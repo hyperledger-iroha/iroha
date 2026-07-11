@@ -491,6 +491,7 @@ pub struct CoreHostImpl<QS> {
     authority: AccountId,
     current_contract_runtime_context: Option<ContractRuntimeExecutionContext>,
     current_entrypoint_authorization: Option<ContractEntrypointAuthorizationSnapshot>,
+    nested_contract_call_depth: usize,
     default: ivm::host::DefaultHost,
     codec_host: IvmCodecHost,
     access_log_enabled: bool,
@@ -607,6 +608,9 @@ pub type CoreHost = CoreHostImpl<NoQueryState>;
 /// Marker query slot for hosts that do not run queries.
 #[derive(Default, Copy, Clone)]
 pub struct NoQueryState;
+
+/// Deterministic maximum number of active `CALL_CONTRACT` child frames.
+const MAX_NESTED_CONTRACT_CALL_DEPTH: usize = 32;
 
 /// Slot storing a live queryable state reference for a host run.
 pub struct QueryStateSlot<QRef> {
@@ -2596,6 +2600,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             authority,
             current_contract_runtime_context: None,
             current_entrypoint_authorization: None,
+            nested_contract_call_depth: 0,
             default,
             codec_host: IvmCodecHost::new(),
             access_log_enabled: false,
@@ -2719,6 +2724,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             authority,
             current_contract_runtime_context: None,
             current_entrypoint_authorization: None,
+            nested_contract_call_depth: 0,
             default,
             codec_host: IvmCodecHost::new(),
             access_log_enabled: false,
@@ -2802,6 +2808,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             authority,
             current_contract_runtime_context: None,
             current_entrypoint_authorization: None,
+            nested_contract_call_depth: 0,
             default,
             codec_host: IvmCodecHost::new(),
             access_log_enabled: false,
@@ -5336,8 +5343,8 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
 
     /// Decode a typed pointer-ABI TLV into a Norito value.
     ///
-    /// The decoder accepts pointers that already live in INPUT as well as
-    /// literal TLVs returned directly from the contract code/literal section.
+    /// The decoder accepts pointers in INPUT or allocated HEAP, as well as
+    /// exact loader-validated literal TLVs from the contract image.
     ///
     /// # Errors
     /// Returns an error if the pointer type does not match, the type is not allowed
@@ -6432,6 +6439,12 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     }
 
     fn handle_call_contract(&mut self, vm: &mut IVM) -> Result<u64, ivm::VMError> {
+        if self.nested_contract_call_depth >= MAX_NESTED_CONTRACT_CALL_DEPTH {
+            return Err(ivm::VMError::metered(
+                ivm::gas::G_CALL_CONTRACT,
+                ivm::VMError::PermissionDenied,
+            ));
+        }
         if self.current_contract_runtime_context.is_none()
             || self.current_entrypoint_authorization.is_none()
         {
@@ -6661,7 +6674,9 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         self.prepared_argument_record_pointer = None;
         self.fastpq_batch_entries = None;
 
+        self.nested_contract_call_depth += 1;
         let run_result = child_vm.run_with_host(self);
+        self.nested_contract_call_depth -= 1;
         let child_gas_consumed = child_gas_limit.saturating_sub(child_vm.remaining_gas());
         let actual_gas = |base: u64| {
             if reserved_gas == 0 {
@@ -11696,6 +11711,45 @@ mod pointer_abi_tests {
             }
             other => panic!("unsupported fixture account label: {other}"),
         }
+    }
+
+    #[test]
+    fn call_contract_rejects_at_deterministic_nesting_depth_before_frame_growth() {
+        let authority = ALICE_ID.clone();
+        let contract = ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &authority,
+            42,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("derive contract address");
+        let authorization = ContractEntrypointAuthorizationSnapshot::new(
+            authority.clone(),
+            "outer".to_owned(),
+            None,
+            &crate::smartcontracts::code::BoundContractIdentity {
+                contract_address: contract.clone(),
+                contract_alias: None,
+                code_hash: Hash::new(b"depth-guard caller contract"),
+            },
+        );
+        let mut host = CoreHost::new(authority);
+        host.bind_contract_runtime_context(contract.subject_id(), authorization);
+        host.nested_contract_call_depth = MAX_NESTED_CONTRACT_CALL_DEPTH;
+        let mut vm = IVM::new(1_000);
+
+        let result = host.handle_call_contract(&mut vm);
+        assert_eq!(
+            result,
+            Err(ivm::VMError::metered(
+                ivm::gas::G_CALL_CONTRACT,
+                ivm::VMError::PermissionDenied,
+            ))
+        );
+        assert_eq!(
+            host.nested_contract_call_depth, MAX_NESTED_CONTRACT_CALL_DEPTH,
+            "rejection must not mutate the active-frame counter"
+        );
     }
 
     fn fixture_account_literal(label: &str) -> String {

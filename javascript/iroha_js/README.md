@@ -9,13 +9,27 @@ transports land in the maintained SDK surface.
 TypeScript consumers can import the bundled `index.d.ts` definitions for the
 SDK surface.
 
-Run the native build (wrapping `cargo build -p iroha_js_host`) before
-importing:
+From an Iroha source checkout, run the native build (wrapping
+`cargo build -p iroha_js_host`) before using native-backed APIs:
 
 ```bash
 npm install
 npm run build:native
 ```
+
+The registry tarball intentionally contains no platform-specific `.node`
+binary, Cargo workspace, install hook, or implicit downloader. Consequently,
+`npm run build:native` is a source-checkout command, not a supported operation
+inside a clean registry installation. Registry consumers can use the portable
+browser exports (`/browser`, `/transaction-codec`, `/canonical-request`,
+`/ivm-artifact`, `/connect-browser`, and `/nexus-app`) and the Node Ed25519
+fallback without a native host. Applications that need native-only APIs must
+provide a separately built and checksum-verified host through
+`IROHA_JS_NATIVE_DIR`. The registry artifact includes only two portable,
+offline examples: `recipes/iso_bridge_builder.mjs` and
+`recipes/nexus_app_transfer.mjs`. The wider recipe catalog is kept in the
+source repository where its native and live-service prerequisites are
+available.
 
 When publishing or testing the packaged layout, build the ESM dist tree:
 
@@ -29,13 +43,14 @@ inter-process lock, validates a staging tree, and publishes only when source and
 distribution content differ, so explicit concurrent builds are deterministic.
 
 Native bindings load only after verifying the platform-specific SHA-256 recorded
-in `native/iroha_js_host.checksums.json`. When the checksum is missing or
-mismatched, SDK startup fails. The loader authenticates the complete manifest,
-then loads a private, read-only, content-addressed snapshot of the exact bytes it
-hashed so replacing the original path cannot race module loading. Run
-`npm run build:native` explicitly after installing the Rust toolchain. Set
-`IROHA_JS_NATIVE_DIR` only in test harnesses that need to point at an alternate
-`native/` folder.
+in `native/iroha_js_host.checksums.json`. When a binding is present but its
+checksum is missing or mismatched, native access fails closed; it never falls
+back around a present-but-unverified binary. The loader authenticates the
+complete manifest, then loads a private, read-only, content-addressed snapshot
+of the exact bytes it hashed so replacing the original path cannot race module
+loading. Run `npm run build:native` explicitly from a source checkout after
+installing the Rust toolchain. Set `IROHA_JS_NATIVE_DIR` only to a separately
+verified native artifact directory.
 
 ## Native SoraFS Reference Validation
 
@@ -320,20 +335,40 @@ the facade a bounded Fetch-based pipeline submit/status client; applications
 may instead inject `toriiClient` and `transactionCodec`. Torii response bodies
 are capped at 64 KiB, submission requests time out after 15 seconds, polling
 defaults to a 30-second budget, and credentials/query/fragment components are
-rejected in the configured Torii base URL. Requests omit ambient credentials
-and referrers and reject redirects.
+rejected in the configured Torii base URL. Request and polling deadlines cover
+headers, response-body reads/cancellation, and asynchronous status callbacks.
+Requests omit ambient credentials and referrers and reject redirects.
 
 The built-in Connect path keeps session proof keys separate from transaction
 signing keys. Browser Connect verifies the approval proof and returns its
 `accountId`, 32-byte X25519 `walletPublicKey`, and 64-byte `signature`.
 `walletPublicKey` authenticates the Connect session proof; it is not the
-Ed25519 transaction key. `NexusAppClient.awaitApproval()` validates that proof
-envelope, projects only `accountId` into the Nexus approval state, and derives
-the Ed25519 controller key from the canonical I105 account. For
+Ed25519 transaction key. Each approval consumer receives an immutable wrapper
+with detached proof-byte copies, so one consumer cannot rewrite verified state
+seen by another. On this built-in path, `NexusAppClient.awaitApproval()` accepts
+only that exact data-only `Uint8Array` proof shape, projects `accountId` into the
+Nexus approval state, and derives the Ed25519 controller key from the canonical
+I105 account. An injected `connectTransport.awaitApproval` instead returns the
+custom `{accountId, signingPublicKey?}` approval shape and must not forward the
+browser proof's `walletPublicKey` or `signature`. For
 `finalizeAndSubmit(..., { wait: true, signal })`, an already-aborted signal is
 rejected before finalization, and the signal is checked again after
-finalization but before Torii submission. This cancellation behavior is scoped
-to status-waiting submissions; `wait: false` does not apply the wait signal.
+finalization and capability capture but before Torii submission. Wait-enabled
+injected Torii clients must provide `waitForTransactionStatus`; the facade
+enforces the wait signal and deadline even if that client does not. Retry logic
+must inspect both `code` and `submissionState`: `operation_aborted` with
+`not_submitted` was stopped before dispatch; `submission_outcome_unknown` with
+`unknown` may already have reached Torii and includes
+`signedTransactionHashHex` for reconciliation; `invalid_submission_response`,
+`transaction_rejected`, `status_wait_aborted`, `status_wait_timeout`, and
+`status_wait_failed` with `submitted` refer to a transaction whose submit call
+resolved and may also expose the exact `submission` value. Do not automatically
+retry an `unknown` or `submitted` outcome. This cancellation behavior is scoped
+to status-waiting submissions; `wait: false` must omit `signal` and every other
+status-only polling option. See `recipes/nexus_app_transfer.mjs` for an offline,
+canonical end-to-end example.
+Custom success/failure status iterables are capped at 32 raw entries before
+duplicate removal.
 
 When supplying a custom `transactionCodec` to `NexusAppClient`, payload hash
 aliases must be exact lowercase 64-character hex and must match the returned
@@ -576,7 +611,7 @@ const usagePlan = {
 };
 
 await torii.createSubscriptionPlan({
-  authority: "sorauﾛ1Nﾀｾhjｾ7pZaG9L7ｴmBnｸbﾖ9ヰsｳ4dqmﾅｺmﾁﾎ24CｳｵEAE9L4",
+  authority: "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB",
   private_key: "provider-private-key-hex",
   plan_id: "aws_compute#commerce",
   plan: usagePlan,
@@ -590,14 +625,14 @@ await torii.createSubscription({
 });
 
 await torii.recordSubscriptionUsage("sub-001", {
-  authority: "sorauﾛ1Nﾀｾhjｾ7pZaG9L7ｴmBnｸbﾖ9ヰsｳ4dqmﾅｺmﾁﾎ24CｳｵEAE9L4",
+  authority: "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB",
   private_key: "provider-private-key-hex",
   unit_key: "compute_ms",
   delta: "3600000",
 });
 
 await torii.chargeSubscriptionNow("sub-001", {
-  authority: "sorauﾛ1Nﾀｾhjｾ7pZaG9L7ｴmBnｸbﾖ9ヰsｳ4dqmﾅｺmﾁﾎ24CｳｵEAE9L4",
+  authority: "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB",
   private_key: "provider-private-key-hex",
 });
 ```
@@ -610,8 +645,8 @@ import { MultisigSpecBuilder, buildProposeMultisigInstruction } from "@iroha/iro
 const spec = new MultisigSpecBuilder()
   .setQuorum(3)
   .setTransactionTtlMs(86_400_000)
-  .addSignatory("sorauﾛ1Nﾀｾhjｾ7pZaG9L7ｴmBnｸbﾖ9ヰsｳ4dqmﾅｺmﾁﾎ24CｳｵEAE9L4", 2)
-  .addSignatory("sorauﾛ1PｹiｺPﾖｿRhgﾗ1EｺﾘNｿnhﾚdｼﾕAYGwﾜﾃYqｹGLﾆwKﾍaQUJKW1", 1)
+  .addSignatory("sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB", 2)
+  .addSignatory("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB", 1)
   .build();
 
 // Preview the effective TTL (clamped to the policy cap) and expiry time
@@ -629,7 +664,7 @@ const propose = buildProposeMultisigInstruction({
 // Register the multisig controller with an explicit (non-derived) account id
 const register = buildRegisterMultisigTransaction({
   chainId: "wonderland",
-  authority: "sorauﾛ1Nﾀｾhjｾ7pZaG9L7ｴmBnｸbﾖ9ヰsｳ4dqmﾅｺmﾁﾎ24CｳｵEAE9L4",
+  authority: "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB",
   accountId: "sorauﾛ1Ni1A1mYｲzｳﾚﾊGﾆｲgｵ4ﾜｾﾒﾔzｺﾍz6ﾀFoVDﾇXzｹCkﾙ4CQVXL",
   spec,
   privateKey: generateKeyPair().privateKey, // controller key is NOT used for signing
@@ -659,7 +694,7 @@ const args = buildMultisigTriggerArgs("lifecycle", {
   action: "create",
   requestId: "mr1",
   fiId: "banka",
-  toAccountId: "sorauﾛ1PｹiｺPﾖｿRhgﾗ1EｺﾘNｿnhﾚdｼﾕAYGwﾜﾃYqｹGLﾆwKﾍaQUJKW1",
+  toAccountId: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
   amountI64: 10,
   createdAtMs: Date.now(),
   expiresAtMs: Date.now() + 60_000,
@@ -674,7 +709,7 @@ const proposalInstruction = buildProposeMultisigExecuteTriggerInstruction({
   trigger: "staged_mint_request_hbl",
   args,
   spec,
-  signerAccountId: "sorauﾛ1Nﾀｾhjｾ7pZaG9L7ｴmBnｸbﾖ9ヰsｳ4dqmﾅｺmﾁﾎ24CｳｵEAE9L4",
+  signerAccountId: "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB",
   strictSignerCheck: true,
   transactionTtlMs: 45_000,
 });
@@ -682,7 +717,7 @@ const proposalInstruction = buildProposeMultisigExecuteTriggerInstruction({
 // Build the normalized Torii request body for the multisig contract-call flow.
 const request = buildMultisigContractCallProposeRequest({
   multisigAccountAlias: "mintops@banka",
-  signerAccountId: "sorauﾛ1Nﾀｾhjｾ7pZaG9L7ｴmBnｸbﾖ9ヰsｳ4dqmﾅｺmﾁﾎ24CｳｵEAE9L4",
+  signerAccountId: "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB",
   contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
   entrypoint: "execute",
   trigger: "staged_mint_request_hbl",
@@ -889,7 +924,7 @@ for await (const lot of torii.iterateAccountRwas(authority, {
   console.log(`${lot.id} => ${lot.quantity}`);
 }
 
-for await (const holding of torii.iterateAccountAssetsQuery("sorauﾛ1Nﾀｾhjｾ7pZaG9L7ｴmBnｸbﾖ9ヰsｳ4dqmﾅｺmﾁﾎ24CｳｵEAE9L4", {
+for await (const holding of torii.iterateAccountAssetsQuery("sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB", {
   requirePermissions: true,
   pageSize: 2,
   filter: { Gte: ["quantity", 1] },
@@ -938,17 +973,17 @@ const registerDomain = noritoEncodeInstruction(
   buildRegisterDomainInstruction({ domainId: "wonderland" }),
 );
 const registerAccount = buildRegisterAccountInstruction({
-  accountId: "sorauﾛ1Nﾀｾhjｾ7pZaG9L7ｴmBnｸbﾖ9ヰsｳ4dqmﾅｺmﾁﾎ24CｳｵEAE9L4",
+  accountId: "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB",
 });
 const transfer = buildTransferAssetInstruction({
   sourceAssetHoldingId: "<base58-asset-definition-id>#<i105-account-id>",
-  destinationAccountId: "sorauﾛ1PｹiｺPﾖｿRhgﾗ1EｺﾘNｿnhﾚdｼﾕAYGwﾜﾃYqｹGLﾆwKﾍaQUJKW1",
+  destinationAccountId: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
   quantity: "5",
 });
 
 const transferTx = buildTransaction({
   chainId: "demo-chain",
-  authority: "sorauﾛ1Nﾀｾhjｾ7pZaG9L7ｴmBnｸbﾖ9ヰsｳ4dqmﾅｺmﾁﾎ24CｳｵEAE9L4",
+  authority: "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB",
   instructions: [transfer],
   privateKey,
 });
@@ -1382,8 +1417,10 @@ pinned to the configured base.
   `recipes/batching.mjs`) to confirm the payload shape matches your intent prior
   to signing or submitting transactions.
 
-The `recipes/batching.mjs` script demonstrates these patterns end-to-end and
-prints deterministic hashes for the batched transactions.
+The source-checkout-only `recipes/batching.mjs` script demonstrates these
+patterns end-to-end and prints deterministic hashes for the batched
+transactions. It is not included in the portable registry tarball because its
+generic transaction builder requires the verified native host.
 
 ## SM2 Deterministic Fixture & Helpers
 
@@ -1760,7 +1797,7 @@ const pinResult = await torii.pinSorafsManifest({
 console.log(`manifest=${pinResult.manifest_id_hex} digest=${pinResult.payload_digest_hex}`);
 
 const registerRequest = {
-  authority: process.env.SORAFS_OPERATOR_ID ?? "sorauﾛ1Nﾀｾhjｾ7pZaG9L7ｴmBnｸbﾖ9ヰsｳ4dqmﾅｺmﾁﾎ24CｳｵEAE9L4",
+  authority: process.env.SORAFS_OPERATOR_ID ?? "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB",
   privateKey: process.env.SORAFS_OPERATOR_KEY ?? "ed25519:deadbeef",
   manifestDigestHex: pinResult.manifest_id_hex,
   chunkDigestSha3_256Hex: process.env.SORAFS_CHUNK_DIGEST ?? "1".repeat(64),
@@ -2085,7 +2122,7 @@ const controller = new AbortController();
 
 await torii.publishSpaceDirectoryManifest(
   {
-    authority: "sorauﾛ1Nﾀｾhjｾ7pZaG9L7ｴmBnｸbﾖ9ヰsｳ4dqmﾅｺmﾁﾎ24CｳｵEAE9L4",
+    authority: "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB",
     privateKeyHex: process.env.SPACE_DIRECTORY_KEY_HEX,
     manifest,
     reason: "Rotation to attester set v2",
@@ -2095,7 +2132,7 @@ await torii.publishSpaceDirectoryManifest(
 
 await torii.revokeSpaceDirectoryManifest(
   {
-    authority: "sorauﾛ1Nﾀｾhjｾ7pZaG9L7ｴmBnｸbﾖ9ヰsｳ4dqmﾅｺmﾁﾎ24CｳｵEAE9L4",
+    authority: "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB",
     privateKey: Buffer.from(process.env.SPACE_DIRECTORY_KEY_SEED, "hex"),
     uaid: "uaid:c2b61dd6bb73e91ee6d0949508d491bbc1b2a347a3f41b5cd35d733c1e751111",
     dataspaceId: 11,
@@ -2383,9 +2420,9 @@ const settlement = buildPacs008Message({
   instigatingAgent: { bic: "DEUTDEFF", lei: "529900ODI3047E2LIV03" },
   instructedAgent: { bic: "COBADEFF" },
   debtorAccount: { iban: "DE89370400440532013000" },
-  creditorAccount: { otherId: "sorauﾛ1Nﾀｾhjｾ7pZaG9L7ｴmBnｸbﾖ9ヰsｳ4dqmﾅｺmﾁﾎ24CｳｵEAE9L4" },
+  creditorAccount: { otherId: "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB" },
   purposeCode: "SECU",
-  supplementaryData: { account_id: "sorauﾛ1Nﾀｾhjｾ7pZaG9L7ｴmBnｸbﾖ9ヰsｳ4dqmﾅｺmﾁﾎ24CｳｵEAE9L4", leg: "delivery" },
+  supplementaryData: { account_id: "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB", leg: "delivery" },
 });
 
 const torii = new ToriiClient("http://localhost:8080");
@@ -2467,7 +2504,7 @@ const manifestTx = buildRegisterSmartContractCodeTransaction({
     abiHash: "hash:…",
     compilerFingerprint: "kotodama-1.2 rustc-1.79",
     accessSetHints: {
-      readKeys: ["account:sorauﾛ1Nﾀｾhjｾ7pZaG9L7ｴmBnｸbﾖ9ヰsｳ4dqmﾅｺmﾁﾎ24CｳｵEAE9L4"],
+      readKeys: ["account:sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB"],
       writeKeys: ["contract:apps:ledger"],
     },
   },
@@ -2764,10 +2801,11 @@ Helper inputs accept either strings or raw `Buffer`s for 32-byte hashes, ensure
 referendum windows remain ordered, and convert ballot payloads to canonical
 Norito JSON before signing.
 
-See `recipes/governance.mjs` for an end-to-end script that assembles the common
-governance transactions, prints deterministic hashes, and optionally submits
-them to Torii (`GOV_SUBMIT=1`). Build the native binding first via
-`npm run build:native` so `hashSignedTransaction` is available.
+See the source-checkout-only `recipes/governance.mjs` for an end-to-end script
+that assembles the common governance transactions, prints deterministic hashes,
+and optionally submits them to Torii (`GOV_SUBMIT=1`). Build the native binding
+from the Iroha workspace first via `npm run build:native`; this recipe is not
+part of the portable registry tarball.
 
 ## Confidential Asset Helpers
 
@@ -2857,7 +2895,7 @@ const detail = await torii.getVerifyingKeyTyped("halo2/ipa", "vk_main");
 console.log(detail.record.status); // "Active"
 
 await torii.registerVerifyingKey({
-  authority: "sorauﾛ1Nﾀｾhjｾ7pZaG9L7ｴmBnｸbﾖ9ヰsｳ4dqmﾅｺmﾁﾎ24CｳｵEAE9L4",
+  authority: "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB",
   private_key: "ed0120…",
   backend: "halo2/ipa",
   name: "vk_main",
@@ -3532,18 +3570,18 @@ const defs = await torii.queryAssetDefinitions({
 });
 console.log("filtered definitions", defs.items);
 
-const perms = await torii.listAccountPermissions("sorauﾛ1Nﾀｾhjｾ7pZaG9L7ｴmBnｸbﾖ9ヰsｳ4dqmﾅｺmﾁﾎ24CｳｵEAE9L4", {
+const perms = await torii.listAccountPermissions("sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB", {
   limit: 5,
 });
 console.log("direct permissions", perms.items.map((item) => item.name));
-for await (const perm of torii.iterateAccountPermissions("sorauﾛ1Nﾀｾhjｾ7pZaG9L7ｴmBnｸbﾖ9ヰsｳ4dqmﾅｺmﾁﾎ24CｳｵEAE9L4", {
+for await (const perm of torii.iterateAccountPermissions("sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB", {
   pageSize: 2,
 })) {
   console.log("paged permission", perm.name);
 }
 const nfts = await torii.listNfts({ limit: 10 });
 console.log("first NFT ids", nfts.items.map((nft) => nft.id));
-const balances = await torii.listAccountAssets("sorauﾛ1Nﾀｾhjｾ7pZaG9L7ｴmBnｸbﾖ9ヰsｳ4dqmﾅｺmﾁﾎ24CｳｵEAE9L4", {
+const balances = await torii.listAccountAssets("sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB", {
   limit: 3,
   assetHoldingId: "<base58-asset-definition-id>#<i105-account-id>",
 });
@@ -3553,7 +3591,7 @@ const holders = await torii.listAssetHolders("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", {
   assetHoldingId: "<base58-asset-definition-id>#<i105-account-id>",
 });
 console.log("top holders", holders.items.map((entry) => entry.account_id));
-const history = await torii.listAccountTransactions("sorauﾛ1Nﾀｾhjｾ7pZaG9L7ｴmBnｸbﾖ9ヰsｳ4dqmﾅｺmﾁﾎ24CｳｵEAE9L4", {
+const history = await torii.listAccountTransactions("sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB", {
   limit: 2,
   assetHoldingId: "<base58-asset-definition-id>#<i105-account-id>",
 });
@@ -3564,13 +3602,13 @@ console.log(
 
 for await (const account of torii.iterateAccountsQuery({
   pageSize: 100,
-  filter: { Eq: ["id", "sorauﾛ1Nﾀｾhjｾ7pZaG9L7ｴmBnｸbﾖ9ヰsｳ4dqmﾅｺmﾁﾎ24CｳｵEAE9L4"] },
+  filter: { Eq: ["id", "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB"] },
   select: [{ Fields: ["id", "metadata.display_name"] }],
 })) {
   console.log("matching account", account.id);
 }
 
-for await (const balance of torii.iterateAccountAssetsQuery("sorauﾛ1Nﾀｾhjｾ7pZaG9L7ｴmBnｸbﾖ9ヰsｳ4dqmﾅｺmﾁﾎ24CｳｵEAE9L4", {
+for await (const balance of torii.iterateAccountAssetsQuery("sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB", {
   pageSize: 32,
   filter: { Eq: ["asset_id.definition_id", "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"] },
 })) {
@@ -3584,7 +3622,7 @@ console.log("governed contract:", governedContract.contract_address, governedCon
 
 for await (const trigger of torii.iterateTriggersQuery({
   pageSize: 50,
-  filter: { Eq: ["object.authority", "sorauﾛ1Nﾀｾhjｾ7pZaG9L7ｴmBnｸbﾖ9ヰsｳ4dqmﾅｺmﾁﾎ24CｳｵEAE9L4"] },
+  filter: { Eq: ["object.authority", "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB"] },
 })) {
   console.log("trigger id:", trigger.id);
 }
@@ -3592,7 +3630,7 @@ for await (const trigger of torii.iterateTriggersQuery({
 // Or mirror the same calls from the runnable recipe:
 //   node ./recipes/nft_account_iteration.mjs \
 //     TORII_URL=http://127.0.0.1:8080 \
-//     ACCOUNT_ID=sorauﾛ1Nﾀｾhjｾ7pZaG9L7ｴmBnｸbﾖ9ヰsｳ4dqmﾅｺmﾁﾎ24CｳｵEAE9L4 \
+//     ACCOUNT_ID=sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB \
 //     ASSET_DEFINITION_ID=62Fk4FPcMuLvW5QjDGNF2a4jAmjM \
 //     NFT_DEFINITION_ID=5Pz9SwdN9eXPbiXPX9HRCpzCcE3o
 ```
@@ -3607,13 +3645,13 @@ console.log(policy.suffix, policy.pricing.length);
 
 const registration = await torii.registerSnsName({
   selector: { suffix_id: 0x1002, label: "demo" },
-  owner: "sorauﾛ1Nﾀｾhjｾ7pZaG9L7ｴmBnｸbﾖ9ヰsｳ4dqmﾅｺmﾁﾎ24CｳｵEAE9L4",
+  owner: "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB",
   payment: {
     asset_id: "<base58-asset-definition-id>",
     gross_amount: 120,
     net_amount: 120,
     settlement_tx: { tx: "hash" },
-    payer: "sorauﾛ1Nﾀｾhjｾ7pZaG9L7ｴmBnｸbﾖ9ヰsｳ4dqmﾅｺmﾁﾎ24CｳｵEAE9L4",
+    payer: "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB",
     signature: "sig-json",
   },
 });
@@ -3655,7 +3693,7 @@ if (explorerMetrics) {
   console.log("explorer metrics disabled on this node");
 }
 
-const qr = await torii.getExplorerAccountQr("sorauﾛ1Nﾀｾhjｾ7pZaG9L7ｴmBnｸbﾖ9ヰsｳ4dqmﾅｺmﾁﾎ24CｳｵEAE9L4");
+const qr = await torii.getExplorerAccountQr("sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB");
 console.log(qr.literal); // i105 literal embedded in the QR SVG
 console.log(qr.svg); // inline SVG (192x192) ready to drop into your UI
 
@@ -3672,7 +3710,7 @@ for (const entry of recentBlocks.items) {
 
 // NFT and account-asset iteration mirrors the Torii JSON envelopes while handling pagination.
 const holdings = [];
-for await (const holding of torii.iterateAccountAssets("sorauﾛ1Nﾀｾhjｾ7pZaG9L7ｴmBnｸbﾖ9ヰsｳ4dqmﾅｺmﾁﾎ24CｳｵEAE9L4", {
+for await (const holding of torii.iterateAccountAssets("sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB", {
   pageSize: 2,
   maxItems: 5,
   sort: [{ key: "quantity", order: "desc" }],
@@ -3692,7 +3730,7 @@ for await (const nft of torii.iterateNftsQuery({
 console.log("matching NFTs", nftIds);
 
 const ownedNfts = [];
-for await (const nft of torii.iterateAccountNfts("sorauﾛ1Nﾀｾhjｾ7pZaG9L7ｴmBnｸbﾖ9ヰsｳ4dqmﾅｺmﾁﾎ24CｳｵEAE9L4", {
+for await (const nft of torii.iterateAccountNfts("sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB", {
   domainId: "wonderland",
   pageSize: 10,
 })) {
@@ -3800,7 +3838,7 @@ const deriveResponse = await torii.governanceDeriveCouncilVrf({
   committeeSize: 2,
   candidates: [
     {
-      accountId: "sorauﾛ1PｹiｺPﾖｿRhgﾗ1EｺﾘNｿnhﾚdｼﾕAYGwﾜﾃYqｹGLﾆwKﾍaQUJKW1",
+      accountId: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
       variant: "Normal",
       pk: validatorPublicKeyBytes,
       proof: validatorProofBytes,

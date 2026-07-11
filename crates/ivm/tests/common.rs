@@ -59,6 +59,28 @@ pub fn decode_i64_state_value(payload: &[u8]) -> i64 {
         .expect("test state int fits i64")
 }
 
+/// Decode one pointer-backed Kotodama `int` return register.
+pub fn decode_int_register(vm: &IVM, register: usize) -> BigInt {
+    let tlv = vm
+        .validate_tlv(vm.register(register))
+        .unwrap_or_else(|error| panic!("validate int return in r{register}: {error:?}"));
+    assert_eq!(
+        tlv.type_id,
+        PointerType::Int,
+        "r{register} must contain an Int pointer"
+    );
+    IntValueV1::decode_frame(tlv.payload)
+        .unwrap_or_else(|error| panic!("decode int return in r{register}: {error:?}"))
+        .into_int()
+}
+
+/// Decode one pointer-backed Kotodama `int` return known to fit an `i64`.
+pub fn decode_i64_register(vm: &IVM, register: usize) -> i64 {
+    decode_int_register(vm, register)
+        .try_to_i64()
+        .unwrap_or_else(|| panic!("int return in r{register} does not fit i64"))
+}
+
 /// Encode one pointer-backed value using the schema-bound Kotodama V1 record.
 pub fn encode_pointer_state_value(
     kind: StateValueKindV1,

@@ -173,6 +173,7 @@ max_bytes_per_minute = 104857600
 
 [sumeragi.block]
 max_transactions = 96
+max_ivm_transactions = 32
 max_payload_bytes = 16777216
 proposal_queue_scan_multiplier = 4
 

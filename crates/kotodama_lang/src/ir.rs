@@ -1877,6 +1877,12 @@ fn emit_int_from_u64(ctx: &mut LowerCtx, value: Temp) -> Temp {
     dest
 }
 
+fn emit_int_try_to_u64(ctx: &mut LowerCtx, value: Temp) -> Temp {
+    let dest = ctx.new_temp();
+    ctx.current_instr(Instr::IntTryToU64 { dest, value });
+    dest
+}
+
 fn emit_list_allocation(ctx: &mut LowerCtx, list_ty: &Type, initial_len: u64) -> Temp {
     let Some((_, layout)) = list_layout_for_type(list_ty) else {
         ctx.record_error("internal error: invalid List layout".into());
@@ -2020,20 +2026,28 @@ fn clear_list_element(ctx: &mut LowerCtx, list: Temp, index: Temp, element_ty: &
 }
 
 fn emit_list_index_is_present(ctx: &mut LowerCtx, index: Temp, len: Temp) -> Temp {
-    let zero = emit_i64_const(ctx, 0);
+    let zero = ctx.new_temp();
+    ctx.current_instr(Instr::DataRef {
+        dest: zero,
+        kind: DataRefKind::Int,
+        value: "0".to_owned(),
+    });
+    let len = emit_int_from_u64(ctx, len);
     let non_negative = ctx.new_temp();
-    ctx.current_instr(Instr::Binary {
+    ctx.current_instr(Instr::NumericCompare {
         dest: non_negative,
         op: BinaryOp::Ge,
         left: index,
         right: zero,
+        kind: WideNumericKind::Int,
     });
     let below_len = ctx.new_temp();
-    ctx.current_instr(Instr::Binary {
+    ctx.current_instr(Instr::NumericCompare {
         dest: below_len,
         op: BinaryOp::Lt,
         left: index,
         right: len,
+        kind: WideNumericKind::Int,
     });
     let present = ctx.new_temp();
     ctx.current_instr(Instr::Binary {
@@ -2453,7 +2467,7 @@ fn lower_list_get(
     vars: &mut HashMap<String, Temp>,
 ) -> Temp {
     let list = lower_expr(ctx, &args[0], vars);
-    let index = lower_expr_as_i64(ctx, &args[1], vars);
+    let index = lower_expr(ctx, &args[1], vars);
     let len = ctx.new_temp();
     ctx.current_instr(Instr::Load64Imm {
         dest: len,
@@ -2476,6 +2490,10 @@ fn lower_list_get(
         ctx.record_error("internal error: List.get result is not Option<T>".into());
         return emit_i64_const(ctx, 0);
     };
+    // The dominating exact-int comparisons prove `0 <= index < len <= 64`,
+    // so this scalar conversion cannot fail. Keeping it inside the active arm
+    // makes arbitrary-width out-of-range indices return `Option::none`.
+    let index = emit_int_try_to_u64(ctx, index);
     let value = load_list_element(ctx, list, index, &element_ty);
     let value = emit_sum_value(ctx, result_ty, 1, Some(value));
     ctx.current_instr(Instr::Copy {
@@ -2501,7 +2519,7 @@ fn lower_list_try_set(
     vars: &mut HashMap<String, Temp>,
 ) -> Temp {
     let list = lower_expr(ctx, &args[0], vars);
-    let index = lower_expr_as_i64(ctx, &args[1], vars);
+    let index = lower_expr(ctx, &args[1], vars);
     let value = lower_expr(ctx, &args[2], vars);
     let Type::List(element_ty, _) = semantic::resolve_struct_type(&args[0].ty) else {
         ctx.record_error("internal error: List.try_set receiver lost List type".into());
@@ -2525,6 +2543,8 @@ fn lower_list_try_set(
     });
 
     ctx.start_block(success);
+    // Conversion is reached only after the exact-int bounds proof above.
+    let index = emit_int_try_to_u64(ctx, index);
     store_list_element(ctx, list, index, value, &element_ty);
     let one = emit_i64_const(ctx, 1);
     ctx.current_instr(Instr::Copy {
@@ -2756,7 +2776,7 @@ fn lower_list_take(
     vars: &mut HashMap<String, Temp>,
 ) -> Temp {
     let source = lower_expr(ctx, &args[0], vars);
-    let limit = lower_expr_as_i64(ctx, &args[1], vars);
+    let limit = lower_expr_as_u64(ctx, &args[1], vars);
     let Type::List(source_element, _) = semantic::resolve_struct_type(&args[0].ty) else {
         ctx.record_error("internal error: List.take receiver lost List type".into());
         return emit_i64_const(ctx, 0);
@@ -2961,7 +2981,7 @@ fn lower_numeric_round_intrinsic(
     let dividend = lower_expr(ctx, &args[0], vars);
     let divisor = lower_expr(ctx, &args[1], vars);
     let scale = lower_expr(ctx, &args[2], vars);
-    let mode = lower_expr_as_i64(ctx, &args[3], vars);
+    let mode = lower_expr_as_u64(ctx, &args[3], vars);
     let dest = ctx.new_temp();
     ctx.current_instr(Instr::NumericRound {
         dest,
@@ -2991,7 +3011,7 @@ fn lower_decimal_to_int_intrinsic(
         return Some(emit_i64_const(ctx, 0));
     }
     let value = lower_expr(ctx, &args[0], vars);
-    let mode = args.get(1).map(|mode| lower_expr_as_i64(ctx, mode, vars));
+    let mode = args.get(1).map(|mode| lower_expr_as_u64(ctx, mode, vars));
     let dest = ctx.new_temp();
     ctx.current_instr(Instr::DecimalToInt {
         dest,
@@ -5060,10 +5080,43 @@ fn lower_expr_as_i64(
     expr: &TypedExpr,
     vars: &mut HashMap<String, Temp>,
 ) -> Temp {
+    if let semantic::ExprKind::IntLiteral(value) = expr.kind() {
+        if let Some(value) = value.try_to_i64() {
+            return emit_i64_const(ctx, value);
+        }
+        ctx.record_error(format!(
+            "constant `{value}` is outside the signed 64-bit range required by this host boundary"
+        ));
+        return emit_i64_const(ctx, 0);
+    }
     let value = lower_expr(ctx, expr, vars);
     if matches!(semantic::resolve_struct_type(&expr.ty), Type::Int) {
         let out = ctx.new_temp();
         ctx.current_instr(Instr::IntTryToI64 { dest: out, value });
+        out
+    } else {
+        value
+    }
+}
+
+fn lower_expr_as_u64(
+    ctx: &mut LowerCtx,
+    expr: &TypedExpr,
+    vars: &mut HashMap<String, Temp>,
+) -> Temp {
+    if let semantic::ExprKind::IntLiteral(value) = expr.kind() {
+        if let Some(value) = value.try_to_u64() {
+            return emit_i64_const(ctx, i64::from_le_bytes(value.to_le_bytes()));
+        }
+        ctx.record_error(format!(
+            "constant `{value}` is outside the unsigned 64-bit range required by this host boundary"
+        ));
+        return emit_i64_const(ctx, 0);
+    }
+    let value = lower_expr(ctx, expr, vars);
+    if matches!(semantic::resolve_struct_type(&expr.ty), Type::Int) {
+        let out = ctx.new_temp();
+        ctx.current_instr(Instr::IntTryToU64 { dest: out, value });
         out
     } else {
         value
@@ -5802,7 +5855,7 @@ fn lower_surface_builtin_call(
             dest
         }
         Builtin::Isqrt => {
-            let src = lower_expr_as_i64(ctx, &args[0], vars);
+            let src = lower_expr_as_u64(ctx, &args[0], vars);
             let scalar = ctx.new_temp();
             ctx.current_instr(Instr::Isqrt { dest: scalar, src });
             emit_int_from_u64(ctx, scalar)
@@ -5853,8 +5906,8 @@ fn lower_surface_builtin_call(
             emit_int_from_i64(ctx, scalar)
         }
         Builtin::Poseidon2 => {
-            let a = lower_expr_as_i64(ctx, &args[0], vars);
-            let b = lower_expr_as_i64(ctx, &args[1], vars);
+            let a = lower_expr_as_u64(ctx, &args[0], vars);
+            let b = lower_expr_as_u64(ctx, &args[1], vars);
             let scalar = ctx.new_temp();
             ctx.current_instr(Instr::Poseidon2 { dest: scalar, a, b });
             emit_int_from_u64(ctx, scalar)
@@ -5862,7 +5915,7 @@ fn lower_surface_builtin_call(
         Builtin::Poseidon6 => {
             let mut lowered_args = [Temp(0); 6];
             for (index, arg) in args.iter().enumerate() {
-                lowered_args[index] = lower_expr_as_i64(ctx, arg, vars);
+                lowered_args[index] = lower_expr_as_u64(ctx, arg, vars);
             }
             let scalar = ctx.new_temp();
             ctx.current_instr(Instr::Poseidon6 {
@@ -5872,14 +5925,14 @@ fn lower_surface_builtin_call(
             emit_int_from_u64(ctx, scalar)
         }
         Builtin::Pubkgen => {
-            let src = lower_expr_as_i64(ctx, &args[0], vars);
+            let src = lower_expr_as_u64(ctx, &args[0], vars);
             let scalar = ctx.new_temp();
             ctx.current_instr(Instr::Pubkgen { dest: scalar, src });
             emit_int_from_u64(ctx, scalar)
         }
         Builtin::Valcom => {
-            let value = lower_expr_as_i64(ctx, &args[0], vars);
-            let blind = lower_expr_as_i64(ctx, &args[1], vars);
+            let value = lower_expr_as_u64(ctx, &args[0], vars);
+            let blind = lower_expr_as_u64(ctx, &args[1], vars);
             let scalar = ctx.new_temp();
             ctx.current_instr(Instr::Valcom {
                 dest: scalar,
@@ -5889,7 +5942,7 @@ fn lower_surface_builtin_call(
             emit_int_from_u64(ctx, scalar)
         }
         Builtin::SetVl => {
-            let value = lower_expr_as_i64(ctx, &args[0], vars);
+            let value = lower_expr_as_u64(ctx, &args[0], vars);
             ctx.current_instr(Instr::SetVl { value });
             let temp = ctx.new_temp();
             ctx.current_instr(Instr::Const {
@@ -5921,8 +5974,8 @@ fn lower_surface_builtin_call(
         }
         Builtin::StateKeys => {
             let prefix = lower_expr(ctx, &args[0], vars);
-            let offset = lower_expr_as_i64(ctx, &args[1], vars);
-            let limit = lower_expr_as_i64(ctx, &args[2], vars);
+            let offset = lower_expr_as_u64(ctx, &args[1], vars);
+            let limit = lower_expr_as_u64(ctx, &args[2], vars);
             let dest = ctx.new_temp();
             ctx.current_instr(Instr::StateKeys {
                 dest,
@@ -5984,8 +6037,8 @@ fn lower_surface_builtin_call(
         | Builtin::QueryPageAssetDefinitions
         | Builtin::QueryPageDomains
         | Builtin::QueryPageNfts => {
-            let offset = lower_expr_as_i64(ctx, &args[0], vars);
-            let limit = lower_expr_as_i64(ctx, &args[1], vars);
+            let offset = lower_expr_as_u64(ctx, &args[0], vars);
+            let limit = lower_expr_as_u64(ctx, &args[1], vars);
             let entity = match builtin {
                 Builtin::QueryPageAccounts => ivm_abi::core_query::CoreQueryEntityTagV1::Account,
                 Builtin::QueryPageAssets => ivm_abi::core_query::CoreQueryEntityTagV1::Asset,
@@ -6046,7 +6099,7 @@ fn lower_surface_builtin_call(
         Builtin::BuildUnshieldInline => {
             let asset = lower_expr(ctx, &args[0], vars);
             let to = lower_expr(ctx, &args[1], vars);
-            let amount = lower_expr_as_i64(ctx, &args[2], vars);
+            let amount = lower_expr_as_u64(ctx, &args[2], vars);
             let inputs = lower_expr(ctx, &args[3], vars);
             let (outputs, backend_idx) = if args.len() == 8 {
                 (Some(lower_expr(ctx, &args[4], vars)), 5)
@@ -6161,7 +6214,7 @@ fn lower_surface_builtin_call(
         }
         Builtin::Require => {
             let cond = lower_expr(ctx, &args[0], vars);
-            let code = lower_expr_as_i64(ctx, &args[1], vars);
+            let code = lower_expr_as_u64(ctx, &args[1], vars);
             let reject = ctx.new_temp();
             ctx.current_instr(Instr::Unary {
                 dest: reject,
@@ -6577,7 +6630,7 @@ fn lower_surface_builtin_call(
             t
         }
         Builtin::Alloc => {
-            let bytes = lower_expr_as_i64(ctx, &args[0], vars);
+            let bytes = lower_expr_as_u64(ctx, &args[0], vars);
             let scalar = ctx.new_temp();
             ctx.current_instr(Instr::Alloc {
                 dest: scalar,
@@ -6586,13 +6639,13 @@ fn lower_surface_builtin_call(
             emit_int_from_u64(ctx, scalar)
         }
         Builtin::GetPrivateInput => {
-            let index = lower_expr_as_i64(ctx, &args[0], vars);
+            let index = lower_expr_as_u64(ctx, &args[0], vars);
             let dest = ctx.new_temp();
             ctx.current_instr(Instr::GetPrivateInput { dest, index });
             dest
         }
         Builtin::UseNullifier => {
-            let nullifier = lower_expr_as_i64(ctx, &args[0], vars);
+            let nullifier = lower_expr_as_u64(ctx, &args[0], vars);
             ctx.current_instr(Instr::UseNullifier { nullifier });
             let t = ctx.new_temp();
             ctx.current_instr(Instr::Const { dest: t, value: 0 });
@@ -6611,7 +6664,7 @@ fn lower_surface_builtin_call(
             t
         }
         Builtin::SetExecutionDepth => {
-            let value = lower_expr_as_i64(ctx, &args[0], vars);
+            let value = lower_expr_as_u64(ctx, &args[0], vars);
             ctx.current_instr(Instr::SetExecutionDepth { value });
             let t = ctx.new_temp();
             ctx.current_instr(Instr::Const { dest: t, value: 0 });
@@ -6767,7 +6820,7 @@ fn lower_surface_builtin_call(
             dest
         }
         Builtin::GrowHeap => {
-            let bytes = lower_expr_as_i64(ctx, &args[0], vars);
+            let bytes = lower_expr_as_u64(ctx, &args[0], vars);
             let scalar = ctx.new_temp();
             ctx.current_instr(Instr::GrowHeap {
                 dest: scalar,
@@ -6776,9 +6829,9 @@ fn lower_surface_builtin_call(
             emit_int_from_u64(ctx, scalar)
         }
         Builtin::GetMerklePath => {
-            let address = lower_expr_as_i64(ctx, &args[0], vars);
-            let output = lower_expr_as_i64(ctx, &args[1], vars);
-            let root_output = args.get(2).map(|arg| lower_expr_as_i64(ctx, arg, vars));
+            let address = lower_expr_as_u64(ctx, &args[0], vars);
+            let output = lower_expr_as_u64(ctx, &args[1], vars);
+            let root_output = args.get(2).map(|arg| lower_expr_as_u64(ctx, arg, vars));
             let scalar = ctx.new_temp();
             ctx.current_instr(Instr::GetMerklePath {
                 dest: scalar,
@@ -6789,10 +6842,10 @@ fn lower_surface_builtin_call(
             emit_int_from_u64(ctx, scalar)
         }
         Builtin::GetMerkleCompact => {
-            let address = lower_expr_as_i64(ctx, &args[0], vars);
-            let output = lower_expr_as_i64(ctx, &args[1], vars);
-            let max_depth = args.get(2).map(|arg| lower_expr_as_i64(ctx, arg, vars));
-            let root_output = args.get(3).map(|arg| lower_expr_as_i64(ctx, arg, vars));
+            let address = lower_expr_as_u64(ctx, &args[0], vars);
+            let output = lower_expr_as_u64(ctx, &args[1], vars);
+            let max_depth = args.get(2).map(|arg| lower_expr_as_u64(ctx, arg, vars));
+            let root_output = args.get(3).map(|arg| lower_expr_as_u64(ctx, arg, vars));
             let scalar = ctx.new_temp();
             ctx.current_instr(Instr::GetMerkleCompact {
                 dest: scalar,
@@ -6804,10 +6857,10 @@ fn lower_surface_builtin_call(
             emit_int_from_u64(ctx, scalar)
         }
         Builtin::GetRegisterMerkleCompact => {
-            let register_index = lower_expr_as_i64(ctx, &args[0], vars);
-            let output = lower_expr_as_i64(ctx, &args[1], vars);
-            let max_depth = args.get(2).map(|arg| lower_expr_as_i64(ctx, arg, vars));
-            let root_output = args.get(3).map(|arg| lower_expr_as_i64(ctx, arg, vars));
+            let register_index = lower_expr_as_u64(ctx, &args[0], vars);
+            let output = lower_expr_as_u64(ctx, &args[1], vars);
+            let max_depth = args.get(2).map(|arg| lower_expr_as_u64(ctx, arg, vars));
+            let root_output = args.get(3).map(|arg| lower_expr_as_u64(ctx, arg, vars));
             let scalar = ctx.new_temp();
             ctx.current_instr(Instr::GetRegisterMerkleCompact {
                 dest: scalar,
@@ -6857,7 +6910,7 @@ fn lower_surface_builtin_call(
         }
         Builtin::SetAccountQuorum => {
             let account = lower_expr(ctx, &args[0], vars);
-            let quorum = lower_expr_as_i64(ctx, &args[1], vars);
+            let quorum = lower_expr_as_u64(ctx, &args[1], vars);
             ctx.current_instr(Instr::SetAccountQuorum { account, quorum });
             let t = ctx.new_temp();
             ctx.current_instr(Instr::Const { dest: t, value: 0 });
@@ -7205,8 +7258,8 @@ fn lower_surface_builtin_call(
         Builtin::StateMapRemove => lower_state_map_remove_option(ctx, args, vars),
         Builtin::KeysTake2 | Builtin::ValuesTake2 => {
             let base = lower_expr(ctx, &args[0], vars);
-            let start_t = lower_expr_as_i64(ctx, &args[1], vars);
-            let which_t = lower_expr_as_i64(ctx, &args[2], vars);
+            let start_t = lower_expr_as_u64(ctx, &args[1], vars);
+            let which_t = lower_expr_as_u64(ctx, &args[2], vars);
             let one = ctx.new_temp();
             ctx.current_instr(Instr::Const {
                 dest: one,
@@ -7261,8 +7314,8 @@ fn lower_surface_builtin_call(
         }
         Builtin::KeysValuesTake2 => {
             let base = lower_expr(ctx, &args[0], vars);
-            let start_t = lower_expr_as_i64(ctx, &args[1], vars);
-            let which_t = lower_expr_as_i64(ctx, &args[2], vars);
+            let start_t = lower_expr_as_u64(ctx, &args[1], vars);
+            let which_t = lower_expr_as_u64(ctx, &args[2], vars);
             let one = ctx.new_temp();
             ctx.current_instr(Instr::Const {
                 dest: one,
@@ -8844,6 +8897,18 @@ mod tests {
                 },
             ] if *actual_scalar == scalar && *actual_source == source_int && *value == scalar
         ));
+
+        let mut context = LowerCtx::new(Type::Unit, 64, HashMap::new(), HashMap::new());
+        let entry = context.new_label();
+        context.start_block(entry);
+        let scalar = emit_i64_const(&mut context, -1);
+        let source_int = emit_int_from_u64(&mut context, scalar);
+        context.finish_current(Terminator::Return(Some(source_int)));
+        assert!(matches!(
+            context.blocks[0].instrs.last(),
+            Some(Instr::IntFromU64 { dest, value })
+                if *dest == source_int && *value == scalar
+        ));
     }
 
     #[test]
@@ -9863,7 +9928,7 @@ mod tests {
         let materialized = instructions
             .iter()
             .filter_map(|instruction| match instruction {
-                Instr::IntFromI64 { dest, value } => Some((*dest, *value)),
+                Instr::IntFromU64 { dest, value } => Some((*dest, *value)),
                 _ => None,
             })
             .collect::<Vec<_>>();
@@ -9879,6 +9944,66 @@ mod tests {
                     if materialized.iter().any(|(source_int, _)| items.first() == Some(source_int))
             )
         }));
+    }
+
+    #[test]
+    fn list_get_converts_an_arbitrary_width_index_only_after_bounds_proof() {
+        let source =
+            "fn probe(List<int, 4> values, int index) -> Option<int> { values.get(index) }";
+        let lowered = lower(
+            &analyze(&parse(source).expect("parse List.get bounds proof"))
+                .expect("analyze List.get bounds proof"),
+        )
+        .expect("lower List.get bounds proof");
+        let function = &lowered.functions[0];
+        let conversion_block = function
+            .blocks
+            .iter()
+            .find(|block| {
+                block
+                    .instrs
+                    .iter()
+                    .any(|instruction| matches!(instruction, Instr::IntTryToU64 { .. }))
+            })
+            .expect("successful List.get arm converts its proven index");
+        let predecessor = function
+            .blocks
+            .iter()
+            .find(|block| {
+                matches!(
+                    block.terminator,
+                    Terminator::Branch { then_bb, .. } if then_bb == conversion_block.label
+                )
+            })
+            .expect("bounds-check branch dominates scalar conversion");
+
+        assert!(predecessor.instrs.iter().any(|instruction| {
+            matches!(
+                instruction,
+                Instr::NumericCompare {
+                    op: BinaryOp::Ge,
+                    kind: WideNumericKind::Int,
+                    ..
+                }
+            )
+        }));
+        assert!(predecessor.instrs.iter().any(|instruction| {
+            matches!(
+                instruction,
+                Instr::NumericCompare {
+                    op: BinaryOp::Lt,
+                    kind: WideNumericKind::Int,
+                    ..
+                }
+            )
+        }));
+        assert!(
+            predecessor
+                .instrs
+                .iter()
+                .all(|instruction| !matches!(instruction, Instr::IntTryToU64 { .. })),
+            "out-of-range indices must reach Option::none without a narrowing fault"
+        );
     }
 
     #[test]

@@ -25,9 +25,10 @@ added with new IDs; existing IDs must not change.
 | 0x000D | ProofBlob | OK |
 | 0x000E | SoracloudRequest | OK |
 | 0x000F | SoracloudResponse | OK |
-| 0x0010 | Quantity | OK |
+| 0x0010 | RetiredAmount | - |
 | 0x0011 | Int | OK |
 | 0x0012 | Decimal | OK |
+| 0x0013 | Quantity | OK |
 <!-- END GENERATED POINTER TYPES -->
 
 
@@ -42,3 +43,5 @@ Notes
   domains. `Quantity` is the nonnegative nominal ledger domain used for source
   `quantity` values; hosts reject cross-typed pointers rather than aliasing
   numeric domains.
+- `RetiredAmount` preserves `0x0010` solely to reject pre-release payloads with
+  a stable known-but-forbidden type. No ABI policy permits it.

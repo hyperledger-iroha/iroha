@@ -7126,6 +7126,8 @@ pub struct ProofApi {
     pub max_body_bytes: Bytes<u64>,
     /// Maximum proof request bodies buffered concurrently before handler admission.
     pub body_max_inflight: NonZeroUsize,
+    /// Absolute deadline for reading one admitted proof request body.
+    pub body_read_timeout: Duration,
     /// Egress budget for proof responses (bytes/sec). None disables.
     pub egress_bytes_per_sec: Option<NonZeroU64>,
     /// Burst budget for proof responses (bytes).

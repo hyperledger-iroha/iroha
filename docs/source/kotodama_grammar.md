@@ -685,11 +685,18 @@ Source code uses namespaced capabilities. Representative roots are:
 - `ledger::account::set_detail`
 - `state::get`, `state::set`, and `state::delete`
 - `crypto::sha256`, `crypto::sha3`, and signature/proof operations
-- `math::wrapping_add`, `math::isqrt`, and other deterministic arithmetic helpers
+- `math::wrapping_add`, `math::wrapping_sub`, `math::wrapping_mul`, and
+  `math::wrapping_neg` for explicitly modular 512-bit integer arithmetic
 - `debug::info` for diagnostics
 - `test::assert` and `test::assert_eq` in test builds only
 
 Flat aliases are errors. Allocation, heap growth, raw pointers, direct syscall variants, opaque instruction submission, and compiler `*_direct` helpers are not source APIs. The canonical builtin registry defines each capability's signature, effect, syscall, access behavior, gas class, and permitted execution modes.
+
+The scalar IVM operations historically exposed as `math::isqrt`, `math::abs`,
+`math::min`, `math::max`, `math::div_ceil`, `math::gcd`, and `math::mean` are not
+Kotodama V1 source helpers. They remain internal until complete signed 512-bit
+semantics and deterministic gas formulas are specified. Use ordinary checked
+operators and comparisons; no implicit 64-bit narrowing is permitted.
 
 Compiler-owned lifecycle and code-operation labels use the branded
 `seiyaku::deactivate_instance`, `seiyaku::remove_code`,

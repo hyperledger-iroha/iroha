@@ -1264,13 +1264,13 @@ mod tests {
                 source: r#"
                     seiyaku Vault {
                         error enum VaultError { Empty = 7 }
-                        state balance: i64;
+                        state int balance;
                         hajimari() { balance = 0; }
-                        kotoage fn deposit(amount: i64) authorize("CanDeposit") {
+                        kotoage fn deposit(int amount) authorize("CanDeposit") {
                             require(amount > 0, VaultError::Empty);
                             balance = balance + amount;
                         }
-                        view fn read() -> i64 { return balance; }
+                        view fn read() -> int { return balance; }
                     }
                 "#,
                 source_name: Some("vault.ko"),
@@ -1279,11 +1279,11 @@ mod tests {
         let markdown = render_contract_documentation(&output.manifest);
         for expected in [
             "# Vault",
-            "### `deposit(amount: i64)`",
+            "### `deposit(int amount)`",
             "Kind: `kotoage`/`言挙げ`",
             "Authorization: `CanDeposit`",
             "## Durable state",
-            "`balance`: `i64`",
+            "`balance`: `int`",
             "## Seiyaku errors",
             "`VaultError::Empty` = `7`",
         ] {
@@ -1297,7 +1297,7 @@ mod tests {
     #[test]
     fn formatter_validation_uses_lossless_v1_syntax() {
         format_source_text(
-            "seiyaku Demo { view fn value() -> i64 { return 1; } }",
+            "seiyaku Demo { view fn value() -> int { return 1; } }",
             Some("valid.ko"),
         )
         .expect("valid syntax");
@@ -1311,7 +1311,7 @@ mod tests {
             "formatting must preserve the selected branded script",
         );
         let error = format_source_text(
-            "seiyaku Démo { view fn value() -> i64 { return ; } }",
+            "seiyaku Démo { view fn value() -> int { return ; } }",
             Some("invalid.ko"),
         )
         .expect_err("invalid source must not be formatted");
@@ -1426,7 +1426,7 @@ mod tests {
         let source = root.join("lint.ko");
         std::fs::write(
             &source,
-            "seiyaku Lint { view fn value(unused: i64) -> i64 { return 1; } }",
+            "seiyaku Lint { view fn value(int unused) -> int { return 1; } }",
         )
         .expect("write lint source");
 
@@ -1477,7 +1477,7 @@ mod tests {
         std::fs::create_dir_all(&root).expect("create module test root");
         std::fs::write(
             &source,
-            "module Math { fn add(left: i64, right: i64) -> i64 { return left + right; } }",
+            "module Math { fn add(int left, int right) -> int { return left + right; } }",
         )
         .expect("write module source");
         let error = build(vec![
@@ -1626,7 +1626,7 @@ mod tests {
         let uri = "file:///workspace/fixes.ko";
 
         let mixed =
-            "seiyaku C { fn target(first: i64, second: i64) {} fn f() { target(1, second: 2); } }";
+            "seiyaku C { fn target(int first, int second) {} fn f() { target(1, second: 2); } }";
         let mixed_actions = lsp_code_action_items(&session, uri, mixed);
         let mixed_action = mixed_actions
             .as_array()
@@ -1688,7 +1688,7 @@ mod tests {
         );
 
         let positional =
-            "seiyaku C { struct Pair { left: i64, right: i64 } fn f() { let pair = Pair(1, 2); } }";
+            "seiyaku C { struct Pair { int left, int right } fn f() { let pair = Pair(1, 2); } }";
         let positional_actions = lsp_code_action_items(&session, uri, positional);
         let positional_action = positional_actions
             .as_array()
@@ -1721,7 +1721,7 @@ mod tests {
         let module = lsp_diagnostics(
             &session,
             "file:///workspace/math.ko",
-            "module Math { fn value() -> i64 { return 1; } }",
+            "module Math { fn value() -> int { return 1; } }",
         );
         assert!(
             module.is_empty(),
@@ -1731,7 +1731,7 @@ mod tests {
         let invalid = lsp_diagnostics(
             &session,
             "file:///workspace/broken.ko",
-            "module Broken { fn value( -> i64 { return 1; } }",
+            "module Broken { fn value( -> int { return 1; } }",
         );
         assert!(!invalid.is_empty());
     }

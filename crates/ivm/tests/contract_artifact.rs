@@ -214,7 +214,7 @@ fn verifier_rejects_mismatched_or_oversized_exact_boundary_schemas() {
     let mut argument_mismatch = entrypoint("inspect", EntryPointKind::View, 0);
     argument_mismatch.params = vec![EntrypointParamDescriptor {
         name: "value".to_owned(),
-        type_name: "i64".to_owned(),
+        type_name: "int".to_owned(),
     }];
     argument_mismatch.argument_schema = Some(EntrypointArgumentSchemaV1 {
         fields: vec![EntrypointArgumentFieldV1 {
@@ -234,7 +234,7 @@ fn verifier_rejects_mismatched_or_oversized_exact_boundary_schemas() {
     assert!(error.to_string().contains("invalid argument schema"));
 
     let mut return_mismatch = entrypoint("inspect", EntryPointKind::View, 0);
-    return_mismatch.return_type = Some("i64".to_owned());
+    return_mismatch.return_type = Some("int".to_owned());
     return_mismatch.return_schema = Some(value_type(EntrypointValueKindV1::Bool));
     let artifact = contract_artifact(1, vec![return_mismatch]);
     let error = ivm::verify_contract_artifact(&artifact)
@@ -242,7 +242,7 @@ fn verifier_rejects_mismatched_or_oversized_exact_boundary_schemas() {
     assert!(error.to_string().contains("return schema"));
 
     let mut oversized = entrypoint("inspect", EntryPointKind::View, 0);
-    oversized.return_type = Some(format!("({})", vec!["i64"; 14].join(", ")));
+    oversized.return_type = Some(format!("({})", vec!["int"; 14].join(", ")));
     oversized.return_schema = Some(EntrypointValueTypeV1 {
         nodes: std::iter::once(EntrypointValueTypeNodeV1::Tuple(14))
             .chain(std::iter::repeat_n(
@@ -368,7 +368,7 @@ fn verifier_rejects_forged_reserved_query_page_schemas() {
 fn compiler_embeds_exact_nested_return_schema_in_cntr_and_manifest() {
     let source = r#"
         seiyaku ExactReturn {
-            struct Pair { count: i64, ready: bool }
+            struct Pair { int count, bool ready }
 
             view fn inspect() -> Result<Option<Pair>, (string, bool)> {
                 return Result::ok(Option::some(Pair { count: 7, ready: true }));
@@ -478,7 +478,7 @@ fn verify_rejects_ambiguous_or_reserved_error_codes() {
 fn compiler_emits_self_describing_contract_artifact() {
     let src = r#"
         seiyaku Demo {
-            state counter: i64;
+            state int counter;
 
             hajimari() {
                 counter = 0;
@@ -680,7 +680,7 @@ fn public_entrypoint_descriptor_targets_halting_wrapper() {
         seiyaku Demo {
             kotoage fn main()  authorize("Entry") {}
 
-            kotoage fn run() -> i64  authorize("Entry") {
+            kotoage fn run() -> int  authorize("Entry") {
                 return 42;
             }
         }
@@ -712,7 +712,7 @@ fn contract_artifact_with_cntr_requires_explicit_entrypoint_selection() {
     let src = r#"
 seiyaku ContractArtifactFixture {
 
-        kotoage fn main() -> i64 authorize("Entry") {
+        kotoage fn main() -> int authorize("Entry") {
             debug::info("alpha");
             return 7;
         }
@@ -1752,7 +1752,7 @@ fn verify_rejects_invalid_dynamic_access_hints() {
         write_keys: Vec::new(),
         dynamic_reads: vec![DynamicAccessHint {
             base_key: "state:*".to_owned(),
-            key_type: "i64".to_owned(),
+            key_type: "int".to_owned(),
             bound_kind: "take".to_owned(),
             max_keys: 64,
         }],
@@ -1775,7 +1775,7 @@ fn verify_rejects_invalid_dynamic_access_hints() {
         dynamic_reads: Vec::new(),
         dynamic_writes: vec![DynamicAccessHint {
             base_key: "state:Orders".to_owned(),
-            key_type: "i64".to_owned(),
+            key_type: "int".to_owned(),
             bound_kind: "range".to_owned(),
             max_keys: 0,
         }],

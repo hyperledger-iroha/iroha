@@ -21,6 +21,8 @@ use crate::block::BlockHeader;
 
 /// Current Norito layout version of [`V2FinalityArtifact`].
 pub const V2_FINALITY_ARTIFACT_VERSION: u16 = 1;
+/// Maximum encoded BLS proof-of-possession bytes retained per validator.
+pub const MAX_VALIDATOR_POP_BYTES: usize = 256;
 
 /// Election inputs finalized for the epoch immediately following a block.
 ///
@@ -208,6 +210,18 @@ impl V2FinalityArtifact {
                 index: u32::try_from(index).unwrap_or(u32::MAX),
             });
         }
+        if let Some((index, proof)) = self
+            .validator_set_pops
+            .iter()
+            .enumerate()
+            .find(|(_, proof)| proof.len() > MAX_VALIDATOR_POP_BYTES)
+        {
+            return Err(V2FinalityValidationError::ProofOfPossessionTooLarge {
+                index: u32::try_from(index).unwrap_or(u32::MAX),
+                actual: proof.len(),
+                max: MAX_VALIDATOR_POP_BYTES,
+            });
+        }
         Ok(())
     }
 
@@ -252,7 +266,6 @@ impl V2FinalityArtifact {
     pub fn verify(&self) -> Result<(), V2QuorumCertificateVerificationError> {
         self.validate()
             .map_err(V2QuorumCertificateVerificationError::InvalidArtifact)?;
-        verify_validator_roster_pops(&self.height_context, validator_set_pops)?;
         verify_quorum_certificate_with_validator_pops(
             &self.height_context,
             &self.commit_qc,
@@ -488,6 +501,15 @@ pub enum V2FinalityValidationError {
         /// Frozen roster index.
         index: u32,
     },
+    /// One durable proof exceeds the protocol's bounded representation.
+    ProofOfPossessionTooLarge {
+        /// Frozen roster index.
+        index: u32,
+        /// Supplied proof size.
+        actual: usize,
+        /// Protocol maximum.
+        max: usize,
+    },
     /// Artifact height differs from the externally associated block height.
     AssociatedHeightMismatch {
         /// Artifact height.
@@ -553,6 +575,10 @@ impl fmt::Display for V2FinalityValidationError {
             Self::MissingProofOfPossession { index } => {
                 write!(f, "v2 finality PoP at roster index {index} is empty")
             }
+            Self::ProofOfPossessionTooLarge { index, actual, max } => write!(
+                f,
+                "v2 finality PoP at roster index {index} is {actual} bytes; maximum is {max}"
+            ),
             Self::AssociatedHeightMismatch { artifact, block } => write!(
                 f,
                 "v2 finality artifact height {artifact} does not match block height {block}"
@@ -766,6 +792,34 @@ mod tests {
     }
 
     #[test]
+    fn durable_validator_pops_are_exactly_aligned_nonempty_and_bounded() {
+        let mut missing = artifact();
+        missing.validator_set_pops.pop();
+        assert!(matches!(
+            missing.validate(),
+            Err(V2FinalityValidationError::ProofOfPossessionCount { .. })
+        ));
+
+        let mut empty = artifact();
+        empty.validator_set_pops[1].clear();
+        assert_eq!(
+            empty.validate(),
+            Err(V2FinalityValidationError::MissingProofOfPossession { index: 1 })
+        );
+
+        let mut oversized = artifact();
+        oversized.validator_set_pops[2] = vec![0xA4; MAX_VALIDATOR_POP_BYTES + 1];
+        assert_eq!(
+            oversized.validate(),
+            Err(V2FinalityValidationError::ProofOfPossessionTooLarge {
+                index: 2,
+                actual: MAX_VALIDATOR_POP_BYTES + 1,
+                max: MAX_VALIDATOR_POP_BYTES,
+            })
+        );
+    }
+
+    #[test]
     fn commit_qc_context_id_authenticates_the_exact_epoch_transition() {
         let canonical = artifact();
         canonical.validate().expect("canonical artifact");
@@ -784,7 +838,12 @@ mod tests {
             .next_epoch_snapshot
             .as_mut()
             .expect("boundary snapshot");
-        snapshot.roster[0].power += 1;
+        let replacement = KeyPair::try_from_seed(vec![0xE1; 32], Algorithm::Ed25519)
+            .expect("replacement validator key");
+        snapshot.roster[0].validator = PeerId::new(replacement.public_key().clone());
+        snapshot
+            .roster
+            .sort_by(|left, right| left.validator.cmp(&right.validator));
         snapshot.quorum = DualQuorum::from_roster(&snapshot.roster).expect("mutated valid roster");
 
         for forged in [forged_seed, forged_roster] {

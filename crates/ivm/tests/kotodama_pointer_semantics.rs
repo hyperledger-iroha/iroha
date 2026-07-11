@@ -9,7 +9,7 @@ fn pointer_cannot_participate_in_arithmetic() {
         seiyaku InvalidPointerArithmetic {
         view fn main() {
             let k = Name::parse("cursor");
-            let a = k + 1; // invalid: Name is not i64
+            let a = k + 1; // invalid: Name is not int
         }
         }
     "#;

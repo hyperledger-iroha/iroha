@@ -16185,7 +16185,6 @@ mod tests {
     fn flat_builtin_spellings_are_rejected_in_favour_of_namespaces() {
         for (flat_call, canonical) in [
             ("wrapping_add(left: 1, right: 2)", "math::wrapping_add"),
-            ("abs(-1)", "math::abs"),
             ("info(1)", "debug::info"),
             ("assert(true)", "test::assert"),
             ("assert_eq(actual: 1, expected: 1)", "test::assert_eq"),
@@ -17356,10 +17355,12 @@ mod tests {
     }
 
     #[test]
-    fn int_values_work_with_int_builtins_without_host_width_conversions() {
-        let program = parse("seiyaku C { fn f(int value) -> int { return math::abs(value); } }")
-            .expect("parse int math argument");
-        analyze(&program).expect("int builtin must accept the language int type");
+    fn adaptive_int_values_use_width_independent_operators() {
+        let program = parse(
+            "seiyaku C { fn f(int value) -> int { return value < 0 ? -value : value; } }",
+        )
+        .expect("parse width-independent int expression");
+        analyze(&program).expect("ordinary int operators must accept the complete V1 domain");
     }
 
     #[test]

@@ -480,15 +480,12 @@ enum SccpStrictJSON {
     ) throws -> UInt64 {
         guard let number = value[field] as? NSNumber,
               CFGetTypeID(number) != CFBooleanGetTypeID(),
-              number.doubleValue.isFinite,
-              number.doubleValue.rounded(.towardZero) == number.doubleValue,
-              number.doubleValue >= 0,
-              number.doubleValue <= Double(UInt64.max)
+              !CFNumberIsFloatType(number)
         else {
-            throw SccpV1Error.invalid("\(field) must be an unsigned integer")
+            throw SccpV1Error.invalid("\(field) must be a canonical unsigned JSON integer")
         }
         let result = number.uint64Value
-        guard result >= minimum, result <= maximum, number.doubleValue == Double(result) else {
+        guard number.stringValue == String(result), result >= minimum, result <= maximum else {
             throw SccpV1Error.invalid("\(field) is out of range")
         }
         return result

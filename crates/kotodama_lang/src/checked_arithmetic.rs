@@ -41,8 +41,10 @@ impl ConstantNumericError {
     /// Consensus-visible diagnostic class corresponding to the runtime fault.
     pub(crate) const fn code(self) -> &'static str {
         match self {
-            Self::Int(BigIntError::Overflow)
-            | Self::Numeric(NumericOperationError::MantissaOverflow) => "E_INT_OVERFLOW",
+            Self::Int(BigIntError::Overflow) => "E_INT_OVERFLOW",
+            Self::Numeric(NumericOperationError::MantissaOverflow) => {
+                "E_DECIMAL_MANTISSA_OVERFLOW"
+            }
             Self::Int(BigIntError::DivisionByZero)
             | Self::Numeric(NumericOperationError::DivisionByZero) => "E_DIVISION_BY_ZERO",
             Self::Int(BigIntError::NonCanonical)
@@ -240,7 +242,11 @@ fn evaluate_binary(
             Ok(ConstantNumeric::Int(ensure_int_v1(quotient)?))
         }
         (ConstantNumeric::Int(left), BinaryOp::Mod, ConstantNumeric::Int(right)) => {
-            let (_, remainder) = left.checked_div_rem(&right)?;
+            let (quotient, remainder) = left.checked_div_rem(&right)?;
+            // Division and remainder are one paired operation. `min_int / -1`
+            // therefore overflows even though its mathematical remainder is
+            // zero, matching the runtime syscall contract.
+            ensure_int_v1(quotient)?;
             Ok(ConstantNumeric::Int(ensure_int_v1(remainder)?))
         }
         (ConstantNumeric::Decimal(left), BinaryOp::Add, ConstantNumeric::Decimal(right)) => {
@@ -297,15 +303,36 @@ mod tests {
 
     #[test]
     fn integer_folding_uses_the_full_signed_domain() {
-        let maximum = BigInt::from_twos_bytes(&[
-            0xff; iroha_primitives::bigint::MAX_ENCODED_BYTES - 1
-        ])
-        .expect("positive endpoint");
+        let mut maximum_bytes = vec![0xff; MAX_MANTISSA_BYTES];
+        maximum_bytes[MAX_MANTISSA_BYTES - 1] = 0x7f;
+        let maximum = BigInt::from_twos_bytes(&maximum_bytes).expect("positive endpoint");
         assert!(matches!(
             evaluate(&binary(
                 BinaryOp::Add,
                 int(maximum),
                 int(BigInt::one()),
+                Type::Int,
+            )),
+            Err(ConstantNumericError::Int(BigIntError::Overflow))
+        ));
+
+        let mut minimum_bytes = vec![0; MAX_MANTISSA_BYTES];
+        minimum_bytes[MAX_MANTISSA_BYTES - 1] = 0x80;
+        let minimum = BigInt::from_twos_bytes(&minimum_bytes).expect("negative endpoint");
+        assert!(matches!(
+            evaluate(&binary(
+                BinaryOp::Div,
+                int(minimum.clone()),
+                int(BigInt::from(-1_i64)),
+                Type::Int,
+            )),
+            Err(ConstantNumericError::Int(BigIntError::Overflow))
+        ));
+        assert!(matches!(
+            evaluate(&binary(
+                BinaryOp::Mod,
+                int(minimum),
+                int(BigInt::from(-1_i64)),
                 Type::Int,
             )),
             Err(ConstantNumericError::Int(BigIntError::Overflow))
@@ -321,6 +348,10 @@ mod tests {
             Err(ConstantNumericError::Numeric(
                 NumericOperationError::RepeatingDecimal
             ))
+        );
+        assert_eq!(
+            ConstantNumericError::Numeric(NumericOperationError::MantissaOverflow).code(),
+            "E_DECIMAL_MANTISSA_OVERFLOW"
         );
     }
 

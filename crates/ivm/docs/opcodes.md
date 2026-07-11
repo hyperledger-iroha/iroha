@@ -165,7 +165,7 @@ hash operation is the explicit commitment/declassification boundary.
 
 Notes
 - Vector ops (`VADD*`/`VAND`/`VXOR`/`VOR`/`VROT32`, `LOAD128`/`STORE128`) are available only when the header `VECTOR` bit is set; otherwise a deterministic mode-disabled trap occurs. `SETVL` sets the logical vector length used for gas scaling and ILP vector helpers; it does not change the physical SIMD width.
-- Signature verify opcodes and hash/compression ops consume or produce data via TLV pointers when specified; see `syscalls.md` for pointer-ABI TLV layout and examples.
+- Signature verify opcodes and hash/compression ops consume or produce data via TLV pointers when specified; see `syscalls.md` for pointer-ABI TLV layout and examples. Signature verification checks the privacy classification of the complete TLV envelope (header, payload, and checksum) before parsing. A private overlap traps with `PrivacyViolation` rather than being converted into a public false result.
 
 ## Reserved ISO 20022 Messaging Slots
 
@@ -196,15 +196,21 @@ to prevent accidental reuse of their assigned values.
 
 | Hex | Mnemonic | Description |
 |----:|----------|-------------|
-| 0xA0 | `ASSERT` | Assert zero |
-| 0xA1 | `ASSERT_EQ` | Assert registers equal |
+| 0xA0 | `ASSERT` | Assert zero; private operands are rejected |
+| 0xA1 | `ASSERT_EQ` | Assert registers equal; private operands are rejected |
 | 0xA2 | `FADD` | Field addition |
 | 0xA3 | `FSUB` | Field subtraction |
 | 0xA4 | `FMUL` | Field multiplication |
-| 0xA5 | `FINV` | Field inverse |
-| 0xA6 | `ASSERT_RANGE` | Assert numeric range |
+| 0xA5 | `FINV` | Field inverse; private operands are rejected because zero is exceptional |
+| 0xA6 | `ASSERT_RANGE` | Assert numeric range; private operands are rejected |
 
 For detailed semantics see the `instruction` module in the API reference.
+
+The public-only restriction on value-dependent traps is deliberate. Whether a
+private assertion, division, absolute value, or inverse succeeds cannot be
+allowed to change the observable VM result. Total arithmetic operations may
+still propagate private tags; declassification remains limited to explicit
+commitment/proof boundaries.
 
 Note: Public parallel markers (`PARBEGIN`/`PAREND`) are no‑ops by design. `SETVL` sets only the logical vector length used for gas scaling and helpers; it does not change the physical SIMD width. Any accelerated backend must preserve bit‑exact results relative to the scalar path.
 

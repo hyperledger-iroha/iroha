@@ -554,6 +554,7 @@ mod tests {
             height: 1,
             epoch: 0,
             epoch_end_height: u64::MAX,
+            next_epoch_snapshot: None,
             mode: wire::ConsensusMode::Permissioned,
             parent_commit_qc: None,
             quorum: wire::DualQuorum::from_roster(&roster).expect("fixture quorum"),
@@ -671,7 +672,13 @@ mod tests {
             signers: vec![0, 1, 2],
             aggregate_signature: vec![0xB4; 48],
         };
-        wire::finality::V2FinalityArtifact::new(context, subject, commit_qc, None)
+        let validator_set_pops = vec![vec![0xB5]; context.roster.len()];
+        wire::finality::V2FinalityArtifact::new(
+            context,
+            subject,
+            commit_qc,
+            validator_set_pops,
+        )
     }
 
     fn authenticated_artifact_for(
@@ -714,7 +721,19 @@ mod tests {
             aggregate_signature: iroha_crypto::bls_normal_aggregate_signatures(&share_refs)
                 .expect("aggregate CommitQC"),
         };
-        wire::finality::V2FinalityArtifact::new(context, subject, commit_qc, None)
+        let validator_set_pops = keys
+            .iter()
+            .map(|key| {
+                iroha_crypto::bls_normal_pop_prove(key.private_key())
+                    .expect("fixture validator PoP")
+            })
+            .collect();
+        wire::finality::V2FinalityArtifact::new(
+            context,
+            subject,
+            commit_qc,
+            validator_set_pops,
+        )
     }
 
     #[test]

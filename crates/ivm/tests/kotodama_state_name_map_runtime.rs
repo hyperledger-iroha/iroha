@@ -1,4 +1,4 @@
-//! Regressions for durable `StateMap<Name, i64>` runtime behavior.
+//! Regressions for durable `StateMap<Name, int>` runtime behavior.
 
 use std::{collections::HashMap, str::FromStr};
 
@@ -54,8 +54,8 @@ fn run_program_with_wsv(src: &str, wsv: MockWorldStateView) -> (IVM, MockWorldSt
 fn durable_name_map_roundtrip_read_after_write() {
     let src = r#"
         seiyaku C {
-            state Foo: StateMap<Name, i64>;
-            kotoage fn main() -> i64 authorize("WriteState") {
+            state StateMap<Name, int> Foo;
+            kotoage fn main() -> int authorize("WriteState") {
                 Foo[Name::parse("alice")] = 1;
                 return Foo.get(Name::parse("alice")).unwrap_or(0);
             }
@@ -63,15 +63,15 @@ fn durable_name_map_roundtrip_read_after_write() {
     "#;
 
     let vm = run_program(src);
-    assert_eq!(vm.register(10), 1);
+    assert_eq!(common::decode_i64_register(&vm, 10), 1);
 }
 
 #[test]
 fn durable_name_map_read_modify_write_roundtrip() {
     let src = r#"
         seiyaku C {
-            state Foo: StateMap<Name, i64>;
-            kotoage fn main() -> i64 authorize("WriteState") {
+            state StateMap<Name, int> Foo;
+            kotoage fn main() -> int authorize("WriteState") {
                 Foo[Name::parse("alice")] = 1;
                 let prior = Foo.get(Name::parse("alice")).unwrap_or(0);
                 Foo[Name::parse("alice")] = prior + 1;
@@ -81,15 +81,15 @@ fn durable_name_map_read_modify_write_roundtrip() {
     "#;
 
     let vm = run_program(src);
-    assert_eq!(vm.register(10), 2);
+    assert_eq!(common::decode_i64_register(&vm, 10), 2);
 }
 
 #[test]
 fn durable_name_map_if_branch_reassignment_roundtrip() {
     let src = r#"
         seiyaku C {
-            state Foo: StateMap<Name, i64>;
-            kotoage fn main() -> i64 authorize("WriteState") {
+            state StateMap<Name, int> Foo;
+            kotoage fn main() -> int authorize("WriteState") {
                 Foo[Name::parse("alice")] = 1;
                 var value = 0;
                 if (Foo.contains(Name::parse("alice"))) {
@@ -101,20 +101,20 @@ fn durable_name_map_if_branch_reassignment_roundtrip() {
     "#;
 
     let vm = run_program(src);
-    assert_eq!(vm.register(10), 1);
+    assert_eq!(common::decode_i64_register(&vm, 10), 1);
 }
 
 #[test]
 fn durable_name_map_roundtrip_through_name_parameter() {
     let src = r#"
         seiyaku C {
-            state Foo: StateMap<Name, i64>;
+            state StateMap<Name, int> Foo;
 
-            fn read_value(key: Name) -> i64 {
+            fn read_value(Name key) -> int {
                 return Foo.get(key).unwrap_or(0);
             }
 
-            kotoage fn main() -> i64 authorize("WriteState") {
+            kotoage fn main() -> int authorize("WriteState") {
                 Foo[Name::parse("alice")] = 1;
                 return read_value(Name::parse("alice"));
             }
@@ -122,20 +122,20 @@ fn durable_name_map_roundtrip_through_name_parameter() {
     "#;
 
     let vm = run_program(src);
-    assert_eq!(vm.register(10), 1);
+    assert_eq!(common::decode_i64_register(&vm, 10), 1);
 }
 
 #[test]
 fn durable_name_map_roundtrip_through_helper() {
     let src = r#"
         seiyaku C {
-            state Foo: StateMap<Name, i64>;
+            state StateMap<Name, int> Foo;
 
-            fn read_value(key: Name) -> i64 {
+            fn read_value(Name key) -> int {
                 return Foo.ensure(key, 0);
             }
 
-            kotoage fn main() -> i64 authorize("WriteState") {
+            kotoage fn main() -> int authorize("WriteState") {
                 Foo[Name::parse("alice")] = 1;
                 return read_value(Name::parse("alice"));
             }
@@ -143,17 +143,17 @@ fn durable_name_map_roundtrip_through_helper() {
     "#;
 
     let vm = run_program(src);
-    assert_eq!(vm.register(10), 1);
+    assert_eq!(common::decode_i64_register(&vm, 10), 1);
 }
 
 #[test]
 fn durable_name_map_struct_value_roundtrip_through_helper() {
     let src = r#"
         seiyaku C {
-            struct Entry { amount: i64; active: bool; }
-            state Entries: StateMap<Name, Entry>;
+            struct Entry { int amount, bool active }
+            state StateMap<Name, Entry> Entries;
 
-            fn read_score(key: Name) -> i64 {
+            fn read_score(Name key) -> int {
                 let entry = Entries.get(key).unwrap_or(Entry { amount: 0, active: false });
                 var value = entry.amount;
                 if (entry.active) {
@@ -162,7 +162,7 @@ fn durable_name_map_struct_value_roundtrip_through_helper() {
                 return value;
             }
 
-            kotoage fn main() -> i64 authorize("WriteState") {
+            kotoage fn main() -> int authorize("WriteState") {
                 Entries[Name::parse("alice")] = Entry { amount: 41, active: true };
                 return read_score(Name::parse("alice"));
             }
@@ -170,16 +170,16 @@ fn durable_name_map_struct_value_roundtrip_through_helper() {
     "#;
 
     let vm = run_program(src);
-    assert_eq!(vm.register(10), 42);
+    assert_eq!(common::decode_i64_register(&vm, 10), 42);
 }
 
 #[test]
 fn durable_name_map_if_branch_roundtrip_through_name_parameter() {
     let src = r#"
         seiyaku C {
-            state Foo: StateMap<Name, i64>;
+            state StateMap<Name, int> Foo;
 
-            fn read_value(key: Name) -> i64 {
+            fn read_value(Name key) -> int {
                 var value = 0;
                 if (Foo.contains(key)) {
                     value = Foo.get(key).unwrap_or(0);
@@ -187,7 +187,7 @@ fn durable_name_map_if_branch_roundtrip_through_name_parameter() {
                 return value;
             }
 
-            kotoage fn main() -> i64 authorize("WriteState") {
+            kotoage fn main() -> int authorize("WriteState") {
                 Foo[Name::parse("alice")] = 1;
                 return read_value(Name::parse("alice"));
             }
@@ -195,14 +195,14 @@ fn durable_name_map_if_branch_roundtrip_through_name_parameter() {
     "#;
 
     let vm = run_program(src);
-    assert_eq!(vm.register(10), 1);
+    assert_eq!(common::decode_i64_register(&vm, 10), 1);
 }
 
 #[test]
 fn durable_name_map_roundtrip_across_wsv_invocations() {
     let write_src = r#"
         seiyaku C {
-            state Foo: StateMap<Name, i64>;
+            state StateMap<Name, int> Foo;
             kotoage fn main() authorize("WriteState") {
                 Foo[Name::parse("alice")] = 1;
             }
@@ -210,8 +210,8 @@ fn durable_name_map_roundtrip_across_wsv_invocations() {
     "#;
     let read_src = r#"
         seiyaku C {
-            state Foo: StateMap<Name, i64>;
-            view fn main() -> i64 {
+            state StateMap<Name, int> Foo;
+            view fn main() -> int {
                 return Foo.get(Name::parse("alice")).unwrap_or(0);
             }
         }
@@ -219,14 +219,14 @@ fn durable_name_map_roundtrip_across_wsv_invocations() {
 
     let (_, wsv) = run_program_with_wsv(write_src, MockWorldStateView::new());
     let (vm, _) = run_program_with_wsv(read_src, wsv);
-    assert_eq!(vm.register(10), 1);
+    assert_eq!(common::decode_i64_register(&vm, 10), 1);
 }
 
 #[test]
 fn durable_name_map_if_branch_roundtrip_across_wsv_invocations() {
     let write_src = r#"
         seiyaku C {
-            state Foo: StateMap<Name, i64>;
+            state StateMap<Name, int> Foo;
             kotoage fn main() authorize("WriteState") {
                 Foo[Name::parse("alice")] = 1;
             }
@@ -234,8 +234,8 @@ fn durable_name_map_if_branch_roundtrip_across_wsv_invocations() {
     "#;
     let read_src = r#"
         seiyaku C {
-            state Foo: StateMap<Name, i64>;
-            view fn main() -> i64 {
+            state StateMap<Name, int> Foo;
+            view fn main() -> int {
                 var value = 0;
                 if (Foo.contains(Name::parse("alice"))) {
                     value = Foo.get(Name::parse("alice")).unwrap_or(0);
@@ -247,14 +247,14 @@ fn durable_name_map_if_branch_roundtrip_across_wsv_invocations() {
 
     let (_, wsv) = run_program_with_wsv(write_src, MockWorldStateView::new());
     let (vm, _) = run_program_with_wsv(read_src, wsv);
-    assert_eq!(vm.register(10), 1);
+    assert_eq!(common::decode_i64_register(&vm, 10), 1);
 }
 
 #[test]
 fn durable_name_to_account_id_map_roundtrip() {
     let src = r#"
         seiyaku C {
-            state Foo: StateMap<Name, AccountId>;
+            state StateMap<Name, AccountId> Foo;
 
             kotoage fn main() -> bool authorize("WriteState") {
                 let key = Name::parse("alice");
@@ -266,14 +266,14 @@ fn durable_name_to_account_id_map_roundtrip() {
     "#;
 
     let vm = run_program(src);
-    assert_eq!(vm.register(10), 1);
+    assert_eq!(common::decode_i64_register(&vm, 10), 1);
 }
 
 #[test]
 fn durable_name_to_account_id_map_roundtrip_across_wsv_invocations() {
     let write_src = r#"
         seiyaku C {
-            state Foo: StateMap<Name, AccountId>;
+            state StateMap<Name, AccountId> Foo;
 
             kotoage fn main() authorize("WriteState") {
                 Foo[Name::parse("alice")] = context::authority();
@@ -282,7 +282,7 @@ fn durable_name_to_account_id_map_roundtrip_across_wsv_invocations() {
     "#;
     let read_src = r#"
         seiyaku C {
-            state Foo: StateMap<Name, AccountId>;
+            state StateMap<Name, AccountId> Foo;
 
             view fn main() -> bool {
                 let key = Name::parse("alice");
@@ -294,14 +294,14 @@ fn durable_name_to_account_id_map_roundtrip_across_wsv_invocations() {
 
     let (_, wsv) = run_program_with_wsv(write_src, MockWorldStateView::new());
     let (vm, _) = run_program_with_wsv(read_src, wsv);
-    assert_eq!(vm.register(10), 1);
+    assert_eq!(common::decode_i64_register(&vm, 10), 1);
 }
 
 #[test]
 fn durable_name_to_blob_map_write_from_json_hex_roundtrip() {
     let src = r#"
         seiyaku C {
-            state Foo: StateMap<Name, bytes>;
+            state StateMap<Name, bytes> Foo;
 
             kotoage fn main() -> bool authorize("WriteState") {
                 let ev = Json::parse("{\"value_hex\":\"0x68656c6c6f\"}");
@@ -317,20 +317,20 @@ fn durable_name_to_blob_map_write_from_json_hex_roundtrip() {
     "#;
 
     let vm = run_program(src);
-    assert_eq!(vm.register(10), 1);
+    assert_eq!(common::decode_i64_register(&vm, 10), 1);
 }
 
 #[test]
 fn durable_name_map_key_survives_function_call() {
     let src = r#"
         seiyaku C {
-            state Foo: StateMap<Name, i64>;
+            state StateMap<Name, int> Foo;
 
-            fn touch() -> i64 {
+            fn touch() -> int {
                 return 7;
             }
 
-            kotoage fn main() -> i64 authorize("WriteState") {
+            kotoage fn main() -> int authorize("WriteState") {
                 let key = Name::parse("alice");
                 Foo[key] = 1;
                 let ignored = touch();
@@ -340,17 +340,17 @@ fn durable_name_map_key_survives_function_call() {
     "#;
 
     let vm = run_program(src);
-    assert_eq!(vm.register(10), 1);
+    assert_eq!(common::decode_i64_register(&vm, 10), 1);
 }
 
 #[test]
 fn durable_name_map_branch_value_drives_following_state_set() {
     let src = r#"
         seiyaku C {
-            state Counter: StateMap<i64, i64>;
-            state Foo: StateMap<Name, i64>;
+            state StateMap<int, int> Counter;
+            state StateMap<Name, int> Foo;
 
-            kotoage fn main() -> i64 authorize("WriteState") {
+            kotoage fn main() -> int authorize("WriteState") {
                 let key = Name::parse("alice");
                 Foo[key] = 1;
 
@@ -366,16 +366,16 @@ fn durable_name_map_branch_value_drives_following_state_set() {
     "#;
 
     let vm = run_program(src);
-    assert_eq!(vm.register(10), 2);
+    assert_eq!(common::decode_i64_register(&vm, 10), 2);
 }
 
 #[test]
 fn durable_name_map_branch_value_survives_following_addition() {
     let src = r#"
         seiyaku C {
-            state Foo: StateMap<Name, i64>;
+            state StateMap<Name, int> Foo;
 
-            kotoage fn main() -> i64 authorize("WriteState") {
+            kotoage fn main() -> int authorize("WriteState") {
                 let key = Name::parse("alice");
                 Foo[key] = 1;
 
@@ -390,17 +390,17 @@ fn durable_name_map_branch_value_survives_following_addition() {
     "#;
 
     let vm = run_program(src);
-    assert_eq!(vm.register(10), 2);
+    assert_eq!(common::decode_i64_register(&vm, 10), 2);
 }
 
 #[test]
 fn durable_name_map_branch_value_survives_path_work() {
     let src = r#"
         seiyaku C {
-            state Foo: StateMap<Name, i64>;
-            state EntryByPosition: StateMap<i64, i64>;
+            state StateMap<Name, int> Foo;
+            state StateMap<int, int> EntryByPosition;
 
-            kotoage fn main() -> i64 authorize("WriteState") {
+            kotoage fn main() -> int authorize("WriteState") {
                 let key = Name::parse("alice");
                 Foo[key] = 1;
 
@@ -416,25 +416,25 @@ fn durable_name_map_branch_value_survives_path_work() {
     "#;
 
     let vm = run_program(src);
-    assert_eq!(vm.register(10), 1);
+    assert_eq!(common::decode_i64_register(&vm, 10), 1);
 }
 
 #[test]
 fn durable_name_map_branch_value_survives_following_state_work() {
     let src = r#"
         seiyaku C {
-            state Counter: StateMap<i64, i64>;
-            state CountByKey: StateMap<Name, i64>;
-            state IndexById: StateMap<Name, i64>;
-            state EntryByPosition: StateMap<i64, i64>;
+            state StateMap<int, int> Counter;
+            state StateMap<Name, int> CountByKey;
+            state StateMap<Name, int> IndexById;
+            state StateMap<int, int> EntryByPosition;
 
-            fn next_index() -> i64 {
+            fn next_index() -> int {
                 let value = Counter.ensure(1, 0);
                 Counter[1] = value + 1;
                 return value;
             }
 
-            kotoage fn main() -> i64 authorize("WriteState") {
+            kotoage fn main() -> int authorize("WriteState") {
                 let tranche_id = Name::parse("t2");
                 let beneficiary_lookup_key = Name::parse("alice");
                 CountByKey[beneficiary_lookup_key] = 1;
@@ -454,5 +454,5 @@ fn durable_name_map_branch_value_survives_following_state_work() {
     "#;
 
     let vm = run_program(src);
-    assert_eq!(vm.register(10), 2);
+    assert_eq!(common::decode_i64_register(&vm, 10), 2);
 }

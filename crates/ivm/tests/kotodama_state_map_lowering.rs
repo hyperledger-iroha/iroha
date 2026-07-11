@@ -96,7 +96,7 @@ fn kotodama_nested_struct_map_roundtrip() {
     vm.load_program(&code).expect("load nested map program");
     common::select_kotodama_entrypoint(&mut vm, &code, "main");
     vm.run().expect("execute nested map program");
-    assert_eq!(vm.register(10), 33);
+    assert_eq!(common::decode_i64_register(&vm, 10), 33);
 }
 
 #[test]

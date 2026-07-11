@@ -19,6 +19,6 @@ fn user_defined_call_returns_42() {
     vm.load_program(&program).expect("load program");
     common::select_kotodama_entrypoint(&mut vm, &program, "main");
     vm.run().expect("run VM");
-    // Entry function returns via r10
-    assert_eq!(vm.register(10), 42);
+    // Source `int` values return through typed pointer-ABI registers.
+    assert_eq!(common::decode_i64_register(&vm, 10), 42);
 }

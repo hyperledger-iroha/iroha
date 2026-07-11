@@ -9,7 +9,7 @@ use iroha_core::bridge::{
     BridgeFinalityError, BridgeStateReadOnly, FinalityProofVerificationConfig,
     build_finality_proof, verify_finality_proof,
 };
-use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, PublicKey, Signature, SignatureOf};
+use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature, SignatureOf};
 use iroha_data_model::{
     ChainId,
     block::{
@@ -27,7 +27,6 @@ struct Fixture {
     chain_id: ChainId,
     block: Arc<SignedBlock>,
     artifact: V2FinalityArtifact,
-    keys: Vec<KeyPair>,
     pops: Vec<Vec<u8>>,
 }
 
@@ -74,6 +73,7 @@ fn fixture() -> Fixture {
         height: 1,
         epoch: 0,
         epoch_end_height: 10,
+        next_epoch_snapshot: None,
         mode: ConsensusMode::Npos,
         parent_commit_qc: None,
         quorum: DualQuorum::from_roster(&roster).expect("valid roster"),
@@ -131,12 +131,11 @@ fn fixture() -> Fixture {
             iroha_crypto::bls_normal_pop_prove(key.private_key()).expect("derive validator PoP")
         })
         .collect::<Vec<_>>();
-    let artifact = V2FinalityArtifact::new(context, subject, commit_qc, None);
+    let artifact = V2FinalityArtifact::new(context, subject, commit_qc, pops.clone());
     Fixture {
         chain_id,
         block,
         artifact,
-        keys,
         pops,
     }
 }
@@ -145,7 +144,6 @@ struct TestState {
     chain_id: ChainId,
     block: Option<Arc<SignedBlock>>,
     artifact: Result<Option<V2FinalityArtifact>, String>,
-    pops: Vec<(PublicKey, Vec<u8>)>,
 }
 
 impl BridgeStateReadOnly for TestState {
@@ -166,12 +164,6 @@ impl BridgeStateReadOnly for TestState {
     ) -> Result<Option<V2FinalityArtifact>, String> {
         self.artifact.clone()
     }
-
-    fn bridge_validator_pop(&self, public_key: &PublicKey) -> Option<Vec<u8>> {
-        self.pops
-            .iter()
-            .find_map(|(key, pop)| (key == public_key).then(|| pop.clone()))
-    }
 }
 
 fn state_from_fixture(fixture: &Fixture) -> TestState {
@@ -179,17 +171,11 @@ fn state_from_fixture(fixture: &Fixture) -> TestState {
         chain_id: fixture.chain_id.clone(),
         block: Some(fixture.block.clone()),
         artifact: Ok(Some(fixture.artifact.clone())),
-        pops: fixture
-            .keys
-            .iter()
-            .zip(&fixture.pops)
-            .map(|(key, pop)| (key.public_key().clone(), pop.clone()))
-            .collect(),
     }
 }
 
 #[test]
-fn builder_returns_only_the_exact_v2_artifact_and_aligned_pops() {
+fn builder_returns_only_the_exact_self_contained_v2_artifact() {
     let fixture = fixture();
     let state = state_from_fixture(&fixture);
 
@@ -197,10 +183,10 @@ fn builder_returns_only_the_exact_v2_artifact_and_aligned_pops() {
 
     assert_eq!(proof.block_header, fixture.block.header());
     assert_eq!(proof.finality_artifact, fixture.artifact);
-    assert_eq!(proof.validator_set_pops, fixture.pops);
+    assert_eq!(proof.finality_artifact.validator_set_pops, fixture.pops);
     proof
         .finality_artifact
-        .verify_with_validator_pops(&proof.validator_set_pops)
+        .verify()
         .expect("builder output verifies");
 }
 
@@ -222,7 +208,7 @@ fn builder_fails_closed_for_absent_or_unreadable_v2_artifact() {
 }
 
 #[test]
-fn builder_rejects_artifact_block_chain_and_pop_mismatches() {
+fn builder_rejects_artifact_block_chain_and_durable_pop_attacks() {
     let fixture = fixture();
     let mut state = state_from_fixture(&fixture);
     let mut mismatched = fixture.artifact.clone();
@@ -241,11 +227,22 @@ fn builder_rejects_artifact_block_chain_and_pop_mismatches() {
     );
 
     let mut state = state_from_fixture(&fixture);
-    state.pops.pop();
-    assert_eq!(
+    let mut missing_pop = fixture.artifact.clone();
+    missing_pop.validator_set_pops.pop();
+    state.artifact = Ok(Some(missing_pop));
+    assert!(matches!(
         build_finality_proof(&state, 1),
-        Err(BridgeFinalityError::MissingValidatorPop { index: 3 })
-    );
+        Err(BridgeFinalityError::InvalidFinalityArtifact { height: 1, .. })
+    ));
+
+    let mut state = state_from_fixture(&fixture);
+    let mut forged_pop = fixture.artifact.clone();
+    forged_pop.validator_set_pops[0][0] ^= 0x80;
+    state.artifact = Ok(Some(forged_pop));
+    assert!(matches!(
+        build_finality_proof(&state, 1),
+        Err(BridgeFinalityError::InvalidFinalityArtifact { height: 1, .. })
+    ));
 }
 
 #[test]

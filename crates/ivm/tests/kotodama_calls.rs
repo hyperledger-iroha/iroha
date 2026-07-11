@@ -20,7 +20,7 @@ fn nested_function_calls_work() {
     vm.load_program(&code).unwrap();
     common::select_kotodama_entrypoint(&mut vm, &code, "main");
     vm.run().expect("execute nested calls");
-    assert_eq!(vm.register(10), 7);
+    assert_eq!(common::decode_i64_register(&vm, 10), 7);
 }
 
 #[test]
@@ -40,5 +40,5 @@ fn multi_return_call_and_tuple_use() {
     vm.load_program(&code).unwrap();
     common::select_kotodama_entrypoint(&mut vm, &code, "main");
     vm.run().expect("execute multi-return");
-    assert_eq!(vm.register(10), 11);
+    assert_eq!(common::decode_i64_register(&vm, 10), 11);
 }

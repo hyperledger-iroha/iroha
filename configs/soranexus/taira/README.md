@@ -1041,9 +1041,10 @@ From `../iroha2-block-explorer-web`:
      script patches them from `configs/soranexus/taira/config.toml`, but a
      stale bundle can still bring the old default back.
    - confirm those peer configs also retain the Taira `[sumeragi.block]`
-     `max_transactions = 96`, `max_payload_bytes = 16777216`, and
-     `proposal_queue_scan_multiplier = 4` bounds before running public write
-     canaries or scenario sweeps. Fast-finality caps are retired in v2.
+     `max_transactions = 96`, `max_ivm_transactions = 32`,
+     `max_payload_bytes = 16777216`, and `proposal_queue_scan_multiplier = 4`
+     bounds before running public write canaries or scenario sweeps.
+     Fast-finality caps are retired in v2.
    - keep `[sorafs.quota] storage_pin_max_events = 64` in the Taira profile and
      served peer configs; otherwise a handful of failed storage-pin probes can
      exhaust the default `4 requests / 3600s` window before a real

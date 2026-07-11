@@ -1277,7 +1277,6 @@ impl CoreHost {
             syscalls::STATE_MAP_MAX_KEY_BYTES,
         ))
     }
-
 }
 
 // Provide a Default impl to satisfy clippy::new_without_default without changing API.
@@ -3793,10 +3792,7 @@ mod tests {
         );
         assert_eq!(
             get_gas,
-            CoreHost::json_gas(
-                object_with_value_len + key_name_bytes.len(),
-                16
-            )
+            CoreHost::json_gas(object_with_value_len + key_name_bytes.len(), 16)
         );
 
         let name: Name = "wonderland".parse().expect("name");
@@ -4303,7 +4299,11 @@ mod tests {
             assert_eq!(quantity.to_string(), "1.25");
         }
 
-        for invalid in [r#"{"amount":"-1"}"#, r#"{"amount":"1.2500"}"#, r#"{"amount":1}"#] {
+        for invalid in [
+            r#"{"amount":"-1"}"#,
+            r#"{"amount":"1.2500"}"#,
+            r#"{"amount":1}"#,
+        ] {
             let invalid = Json::from_str_norito(invalid).expect("invalid quantity JSON");
             let invalid_ptr = vm
                 .alloc_input_tlv(&make_pointer_tlv(

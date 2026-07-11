@@ -169,8 +169,22 @@ Rounded division requires an output scale and one of these stable modes:
 | 5 | `nearest_away` | nearest, ties away from zero |
 | 6 | `nearest_toward_zero` | nearest, ties toward zero |
 
-Decimal-to-int conversion is exact by default. Named truncating and rounded
-conversions are available. Quantity conversion is checked and explicit.
+The source conversion surface is explicit:
+
+```text
+decimal::from_int(value)
+decimal::to_int_exact(value)
+decimal::to_int_trunc(value)
+decimal::to_int_round(value, mode)
+quantity::try_from_int(value)
+quantity::try_from_decimal(value)
+decimal::from_quantity(value)
+```
+
+Decimal-to-int conversion is exact by default. Truncating and rounded forms
+must be named. Quantity conversions are checked and return a recoverable
+`Result<quantity, int>` fault value. Width-specific constructors and generic
+`numeric::*` arithmetic helpers are not part of V1.
 
 Checked negation, addition, subtraction, multiplication, division, and
 remainder fail rather than wrap. The explicit integer wrapping operations use
@@ -181,6 +195,11 @@ V1 defines no source bitwise or shift operators. A future operation must first
 specify its complete 512-bit two's-complement semantics, valid shift counts,
 gas, and ABI surface; host-language bigint behavior is never inherited
 implicitly.
+
+The scalar IVM helpers formerly surfaced as `math::isqrt`, `math::abs`,
+`math::min`, `math::max`, `math::div_ceil`, `math::gcd`, and `math::mean` are
+also not source operations in V1. They cannot acquire an implicit 64-bit input
+domain merely because the underlying VM has scalar instructions.
 
 ## Canonical wire values
 
@@ -212,9 +231,10 @@ seven-byte type/version/length header and a 32-byte payload hash, for maxima of
 Pointer type IDs are:
 
 ```text
-0x0010  QuantityValueV1
+0x0010  retired Amount (known, permanently disallowed)
 0x0011  IntValueV1
 0x0012  DecimalValueV1
+0x0013  QuantityValueV1
 ```
 
 Numeric equality, map-key hashing, and collection ordering operate on the

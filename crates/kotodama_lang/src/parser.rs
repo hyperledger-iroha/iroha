@@ -4393,7 +4393,14 @@ fn removed_free_helper_message(name: &str) -> Option<&'static str> {
         | "numeric::lt"
         | "numeric::le"
         | "numeric::gt"
-        | "numeric::ge" => Some(
+        | "numeric::ge"
+        | "math::isqrt"
+        | "math::abs"
+        | "math::min"
+        | "math::max"
+        | "math::div_ceil"
+        | "math::gcd"
+        | "math::mean" => Some(
             "generic numeric helpers are not part of Kotodama V1; use operators and the named int, decimal, or quantity conversions",
         ),
         "contains" | "std::map::contains" | "has" | "std::map::has" => {
@@ -4479,6 +4486,13 @@ fn removed_free_helper_code(name: &str) -> &'static str {
             | "numeric::le"
             | "numeric::gt"
             | "numeric::ge"
+            | "math::isqrt"
+            | "math::abs"
+            | "math::min"
+            | "math::max"
+            | "math::div_ceil"
+            | "math::gcd"
+            | "math::mean"
     ) {
         "E_RETIRED_NUMERIC_HELPER"
     } else if matches!(
@@ -5146,6 +5160,7 @@ mod tests {
         for source in [
             "module M { fn f() { let value = numeric::add(left: 1, right: 2); } }",
             "module M { fn f() { let value = numeric::to_i64(1); } }",
+            "module M { fn f() { let value = math::isqrt(9); } }",
             "module M { fn f() { let value = json::set_i64(json::object(), Name::parse(\"n\"), 1); } }",
             "module M { fn f() { let value = json::set_int(json::object(), Name::parse(\"n\"), 1); } }",
         ] {
@@ -5625,6 +5640,33 @@ mod tests {
             let error = parse_module(&format!("fn main() {{ let int value = {spelling}; }}"))
                 .expect_err("out-of-domain int literal must fail");
             assert!(error.contains("E_INT_LITERAL_OVERFLOW"), "{error}");
+        }
+    }
+
+    #[test]
+    fn radix_literals_use_the_same_signed_512_bit_domain() {
+        let maximum_hex = format!("0x7{}", "f".repeat(127));
+        let minimum_hex = format!("-0x8{}", "0".repeat(127));
+        let maximum_binary = format!("0b{}", "1".repeat(511));
+        let minimum_binary = format!("-0b1{}", "0".repeat(511));
+        for spelling in [maximum_hex, minimum_hex, maximum_binary, minimum_binary] {
+            parse_module(&format!("fn main() {{ let int value = {spelling}; }}"))
+                .unwrap_or_else(|error| panic!("signed endpoint `{spelling}` failed: {error}"));
+        }
+
+        let positive_neighbor_hex = format!("0x8{}", "0".repeat(127));
+        let negative_neighbor_hex = format!("-0x8{}1", "0".repeat(126));
+        let positive_neighbor_binary = format!("0b1{}", "0".repeat(511));
+        let negative_neighbor_binary = format!("-0b1{}1", "0".repeat(510));
+        for spelling in [
+            positive_neighbor_hex,
+            negative_neighbor_hex,
+            positive_neighbor_binary,
+            negative_neighbor_binary,
+        ] {
+            let error = parse_module(&format!("fn main() {{ let int value = {spelling}; }}"))
+                .expect_err("neighbor outside the signed domain must fail");
+            assert!(error.contains("E_INT_LITERAL_OVERFLOW"), "{spelling}: {error}");
         }
     }
 

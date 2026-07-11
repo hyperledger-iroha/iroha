@@ -3363,8 +3363,7 @@ mod tests {
                 10 => candidate.semantic_proof_profile_hash[0] ^= 1,
                 11 => candidate.sora_finality_anchor_hash[0] ^= 1,
                 12 => {
-                    candidate.circuit_artifact_sha256 =
-                        FORBIDDEN_SIGNAL_BINDING_CIRCUIT_SHA256;
+                    candidate.circuit_artifact_sha256 = FORBIDDEN_SIGNAL_BINDING_CIRCUIT_SHA256;
                 }
                 _ => unreachable!(),
             }

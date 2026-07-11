@@ -35,6 +35,33 @@ const abortSignalReasonGetter =
     ? null
     : (Object.getOwnPropertyDescriptor(AbortSignal.prototype, "reason")?.get ??
       null);
+const abortSignalEventTargetPrototype =
+  typeof AbortSignal === "undefined"
+    ? null
+    : Object.getPrototypeOf(AbortSignal.prototype);
+const abortSignalAddEventListener =
+  abortSignalEventTargetPrototype === null
+    ? null
+    : (Object.getOwnPropertyDescriptor(
+        abortSignalEventTargetPrototype,
+        "addEventListener",
+      )?.value ?? null);
+const abortSignalRemoveEventListener =
+  abortSignalEventTargetPrototype === null
+    ? null
+    : (Object.getOwnPropertyDescriptor(
+        abortSignalEventTargetPrototype,
+        "removeEventListener",
+      )?.value ?? null);
+const typedArrayPrototype = Object.getPrototypeOf(Uint8Array.prototype);
+const typedArrayBufferGetter = Object.getOwnPropertyDescriptor(
+  typedArrayPrototype,
+  "buffer",
+)?.get;
+const typedArrayByteLengthGetter = Object.getOwnPropertyDescriptor(
+  typedArrayPrototype,
+  "byteLength",
+)?.get;
 
 function assertByteLength(length, maxBytes, context) {
   if (maxBytes !== undefined && length > maxBytes) {
@@ -389,6 +416,16 @@ const FINALIZE_OPTION_FIELDS = new Set([
   "signingPublicKey",
   "toriiClient",
 ]);
+const STATUS_WAIT_OPTION_FIELDS = Object.freeze([
+  "intervalMs",
+  "timeoutMs",
+  "maxAttempts",
+  "scope",
+  "successStatuses",
+  "failureStatuses",
+  "onStatus",
+  "signal",
+]);
 const CONNECT_OPTION_FIELDS = new Set([
   "sid",
   "chainId",
@@ -437,34 +474,47 @@ const BROWSER_CONNECT_APPROVAL_FIELDS = new Set([
 function projectBrowserConnectApproval(value) {
   // Browser Connect verifies the approval proof; the facade keeps only the
   // account identity and never treats the X25519 wallet key as a signing key.
-  const approval = snapshotDataFields(
-    value,
-    BROWSER_CONNECT_APPROVAL_FIELDS,
-    "browser Connect approval",
-    "invalid_wallet_approval",
-  );
+  let approval;
+  try {
+    approval = snapshotDataFields(
+      value,
+      BROWSER_CONNECT_APPROVAL_FIELDS,
+      "browser Connect approval",
+      "invalid_wallet_approval",
+    );
+  } catch (error) {
+    throw new NexusAppError(
+      "invalid_wallet_approval",
+      "browser Connect approval must be an exact data-only proof envelope",
+      error,
+    );
+  }
   for (const [field, byteLength] of [
     ["walletPublicKey", 32],
     ["signature", 64],
   ]) {
-    let bytes;
     try {
-      bytes = toBuffer(
-        approval[field],
-        `browser Connect approval.${field}`,
-        { maxBytes: byteLength },
+      const bytes = approval[field];
+      const buffer = Reflect.apply(typedArrayBufferGetter, bytes, []);
+      const actualByteLength = Reflect.apply(
+        typedArrayByteLengthGetter,
+        bytes,
+        [],
       );
+      if (
+        !(bytes instanceof Uint8Array) ||
+        Object.getPrototypeOf(bytes) !== Uint8Array.prototype ||
+        (typeof SharedArrayBuffer !== "undefined" &&
+          buffer instanceof SharedArrayBuffer) ||
+        actualByteLength !== byteLength
+      ) {
+        throw new TypeError("invalid browser Connect proof bytes");
+      }
     } catch (error) {
       throw new NexusAppError(
         "invalid_wallet_approval",
         `browser Connect approval.${field} must be exactly ${byteLength} bytes`,
         error,
-      );
-    }
-    if (bytes.length !== byteLength) {
-      throw new NexusAppError(
-        "invalid_wallet_approval",
-        `browser Connect approval.${field} must be exactly ${byteLength} bytes`,
       );
     }
   }
@@ -917,7 +967,7 @@ function submissionHashHex(submission) {
 
 function maybeInvoke(method, receiver, ...args) {
   if (typeof method === "function") {
-    return method.apply(receiver, args);
+    return Reflect.apply(method, receiver, args);
   }
   return undefined;
 }
@@ -963,7 +1013,7 @@ function normalizePositiveInteger(value, context) {
 
 function normalizeStatusSet(value, fallback, context) {
   const source = value === undefined || value === null ? fallback : value;
-  if (typeof source === "string" || source?.[Symbol.iterator] === undefined) {
+  if (typeof source === "string") {
     throw new TypeError(`${context} must be an iterable of status strings`);
   }
   const result = new Set();
@@ -999,28 +1049,60 @@ function normalizeStatusScope(value) {
 }
 
 function abortSignalState(signal) {
-  if (abortSignalAbortedGetter !== null) {
-    try {
-      return {
-        aborted: Reflect.apply(abortSignalAbortedGetter, signal, []),
-        reason:
-          abortSignalReasonGetter === null
-            ? undefined
-            : Reflect.apply(abortSignalReasonGetter, signal, []),
-      };
-    } catch {
-      // Fall through for explicitly supported AbortSignal-like test doubles.
-    }
-  }
-  const aborted = Object.getOwnPropertyDescriptor(signal, "aborted");
-  if (!aborted || !("value" in aborted) || typeof aborted.value !== "boolean") {
+  if (abortSignalAbortedGetter === null) {
     throw new TypeError("transaction status signal must be an AbortSignal");
   }
-  const reason = Object.getOwnPropertyDescriptor(signal, "reason");
-  return {
-    aborted: aborted.value,
-    reason: reason && "value" in reason ? reason.value : undefined,
-  };
+  try {
+    return {
+      aborted: Reflect.apply(abortSignalAbortedGetter, signal, []),
+      reason:
+        abortSignalReasonGetter === null
+          ? undefined
+          : Reflect.apply(abortSignalReasonGetter, signal, []),
+    };
+  } catch (error) {
+    throw new TypeError("transaction status signal must be an AbortSignal", {
+      cause: error,
+    });
+  }
+}
+
+function abortReasonOrDefault(reason) {
+  return reason === undefined ? new Error("operation aborted") : reason;
+}
+
+function addAbortSignalListener(signal, listener) {
+  abortSignalState(signal);
+  if (typeof abortSignalAddEventListener !== "function") {
+    throw new TypeError("transaction status signal must be an AbortSignal");
+  }
+  Reflect.apply(abortSignalAddEventListener, signal, [
+    "abort",
+    listener,
+    { once: true },
+  ]);
+}
+
+function removeAbortSignalListener(signal, listener) {
+  abortSignalState(signal);
+  if (typeof abortSignalRemoveEventListener !== "function") {
+    throw new TypeError("transaction status signal must be an AbortSignal");
+  }
+  Reflect.apply(abortSignalRemoveEventListener, signal, ["abort", listener]);
+}
+
+function throwIfAbortSignalAborted(signal) {
+  if (signal === null) return;
+  const { aborted, reason } = abortSignalState(signal);
+  if (aborted) throw abortReasonOrDefault(reason);
+}
+
+function abortControllerWithReason(controller, reason) {
+  if (reason === undefined) {
+    controller.abort();
+  } else {
+    controller.abort(reason);
+  }
 }
 
 function normalizeTransactionStatusOptions(options = {}) {
@@ -1055,15 +1137,12 @@ function normalizeTransactionStatusOptions(options = {}) {
     throw new TypeError("transaction status onStatus must be a function");
   }
   const signal = options.signal ?? null;
-  if (
-    signal !== null &&
-    (typeof signal !== "object" ||
-      typeof signal.addEventListener !== "function" ||
-      typeof signal.removeEventListener !== "function")
-  ) {
-    throw new TypeError("transaction status signal must be an AbortSignal");
+  if (signal !== null) {
+    if (typeof signal !== "object") {
+      throw new TypeError("transaction status signal must be an AbortSignal");
+    }
+    abortSignalState(signal);
   }
-  if (signal !== null) abortSignalState(signal);
   const successStatuses = normalizeStatusSet(
     options.successStatuses,
     DEFAULT_SUCCESS_STATUSES,
@@ -1091,18 +1170,23 @@ function normalizeTransactionStatusOptions(options = {}) {
   });
 }
 
-function throwIfStatusWaitAborted(statusOptions, shouldWait) {
+function throwIfStatusWaitAborted(statusOptions, shouldWait, context = {}) {
   if (!shouldWait || statusOptions.signal === null) return;
   const { aborted, reason } = abortSignalState(statusOptions.signal);
   if (!aborted) return;
-  const cause =
-    reason === undefined
-      ? new Error("operation aborted")
-      : reason;
+  const cause = abortReasonOrDefault(reason);
+  const submitted = context.submissionState === "submitted";
   throw new NexusAppError(
-    "status_wait_failed",
-    "transaction status wait was aborted before submission",
+    submitted ? "status_wait_aborted" : "operation_aborted",
+    submitted
+      ? "transaction status wait was aborted after submission"
+      : "transaction submission was aborted before dispatch",
     cause,
+    {
+      phase: submitted ? "status_wait" : "submission",
+      submissionState: submitted ? "submitted" : "not_submitted",
+      ...context,
+    },
   );
 }
 
@@ -1112,23 +1196,30 @@ function responseHeader(response, name) {
     : null;
 }
 
-async function cancelResponseBody(response) {
+async function cancelResponseBody(response, signal = null) {
   try {
-    await response?.body?.cancel?.();
+    const body = response?.body;
+    const cancel = body?.cancel;
+    if (typeof cancel === "function") {
+      await awaitStatusWithGuards(Reflect.apply(cancel, body, []), {
+        signal,
+        timeoutMs: null,
+      });
+    }
   } catch {
     // Cancellation is best-effort; preserve the validation or transport result.
   }
 }
 
-async function readBoundedResponseText(response, context) {
+async function readBoundedResponseText(response, context, signal = null) {
   const declaredLength = responseHeader(response, "content-length");
   if (declaredLength !== null && declaredLength !== undefined) {
     if (!/^(?:0|[1-9]\d*)$/u.test(declaredLength)) {
-      await cancelResponseBody(response);
+      await cancelResponseBody(response, signal);
       throw new Error(`${context} returned an invalid Content-Length`);
     }
     if (BigInt(declaredLength) > BigInt(MAX_TORII_RESPONSE_BYTES)) {
-      await cancelResponseBody(response);
+      await cancelResponseBody(response, signal);
       throw new Error(`${context} exceeds ${MAX_TORII_RESPONSE_BYTES} response bytes`);
     }
   }
@@ -1138,7 +1229,10 @@ async function readBoundedResponseText(response, context) {
     let total = 0;
     try {
       while (true) {
-        const { done, value } = await reader.read();
+        const { done, value } = await awaitStatusWithGuards(reader.read(), {
+          signal,
+          timeoutMs: null,
+        });
         if (done) break;
         if (!(value instanceof Uint8Array)) {
           throw new Error(`${context} returned an invalid response stream`);
@@ -1151,7 +1245,10 @@ async function readBoundedResponseText(response, context) {
       }
     } catch (error) {
       try {
-        await reader.cancel(error);
+        await awaitStatusWithGuards(reader.cancel(error), {
+          signal,
+          timeoutMs: null,
+        });
       } catch {
         // Preserve the original bounded-read failure.
       }
@@ -1170,7 +1267,12 @@ async function readBoundedResponseText(response, context) {
     }
   }
   if (typeof response?.arrayBuffer === "function") {
-    const bytes = new Uint8Array(await response.arrayBuffer());
+    const bytes = new Uint8Array(
+      await awaitStatusWithGuards(response.arrayBuffer(), {
+        signal,
+        timeoutMs: null,
+      }),
+    );
     if (bytes.byteLength > MAX_TORII_RESPONSE_BYTES) {
       throw new Error(`${context} exceeds ${MAX_TORII_RESPONSE_BYTES} response bytes`);
     }
@@ -1181,7 +1283,10 @@ async function readBoundedResponseText(response, context) {
     }
   }
   if (typeof response?.text === "function") {
-    const text = await response.text();
+    const text = await awaitStatusWithGuards(response.text(), {
+      signal,
+      timeoutMs: null,
+    });
     if (Buffer.byteLength(text, "utf8") > MAX_TORII_RESPONSE_BYTES) {
       throw new Error(`${context} exceeds ${MAX_TORII_RESPONSE_BYTES} response bytes`);
     }
@@ -1222,22 +1327,149 @@ function pipelineStatusKind(payload) {
 }
 
 function delayWithSignal(milliseconds, signal) {
+  if (signal === null) {
+    return milliseconds === 0
+      ? Promise.resolve()
+      : new Promise((resolve) => setTimeout(resolve, milliseconds));
+  }
+  try {
+    throwIfAbortSignalAborted(signal);
+  } catch (error) {
+    return Promise.reject(error);
+  }
   if (milliseconds === 0) return Promise.resolve();
   return new Promise((resolve, reject) => {
-    if (signal?.aborted) {
-      reject(signal.reason ?? new Error("operation aborted"));
+    let settled = false;
+    let timer = null;
+    const cleanup = () => {
+      if (timer !== null) clearTimeout(timer);
+      try {
+        removeAbortSignalListener(signal, onAbort);
+      } catch {
+        // Listener cleanup is best-effort after the delay has settled.
+      }
+    };
+    const finish = (callback, value) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      callback(value);
+    };
+    const onAbort = () => {
+      try {
+        const { reason } = abortSignalState(signal);
+        finish(reject, abortReasonOrDefault(reason));
+      } catch (error) {
+        finish(reject, error);
+      }
+    };
+    try {
+      addAbortSignalListener(signal, onAbort);
+      throwIfAbortSignalAborted(signal);
+    } catch (error) {
+      finish(reject, error);
       return;
     }
-    const timer = setTimeout(() => {
-      signal?.removeEventListener?.("abort", onAbort);
-      resolve();
-    }, milliseconds);
-    const onAbort = () => {
-      clearTimeout(timer);
-      reject(signal.reason ?? new Error("operation aborted"));
-    };
-    signal?.addEventListener?.("abort", onAbort, { once: true });
+    timer = setTimeout(() => finish(resolve), milliseconds);
   });
+}
+
+function awaitStatusWithGuards(value, statusOptions) {
+  const { signal, timeoutMs } = statusOptions;
+  if (signal === null && timeoutMs === null) return Promise.resolve(value);
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let timeout = null;
+    const deadline = timeoutMs === null ? null : Date.now() + timeoutMs;
+    const cleanup = () => {
+      if (timeout !== null) clearTimeout(timeout);
+      if (signal !== null) {
+        try {
+          removeAbortSignalListener(signal, onAbort);
+        } catch {
+          // Listener cleanup is best-effort after the wait has settled.
+        }
+      }
+    };
+    const finish = (callback, result) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      callback(result);
+    };
+    const onAbort = () => {
+      try {
+        const { reason } = abortSignalState(signal);
+        finish(reject, abortReasonOrDefault(reason));
+      } catch (error) {
+        finish(reject, error);
+      }
+    };
+    // Observe the underlying promise before any synchronous abort path can
+    // settle this guard. A late rejection must never become unhandled merely
+    // because cancellation won the race.
+    Promise.resolve(value).then(
+      (result) => finish(resolve, result),
+      (error) => finish(reject, error),
+    );
+    if (signal !== null) {
+      try {
+        addAbortSignalListener(signal, onAbort);
+        throwIfAbortSignalAborted(signal);
+      } catch (error) {
+        finish(reject, error);
+        return;
+      }
+    }
+    const scheduleTimeout = () => {
+      if (deadline === null || settled) return;
+      const remaining = Math.max(0, deadline - Date.now());
+      timeout = setTimeout(() => {
+        if (Date.now() < deadline) {
+          scheduleTimeout();
+          return;
+        }
+        finish(
+          reject,
+          new BrowserTransactionStatusTimeoutError(
+            `transaction status did not settle within ${timeoutMs}ms`,
+            null,
+            null,
+          ),
+        );
+      }, Math.min(remaining, 2_147_483_647));
+    };
+    if (timeoutMs === 0) {
+      finish(
+        reject,
+        new BrowserTransactionStatusTimeoutError(
+          "transaction status did not settle within 0ms",
+          null,
+          null,
+        ),
+      );
+    } else if (deadline !== null) {
+      scheduleTimeout();
+    }
+  });
+}
+
+class BrowserTransactionRejectedError extends Error {
+  constructor(status, payload) {
+    super(`transaction reached failure status ${status}`);
+    this.name = "BrowserTransactionRejectedError";
+    this.status = status;
+    this.payload = payload;
+  }
+}
+
+class BrowserTransactionStatusTimeoutError extends Error {
+  constructor(message, attempts, payload) {
+    super(message);
+    this.name = "BrowserTransactionStatusTimeoutError";
+    this.attempts = attempts;
+    this.payload = payload;
+  }
 }
 
 class BrowserToriiPipelineClient {
@@ -1251,41 +1483,71 @@ class BrowserToriiPipelineClient {
 
   async _open(path, init, externalSignal) {
     const controller = new AbortController();
-    const onAbort = () => controller.abort(externalSignal?.reason);
-    if (externalSignal?.aborted) {
-      controller.abort(externalSignal.reason);
-    } else {
-      externalSignal?.addEventListener?.("abort", onAbort, { once: true });
+    let externalListenerAttached = false;
+    const detachExternalListener = () => {
+      if (!externalListenerAttached) return;
+      externalListenerAttached = false;
+      try {
+        removeAbortSignalListener(externalSignal, onAbort);
+      } catch {
+        // Listener cleanup is best-effort once the request is closed.
+      }
+    };
+    const onAbort = () => {
+      try {
+        const { reason } = abortSignalState(externalSignal);
+        abortControllerWithReason(controller, reason);
+      } catch (error) {
+        controller.abort(error);
+      }
+    };
+    if (externalSignal !== undefined && externalSignal !== null) {
+      const initial = abortSignalState(externalSignal);
+      if (initial.aborted) {
+        abortControllerWithReason(controller, initial.reason);
+      } else {
+        externalListenerAttached = true;
+        try {
+          addAbortSignalListener(externalSignal, onAbort);
+          const registered = abortSignalState(externalSignal);
+          if (registered.aborted) onAbort();
+        } catch (error) {
+          detachExternalListener();
+          throw error;
+        }
+      }
     }
     const timeout = setTimeout(
       () => controller.abort(new Error("Torii request timed out")),
       DEFAULT_TORII_REQUEST_TIMEOUT_MS,
     );
     try {
-      const response = await this.fetchImpl(
-        new URL(`${this.baseUrl}${path}`).toString(),
-        {
+      throwIfAbortSignalAborted(controller.signal);
+      const response = await awaitStatusWithGuards(
+        this.fetchImpl(new URL(`${this.baseUrl}${path}`).toString(), {
           credentials: "omit",
           redirect: "error",
           referrerPolicy: "no-referrer",
           ...init,
           signal: controller.signal,
-        },
+        }),
+        { signal: controller.signal, timeoutMs: null },
       );
       if (!response || !Number.isInteger(response.status)) {
         throw new Error("Torii fetch returned an invalid response");
       }
       return {
         response,
+        signal: controller.signal,
         close: () => {
           clearTimeout(timeout);
-          externalSignal?.removeEventListener?.("abort", onAbort);
+          detachExternalListener();
           controller.abort(new Error("Torii response closed"));
         },
       };
     } catch (error) {
       clearTimeout(timeout);
-      externalSignal?.removeEventListener?.("abort", onAbort);
+      detachExternalListener();
       throw error;
     }
   }
@@ -1310,21 +1572,28 @@ class BrowserToriiPipelineClient {
       },
     );
     try {
-      const { response } = request;
+      const { response, signal } = request;
       if (![200, 201, 202, 204].includes(response.status)) {
-        await cancelResponseBody(response);
+        await cancelResponseBody(response, signal);
+        throwIfAbortSignalAborted(signal);
         throw new Error(`Torii transaction submission returned HTTP ${response.status}`);
       }
       if (response.status === 204) {
-        await cancelResponseBody(response);
+        await cancelResponseBody(response, signal);
+        throwIfAbortSignalAborted(signal);
         return null;
       }
       const contentType = responseHeader(response, "content-type")?.toLowerCase() ?? "";
       if (contentType.includes("application/x-norito")) {
-        await response.body?.cancel?.();
+        await cancelResponseBody(response, signal);
+        throwIfAbortSignalAborted(signal);
         return null;
       }
-      const text = await readBoundedResponseText(response, "Torii submission");
+      const text = await readBoundedResponseText(
+        response,
+        "Torii submission",
+        signal,
+      );
       if (text === "") return null;
       return parseJsonResponse(text, "Torii submission");
     } finally {
@@ -1350,16 +1619,22 @@ class BrowserToriiPipelineClient {
       options.signal,
     );
     try {
-      const { response } = request;
+      const { response, signal } = request;
       if (response.status === 404 || response.status === 204) {
-        await cancelResponseBody(response);
+        await cancelResponseBody(response, signal);
+        throwIfAbortSignalAborted(signal);
         return null;
       }
       if (response.status !== 200 && response.status !== 202) {
-        await cancelResponseBody(response);
+        await cancelResponseBody(response, signal);
+        throwIfAbortSignalAborted(signal);
         throw new Error(`Torii transaction status returned HTTP ${response.status}`);
       }
-      const text = await readBoundedResponseText(response, "Torii transaction status");
+      const text = await readBoundedResponseText(
+        response,
+        "Torii transaction status",
+        signal,
+      );
       return parseJsonResponse(text, "Torii transaction status");
     } finally {
       request.close();
@@ -1370,50 +1645,177 @@ class BrowserToriiPipelineClient {
     const normalized = normalizeTransactionStatusOptions(options);
     const successStatuses = new Set(normalized.successStatuses);
     const failureStatuses = new Set(normalized.failureStatuses);
+    const controller = new AbortController();
+    let externalListenerAttached = false;
+    let timeout = null;
     const startedAt = Date.now();
+    const deadline =
+      normalized.timeoutMs === null
+        ? null
+        : startedAt + normalized.timeoutMs;
     let attempts = 0;
     let lastPayload = null;
-    while (true) {
-      if (normalized.signal?.aborted) {
-        throw normalized.signal.reason ?? new Error("operation aborted");
+    const timeoutError = () =>
+      new BrowserTransactionStatusTimeoutError(
+        `transaction status did not settle within ${normalized.timeoutMs}ms`,
+        attempts,
+        lastPayload,
+      );
+    const throwIfDeadlineReached = () => {
+      if (deadline !== null && Date.now() >= deadline) {
+        throw timeoutError();
       }
-      attempts += 1;
-      lastPayload = await this.getTransactionStatus(hashHex, {
-        scope: normalized.scope,
-        signal: normalized.signal,
-      });
-      const status = pipelineStatusKind(lastPayload);
-      if (normalized.onStatus) {
-        await normalized.onStatus(status, lastPayload, attempts);
+    };
+    const onExternalAbort = () => {
+      try {
+        const { reason } = abortSignalState(normalized.signal);
+        abortControllerWithReason(controller, reason);
+      } catch (error) {
+        controller.abort(error);
       }
-      if (status !== null && successStatuses.has(status)) return lastPayload;
-      if (status !== null && failureStatuses.has(status)) {
-        throw new Error(`transaction reached failure status ${status}`);
+    };
+    const cleanup = () => {
+      if (timeout !== null) clearTimeout(timeout);
+      if (externalListenerAttached) {
+        externalListenerAttached = false;
+        try {
+          removeAbortSignalListener(normalized.signal, onExternalAbort);
+        } catch {
+          // Listener cleanup is best-effort after polling has settled.
+        }
       }
-      if (normalized.maxAttempts !== null && attempts >= normalized.maxAttempts) {
-        throw new Error(`transaction status did not settle after ${attempts} attempts`);
+    };
+    const scheduleTimeout = () => {
+      if (deadline === null || abortSignalState(controller.signal).aborted) return;
+      const remaining = Math.max(0, deadline - Date.now());
+      timeout = setTimeout(() => {
+        if (Date.now() < deadline) {
+          scheduleTimeout();
+          return;
+        }
+        controller.abort(timeoutError());
+      }, Math.min(remaining, 2_147_483_647));
+    };
+    try {
+      if (normalized.signal !== null) {
+        const initial = abortSignalState(normalized.signal);
+        if (initial.aborted) {
+          abortControllerWithReason(controller, initial.reason);
+        } else {
+          externalListenerAttached = true;
+          try {
+            addAbortSignalListener(normalized.signal, onExternalAbort);
+            const registered = abortSignalState(normalized.signal);
+            if (registered.aborted) onExternalAbort();
+          } catch (error) {
+            cleanup();
+            throw error;
+          }
+        }
       }
       if (
-        normalized.timeoutMs !== null &&
-        Date.now() - startedAt >= normalized.timeoutMs
+        normalized.timeoutMs === 0 &&
+        !abortSignalState(controller.signal).aborted
       ) {
-        throw new Error(
-          `transaction status did not settle within ${normalized.timeoutMs}ms`,
-        );
+        controller.abort(timeoutError());
+      } else {
+        scheduleTimeout();
       }
-      await delayWithSignal(normalized.intervalMs, normalized.signal);
+      while (true) {
+        throwIfAbortSignalAborted(controller.signal);
+        throwIfDeadlineReached();
+        attempts += 1;
+        lastPayload = await this.getTransactionStatus(hashHex, {
+          scope: normalized.scope,
+          signal: controller.signal,
+        });
+        throwIfAbortSignalAborted(controller.signal);
+        throwIfDeadlineReached();
+        const status = pipelineStatusKind(lastPayload);
+        if (normalized.onStatus) {
+          const callback = Promise.resolve().then(() =>
+            Reflect.apply(normalized.onStatus, undefined, [
+              status,
+              lastPayload,
+              attempts,
+            ]),
+          );
+          await awaitStatusWithGuards(callback, {
+            signal: controller.signal,
+            timeoutMs: null,
+          });
+        }
+        throwIfAbortSignalAborted(controller.signal);
+        throwIfDeadlineReached();
+        if (status !== null && successStatuses.has(status)) return lastPayload;
+        if (status !== null && failureStatuses.has(status)) {
+          throw new BrowserTransactionRejectedError(status, lastPayload);
+        }
+        if (normalized.maxAttempts !== null && attempts >= normalized.maxAttempts) {
+          throw new BrowserTransactionStatusTimeoutError(
+            `transaction status did not settle after ${attempts} attempts`,
+            attempts,
+            lastPayload,
+          );
+        }
+        await delayWithSignal(normalized.intervalMs, controller.signal);
+      }
+    } finally {
+      cleanup();
     }
   }
 }
 
 export class NexusAppError extends Error {
-  constructor(code, message, cause) {
+  constructor(code, message, cause, context = {}) {
     super(message);
     this.name = "NexusAppError";
-    this.code = code;
-    if (arguments.length >= 3) {
-      this.cause = cause;
-    }
+    Object.defineProperties(this, {
+      code: {
+        value: code,
+        enumerable: true,
+      },
+      ...(arguments.length >= 3
+        ? {
+            cause: {
+              value: cause,
+              enumerable: true,
+            },
+          }
+        : {}),
+      phase: {
+        value: context.phase ?? "validation",
+        enumerable: true,
+      },
+      submissionState: {
+        value: context.submissionState ?? "not_submitted",
+        enumerable: true,
+      },
+      ...(context.signedTransactionHashHex === undefined
+        ? {}
+        : {
+            signedTransactionHashHex: {
+              value: context.signedTransactionHashHex,
+              enumerable: true,
+            },
+          }),
+      ...(context.submission === undefined
+        ? {}
+        : {
+            submission: {
+              value: context.submission,
+              enumerable: true,
+            },
+          }),
+      ...(context.status === undefined
+        ? {}
+        : {
+            status: {
+              value: context.status,
+              enumerable: true,
+            },
+          }),
+    });
   }
 }
 
@@ -1451,12 +1853,23 @@ export class NexusAppClient {
       "connect options",
       "invalid_connect_options",
     );
-    const injected = await maybeInvoke(
-      this.connect?.startConnect,
-      this.connect,
-      options,
-      this.config,
-    );
+    let injected;
+    try {
+      const connect = this.connect;
+      const startConnect = connect?.startConnect;
+      injected = await maybeInvoke(
+        startConnect,
+        connect,
+        options,
+        this.config,
+      );
+    } catch (error) {
+      throw new NexusAppError(
+        "connect_start_failed",
+        "Connect session registration failed",
+        error,
+      );
+    }
     if (injected !== undefined) {
       return normalizeConnectSession(injected);
     }
@@ -1492,12 +1905,23 @@ export class NexusAppClient {
 
   async awaitApproval(session) {
     const normalized = normalizeConnectSession(session);
-    const injected = await maybeInvoke(
-      this.connect?.awaitApproval,
-      this.connect,
-      normalized,
-      this.config,
-    );
+    let injected;
+    try {
+      const connect = this.connect;
+      const awaitApproval = connect?.awaitApproval;
+      injected = await maybeInvoke(
+        awaitApproval,
+        connect,
+        normalized,
+        this.config,
+      );
+    } catch (error) {
+      throw new NexusAppError(
+        "connect_approval_failed",
+        "Connect wallet approval failed",
+        error,
+      );
+    }
     let approved = injected;
     if (approved === undefined) {
       const appSession =
@@ -1516,9 +1940,33 @@ export class NexusAppClient {
           allowInsecure: this.config.allowInsecure,
         });
       normalized.appSession = appSession;
-      approved = projectBrowserConnectApproval(
-        await appSession.waitForApproval(),
-      );
+      let waitForApproval;
+      try {
+        waitForApproval = appSession?.waitForApproval;
+      } catch (error) {
+        throw new NexusAppError(
+          "connect_session_unapproved",
+          "Connect approval capability could not be resolved",
+          error,
+        );
+      }
+      if (typeof waitForApproval !== "function") {
+        throw new NexusAppError(
+          "connect_session_unapproved",
+          "Connect app session cannot await wallet approval",
+        );
+      }
+      let browserApproval;
+      try {
+        browserApproval = await Reflect.apply(waitForApproval, appSession, []);
+      } catch (error) {
+        throw new NexusAppError(
+          "connect_approval_failed",
+          "Connect wallet approval failed",
+          error,
+        );
+      }
+      approved = projectBrowserConnectApproval(browserApproval);
     }
     approved = snapshotDataFields(
       approved,
@@ -1655,10 +2103,48 @@ export class NexusAppClient {
       ttlMs: input.ttlMs ?? null,
       nonce: input.nonce ?? null,
     };
-    const payloadResult =
-      this.transactionCodec?.buildTransferPayload
-        ? this.transactionCodec.buildTransferPayload(payloadInput)
-        : defaultBuildTransferPayload(payloadInput);
+    let transactionCodec;
+    let payloadBuilder = null;
+    let payloadHasher = null;
+    try {
+      transactionCodec = this.transactionCodec;
+      if (transactionCodec !== null) {
+        payloadBuilder = transactionCodec.buildTransferPayload ?? null;
+        payloadHasher = transactionCodec.payloadHashHex ?? null;
+      }
+    } catch (error) {
+      throw new NexusAppError(
+        "invalid_transaction_codec",
+        "transaction codec payload capabilities could not be resolved",
+        error,
+      );
+    }
+    if (transactionCodec !== null) {
+      for (const [name, method] of [
+        ["buildTransferPayload", payloadBuilder],
+        ["payloadHashHex", payloadHasher],
+      ]) {
+        if (method !== null && typeof method !== "function") {
+          throw new NexusAppError(
+            "invalid_transaction_codec",
+            `transaction codec ${name} must be a function`,
+          );
+        }
+      }
+    }
+    let payloadResult;
+    try {
+      payloadResult =
+        payloadBuilder === null
+          ? defaultBuildTransferPayload(payloadInput)
+          : Reflect.apply(payloadBuilder, transactionCodec, [payloadInput]);
+    } catch (error) {
+      throw new NexusAppError(
+        "invalid_payload",
+        "transaction payload construction failed",
+        error,
+      );
+    }
     const { payloadBytes, assertedHashHex } = normalizePayloadBuildResult(payloadResult);
     if (payloadBytes.length === 0) {
       throw new NexusAppError("invalid_payload", "payloadBytes must not be empty");
@@ -1670,9 +2156,21 @@ export class NexusAppClient {
         `transaction codec payload hash ${assertedHashHex} does not match canonical hash ${payloadHashHex}`,
       );
     }
-    if (typeof this.transactionCodec?.payloadHashHex === "function") {
+    if (payloadHasher !== null) {
+      let codecHash;
+      try {
+        codecHash = Reflect.apply(payloadHasher, transactionCodec, [
+          Buffer.from(payloadBytes),
+        ]);
+      } catch (error) {
+        throw new NexusAppError(
+          "invalid_payload_hash",
+          "transaction codec payload hasher failed",
+          error,
+        );
+      }
       const codecHashHex = exactHashHex(
-        this.transactionCodec.payloadHashHex(Buffer.from(payloadBytes)),
+        codecHash,
         "transactionCodec.payloadHashHex result",
         "invalid_payload_hash",
       );
@@ -1745,26 +2243,56 @@ export class NexusAppClient {
       authority: approvedAccount ?? configuredAuthority,
       signingPublicKey: expectedSigningPublicKey,
     });
-    const injected = await maybeInvoke(
-      this.connect?.requestSignature,
-      this.connect,
-      normalizedSession,
-      copyValidatedSignable(canonicalSignable),
-      this.config,
-    );
+    let injected;
+    try {
+      const connect = this.connect;
+      const requestSignature = connect?.requestSignature;
+      injected = await maybeInvoke(
+        requestSignature,
+        connect,
+        normalizedSession,
+        copyValidatedSignable(canonicalSignable),
+        this.config,
+      );
+    } catch (error) {
+      throw new NexusAppError(
+        "wallet_signature_failed",
+        "wallet signature request failed",
+        error,
+      );
+    }
     if (injected !== undefined) {
       return normalizeSignature(injected);
     }
     const appSession = normalizedSession.appSession;
-    if (!appSession || typeof appSession.signTransaction !== "function") {
+    let signTransaction;
+    try {
+      signTransaction = appSession?.signTransaction;
+    } catch (error) {
+      throw new NexusAppError(
+        "connect_session_unapproved",
+        "Connect signing capability could not be resolved",
+        error,
+      );
+    }
+    if (typeof signTransaction !== "function") {
       throw new NexusAppError(
         "connect_session_unapproved",
         "Connect app session is not approved or cannot sign transactions",
       );
     }
-    const signature = await appSession.signTransaction(
-      Buffer.from(canonicalSignable.payloadBytes),
-    );
+    let signature;
+    try {
+      signature = await Reflect.apply(signTransaction, appSession, [
+        Buffer.from(canonicalSignable.payloadBytes),
+      ]);
+    } catch (error) {
+      throw new NexusAppError(
+        "wallet_signature_failed",
+        "Connect wallet signature request failed",
+        error,
+      );
+    }
     return normalizeSignature({ algorithm: ALGORITHM_ED25519, signature });
   }
 
@@ -1782,15 +2310,31 @@ export class NexusAppClient {
       );
     }
     const shouldWait = options.wait !== false;
-    let statusOptions;
-    try {
-      statusOptions = normalizeTransactionStatusOptions(options);
-    } catch (error) {
-      throw new NexusAppError(
-        "status_wait_failed",
-        `invalid transaction status options: ${error?.message ?? String(error)}`,
-        error,
-      );
+    let statusOptions = null;
+    if (shouldWait) {
+      try {
+        statusOptions = normalizeTransactionStatusOptions(options);
+      } catch (error) {
+        throw new NexusAppError(
+          "invalid_finalize_options",
+          "transaction status options are invalid",
+          error,
+        );
+      }
+    } else {
+      for (const field of STATUS_WAIT_OPTION_FIELDS) {
+        if (ownDataDescriptor(
+          options,
+          field,
+          "finalize options",
+          "invalid_finalize_options",
+        )) {
+          throw new NexusAppError(
+            "invalid_finalize_options",
+            `finalize options.${field} is not allowed when wait is false`,
+          );
+        }
+      }
     }
     throwIfStatusWaitAborted(statusOptions, shouldWait);
     signable = snapshotDataFields(
@@ -1847,37 +2391,133 @@ export class NexusAppClient {
       normalizedSignature,
       publicKey,
     );
-    const finalized = normalizeFinalizedTransaction(
-      this.transactionCodec?.finalizeSignedTransaction
-        ? this.transactionCodec.finalizeSignedTransaction(
-            canonicalSignable,
-            normalizedSignature,
-            publicKey,
-          )
-        : defaultFinalizeSignedTransaction(
-            canonicalSignable,
-            normalizedSignature,
-            publicKey,
-          ),
-    );
+    let transactionCodec;
+    let transactionFinalizer = null;
+    try {
+      transactionCodec = this.transactionCodec;
+      if (transactionCodec !== null) {
+        transactionFinalizer =
+          transactionCodec.finalizeSignedTransaction ?? null;
+      }
+    } catch (error) {
+      throw new NexusAppError(
+        "invalid_transaction_codec",
+        "transaction codec finalizer could not be resolved",
+        error,
+        { phase: "finalization" },
+      );
+    }
+    if (transactionCodec !== null) {
+      throwIfStatusWaitAborted(statusOptions, shouldWait);
+      if (
+        transactionFinalizer !== null &&
+        typeof transactionFinalizer !== "function"
+      ) {
+        throw new NexusAppError(
+          "invalid_transaction_codec",
+          "transaction codec finalizer must be a function",
+          undefined,
+          { phase: "finalization" },
+        );
+      }
+    }
+    let finalizedResult;
+    try {
+      finalizedResult =
+        transactionFinalizer === null
+          ? defaultFinalizeSignedTransaction(
+              canonicalSignable,
+              normalizedSignature,
+              publicKey,
+            )
+          : Reflect.apply(transactionFinalizer, transactionCodec, [
+              canonicalSignable,
+              normalizedSignature,
+              publicKey,
+            ]);
+    } catch (error) {
+      throw new NexusAppError(
+        "invalid_signed_transaction",
+        "transaction finalization failed",
+        error,
+        { phase: "finalization" },
+      );
+    }
+    throwIfStatusWaitAborted(statusOptions, shouldWait);
+    let finalized;
+    try {
+      finalized = normalizeFinalizedTransaction(finalizedResult);
+    } catch (error) {
+      let code = "invalid_signed_transaction";
+      try {
+        if (error instanceof NexusAppError) code = error.code;
+      } catch {
+        // Hostile thrown values remain opaque causes.
+      }
+      throw new NexusAppError(
+        code,
+        "transaction finalizer returned an invalid result",
+        error,
+        { phase: "finalization" },
+      );
+    }
     if (!finalized.signedTransaction.equals(expectedFinalized.signedTransaction)) {
       throw new NexusAppError(
         "signed_transaction_mismatch",
         "transaction finalizer bytes do not match the independently finalized canonical transfer",
+        undefined,
+        { phase: "finalization" },
       );
     }
     if (finalized.hashHex !== expectedFinalized.hashHex) {
       throw new NexusAppError(
         "transaction_hash_mismatch",
         "transaction finalizer hash does not match the independently finalized canonical transfer",
+        undefined,
+        { phase: "finalization" },
       );
     }
+    throwIfStatusWaitAborted(statusOptions, shouldWait);
     const toriiClient = options.toriiClient ?? this.toriiClient;
-    const submitTransaction = toriiClient?.submitTransaction;
+    let submitTransaction;
+    let waitForTransactionStatus = null;
+    try {
+      submitTransaction = toriiClient?.submitTransaction;
+    } catch (error) {
+      throw new NexusAppError(
+        "torii_client_unavailable",
+        "Torii client capabilities could not be resolved",
+        error,
+        { phase: "submission" },
+      );
+    }
     if (typeof submitTransaction !== "function") {
       throw new NexusAppError(
         "torii_client_unavailable",
         "Torii client is required to submit the signed transaction",
+        undefined,
+        { phase: "submission" },
+      );
+    }
+    throwIfStatusWaitAborted(statusOptions, shouldWait);
+    if (shouldWait) {
+      try {
+        waitForTransactionStatus = toriiClient?.waitForTransactionStatus;
+      } catch (error) {
+        throw new NexusAppError(
+          "status_wait_unavailable",
+          "Torii status-wait capability could not be resolved",
+          error,
+          { phase: "submission" },
+        );
+      }
+    }
+    if (shouldWait && typeof waitForTransactionStatus !== "function") {
+      throw new NexusAppError(
+        "status_wait_unavailable",
+        "wait-enabled submission requires a Torii status waiter",
+        undefined,
+        { phase: "submission" },
       );
     }
     throwIfStatusWaitAborted(statusOptions, shouldWait);
@@ -1888,30 +2528,87 @@ export class NexusAppClient {
       ]);
     } catch (error) {
       throw new NexusAppError(
-        "submit_failed",
-        `failed to submit signed transfer to Torii: ${error?.message ?? String(error)}`,
+        "submission_outcome_unknown",
+        "Torii transaction submission did not return a confirmed outcome",
         error,
+        {
+          phase: "submission",
+          submissionState: "unknown",
+          signedTransactionHashHex: finalized.hashHex,
+        },
       );
     }
-    const submittedHashHex = submissionHashHex(submission);
+    const submittedContext = {
+      phase: "submission",
+      submissionState: "submitted",
+      signedTransactionHashHex: finalized.hashHex,
+      submission,
+    };
+    let submittedHashHex;
+    try {
+      submittedHashHex = submissionHashHex(submission);
+    } catch (error) {
+      throw new NexusAppError(
+        "invalid_submission_response",
+        "Torii returned an invalid transaction submission receipt",
+        error,
+        submittedContext,
+      );
+    }
     if (submittedHashHex && submittedHashHex !== finalized.hashHex) {
       throw new NexusAppError(
-        "transaction_hash_mismatch",
+        "invalid_submission_response",
         `Torii returned transaction hash ${submittedHashHex} but local hash is ${finalized.hashHex}`,
+        undefined,
+        submittedContext,
       );
     }
     let status = null;
-    if (shouldWait && typeof toriiClient.waitForTransactionStatus === "function") {
+    if (shouldWait) {
+      const waitContext = {
+        phase: "status_wait",
+        submissionState: "submitted",
+        signedTransactionHashHex: finalized.hashHex,
+        submission,
+      };
+      throwIfStatusWaitAborted(statusOptions, true, waitContext);
       try {
-        status = await toriiClient.waitForTransactionStatus(
+        const pendingStatus = Reflect.apply(waitForTransactionStatus, toriiClient, [
           finalized.hashHex,
+          statusOptions,
+        ]);
+        status = await awaitStatusWithGuards(
+          pendingStatus,
           statusOptions,
         );
       } catch (error) {
+        throwIfStatusWaitAborted(statusOptions, true, waitContext);
+        let code = "status_wait_failed";
+        let message = "failed while waiting for Torii pipeline status";
+        let observedStatus;
+        try {
+          if (error instanceof BrowserTransactionRejectedError) {
+            code = "transaction_rejected";
+            message = "transaction reached a terminal failure status";
+            observedStatus = error.status;
+          } else if (error instanceof BrowserTransactionStatusTimeoutError) {
+            code = "status_wait_timeout";
+            message = "transaction status wait timed out";
+            observedStatus = error.payload;
+          }
+        } catch {
+          // Hostile rejection values remain opaque causes.
+        }
         throw new NexusAppError(
-          "status_wait_failed",
-          `failed while waiting for Torii pipeline status: ${error?.message ?? String(error)}`,
+          code,
+          message,
           error,
+          {
+            ...waitContext,
+            ...(observedStatus === undefined
+              ? {}
+              : { status: observedStatus }),
+          },
         );
       }
     }

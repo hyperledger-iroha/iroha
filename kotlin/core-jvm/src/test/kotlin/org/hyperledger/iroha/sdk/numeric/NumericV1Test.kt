@@ -49,10 +49,14 @@ class NumericV1Test {
         assertCode(NumericV1ErrorCode.INVALID_TEXT) { KotodamaInt.parse("01") }
         assertEquals("1.23", NumericV1Codec.decodeDecimalJson("1.23").toString())
         assertEquals("0", NumericV1Codec.decodeQuantityJson("0").toString())
-        listOf("1.0", "1.2300", "0.0").forEach { alternate ->
+        listOf("+1", "01", "1.", ".5", "1e0", "-0", "-0.0", "1.0", "1.2300", "0.0").forEach { alternate ->
             assertCode(NumericV1ErrorCode.INVALID_TEXT) { NumericV1Codec.decodeDecimalJson(alternate) }
         }
+        listOf("+1", "01", "-0", "1.0", "1e0").forEach { alternate ->
+            assertCode(NumericV1ErrorCode.INVALID_TEXT) { NumericV1Codec.decodeIntJson(alternate) }
+        }
         assertCode(NumericV1ErrorCode.INVALID_TEXT) { NumericV1Codec.decodeQuantityJson("1.0") }
+        assertCode(NumericV1ErrorCode.NEGATIVE_QUANTITY) { NumericV1Codec.decodeQuantityJson("-1") }
     }
 
     @Test

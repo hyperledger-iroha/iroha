@@ -889,13 +889,26 @@ mod tests {
     }
 
     fn make_v2_fixture(chain_id: &str) -> V2Fixture {
-        make_v2_fixture_with_quorum(chain_id, &[40, 30, 20, 10], &[0, 1, 2])
+        make_v2_fixture_config(chain_id, &[40, 30, 20, 10], &[0, 1, 2], false)
     }
 
     fn make_v2_fixture_with_quorum(
         chain_id: &str,
         powers: &[u64],
         signer_indices: &[u32],
+    ) -> V2Fixture {
+        make_v2_fixture_config(chain_id, powers, signer_indices, false)
+    }
+
+    fn make_boundary_v2_fixture(chain_id: &str) -> V2Fixture {
+        make_v2_fixture_config(chain_id, &[40, 30, 20, 10], &[0, 1, 2], true)
+    }
+
+    fn make_v2_fixture_config(
+        chain_id: &str,
+        powers: &[u64],
+        signer_indices: &[u32],
+        boundary: bool,
     ) -> V2Fixture {
         use crate::block::consensus_v2::{
             BlockSubject, ConsensusMode, ConsensusRound, DataAvailabilityLayout, DualQuorum,
@@ -926,13 +939,24 @@ mod tests {
             0,
             0,
         );
+        let next_epoch_snapshot = boundary.then(|| {
+            let next_roster = roster.clone();
+            crate::block::consensus_v2::finality::FinalizedNextEpochSnapshot {
+                epoch: 1,
+                mode: ConsensusMode::Npos,
+                quorum: DualQuorum::from_roster(&next_roster)
+                    .expect("valid boundary next-epoch quorum"),
+                roster: next_roster,
+                leader_seed: [0x6B; 32],
+            }
+        });
         let context = HeightContext {
             chain_id: chain_id.parse().expect("chain id"),
             protocol_version: PROTOCOL_VERSION,
             height: 1,
             epoch: 0,
-            epoch_end_height: 10,
-            next_epoch_snapshot: None,
+            epoch_end_height: if boundary { 1 } else { 10 },
+            next_epoch_snapshot,
             mode: ConsensusMode::Npos,
             parent_commit_qc: None,
             quorum: DualQuorum::from_roster(&roster).expect("valid powered roster"),
@@ -1744,6 +1768,59 @@ mod tests {
             verifier.verify(&fixture.proof),
             Err(BridgeFinalityVerifyError::CertificateVerification(
                 crate::block::consensus_v2::finality::V2QuorumCertificateVerificationError::InvalidAggregateSignature
+            ))
+        ));
+    }
+
+    #[test]
+    fn boundary_transition_cannot_be_replaced_without_old_roster_signatures() {
+        use crate::block::consensus_v2::finality::{
+            V2FinalityValidationError, V2QuorumCertificateVerificationError,
+        };
+
+        let fixture = make_boundary_v2_fixture("chain-a");
+        let original_context = fixture.proof.finality_artifact.height_context.clone();
+
+        let mut stale_context_id = fixture.proof.clone();
+        stale_context_id
+            .finality_artifact
+            .height_context
+            .next_epoch_snapshot
+            .as_mut()
+            .expect("boundary snapshot")
+            .leader_seed[0] ^= 0x80;
+        let mut verifier = BridgeFinalityVerifier::with_context(
+            original_context.chain_id.clone(),
+            original_context.id(),
+        );
+        assert!(matches!(
+            verifier.verify(&stale_context_id),
+            Err(BridgeFinalityVerifyError::InvalidArtifact(
+                V2FinalityValidationError::CertificateContextMismatch
+            ))
+        ));
+
+        let mut forged_context_id = fixture.proof;
+        forged_context_id
+            .finality_artifact
+            .height_context
+            .next_epoch_snapshot
+            .as_mut()
+            .expect("boundary snapshot")
+            .leader_seed[0] ^= 0x80;
+        forged_context_id
+            .finality_artifact
+            .commit_qc
+            .round
+            .context_id = forged_context_id.finality_artifact.context_id();
+        let mut verifier = BridgeFinalityVerifier::with_context(
+            original_context.chain_id,
+            forged_context_id.finality_artifact.context_id(),
+        );
+        assert!(matches!(
+            verifier.verify(&forged_context_id),
+            Err(BridgeFinalityVerifyError::CertificateVerification(
+                V2QuorumCertificateVerificationError::InvalidAggregateSignature
             ))
         ));
     }

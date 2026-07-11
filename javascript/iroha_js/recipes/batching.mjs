@@ -16,7 +16,7 @@ const chainId = "batching-sample-chain";
 const authority =
   "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D";
 const recipient =
-  "sorauﾛ1Pﾀﾚｿ1ﾍｶsFｲAfｾeB3ｽヱヱｳcyﾊyｹ1ﾂﾈヰヰ6ﾛヰEAﾃｱｳﾖLPN4XM";
+  "sorauﾛ1Prﾇuﾉﾉ4ﾒdﾛﾑｲﾄn5tﾆﾒrsR9ﾋ2Gｷ7gWeFzyﾁﾋﾁAHﾌTJQQ4L";
 const assetDefinitionId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
 const assetId = `${assetDefinitionId}#${authority}`;
 const privateKey = Buffer.alloc(32, 0x11);

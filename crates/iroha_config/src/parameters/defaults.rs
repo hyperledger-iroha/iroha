@@ -1576,6 +1576,8 @@ pub mod torii {
     pub const PROOF_MAX_BODY_BYTES: Bytes<u64> = Bytes(8 * 1024 * 1024); // 8 MiB
     /// Maximum proof request bodies buffered concurrently before handler admission.
     pub const PROOF_BODY_MAX_INFLIGHT: NonZeroUsize = nonzero!(8usize);
+    /// Absolute deadline for reading one admitted proof request body.
+    pub const PROOF_BODY_READ_TIMEOUT_MS: u64 = 15_000;
     /// Steady-state egress budget for proof responses (bytes/sec). None disables.
     pub const PROOF_EGRESS_BYTES_PER_SEC: Option<u64> = Some(8 * 1024 * 1024); // 8 MiB/s
     /// Burst egress budget for proof responses (bytes).

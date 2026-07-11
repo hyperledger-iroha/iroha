@@ -887,8 +887,14 @@ public sealed class SccpExactTests
             value => ((Dictionary<string, object?>)value["sora_finality_anchor"]!)["checkpoint_height"] = 0,
             value => ((Dictionary<string, object?>)value["sora_finality_anchor"]!)["protocol_version"] = 1,
             value => ((Dictionary<string, object?>)value["sora_finality_anchor"]!)["protocol_version"] = "2",
+            value => ((Dictionary<string, object?>)value["sora_finality_anchor"]!)["protocol_version"] = true,
             value => ((Dictionary<string, object?>)value["sora_finality_anchor"]!)["validator_set_epoch"] = 2,
             value => ((Dictionary<string, object?>)value["sora_finality_anchor"]!)["checkpoint_context_id"] = Upper(0, 32),
+            value => ((Dictionary<string, object?>)value["sora_finality_anchor"]!)["checkpoint_context_id"] =
+                ((Dictionary<string, object?>)value["sora_finality_anchor"]!)["chain_id_hash"],
+            value => ((Dictionary<string, object?>)value["sora_finality_anchor"]!)["checkpoint_block_hash"] =
+                ((Dictionary<string, object?>)value["sora_finality_anchor"]!)["checkpoint_context_id"],
+            value => ((Dictionary<string, object?>)value["sora_finality_anchor"]!)["checkpoint_finality_artifact_hash"] = Upper(0, 32),
             value => ((Dictionary<string, object?>)value["sora_finality_anchor"]!)["checkpoint_finality_artifact_hash"] =
                 ((Dictionary<string, object?>)value["sora_finality_anchor"]!)["checkpoint_block_hash"],
             value => ((Dictionary<string, object?>)value["sora_finality_anchor"]!).Remove("checkpoint_finality_artifact_hash"),
@@ -907,6 +913,8 @@ public sealed class SccpExactTests
         var text = Encoding.UTF8.GetString(Json(valid));
         Assert.Throws<ArgumentException>(() => SccpGroth16ProofRequestV1.Parse(Encoding.UTF8.GetBytes(
             text.Replace("\"target_domain\":2", "\"target_domain\":2,\"target_domain\":5", StringComparison.Ordinal))));
+        Assert.Throws<ArgumentException>(() => SccpGroth16ProofRequestV1.Parse(Encoding.UTF8.GetBytes(
+            text.Replace("\"protocol_version\":2", "\"protocol_version\":2.0", StringComparison.Ordinal))));
         Assert.Throws<ArgumentException>(() => SccpGroth16ProofRequestV1.Parse(Encoding.UTF8.GetBytes(text + "null")));
 
         var archivedIdentity = ProofRequestObject();
@@ -2286,6 +2294,7 @@ public sealed class SccpExactTests
         canonical.Write(Convert.FromHexString((string)anchor["checkpoint_block_hash"]!));
         canonical.Write(Convert.FromHexString((string)anchor["checkpoint_context_id"]!));
         canonical.Write(Convert.FromHexString((string)anchor["checkpoint_finality_artifact_hash"]!));
+        Assert.Equal(140, canonical.Length);
         return SccpV1.Keccak256(Concat("sccp:sora-finality-anchor:v1"u8.ToArray(), canonical.ToArray()));
     }
 

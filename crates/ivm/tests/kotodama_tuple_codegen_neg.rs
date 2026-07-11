@@ -7,7 +7,7 @@ fn compile_function_returning_fourteen_values_fails() {
     let src = r#"
         seiyaku TooManyReturns {
             fn h()
-                -> (i64,i64,i64,i64,i64,i64,i64,i64,i64,i64,i64,i64,i64,i64) {
+                -> (int,int,int,int,int,int,int,int,int,int,int,int,int,int) {
                 return (1,2,3,4,5,6,7,8,9,10,11,12,13,14);
             }
         }
@@ -37,8 +37,8 @@ fn compile_function_returning_thirteen_values_succeeds() {
     use ivm::kotodama::compiler::Compiler;
     let src = r#"
         seiyaku MaximumReturns {
-            fn h(a:i64,b:i64,c:i64,d:i64,e:i64,f:i64,g:i64,eighth:i64,i:i64,j:i64,k:i64,l:i64,m:i64)
-                -> (i64,i64,i64,i64,i64,i64,i64,i64,i64,i64,i64,i64,i64) {
+            fn h(int a,int b,int c,int d,int e,int f,int g,int eighth,int i,int j,int k,int l,int m)
+                -> (int,int,int,int,int,int,int,int,int,int,int,int,int) {
                 return (a,b,c,d,e,f,g,eighth,i,j,k,l,m);
             }
         }

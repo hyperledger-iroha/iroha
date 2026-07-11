@@ -7,7 +7,7 @@ use std::{
     sync::{Arc, Mutex, OnceLock},
 };
 
-use iroha_crypto::{Hash, HashOf, PublicKey};
+use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
     ChainId,
     block::{BlockHeader, SignedBlock},
@@ -24,7 +24,7 @@ use thiserror::Error;
 
 use crate::{
     mmr::BlockMmr,
-    state::{State as CoreState, StateReadOnly, consensus_key_pop_for_public_key},
+    state::{State as CoreState, StateReadOnly},
     tx::AcceptedTransaction,
 };
 
@@ -41,8 +41,6 @@ pub trait BridgeStateReadOnly {
         &self,
         height: u64,
     ) -> Result<Option<iroha_data_model::block::consensus_v2::finality::V2FinalityArtifact>, String>;
-    /// Resolve a validator consensus-key proof-of-possession by public key.
-    fn bridge_validator_pop(&self, public_key: &PublicKey) -> Option<Vec<u8>>;
 }
 
 impl<T: StateReadOnly> BridgeStateReadOnly for T {
@@ -63,10 +61,6 @@ impl<T: StateReadOnly> BridgeStateReadOnly for T {
             .v2_finality_artifact(height)
             .map_err(|error| error.to_string())
     }
-
-    fn bridge_validator_pop(&self, public_key: &PublicKey) -> Option<Vec<u8>> {
-        consensus_key_pop_for_public_key(self.world(), public_key)
-    }
 }
 
 impl BridgeStateReadOnly for CoreState {
@@ -86,11 +80,6 @@ impl BridgeStateReadOnly for CoreState {
         self.kura()
             .v2_finality_artifact(height)
             .map_err(|error| error.to_string())
-    }
-
-    fn bridge_validator_pop(&self, public_key: &PublicKey) -> Option<Vec<u8>> {
-        let world = self.world_view();
-        consensus_key_pop_for_public_key(&world, public_key)
     }
 }
 
@@ -1043,12 +1032,6 @@ pub enum BridgeFinalityError {
         /// Height being proven.
         height: u64,
     },
-    /// Validator `PoP` missing for the validator set entry.
-    #[error("validator PoP missing for index {index}")]
-    MissingValidatorPop {
-        /// Index into the validator set.
-        index: usize,
-    },
     /// The exact durable artifact failed v2 quorum or BLS verification.
     #[error("Sumeragi-v2 finality artifact for height {height} failed verification: {reason}")]
     InvalidFinalityArtifact {
@@ -1134,14 +1117,15 @@ fn block_hash_at(
 
 /// Build a self-contained finality proof for the block at `height`.
 ///
-/// The proof bundles the block header, Kura's exact immutable v2 finality
-/// artifact, and BLS PoPs aligned with the frozen powered roster.
+/// The proof bundles the block header and Kura's exact immutable v2 finality
+/// artifact. The artifact owns BLS PoPs aligned with its frozen powered roster,
+/// so historical verification never consults mutable validator state.
 ///
 /// # Errors
 ///
 /// Returns [`BridgeFinalityError`] when the height is invalid, the block or
-/// durable artifact is missing/malformed, a validator PoP is unavailable, or
-/// the exact v2 artifact fails cryptographic verification.
+/// durable artifact is missing/malformed, or the exact v2 artifact fails
+/// cryptographic verification.
 pub fn build_finality_proof(
     state: &impl BridgeStateReadOnly,
     height: u64,
@@ -1169,15 +1153,8 @@ pub fn build_finality_proof(
         return Err(BridgeFinalityError::FinalityArtifactMismatch { height });
     }
 
-    let mut validator_set_pops = Vec::with_capacity(finality_artifact.height_context.roster.len());
-    for (index, entry) in finality_artifact.height_context.roster.iter().enumerate() {
-        let Some(pop) = state.bridge_validator_pop(entry.validator.public_key()) else {
-            return Err(BridgeFinalityError::MissingValidatorPop { index });
-        };
-        validator_set_pops.push(pop);
-    }
     finality_artifact
-        .verify_with_validator_pops(&validator_set_pops)
+        .verify()
         .map_err(|error| BridgeFinalityError::InvalidFinalityArtifact {
             height,
             reason: error.to_string(),
@@ -1187,7 +1164,6 @@ pub fn build_finality_proof(
         version: BRIDGE_FINALITY_PROOF_VERSION_V1,
         block_header,
         finality_artifact,
-        validator_set_pops,
     })
 }
 
@@ -1398,22 +1374,6 @@ fn verify_structural_sccp_finality_proof_against_local_state(
         );
     }
 
-    let mut local_pops = Vec::with_capacity(artifact.height_context.roster.len());
-    for (index, validator) in artifact.height_context.roster.iter().enumerate() {
-        let pop = state
-            .bridge_validator_pop(validator.validator.public_key())
-            .ok_or_else(|| {
-                format!("local validator proof of possession is missing at roster index {index}")
-            })?;
-        local_pops.push(pop);
-    }
-    if local_pops != finality.validator_set_pops {
-        return Err(
-            "SCCP finality proof PoPs do not match the authoritative local validator records"
-                .to_owned(),
-        );
-    }
-
     count_sccp_local_bls_verification_for_tests();
     iroha_data_model::bridge::verify_bridge_finality_proof(finality, state.bridge_chain_id())
         .map_err(|error| {
@@ -1501,7 +1461,6 @@ mod tests {
         chain_id: ChainId,
         block: Option<Arc<SignedBlock>>,
         artifact: Option<iroha_data_model::block::consensus_v2::finality::V2FinalityArtifact>,
-        validator_pops: Vec<(PublicKey, Vec<u8>)>,
         artifact_error: Option<String>,
     }
 
@@ -1532,12 +1491,6 @@ mod tests {
                 .as_ref()
                 .filter(|artifact| artifact.height == height)
                 .cloned())
-        }
-
-        fn bridge_validator_pop(&self, public_key: &PublicKey) -> Option<Vec<u8>> {
-            self.validator_pops
-                .iter()
-                .find_map(|(candidate, pop)| (candidate == public_key).then(|| pop.clone()))
         }
     }
 
@@ -1803,19 +1756,10 @@ mod tests {
             .expect("fixture local block results");
         assert_eq!(block.hash(), finality.finality_artifact.block_hash);
 
-        let validator_pops = finality
-            .finality_artifact
-            .height_context
-            .roster
-            .iter()
-            .zip(&finality.validator_set_pops)
-            .map(|(validator, pop)| (validator.validator.public_key().clone(), pop.clone()))
-            .collect();
         TestSccpFinalityState {
             chain_id: finality.finality_artifact.height_context.chain_id.clone(),
             block: Some(Arc::new(block)),
             artifact: Some(finality.finality_artifact.clone()),
-            validator_pops,
             artifact_error: None,
         }
     }
@@ -1865,7 +1809,6 @@ mod tests {
             chain_id: finality.finality_artifact.height_context.chain_id.clone(),
             block: None,
             artifact: None,
-            validator_pops: Vec::new(),
             artifact_error: None,
         };
         reset_sccp_local_bls_verifications_for_tests();
@@ -1876,7 +1819,7 @@ mod tests {
     }
 
     #[test]
-    fn sccp_local_anchor_rejects_artifact_pop_chain_and_record_substitution_before_bls() {
+    fn sccp_local_anchor_rejects_artifact_chain_and_record_substitution_before_bls() {
         let fixture = iroha_sccp::sccp_exact_outbound_test_fixture_v1();
         let finality =
             iroha_sccp::decode_taira_bridge_finality_proof(&fixture.bundle.finality_proof)
@@ -1916,12 +1859,12 @@ mod tests {
         assert_rejected_before_bls(&attack, "exact durable local artifact");
 
         let mut attack = base.clone();
-        attack.validator_pops.pop();
-        assert_rejected_before_bls(&attack, "missing at roster index");
-
-        let mut attack = base.clone();
-        attack.validator_pops[0].1[0] ^= 1;
-        assert_rejected_before_bls(&attack, "authoritative local validator records");
+        attack
+            .artifact
+            .as_mut()
+            .expect("base artifact")
+            .validator_set_pops[0][0] ^= 1;
+        assert_rejected_before_bls(&attack, "exact durable local artifact");
 
         let hostile_payload =
             canonical_test_sccp_payload_bytes(&sample_transfer_payload(999, [0x44; 20]));

@@ -16,10 +16,14 @@ final class NumericV1Tests: XCTestCase {
         assertCode(.invalidText) { _ = try KotodamaInt("01") }
         XCTAssertEqual(try KotodamaNumericV1Codec.decodeDecimalJSON("1.23").canonicalString, "1.23")
         XCTAssertEqual(try KotodamaNumericV1Codec.decodeQuantityJSON("0").canonicalString, "0")
-        for alternate in ["1.0", "1.2300", "0.0"] {
+        for alternate in ["+1", "01", "1.", ".5", "1e0", "-0", "-0.0", "1.0", "1.2300", "0.0"] {
             assertCode(.invalidText) { _ = try KotodamaNumericV1Codec.decodeDecimalJSON(alternate) }
         }
+        for alternate in ["+1", "01", "-0", "1.0", "1e0"] {
+            assertCode(.invalidText) { _ = try KotodamaNumericV1Codec.decodeIntJSON(alternate) }
+        }
         assertCode(.invalidText) { _ = try KotodamaNumericV1Codec.decodeQuantityJSON("1.0") }
+        assertCode(.negativeQuantity) { _ = try KotodamaNumericV1Codec.decodeQuantityJSON("-1") }
     }
 
     func testCanonicalFramesAndEnvelopesRoundtrip() throws {

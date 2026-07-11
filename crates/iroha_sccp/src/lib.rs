@@ -3424,7 +3424,7 @@ pub fn verify_sccp_destination_proof_v1(
         return None;
     }
     let verified = verify_parsed_sccp_destination_proof_v1(parsed, governed_route)?;
-    if !verify_taira_commit_qc_bls_aggregate(verified.finality()) {
+    if !verify_taira_bridge_finality_proof_cryptographic(verified.finality()) {
         return None;
     }
     Some(verified.into_call())
@@ -4245,8 +4245,8 @@ pub fn verify_taira_bridge_finality_proof_structure(proof: &TairaBridgeFinalityP
         || !h256_is_nonzero(&commitment_root)
         || roster_len == 0
         || roster_len > SCCP_TAIRA_MAX_FINALITY_VALIDATORS_V1
-        || proof.validator_set_pops.len() != roster_len
-        || proof
+        || artifact.validator_set_pops.len() != roster_len
+        || artifact
             .validator_set_pops
             .iter()
             .any(|pop| pop.is_empty() || pop.len() > SCCP_TAIRA_MAX_BLS_PROOF_BYTES_V1)
@@ -5840,6 +5840,34 @@ mod tests {
             "70/100 power with only two of four signers must fail the count quorum"
         );
 
+        let mut attack = proof.clone();
+        attack.finality_artifact.height_context.quorum.min_signers = attack
+            .finality_artifact
+            .height_context
+            .quorum
+            .min_signers
+            .saturating_sub(1);
+        attack.finality_artifact.commit_qc.round.context_id =
+            attack.finality_artifact.height_context.id();
+        assert!(
+            !verify_taira_bridge_finality_proof_structure(&attack),
+            "a proof-controlled count threshold must not replace the canonical roster quorum"
+        );
+
+        let mut attack = proof.clone();
+        attack.finality_artifact.height_context.quorum.total_power = attack
+            .finality_artifact
+            .height_context
+            .quorum
+            .total_power
+            .saturating_add(1);
+        attack.finality_artifact.commit_qc.round.context_id =
+            attack.finality_artifact.height_context.id();
+        assert!(
+            !verify_taira_bridge_finality_proof_structure(&attack),
+            "a proof-controlled total power must not replace the exact roster sum"
+        );
+
         for signers in [vec![0, 0, 1], vec![1, 0, 2], vec![0, 1, 4]] {
             let mut attack = proof.clone();
             attack.finality_artifact.commit_qc.signers = signers;
@@ -5847,15 +5875,16 @@ mod tests {
         }
 
         let mut attack = proof.clone();
-        attack.validator_set_pops.pop();
+        attack.finality_artifact.validator_set_pops.pop();
         assert!(!verify_taira_bridge_finality_proof_structure(&attack));
 
         let mut attack = proof.clone();
-        attack.validator_set_pops[0].clear();
+        attack.finality_artifact.validator_set_pops[0].clear();
         assert!(!verify_taira_bridge_finality_proof_structure(&attack));
 
         let mut attack = proof.clone();
-        attack.validator_set_pops[0] = vec![0x55; SCCP_TAIRA_MAX_BLS_PROOF_BYTES_V1 + 1];
+        attack.finality_artifact.validator_set_pops[0] =
+            vec![0x55; SCCP_TAIRA_MAX_BLS_PROOF_BYTES_V1 + 1];
         assert!(!verify_taira_bridge_finality_proof_structure(&attack));
 
         let mut attack = proof.clone();
@@ -5869,9 +5898,18 @@ mod tests {
         assert!(!verify_taira_bridge_finality_proof_cryptographic(&attack));
 
         let mut attack = proof.clone();
-        attack.validator_set_pops[0][0] ^= 1;
+        attack.finality_artifact.validator_set_pops[0][0] ^= 1;
         assert!(verify_taira_bridge_finality_proof_structure(&attack));
         assert!(!verify_taira_bridge_finality_proof_cryptographic(&attack));
+
+        let mut attack = proof.clone();
+        assert!(!attack.finality_artifact.commit_qc.signers.contains(&3));
+        attack.finality_artifact.validator_set_pops[3][0] ^= 1;
+        assert!(verify_taira_bridge_finality_proof_structure(&attack));
+        assert!(
+            !verify_taira_bridge_finality_proof_cryptographic(&attack),
+            "every frozen-roster PoP, including non-signers, must authenticate its validator key"
+        );
 
         let mut attack = proof.clone();
         attack.block_header.set_sccp_commitment_root(None);

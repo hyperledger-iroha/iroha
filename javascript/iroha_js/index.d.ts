@@ -1,6 +1,6 @@
 /// <reference types="node" />
 
-export * from "./kotodama-compiler";
+export * from "./kotodama-compiler.js";
 
 export type JsonValue =
   | null
@@ -2438,52 +2438,58 @@ export interface AnonymousPgcProofMaterialBaseInput {
   aux?: BinaryLike;
 }
 
-export type AnonymousPgcProofMaterialInput =
-  AnonymousPgcProofMaterialBaseInput &
-  AnonymousPgcOptionalAlias3<
-    "backend",
-    "backendTag",
-    "backend_tag",
-    PrivacyBackendTag
-  > &
-  AnonymousPgcOptionalAlias2<"circuitId", "circuit_id", string> &
-  AnonymousPgcOptionalAlias4<
-    "vkHash",
-    "vk_hash",
-    "verifierKeyHash",
-    "verifyingKeyHash",
-    BinaryLike
-  > &
-  AnonymousPgcReceiverSetMaterialInput &
-  AnonymousPgcOptionalAlias2<"anonymitySetRoot", "anonymity_set_root", BinaryLike> &
-  AnonymousPgcOptionalAlias4<
-    "txDigest",
-    "tx_digest",
-    "payloadDigest",
-    "payload_digest",
-    BinaryLike
-  > &
-  AnonymousPgcPayloadInput &
-  AnonymousPgcOptionalAlias2<
-    "balanceCommitments",
-    "balance_commitments",
-    ReadonlyArray<BinaryLike | { commitment?: BinaryLike }>
-  > &
-  AnonymousPgcOptionalAlias2<"linkTag", "link_tag", BinaryLike> &
-  AnonymousPgcOptionalAlias2<
-    "rangeCommitments",
-    "range_commitments",
-    ReadonlyArray<BinaryLike | RangeCommitmentInput>
-  > &
-  AnonymousPgcOptionalAlias2<"chainId", "chain_id", string> &
-  AnonymousPgcOptionalAlias2<"domainSeparator", "domain_separator", string> &
-  AnonymousPgcOptionalAlias2<"maxProofBytes", "max_proof_bytes", NumericLike> &
-  AnonymousPgcOptionalAlias2<
-    "maxPublicInputBytes",
-    "max_public_input_bytes",
-    NumericLike
-  > &
-  AnonymousPgcOptionalAlias2<"maxPayloadBytes", "max_payload_bytes", NumericLike>;
+/**
+ * Accepted anonymous-PGC proof material aliases.
+ *
+ * Runtime validation rejects conflicting aliases. Keeping the aliases as
+ * independent optional properties prevents TypeScript from expanding the
+ * cross-product of every alias union into an unrepresentable type.
+ */
+export interface AnonymousPgcProofMaterialInput
+  extends AnonymousPgcProofMaterialBaseInput {
+  backend?: PrivacyBackendTag;
+  backendTag?: PrivacyBackendTag;
+  backend_tag?: PrivacyBackendTag;
+  circuitId?: string;
+  circuit_id?: string;
+  vkHash?: BinaryLike;
+  vk_hash?: BinaryLike;
+  verifierKeyHash?: BinaryLike;
+  verifyingKeyHash?: BinaryLike;
+  receiverSet?: AnonymousPgcReceiverSetInput | AnonymousPgcReceiverSet;
+  receiver_set?: AnonymousPgcReceiverSetInput | AnonymousPgcReceiverSet;
+  version?: NumericLike;
+  threshold?: NumericLike;
+  k?: NumericLike;
+  receivers?: ReadonlyArray<AnonymousPgcReceiverInput>;
+  anonymitySetRoot?: BinaryLike;
+  anonymity_set_root?: BinaryLike;
+  txDigest?: BinaryLike;
+  tx_digest?: BinaryLike;
+  payloadDigest?: BinaryLike;
+  payload_digest?: BinaryLike;
+  payload?: BinaryLike;
+  payloadBytes?: BinaryLike;
+  payload_bytes?: BinaryLike;
+  payloadJson?: unknown;
+  payload_json?: unknown;
+  balanceCommitments?: ReadonlyArray<BinaryLike | { commitment?: BinaryLike }>;
+  balance_commitments?: ReadonlyArray<BinaryLike | { commitment?: BinaryLike }>;
+  linkTag?: BinaryLike;
+  link_tag?: BinaryLike;
+  rangeCommitments?: ReadonlyArray<BinaryLike | RangeCommitmentInput>;
+  range_commitments?: ReadonlyArray<BinaryLike | RangeCommitmentInput>;
+  chainId?: string;
+  chain_id?: string;
+  domainSeparator?: string;
+  domain_separator?: string;
+  maxProofBytes?: NumericLike;
+  max_proof_bytes?: NumericLike;
+  maxPublicInputBytes?: NumericLike;
+  max_public_input_bytes?: NumericLike;
+  maxPayloadBytes?: NumericLike;
+  max_payload_bytes?: NumericLike;
+}
 
 export type AnonymousPgcPaymentBindingHashInput =
   | { paymentBindingHash: BinaryLike; payment_binding_hash?: never }
@@ -4996,10 +5002,286 @@ export function sorafsGatewayFetch(
   options?: SorafsGatewayFetchOptions,
 ): SorafsGatewayFetchResult;
 
-export const Torii: typeof import("./src/toriiClient.js");
-export const Norito: typeof import("./src/norito.js");
-export const Crypto: typeof import("./src/crypto.js");
-export const OfflineQrStream: typeof import("./src/offlineQrStream.js");
+export class ToriiDataModelMismatchError extends Error {
+  readonly expected: unknown;
+  readonly actual: unknown | null;
+  readonly cause?: unknown;
+  constructor(expected: unknown, actual: unknown, cause?: unknown);
+}
+
+export interface IdentifierRequestForPolicyOptions {
+  input?: unknown;
+  encryptedInput?: string;
+  encrypt?: boolean;
+  seed?: BinaryLike;
+  seedHex?: string;
+  outputOpening: unknown;
+}
+
+export interface IdentifierRequestForPolicy {
+  policyId: string;
+  encryptedInput: string;
+  outputOpening: unknown;
+}
+
+export function encodeIdentifierResolutionReceiptPayload(payload: unknown): Buffer;
+export function encodeIdentifierResolutionReceiptAttestation(
+  attestation: unknown,
+): Buffer;
+export function getIdentifierBfvPublicParameters(
+  policySummary: unknown,
+): Readonly<Record<string, unknown>> | null;
+export function encryptIdentifierInputForPolicy(
+  policySummary: unknown,
+  input: unknown,
+  options?: { seed?: BinaryLike; seedHex?: string },
+): string;
+export function buildIdentifierRequestForPolicy(
+  policySummary: unknown,
+  options: IdentifierRequestForPolicyOptions,
+): IdentifierRequestForPolicy;
+export function verifyIdentifierResolutionReceipt(
+  receipt: unknown,
+  policySummary: unknown,
+): boolean;
+
+export const sakuraStormQrStreamTheme: OfflineQrStreamTheme;
+export const sakuraStormQrStreamSkin: OfflineQrStreamPlaybackSkin;
+
+type IrohaJsPublicApi = typeof import("./index.js");
+type IrohaJsRuntimeNamespace<Keys extends keyof IrohaJsPublicApi> = Readonly<
+  Pick<IrohaJsPublicApi, Keys>
+>;
+
+type ToriiRuntimeNamespaceExport =
+    "IsoMessageTimeoutError"
+  | "ToriiClient"
+  | "ToriiDataModelMismatchError"
+  | "ToriiHttpError"
+  | "TransactionStatusError"
+  | "TransactionTimeoutError"
+  | "buildConnectWebSocketUrl"
+  | "buildIdentifierRequestForPolicy"
+  | "buildRbcSampleRequest"
+  | "buildSorafsOrderbookEventsWebSocketUrl"
+  | "decodePdpCommitmentHeader"
+  | "encodeIdentifierResolutionReceiptAttestation"
+  | "encodeIdentifierResolutionReceiptPayload"
+  | "encryptIdentifierInputForPolicy"
+  | "extractPipelineRejectionReason"
+  | "extractPipelineStatusKind"
+  | "getIdentifierBfvPublicParameters"
+  | "isStatusQueueStalled"
+  | "openConnectWebSocket"
+  | "openSorafsOrderbookEventsWebSocket"
+  | "statusLivenessElapsedMs"
+  | "verifyIdentifierResolutionReceipt";
+
+type NoritoRuntimeNamespaceExport =
+    "noritoDecodeInstruction"
+  | "noritoDecodePrivacyProofEnvelope"
+  | "noritoEncodeInstruction"
+  | "noritoEncodeMultisigContractCallApproveRequest"
+  | "noritoEncodeMultisigContractCallProposeRequest"
+  | "noritoEncodeMultisigProposeRequest"
+  | "noritoEncodePrivacyProofEnvelope"
+  | "noritoEncodeTransactionPayloadBatch";
+
+type CryptoRuntimeNamespaceExport =
+    "CRYPTO_ALGORITHMS"
+  | "KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS"
+  | "KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES"
+  | "KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1"
+  | "KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1"
+  | "KAGEMUSHA_PROOF_ATTACHMENT_WIRE_NAME"
+  | "KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND"
+  | "KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1"
+  | "KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1"
+  | "KAGEMUSHA_RECURSIVE_COMPACT_MULTI_HOP_UNAVAILABLE_FRAGMENT"
+  | "KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE_FRAGMENT"
+  | "KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_NATIVE_BRIDGE_ABI_VERSION"
+  | "KAGEMUSHA_RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES"
+  | "KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_MAX_BYTES"
+  | "KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_REQUIRED_COUNT_V1"
+  | "KAGEMUSHA_RECURSIVE_SPEND_ACCUMULATOR_DOMAIN"
+  | "KAGEMUSHA_RECURSIVE_SPEND_APPEND_REQUEST_WIRE_NAME"
+  | "KAGEMUSHA_RECURSIVE_SPEND_BUNDLE_WIRE_NAME"
+  | "KAGEMUSHA_RECURSIVE_SPEND_INIT_REQUEST_WIRE_NAME"
+  | "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_CHAIN_ASSET_BINDING_DOMAIN_V1"
+  | "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_DOMAIN_V1"
+  | "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_FINAL_NOTE_BINDING_DOMAIN_V1"
+  | "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_OPENINGS_PREFLIGHT_DOMAIN_V1"
+  | "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1"
+  | "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1"
+  | "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1"
+  | "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1"
+  | "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESS_WIRE_NAME"
+  | "KAGEMUSHA_RECURSIVE_SPEND_RECORD_BUNDLE_WIRE_NAME"
+  | "KAGEMUSHA_RECURSIVE_SPEND_REDEEM_REQUEST_WIRE_NAME"
+  | "KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_NATIVE_BRIDGE_ABI_VERSION"
+  | "KAGEMUSHA_RECURSIVE_SPEND_TOPUP_REQUIRED_NATIVE_BRIDGE_ABI_VERSION"
+  | "KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROFILE_BINDING_DIGEST_DOMAIN"
+  | "KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROFILE_DIGEST_DOMAIN"
+  | "KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROFILE_DOMAIN"
+  | "KAGEMUSHA_RECURSIVE_SPEND_VERIFY_REQUEST_WIRE_NAME"
+  | "KAGEMUSHA_RECURSIVE_SPEND_VERIFY_RESULT_WIRE_NAME"
+  | "KAGEMUSHA_RECURSIVE_TOPUP_REQUEST_WIRE_NAME"
+  | "KAGEMUSHA_VERIFYING_KEY_RECORD_WIRE_NAME"
+  | "KagemushaRecursiveSpendRequestCodecError"
+  | "PRIVACY_FFI_ERROR_INVALID_REQUEST"
+  | "PRIVACY_FFI_ERROR_MALFORMED_NORITO"
+  | "PRIVACY_FFI_ERROR_NULL_POINTER"
+  | "PRIVACY_FFI_ERROR_PRODUCTION_DISABLED"
+  | "PRIVACY_FFI_ERROR_UNSUPPORTED_ALGORITHM"
+  | "PRIVACY_FFI_STATUS_ERROR"
+  | "PRIVACY_FFI_VERSION_V1"
+  | "PRIVACY_NATIVE_ARCHIVE_MAX_BYTES"
+  | "PRIVACY_REQUIRED_BRIDGE_ABI_VERSION"
+  | "SM2_DEFAULT_DISTINGUISHED_ID"
+  | "SM2_PRIVATE_KEY_LENGTH"
+  | "SM2_PUBLIC_KEY_LENGTH"
+  | "SM2_SIGNATURE_LENGTH"
+  | "SUPPORTED_CRYPTO_ALGORITHMS"
+  | "buildKagemushaRecursiveSpendVerifierRecordRef"
+  | "buildKagemushaRecursiveSpendableNoteDescriptor"
+  | "buildKaigiRosterJoinProof"
+  | "buildZkAceTransferAuthorizationV1"
+  | "canAppendKagemushaRecursiveSpendWitnesslessLineage"
+  | "canProveKagemushaRecursiveSpendAppendOutputProofCircuitId"
+  | "canRedeemKagemushaRecursiveSpendWitnessless"
+  | "canSelectKagemushaRecursiveSpendAppendOutputProofCircuitId"
+  | "decodeKagemushaRecursiveSpendBundle"
+  | "decodeKagemushaRecursiveSpendVerifyResult"
+  | "deriveConfidentialDiversifierV2"
+  | "deriveConfidentialKeyset"
+  | "deriveConfidentialKeysetFromHex"
+  | "deriveConfidentialNoteV2"
+  | "deriveConfidentialNullifierV2"
+  | "deriveConfidentialOwnerTagV2"
+  | "deriveConfidentialReceiveAddressV2"
+  | "deriveEd25519SeedFromRecoveryPhrase"
+  | "deriveSm2KeyPairFromSeed"
+  | "ed25519SeedToRecoveryPhrase"
+  | "encodeKagemushaRecursiveSpendAppendRequest"
+  | "encodeKagemushaRecursiveSpendInitRequest"
+  | "encodeKagemushaRecursiveSpendRedeemRequest"
+  | "encodeKagemushaRecursiveSpendTopUpRequest"
+  | "encodeKagemushaRecursiveSpendVerifyRequest"
+  | "entropyToRecoveryPhrase"
+  | "generateKeyPair"
+  | "generateRecoveryPhrase"
+  | "generateSm2KeyPair"
+  | "isKagemushaCompactPaymentTokenNativeAvailable"
+  | "isKagemushaPallasOpenEnvelopeBuilderNativeAvailable"
+  | "isKagemushaRecursiveAggregationProofBundleNativeAvailable"
+  | "isKagemushaRecursiveCompactPaymentTokenNativeAvailable"
+  | "isKagemushaRecursiveCompactPaymentTokenVerifierNativeAvailable"
+  | "isKagemushaRecursiveCompactUnavailable"
+  | "isKagemushaRecursiveSpendCompactPaymentTokenProjectionNativeAvailable"
+  | "isKagemushaRecursiveSpendCompactPaymentTokenProjectionVerifierNativeAvailable"
+  | "isKagemushaRecursiveSpendLineageAppendOutputCircuitId"
+  | "isKagemushaRecursiveSpendLineageProofCircuitId"
+  | "isKagemushaRecursiveSpendNativeAvailable"
+  | "isKagemushaRecursiveSpendTopUpNativeAvailable"
+  | "isPrivacyNativeAvailable"
+  | "isSupportedKagemushaRecursiveSpendAppendOutputProofCircuitId"
+  | "isSupportedKagemushaRecursiveSpendAppendProofTransition"
+  | "isSupportedKagemushaRecursiveSpendLineageKeyArtifactOpeningLen"
+  | "isSupportedKagemushaRecursiveSpendPreviousProofCircuitId"
+  | "kagemushaBuildPallasOpenEnvelopesArchive"
+  | "kagemushaBuildPreviousProofOpenEnvelopesArchive"
+  | "kagemushaProveVerifiedCompactPaymentTokenWithRecords"
+  | "kagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes"
+  | "kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes"
+  | "kagemushaRecursiveSpendAppend"
+  | "kagemushaRecursiveSpendAppendTyped"
+  | "kagemushaRecursiveSpendCompactPaymentTokenFromBundle"
+  | "kagemushaRecursiveSpendInit"
+  | "kagemushaRecursiveSpendInitTyped"
+  | "kagemushaRecursiveSpendLineageAppendBoundary"
+  | "kagemushaRecursiveSpendLineageKeyArtifacts"
+  | "kagemushaRecursiveSpendLineageKeyArtifactsForAppend"
+  | "kagemushaRecursiveSpendLineageKeyArtifactsForInit"
+  | "kagemushaRecursiveSpendLineageWitnessAppendResult"
+  | "kagemushaRecursiveSpendLineageWitnessFromInitResult"
+  | "kagemushaRecursiveSpendRedeem"
+  | "kagemushaRecursiveSpendRedeemTyped"
+  | "kagemushaRecursiveSpendTopUp"
+  | "kagemushaRecursiveSpendTopUpTyped"
+  | "kagemushaRecursiveSpendTransitionProfileAppend"
+  | "kagemushaRecursiveSpendTransitionProfileInit"
+  | "kagemushaRecursiveSpendVerify"
+  | "kagemushaRecursiveSpendVerifyTyped"
+  | "kagemushaVerifyRecursiveCompactPaymentToken"
+  | "kagemushaVerifyRecursiveSpendCompactPaymentTokenProjection"
+  | "loadKeyPair"
+  | "loadSm2KeyPair"
+  | "normalizeCryptoAlgorithm"
+  | "normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId"
+  | "normalizeRecoveryPhrase"
+  | "preferredKagemushaOfflineSpendMode"
+  | "preferredKagemushaOfflineSpendModeForCapabilities"
+  | "preferredKagemushaRecursiveSpendAppendOutputProofCircuitId"
+  | "privacyBuildProofV1"
+  | "privacyCapabilitiesV1"
+  | "privacyProofRequestV1"
+  | "privacyVerifyProofV1"
+  | "privateKeyMultihash"
+  | "publicKeyFromPrivate"
+  | "publicKeyMultihash"
+  | "recoveryPhraseToEntropy"
+  | "requiresKagemushaRecursiveSpendLineageKeyArtifactsForAppendOutput"
+  | "requiresKagemushaRecursiveSpendLineageKeyArtifactsForInit"
+  | "requiresKagemushaRecursiveSpendLineageWitnessForRedeem"
+  | "requiresKagemushaRecursiveSpendPreviousLineageVerifierRecordForAppend"
+  | "requiresKagemushaRecursiveSpendPreviousProofOpenEnvelopesForAppend"
+  | "sign"
+  | "signEd25519"
+  | "signSm2"
+  | "sm2FixtureFromSeed"
+  | "sm2PublicKeyMultihash"
+  | "supportedCryptoAlgorithms"
+  | "validateKagemushaRecursiveSpendLineageKeyArtifacts"
+  | "validateRecoveryPhrase"
+  | "verify"
+  | "verifyEd25519"
+  | "verifySm2";
+
+type OfflineQrStreamRuntimeNamespaceExport =
+    "OfflineQrPayloadKind"
+  | "OfflineQrStreamDecoder"
+  | "OfflineQrStreamEncoder"
+  | "OfflineQrStreamEnvelope"
+  | "OfflineQrStreamFrame"
+  | "OfflineQrStreamFrameEncoding"
+  | "OfflineQrStreamFrameKind"
+  | "OfflineQrStreamOptions"
+  | "OfflineQrStreamPlaybackSkin"
+  | "OfflineQrStreamScanSession"
+  | "OfflineQrStreamTheme"
+  | "decodeQrFrameText"
+  | "encodeQrFrameText"
+  | "sakuraQrStreamLowPowerSkin"
+  | "sakuraQrStreamReducedMotionSkin"
+  | "sakuraQrStreamSkin"
+  | "sakuraQrStreamTheme"
+  | "sakuraStormQrStreamSkin"
+  | "sakuraStormQrStreamTheme"
+  | "scanQrStreamFrames";
+
+export const Torii: IrohaJsRuntimeNamespace<ToriiRuntimeNamespaceExport> &
+  Readonly<{
+    getTrustedValidationFeeVerificationContext(
+      client: ToriiClient,
+    ): ValidationFeePolicyVerificationContext | null;
+  }>;
+export const Norito: IrohaJsRuntimeNamespace<NoritoRuntimeNamespaceExport>;
+export const Crypto: IrohaJsRuntimeNamespace<CryptoRuntimeNamespaceExport> &
+  Readonly<{
+    KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_PUBLIC_INPUTS_WIRE_NAME:
+      "iroha_data_model::offline::model::KagemushaRecursiveAggregationProofPublicInputs";
+  }>;
+export const OfflineQrStream: IrohaJsRuntimeNamespace<OfflineQrStreamRuntimeNamespaceExport>;
 
 export interface SoranetPuzzleParamsSnapshot {
   memoryKib: number;
@@ -14799,5 +15081,5 @@ export const NumericV1: {
   decodeQuantityJson(value: string): KotodamaQuantity;
 };
 
-export * from "./nexus-app";
+export * from "./nexus-app.js";
 export * from "./transaction-codec.js";

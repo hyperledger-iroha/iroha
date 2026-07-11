@@ -71,6 +71,22 @@ fn mark_one_private_stack_byte(vm: &mut IVM, address: u64) {
         .expect("leave exactly one private byte");
 }
 
+fn mark_private_stack_word_preserving_bytes(vm: &mut IVM, address: u64) {
+    let value = vm
+        .memory
+        .load_u64(address)
+        .expect("load public stack word before retagging");
+    vm.set_register(1, address);
+    vm.set_register(2, value);
+    vm.registers.set_tag(2, true);
+    vm.execute_instruction(Instruction::Store {
+        rs: 2,
+        addr_reg: 1,
+        offset: 0,
+    })
+    .expect("retag unchanged stack word as private");
+}
+
 #[test]
 fn branch_on_private_fails() {
     let mut vm = IVM::new(u64::MAX);
@@ -294,6 +310,81 @@ fn wide_add_propagates_secret_tag() {
 }
 
 #[test]
+fn value_dependent_arithmetic_traps_reject_private_operands_before_reading_values() {
+    for opcode in [
+        instruction::wide::arithmetic::DIV,
+        instruction::wide::arithmetic::DIVU,
+        instruction::wide::arithmetic::REM,
+        instruction::wide::arithmetic::REMU,
+        instruction::wide::arithmetic::DIV_CEIL,
+    ] {
+        for (numerator, denominator) in [
+            (12_u64, 3_u64),
+            (12, 0),
+            (i64::MIN as u64, (-1_i64) as u64),
+        ] {
+            let program = raw_zk_program(&[encoding::wide::encode_rr(opcode, 3, 1, 2)]);
+            let mut vm = IVM::new(10_000);
+            vm.load_program(&program).expect("load private trap fixture");
+            vm.set_register(1, numerator);
+            vm.set_register(2, denominator);
+            vm.registers.set_tag(1, true);
+            vm.registers.set_tag(2, true);
+
+            assert_eq!(
+                vm.run(),
+                Err(VMError::PrivacyViolation),
+                "opcode {opcode:#x} exposed a private value-dependent outcome for {numerator}/{denominator}"
+            );
+        }
+    }
+
+    for value in [0_u64, 7, i64::MIN as u64] {
+        let program = raw_zk_program(&[encoding::wide::encode_rr(
+            instruction::wide::arithmetic::ABS,
+            3,
+            1,
+            0,
+        )]);
+        let mut vm = IVM::new(10_000);
+        vm.load_program(&program).expect("load private abs fixture");
+        vm.set_register(1, value);
+        vm.registers.set_tag(1, true);
+        assert_eq!(vm.run(), Err(VMError::PrivacyViolation));
+    }
+}
+
+#[test]
+fn zk_assertions_reject_private_predicates_independent_of_truth_value() {
+    for value in [0_u64, 1] {
+        for word in [
+            encoding::wide::encode_rr(instruction::wide::zk::ASSERT, 0, 1, 0),
+            encoding::wide::encode_ri(instruction::wide::zk::ASSERT_RANGE, 0, 1, 1),
+        ] {
+            let mut vm = IVM::new(10_000);
+            vm.load_program(&raw_zk_program(&[word]))
+                .expect("load private assertion fixture");
+            vm.set_register(1, value);
+            vm.registers.set_tag(1, true);
+            assert_eq!(vm.run(), Err(VMError::PrivacyViolation));
+        }
+    }
+
+    for (left, right) in [(7_u64, 7_u64), (7, 8)] {
+        let word =
+            encoding::wide::encode_rr(instruction::wide::zk::ASSERT_EQ, 0, 1, 2);
+        let mut vm = IVM::new(10_000);
+        vm.load_program(&raw_zk_program(&[word]))
+            .expect("load private equality assertion fixture");
+        vm.set_register(1, left);
+        vm.set_register(2, right);
+        vm.registers.set_tag(1, true);
+        vm.registers.set_tag(2, true);
+        assert_eq!(vm.run(), Err(VMError::PrivacyViolation));
+    }
+}
+
+#[test]
 fn wide_addi_propagates_tag() {
     let mut program = meta_with_mode(ivm::ivm_mode::ZK).encode();
     let addi = encoding::wide::encode_ri(instruction::wide::arithmetic::ADDI, 3, 1, 7);
@@ -436,6 +527,147 @@ fn private_input_syscall_requires_zk_execution_mode() {
 }
 
 #[test]
+fn successful_hosts_cannot_declassify_unwritten_output_registers() {
+    struct PartialOutputHost;
+
+    impl IVMHost for PartialOutputHost {
+        fn prepare_syscall(&self, number: u32, vm: &IVM) -> Result<u64, VMError> {
+            match number {
+                syscalls::SYSCALL_CURRENT_TIME_MS => {
+                    assert_eq!(vm.register(10), 0);
+                    assert!(!vm.registers.tag(10));
+                }
+                syscalls::SYSCALL_ZK_VERIFY_TRANSFER => {
+                    assert_eq!(vm.register(10), 123, "declared input must be preserved");
+                    assert!(!vm.registers.tag(10));
+                    assert_eq!(vm.register(11), 0, "output-only r11 must be sanitized");
+                    assert!(!vm.registers.tag(11));
+                }
+                _ => panic!("unexpected syscall {number:#x}"),
+            }
+            Ok(0)
+        }
+
+        fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, VMError> {
+            if number == syscalls::SYSCALL_CURRENT_TIME_MS {
+                assert_eq!(vm.register(10), 0);
+                assert!(!vm.registers.tag(10));
+            }
+            if number == syscalls::SYSCALL_ZK_VERIFY_TRANSFER {
+                assert_eq!(vm.register(11), 0);
+                assert!(!vm.registers.tag(11));
+                vm.set_register(10, 1);
+            }
+            Ok(0)
+        }
+
+        fn as_any(&mut self) -> &mut dyn Any
+        where
+            Self: 'static,
+        {
+            self
+        }
+    }
+
+    let mut no_write = IVM::new(10_000);
+    no_write
+        .load_program(&raw_zk_program(&[scall(
+            syscalls::SYSCALL_CURRENT_TIME_MS,
+        )]))
+        .expect("load output-only syscall fixture");
+    no_write.set_host(PartialOutputHost);
+    no_write.set_register(10, 0xDEAD_BEEF);
+    no_write.registers.set_tag(10, true);
+    no_write.run().expect("no-write host returns success");
+    assert_eq!(no_write.register(10), 0);
+    assert!(!no_write.registers.tag(10));
+
+    let mut partial_write = IVM::new(10_000);
+    partial_write
+        .load_program(&raw_zk_program(&[scall(
+            syscalls::SYSCALL_ZK_VERIFY_TRANSFER,
+        )]))
+        .expect("load partial-output syscall fixture");
+    partial_write.set_host(PartialOutputHost);
+    partial_write.set_register(10, 123);
+    partial_write.set_register(11, 0xA5A5_A5A5);
+    partial_write.registers.set_tag(11, true);
+    partial_write
+        .run()
+        .expect("partial-write host returns success");
+    assert_eq!(partial_write.register(10), 1);
+    assert_eq!(partial_write.register(11), 0);
+    assert!(!partial_write.registers.tag(10));
+    assert!(!partial_write.registers.tag(11));
+}
+
+#[test]
+fn output_sanitization_restores_registers_when_prepare_or_quote_fails() {
+    struct PrepareFailureHost;
+
+    impl IVMHost for PrepareFailureHost {
+        fn prepare_syscall(&self, _number: u32, vm: &IVM) -> Result<u64, VMError> {
+            assert_eq!(vm.register(10), 0);
+            assert!(!vm.registers.tag(10));
+            Err(VMError::DecodeError)
+        }
+
+        fn syscall(&mut self, _number: u32, _vm: &mut IVM) -> Result<u64, VMError> {
+            panic!("failed preparation must not execute the host")
+        }
+
+        fn as_any(&mut self) -> &mut dyn Any
+        where
+            Self: 'static,
+        {
+            self
+        }
+    }
+
+    struct UnaffordableHost;
+
+    impl IVMHost for UnaffordableHost {
+        fn prepare_syscall(&self, _number: u32, vm: &IVM) -> Result<u64, VMError> {
+            assert_eq!(vm.register(10), 0);
+            assert!(!vm.registers.tag(10));
+            Ok(1_000_000)
+        }
+
+        fn syscall(&mut self, _number: u32, _vm: &mut IVM) -> Result<u64, VMError> {
+            panic!("unaffordable quote must not execute the host")
+        }
+
+        fn as_any(&mut self) -> &mut dyn Any
+        where
+            Self: 'static,
+        {
+            self
+        }
+    }
+
+    fn assert_restored(
+        host: impl IVMHost + Send + Sync + 'static,
+        expected: VMError,
+    ) {
+        let mut vm = IVM::new(10_000);
+        vm.load_program(&raw_zk_program(&[scall(
+            syscalls::SYSCALL_CURRENT_TIME_MS,
+        )]))
+        .expect("load restoration fixture");
+        vm.set_host(host);
+        vm.set_register(10, 0xC0FF_EE);
+        vm.registers.set_tag(10, true);
+
+        assert_eq!(vm.run(), Err(expected));
+        assert_eq!(vm.register(10), 0xC0FF_EE);
+        assert!(vm.registers.tag(10));
+    }
+
+    assert_restored(PrepareFailureHost, VMError::DecodeError);
+    assert_restored(UnaffordableHost, VMError::OutOfGas);
+}
+
+#[test]
 fn private_input_cannot_flow_directly_to_public_syscall_sinks() {
     for sink in [
         syscalls::SYSCALL_USE_NULLIFIER,
@@ -480,9 +712,9 @@ fn valcom_declassifies_matching_private_operands() {
 fn compiled_secret_commitment_executes_end_to_end() {
     let source = r#"
         seiyaku Privacy {
-            kotoage fn commitment() -> i64 authorize("CreateCommitment") {
-                let value: Secret<i64> = crypto::private_input(0);
-                let blinding: Secret<i64> = crypto::private_input(1);
+            kotoage fn commitment() -> int authorize("CreateCommitment") {
+                let Secret<int> value = crypto::private_input(0);
+                let Secret<int> blinding = crypto::private_input(1);
                 return crypto::valcom(left: value, right: blinding);
             }
         }
@@ -644,20 +876,21 @@ fn zk_field_operations_propagate_private_tags_and_reject_mixed_visibility() {
 }
 
 #[test]
-fn zk_field_inverse_preserves_private_visibility() {
-    let program = raw_zk_program(&[encoding::wide::encode_rr(
-        instruction::wide::zk::FINV,
-        3,
-        1,
-        0,
-    )]);
-    let mut vm = IVM::new(10_000);
-    vm.load_program(&program).unwrap();
-    vm.set_register(1, 7);
-    vm.registers.set_tag(1, true);
+fn zk_field_inverse_rejects_private_operand_independent_of_invertibility() {
+    for value in [0_u64, 7] {
+        let program = raw_zk_program(&[encoding::wide::encode_rr(
+            instruction::wide::zk::FINV,
+            3,
+            1,
+            0,
+        )]);
+        let mut vm = IVM::new(10_000);
+        vm.load_program(&program).unwrap();
+        vm.set_register(1, value);
+        vm.registers.set_tag(1, true);
 
-    vm.run().expect("private field inverse");
-    assert!(vm.registers.tag(3));
+        assert_eq!(vm.run(), Err(VMError::PrivacyViolation));
+    }
 }
 
 #[test]
@@ -754,6 +987,39 @@ fn private_stack_envelope_cannot_be_published_through_a_public_pointer() {
         !vm.registers.tag(10),
         "the pointer register itself is public"
     );
+}
+
+#[test]
+fn signature_opcodes_reject_private_tlv_header_payload_and_checksum_bytes() {
+    for opcode in [
+        instruction::wide::crypto::ED25519BATCHVERIFY,
+        instruction::wide::crypto::ED25519VERIFY,
+        instruction::wide::crypto::ECDSAVERIFY,
+        instruction::wide::crypto::DILITHIUMVERIFY,
+    ] {
+        for private_offset in [0_u64, 7, 7 + 32] {
+            let program = raw_zk_program(&[encoding::wide::encode_rr(opcode, 3, 1, 2)]);
+            let mut vm = IVM::new(100_000);
+            vm.load_program(&program)
+                .expect("load signature privacy fixture");
+
+            let pointer = Memory::STACK_START;
+            let envelope = blob_tlv(&[0_u8; 32]);
+            vm.store_bytes(pointer, &envelope)
+                .expect("seed public signature TLV");
+            mark_private_stack_word_preserving_bytes(&mut vm, pointer + private_offset);
+            for register in [1, 2, 3] {
+                vm.set_register(register, pointer);
+                vm.registers.set_tag(register, false);
+            }
+
+            assert_eq!(
+                vm.run(),
+                Err(VMError::PrivacyViolation),
+                "signature opcode {opcode:#x} converted private TLV bytes at offset {private_offset} into a public verification result"
+            );
+        }
+    }
 }
 
 #[test]

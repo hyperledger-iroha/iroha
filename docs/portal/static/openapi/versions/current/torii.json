@@ -6053,6 +6053,297 @@
         "description": "XML payload returned as UTF-8 text.",
         "format": "xml",
         "type": "string"
+      },
+      "ZkIvmCompactProof": {
+        "additionalProperties": false,
+        "properties": {
+          "backend": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "bytes_b64": {
+            "contentEncoding": "base64",
+            "description": "Canonical standard-base64 encoding of 1 byte through 8 MiB of proof bytes. Legacy numeric proof.bytes is accepted only on attachment input and is never emitted here.",
+            "maxLength": 11184812,
+            "minLength": 4,
+            "type": "string"
+          }
+        },
+        "required": [
+          "backend",
+          "bytes_b64"
+        ],
+        "type": "object"
+      },
+      "ZkIvmCompactProofAttachment": {
+        "additionalProperties": false,
+        "properties": {
+          "backend": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "envelope_hash": {
+            "items": {
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxItems": 32,
+            "minItems": 32,
+            "type": "array"
+          },
+          "lane_privacy": {
+            "$ref": "#/components/schemas/JsonValue"
+          },
+          "proof": {
+            "$ref": "#/components/schemas/ZkIvmCompactProof"
+          },
+          "vk_commitment": {
+            "items": {
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxItems": 32,
+            "minItems": 32,
+            "type": "array"
+          },
+          "vk_ref": {
+            "$ref": "#/components/schemas/ZkIvmVerifyingKeyRef"
+          }
+        },
+        "required": [
+          "backend",
+          "proof",
+          "vk_ref"
+        ],
+        "type": "object"
+      },
+      "ZkIvmDeriveRequest": {
+        "additionalProperties": false,
+        "description": "Body is limited to 8 MiB before extraction. metadata must carry gas_limit.",
+        "properties": {
+          "authority": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "bytecode": {
+            "contentEncoding": "base64",
+            "maxLength": 5592408,
+            "type": "string"
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "vk_ref": {
+            "$ref": "#/components/schemas/ZkIvmVerifyingKeyRef"
+          }
+        },
+        "required": [
+          "vk_ref",
+          "authority",
+          "bytecode"
+        ],
+        "type": "object"
+      },
+      "ZkIvmDeriveResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "proved": {
+            "$ref": "#/components/schemas/ZkIvmProvedPayload"
+          }
+        },
+        "required": [
+          "proved"
+        ],
+        "type": "object"
+      },
+      "ZkIvmProveJob": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/ZkIvmProveJobPendingOrRunning"
+          },
+          {
+            "$ref": "#/components/schemas/ZkIvmProveJobError"
+          },
+          {
+            "$ref": "#/components/schemas/ZkIvmProveJobDone"
+          }
+        ]
+      },
+      "ZkIvmProveJobCreated": {
+        "additionalProperties": false,
+        "properties": {
+          "job_id": {
+            "pattern": "^[0-9a-f]{32}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "job_id"
+        ],
+        "type": "object"
+      },
+      "ZkIvmProveJobDone": {
+        "additionalProperties": false,
+        "description": "Canonical terminal response, serialized once and retained under the configurable aggregate job cache budget (128 MiB by default); total response is at most 32 MiB.",
+        "properties": {
+          "attachment": {
+            "$ref": "#/components/schemas/ZkIvmCompactProofAttachment"
+          },
+          "job_id": {
+            "pattern": "^[0-9a-f]{32}$",
+            "type": "string"
+          },
+          "proved": {
+            "$ref": "#/components/schemas/ZkIvmProvedPayload"
+          },
+          "status": {
+            "enum": [
+              "done"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "job_id",
+          "status",
+          "proved",
+          "attachment"
+        ],
+        "type": "object"
+      },
+      "ZkIvmProveJobError": {
+        "additionalProperties": false,
+        "properties": {
+          "error": {
+            "maxLength": 1036,
+            "minLength": 1,
+            "type": "string"
+          },
+          "job_id": {
+            "pattern": "^[0-9a-f]{32}$",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "error"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "job_id",
+          "status",
+          "error"
+        ],
+        "type": "object"
+      },
+      "ZkIvmProveJobPendingOrRunning": {
+        "additionalProperties": false,
+        "properties": {
+          "job_id": {
+            "pattern": "^[0-9a-f]{32}$",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "running"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "job_id",
+          "status"
+        ],
+        "type": "object"
+      },
+      "ZkIvmProveRequest": {
+        "additionalProperties": false,
+        "description": "Body is limited to 8 MiB before extraction. Optional proved is equality-checked against authoritative node execution and is never echoed by POST.",
+        "properties": {
+          "authority": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "bytecode": {
+            "contentEncoding": "base64",
+            "maxLength": 5592408,
+            "type": "string"
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "proved": {
+            "$ref": "#/components/schemas/ZkIvmProvedPayload"
+          },
+          "vk_ref": {
+            "$ref": "#/components/schemas/ZkIvmVerifyingKeyRef"
+          }
+        },
+        "required": [
+          "vk_ref",
+          "authority",
+          "bytecode"
+        ],
+        "type": "object"
+      },
+      "ZkIvmProvedPayload": {
+        "additionalProperties": false,
+        "description": "Canonical IvmProved JSON. Torii rejects an encoded proved payload above 16 MiB and bounds host output before queue/durable-state growth.",
+        "maxProperties": 4,
+        "properties": {
+          "bytecode": {
+            "contentEncoding": "base64",
+            "maxLength": 5592408,
+            "type": "string"
+          },
+          "events_commitment": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "gas_policy_commitment": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "overlay": {
+            "description": "Ordered canonical InstructionBox JSON values, bounded by the live transaction instruction limit.",
+            "items": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "bytecode",
+          "overlay",
+          "events_commitment",
+          "gas_policy_commitment"
+        ],
+        "type": "object"
+      },
+      "ZkIvmVerifyingKeyRef": {
+        "additionalProperties": false,
+        "properties": {
+          "backend": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "backend",
+          "name"
+        ],
+        "type": "object"
       }
     }
   },
@@ -6589,7 +6880,7 @@
     },
     "/v1/accounts/{account_id}/permissions": {
       "get": {
-        "description": "List permissions granted to an account. Signed/internal reads fan out across all configured dataspaces so dataspace-scoped grants remain visible regardless of ingress; unsigned reads stay limited to caller-visible routes.",
+        "description": "List effective permissions granted to an account, including permissions inherited from assigned roles. Signed/internal reads fan out across all configured dataspaces so dataspace-scoped grants remain visible regardless of ingress; unsigned reads stay limited to caller-visible routes.",
         "parameters": [
           {
             "description": "Canonical I105 account identifier or on-chain alias `name@domain.dataspace` / `name@dataspace`.",
@@ -8985,7 +9276,7 @@
     },
     "/v1/contracts/view/batch": {
       "post": {
-        "description": "Execute a batch of manifest-validated read-only contract view entrypoints and return one normalized item per request.",
+        "description": "Execute 1 through 256 manifest-validated read-only contract view entrypoints under shared blocking-worker concurrency and timeout limits; the direct or routed JSON response is capped at 8 MiB.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -21681,14 +21972,14 @@
         "x-iroha-tool-effect": "read"
       }
     },
-    "/v1/zk/ivm/prove": {
+    "/v1/zk/ivm/derive": {
       "post": {
-        "description": "Submit an IVM proved payload and return a job identifier for proof generation.",
+        "description": "Execute ZK-mode IVM bytecode under bounded host output, blocking-worker concurrency, and timeout limits; plaintext gas usage is not returned.",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/JsonValue"
+                "$ref": "#/components/schemas/ZkIvmDeriveRequest"
               }
             }
           },
@@ -21699,7 +21990,39 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/ZkIvmDeriveResponse"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Derive an IVM proved payload.",
+        "tags": [
+          "ZK"
+        ],
+        "x-iroha-tool-effect": "write"
+      }
+    },
+    "/v1/zk/ivm/prove": {
+      "post": {
+        "description": "Execute and prove ZK-mode IVM bytecode asynchronously. POST returns only a job identifier; canonical proved and compact proof attachment material are available from the terminal GET state.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ZkIvmProveRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ZkIvmProveJobCreated"
                 }
               }
             },
@@ -21715,7 +22038,7 @@
     },
     "/v1/zk/ivm/prove/{job_id}": {
       "delete": {
-        "description": "Delete an IVM proof generation job entry.",
+        "description": "Cancel and delete an IVM proof generation job entry. Already-started blocking work is discard-only and retains compute capacity until physical completion.",
         "parameters": [
           {
             "description": "Proof generation job identifier.",
@@ -21723,6 +22046,7 @@
             "name": "job_id",
             "required": true,
             "schema": {
+              "pattern": "^[0-9a-f]{32}$",
               "type": "string"
             }
           }
@@ -21732,7 +22056,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/ZkIvmProveJobCreated"
                 }
               }
             },
@@ -21746,7 +22070,7 @@
         "x-iroha-tool-effect": "write"
       },
       "get": {
-        "description": "Fetch the status of an IVM proof generation job.",
+        "description": "Fetch one state-dependent cached response: pending/running contain only job_id+status, error adds error, and done adds proved+compact attachment with proof.bytes_b64.",
         "parameters": [
           {
             "description": "Proof generation job identifier.",
@@ -21754,6 +22078,7 @@
             "name": "job_id",
             "required": true,
             "schema": {
+              "pattern": "^[0-9a-f]{32}$",
               "type": "string"
             }
           }
@@ -21763,7 +22088,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/ZkIvmProveJob"
                 }
               }
             },

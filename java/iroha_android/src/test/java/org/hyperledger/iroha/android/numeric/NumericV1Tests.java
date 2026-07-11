@@ -57,10 +57,15 @@ public final class NumericV1Tests {
     assertCode(NumericV1.ErrorCode.INVALID_TEXT, () -> NumericV1.IntValue.parse("01"));
     assertEquals("1.23", NumericV1.decodeDecimalJson("1.23").toString());
     assertEquals("0", NumericV1.decodeQuantityJson("0").toString());
-    for (final String alternate : new String[] {"1.0", "1.2300", "0.0"}) {
+    for (final String alternate :
+        new String[] {"+1", "01", "1.", ".5", "1e0", "-0", "-0.0", "1.0", "1.2300", "0.0"}) {
       assertCode(NumericV1.ErrorCode.INVALID_TEXT, () -> NumericV1.decodeDecimalJson(alternate));
     }
+    for (final String alternate : new String[] {"+1", "01", "-0", "1.0", "1e0"}) {
+      assertCode(NumericV1.ErrorCode.INVALID_TEXT, () -> NumericV1.decodeIntJson(alternate));
+    }
     assertCode(NumericV1.ErrorCode.INVALID_TEXT, () -> NumericV1.decodeQuantityJson("1.0"));
+    assertCode(NumericV1.ErrorCode.NEGATIVE_QUANTITY, () -> NumericV1.decodeQuantityJson("-1"));
   }
 
   @Test

@@ -25,6 +25,7 @@ use ed25519_dalek::{Signature as Ed25519Signature, Verifier as _};
 use ed25519_dalek::{Signer as _, SigningKey};
 use iroha_data_model::prelude::{Mintable, Name};
 use iroha_primitives::{json::Json, numeric::Numeric};
+use ivm_abi::entrypoint::EntrypointArgumentSchemaV1;
 use norito::codec::Encode;
 use norito::json::{self, Value};
 
@@ -101,10 +102,16 @@ struct CompiledSuite {
     runtime_code: Option<Vec<u8>>,
     report: CompileReport,
     pc_base: u64,
-    runtime_entrypoints: HashMap<String, u64>,
+    runtime_entrypoints: HashMap<String, RuntimeEntrypoint>,
     tests: Vec<CompiledTestCase>,
     fixtures: HashMap<String, FixtureDecl>,
     coverage_functions: Vec<CoverageFunction>,
+}
+
+#[derive(Clone)]
+struct RuntimeEntrypoint {
+    pc: u64,
+    argument_schema: Option<EntrypointArgumentSchemaV1>,
 }
 
 #[derive(Clone)]
@@ -137,7 +144,7 @@ struct KotoTestHost {
     inner: WsvHost,
     actors: HashMap<String, FixtureActor>,
     base_public_inputs: BTreeMap<Name, Vec<u8>>,
-    entrypoints: HashMap<String, u64>,
+    entrypoints: HashMap<String, RuntimeEntrypoint>,
     program: Option<Vec<u8>>,
     last_test_error: Option<String>,
     supplemental_trace_pcs: Vec<u64>,
@@ -638,7 +645,10 @@ fn compile_suite(suite: &DiscoveredSuite, zk_enabled: bool) -> Result<CompiledSu
                         .map(|entry| {
                             (
                                 entry.name.clone(),
-                                runtime_pc_base.saturating_add(entry.entry_pc),
+                                RuntimeEntrypoint {
+                                    pc: runtime_pc_base.saturating_add(entry.entry_pc),
+                                    argument_schema: entry.argument_schema.clone(),
+                                },
                             )
                         })
                         .collect::<HashMap<_, _>>()
@@ -1034,7 +1044,11 @@ struct KotoTestHostSnapshot {
 }
 
 impl KotoTestHost {
-    fn new(inner: WsvHost, program: Option<Vec<u8>>, entrypoints: HashMap<String, u64>) -> Self {
+    fn new(
+        inner: WsvHost,
+        program: Option<Vec<u8>>,
+        entrypoints: HashMap<String, RuntimeEntrypoint>,
+    ) -> Self {
         Self {
             inner,
             actors: HashMap::new(),
@@ -1237,8 +1251,8 @@ impl KotoTestHost {
                 ));
             }
         };
-        let entry_pc = match self.entrypoints.get(&entrypoint).copied() {
-            Some(pc) => pc,
+        let runtime_entrypoint = match self.entrypoints.get(&entrypoint).cloned() {
+            Some(entrypoint) => entrypoint,
             None => {
                 return self.fail_test(format!(
                     "unknown runtime entrypoint `{entrypoint}` for actor `{actor_alias}`"
@@ -1258,13 +1272,17 @@ impl KotoTestHost {
         let previous_caller = self.inner.caller_subject();
 
         self.inner.set_caller_subject(actor.account.clone());
-        let trigger_name: Name = "trigger_event_json"
-            .parse()
-            .map_err(|_| crate::VMError::DecodeError)?;
         let mut nested_inputs = self.base_public_inputs.clone();
-        let encoded_payload =
-            norito::to_bytes(&payload).map_err(|_| crate::VMError::DecodeError)?;
-        nested_inputs.insert(trigger_name, make_tlv(PointerType::Json, &encoded_payload));
+        if let Some(schema) = runtime_entrypoint.argument_schema.as_ref() {
+            let trigger_name: Name = "trigger_event_json"
+                .parse()
+                .map_err(|_| crate::VMError::DecodeError)?;
+            let encoded_payload = crate::encode_argument_record_from_json(schema, &payload)?;
+            nested_inputs.insert(
+                trigger_name,
+                make_tlv(PointerType::NoritoBytes, &encoded_payload),
+            );
+        }
         self.inner.set_public_inputs(nested_inputs);
 
         let mut nested_vm = IVM::new(u64::MAX);
@@ -1278,7 +1296,7 @@ impl KotoTestHost {
         nested_vm
             .load_program(&runtime_program)
             .map_err(|_| crate::VMError::DecodeError)?;
-        nested_vm.set_program_counter(entry_pc)?;
+        nested_vm.set_program_counter(runtime_entrypoint.pc)?;
         nested_vm.set_register(1, nested_vm.memory.code_len().saturating_sub(4));
         nested_vm.set_trace_mode(vm.trace_mode());
         nested_vm.set_max_cycles(0);
@@ -2440,7 +2458,7 @@ mod tests {
             "contracts/demo.ko",
             r#"
             seiyaku Demo {
-              fn increment(x: i64) -> i64 { return x + 1; }
+              fn increment(int x) -> int { return x + 1; }
 
               #[test]
               fn inline() {
@@ -2496,7 +2514,7 @@ mod tests {
             "contracts/demo.ko",
             r#"
             seiyaku Demo {
-              fn increment(x: i64) -> i64 { return x + 1; }
+              fn increment(int x) -> int { return x + 1; }
             }
             "#,
         );
@@ -2540,8 +2558,8 @@ mod tests {
             "contracts/contract_flow_demo.ko",
             r#"
             seiyaku Demo {
-                state counter: i64;
-                state last_actor: AccountId;
+                state int counter;
+                state AccountId last_actor;
 
                 hajimari() {
                     counter = 1;
@@ -2556,7 +2574,7 @@ mod tests {
                     last_actor = context::authority();
                 }
 
-                view fn pair() -> (i64, i64) {
+                view fn pair() -> (int, int) {
                     return (2, 3);
                 }
 
@@ -2748,8 +2766,8 @@ mod tests {
             "contracts/contract_flow_demo.ko",
             r#"
             seiyaku Demo {
-                state counter: i64;
-                state last_actor: AccountId;
+                state int counter;
+                state AccountId last_actor;
 
                 hajimari() {
                     counter = 1;
@@ -2764,7 +2782,7 @@ mod tests {
                     last_actor = context::authority();
                 }
 
-                view fn pair() -> (i64, i64) {
+                view fn pair() -> (int, int) {
                     return (2, 3);
                 }
 
@@ -2903,11 +2921,11 @@ mod tests {
     fn compile_suite_excludes_test_functions_from_coverage() {
         let source = r#"
             seiyaku Demo {
-                view fn run(count: i64) -> i64 { return count + 1; }
+                view fn run(int count) -> int { return count + 1; }
 
                 #[test]
                 fn smoke() {
-                    let next = invoke_entrypoint("run", Json::parse("{\"count\": 7}"));
+                    let next = invoke_entrypoint("run", Json::parse("{\"count\":\"7\"}"));
                     test::assert_eq(actual: next, expected: 8);
                 }
             }

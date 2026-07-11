@@ -1506,13 +1506,16 @@ impl Builtin {
             Self::WrappingSub => "math::wrapping_sub",
             Self::WrappingMul => "math::wrapping_mul",
             Self::WrappingNeg => "math::wrapping_neg",
-            Self::Isqrt => "math::isqrt",
-            Self::Abs => "math::abs",
-            Self::Min => "math::min",
-            Self::Max => "math::max",
-            Self::DivCeil => "math::div_ceil",
-            Self::Gcd => "math::gcd",
-            Self::Mean => "math::mean",
+            // These scalar IVM operations do not yet have specified 512-bit
+            // Kotodama semantics. Keep them available to compiler internals,
+            // but do not advertise a width-constrained source API.
+            Self::Isqrt
+            | Self::Abs
+            | Self::Min
+            | Self::Max
+            | Self::DivCeil
+            | Self::Gcd
+            | Self::Mean => self.name(),
             Self::Poseidon2 => "crypto::poseidon2",
             Self::Poseidon6 => "crypto::poseidon6",
             Self::Pubkgen => "crypto::pubkgen",
@@ -1858,6 +1861,13 @@ impl Builtin {
             | Self::NumericLe
             | Self::NumericGt
             | Self::NumericGe
+            | Self::Isqrt
+            | Self::Abs
+            | Self::Min
+            | Self::Max
+            | Self::DivCeil
+            | Self::Gcd
+            | Self::Mean
             | Self::NumericToIntDirect
             | Self::NumericAddDirect
             | Self::NumericSubDirect

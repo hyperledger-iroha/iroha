@@ -849,7 +849,7 @@ mod tests {
         let report = fuzz(
             r#"
             fn call_host() {
-                math::isqrt(9);
+                crypto::sha256(b"payload");
             }
         "#,
         );

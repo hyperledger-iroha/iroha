@@ -127,6 +127,9 @@ impl VerifiedHeightContext {
     ) -> Result<Self, AdapterError> {
         context.validate()?;
         parent_artifact.validate()?;
+        if parent_artifact.validator_set_pops != parent_proofs_of_possession {
+            return Err(AdapterError::ParentContextMismatch);
+        }
         verify_roster_proofs(&parent_artifact.height_context, parent_proofs_of_possession)?;
         verify_quorum_certificate(
             &parent_artifact.height_context,
@@ -1205,7 +1208,9 @@ impl SumeragiV2Adapter {
         artifact: &wire::finality::V2FinalityArtifact,
     ) -> Result<FinalizedV2Height, AdapterError> {
         self.ensure_ingress()?;
-        artifact.validate()?;
+        artifact
+            .verify()
+            .map_err(|error| AdapterError::Cryptography(error.to_string()))?;
         let core_decision = self
             .reducer
             .durable_state()
@@ -1218,6 +1223,7 @@ impl SumeragiV2Adapter {
         let wire_subject = self.registry.subject(core_decision.subject())?;
 
         if artifact.height_context != self.wire_context
+            || artifact.validator_set_pops != self.proofs_of_possession
             || artifact.subject != wire_subject
             || artifact.commit_qc != wire_decision
             || kura_receipt.height() != self.wire_context.height
@@ -2910,6 +2916,7 @@ mod tests {
             height: 1,
             epoch: 1,
             epoch_end_height: 100,
+            next_epoch_snapshot: None,
             mode: wire::ConsensusMode::Permissioned,
             parent_commit_qc: None,
             quorum: wire::DualQuorum::from_roster(&roster).expect("fixture quorum"),
@@ -2999,6 +3006,7 @@ mod tests {
             height: 1,
             epoch: 3,
             epoch_end_height: 100,
+            next_epoch_snapshot: None,
             mode: wire::ConsensusMode::Permissioned,
             parent_commit_qc: None,
             quorum: wire::DualQuorum::from_roster(&roster).expect("fixture quorum"),
@@ -3078,7 +3086,7 @@ mod tests {
             parent_context.clone(),
             parent_subject,
             parent_qc.clone(),
-            None,
+            proofs.clone(),
         );
         artifact.validate().expect("valid parent artifact");
         let receipt = KuraV2CommitReceipt::for_test(&artifact);

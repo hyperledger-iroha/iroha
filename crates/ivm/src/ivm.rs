@@ -200,6 +200,14 @@ const SYSCALL_ARGS_3: &[usize] = &[10, 11, 12];
 const SYSCALL_ARGS_4: &[usize] = &[10, 11, 12, 13];
 const SYSCALL_ARGS_5: &[usize] = &[10, 11, 12, 13, 14];
 
+#[derive(Clone, Copy, Debug, Default)]
+struct SavedSyscallOutputRegisters {
+    registers: [usize; 5],
+    values: [u64; 5],
+    private: [bool; 5],
+    len: usize,
+}
+
 include!(concat!(env!("OUT_DIR"), "/syscall_signatures.rs"));
 
 fn default_vector_length() -> usize {
@@ -3135,6 +3143,22 @@ impl IVM {
         }
     }
 
+    /// Reject private operands before an operation whose trap behavior depends
+    /// on their values. A private divide-by-zero, failed assertion, or inverse
+    /// failure would otherwise reveal a witness predicate through the public
+    /// execution result.
+    #[inline]
+    fn zk_require_public_trap_operands(&self, registers: &[usize]) -> Result<(), VMError> {
+        if self.zk_mode
+            && registers
+                .iter()
+                .any(|&register| self.registers.tag(register))
+        {
+            return Err(VMError::PrivacyViolation);
+        }
+        Ok(())
+    }
+
     #[inline]
     fn zk_unary_tag(&self, rs: usize) -> Option<bool> {
         if self.zk_mode {
@@ -3562,6 +3586,20 @@ impl IVM {
                 Ok(tlv)
             }
             Err(err) => Err(err),
+        }
+    }
+
+    /// Validate a public cryptographic operand without changing the legacy
+    /// boolean-result behavior for malformed public TLVs. Privacy violations
+    /// are never converted into a public verification failure.
+    fn validate_public_crypto_tlv(
+        &self,
+        ptr: u64,
+    ) -> Result<Option<crate::pointer_abi::Tlv<'_>>, VMError> {
+        match self.validate_tlv(ptr) {
+            Ok(tlv) => Ok(Some(tlv)),
+            Err(VMError::PrivacyViolation) => Err(VMError::PrivacyViolation),
+            Err(_) => Ok(None),
         }
     }
 
@@ -4561,19 +4599,60 @@ impl IVM {
         Ok(())
     }
 
+    /// Snapshot and clear output-only registers before entering the host. Registers that
+    /// overlap the declared input window are already proven public by
+    /// `validate_syscall_privacy` and must remain intact for the host call.
+    /// This prevents a successful no-write or partial-write host from
+    /// declassifying stale private register contents.
     #[inline]
-    fn apply_syscall_output_privacy(&mut self, number: u32) {
+    fn sanitize_syscall_output_privacy(
+        &mut self,
+        number: u32,
+    ) -> SavedSyscallOutputRegisters {
+        let mut saved = SavedSyscallOutputRegisters::default();
         if !self.zk_mode {
-            return;
+            return saved;
+        }
+        let inputs = syscall_public_input_registers(number);
+        for &register in syscall_public_output_registers(number) {
+            if !inputs.contains(&register) {
+                debug_assert!(saved.len < saved.registers.len());
+                saved.registers[saved.len] = register;
+                saved.values[saved.len] = self.registers.get(register);
+                saved.private[saved.len] = self.registers.tag(register);
+                saved.len += 1;
+                self.registers.set(register, 0);
+                self.registers.set_tag(register, false);
+            }
+        }
+        saved
+    }
+
+    #[inline]
+    fn restore_syscall_output_privacy(&mut self, saved: SavedSyscallOutputRegisters) {
+        for index in 0..saved.len {
+            let register = saved.registers[index];
+            self.registers.set(register, saved.values[index]);
+            self.registers.set_tag(register, saved.private[index]);
+        }
+    }
+
+    #[inline]
+    fn finalize_syscall_output_privacy(&mut self, number: u32) -> Result<(), VMError> {
+        if !self.zk_mode {
+            return Ok(());
         }
         if number == crate::syscalls::SYSCALL_GET_PRIVATE_INPUT {
             self.registers.set_tag(10, true);
-            return;
+            return Ok(());
         }
 
         for &register in syscall_public_output_registers(number) {
-            self.registers.set_tag(register, false);
+            if self.registers.tag(register) {
+                return Err(VMError::PrivacyViolation);
+            }
         }
+        Ok(())
     }
 
     #[inline]
@@ -4597,9 +4676,11 @@ impl IVM {
         debug_assert_eq!(self.syscall_gas_reserve, 0);
         debug_assert!(self.staged_syscall.is_none());
         self.validate_syscall_privacy(number)?;
+        let saved_outputs = self.sanitize_syscall_output_privacy(number);
         let quoted = match host.prepare_syscall(number, self) {
             Ok(quoted) => quoted,
             Err(error) => {
+                self.restore_syscall_output_privacy(saved_outputs);
                 let (metered_gas, source) = error.split_metered();
                 if let Some(gas) = metered_gas {
                     self.debit_gas(gas)?;
@@ -4607,7 +4688,10 @@ impl IVM {
                 return Err(source);
             }
         };
-        self.debit_gas(quoted)?;
+        if let Err(error) = self.debit_gas(quoted) {
+            self.restore_syscall_output_privacy(saved_outputs);
+            return Err(error);
+        }
         self.syscall_gas_reserve = quoted;
 
         let (actual, outcome) = match host.syscall(number, self) {
@@ -4632,7 +4716,7 @@ impl IVM {
             .saturating_add(quoted - actual)
             .min(self.gas_limit);
         if outcome.is_ok() {
-            self.apply_syscall_output_privacy(number);
+            self.finalize_syscall_output_privacy(number)?;
         }
         outcome
     }
@@ -4657,6 +4741,8 @@ impl IVM {
             return Err(error);
         }
 
+        self.sanitize_syscall_output_privacy(number);
+
         let host_result = host.syscall(number, self);
         match host_result {
             Ok(0) => {
@@ -4670,7 +4756,7 @@ impl IVM {
                     return Err(VMError::SyscallMeteringModeMismatch { syscall: number });
                 }
                 self.finish_staged_syscall(completion);
-                self.apply_syscall_output_privacy(number);
+                self.finalize_syscall_output_privacy(number)?;
                 Ok(())
             }
             Ok(_actual) => {
@@ -5035,6 +5121,7 @@ impl IVM {
                         let rd = instruction::wide::rd(instr);
                         let rs1 = instruction::wide::rs1(instr);
                         let rs2 = instruction::wide::rs2(instr);
+                        self.zk_require_public_trap_operands(&[rs1, rs2])?;
                         let tag = self.zk_match_tags(rs1, rs2)?;
                         let num = self.registers.get(rs1) as i64;
                         let denom = self.registers.get(rs2) as i64;
@@ -5049,6 +5136,7 @@ impl IVM {
                         let rd = instruction::wide::rd(instr);
                         let rs1 = instruction::wide::rs1(instr);
                         let rs2 = instruction::wide::rs2(instr);
+                        self.zk_require_public_trap_operands(&[rs1, rs2])?;
                         let tag = self.zk_match_tags(rs1, rs2)?;
                         let denom = self.registers.get(rs2);
                         if denom == 0 {
@@ -5065,6 +5153,7 @@ impl IVM {
                         let rd = instruction::wide::rd(instr);
                         let rs1 = instruction::wide::rs1(instr);
                         let rs2 = instruction::wide::rs2(instr);
+                        self.zk_require_public_trap_operands(&[rs1, rs2])?;
                         let tag = self.zk_match_tags(rs1, rs2)?;
                         let num = self.registers.get(rs1) as i64;
                         let denom = self.registers.get(rs2) as i64;
@@ -5079,6 +5168,7 @@ impl IVM {
                         let rd = instruction::wide::rd(instr);
                         let rs1 = instruction::wide::rs1(instr);
                         let rs2 = instruction::wide::rs2(instr);
+                        self.zk_require_public_trap_operands(&[rs1, rs2])?;
                         let tag = self.zk_match_tags(rs1, rs2)?;
                         let denom = self.registers.get(rs2);
                         if denom == 0 {
@@ -5308,6 +5398,7 @@ impl IVM {
                     instruction::wide::arithmetic::ABS => {
                         let rd = instruction::wide::rd(instr);
                         let rs = instruction::wide::rs1(instr);
+                        self.zk_require_public_trap_operands(&[rs])?;
                         let tag = self.zk_unary_tag(rs);
                         let v = self.registers.get(rs) as i64;
                         let abs = checked_abs_i64(v)?;
@@ -5321,6 +5412,7 @@ impl IVM {
                         let rd = instruction::wide::rd(instr);
                         let rs1 = instruction::wide::rs1(instr);
                         let rs2 = instruction::wide::rs2(instr);
+                        self.zk_require_public_trap_operands(&[rs1, rs2])?;
                         let tag = self.zk_match_tags(rs1, rs2)?;
                         let num = self.registers.get(rs1) as i64;
                         let denom = self.registers.get(rs2) as i64;
@@ -6519,9 +6611,9 @@ impl IVM {
                             return Err(VMError::PrivacyViolation);
                         }
                         let mut fail_index = 0u64;
-                        let ok = if let Ok(tlv_req) =
-                            self.memory.validate_tlv(self.registers.get(rs1))
-                        {
+                        let request =
+                            self.validate_public_crypto_tlv(self.registers.get(rs1))?;
+                        let ok = if let Some(tlv_req) = request {
                             let is_norito = tlv_req.type_id_raw()
                                 == crate::pointer_abi::PointerType::NoritoBytes as u16;
                             is_norito
@@ -6616,10 +6708,10 @@ impl IVM {
                         let msg_ptr = self.registers.get(rs1);
                         let sig_ptr = self.registers.get(rs2);
                         let pk_ptr = self.registers.get(rd);
-                        let ok = if let (Ok(tlv_msg), Ok(tlv_sig), Ok(tlv_pk)) = (
-                            self.memory.validate_tlv(msg_ptr),
-                            self.memory.validate_tlv(sig_ptr),
-                            self.memory.validate_tlv(pk_ptr),
+                        let ok = if let (Some(tlv_msg), Some(tlv_sig), Some(tlv_pk)) = (
+                            self.validate_public_crypto_tlv(msg_ptr)?,
+                            self.validate_public_crypto_tlv(sig_ptr)?,
+                            self.validate_public_crypto_tlv(pk_ptr)?,
                         ) {
                             let types_ok = tlv_msg.type_id_raw()
                                 == crate::pointer_abi::PointerType::Blob as u16
@@ -6659,10 +6751,10 @@ impl IVM {
                         let msg_ptr = self.registers.get(rs1);
                         let sig_ptr = self.registers.get(rs2);
                         let pk_ptr = self.registers.get(rd);
-                        let ok = if let (Ok(tlv_msg), Ok(tlv_sig), Ok(tlv_pk)) = (
-                            self.memory.validate_tlv(msg_ptr),
-                            self.memory.validate_tlv(sig_ptr),
-                            self.memory.validate_tlv(pk_ptr),
+                        let ok = if let (Some(tlv_msg), Some(tlv_sig), Some(tlv_pk)) = (
+                            self.validate_public_crypto_tlv(msg_ptr)?,
+                            self.validate_public_crypto_tlv(sig_ptr)?,
+                            self.validate_public_crypto_tlv(pk_ptr)?,
                         ) {
                             let types_ok = tlv_msg.type_id_raw()
                                 == crate::pointer_abi::PointerType::Blob as u16
@@ -6702,10 +6794,10 @@ impl IVM {
                         let msg_ptr = self.registers.get(rs1);
                         let sig_ptr = self.registers.get(rs2);
                         let pk_ptr = self.registers.get(rd);
-                        let ok = if let (Ok(tlv_msg), Ok(tlv_sig), Ok(tlv_pk)) = (
-                            self.memory.validate_tlv(msg_ptr),
-                            self.memory.validate_tlv(sig_ptr),
-                            self.memory.validate_tlv(pk_ptr),
+                        let ok = if let (Some(tlv_msg), Some(tlv_sig), Some(tlv_pk)) = (
+                            self.validate_public_crypto_tlv(msg_ptr)?,
+                            self.validate_public_crypto_tlv(sig_ptr)?,
+                            self.validate_public_crypto_tlv(pk_ptr)?,
                         ) {
                             let types_ok = tlv_msg.type_id_raw()
                                 == crate::pointer_abi::PointerType::Blob as u16
@@ -6736,6 +6828,7 @@ impl IVM {
                             return Err(VMError::ZkExtensionDisabled);
                         }
                         let rs = instruction::wide::rs1(instr);
+                        self.zk_require_public_trap_operands(&[rs])?;
                         if self.zk_trace_collection_enabled() {
                             self.constraints.record(Constraint::Zero {
                                 reg: rs,
@@ -6756,6 +6849,7 @@ impl IVM {
                         }
                         let rs1 = instruction::wide::rs1(instr);
                         let rs2 = instruction::wide::rs2(instr);
+                        self.zk_require_public_trap_operands(&[rs1, rs2])?;
                         if self.zk_trace_collection_enabled() {
                             self.constraints.record(Constraint::Eq {
                                 reg1: rs1,
@@ -6829,6 +6923,7 @@ impl IVM {
                         }
                         let rd = instruction::wide::rd(instr);
                         let rs = instruction::wide::rs1(instr);
+                        self.zk_require_public_trap_operands(&[rs])?;
                         let tag = self.registers.tag(rs);
                         let value = self.registers.get(rs);
                         match crate::field::inv(value) {
@@ -6850,6 +6945,7 @@ impl IVM {
                         }
                         let rs = instruction::wide::rs1(instr);
                         let imm = instruction::wide::imm8(instr) as u8;
+                        self.zk_require_public_trap_operands(&[rs])?;
                         if self.zk_trace_collection_enabled() {
                             self.constraints.record(Constraint::Range {
                                 reg: rs,
@@ -8135,25 +8231,29 @@ mod tests {
     }
 
     #[test]
-    fn syscall_output_declassification_uses_only_normative_signatures() {
+    fn syscall_output_privacy_finalization_uses_only_normative_signatures() {
         let mut vm = IVM::new(u64::MAX);
         vm.set_zk_mode(true);
         for register in 10..=12 {
             vm.registers.set_tag(register, true);
         }
 
-        vm.apply_syscall_output_privacy(crate::syscalls::SYSCALL_STATE_KEYS);
+        assert_eq!(
+            vm.finalize_syscall_output_privacy(crate::syscalls::SYSCALL_STATE_KEYS),
+            Err(VMError::PrivacyViolation)
+        );
         for register in 10..=12 {
             assert!(
-                !vm.registers.tag(register),
-                "documented public output r{register} retained a secret tag"
+                vm.registers.tag(register),
+                "privacy finalization laundered a secret host output in r{register}"
             );
         }
 
         for register in 10..=14 {
             vm.registers.set_tag(register, true);
         }
-        vm.apply_syscall_output_privacy(0x00ff_fffe);
+        vm.finalize_syscall_output_privacy(0x00ff_fffe)
+            .expect("unknown syscall has no declared public outputs");
         for register in 10..=14 {
             assert!(
                 vm.registers.tag(register),
@@ -8162,7 +8262,8 @@ mod tests {
         }
 
         vm.registers.set_tag(10, false);
-        vm.apply_syscall_output_privacy(crate::syscalls::SYSCALL_GET_PRIVATE_INPUT);
+        vm.finalize_syscall_output_privacy(crate::syscalls::SYSCALL_GET_PRIVATE_INPUT)
+            .expect("private-input syscall explicitly classifies its result");
         assert!(vm.registers.tag(10));
     }
 

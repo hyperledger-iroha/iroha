@@ -46,10 +46,14 @@ test("numeric V1 canonical construction and endpoint rejection", () => {
   assert.throws(() => new KotodamaDecimal("01"), { code: "invalid_text" });
   assert.equal(NumericV1.decodeDecimalJson("1.23").toString(), "1.23");
   assert.equal(NumericV1.decodeQuantityJson("0").toString(), "0");
-  for (const alternate of ["1.0", "1.2300", "0.0"]) {
+  for (const alternate of ["+1", "01", "1.", ".5", "1e0", "-0", "-0.0", "1.0", "1.2300", "0.0"]) {
     assert.throws(() => NumericV1.decodeDecimalJson(alternate), { code: "invalid_text" });
   }
+  for (const alternate of ["+1", "01", "-0", "1.0", "1e0"]) {
+    assert.throws(() => NumericV1.decodeIntJson(alternate), { code: "invalid_text" });
+  }
   assert.throws(() => NumericV1.decodeQuantityJson("1.0"), { code: "invalid_text" });
+  assert.throws(() => NumericV1.decodeQuantityJson("-1"), { code: "negative_quantity" });
   assert.throws(() => NumericV1.decodeIntJson(1), TypeError);
 });
 

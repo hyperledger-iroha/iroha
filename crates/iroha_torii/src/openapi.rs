@@ -2148,7 +2148,7 @@ fn contracts_paths() -> Map {
         Value::Object(json_post_operation(
             "Contracts",
             "Execute multiple read-only contract views.",
-            "Execute a batch of manifest-validated read-only contract view entrypoints and return one normalized item per request.",
+            "Execute 1 through 256 manifest-validated read-only contract view entrypoints under shared blocking-worker concurrency and timeout limits; the direct or routed JSON response is capped at 8 MiB.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
             Vec::new(),
@@ -2464,9 +2464,10 @@ fn zk_paths() -> Map {
                 "Fetch an IVM prove job.",
                 "Fetch one state-dependent cached response: pending/running contain only job_id+status, error adds error, and done adds proved+compact attachment with proof.bytes_b64.",
                 "#/components/schemas/ZkIvmProveJob",
-                vec![string_path_param(
+                vec![patterned_string_path_param(
                     "job_id",
                     "Proof generation job identifier.",
+                    "^[0-9a-f]{32}$",
                 )],
             );
             let delete_op = json_delete_operation(
@@ -2474,9 +2475,10 @@ fn zk_paths() -> Map {
                 "Delete an IVM prove job.",
                 "Cancel and delete an IVM proof generation job entry. Already-started blocking work is discard-only and retains compute capacity until physical completion.",
                 "#/components/schemas/ZkIvmProveJobCreated",
-                vec![string_path_param(
+                vec![patterned_string_path_param(
                     "job_id",
                     "Proof generation job identifier.",
+                    "^[0-9a-f]{32}$",
                 )],
             );
             let mut methods = Map::new();
@@ -6554,8 +6556,8 @@ fn bridge_finality_bundle_operation() -> Map {
         "description".into(),
         Value::String(
             "Returns an MMR commitment bound to the block hash and immutable height-context id, \
-             together with the exact durable Sumeragi-v2 finality artifact, canonical block \
-             header, and roster-aligned BLS proofs of possession. The response contains no \
+             together with the canonical block header and exact durable Sumeragi-v2 finality \
+             artifact, including its roster-aligned BLS proofs of possession. The response contains no \
              legacy authority-set or detached-justification projection."
                 .to_owned(),
         ),
@@ -6953,8 +6955,8 @@ fn bridge_finality_operation() -> Map {
     operation.insert(
         "description".into(),
         Value::String(
-            "Returns the canonical block header, the exact durable Sumeragi-v2 finality artifact \
-             (including its frozen powered roster, dual quorum, subject, and CommitQC), and \
+            "Returns the canonical block header and exact durable Sumeragi-v2 finality artifact, \
+             including its frozen powered roster, dual quorum, subject, CommitQC, and \
              roster-aligned BLS proofs of possession. Verifiers must pin the expected chain and \
              initial height-context id before advancing through successor proofs; no retired v1 \
              commit-certificate projection is accepted."
@@ -9080,6 +9082,17 @@ fn string_path_param(name: &str, description: &str) -> Value {
     schema.insert("type".into(), Value::String("string".to_owned()));
     param.insert("schema".into(), Value::Object(schema));
     Value::Object(param)
+}
+
+fn patterned_string_path_param(name: &str, description: &str, pattern: &str) -> Value {
+    let mut parameter = string_path_param(name, description);
+    parameter
+        .as_object_mut()
+        .and_then(|parameter| parameter.get_mut("schema"))
+        .and_then(Value::as_object_mut)
+        .expect("string path parameter has a schema")
+        .insert("pattern".into(), Value::String(pattern.to_owned()));
+    parameter
 }
 
 fn string_header_param(name: &str, description: &str, required: bool) -> Value {
@@ -11350,6 +11363,9 @@ fn bridge_finality_schemas(schemas: &mut Map) {
                     "type": "integer", "format": "uint64", "minimum": 1,
                     "maximum": 18446744073709551615_u64
                 },
+                "next_epoch_snapshot": {
+                    "$ref": "#/components/schemas/SumeragiV2FinalizedNextEpochSnapshot"
+                },
                 "mode": { "$ref": "#/components/schemas/SumeragiV2ConsensusMode" },
                 "parent_commit_qc": {
                     "$ref": "#/components/schemas/SumeragiV2CommitQuorumCertificate"
@@ -11365,7 +11381,7 @@ fn bridge_finality_schemas(schemas: &mut Map) {
                 "da_layout": { "$ref": "#/components/schemas/SumeragiV2DataAvailabilityLayout" },
                 "leader_seed": { "$ref": "#/components/schemas/SumeragiV2Bytes32" }
             },
-            "description": "Complete immutable Sumeragi-v2 context. parent_commit_qc is omitted only at height one."
+            "description": "Complete immutable Sumeragi-v2 context. next_epoch_snapshot is present exactly at an epoch-ending height; parent_commit_qc is omitted only at height one."
         }),
     );
     schemas.insert(
@@ -11396,7 +11412,7 @@ fn bridge_finality_schemas(schemas: &mut Map) {
             "type": "object",
             "required": [
                 "format_version", "protocol_version", "height", "height_context", "subject",
-                "block_hash", "commit_qc"
+                "block_hash", "commit_qc", "validator_set_pops"
             ],
             "additionalProperties": false,
             "properties": {
@@ -11412,11 +11428,13 @@ fn bridge_finality_schemas(schemas: &mut Map) {
                 "commit_qc": {
                     "$ref": "#/components/schemas/SumeragiV2CommitQuorumCertificate"
                 },
-                "next_epoch_snapshot": {
-                    "$ref": "#/components/schemas/SumeragiV2FinalizedNextEpochSnapshot"
+                "validator_set_pops": {
+                    "type": "array", "minItems": 1, "maxItems": 4096,
+                    "items": { "$ref": "#/components/schemas/SumeragiV2BlsProof" },
+                    "description": "Durable BLS proofs of possession aligned one-for-one with height_context.roster."
                 }
             },
-            "description": "Exact immutable finality sidecar persisted by the Sumeragi-v2 apply path. next_epoch_snapshot is omitted away from epoch boundaries."
+            "description": "Exact immutable finality sidecar persisted by the Sumeragi-v2 apply path, including the complete cryptographic material needed after mutable validator records rotate."
         }),
     );
     schemas.insert(
@@ -11460,21 +11478,16 @@ fn bridge_finality_schemas(schemas: &mut Map) {
         "BridgeFinalityProof".to_owned(),
         norito::json!({
             "type": "object",
-            "required": ["version", "block_header", "finality_artifact", "validator_set_pops"],
+            "required": ["version", "block_header", "finality_artifact"],
             "additionalProperties": false,
             "properties": {
                 "version": { "type": "integer", "format": "uint8", "enum": [1] },
                 "block_header": { "$ref": "#/components/schemas/BlockHeader" },
                 "finality_artifact": {
                     "$ref": "#/components/schemas/SumeragiV2FinalityArtifact"
-                },
-                "validator_set_pops": {
-                    "type": "array", "minItems": 1, "maxItems": 4096,
-                    "items": { "$ref": "#/components/schemas/SumeragiV2BlsProof" },
-                    "description": "BLS proofs of possession aligned one-for-one with finality_artifact.height_context.roster."
                 }
             },
-            "description": "Version-one bridge proof carrying only a canonical block header, the exact durable v2 artifact, and aligned PoPs."
+            "description": "Version-one bridge proof carrying only a canonical block header and the exact independently-verifiable durable v2 artifact."
         }),
     );
     schemas.insert(
@@ -19100,18 +19113,8 @@ mod tests {
         assert_closed_shape(
             &schemas,
             "BridgeFinalityProof",
-            &[
-                "version",
-                "block_header",
-                "finality_artifact",
-                "validator_set_pops",
-            ],
-            &[
-                "version",
-                "block_header",
-                "finality_artifact",
-                "validator_set_pops",
-            ],
+            &["version", "block_header", "finality_artifact"],
+            &["version", "block_header", "finality_artifact"],
         );
         assert_closed_shape(
             &schemas,
@@ -19124,6 +19127,7 @@ mod tests {
                 "subject",
                 "block_hash",
                 "commit_qc",
+                "validator_set_pops",
             ],
             &[
                 "format_version",
@@ -19133,7 +19137,7 @@ mod tests {
                 "subject",
                 "block_hash",
                 "commit_qc",
-                "next_epoch_snapshot",
+                "validator_set_pops",
             ],
         );
         assert_closed_shape(
@@ -19158,6 +19162,7 @@ mod tests {
                 "height",
                 "epoch",
                 "epoch_end_height",
+                "next_epoch_snapshot",
                 "mode",
                 "parent_commit_qc",
                 "roster",
@@ -19331,7 +19336,7 @@ mod tests {
             Some("^ea0130[0-9A-F]{96}$")
         );
 
-        let pops = property(&schemas, "BridgeFinalityProof", "validator_set_pops");
+        let pops = property(&schemas, "SumeragiV2FinalityArtifact", "validator_set_pops");
         assert_eq!(pops.get("minItems").and_then(Value::as_u64), Some(1));
         assert_eq!(pops.get("maxItems").and_then(Value::as_u64), Some(4096));
         assert_eq!(
@@ -19418,6 +19423,223 @@ mod tests {
             assert!(
                 !serialized.contains(&format!("\"{retired}\"")),
                 "retired v1 bridge-finality field `{retired}` reappeared"
+            );
+        }
+    }
+
+    #[test]
+    fn bridge_finality_schema_matches_norito_json_and_decoder_rejects_v1_fields() {
+        let fixture = iroha_sccp::sccp_exact_outbound_test_fixture_v1();
+        let proof = iroha_sccp::decode_taira_bridge_finality_proof(&fixture.bundle.finality_proof)
+            .expect("decode exact SCCP v2 finality fixture");
+        let value = norito::json::to_value(&proof).expect("serialize exact finality proof");
+        let proof_object = value.as_object().expect("proof JSON object");
+        let mut proof_fields = proof_object.keys().map(String::as_str).collect::<Vec<_>>();
+        proof_fields.sort_unstable();
+        assert_eq!(
+            proof_fields,
+            ["block_header", "finality_artifact", "version"]
+        );
+
+        let header = proof_object
+            .get("block_header")
+            .and_then(Value::as_object)
+            .expect("block header JSON object");
+        for required in [
+            "height",
+            "prev_block_hash",
+            "merkle_root",
+            "result_merkle_root",
+            "da_proof_policies_hash",
+            "da_commitments_hash",
+            "da_pin_intents_hash",
+            "prev_roster_evidence_hash",
+            "sccp_commitment_root",
+            "creation_time_ms",
+            "view_change_index",
+            "confidential_features",
+        ] {
+            assert!(
+                header.contains_key(required),
+                "serialized block header omitted required JSON field {required}"
+            );
+        }
+        assert!(!header.contains_key("npos_effects_hash"));
+        assert!(!header.contains_key("execution_context_hash"));
+        assert!(
+            header
+                .get("sccp_commitment_root")
+                .and_then(Value::as_array)
+                .is_some_and(|root| root.len() == 32)
+        );
+
+        let artifact = proof_object
+            .get("finality_artifact")
+            .and_then(Value::as_object)
+            .expect("v2 artifact JSON object");
+        let mut artifact_fields = artifact.keys().map(String::as_str).collect::<Vec<_>>();
+        artifact_fields.sort_unstable();
+        assert_eq!(
+            artifact_fields,
+            [
+                "block_hash",
+                "commit_qc",
+                "format_version",
+                "height",
+                "height_context",
+                "protocol_version",
+                "subject",
+                "validator_set_pops",
+            ]
+        );
+        assert_eq!(
+            artifact.get("format_version").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            artifact.get("protocol_version").and_then(Value::as_u64),
+            Some(2)
+        );
+        let context = artifact
+            .get("height_context")
+            .and_then(Value::as_object)
+            .expect("height context JSON object");
+        assert_eq!(
+            context.get("protocol_version").and_then(Value::as_u64),
+            Some(2)
+        );
+        assert!(!context.contains_key("next_epoch_snapshot"));
+        assert!(!context.contains_key("parent_commit_qc"));
+        let mode = context
+            .get("mode")
+            .and_then(Value::as_object)
+            .expect("adjacently tagged consensus mode");
+        assert_eq!(mode.get("mode").and_then(Value::as_str), Some("npos"));
+        assert_eq!(mode.get("details"), Some(&Value::Null));
+        let encoding = context
+            .get("da_layout")
+            .and_then(Value::as_object)
+            .and_then(|layout| layout.get("encoding"))
+            .and_then(Value::as_object)
+            .expect("adjacently tagged payload encoding");
+        assert_eq!(
+            encoding.get("encoding").and_then(Value::as_str),
+            Some("plain")
+        );
+        assert_eq!(encoding.get("details"), Some(&Value::Null));
+
+        let roster = context
+            .get("roster")
+            .and_then(Value::as_array)
+            .expect("powered roster array");
+        assert_eq!(roster.len(), 4);
+        for validator in roster {
+            let validator = validator.as_object().expect("validator-power object");
+            let public_key = validator
+                .get("validator")
+                .and_then(Value::as_str)
+                .expect("validator id string");
+            assert_eq!(public_key.len(), 102);
+            assert!(public_key.starts_with("ea0130"));
+            assert!(
+                public_key[6..]
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'A'..=b'F').contains(&byte))
+            );
+            assert!(validator.get("power").and_then(Value::as_u64).is_some());
+        }
+        let quorum = context
+            .get("quorum")
+            .and_then(Value::as_object)
+            .expect("dual quorum object");
+        assert_eq!(quorum.len(), 2);
+        assert!(quorum.get("min_signers").and_then(Value::as_u64).is_some());
+        assert!(quorum.get("total_power").and_then(Value::as_u64).is_some());
+
+        let subject = artifact
+            .get("subject")
+            .and_then(Value::as_object)
+            .expect("block subject object");
+        assert!(!subject.contains_key("parent_block_hash"));
+        for hash_field in ["block_hash", "payload_hash"] {
+            let hash = subject
+                .get(hash_field)
+                .and_then(Value::as_str)
+                .expect("canonical hash literal");
+            assert!(hash.starts_with("hash:"));
+            assert_eq!(hash.len(), 74);
+        }
+
+        let commit_qc = artifact
+            .get("commit_qc")
+            .and_then(Value::as_object)
+            .expect("commit QC object");
+        let phase = commit_qc
+            .get("phase")
+            .and_then(Value::as_object)
+            .expect("adjacently tagged commit phase");
+        assert_eq!(phase.get("phase").and_then(Value::as_str), Some("commit"));
+        assert_eq!(phase.get("details"), Some(&Value::Null));
+        assert!(
+            commit_qc
+                .get("round")
+                .and_then(Value::as_object)
+                .and_then(|round| round.get("context_id"))
+                .and_then(Value::as_array)
+                .is_some_and(|context_id| context_id.len() == 1)
+        );
+        assert!(
+            commit_qc
+                .get("aggregate_signature")
+                .and_then(Value::as_array)
+                .is_some_and(|signature| signature.len() == 96)
+        );
+
+        let pops = artifact
+            .get("validator_set_pops")
+            .and_then(Value::as_array)
+            .expect("validator PoP array");
+        assert_eq!(pops.len(), roster.len());
+        assert!(pops.iter().all(|pop| {
+            pop.as_array().is_some_and(|bytes| {
+                bytes.len() == 96
+                    && bytes
+                        .iter()
+                        .all(|byte| byte.as_u64().is_some_and(|byte| byte <= 255))
+            })
+        }));
+
+        for retired in [
+            "height",
+            "chain_id",
+            "block_hash",
+            "commit_qc",
+            "validator_set_pops",
+            "authority_set",
+            "next_authority_set",
+            "justification",
+            "signatures",
+            "validator_set_hash",
+            "validator_set_hash_version",
+            "validator_set",
+            "subject_block_hash",
+            "parent_state_root",
+            "post_state_root",
+            "mode_tag",
+            "highest_qc",
+            "aggregate",
+            "signers_bitmap",
+            "bls_aggregate_signature",
+        ] {
+            let mut hostile = value.clone();
+            hostile
+                .as_object_mut()
+                .expect("proof JSON object")
+                .insert(retired.to_owned(), Value::Null);
+            assert!(
+                norito::json::from_value::<iroha_data_model::bridge::BridgeFinalityProof>(hostile)
+                    .is_err(),
+                "BridgeFinalityProof JSON decoder accepted retired v1 field {retired}"
             );
         }
     }
@@ -20134,6 +20356,24 @@ mod tests {
             .and_then(|schema| schema.get("$ref"))
             .and_then(Value::as_str);
         assert_eq!(request_ref, Some("#/components/schemas/ZkIvmProveRequest"));
+        let job_path = paths
+            .get("/v1/zk/ivm/prove/{job_id}")
+            .and_then(Value::as_object)
+            .expect("prove job path");
+        for method in ["get", "delete"] {
+            let pattern = job_path
+                .get(method)
+                .and_then(Value::as_object)
+                .and_then(|operation| operation.get("parameters"))
+                .and_then(Value::as_array)
+                .and_then(|parameters| parameters.first())
+                .and_then(Value::as_object)
+                .and_then(|parameter| parameter.get("schema"))
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("pattern"))
+                .and_then(Value::as_str);
+            assert_eq!(pattern, Some("^[0-9a-f]{32}$"), "{method} path id");
+        }
 
         let schemas = doc
             .get("components")

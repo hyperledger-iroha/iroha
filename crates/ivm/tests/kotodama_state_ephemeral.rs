@@ -23,7 +23,7 @@ fn state_map_set_get_roundtrip() {
     vm.load_program(&prog).expect("load program");
     common::select_kotodama_entrypoint(&mut vm, &prog, "main");
     vm.run().expect("state map roundtrip");
-    assert_eq!(vm.register(10), 7);
+    assert_eq!(common::decode_i64_register(&vm, 10), 7);
 }
 
 #[test]
@@ -49,5 +49,5 @@ fn state_map_with_struct_value_roundtrip() {
     vm.load_program(&prog).expect("load program");
     common::select_kotodama_entrypoint(&mut vm, &prog, "main");
     vm.run().expect("state map struct roundtrip");
-    assert_eq!(vm.register(10), 9);
+    assert_eq!(common::decode_i64_register(&vm, 10), 9);
 }

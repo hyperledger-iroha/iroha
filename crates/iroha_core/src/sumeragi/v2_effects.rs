@@ -3200,6 +3200,7 @@ mod tests {
                 height: 1,
                 epoch: 0,
                 epoch_end_height: 100,
+                next_epoch_snapshot: None,
                 mode: wire::ConsensusMode::Permissioned,
                 parent_commit_qc: None,
                 roster: roster.clone(),
@@ -4420,7 +4421,7 @@ mod tests {
             fixture.context.clone(),
             fixture.manifest.subject,
             commit,
-            None,
+            vec![vec![0x5C]; fixture.context.roster.len()],
         );
         let receipt = KuraV2CommitReceipt::for_test(&artifact);
         assert_eq!(
@@ -4562,7 +4563,7 @@ mod tests {
             fixture.context.clone(),
             fixture.manifest.subject,
             commit,
-            None,
+            vec![vec![0x5D]; fixture.context.roster.len()],
         );
         artifact.block_hash = HashOf::from_untyped_unchecked(Hash::new(b"wrong block"));
         let receipt = KuraV2CommitReceipt::for_test(&artifact);

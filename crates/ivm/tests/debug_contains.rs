@@ -4,7 +4,7 @@
 fn in_memory_map_contains_is_rejected() {
     let src = r#"
         module RemovedMapContains {
-            fn f() -> i64 {
+            fn f() -> int {
                 let m = Map::new();
                 m[7] = 111;
                 let present = m.contains(7);

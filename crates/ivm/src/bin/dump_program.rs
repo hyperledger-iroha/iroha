@@ -1,11 +1,11 @@
 fn main() {
     let src = r#"
         seiyaku DumpProgram {
-            struct A { x: i64 }
-            struct B { a: A }
-            struct C { b: B }
-            struct D { c: C }
-            view fn main() -> i64 {
+            struct A { int x }
+            struct B { A a }
+            struct C { B b }
+            struct D { C c }
+            view fn main() -> int {
                 let a = A { x: 5 };
                 let b = B { a };
                 let c = C { b };

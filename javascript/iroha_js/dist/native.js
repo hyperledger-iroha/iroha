@@ -28,8 +28,19 @@ let cachedBinding;
 let cachedBindingPath;
 let cachedSnapshotDir;
 
-function nativeBindingError(reason) {
-  return new Error(`Native binding required; ${reason}`);
+function nativeBindingError(reason, status = "unknown") {
+  const error = new Error(`Native binding required; ${reason}`);
+  Object.defineProperties(error, {
+    code: {
+      value: "ERR_IROHA_NATIVE_BINDING",
+      enumerable: true,
+    },
+    nativeStatus: {
+      value: status,
+      enumerable: true,
+    },
+  });
+  return error;
 }
 
 function formatForceNativeVerificationError(verification, paths) {
@@ -37,26 +48,31 @@ function formatForceNativeVerificationError(verification, paths) {
     case "missing_file":
       return nativeBindingError(
         `binding missing at ${paths.bindingPath}; run \`npm run build:native\`.`,
+        verification.status,
       );
     case "manifest_error":
       return nativeBindingError(
         `checksum manifest at ${paths.checksumPath} is invalid or unreadable: ${
           verification.error?.message ?? verification.error
         }.`,
+        verification.status,
       );
     case "missing_manifest":
     case "missing_expected_entry":
       return nativeBindingError(
         `checksum manifest missing entries for ${verification.platform}; run \`npm run build:native\`.`,
+        verification.status,
       );
     case "hash_mismatch":
       return nativeBindingError(
         `checksum mismatch for ${paths.bindingPath}; expected ${verification.expectedSha256}, found ${verification.sha256}.`,
+        verification.status,
       );
     case "hash_error":
     default:
       return nativeBindingError(
         `verification failed (${verification.status}).`,
+        verification.status,
       );
   }
 }
@@ -93,6 +109,7 @@ export function getNativeBinding() {
     cleanupSnapshotDirectory(snapshot?.directory);
     throw nativeBindingError(
       `failed to load verified binding from ${paths.bindingPath}: ${error?.message ?? error}.`,
+      "load_error",
     );
   }
   cachedBindingPath = paths.bindingPath;

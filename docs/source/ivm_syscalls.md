@@ -59,8 +59,8 @@ Notes
 - All pointer arguments reference Norito TLV envelopes in the INPUT region and are validated on first dereference (`E_NORITO_INVALID` on error).
 - All mutations are applied via Iroha’s standard executor (through `CoreHost`), not directly by the VM.
 - Kotodama `block_height()` lowers to the existing extended `SYSVAR_BLOCK_HEIGHT` syscall (`0x010021`) and returns the host-provided block height as an integer.
-- Pointer type `0x0010` is permanently retired and rejected. `IntValueV1`,
-  `DecimalValueV1`, and `QuantityValueV1` use `0x0011`, `0x0012`, and `0x0013`.
+- `QuantityValueV1`, `IntValueV1`, and `DecimalValueV1` use pointer types
+  `0x0010`, `0x0011`, and `0x0012`; `0x0013` is unassigned and rejected.
   Their unconditional syscall blocks are `0x010100..=0x010113`,
   `0x010120..=0x01012F`, and `0x010140..=0x01014F`. Exact division distinguishes
   repeating results from terminating results needing scale above 28; rounded

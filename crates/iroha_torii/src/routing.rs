@@ -4205,6 +4205,8 @@ pub struct ProofApiLimits {
     pub retry_after: std::time::Duration,
     /// Maximum proof request payload size (bytes).
     pub max_body_bytes: u64,
+    /// Absolute deadline for reading one admitted proof request body.
+    pub body_read_timeout: std::time::Duration,
 }
 
 impl ProofApiLimits {
@@ -4215,6 +4217,7 @@ impl ProofApiLimits {
         cache_max_age: std::time::Duration,
         retry_after: std::time::Duration,
         max_body_bytes: u64,
+        body_read_timeout: std::time::Duration,
     ) -> Self {
         Self {
             max_list_limit: max_list_limit.max(1),
@@ -4222,6 +4225,7 @@ impl ProofApiLimits {
             cache_max_age,
             retry_after,
             max_body_bytes,
+            body_read_timeout,
         }
     }
 }
@@ -4238,6 +4242,9 @@ impl Default for ProofApiLimits {
             ),
             retry_after: std::time::Duration::from_secs(defaults::torii::PROOF_RETRY_AFTER_SECS),
             max_body_bytes: defaults::torii::PROOF_MAX_BODY_BYTES.get(),
+            body_read_timeout: std::time::Duration::from_millis(
+                defaults::torii::PROOF_BODY_READ_TIMEOUT_MS,
+            ),
         }
     }
 }
@@ -6089,7 +6096,6 @@ fn map_bridge_finality_error(err: iroha_core::bridge::BridgeFinalityError) -> Er
         }
         iroha_core::bridge::BridgeFinalityError::FinalityArtifactRead { .. }
         | iroha_core::bridge::BridgeFinalityError::FinalityArtifactMismatch { .. }
-        | iroha_core::bridge::BridgeFinalityError::MissingValidatorPop { .. }
         | iroha_core::bridge::BridgeFinalityError::InvalidFinalityArtifact { .. } => Error::Query(
             iroha_data_model::ValidationFail::InternalError(format!("{err:?}")),
         ),

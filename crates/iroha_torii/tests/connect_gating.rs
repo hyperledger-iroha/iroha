@@ -308,6 +308,9 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
                 max_body_bytes: iroha_config::parameters::defaults::torii::PROOF_MAX_BODY_BYTES,
                 body_max_inflight:
                     iroha_config::parameters::defaults::torii::PROOF_BODY_MAX_INFLIGHT,
+                body_read_timeout: std::time::Duration::from_millis(
+                    iroha_config::parameters::defaults::torii::PROOF_BODY_READ_TIMEOUT_MS,
+                ),
                 egress_bytes_per_sec: iroha_config::parameters::defaults::torii::PROOF_EGRESS_BYTES_PER_SEC
                     .and_then(std::num::NonZeroU64::new),
                 egress_burst_bytes: iroha_config::parameters::defaults::torii::PROOF_EGRESS_BURST_BYTES

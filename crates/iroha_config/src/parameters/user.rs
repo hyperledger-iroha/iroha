@@ -16054,6 +16054,11 @@ pub struct Torii {
     /// Maximum proof request bodies buffered concurrently before handler admission.
     #[config(default = "defaults::torii::PROOF_BODY_MAX_INFLIGHT")]
     pub proof_body_max_inflight: NonZeroUsize,
+    /// Absolute deadline for reading one admitted proof request body (milliseconds).
+    #[config(
+        default = "DurationMs(std::time::Duration::from_millis(defaults::torii::PROOF_BODY_READ_TIMEOUT_MS))"
+    )]
+    pub proof_body_read_timeout_ms: DurationMs,
     /// Optional proof egress steady-state budget (bytes/sec). None disables.
     pub proof_egress_bytes_per_sec: Option<u64>,
     /// Optional proof egress burst budget (bytes). None disables.
@@ -16817,6 +16822,7 @@ impl Torii {
                     .and_then(std::num::NonZeroU32::new),
                 max_body_bytes: self.proof_max_body_bytes,
                 body_max_inflight: self.proof_body_max_inflight,
+                body_read_timeout: self.proof_body_read_timeout_ms.get(),
                 egress_bytes_per_sec: self
                     .proof_egress_bytes_per_sec
                     .or(super::defaults::torii::PROOF_EGRESS_BYTES_PER_SEC)

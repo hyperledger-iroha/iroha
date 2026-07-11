@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import base64
 import copy
 import hashlib
@@ -2043,3 +2044,32 @@ def test_production_entrypoints_expose_no_test_policy_or_signing_switch() -> Non
         '"regenerate"',
     ):
         assert forbidden not in fixture_source
+
+
+def test_production_tooling_has_no_private_key_api_or_signing_call() -> None:
+    for path in (*PRODUCTION_CLIS, SCRIPTS / "sccp_release_common.py"):
+        source = path.read_text(encoding="utf-8")
+        tree = ast.parse(source, filename=str(path))
+        imported_modules = {
+            alias.name
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Import)
+            for alias in node.names
+        } | {
+            node.module
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ImportFrom) and node.module is not None
+        }
+        assert not imported_modules & {
+            "nacl.signing",
+            "cryptography.hazmat.primitives.asymmetric.ed25519",
+        }
+        assert not any(
+            isinstance(node, ast.Attribute) and node.attr in {"sign", "private_bytes"}
+            for node in ast.walk(tree)
+        )
+        assert not any(
+            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and (node.name == "sign" or node.name.startswith("sign_"))
+            for node in ast.walk(tree)
+        )

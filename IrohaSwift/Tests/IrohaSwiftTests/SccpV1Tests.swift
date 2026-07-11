@@ -449,8 +449,12 @@ final class SccpV1Tests: XCTestCase {
         let invalidFinalityAnchors: [(inout [String: Any]) -> Void] = [
             { $0["protocol_version"] = 1 },
             { $0["protocol_version"] = "2" },
+            { $0["protocol_version"] = true },
             { $0["validator_set_epoch"] = 2 },
             { $0["checkpoint_context_id"] = String(repeating: "0", count: 64) },
+            { $0["checkpoint_context_id"] = $0["chain_id_hash"] },
+            { $0["checkpoint_block_hash"] = $0["checkpoint_context_id"] },
+            { $0["checkpoint_finality_artifact_hash"] = String(repeating: "0", count: 64) },
             { $0["checkpoint_finality_artifact_hash"] = $0["checkpoint_block_hash"] },
             { $0.removeValue(forKey: "checkpoint_finality_artifact_hash") },
         ]
@@ -459,6 +463,19 @@ final class SccpV1Tests: XCTestCase {
             mutateFinalityAnchor(&hostile, mutation)
             XCTAssertThrowsError(try SccpRegistryV1.parse(jsonData(hostile)))
         }
+        let canonicalJSON = String(data: valid, encoding: .utf8)!
+        XCTAssertThrowsError(try SccpRegistryV1.parse(Data(
+            canonicalJSON.replacingOccurrences(
+                of: "\"protocol_version\":2",
+                with: "\"protocol_version\":2.0"
+            ).utf8
+        )))
+        XCTAssertThrowsError(try SccpRegistryV1.parse(Data(
+            canonicalJSON.replacingOccurrences(
+                of: "\"checkpoint_height\":7",
+                with: "\"checkpoint_height\":7e0"
+            ).utf8
+        )))
 
         let tron = try SccpRegistryV1.parse(try registryJSON(source: .tronMainnet))
         XCTAssertEqual(tron.lanes[0].routes[0].routeId, "taira_tron_xor")
@@ -1316,6 +1333,7 @@ final class SccpV1Tests: XCTestCase {
         canonical.append(checkpoint)
         canonical.append(contextId)
         canonical.append(artifactHash)
+        XCTAssertEqual(canonical.count, 140)
         let anchorHash = irohaKeccak256(Data("sccp:sora-finality-anchor:v1".utf8) + canonical)
         return ([
             "version": 1,

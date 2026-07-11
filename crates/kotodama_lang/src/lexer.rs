@@ -775,16 +775,17 @@ mod tests {
     }
 
     #[test]
-    fn hex_literal_overflow_is_reported() {
-        let err = lex("0x1_0000_0000_0000_0000_0000_0000_0000_0000").unwrap_err();
-        assert!(err.contains("overflow"));
+    fn wide_hex_literal_is_preserved_for_the_parser_domain_check() {
+        let spelling = "0x1_0000_0000_0000_0000_0000_0000_0000_0000";
+        let tokens = lex(spelling).expect("lex wide hexadecimal int");
+        assert!(matches!(&tokens[0].kind, TokenKind::Number(value) if value == spelling));
     }
 
     #[test]
-    fn binary_literal_overflow_is_reported() {
-        let literal = format!("0b1{}", "0".repeat(128));
-        let err = lex(&literal).unwrap_err();
-        assert!(err.contains("overflow"));
+    fn wide_binary_literal_is_preserved_for_the_parser_domain_check() {
+        let spelling = format!("0b1{}", "0".repeat(128));
+        let tokens = lex(&spelling).expect("lex wide binary int");
+        assert!(matches!(&tokens[0].kind, TokenKind::Number(value) if value == &spelling));
     }
 
     #[test]

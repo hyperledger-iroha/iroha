@@ -615,15 +615,27 @@ mod tests {
     }
 
     fn genesis(mode: wire::ConsensusMode, powers: &[u64], end: u64) -> wire::HeightContext {
+        let roster = roster(powers);
+        let next_epoch_snapshot = (end == 1).then(|| {
+            let next_roster = roster.clone();
+            wire::finality::FinalizedNextEpochSnapshot {
+                epoch: 5,
+                mode,
+                quorum: wire::DualQuorum::from_roster(&next_roster).expect("next quorum"),
+                roster: next_roster,
+                leader_seed: [0x42; 32],
+            }
+        });
         build_genesis_height_context(GenesisContextInputs {
             chain_id: "v2-context-builder-test".into(),
             election: FrozenElectionInputs {
                 epoch: 4,
                 epoch_end_height: end,
                 mode,
-                roster: roster(powers),
+                roster,
                 leader_seed: [0x41; 32],
             },
+            next_epoch_snapshot,
             nexus_amx_context_hash: Hash::new(b"genesis nexus amx context"),
             da_layout: wire::DataAvailabilityLayout {
                 encoding: wire::PayloadEncoding::Plain,
@@ -883,9 +895,11 @@ mod tests {
     }
 
     fn artifact(
-        context: wire::HeightContext,
+        mut context: wire::HeightContext,
         next: Option<wire::finality::FinalizedNextEpochSnapshot>,
     ) -> wire::finality::V2FinalityArtifact {
+        context.next_epoch_snapshot = next;
+        context.validate().expect("valid artifact context");
         let subject = wire::BlockSubject {
             parent_block_hash: context
                 .parent_commit_qc
@@ -908,15 +922,22 @@ mod tests {
             signers: vec![0, 1, 2, 3],
             aggregate_signature: vec![0xA5; 48],
         };
-        wire::finality::V2FinalityArtifact::new(context, subject, commit_qc, next)
+        let validator_set_pops = vec![vec![0xA6]; context.roster.len()];
+        wire::finality::V2FinalityArtifact::new(
+            context,
+            subject,
+            commit_qc,
+            validator_set_pops,
+        )
     }
 
     #[test]
     fn non_boundary_successor_copies_frozen_election_inputs_exactly() {
         let parent_context = genesis(wire::ConsensusMode::Npos, &[7, 5, 3, 1], 3);
         let parent = artifact(parent_context.clone(), None);
-        let successor = build_successor_height_context(&parent, Hash::new(b"next lanes"), None)
-            .expect("successor context");
+        let successor =
+            build_successor_height_context(&parent, Hash::new(b"next lanes"), None, None)
+                .expect("successor context");
         assert_eq!(successor.height, 2);
         assert_eq!(successor.epoch, parent_context.epoch);
         assert_eq!(successor.epoch_end_height, parent_context.epoch_end_height);
@@ -938,8 +959,13 @@ mod tests {
             leader_seed: [0x77; 32],
         };
         let parent = artifact(parent_context, Some(snapshot));
-        let successor = build_successor_height_context(&parent, Hash::new(b"next lanes"), Some(5))
-            .expect("epoch successor");
+        let successor = build_successor_height_context(
+            &parent,
+            Hash::new(b"next lanes"),
+            Some(5),
+            None,
+        )
+        .expect("epoch successor");
         assert_eq!(successor.height, 2);
         assert_eq!(successor.epoch, 5);
         assert_eq!(successor.epoch_end_height, 5);
@@ -951,7 +977,12 @@ mod tests {
     fn epoch_end_argument_is_present_only_at_a_certified_boundary() {
         let non_boundary = artifact(genesis(wire::ConsensusMode::Npos, &[4, 3, 2, 1], 3), None);
         assert_eq!(
-            build_successor_height_context(&non_boundary, Hash::new(b"lanes"), Some(8)),
+            build_successor_height_context(
+                &non_boundary,
+                Hash::new(b"lanes"),
+                Some(8),
+                None,
+            ),
             Err(V2ContextBuildError::UnexpectedNextEpochEnd)
         );
 
@@ -965,7 +996,7 @@ mod tests {
         };
         let boundary = artifact(boundary_context, Some(snapshot));
         assert_eq!(
-            build_successor_height_context(&boundary, Hash::new(b"lanes"), None),
+            build_successor_height_context(&boundary, Hash::new(b"lanes"), None, None),
             Err(V2ContextBuildError::MissingNextEpochEnd)
         );
     }
@@ -981,6 +1012,7 @@ mod tests {
                 roster: roster(&[1, 2, 1, 1]),
                 leader_seed: [0; 32],
             },
+            next_epoch_snapshot: None,
             nexus_amx_context_hash: Hash::new(b"nexus amx context"),
             da_layout: wire::DataAvailabilityLayout {
                 encoding: wire::PayloadEncoding::Plain,

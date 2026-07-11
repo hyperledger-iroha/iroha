@@ -53,7 +53,7 @@ fn get_or_state_map() {
     vm.load_program(&code).unwrap();
     common::select_kotodama_entrypoint(&mut vm, &code, "main");
     vm.run().expect("execute");
-    assert_eq!(vm.register(10), 111 * 2 + 9);
+    assert_eq!(common::decode_i64_register(&vm, 10), 111 * 2 + 9);
 }
 
 #[test]

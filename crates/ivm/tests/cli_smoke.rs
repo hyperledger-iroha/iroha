@@ -45,7 +45,7 @@ fn koto_build_meta_header_smoke() {
 
 #[test]
 fn compile_tuple_return_minimal() {
-    let src = "seiyaku Tuple { view fn pair(a: i64, b: i64) -> (i64, i64) { return (a, b); } }";
+    let src = "seiyaku Tuple { view fn pair(int a, int b) -> (int, int) { return (a, b); } }";
     let code = ivm::KotodamaCompiler::new()
         .compile_source(src)
         .expect("compile tuple return");

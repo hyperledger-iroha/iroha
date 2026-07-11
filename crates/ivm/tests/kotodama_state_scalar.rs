@@ -26,7 +26,7 @@ fn kotodama_state_scalar_reads_durable() {
     vm.load_program(&code).expect("load program");
     common::select_kotodama_entrypoint(&mut vm, &code, "main");
     vm.run().expect("execute reader");
-    assert_eq!(vm.register(10), 42);
+    assert_eq!(common::decode_i64_register(&vm, 10), 42);
 }
 
 #[test]
@@ -67,5 +67,5 @@ fn kotodama_state_struct_helper_param_reads_flattened_fields() {
     vm.load_program(&code).expect("load program");
     common::select_kotodama_entrypoint(&mut vm, &code, "main");
     vm.run().expect("execute struct state helper");
-    assert_eq!(vm.register(10), 8);
+    assert_eq!(common::decode_i64_register(&vm, 10), 8);
 }

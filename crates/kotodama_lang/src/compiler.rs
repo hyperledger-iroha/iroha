@@ -1749,8 +1749,9 @@ mod tests {
         );
     }
 
-    fn canonical_i64_state_key(base: &str, value: i64) -> String {
-        let encoded = norito::to_bytes(&value).expect("encode canonical int state key");
+    fn canonical_numeric_state_key(base: &str, kind: ir::DataRefKind, value: &str) -> String {
+        let encoded = encode_pointer_tlv_bytes(kind, value)
+            .expect("encode canonical pointer-backed numeric state key");
         format!("state:{base}/{}", hex::encode(encoded))
     }
 
@@ -1858,8 +1859,7 @@ mod tests {
 
     #[test]
     fn source_metadata_changes_sidecars_but_not_optimized_ir_or_artifact_bytes() {
-        let source_text =
-            "seiyaku MetadataFree { view fn answer(int value) -> int { value + 1 } }";
+        let source_text = "seiyaku MetadataFree { view fn answer(int value) -> int { value + 1 } }";
         let source = crate::source::SourceFile::new(
             crate::source::SourceId(73),
             "contracts/metadata_free.ko",
@@ -2500,8 +2500,7 @@ seiyaku SumJoinFacts {
         assert_eq!(record_decodes, 1, "trigger arguments must be decoded once");
         assert!(words.iter().all(|word| {
             instruction::wide::opcode(*word) != instruction::wide::system::SYSTEM
-                || encoding::wide::decode_syscallx(*word)
-                    != syscalls::SYSCALL_JSON_GET_QUANTITY
+                || encoding::wide::decode_syscallx(*word) != syscalls::SYSCALL_JSON_GET_QUANTITY
         }));
     }
 
@@ -2904,10 +2903,8 @@ seiyaku JsonNumericTest {
         let compiler = test_mode_compiler();
         let bytes = compiler.compile_source(src).expect("compile get_quantity");
         let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
-        let needle = encoding::wide::encode_syscallx(
-            ivm_abi::syscalls::SYSCALL_JSON_GET_QUANTITY,
-        )
-        .to_le_bytes();
+        let needle = encoding::wide::encode_syscallx(ivm_abi::syscalls::SYSCALL_JSON_GET_QUANTITY)
+            .to_le_bytes();
         assert!(
             bytes[parsed.code_offset..]
                 .windows(needle.len())
@@ -6298,22 +6295,15 @@ fn main() {
     }
 
     #[test]
-    fn math_scalar_builtins_emit_opcodes_and_complete_access() {
+    fn crypto_scalar_builtins_emit_opcodes_and_complete_access() {
         let src = r#"
 seiyaku CompilerFixture {
 
-view fn scalar_math() -> int {
-  let a = math::abs(-5);
-  let b = math::min(left: 1, right: 2);
-  let c = math::max(left: 3, right: 4);
-  let d = math::div_ceil(left: 5, right: 2);
-  let e = math::gcd(left: 21, right: 6);
-  let f = math::mean(left: 2, right: 8);
-  let g = math::isqrt(16);
+view fn scalar_crypto() -> int {
   let h = crypto::poseidon2(left: 1, right: 2);
   let i = crypto::pubkgen(3);
   let j = crypto::valcom(left: 4, right: 5);
-  return a + b + c + d + e + f + g + h + i + j;
+  return h + i + j;
 }
 
 }
@@ -6332,13 +6322,6 @@ view fn scalar_math() -> int {
             .collect();
 
         for (opcode, label) in [
-            (instruction::wide::arithmetic::ABS, "ABS"),
-            (instruction::wide::arithmetic::MIN, "MIN"),
-            (instruction::wide::arithmetic::MAX, "MAX"),
-            (instruction::wide::arithmetic::DIV_CEIL, "DIV_CEIL"),
-            (instruction::wide::arithmetic::GCD, "GCD"),
-            (instruction::wide::arithmetic::MEAN, "MEAN"),
-            (instruction::wide::arithmetic::ISQRT, "ISQRT"),
             (instruction::wide::crypto::POSEIDON2, "POSEIDON2"),
             (instruction::wide::crypto::PUBKGEN, "PUBKGEN"),
             (instruction::wide::crypto::VALCOM, "VALCOM"),
@@ -6350,43 +6333,19 @@ view fn scalar_math() -> int {
         }
 
         let entrypoints = manifest.entrypoints.expect("entrypoints must be present");
-        let scalar_math = entrypoints
+        let scalar_crypto = entrypoints
             .iter()
-            .find(|entry| entry.name == "scalar_math")
-            .expect("scalar_math entrypoint");
-        assert_ne!(scalar_math.access_hints_complete, Some(false));
-        assert!(scalar_math.access_hints_skipped.is_empty());
-        assert!(scalar_math.read_keys.is_empty());
-        assert!(scalar_math.write_keys.is_empty());
+            .find(|entry| entry.name == "scalar_crypto")
+            .expect("scalar_crypto entrypoint");
+        assert_ne!(scalar_crypto.access_hints_complete, Some(false));
+        assert!(scalar_crypto.access_hints_skipped.is_empty());
+        assert!(scalar_crypto.read_keys.is_empty());
+        assert!(scalar_crypto.write_keys.is_empty());
     }
 
     #[test]
     fn math_vector_scalar_builtins_reject_invalid_arguments() {
         for (src, expected) in [
-            (
-                r#"
-seiyaku CompilerFixture {
-
-fn main() {
-  let _bad = math::isqrt(Name::parse("not_int"));
-}
-
-}
-"#,
-                "math::isqrt expects (int)",
-            ),
-            (
-                r#"
-seiyaku CompilerFixture {
-
-fn main() {
-  let _bad = math::min(left: 1, right: Name::parse("not_int"));
-}
-
-}
-"#,
-                "math::min expects (int, int)",
-            ),
             (
                 r#"
 seiyaku CompilerFixture {
@@ -6462,6 +6421,13 @@ fn main() {
             "numeric::add(left: 1, right: 2)",
             "numeric::rem(left: 1, right: 2)",
             "numeric::ge(left: 1, right: 2)",
+            "math::isqrt(9)",
+            "math::abs(-1)",
+            "math::min(left: 1, right: 2)",
+            "math::max(left: 1, right: 2)",
+            "math::div_ceil(left: 5, right: 2)",
+            "math::gcd(left: 6, right: 4)",
+            "math::mean(left: 1, right: 2)",
         ] {
             let source = format!(
                 "seiyaku CompilerFixture {{ view fn probe() -> int {{ let value = {call}; return 0; }} }}"
@@ -7355,7 +7321,7 @@ seiyaku Test {
         let hints = manifest
             .access_set_hints
             .expect("expected access_set_hints");
-        let literal_key = canonical_i64_state_key("Foo", 1);
+        let literal_key = canonical_numeric_state_key("Foo", ir::DataRefKind::Int, "1");
         assert!(
             hints.read_keys.contains(&"state:Foo".to_string()),
             "{hints:?}"
@@ -9765,7 +9731,7 @@ seiyaku Test {
   state StateMap<quantity, int> Foo;
 
   kotoage fn main()  authorize("Entry") {
-    Foo[7] = 2;
+    Foo[7.00] = 2;
     let _x = Foo.get(7);
   }
 }
@@ -9775,19 +9741,19 @@ seiyaku Test {
             .compile_source_with_manifest(src)
             .expect("quantity is a canonical-Norito durable map key");
         let hints = manifest.access_set_hints.expect("access hints");
+        let literal_key = canonical_numeric_state_key("Foo", ir::DataRefKind::Quantity, "7");
         assert!(hints.read_keys.contains(&"state:Foo".to_string()));
         assert!(hints.write_keys.contains(&"state:Foo".to_string()));
-        assert!(
+        assert!(hints.read_keys.contains(&literal_key), "{hints:?}");
+        assert!(hints.write_keys.contains(&literal_key), "{hints:?}");
+        assert_eq!(
             hints
                 .read_keys
                 .iter()
-                .any(|key| key.starts_with("state:Foo/") && key.len() > "state:Foo/".len())
-        );
-        assert!(
-            hints
-                .write_keys
-                .iter()
-                .any(|key| key.starts_with("state:Foo/") && key.len() > "state:Foo/".len())
+                .filter(|key| key.starts_with("state:Foo/"))
+                .count(),
+            1,
+            "7.00 and 7 must canonicalize to the same quantity key"
         );
     }
 
@@ -10447,10 +10413,8 @@ seiyaku RoundedQuantity {
         let code = Compiler::new()
             .compile_source(source)
             .expect("compile rounded quantity division");
-        let encoded = encoding::wide::encode_syscallx(
-            syscalls::SYSCALL_QUANTITY_DIV_DECIMAL_ROUND,
-        )
-        .to_le_bytes();
+        let encoded = encoding::wide::encode_syscallx(syscalls::SYSCALL_QUANTITY_DIV_DECIMAL_ROUND)
+            .to_le_bytes();
         assert_eq!(
             code.windows(encoded.len())
                 .filter(|window| *window == encoded)
@@ -11428,8 +11392,8 @@ impl Compiler {
                     {
                         int_const_map.insert((func_idx, *dest), neg);
                     }
-                    if let ir::Instr::IntFromI64 { dest, .. }
-                    | ir::Instr::IntFromU64 { dest, .. } = instr
+                    if let ir::Instr::IntFromI64 { dest, .. } | ir::Instr::IntFromU64 { dest, .. } =
+                        instr
                     {
                         dataref_kind_map.insert((func_idx, *dest), DRK::Int);
                     }
@@ -16134,8 +16098,7 @@ impl Compiler {
                             push_word(&mut code, encode_addi(rd, 10, 0)?);
                             spill_back(dest, rd, spilled, imm, &mut code)?;
                         }
-                        Instr::IntFromI64 { dest, value }
-                        | Instr::IntFromU64 { dest, value } => {
+                        Instr::IntFromI64 { dest, value } | Instr::IntFromU64 { dest, value } => {
                             let rv = src_reg(value, scratch1, &mut code)?;
                             push_word(&mut code, encode_addi(10, rv, 0)?);
                             let syscall = match instr {
@@ -16148,8 +16111,7 @@ impl Compiler {
                             push_word(&mut code, encode_addi(rd, 10, 0)?);
                             spill_back(dest, rd, spilled, imm, &mut code)?;
                         }
-                        Instr::IntTryToI64 { dest, value }
-                        | Instr::IntTryToU64 { dest, value } => {
+                        Instr::IntTryToI64 { dest, value } | Instr::IntTryToU64 { dest, value } => {
                             if let Some(s) = string_map.get(&(func_idx, *value)) {
                                 let key = DataKey(DataKind::Int, s.clone());
                                 emit_literal_load(&mut code, &fixups, 10, key);
@@ -16212,7 +16174,9 @@ impl Compiler {
                                     (syscalls::SYSCALL_QUANTITY_TO_DECIMAL, false)
                                 }
                                 _ => {
-                                    return Err("unsupported Kotodama numeric conversion".to_owned());
+                                    return Err(
+                                        "unsupported Kotodama numeric conversion".to_owned()
+                                    );
                                 }
                             };
                             push_syscall(&mut code, syscall);
@@ -16269,13 +16233,7 @@ impl Compiler {
                         Instr::NumericStatus { dest } => {
                             let (status_reg, status_spilled, status_imm) = dst_reg(dest);
                             push_word(&mut code, encode_addi(status_reg, 11, 0)?);
-                            spill_back(
-                                dest,
-                                status_reg,
-                                status_spilled,
-                                status_imm,
-                                &mut code,
-                            )?;
+                            spill_back(dest, status_reg, status_spilled, status_imm, &mut code)?;
                         }
                         Instr::NumericNeg { dest, value, kind } => {
                             if let Some(kind) = dataref_kind_map.get(&(func_idx, *value)).copied()
@@ -16305,7 +16263,9 @@ impl Compiler {
                                 ir::WideNumericKind::Int => syscalls::SYSCALL_INT_NEG,
                                 ir::WideNumericKind::Decimal => syscalls::SYSCALL_DECIMAL_NEG,
                                 ir::WideNumericKind::Quantity => {
-                                    return Err("quantity negation reached code generation".to_owned());
+                                    return Err(
+                                        "quantity negation reached code generation".to_owned()
+                                    );
                                 }
                             };
                             push_syscall(&mut code, syscall);
@@ -16363,20 +16323,90 @@ impl Compiler {
                                 push_word(&mut code, encode_addi(register, 0, 0)?);
                             }
                             let num = match (left_kind, op, right_kind, result_kind) {
-                                (ir::WideNumericKind::Int, BinaryOp::Add, ir::WideNumericKind::Int, ir::WideNumericKind::Int) => syscalls::SYSCALL_INT_ADD,
-                                (ir::WideNumericKind::Int, BinaryOp::Sub, ir::WideNumericKind::Int, ir::WideNumericKind::Int) => syscalls::SYSCALL_INT_SUB,
-                                (ir::WideNumericKind::Int, BinaryOp::Mul, ir::WideNumericKind::Int, ir::WideNumericKind::Int) => syscalls::SYSCALL_INT_MUL,
-                                (ir::WideNumericKind::Int, BinaryOp::Div, ir::WideNumericKind::Int, ir::WideNumericKind::Int) => syscalls::SYSCALL_INT_DIV,
-                                (ir::WideNumericKind::Int, BinaryOp::Mod, ir::WideNumericKind::Int, ir::WideNumericKind::Int) => syscalls::SYSCALL_INT_REM,
-                                (ir::WideNumericKind::Decimal, BinaryOp::Add, ir::WideNumericKind::Decimal, ir::WideNumericKind::Decimal) => syscalls::SYSCALL_DECIMAL_ADD,
-                                (ir::WideNumericKind::Decimal, BinaryOp::Sub, ir::WideNumericKind::Decimal, ir::WideNumericKind::Decimal) => syscalls::SYSCALL_DECIMAL_SUB,
-                                (ir::WideNumericKind::Decimal, BinaryOp::Mul, ir::WideNumericKind::Decimal, ir::WideNumericKind::Decimal) => syscalls::SYSCALL_DECIMAL_MUL,
-                                (ir::WideNumericKind::Decimal, BinaryOp::Div, ir::WideNumericKind::Decimal, ir::WideNumericKind::Decimal) => syscalls::SYSCALL_DECIMAL_DIV_EXACT,
-                                (ir::WideNumericKind::Quantity, BinaryOp::Add, ir::WideNumericKind::Quantity, ir::WideNumericKind::Quantity) => syscalls::SYSCALL_QUANTITY_ADD,
-                                (ir::WideNumericKind::Quantity, BinaryOp::Sub, ir::WideNumericKind::Quantity, ir::WideNumericKind::Quantity) => syscalls::SYSCALL_QUANTITY_SUB,
-                                (ir::WideNumericKind::Quantity, BinaryOp::Mul, ir::WideNumericKind::Decimal, ir::WideNumericKind::Quantity) => syscalls::SYSCALL_QUANTITY_MUL_DECIMAL,
-                                (ir::WideNumericKind::Quantity, BinaryOp::Div, ir::WideNumericKind::Decimal, ir::WideNumericKind::Quantity) => syscalls::SYSCALL_QUANTITY_DIV_DECIMAL_EXACT,
-                                (ir::WideNumericKind::Quantity, BinaryOp::Div, ir::WideNumericKind::Quantity, ir::WideNumericKind::Decimal) => syscalls::SYSCALL_QUANTITY_RATIO_EXACT,
+                                (
+                                    ir::WideNumericKind::Int,
+                                    BinaryOp::Add,
+                                    ir::WideNumericKind::Int,
+                                    ir::WideNumericKind::Int,
+                                ) => syscalls::SYSCALL_INT_ADD,
+                                (
+                                    ir::WideNumericKind::Int,
+                                    BinaryOp::Sub,
+                                    ir::WideNumericKind::Int,
+                                    ir::WideNumericKind::Int,
+                                ) => syscalls::SYSCALL_INT_SUB,
+                                (
+                                    ir::WideNumericKind::Int,
+                                    BinaryOp::Mul,
+                                    ir::WideNumericKind::Int,
+                                    ir::WideNumericKind::Int,
+                                ) => syscalls::SYSCALL_INT_MUL,
+                                (
+                                    ir::WideNumericKind::Int,
+                                    BinaryOp::Div,
+                                    ir::WideNumericKind::Int,
+                                    ir::WideNumericKind::Int,
+                                ) => syscalls::SYSCALL_INT_DIV,
+                                (
+                                    ir::WideNumericKind::Int,
+                                    BinaryOp::Mod,
+                                    ir::WideNumericKind::Int,
+                                    ir::WideNumericKind::Int,
+                                ) => syscalls::SYSCALL_INT_REM,
+                                (
+                                    ir::WideNumericKind::Decimal,
+                                    BinaryOp::Add,
+                                    ir::WideNumericKind::Decimal,
+                                    ir::WideNumericKind::Decimal,
+                                ) => syscalls::SYSCALL_DECIMAL_ADD,
+                                (
+                                    ir::WideNumericKind::Decimal,
+                                    BinaryOp::Sub,
+                                    ir::WideNumericKind::Decimal,
+                                    ir::WideNumericKind::Decimal,
+                                ) => syscalls::SYSCALL_DECIMAL_SUB,
+                                (
+                                    ir::WideNumericKind::Decimal,
+                                    BinaryOp::Mul,
+                                    ir::WideNumericKind::Decimal,
+                                    ir::WideNumericKind::Decimal,
+                                ) => syscalls::SYSCALL_DECIMAL_MUL,
+                                (
+                                    ir::WideNumericKind::Decimal,
+                                    BinaryOp::Div,
+                                    ir::WideNumericKind::Decimal,
+                                    ir::WideNumericKind::Decimal,
+                                ) => syscalls::SYSCALL_DECIMAL_DIV_EXACT,
+                                (
+                                    ir::WideNumericKind::Quantity,
+                                    BinaryOp::Add,
+                                    ir::WideNumericKind::Quantity,
+                                    ir::WideNumericKind::Quantity,
+                                ) => syscalls::SYSCALL_QUANTITY_ADD,
+                                (
+                                    ir::WideNumericKind::Quantity,
+                                    BinaryOp::Sub,
+                                    ir::WideNumericKind::Quantity,
+                                    ir::WideNumericKind::Quantity,
+                                ) => syscalls::SYSCALL_QUANTITY_SUB,
+                                (
+                                    ir::WideNumericKind::Quantity,
+                                    BinaryOp::Mul,
+                                    ir::WideNumericKind::Decimal,
+                                    ir::WideNumericKind::Quantity,
+                                ) => syscalls::SYSCALL_QUANTITY_MUL_DECIMAL,
+                                (
+                                    ir::WideNumericKind::Quantity,
+                                    BinaryOp::Div,
+                                    ir::WideNumericKind::Decimal,
+                                    ir::WideNumericKind::Quantity,
+                                ) => syscalls::SYSCALL_QUANTITY_DIV_DECIMAL_EXACT,
+                                (
+                                    ir::WideNumericKind::Quantity,
+                                    BinaryOp::Div,
+                                    ir::WideNumericKind::Quantity,
+                                    ir::WideNumericKind::Decimal,
+                                ) => syscalls::SYSCALL_QUANTITY_RATIO_EXACT,
                                 _ => {
                                     return Err(i18n::translate(
                                         self.lang,

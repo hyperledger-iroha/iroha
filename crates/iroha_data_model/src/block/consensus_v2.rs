@@ -27,6 +27,8 @@ pub mod fingerprint;
 
 /// Sumeragi v2 wire protocol version.
 pub const PROTOCOL_VERSION: u16 = 2;
+/// Consensus-wide upper bound for one voting roster.
+pub const MAX_VALIDATORS_PER_HEIGHT: usize = 4_096;
 /// Permissioned Sumeragi v2 handshake and domain-separation tag.
 pub const PERMISSIONED_TAG: &str = "iroha2-consensus::permissioned-sumeragi@v2";
 /// NPoS Sumeragi v2 handshake and domain-separation tag.
@@ -336,7 +338,6 @@ impl HeightContext {
             height: self.height,
             epoch: self.epoch,
             epoch_end_height: self.epoch_end_height,
-            next_epoch_snapshot: self.next_epoch_snapshot.clone(),
             mode: self.mode,
             parent_commit: self
                 .parent_commit_qc
@@ -353,7 +354,16 @@ impl HeightContext {
             da_layout: self.da_layout,
             leader_seed: self.leader_seed,
         };
-        HeightContextId(HashOf::from_untyped_unchecked(Hash::new(identity.encode())))
+        let encoded = match self.next_epoch_snapshot.as_ref() {
+            None => identity.encode(),
+            Some(next_epoch_snapshot) => EpochBoundaryHeightContextIdentity {
+                    domain: b"iroha:sumeragi:v2:height-context:epoch-transition:v1".to_vec(),
+                    base: identity,
+                    next_epoch_snapshot: next_epoch_snapshot.clone(),
+                }
+                .encode(),
+        };
+        HeightContextId(HashOf::from_untyped_unchecked(Hash::new(encoded)))
     }
 
     /// Validate the immutable context and its quorum snapshot.
@@ -461,7 +471,6 @@ struct HeightContextIdentity {
     height: Height,
     epoch: u64,
     epoch_end_height: Height,
-    next_epoch_snapshot: Option<finality::FinalizedNextEpochSnapshot>,
     mode: ConsensusMode,
     parent_commit: Option<ParentCommitIdentity>,
     roster: Vec<ValidatorPower>,
@@ -469,6 +478,13 @@ struct HeightContextIdentity {
     nexus_amx_context_hash: Hash,
     da_layout: DataAvailabilityLayout,
     leader_seed: [u8; 32],
+}
+
+#[derive(Encode)]
+struct EpochBoundaryHeightContextIdentity {
+    domain: Vec<u8>,
+    base: HeightContextIdentity,
+    next_epoch_snapshot: finality::FinalizedNextEpochSnapshot,
 }
 
 #[derive(Encode)]
@@ -2129,6 +2145,9 @@ fn validated_total_power(roster: &[ValidatorPower]) -> Result<u64, ValidationErr
     if roster.is_empty() {
         return Err(ValidationError::EmptyRoster);
     }
+    if roster.len() > MAX_VALIDATORS_PER_HEIGHT {
+        return Err(ValidationError::RosterTooLarge);
+    }
     let mut seen = BTreeSet::new();
     let mut total = 0_u64;
     for pair in roster.windows(2) {
@@ -2259,6 +2278,7 @@ mod tests {
             height: 1,
             epoch: 2,
             epoch_end_height: 100,
+            next_epoch_snapshot: None,
             mode: ConsensusMode::Npos,
             parent_commit_qc: None,
             quorum: DualQuorum::from_roster(&roster).expect("valid fixture quorum"),

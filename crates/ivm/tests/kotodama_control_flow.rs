@@ -27,7 +27,7 @@ fn break_exits_bounded_for_loop() {
     vm.load_program(&code).expect("load program");
     common::select_kotodama_entrypoint(&mut vm, &code, "main");
     vm.run().expect("execute break program");
-    assert_eq!(vm.register(10), 3);
+    assert_eq!(common::decode_i64_register(&vm, 10), 3);
 }
 
 #[test]
@@ -54,5 +54,5 @@ fn continue_skips_range_iteration() {
     vm.load_program(&code).expect("load program");
     common::select_kotodama_entrypoint(&mut vm, &code, "main");
     vm.run().expect("execute continue program");
-    assert_eq!(vm.register(10), 8);
+    assert_eq!(common::decode_i64_register(&vm, 10), 8);
 }

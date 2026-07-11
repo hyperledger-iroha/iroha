@@ -331,12 +331,12 @@ pub(crate) fn signed_finality_proof(commitment_root: H256) -> Vec<u8> {
             iroha_crypto::bls_normal_pop_prove(keypair.private_key()).expect("BLS fixture PoP")
         })
         .collect();
-    let finality_artifact = V2FinalityArtifact::new(context, subject, commit_qc, None);
+    let finality_artifact =
+        V2FinalityArtifact::new(context, subject, commit_qc, validator_set_pops);
     to_bytes(&TairaBridgeFinalityProofV1 {
         version: BRIDGE_FINALITY_PROOF_VERSION_V1,
         block_header,
         finality_artifact,
-        validator_set_pops,
     })
     .expect("canonical exact SCCP finality fixture")
 }
