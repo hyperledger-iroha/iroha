@@ -43,12 +43,12 @@ require(
 )
 
 artifact_constants = {
-    "KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PARAMETERS_FILE_NAME_V3": "transition-eq.parameters.krv3",
-    "KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROVING_KEY_FILE_NAME_V3": "transition-eq.proving-key.krv3",
-    "KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_VERIFYING_KEY_FILE_NAME_V3": "transition-eq.verifying-key.krv3",
-    "KAGEMUSHA_RECURSIVE_SPEND_STATE_PARAMETERS_FILE_NAME_V3": "state-ep.parameters.krv3",
-    "KAGEMUSHA_RECURSIVE_SPEND_STATE_PROVING_KEY_FILE_NAME_V3": "state-ep.proving-key.krv3",
-    "KAGEMUSHA_RECURSIVE_SPEND_STATE_VERIFYING_KEY_FILE_NAME_V3": "state-ep.verifying-key.krv3",
+    "KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PARAMETERS_FILE_NAME_V3": "step-eq.parameters.krv3",
+    "KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PROVING_KEY_FILE_NAME_V3": "step-eq.proving-key.krv3",
+    "KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_VERIFYING_KEY_FILE_NAME_V3": "step-eq.verifying-key.krv3",
+    "KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PARAMETERS_FILE_NAME_V3": "step-ep.parameters.krv3",
+    "KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PROVING_KEY_FILE_NAME_V3": "step-ep.proving-key.krv3",
+    "KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_VERIFYING_KEY_FILE_NAME_V3": "step-ep.verifying-key.krv3",
 }
 declared_artifact_constants = {
     name: value

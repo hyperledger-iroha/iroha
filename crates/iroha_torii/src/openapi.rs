@@ -14051,7 +14051,7 @@ fn openapi_schemas() -> Map {
                 "asset_definition_id", "asset_scale", "evaluated_block_height",
                 "evaluated_block_hash", "active_transfer_verifier",
                 "active_topup_shield_verifier", "active_unshield_verifier",
-                "active_recursive_transition_verifier", "active_recursive_state_verifier",
+                "active_recursive_step_eq_verifier", "active_recursive_step_ep_verifier",
                 "proof_backend_available", "recursive_lineage_supported",
                 "ready", "blockers"
             ],
@@ -14066,8 +14066,8 @@ fn openapi_schemas() -> Map {
                 "max_hops": {
                     "type": "integer",
                     "format": "uint32",
-                    "minimum": 1,
-                    "maximum": 64
+                    "minimum": 8,
+                    "maximum": 8
                 },
                 "asset_definition_id": {
                     "type": "string",
@@ -14117,14 +14117,14 @@ fn openapi_schemas() -> Map {
                     ],
                     "description": "Authoritative active confidential-unshield verifier at the evaluated height."
                 },
-                "active_recursive_transition_verifier": {
+                "active_recursive_step_eq_verifier": {
                     "anyOf": [
                         { "$ref": "#/components/schemas/OfflineActiveTransferVerifier" },
                         { "type": "null" }
                     ],
                     "description": "Authoritative active V3 recursive transition verifier at the evaluated height."
                 },
-                "active_recursive_state_verifier": {
+                "active_recursive_step_ep_verifier": {
                     "anyOf": [
                         { "$ref": "#/components/schemas/OfflineActiveTransferVerifier" },
                         { "type": "null" }
@@ -20731,8 +20731,8 @@ mod tests {
                 "active_transfer_verifier",
                 "active_topup_shield_verifier",
                 "active_unshield_verifier",
-                "active_recursive_transition_verifier",
-                "active_recursive_state_verifier",
+                "active_recursive_step_eq_verifier",
+                "active_recursive_step_ep_verifier",
                 "proof_backend_available",
                 "recursive_lineage_supported",
                 "ready",
@@ -20749,8 +20749,8 @@ mod tests {
         );
         for field in [
             "active_unshield_verifier",
-            "active_recursive_transition_verifier",
-            "active_recursive_state_verifier",
+            "active_recursive_step_eq_verifier",
+            "active_recursive_step_ep_verifier",
         ] {
             assert_eq!(
                 nullable_property_ref(schemas, "OfflineReadiness", field),

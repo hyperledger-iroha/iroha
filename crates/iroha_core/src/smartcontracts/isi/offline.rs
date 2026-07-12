@@ -4588,15 +4588,15 @@ pub mod isi {
     ) -> Result<(), Error> {
         let id = &bundle.recursive_proof.verifier_key_id;
         if record.circuit_id
-            != iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_EP_CIRCUIT_ID_V1
+            != iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V1
             || id.name
-                != iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_EP_CIRCUIT_ID_V1
+                != iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V1
             || record.namespace != iroha_data_model::offline::KAGEMUSHA_VERIFIER_NAMESPACE
             || record.backend != BackendTag::Halo2IpaPasta
             || record.curve
-                != iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_VERIFIER_CURVE_V3
+                != iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_VERIFIER_CURVE_V3
             || record.public_inputs_schema_hash
-                != iroha_data_model::offline::kagemusha_recursive_spend_state_public_inputs_schema_hash_v3()
+                != iroha_data_model::offline::kagemusha_recursive_spend_step_ep_public_inputs_schema_hash_v3()
             || id.backend.as_str()
                 != iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1
             || record.commitment == [0; 32]

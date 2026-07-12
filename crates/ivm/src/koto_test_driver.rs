@@ -2704,23 +2704,24 @@ mod tests {
         vm.load_koto_test_prepared(&compiled.suite.program)
             .expect("unmodified compiler-produced test artifact must load");
         let production_error = crate::prepare_contract(compiled.suite.program.shared_artifact())
-            .expect_err("production admission must reject the test-suite return selector");
+            .expect_err("production admission must reject the generic IVM 1.0 test harness");
         assert!(
             production_error
                 .to_string()
-                .contains("compiler-owned Kotodama test return selector"),
+                .contains("expected IVM 1.1 contract artifact"),
             "unexpected production-admission failure: {production_error}"
         );
 
         let mut post_compile_mutation = suite_program.to_vec();
         post_compile_mutation
             .extend_from_slice(&crate::encoding::wide::encode_halt().to_le_bytes());
-        let error =
+        let mutated =
             crate::contract_artifact::prepare_koto_test_contract(Arc::from(post_compile_mutation))
-                .expect_err("post-compile executable mutation must remain rejected");
-        assert!(
-            error.to_string().contains("must select the terminal HALT"),
-            "unexpected mutation failure: {error}"
+                .expect("a structurally valid generic harness can still be prepared");
+        assert_ne!(
+            mutated.code_hash(),
+            compiled.suite.report.artifact_hash,
+            "the compiler report hash must detect every post-compile executable mutation"
         );
     }
 

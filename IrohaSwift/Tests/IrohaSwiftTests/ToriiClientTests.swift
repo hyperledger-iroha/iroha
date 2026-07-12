@@ -1222,7 +1222,7 @@ final class ToriiClientTests: XCTestCase {
     private var currentKagemushaReadinessFields: String {
         """
         "required_bridge_abi_version": 19,
-        "max_hops": 64,
+        "max_hops": 8,
         "active_unshield_verifier": {
           "id": {"backend": "halo2/ipa", "name": "confidential_unshield_v3_verifier_record"},
           "version": 1,
@@ -10351,7 +10351,7 @@ final class ToriiClientTests: XCTestCase {
         )
         XCTAssertEqual(readiness.assetDefinitionId, "7EAD8EFYUx1aVKZPUU1fyKvr8dF1")
         XCTAssertEqual(readiness.requiredBridgeAbiVersion, 19)
-        XCTAssertEqual(readiness.maxHops, 64)
+        XCTAssertEqual(readiness.maxHops, 8)
         XCTAssertEqual(readiness.assetScale, 9)
         XCTAssertEqual(readiness.evaluatedBlockHeight, UInt64.max)
         XCTAssertEqual(readiness.evaluatedBlockHash, String(repeating: "ab", count: 32))
@@ -10418,7 +10418,7 @@ final class ToriiClientTests: XCTestCase {
         )
         let mutations: [((inout [String: Any]) -> Void, String)] = [
             ({ $0["required_bridge_abi_version"] = 17 }, "required_bridge_abi_version"),
-            ({ $0["max_hops"] = 8 }, "max_hops"),
+            ({ $0["max_hops"] = 9 }, "max_hops"),
             ({ $0["proof_backend_available"] = false }, "proof_backend_available"),
             (
                 { $0["recursive_lineage_supported"] = false },
@@ -11041,7 +11041,7 @@ final class ToriiClientTests: XCTestCase {
         let payload = """
         {
           "required_bridge_abi_version": 19,
-          "max_hops": 64,
+          "max_hops": 8,
           "asset_definition_id": "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
           "asset_scale": 29,
           "evaluated_block_height": 7,

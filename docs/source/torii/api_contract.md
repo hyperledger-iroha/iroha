@@ -171,12 +171,12 @@ backend/name/circuit and must not share a registry id, key commitment, or
 public-input schema hash with another role.
 
 `active_transfer_verifier`, `active_topup_shield_verifier`,
-`active_unshield_verifier`, `active_recursive_transition_verifier`, and
-`active_recursive_state_verifier` are separate required nullable fields from
+`active_unshield_verifier`, `active_recursive_step_eq_verifier`, and
+`active_recursive_step_ep_verifier` are separate required nullable fields from
 the same evaluated block snapshot. Each is null exactly when its corresponding
 `transfer_verifier_unavailable`, `topup_shield_verifier_unavailable`,
-`unshield_verifier_unavailable`, `recursive_transition_verifier_unavailable`,
-or `recursive_state_verifier_unavailable` blocker is present; a non-null
+`unshield_verifier_unavailable`, `recursive_step_eq_verifier_unavailable`,
+or `recursive_step_ep_verifier_unavailable` blocker is present; a non-null
 verifier must be active at `evaluated_block_height`, and `ready: true` requires
 all five roles.
 

@@ -12,12 +12,12 @@ class KagemushaRecursiveSpendProver private constructor() {
         const val ARTIFACT_MANIFEST_SCHEMA: String =
             "kagemusha.offline.recursive_spend.artifact_manifest.v3"
         val ARTIFACT_FILES: List<String> = listOf(
-            "transition-eq.parameters.krv3",
-            "transition-eq.proving-key.krv3",
-            "transition-eq.verifying-key.krv3",
-            "state-ep.parameters.krv3",
-            "state-ep.proving-key.krv3",
-            "state-ep.verifying-key.krv3",
+            "step-eq.parameters.krv3",
+            "step-eq.proving-key.krv3",
+            "step-eq.verifying-key.krv3",
+            "step-ep.parameters.krv3",
+            "step-ep.proving-key.krv3",
+            "step-ep.verifying-key.krv3",
         )
         const val ARTIFACT_COUNT: Int = 6
         const val MAX_MANIFEST_BYTES: Int = 1024 * 1024

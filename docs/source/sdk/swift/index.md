@@ -238,8 +238,8 @@ commitment, or public-input schema hash with another role.
 
 The response carries five required nullable SDK snapshots:
 `activeTransferVerifier`, `activeTopUpShieldVerifier`,
-`activeUnshieldVerifier`, `activeRecursiveTransitionVerifier`, and
-`activeRecursiveStateVerifier`. Each is null exactly with its matching
+`activeUnshieldVerifier`, `activeRecursiveStepEqVerifier`, and
+`activeRecursiveStepEpVerifier`. Each is null exactly with its matching
 unavailable blocker, and `ready: true` requires all five roles to be active at
 the evaluated block.
 

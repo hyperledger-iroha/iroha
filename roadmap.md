@@ -12,8 +12,9 @@ atomic artifact lifecycle. Typed V2/V3 names are internal wire versions, not
 runtime product selectors.
 `KAGEMUSHA_RECURSIVE_SPEND_PROOF_BACKEND_AVAILABLE = false` is the
 authoritative release state: Core top-up execution and every proof-gated
-init/append/verify/redeem path remain unavailable. The 64-depth branch bound is
-a protocol bound, not an availability signal.
+init/append/verify/redeem path remain unavailable. The 64-level branch-path
+capacity and separate eight-peer-hop ceiling are protocol bounds, not
+availability signals.
 The remaining release work is the ABI-19 two-layer Pasta IPA/Poseidon backend:
 an EqAffine/Vesta transition proof and EpAffine/Pallas state wrapper must
 authenticate the previous recursive proof and current transition proof under

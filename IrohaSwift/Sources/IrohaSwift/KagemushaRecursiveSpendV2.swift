@@ -34,8 +34,8 @@ public struct KagemushaRecursiveSpendNativeCapabilities: Equatable, Sendable {
     public let transcriptProfile: String
     public let proofEnvelopeVersion: UInt16
     public let stateBoundaryVersion: UInt16
-    public let transitionCircuitID: String
-    public let stateCircuitID: String
+    public let stepEqCircuitID: String
+    public let stepEpCircuitID: String
     public let maxProofBytes: UInt32
     public let proofBackendAvailable: Bool
     public let missingGates: [String]
@@ -47,8 +47,8 @@ public struct KagemushaRecursiveSpendNativeCapabilities: Equatable, Sendable {
         transcriptProfile: String,
         proofEnvelopeVersion: UInt16,
         stateBoundaryVersion: UInt16,
-        transitionCircuitID: String,
-        stateCircuitID: String,
+        stepEqCircuitID: String,
+        stepEpCircuitID: String,
         maxProofBytes: UInt32,
         proofBackendAvailable: Bool,
         missingGates: [String]
@@ -59,8 +59,8 @@ public struct KagemushaRecursiveSpendNativeCapabilities: Equatable, Sendable {
               transcriptProfile == KagemushaRecursiveSpend.pastaCycleTranscript,
               proofEnvelopeVersion == KagemushaRecursiveSpend.pastaCycleProofEnvelopeVersion,
               stateBoundaryVersion == KagemushaRecursiveSpend.stateBoundaryVersion,
-              transitionCircuitID == KagemushaRecursiveSpend.transitionEqCircuitID,
-              stateCircuitID == KagemushaRecursiveSpend.stateEpCircuitID,
+              stepEqCircuitID == KagemushaRecursiveSpend.stepEqCircuitID,
+              stepEpCircuitID == KagemushaRecursiveSpend.stepEpCircuitID,
               maxProofBytes == UInt32(KagemushaRecursiveSpend.releaseMaximumProofBytes),
               missingGates == (proofBackendAvailable
                 ? []
@@ -73,8 +73,8 @@ public struct KagemushaRecursiveSpendNativeCapabilities: Equatable, Sendable {
         self.transcriptProfile = transcriptProfile
         self.proofEnvelopeVersion = proofEnvelopeVersion
         self.stateBoundaryVersion = stateBoundaryVersion
-        self.transitionCircuitID = transitionCircuitID
-        self.stateCircuitID = stateCircuitID
+        self.stepEqCircuitID = stepEqCircuitID
+        self.stepEpCircuitID = stepEpCircuitID
         self.maxProofBytes = maxProofBytes
         self.proofBackendAvailable = proofBackendAvailable
         self.missingGates = missingGates
@@ -89,8 +89,8 @@ public enum KagemushaRecursiveSpend {
         case transfer
         case topUpShield
         case unshield
-        case recursiveTransition
-        case recursiveState
+        case recursiveStepEq
+        case recursiveStepEp
 
         public var registryBackend: String { "halo2/ipa" }
 
@@ -102,10 +102,10 @@ public enum KagemushaRecursiveSpend {
                 return "kagemusha_topup_shield_v2_verifier_record"
             case .unshield:
                 return "confidential_unshield_v3_verifier_record"
-            case .recursiveTransition:
-                return "kagemusha_recursive_transition_v3_verifier_record"
-            case .recursiveState:
-                return "kagemusha_recursive_state_v3_verifier_record"
+            case .recursiveStepEq:
+                return "kagemusha_recursive_step_eq_v3_verifier_record"
+            case .recursiveStepEp:
+                return "kagemusha_recursive_step_ep_v3_verifier_record"
             }
         }
 
@@ -117,27 +117,27 @@ public enum KagemushaRecursiveSpend {
                 return KagemushaRecursiveSpend.topUpShieldCircuitID
             case .unshield:
                 return "halo2/pasta/ipa/anon-unshield-2in-1change-merkle16-poseidon-diversified"
-            case .recursiveTransition:
-                return KagemushaRecursiveSpend.transitionEqCircuitID
-            case .recursiveState:
-                return KagemushaRecursiveSpend.stateEpCircuitID
+            case .recursiveStepEq:
+                return KagemushaRecursiveSpend.stepEqCircuitID
+            case .recursiveStepEp:
+                return KagemushaRecursiveSpend.stepEpCircuitID
             }
         }
     }
 
     public static let requiredNativeBridgeAbiVersion: UInt32 = 19
-    /// First-release peer-depth bound advertised by Torii readiness and
+    /// First-release peer-hop bound advertised by Torii readiness and
     /// enforced by every recursive-spend request codec.
-    public static let maximumPeerHops: UInt32 = 64
+    public static let maximumPeerHops: UInt32 = 8
     public static let artifactManifestSchema =
         "kagemusha.offline.recursive_spend.artifact_manifest.v3"
     public static let pastaCycleBackend = "halo2/ipa-pasta-cycle-v1"
     public static let pastaCycleTranscript = "kagemusha-pasta-cycle-poseidon-v1"
     public static let pastaCycleProofEnvelopeVersion: UInt16 = 1
     public static let stateBoundaryVersion: UInt16 = 1
-    public static let transitionEqCircuitID =
-        "kagemusha-recursive-spend-transition-eq-v1"
-    public static let stateEpCircuitID = "kagemusha-recursive-spend-state-ep-v1"
+    public static let stepEqCircuitID = "kagemusha-recursive-spend-step-eq-v1"
+    public static let stepEpCircuitID = "kagemusha-recursive-spend-step-ep-v1"
+    public static let maximumProofSteps: UInt32 = 128
     public static let releaseMaximumProofBytes = 4_096
     public static let artifactMaximumFileBytes = 256 * 1024 * 1024
     public static let topUpFinalityProofMaximumArchiveBytes = 2 * 1_024 * 1_024
@@ -237,6 +237,13 @@ public enum KagemushaRecursiveSpend {
     public static let transitionTagDomain =
         "iroha:kagemusha:v2:transition-tag:sha256-192"
     public static let maximumAuthorizationTTLMilliseconds: UInt64 = 5 * 60 * 1_000
+
+    public static func stepCircuitID(proofStepCount: UInt32) throws -> String {
+        guard (1...maximumProofSteps).contains(proofStepCount) else {
+            throw KagemushaRecursiveSpendError.invalidField("proofStepCount")
+        }
+        return proofStepCount.isMultiple(of: 2) ? stepEpCircuitID : stepEqCircuitID
+    }
 
     public static let requiredProofSymbols = [
         "connect_norito_kagemusha_recursive_spend_init_v2",

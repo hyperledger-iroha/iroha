@@ -436,8 +436,8 @@ __all__ = [
     "OfflineActiveTransferVerifier",
     "OfflineActiveTopUpShieldVerifier",
     "OfflineActiveUnshieldVerifier",
-    "OfflineActiveRecursiveTransitionVerifier",
-    "OfflineActiveRecursiveStateVerifier",
+    "OfflineActiveRecursiveStepEqVerifier",
+    "OfflineActiveRecursiveStepEpVerifier",
     "OfflineReadiness",
     "OfflineAssetScale",
     "OfflineScaledAmountJson",
@@ -2789,7 +2789,7 @@ _OFFLINE_MAX_JSON_DEPTH = 128
 _OFFLINE_MAX_JSON_RESPONSE_BYTES = 256 * 1024
 _KAGEMUSHA_MAX_NORITO_REQUEST_BYTES = 256 * 1024
 _KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION = 19
-_KAGEMUSHA_MAX_HOPS = 64
+_KAGEMUSHA_MAX_HOPS = 8
 _KAGEMUSHA_VERIFIER_CIRCUITS = {
     "active_transfer_verifier":
         "halo2/pasta/ipa/anon-transfer-2x2-merkle16-poseidon-diversified",
@@ -2797,10 +2797,10 @@ _KAGEMUSHA_VERIFIER_CIRCUITS = {
         "halo2/pasta/ipa/kagemusha-topup-shield-merkle16-poseidon-diversified-v2",
     "active_unshield_verifier":
         "halo2/pasta/ipa/anon-unshield-2in-1change-merkle16-poseidon-diversified",
-    "active_recursive_transition_verifier":
-        "kagemusha-recursive-spend-transition-eq-v1",
-    "active_recursive_state_verifier":
-        "kagemusha-recursive-spend-state-ep-v1",
+    "active_recursive_step_eq_verifier":
+        "kagemusha-recursive-spend-step-eq-v1",
+    "active_recursive_step_ep_verifier":
+        "kagemusha-recursive-spend-step-ep-v1",
 }
 
 
@@ -3148,8 +3148,8 @@ class OfflineActiveTransferVerifier:
 # shape. Distinct aliases keep role substitution visible at the API boundary.
 OfflineActiveTopUpShieldVerifier = OfflineActiveTransferVerifier
 OfflineActiveUnshieldVerifier = OfflineActiveTransferVerifier
-OfflineActiveRecursiveTransitionVerifier = OfflineActiveTransferVerifier
-OfflineActiveRecursiveStateVerifier = OfflineActiveTransferVerifier
+OfflineActiveRecursiveStepEqVerifier = OfflineActiveTransferVerifier
+OfflineActiveRecursiveStepEpVerifier = OfflineActiveTransferVerifier
 
 
 def _offline_active_transfer_verifier(
@@ -3256,8 +3256,8 @@ class OfflineReadiness:
     active_transfer_verifier: Optional[OfflineActiveTransferVerifier]
     active_topup_shield_verifier: Optional[OfflineActiveTopUpShieldVerifier]
     active_unshield_verifier: Optional[OfflineActiveUnshieldVerifier]
-    active_recursive_transition_verifier: Optional[OfflineActiveRecursiveTransitionVerifier]
-    active_recursive_state_verifier: Optional[OfflineActiveRecursiveStateVerifier]
+    active_recursive_step_eq_verifier: Optional[OfflineActiveRecursiveStepEqVerifier]
+    active_recursive_step_ep_verifier: Optional[OfflineActiveRecursiveStepEpVerifier]
     proof_backend_available: bool
     recursive_lineage_supported: bool
     ready: bool
@@ -3287,8 +3287,8 @@ class OfflineReadiness:
                 "active_transfer_verifier",
                 "active_topup_shield_verifier",
                 "active_unshield_verifier",
-                "active_recursive_transition_verifier",
-                "active_recursive_state_verifier",
+                "active_recursive_step_eq_verifier",
+                "active_recursive_step_ep_verifier",
                 "proof_backend_available",
                 "recursive_lineage_supported",
                 "ready",
@@ -3371,8 +3371,8 @@ class OfflineReadiness:
         }
         for field in (
             "active_unshield_verifier",
-            "active_recursive_transition_verifier",
-            "active_recursive_state_verifier",
+            "active_recursive_step_eq_verifier",
+            "active_recursive_step_ep_verifier",
         ):
             raw_verifier = _offline_required(record, field, context)
             parsed_verifiers[field] = (
@@ -3390,11 +3390,11 @@ class OfflineReadiness:
                     f"{context}.{field}.circuit_id does not match its Kagemusha role"
                 )
         active_unshield_verifier = parsed_verifiers["active_unshield_verifier"]
-        active_recursive_transition_verifier = parsed_verifiers[
-            "active_recursive_transition_verifier"
+        active_recursive_step_eq_verifier = parsed_verifiers[
+            "active_recursive_step_eq_verifier"
         ]
-        active_recursive_state_verifier = parsed_verifiers[
-            "active_recursive_state_verifier"
+        active_recursive_step_ep_verifier = parsed_verifiers[
+            "active_recursive_step_ep_verifier"
         ]
         active_records = [verifier for verifier in parsed_verifiers.values() if verifier is not None]
         if len({(record.id.backend, record.id.name) for record in active_records}) != len(active_records):
@@ -3474,10 +3474,10 @@ class OfflineReadiness:
         for field, blocker_code in (
             ("active_unshield_verifier", "unshield_verifier_unavailable"),
             (
-                "active_recursive_transition_verifier",
-                "recursive_transition_verifier_unavailable",
+                "active_recursive_step_eq_verifier",
+                "recursive_step_eq_verifier_unavailable",
             ),
-            ("active_recursive_state_verifier", "recursive_state_verifier_unavailable"),
+            ("active_recursive_step_ep_verifier", "recursive_step_ep_verifier_unavailable"),
         ):
             if (blocker_code in blocker_codes) != (parsed_verifiers[field] is None):
                 raise RuntimeError(
@@ -3489,8 +3489,8 @@ class OfflineReadiness:
             )
         expected_recursive_lineage = (
             proof_backend_available
-            and active_recursive_transition_verifier is not None
-            and active_recursive_state_verifier is not None
+            and active_recursive_step_eq_verifier is not None
+            and active_recursive_step_ep_verifier is not None
         )
         if recursive_lineage_supported != expected_recursive_lineage:
             raise RuntimeError(
@@ -3522,8 +3522,8 @@ class OfflineReadiness:
             active_transfer_verifier=active_transfer_verifier,
             active_topup_shield_verifier=active_topup_shield_verifier,
             active_unshield_verifier=active_unshield_verifier,
-            active_recursive_transition_verifier=active_recursive_transition_verifier,
-            active_recursive_state_verifier=active_recursive_state_verifier,
+            active_recursive_step_eq_verifier=active_recursive_step_eq_verifier,
+            active_recursive_step_ep_verifier=active_recursive_step_ep_verifier,
             proof_backend_available=proof_backend_available,
             recursive_lineage_supported=recursive_lineage_supported,
             ready=ready,

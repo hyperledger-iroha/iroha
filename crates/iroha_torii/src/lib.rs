@@ -11016,35 +11016,35 @@ async fn handler_offline_readiness(
         .into(),
         iroha_core::zk::confidential_v2::CONFIDENTIAL_V2_MAX_PROOF_BYTES,
     )?;
-    let recursive_transition = offline_kagemusha_readiness_verifier_record(
+    let recursive_step_eq = offline_kagemusha_readiness_verifier_record(
         world,
         block_height,
-        iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_EQ_CIRCUIT_ID_V1,
-        iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_TRANSITION_V3,
-        iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_VERIFIER_CURVE_V3,
-        iroha_data_model::offline::kagemusha_recursive_spend_transition_public_inputs_schema_hash_v3(),
+        iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V1,
+        iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_STEP_EQ_V3,
+        iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_VERIFIER_CURVE_V3,
+        iroha_data_model::offline::kagemusha_recursive_spend_step_eq_public_inputs_schema_hash_v3(),
         iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROOF_BYTES_V3,
     )?;
-    let recursive_state = offline_kagemusha_readiness_verifier_record(
+    let recursive_step_ep = offline_kagemusha_readiness_verifier_record(
         world,
         block_height,
-        iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_EP_CIRCUIT_ID_V1,
-        iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_STATE_V3,
-        iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_VERIFIER_CURVE_V3,
-        iroha_data_model::offline::kagemusha_recursive_spend_state_public_inputs_schema_hash_v3(),
+        iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V1,
+        iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_STEP_EP_V3,
+        iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_VERIFIER_CURVE_V3,
+        iroha_data_model::offline::kagemusha_recursive_spend_step_ep_public_inputs_schema_hash_v3(),
         iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROOF_BYTES_V3,
     )?;
     ensure_offline_readiness_verifier_roles_are_distinct([
         ("transfer", transfer.as_ref()),
         ("topup_shield", topup_shield.as_ref()),
         ("unshield", unshield.as_ref()),
-        ("recursive_transition", recursive_transition.as_ref()),
-        ("recursive_state", recursive_state.as_ref()),
+        ("recursive_step_eq", recursive_step_eq.as_ref()),
+        ("recursive_step_ep", recursive_step_ep.as_ref()),
     ])?;
     let proof_backend_available =
         iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PROOF_BACKEND_AVAILABLE;
     let recursive_lineage_supported =
-        proof_backend_available && recursive_transition.is_some() && recursive_state.is_some();
+        proof_backend_available && recursive_step_eq.is_some() && recursive_step_ep.is_some();
     let mut blockers = Vec::new();
     if app.offline_commands.is_none() {
         blockers.push(offline_readiness_blocker(
@@ -11088,13 +11088,13 @@ async fn handler_offline_readiness(
             "The unshield verifier is not active at the evaluated block.",
         ),
         (
-            recursive_transition.is_some(),
-            "recursive_transition_verifier_unavailable",
+            recursive_step_eq.is_some(),
+            "recursive_step_eq_verifier_unavailable",
             "The V3 recursive transition verifier is not active at the evaluated block.",
         ),
         (
-            recursive_state.is_some(),
-            "recursive_state_verifier_unavailable",
+            recursive_step_ep.is_some(),
+            "recursive_step_ep_verifier_unavailable",
             "The V3 recursive state verifier is not active at the evaluated block.",
         ),
     ] {
@@ -11117,9 +11117,7 @@ async fn handler_offline_readiness(
     let payload = iroha_torii_shared::offline_api::OfflineReadiness {
         required_bridge_abi_version:
             iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3,
-        max_hops: u32::from(
-            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_BRANCH_DEPTH_V2,
-        ),
+        max_hops: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2,
         asset_definition_id: asset_definition_id.to_string(),
         asset_scale,
         evaluated_block_height: block_height,
@@ -11127,8 +11125,8 @@ async fn handler_offline_readiness(
         active_transfer_verifier: transfer,
         active_topup_shield_verifier: topup_shield,
         active_unshield_verifier: unshield,
-        active_recursive_transition_verifier: recursive_transition,
-        active_recursive_state_verifier: recursive_state,
+        active_recursive_step_eq_verifier: recursive_step_eq,
+        active_recursive_step_ep_verifier: recursive_step_ep,
         proof_backend_available,
         recursive_lineage_supported,
         ready: blockers.is_empty(),
@@ -11359,7 +11357,7 @@ mod offline_kagemusha_readiness_tests {
     fn readiness_etag_hashes_the_exact_selected_representation() {
         let payload = iroha_torii_shared::offline_api::OfflineReadiness {
             required_bridge_abi_version: 19,
-            max_hops: 64,
+            max_hops: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2,
             asset_definition_id: "xor#wonderland".to_owned(),
             asset_scale: Some(9),
             evaluated_block_height: 7,
@@ -11367,8 +11365,8 @@ mod offline_kagemusha_readiness_tests {
             active_transfer_verifier: None,
             active_topup_shield_verifier: None,
             active_unshield_verifier: None,
-            active_recursive_transition_verifier: None,
-            active_recursive_state_verifier: None,
+            active_recursive_step_eq_verifier: None,
+            active_recursive_step_ep_verifier: None,
             proof_backend_available: false,
             recursive_lineage_supported: false,
             ready: false,

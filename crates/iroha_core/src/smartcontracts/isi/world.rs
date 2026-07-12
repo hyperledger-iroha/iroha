@@ -30801,8 +30801,10 @@ seiyaku GovernanceLifecycle {
                     "unexpected error: {msg}"
                 );
                 assert!(stx.world.peers().iter().all(|p| p != &peer_id_missing));
-                let snapshot = crate::sumeragi::status::snapshot().peer_key_policy;
-                assert_eq!(snapshot.missing_hsm_total, 1);
+                let (reject_total, last_reason) =
+                    crate::sumeragi::status::peer_key_policy_reject_snapshot_for_tests();
+                assert_eq!(reject_total, 1);
+                assert_eq!(last_reason, Some("missing_hsm"));
             }
 
             let bls_bound = checked_keypair_with_algorithm(Algorithm::BlsNormal);
@@ -30858,8 +30860,10 @@ seiyaku GovernanceLifecycle {
             let msg = smart_contract_instruction_error_message(err);
             assert!(msg.contains("lead-time policy"), "unexpected error: {msg}");
             assert!(stx.world.peers().iter().all(|p| p != &peer_id));
-            let snapshot = crate::sumeragi::status::snapshot().peer_key_policy;
-            assert!(snapshot.lead_time_violation_total > 0);
+            let (reject_total, last_reason) =
+                crate::sumeragi::status::peer_key_policy_reject_snapshot_for_tests();
+            assert!(reject_total > 0);
+            assert_eq!(last_reason, Some("lead_time_violation"));
         }
 
         #[test]
@@ -30911,8 +30915,10 @@ seiyaku GovernanceLifecycle {
                 .expect_err("identifier collisions must be rejected");
             let msg = smart_contract_instruction_error_message(err);
             assert!(msg.contains("collision"), "unexpected error: {msg}");
-            let snapshot = crate::sumeragi::status::snapshot().peer_key_policy;
-            assert_eq!(snapshot.identifier_collision_total, 1);
+            let (reject_total, last_reason) =
+                crate::sumeragi::status::peer_key_policy_reject_snapshot_for_tests();
+            assert_eq!(reject_total, 1);
+            assert_eq!(last_reason, Some("identifier_collision"));
         }
 
         #[test]

@@ -9,7 +9,7 @@
 use ff::PrimeField;
 use halo2_proofs::{
     circuit::{Layouter, SimpleFloorPlanner, Value},
-    halo2curves::pasta::Fp as Scalar,
+    halo2curves::pasta::{Fp as Scalar, Fq},
     plonk::{Circuit, ConstraintSystem, Error as PlonkError, Expression, Selector},
     poly::Rotation,
 };
@@ -126,41 +126,40 @@ const PEER_HOP_SELECTOR_COUNT: usize = KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V
 
 /// Fixed public and private witness values for one V2 output branch.
 #[derive(Clone, Debug)]
-pub struct KagemushaRecursiveSpendTransitionValuesV2 {
+pub struct KagemushaRecursiveSpendTransitionValuesV2<F: PrimeField = Scalar> {
     /// Consecutive public rows described by
     /// [`KAGEMUSHA_RECURSIVE_SPEND_V2_PUBLIC_INPUTS_SCHEMA`].
-    pub public: [Scalar; KAGEMUSHA_RECURSIVE_SPEND_V2_INSTANCE_ROWS],
+    pub public: [F; KAGEMUSHA_RECURSIVE_SPEND_V2_INSTANCE_ROWS],
     /// Carry from the low 64-bit limb of recipient + change.
-    amount_low_carry: Scalar,
+    amount_low_carry: F,
     /// One-hot selector for the parent branch depth on append.
-    path_depth_selectors: [Scalar; PATH_SELECTOR_COUNT],
+    path_depth_selectors: [F; PATH_SELECTOR_COUNT],
     /// One-hot selector constraining the current peer-hop count to `0..=8`.
-    peer_hop_selectors: [Scalar; PEER_HOP_SELECTOR_COUNT],
+    peer_hop_selectors: [F; PEER_HOP_SELECTOR_COUNT],
 }
 
-impl Default for KagemushaRecursiveSpendTransitionValuesV2 {
+impl<F: PrimeField> Default for KagemushaRecursiveSpendTransitionValuesV2<F> {
     fn default() -> Self {
-        let mut public = [Scalar::from(0); KAGEMUSHA_RECURSIVE_SPEND_V2_INSTANCE_ROWS];
-        public[I_LAYOUT_VERSION] =
-            Scalar::from(KAGEMUSHA_RECURSIVE_SPEND_V2_INSTANCE_LAYOUT_VERSION);
+        let mut public = [F::ZERO; KAGEMUSHA_RECURSIVE_SPEND_V2_INSTANCE_ROWS];
+        public[I_LAYOUT_VERSION] = F::from(KAGEMUSHA_RECURSIVE_SPEND_V2_INSTANCE_LAYOUT_VERSION);
         // Keygen uses this witnessless, internally consistent init shape.
-        public[I_PROOF_STEP_COUNT] = Scalar::from(1);
-        let mut peer_hop_selectors = [Scalar::from(0); PEER_HOP_SELECTOR_COUNT];
-        peer_hop_selectors[0] = Scalar::from(1);
+        public[I_PROOF_STEP_COUNT] = F::ONE;
+        let mut peer_hop_selectors = [F::ZERO; PEER_HOP_SELECTOR_COUNT];
+        peer_hop_selectors[0] = F::ONE;
         Self {
             public,
-            amount_low_carry: Scalar::from(0),
-            path_depth_selectors: [Scalar::from(0); PATH_SELECTOR_COUNT],
+            amount_low_carry: F::ZERO,
+            path_depth_selectors: [F::ZERO; PATH_SELECTOR_COUNT],
             peer_hop_selectors,
         }
     }
 }
 
-impl KagemushaRecursiveSpendTransitionValuesV2 {
+impl<F: PrimeField> KagemushaRecursiveSpendTransitionValuesV2<F> {
     fn validate_host_relation(&self) -> Result<(), String> {
         let value = |index: usize| self.public[index];
-        let zero = Scalar::from(0);
-        let one = Scalar::from(1);
+        let zero = F::ZERO;
+        let one = F::ONE;
         for (index, field) in [
             (I_APPEND_PROFILE, "append_profile"),
             (I_REDEMPTION_PROFILE, "redemption_profile"),
@@ -173,8 +172,7 @@ impl KagemushaRecursiveSpendTransitionValuesV2 {
                 return Err(format!("Kagemusha V2 {field} must be boolean"));
             }
         }
-        if value(I_LAYOUT_VERSION)
-            != Scalar::from(KAGEMUSHA_RECURSIVE_SPEND_V2_INSTANCE_LAYOUT_VERSION)
+        if value(I_LAYOUT_VERSION) != F::from(KAGEMUSHA_RECURSIVE_SPEND_V2_INSTANCE_LAYOUT_VERSION)
         {
             return Err("Kagemusha V2 transition layout version mismatch".to_owned());
         }
@@ -210,7 +208,7 @@ impl KagemushaRecursiveSpendTransitionValuesV2 {
         let peer_hop_count = self.peer_hop_selectors.iter().copied().enumerate().fold(
             zero,
             |sum, (hop, selector)| {
-                sum + selector * Scalar::from(u64::try_from(hop).expect("peer hop fits u64"))
+                sum + selector * F::from(u64::try_from(hop).expect("peer hop fits u64"))
             },
         );
         if self
@@ -238,42 +236,48 @@ pub struct KagemushaRecursiveSpendTransitionConfigV2 {
 
 /// Exact branch-safe split circuit shared by init and append compositions.
 #[derive(Clone, Debug, Default)]
-pub struct KagemushaRecursiveSpendTransitionCircuitV2 {
+pub struct KagemushaRecursiveSpendTransitionCircuitV2<F: PrimeField = Scalar> {
     /// Fixed transition witness and public values.
-    pub values: KagemushaRecursiveSpendTransitionValuesV2,
+    pub values: KagemushaRecursiveSpendTransitionValuesV2<F>,
 }
 
-fn query_at(
-    meta: &mut halo2_proofs::plonk::VirtualCells<'_, Scalar>,
+/// Eq/Vesta implementation of the symmetric recursive step relation.
+pub type KagemushaRecursiveSpendStepEqCircuitV1 =
+    KagemushaRecursiveSpendTransitionCircuitV2<Scalar>;
+/// Ep/Pallas implementation of the identical symmetric recursive step relation.
+pub type KagemushaRecursiveSpendStepEpCircuitV1 = KagemushaRecursiveSpendTransitionCircuitV2<Fq>;
+
+fn query_at<F: PrimeField>(
+    meta: &mut halo2_proofs::plonk::VirtualCells<'_, F>,
     column: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
     index: usize,
-) -> Expression<Scalar> {
+) -> Expression<F> {
     meta.query_advice(
         column,
         Rotation(i32::try_from(index).expect("V2 transition row offset fits i32")),
     )
 }
 
-fn query_instance_at(
-    meta: &mut halo2_proofs::plonk::VirtualCells<'_, Scalar>,
+fn query_instance_at<F: PrimeField>(
+    meta: &mut halo2_proofs::plonk::VirtualCells<'_, F>,
     column: halo2_proofs::plonk::Column<halo2_proofs::plonk::Instance>,
     index: usize,
-) -> Expression<Scalar> {
+) -> Expression<F> {
     meta.query_instance(
         column,
         Rotation(i32::try_from(index).expect("V2 transition row offset fits i32")),
     )
 }
 
-fn select_expression(
-    first: Expression<Scalar>,
-    second: Expression<Scalar>,
-    selector: Expression<Scalar>,
-) -> Expression<Scalar> {
+fn select_expression<F: PrimeField>(
+    first: Expression<F>,
+    second: Expression<F>,
+    selector: Expression<F>,
+) -> Expression<F> {
     first.clone() + selector * (second - first)
 }
 
-impl Circuit<Scalar> for KagemushaRecursiveSpendTransitionCircuitV2 {
+impl<F: PrimeField> Circuit<F> for KagemushaRecursiveSpendTransitionCircuitV2<F> {
     type Config = KagemushaRecursiveSpendTransitionConfigV2;
     type FloorPlanner = SimpleFloorPlanner;
     type Params = ();
@@ -282,7 +286,7 @@ impl Circuit<Scalar> for KagemushaRecursiveSpendTransitionCircuitV2 {
         Self::default()
     }
 
-    fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
+    fn configure(meta: &mut ConstraintSystem<F>) -> Self::Config {
         meta.set_minimum_degree(3);
         let public_advice = meta.advice_column();
         let public_instance = meta.instance_column();
@@ -297,9 +301,9 @@ impl Circuit<Scalar> for KagemushaRecursiveSpendTransitionCircuitV2 {
                 .map(|index| query_at(meta, public_advice, index))
                 .collect::<Vec<_>>();
             let p = |index: usize| public[index].clone();
-            let one = Expression::Constant(Scalar::from(1));
-            let zero = Expression::Constant(Scalar::from(0));
-            let two_pow_64 = Expression::Constant(Scalar::from_u128(1u128 << 64));
+            let one = Expression::Constant(F::ONE);
+            let zero = Expression::Constant(F::ZERO);
+            let two_pow_64 = Expression::Constant(F::from_u128(1u128 << 64));
             let append = p(I_APPEND_PROFILE);
             let redemption = p(I_REDEMPTION_PROFILE);
             let extends = append.clone() + redemption.clone();
@@ -320,7 +324,7 @@ impl Circuit<Scalar> for KagemushaRecursiveSpendTransitionCircuitV2 {
             constraints.push(
                 enabled.clone()
                     * (p(I_LAYOUT_VERSION)
-                        - Expression::Constant(Scalar::from(
+                        - Expression::Constant(F::from(
                             KAGEMUSHA_RECURSIVE_SPEND_V2_INSTANCE_LAYOUT_VERSION,
                         ))),
             );
@@ -384,7 +388,7 @@ impl Circuit<Scalar> for KagemushaRecursiveSpendTransitionCircuitV2 {
                 peer_hop_selector_sum = peer_hop_selector_sum + selector.clone();
                 selected_peer_hop = selected_peer_hop
                     + selector
-                        * Expression::Constant(Scalar::from(
+                        * Expression::Constant(F::from(
                             u64::try_from(hop).expect("peer hop fits u64"),
                         ));
             }
@@ -593,11 +597,11 @@ impl Circuit<Scalar> for KagemushaRecursiveSpendTransitionCircuitV2 {
                 selector_sum = selector_sum + selector.clone();
                 selected_depth = selected_depth
                     + selector.clone()
-                        * Expression::Constant(Scalar::from(
+                        * Expression::Constant(F::from(
                             u64::try_from(depth).expect("path depth fits u64"),
                         ));
-                selected_mask = selected_mask
-                    + selector * Expression::Constant(Scalar::from(1u64 << (63 - depth)));
+                selected_mask =
+                    selected_mask + selector * Expression::Constant(F::from(1u64 << (63 - depth)));
             }
             constraints.extend([
                 enabled.clone() * (selector_sum - extends.clone()),
@@ -660,7 +664,7 @@ impl Circuit<Scalar> for KagemushaRecursiveSpendTransitionCircuitV2 {
     fn synthesize(
         &self,
         config: Self::Config,
-        mut layouter: impl Layouter<Scalar>,
+        mut layouter: impl Layouter<F>,
     ) -> Result<(), PlonkError> {
         self.values
             .validate_host_relation()
@@ -1059,9 +1063,9 @@ fn ensure_transition_statement_binding(
 
 /// Return the single public instance column for a V2 transition witness.
 #[must_use]
-pub fn kagemusha_recursive_spend_transition_instance_column_v2(
-    values: &KagemushaRecursiveSpendTransitionValuesV2,
-) -> Vec<Scalar> {
+pub fn kagemusha_recursive_spend_transition_instance_column_v2<F: PrimeField>(
+    values: &KagemushaRecursiveSpendTransitionValuesV2<F>,
+) -> Vec<F> {
     values.public.to_vec()
 }
 
@@ -1547,6 +1551,24 @@ mod tests {
         values
     }
 
+    fn as_step_ep_values(
+        values: &KagemushaRecursiveSpendTransitionValuesV2,
+    ) -> KagemushaRecursiveSpendTransitionValuesV2<Fq> {
+        let convert = |value: Scalar| {
+            let source = value.to_repr();
+            let mut target = <Fq as PrimeField>::Repr::default();
+            target.as_mut().copy_from_slice(source.as_ref());
+            Option::<Fq>::from(Fq::from_repr(target))
+                .expect("all field-neutral transition fixture values fit both Pasta fields")
+        };
+        KagemushaRecursiveSpendTransitionValuesV2 {
+            public: values.public.map(convert),
+            amount_low_carry: convert(values.amount_low_carry),
+            path_depth_selectors: values.path_depth_selectors.map(convert),
+            peer_hop_selectors: values.peer_hop_selectors.map(convert),
+        }
+    }
+
     #[test]
     fn envelope_statement_binding_rejects_every_mutable_common_row() {
         let statement = init_statement();
@@ -1693,6 +1715,33 @@ mod tests {
     }
 
     #[test]
+    fn transition_relation_is_identical_on_both_pasta_step_parities() {
+        let eq_values = valid_append_values();
+        let ep_values = as_step_ep_values(&eq_values);
+        let instances = vec![ep_values.public.to_vec()];
+        let prover = halo2_proofs::dev::MockProver::run(
+            9,
+            &KagemushaRecursiveSpendStepEpCircuitV1 { values: ep_values },
+            instances,
+        )
+        .expect("StepEp mock prover");
+        prover.assert_satisfied();
+
+        let mut non_conserving = as_step_ep_values(&eq_values);
+        non_conserving.public[I_CHANGE_AMOUNT_LO] += Fq::ONE;
+        let instances = vec![non_conserving.public.to_vec()];
+        let prover = halo2_proofs::dev::MockProver::run(
+            9,
+            &KagemushaRecursiveSpendStepEpCircuitV1 {
+                values: non_conserving,
+            },
+            instances,
+        )
+        .expect("StepEp adversarial mock prover");
+        assert!(prover.verify().is_err());
+    }
+
+    #[test]
     fn transition_relation_rejects_non_conservation() {
         let mut values = valid_append_values();
         write_amount(&mut values.public, I_CHANGE_AMOUNT_LO, 61);
@@ -1802,8 +1851,12 @@ mod tests {
         let mut at_limit = valid_append_values();
         at_limit.public[I_PEER_HOP_COUNT] = Scalar::from(8);
         at_limit.public[I_PREVIOUS_PEER_HOP_COUNT] = Scalar::from(7);
+        at_limit.public[I_BRANCH_DEPTH] = Scalar::from(8);
+        at_limit.public[I_PARENT_BRANCH_DEPTH] = Scalar::from(7);
         at_limit.peer_hop_selectors[1] = Scalar::from(0);
         at_limit.peer_hop_selectors[8] = Scalar::from(1);
+        at_limit.path_depth_selectors[0] = Scalar::from(0);
+        at_limit.path_depth_selectors[7] = Scalar::from(1);
         let instances = vec![at_limit.public.to_vec()];
         let prover = halo2_proofs::dev::MockProver::run(
             9,
