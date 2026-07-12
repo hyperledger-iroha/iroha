@@ -64,8 +64,8 @@ use crate::{
         self, CONTRACT_FEATURE_BIT_VECTOR, CONTRACT_FEATURE_BIT_ZK, EmbeddedContractInterfaceV1,
         EmbeddedEntrypointDescriptor, EmbeddedFunctionBudgetReportV1, EmbeddedSourceLocation,
         EmbeddedSourceMapEntryV1, EmbeddedStateDescriptor, EmbeddedStateFieldDescriptor,
-        EmbeddedStateType, LITERAL_SECTION_MAGIC, LiteralKindV1, ProgramMetadata,
-        encode_literal_descriptor,
+        EmbeddedStateType, KOTO_TEST_RETURN_ENTRYPOINT, LITERAL_SECTION_MAGIC, LiteralKindV1,
+        ProgramMetadata, encode_literal_descriptor,
     },
     pointer_abi::PointerType,
     syscalls,
@@ -86,7 +86,6 @@ const HINT_SKIP_DYNAMIC_STATE_PATH: &str = "dynamic state path is not compiler-r
 const HINT_SKIP_CONTRACT_CALL_TARGET: &str = "contract call target is not compiler-resolved";
 const HINT_SKIP_INTERNAL_CALL_TARGET: &str = "internal call target is not compiler-resolved";
 const HINT_SKIP_OPAQUE_ISI: &str = "opaque ISI access is not compiler-resolved";
-const TEST_RETURN_ENTRYPOINT_BASE: &str = "__koto_test_return";
 
 fn multiply_defined_temps(program: &ir::Program) -> HashSet<(usize, ir::Temp)> {
     let mut seen = HashSet::new();
@@ -18644,15 +18643,8 @@ impl Compiler {
                 .len()
                 .checked_sub(core::mem::size_of::<u32>())
                 .ok_or_else(|| "test artifact is missing its return HALT".to_owned())?;
-            let mut name = TEST_RETURN_ENTRYPOINT_BASE.to_owned();
-            while entrypoint_descriptors
-                .iter()
-                .any(|entrypoint| entrypoint.name == name)
-            {
-                name.push('_');
-            }
             entrypoint_descriptors.push(EmbeddedEntrypointDescriptor {
-                name,
+                name: KOTO_TEST_RETURN_ENTRYPOINT.to_owned(),
                 kind: EntryPointKind::View,
                 params: Vec::new(),
                 argument_schema: None,

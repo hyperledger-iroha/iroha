@@ -216429,19 +216429,6 @@ fn sample_lane_block_messages() -> (
     ))
 }
 
-fn sample_active_lane_block_messages(
-    state: &State,
-) -> (
-    crate::sumeragi::consensus::LaneBlockProposalV1,
-    crate::lane_consensus::LaneBlockVoteV1,
-    crate::sumeragi::consensus::LaneBlockQcV1,
-    Vec<u8>,
-) {
-    let (proposal, prepare_vote, prepare_qc, _commit_vote, _commit_qc, signer_pop) =
-        sample_active_lane_block_commit_messages(state);
-    (proposal, prepare_vote, prepare_qc, signer_pop)
-}
-
 fn sample_lane_block_proposal_for_validators(
     validator_set: Vec<PeerId>,
 ) -> crate::sumeragi::consensus::LaneBlockProposalV1 {

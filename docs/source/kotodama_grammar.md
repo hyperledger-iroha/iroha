@@ -716,7 +716,15 @@ suite in test mode, then derives a test-free runtime seiyaku when the target has
 an invocable public or lifecycle entrypoint. A pure unit-test target containing
 only private helpers and `#[test]` functions needs no runtime artifact; its
 tests, coverage, and profile data run from the test projection. This runner-only
-derivation is not available to ordinary production builds.
+derivation is not available to ordinary production builds. The two projections
+retain separate immutable prepared artifacts, compiler reports, and code hashes.
+The test projection authenticates its terminal return `HALT` through the
+compiler-owned `__koto_test_return` CNTR descriptor; that selector is reserved
+from source declarations and rejected by production admission. Host-private
+`0x00FE0001..=0x00FE0005` helpers require the crate-private test loader plus an
+explicit host opt-in (the runner supplies `KotoTestHost`), remain outside ABI v1
+and its hash, and cannot be enabled by public VM loaders or a permissive custom
+host.
 Typed fixture values use the same constructors as seiyaku code, including
 `AccountId::parse`, `AssetDefinitionId::parse`, `DomainId::parse`,
 `Name::parse`, and `Json::parse`; flat fixture-only constructor aliases are
