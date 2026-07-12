@@ -1,6 +1,6 @@
 use std::fmt::Display;
 
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::Quantity;
 #[cfg(feature = "json")]
 use norito::json::{FastJsonWrite, JsonSerialize};
 
@@ -16,9 +16,9 @@ isi! {
     }
 }
 
-impl Mint<Numeric, Asset> {
-    /// Constructs a new [`Mint`] for an [`Asset`] of [`Numeric`] type.
-    pub fn asset_numeric(object: impl Into<Numeric>, asset_id: AssetId) -> Self {
+impl Mint<Quantity, Asset> {
+    /// Constructs a new [`Mint`] for a non-negative [`Asset`] quantity.
+    pub fn asset_quantity(object: impl Into<Quantity>, asset_id: AssetId) -> Self {
         Self {
             object: object.into(),
             destination: asset_id,
@@ -49,7 +49,7 @@ impl_display! {
 }
 
 impl_into_box! {
-    Mint<Numeric, Asset> |
+    Mint<Quantity, Asset> |
     Mint<u32, Trigger>
 => MintBox
 }
@@ -64,9 +64,9 @@ isi! {
     }
 }
 
-impl Burn<Numeric, Asset> {
-    /// Constructs a new [`Burn`] for an [`Asset`] of [`Numeric`] type.
-    pub fn asset_numeric(object: impl Into<Numeric>, asset_id: AssetId) -> Self {
+impl Burn<Quantity, Asset> {
+    /// Constructs a new [`Burn`] for a non-negative [`Asset`] quantity.
+    pub fn asset_quantity(object: impl Into<Quantity>, asset_id: AssetId) -> Self {
         Self {
             object: object.into(),
             destination: asset_id,
@@ -97,7 +97,7 @@ impl_display! {
 }
 
 impl_into_box! {
-    Burn<Numeric, Asset> |
+    Burn<Quantity, Asset> |
     Burn<u32, Trigger>
 => BurnBox
 }
@@ -142,7 +142,7 @@ isi_box! {
     /// Dev note: "Box" is naming for a grouped enum, not heap allocation.
     pub enum MintBox {
         /// Mint for [`Asset`].
-        Asset(Mint<Numeric, Asset>),
+        Asset(Mint<Quantity, Asset>),
         /// Mint [`Trigger`] repetitions.
         TriggerRepetitions(Mint<u32, Trigger>),
     }
@@ -161,7 +161,7 @@ isi_box! {
     /// Dev note: this is a tagged union of concrete `Burn<_, _>` variants.
     pub enum BurnBox {
         /// Burn [`Asset`].
-        Asset(Burn<Numeric, Asset>),
+        Asset(Burn<Quantity, Asset>),
         /// Burn [`Trigger`] repetitions.
         TriggerRepetitions(Burn<u32, Trigger>),
     }
@@ -177,9 +177,9 @@ enum_type! {
 // Seal implementations
 impl crate::seal::Instruction for MintBox {}
 impl crate::seal::Instruction for BurnBox {}
-impl crate::seal::Instruction for Mint<Numeric, Asset> {}
+impl crate::seal::Instruction for Mint<Quantity, Asset> {}
 impl crate::seal::Instruction for Mint<u32, Trigger> {}
-impl crate::seal::Instruction for Burn<Numeric, Asset> {}
+impl crate::seal::Instruction for Burn<Quantity, Asset> {}
 impl crate::seal::Instruction for Burn<u32, Trigger> {}
 
 macro_rules! impl_mint_burn_slice_decode {
@@ -241,7 +241,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for MintBox {
         );
         let mut offset = 4usize;
         let value = match tag {
-            0 => Self::Asset(super::decode_aos_slice_field::<Mint<Numeric, Asset>>(
+            0 => Self::Asset(super::decode_aos_slice_field::<Mint<Quantity, Asset>>(
                 super::read_aos_field(bytes, &mut offset, flags)?,
                 flags,
             )?),
@@ -278,7 +278,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for BurnBox {
         );
         let mut offset = 4usize;
         let value = match tag {
-            0 => Self::Asset(super::decode_aos_slice_field::<Burn<Numeric, Asset>>(
+            0 => Self::Asset(super::decode_aos_slice_field::<Burn<Quantity, Asset>>(
                 super::read_aos_field(bytes, &mut offset, flags)?,
                 flags,
             )?),
@@ -313,6 +313,7 @@ impl BurnBox {
 #[cfg(test)]
 mod tests {
     use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_primitives::numeric::{Numeric, NumericOperationError};
     use norito::core::DecodeFromSlice;
 
     use super::*;
@@ -336,20 +337,49 @@ mod tests {
     }
 
     #[test]
-    fn mint_burn_decode_from_slice_roundtrips_asset_numeric() {
-        let mint = Mint::asset_numeric(7_u32, asset_id());
+    fn mint_burn_decode_from_slice_roundtrips_asset_quantity() {
+        let mint = Mint::asset_quantity(7_u32, asset_id());
         let mint_bytes = mint.encode();
         let (decoded, used) =
-            Mint::<Numeric, Asset>::decode_from_slice(&mint_bytes).expect("decode mint");
+            Mint::<Quantity, Asset>::decode_from_slice(&mint_bytes).expect("decode mint");
         assert_eq!(used, mint_bytes.len());
         assert_eq!(decoded, mint);
 
-        let burn = Burn::asset_numeric(3_u32, asset_id());
+        let burn = Burn::asset_quantity(3_u32, asset_id());
         let burn_bytes = burn.encode();
         let (decoded, used) =
-            Burn::<Numeric, Asset>::decode_from_slice(&burn_bytes).expect("decode burn");
+            Burn::<Quantity, Asset>::decode_from_slice(&burn_bytes).expect("decode burn");
         assert_eq!(used, burn_bytes.len());
         assert_eq!(decoded, burn);
+    }
+
+    #[test]
+    fn negative_asset_quantity_is_rejected_before_construction_and_during_decode() {
+        let negative = Numeric::new(-1_i32, 2);
+        assert_eq!(
+            Quantity::try_from_numeric(negative.clone()),
+            Err(NumericOperationError::NegativeQuantity)
+        );
+
+        // A signed decimal has the same generic field layout, but it is not an
+        // asset instruction and must not decode through the nominal boundary.
+        let forged_mint = Mint::<Numeric, Asset> {
+            object: negative.clone(),
+            destination: asset_id(),
+        };
+        assert!(
+            Mint::<Quantity, Asset>::decode_from_slice(&forged_mint.encode()).is_err(),
+            "negative signed payload must not decode as an asset mint"
+        );
+
+        let forged_burn = Burn::<Numeric, Asset> {
+            object: negative,
+            destination: asset_id(),
+        };
+        assert!(
+            Burn::<Quantity, Asset>::decode_from_slice(&forged_burn.encode()).is_err(),
+            "negative signed payload must not decode as an asset burn"
+        );
     }
 
     #[test]
@@ -376,7 +406,7 @@ mod tests {
             .register_with_id_slice::<BurnBox>(BurnBox::WIRE_ID);
 
         let mint_cases = [
-            MintBox::Asset(Mint::asset_numeric(7_u32, asset_id())),
+            MintBox::Asset(Mint::asset_quantity(7_u32, asset_id())),
             MintBox::TriggerRepetitions(Mint::trigger_repetitions(5, trigger_id())),
         ];
         for value in mint_cases {
@@ -391,7 +421,7 @@ mod tests {
         }
 
         let burn_cases = [
-            BurnBox::Asset(Burn::asset_numeric(3_u32, asset_id())),
+            BurnBox::Asset(Burn::asset_quantity(3_u32, asset_id())),
             BurnBox::TriggerRepetitions(Burn::trigger_repetitions(2, trigger_id())),
         ];
         for value in burn_cases {

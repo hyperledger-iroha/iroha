@@ -511,13 +511,13 @@ export type MultisigProposalStatus =
   | "CANCELED"
   | "EXPIRED";
 
-export interface MultisigProposalsQueryRequest extends MultisigAccountSelector {
+export interface MultisigProposalsListRequest extends MultisigAccountSelector {
   status?: ReadonlyArray<MultisigProposalStatus>;
   cursor?: string | null;
   limit?: number | string | bigint | null;
 }
 
-export interface MultisigProposalLookupRequest extends MultisigAccountSelector {
+export interface MultisigProposalGetRequest extends MultisigAccountSelector {
   proposalId?: string | null;
   instructionsHash?: string | null;
   proposal_id?: string | null;
@@ -699,13 +699,13 @@ export interface MultisigProposalEntry {
   terminal_at_ms: number | null;
 }
 
-export interface MultisigProposalsQueryResponse {
+export interface MultisigProposalsListResponse {
   resolved_multisig_account_id: string;
   proposals: ReadonlyArray<MultisigProposalEntry>;
   next_cursor: string | null;
 }
 
-export interface MultisigProposalLookupResponse extends MultisigProposalEntry {
+export interface MultisigProposalGetResponse extends MultisigProposalEntry {
   resolved_multisig_account_id: string;
 }
 
@@ -1141,11 +1141,13 @@ export function buildSampleCamt056Message(
 ): string;
 
 /**
- * Numeric values accepted by builder helpers. Prefer decimal strings for exact
- * quantities; numbers are accepted for convenience and will be serialised
- * through the canonical Norito string representation.
+ * Numeric values accepted by non-quantity helpers. Quantity-bearing APIs use
+ * {@link QuantityInput} so JavaScript `number` can never lose precision.
  */
 export type NumericLike = string | number | bigint;
+
+/** Lossless canonical input accepted by asset and RWA quantity builders. */
+export type QuantityInput = KotodamaQuantity | string | bigint;
 
 /**
  * Metadata payload accepted by transaction helpers. Objects are stringified
@@ -2888,6 +2890,17 @@ export interface RetirePrivacyVerifierKeyInstructionInput
 export function normalizeAccountId(value: string, name?: string): string;
 export function ensureCanonicalAccountId(value: string, name?: string): string;
 export function normalizeI105AccountId(value: string, name?: string): string;
+export type IdentifierNormalization =
+  | "exact"
+  | "lowercase_trimmed"
+  | "phone_e164"
+  | "email_address"
+  | "account_number";
+export function normalizeIdentifierInput(
+  value: string,
+  normalization: IdentifierNormalization,
+  name?: string,
+): string;
 export function tryNormalizeI105AccountId(
   value: unknown,
   name?: string,
@@ -5240,6 +5253,7 @@ export function encryptIdentifierInputForPolicy(
   input: unknown,
   options?: { seed?: BinaryLike; seedHex?: string },
 ): string;
+export function hashIdentifierEncryptedInput(encryptedInput: string): string;
 export function buildIdentifierRequestForPolicy(
   policySummary: IdentifierPolicyClientSummary,
   options: IdentifierRequestForPolicyOptions,
@@ -5249,8 +5263,6 @@ export function verifyIdentifierResolutionReceipt(
   policySummary: IdentifierPolicyClientSummary,
 ): boolean;
 
-export const sakuraStormQrStreamTheme: OfflineQrStreamTheme;
-export const sakuraStormQrStreamSkin: OfflineQrStreamPlaybackSkin;
 
 type IrohaJsPublicApi = typeof import("./index.js");
 type IrohaJsRuntimeNamespace<Keys extends keyof IrohaJsPublicApi> = Readonly<
@@ -5260,6 +5272,7 @@ type IrohaJsRuntimeNamespace<Keys extends keyof IrohaJsPublicApi> = Readonly<
 type ToriiRuntimeNamespaceExport =
     "IsoMessageTimeoutError"
   | "ToriiClient"
+  | "TransactionBatchAdmissionAmbiguousError"
   | "ToriiDataModelMismatchError"
   | "ToriiHttpError"
   | "TransactionStatusError"
@@ -5272,6 +5285,7 @@ type ToriiRuntimeNamespaceExport =
   | "encodeIdentifierResolutionReceiptAttestation"
   | "encodeIdentifierResolutionReceiptPayload"
   | "encryptIdentifierInputForPolicy"
+  | "hashIdentifierEncryptedInput"
   | "extractPipelineRejectionReason"
   | "extractPipelineStatusKind"
   | "getIdentifierBfvPublicParameters"
@@ -5294,44 +5308,6 @@ type NoritoRuntimeNamespaceExport =
 
 type CryptoRuntimeNamespaceExport =
     "CRYPTO_ALGORITHMS"
-  | "KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS"
-  | "KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES"
-  | "KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1"
-  | "KAGEMUSHA_PROOF_ATTACHMENT_WIRE_NAME"
-  | "KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND"
-  | "KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1"
-  | "KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1"
-  | "KAGEMUSHA_RECURSIVE_COMPACT_MULTI_HOP_UNAVAILABLE_FRAGMENT"
-  | "KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE_FRAGMENT"
-  | "KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_NATIVE_BRIDGE_ABI_VERSION"
-  | "KAGEMUSHA_RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES"
-  | "KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_MAX_BYTES"
-  | "KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_REQUIRED_COUNT_V1"
-  | "KAGEMUSHA_RECURSIVE_SPEND_ACCUMULATOR_DOMAIN"
-  | "KAGEMUSHA_RECURSIVE_SPEND_APPEND_REQUEST_WIRE_NAME"
-  | "KAGEMUSHA_RECURSIVE_SPEND_BUNDLE_WIRE_NAME"
-  | "KAGEMUSHA_RECURSIVE_SPEND_INIT_REQUEST_WIRE_NAME"
-  | "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_CHAIN_ASSET_BINDING_DOMAIN_V1"
-  | "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_DOMAIN_V1"
-  | "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_FINAL_NOTE_BINDING_DOMAIN_V1"
-  | "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_OPENINGS_PREFLIGHT_DOMAIN_V1"
-  | "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1"
-  | "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1"
-  | "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1"
-  | "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1"
-  | "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESS_WIRE_NAME"
-  | "KAGEMUSHA_RECURSIVE_SPEND_RECORD_BUNDLE_WIRE_NAME"
-  | "KAGEMUSHA_RECURSIVE_SPEND_REDEEM_REQUEST_WIRE_NAME"
-  | "KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_NATIVE_BRIDGE_ABI_VERSION"
-  | "KAGEMUSHA_RECURSIVE_SPEND_TOPUP_REQUIRED_NATIVE_BRIDGE_ABI_VERSION"
-  | "KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROFILE_BINDING_DIGEST_DOMAIN"
-  | "KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROFILE_DIGEST_DOMAIN"
-  | "KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROFILE_DOMAIN"
-  | "KAGEMUSHA_RECURSIVE_SPEND_VERIFY_REQUEST_WIRE_NAME"
-  | "KAGEMUSHA_RECURSIVE_SPEND_VERIFY_RESULT_WIRE_NAME"
-  | "KAGEMUSHA_RECURSIVE_TOPUP_REQUEST_WIRE_NAME"
-  | "KAGEMUSHA_VERIFYING_KEY_RECORD_WIRE_NAME"
-  | "KagemushaRecursiveSpendRequestCodecError"
   | "PRIVACY_FFI_ERROR_INVALID_REQUEST"
   | "PRIVACY_FFI_ERROR_MALFORMED_NORITO"
   | "PRIVACY_FFI_ERROR_NULL_POINTER"
@@ -5346,16 +5322,8 @@ type CryptoRuntimeNamespaceExport =
   | "SM2_PUBLIC_KEY_LENGTH"
   | "SM2_SIGNATURE_LENGTH"
   | "SUPPORTED_CRYPTO_ALGORITHMS"
-  | "buildKagemushaRecursiveSpendVerifierRecordRef"
-  | "buildKagemushaRecursiveSpendableNoteDescriptor"
   | "buildKaigiRosterJoinProof"
   | "buildZkAceTransferAuthorizationV1"
-  | "canAppendKagemushaRecursiveSpendWitnesslessLineage"
-  | "canProveKagemushaRecursiveSpendAppendOutputProofCircuitId"
-  | "canRedeemKagemushaRecursiveSpendWitnessless"
-  | "canSelectKagemushaRecursiveSpendAppendOutputProofCircuitId"
-  | "decodeKagemushaRecursiveSpendBundle"
-  | "decodeKagemushaRecursiveSpendVerifyResult"
   | "deriveConfidentialDiversifierV2"
   | "deriveConfidentialKeyset"
   | "deriveConfidentialKeysetFromHex"
@@ -5366,66 +5334,15 @@ type CryptoRuntimeNamespaceExport =
   | "deriveEd25519SeedFromRecoveryPhrase"
   | "deriveSm2KeyPairFromSeed"
   | "ed25519SeedToRecoveryPhrase"
-  | "encodeKagemushaRecursiveSpendAppendRequest"
-  | "encodeKagemushaRecursiveSpendInitRequest"
-  | "encodeKagemushaRecursiveSpendRedeemRequest"
-  | "encodeKagemushaRecursiveSpendTopUpRequest"
-  | "encodeKagemushaRecursiveSpendVerifyRequest"
   | "entropyToRecoveryPhrase"
   | "generateKeyPair"
   | "generateRecoveryPhrase"
   | "generateSm2KeyPair"
-  | "isKagemushaCompactPaymentTokenNativeAvailable"
-  | "isKagemushaPallasOpenEnvelopeBuilderNativeAvailable"
-  | "isKagemushaRecursiveAggregationProofBundleNativeAvailable"
-  | "isKagemushaRecursiveCompactPaymentTokenNativeAvailable"
-  | "isKagemushaRecursiveCompactPaymentTokenVerifierNativeAvailable"
-  | "isKagemushaRecursiveCompactUnavailable"
-  | "isKagemushaRecursiveSpendCompactPaymentTokenProjectionNativeAvailable"
-  | "isKagemushaRecursiveSpendCompactPaymentTokenProjectionVerifierNativeAvailable"
-  | "isKagemushaRecursiveSpendLineageAppendOutputCircuitId"
-  | "isKagemushaRecursiveSpendLineageProofCircuitId"
-  | "isKagemushaRecursiveSpendNativeAvailable"
-  | "isKagemushaRecursiveSpendTopUpNativeAvailable"
-  | "isKagemushaSpendAgainMode"
   | "isPrivacyNativeAvailable"
-  | "isSupportedKagemushaRecursiveSpendAppendOutputProofCircuitId"
-  | "isSupportedKagemushaRecursiveSpendAppendProofTransition"
-  | "isSupportedKagemushaRecursiveSpendLineageKeyArtifactOpeningLen"
-  | "isSupportedKagemushaRecursiveSpendPreviousProofCircuitId"
-  | "kagemushaBuildPallasOpenEnvelopesArchive"
-  | "kagemushaBuildPreviousProofOpenEnvelopesArchive"
-  | "kagemushaProveVerifiedCompactPaymentTokenWithRecords"
-  | "kagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes"
-  | "kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes"
-  | "kagemushaRecursiveSpendAppend"
-  | "kagemushaRecursiveSpendAppendTyped"
-  | "kagemushaRecursiveSpendCompactPaymentTokenFromBundle"
-  | "kagemushaRecursiveSpendInit"
-  | "kagemushaRecursiveSpendInitTyped"
-  | "kagemushaRecursiveSpendLineageAppendBoundary"
-  | "kagemushaRecursiveSpendLineageKeyArtifacts"
-  | "kagemushaRecursiveSpendLineageKeyArtifactsForAppend"
-  | "kagemushaRecursiveSpendLineageKeyArtifactsForInit"
-  | "kagemushaRecursiveSpendLineageWitnessAppendResult"
-  | "kagemushaRecursiveSpendLineageWitnessFromInitResult"
-  | "kagemushaRecursiveSpendRedeem"
-  | "kagemushaRecursiveSpendRedeemTyped"
-  | "kagemushaRecursiveSpendTopUp"
-  | "kagemushaRecursiveSpendTopUpTyped"
-  | "kagemushaRecursiveSpendTransitionProfileAppend"
-  | "kagemushaRecursiveSpendTransitionProfileInit"
-  | "kagemushaRecursiveSpendVerify"
-  | "kagemushaRecursiveSpendVerifyTyped"
-  | "kagemushaVerifyRecursiveCompactPaymentToken"
-  | "kagemushaVerifyRecursiveSpendCompactPaymentTokenProjection"
   | "loadKeyPair"
   | "loadSm2KeyPair"
   | "normalizeCryptoAlgorithm"
-  | "normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId"
   | "normalizeRecoveryPhrase"
-  | "preferredKagemushaOfflineSpendMode"
-  | "preferredKagemushaRecursiveSpendAppendOutputProofCircuitId"
   | "privacyBuildProofV1"
   | "privacyCapabilitiesV1"
   | "privacyProofRequestV1"
@@ -5434,44 +5351,17 @@ type CryptoRuntimeNamespaceExport =
   | "publicKeyFromPrivate"
   | "publicKeyMultihash"
   | "recoveryPhraseToEntropy"
-  | "requiresKagemushaRecursiveSpendLineageKeyArtifactsForAppendOutput"
-  | "requiresKagemushaRecursiveSpendLineageKeyArtifactsForInit"
-  | "requiresKagemushaRecursiveSpendLineageWitnessForRedeem"
-  | "requiresKagemushaRecursiveSpendPreviousLineageVerifierRecordForAppend"
-  | "requiresKagemushaRecursiveSpendPreviousProofOpenEnvelopesForAppend"
   | "sign"
   | "signEd25519"
   | "signSm2"
   | "sm2FixtureFromSeed"
   | "sm2PublicKeyMultihash"
   | "supportedCryptoAlgorithms"
-  | "validateKagemushaRecursiveSpendLineageKeyArtifacts"
   | "validateRecoveryPhrase"
   | "verify"
   | "verifyEd25519"
   | "verifySm2";
 
-type OfflineQrStreamRuntimeNamespaceExport =
-    "OfflineQrPayloadKind"
-  | "OfflineQrStreamDecoder"
-  | "OfflineQrStreamEncoder"
-  | "OfflineQrStreamEnvelope"
-  | "OfflineQrStreamFrame"
-  | "OfflineQrStreamFrameEncoding"
-  | "OfflineQrStreamFrameKind"
-  | "OfflineQrStreamOptions"
-  | "OfflineQrStreamPlaybackSkin"
-  | "OfflineQrStreamScanSession"
-  | "OfflineQrStreamTheme"
-  | "decodeQrFrameText"
-  | "encodeQrFrameText"
-  | "sakuraQrStreamLowPowerSkin"
-  | "sakuraQrStreamReducedMotionSkin"
-  | "sakuraQrStreamSkin"
-  | "sakuraQrStreamTheme"
-  | "sakuraStormQrStreamSkin"
-  | "sakuraStormQrStreamTheme"
-  | "scanQrStreamFrames";
 
 export const Torii: IrohaJsRuntimeNamespace<ToriiRuntimeNamespaceExport> &
   Readonly<{
@@ -5480,12 +5370,7 @@ export const Torii: IrohaJsRuntimeNamespace<ToriiRuntimeNamespaceExport> &
     ): ValidationFeePolicyVerificationContext | null;
   }>;
 export const Norito: IrohaJsRuntimeNamespace<NoritoRuntimeNamespaceExport>;
-export const Crypto: IrohaJsRuntimeNamespace<CryptoRuntimeNamespaceExport> &
-  Readonly<{
-    KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_PUBLIC_INPUTS_WIRE_NAME:
-      "iroha_data_model::offline::model::KagemushaRecursiveAggregationProofPublicInputs";
-  }>;
-export const OfflineQrStream: IrohaJsRuntimeNamespace<OfflineQrStreamRuntimeNamespaceExport>;
+export const Crypto: IrohaJsRuntimeNamespace<CryptoRuntimeNamespaceExport>;
 
 export interface SoranetPuzzleParamsSnapshot {
   memoryKib: number;
@@ -6668,606 +6553,6 @@ export interface SubscriptionActionResponse {
   tx_hash_hex: string;
 }
 
-export type OfflineByteArray = ReadonlyArray<number>;
-export type OfflineJsonUnsignedInteger = number | bigint;
-export type OfflineAssetScale =
-  | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14
-  | 15 | 16 | 17 | 18 | 19 | 20 | 21 | 22 | 23 | 24 | 25 | 26 | 27 | 28
-  | 0n | 1n | 2n | 3n | 4n | 5n | 6n | 7n | 8n | 9n | 10n | 11n | 12n
-  | 13n | 14n | 15n | 16n | 17n | 18n | 19n | 20n | 21n | 22n | 23n
-  | 24n | 25n | 26n | 27n | 28n;
-export type OfflineFixed32Bytes = readonly [
-  number, number, number, number, number, number, number, number,
-  number, number, number, number, number, number, number, number,
-  number, number, number, number, number, number, number, number,
-  number, number, number, number, number, number, number, number,
-];
-export type OfflineFixed8Bytes = readonly [
-  number, number, number, number, number, number, number, number,
-];
-export interface OfflineScaledAmountJson {
-  atomic_units: OfflineJsonUnsignedInteger;
-  scale: OfflineAssetScale;
-}
-
-export interface OfflineVerifierKeyIdJson {
-  backend: string;
-  name: string;
-}
-
-export interface OfflineSpendableNoteJson {
-  chain_id: string;
-  asset: string;
-  note_commitment: OfflineFixed32Bytes;
-  spend_nullifier: OfflineFixed32Bytes;
-  amount: OfflineScaledAmountJson;
-}
-
-export interface OfflineAuthorizationJson {
-  authority: string;
-  device_id: string;
-  operation_id: OfflineFixed32Bytes;
-  issued_at_ms: OfflineJsonUnsignedInteger;
-  expires_at_ms: OfflineJsonUnsignedInteger;
-  nonce: OfflineFixed32Bytes;
-  payload_digest: OfflineFixed32Bytes;
-  app_attest_evidence_sha256?: OfflineFixed32Bytes | null;
-  app_attest_evidence?: OfflineByteArray | null;
-  signature: string;
-}
-
-export interface OfflineProofBoxJson {
-  backend: string;
-  bytes: OfflineByteArray;
-}
-
-export interface OfflineVerifyingKeyJson {
-  backend: string;
-  bytes: OfflineByteArray;
-}
-
-export type OfflineProofBackend =
-  | "halo2-ipa-pasta"
-  | "halo2-bn254"
-  | "groth16"
-  | "stark"
-  | "unsupported"
-  | "halo2-ipa-orchard"
-  | "groth16-bls12-377"
-  | "fcmp-plus-plus-curve-tree"
-  | "lattice-pcs-sis"
-  | "miden-stark"
-  | "aztec-plonkish-private-kernel"
-  | "pq-masp-stark-fri"
-  | "anonymous-pgc"
-  | "verange"
-  | "zkat"
-  | "recursive-anonymous-admission"
-  | "vega-existing-credential-zk"
-  | "silent-threshold-anoncred"
-  | "zk-x509"
-  | "sis-with-hints";
-
-export type OfflineVerifierStatus = "Proposed" | "Active" | "Withdrawn";
-
-export interface OfflineMerkleProofJson {
-  leaf_index: OfflineJsonUnsignedInteger;
-  audit_path: ReadonlyArray<string | null>;
-}
-
-export interface OfflineLanePrivacyMerkleWitnessJson {
-  leaf: OfflineFixed32Bytes;
-  proof: OfflineMerkleProofJson;
-}
-
-export interface OfflineLanePrivacySnarkWitnessJson {
-  public_inputs: string;
-  proof: string;
-}
-
-export type OfflineLanePrivacyWitnessJson =
-  | { kind: "merkle"; payload: OfflineLanePrivacyMerkleWitnessJson }
-  | { kind: "snark"; payload: OfflineLanePrivacySnarkWitnessJson };
-
-export interface OfflineLanePrivacyProofJson {
-  commitment_id: readonly [number];
-  witness: OfflineLanePrivacyWitnessJson;
-}
-
-export interface OfflineProofAttachmentJson {
-  backend: string;
-  proof: OfflineProofBoxJson;
-  vk_ref: OfflineVerifierKeyIdJson;
-  vk_commitment?: OfflineFixed32Bytes | null;
-  envelope_hash?: OfflineFixed32Bytes | null;
-  lane_privacy?: OfflineLanePrivacyProofJson | null;
-}
-
-export interface OfflineVerifiedFoldStepJson {
-  root_before: OfflineFixed32Bytes;
-  input_nullifiers: ReadonlyArray<OfflineFixed32Bytes>;
-  output_commitments: ReadonlyArray<OfflineFixed32Bytes>;
-  root_after: OfflineFixed32Bytes;
-  attachment: OfflineProofAttachmentJson;
-  verifier_key: OfflineVerifyingKeyJson;
-}
-
-export interface OfflineVerifiedFoldBundleJson {
-  chain_id: string;
-  asset: string;
-  steps: ReadonlyArray<OfflineVerifiedFoldStepJson>;
-}
-
-export interface OfflineVerifyingKeyRecordJson {
-  version: OfflineJsonUnsignedInteger;
-  circuit_id: string;
-  owner_manifest_id?: string | null;
-  namespace: string;
-  backend: OfflineProofBackend;
-  curve: string;
-  public_inputs_schema_hash: OfflineFixed32Bytes;
-  commitment: OfflineFixed32Bytes;
-  vk_len: OfflineJsonUnsignedInteger;
-  max_proof_bytes: OfflineJsonUnsignedInteger;
-  gas_schedule_id?: string | null;
-  metadata_uri_cid?: string | null;
-  vk_bytes_cid?: string | null;
-  activation_height?: OfflineJsonUnsignedInteger | null;
-  withdraw_height?: OfflineJsonUnsignedInteger | null;
-  key?: OfflineVerifyingKeyJson | null;
-  status: OfflineVerifierStatus;
-}
-
-export interface OfflineVerifiedFoldVerifierRecordJson {
-  id: OfflineVerifierKeyIdJson;
-  record: OfflineVerifyingKeyRecordJson;
-}
-
-export interface OfflineVerifiedFoldRecordBundleJson {
-  bundle: OfflineVerifiedFoldBundleJson;
-  verifier_records: ReadonlyArray<OfflineVerifiedFoldVerifierRecordJson>;
-}
-
-export interface OfflineTopUpShieldEvidenceJson {
-  initial_root: OfflineFixed32Bytes;
-  finalized_root: OfflineFixed32Bytes;
-  leaf_index: OfflineJsonUnsignedInteger;
-  proof: OfflineProofAttachmentJson;
-}
-
-export interface OfflineTopUpRequestJson {
-  asset: string;
-  amount: OfflineScaledAmountJson;
-  current_note: OfflineSpendableNoteJson;
-  shield_evidence: OfflineTopUpShieldEvidenceJson;
-  artifact_generation: string;
-  operation_id: OfflineFixed32Bytes;
-  authorization: OfflineAuthorizationJson;
-}
-
-export interface OfflineTopUpAnchorReferenceJson {
-  topup_operation_id: OfflineFixed32Bytes;
-  anchor_digest: OfflineFixed32Bytes;
-}
-
-export interface OfflineBranchPathJson {
-  lineage_root: OfflineFixed32Bytes;
-  depth: OfflineJsonUnsignedInteger;
-  path_bits: OfflineFixed8Bytes;
-}
-
-export interface OfflineBranchClaimJson {
-  path: OfflineBranchPathJson;
-  transition_tags: string;
-}
-
-export type OfflineLineageModeJson = {
-  mode: "reserved" | "semantic";
-  value?: null;
-};
-
-export interface OfflineSpendBranchJson {
-  branch: "recipient" | "change";
-  value?: null;
-}
-
-export interface OfflinePeerSplitTransitionJson {
-  binding_digest: OfflineFixed32Bytes;
-  branch: OfflineSpendBranchJson;
-  recipient_request_digest: OfflineFixed32Bytes;
-  operation_id: OfflineFixed32Bytes;
-  parent_max_proof_step_count: OfflineJsonUnsignedInteger;
-  parent_max_peer_hop_count: OfflineJsonUnsignedInteger;
-}
-
-export interface OfflineRedemptionChangeTransitionJson {
-  binding_digest: OfflineFixed32Bytes;
-  parent_bundle_digest: OfflineFixed32Bytes;
-  operation_id: OfflineFixed32Bytes;
-  parent_proof_step_count: OfflineJsonUnsignedInteger;
-  parent_peer_hop_count: OfflineJsonUnsignedInteger;
-}
-
-export type OfflineRecursiveSpendTransitionJson =
-  | { transition: "peer_split"; value: OfflinePeerSplitTransitionJson }
-  | { transition: "redemption_change"; value: OfflineRedemptionChangeTransitionJson };
-
-export interface OfflineRecursiveSpendStatementJson {
-  chain_id: string;
-  asset: string;
-  asset_scale: OfflineAssetScale;
-  final_root: OfflineFixed32Bytes;
-  topup_anchor_refs: ReadonlyArray<OfflineTopUpAnchorReferenceJson>;
-  proof_step_count: OfflineJsonUnsignedInteger;
-  peer_hop_count: OfflineJsonUnsignedInteger;
-  current_note: OfflineSpendableNoteJson;
-  branch_claims: ReadonlyArray<OfflineBranchClaimJson>;
-  transition?: OfflineRecursiveSpendTransitionJson | null;
-  artifact_generation: string;
-  lineage_mode: OfflineLineageModeJson;
-  verifier_key_id: OfflineVerifierKeyIdJson;
-}
-
-export interface OfflineRecursiveSpendProofJson {
-  verifier_key_id: OfflineVerifierKeyIdJson;
-  public_statement_digest: OfflineFixed32Bytes;
-  proof: OfflineProofBoxJson;
-}
-
-export interface OfflineRecursiveSpendBundleJson {
-  statement: OfflineRecursiveSpendStatementJson;
-  recursive_proof: OfflineRecursiveSpendProofJson;
-}
-
-export interface OfflineUnshieldPublicInputsJson {
-  input_commitment_0: OfflineFixed32Bytes;
-  input_commitment_1: OfflineFixed32Bytes;
-  nullifier_0: OfflineFixed32Bytes;
-  nullifier_1: OfflineFixed32Bytes;
-  change_output_commitment: OfflineFixed32Bytes;
-  root: OfflineFixed32Bytes;
-  public_amount: OfflineFixed32Bytes;
-  asset_tag: OfflineFixed32Bytes;
-  chain_tag: OfflineFixed32Bytes;
-}
-
-export interface OfflineRedemptionIntentJson {
-  chain_id: string;
-  asset: string;
-  input_note: OfflineSpendableNoteJson;
-  parent_branch_claims: ReadonlyArray<OfflineBranchClaimJson>;
-  parent_topup_anchor_refs: ReadonlyArray<OfflineTopUpAnchorReferenceJson>;
-  parent_proof_step_count: OfflineJsonUnsignedInteger;
-  parent_peer_hop_count: OfflineJsonUnsignedInteger;
-  parent_bundle_digest: OfflineFixed32Bytes;
-  input_root: OfflineFixed32Bytes;
-  recipient: string;
-  public_amount: OfflineScaledAmountJson;
-  change_output?: OfflineSpendableNoteJson | null;
-  change_artifact_generation?: string | null;
-  unshield_public_inputs: OfflineUnshieldPublicInputsJson;
-  unshield_public_inputs_digest: OfflineFixed32Bytes;
-  operation_id: OfflineFixed32Bytes;
-}
-
-export interface OfflineLineageWitnessJson {
-  nodes: ReadonlyArray<OfflineLineageNodeJson>;
-  final_bundle_digest: OfflineFixed32Bytes;
-}
-
-export interface OfflineLineageNodeJson {
-  result_bundle_digest: OfflineFixed32Bytes;
-  parent_bundle_digests: ReadonlyArray<OfflineFixed32Bytes>;
-  proof_step_count: OfflineJsonUnsignedInteger;
-  verified_at_block_height: OfflineJsonUnsignedInteger;
-  transition_archive: OfflineByteArray;
-}
-
-export interface OfflineRedeemChangeJson {
-  output: OfflineSpendableNoteJson;
-  branch_claims: ReadonlyArray<OfflineBranchClaimJson>;
-  bundle: OfflineRecursiveSpendBundleJson;
-}
-
-export interface OfflineRedeemRequestJson {
-  bundle: OfflineRecursiveSpendBundleJson;
-  recipient: string;
-  amount: OfflineScaledAmountJson;
-  redeem_proof: OfflineProofAttachmentJson;
-  redemption: OfflineRedemptionIntentJson;
-  lineage_witness?: OfflineLineageWitnessJson | null;
-  lineage_verifier_record: OfflineVerifyingKeyRecordJson;
-  offline_change?: OfflineRedeemChangeJson | null;
-  block_height: OfflineJsonUnsignedInteger;
-  operation_id: OfflineFixed32Bytes;
-  authorization: OfflineAuthorizationJson;
-}
-
-export interface ToriiOfflineReadinessBlocker {
-  code: string;
-  message: string;
-}
-
-export interface ToriiOfflineVerifierId {
-  backend: string;
-  name: string;
-}
-
-export interface ToriiOfflineActiveTransferVerifier {
-  id: ToriiOfflineVerifierId;
-  version: number;
-  circuit_id: string;
-  commitment: string;
-  public_inputs_schema_hash: string;
-  max_proof_bytes: number;
-  activation_height: number | bigint;
-  withdrawal_height: number | bigint | null;
-}
-
-export type ToriiOfflineActiveTopUpShieldVerifier =
-  ToriiOfflineActiveTransferVerifier;
-
-export interface ToriiOfflineReadinessResponse {
-  asset_definition_id: string;
-  /** Authoritative live u32 scale; values above 28 accompany asset_scale_unsupported. */
-  asset_scale: number | null;
-  evaluated_block_height: number | bigint;
-  evaluated_block_hash: string;
-  active_transfer_verifier: ToriiOfflineActiveTransferVerifier | null;
-  active_topup_shield_verifier: ToriiOfflineActiveTopUpShieldVerifier | null;
-  ready: boolean;
-  blockers: ToriiOfflineReadinessBlocker[];
-}
-
-export type OfflineOperationKindTag = {
-  kind: "top_up" | "redeem";
-  value: null;
-};
-
-export type OfflinePendingStateTag = {
-  state: "pending";
-  value: null;
-};
-
-export interface OfflineOperationReference {
-  operation_id: string;
-  kind: OfflineOperationKindTag;
-  state: OfflinePendingStateTag;
-  transaction_hash: string;
-  status_uri: string;
-  submitted_at_ms: number | bigint;
-}
-
-export interface OfflineTopUpAnchor {
-  version: 2 | 2n;
-  chain_id: string;
-  payer: string;
-  asset: string;
-  asset_scale: OfflineAssetScale;
-  amount: OfflineScaledAmountJson;
-  initial_root: OfflineFixed32Bytes;
-  finalized_root: OfflineFixed32Bytes;
-  shield_leaf_index: OfflineJsonUnsignedInteger;
-  current_note: OfflineSpendableNoteJson;
-  topup_operation_id: OfflineFixed32Bytes;
-  shield_verifier_id: OfflineVerifierKeyIdJson;
-  shield_verifier_commitment: OfflineFixed32Bytes;
-  artifact_generation: string;
-  finalized_height: OfflineJsonUnsignedInteger;
-  finalized_tx_hash: OfflineFixed32Bytes;
-  anchor_digest: OfflineFixed32Bytes;
-}
-
-export interface OfflineTopUpFinalityProofAnchor {
-  topup_operation_id: OfflineFixed32Bytes;
-  anchor_digest: OfflineFixed32Bytes;
-}
-
-export type OfflineFinalityHashLiteral = `hash:${string}#${string}`;
-
-export type OfflineFinalityHeightContextId = readonly [OfflineFinalityHashLiteral];
-
-export type OfflineFinalityConsensusMode = {
-  mode: "permissioned" | "npos";
-  details: null;
-};
-
-export type OfflineFinalityPayloadEncoding = {
-  encoding: "plain" | "reed_solomon16";
-  details: null;
-};
-
-export type OfflineFixed96Bytes = readonly [
-  number, number, number, number, number, number, number, number,
-  number, number, number, number, number, number, number, number,
-  number, number, number, number, number, number, number, number,
-  number, number, number, number, number, number, number, number,
-  number, number, number, number, number, number, number, number,
-  number, number, number, number, number, number, number, number,
-  number, number, number, number, number, number, number, number,
-  number, number, number, number, number, number, number, number,
-  number, number, number, number, number, number, number, number,
-  number, number, number, number, number, number, number, number,
-  number, number, number, number, number, number, number, number,
-  number, number, number, number, number, number, number, number,
-];
-
-export interface OfflineTopUpFinalityDataAvailabilityLayout {
-  encoding: OfflineFinalityPayloadEncoding;
-  chunk_size_bytes: OfflineJsonUnsignedInteger;
-  data_shards: OfflineJsonUnsignedInteger;
-  parity_shards: OfflineJsonUnsignedInteger;
-  max_payload_size_bytes: OfflineJsonUnsignedInteger;
-  max_chunk_count: OfflineJsonUnsignedInteger;
-}
-
-export interface OfflineTopUpFinalityValidatorPower {
-  validator: string;
-  power: OfflineJsonUnsignedInteger;
-}
-
-export interface OfflineTopUpFinalityDualQuorum {
-  min_signers: OfflineJsonUnsignedInteger;
-  total_power: OfflineJsonUnsignedInteger;
-}
-
-export interface OfflineTopUpFinalityNextEpochSnapshot {
-  epoch: OfflineJsonUnsignedInteger;
-  epoch_end_height: OfflineJsonUnsignedInteger;
-  mode: OfflineFinalityConsensusMode;
-  roster: ReadonlyArray<OfflineTopUpFinalityValidatorPower>;
-  validator_set_pops: ReadonlyArray<OfflineFixed96Bytes>;
-  quorum: OfflineTopUpFinalityDualQuorum;
-  leader_seed: OfflineFixed32Bytes;
-}
-
-export interface OfflineTopUpFinalityConsensusRound {
-  context_id: OfflineFinalityHeightContextId;
-  height: OfflineJsonUnsignedInteger;
-  view: OfflineJsonUnsignedInteger;
-}
-
-export interface OfflineTopUpFinalityBlockSubject {
-  parent_block_hash?: OfflineFinalityHashLiteral;
-  block_hash: OfflineFinalityHashLiteral;
-  payload_hash: OfflineFinalityHashLiteral;
-}
-
-export interface OfflineTopUpFinalityExecutionCommitment {
-  parent_state_root: OfflineFinalityHashLiteral;
-  post_state_root: OfflineFinalityHashLiteral;
-  ordinary_writes_root: OfflineFinalityHashLiteral;
-  topup_anchor_root?: OfflineFinalityHashLiteral;
-  topup_anchor_count: OfflineJsonUnsignedInteger;
-}
-
-export interface OfflineTopUpFinalityCommitQuorumCertificate {
-  round: OfflineTopUpFinalityConsensusRound;
-  phase: { phase: "commit"; details: null };
-  subject: OfflineTopUpFinalityBlockSubject;
-  execution_commitment: OfflineTopUpFinalityExecutionCommitment;
-  signers: ReadonlyArray<OfflineJsonUnsignedInteger>;
-  aggregate_signature: OfflineFixed96Bytes;
-}
-
-export interface OfflineTopUpFinalityHeightContext {
-  context_id: OfflineFinalityHeightContextId;
-  chain_id: string;
-  protocol_version: 2 | 2n;
-  height: OfflineJsonUnsignedInteger;
-  epoch: OfflineJsonUnsignedInteger;
-  epoch_end_height: OfflineJsonUnsignedInteger;
-  next_epoch_snapshot?: OfflineTopUpFinalityNextEpochSnapshot;
-  mode: OfflineFinalityConsensusMode;
-  parent_commit_qc?: OfflineTopUpFinalityCommitQuorumCertificate;
-  nexus_amx_context_hash: OfflineFinalityHashLiteral;
-  da_layout: OfflineTopUpFinalityDataAvailabilityLayout;
-  leader_seed: OfflineFixed32Bytes;
-}
-
-export interface OfflineTopUpFinalityCompactQc {
-  height_context: OfflineTopUpFinalityHeightContext;
-  certificate: OfflineTopUpFinalityCommitQuorumCertificate;
-}
-
-export interface OfflineTopUpFinalityMerkleProof {
-  leaf_index: OfflineJsonUnsignedInteger;
-  leaf_count: OfflineJsonUnsignedInteger;
-  siblings: ReadonlyArray<OfflineFixed32Bytes>;
-}
-
-export interface OfflineTopUpFinalityProof {
-  version: 1 | 1n;
-  anchor: OfflineTopUpFinalityProofAnchor;
-  commit_qc: OfflineTopUpFinalityCompactQc;
-  anchor_path: OfflineTopUpFinalityMerkleProof;
-}
-
-export interface OfflineTopUpResult {
-  transaction_hash: string;
-  finalized_block_height: number | bigint;
-  server_time_ms: number | bigint;
-  anchor: OfflineTopUpAnchor;
-  finality_proof: OfflineTopUpFinalityProof;
-}
-
-export interface OfflineRedeemResult {
-  transaction_hash: string;
-  finalized_block_height: number | bigint;
-  server_time_ms: number | bigint;
-}
-
-export type OfflineOperationResult =
-  | { kind: "top_up"; result: OfflineTopUpResult }
-  | { kind: "redeem"; result: OfflineRedeemResult };
-
-export interface OfflineQueueErrorDetails {
-  state: string;
-  queued: number | bigint;
-  capacity: number | bigint;
-  saturated: boolean;
-}
-
-export interface OfflineAxtErrorDetails {
-  code?: string;
-  reason?: string;
-  snapshot_version?: number | bigint;
-  dataspace?: number | bigint;
-  lane?: number | bigint;
-  next_min_handle_era?: number | bigint;
-  next_min_sub_nonce?: number | bigint;
-}
-
-export interface OfflineErrorDetails {
-  layer?: string;
-  reject_code?: string;
-  queue?: OfflineQueueErrorDetails;
-  retry_after_seconds?: number | bigint;
-  endpoint?: string;
-  field?: string;
-  expected?: string;
-  actual?: string;
-  profile?: string;
-  chain_discriminant?: number | bigint;
-  tx_hash?: string;
-  last_status?: string;
-  hint?: string;
-  axt?: OfflineAxtErrorDetails;
-}
-
-export interface OfflineErrorEnvelope {
-  code: string;
-  message: string;
-  details?: OfflineErrorDetails;
-}
-
-export type OfflineOperationStatus =
-  | {
-      state: "pending";
-      value: {
-        operation_id: string;
-        kind: OfflineOperationKindTag;
-        transaction_hash: string;
-        submitted_at_ms: number | bigint;
-      };
-    }
-  | {
-      state: "applied";
-      value: {
-        operation_id: string;
-        result: OfflineOperationResult;
-      };
-    }
-  | {
-      state: "rejected";
-      value: {
-        operation_id: string;
-        kind: OfflineOperationKindTag;
-        transaction_hash: string;
-        error: OfflineErrorEnvelope;
-      };
-    };
-
 export interface ToriiStatusPayload {
   observed_at_ms: number;
   peers: number;
@@ -8136,24 +7421,24 @@ type ExclusiveSingleOrManyOptional<
 
 type DomainMintSpec = {
   assetId: string;
-  quantity: NumericLike;
+  quantity: QuantityInput;
 };
 
 type AssetDefinitionMintSpec = {
   accountId?: string;
   assetHoldingId?: string;
-  quantity: NumericLike;
+  quantity: QuantityInput;
 };
 
 type MintTransferSpec = {
   sourceAssetHoldingId?: string;
-  quantity: NumericLike;
+  quantity: QuantityInput;
   destinationAccountId: string;
 };
 
 type AccountTransferSpec = {
   sourceAssetHoldingId: string;
-  quantity: NumericLike;
+  quantity: QuantityInput;
   destinationAccountId: string;
 };
 
@@ -8353,168 +7638,6 @@ export interface RegisterSnsNameViaConsensusResult {
   status?: unknown;
 }
 
-export type KagemushaInstructionArchiveType =
-  | "KagemushaTransfer"
-  | "RedeemKagemushaRecursive"
-  | "TopUpKagemushaRecursive";
-
-export const KAGEMUSHA_TRANSFER_INSTRUCTION_WIRE_NAME: "iroha_data_model::isi::offline::KagemushaTransfer";
-export const KAGEMUSHA_REDEEM_RECURSIVE_INSTRUCTION_WIRE_NAME: "iroha_data_model::isi::offline::RedeemKagemushaRecursive";
-export const KAGEMUSHA_TOP_UP_RECURSIVE_INSTRUCTION_WIRE_NAME: "iroha_data_model::isi::offline::TopUpKagemushaRecursive";
-export const KAGEMUSHA_RECURSIVE_REDEEM_REQUEST_WIRE_NAME: "iroha_data_model::offline::model::KagemushaRecursiveSpendRedeemRequestV1";
-
-export const OFFLINE_CASH_TRANSPORT_QR: "qr";
-export const OFFLINE_CASH_TRANSPORT_NFC: "nfc";
-export const OFFLINE_CASH_TRANSPORT_NEARBY: "nearby";
-
-export type OfflineCashTransportKind = "qr" | "nfc" | "nearby";
-
-export interface OfflineCashNfcCapability {
-  readonly supported: boolean;
-  readonly reason?: string | null;
-}
-
-export interface OfflineCashTransportCapabilities {
-  readonly qr?: boolean;
-  readonly qrStreaming?: boolean;
-  readonly nfc?: boolean | OfflineCashNfcCapability;
-  readonly nearby?: boolean;
-}
-
-export interface OfflineCashConfigurationSnapshot {
-  readonly chainId: string;
-  readonly assetDefinitionId: string;
-  readonly offlinePaymentsEnabled: boolean;
-  readonly issuerPublicKeyBase64?: string | null;
-  readonly nativeBridgeAbiVersion?: number | null;
-  readonly artifactSetId?: string | null;
-  readonly circuitId?: string | null;
-  readonly createdAtMs: number;
-  readonly expiresAtMs?: number | null;
-}
-
-export class OfflineCashConfigurationSnapshotError extends Error {
-  readonly code:
-    | "offline_payments_disabled"
-    | "missing_issuer_public_key"
-    | "expired"
-    | "unsupported_native_bridge_abi"
-    | "malformed_snapshot";
-}
-
-export function assertOfflineCashConfigurationSnapshotUsable(
-  snapshot: OfflineCashConfigurationSnapshot,
-  options?: {
-    nowMs?: number;
-    requiredNativeBridgeAbiVersion?: number | null;
-  },
-): true;
-
-export function offlineCashAvailableTransportKinds(
-  capabilities?: OfflineCashTransportCapabilities,
-): OfflineCashTransportKind[];
-
-export interface OfflineCashAuditReceiptSynchronizer {
-  readonly hasPendingAuditReceipts?:
-    | boolean
-    | (() => boolean | Promise<boolean>);
-  syncPendingAuditReceipts(): void | Promise<void>;
-}
-
-export class OfflineCashLifecycleController {
-  constructor(input: {
-    wallet: object;
-    auditReceiptSynchronizer?: OfflineCashAuditReceiptSynchronizer | null;
-  });
-  syncPendingAuditReceiptsIfNeeded(): Promise<boolean>;
-  load(assetDefinitionId: string, amount: string): Promise<unknown>;
-  prepareReceive(assetDefinitionId: string, amount: string): unknown;
-  createPayment(receiveRequest: unknown): unknown;
-  acceptPayment(paymentToken: unknown): unknown;
-  redeem(note: unknown, recipient?: string | null): unknown;
-}
-
-export interface KagemushaInstructionArchiveInput {
-  type?: KagemushaInstructionArchiveType;
-  instructionType?: KagemushaInstructionArchiveType;
-  instruction_type?: KagemushaInstructionArchiveType;
-  instructionArchive?: BinaryLike;
-  instruction_archive?: BinaryLike;
-  archive?: BinaryLike;
-  bytes?: BinaryLike;
-  bytesBase64?: string;
-  bytes_base64?: string;
-}
-
-export interface KagemushaInstructionTransactionInput
-  extends KagemushaInstructionArchiveInput {
-  chainId: string;
-  authority: string;
-  metadata?: MetadataLike;
-  creationTimeMs?: number | null;
-  ttlMs?: number | null;
-  nonce?: number | null;
-  privateKey: Buffer | ArrayBuffer | ArrayBufferView;
-  privateKeyAlgorithm?: string | null;
-}
-
-export interface KagemushaRecursiveRedeemTransactionBaseInput {
-  chainId: string;
-  authority: string;
-  metadata?: MetadataLike;
-  creationTimeMs?: number | null;
-  ttlMs?: number | null;
-  nonce?: number | null;
-  privateKey: Buffer | ArrayBuffer | ArrayBufferView;
-  privateKeyAlgorithm?: string | null;
-}
-
-export type KagemushaRecursiveRedeemArchiveInput =
-  | {
-      redeemRequestArchive: BinaryLike;
-      redeem_request_archive?: never;
-      requestArchive?: never;
-    }
-  | {
-      redeemRequestArchive?: never;
-      redeem_request_archive: BinaryLike;
-      requestArchive?: never;
-    }
-  | {
-      redeemRequestArchive?: never;
-      redeem_request_archive?: never;
-      requestArchive: BinaryLike;
-    };
-
-export type KagemushaRecursiveRedeemTransactionInput =
-  KagemushaRecursiveRedeemTransactionBaseInput &
-    KagemushaRecursiveRedeemArchiveInput;
-
-export interface KagemushaRecursiveTopUpTransactionBaseInput {
-  chainId: string;
-  authority: string;
-  metadata?: MetadataLike;
-  creationTimeMs?: number | null;
-  ttlMs?: number | null;
-  nonce?: number | null;
-  privateKey: Buffer | ArrayBuffer | ArrayBufferView;
-  privateKeyAlgorithm?: string | null;
-}
-
-export type KagemushaRecursiveTopUpArchiveInput =
-  | {
-      topUpRequestArchive: BinaryLike;
-      top_up_request_archive?: never;
-    }
-  | {
-      topUpRequestArchive?: never;
-      top_up_request_archive: BinaryLike;
-    };
-
-export type KagemushaRecursiveTopUpTransactionInput =
-  KagemushaRecursiveTopUpTransactionBaseInput &
-    KagemushaRecursiveTopUpArchiveInput;
-
 export interface IvmProvedTransactionAssemblyInput {
   chainId: string;
   authority: string;
@@ -8648,7 +7771,7 @@ export interface RequiredIvmOverlayTransfer {
   source_asset_holding_id?: string;
   sourceAssetId?: string;
   source_asset_id?: string;
-  quantity: NumericLike;
+  quantity: QuantityInput;
   destinationAccountId?: string;
   destination_account_id?: string;
 }
@@ -8779,7 +7902,7 @@ export interface MintAssetInput {
   chainId: string;
   authority: string;
   assetHoldingId: string;
-  quantity: NumericLike;
+  quantity: QuantityInput;
   metadata?: MetadataLike;
   creationTimeMs?: number | null;
   ttlMs?: number | null;
@@ -8792,7 +7915,7 @@ export interface BurnAssetInput {
   chainId: string;
   authority: string;
   assetHoldingId: string;
-  quantity: NumericLike;
+  quantity: QuantityInput;
   metadata?: MetadataLike;
   creationTimeMs?: number | null;
   ttlMs?: number | null;
@@ -8831,7 +7954,7 @@ export interface TransferAssetInput {
   chainId: string;
   authority: string;
   sourceAssetHoldingId: string;
-  quantity: NumericLike;
+  quantity: QuantityInput;
   destinationAccountId: string;
   metadata?: MetadataLike;
   creationTimeMs?: number | null;
@@ -8886,7 +8009,7 @@ export interface TransferNftInput {
 export interface RwaParentRefInput {
   rwa?: string;
   rwaId?: string;
-  quantity: NumericLike;
+  quantity: QuantityInput;
 }
 
 export interface RwaControlPolicyInput {
@@ -8906,7 +8029,7 @@ export interface RwaControlPolicyInput {
 
 export interface RegisterRwaPayloadInput {
   domain: string;
-  quantity: NumericLike;
+  quantity: QuantityInput;
   spec?: Record<string, unknown> | null;
   primaryReference?: string;
   primary_reference?: string;
@@ -8942,7 +8065,7 @@ export interface TransferRwaInput {
   authority: string;
   sourceAccountId: string;
   rwaId: string;
-  quantity: NumericLike;
+  quantity: QuantityInput;
   destinationAccountId: string;
   metadata?: MetadataLike;
   creationTimeMs?: number | null;
@@ -8969,7 +8092,7 @@ export interface RedeemRwaInput {
   chainId: string;
   authority: string;
   rwaId: string;
-  quantity: NumericLike;
+  quantity: QuantityInput;
   metadata?: MetadataLike;
   creationTimeMs?: number | null;
   ttlMs?: number | null;
@@ -8996,7 +8119,7 @@ export interface HoldRwaInput {
   chainId: string;
   authority: string;
   rwaId: string;
-  quantity: NumericLike;
+  quantity: QuantityInput;
   metadata?: MetadataLike;
   creationTimeMs?: number | null;
   ttlMs?: number | null;
@@ -9011,7 +8134,7 @@ export interface ForceTransferRwaInput {
   chainId: string;
   authority: string;
   rwaId: string;
-  quantity: NumericLike;
+  quantity: QuantityInput;
   destinationAccountId: string;
   metadata?: MetadataLike;
   creationTimeMs?: number | null;
@@ -9073,7 +8196,7 @@ interface MintAndTransferInputBase {
   authority: string;
   mint: {
     assetHoldingId: string;
-    quantity: NumericLike;
+    quantity: QuantityInput;
   };
   metadata?: MetadataLike;
   creationTimeMs?: number | null;
@@ -9930,6 +9053,10 @@ export interface ContractCallRequest {
   contractAlias?: string;
   entrypoint: string;
   payload?: unknown;
+  creationTimeMs?: NumericLike | null;
+  creation_time_ms?: NumericLike | null;
+  transactionTtlMs?: NumericLike | null;
+  transaction_ttl_ms?: NumericLike | null;
   gasAssetId?: string | null;
   gas_asset_id?: string | null;
   feeSponsor?: string | null;
@@ -11748,6 +10875,20 @@ export declare class TransactionTimeoutError extends Error {
   readonly payload: ToriiPipelineTransactionStatus | null;
 }
 
+export declare class TransactionBatchAdmissionAmbiguousError extends Error {
+  constructor(
+    message: string,
+    expectedCount: number,
+    acceptedCount?: number | null,
+    cause?: unknown,
+  );
+  readonly expectedCount: number;
+  readonly acceptedCount: number | null;
+  readonly ambiguous: true;
+  readonly retryable: false;
+  readonly cause?: unknown;
+}
+
 export declare class IsoMessageTimeoutError extends Error {
   constructor(
     messageId: string,
@@ -11934,14 +11075,14 @@ export declare class ToriiBrowserClient {
     selector: MultisigAccountSelector,
     options?: Record<string, unknown>,
   ): Promise<MultisigSpecResponse>;
-  queryMultisigProposals(
-    selector: MultisigProposalsQueryRequest,
+  listMultisigProposals(
+    selector: MultisigProposalsListRequest,
     options?: Record<string, unknown>,
-  ): Promise<MultisigProposalsQueryResponse>;
-  lookupMultisigProposal(
-    request: MultisigProposalLookupRequest,
+  ): Promise<MultisigProposalsListResponse>;
+  getMultisigProposal(
+    request: MultisigProposalGetRequest,
     options?: Record<string, unknown>,
-  ): Promise<MultisigProposalLookupResponse>;
+  ): Promise<MultisigProposalGetResponse>;
   submitMultisigPropose(
     request: Record<string, unknown>,
     options?: Record<string, unknown>,
@@ -11953,24 +11094,7 @@ export declare class ToriiBrowserClient {
   submitMultisigContractCallApprove(
     request: Record<string, unknown>,
     options?: Record<string, unknown>,
-  ): Promise<unknown>;
-  getOfflineReadiness(
-    assetDefinitionId: string,
-    options?: { signal?: AbortSignal },
-  ): Promise<ToriiOfflineReadinessResponse>;
-  submitOfflineTopUp(
-    request: OfflineTopUpRequestJson,
-    options?: { signal?: AbortSignal },
-  ): Promise<OfflineOperationReference>;
-  submitOfflineRedeem(
-    request: OfflineRedeemRequestJson,
-    options?: { signal?: AbortSignal },
-  ): Promise<OfflineOperationReference>;
-  getOfflineOperationStatus(
-    operationId: string,
-    options?: { signal?: AbortSignal },
-  ): Promise<OfflineOperationStatus>;
-  getSumeragiStatus(options?: Record<string, unknown>): Promise<unknown>;
+  ): Promise<unknown>;  getSumeragiStatus(options?: Record<string, unknown>): Promise<unknown>;
   getSumeragiTelemetry(options?: Record<string, unknown>): Promise<unknown>;
   listKaigiRelays(options?: Record<string, unknown>): Promise<unknown>;
   getKaigiRelay(
@@ -13106,14 +12230,14 @@ export declare class ToriiClient {
     request: MultisigAccountSelector,
     options?: { signal?: AbortSignal },
   ): Promise<MultisigSpecResponse>;
-  queryMultisigProposals(
-    request: MultisigProposalsQueryRequest,
+  listMultisigProposals(
+    request: MultisigProposalsListRequest,
     options?: { signal?: AbortSignal },
-  ): Promise<MultisigProposalsQueryResponse>;
-  lookupMultisigProposal(
-    request: MultisigProposalLookupRequest,
+  ): Promise<MultisigProposalsListResponse>;
+  getMultisigProposal(
+    request: MultisigProposalGetRequest,
     options?: { signal?: AbortSignal },
-  ): Promise<MultisigProposalLookupResponse>;
+  ): Promise<MultisigProposalGetResponse>;
   getContractManifest(
     codeHashHex: string,
   ): Promise<ContractManifestRecord | null>;
@@ -13206,24 +12330,7 @@ export declare class ToriiClient {
     subscriptionId: string,
     request: SubscriptionUsageRequest,
     options?: { signal?: AbortSignal },
-  ): Promise<SubscriptionActionResponse>;
-  getOfflineReadiness(
-    assetDefinitionId: string,
-    options?: { signal?: AbortSignal },
-  ): Promise<ToriiOfflineReadinessResponse>;
-  submitOfflineTopUp(
-    request: OfflineTopUpRequestJson,
-    options?: { signal?: AbortSignal },
-  ): Promise<OfflineOperationReference>;
-  submitOfflineRedeem(
-    request: OfflineRedeemRequestJson,
-    options?: { signal?: AbortSignal },
-  ): Promise<OfflineOperationReference>;
-  getOfflineOperationStatus(
-    operationId: string,
-    options?: { signal?: AbortSignal },
-  ): Promise<OfflineOperationStatus>;
-}
+  ): Promise<SubscriptionActionResponse>;}
 
 export interface NoritoRpcClientOptions {
   fetchImpl?: typeof fetch;
@@ -13424,423 +12531,6 @@ export function deriveConfidentialNullifierV2(input: {
   rho?: ArrayBufferView | ArrayBuffer | Buffer;
 }): { nullifier: Buffer; nullifierHex: string };
 
-export const KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1: "recursive_spend_v1";
-export const KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_NATIVE_BRIDGE_ABI_VERSION: 18;
-export const KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_NATIVE_BRIDGE_ABI_VERSION: 7;
-export const KAGEMUSHA_RECURSIVE_SPEND_TOPUP_REQUIRED_NATIVE_BRIDGE_ABI_VERSION: 15;
-export const KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1: "kagemusha-recursive-compact-v1";
-export const KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE_FRAGMENT: "recursive compact Kagemusha payment-token multi-hop proving requires the append verifier batch";
-export const KAGEMUSHA_RECURSIVE_COMPACT_MULTI_HOP_UNAVAILABLE_FRAGMENT: "recursive compact Kagemusha multi-hop payment-token proving requires the append verifier batch";
-export const KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND: "halo2/ipa";
-export const KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1: "kagemusha-recursive-aggregation-v1";
-export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1: "kagemusha-recursive-spend-lineage-onehop-v1";
-export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1: "kagemusha-recursive-spend-lineage-append-v1";
-export const KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS: 64;
-export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1: 64;
-export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1: false;
-export const KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_REQUIRED_COUNT_V1: 1;
-export const KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_MAX_BYTES: 8388608;
-export const KAGEMUSHA_RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES: 128;
-export const KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES: 268435456;
-export const KAGEMUSHA_RECURSIVE_SPEND_ACCUMULATOR_DOMAIN: "iroha:kagemusha:v1:recursive-spend-accumulator";
-export const KAGEMUSHA_RECURSIVE_TOPUP_REQUEST_WIRE_NAME: "iroha_data_model::offline::model::KagemushaRecursiveSpendTopUpRequestV1";
-export const KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROFILE_DOMAIN: "iroha:kagemusha:v1:recursive-spend-transition-profile";
-export const KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROFILE_DIGEST_DOMAIN: "iroha:kagemusha:v1:recursive-spend-transition-profile-digest";
-export const KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROFILE_BINDING_DIGEST_DOMAIN: "iroha:kagemusha:v1:recursive-spend-transition-profile-binding-digest";
-export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_OPENINGS_PREFLIGHT_DOMAIN_V1: "iroha:kagemusha:recursive-spend-lineage-append-openings-preflight:v1";
-export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_DOMAIN_V1: "iroha:kagemusha:recursive-spend-lineage-append-boundary:v1";
-export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_CHAIN_ASSET_BINDING_DOMAIN_V1: "iroha:kagemusha:recursive-spend-lineage-append-boundary-chain-asset:v1";
-export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_FINAL_NOTE_BINDING_DOMAIN_V1: "iroha:kagemusha:recursive-spend-lineage-append-boundary-final-note:v1";
-export const KAGEMUSHA_RECURSIVE_SPEND_INIT_REQUEST_WIRE_NAME: "iroha_data_model::offline::model::KagemushaRecursiveSpendInitRequestV1";
-export const KAGEMUSHA_RECURSIVE_SPEND_APPEND_REQUEST_WIRE_NAME: "iroha_data_model::offline::model::KagemushaRecursiveSpendAppendRequestV1";
-export const KAGEMUSHA_RECURSIVE_SPEND_VERIFY_REQUEST_WIRE_NAME: "iroha_data_model::offline::model::KagemushaRecursiveSpendVerifyRequestV1";
-export const KAGEMUSHA_RECURSIVE_SPEND_VERIFY_RESULT_WIRE_NAME: "iroha_data_model::offline::model::KagemushaRecursiveSpendVerifyResultV1";
-export const KAGEMUSHA_RECURSIVE_SPEND_REDEEM_REQUEST_WIRE_NAME: "iroha_data_model::offline::model::KagemushaRecursiveSpendRedeemRequestV1";
-export const KAGEMUSHA_RECURSIVE_SPEND_BUNDLE_WIRE_NAME: "iroha_data_model::offline::model::KagemushaRecursiveSpendBundleV1";
-export const KAGEMUSHA_RECURSIVE_SPEND_RECORD_BUNDLE_WIRE_NAME: "iroha_data_model::offline::model::KagemushaVerifiedFoldRecordBundle";
-export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESS_WIRE_NAME: "iroha_data_model::offline::model::KagemushaRecursiveSpendLineageWitnessV1";
-export const KAGEMUSHA_PROOF_ATTACHMENT_WIRE_NAME: "iroha_data_model::proof::ProofAttachment";
-export const KAGEMUSHA_VERIFYING_KEY_RECORD_WIRE_NAME: "iroha_data_model::proof::VerifyingKeyRecord";
-export class KagemushaRecursiveSpendRequestCodecError extends Error {
-  readonly kind: "field" | "archive" | string;
-  readonly field: string;
-  constructor(kind: string, field: string, message?: string);
-}
-export type KagemushaOfflineSpendMode = "recursive_spend_v1";
-export type KagemushaRecursiveSpendLineageKeyArtifactOpeningLen =
-  | 2
-  | 4
-  | 8
-  | 16
-  | 32
-  | 64
-  | 128;
-export type KagemushaRecursiveSpendLineageKeyArtifactBytesLike =
-  | Buffer
-  | ArrayBuffer
-  | ArrayBufferView;
-export interface KagemushaRecursiveSpendLineageKeyArtifacts {
-  readonly proofCircuitId:
-    | typeof KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1
-    | typeof KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1;
-  readonly verifierOpeningLen: KagemushaRecursiveSpendLineageKeyArtifactOpeningLen;
-  readonly lineageVerifierKeyBackend: typeof KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND;
-  readonly lineageVerifierKey: Buffer;
-  readonly lineageProvingKeyArchive: Buffer;
-  readonly isInitArtifact: boolean;
-  readonly isAppendArtifact: boolean;
-}
-export function preferredKagemushaOfflineSpendMode(): KagemushaOfflineSpendMode | null;
-export function preferredKagemushaOfflineSpendMode(
-  pastaCycleV3BackendAvailable: boolean,
-): KagemushaOfflineSpendMode | null;
-export function isKagemushaSpendAgainMode(
-  value: unknown,
-): value is KagemushaOfflineSpendMode;
-export function canRedeemKagemushaRecursiveSpendWitnessless(
-  proofCircuitId: string,
-  hopCount: number,
-): boolean;
-export function isKagemushaRecursiveSpendLineageProofCircuitId(
-  proofCircuitId?: string | null,
-): boolean;
-export function isKagemushaRecursiveSpendLineageAppendOutputCircuitId(
-  outputProofCircuitId: string,
-): boolean;
-export function isSupportedKagemushaRecursiveSpendLineageKeyArtifactOpeningLen(
-  verifierOpeningLen: unknown,
-): verifierOpeningLen is KagemushaRecursiveSpendLineageKeyArtifactOpeningLen;
-export function kagemushaRecursiveSpendLineageKeyArtifactsForInit(
-  verifierOpeningLen: KagemushaRecursiveSpendLineageKeyArtifactOpeningLen,
-  lineageVerifierKeyBackend: typeof KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND,
-  lineageVerifierKey: KagemushaRecursiveSpendLineageKeyArtifactBytesLike,
-  lineageProvingKeyArchive: KagemushaRecursiveSpendLineageKeyArtifactBytesLike,
-): KagemushaRecursiveSpendLineageKeyArtifacts;
-export function kagemushaRecursiveSpendLineageKeyArtifactsForAppend(
-  verifierOpeningLen: KagemushaRecursiveSpendLineageKeyArtifactOpeningLen,
-  lineageVerifierKeyBackend: typeof KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND,
-  lineageVerifierKey: KagemushaRecursiveSpendLineageKeyArtifactBytesLike,
-  lineageProvingKeyArchive: KagemushaRecursiveSpendLineageKeyArtifactBytesLike,
-): KagemushaRecursiveSpendLineageKeyArtifacts;
-export function kagemushaRecursiveSpendLineageKeyArtifacts(
-  proofCircuitId:
-    | typeof KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1
-    | typeof KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
-  verifierOpeningLen: KagemushaRecursiveSpendLineageKeyArtifactOpeningLen,
-  lineageVerifierKeyBackend: typeof KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND,
-  lineageVerifierKey: KagemushaRecursiveSpendLineageKeyArtifactBytesLike,
-  lineageProvingKeyArchive: KagemushaRecursiveSpendLineageKeyArtifactBytesLike,
-): KagemushaRecursiveSpendLineageKeyArtifacts;
-export function validateKagemushaRecursiveSpendLineageKeyArtifacts(
-  artifacts: KagemushaRecursiveSpendLineageKeyArtifacts,
-): KagemushaRecursiveSpendLineageKeyArtifacts;
-export function requiresKagemushaRecursiveSpendLineageKeyArtifactsForInit(): boolean;
-export function requiresKagemushaRecursiveSpendLineageKeyArtifactsForAppendOutput(
-  outputProofCircuitId: string,
-): boolean;
-export function requiresKagemushaRecursiveSpendLineageWitnessForRedeem(
-  proofCircuitId: string,
-  hopCount: number,
-): boolean;
-export function canAppendKagemushaRecursiveSpendWitnesslessLineage(
-  previousHopCount: number,
-): boolean;
-export function normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId(
-  outputProofCircuitId: string,
-): string;
-export function isSupportedKagemushaRecursiveSpendAppendOutputProofCircuitId(
-  outputProofCircuitId: string,
-): boolean;
-export function isSupportedKagemushaRecursiveSpendPreviousProofCircuitId(
-  previousProofCircuitId?: string | null,
-): boolean;
-export function requiresKagemushaRecursiveSpendPreviousLineageVerifierRecordForAppend(
-  previousProofCircuitId?: string | null,
-): boolean;
-export function isSupportedKagemushaRecursiveSpendAppendProofTransition(
-  previousProofCircuitId: string | null | undefined,
-  outputProofCircuitId: string,
-): boolean;
-export function preferredKagemushaRecursiveSpendAppendOutputProofCircuitId(
-  previousHopCount: number,
-): string;
-export function canProveKagemushaRecursiveSpendAppendOutputProofCircuitId(
-  outputProofCircuitId: string,
-  previousHopCount: number,
-): boolean;
-export function canSelectKagemushaRecursiveSpendAppendOutputProofCircuitId(
-  previousProofCircuitId: string | null | undefined,
-  outputProofCircuitId: string,
-  previousHopCount: number,
-): boolean;
-export function requiresKagemushaRecursiveSpendPreviousProofOpenEnvelopesForAppend(
-  outputProofCircuitId: string,
-  previousHopCount: number,
-): boolean;
-export function isKagemushaRecursiveSpendNativeAvailable(): boolean;
-export function isKagemushaRecursiveSpendTopUpNativeAvailable(): boolean;
-export function isKagemushaCompactPaymentTokenNativeAvailable(): boolean;
-export function isKagemushaRecursiveAggregationProofBundleNativeAvailable(): boolean;
-export function isKagemushaPallasOpenEnvelopeBuilderNativeAvailable(): boolean;
-export function isKagemushaRecursiveCompactPaymentTokenNativeAvailable(): boolean;
-export function isKagemushaRecursiveCompactPaymentTokenVerifierNativeAvailable(): boolean;
-export function isKagemushaRecursiveCompactUnavailable(error: unknown): boolean;
-export function isKagemushaRecursiveSpendCompactPaymentTokenProjectionNativeAvailable(): boolean;
-export function isKagemushaRecursiveSpendCompactPaymentTokenProjectionVerifierNativeAvailable(): boolean;
-export function kagemushaProveVerifiedCompactPaymentTokenWithRecords(
-  recordBundleArchive: BinaryLike,
-): Buffer;
-export function kagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
-  recordBundleArchive: BinaryLike,
-  pallasOpenEnvelopesArchive: BinaryLike,
-): Buffer;
-export function kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
-  recordBundleArchive: BinaryLike,
-  pallasOpenEnvelopesArchive: BinaryLike,
-  recursiveCompactKeyArtifactsArchive: BinaryLike,
-): Buffer;
-export function kagemushaBuildPallasOpenEnvelopesArchive(
-  recordBundleArchive: BinaryLike,
-): Buffer;
-export function kagemushaBuildPreviousProofOpenEnvelopesArchive(
-  previousBundleArchive: BinaryLike,
-): Buffer;
-export function kagemushaVerifyRecursiveCompactPaymentToken(
-  compactTokenArchive: BinaryLike,
-  recursiveCompactVerifierKeysArchive: BinaryLike,
-): boolean;
-export function kagemushaRecursiveSpendCompactPaymentTokenFromBundle(
-  bundleArchive: BinaryLike,
-): Buffer;
-export function kagemushaVerifyRecursiveSpendCompactPaymentTokenProjection(
-  compactTokenArchive: BinaryLike,
-  verifierRecordArchive: BinaryLike,
-  blockHeight?: number | bigint | null,
-): boolean;
-export interface KagemushaRecursiveSpendableNoteDescriptorInput {
-  readonly noteCommitment?: BinaryLike;
-  readonly note_commitment?: BinaryLike;
-  readonly commitment?: BinaryLike;
-  readonly spendNullifier?: BinaryLike;
-  readonly spend_nullifier?: BinaryLike;
-  readonly nullifier?: BinaryLike;
-  readonly amount: NumericLike;
-}
-export interface KagemushaRecursiveSpendableNoteDescriptor {
-  readonly noteCommitment: Buffer;
-  readonly note_commitment: Buffer;
-  readonly spendNullifier: Buffer;
-  readonly spend_nullifier: Buffer;
-  readonly amount: string;
-}
-export interface KagemushaRecursiveSpendVerifierRecordRefInput {
-  readonly verifierKeyId?: string;
-  readonly verifier_key_id?: string;
-  readonly recordBytes?: BinaryLike;
-  readonly record_bytes?: BinaryLike;
-}
-export interface KagemushaRecursiveSpendVerifierRecordRef {
-  readonly verifierKeyId: string;
-  readonly verifier_key_id: string;
-  readonly recordBytes: Buffer;
-  readonly record_bytes: Buffer;
-}
-export interface KagemushaRecursiveSpendInitRequestInput {
-  readonly recordBundle?: BinaryLike;
-  readonly record_bundle?: BinaryLike;
-  readonly pallasOpenEnvelopes?: BinaryLike;
-  readonly pallas_open_envelopes?: BinaryLike;
-  readonly pallasOpenEnvelopesArchive?: BinaryLike;
-  readonly currentNote?: KagemushaRecursiveSpendableNoteDescriptorInput;
-  readonly current_note?: KagemushaRecursiveSpendableNoteDescriptorInput;
-  readonly lineageKeyArtifacts?: KagemushaRecursiveSpendLineageKeyArtifacts | null;
-  readonly lineage_key_artifacts?: KagemushaRecursiveSpendLineageKeyArtifacts | null;
-  readonly lineageVerifierKey?: BinaryLike | null;
-  readonly lineage_verifier_key?: BinaryLike | null;
-  readonly lineageProvingKeyArchive?: BinaryLike | null;
-  readonly lineage_proving_key_archive?: BinaryLike | null;
-  readonly blockHeight?: number | bigint | string | null;
-  readonly block_height?: number | bigint | string | null;
-}
-export interface KagemushaRecursiveSpendAppendRequestBaseInput {
-  readonly previousBundle?: BinaryLike;
-  readonly previous_bundle?: BinaryLike;
-  readonly recordBundle?: BinaryLike;
-  readonly record_bundle?: BinaryLike;
-  readonly pallasOpenEnvelopes?: BinaryLike;
-  readonly pallas_open_envelopes?: BinaryLike;
-  readonly pallasOpenEnvelopesArchive?: BinaryLike;
-  readonly currentNote?: KagemushaRecursiveSpendableNoteDescriptorInput;
-  readonly current_note?: KagemushaRecursiveSpendableNoteDescriptorInput;
-  readonly previousLineageVerifierRecord?: KagemushaRecursiveSpendVerifierRecordRefInput | null;
-  readonly previous_lineage_verifier_record?: KagemushaRecursiveSpendVerifierRecordRefInput | null;
-  readonly previousProofOpenEnvelopes?: BinaryLike | null;
-  readonly previous_proof_open_envelopes?: BinaryLike | null;
-  readonly previousRecursiveProofOpenEnvelopesArchive?: BinaryLike | null;
-  readonly lineageKeyArtifacts?: KagemushaRecursiveSpendLineageKeyArtifacts | null;
-  readonly lineage_key_artifacts?: KagemushaRecursiveSpendLineageKeyArtifacts | null;
-  readonly lineageVerifierKey?: BinaryLike | null;
-  readonly lineage_verifier_key?: BinaryLike | null;
-  readonly lineageProvingKeyArchive?: BinaryLike | null;
-  readonly lineage_proving_key_archive?: BinaryLike | null;
-  readonly blockHeight?: number | bigint | string | null;
-  readonly block_height?: number | bigint | string | null;
-}
-export type KagemushaRecursiveSpendAppendRequestInput =
-  KagemushaRecursiveSpendAppendRequestBaseInput &
-    (
-      | {
-          readonly outputProofCircuitId: string;
-          readonly output_proof_circuit_id?: never;
-        }
-      | {
-          readonly outputProofCircuitId?: never;
-          readonly output_proof_circuit_id: string;
-        }
-    );
-export interface KagemushaRecursiveSpendVerifyRequestInput {
-  readonly bundle: BinaryLike;
-  readonly lineageVerifierRecord?: KagemushaRecursiveSpendVerifierRecordRefInput | null;
-  readonly lineage_verifier_record?: KagemushaRecursiveSpendVerifierRecordRefInput | null;
-  readonly blockHeight?: number | bigint | string | null;
-  readonly block_height?: number | bigint | string | null;
-}
-export interface KagemushaRecursiveSpendRedeemRequestInput {
-  readonly bundle: BinaryLike;
-  readonly recipient: string;
-  readonly publicAmount?: NumericLike;
-  readonly public_amount?: NumericLike;
-  readonly redeemProof?: BinaryLike;
-  readonly redeem_proof?: BinaryLike;
-  readonly lineageWitness?: BinaryLike | null;
-  readonly lineage_witness?: BinaryLike | null;
-  readonly changeOutput?: BinaryLike | null;
-  readonly change_output?: BinaryLike | null;
-  readonly lineageVerifierRecord?: KagemushaRecursiveSpendVerifierRecordRefInput | null;
-  readonly lineage_verifier_record?: KagemushaRecursiveSpendVerifierRecordRefInput | null;
-  readonly lineageVerifierRecords?: readonly KagemushaRecursiveSpendVerifierRecordRefInput[] | null;
-  readonly lineage_verifier_records?: readonly KagemushaRecursiveSpendVerifierRecordRefInput[] | null;
-  readonly blockHeight?: number | bigint | string | null;
-  readonly block_height?: number | bigint | string | null;
-}
-export interface KagemushaRecursiveSpendTopUpRequestInput {
-  readonly assetId?: string;
-  readonly asset_id?: string;
-  readonly asset?: string;
-  readonly accountId?: string;
-  readonly account_id?: string;
-  readonly assetDefinitionId?: string;
-  readonly asset_definition_id?: string;
-  readonly amount: NumericLike;
-  readonly initRequestArchive?: BinaryLike;
-  readonly init_request_archive?: BinaryLike;
-}
-export interface KagemushaRecursiveSpendVerifyResult {
-  readonly valid: boolean;
-  readonly hopCount: number;
-  readonly hop_count: number;
-  readonly encodedBytes: number;
-  readonly encoded_bytes: number;
-  readonly reason: string;
-  readonly chainAdmissible: boolean;
-  readonly chain_admissible: boolean;
-  readonly chainAdmissionReason: string;
-  readonly chain_admission_reason: string;
-  readonly witnesslessRedeemSupported: boolean;
-  readonly witnessless_redeem_supported: boolean;
-  readonly lineageWitnessRequiredForRedeem: boolean;
-  readonly lineage_witness_required_for_redeem: boolean;
-}
-export interface KagemushaRecursiveSpendBundleSummary {
-  readonly hopCount: number;
-  readonly hop_count: number;
-  readonly proofCircuitId: string;
-  readonly proof_circuit_id: string;
-  readonly asset: string;
-  readonly chainId: string;
-  readonly chain_id: string;
-  readonly initialRoot: Buffer;
-  readonly initial_root: Buffer;
-  readonly finalRoot: Buffer;
-  readonly final_root: Buffer;
-  readonly currentNote: KagemushaRecursiveSpendableNoteDescriptor;
-  readonly current_note: KagemushaRecursiveSpendableNoteDescriptor;
-  readonly topupAnchorNullifiers: readonly Buffer[];
-  readonly topup_anchor_nullifiers: readonly Buffer[];
-}
-export function buildKagemushaRecursiveSpendableNoteDescriptor(
-  input: KagemushaRecursiveSpendableNoteDescriptorInput,
-): KagemushaRecursiveSpendableNoteDescriptor;
-export function buildKagemushaRecursiveSpendVerifierRecordRef(
-  input: KagemushaRecursiveSpendVerifierRecordRefInput,
-): KagemushaRecursiveSpendVerifierRecordRef;
-export function encodeKagemushaRecursiveSpendInitRequest(
-  request: KagemushaRecursiveSpendInitRequestInput,
-): Buffer;
-export function encodeKagemushaRecursiveSpendTopUpRequest(
-  request: KagemushaRecursiveSpendTopUpRequestInput,
-): Buffer;
-export function encodeKagemushaRecursiveSpendAppendRequest(
-  request: KagemushaRecursiveSpendAppendRequestInput,
-): Buffer;
-export function encodeKagemushaRecursiveSpendVerifyRequest(
-  request: KagemushaRecursiveSpendVerifyRequestInput,
-): Buffer;
-export function encodeKagemushaRecursiveSpendRedeemRequest(
-  request: KagemushaRecursiveSpendRedeemRequestInput,
-): Buffer;
-export function decodeKagemushaRecursiveSpendVerifyResult(
-  archive: BinaryLike,
-): KagemushaRecursiveSpendVerifyResult;
-export function decodeKagemushaRecursiveSpendBundle(
-  archive: BinaryLike,
-): KagemushaRecursiveSpendBundleSummary;
-export function kagemushaRecursiveSpendInitTyped(
-  request: KagemushaRecursiveSpendInitRequestInput,
-): Buffer;
-export function kagemushaRecursiveSpendTopUpTyped(
-  request: KagemushaRecursiveSpendTopUpRequestInput,
-): Buffer;
-export function kagemushaRecursiveSpendAppendTyped(
-  request: KagemushaRecursiveSpendAppendRequestInput,
-): Buffer;
-export function kagemushaRecursiveSpendVerifyTyped(
-  request: KagemushaRecursiveSpendVerifyRequestInput,
-): KagemushaRecursiveSpendVerifyResult;
-export function kagemushaRecursiveSpendRedeemTyped(
-  request: KagemushaRecursiveSpendRedeemRequestInput,
-): Buffer;
-export function kagemushaRecursiveSpendInit(requestArchive: BinaryLike): Buffer;
-export function kagemushaRecursiveSpendTopUp(
-  requestArchive: BinaryLike,
-): Buffer;
-export function kagemushaRecursiveSpendAppend(
-  requestArchive: BinaryLike,
-): Buffer;
-export function kagemushaRecursiveSpendTransitionProfileInit(
-  requestArchive: BinaryLike,
-): Buffer;
-export function kagemushaRecursiveSpendTransitionProfileAppend(
-  requestArchive: BinaryLike,
-): Buffer;
-export function kagemushaRecursiveSpendLineageAppendBoundary(
-  profileArchive: BinaryLike,
-): Buffer;
-export function kagemushaRecursiveSpendLineageWitnessFromInitResult(
-  requestArchive: BinaryLike,
-  bundleArchive: BinaryLike,
-): Buffer;
-export function kagemushaRecursiveSpendLineageWitnessAppendResult(
-  previousWitnessArchive: BinaryLike,
-  requestArchive: BinaryLike,
-  bundleArchive: BinaryLike,
-): Buffer;
-export function kagemushaRecursiveSpendVerify(
-  requestArchive: BinaryLike,
-): Buffer;
-export function kagemushaRecursiveSpendRedeem(
-  requestArchive: BinaryLike,
-): Buffer;
 export const PRIVACY_NATIVE_ARCHIVE_MAX_BYTES: number;
 export function isPrivacyNativeAvailable(): boolean;
 export function privacyCapabilitiesV1(): Buffer;
@@ -14049,6 +12739,15 @@ export function hashSignedTransactionPayload(
   options?: { encoding?: BufferEncoding | "buffer" },
 ): string | Buffer;
 
+export function decodeSignedTransaction(
+  signedTransaction: ArrayBufferView | ArrayBuffer | Buffer,
+): Record<string, unknown>;
+
+export function encodeContractArgumentRecord(
+  argumentSchema: Record<string, unknown>,
+  payload: Record<string, unknown>,
+): Buffer;
+
 export function hashInstructionBatch(
   instructions: Array<object | string>,
   options?: { encoding?: BufferEncoding | "buffer" },
@@ -14059,227 +12758,6 @@ export function resignSignedTransaction(
   privateKey: ArrayBufferView | ArrayBuffer | Buffer,
 ): Buffer;
 
-export const OfflineQrStreamFrameKind: Readonly<{
-  header: number;
-  data: number;
-  parity: number;
-}>;
-
-export const OfflineQrStreamFrameEncoding: Readonly<{
-  binary: "binary";
-  base64: "base64";
-}>;
-
-export const OfflineQrPayloadKind: Readonly<{
-  unspecified: number;
-  offlineReceiveRequest: number;
-  offlinePaymentToken: number;
-  offlineReceiptAck: number;
-}>;
-
-export class OfflineQrStreamOptions {
-  chunkSize: number;
-  parityGroup: number;
-  payloadKind: number;
-  constructor(options?: {
-    chunkSize?: number;
-    parityGroup?: number;
-    payloadKind?: number;
-  });
-}
-
-export class OfflineQrStreamEnvelope {
-  readonly flags: number;
-  readonly encoding: number;
-  readonly parityGroup: number;
-  readonly chunkSize: number;
-  readonly dataChunks: number;
-  readonly parityChunks: number;
-  readonly payloadKind: number;
-  readonly payloadLength: number;
-  readonly payloadHash: Buffer;
-  constructor(input: {
-    flags?: number;
-    encoding?: number;
-    parityGroup?: number;
-    chunkSize: number;
-    dataChunks: number;
-    parityChunks: number;
-    payloadKind: number;
-    payloadLength: number;
-    payloadHash: ArrayBufferView | ArrayBuffer | Buffer;
-  });
-  get streamId(): Buffer;
-  encode(): Buffer;
-  static decode(
-    bytes: ArrayBufferView | ArrayBuffer | Buffer,
-  ): OfflineQrStreamEnvelope;
-}
-
-export class OfflineQrStreamFrame {
-  readonly kind: number;
-  readonly streamId: Buffer;
-  readonly index: number;
-  readonly total: number;
-  readonly payload: Buffer;
-  constructor(input: {
-    kind: number;
-    streamId: ArrayBufferView | ArrayBuffer | Buffer;
-    index: number;
-    total: number;
-    payload?: ArrayBufferView | ArrayBuffer | Buffer;
-  });
-  encode(): Buffer;
-  static decode(
-    bytes: ArrayBufferView | ArrayBuffer | Buffer,
-  ): OfflineQrStreamFrame;
-}
-
-export class OfflineQrStreamEncoder {
-  static encodeFrames(
-    payload: ArrayBufferView | ArrayBuffer | Buffer,
-    options?: {
-      chunkSize?: number;
-      parityGroup?: number;
-      payloadKind?: number;
-    },
-  ): OfflineQrStreamFrame[];
-  static encodeFrameBytes(
-    payload: ArrayBufferView | ArrayBuffer | Buffer,
-    options?: {
-      chunkSize?: number;
-      parityGroup?: number;
-      payloadKind?: number;
-    },
-  ): Buffer[];
-}
-
-export class OfflineQrStreamDecoder {
-  ingest(frameBytes: ArrayBufferView | ArrayBuffer | Buffer): {
-    payload: Buffer | null;
-    receivedChunks: number;
-    totalChunks: number;
-    recoveredChunks: number;
-    progress: number;
-    isComplete: boolean;
-  };
-}
-
-export class OfflineQrStreamScanSession {
-  constructor(options?: { frameEncoding?: "binary" | "base64" });
-  ingest(
-    frame: string | ArrayBufferView | ArrayBuffer | Buffer,
-    encoding?: "binary" | "base64",
-  ): {
-    payload: Buffer | null;
-    receivedChunks: number;
-    totalChunks: number;
-    recoveredChunks: number;
-    progress: number;
-    isComplete: boolean;
-  };
-}
-
-export interface OfflineQrStreamColor {
-  red: number;
-  green: number;
-  blue: number;
-}
-
-export class OfflineQrStreamTheme {
-  readonly name: string;
-  readonly backgroundStart: OfflineQrStreamColor;
-  readonly backgroundEnd: OfflineQrStreamColor;
-  readonly accent: OfflineQrStreamColor;
-  readonly petal: OfflineQrStreamColor;
-  readonly petalCount: number;
-  readonly pulsePeriod: number;
-  constructor(input: {
-    name: string;
-    backgroundStart: OfflineQrStreamColor;
-    backgroundEnd: OfflineQrStreamColor;
-    accent: OfflineQrStreamColor;
-    petal: OfflineQrStreamColor;
-    petalCount: number;
-    pulsePeriod: number;
-  });
-  frameStyle(
-    frameIndex: number,
-    totalFrames: number,
-  ): { petalPhase: number; accentStrength: number; gradientAngle: number };
-}
-
-export class OfflineQrStreamPlaybackSkin {
-  readonly name: string;
-  readonly theme: OfflineQrStreamTheme;
-  readonly frameRate: number;
-  readonly petalDriftSpeed: number;
-  readonly progressOverlayAlpha: number;
-  readonly reducedMotion: boolean;
-  readonly lowPower: boolean;
-  constructor(input: {
-    name: string;
-    theme?: OfflineQrStreamTheme;
-    frameRate?: number;
-    petalDriftSpeed?: number;
-    progressOverlayAlpha?: number;
-    reducedMotion?: boolean;
-    lowPower?: boolean;
-  });
-  frameStyle(
-    frameIndex: number,
-    totalFrames: number,
-    progress?: number,
-  ): {
-    petalPhase: number;
-    accentStrength: number;
-    gradientAngle: number;
-    driftOffset: number;
-    progressAlpha: number;
-  };
-}
-
-export const sakuraQrStreamTheme: OfflineQrStreamTheme;
-export const sakuraQrStreamSkin: OfflineQrStreamPlaybackSkin;
-export const sakuraQrStreamReducedMotionSkin: OfflineQrStreamPlaybackSkin;
-export const sakuraQrStreamLowPowerSkin: OfflineQrStreamPlaybackSkin;
-
-export function encodeQrFrameText(
-  bytes: ArrayBufferView | ArrayBuffer | Buffer,
-  encoding?: "binary" | "base64",
-): string;
-
-export function decodeQrFrameText(
-  value: string,
-  encoding?: "binary" | "base64",
-): Buffer;
-
-export function scanQrStreamFrames(
-  frames:
-    | AsyncIterable<string | ArrayBufferView | ArrayBuffer | Buffer>
-    | Iterable<string | ArrayBufferView | ArrayBuffer | Buffer>,
-  options?: {
-    session?: OfflineQrStreamScanSession;
-    frameEncoding?: "binary" | "base64";
-  },
-): Promise<{
-  payload: Buffer | null;
-  receivedChunks: number;
-  totalChunks: number;
-  recoveredChunks: number;
-  progress: number;
-  isComplete: boolean;
-} | null>;
-
-export function buildRegisterDomainTransaction(
-  input: RegisterDomainInput,
-): SignedTransactionResult;
-
-/**
- * Assemble and sign a transaction from pre-built instruction payloads. The
- * instruction array must be non-empty; each entry should be either a builder
- * result or a Norito JSON string.
- */
 export function buildTransaction(
   input: TransactionAssemblyInput,
 ): SignedTransactionResult;
@@ -14359,31 +12837,6 @@ export function submitValidationFeeIvmProvedContractCall(
   options?: IvmProvedContractCallOptions,
 ): Promise<IvmProvedContractCallResult>;
 
-export function buildKagemushaInstructionArchiveInstruction(
-  input: KagemushaInstructionArchiveInput,
-): {
-  KagemushaInstructionArchive: {
-    type: KagemushaInstructionArchiveType;
-    bytes_base64: string;
-  };
-};
-
-export function buildKagemushaInstructionTransaction(
-  input: KagemushaInstructionTransactionInput,
-): SignedTransactionResult;
-
-export function buildKagemushaRecursiveTopUpTransaction(
-  input: KagemushaRecursiveTopUpTransactionInput,
-): SignedTransactionResult;
-
-export function buildKagemushaRecursiveRedeemTransaction(
-  input: KagemushaRecursiveRedeemTransactionInput,
-): SignedTransactionResult;
-
-/**
- * Build and sign a transaction containing a single `Mint::Asset` instruction.
- * Validates the quantity and asset identifier before serialising to Norito.
- */
 export function buildMintAssetTransaction(
   input: MintAssetInput,
 ): SignedTransactionResult;
@@ -14678,7 +13131,7 @@ export function buildMintAssetInstruction({
   quantity,
 }: {
   assetId: string;
-  quantity: NumericLike;
+  quantity: QuantityInput;
 }): object;
 
 /**
@@ -14690,7 +13143,7 @@ export function buildBurnAssetInstruction({
   quantity,
 }: {
   assetId: string;
-  quantity: NumericLike;
+  quantity: QuantityInput;
 }): object;
 
 /**
@@ -14903,7 +13356,7 @@ export function buildTransferAssetInstruction({
   destinationAccountId,
 }: {
   sourceAssetHoldingId: string;
-  quantity: NumericLike;
+  quantity: QuantityInput;
   destinationAccountId: string;
 }): object;
 
@@ -14954,7 +13407,7 @@ export function buildTransferRwaInstruction({
 }: {
   sourceAccountId: string;
   rwaId: string;
-  quantity: NumericLike;
+  quantity: QuantityInput;
   destinationAccountId: string;
 }): object;
 
@@ -14972,7 +13425,7 @@ export function buildRedeemRwaInstruction({
   quantity,
 }: {
   rwaId: string;
-  quantity: NumericLike;
+  quantity: QuantityInput;
 }): object;
 
 export function buildFreezeRwaInstruction({ rwaId }: { rwaId: string }): object;
@@ -14988,7 +13441,7 @@ export function buildHoldRwaInstruction({
   quantity,
 }: {
   rwaId: string;
-  quantity: NumericLike;
+  quantity: QuantityInput;
 }): object;
 
 export function buildReleaseRwaInstruction({
@@ -14996,7 +13449,7 @@ export function buildReleaseRwaInstruction({
   quantity,
 }: {
   rwaId: string;
-  quantity: NumericLike;
+  quantity: QuantityInput;
 }): object;
 
 export function buildForceTransferRwaInstruction({
@@ -15005,7 +13458,7 @@ export function buildForceTransferRwaInstruction({
   destinationAccountId,
 }: {
   rwaId: string;
-  quantity: NumericLike;
+  quantity: QuantityInput;
   destinationAccountId: string;
 }): object;
 
@@ -15108,7 +13561,7 @@ export interface SendToTwitterInstructionInput {
         value?: string | ArrayBufferView | ArrayBuffer | Buffer;
       }
     | Record<string, unknown>;
-  amount: string | number | bigint;
+  amount: QuantityInput;
 }
 
 export interface CancelTwitterEscrowInstructionInput {

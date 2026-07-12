@@ -1,5 +1,7 @@
 package org.hyperledger.iroha.sdk.core.model.instructions
 
+import org.hyperledger.iroha.sdk.numeric.KotodamaQuantity
+
 private const val ACTION = "RedeemRwa"
 
 /** Typed representation of the `RedeemRwa` instruction. */
@@ -19,7 +21,8 @@ class RedeemRwaInstruction private constructor(
         ),
     )
 
-    constructor(rwaId: String, quantity: Number) : this(rwaId, quantity.toString())
+    /** Construct from a lossless validated quantity value. */
+    constructor(rwaId: String, quantity: KotodamaQuantity) : this(rwaId, quantity.toString())
 
     override val kind: InstructionKind = InstructionKind.CUSTOM
 
@@ -38,7 +41,7 @@ class RedeemRwaInstruction private constructor(
             val quantity = require(arguments, "quantity")
             return RedeemRwaInstruction(
                 rwaId = rwaId,
-                quantity = quantity,
+                quantity = validatedQuantity(quantity),
                 arguments = LinkedHashMap(arguments),
             )
         }
@@ -55,8 +58,7 @@ class RedeemRwaInstruction private constructor(
         }
 
         private fun validatedQuantity(value: String): String {
-            require(value.isNotBlank()) { "quantity must not be blank" }
-            return value
+            return requireCanonicalQuantity(value)
         }
     }
 }

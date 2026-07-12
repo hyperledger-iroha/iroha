@@ -23,9 +23,10 @@ New to our project? [Make your first contribution](#your-first-code-contribution
 - Fix your issue of choice.
 - Ensure you follow our [style guides](#style-guides) for code and documentation.
 - Write [tests](https://doc.rust-lang.org/cargo/commands/cargo-test.html). Ensure they all pass (`cargo test --workspace`). If you touch the SM cryptography stack, also run `cargo test -p iroha_crypto --features "sm sm_proptest"` to execute the optional fuzz/property harness.
-  - Note: Tests that exercise the IVM executor will automatically synthesize a minimal, deterministic executor bytecode if `defaults/executor.to` is not present. No pre-step is required to run tests. To generate the canonical bytecode for parity, you can run:
-    - `cargo run --manifest-path scripts/generate_executor_to/Cargo.toml`
-    - `cargo run --manifest-path scripts/regenerate_codec_samples/Cargo.toml`
+  - Note: generated IVM executor fixtures are checked in and missing fixtures fail closed. Verify or atomically refresh every generator-owned fixture with:
+    - `cargo run --locked -p ivm --bin ivm_fixture_export -- --check`
+    - `cargo run --locked -p ivm --bin ivm_fixture_export -- --write`
+  - The separate codec-sample command does not generate executor bytecode: `cargo run --manifest-path scripts/regenerate_codec_samples/Cargo.toml`.
 - If you change derive/proc-macro crates, run the trybuild UI suites via
   `make check-proc-macro-ui` (or
   `PROC_MACRO_UI_CRATES="crate1 crate2" make check-proc-macro-ui`) and refresh

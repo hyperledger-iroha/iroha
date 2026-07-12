@@ -74,7 +74,7 @@ fn non_mintable_asset_minting_rules() -> Result<()> {
 
         let metadata = Metadata::default();
         let asset_id = AssetId::new(asset_definition_id.clone(), account_id.clone());
-        let mint = Mint::asset_numeric(200_u32, asset_id.clone());
+        let mint = Mint::asset_quantity(200_u32, asset_id.clone());
         let instructions: [InstructionBox; 2] = [create_asset.into(), mint.clone().into()];
         let tx = test_client.build_transaction(instructions, metadata);
 
@@ -100,7 +100,7 @@ fn non_mintable_asset_minting_rules() -> Result<()> {
         );
 
         let asset_id = AssetId::new(asset_definition_id.clone(), account_id.clone());
-        let register_asset = Mint::asset_numeric(1_u32, asset_id.clone());
+        let register_asset = Mint::asset_quantity(1_u32, asset_id.clone());
 
         test_client.submit_all_blocking::<InstructionBox>([
             create_asset.into(),
@@ -110,7 +110,7 @@ fn non_mintable_asset_minting_rules() -> Result<()> {
 
         assert!(test_client.submit_blocking(register_asset).is_err());
 
-        let mint = Mint::asset_numeric(1u32, asset_id);
+        let mint = Mint::asset_quantity(1u32, asset_id);
         assert!(test_client.submit_blocking(mint).is_err());
     }
 

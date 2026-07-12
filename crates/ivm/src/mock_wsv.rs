@@ -3021,7 +3021,7 @@ impl WsvHost {
                 from,
                 to,
                 entry.asset_definition().clone(),
-                entry.amount().clone(),
+                    entry.amount().clone().into_numeric(),
                 self.allow_contract_runtime_asset_transfer_bypass,
             ) {
                 return Err(VMError::PermissionDenied);
@@ -7481,7 +7481,21 @@ mod tests_null_decode {
             features_bitmap: 0,
             access_set_hints: None,
             kotoba: Vec::new(),
-            entrypoints: Vec::new(),
+            entrypoints: vec![crate::metadata::EmbeddedEntrypointDescriptor {
+                name: "inspect".to_owned(),
+                kind: iroha_data_model::smart_contract::manifest::EntryPointKind::View,
+                params: Vec::new(),
+                argument_schema: None,
+                return_type: None,
+                return_schema: None,
+                permission: None,
+                read_keys: Vec::new(),
+                write_keys: Vec::new(),
+                access_hints_complete: Some(true),
+                access_hints_skipped: Vec::new(),
+                triggers: Vec::new(),
+                entry_pc: 0,
+            }],
             states: vec![crate::metadata::EmbeddedStateDescriptor {
                 name: name.to_owned(),
                 ty: crate::metadata::EmbeddedStateType::StateMap {
@@ -7493,6 +7507,7 @@ mod tests_null_decode {
         };
         let mut artifact = crate::metadata::ProgramMetadata::default().encode();
         artifact.extend_from_slice(&interface.encode_section());
+        artifact.extend_from_slice(&crate::encoding::wide::encode_halt().to_le_bytes());
         vm.load_program(&artifact)
             .expect("load mock WSV map schema");
     }
@@ -8214,13 +8229,13 @@ mod tests_null_decode {
                 alice.clone(),
                 bob,
                 asset.clone(),
-                Numeric::from(10_u64),
+                10_u64,
             ),
             iroha_data_model::isi::transfer::TransferAssetBatchEntry::new(
                 alice,
                 carol,
                 asset,
-                Numeric::from(5_u64),
+                5_u64,
             ),
         ]);
         let batch_payload = norito::to_bytes(&batch).expect("encode transfer batch");

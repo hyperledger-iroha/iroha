@@ -21,7 +21,7 @@ use iroha_data_model::{
     block::{self, SignedBlock, consensus::SumeragiStatusWire},
     events::{
         EventBox,
-        data::{DataEvent, offline, prelude::*, sorafs},
+        data::{DataEvent, prelude::*, sorafs},
         pipeline::PipelineEventBox,
         stream::EventMessage,
     },
@@ -3987,7 +3987,6 @@ fn data_summary(event: &DataEvent) -> (String, String) {
         DataEvent::SmartContract(contract) => ("SmartContract".to_owned(), format!("{contract:?}")),
         DataEvent::Soradns(event) => ("Soradns".to_owned(), format!("{event:?}")),
         DataEvent::Sorafs(event) => sorafs_event_summary(event),
-        DataEvent::Offline(event) => offline_event_summary(event),
         DataEvent::SpaceDirectory(directory) => {
             ("SpaceDirectory".to_owned(), format!("{directory:?}"))
         }
@@ -4251,43 +4250,6 @@ fn nft_event_summary(event: &NftEvent) -> (String, String) {
             format!("nft={} key={}", change.target(), change.key()),
         ),
         NftEvent::OwnerChanged(change) => ("NFT owner changed".to_owned(), format!("{change:?}")),
-    }
-}
-
-fn offline_event_summary(event: &offline::OfflineNoteEvent) -> (String, String) {
-    match event {
-        offline::OfflineNoteEvent::NoteIssued(payload) => (
-            "Offline note issued".to_owned(),
-            format!(
-                "note={:?} account={} asset={} amount={} recorded_at_ms={}",
-                payload.note_commitment,
-                payload.account,
-                payload.asset,
-                payload.amount,
-                payload.recorded_at_ms
-            ),
-        ),
-        offline::OfflineNoteEvent::NoteRedeemed(payload) => (
-            "Offline note redeemed".to_owned(),
-            format!(
-                "source_note={:?} recipient={} asset={} amount={} recorded_at_ms={}",
-                payload.source_note_commitment,
-                payload.recipient,
-                payload.asset,
-                payload.amount,
-                payload.recorded_at_ms
-            ),
-        ),
-        offline::OfflineNoteEvent::AuditRecorded(payload) => (
-            "Offline audit recorded".to_owned(),
-            format!(
-                "token={:?} account={} public_inputs={:?} recorded_at_ms={}",
-                payload.token_id,
-                payload.account,
-                payload.public_inputs_hash,
-                payload.recorded_at_ms
-            ),
-        ),
     }
 }
 
@@ -9665,31 +9627,6 @@ state_tiered_cold_entries 2
                 && detail.contains("quorum=1")
                 && detail.contains("timelock_ms=60000"),
             "detail `{detail}` should summarize the recovery policy"
-        );
-    }
-
-    #[test]
-    fn offline_note_issued_summary_includes_note_and_amount() {
-        let definition = iroha_data_model::asset::AssetDefinitionId::new(
-            iroha_data_model::prelude::DomainId::try_new("offline", "universal")
-                .expect("domain id"),
-            "usd".parse().expect("asset name"),
-        );
-        let payload = offline::OfflineNoteIssued {
-            note_commitment: Hash::prehashed([1_u8; Hash::LENGTH]),
-            account: ALICE_ID.clone(),
-            asset: iroha_data_model::asset::AssetId::new(definition, ALICE_ID.clone()),
-            amount: iroha_data_model::prelude::Numeric::from(42_u32),
-            recorded_at_ms: 1_234,
-        };
-        let offline_event = offline::OfflineNoteEvent::NoteIssued(payload);
-        let event_box = EventBox::Data(DataEvent::Offline(offline_event).into());
-        let summary = EventSummary::from_event(&event_box);
-        assert_eq!(summary.label, "Offline note issued");
-        let detail = summary.detail.expect("detail");
-        assert!(
-            detail.contains("note") && detail.contains("amount=42"),
-            "detail `{detail}` should include note and amount markers"
         );
     }
 

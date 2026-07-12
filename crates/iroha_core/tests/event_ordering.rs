@@ -61,7 +61,7 @@ fn data_events_follow_instruction_order_in_tx() {
         )
         .into(),
         // 3) Mint creates the asset (first time)
-        Mint::asset_numeric(10_u32, asset.clone()).into(),
+        Mint::asset_quantity(10_u32, asset.clone()).into(),
     ];
     let tx = TransactionBuilder::new(ChainId::from("chain"), authority_id.clone())
         .with_instructions(instrs)

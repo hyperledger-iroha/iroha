@@ -789,6 +789,10 @@ impl<T: message::ClassifyTopic> message::ClassifyTopic for RelayMessage<T> {
     fn priority(&self) -> message::Priority {
         self.priority
     }
+
+    fn is_outbound_allowed(&self) -> bool {
+        self.payload.is_outbound_allowed()
+    }
 }
 
 fn peer_message_channel<T: Pload>(
@@ -929,6 +933,15 @@ mod data_frame_wire_len_tests {
         body: Vec<u8>,
     }
 
+    #[derive(Clone, Debug, Decode, Encode)]
+    struct DeniedDummy;
+
+    impl message::ClassifyTopic for DeniedDummy {
+        fn is_outbound_allowed(&self) -> bool {
+            false
+        }
+    }
+
     #[test]
     fn data_frame_wire_len_matches_manual_envelope() {
         let origin = PeerId::from(KeyPair::random().public_key().clone());
@@ -1023,6 +1036,20 @@ mod data_frame_wire_len_tests {
             RelayTarget::Direct(peer_id) => assert_eq!(peer_id, target),
             RelayTarget::Broadcast => panic!("expected direct relay target"),
         }
+    }
+
+    #[test]
+    fn relay_message_preserves_outbound_admission_policy() {
+        let origin = PeerId::from(KeyPair::random().public_key().clone());
+        let frame = RelayMessage::new(
+            origin,
+            RelayTarget::Broadcast,
+            1,
+            message::Priority::High,
+            DeniedDummy,
+        );
+
+        assert!(!frame.is_outbound_allowed());
     }
 }
 
@@ -2950,6 +2977,13 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
     pub fn post(&self, msg: Post<T>) {
         use tokio::sync::mpsc::error::TrySendError;
 
+        if !msg.data.is_outbound_allowed() {
+            iroha_logger::warn!(
+                topic = ?msg.data.topic(),
+                "Rejected an outbound message at the P2P admission boundary"
+            );
+            return;
+        }
         let priority = msg.priority;
         let topic = msg.data.topic();
         let sender = match priority {
@@ -2988,6 +3022,13 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
     pub fn broadcast(&self, msg: Broadcast<T>) {
         use tokio::sync::mpsc::error::TrySendError;
 
+        if !msg.data.is_outbound_allowed() {
+            iroha_logger::warn!(
+                topic = ?msg.data.topic(),
+                "Rejected an outbound broadcast at the P2P admission boundary"
+            );
+            return;
+        }
         let priority = msg.priority;
         let topic = msg.data.topic();
         let sender = match priority {
@@ -7555,6 +7596,14 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
         frame: RelayMessage<T>,
         topic: message::Topic,
     ) -> bool {
+        if !message::ClassifyTopic::is_outbound_allowed(&frame) {
+            iroha_logger::warn!(
+                peer = %peer_id,
+                ?topic,
+                "Rejected an outbound relay frame at the P2P admission boundary"
+            );
+            return false;
+        }
         let is_high = matches!(frame.priority, Priority::High);
         let is_consensus = is_consensus_topic(topic);
         if matches!(topic, message::Topic::BlockSync) {
@@ -12050,6 +12099,15 @@ pub mod message {
         /// Return the explicit delivery priority carried by the message.
         fn priority(&self) -> Priority {
             Priority::Low
+        }
+
+        /// Return whether the payload may cross the live outbound network boundary.
+        ///
+        /// Implementations use this fail-closed hook to keep decode-only archival
+        /// envelopes off the live peer network. Ordinary payloads are admitted by
+        /// default.
+        fn is_outbound_allowed(&self) -> bool {
+            true
         }
     }
 

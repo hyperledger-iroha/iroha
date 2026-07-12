@@ -293,7 +293,7 @@ pub struct PeersGossiper {
     /// Peers provided at startup
     initial_peers: BTreeMap<PeerId, SocketAddr>,
     /// Consensus mode to decide observer admission policy.
-    consensus_mode: iroha_config::parameters::actual::ConsensusMode,
+    consensus_mode: iroha_data_model::block::consensus_v2::ConsensusMode,
     /// Trusted peers configured locally
     trusted_peers: BTreeSet<PeerId>,
     /// Configured peers that stay trusted even if topology excludes them (e.g., observers).
@@ -405,7 +405,7 @@ impl PeersGossiper {
         key_pair: KeyPair,
         gossip_period: Duration,
         gossip_max_period: Duration,
-        consensus_mode: iroha_config::parameters::actual::ConsensusMode,
+        consensus_mode: iroha_data_model::block::consensus_v2::ConsensusMode,
         trust_decay_half_life: Duration,
         trust_penalty_bad_gossip: i32,
         trust_penalty_unknown_peer: i32,
@@ -793,7 +793,7 @@ impl PeersGossiper {
         let is_trusted = self.trusted_peers.contains(from_peer.id());
         let allow_public = matches!(
             self.consensus_mode,
-            iroha_config::parameters::actual::ConsensusMode::Npos
+            iroha_data_model::block::consensus_v2::ConsensusMode::Npos
         );
         if !allow_public && !self.current_topology.contains(from_peer.id()) && !is_trusted {
             return false;
@@ -847,7 +847,7 @@ impl PeersGossiper {
     ) -> bool {
         let allow_public = matches!(
             self.consensus_mode,
-            iroha_config::parameters::actual::ConsensusMode::Npos
+            iroha_data_model::block::consensus_v2::ConsensusMode::Npos
         );
         if !self.trusted_peers.contains(from_peer.id())
             && !allow_public
@@ -1150,11 +1150,12 @@ mod tests {
     use iroha_config::{
         base::WithOrigin,
         parameters::actual::{
-            ConsensusMode, LaneProfile, Network as NetworkConfig, RelayMode, SoranetHandshake,
-            SoranetPrivacy, SoranetVpn, TrustedPeers as TrustedPeersConfig,
+            LaneProfile, Network as NetworkConfig, RelayMode, SoranetHandshake, SoranetPrivacy,
+            SoranetVpn, TrustedPeers as TrustedPeersConfig,
         },
     };
     use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_data_model::block::consensus_v2::ConsensusMode;
 
     use super::*;
 
@@ -1531,8 +1532,6 @@ mod tests {
                 iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_PER_SEC,
             consensus_ingress_critical_bytes_burst:
                 iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_BURST,
-            consensus_ingress_rbc_session_limit:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RBC_SESSION_LIMIT,
             consensus_ingress_penalty_threshold:
                 iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_THRESHOLD,
             consensus_ingress_penalty_window: Duration::from_millis(

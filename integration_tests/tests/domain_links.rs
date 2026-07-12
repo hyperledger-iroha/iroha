@@ -131,8 +131,8 @@ fn receive_paths_materialize_unregistered_accounts_for_assets_and_nfts() -> Resu
             .with_name(asset_definition_id.name().to_string()),
     ))?;
     let source_asset_id = AssetId::new(asset_definition_id.clone(), source_account.clone());
-    client.submit_blocking(Mint::asset_numeric(10u32, source_asset_id.clone()))?;
-    client.submit_blocking(Transfer::asset_numeric(
+    client.submit_blocking(Mint::asset_quantity(10u32, source_asset_id.clone()))?;
+    client.submit_blocking(Transfer::asset_quantity(
         source_asset_id,
         4u32,
         destination_asset.clone(),

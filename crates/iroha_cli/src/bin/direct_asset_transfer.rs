@@ -1,4 +1,4 @@
-//! Direct numeric asset transfer helper for live operator workflows.
+//! Direct asset quantity transfer helper for live operator workflows.
 
 use std::{path::PathBuf, str::FromStr};
 
@@ -51,8 +51,8 @@ fn main() -> Result<()> {
     let to = parse_account(&args.to).wrap_err("decode --to")?;
     let definition =
         AssetDefinitionId::from_str(&args.asset_definition).wrap_err("parse --asset-definition")?;
-    let quantity: Numeric = args.quantity.parse().wrap_err("parse --quantity")?;
-    let tx_hash = client.submit_blocking(Transfer::asset_numeric(
+    let quantity: Quantity = args.quantity.parse().wrap_err("parse --quantity")?;
+    let tx_hash = client.submit_blocking(Transfer::asset_quantity(
         AssetId::new(definition, from),
         quantity,
         to,

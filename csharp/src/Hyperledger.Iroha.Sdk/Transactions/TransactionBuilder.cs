@@ -2,7 +2,7 @@ using System.Collections.ObjectModel;
 using System.Text.Json.Nodes;
 using Hyperledger.Iroha.Crypto;
 using Hyperledger.Iroha.Norito;
-using Hyperledger.Iroha.Offline;
+using Hyperledger.Iroha.Numeric;
 
 namespace Hyperledger.Iroha.Transactions;
 
@@ -45,6 +45,14 @@ public sealed class TransactionBuilder
         return AddInstruction(TransactionInstruction.TransferAsset(assetDefinitionId, quantity, destinationAccountId));
     }
 
+    public TransactionBuilder TransferAsset(
+        string assetDefinitionId,
+        NumericV1.QuantityValue quantity,
+        string destinationAccountId)
+    {
+        return AddInstruction(TransactionInstruction.TransferAsset(assetDefinitionId, quantity, destinationAccountId));
+    }
+
     public TransactionBuilder TransferDomain(string domainId, string destinationAccountId)
     {
         return AddInstruction(TransactionInstruction.TransferDomain(domainId, destinationAccountId));
@@ -65,7 +73,23 @@ public sealed class TransactionBuilder
         return AddInstruction(TransactionInstruction.MintAsset(assetDefinitionId, quantity, destinationAccountId));
     }
 
+    public TransactionBuilder MintAsset(
+        string assetDefinitionId,
+        NumericV1.QuantityValue quantity,
+        string destinationAccountId)
+    {
+        return AddInstruction(TransactionInstruction.MintAsset(assetDefinitionId, quantity, destinationAccountId));
+    }
+
     public TransactionBuilder BurnAsset(string assetDefinitionId, string quantity, string destinationAccountId)
+    {
+        return AddInstruction(TransactionInstruction.BurnAsset(assetDefinitionId, quantity, destinationAccountId));
+    }
+
+    public TransactionBuilder BurnAsset(
+        string assetDefinitionId,
+        NumericV1.QuantityValue quantity,
+        string destinationAccountId)
     {
         return AddInstruction(TransactionInstruction.BurnAsset(assetDefinitionId, quantity, destinationAccountId));
     }
@@ -143,181 +167,6 @@ public sealed class TransactionBuilder
     public TransactionBuilder ExecuteTrigger(string triggerId, JsonNode? args = null)
     {
         return AddInstruction(TransactionInstruction.ExecuteTrigger(triggerId, args));
-    }
-
-    public TransactionBuilder KagemushaInstructionArchive(
-        KagemushaInstructionType instructionType,
-        byte[] instructionArchive)
-    {
-        return AddInstruction(TransactionInstruction.KagemushaInstructionArchive(instructionType, instructionArchive));
-    }
-
-    public TransactionBuilder KagemushaRecursiveTopUp(
-        KagemushaRecursiveSpendTopUpInstructionArchive instructionArchive)
-    {
-        return AddInstruction(TransactionInstruction.KagemushaRecursiveTopUp(instructionArchive));
-    }
-
-    public TransactionBuilder KagemushaRecursiveTopUp(ReadOnlySpan<byte> initRequestArchive)
-    {
-        return KagemushaRecursiveTopUp(KagemushaRecursiveSpendNative.TopUp(initRequestArchive));
-    }
-
-    public TransactionBuilder KagemushaRecursiveRedeem(
-        KagemushaRecursiveSpendRedeemInstructionArchive instructionArchive)
-    {
-        return AddInstruction(TransactionInstruction.KagemushaRecursiveRedeem(instructionArchive));
-    }
-
-    public TransactionBuilder KagemushaRecursiveRedeem(ReadOnlySpan<byte> redeemRequestArchive)
-    {
-        return KagemushaRecursiveRedeem(KagemushaRecursiveSpendNative.Redeem(redeemRequestArchive));
-    }
-
-    public TransactionBuilder KagemushaRecursiveRedeem(
-        ReadOnlySpan<byte> redeemRequestArchive,
-        string? publicAmount,
-        string? currentNoteAmount,
-        bool hasChangeOutput)
-    {
-        return KagemushaRecursiveRedeem(KagemushaRecursiveSpendNative.Redeem(
-            redeemRequestArchive,
-            publicAmount,
-            currentNoteAmount,
-            hasChangeOutput));
-    }
-
-    public TransactionBuilder KagemushaRecursiveRedeem(
-        ReadOnlySpan<byte> redeemRequestArchive,
-        string? publicAmount,
-        string? currentNoteAmount,
-        ReadOnlySpan<byte> changeOutput)
-    {
-        return KagemushaRecursiveRedeem(KagemushaRecursiveSpendNative.Redeem(
-            redeemRequestArchive,
-            publicAmount,
-            currentNoteAmount,
-            changeOutput));
-    }
-
-    public TransactionBuilder KagemushaRecursiveRedeem(
-        ReadOnlySpan<byte> redeemRequestArchive,
-        string? proofCircuitId,
-        uint hopCount,
-        bool hasLineageWitness,
-        bool hasLineageVerifierRecord)
-    {
-        return KagemushaRecursiveRedeem(KagemushaRecursiveSpendNative.Redeem(
-            redeemRequestArchive,
-            proofCircuitId,
-            hopCount,
-            hasLineageWitness,
-            hasLineageVerifierRecord));
-    }
-
-    public TransactionBuilder KagemushaRecursiveRedeem(
-        ReadOnlySpan<byte> redeemRequestArchive,
-        string? proofCircuitId,
-        uint hopCount,
-        bool hasLineageWitness,
-        bool hasLineageVerifierRecord,
-        int lineageVerifierRecordCount)
-    {
-        return KagemushaRecursiveRedeem(KagemushaRecursiveSpendNative.Redeem(
-            redeemRequestArchive,
-            proofCircuitId,
-            hopCount,
-            hasLineageWitness,
-            hasLineageVerifierRecord,
-            lineageVerifierRecordCount));
-    }
-
-    public TransactionBuilder KagemushaRecursiveRedeem(
-        ReadOnlySpan<byte> redeemRequestArchive,
-        string? proofCircuitId,
-        uint hopCount,
-        bool hasLineageWitness,
-        bool hasLineageVerifierRecord,
-        string? publicAmount,
-        string? currentNoteAmount,
-        bool hasChangeOutput)
-    {
-        return KagemushaRecursiveRedeem(KagemushaRecursiveSpendNative.Redeem(
-            redeemRequestArchive,
-            proofCircuitId,
-            hopCount,
-            hasLineageWitness,
-            hasLineageVerifierRecord,
-            publicAmount,
-            currentNoteAmount,
-            hasChangeOutput));
-    }
-
-    public TransactionBuilder KagemushaRecursiveRedeem(
-        ReadOnlySpan<byte> redeemRequestArchive,
-        string? proofCircuitId,
-        uint hopCount,
-        bool hasLineageWitness,
-        bool hasLineageVerifierRecord,
-        int lineageVerifierRecordCount,
-        string? publicAmount,
-        string? currentNoteAmount,
-        bool hasChangeOutput)
-    {
-        return KagemushaRecursiveRedeem(KagemushaRecursiveSpendNative.Redeem(
-            redeemRequestArchive,
-            proofCircuitId,
-            hopCount,
-            hasLineageWitness,
-            hasLineageVerifierRecord,
-            lineageVerifierRecordCount,
-            publicAmount,
-            currentNoteAmount,
-            hasChangeOutput));
-    }
-
-    public TransactionBuilder KagemushaRecursiveRedeem(
-        ReadOnlySpan<byte> redeemRequestArchive,
-        string? proofCircuitId,
-        uint hopCount,
-        bool hasLineageWitness,
-        bool hasLineageVerifierRecord,
-        string? publicAmount,
-        string? currentNoteAmount,
-        ReadOnlySpan<byte> changeOutput)
-    {
-        return KagemushaRecursiveRedeem(KagemushaRecursiveSpendNative.Redeem(
-            redeemRequestArchive,
-            proofCircuitId,
-            hopCount,
-            hasLineageWitness,
-            hasLineageVerifierRecord,
-            publicAmount,
-            currentNoteAmount,
-            changeOutput));
-    }
-
-    public TransactionBuilder KagemushaRecursiveRedeem(
-        ReadOnlySpan<byte> redeemRequestArchive,
-        string? proofCircuitId,
-        uint hopCount,
-        bool hasLineageWitness,
-        bool hasLineageVerifierRecord,
-        int lineageVerifierRecordCount,
-        string? publicAmount,
-        string? currentNoteAmount,
-        ReadOnlySpan<byte> changeOutput)
-    {
-        return KagemushaRecursiveRedeem(KagemushaRecursiveSpendNative.Redeem(
-            redeemRequestArchive,
-            proofCircuitId,
-            hopCount,
-            hasLineageWitness,
-            hasLineageVerifierRecord,
-            lineageVerifierRecordCount,
-            publicAmount,
-            currentNoteAmount,
-            changeOutput));
     }
 
     public TransactionBuilder SetCreationTimeMilliseconds(ulong creationTimeMilliseconds)

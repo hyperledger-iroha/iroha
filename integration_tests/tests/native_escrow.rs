@@ -154,7 +154,7 @@ fn native_asset_escrow_aitai_flow_on_multi_peer_network() -> Result<()> {
                     .with_name(asset_definition_id.name().to_string()),
             )
             .into(),
-            Mint::asset_numeric(Numeric::from(100_u64), seller_asset_id.clone()).into(),
+            Mint::asset_quantity(100_u64, seller_asset_id.clone()).into(),
         ])?;
 
         let escrow_id = EscrowId::new(Hash::new("native-aitai-flow"));
@@ -176,9 +176,9 @@ fn native_asset_escrow_aitai_flow_on_multi_peer_network() -> Result<()> {
         ))?;
         assert!(
             client
-                .submit_blocking(Transfer::asset_numeric(
+                .submit_blocking(Transfer::asset_quantity(
                     custody_asset_id,
-                    Numeric::from(1_u64),
+                    1_u64,
                     seller.clone(),
                 ))
                 .is_err(),
@@ -264,7 +264,7 @@ fn native_asset_lock_flow_on_multi_peer_network() -> Result<()> {
                     .with_name(asset_definition_id.name().to_string()),
             )
             .into(),
-            Mint::asset_numeric(Numeric::from(100_u64), source_asset_id.clone()).into(),
+            Mint::asset_quantity(100_u64, source_asset_id.clone()).into(),
         ])?;
 
         let trusted_lock_id = EscrowId::new(Hash::new("native-asset-lock-trusted"));
@@ -309,9 +309,9 @@ fn native_asset_lock_flow_on_multi_peer_network() -> Result<()> {
         ))?;
         assert!(
             client
-                .submit_blocking(Transfer::asset_numeric(
+                .submit_blocking(Transfer::asset_quantity(
                     custody_asset_id.clone(),
-                    Numeric::from(1_u64),
+                    1_u64,
                     source.clone(),
                 ))
                 .is_err(),

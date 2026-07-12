@@ -18,7 +18,7 @@ use iroha_data_model::{
     nexus::{DataSpaceId, LaneId},
     transaction::SignedTransaction,
 };
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::Quantity;
 use rust_decimal::{Decimal, prelude::FromPrimitive};
 pub use settlement_router::VolatilityBucket;
 use settlement_router::{
@@ -205,7 +205,7 @@ pub struct PendingNexusFeeReceipt {
     /// Fee asset selector, fixed to `xor#universal` for DPN settlement.
     pub fee_asset_id: String,
     /// Computed Nexus fee amount.
-    pub fee_amount: Numeric,
+    pub fee_amount: Quantity,
     /// Fee schedule inputs used to compute [`Self::fee_amount`].
     pub schedule: NexusFeeScheduleInputs,
 }

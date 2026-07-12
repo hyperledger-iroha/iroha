@@ -147,7 +147,6 @@ I18NF0000022X
 ## Offline readiness
 
 JavaScript integrations should use `GET /v1/offline/readiness?asset_definition_id=xor%23wonderland` for offline feature discovery.
-Classic Offline Note issuance, redemption, and audit transaction paths are retired;
 Kagemusha readiness fields advertise the active offline payment implementation.
 
 ```js
@@ -157,7 +156,6 @@ console.log("offline ready", readiness.ready, readiness.blockers);
 ## Offline readiness
 
 JavaScript integrations should use `GET /v1/offline/readiness?asset_definition_id=xor%23wonderland` for offline feature discovery.
-Classic Offline Note issuance, redemption, and audit transaction paths are retired;
 Kagemusha readiness fields advertise the active offline payment implementation.
 
 ```ts

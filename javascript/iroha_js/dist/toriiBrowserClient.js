@@ -1,18 +1,4 @@
-import {
-  OFFLINE_OPERATIONS_PATH,
-  OFFLINE_READINESS_PATH,
-  OFFLINE_REDEEM_PATH,
-  OFFLINE_TOP_UP_PATH,
-  normalizeOfflineOperationReference,
-  normalizeOfflineOperationStatus,
-  normalizeOfflineReadinessResponse,
-  normalizeOfflineRedeemRequest,
-  normalizeOfflineTopUpRequest,
-  parseOfflineJson,
-  requireOfflineAssetDefinitionId,
-  requireOfflineJsonContentType,
-  requireOfflineOperationId,
-} from "./offlineApi.js";
+import { NumericV1, NumericV1Error } from "./numericV1.js";
 
 const DEFAULT_SUCCESS_STATUSES = [200];
 const MULTISIG_PROPOSAL_STATUS_VALUES = new Set([
@@ -73,6 +59,51 @@ function requireNonEmptyString(value, context) {
     throw new TypeError(`${context} must not be empty`);
   }
   return trimmed;
+}
+
+function requireCanonicalQuantity(value, context) {
+  if (typeof value !== "string") {
+    throw new TypeError(`${context} must be a canonical Kotodama V1 quantity string`);
+  }
+  try {
+    return NumericV1.decodeQuantityJson(value).toString();
+  } catch (error) {
+    if (!(error instanceof NumericV1Error)) throw error;
+    throw new TypeError(
+      `${context} must be a canonical non-negative Kotodama V1 quantity (${error.code})`,
+    );
+  }
+}
+
+function normalizeQuantityRecord(value, context, fields, { optional = false } = {}) {
+  const record = requireObject(value, context);
+  const normalized = { ...record };
+  for (const field of fields) {
+    if (normalized[field] === undefined || normalized[field] === null) {
+      if (!optional) {
+        throw new TypeError(`${context}.${field} must be a canonical Kotodama V1 quantity string`);
+      }
+    } else {
+      normalized[field] = requireCanonicalQuantity(
+        normalized[field],
+        `${context}.${field}`,
+      );
+    }
+  }
+  return normalized;
+}
+
+function normalizeQuantityPage(value, context, fields, options) {
+  const page = requireObject(value, context);
+  if (!Array.isArray(page.items)) {
+    throw new TypeError(`${context}.items must be an array`);
+  }
+  return {
+    ...page,
+    items: page.items.map((item, index) =>
+      normalizeQuantityRecord(item, `${context}.items[${index}]`, fields, options),
+    ),
+  };
 }
 
 function normalizePositiveInteger(value, context, fallback) {
@@ -267,25 +298,6 @@ function normalizeTransactionQueryEnvelope(options, context) {
 
 function signalFrom(options) {
   return options.signal === undefined ? undefined : options.signal;
-}
-
-function offlineSignalOnlyOptions(options, context) {
-  const record = requireObject(options, `${context} options`);
-  const extras = Object.keys(record).filter((key) => key !== "signal");
-  if (extras.length > 0) {
-    throw new TypeError(`${context} options contains unsupported fields: ${extras.join(", ")}`);
-  }
-  const signal = signalFrom(record);
-  if (
-    signal !== undefined &&
-    signal !== null &&
-    (typeof signal !== "object" ||
-      typeof signal.aborted !== "boolean" ||
-      typeof signal.addEventListener !== "function")
-  ) {
-    throw new TypeError(`${context} options.signal must be an AbortSignal`);
-  }
-  return signal ?? undefined;
 }
 
 function copyRequestFields(source) {
@@ -581,14 +593,18 @@ export class ToriiBrowserClient {
         asset_id: opts.assetId ?? opts.asset_id,
       },
       signal: signalFrom(opts),
-    });
+    }).then((payload) =>
+      normalizeQuantityPage(payload, "explorer assets response", ["quantity"]),
+    );
   }
 
   getExplorerAsset(assetId, options = {}) {
     const opts = requireObject(options, "getExplorerAsset options");
     return this._json("GET", `/v1/explorer/assets/${encodeURIComponent(requireNonEmptyString(assetId, "assetId"))}`, {
       signal: signalFrom(opts),
-    });
+    }).then((payload) =>
+      normalizeQuantityRecord(payload, "explorer asset response", ["quantity"]),
+    );
   }
 
   listAccountAssets(accountId, options = {}) {
@@ -601,7 +617,9 @@ export class ToriiBrowserClient {
         count_mode: normalizeCountMode(opts.countMode ?? opts.count_mode, "countMode"),
       },
       signal: signalFrom(opts),
-    });
+    }).then((payload) =>
+      normalizeQuantityPage(payload, "account assets response", ["quantity"]),
+    );
   }
 
   queryAccountTransactions(accountId, options = {}) {
@@ -638,7 +656,9 @@ export class ToriiBrowserClient {
         count_mode: normalizeCountMode(opts.countMode ?? opts.count_mode, "countMode"),
       },
       signal: signalFrom(opts),
-    });
+    }).then((payload) =>
+      normalizeQuantityPage(payload, "asset holders response", ["quantity"]),
+    );
   }
 
   listAssetDefinitions(options = {}) {
@@ -649,14 +669,28 @@ export class ToriiBrowserClient {
         count_mode: normalizeCountMode(opts.countMode ?? opts.count_mode, "countMode"),
       },
       signal: signalFrom(opts),
-    });
+    }).then((payload) =>
+      normalizeQuantityPage(
+        payload,
+        "asset definitions response",
+        ["total_quantity"],
+        { optional: true },
+      ),
+    );
   }
 
   getAssetDefinition(assetDefinitionId, options = {}) {
     const opts = requireObject(options, "getAssetDefinition options");
     return this._json("GET", `/v1/assets/definitions/${encodeURIComponent(requireNonEmptyString(assetDefinitionId, "assetDefinitionId"))}`, {
       signal: signalFrom(opts),
-    });
+    }).then((payload) =>
+      normalizeQuantityRecord(
+        payload,
+        "asset definition response",
+        ["total_quantity"],
+        { optional: true },
+      ),
+    );
   }
 
   resolveAlias(aliasOrRequest, options = {}) {
@@ -692,7 +726,14 @@ export class ToriiBrowserClient {
         owned_by: opts.ownedBy ?? opts.owned_by,
       },
       signal: signalFrom(opts),
-    });
+    }).then((payload) =>
+      normalizeQuantityPage(
+        payload,
+        "explorer asset definitions response",
+        ["total_quantity"],
+        { optional: true },
+      ),
+    );
   }
 
   getExplorerAssetDefinitionEconometrics(assetDefinitionId, options = {}) {
@@ -737,14 +778,18 @@ export class ToriiBrowserClient {
         domain: opts.domain,
       },
       signal: signalFrom(opts),
-    });
+    }).then((payload) =>
+      normalizeQuantityPage(payload, "explorer rwas response", ["quantity", "held_quantity"]),
+    );
   }
 
   getExplorerRwa(rwaId, options = {}) {
     const opts = requireObject(options, "getExplorerRwa options");
     return this._json("GET", `/v1/explorer/rwas/${encodeURIComponent(requireNonEmptyString(rwaId, "rwaId"))}`, {
       signal: signalFrom(opts),
-    });
+    }).then((payload) =>
+      normalizeQuantityRecord(payload, "explorer rwa response", ["quantity", "held_quantity"]),
+    );
   }
 
   listExplorerBlocks(options = {}) {
@@ -869,24 +914,24 @@ export class ToriiBrowserClient {
     });
   }
 
-  queryMultisigProposals(selector, options = {}) {
-    const opts = requireObject(options, "queryMultisigProposals options");
-    return this._json("POST", "/v1/multisig/proposals/query", {
+  listMultisigProposals(selector, options = {}) {
+    const opts = requireObject(options, "listMultisigProposals options");
+    return this._json("POST", "/v1/multisig/proposals/list", {
       body: normalizeMultisigProposalsListBody(
         selector,
-        "queryMultisigProposals selector",
+        "listMultisigProposals selector",
       ),
       signal: signalFrom(opts),
     });
   }
 
-  lookupMultisigProposal(request, options = {}) {
+  getMultisigProposal(request, options = {}) {
     const normalizedRequest = normalizeMultisigProposalGetBody(
       request,
-      "lookupMultisigProposal request",
+      "getMultisigProposal request",
     );
-    const opts = requireObject(options, "lookupMultisigProposal options");
-    return this._json("POST", "/v1/multisig/proposals/lookup", {
+    const opts = requireObject(options, "getMultisigProposal options");
+    return this._json("POST", "/v1/multisig/proposals/get", {
       body: normalizedRequest,
       signal: signalFrom(opts),
     });
@@ -929,79 +974,6 @@ export class ToriiBrowserClient {
       headers: { Accept: "application/json", ...(opts.headers ?? {}) },
       signal: signalFrom(opts),
       successStatuses: opts.successStatuses ?? [200, 202],
-    });
-  }
-
-  async getOfflineReadiness(assetDefinitionId, options = {}) {
-    const asset = requireOfflineAssetDefinitionId(assetDefinitionId);
-    const signal = offlineSignalOnlyOptions(options, "getOfflineReadiness");
-    const payload = await this._json("GET", OFFLINE_READINESS_PATH, {
-      params: { asset_definition_id: asset },
-      signal,
-      jsonParser: (text) => parseOfflineJson(text, "offline readiness response"),
-      responseObserver(response) {
-        requireOfflineJsonContentType(
-          response.headers?.get?.("content-type"),
-          "offline readiness response",
-        );
-      },
-    });
-    return normalizeOfflineReadinessResponse(payload, asset);
-  }
-
-  async submitOfflineTopUp(request, options = {}) {
-    const command = normalizeOfflineTopUpRequest(request);
-    return this._submitOfflineCommand(OFFLINE_TOP_UP_PATH, "top_up", command, options);
-  }
-
-  async submitOfflineRedeem(request, options = {}) {
-    const command = normalizeOfflineRedeemRequest(request);
-    return this._submitOfflineCommand(OFFLINE_REDEEM_PATH, "redeem", command, options);
-  }
-
-  async getOfflineOperationStatus(operationId, options = {}) {
-    const canonicalId = requireOfflineOperationId(operationId);
-    const signal = offlineSignalOnlyOptions(options, "getOfflineOperationStatus");
-    const payload = await this._json(
-      "GET",
-      `${OFFLINE_OPERATIONS_PATH}/${canonicalId}`,
-      {
-        signal,
-        jsonParser: (text) => parseOfflineJson(text, "offline operation status response"),
-        responseObserver(response) {
-          requireOfflineJsonContentType(
-            response.headers?.get?.("content-type"),
-            "offline operation status response",
-          );
-        },
-      },
-    );
-    return normalizeOfflineOperationStatus(payload, canonicalId);
-  }
-
-  async _submitOfflineCommand(path, expectedKind, command, options) {
-    const methodName = expectedKind === "top_up" ? "submitOfflineTopUp" : "submitOfflineRedeem";
-    const signal = offlineSignalOnlyOptions(options, methodName);
-    let location;
-    const payload = await this._json("POST", path, {
-      rawBody: command.body,
-      contentType: "application/json",
-      headers: { "Idempotency-Key": command.operationId },
-      signal,
-      successStatuses: [202],
-      jsonParser: (text) => parseOfflineJson(text, "offline operation reference response"),
-      responseObserver(response) {
-        requireOfflineJsonContentType(
-          response.headers?.get?.("content-type"),
-          "offline operation reference response",
-        );
-        location = response.headers?.get?.("location") ?? null;
-      },
-    });
-    return normalizeOfflineOperationReference(payload, {
-      expectedOperationId: command.operationId,
-      expectedKind,
-      location,
     });
   }
 

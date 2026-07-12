@@ -31,7 +31,7 @@ fn client_mint_asset_should_increase_amount_on_another_peer() -> Result<()> {
     });
 
     let quantity = numeric!(200);
-    let mint_asset = Mint::asset_numeric(
+    let mint_asset = Mint::asset_quantity(
         quantity.clone(),
         AssetId::new(asset_definition_id.clone(), account_id.clone()),
     );

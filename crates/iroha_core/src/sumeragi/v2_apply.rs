@@ -132,7 +132,7 @@ impl V2ApplyService {
             .ok_or_else(|| {
                 V2ApplyError::Validation("Sumeragi v2 leader index is out of range".to_owned())
             })?;
-        let expected = super::main_loop::lane_scheduler::prepare_v2_lane_payload_plan(
+        let expected = super::lane_planner::prepare_v2_lane_payload_plan(
             self.state.as_ref(),
             context,
             view,
@@ -276,11 +276,22 @@ impl V2ApplyService {
         // the Kura checkpoint/manifest are separate durable systems. A crash
         // after WSV commit must retry these idempotent associations even
         // though executing the block a second time is forbidden.
-        self.persist_post_apply_metadata(context, task)?;
+        self.persist_post_apply_metadata(context, task)
+            .map_err(|error| {
+                V2ApplyError::committed_recovery_required("post-apply metadata", &error)
+            })?;
 
-        let receipt = self.kura.store_v2_finality_artifact(&artifact)?;
+        let receipt = self.kura.store_v2_finality_artifact(&artifact).map_err(|error| {
+            V2ApplyError::committed_recovery_required("v2 finality artifact", &error)
+        })?;
         self.kura
-            .promote_kagemusha_topup_finality_sidecar(&artifact, &receipt)?;
+            .promote_kagemusha_topup_finality_sidecar(&artifact, &receipt)
+            .map_err(|error| {
+                V2ApplyError::committed_recovery_required(
+                    "Kagemusha finality sidecar promotion",
+                    &error,
+                )
+            })?;
         Ok(DurableApplyCompletion::new(task.id(), receipt, artifact))
     }
 
@@ -419,16 +430,16 @@ impl V2ApplyService {
             .iter()
             .map(|entry| entry.validator.clone())
             .collect();
-        // Sumeragi v2 finality is carried by the exact Kura-owned v2 artifact,
-        // not by the legacy commit-roster journal. Kura has already crossed
-        // the first irreversible boundary above, so publish only the block's
-        // remaining WSV effects here without fabricating legacy QC authority.
-        let state_events = state_block
-            .apply_without_execution_with_commit_roster(&committed_block, commit_topology, None)
-            .map_err(|error| V2ApplyError::StateApply(error.to_owned()))?;
+        let state_events = state_block.apply_without_execution_with_commit_qc(
+            &committed_block,
+            commit_topology,
+            None,
+        );
         state_block
             .commit()
-            .map_err(|error| V2ApplyError::StateCommit(error.to_string()))?;
+            .map_err(|error| {
+                V2ApplyError::committed_recovery_required("WSV publication after Kura commit", &error)
+            })?;
 
         self.queue.remove_committed_hashes(
             committed_block
@@ -547,16 +558,39 @@ pub(crate) enum V2ApplyError {
     /// Certificate-aware block commit conversion failed.
     #[error("Sumeragi v2 block commit conversion failed: {0}")]
     Commit(String),
-    /// Post-execution WSV effects could not be applied.
-    #[error("Sumeragi v2 post-execution state application failed: {0}")]
-    StateApply(String),
-    /// WSV transaction could not commit.
-    #[error("Sumeragi v2 state commit failed: {0}")]
-    StateCommit(String),
+    /// Kura or WSV crossed the canonical commit point but the complete durable transition failed.
+    #[error("Sumeragi v2 committed transition requires restart recovery at {stage}: {detail}")]
+    CommittedRecoveryRequired {
+        /// Post-commit stage that could not be completed.
+        stage: &'static str,
+        /// Underlying persistence diagnostic.
+        detail: String,
+    },
     /// Test-only crash boundary after Kura commits and before WSV publication.
     #[cfg(test)]
     #[error("injected crash after Kura store and before WSV commit")]
     InjectedCrashAfterKuraStore,
+}
+
+impl V2ApplyError {
+    fn committed_recovery_required(stage: &'static str, error: &impl std::fmt::Display) -> Self {
+        Self::CommittedRecoveryRequired {
+            stage,
+            detail: error.to_string(),
+        }
+    }
+
+    /// Return whether the live consensus process must stop producing output until restart.
+    #[must_use]
+    pub(crate) const fn requires_restart_recovery(&self) -> bool {
+        match self {
+            Self::Kura(error) => error.requires_restart_recovery(),
+            Self::CommittedRecoveryRequired { .. } => true,
+            #[cfg(test)]
+            Self::InjectedCrashAfterKuraStore => true,
+            _ => false,
+        }
+    }
 }
 
 impl BodyValidationError for V2ApplyError {
@@ -610,6 +644,36 @@ mod tests {
         },
         tx::AcceptedTransaction,
     };
+
+    #[test]
+    fn restart_recovery_classification_distinguishes_commit_boundaries() {
+        assert!(
+            V2ApplyError::Kura(crate::kura::Error::DaBlockRewriteCommitStateUnknown {
+                detail: "unknown marker".to_owned(),
+            })
+            .requires_restart_recovery()
+        );
+        assert!(
+            V2ApplyError::Kura(crate::kura::Error::CanonicalBlockCommittedRecoveryRequired {
+                detail: "new marker won".to_owned(),
+            })
+            .requires_restart_recovery()
+        );
+        assert!(
+            V2ApplyError::committed_recovery_required(
+                "post-apply metadata",
+                &"injected persistence failure",
+            )
+            .requires_restart_recovery()
+        );
+        assert!(
+            !V2ApplyError::Kura(crate::kura::Error::IO(
+                std::io::Error::other("pre-marker retry"),
+                std::path::PathBuf::from("pre-marker-stage"),
+            ))
+            .requires_restart_recovery()
+        );
+    }
 
     struct ApplyFixture {
         context: wire::HeightContext,
@@ -771,17 +835,15 @@ mod tests {
                     .expect("resolve canonical fixture route");
                 let route = routing_plan.coordinator_route();
                 let entrypoint_hash = Hash::from(accepted.hash_as_entrypoint());
-                let lane_plan =
-                    super::super::main_loop::lane_scheduler::prepare_v2_lane_payload_plan(
-                        state.as_ref(),
-                        &context,
-                        0,
-                        &context.roster[usize::try_from(leader_index).expect("leader index")]
-                            .validator,
-                        std::slice::from_ref(&route),
-                        std::slice::from_ref(&entrypoint_hash),
-                    )
-                    .expect("derive canonical fixture lane plan");
+                let lane_plan = super::super::lane_planner::prepare_v2_lane_payload_plan(
+                    state.as_ref(),
+                    &context,
+                    0,
+                    &context.roster[usize::try_from(leader_index).expect("leader index")].validator,
+                    std::slice::from_ref(&route),
+                    std::slice::from_ref(&entrypoint_hash),
+                )
+                .expect("derive canonical fixture lane plan");
                 assert!(lane_plan.unavailable_indices.is_empty());
                 assert_eq!(lane_plan.ownerships.len(), 1);
                 let execution_context =

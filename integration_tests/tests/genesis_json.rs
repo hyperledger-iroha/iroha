@@ -83,7 +83,7 @@ fn fallback_raw_genesis_from_json() -> RawGenesisTransaction {
         wonderland_domain,
         ALICE_ID.clone(),
     ));
-    builder = builder.append_instruction(Mint::asset_numeric(
+    builder = builder.append_instruction(Mint::asset_quantity(
         13_u32,
         AssetId::new(rose_definition_id, ALICE_ID.clone()),
     ));

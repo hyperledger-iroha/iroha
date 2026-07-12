@@ -11,6 +11,7 @@ use iroha_data_model::{
     domain::DomainId,
     events::data::prelude::{AssetChanged, AssetEvent},
     fastpq::TransferDeltaTranscript,
+    isi::error::MathError,
     isi::vpn::{OpenVpnLeaseEscrow, RefundExpiredVpnLease, SettleVpnLease},
     name::Name,
     prelude::*,
@@ -166,14 +167,16 @@ fn transfer_numeric_asset_for_vpn(
         .telemetry
         .observe_tx_amount(amount.clone().to_f64());
 
+    let quantity = Quantity::from_canonical_numeric(amount.clone())
+        .map_err(|_| MathError::NegativeValue)?;
     state_transaction.world.emit_events([
         AssetEvent::Removed(AssetChanged {
             asset: source_id,
-            amount: amount.clone(),
+            amount: quantity.clone(),
         }),
         AssetEvent::Added(AssetChanged {
             asset: destination_id,
-            amount: amount.clone(),
+            amount: quantity,
         }),
     ]);
 

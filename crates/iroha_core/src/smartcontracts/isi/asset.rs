@@ -37,7 +37,10 @@ pub mod isi {
         nexus::{CapabilityRequest, DataSpaceCatalog, DataSpaceId, ManifestVerdict},
     };
     use iroha_primitives::numeric::NumericSpec;
-    use iroha_primitives::{json::Json, numeric::Numeric};
+    use iroha_primitives::{
+        json::Json,
+        numeric::{Numeric, Quantity},
+    };
     use time::{Date, Month, OffsetDateTime, PrimitiveDateTime, Time as WallClockTime};
 
     use super::*;
@@ -64,21 +67,18 @@ pub mod isi {
                 .into());
             }
             ensure_non_negative(amount)?;
+            let amount_quantity = Quantity::from_canonical_numeric(amount.clone())
+                .map_err(|_| MathError::NegativeValue)?;
             let asset = self
                 .assets
                 .get_mut(&resolved_id)
                 .ok_or_else(|| FindError::Asset(resolved_id.clone().into()))?;
-            let quantity: &mut Numeric = &mut *asset;
-            ensure_non_negative(quantity)?;
-            assert_numeric_spec_with(quantity, spec)?;
-            let current = quantity.clone();
-            let candidate = current
-                .checked_sub(amount.clone())
-                .ok_or(MathError::NotEnoughQuantity)?;
-            if candidate.mantissa().is_negative() {
-                return Err(MathError::NotEnoughQuantity.into());
-            }
-            assert_numeric_spec_with(&candidate, spec)?;
+            let quantity: &mut Quantity = &mut *asset;
+            assert_numeric_spec_with(quantity.as_numeric(), spec)?;
+            let candidate = quantity
+                .checked_sub(&amount_quantity)
+                .map_err(|_| MathError::NotEnoughQuantity)?;
+            assert_numeric_spec_with(candidate.as_numeric(), spec)?;
             *quantity = candidate;
             if (**asset).is_zero() {
                 assert!(self.remove_asset_and_metadata(&resolved_id).is_some());
@@ -97,8 +97,8 @@ pub mod isi {
                 .get(source_id)
                 .ok_or_else(|| FindError::Asset(source_id.clone().into()))?
                 .as_ref()
+                .as_numeric()
                 .clone();
-            ensure_non_negative(&source_current)?;
             let from_balance_after = source_current
                 .clone()
                 .checked_sub(amount.clone())
@@ -114,7 +114,7 @@ pub mod isi {
             } else {
                 self.assets
                     .get(destination_id)
-                    .map(|value| value.as_ref().clone())
+                    .map(|value| value.as_ref().as_numeric().clone())
                     .unwrap_or_else(Numeric::zero)
             };
             ensure_non_negative(&to_balance_before)?;
@@ -145,19 +145,27 @@ pub mod isi {
             delta: &TransferDeltaTranscript,
         ) -> Result<(), Error> {
             {
+                let from_balance_after = Quantity::from_canonical_numeric(
+                    delta.from_balance_after.clone(),
+                )
+                .map_err(|_| MathError::NegativeValue)?;
                 let asset = self
                     .assets
                     .get_mut(source_id)
                     .ok_or_else(|| FindError::Asset(source_id.clone().into()))?;
-                **asset = delta.from_balance_after.clone();
+                **asset = from_balance_after;
             }
             if delta.from_balance_after.is_zero() {
                 assert!(self.remove_asset_and_metadata(source_id).is_some());
             }
 
             {
-                let dst = self.asset_or_insert_exact(destination_id, Numeric::zero())?;
-                **dst = delta.to_balance_after.clone();
+                let to_balance_after = Quantity::from_canonical_numeric(
+                    delta.to_balance_after.clone(),
+                )
+                .map_err(|_| MathError::NegativeValue)?;
+                let dst = self.asset_or_insert_exact(destination_id, Quantity::zero())?;
+                **dst = to_balance_after;
             }
             if !delta.to_balance_after.is_zero() {
                 self.track_nonzero_asset_holder(destination_id);
@@ -177,16 +185,16 @@ pub mod isi {
             let spec = self.asset_definition(resolved_id.definition())?.spec();
             ensure_non_negative(amount)?;
             assert_numeric_spec_with(amount, spec)?;
+            let amount_quantity = Quantity::from_canonical_numeric(amount.clone())
+                .map_err(|_| MathError::NegativeValue)?;
             let is_nonzero = {
-                let dst = self.asset_or_insert(&resolved_id, Numeric::zero())?;
-                let q: &mut Numeric = &mut *dst;
-                ensure_non_negative(q)?;
-                assert_numeric_spec_with(q, spec)?;
+                let dst = self.asset_or_insert(&resolved_id, Quantity::zero())?;
+                let q: &mut Quantity = &mut *dst;
+                assert_numeric_spec_with(q.as_numeric(), spec)?;
                 *q = q
-                    .clone()
-                    .checked_add(amount.clone())
-                    .ok_or(MathError::Overflow)?;
-                assert_numeric_spec_with(q, spec)?;
+                    .checked_add(&amount_quantity)
+                    .map_err(|_| MathError::Overflow)?;
+                assert_numeric_spec_with(q.as_numeric(), spec)?;
                 !q.is_zero()
             };
             if is_nonzero {
@@ -1412,23 +1420,27 @@ pub mod isi {
         let destination = prepared.destination.apply(state_transaction)?;
         state_transaction.record_transfer_transcript(submitting_authority, source.delta)?;
         state_transaction.record_transfer_transcript(submitting_authority, destination.delta)?;
+        let source_amount = Quantity::from_canonical_numeric(source.amount)
+            .map_err(|_| MathError::NegativeValue)?;
+        let destination_amount = Quantity::from_canonical_numeric(destination.amount)
+            .map_err(|_| MathError::NegativeValue)?;
 
         state_transaction.world.emit_events([
             AssetEvent::Removed(AssetChanged {
                 asset: source.source_id,
-                amount: source.amount.clone(),
+                amount: source_amount.clone(),
             }),
             AssetEvent::Added(AssetChanged {
                 asset: source.destination_id,
-                amount: source.amount,
+                amount: source_amount,
             }),
             AssetEvent::Removed(AssetChanged {
                 asset: destination.source_id,
-                amount: destination.amount.clone(),
+                amount: destination_amount.clone(),
             }),
             AssetEvent::Added(AssetChanged {
                 asset: destination.destination_id,
-                amount: destination.amount,
+                amount: destination_amount,
             }),
         ]);
         Ok(())
@@ -1553,8 +1565,8 @@ pub mod isi {
         let from_balance_after;
         {
             let asset = state_transaction.world.asset_mut(source_id)?;
-            let current = asset.clone().into_inner();
-            ensure_non_negative(&current)?;
+            let current_quantity = asset.clone().into_inner();
+            let current = current_quantity.as_numeric().clone();
             from_balance_before = current.clone();
             let candidate = current
                 .checked_sub(amount.clone())
@@ -1564,7 +1576,8 @@ pub mod isi {
             }
             from_balance_after = candidate;
             remove_source_asset = from_balance_after.is_zero();
-            **asset = from_balance_after.clone();
+            **asset = Quantity::from_canonical_numeric(from_balance_after.clone())
+                .map_err(|_| MathError::NotEnoughQuantity)?;
         }
         if remove_source_asset {
             assert!(
@@ -1580,15 +1593,15 @@ pub mod isi {
         {
             let dst = state_transaction
                 .world
-                .asset_or_insert_exact(destination_id, Numeric::zero())?;
-            let current = dst.clone().into_inner();
-            ensure_non_negative(&current)?;
+                .asset_or_insert_exact(destination_id, Quantity::zero())?;
+            let current = dst.clone().into_inner().into_numeric();
             to_balance_before = current.clone();
             to_balance_after = current
                 .checked_add(amount.clone())
                 .ok_or(MathError::Overflow)?;
             ensure_non_negative(&to_balance_after)?;
-            **dst = to_balance_after.clone();
+            **dst = Quantity::from_canonical_numeric(to_balance_after.clone())
+                .map_err(|_| MathError::NegativeValue)?;
         }
         if !to_balance_after.is_zero() {
             state_transaction
@@ -1635,7 +1648,7 @@ pub mod isi {
         Ok((source_id, destination_id, delta))
     }
 
-    impl Execute for Mint<Numeric, Asset> {
+    impl Execute for Mint<Quantity, Asset> {
         fn execute(
             self,
             authority: &AccountId,
@@ -1651,7 +1664,10 @@ pub mod isi {
                 .world
                 .resolve_asset_id_for_current_scope(&asset_id)?;
 
-            let amount = self.object().clone();
+            // Instruction payloads carry the nominal non-negative domain. Convert to the
+            // storage arithmetic representation only at the execution boundary.
+            let quantity = self.object().clone();
+            let amount = quantity.as_numeric().clone();
             let _created = ensure_receiving_account(
                 authority,
                 asset_id.account(),
@@ -1691,14 +1707,14 @@ pub mod isi {
                 state_transaction.telemetry.observe_tx_amount(amount_f64);
                 state_transaction
                     .world
-                    .increase_asset_total_amount(asset_id.definition(), &amount)?;
+                    .increase_asset_total_amount(asset_id.definition(), &quantity)?;
             }
 
             state_transaction
                 .world
                 .emit_events(Some(AssetEvent::Added(AssetChanged {
                     asset: asset_id.clone(),
-                    amount: amount.clone(),
+                    amount: quantity.clone(),
                 })));
 
             if flipped {
@@ -1706,7 +1722,7 @@ pub mod isi {
                     AssetDefinitionEvent::MintabilityChangedDetailed(
                         AssetDefinitionMintabilityChanged {
                             asset_definition: asset_id.definition().clone(),
-                            minted_amount: amount.clone(),
+                            minted_amount: quantity,
                             authority: authority.clone(),
                         },
                     ),
@@ -1717,7 +1733,7 @@ pub mod isi {
         }
     }
 
-    impl Execute for Burn<Numeric, Asset> {
+    impl Execute for Burn<Quantity, Asset> {
         fn execute(
             self,
             _authority: &AccountId,
@@ -1733,10 +1749,12 @@ pub mod isi {
                 .world
                 .resolve_asset_id_for_current_scope(&asset_id)?;
 
+            let quantity = self.object().clone();
+            let amount = quantity.as_numeric().clone();
             let spec = state_transaction
                 .numeric_spec_for(asset_id.definition())
                 .map_err(Error::from)?;
-            assert_numeric_spec_with(self.object(), spec)?;
+            assert_numeric_spec_with(&amount, spec)?;
             ensure_usage_policy_for_accounts(
                 state_transaction,
                 asset_id.definition(),
@@ -1744,13 +1762,12 @@ pub mod isi {
                     resolved_asset_id.account(),
                     asset_id_dataspace_hint(state_transaction, &resolved_asset_id),
                 )],
-                Some(self.object()),
+                Some(&amount),
             )?;
             ensure_not_native_escrow_source(state_transaction, &resolved_asset_id)?;
             ensure_not_sccp_custody_source(state_transaction, &resolved_asset_id)?;
 
             // Withdraw from source asset balance and remove if it reaches zero
-            let amount = self.object().clone();
             state_transaction
                 .world
                 .withdraw_numeric_asset(&asset_id, &amount)?;
@@ -1763,21 +1780,21 @@ pub mod isi {
                     .observe_tx_amount(amount.clone().to_f64());
                 state_transaction
                     .world
-                    .decrease_asset_total_amount(asset_id.definition(), &amount)?;
+                    .decrease_asset_total_amount(asset_id.definition(), &quantity)?;
             }
 
             state_transaction
                 .world
                 .emit_events(Some(AssetEvent::Removed(AssetChanged {
                     asset: asset_id.clone(),
-                    amount,
+                    amount: quantity,
                 })));
 
             Ok(())
         }
     }
 
-    impl Execute for Transfer<Asset, Numeric, Account> {
+    impl Execute for Transfer<Asset, Quantity, Account> {
         fn execute(
             self,
             authority: &AccountId,
@@ -1788,7 +1805,7 @@ pub mod isi {
                 authority,
                 self.source().clone(),
                 self.destination().clone(),
-                self.object().clone(),
+                self.object().clone().into_numeric(),
             )
         }
     }
@@ -1818,14 +1835,16 @@ pub mod isi {
             .telemetry
             .observe_tx_amount(applied.amount.clone().to_f64());
 
+        let amount = Quantity::from_canonical_numeric(applied.amount)
+            .map_err(|_| MathError::NegativeValue)?;
         state_transaction.world.emit_events([
             AssetEvent::Removed(AssetChanged {
                 asset: applied.source_id,
-                amount: applied.amount.clone(),
+                amount: amount.clone(),
             }),
             AssetEvent::Added(AssetChanged {
                 asset: applied.destination_id,
-                amount: applied.amount,
+                amount,
             }),
         ]);
 
@@ -1842,6 +1861,8 @@ pub mod isi {
         destination: AccountId,
         amount: Numeric,
     ) -> Result<(), Error> {
+        state_transaction
+            .require_transfer_transcript_identity("SCCP native inbound settlement")?;
         state_transaction.world.account(&destination)?;
         let destination_id = AssetId::new(source_id.definition().clone(), destination);
         let (source_id, destination_id, delta) = apply_numeric_asset_transfer_delta(
@@ -1852,14 +1873,16 @@ pub mod isi {
             NumericAssetTransferSourcePolicy::SccpInboundSettlement,
         )?;
         state_transaction.record_transfer_transcript(submitting_authority, delta)?;
+        let quantity = Quantity::from_canonical_numeric(amount)
+            .map_err(|_| MathError::NegativeValue)?;
         state_transaction.world.emit_events([
             AssetEvent::Removed(AssetChanged {
                 asset: source_id,
-                amount: amount.clone(),
+                amount: quantity.clone(),
             }),
             AssetEvent::Added(AssetChanged {
                 asset: destination_id,
-                amount,
+                amount: quantity,
             }),
         ]);
         Ok(())
@@ -1899,14 +1922,16 @@ pub mod isi {
             .telemetry
             .observe_tx_amount(applied.amount.clone().to_f64());
 
+        let amount = Quantity::from_canonical_numeric(applied.amount)
+            .map_err(|_| MathError::NegativeValue)?;
         state_transaction.world.emit_events([
             AssetEvent::Removed(AssetChanged {
                 asset: applied.source_id,
-                amount: applied.amount.clone(),
+                amount: amount.clone(),
             }),
             AssetEvent::Added(AssetChanged {
                 asset: applied.destination_id,
-                amount: applied.amount,
+                amount,
             }),
         ]);
 
@@ -2057,7 +2082,7 @@ pub mod isi {
                     AssetId::new(entry.asset_definition().clone(), entry.from().clone());
                 let destination_id =
                     AssetId::new(entry.asset_definition().clone(), entry.to().clone());
-                let amount = entry.amount().clone();
+                let amount = entry.amount().as_numeric().clone();
                 let plan = PreparedNumericTransferPlan::prepare_user(
                     state_transaction,
                     authority,
@@ -2072,14 +2097,16 @@ pub mod isi {
                 state_transaction
                     .telemetry
                     .observe_tx_amount(applied.amount.to_f64());
+                let amount = Quantity::from_canonical_numeric(applied.amount)
+                    .map_err(|_| MathError::NegativeValue)?;
                 state_transaction.world.emit_events([
                     AssetEvent::Removed(AssetChanged {
                         asset: applied.source_id,
-                        amount: applied.amount.clone(),
+                        amount: amount.clone(),
                     }),
                     AssetEvent::Added(AssetChanged {
                         asset: applied.destination_id,
-                        amount: applied.amount,
+                        amount,
                     }),
                 ]);
             }
@@ -3433,7 +3460,7 @@ pub mod query {
             }
             .build(&ALICE_ID);
             let asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
-            let asset = Asset::new(asset_id.clone(), Numeric::new(13, 0));
+            let asset = Asset::new(asset_id.clone(), Quantity::from(13));
 
             let world = World::with_assets([domain], [account], [asset_def], [asset], []);
             let kura = Kura::blank_kura_for_testing();
@@ -3471,8 +3498,8 @@ pub mod query {
             .build(&ALICE_ID);
             let alice_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
             let bob_asset_id = AssetId::new(asset_def_id.clone(), bob_id.clone());
-            let alice_asset = Asset::new(alice_asset_id.clone(), Numeric::new(13, 0));
-            let bob_asset = Asset::new(bob_asset_id, Numeric::new(7, 0));
+            let alice_asset = Asset::new(alice_asset_id.clone(), Quantity::from(13));
+            let bob_asset = Asset::new(bob_asset_id, Quantity::from(7));
 
             let world = World::with_assets(
                 [domain],
@@ -3516,8 +3543,8 @@ pub mod query {
             .build(&ALICE_ID);
             let alice_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
             let bob_asset_id = AssetId::new(asset_def_id.clone(), bob_id.clone());
-            let alice_asset = Asset::new(alice_asset_id.clone(), Numeric::new(13, 0));
-            let bob_asset = Asset::new(bob_asset_id, Numeric::new(7, 0));
+            let alice_asset = Asset::new(alice_asset_id.clone(), Quantity::from(13));
+            let bob_asset = Asset::new(bob_asset_id, Quantity::from(7));
 
             let world = World::with_assets(
                 [domain],
@@ -3621,8 +3648,8 @@ pub mod query {
             .build(&ALICE_ID);
             let alice_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
             let bob_asset_id = AssetId::new(asset_def_id.clone(), bob_id.clone());
-            let alice_asset = Asset::new(alice_asset_id.clone(), Numeric::new(13, 0));
-            let bob_asset = Asset::new(bob_asset_id, Numeric::new(7, 0));
+            let alice_asset = Asset::new(alice_asset_id.clone(), Quantity::from(13));
+            let bob_asset = Asset::new(bob_asset_id, Quantity::from(7));
 
             let world = World::with_assets(
                 [domain],
@@ -3667,8 +3694,8 @@ pub mod query {
             .build(&ALICE_ID);
             let alice_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
             let bob_asset_id = AssetId::new(asset_def_id, bob_id.clone());
-            let alice_asset = Asset::new(alice_asset_id.clone(), Numeric::new(13, 0));
-            let bob_asset = Asset::new(bob_asset_id, Numeric::new(7, 0));
+            let alice_asset = Asset::new(alice_asset_id.clone(), Quantity::from(13));
+            let bob_asset = Asset::new(bob_asset_id, Quantity::from(7));
 
             let world = World::with_assets(
                 [domain],
@@ -3737,9 +3764,9 @@ pub mod query {
                 AssetId::new(secondary_asset_def_id.clone(), ALICE_ID.clone());
             let bob_primary_asset_id = AssetId::new(primary_asset_def_id, bob_id.clone());
             let alice_primary_asset =
-                Asset::new(alice_primary_asset_id.clone(), Numeric::new(13, 0));
-            let alice_secondary_asset = Asset::new(alice_secondary_asset_id, Numeric::new(7, 0));
-            let bob_primary_asset = Asset::new(bob_primary_asset_id, Numeric::new(5, 0));
+                Asset::new(alice_primary_asset_id.clone(), Quantity::from(13));
+            let alice_secondary_asset = Asset::new(alice_secondary_asset_id, Quantity::from(7));
+            let bob_primary_asset = Asset::new(bob_primary_asset_id, Quantity::from(5));
 
             let world = World::with_assets(
                 [primary_domain, secondary_domain],
@@ -3797,7 +3824,7 @@ pub mod query {
             }
             .build(&ALICE_ID);
             let alice_asset_id = AssetId::new(asset_def_id, ALICE_ID.clone());
-            let alice_asset = Asset::new(alice_asset_id.clone(), Numeric::new(1, 0));
+            let alice_asset = Asset::new(alice_asset_id.clone(), Quantity::from(1));
 
             let world = World::with_assets(
                 [domain],
@@ -3821,7 +3848,7 @@ pub mod query {
                 .execute(&ALICE_ID, &mut stx)
                 .expect("set metadata");
 
-            Transfer::asset_numeric(alice_asset_id.clone(), 1_u32, BOB_ID.clone())
+            Transfer::asset_quantity(alice_asset_id.clone(), 1_u32, BOB_ID.clone())
                 .execute(&ALICE_ID, &mut stx)
                 .expect("transfer succeeds");
 
@@ -4036,7 +4063,7 @@ pub mod query {
             .execute(&ALICE_ID, &mut stx)
             .expect("freeze succeeds");
 
-            let err = Transfer::asset_numeric(source_asset_id.clone(), 1_u32, BOB_ID.clone())
+            let err = Transfer::asset_quantity(source_asset_id.clone(), 1_u32, BOB_ID.clone())
                 .execute(&ALICE_ID, &mut stx)
                 .expect_err("frozen outbound transfer must be rejected");
             assert!(
@@ -4076,7 +4103,7 @@ pub mod query {
                 .execute(&ALICE_ID, &mut stx)
                 .expect("blacklist succeeds");
 
-            let err = Transfer::asset_numeric(source_asset_id.clone(), 1_u32, BOB_ID.clone())
+            let err = Transfer::asset_quantity(source_asset_id.clone(), 1_u32, BOB_ID.clone())
                 .execute(&ALICE_ID, &mut stx)
                 .expect_err("blacklisted outbound transfer must be rejected");
             assert!(
@@ -4124,7 +4151,7 @@ pub mod query {
             .execute(&ALICE_ID, &mut stx)
             .expect("limit update succeeds");
 
-            Transfer::asset_numeric(source_asset_id.clone(), 5_u32, BOB_ID.clone())
+            Transfer::asset_quantity(source_asset_id.clone(), 5_u32, BOB_ID.clone())
                 .execute(&ALICE_ID, &mut stx)
                 .expect("exact-cap transfer must succeed");
 
@@ -4149,7 +4176,7 @@ pub mod query {
             assert_eq!(usage.bucket_start_ms, 86_400_000);
             assert_eq!(usage.spent_amount, Numeric::new(5, 0));
 
-            let err = Transfer::asset_numeric(source_asset_id.clone(), 1_u32, BOB_ID.clone())
+            let err = Transfer::asset_quantity(source_asset_id.clone(), 1_u32, BOB_ID.clone())
                 .execute(&ALICE_ID, &mut stx)
                 .expect_err("over-cap transfer must be rejected");
             assert!(
@@ -4196,7 +4223,7 @@ pub mod query {
             }
             .build(&ALICE_ID);
             let alice_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
-            let alice_asset = Asset::new(alice_asset_id.clone(), Numeric::new(10, 0));
+            let alice_asset = Asset::new(alice_asset_id.clone(), Quantity::from(10));
 
             let world = World::with_assets(
                 [domain],
@@ -4218,7 +4245,7 @@ pub mod query {
             let mut block = state.block(header);
             let mut stx = block.transaction();
 
-            let err = Transfer::asset_numeric(alice_asset_id.clone(), 1_u32, BOB_ID.clone())
+            let err = Transfer::asset_quantity(alice_asset_id.clone(), 1_u32, BOB_ID.clone())
                 .execute(&ALICE_ID, &mut stx)
                 .expect_err("generic transfer from escrow source must be rejected");
             assert!(
@@ -4270,7 +4297,7 @@ pub mod query {
                 Json::from(norito::json!(true)),
             );
             let escrow_asset_id = AssetId::new(asset_def_id.clone(), escrow_account.clone());
-            let escrow_asset = Asset::new(escrow_asset_id.clone(), Numeric::new(10, 0));
+            let escrow_asset = Asset::new(escrow_asset_id.clone(), Quantity::from(10));
             let world = World::with_assets(
                 [domain],
                 [escrow_account_model, bob_account],
@@ -4291,7 +4318,7 @@ pub mod query {
             let mut block = state.block(header);
             let mut stx = block.transaction();
 
-            let err = Transfer::asset_numeric(escrow_asset_id.clone(), 1_u32, BOB_ID.clone())
+            let err = Transfer::asset_quantity(escrow_asset_id.clone(), 1_u32, BOB_ID.clone())
                 .execute(&escrow_account, &mut stx)
                 .expect_err("metadata-derived escrow source must be rejected");
             assert!(
@@ -4683,22 +4710,7 @@ pub mod query {
                 InstructionExecutionError::Math(MathError::NotEnoughQuantity)
             ));
 
-            for err in [
-                Mint::asset_numeric(negative.clone(), source_asset_id.clone())
-                    .execute(&ALICE_ID, &mut stx)
-                    .expect_err("negative mint must be rejected"),
-                Burn::asset_numeric(negative.clone(), source_asset_id.clone())
-                    .execute(&ALICE_ID, &mut stx)
-                    .expect_err("negative burn must be rejected"),
-                Transfer::asset_numeric(source_asset_id.clone(), negative, BOB_ID.clone())
-                    .execute(&ALICE_ID, &mut stx)
-                    .expect_err("negative transfer must be rejected"),
-            ] {
-                assert!(matches!(
-                    err,
-                    InstructionExecutionError::Math(MathError::NegativeValue)
-                ));
-            }
+            assert!(Quantity::try_from_numeric(negative).is_err());
 
             assert_eq!(
                 stx.world
@@ -4806,7 +4818,7 @@ pub mod query {
             stx.world.current_dataspace_id = Some(dsid);
 
             let mint_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
-            Mint::asset_numeric(5_u32, mint_id)
+            Mint::asset_quantity(5_u32, mint_id)
                 .execute(&ALICE_ID, &mut stx)
                 .expect("mint must succeed in dataspace context");
 
@@ -4865,7 +4877,7 @@ pub mod query {
                 ALICE_ID.clone(),
                 iroha_data_model::asset::AssetBalanceScope::Dataspace(dsid),
             );
-            Mint::asset_numeric(5_u32, scoped_id.clone())
+            Mint::asset_quantity(5_u32, scoped_id.clone())
                 .execute(&ALICE_ID, &mut stx)
                 .expect("explicit dataspace scope must be honored from the universal route");
 
@@ -4924,7 +4936,7 @@ pub mod query {
                 ALICE_ID.clone(),
                 iroha_data_model::asset::AssetBalanceScope::Dataspace(DataSpaceId::new(7)),
             );
-            let err = Mint::asset_numeric(5_u32, scoped_id)
+            let err = Mint::asset_quantity(5_u32, scoped_id)
                 .execute(&ALICE_ID, &mut stx)
                 .expect_err("private routes must reject explicit foreign dataspace scopes");
 
@@ -4970,7 +4982,7 @@ pub mod query {
             stx.world.current_dataspace_id = Some(private_dataspace);
 
             let mint_id = AssetId::new(asset_def_id, ALICE_ID.clone());
-            let err = Mint::asset_numeric(5_u32, mint_id)
+            let err = Mint::asset_quantity(5_u32, mint_id)
                 .execute(&ALICE_ID, &mut stx)
                 .expect_err("global asset writes must use the authoritative route");
 
@@ -5019,7 +5031,7 @@ pub mod query {
                 ALICE_ID.clone(),
                 iroha_data_model::asset::AssetBalanceScope::Dataspace(DataSpaceId::new(7)),
             );
-            let err = Mint::asset_numeric(5_u32, scoped_id)
+            let err = Mint::asset_quantity(5_u32, scoped_id)
                 .execute(&ALICE_ID, &mut stx)
                 .expect_err("global assets must reject explicit dataspace-scoped ids");
 
@@ -5068,7 +5080,7 @@ pub mod query {
                 ALICE_ID.clone(),
                 iroha_data_model::asset::AssetBalanceScope::Dataspace(DataSpaceId::new(7)),
             );
-            let err = Burn::asset_numeric(5_u32, scoped_id)
+            let err = Burn::asset_quantity(5_u32, scoped_id)
                 .execute(&ALICE_ID, &mut stx)
                 .expect_err("global assets must reject explicit dataspace-scoped ids");
 
@@ -5118,7 +5130,7 @@ pub mod query {
                 ALICE_ID.clone(),
                 iroha_data_model::asset::AssetBalanceScope::Dataspace(DataSpaceId::new(7)),
             );
-            let err = Transfer::asset_numeric(scoped_source_id, 1_u32, BOB_ID.clone())
+            let err = Transfer::asset_quantity(scoped_source_id, 1_u32, BOB_ID.clone())
                 .execute(&ALICE_ID, &mut stx)
                 .expect_err("global assets must reject explicit dataspace-scoped ids");
 
@@ -5152,7 +5164,7 @@ pub mod query {
             .with_balance_scope_policy(iroha_data_model::asset::AssetBalancePolicy::Global)
             .build(&ALICE_ID);
             let source_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
-            let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(10, 0));
+            let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(10));
 
             let world = World::with_assets(
                 [domain],
@@ -5172,7 +5184,7 @@ pub mod query {
             stx.current_dataspace_id = Some(private_dataspace);
             stx.world.current_dataspace_id = Some(private_dataspace);
 
-            let err = Transfer::asset_numeric(source_asset_id.clone(), 1_u32, BOB_ID.clone())
+            let err = Transfer::asset_quantity(source_asset_id.clone(), 1_u32, BOB_ID.clone())
                 .execute(&ALICE_ID, &mut stx)
                 .expect_err("global asset transfer must use the authoritative route");
             match err {
@@ -5214,7 +5226,7 @@ pub mod query {
             .with_balance_scope_policy(iroha_data_model::asset::AssetBalancePolicy::Global)
             .build(&ALICE_ID);
             let source_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
-            let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(10, 0));
+            let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(10));
 
             let world =
                 World::with_assets([domain], [alice_account], [asset_def], [source_asset], []);
@@ -5229,7 +5241,7 @@ pub mod query {
             stx.current_dataspace_id = Some(private_dataspace);
             stx.world.current_dataspace_id = Some(private_dataspace);
 
-            let err = Transfer::asset_numeric(source_asset_id.clone(), 1_u32, BOB_ID.clone())
+            let err = Transfer::asset_quantity(source_asset_id.clone(), 1_u32, BOB_ID.clone())
                 .execute(&ALICE_ID, &mut stx)
                 .expect_err("route rejection must happen before implicit receiver admission");
             match err {
@@ -5275,7 +5287,7 @@ pub mod query {
             .with_balance_scope_policy(iroha_data_model::asset::AssetBalancePolicy::Global)
             .build(&ALICE_ID);
             let source_asset_id = AssetId::new(asset_def_id, ALICE_ID.clone());
-            let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(10, 0));
+            let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(10));
 
             let world = World::with_assets([domain], [account], [asset_def], [source_asset], []);
             let kura = Kura::blank_kura_for_testing();
@@ -5289,7 +5301,7 @@ pub mod query {
             stx.current_dataspace_id = Some(private_dataspace);
             stx.world.current_dataspace_id = Some(private_dataspace);
 
-            let err = Burn::asset_numeric(1_u32, source_asset_id.clone())
+            let err = Burn::asset_quantity(1_u32, source_asset_id.clone())
                 .execute(&ALICE_ID, &mut stx)
                 .expect_err("global asset burn must use the authoritative route");
             match err {
@@ -5363,7 +5375,7 @@ pub mod query {
             stx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
 
             let mint_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
-            Mint::asset_numeric(5_u32, mint_id.clone())
+            Mint::asset_quantity(5_u32, mint_id.clone())
                 .execute(&ALICE_ID, &mut stx)
                 .expect("universal AMX coordinator can mutate non-universal global asset home");
 
@@ -5429,7 +5441,7 @@ pub mod query {
                 ALICE_ID.clone(),
                 iroha_data_model::asset::AssetBalanceScope::Dataspace(DataSpaceId::new(7)),
             );
-            let err = Transfer::asset_numeric(source, 1_u32, BOB_ID.clone())
+            let err = Transfer::asset_quantity(source, 1_u32, BOB_ID.clone())
                 .execute(&ALICE_ID, &mut stx)
                 .expect_err("cross-dataspace transfer must be rejected");
             assert!(
@@ -5470,7 +5482,7 @@ pub mod query {
                 ALICE_ID.clone(),
                 iroha_data_model::asset::AssetBalanceScope::Dataspace(source_dataspace),
             );
-            let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(10, 0));
+            let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(10));
 
             let mut world = World::with_assets(
                 [domain],
@@ -5496,7 +5508,7 @@ pub mod query {
             stx.world.current_dataspace_id = Some(source_dataspace);
             seed_test_call_hash(&mut stx, 0xB6);
 
-            let err = Transfer::asset_numeric(source_asset_id.clone(), 1_u32, BOB_ID.clone())
+            let err = Transfer::asset_quantity(source_asset_id.clone(), 1_u32, BOB_ID.clone())
                 .execute(&ALICE_ID, &mut stx)
                 .expect_err("non-universal route must not credit another dataspace binding");
             match err {
@@ -5559,7 +5571,7 @@ pub mod query {
                 ALICE_ID.clone(),
                 iroha_data_model::asset::AssetBalanceScope::Dataspace(source_dataspace),
             );
-            let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(10, 0));
+            let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(10));
 
             let mut world = World::with_assets(
                 [domain],
@@ -5671,7 +5683,7 @@ pub mod query {
                 ALICE_ID.clone(),
                 iroha_data_model::asset::AssetBalanceScope::Dataspace(source_dataspace),
             );
-            let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(10, 0));
+            let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(10));
 
             let world = World::with_assets(
                 [domain],
@@ -5786,7 +5798,7 @@ pub mod query {
                 ALICE_ID.clone(),
                 iroha_data_model::asset::AssetBalanceScope::Dataspace(source_dataspace),
             );
-            let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(10, 0));
+            let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(10));
 
             let mut world = World::with_assets(
                 [domain],
@@ -5878,7 +5890,7 @@ pub mod query {
             stx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
             seed_test_call_hash(&mut stx, 0xB3);
 
-            Transfer::asset_numeric(
+            Transfer::asset_quantity(
                 AssetId::new(asset_def_id.clone(), ALICE_ID.clone()),
                 1_u32,
                 BOB_ID.clone(),
@@ -5946,7 +5958,7 @@ pub mod query {
                 ALICE_ID.clone(),
                 iroha_data_model::asset::AssetBalanceScope::Dataspace(home_dataspace),
             );
-            let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(10, 0));
+            let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(10));
 
             let mut world = World::with_assets(
                 [domain],
@@ -5994,7 +6006,7 @@ pub mod query {
             stx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
             seed_test_call_hash(&mut stx, 0xB9);
 
-            Transfer::asset_numeric(
+            Transfer::asset_quantity(
                 AssetId::new(asset_def_id.clone(), ALICE_ID.clone()),
                 3_u32,
                 BOB_ID.clone(),
@@ -6069,7 +6081,7 @@ pub mod query {
                 ALICE_ID.clone(),
                 iroha_data_model::asset::AssetBalanceScope::Dataspace(DataSpaceId::UNIVERSAL),
             );
-            let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(10, 0));
+            let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(10));
 
             let mut world = World::with_assets(
                 [domain],
@@ -6094,7 +6106,7 @@ pub mod query {
             stx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
             seed_test_call_hash(&mut stx, 0xB8);
 
-            Transfer::asset_numeric(source_asset_id.clone(), 1_u32, BOB_ID.clone())
+            Transfer::asset_quantity(source_asset_id.clone(), 1_u32, BOB_ID.clone())
                 .execute(&ALICE_ID, &mut stx)
                 .expect("explicit universal source scope should credit universal destination");
 
@@ -6173,7 +6185,7 @@ pub mod query {
                 ALICE_ID.clone(),
                 iroha_data_model::asset::AssetBalanceScope::Dataspace(source_dataspace),
             );
-            let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(10, 0));
+            let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(10));
 
             let mut world = World::with_assets(
                 [domain],
@@ -6221,7 +6233,7 @@ pub mod query {
                 "fixture must preserve Bob's UAID dataspace bindings"
             );
 
-            let err = Transfer::asset_numeric(
+            let err = Transfer::asset_quantity(
                 AssetId::with_scope(
                     asset_def_id,
                     ALICE_ID.clone(),
@@ -6291,7 +6303,7 @@ pub mod query {
                 ALICE_ID.clone(),
                 iroha_data_model::asset::AssetBalanceScope::Dataspace(first_source_dataspace),
             );
-            let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(10, 0));
+            let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(10));
 
             let mut world = World::with_assets(
                 [domain],
@@ -6326,7 +6338,7 @@ pub mod query {
             stx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
             seed_test_call_hash(&mut stx, 0xB5);
 
-            let err = Transfer::asset_numeric(
+            let err = Transfer::asset_quantity(
                 AssetId::new(asset_def_id.clone(), ALICE_ID.clone()),
                 1_u32,
                 BOB_ID.clone(),
@@ -6392,7 +6404,7 @@ pub mod query {
                 Json::new(issuer_policy),
             );
             let source_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
-            let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(10, 0));
+            let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(10));
 
             let world = World::with_assets(
                 [domain],
@@ -6409,7 +6421,7 @@ pub mod query {
             let mut block = state.block(header);
             let mut stx = block.transaction();
 
-            let err = Transfer::asset_numeric(source_asset_id, 1_u32, BOB_ID.clone())
+            let err = Transfer::asset_quantity(source_asset_id, 1_u32, BOB_ID.clone())
                 .execute(&ALICE_ID, &mut stx)
                 .expect_err("unbound destination must be rejected");
             assert!(
@@ -6489,7 +6501,7 @@ pub mod query {
             );
 
             let source_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
-            let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(10, 0));
+            let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(10));
             let world = World::with_assets(
                 [denied_domain, allowed_domain],
                 [alice_account, bob_account],
@@ -6505,7 +6517,7 @@ pub mod query {
             let mut block = state.block(header);
             let mut stx = block.transaction();
             seed_test_call_hash(&mut stx, 0xB4);
-            Transfer::asset_numeric(source_asset_id, 1_u32, BOB_ID.clone())
+            Transfer::asset_quantity(source_asset_id, 1_u32, BOB_ID.clone())
                 .execute(&ALICE_ID, &mut stx)
                 .expect("one matching allowed domain membership should authorize transfer");
 
@@ -6584,7 +6596,7 @@ pub mod query {
             );
 
             let source_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
-            let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(10, 0));
+            let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(10));
             let world = World::with_assets(
                 [domain],
                 [alice_account, bob_account],
@@ -6599,7 +6611,7 @@ pub mod query {
             let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
             let mut block = state.block(header);
             let mut stx = block.transaction();
-            let err = Transfer::asset_numeric(source_asset_id, 1_u32, BOB_ID.clone())
+            let err = Transfer::asset_quantity(source_asset_id, 1_u32, BOB_ID.clone())
                 .execute(&ALICE_ID, &mut stx)
                 .expect_err("domain deny policy must reject transfer");
             assert!(
@@ -6663,7 +6675,7 @@ pub mod query {
                 ALICE_ID.clone(),
                 iroha_data_model::asset::AssetBalanceScope::Dataspace(dsid),
             );
-            let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(10, 0));
+            let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(10));
             let world = World::with_assets(
                 [domain],
                 [alice_account, bob_account],
@@ -6718,7 +6730,7 @@ pub mod query {
                 .space_directory_manifests
                 .insert(uaid_bob, bob_set);
 
-            let err = Transfer::asset_numeric(source_asset_id, 1_u32, BOB_ID.clone())
+            let err = Transfer::asset_quantity(source_asset_id, 1_u32, BOB_ID.clone())
                 .execute(&ALICE_ID, &mut stx)
                 .expect_err("manifest without matching allow should deny");
             assert!(

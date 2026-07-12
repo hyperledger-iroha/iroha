@@ -4,7 +4,6 @@ use iroha_data_model::{
     isi::{BuiltInInstruction, register::RegisterPeerWithPop, rwa::*},
     prelude::*,
 };
-use iroha_primitives::numeric::Numeric;
 use norito::codec::Encode;
 
 fn assert_instruction<T: Instruction + BuiltInInstruction + Clone + Encode + 'static>() {}
@@ -44,13 +43,13 @@ fn built_in_instructions_implement_traits() {
         Unregister<Nft>,
         Unregister<Role>,
         Unregister<Trigger>,
-        Mint<Numeric, Asset>,
+        Mint<Quantity, Asset>,
         Mint<u32, Trigger>,
-        Burn<Numeric, Asset>,
+        Burn<Quantity, Asset>,
         Burn<u32, Trigger>,
         Transfer<Account, DomainId, Account>,
         Transfer<Account, AssetDefinitionId, Account>,
-        Transfer<Asset, Numeric, Account>,
+        Transfer<Asset, Quantity, Account>,
         Transfer<Account, NftId, Account>,
         RegisterRwa,
         TransferRwa,

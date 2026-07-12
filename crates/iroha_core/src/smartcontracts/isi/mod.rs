@@ -145,9 +145,9 @@ define_instruction_handlers! {
     dispatch_instruction::<runtime_upgrade::ProposeRuntimeUpgrade>,
     dispatch_instruction::<runtime_upgrade::ActivateRuntimeUpgrade>,
     dispatch_instruction::<runtime_upgrade::CancelRuntimeUpgrade>,
-    dispatch_instruction::<Mint<Numeric, Asset>>,
-    dispatch_instruction::<Burn<Numeric, Asset>>,
-    dispatch_instruction::<Transfer<Asset, Numeric, Account>>,
+    dispatch_instruction::<Mint<Quantity, Asset>>,
+    dispatch_instruction::<Burn<Quantity, Asset>>,
+    dispatch_instruction::<Transfer<Asset, Quantity, Account>>,
     dispatch_instruction::<TransferAssetBatch>,
     dispatch_instruction::<iroha_data_model::isi::SetAssetTransferFreeze>,
     dispatch_instruction::<iroha_data_model::isi::SetAssetTransferBlacklist>,
@@ -228,12 +228,6 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::ram_lfe::DeactivateRamLfeProgramPolicy>,
     dispatch_instruction::<iroha_data_model::isi::SetAssetDefinitionAlias>,
     dispatch_instruction::<iroha_data_model::isi::SetAssetDefinitionBalancePolicy>,
-    dispatch_instruction::<iroha_data_model::isi::offline::IssueOfflineNote>,
-    dispatch_instruction::<iroha_data_model::isi::offline::RedeemOfflineNote>,
-    dispatch_instruction::<iroha_data_model::isi::offline::AuditOfflineNote>,
-    dispatch_instruction::<iroha_data_model::isi::offline::KagemushaTransfer>,
-    dispatch_instruction::<iroha_data_model::isi::offline::TopUpKagemushaRecursive>,
-    dispatch_instruction::<iroha_data_model::isi::offline::RedeemKagemushaRecursive>,
     dispatch_instruction::<iroha_data_model::isi::offline::TopUpKagemushaRecursiveV2>,
     dispatch_instruction::<iroha_data_model::isi::offline::RedeemKagemushaRecursiveV2>,
     dispatch_instruction::<iroha_data_model::isi::offline::RegisterOfflineDeviceAttestation>,
@@ -491,9 +485,9 @@ mod registry_dispatch_tests {
         let registry = iroha_data_model::isi::registry::default();
         let direct_variants = [
             std::any::type_name::<iroha_data_model::isi::register::RegisterPeerWithPop>(),
-            std::any::type_name::<Mint<Numeric, Asset>>(),
-            std::any::type_name::<Burn<Numeric, Asset>>(),
-            std::any::type_name::<Transfer<Asset, Numeric, Account>>(),
+            std::any::type_name::<Mint<Quantity, Asset>>(),
+            std::any::type_name::<Burn<Quantity, Asset>>(),
+            std::any::type_name::<Transfer<Asset, Quantity, Account>>(),
             std::any::type_name::<SetKeyValue<Trigger>>(),
             std::any::type_name::<iroha_data_model::isi::repo::RepoIsi>(),
             std::any::type_name::<iroha_data_model::isi::repo::ReverseRepoIsi>(),
@@ -3383,7 +3377,7 @@ mod tests {
             "rose".parse()?,
         );
         let asset_id = AssetId::new(asset_definition_id, account_id.clone());
-        Mint::asset_numeric(numeric!(1), asset_id.clone())
+        Mint::asset_quantity(1_u32, asset_id.clone())
             .execute(&account_id, &mut state_transaction)?;
 
         let key = "note".parse::<Name>()?;

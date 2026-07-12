@@ -181,39 +181,59 @@ mod model {
     #[repr(u32)]
     pub enum IvmAdmissionError {
         /// IVM bytecode omits a non-zero `max_cycles` header field
+        #[codec(index = 0)]
         MissingMaxCycles,
         /// Unsupported IVM version
+        #[codec(index = 1)]
         UnsupportedVersion(UnsupportedVersionInfo),
         /// Unsupported IVM feature bits
+        #[codec(index = 2)]
         UnsupportedFeatureBits(u8),
         /// Unsupported IVM ABI version
+        #[codec(index = 3)]
         UnsupportedAbiVersion(u8),
         /// Program targets an ABI version that is not active under runtime governance
+        #[codec(index = 4)]
         AbiVersionNotActive(u8),
         /// Vector length too large
+        #[codec(index = 5)]
         VectorLengthTooLarge(VectorLengthTooLargeInfo),
         /// `max_cycles` exceeds upper bound
+        #[codec(index = 6)]
         MaxCyclesExceedsUpperBound(MaxCyclesExceedsUpperBoundInfo),
         /// `max_cycles` exceeds configured fuel limit
+        #[codec(index = 7)]
         MaxCyclesExceedsFuel(MaxCyclesExceedsFuelInfo),
         /// Decoded instruction count exceeds admission limit
+        #[codec(index = 8)]
         DecodedInstructionCountExceeded(DecodedInstructionLimitInfo),
         /// Decoded byte length exceeds admission limit
+        #[codec(index = 9)]
         DecodedCodeSizeExceeded(DecodedCodeSizeLimitInfo),
         /// Kotodama bytecode decode failed: {0}
+        #[codec(index = 10)]
         BytecodeDecodingFailed(String),
         /// Manifest `code_hash` mismatch
+        #[codec(index = 11)]
         ManifestCodeHashMismatch(ManifestCodeHashMismatchInfo),
         /// Manifest `abi_hash` mismatch with node policy
+        #[codec(index = 12)]
         ManifestAbiHashMismatch(ManifestAbiHashMismatchInfo),
         /// Contract manifest omits the required `code_hash`
+        #[codec(index = 13)]
         ManifestCodeHashMissing,
         /// Contract manifest omits the required `abi_hash`
+        #[codec(index = 14)]
         ManifestAbiHashMissing,
         /// Transaction `contract_manifest` metadata is malformed
+        #[codec(index = 15)]
         ManifestMalformed,
         /// Artifact-carried ABI hash does not match the runtime descriptor
+        #[codec(index = 16)]
         ArtifactAbiHashMismatch(ArtifactAbiHashMismatchInfo),
+        /// Generic IVM program invokes a contract-bound syscall
+        #[codec(index = 17)]
+        GenericSyscallNotAllowed(u32),
     }
 
     /// Unsupported IVM version details
@@ -376,11 +396,111 @@ pub mod prelude {
 mod tests {
     use super::*;
     use crate::transaction::executable::IvmBytecode;
+    use norito::codec::{DecodeAll, Encode};
 
     #[test]
     fn bytecode_getter_returns_inner_bytecode() {
         let code = IvmBytecode::from_compiled(vec![1, 2, 3]);
         let executor = Executor::new(code.clone());
         assert_eq!(executor.bytecode().as_ref(), code.as_ref());
+    }
+
+    #[test]
+    fn ivm_admission_error_wire_tags_are_pinned_and_roundtrip() {
+        let hash = iroha_crypto::Hash::new(b"ivm-admission-error-tag-test");
+        let cases = [
+            (IvmAdmissionError::MissingMaxCycles, 0),
+            (
+                IvmAdmissionError::UnsupportedVersion(UnsupportedVersionInfo {
+                    major: 2,
+                    minor: 3,
+                }),
+                1,
+            ),
+            (IvmAdmissionError::UnsupportedFeatureBits(0x80), 2),
+            (IvmAdmissionError::UnsupportedAbiVersion(2), 3),
+            (IvmAdmissionError::AbiVersionNotActive(2), 4),
+            (
+                IvmAdmissionError::VectorLengthTooLarge(VectorLengthTooLargeInfo {
+                    vector_length: 65,
+                    max_allowed: 64,
+                }),
+                5,
+            ),
+            (
+                IvmAdmissionError::MaxCyclesExceedsUpperBound(MaxCyclesExceedsUpperBoundInfo {
+                    max_cycles: 2,
+                    upper_bound: 1,
+                }),
+                6,
+            ),
+            (
+                IvmAdmissionError::MaxCyclesExceedsFuel(MaxCyclesExceedsFuelInfo {
+                    max_cycles: 2,
+                    fuel_limit: 1,
+                }),
+                7,
+            ),
+            (
+                IvmAdmissionError::DecodedInstructionCountExceeded(DecodedInstructionLimitInfo {
+                    decoded_instructions: 2,
+                    limit: 1,
+                }),
+                8,
+            ),
+            (
+                IvmAdmissionError::DecodedCodeSizeExceeded(DecodedCodeSizeLimitInfo {
+                    decoded_bytes: 2,
+                    limit: 1,
+                }),
+                9,
+            ),
+            (IvmAdmissionError::BytecodeDecodingFailed("bad".into()), 10),
+            (
+                IvmAdmissionError::ManifestCodeHashMismatch(ManifestCodeHashMismatchInfo {
+                    expected: hash,
+                    actual: hash,
+                }),
+                11,
+            ),
+            (
+                IvmAdmissionError::ManifestAbiHashMismatch(ManifestAbiHashMismatchInfo {
+                    expected: hash,
+                    actual: hash,
+                }),
+                12,
+            ),
+            (IvmAdmissionError::ManifestCodeHashMissing, 13),
+            (IvmAdmissionError::ManifestAbiHashMissing, 14),
+            (IvmAdmissionError::ManifestMalformed, 15),
+            (
+                IvmAdmissionError::ArtifactAbiHashMismatch(ArtifactAbiHashMismatchInfo {
+                    expected: hash,
+                    actual: hash,
+                }),
+                16,
+            ),
+            (IvmAdmissionError::GenericSyscallNotAllowed(0x47), 17),
+        ];
+
+        for (error, expected_tag) in cases {
+            let encoded = error.encode();
+            assert!(encoded.len() >= 4);
+            assert_eq!(
+                u32::from_le_bytes(encoded[..4].try_into().expect("four-byte enum tag")),
+                expected_tag
+            );
+            assert_eq!(
+                IvmAdmissionError::decode_all(&mut encoded.as_slice())
+                    .expect("decode admission error"),
+                error
+            );
+        }
+
+        let unknown = 18_u32.encode();
+        assert!(
+            IvmAdmissionError::decode_all(&mut unknown.as_slice()).is_err(),
+            "unknown admission error tags must fail closed"
+        );
     }
 }

@@ -48,11 +48,11 @@ async fn npos_pacemaker_targets_one_second_under_250ms_links() -> Result<()> {
         .with_auto_populated_trusted_peers()
         .with_sync_timeout(LATENCY_SYNC_TIMEOUT)
         .with_block_sync_gossip_period(Duration::from_millis(BLOCK_SYNC_GOSSIP_PERIOD_MS))
+        .with_npos_consensus()
         .with_config_layer(|layer| {
             layer
                 .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full")
-                .write(["sumeragi", "consensus_mode"], "npos")
                 .write(["sumeragi", "collectors", "k"], i64::from(COLLECTORS_K))
                 .write(
                     ["sumeragi", "collectors", "redundant_send_r"],

@@ -422,7 +422,7 @@ test("normalizeAssetHoldingId exported canonicalizes asset-holding identifiers",
 });
 
 test("buildMintAssetInstruction produces canonical Norito payload", () => {
-  const instruction = buildMintAssetInstruction({ assetId: ASSET_ID, quantity: 42 });
+  const instruction = buildMintAssetInstruction({ assetId: ASSET_ID, quantity: 42n });
   assert.deepEqual(instruction, {
     Mint: { Asset: { object: "42", destination: ASSET_ID_CANONICAL } },
   });
@@ -435,7 +435,7 @@ test("buildMintAssetInstruction rejects invalid Numeric literals", () => {
     () => buildMintAssetInstruction({ assetId: ASSET_ID, quantity: "1e-3" }),
     (error) => {
       assert.equal(error?.code, ValidationErrorCode.INVALID_NUMERIC);
-      assert.match(String(error?.message), /Numeric literal/i);
+      assert.match(String(error?.message), /canonical non-negative Kotodama V1 quantity/i);
       return true;
     },
   );
@@ -444,7 +444,7 @@ test("buildMintAssetInstruction rejects invalid Numeric literals", () => {
     () => buildMintAssetInstruction({ assetId: ASSET_ID, quantity: tooManyDecimals }),
     (error) => {
       assert.equal(error?.code, ValidationErrorCode.VALUE_OUT_OF_RANGE);
-      assert.match(String(error?.message), /scale exceeds/i);
+      assert.match(String(error?.message), /canonical non-negative Kotodama V1 quantity/i);
       return true;
     },
   );
@@ -455,7 +455,7 @@ test("buildMintAssetInstruction rejects invalid Numeric literals", () => {
     () => buildMintAssetInstruction({ assetId: ASSET_ID, quantity: tooLarge }),
     (error) => {
       assert.equal(error?.code, ValidationErrorCode.VALUE_OUT_OF_RANGE);
-      assert.match(String(error?.message), /mantissa exceeds/i);
+      assert.match(String(error?.message), /canonical non-negative Kotodama V1 quantity/i);
       return true;
     },
   );
@@ -471,10 +471,21 @@ test("buildMintAssetInstruction rejects invalid Numeric literals", () => {
     () => buildMintAssetInstruction({ assetId: ASSET_ID, quantity: "1".repeat(100_000) }),
     (error) => {
       assert.equal(error?.code, ValidationErrorCode.VALUE_OUT_OF_RANGE);
-      assert.match(String(error?.message), /bounded Numeric text length/i);
+      assert.match(String(error?.message), /canonical non-negative Kotodama V1 quantity/i);
       return true;
     },
   );
+
+  for (const quantity of [42, "+1", "01", "1.0", "1.2300", " 1", "1 ", "0.0"]) {
+    assert.throws(
+      () => buildMintAssetInstruction({ assetId: ASSET_ID, quantity }),
+      (error) => {
+        assert.equal(error?.code, ValidationErrorCode.INVALID_NUMERIC);
+        return true;
+      },
+      `accepted ambiguous quantity ${String(quantity)}`,
+    );
+  }
 });
 
 test("buildMintAssetInstruction accepts the positive signed-Numeric boundary", () => {
@@ -497,7 +508,7 @@ test("buildBurnAssetInstruction produces canonical Norito payload", () => {
 });
 
 test("buildBurnAssetInstruction matches canonical numeric Norito fixture", () => {
-  const { fixture, decoded } = decodeFixtureInstruction("burn_asset_numeric.json");
+  const { fixture, decoded } = decodeFixtureInstruction("burn_asset_quantity.json");
   const { destination, object } = decoded.Burn.Asset;
   const instruction = buildBurnAssetInstruction({ assetId: destination, quantity: object });
   assert.deepEqual(instruction, decoded);
@@ -2598,10 +2609,7 @@ descriptorTest("privacy proof envelopes preserve pending production backend tags
     ["jindo-lattice-pcs-zk", "LatticePcsSis"],
     ["jindo-lattice-pcs-zk-v0", "LatticePcsSis"],
     ["Halo2IpaPasta", "Halo2IpaPasta"],
-    ["halo2/pasta/kagemusha-recursive-aggregation-v1", "Halo2IpaPasta"],
-    ["halo2/pasta/kagemusha-recursive-compact-v1", "Halo2IpaPasta"],
-    ["halo2/pasta/kagemusha-recursive-spend-lineage-onehop-v1", "Halo2IpaPasta"],
-    ["halo2/pasta/kagemusha-recursive-spend-lineage-append-v1", "Halo2IpaPasta"],
+    ["halo2/ipa-pasta-cycle-v1", "Halo2IpaPasta"],
     ["stark/fri", "Stark"],
     ["stark/fri/sha256-goldilocks", "Stark"],
     ["stark/fri/poseidon2-goldilocks", "Stark"],

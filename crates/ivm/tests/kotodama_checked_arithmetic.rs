@@ -4,7 +4,12 @@ use std::collections::BTreeMap;
 
 use iroha_crypto::Hash;
 use iroha_data_model::prelude::Name;
-use iroha_primitives::{bigint::BigInt, json::Json, numeric::Numeric, numeric_abi::DecimalValueV1};
+use iroha_primitives::{
+    bigint::BigInt,
+    json::Json,
+    numeric::{Numeric, Quantity},
+    numeric_abi::{DecimalValueV1, QuantityValueV1},
+};
 use ivm::{
     IVM, ProgramMetadata, VMError, encoding, host::DefaultHost, kotodama::compiler::Compiler,
     numeric::NumericFaultV1, pointer_abi::PointerType, syscalls,
@@ -110,6 +115,175 @@ fn run_mixed_int_decimal(program: &[u8], left: &str, right: &str) -> Result<Nume
 
 fn bigint(value: &str) -> BigInt {
     value.parse().expect("parse bounded integer fixture")
+}
+
+#[derive(Clone, Copy, Debug)]
+enum NumericReturnKind {
+    Int,
+    Decimal,
+    Quantity,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum NumericValue {
+    Int(BigInt),
+    Decimal(Numeric),
+    Quantity(Quantity),
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum NumericOutcome {
+    Value(NumericValue),
+    Fault(NumericFaultV1),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FoldedSyscallExpectation {
+    Omitted,
+    Retained,
+}
+
+fn contains_extended_syscall(program: &[u8], syscall: u32) -> bool {
+    let metadata = ProgramMetadata::parse(program).expect("parse numeric differential artifact");
+    let expected = encoding::wide::encode_syscallx(syscall);
+    program[metadata.code_offset..]
+        .chunks_exact(4)
+        .any(|word| u32::from_le_bytes(word.try_into().expect("four-byte instruction")) == expected)
+}
+
+fn decode_numeric_return(vm: &IVM, kind: NumericReturnKind) -> NumericValue {
+    match kind {
+        NumericReturnKind::Int => NumericValue::Int(common::decode_int_register(vm, 10)),
+        NumericReturnKind::Decimal => {
+            let output = vm
+                .validate_tlv(vm.register(10))
+                .expect("validate returned decimal pointer");
+            assert_eq!(output.type_id, PointerType::Decimal);
+            NumericValue::Decimal(
+                DecimalValueV1::decode_frame(output.payload)
+                    .expect("decode returned canonical decimal")
+                    .into_numeric(),
+            )
+        }
+        NumericReturnKind::Quantity => {
+            let output = vm
+                .validate_tlv(vm.register(10))
+                .expect("validate returned quantity pointer");
+            assert_eq!(output.type_id, PointerType::Quantity);
+            NumericValue::Quantity(
+                QuantityValueV1::decode_frame(output.payload)
+                    .expect("decode returned canonical quantity")
+                    .into_quantity(),
+            )
+        }
+    }
+}
+
+fn numeric_fault_from_vm_error(error: &VMError) -> Option<NumericFaultV1> {
+    match error {
+        VMError::NumericFault(fault) => Some(*fault),
+        VMError::Metered { source, .. } => numeric_fault_from_vm_error(source),
+        _ => None,
+    }
+}
+
+fn execute_numeric_program(
+    program: &[u8],
+    payload: Option<&Json>,
+    kind: NumericReturnKind,
+) -> NumericOutcome {
+    let mut vm = IVM::new(u64::MAX);
+    vm.load_program(program)
+        .expect("load numeric differential artifact");
+    vm.set_program_counter(entrypoint_pc(program))
+        .expect("select numeric differential entrypoint");
+    let host = match payload {
+        Some(payload) => argument_host(program, payload).expect("encode numeric arguments"),
+        None => DefaultHost::new(),
+    };
+    vm.set_host(host);
+    match vm.run() {
+        Ok(()) => NumericOutcome::Value(decode_numeric_return(&vm, kind)),
+        Err(error) => {
+            let fault = numeric_fault_from_vm_error(&error).or_else(|| {
+                // Infallible source conversions turn the recoverable ABI status into an
+                // ABORT. Preserve the underlying numeric class in this differential gate.
+                (error == VMError::AssertionFailed)
+                    .then(|| NumericFaultV1::from_tag(vm.register(11)))
+                    .flatten()
+            });
+            NumericOutcome::Fault(
+                fault.unwrap_or_else(|| panic!("unexpected numeric runtime failure: {error:?}")),
+            )
+        }
+    }
+}
+
+fn compiler_numeric_fault(error: &str) -> NumericFaultV1 {
+    for (code, fault) in [
+        (
+            "E_DECIMAL_MANTISSA_OVERFLOW",
+            NumericFaultV1::MantissaOverflow,
+        ),
+        ("E_INT_OVERFLOW", NumericFaultV1::MantissaOverflow),
+        ("E_DECIMAL_SCALE_OVERFLOW", NumericFaultV1::ScaleOverflow),
+        ("E_DIVISION_BY_ZERO", NumericFaultV1::DivisionByZero),
+        ("E_REPEATING_DECIMAL", NumericFaultV1::RepeatingDecimal),
+        (
+            "E_EXACT_DIVISION_SCALE_OVERFLOW",
+            NumericFaultV1::ExactDivisionScaleOverflow,
+        ),
+        ("E_INVALID_SCALE", NumericFaultV1::InvalidScale),
+        ("E_INEXACT_CONVERSION", NumericFaultV1::InexactConversion),
+        ("E_NEGATIVE_QUANTITY", NumericFaultV1::NegativeQuantity),
+        ("E_QUANTITY_UNDERFLOW", NumericFaultV1::QuantityUnderflow),
+    ] {
+        if error.contains(code) {
+            return fault;
+        }
+    }
+    panic!("unexpected folded numeric failure: {error}");
+}
+
+fn assert_numeric_fold_runtime_parity(
+    case: &str,
+    folded_source: &str,
+    runtime_source: &str,
+    runtime_payload: &str,
+    kind: NumericReturnKind,
+    syscall: u32,
+    folded_syscall: FoldedSyscallExpectation,
+) {
+    let runtime_program = compile(runtime_source);
+    assert!(
+        contains_extended_syscall(&runtime_program, syscall),
+        "{case}: parameterized runtime program must invoke syscall 0x{syscall:06x}"
+    );
+    let payload = Json::from_str_norito(runtime_payload).expect("valid numeric argument JSON");
+    let runtime = execute_numeric_program(&runtime_program, Some(&payload), kind);
+
+    let folded = match Compiler::new().compile_source(folded_source) {
+        Ok(program) => {
+            let contains = contains_extended_syscall(&program, syscall);
+            match folded_syscall {
+                FoldedSyscallExpectation::Omitted => assert!(
+                    !contains,
+                    "{case}: constant-folded program retained syscall 0x{syscall:06x}"
+                ),
+                FoldedSyscallExpectation::Retained => assert!(
+                    contains,
+                    "{case}: recoverable conversion unexpectedly lost its runtime syscall"
+                ),
+            }
+            execute_numeric_program(&program, None, kind)
+        }
+        Err(error) => NumericOutcome::Fault(compiler_numeric_fault(&error)),
+    };
+
+    assert_eq!(
+        folded, runtime,
+        "{case}: constant folding and parameterized VM execution diverged"
+    );
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -231,6 +405,458 @@ fn mixed_int_decimal_runtime_promotion_matches_folding_and_uses_decimal_from_int
 
     assert_eq!(runtime_value, folded_value);
     assert_eq!(runtime_value.to_string(), "9007199254740993.125");
+}
+
+#[test]
+fn decimal_constant_folding_matches_parameterized_vm_arithmetic_and_faults() {
+    for (case, operator, left, right, syscall) in [
+        (
+            "decimal-add",
+            "+",
+            "1.2",
+            "2.3",
+            syscalls::SYSCALL_DECIMAL_ADD,
+        ),
+        (
+            "decimal-sub",
+            "-",
+            "5",
+            "1.25",
+            syscalls::SYSCALL_DECIMAL_SUB,
+        ),
+        (
+            "decimal-mul",
+            "*",
+            "1.5",
+            "2",
+            syscalls::SYSCALL_DECIMAL_MUL,
+        ),
+        (
+            "decimal-exact-div",
+            "/",
+            "1",
+            "8",
+            syscalls::SYSCALL_DECIMAL_DIV_EXACT,
+        ),
+        (
+            "decimal-repeating-div",
+            "/",
+            "1",
+            "3",
+            syscalls::SYSCALL_DECIMAL_DIV_EXACT,
+        ),
+        (
+            "decimal-exact-div-scale-overflow",
+            "/",
+            "1",
+            "100000000000000000000000000000",
+            syscalls::SYSCALL_DECIMAL_DIV_EXACT,
+        ),
+        (
+            "decimal-div-zero",
+            "/",
+            "1",
+            "0",
+            syscalls::SYSCALL_DECIMAL_DIV_EXACT,
+        ),
+        (
+            "decimal-result-scale-overflow",
+            "*",
+            "0.000000000000001",
+            "0.000000000000001",
+            syscalls::SYSCALL_DECIMAL_MUL,
+        ),
+        (
+            "decimal-mantissa-overflow",
+            "+",
+            MAX_INT,
+            "1",
+            syscalls::SYSCALL_DECIMAL_ADD,
+        ),
+    ] {
+        let folded_source = format!(
+            "seiyaku FoldedDecimal {{\n\
+                 const decimal LEFT = {left};\n\
+                 const decimal RIGHT = {right};\n\
+                 view fn run() -> decimal {{ return LEFT {operator} RIGHT; }}\n\
+             }}"
+        );
+        let runtime_source = format!(
+            "seiyaku RuntimeDecimal {{\n\
+                 view fn run(decimal left, decimal right) -> decimal {{\n\
+                     return left {operator} right;\n\
+                 }}\n\
+             }}"
+        );
+        let payload = format!(r#"{{"left":"{left}","right":"{right}"}}"#);
+        assert_numeric_fold_runtime_parity(
+            case,
+            &folded_source,
+            &runtime_source,
+            &payload,
+            NumericReturnKind::Decimal,
+            syscall,
+            FoldedSyscallExpectation::Omitted,
+        );
+    }
+}
+
+#[test]
+fn every_decimal_rounding_mode_matches_between_folding_and_vm_execution() {
+    for (mode, dividend) in [
+        ("toward_zero", "1"),
+        ("away_from_zero", "1"),
+        ("floor", "-1"),
+        ("ceil", "-1"),
+        ("nearest_even", "1"),
+        ("nearest_away", "1"),
+        ("nearest_toward_zero", "1"),
+    ] {
+        let folded_source = format!(
+            "seiyaku FoldedRoundedDecimal {{\n\
+                 const decimal VALUE = {dividend};\n\
+                 const decimal DIVISOR = 8.0;\n\
+                 const int SCALE = 2;\n\
+                 view fn run() -> decimal {{\n\
+                     return VALUE.div_round(\n\
+                         divisor: DIVISOR, scale: SCALE, mode: Rounding::{mode});\n\
+                 }}\n\
+             }}"
+        );
+        let runtime_source = format!(
+            "seiyaku RuntimeRoundedDecimal {{\n\
+                 view fn run(decimal value, decimal divisor, int scale) -> decimal {{\n\
+                     return value.div_round(\n\
+                         divisor: divisor, scale: scale, mode: Rounding::{mode});\n\
+                 }}\n\
+             }}"
+        );
+        let payload = format!(r#"{{"value":"{dividend}","divisor":"8","scale":"2"}}"#);
+        assert_numeric_fold_runtime_parity(
+            mode,
+            &folded_source,
+            &runtime_source,
+            &payload,
+            NumericReturnKind::Decimal,
+            syscalls::SYSCALL_DECIMAL_DIV_ROUND,
+            FoldedSyscallExpectation::Omitted,
+        );
+    }
+}
+
+#[test]
+fn decimal_to_int_conversions_match_folding_for_success_and_failure() {
+    for (case, value) in [
+        ("decimal-to-int-exact", "42"),
+        ("decimal-to-int-inexact", "1.25"),
+    ] {
+        // The outer checked addition makes the exact cast part of a foldable numeric
+        // expression. It also guards against a future lowering that silently defers a
+        // known-inexact constant to runtime.
+        let folded_source = format!(
+            "seiyaku FoldedExactConversion {{\n\
+                 const decimal VALUE = {value};\n\
+                 view fn run() -> int {{\n\
+                     return decimal::to_int_exact(value: VALUE) + 0;\n\
+                 }}\n\
+             }}"
+        );
+        let runtime_source = "seiyaku RuntimeExactConversion {\n\
+             view fn run(decimal value) -> int {\n\
+                 return decimal::to_int_exact(value: value) + 0;\n\
+             }\n\
+         }";
+        let payload = format!(r#"{{"value":"{value}"}}"#);
+        assert_numeric_fold_runtime_parity(
+            case,
+            &folded_source,
+            runtime_source,
+            &payload,
+            NumericReturnKind::Int,
+            syscalls::SYSCALL_DECIMAL_TRY_TO_INT_EXACT,
+            FoldedSyscallExpectation::Omitted,
+        );
+    }
+
+    assert_numeric_fold_runtime_parity(
+        "decimal-to-int-trunc",
+        "seiyaku FoldedTruncConversion {\n\
+             view fn run() -> int {\n\
+                 return decimal::to_int_trunc(value: -1.9);\n\
+             }\n\
+         }",
+        "seiyaku RuntimeTruncConversion {\n\
+             view fn run(decimal value) -> int {\n\
+                 return decimal::to_int_trunc(value: value);\n\
+             }\n\
+         }",
+        r#"{"value":"-1.9"}"#,
+        NumericReturnKind::Int,
+        syscalls::SYSCALL_DECIMAL_TO_INT_TRUNC,
+        FoldedSyscallExpectation::Omitted,
+    );
+
+    for mode in [
+        "toward_zero",
+        "away_from_zero",
+        "floor",
+        "ceil",
+        "nearest_even",
+        "nearest_away",
+        "nearest_toward_zero",
+    ] {
+        let folded_source = format!(
+            "seiyaku FoldedRoundedConversion {{\n\
+                 view fn run() -> int {{\n\
+                     return decimal::to_int_round(\n\
+                         value: 2.5, mode: Rounding::{mode});\n\
+                 }}\n\
+             }}"
+        );
+        let runtime_source = format!(
+            "seiyaku RuntimeRoundedConversion {{\n\
+                 view fn run(decimal value) -> int {{\n\
+                     return decimal::to_int_round(\n\
+                         value: value, mode: Rounding::{mode});\n\
+                 }}\n\
+             }}"
+        );
+        assert_numeric_fold_runtime_parity(
+            mode,
+            &folded_source,
+            &runtime_source,
+            r#"{"value":"2.5"}"#,
+            NumericReturnKind::Int,
+            syscalls::SYSCALL_DECIMAL_TO_INT_ROUND,
+            FoldedSyscallExpectation::Omitted,
+        );
+    }
+}
+
+#[test]
+fn quantity_arithmetic_folding_matches_parameterized_vm_execution() {
+    for (case, constants, params, expression, payload, kind, syscall) in [
+        (
+            "quantity-add",
+            "const quantity LEFT = 1.25; const quantity RIGHT = 2.75;",
+            "quantity left, quantity right",
+            "left + right",
+            r#"{"left":"1.25","right":"2.75"}"#,
+            NumericReturnKind::Quantity,
+            syscalls::SYSCALL_QUANTITY_ADD,
+        ),
+        (
+            "quantity-sub",
+            "const quantity LEFT = 5.0; const quantity RIGHT = 1.25;",
+            "quantity left, quantity right",
+            "left - right",
+            r#"{"left":"5","right":"1.25"}"#,
+            NumericReturnKind::Quantity,
+            syscalls::SYSCALL_QUANTITY_SUB,
+        ),
+        (
+            "quantity-underflow",
+            "const quantity LEFT = 1.0; const quantity RIGHT = 2.0;",
+            "quantity left, quantity right",
+            "left - right",
+            r#"{"left":"1","right":"2"}"#,
+            NumericReturnKind::Quantity,
+            syscalls::SYSCALL_QUANTITY_SUB,
+        ),
+        (
+            "quantity-mul-decimal",
+            "const quantity LEFT = 1.5; const decimal RIGHT = 2.0;",
+            "quantity left, decimal right",
+            "left * right",
+            r#"{"left":"1.5","right":"2"}"#,
+            NumericReturnKind::Quantity,
+            syscalls::SYSCALL_QUANTITY_MUL_DECIMAL,
+        ),
+        (
+            "quantity-negative-result",
+            "const quantity LEFT = 1.0; const decimal RIGHT = -1.0;",
+            "quantity left, decimal right",
+            "left * right",
+            r#"{"left":"1","right":"-1"}"#,
+            NumericReturnKind::Quantity,
+            syscalls::SYSCALL_QUANTITY_MUL_DECIMAL,
+        ),
+        (
+            "quantity-div-decimal",
+            "const quantity LEFT = 1.0; const decimal RIGHT = 8.0;",
+            "quantity left, decimal right",
+            "left / right",
+            r#"{"left":"1","right":"8"}"#,
+            NumericReturnKind::Quantity,
+            syscalls::SYSCALL_QUANTITY_DIV_DECIMAL_EXACT,
+        ),
+        (
+            "quantity-ratio",
+            "const quantity LEFT = 1.0; const quantity RIGHT = 8.0;",
+            "quantity left, quantity right",
+            "left / right",
+            r#"{"left":"1","right":"8"}"#,
+            NumericReturnKind::Decimal,
+            syscalls::SYSCALL_QUANTITY_RATIO_EXACT,
+        ),
+    ] {
+        let return_type = match kind {
+            NumericReturnKind::Int => "int",
+            NumericReturnKind::Decimal => "decimal",
+            NumericReturnKind::Quantity => "quantity",
+        };
+        let folded_expression = expression.replace("left", "LEFT").replace("right", "RIGHT");
+        let folded_source = format!(
+            "seiyaku FoldedQuantity {{\n\
+                 {constants}\n\
+                 view fn run() -> {return_type} {{ return {folded_expression}; }}\n\
+             }}"
+        );
+        let runtime_source = format!(
+            "seiyaku RuntimeQuantity {{\n\
+                 view fn run({params}) -> {return_type} {{ return {expression}; }}\n\
+             }}"
+        );
+        assert_numeric_fold_runtime_parity(
+            case,
+            &folded_source,
+            &runtime_source,
+            payload,
+            kind,
+            syscall,
+            FoldedSyscallExpectation::Omitted,
+        );
+    }
+}
+
+#[test]
+fn explicit_quantity_conversions_match_for_values_and_negative_failures() {
+    for (case, source_type, value, syscall) in [
+        (
+            "quantity-from-int",
+            "int",
+            "7",
+            syscalls::SYSCALL_QUANTITY_TRY_FROM_INT,
+        ),
+        (
+            "quantity-from-decimal",
+            "decimal",
+            "7.25",
+            syscalls::SYSCALL_QUANTITY_TRY_FROM_DECIMAL,
+        ),
+    ] {
+        let conversion = if source_type == "int" {
+            "quantity::try_from_int"
+        } else {
+            "quantity::try_from_decimal"
+        };
+        let folded_source = format!(
+            "seiyaku FoldedQuantityConversion {{\n\
+                 view fn run() -> quantity {{\n\
+                     let outcome = {conversion}(value: {value});\n\
+                     return match outcome {{\n\
+                         Result::ok(converted) => converted,\n\
+                         Result::err(_) => 0\n\
+                     }};\n\
+                 }}\n\
+             }}"
+        );
+        let runtime_source = format!(
+            "seiyaku RuntimeQuantityConversion {{\n\
+                 view fn run({source_type} value) -> quantity {{\n\
+                     let outcome = {conversion}(value: value);\n\
+                     return match outcome {{\n\
+                         Result::ok(converted) => converted,\n\
+                         Result::err(_) => 0\n\
+                     }};\n\
+                 }}\n\
+             }}"
+        );
+        let payload = format!(r#"{{"value":"{value}"}}"#);
+        assert_numeric_fold_runtime_parity(
+            case,
+            &folded_source,
+            &runtime_source,
+            &payload,
+            NumericReturnKind::Quantity,
+            syscall,
+            // Recoverable conversions deliberately remain runtime operations so
+            // their Result shape and stable fault payload cannot be optimized away.
+            FoldedSyscallExpectation::Retained,
+        );
+    }
+
+    for (case, source_type, value, syscall) in [
+        (
+            "negative-int-to-quantity",
+            "int",
+            "-1",
+            syscalls::SYSCALL_QUANTITY_TRY_FROM_INT,
+        ),
+        (
+            "negative-decimal-to-quantity",
+            "decimal",
+            "-1.25",
+            syscalls::SYSCALL_QUANTITY_TRY_FROM_DECIMAL,
+        ),
+    ] {
+        let conversion = if source_type == "int" {
+            "quantity::try_from_int"
+        } else {
+            "quantity::try_from_decimal"
+        };
+        let folded_source = format!(
+            "seiyaku FoldedNegativeQuantityConversion {{\n\
+                 view fn run() -> int {{\n\
+                     let outcome = {conversion}(value: {value});\n\
+                     return match outcome {{\n\
+                         Result::ok(_) => 0,\n\
+                         Result::err(code) => code\n\
+                     }};\n\
+                 }}\n\
+             }}"
+        );
+        let runtime_source = format!(
+            "seiyaku RuntimeNegativeQuantityConversion {{\n\
+                 view fn run({source_type} value) -> int {{\n\
+                     let outcome = {conversion}(value: value);\n\
+                     return match outcome {{\n\
+                         Result::ok(_) => 0,\n\
+                         Result::err(code) => code\n\
+                     }};\n\
+                 }}\n\
+             }}"
+        );
+        let payload = format!(r#"{{"value":"{value}"}}"#);
+        assert_numeric_fold_runtime_parity(
+            case,
+            &folded_source,
+            &runtime_source,
+            &payload,
+            NumericReturnKind::Int,
+            syscall,
+            FoldedSyscallExpectation::Retained,
+        );
+    }
+
+    assert_numeric_fold_runtime_parity(
+        "quantity-to-decimal",
+        "seiyaku FoldedQuantityToDecimal {\n\
+             const quantity VALUE = 1.25;\n\
+             view fn run() -> decimal {\n\
+                 return decimal::from_quantity(value: VALUE) + 0.0;\n\
+             }\n\
+         }",
+        "seiyaku RuntimeQuantityToDecimal {\n\
+             view fn run(quantity value) -> decimal {\n\
+                 return decimal::from_quantity(value: value) + 0.0;\n\
+             }\n\
+         }",
+        r#"{"value":"1.25"}"#,
+        NumericReturnKind::Decimal,
+        syscalls::SYSCALL_QUANTITY_TO_DECIMAL,
+        FoldedSyscallExpectation::Omitted,
+    );
 }
 
 #[test]

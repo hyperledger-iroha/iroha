@@ -22,7 +22,6 @@ public final class ClientConfigManifestLoaderTests {
     final ClientConfigManifestLoaderTests tests = new ClientConfigManifestLoaderTests();
     try {
       tests.loadsToriiAndRetryConfiguration();
-      tests.supportsOfflineJournalQueueWithSeed();
       tests.supportsFilePendingQueueWithRelativePath();
       tests.parsesTelemetryRedaction();
       tests.customizerCanMutateBuilder();
@@ -59,38 +58,6 @@ public final class ClientConfigManifestLoaderTests {
     final String expectedDigest =
         ClientConfigManifestLoader.sha256Hex(Files.readAllBytes(manifest));
     assertEquals(expectedDigest, loaded.context().digest(), "digest mismatch");
-  }
-
-  private void supportsOfflineJournalQueueWithSeed() throws Exception {
-    final Path manifest = tempDir.resolve("offline_manifest.json");
-    final Path queueDir = tempDir.resolve("queue");
-    Files.createDirectories(queueDir);
-    final String queuePath = queueDir.resolve("pending.queue").toString();
-    final String seed =
-        Base64.getEncoder().encodeToString("journal-seed-1234".getBytes(StandardCharsets.UTF_8));
-    final String json =
-        """
-        {
-          "torii": {
-            "base_uri": "https://offline.example",
-            "timeout_ms": 5000
-          },
-          "pending_queue": {
-            "kind": "offline_journal",
-            "path": "%s",
-            "key_seed_b64": "%s"
-          },
-          "telemetry": { "enabled": false }
-        }
-        """
-            .formatted(queuePath.replace("\\", "\\\\"), seed);
-    Files.writeString(manifest, json, StandardCharsets.UTF_8);
-
-    final ClientConfig config = ClientConfigManifestLoader.load(manifest).clientConfig();
-    assertNotNull(config.pendingQueue(), "pending queue should be configured");
-    assertTrue(
-        config.pendingQueue().telemetryQueueName().toLowerCase().contains("offline"),
-        "pending queue should be offline journal");
   }
 
   private void supportsFilePendingQueueWithRelativePath() throws Exception {

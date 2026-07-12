@@ -70,6 +70,32 @@ final class NumericV1Tests: XCTestCase {
         }
     }
 
+    func testDecodersAcceptNonZeroIndexDataSlicesWithoutEscapingTheirBounds() throws {
+        let quantity = try KotodamaQuantity("12.5")
+        let frame = try KotodamaNumericV1Codec.encodeQuantityFrame(quantity)
+        var framedStorage = Data([0xaa, 0xbb])
+        framedStorage.append(frame)
+        framedStorage.append(contentsOf: [0xcc, 0xdd])
+        let frameSlice = framedStorage[2..<(2 + frame.count)]
+        XCTAssertEqual(frameSlice.startIndex, 2)
+        XCTAssertEqual(try KotodamaNumericV1Codec.decodeQuantityFrame(frameSlice), quantity)
+
+        let envelope = try KotodamaNumericV1Codec.encodeQuantityEnvelope(quantity)
+        var envelopeStorage = Data([0x11, 0x22, 0x33])
+        envelopeStorage.append(envelope)
+        envelopeStorage.append(0x44)
+        let envelopeSlice = envelopeStorage[3..<(3 + envelope.count)]
+        XCTAssertEqual(envelopeSlice.startIndex, 3)
+        XCTAssertEqual(try KotodamaNumericV1Codec.decodeQuantityEnvelope(envelopeSlice), quantity)
+
+        let truncatedFrameSlice = framedStorage[2..<(2 + frame.count - 1)]
+        XCTAssertThrowsError(try KotodamaNumericV1Codec.decodeQuantityFrame(truncatedFrameSlice))
+        let truncatedEnvelopeSlice = envelopeStorage[3..<(3 + envelope.count - 1)]
+        assertCode(.truncatedEnvelope) {
+            _ = try KotodamaNumericV1Codec.decodeQuantityEnvelope(truncatedEnvelopeSlice)
+        }
+    }
+
     func testSigned512BitEndpointsRoundtrip() throws {
         let minimum = "-" + decimalPowerOfTwo(511)
         let maximum = decimalSubtractOne(decimalPowerOfTwo(511))
@@ -154,6 +180,31 @@ final class NumericV1Tests: XCTestCase {
             default: return XCTFail("unknown text fixture kind")
             }
             XCTAssertEqual(canonical, vector["canonical"] as? String, vector["id"] as? String ?? "")
+        }
+
+        for vector in try XCTUnwrap(object["invalid_text"] as? [[String: Any]]) {
+            let id = try XCTUnwrap(vector["id"] as? String)
+            let kind = try XCTUnwrap(vector["kind"] as? String)
+            let input = try XCTUnwrap(vector["input"])
+            let expected = try XCTUnwrap(
+                KotodamaNumericV1ErrorCode(
+                    rawValue: try XCTUnwrap(vector["expected"] as? String)
+                )
+            )
+            assertCode(expected) {
+                guard let text = input as? String else {
+                    throw KotodamaNumericV1Error(
+                        code: .invalidText,
+                        message: "\(kind) JSON must be a string"
+                    )
+                }
+                switch kind {
+                case "int": _ = try KotodamaNumericV1Codec.decodeIntJSON(text)
+                case "decimal": _ = try KotodamaNumericV1Codec.decodeDecimalJSON(text)
+                case "quantity": _ = try KotodamaNumericV1Codec.decodeQuantityJSON(text)
+                default: return XCTFail("unknown invalid text fixture kind \(kind): \(id)")
+                }
+            }
         }
 
         for vector in try XCTUnwrap(object["valid"] as? [[String: Any]]) {

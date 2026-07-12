@@ -7,6 +7,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import org.hyperledger.iroha.android.numeric.NumericV1;
 
 /** Typed Android builders and constants for native numeric asset escrow instructions. */
 public final class NativeEscrowInstructions {
@@ -70,6 +71,15 @@ public final class NativeEscrowInstructions {
     return new OpenAssetEscrow(escrowId, assetDefinition, amount, evidenceHashes);
   }
 
+  /** Opens an asset escrow from a lossless validated quantity value. */
+  public static OpenAssetEscrow openAssetEscrow(
+      final String escrowId,
+      final String assetDefinition,
+      final NumericV1.QuantityValue amount,
+      final List<String> evidenceHashes) {
+    return new OpenAssetEscrow(escrowId, assetDefinition, amount, evidenceHashes);
+  }
+
   public static AcceptAssetEscrow acceptAssetEscrow(final String escrowId) {
     return new AcceptAssetEscrow(escrowId);
   }
@@ -95,6 +105,15 @@ public final class NativeEscrowInstructions {
       final String escrowId,
       final String buyerAmount,
       final String sellerAmount,
+      final List<String> evidenceHashes) {
+    return new ResolveEscrowDispute(escrowId, buyerAmount, sellerAmount, evidenceHashes);
+  }
+
+  /** Resolves an escrow from lossless validated split quantities. */
+  public static ResolveEscrowDispute resolveEscrowDispute(
+      final String escrowId,
+      final NumericV1.QuantityValue buyerAmount,
+      final NumericV1.QuantityValue sellerAmount,
       final List<String> evidenceHashes) {
     return new ResolveEscrowDispute(escrowId, buyerAmount, sellerAmount, evidenceHashes);
   }
@@ -315,6 +334,19 @@ public final class NativeEscrowInstructions {
           null);
     }
 
+    /** Construct from a lossless validated quantity value. */
+    public OpenAssetEscrow(
+        final String escrowId,
+        final String assetDefinition,
+        final NumericV1.QuantityValue amount,
+        final List<String> evidenceHashes) {
+      this(
+          escrowId,
+          assetDefinition,
+          Objects.requireNonNull(amount, "amount").toString(),
+          evidenceHashes);
+    }
+
     private OpenAssetEscrow(
         final String escrowId,
         final String assetDefinition,
@@ -323,7 +355,7 @@ public final class NativeEscrowInstructions {
         final Map<String, String> argumentOrder) {
       this.escrowId = escrowId;
       this.assetDefinition = assetDefinition;
-      this.amount = amount;
+      this.amount = InstructionQuantity.requireCanonical(amount);
       this.evidenceHashes = evidenceHashes;
       if (argumentOrder == null) {
         final Map<String, String> args = new LinkedHashMap<>();
@@ -594,6 +626,19 @@ public final class NativeEscrowInstructions {
           null);
     }
 
+    /** Construct from lossless validated split quantities. */
+    public ResolveEscrowDispute(
+        final String escrowId,
+        final NumericV1.QuantityValue buyerAmount,
+        final NumericV1.QuantityValue sellerAmount,
+        final List<String> evidenceHashes) {
+      this(
+          escrowId,
+          Objects.requireNonNull(buyerAmount, "buyerAmount").toString(),
+          Objects.requireNonNull(sellerAmount, "sellerAmount").toString(),
+          evidenceHashes);
+    }
+
     private ResolveEscrowDispute(
         final String escrowId,
         final String buyerAmount,
@@ -601,8 +646,8 @@ public final class NativeEscrowInstructions {
         final List<String> evidenceHashes,
         final Map<String, String> argumentOrder) {
       this.escrowId = escrowId;
-      this.buyerAmount = buyerAmount;
-      this.sellerAmount = sellerAmount;
+      this.buyerAmount = InstructionQuantity.requireCanonical(buyerAmount);
+      this.sellerAmount = InstructionQuantity.requireCanonical(sellerAmount);
       this.evidenceHashes = evidenceHashes;
       if (argumentOrder == null) {
         final Map<String, String> args = new LinkedHashMap<>();

@@ -17,7 +17,7 @@ use std::{
 
 use eyre::{Result, WrapErr, eyre};
 use iroha_config::parameters::actual::{
-    ConsensusMode, LaneConfig, LaneConfigEntry, LaneRoutingPolicy, NexusFeeSettlementMode,
+    LaneConfig, LaneConfigEntry, LaneRoutingPolicy, NexusFeeSettlementMode,
 };
 #[cfg(any(test, feature = "bench"))]
 use iroha_crypto::KeyPair;
@@ -39,6 +39,7 @@ use iroha_data_model::{
         Asset, AssetBalancePolicy, AssetBalanceScope, AssetDefinitionAlias, AssetDefinitionId,
         AssetEntry, AssetValue, Mintable, id::AssetId,
     },
+    block::consensus_v2::ConsensusMode,
     block::{
         BlockHeader, SignedBlock,
         consensus::{
@@ -161,7 +162,7 @@ use iroha_logger::prelude::*;
 use iroha_primitives::{
     const_vec::ConstVec,
     json::Json,
-    numeric::{Numeric, NumericSpec},
+    numeric::{Numeric, NumericSpec, Quantity},
     time::TimeSource,
 };
 use iroha_schema::Ident;
@@ -263,7 +264,7 @@ fn append_merge_executor_delta(
 
 use crate::{
     block::BlockValidationError,
-    commit_roster_journal::{CommitRosterJournal, CommitRosterSnapshot},
+    commit_roster_journal::{CommitRosterJournal, CommitRosterJournalError, CommitRosterSnapshot},
     da::{
         ConfidentialComputeError, DaCommitmentValidationError, DaShardCursorError,
         DaShardCursorIndex, DaShardCursorJournal, LaneEpoch,
@@ -272,7 +273,7 @@ use crate::{
         pin_store::DaPinStore,
         receipts::{DaReceiptCursorError, DaReceiptCursorIndex},
     },
-    sumeragi::{pacing_governor, stake_snapshot::CommitStakeSnapshot, status},
+    sumeragi::stake_snapshot::CommitStakeSnapshot,
 };
 
 mod tiered;
@@ -685,7 +686,7 @@ macro_rules! build_world_block {
             repo_agreements_by_counterparty: $state.repo_agreements_by_counterparty.$method(),
             repo_agreements_by_custodian: $state.repo_agreements_by_custodian.$method(),
             settlement_ledgers: $state.settlement_ledgers.$method(),
-            offline_note_replay_keys: $state.offline_note_replay_keys.$method(),
+            kagemusha_replay_keys: $state.kagemusha_replay_keys.$method(),
             direct_lane_block_application_markers: $state
                 .direct_lane_block_application_markers
                 .$method(),
@@ -918,7 +919,7 @@ macro_rules! build_world_transaction {
             repo_agreements_by_counterparty: $state.repo_agreements_by_counterparty.transaction(),
             repo_agreements_by_custodian: $state.repo_agreements_by_custodian.transaction(),
             settlement_ledgers: $state.settlement_ledgers.transaction(),
-            offline_note_replay_keys: $state.offline_note_replay_keys.transaction(),
+            kagemusha_replay_keys: $state.kagemusha_replay_keys.transaction(),
             direct_lane_block_application_markers: $state
                 .direct_lane_block_application_markers
                 .transaction(),
@@ -3607,7 +3608,7 @@ pub struct World {
     /// Settlement audit trails keyed by settlement identifier.
     pub(crate) settlement_ledgers: Storage<SettlementId, SettlementLedger>,
     /// Offline replay keys used for issued notes, certificates, nullifiers, and audit tokens.
-    pub(crate) offline_note_replay_keys: Storage<Hash, ()>,
+    pub(crate) kagemusha_replay_keys: Storage<Hash, ()>,
     /// Direct standalone lane blocks already applied to world state.
     pub(crate) direct_lane_block_application_markers:
         Storage<DirectLaneBlockApplicationKey, DirectLaneBlockApplicationMarker>,
@@ -4092,7 +4093,7 @@ pub struct WorldBlock<'world> {
     /// Settlement audit trails keyed by settlement identifier.
     pub(crate) settlement_ledgers: StorageBlock<'world, SettlementId, SettlementLedger>,
     /// Offline replay keys used for issued notes, certificates, nullifiers, and audit tokens.
-    pub(crate) offline_note_replay_keys: StorageBlock<'world, Hash, ()>,
+    pub(crate) kagemusha_replay_keys: StorageBlock<'world, Hash, ()>,
     /// Direct standalone lane blocks already applied to world state.
     pub(crate) direct_lane_block_application_markers:
         StorageBlock<'world, DirectLaneBlockApplicationKey, DirectLaneBlockApplicationMarker>,
@@ -4245,7 +4246,7 @@ impl<'world> WorldBlock<'world> {
         collect_reverts!(self.governance_slashes, GovernanceSlash);
         collect_reverts!(self.council, Council);
         collect_reverts!(self.parliament_bodies, ParliamentBodies);
-        collect_reverts!(self.offline_note_replay_keys, OfflineNoteReplayKey);
+        collect_reverts!(self.kagemusha_replay_keys, KagemushaReplayKey);
         collect_reverts!(
             self.direct_lane_block_application_markers,
             DirectLaneBlockApplicationMarker
@@ -4312,7 +4313,7 @@ impl<'world> WorldBlock<'world> {
         collect_payload!(self.governance_slashes, GovernanceSlash);
         collect_payload!(self.council, Council);
         collect_payload!(self.parliament_bodies, ParliamentBodies);
-        collect_payload!(self.offline_note_replay_keys, OfflineNoteReplayKey);
+        collect_payload!(self.kagemusha_replay_keys, KagemushaReplayKey);
         collect_payload!(
             self.direct_lane_block_application_markers,
             DirectLaneBlockApplicationMarker
@@ -4502,7 +4503,7 @@ impl<'world> WorldBlock<'world> {
             repo_agreements_by_counterparty,
             repo_agreements_by_custodian,
             settlement_ledgers,
-            offline_note_replay_keys,
+            kagemusha_replay_keys,
             direct_lane_block_application_markers,
             public_lane_validators,
             public_lane_stake_shares,
@@ -5041,7 +5042,7 @@ pub struct WorldTransaction<'block, 'world> {
     pub(crate) settlement_ledgers:
         StorageTransaction<'block, 'world, SettlementId, SettlementLedger>,
     /// Offline replay keys used for issued notes, certificates, nullifiers, and audit tokens.
-    pub(crate) offline_note_replay_keys: StorageTransaction<'block, 'world, Hash, ()>,
+    pub(crate) kagemusha_replay_keys: StorageTransaction<'block, 'world, Hash, ()>,
     /// Direct standalone lane blocks already applied to world state.
     pub(crate) direct_lane_block_application_markers: StorageTransaction<
         'block,
@@ -6508,7 +6509,7 @@ pub struct WorldView<'world> {
     /// Settlement audit trails keyed by settlement identifier.
     pub(crate) settlement_ledgers: StorageView<'world, SettlementId, SettlementLedger>,
     /// Offline replay keys used for issued notes, certificates, nullifiers, and audit tokens.
-    pub(crate) offline_note_replay_keys: StorageView<'world, Hash, ()>,
+    pub(crate) kagemusha_replay_keys: StorageView<'world, Hash, ()>,
     /// Direct standalone lane blocks already applied to world state.
     pub(crate) direct_lane_block_application_markers:
         StorageView<'world, DirectLaneBlockApplicationKey, DirectLaneBlockApplicationMarker>,
@@ -9306,10 +9307,6 @@ pub struct State {
     pipeline_ivm_prepared_cache: parking_lot::RwLock<PreparedContractCache>,
     /// Oracle aggregation configuration.
     pub oracle: iroha_config::parameters::actual::Oracle,
-    /// Deterministic pacing governor configuration snapshot.
-    pub pacing_governor: iroha_config::parameters::actual::SumeragiPacingGovernor,
-    /// Runtime DA quorum timeout multiplier used for Sumeragi liveness budgets.
-    sumeragi_da_quorum_timeout_multiplier: u32,
     /// Streaming configuration snapshot (spool paths, codec defaults).
     streaming: iroha_config::parameters::actual::Streaming,
     /// Cryptography configuration (enabled algorithms, defaults).
@@ -9518,8 +9515,6 @@ pub struct StateBlock<'state> {
     pub pipeline: iroha_config::parameters::actual::Pipeline,
     /// Oracle configuration snapshot for this block.
     pub oracle: iroha_config::parameters::actual::Oracle,
-    /// Deterministic pacing governor configuration snapshot for this block.
-    pub pacing_governor: iroha_config::parameters::actual::SumeragiPacingGovernor,
     /// Cryptography configuration snapshot for this block.
     pub crypto: Arc<iroha_config::parameters::actual::Crypto>,
     /// Nexus configuration snapshot for this block.
@@ -9587,10 +9582,6 @@ pub struct StateBlock<'state> {
     confidential_registry_dirty: bool,
     /// Implicit accounts created so far in this block.
     pub implicit_account_creations_in_block: u32,
-    /// Whether a `next_mode` update was applied in this block.
-    pub mode_cutover_next_set_in_block: bool,
-    /// Whether a `mode_activation_height` update was applied in this block.
-    pub mode_cutover_activation_set_in_block: bool,
     /// Gas limit per block (read from on-chain parameters or defaults).
     pub gas_limit_per_block: u64,
     /// State telemetry
@@ -9986,14 +9977,6 @@ pub struct StateTransaction<'block, 'state> {
     committed_fragments: &'block mut usize,
     /// Lanes whose state was touched in this transaction.
     touched_lanes: &'block mut BTreeSet<LaneId>,
-    /// Tracks whether `next_mode` was updated in this block (applied transactions only).
-    pub(crate) mode_cutover_next_set_in_block: &'block mut bool,
-    /// Tracks whether `mode_activation_height` was updated in this block (applied transactions only).
-    pub(crate) mode_cutover_activation_set_in_block: &'block mut bool,
-    /// Tracks whether `next_mode` was updated in this transaction.
-    mode_cutover_next_set_in_tx: bool,
-    /// Tracks whether `mode_activation_height` was updated in this transaction.
-    mode_cutover_activation_set_in_tx: bool,
     /// Tracks whether confidential registries were updated in this block.
     confidential_registry_dirty: &'block mut bool,
     /// The world. Contains `domains`, `triggers`, `roles` and other data representing the current state of the blockchain.
@@ -10220,16 +10203,6 @@ impl<'block, 'state> StateTransaction<'block, 'state> {
         &mut self.world
     }
 
-    /// Mark that `next_mode` was staged in this transaction.
-    pub fn mark_mode_cutover_next_set(&mut self) {
-        self.mode_cutover_next_set_in_tx = true;
-    }
-
-    /// Mark that `mode_activation_height` was staged in this transaction.
-    pub fn mark_mode_cutover_activation_set(&mut self) {
-        self.mode_cutover_activation_set_in_tx = true;
-    }
-
     /// Exposes the cached block hashes for this transaction scope.
     #[inline]
     pub fn block_hashes(&self) -> &BlockHashesTransaction<'block> {
@@ -10299,7 +10272,7 @@ impl<'block, 'state> StateTransaction<'block, 'state> {
             .chain(self.pending_nexus_fee_records.values())
         {
             if &record.payer_account_id == payer && record.fee_asset_id == fee_asset_id {
-                total = total.checked_add(record.fee_amount.clone())?;
+                total = total.checked_add(record.fee_amount.as_numeric().clone())?;
             }
         }
         Some(total)
@@ -13554,36 +13527,20 @@ mod sumeragi_timing_tests {
     use super::*;
 
     #[test]
-    fn sumeragi_commit_quorum_timeout_uses_runtime_da_multiplier() {
+    fn v2_block_cadence_ignores_retired_adaptive_pacing() {
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query = crate::query::store::LiveQueryStore::start_test();
         let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query);
+        let mut parameters = state.world.parameters.block();
+        parameters.sumeragi.block_time_ms = 1_000;
+        parameters.sumeragi.pacing_factor_bps = 20_000;
+        parameters.commit();
 
+        assert_eq!(state.sumeragi_block_cadence(), Duration::from_secs(1));
         assert_eq!(
-            state.sumeragi_commit_quorum_timeout(),
-            Duration::from_millis(800)
-        );
-
-        let config = SumeragiPolicyConfig {
-            collectors_k: usize::from(iroha_config::parameters::defaults::sumeragi::COLLECTORS_K),
-            collectors_redundant_send_r:
-                iroha_config::parameters::defaults::sumeragi::COLLECTORS_REDUNDANT_SEND_R,
-            policy_flags: SumeragiPolicyFlags::new(true, false),
-            da_quorum_timeout_multiplier: 3,
-            key_activation_lead_blocks:
-                iroha_config::parameters::defaults::sumeragi::KEY_ACTIVATION_LEAD_BLOCKS,
-            key_overlap_grace_blocks:
-                iroha_config::parameters::defaults::sumeragi::KEY_OVERLAP_GRACE_BLOCKS,
-            key_expiry_grace_blocks:
-                iroha_config::parameters::defaults::sumeragi::KEY_EXPIRY_GRACE_BLOCKS,
-            key_allowed_algorithms: BTreeSet::new(),
-            key_allowed_hsm_providers: BTreeSet::new(),
-        };
-        state.set_sumeragi_parameters(config);
-
-        assert_eq!(
-            state.sumeragi_commit_quorum_timeout(),
-            Duration::from_millis(1_200)
+            state.sumeragi_effective_block_time(),
+            Duration::from_secs(2),
+            "the fixture must prove the retired adaptive value differs"
         );
     }
 }
@@ -14868,15 +14825,18 @@ impl DetachedStateTransactionDelta {
         let Some((source_id, destination, amount)) = self.single_transfer_delta() else {
             return false;
         };
+        let Ok(quantity) = Quantity::from_canonical_numeric(amount.clone()) else {
+            return false;
+        };
         let destination_id = AssetId::new(source_id.definition().clone(), destination.clone());
         let transfer_events = [
             data_pre::DataEvent::from(data_pre::AssetEvent::Removed(data_pre::AssetChanged {
                 asset: source_id.clone(),
-                amount: amount.clone(),
+                amount: quantity.clone(),
             })),
             data_pre::DataEvent::from(data_pre::AssetEvent::Added(data_pre::AssetChanged {
                 asset: destination_id.clone(),
-                amount: amount.clone(),
+                amount: quantity,
             })),
         ];
 
@@ -15714,20 +15674,20 @@ impl DetachedStateTransactionDelta {
             for (id, qty) in &asset_adds {
                 let def = stx.world.asset_definition(id.definition())?;
                 let spec = def.spec();
-                ensure_asset_numeric_value(qty, spec)
+                ensure_asset_quantity_value(qty, spec)
                     .map_err(iroha_data_model::ValidationFail::InstructionFailed)?;
                 if let Some(value) = stx.world.assets.get(id) {
-                    ensure_asset_numeric_value(value.as_ref(), spec)
+                    ensure_asset_quantity_value(value.as_ref().as_numeric(), spec)
                         .map_err(iroha_data_model::ValidationFail::InstructionFailed)?;
                 }
             }
             for (id, qty) in &asset_subs {
                 let def = stx.world.asset_definition(id.definition())?;
                 let spec = def.spec();
-                ensure_asset_numeric_value(qty, spec)
+                ensure_asset_quantity_value(qty, spec)
                     .map_err(iroha_data_model::ValidationFail::InstructionFailed)?;
                 if let Some(value) = stx.world.assets.get(id) {
-                    ensure_asset_numeric_value(value.as_ref(), spec)
+                    ensure_asset_quantity_value(value.as_ref().as_numeric(), spec)
                         .map_err(iroha_data_model::ValidationFail::InstructionFailed)?;
                 }
             }
@@ -15783,6 +15743,11 @@ impl DetachedStateTransactionDelta {
 
             // Apply asset subtractions (aggregated per id)
             for (id, qty) in &asset_subs {
+                let quantity = Quantity::from_canonical_numeric(qty.clone()).map_err(|_| {
+                    iroha_data_model::ValidationFail::InstructionFailed(Error::Math(
+                        MathError::NegativeValue,
+                    ))
+                })?;
                 // Mutate value and record pre/post within a limited scope to drop the mutable borrow
                 // before possibly removing the entry from the map.
                 let remove_it = {
@@ -15791,28 +15756,18 @@ impl DetachedStateTransactionDelta {
                             "asset not found: {id}"
                         ))
                     })?;
-                    let qref: &mut iroha_primitives::numeric::Numeric = &mut *cur;
-                    if qref.mantissa().is_negative() {
-                        return Err(iroha_data_model::ValidationFail::InstructionFailed(
-                            Error::Math(MathError::NegativeValue),
-                        ));
-                    }
+                    let qref: &mut Quantity = &mut *cur;
                     // Witness: record pre-value
-                    crate::sumeragi::witness::record_read_asset(id, Some(qref));
-                    let updated = qref.clone().checked_sub(qty.clone()).ok_or_else(|| {
+                    crate::sumeragi::witness::record_read_asset(id, Some(qref.as_numeric()));
+                    let updated = qref.checked_sub(&quantity).map_err(|_| {
                         iroha_data_model::ValidationFail::NotPermitted(
                             "not enough quantity".to_owned(),
                         )
                     })?;
-                    if updated.mantissa().is_negative() {
-                        return Err(iroha_data_model::ValidationFail::InstructionFailed(
-                            Error::Math(MathError::NotEnoughQuantity),
-                        ));
-                    }
                     *qref = updated;
-                    let is_zero = (**cur).is_zero();
+                    let is_zero = qref.is_zero();
                     // Witness: record post-value (after mutation)
-                    crate::sumeragi::witness::record_write_asset(id, cur);
+                    crate::sumeragi::witness::record_write_asset(id, qref.as_numeric());
                     is_zero
                 };
                 if remove_it {
@@ -15821,32 +15776,25 @@ impl DetachedStateTransactionDelta {
             }
             // Apply asset additions (aggregated per id) and defer event emission until totals update.
             for (id, qty) in &asset_adds {
+                let quantity = Quantity::from_canonical_numeric(qty.clone()).map_err(|_| {
+                    iroha_data_model::ValidationFail::InstructionFailed(Error::Math(
+                        MathError::NegativeValue,
+                    ))
+                })?;
                 let is_nonzero = {
-                    let dst = stx
-                        .world
-                        .asset_or_insert(id, iroha_primitives::numeric::Numeric::zero())?;
-                    let qref: &mut iroha_primitives::numeric::Numeric = &mut *dst;
-                    if qref.mantissa().is_negative() {
-                        return Err(iroha_data_model::ValidationFail::InstructionFailed(
-                            Error::Math(MathError::NegativeValue),
-                        ));
-                    }
+                    let dst = stx.world.asset_or_insert(id, Quantity::zero())?;
+                    let qref: &mut Quantity = &mut *dst;
                     // Witness: record pre-value
-                    crate::sumeragi::witness::record_read_asset(id, Some(qref));
-                    let updated = qref.clone().checked_add(qty.clone()).ok_or_else(|| {
+                    crate::sumeragi::witness::record_read_asset(id, Some(qref.as_numeric()));
+                    let updated = qref.checked_add(&quantity).map_err(|_| {
                         iroha_data_model::ValidationFail::NotPermitted(
                             "numeric overflow".to_owned(),
                         )
                     })?;
-                    if updated.mantissa().is_negative() {
-                        return Err(iroha_data_model::ValidationFail::InstructionFailed(
-                            Error::Math(MathError::NegativeValue),
-                        ));
-                    }
                     *qref = updated;
                     let is_nonzero = !qref.is_zero();
                     // Witness: record post-value
-                    crate::sumeragi::witness::record_write_asset(id, qref);
+                    crate::sumeragi::witness::record_write_asset(id, qref.as_numeric());
                     is_nonzero
                 };
                 if is_nonzero {
@@ -15855,38 +15803,48 @@ impl DetachedStateTransactionDelta {
             }
             // Update asset definition totals
             for (def, qty) in &asset_def_adds {
+                let quantity = Quantity::from_canonical_numeric(qty.clone()).map_err(|_| {
+                    iroha_data_model::ValidationFail::InstructionFailed(Error::Math(
+                        MathError::NegativeValue,
+                    ))
+                })?;
                 // Witness: record pre total
                 if let Ok(def_ro) = stx.world.asset_definition(def) {
                     crate::sumeragi::witness::record_read_asset_def_total(
                         def,
-                        Some(def_ro.total_quantity()),
+                        Some(def_ro.total_quantity().as_numeric()),
                     );
                 } else {
                     crate::sumeragi::witness::record_read_asset_def_total(def, None);
                 }
-                stx.world.increase_asset_total_amount(def, qty)?;
+                stx.world.increase_asset_total_amount(def, &quantity)?;
                 // Witness: record post total
                 if let Ok(def_ro) = stx.world.asset_definition(def) {
                     crate::sumeragi::witness::record_write_asset_def_total(
                         def,
-                        def_ro.total_quantity(),
+                        def_ro.total_quantity().as_numeric(),
                     );
                 }
             }
             for (def, qty) in &asset_def_subs {
+                let quantity = Quantity::from_canonical_numeric(qty.clone()).map_err(|_| {
+                    iroha_data_model::ValidationFail::InstructionFailed(Error::Math(
+                        MathError::NegativeValue,
+                    ))
+                })?;
                 if let Ok(def_ro) = stx.world.asset_definition(def) {
                     crate::sumeragi::witness::record_read_asset_def_total(
                         def,
-                        Some(def_ro.total_quantity()),
+                        Some(def_ro.total_quantity().as_numeric()),
                     );
                 } else {
                     crate::sumeragi::witness::record_read_asset_def_total(def, None);
                 }
-                stx.world.decrease_asset_total_amount(def, qty)?;
+                stx.world.decrease_asset_total_amount(def, &quantity)?;
                 if let Ok(def_ro) = stx.world.asset_definition(def) {
                     crate::sumeragi::witness::record_write_asset_def_total(
                         def,
-                        def_ro.total_quantity(),
+                        def_ro.total_quantity().as_numeric(),
                     );
                 }
             }
@@ -15908,7 +15866,11 @@ impl DetachedStateTransactionDelta {
                         stx.world
                             .emit_events(Some(AssetEvent::Removed(AssetChanged {
                                 asset: asset.clone(),
-                                amount: qty,
+                                amount: Quantity::from_canonical_numeric(qty).map_err(|_| {
+                                    iroha_data_model::ValidationFail::InstructionFailed(
+                                        Error::Math(MathError::NegativeValue),
+                                    )
+                                })?,
                             })));
                     }
                     AssetEventScriptEntry::Added(index) => {
@@ -15925,7 +15887,11 @@ impl DetachedStateTransactionDelta {
                             .expect("asset event references missing addition qty");
                         stx.world.emit_events(Some(AssetEvent::Added(AssetChanged {
                             asset: asset.clone(),
-                            amount: qty,
+                            amount: Quantity::from_canonical_numeric(qty).map_err(|_| {
+                                iroha_data_model::ValidationFail::InstructionFailed(Error::Math(
+                                    MathError::NegativeValue,
+                                ))
+                            })?,
                         })));
                     }
                 }
@@ -16221,15 +16187,8 @@ impl DetachedStateTransactionDelta {
                             == iroha_data_model::nexus::LaneLifecycleParameterV1::parameter_id()
                 );
                 if is_consensus_lane_lifecycle
-                    || matches!(
-                    &param,
-                    iroha_data_model::parameter::Parameter::Sumeragi(
-                        iroha_data_model::parameter::SumeragiParameter::NextMode(_)
-                            | iroha_data_model::parameter::SumeragiParameter::ModeActivationHeight(
-                                _
-                            )
-                    )
-                ) {
+                    || matches!(&param, iroha_data_model::parameter::Parameter::Sumeragi(_))
+                {
                     if let Err(err) = SetParameter::new(param).execute(authority, &mut stx) {
                         return Err(ValidationFail::InstructionFailed(err));
                     }
@@ -16260,78 +16219,9 @@ impl DetachedStateTransactionDelta {
                 }
                 let params = stx.world.parameters.get_mut();
                 match param.clone() {
-                    iroha_data_model::parameter::Parameter::Sumeragi(x) => match x {
-                        iroha_data_model::parameter::SumeragiParameter::MaxClockDriftMs(_) => {
-                            set_param_and_emit!(
-                                params,
-                                iroha_data_model::parameter::Parameter::Sumeragi(x),
-                                Sumeragi(SumeragiParameter::MaxClockDriftMs)
-                            )
-                        }
-                        iroha_data_model::parameter::SumeragiParameter::BlockTimeMs(_) => {
-                            set_param_and_emit!(
-                                params,
-                                iroha_data_model::parameter::Parameter::Sumeragi(x),
-                                Sumeragi(SumeragiParameter::BlockTimeMs)
-                            )
-                        }
-                        iroha_data_model::parameter::SumeragiParameter::CommitTimeMs(_) => {
-                            set_param_and_emit!(
-                                params,
-                                iroha_data_model::parameter::Parameter::Sumeragi(x),
-                                Sumeragi(SumeragiParameter::CommitTimeMs)
-                            )
-                        }
-                        iroha_data_model::parameter::SumeragiParameter::MinFinalityMs(_) => {
-                            set_param_and_emit!(
-                                params,
-                                iroha_data_model::parameter::Parameter::Sumeragi(x),
-                                Sumeragi(SumeragiParameter::MinFinalityMs)
-                            )
-                        }
-                        iroha_data_model::parameter::SumeragiParameter::PacingFactorBps(_) => {
-                            set_param_and_emit!(
-                                params,
-                                iroha_data_model::parameter::Parameter::Sumeragi(x),
-                                Sumeragi(SumeragiParameter::PacingFactorBps)
-                            )
-                        }
-                        iroha_data_model::parameter::SumeragiParameter::CollectorsK(_) => {
-                            set_param_and_emit!(
-                                params,
-                                iroha_data_model::parameter::Parameter::Sumeragi(x),
-                                Sumeragi(SumeragiParameter::CollectorsK)
-                            )
-                        }
-                        iroha_data_model::parameter::SumeragiParameter::RedundantSendR(_) => {
-                            set_param_and_emit!(
-                                params,
-                                iroha_data_model::parameter::Parameter::Sumeragi(x),
-                                Sumeragi(SumeragiParameter::RedundantSendR)
-                            )
-                        }
-                        iroha_data_model::parameter::SumeragiParameter::DaEnabled(_) => {
-                            set_param_and_emit!(
-                                params,
-                                iroha_data_model::parameter::Parameter::Sumeragi(x),
-                                Sumeragi(SumeragiParameter::DaEnabled)
-                            )
-                        }
-                        iroha_data_model::parameter::SumeragiParameter::NextMode(_) => {
-                            set_param_and_emit!(
-                                params,
-                                iroha_data_model::parameter::Parameter::Sumeragi(x),
-                                Sumeragi(SumeragiParameter::NextMode)
-                            )
-                        }
-                        iroha_data_model::parameter::SumeragiParameter::ModeActivationHeight(_) => {
-                            set_param_and_emit!(
-                                params,
-                                iroha_data_model::parameter::Parameter::Sumeragi(x),
-                                Sumeragi(SumeragiParameter::ModeActivationHeight)
-                            )
-                        }
-                    },
+                    iroha_data_model::parameter::Parameter::Sumeragi(_) => {
+                        unreachable!("Sumeragi parameters are validated through SetParameter")
+                    }
                     iroha_data_model::parameter::Parameter::Block(x) => match x {
                         iroha_data_model::parameter::BlockParameter::MaxTransactions(_) => {
                             set_param_and_emit!(
@@ -16492,7 +16382,7 @@ impl DetachedStateTransactionDelta {
     }
 }
 
-fn ensure_asset_numeric_value(value: &Numeric, spec: NumericSpec) -> Result<(), Error> {
+fn ensure_asset_quantity_value(value: &Numeric, spec: NumericSpec) -> Result<(), Error> {
     if value.mantissa().is_negative() {
         return Err(MathError::NegativeValue.into());
     }
@@ -16522,12 +16412,7 @@ impl World {
         let definitions = self.asset_definitions.view();
         for (definition_id, definition) in definitions.iter() {
             let total = definition.total_quantity();
-            if total.mantissa().is_negative() {
-                return Err(format!(
-                    "asset definition {definition_id} has negative total quantity {total}"
-                ));
-            }
-            if definition.spec().check(total).is_err() {
+            if definition.spec().check(total.as_numeric()).is_err() {
                 return Err(format!(
                     "asset definition {definition_id} total quantity {total} violates numeric spec {}",
                     definition.spec()
@@ -16538,9 +16423,6 @@ impl World {
         let accounts = self.accounts.view();
         for (asset_id, asset_value) in self.assets.view().iter() {
             let balance = asset_value.as_ref();
-            if balance.mantissa().is_negative() {
-                return Err(format!("asset {asset_id} has negative balance {balance}"));
-            }
             let definition = definitions.get(asset_id.definition()).ok_or_else(|| {
                 format!(
                     "asset {asset_id} references missing definition {}",
@@ -16553,7 +16435,7 @@ impl World {
                     asset_id.account()
                 ));
             }
-            if definition.spec().check(balance).is_err() {
+            if definition.spec().check(balance.as_numeric()).is_err() {
                 return Err(format!(
                     "asset {asset_id} balance {balance} violates numeric spec {}",
                     definition.spec()
@@ -17952,7 +17834,7 @@ impl World {
             repo_agreements_by_counterparty: self.repo_agreements_by_counterparty.view(),
             repo_agreements_by_custodian: self.repo_agreements_by_custodian.view(),
             settlement_ledgers: self.settlement_ledgers.view(),
-            offline_note_replay_keys: self.offline_note_replay_keys.view(),
+            kagemusha_replay_keys: self.kagemusha_replay_keys.view(),
             direct_lane_block_application_markers: self
                 .direct_lane_block_application_markers
                 .view(),
@@ -18641,7 +18523,7 @@ pub trait WorldReadOnly {
     /// Settlement audit trails (read-only).
     fn settlement_ledgers(&self) -> &impl StorageReadOnly<SettlementId, SettlementLedger>;
     /// Offline replay keys (read-only).
-    fn offline_note_replay_keys(&self) -> &impl StorageReadOnly<Hash, ()>;
+    fn kagemusha_replay_keys(&self) -> &impl StorageReadOnly<Hash, ()>;
     /// Direct standalone lane-block application markers (read-only).
     fn direct_lane_block_application_markers(
         &self,
@@ -19311,7 +19193,7 @@ pub trait WorldReadOnly {
     ///
     /// # Errors
     /// - Asset definition not found
-    fn asset_total_amount(&self, definition_id: &AssetDefinitionId) -> Result<Numeric, FindError> {
+    fn asset_total_amount(&self, definition_id: &AssetDefinitionId) -> Result<Quantity, FindError> {
         Ok(self
             .asset_definition(definition_id)?
             .total_quantity()
@@ -20088,8 +19970,8 @@ macro_rules! impl_world_ro {
             fn settlement_ledgers(&self) -> &impl StorageReadOnly<SettlementId, SettlementLedger> {
                 &self.settlement_ledgers
             }
-            fn offline_note_replay_keys(&self) -> &impl StorageReadOnly<Hash, ()> {
-                &self.offline_note_replay_keys
+            fn kagemusha_replay_keys(&self) -> &impl StorageReadOnly<Hash, ()> {
+                &self.kagemusha_replay_keys
             }
             fn direct_lane_block_application_markers(
                 &self,
@@ -20590,7 +20472,7 @@ impl<'world> WorldBlock<'world> {
             repo_agreements_by_counterparty,
             repo_agreements_by_custodian,
             settlement_ledgers,
-            offline_note_replay_keys,
+            kagemusha_replay_keys,
             direct_lane_block_application_markers,
             public_lane_validators,
             public_lane_stake_shares,
@@ -20699,7 +20581,7 @@ impl<'world> WorldBlock<'world> {
         repo_agreements_by_counterparty.commit();
         repo_agreements_by_custodian.commit();
         settlement_ledgers.commit();
-        offline_note_replay_keys.commit();
+        kagemusha_replay_keys.commit();
         direct_lane_block_application_markers.commit();
         domain_committees.commit();
         domain_endorsement_policies.commit();
@@ -21923,7 +21805,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             manifest_aliases,
             replication_orders,
             settlement_ledgers,
-            offline_note_replay_keys,
+            kagemusha_replay_keys,
             public_lane_validators,
             public_lane_stake_shares,
             public_lane_rewards,
@@ -22033,7 +21915,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         self.soradns_last_publish_ms.apply();
         self.soradns_history_len.apply();
         settlement_ledgers.apply();
-        offline_note_replay_keys.apply();
+        kagemusha_replay_keys.apply();
         domain_committees.apply();
         domain_endorsement_policies.apply();
         domain_endorsements.apply();
@@ -22324,7 +22206,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
     pub fn asset_or_insert(
         &mut self,
         asset_id: &AssetId,
-        default_asset_value: impl Into<Numeric>,
+        default_asset_value: impl Into<Quantity>,
     ) -> Result<&mut AssetValue, Error> {
         let resolved_id = self.resolve_asset_id_for_current_scope(asset_id)?;
         self.asset_or_insert_exact(&resolved_id, default_asset_value)
@@ -22343,16 +22225,16 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
     pub fn asset_or_insert_exact(
         &mut self,
         asset_id: &AssetId,
-        default_asset_value: impl Into<Numeric>,
+        default_asset_value: impl Into<Quantity>,
     ) -> Result<&mut AssetValue, Error> {
         let resolved_id = asset_id.clone();
         let spec = self.asset_definition(resolved_id.definition())?.spec();
         self.account(resolved_id.account())?;
         let default_asset_value = default_asset_value.into();
-        ensure_asset_numeric_value(&default_asset_value, spec)?;
+        ensure_asset_quantity_value(default_asset_value.as_numeric(), spec)?;
 
         if let Some(value) = self.assets.get(&resolved_id) {
-            ensure_asset_numeric_value(value.as_ref(), spec)?;
+            ensure_asset_quantity_value(value.as_ref().as_numeric(), spec)?;
         }
 
         if self.assets.get(&resolved_id).is_none() {
@@ -22399,23 +22281,22 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
     pub fn increase_asset_total_amount(
         &mut self,
         definition_id: &AssetDefinitionId,
-        increment: &Numeric,
+        increment: &Quantity,
     ) -> Result<(), Error> {
         let spec = self.asset_definition(definition_id)?.spec();
-        ensure_asset_numeric_value(increment, spec)?;
+        ensure_asset_quantity_value(increment.as_numeric(), spec)?;
         // Update the aggregate based on the stored value rather than recomputing
         // from the current storage view (which would already include the change)
         // to avoid double-counting.
         // Compute and persist the new total first, then emit events.
         let new_total = {
             let def = self.asset_definition_mut(definition_id)?;
-            ensure_asset_numeric_value(&def.total_quantity, spec)?;
+            ensure_asset_quantity_value(def.total_quantity.as_numeric(), spec)?;
             let new_total = def
                 .total_quantity
-                .clone()
-                .checked_add(increment.clone())
-                .ok_or(MathError::Overflow)?;
-            ensure_asset_numeric_value(&new_total, spec)?;
+                .checked_add(increment)
+                .map_err(|_| MathError::Overflow)?;
+            ensure_asset_quantity_value(new_total.as_numeric(), spec)?;
             def.total_quantity = new_total.clone();
             new_total
         };
@@ -22453,25 +22334,24 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
     pub fn decrease_asset_total_amount(
         &mut self,
         definition_id: &AssetDefinitionId,
-        decrement: &Numeric,
+        decrement: &Quantity,
     ) -> Result<(), Error> {
         let spec = self.asset_definition(definition_id)?.spec();
-        ensure_asset_numeric_value(decrement, spec)?;
+        ensure_asset_quantity_value(decrement.as_numeric(), spec)?;
         // Update the aggregate directly to avoid double-counting when storage
         // has already been mutated by the caller.
         // Compute and persist the new total first, then emit events.
         let new_total = {
             let def = self.asset_definition_mut(definition_id)?;
-            ensure_asset_numeric_value(&def.total_quantity, spec)?;
+            ensure_asset_quantity_value(def.total_quantity.as_numeric(), spec)?;
             if &def.total_quantity < decrement {
                 return Err(MathError::NotEnoughQuantity.into());
             }
             let new_total = def
                 .total_quantity
-                .clone()
-                .checked_sub(decrement.clone())
-                .ok_or(MathError::NotEnoughQuantity)?;
-            ensure_asset_numeric_value(&new_total, spec)?;
+                .checked_sub(decrement)
+                .map_err(|_| MathError::NotEnoughQuantity)?;
+            ensure_asset_quantity_value(new_total.as_numeric(), spec)?;
             def.total_quantity = new_total.clone();
             new_total
         };
@@ -22660,65 +22540,11 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
     }
 }
 
-/// Bitflags for boolean Sumeragi policy toggles.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct SumeragiPolicyFlags(u8);
-
-impl SumeragiPolicyFlags {
-    const DA_ENABLED: u8 = 0b0000_0001;
-    const KEY_REQUIRE_HSM: u8 = 0b0000_0010;
-
-    /// Build policy flags from boolean inputs.
-    #[must_use]
-    pub fn new(da_enabled: bool, key_require_hsm: bool) -> Self {
-        let mut flags = Self::default();
-        flags.set_da_enabled(da_enabled);
-        flags.set_key_require_hsm(key_require_hsm);
-        flags
-    }
-
-    /// Return true if DA/RBC is enabled.
-    #[must_use]
-    pub fn da_enabled(self) -> bool {
-        (self.0 & Self::DA_ENABLED) != 0
-    }
-
-    /// Return true if consensus keys must carry HSM bindings.
-    #[must_use]
-    pub fn key_require_hsm(self) -> bool {
-        (self.0 & Self::KEY_REQUIRE_HSM) != 0
-    }
-
-    /// Enable or disable DA/RBC policy.
-    pub fn set_da_enabled(&mut self, enabled: bool) {
-        self.set_flag(Self::DA_ENABLED, enabled);
-    }
-
-    /// Enable or disable HSM-required policy.
-    pub fn set_key_require_hsm(&mut self, enabled: bool) {
-        self.set_flag(Self::KEY_REQUIRE_HSM, enabled);
-    }
-
-    fn set_flag(&mut self, flag: u8, enabled: bool) {
-        if enabled {
-            self.0 |= flag;
-        } else {
-            self.0 &= !flag;
-        }
-    }
-}
-
-/// Snapshot of consensus policy configuration used to update Sumeragi parameters.
+/// Snapshot of consensus-key policy copied into runtime state.
 #[derive(Clone)]
 pub struct SumeragiPolicyConfig {
-    /// Number of collectors (K) designated for validators.
-    pub collectors_k: usize,
-    /// Redundant send fanout (r) for validators.
-    pub collectors_redundant_send_r: u8,
-    /// Boolean policy toggles.
-    pub policy_flags: SumeragiPolicyFlags,
-    /// Multiplier applied to DA commit-quorum timeout budgets.
-    pub da_quorum_timeout_multiplier: u32,
+    /// Whether consensus keys must carry an admitted HSM binding.
+    pub key_require_hsm: bool,
     /// Lead-time (in blocks) required before a new consensus key activates.
     pub key_activation_lead_blocks: u64,
     /// Overlap/grace window (in blocks) permitting dual-signing during rotation.
@@ -22734,10 +22560,7 @@ pub struct SumeragiPolicyConfig {
 impl From<&iroha_config::parameters::actual::Sumeragi> for SumeragiPolicyConfig {
     fn from(cfg: &iroha_config::parameters::actual::Sumeragi) -> Self {
         Self {
-            collectors_k: cfg.collectors.k,
-            collectors_redundant_send_r: cfg.collectors.redundant_send_r,
-            policy_flags: SumeragiPolicyFlags::new(cfg.da.enabled, cfg.keys.require_hsm),
-            da_quorum_timeout_multiplier: cfg.da.quorum_timeout_multiplier.max(1),
+            key_require_hsm: cfg.keys.require_hsm,
             key_activation_lead_blocks: cfg.keys.activation_lead_blocks,
             key_overlap_grace_blocks: cfg.keys.overlap_grace_blocks,
             key_expiry_grace_blocks: cfg.keys.expiry_grace_blocks,
@@ -22750,11 +22573,7 @@ impl From<&iroha_config::parameters::actual::Sumeragi> for SumeragiPolicyConfig 
 impl From<&iroha_data_model::parameter::system::SumeragiParameters> for SumeragiPolicyConfig {
     fn from(cfg: &iroha_data_model::parameter::system::SumeragiParameters) -> Self {
         Self {
-            collectors_k: usize::from(cfg.collectors_k),
-            collectors_redundant_send_r: cfg.collectors_redundant_send_r,
-            policy_flags: SumeragiPolicyFlags::new(cfg.da_enabled, cfg.key_require_hsm),
-            da_quorum_timeout_multiplier:
-                iroha_config::parameters::defaults::sumeragi::DA_QUORUM_TIMEOUT_MULTIPLIER,
+            key_require_hsm: cfg.key_require_hsm,
             key_activation_lead_blocks: cfg.key_activation_lead_blocks,
             key_overlap_grace_blocks: cfg.key_overlap_grace_blocks,
             key_expiry_grace_blocks: cfg.key_expiry_grace_blocks,
@@ -22809,10 +22628,10 @@ impl LaneConsensusLifecycleSnapshot {
 impl State {
     fn disable_nexus_fees_for_testing(&mut self) {
         let nexus = self.nexus.get_mut();
-        nexus.fees.base_fee = Numeric::zero();
-        nexus.fees.per_byte_fee = Numeric::zero();
-        nexus.fees.per_instruction_fee = Numeric::zero();
-        nexus.fees.per_gas_unit_fee = Numeric::zero();
+        nexus.fees.base_fee = Quantity::zero();
+        nexus.fees.per_byte_fee = Quantity::zero();
+        nexus.fees.per_instruction_fee = Quantity::zero();
+        nexus.fees.per_gas_unit_fee = Quantity::zero();
     }
 
     /// Snapshot the current Nexus configuration.
@@ -23499,10 +23318,12 @@ impl State {
         commit_qc: &Qc,
         checkpoint: &ValidatorSetCheckpoint,
         stake_snapshot: Option<CommitStakeSnapshot>,
-    ) -> bool {
-        let _persistence_guard = self.commit_roster_journal_persistence_lock.lock();
+    ) -> Result<bool, CommitRosterJournalError> {
         let path = self.commit_roster_journal_path();
         let mut journal_guard = self.commit_roster_journal.write();
+        if journal_guard.storage_is_unknown() {
+            return Err(CommitRosterJournalError::StorageUnknown { path });
+        }
         let mut candidate = journal_guard.clone();
         if !candidate.upsert(commit_qc.clone(), checkpoint.clone(), stake_snapshot) {
             warn!(
@@ -23511,11 +23332,10 @@ impl State {
                 block = %commit_qc.subject_block_hash,
                 "refusing to replace a concurrently prepared commit-roster tuple"
             );
-            return false;
+            return Ok(false);
         }
-        // Persist even when `upsert` accepted an exact clean retry. The durable file may have
-        // been deleted, corrupted, or pruned independently of this in-memory snapshot; every
-        // authenticated durability boundary must therefore rewrite and fsync the exact tuple.
+        // Persist exact clean retries too: the durable file can disappear independently of the
+        // in-memory tuple, so every authenticated durability boundary must rewrite and fsync it.
         let tmp_path = path.with_extension("norito.tmp");
         let measure_bytes = |path: &Path| -> Option<u64> {
             match std::fs::metadata(path) {
@@ -23538,7 +23358,37 @@ impl State {
                 path = %path.display(),
                 "failed to persist commit roster journal"
             );
-            return false;
+            // `persist` publishes with rename before syncing the parent directory. If that final
+            // sync fails, restore the previous journal so an operation rejected by this method
+            // cannot become authoritative after restart. If the compensating replacement also
+            // fails, neither a namespace read nor an exact payload match proves which rename will
+            // survive a crash. Fence all journal-dependent publication until process restart.
+            let outcome = if let Err(rollback_err) = journal_guard.persist() {
+                warn!(
+                    ?rollback_err,
+                    path = %path.display(),
+                    "failed to roll back commit roster journal after persistence error"
+                );
+                journal_guard.mark_storage_unknown();
+                error!(
+                    height = commit_qc.height,
+                    view = commit_qc.view,
+                    block = %commit_qc.subject_block_hash,
+                    path = %path.display(),
+                    "commit roster journal durability is unknown; restart required"
+                );
+                Err(CommitRosterJournalError::StorageUnknown { path: path.clone() })
+            } else {
+                Ok(false)
+            };
+            drop(accounting_mutation);
+            if let Err(refresh_err) = self.kura.refresh_disk_usage_bytes() {
+                warn!(
+                    ?refresh_err,
+                    "failed to reconcile Kura disk usage after commit roster rollback"
+                );
+            }
+            return outcome;
         }
         let after_bytes = match (measure_bytes(&path), measure_bytes(&tmp_path)) {
             (Some(main), Some(tmp)) => Some(main.saturating_add(tmp)),
@@ -23557,7 +23407,7 @@ impl State {
             }
         }
         *journal_guard = candidate;
-        true
+        Ok(true)
     }
 
     fn upsert_commit_roster_journal_memory(
@@ -23565,26 +23415,35 @@ impl State {
         commit_qc: &Qc,
         checkpoint: &ValidatorSetCheckpoint,
         stake_snapshot: Option<CommitStakeSnapshot>,
-    ) {
+    ) -> bool {
         self.commit_roster_journal.write().upsert(
             commit_qc.clone(),
             checkpoint.clone(),
             stake_snapshot,
-        );
+        )
     }
 
-    /// Fetch a commit-roster snapshot for `height`/`block_hash` from persisted local metadata.
+    /// Fetch a commit-roster snapshot for `height`/`block_hash` from the persisted journal.
     ///
-    /// This is deliberately a read-only operation. Journal and sidecar contents are only
-    /// structurally decoded here; consensus callers must authenticate the returned QC against the
-    /// configured chain and validator roster before publishing it to status or writing it back to
-    /// durable state.
+    /// When found, the snapshot is also recorded in the in-memory status caches so subsequent
+    /// block-sync lookups can reuse it without re-reading the journal. Returns `None` while the
+    /// journal is fenced by unknown storage durability; restart must resolve that namespace first.
     #[must_use]
     pub fn commit_roster_snapshot_for_block(
         &self,
         height: u64,
         block_hash: HashOf<BlockHeader>,
     ) -> Option<CommitRosterSnapshot> {
+        let _persistence_guard = self.commit_roster_journal_persistence_lock.lock();
+        if self.commit_roster_journal.read().storage_is_unknown() {
+            error!(
+                height,
+                block = %block_hash,
+                path = %self.commit_roster_journal_path().display(),
+                "commit roster snapshot is fenced by unknown journal durability; restart required"
+            );
+            return None;
+        }
         if self
             .committed_hash_conflict_for_height(height, block_hash)
             .is_some()
@@ -23596,7 +23455,8 @@ impl State {
             );
             return None;
         }
-        self.commit_roster_journal
+        let snapshot = self
+            .commit_roster_journal
             .read()
             .get(height, block_hash)
             .or_else(|| {
@@ -23607,107 +23467,46 @@ impl State {
                 let commit_qc = sidecar.commit_qc?;
                 let validator_checkpoint = sidecar.validator_checkpoint?;
                 if !matches!(commit_qc.phase, crate::sumeragi::consensus::Phase::Commit)
-                    || commit_qc.highest_qc.is_some()
                     || commit_qc.height != height
                     || commit_qc.subject_block_hash != block_hash
-                    || commit_qc.validator_set.is_empty()
-                    || commit_qc.validator_set_hash_version
-                        != iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1
-                    || commit_qc.validator_set_hash != HashOf::new(&commit_qc.validator_set)
                     || validator_checkpoint.height != height
                     || validator_checkpoint.block_hash != block_hash
                     || validator_checkpoint.view != commit_qc.view
-                    || validator_checkpoint.parent_state_root != commit_qc.parent_state_root
-                    || validator_checkpoint.post_state_root != commit_qc.post_state_root
-                    || validator_checkpoint.chain_order_hash != commit_qc.chain_order_hash
-                    || validator_checkpoint.rechain_seq != commit_qc.rechain_seq
-                    || validator_checkpoint.validator_set_hash_version
-                        != commit_qc.validator_set_hash_version
-                    || validator_checkpoint.validator_set_hash != commit_qc.validator_set_hash
                     || validator_checkpoint.validator_set != commit_qc.validator_set
                     || validator_checkpoint.signers_bitmap != commit_qc.aggregate.signers_bitmap
                     || validator_checkpoint.bls_aggregate_signature
                         != commit_qc.aggregate.bls_aggregate_signature
-                    || validator_checkpoint.expires_at_height.is_some()
-                    || sidecar
-                        .stake_snapshot
-                        .as_ref()
-                        .is_some_and(|snapshot| !snapshot.matches_roster(&commit_qc.validator_set))
                 {
                     return None;
                 }
-                Some(CommitRosterSnapshot {
+                let snapshot = CommitRosterSnapshot {
                     commit_qc,
                     validator_checkpoint,
                     stake_snapshot: sidecar.stake_snapshot,
-                })
-            })
-    }
-
-    /// Return every locally persisted commit-roster candidate at `height`.
-    ///
-    /// Entries are only structurally decoded here. Consensus must independently authenticate
-    /// each QC against the authoritative topology and stake before using it as finality.
-    pub(crate) fn commit_roster_snapshots_at_height(
-        &self,
-        height: u64,
-    ) -> Vec<CommitRosterSnapshot> {
-        let mut snapshots = self
-            .commit_roster_journal
-            .read()
-            .snapshots()
-            .into_iter()
-            .filter(|snapshot| snapshot.commit_qc.height == height)
-            .collect::<Vec<_>>();
-        if let Some(sidecar) = self.kura.read_roster_metadata(height)
-            && sidecar.height == height
-            && let (Some(commit_qc), Some(validator_checkpoint)) =
-                (sidecar.commit_qc, sidecar.validator_checkpoint)
-        {
-            let sidecar_snapshot = CommitRosterSnapshot {
-                commit_qc,
-                validator_checkpoint,
-                stake_snapshot: sidecar.stake_snapshot,
-            };
-            if !snapshots
-                .iter()
-                .any(|snapshot| snapshot == &sidecar_snapshot)
-            {
-                snapshots.push(sidecar_snapshot);
-            }
+                };
+                if !CommitRosterJournal::snapshot_is_canonical(&snapshot) {
+                    warn!(
+                        height,
+                        block = %block_hash,
+                        "ignoring non-canonical commit-roster sidecar snapshot"
+                    );
+                    return None;
+                }
+                Some(snapshot)
+            })?;
+        if !self.upsert_commit_roster_journal_memory(
+            &snapshot.commit_qc,
+            &snapshot.validator_checkpoint,
+            snapshot.stake_snapshot.clone(),
+        ) {
+            warn!(
+                height,
+                block = %block_hash,
+                "refusing sidecar snapshot that conflicts with a prepared commit-roster tuple"
+            );
+            return None;
         }
-        snapshots
-    }
-
-    /// Return every durable Commit-QC candidate addressable at `height` without requiring
-    /// untrusted ancillary metadata to be internally consistent.
-    ///
-    /// Callers must authenticate each QC against independently selected roster/stake authority.
-    pub(crate) fn persisted_commit_qc_candidates_at_height(&self, height: u64) -> Vec<Qc> {
-        let mut candidates = self
-            .commit_roster_journal
-            .read()
-            .snapshots()
-            .into_iter()
-            .filter(|snapshot| snapshot.commit_qc.height == height)
-            .map(|snapshot| snapshot.commit_qc)
-            .collect::<Vec<_>>();
-        if let Some(sidecar_qc) = self.kura.read_roster_commit_qc_candidate(height) {
-            if sidecar_qc.height != height {
-                warn!(
-                    requested_height = height,
-                    qc_height = sidecar_qc.height,
-                    block = %sidecar_qc.subject_block_hash,
-                    "ignoring roster-sidecar conflict candidate addressed under a different height"
-                );
-            } else if !candidates
-                .iter()
-                .any(|candidate| HashOf::new(candidate) == HashOf::new(&sidecar_qc))
-            {
-                candidates.push(sidecar_qc);
-            }
-        }
-        candidates
+        Some(snapshot)
     }
 
     fn committed_hash_for_height(&self, height: u64) -> Option<HashOf<BlockHeader>> {
@@ -23766,11 +23565,16 @@ impl State {
         checkpoint: &ValidatorSetCheckpoint,
         stake_snapshot: Option<CommitStakeSnapshot>,
         update_world: bool,
-        update_status: bool,
+        _update_status: bool,
         write_sidecar: bool,
         persist_journal: bool,
-        _transition_guard: &status::ConsensusTransitionGuard,
-    ) -> bool {
+    ) -> Result<bool, CommitRosterJournalError> {
+        let _persistence_guard = self.commit_roster_journal_persistence_lock.lock();
+        if self.commit_roster_journal.read().storage_is_unknown() {
+            return Err(CommitRosterJournalError::StorageUnknown {
+                path: self.commit_roster_journal_path(),
+            });
+        }
         if !matches!(commit_qc.phase, crate::sumeragi::consensus::Phase::Commit) {
             warn!(
                 height = commit_qc.height,
@@ -23778,7 +23582,7 @@ impl State {
                 phase = ?commit_qc.phase,
                 "skipping commit roster record for non-commit certificate"
             );
-            return false;
+            return Ok(false);
         }
         let subject_block_hash = commit_qc.subject_block_hash;
         if checkpoint.height != commit_qc.height || checkpoint.block_hash != subject_block_hash {
@@ -23790,7 +23594,7 @@ impl State {
                 checkpoint_block = %checkpoint.block_hash,
                 "skipping commit roster record: checkpoint metadata mismatch"
             );
-            return false;
+            return Ok(false);
         }
         if checkpoint.view != commit_qc.view {
             warn!(
@@ -23800,7 +23604,7 @@ impl State {
                 checkpoint_view = checkpoint.view,
                 "skipping commit roster record: checkpoint view mismatch"
             );
-            return false;
+            return Ok(false);
         }
         if checkpoint.validator_set_hash_version != commit_qc.validator_set_hash_version
             || checkpoint.validator_set_hash != commit_qc.validator_set_hash
@@ -23819,7 +23623,7 @@ impl State {
                 block = %commit_qc.subject_block_hash,
                 "skipping commit roster record: checkpoint does not match commit certificate"
             );
-            return false;
+            return Ok(false);
         }
         if let Some(canonical_hash) =
             self.committed_hash_conflict_for_height(commit_qc.height, subject_block_hash)
@@ -23831,17 +23635,12 @@ impl State {
                 canonical = %canonical_hash,
                 "skipping commit roster record for non-canonical committed block"
             );
-            return false;
+            return Ok(false);
         }
-        if status::consensus_safety_halt_active() {
-            warn!(
-                height = commit_qc.height,
-                view = commit_qc.view,
-                block = %commit_qc.subject_block_hash,
-                "skipping commit roster record while consensus safety halt is active"
-            );
-            return false;
-        }
+        let write_sidecar = write_sidecar
+            && self
+                .committed_hash_for_height(commit_qc.height)
+                .is_some_and(|canonical_hash| canonical_hash == subject_block_hash);
         let stake_snapshot = stake_snapshot;
         if stake_snapshot
             .as_ref()
@@ -23853,7 +23652,7 @@ impl State {
                 block = %commit_qc.subject_block_hash,
                 "rejecting commit roster stake snapshot: roster mismatch"
             );
-            return false;
+            return Ok(false);
         }
         match commit_qc.mode_tag.as_str() {
             crate::sumeragi::consensus::PERMISSIONED_TAG if stake_snapshot.is_some() => {
@@ -23863,7 +23662,7 @@ impl State {
                     block = %commit_qc.subject_block_hash,
                     "rejecting permissioned commit roster with a stake snapshot"
                 );
-                return false;
+                return Ok(false);
             }
             crate::sumeragi::consensus::NPOS_TAG
                 if commit_qc.height > 1 && stake_snapshot.is_none() =>
@@ -23874,7 +23673,7 @@ impl State {
                     block = %commit_qc.subject_block_hash,
                     "rejecting NPoS commit roster without an authoritative stake snapshot"
                 );
-                return false;
+                return Ok(false);
             }
             crate::sumeragi::consensus::PERMISSIONED_TAG | crate::sumeragi::consensus::NPOS_TAG => {
             }
@@ -23886,7 +23685,7 @@ impl State {
                     mode_tag = %commit_qc.mode_tag,
                     "rejecting commit roster with an unknown consensus mode"
                 );
-                return false;
+                return Ok(false);
             }
         }
         let existing_snapshot = self
@@ -23903,90 +23702,29 @@ impl State {
                 view = commit_qc.view,
                 block = %commit_qc.subject_block_hash,
                 existing_view = snapshot.commit_qc.view,
-                existing_has_stake_snapshot = snapshot.stake_snapshot.is_some(),
-                candidate_has_stake_snapshot = stake_snapshot.is_some(),
                 "rejecting divergent commit-roster tuple for an already prepared block subject"
             );
-            return false;
+            return Ok(false);
         }
-        let genesis_stub = commit_qc.height == 1
-            && commit_qc.view == 0
-            && commit_qc.aggregate.bls_aggregate_signature.is_empty()
-            && commit_qc
-                .aggregate
-                .signers_bitmap
-                .iter()
-                .all(|byte| *byte == 0);
-        #[cfg(not(test))]
-        if update_status && genesis_stub {
-            warn!(
-                height = commit_qc.height,
-                block = %commit_qc.subject_block_hash,
-                "raw unsigned genesis status registration is unavailable outside tests"
-            );
-            return false;
-        }
-        #[cfg(test)]
-        if update_status && genesis_stub {
-            let outcome =
-                match status::record_canonical_genesis_commit_qc_stub_for_tests_while_guarded(
-                    commit_qc.clone(),
-                    _transition_guard,
-                ) {
-                    Ok(outcome) => outcome,
-                    Err(error) => {
-                        warn!(
-                            height = commit_qc.height,
-                            view = commit_qc.view,
-                            block = %commit_qc.subject_block_hash,
-                            %error,
-                            "skipping non-canonical unsigned genesis commit QC"
-                        );
-                        return false;
-                    }
-                };
-            if outcome.is_conflict() {
-                warn!(
-                    height = commit_qc.height,
-                    view = commit_qc.view,
-                    block = %commit_qc.subject_block_hash,
-                    "skipping genesis roster writes after conflicting finality detection"
-                );
-                return false;
-            }
-        }
-        if !status::commit_qc_is_recorded(commit_qc) {
-            warn!(
-                height = commit_qc.height,
-                view = commit_qc.view,
-                block = %commit_qc.subject_block_hash,
-                "skipping unregistered commit roster; QC must be authenticated by consensus first"
-            );
-            return false;
-        }
-        if update_status {
-            status::record_validator_checkpoint(checkpoint.clone());
-        }
-        let write_sidecar = write_sidecar
-            && self
-                .committed_hash_for_height(commit_qc.height)
-                .is_some_and(|canonical_hash| canonical_hash == subject_block_hash);
         if existing_snapshot.as_ref().is_some_and(|snapshot| {
             snapshot.commit_qc == *commit_qc
                 && snapshot.validator_checkpoint == *checkpoint
                 && snapshot.stake_snapshot == stake_snapshot
         }) {
-            if persist_journal
-                && !self.persist_commit_roster_journal(
+            let journal_accepted = if persist_journal {
+                self.persist_commit_roster_journal(commit_qc, checkpoint, stake_snapshot.clone())?
+            } else {
+                self.upsert_commit_roster_journal_memory(
                     commit_qc,
                     checkpoint,
                     stake_snapshot.clone(),
                 )
-            {
-                return false;
+            };
+            if !journal_accepted {
+                return Ok(false);
             }
-            // Pre-Kura hints intentionally omit WSV mutation. The canonical commit upgrade must
-            // still populate WSV even when its durable roster payload is an exact duplicate.
+            // A pre-commit hint intentionally omits WSV and sidecar mutation. A later exact
+            // canonical retry must still upgrade those stores after durability is confirmed.
             if update_world {
                 self.upsert_commit_qc_in_world(commit_qc);
             }
@@ -24003,17 +23741,17 @@ impl State {
                 height = commit_qc.height,
                 view = commit_qc.view,
                 block = %commit_qc.subject_block_hash,
-                "skipping duplicate commit roster persistence"
+                "accepted exact commit roster retry"
             );
-            return true;
+            return Ok(true);
         }
         let sidecar_snapshot = stake_snapshot.clone();
         if persist_journal {
-            if !self.persist_commit_roster_journal(commit_qc, checkpoint, stake_snapshot) {
-                return false;
+            if !self.persist_commit_roster_journal(commit_qc, checkpoint, stake_snapshot)? {
+                return Ok(false);
             }
-        } else {
-            self.upsert_commit_roster_journal_memory(commit_qc, checkpoint, stake_snapshot);
+        } else if !self.upsert_commit_roster_journal_memory(commit_qc, checkpoint, stake_snapshot) {
+            return Ok(false);
         }
         if update_world {
             self.upsert_commit_qc_in_world(commit_qc);
@@ -24021,7 +23759,7 @@ impl State {
         if write_sidecar {
             self.write_commit_roster_sidecar(commit_qc, checkpoint, sidecar_snapshot);
         }
-        true
+        Ok(true)
     }
 
     fn commit_roster_sidecar_matches(
@@ -24039,66 +23777,6 @@ impl State {
                     && sidecar.validator_checkpoint.as_ref() == Some(checkpoint)
                     && sidecar.stake_snapshot.as_ref() == stake_snapshot
             })
-    }
-
-    /// Verify that the exact authenticated pre-Kura roster tuple is still present in the durable
-    /// journal. This read-only check is used at the worker handoff boundary; it must never repair,
-    /// upgrade, or otherwise normalize the authority carried by an in-flight commit.
-    pub(crate) fn commit_roster_journal_matches_exact(
-        &self,
-        commit_qc: &Qc,
-        checkpoint: &ValidatorSetCheckpoint,
-        stake_snapshot: Option<&CommitStakeSnapshot>,
-    ) -> bool {
-        self.commit_roster_journal
-            .read()
-            .durable_entry_matches_exact(commit_qc, checkpoint, stake_snapshot)
-    }
-
-    /// Verify that the exact authenticated roster bundle is already durable in both recovery
-    /// stores. This is deliberately read-only: a post-commit check must never normalize or
-    /// rewrite the parent-state authority that was fixed before Kura/WSV mutation.
-    pub(crate) fn commit_roster_artifacts_match_exact(
-        &self,
-        commit_qc: &Qc,
-        checkpoint: &ValidatorSetCheckpoint,
-        stake_snapshot: Option<&CommitStakeSnapshot>,
-    ) -> bool {
-        self.commit_roster_journal_matches_exact(commit_qc, checkpoint, stake_snapshot)
-            && self.commit_roster_sidecar_matches(commit_qc, checkpoint, stake_snapshot)
-    }
-
-    /// Check that a commit QC presented to state apply is the exact subject already authenticated
-    /// by consensus and is paired with a matching checkpoint. State apply may use such a QC in
-    /// WSV, but it must not register finality or mutate roster recovery artifacts itself.
-    fn authenticated_commit_qc_matches_checkpoint(
-        &self,
-        commit_qc: &Qc,
-        checkpoint: &ValidatorSetCheckpoint,
-    ) -> bool {
-        matches!(commit_qc.phase, crate::sumeragi::consensus::Phase::Commit)
-            && commit_qc.highest_qc.is_none()
-            && !commit_qc.validator_set.is_empty()
-            && commit_qc.validator_set_hash_version
-                == iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1
-            && commit_qc.validator_set_hash == HashOf::new(&commit_qc.validator_set)
-            && checkpoint.height == commit_qc.height
-            && checkpoint.view == commit_qc.view
-            && checkpoint.block_hash == commit_qc.subject_block_hash
-            && checkpoint.chain_order_hash == commit_qc.chain_order_hash
-            && checkpoint.rechain_seq == commit_qc.rechain_seq
-            && checkpoint.parent_state_root == commit_qc.parent_state_root
-            && checkpoint.post_state_root == commit_qc.post_state_root
-            && checkpoint.validator_set_hash_version == commit_qc.validator_set_hash_version
-            && checkpoint.validator_set_hash == commit_qc.validator_set_hash
-            && checkpoint.validator_set == commit_qc.validator_set
-            && checkpoint.signers_bitmap == commit_qc.aggregate.signers_bitmap
-            && checkpoint.bls_aggregate_signature == commit_qc.aggregate.bls_aggregate_signature
-            && checkpoint.expires_at_height.is_none()
-            && self
-                .committed_hash_for_height(commit_qc.height)
-                .is_none_or(|canonical_hash| canonical_hash == commit_qc.subject_block_hash)
-            && !status::consensus_safety_halt_active()
     }
 
     fn write_commit_roster_sidecar(
@@ -24119,15 +23797,18 @@ impl State {
 
     /// Record commit-roster artifacts in status caches, world storage, and the journal.
     ///
-    /// Returns `true` when the roster entry is accepted or `false` when skipped.
-    #[cfg(test)]
+    /// Returns `Ok(true)` when the roster entry is accepted or `Ok(false)` when skipped.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CommitRosterJournalError::StorageUnknown`] when a prior failed journal
+    /// replacement could not establish a durable namespace and restart is required.
     pub(crate) fn record_commit_roster(
         &self,
         commit_qc: &Qc,
         checkpoint: &ValidatorSetCheckpoint,
         stake_snapshot: Option<CommitStakeSnapshot>,
-    ) -> bool {
-        let transition_guard = status::consensus_transition_guard();
+    ) -> Result<bool, CommitRosterJournalError> {
         self.record_commit_roster_internal(
             commit_qc,
             checkpoint,
@@ -24136,186 +23817,57 @@ impl State {
             true,
             true,
             true,
-            &transition_guard,
         )
     }
 
     /// Record commit-roster metadata as a consensus recovery hint.
     ///
-    /// This fsyncs the authenticated recovery fence for block-sync validation without taking the
-    /// WSV commit-QC write path or writing committed-height sidecars before the block is durably
-    /// committed. Persistence failure is returned to consensus so it can fail closed.
+    /// This durably persists the recovery fence for block-sync validation without taking the WSV
+    /// commit-QC write path or writing committed-height sidecars before the block is committed.
+    /// Persistence failure is reported to consensus so it can fail closed.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CommitRosterJournalError::StorageUnknown`] when journal durability cannot be
+    /// established and the process must restart before retrying.
     pub(crate) fn record_commit_roster_hint(
         &self,
         commit_qc: &Qc,
         checkpoint: &ValidatorSetCheckpoint,
         stake_snapshot: Option<CommitStakeSnapshot>,
-    ) -> bool {
-        let transition_guard = status::consensus_transition_guard();
-        self.record_commit_roster_hint_while_guarded(
-            commit_qc,
-            checkpoint,
-            stake_snapshot,
-            &transition_guard,
-        )
-    }
-
-    /// Record an authenticated recovery hint while the caller holds the consensus transition
-    /// gate.
-    ///
-    /// Keeping the gate across finality selection, journal publication, and exact readback closes
-    /// the check/use gap where another authenticated subject could otherwise be admitted between
-    /// those steps. Callers that do not already own the gate should use
-    /// [`Self::record_commit_roster_hint`].
-    pub(crate) fn record_commit_roster_hint_while_guarded(
-        &self,
-        commit_qc: &Qc,
-        checkpoint: &ValidatorSetCheckpoint,
-        stake_snapshot: Option<CommitStakeSnapshot>,
-        transition_guard: &status::ConsensusTransitionGuard,
-    ) -> bool {
+    ) -> Result<bool, CommitRosterJournalError> {
         self.record_commit_roster_internal(
             commit_qc,
             checkpoint,
             stake_snapshot,
             false,
-            false,
+            true,
             false,
             true,
-            transition_guard,
         )
     }
 
-    /// Restore an exact authenticated commit QC into WSV during startup.
-    ///
-    /// The opaque authority is the only accepted input: startup code cannot promote a decoded raw
-    /// QC. The caller must retain the consensus transition gate from authenticated registration
-    /// through this operation. Restoration is allowed only for the configured chain and the
-    /// canonical durable Kura subject, with an exact checkpoint/topology tuple in both recovery
-    /// stores. Existing divergent WSV data is rejected rather than overwritten.
-    ///
-    /// The return value is an exact post-write WSV readback, not merely an insertion result.
-    pub(crate) fn restore_authenticated_commit_qc_to_wsv_while_guarded(
-        &self,
-        authority: &crate::sumeragi::AuthenticatedCommitRoster,
-        _transition_guard: &status::ConsensusTransitionGuard,
-    ) -> bool {
-        let commit_qc = authority.commit_qc();
-        let checkpoint = authority.validator_checkpoint();
-        let Ok(height) = usize::try_from(commit_qc.height) else {
-            return false;
-        };
-        let Some(height) = NonZeroUsize::new(height) else {
-            return false;
-        };
-
-        let topology_is_exact = !checkpoint.validator_set.is_empty()
-            && checkpoint.validator_set == commit_qc.validator_set
-            && checkpoint
-                .validator_set
-                .iter()
-                .collect::<BTreeSet<_>>()
-                .len()
-                == checkpoint.validator_set.len()
-            && commit_qc.aggregate.signers_bitmap.len()
-                == checkpoint.validator_set.len().div_ceil(8)
-            && commit_qc
-                .aggregate
-                .signers_bitmap
-                .last()
-                .is_none_or(|last| {
-                    let used_bits = checkpoint.validator_set.len() % 8;
-                    used_bits == 0 || *last & !((1_u8 << used_bits) - 1) == 0
-                });
-        let mode_and_stake_are_exact = match authority.consensus_mode() {
-            ConsensusMode::Permissioned => {
-                commit_qc.mode_tag == crate::sumeragi::consensus::PERMISSIONED_TAG
-                    && authority.stake_snapshot().is_none()
-            }
-            ConsensusMode::Npos => {
-                commit_qc.mode_tag == crate::sumeragi::consensus::NPOS_TAG
-                    && (commit_qc.height == 1 && authority.stake_snapshot().is_none()
-                        || authority.stake_snapshot().is_some_and(|snapshot| {
-                            snapshot.matches_roster(&commit_qc.validator_set)
-                        }))
-            }
-        };
-        if authority.chain_id() != self.chain_id_ref()
-            || !topology_is_exact
-            || !mode_and_stake_are_exact
-            || !status::commit_qc_is_recorded(commit_qc)
-            || self.kura.get_durable_block_hash(height) != Some(commit_qc.subject_block_hash)
-            || !self.authenticated_commit_qc_matches_checkpoint(commit_qc, checkpoint)
-            || !self.commit_roster_artifacts_match_exact(
-                commit_qc,
-                checkpoint,
-                authority.stake_snapshot(),
-            )
-        {
-            return false;
-        }
-
-        let conflicts_at_finality_slot = |existing: &Qc| {
-            existing.height == commit_qc.height
-                && existing.epoch == commit_qc.epoch
-                && (!matches!(existing.phase, crate::sumeragi::consensus::Phase::Commit)
-                    || existing.subject_block_hash != commit_qc.subject_block_hash
-                    || existing.parent_state_root != commit_qc.parent_state_root
-                    || existing.post_state_root != commit_qc.post_state_root)
-        };
-        {
-            let existing = self.world.commit_qcs.view();
-            if existing
-                .iter()
-                .any(|(_, existing)| conflicts_at_finality_slot(existing))
-            {
-                return false;
-            }
-            if let Some(existing) = existing.get(&commit_qc.subject_block_hash) {
-                return existing == commit_qc;
-            }
-        }
-        let mut commit_qcs = self.world.commit_qcs.block();
-        if commit_qcs
-            .iter()
-            .any(|(_, existing)| conflicts_at_finality_slot(existing))
-        {
-            return false;
-        }
-        if let Some(existing) = commit_qcs.get(&commit_qc.subject_block_hash) {
-            return existing == commit_qc;
-        }
-        commit_qcs.insert(commit_qc.subject_block_hash, commit_qc.clone());
-        commit_qcs.commit();
-
-        self.world
-            .commit_qcs
-            .view()
-            .get(&commit_qc.subject_block_hash)
-            == Some(commit_qc)
-    }
-
     /// Record commit-roster artifacts for a durably committed block, including sidecar.
-    #[cfg(test)]
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CommitRosterJournalError::StorageUnknown`] when a prior journal replacement left
+    /// durable state ambiguous. No WSV or sidecar mutation occurs in that state.
     pub(crate) fn record_commit_roster_with_sidecar(
         &self,
         commit_qc: &Qc,
         checkpoint: &ValidatorSetCheckpoint,
         stake_snapshot: Option<CommitStakeSnapshot>,
-    ) -> bool {
-        let transition_guard = status::consensus_transition_guard();
-        let accepted = self.record_commit_roster_internal(
+    ) -> Result<bool, CommitRosterJournalError> {
+        self.record_commit_roster_internal(
             commit_qc,
             checkpoint,
-            stake_snapshot.clone(),
+            stake_snapshot,
             true,
             true,
             true,
-            true,
-            &transition_guard,
-        );
-        accepted
-            && self.commit_roster_sidecar_matches(commit_qc, checkpoint, stake_snapshot.as_ref())
+            false,
+        )
     }
 
     fn restore_commit_roster_history(&self) {
@@ -24323,15 +23875,8 @@ impl State {
         if snapshots.is_empty() {
             return;
         }
-        // `CommitRosterJournal::load` guarantees structural consistency, not consensus
-        // authenticity. In particular this runs before `new_with_chain` installs the configured
-        // chain id, so importing these QCs into authenticated status history here would let stale
-        // or corrupt local metadata poison conflict detection. Keep the decoded snapshots local;
-        // consensus recovery validates them on demand via `selection_from_roster_artifacts`.
-        debug!(
-            loaded = snapshots.len(),
-            "loaded commit rosters for authenticated on-demand recovery"
-        );
+        let restored = snapshots.len();
+        debug!(restored, "restored commit rosters from journal");
     }
 
     /// Reset all in-memory DA indexes to empty state while retaining the current lane mapping.
@@ -25420,6 +24965,12 @@ impl State {
         world
             .validate_non_negative_ledger_invariants()
             .expect("initial world contains invalid non-negative ledger state");
+        crate::smartcontracts::ivm::active_runtime_abi_hash(&world.view(), u64::MAX)
+            .unwrap_or_else(|error| {
+                panic!(
+                    "persisted active runtime ABI is incompatible with this node during state initialization: {error:?}"
+                )
+            });
         crate::smartcontracts::code::initialize_current_contract_subject_bindings(&mut world)
             .expect("new v2 world must contain valid contract subject bindings");
         crate::sns::seed_default_namespace_policies(&mut world);
@@ -25607,9 +25158,6 @@ impl State {
                 PreparedContractCache::with_capacity(pipeline_cache_size),
             ),
             oracle: default_oracle(),
-            pacing_governor: iroha_config::parameters::actual::SumeragiPacingGovernor::default(),
-            sumeragi_da_quorum_timeout_multiplier:
-                iroha_config::parameters::defaults::sumeragi::DA_QUORUM_TIMEOUT_MULTIPLIER,
             streaming,
             nexus: parking_lot::RwLock::new(nexus),
             lane_incarnations: parking_lot::RwLock::new(lane_incarnations),
@@ -26222,8 +25770,27 @@ impl State {
     /// Create structure to execute a block
     #[allow(clippy::too_many_lines)]
     pub fn block(&self, curr_block: BlockHeader) -> StateBlock<'_> {
-        self.block_with_pristine_stage(curr_block, |_| Ok::<(), core::convert::Infallible>(()))
-            .expect("infallible pristine block stage")
+        self.try_block(curr_block).unwrap_or_else(|error| {
+            panic!("persisted active runtime ABI is incompatible with this node: {error:?}")
+        })
+    }
+
+    /// Create a block after validating the persisted active runtime ABI.
+    ///
+    /// # Errors
+    /// Returns the stable admission reason when persisted governance state
+    /// selects an ABI surface different from this binary.
+    pub fn try_block(
+        &self,
+        curr_block: BlockHeader,
+    ) -> Result<StateBlock<'_>, iroha_data_model::executor::IvmAdmissionError> {
+        crate::smartcontracts::ivm::active_runtime_abi_hash(
+            &self.world.view(),
+            curr_block.height().get(),
+        )?;
+        Ok(self
+            .block_with_pristine_stage(curr_block, |_| Ok::<(), core::convert::Infallible>(()))
+            .expect("infallible pristine block stage"))
     }
 
     #[allow(clippy::too_many_lines)]
@@ -26285,7 +25852,6 @@ impl State {
             accounts_snapshot_cache: SyncOnceCell::new(),
             pipeline: self.pipeline.clone(),
             oracle: self.oracle.clone(),
-            pacing_governor: self.pacing_governor,
             crypto: self.crypto(),
             nexus: self.nexus_snapshot(),
             lane_incarnations: self.lane_incarnations_snapshot(),
@@ -26328,8 +25894,6 @@ impl State {
             sccp_verifier_work_in_block: SccpVerifierWorkV1::default(),
             confidential_registry_dirty: false,
             implicit_account_creations_in_block: 0,
-            mode_cutover_next_set_in_block: false,
-            mode_cutover_activation_set_in_block: false,
             gas_limit_per_block,
             #[cfg(feature = "telemetry")]
             telemetry: &self.telemetry,
@@ -26349,12 +25913,22 @@ impl State {
             trust_committed_execution_results: false,
         };
         stage(&mut sb)?;
+        crate::smartcontracts::ivm::active_runtime_abi_hash(
+            &sb.world,
+            sb._curr_block.height().get(),
+        )
+        .unwrap_or_else(|error| {
+            panic!(
+                "persisted active runtime ABI is incompatible with this node at block height {}: {error:?}",
+                sb._curr_block.height().get()
+            )
+        });
         // Activate any pending public-lane validators whose scheduled epoch has begun.
         let epoch_length = sb
             .world
             .sumeragi_npos_parameters()
             .map_or(
-                iroha_config::parameters::defaults::sumeragi::EPOCH_LENGTH_BLOCKS,
+                iroha_config::parameters::defaults::sumeragi::npos::EPOCH_LENGTH_BLOCKS,
                 |params| params.epoch_length_blocks,
             )
             .max(1);
@@ -26413,6 +25987,14 @@ impl State {
                     && rec.manifest.start_height == now_h
                     && now_h < rec.manifest.end_height
                 {
+                    crate::smartcontracts::ivm::validate_runtime_upgrade_manifest_abi(
+                        &rec.manifest,
+                    )
+                    .unwrap_or_else(|error| {
+                        panic!(
+                            "scheduled runtime upgrade {id:?} is incompatible with this node at activation height {now_h}: {error:?}"
+                        )
+                    });
                     rec.status =
                         iroha_data_model::runtime::RuntimeUpgradeStatus::ActivatedAt(now_h);
                     wtx.runtime_upgrades.insert(id, rec);
@@ -26732,6 +26314,13 @@ impl State {
             }
             update_governance_pipeline_slas(&mut wtx, now_h, &sb.gov);
             update_oracle_change_pipeline(&mut wtx, now_h, &sb.oracle.governance);
+            crate::smartcontracts::ivm::active_runtime_abi_hash(&wtx, now_h).unwrap_or_else(
+                |error| {
+                    panic!(
+                        "runtime-upgrade registry became invalid after activation at height {now_h}: {error:?}"
+                    )
+                },
+            );
             wtx.apply();
         }
         {
@@ -26819,7 +26408,6 @@ impl State {
             accounts_snapshot_cache: SyncOnceCell::new(),
             pipeline: self.pipeline.clone(),
             oracle: self.oracle.clone(),
-            pacing_governor: self.pacing_governor,
             crypto: self.crypto(),
             nexus: self.nexus_snapshot(),
             lane_incarnations: self.lane_incarnations_snapshot(),
@@ -26862,8 +26450,6 @@ impl State {
             sccp_verifier_work_in_block: SccpVerifierWorkV1::default(),
             confidential_registry_dirty: false,
             implicit_account_creations_in_block: 0,
-            mode_cutover_next_set_in_block: false,
-            mode_cutover_activation_set_in_block: false,
             gas_limit_per_block,
             #[cfg(feature = "telemetry")]
             telemetry: &self.telemetry,
@@ -26921,7 +26507,6 @@ impl State {
             accounts_snapshot_cache: SyncOnceCell::new(),
             pipeline: self.pipeline.clone(),
             oracle: self.oracle.clone(),
-            pacing_governor: self.pacing_governor,
             crypto: self.crypto(),
             nexus: self.nexus_snapshot(),
             lane_incarnations: self.lane_incarnations_snapshot(),
@@ -26964,8 +26549,6 @@ impl State {
             sccp_verifier_work_in_block: SccpVerifierWorkV1::default(),
             confidential_registry_dirty: false,
             implicit_account_creations_in_block: 0,
-            mode_cutover_next_set_in_block: false,
-            mode_cutover_activation_set_in_block: false,
             gas_limit_per_block,
             #[cfg(feature = "telemetry")]
             telemetry: &self.telemetry,
@@ -27275,15 +26858,6 @@ impl State {
         *self.latest_block_header.write() = Some(header);
     }
 
-    /// Revert block metadata after snapshot reconciliation discards the current tip.
-    pub(crate) fn revert_latest_block_metadata_for_snapshot_reconcile(
-        &self,
-        latest_block_header: Option<BlockHeader>,
-    ) {
-        self.block_hashes.block_and_revert().commit();
-        *self.latest_block_header.write() = latest_block_header;
-    }
-
     #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Override the latest committed block-header cache in tests.
     pub fn update_latest_block_header_cache_for_tests(&self, header: BlockHeader) {
@@ -27543,18 +27117,14 @@ impl State {
             .effective_block_time()
     }
 
-    /// Effective Sumeragi commit-quorum timeout from current chain parameters and runtime config.
+    /// Nominal block cadence frozen into the Sumeragi v2 height profile.
+    ///
+    /// Unlike the legacy effective timing helper, this deliberately ignores
+    /// the retired adaptive pacing factor.
     #[track_caller]
     #[must_use]
-    pub fn sumeragi_commit_quorum_timeout(&self) -> Duration {
-        let params = self.world.parameters.view();
-        let sumeragi = params.sumeragi();
-        crate::sumeragi::main_loop::commit_quorum_timeout_from_durations(
-            sumeragi.effective_block_time(),
-            sumeragi.effective_commit_time(),
-            sumeragi.da_enabled(),
-            self.sumeragi_da_quorum_timeout_multiplier.max(1),
-        )
+    pub fn sumeragi_block_cadence(&self) -> Duration {
+        self.world.parameters.view().sumeragi().block_time()
     }
 
     /// Return whether the canonical account exists in current world state.
@@ -27694,6 +27264,23 @@ impl State {
     #[must_use]
     pub fn pipeline_snapshot(&self) -> iroha_config::parameters::actual::Pipeline {
         self.pipeline.clone()
+    }
+
+    /// Snapshot the effective cycle ceiling for newly admitted IVM programs.
+    ///
+    /// Both node execution policy and the governance-controlled smart-contract
+    /// fuel parameter are consensus-visible admission limits, so producers must
+    /// embed the lower value in generated program headers.
+    #[must_use]
+    pub fn ivm_admission_cycle_limit(&self) -> NonZeroU64 {
+        let fuel = self.world.parameters.view().smart_contract().fuel();
+        NonZeroU64::new(
+            self.pipeline
+                .ivm_max_cycles_upper_bound
+                .get()
+                .min(fuel.get()),
+        )
+        .expect("both IVM cycle limits are non-zero")
     }
 
     /// Snapshot the current governance configuration.
@@ -32025,9 +31612,9 @@ impl State {
 
     fn recompute_nexus_fee_amount(
         receipt: &NexusFeeReceipt,
-    ) -> Result<Numeric, MergeLedgerCommitError> {
+    ) -> Result<Quantity, MergeLedgerCommitError> {
         let schedule = &receipt.schedule;
-        let mut fee = schedule.base_fee.clone();
+        let mut fee = schedule.base_fee.as_numeric().clone();
         for (unit, count, label) in [
             (
                 &schedule.per_byte_fee,
@@ -32046,6 +31633,7 @@ impl State {
             ),
         ] {
             let delta = unit
+                .as_numeric()
                 .clone()
                 .checked_mul(Numeric::from(count), NumericSpec::unconstrained())
                 .ok_or_else(|| {
@@ -32061,7 +31649,12 @@ impl State {
                 ))
             })?;
         }
-        Ok(fee.trim_trailing_zeros())
+        Quantity::from_canonical_numeric(fee.trim_trailing_zeros()).map_err(|error| {
+            MergeLedgerCommitError::InvalidNexusFeeReceipt(format!(
+                "computed fee left the quantity domain for receipt {}: {error}",
+                hex::encode(receipt.source_id)
+            ))
+        })
     }
 
     fn validate_nexus_fee_receipt(
@@ -32091,22 +31684,8 @@ impl State {
                 receipt.fee_asset_id
             )));
         }
-        for (label, value) in [
-            ("fee_amount", &receipt.fee_amount),
-            ("base_fee", &receipt.schedule.base_fee),
-            ("per_byte_fee", &receipt.schedule.per_byte_fee),
-            ("per_instruction_fee", &receipt.schedule.per_instruction_fee),
-            ("per_gas_unit_fee", &receipt.schedule.per_gas_unit_fee),
-        ] {
-            if value.mantissa().is_negative() {
-                return Err(MergeLedgerCommitError::InvalidNexusFeeReceipt(format!(
-                    "{label} must be non-negative for receipt {}",
-                    hex::encode(receipt.source_id)
-                )));
-            }
-        }
         let expected = Self::recompute_nexus_fee_amount(receipt)?;
-        if expected != receipt.fee_amount.clone().trim_trailing_zeros() {
+        if expected != receipt.fee_amount {
             return Err(MergeLedgerCommitError::InvalidNexusFeeReceipt(format!(
                 "fee amount mismatch for receipt {}: expected {}, got {}",
                 hex::encode(receipt.source_id),
@@ -32236,7 +31815,7 @@ impl State {
                 let asset_id = AssetId::new(asset_def.clone(), receipt.payer_account_id.clone());
                 let current = aggregate.remove(&asset_id).unwrap_or_else(Numeric::zero);
                 let next = current
-                    .checked_add(receipt.fee_amount.clone())
+                    .checked_add(receipt.fee_amount.as_numeric().clone())
                     .ok_or_else(|| {
                         MergeLedgerCommitError::InvalidNexusFeeReceipt(format!(
                             "aggregate fee overflow for payer {}",
@@ -32249,7 +31828,7 @@ impl State {
                 let available = world
                     .assets()
                     .get(asset_id)
-                    .map_or_else(Numeric::zero, |value| (**value).clone());
+                    .map_or_else(Numeric::zero, |value| value.as_ref().as_numeric().clone());
                 if available < *required {
                     return Err(MergeLedgerCommitError::InsufficientNexusFeeBalance {
                         payer: asset_id.account().clone(),
@@ -32340,15 +31919,17 @@ impl State {
             );
             tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
             for (asset_id, amount) in &aggregate_burns {
+                let quantity = Quantity::from_canonical_numeric(amount.clone())
+                    .map_err(|err| MergeLedgerCommitError::NexusFeeSettlement(err.to_string()))?;
                 tx.withdraw_numeric_asset(asset_id, amount)
                     .map_err(|err| MergeLedgerCommitError::NexusFeeSettlement(err.to_string()))?;
-                tx.decrease_asset_total_amount(asset_id.definition(), amount)
+                tx.decrease_asset_total_amount(asset_id.definition(), &quantity)
                     .map_err(|err| MergeLedgerCommitError::NexusFeeSettlement(err.to_string()))?;
                 tx.emit_events(Some(
                     iroha_data_model::events::data::prelude::AssetEvent::Removed(
                         iroha_data_model::events::data::prelude::AssetChanged {
                             asset: asset_id.clone(),
-                            amount: amount.clone(),
+                            amount: quantity,
                         },
                     ),
                 ));
@@ -33267,6 +32848,15 @@ impl State {
         carrier_header: BlockHeader,
         entry: &MergeLedgerEntry,
     ) -> Result<StateBlock<'_>, MergeLedgerCommitError> {
+        crate::smartcontracts::ivm::active_runtime_abi_hash(
+            &self.world.view(),
+            carrier_header.height().get(),
+        )
+        .map_err(|error| {
+            MergeLedgerCommitError::ExecutionStatePublication(format!(
+                "persisted active runtime ABI is incompatible with this node: {error:?}"
+            ))
+        })?;
         self.block_with_pristine_stage(carrier_header, |state_block| {
             state_block.stage_certified_merge_entry(entry)
         })
@@ -33279,6 +32869,15 @@ impl State {
         carrier_header: BlockHeader,
         reference: &iroha_data_model::block::CertifiedMergeLedgerReference,
     ) -> Result<StateBlock<'_>, MergeLedgerCommitError> {
+        crate::smartcontracts::ivm::active_runtime_abi_hash(
+            &self.world.view(),
+            carrier_header.height().get(),
+        )
+        .map_err(|error| {
+            MergeLedgerCommitError::ExecutionStatePublication(format!(
+                "persisted active runtime ABI is incompatible with this node: {error:?}"
+            ))
+        })?;
         self.block_with_pristine_stage(carrier_header, |state_block| {
             state_block.stage_certified_merge_reference(reference)
         })
@@ -33715,29 +33314,16 @@ impl State {
     /// Update consensus policy parameters sourced from configuration.
     pub fn set_sumeragi_parameters(&mut self, sumeragi: impl Into<self::SumeragiPolicyConfig>) {
         let policy = sumeragi.into();
-        self.sumeragi_da_quorum_timeout_multiplier = policy.da_quorum_timeout_multiplier.max(1);
         let mut params_block = self.world.parameters.block();
         let mut sys = params_block.sumeragi.clone();
-        // Keep collector topology (`collectors_k`, `collectors_redundant_send_r`) anchored to
-        // on-chain values. Overwriting these from local config causes handshake fingerprint drift
-        // after restart because genesis metadata is derived from chain parameters.
-        sys.da_enabled = policy.policy_flags.da_enabled();
         sys.key_activation_lead_blocks = policy.key_activation_lead_blocks;
         sys.key_overlap_grace_blocks = policy.key_overlap_grace_blocks;
         sys.key_expiry_grace_blocks = policy.key_expiry_grace_blocks;
-        sys.key_require_hsm = policy.policy_flags.key_require_hsm();
+        sys.key_require_hsm = policy.key_require_hsm;
         sys.key_allowed_algorithms = policy.key_allowed_algorithms.iter().copied().collect();
         sys.key_allowed_hsm_providers = policy.key_allowed_hsm_providers.iter().cloned().collect();
         params_block.sumeragi = sys;
         params_block.commit();
-    }
-
-    /// Update deterministic pacing governor configuration from runtime config.
-    pub fn set_sumeragi_pacing_governor(
-        &mut self,
-        pacing_governor: iroha_config::parameters::actual::SumeragiPacingGovernor,
-    ) {
-        self.pacing_governor = pacing_governor;
     }
 
     /// Update pipeline preferences using a loaded configuration.
@@ -38630,11 +38216,11 @@ fn validate_sccp_outbound_payload_for_retained_route(
 }
 
 fn validate_sccp_inbound_anchor_high_water_index(
-    messages: &Storage<SccpInboundMessageKeyV1, SccpInboundMessageRecordV1>,
-    high_water: &Storage<SccpInboundAnchorHighWaterKeyV1, u64>,
+    messages: &impl StorageReadOnly<SccpInboundMessageKeyV1, SccpInboundMessageRecordV1>,
+    high_water: &impl StorageReadOnly<SccpInboundAnchorHighWaterKeyV1, u64>,
 ) -> core::result::Result<(), String> {
     let mut expected = BTreeMap::<SccpInboundAnchorHighWaterKeyV1, u64>::new();
-    for (message_key, record) in messages.view().iter() {
+    for (message_key, record) in messages.iter() {
         let key =
             SccpInboundAnchorHighWaterKeyV1::new(message_key.lane, record.trust_anchor.anchor_hash)
                 .ok_or_else(|| {
@@ -38647,8 +38233,7 @@ fn validate_sccp_inbound_anchor_high_water_index(
             .or_insert(record.anchor_interval_height);
     }
 
-    let persisted = high_water.view();
-    for (key, height) in persisted.iter() {
+    for (key, height) in high_water.iter() {
         if !key.is_well_formed() || *height == 0 {
             return Err(
                 "SCCP inbound anchor high-water index contains a malformed key or zero coordinate"
@@ -38670,7 +38255,7 @@ fn validate_sccp_inbound_anchor_high_water_index(
             Some(_) => {}
         }
     }
-    if expected.keys().any(|key| persisted.get(key).is_none()) {
+    if expected.keys().any(|key| high_water.get(key).is_none()) {
         return Err(
             "SCCP inbound anchor high-water index is missing an admitted anchor entry".to_owned(),
         );
@@ -38736,76 +38321,60 @@ fn recompute_sccp_pending_usage<'a>(
     )
 }
 
-/// Validate chain-profile ownership of hydrated SCCP governance and replay state.
-pub(crate) fn validate_sccp_state_local_profile(state: &State) -> core::result::Result<(), String> {
-    let committed_height = u64::try_from(state.committed_height())
+fn validate_sccp_state_view(
+    world: &impl WorldReadOnly,
+    registry: &ValidatedSccpRegistryV1,
+    chain_id: &iroha_data_model::ChainId,
+    committed_height: usize,
+    kura: &Kura,
+    config: Option<&iroha_config::parameters::actual::Sccp>,
+) -> core::result::Result<(), String> {
+    let committed_height = u64::try_from(committed_height)
         .map_err(|_| "committed WSV height does not fit the SCCP height domain".to_owned())?;
-    let retained_archive_inventory = state
-        .kura()
+    let retained_archive_inventory = kura
         .retained_nonempty_sccp_archive_inventory_at_or_below(committed_height)
         .map_err(|error| {
             format!(
                 "failed to inventory immutable Kura SCCP archives through committed WSV height {committed_height}: {error}"
             )
         })?;
-    let registry = state.sccp_registry_snapshot();
-    let pending_usage = *state.world.sccp_outbound_pending_usage.view().get();
+    let pending_usage = world.sccp_outbound_pending_usage();
     let has_sccp_state = !retained_archive_inventory.is_empty()
         || !registry.lanes().is_empty()
         || pending_usage != SccpOutboundPendingUsageV1::default()
-        || state
-            .world
-            .sccp_outbound_pending_messages
-            .view()
+        || world
+            .sccp_outbound_pending_messages()
             .iter()
             .next()
             .is_some()
-        || state
-            .world
-            .sccp_outbound_proofs
-            .view()
+        || world.sccp_outbound_proofs().iter().next().is_some()
+        || world
+            .sccp_outbound_message_locator()
             .iter()
             .next()
             .is_some()
-        || state
-            .world
-            .sccp_outbound_message_locator
-            .view()
-            .iter()
-            .next()
-            .is_some()
-        || state
-            .world
-            .sccp_outbound_message_index
-            .view()
-            .iter()
-            .next()
-            .is_some()
-        || state
-            .world
-            .sccp_inbound_messages
-            .view()
-            .iter()
-            .next()
-            .is_some()
-        || state
-            .world
-            .sccp_inbound_anchor_high_water
-            .view()
+        || world.sccp_outbound_message_index().iter().next().is_some()
+        || world.sccp_inbound_messages().iter().next().is_some()
+        || world
+            .sccp_inbound_anchor_high_water()
             .iter()
             .next()
             .is_some();
     if !has_sccp_state {
         return Ok(());
     }
-    let local = sccp_local_sora_network_for_chain_id(&state.chain_id).ok_or_else(|| {
+    if let Some(config) = config {
+        validate_sccp_pending_usage_against_config(pending_usage, config)
+            .map_err(|error| error.to_string())?;
+    }
+    let local = sccp_local_sora_network_for_chain_id(chain_id).ok_or_else(|| {
         format!(
             "SCCP state is nonempty but chain id `{}` is not a canonical public SORA chain id",
-            state.chain_id
+            chain_id
         )
     })?;
     let mut expected_pending_usage = SccpOutboundPendingUsageV1::default();
-    for (_, record) in state.world.sccp_outbound_pending_messages.view().iter() {
+    for (_, record) in world.sccp_outbound_pending_messages().iter() {
         expected_pending_usage = expected_pending_usage
             .checked_add_payload(record.payload_bytes.len())
             .ok_or_else(|| "restored SCCP pending outbound usage overflows".to_owned())?;
@@ -38816,11 +38385,11 @@ pub(crate) fn validate_sccp_state_local_profile(state: &State) -> core::result::
         ));
     }
     validate_sccp_inbound_anchor_high_water_index(
-        &state.world.sccp_inbound_messages,
-        &state.world.sccp_inbound_anchor_high_water,
+        world.sccp_inbound_messages(),
+        world.sccp_inbound_anchor_high_water(),
     )?;
-    validate_sccp_registry_local_profile(registry.as_ref(), &state.chain_id)?;
-    for (key, record) in state.world.sccp_outbound_pending_messages.view().iter() {
+    validate_sccp_registry_local_profile(registry, chain_id)?;
+    for (key, record) in world.sccp_outbound_pending_messages().iter() {
         let projection = crate::bridge::validate_sccp_outbound_message_record_v1(key, record)
             .ok_or_else(|| {
                 "SCCP outbound replay record carries malformed, non-canonical, oversized, or identity-mismatched payload evidence"
@@ -38834,7 +38403,7 @@ pub(crate) fn validate_sccp_state_local_profile(state: &State) -> core::result::
             ));
         }
         let route = validate_sccp_outbound_retained_route(
-            registry.as_ref(),
+            registry,
             key,
             record.destination_binding_hash,
             record.route_configuration_hash,
@@ -38842,7 +38411,7 @@ pub(crate) fn validate_sccp_state_local_profile(state: &State) -> core::result::
         )?;
         validate_sccp_outbound_payload_for_retained_route(&projection, route)?;
     }
-    for (key, record) in state.world.sccp_outbound_proofs.view().iter() {
+    for (key, record) in world.sccp_outbound_proofs().iter() {
         if !record.is_well_formed_for_key(key) {
             return Err(format!(
                 "terminal SCCP replay record {} is malformed for its exact outbound key",
@@ -38864,17 +38433,17 @@ pub(crate) fn validate_sccp_state_local_profile(state: &State) -> core::result::
             ));
         }
         let _ = validate_sccp_outbound_retained_route(
-            registry.as_ref(),
+            registry,
             key,
             record.destination_binding_hash,
             record.route_configuration_hash,
             "proof record",
         )?;
     }
-    let pending = state.world.sccp_outbound_pending_messages.view();
-    let terminal = state.world.sccp_outbound_proofs.view();
-    let locator = state.world.sccp_outbound_message_locator.view();
-    let ordered = state.world.sccp_outbound_message_index.view();
+    let pending = world.sccp_outbound_pending_messages();
+    let terminal = world.sccp_outbound_proofs();
+    let locator = world.sccp_outbound_message_locator();
+    let ordered = world.sccp_outbound_message_index();
     let retained_union_len = pending
         .len()
         .checked_add(terminal.len())
@@ -39023,8 +38592,7 @@ pub(crate) fn validate_sccp_state_local_profile(state: &State) -> core::result::
                     archive_messages.len()
                 ));
             }
-            let (header, artifact, messages) = state
-                .kura()
+            let (header, artifact, messages) = kura
                 .v2_finality_artifact_with_archive(index.recorded_at_height)
                 .map_err(|error| {
                     format!(
@@ -39122,7 +38690,7 @@ pub(crate) fn validate_sccp_state_local_profile(state: &State) -> core::result::
             archive_messages.len()
         ));
     }
-    for (key, record) in state.world.sccp_inbound_messages.view().iter() {
+    for (key, record) in world.sccp_inbound_messages().iter() {
         if !key.is_well_formed() || !record.is_well_formed_for_lane(key.lane) {
             return Err(format!(
                 "inbound SCCP replay record {} is malformed for its exact inbound key",
@@ -39194,6 +38762,46 @@ pub(crate) fn validate_sccp_state_local_profile(state: &State) -> core::result::
         }
     }
     Ok(())
+}
+
+/// Validate configuration-independent invariants of hydrated SCCP governance and replay state.
+///
+/// Snapshot decoding runs before the operator's actual configuration is
+/// installed. Pending-state limits are therefore checked by [`State::set_zk`]
+/// at that later boundary rather than against placeholder defaults here.
+pub(crate) fn validate_sccp_state_local_profile(state: &State) -> core::result::Result<(), String> {
+    let world = state.world.view();
+    let registry = state.sccp_registry_snapshot();
+    validate_sccp_state_view(
+        &world,
+        registry.as_ref(),
+        &state.chain_id,
+        state.committed_height(),
+        state.kura(),
+        None,
+    )
+}
+
+/// Validate the exact SCCP state that a one-block snapshot rollback would expose.
+///
+/// The preview uses uncommitted MV write transactions and is dropped on both
+/// success and failure, so validation cannot rewind WSV, DA, or Kura state.
+/// Unlike initial decoding, this runs after installation of the actual runtime
+/// configuration and enforces its pending-state limits against the rollback.
+pub(crate) fn validate_sccp_snapshot_revert_candidate(
+    state: &State,
+) -> core::result::Result<(), String> {
+    let reverted_world = state.world.block_and_revert();
+    let reverted_registry =
+        ValidatedSccpRegistryV1::try_from_wire(reverted_world.sccp_registry.get().clone())?;
+    validate_sccp_state_view(
+        &reverted_world,
+        reverted_registry.as_ref(),
+        &state.chain_id,
+        state.committed_height().saturating_sub(1),
+        state.kura(),
+        Some(&state.zk.sccp),
+    )
 }
 
 /// Immutable, fully validated SCCP governance registry.
@@ -39576,6 +39184,61 @@ impl ValidatedSccpRegistryV1 {
     pub(crate) fn to_wire(&self) -> SccpOnChainRegistryV1 {
         self.wire.clone()
     }
+}
+
+fn validate_canonical_sccp_registry_wire(
+    wire: &SccpOnChainRegistryV1,
+) -> core::result::Result<(), String> {
+    let validated = ValidatedSccpRegistryV1::try_from_wire(wire.clone())?;
+    if validated.registry() != wire {
+        return Err(
+            "invalid SCCP registry: snapshot registry is not in canonical lane/route order"
+                .to_owned(),
+        );
+    }
+    Ok(())
+}
+
+/// Validate the exact multi-version cell envelope used to persist the SCCP registry.
+///
+/// Both the committed `blocks` value and a non-null `revert` value are consensus
+/// material: snapshot reconciliation can promote the latter back into the live
+/// state. The envelope therefore rejects missing or unknown fields and validates
+/// both registry versions before any snapshot becomes observable.
+pub(crate) fn validate_sccp_registry_cell_json(
+    value: &norito::json::Value,
+) -> core::result::Result<(), String> {
+    let norito::json::Value::Object(cell) = value else {
+        return Err(
+            "snapshot SCCP registry must use the exact `{revert,blocks}` cell envelope".to_owned(),
+        );
+    };
+    if let Some(field) = cell
+        .keys()
+        .find(|field| field.as_str() != "revert" && field.as_str() != "blocks")
+    {
+        return Err(format!(
+            "snapshot SCCP registry cell contains unknown field `{field}`"
+        ));
+    }
+    let blocks = cell
+        .get("blocks")
+        .ok_or_else(|| "snapshot SCCP registry cell is missing `blocks`".to_owned())?;
+    let revert = cell
+        .get("revert")
+        .ok_or_else(|| "snapshot SCCP registry cell is missing `revert`".to_owned())?;
+
+    let validate_value = |value: &norito::json::Value, role: &str| {
+        let wire: SccpOnChainRegistryV1 = norito::json::value::from_value(value.clone())
+            .map_err(|error| format!("snapshot SCCP registry {role} is invalid: {error}"))?;
+        validate_canonical_sccp_registry_wire(&wire)
+            .map_err(|error| format!("snapshot SCCP registry {role} is invalid: {error}"))
+    };
+    validate_value(blocks, "blocks")?;
+    if !revert.is_null() {
+        validate_value(revert, "revert")?;
+    }
+    Ok(())
 }
 
 #[derive(Debug)]
@@ -40387,11 +40050,6 @@ impl<'state> StateBlock<'state> {
         self.committed_fragments = self.committed_fragments.saturating_add(additional);
     }
 
-    fn sumeragi_da_enabled(&self) -> bool {
-        let params = self.state_ref.world.parameters.view();
-        params.get().sumeragi().da_enabled()
-    }
-
     fn record_da_shard_cursor_issue(
         &self,
         _reason: &'static str,
@@ -40593,10 +40251,6 @@ impl<'state> StateBlock<'state> {
         &self,
         block: &SignedBlock,
     ) -> Result<(), BlockValidationError> {
-        if !self.sumeragi_da_enabled() {
-            return Ok(());
-        }
-
         self.state_ref
             .ensure_da_indexes_hydrated()
             .map_err(BlockValidationError::from)?;
@@ -40788,10 +40442,6 @@ impl<'state> StateBlock<'state> {
         StateTransaction {
             committed_fragments: &mut self.committed_fragments,
             touched_lanes: &mut self.touched_lanes,
-            mode_cutover_next_set_in_block: &mut self.mode_cutover_next_set_in_block,
-            mode_cutover_activation_set_in_block: &mut self.mode_cutover_activation_set_in_block,
-            mode_cutover_next_set_in_tx: false,
-            mode_cutover_activation_set_in_tx: false,
             confidential_registry_dirty: &mut self.confidential_registry_dirty,
             world,
             block_hashes: self.block_hashes.transaction(),
@@ -41088,8 +40738,6 @@ impl<'state> StateBlock<'state> {
             || self.commit_topology.is_dirty()
             || self.prev_commit_topology.is_dirty()
             || self.world.parameters.is_dirty()
-            || self.mode_cutover_next_set_in_block
-            || self.mode_cutover_activation_set_in_block
             || !self.axt_envelopes.is_empty()
             || !self.fastpq_transcripts.is_empty()
             || !self.settlement_accumulator.is_empty()
@@ -41306,7 +40954,7 @@ impl<'state> StateBlock<'state> {
                     AssetId::new(asset_definition.clone(), receipt.payer_account_id.clone());
                 let current = aggregate.remove(&asset_id).unwrap_or_else(Numeric::zero);
                 let next = current
-                    .checked_add(receipt.fee_amount.clone())
+                    .checked_add(receipt.fee_amount.as_numeric().clone())
                     .ok_or_else(|| {
                         MergeLedgerCommitError::InvalidNexusFeeReceipt(format!(
                             "aggregate fee overflow for payer {}",
@@ -41325,7 +40973,7 @@ impl<'state> StateBlock<'state> {
                 .world
                 .assets
                 .get(asset_id)
-                .map_or_else(Numeric::zero, |value| (**value).clone());
+                .map_or_else(Numeric::zero, |value| value.as_ref().as_numeric().clone());
             if available < *required {
                 return Err(MergeLedgerCommitError::InsufficientNexusFeeBalance {
                     payer: asset_id.account().clone(),
@@ -41339,17 +40987,19 @@ impl<'state> StateBlock<'state> {
         tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
         tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
         for (asset_id, amount) in &aggregate {
+            let quantity = Quantity::from_canonical_numeric(amount.clone())
+                .map_err(|err| MergeLedgerCommitError::NexusFeeSettlement(err.to_string()))?;
             tx.world
                 .withdraw_numeric_asset(asset_id, amount)
                 .map_err(|err| MergeLedgerCommitError::NexusFeeSettlement(err.to_string()))?;
             tx.world
-                .decrease_asset_total_amount(asset_id.definition(), amount)
+                .decrease_asset_total_amount(asset_id.definition(), &quantity)
                 .map_err(|err| MergeLedgerCommitError::NexusFeeSettlement(err.to_string()))?;
             tx.world.emit_events(Some(
                 iroha_data_model::events::data::prelude::AssetEvent::Removed(
                     iroha_data_model::events::data::prelude::AssetChanged {
                         asset: asset_id.clone(),
-                        amount: amount.clone(),
+                        amount: quantity,
                     },
                 ),
             ));
@@ -41386,17 +41036,19 @@ impl<'state> StateBlock<'state> {
         let mut tx = self.transaction();
         tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
         for (asset_id, amount) in &aggregate_burns {
+            let quantity = Quantity::from_canonical_numeric(amount.clone())
+                .map_err(|err| MergeLedgerCommitError::NexusFeeSettlement(err.to_string()))?;
             tx.world
                 .withdraw_numeric_asset(asset_id, amount)
                 .map_err(|err| MergeLedgerCommitError::NexusFeeSettlement(err.to_string()))?;
             tx.world
-                .decrease_asset_total_amount(asset_id.definition(), amount)
+                .decrease_asset_total_amount(asset_id.definition(), &quantity)
                 .map_err(|err| MergeLedgerCommitError::NexusFeeSettlement(err.to_string()))?;
             tx.world.emit_events(Some(
                 iroha_data_model::events::data::prelude::AssetEvent::Removed(
                     iroha_data_model::events::data::prelude::AssetChanged {
                         asset: asset_id.clone(),
-                        amount: amount.clone(),
+                        amount: quantity,
                     },
                 ),
             ));
@@ -41423,9 +41075,6 @@ impl<'state> StateBlock<'state> {
 
     fn commit_inner(mut self) -> Result<(), TransactionsBlockError> {
         const STATE_VIEW_LOCK_THRESHOLD: Duration = Duration::from_millis(10);
-        if self.mode_cutover_next_set_in_block ^ self.mode_cutover_activation_set_in_block {
-            return Err(TransactionsBlockError::ModeStagingInvariant);
-        }
         let block_height = self._curr_block.height().get();
         let block_header_hash = self._curr_block.hash();
         let current_axt_slot =
@@ -41895,23 +41544,40 @@ impl<'state> StateBlock<'state> {
         block: &CommittedBlock,
         topology: Vec<PeerId>,
     ) -> Vec<EventBox> {
-        self.apply_without_execution_with_commit_roster_inner(block, topology, None)
-            .expect("uncertified replay/genesis apply cannot fail roster authorization")
+        self.apply_without_execution_with_commit_qc(block, topology, None)
     }
 
-    /// Apply post-execution effects with an exact, already durable commit-roster tuple.
-    ///
-    /// Supplying no tuple is the replay/genesis path and cannot insert commit-QC authority into
-    /// WSV. Supplying a tuple succeeds only when the journal and strict Kura sidecar already match
-    /// it exactly; this method never consults status or rewrites either recovery artifact.
+    /// Apply post-execution block effects, optionally using an explicit commit certificate hint
+    /// instead of relying on the global status cache to recover per-block commit-roster evidence.
+    #[allow(clippy::too_many_lines)]
+    #[allow(clippy::needless_pass_by_value)]
+    #[iroha_logger::log(
+        skip_all,
+        fields(block_height = block.as_ref().header().height())
+    )]
     #[must_use]
-    pub(crate) fn apply_without_execution_with_commit_roster(
+    pub fn apply_without_execution_with_commit_qc(
         &mut self,
         block: &CommittedBlock,
         topology: Vec<PeerId>,
-        authority: Option<&crate::sumeragi::AuthenticatedCommitRoster>,
-    ) -> Result<Vec<EventBox>, &'static str> {
-        self.apply_without_execution_with_commit_roster_inner(block, topology, authority)
+        commit_qc_hint: Option<&Qc>,
+    ) -> Vec<EventBox> {
+        self.apply_without_execution_with_commit_qc_inner(block, topology, commit_qc_hint, true)
+    }
+
+    /// Apply replayed block effects without refreshing per-block roster sidecars.
+    ///
+    /// Kura replay already has durable commit-roster evidence in the roster journal. Rewriting
+    /// retained sidecars for every historical block makes restart cost scale with the full chain
+    /// and can stall a recovering peer before Torii opens.
+    #[must_use]
+    pub(crate) fn apply_without_execution_with_commit_qc_for_replay(
+        &mut self,
+        block: &CommittedBlock,
+        topology: Vec<PeerId>,
+        commit_qc_hint: Option<&Qc>,
+    ) -> Vec<EventBox> {
+        self.apply_without_execution_with_commit_qc_inner(block, topology, commit_qc_hint, false)
     }
 
     #[allow(clippy::too_many_lines)]
@@ -41921,12 +41587,13 @@ impl<'state> StateBlock<'state> {
         fields(block_height = block.as_ref().header().height())
     )]
     #[must_use]
-    fn apply_without_execution_with_commit_roster_inner(
+    fn apply_without_execution_with_commit_qc_inner(
         &mut self,
         block: &CommittedBlock,
         topology: Vec<PeerId>,
-        authority: Option<&crate::sumeragi::AuthenticatedCommitRoster>,
-    ) -> Result<Vec<EventBox>, &'static str> {
+        commit_qc_hint: Option<&Qc>,
+        write_commit_roster_sidecar: bool,
+    ) -> Vec<EventBox> {
         let block_hash = block.as_ref().hash();
         trace!(%block_hash, "Applying block");
         crate::bridge::validate_sccp_commitment_root_for_signed_block(block.as_ref()).expect(
@@ -42041,29 +41708,16 @@ impl<'state> StateBlock<'state> {
         let checkpoint_topology = topology;
         let checkpoint_block_height = block.as_ref().header().height().get();
         let checkpoint_block_hash = block.as_ref().hash();
-        let commit_cert_for_block = if let Some(authority) = authority {
-            let cert = authority.commit_qc();
-            let checkpoint = authority.validator_checkpoint();
-            if authority.chain_id() != self.state_ref.chain_id_ref()
-                || checkpoint_topology.is_empty()
-                || cert.height != checkpoint_block_height
-                || cert.subject_block_hash != checkpoint_block_hash
-                || cert.validator_set != checkpoint_topology
-                || !self
-                    .state_ref
-                    .authenticated_commit_qc_matches_checkpoint(cert, checkpoint)
-                || !self.state_ref.commit_roster_artifacts_match_exact(
-                    cert,
-                    checkpoint,
-                    authority.stake_snapshot(),
-                )
-            {
-                return Err("certified commit-roster authority is not exact and durable");
-            }
-            Some(cert.clone())
-        } else {
-            None
-        };
+        let hinted_commit_cert = commit_qc_hint
+            .filter(|cert| {
+                cert.height == checkpoint_block_height
+                    && cert.subject_block_hash == checkpoint_block_hash
+                    && matches!(cert.phase, crate::sumeragi::consensus::Phase::Commit)
+            })
+            .cloned();
+        let commit_cert_for_block = (!checkpoint_topology.is_empty())
+            .then_some(hinted_commit_cert.clone())
+            .flatten();
         let mut world_peers: Vec<PeerId> = self.world.peers().iter().cloned().collect();
         let active_lane_ids = self
             .nexus
@@ -42099,27 +41753,10 @@ impl<'state> StateBlock<'state> {
                 );
             }
         }
-        let (status_mode_tag, _, _, _) = crate::sumeragi::status::mode_tags();
-        // Treat NPoS roster snapshots as authoritative during block-apply reconciliation.
-        // Status tags can be stale around mode transitions, so we also consult the effective
-        // mode derived from on-chain scheduling and per-block QC metadata.
-        let status_fallback_mode = if status_mode_tag == crate::sumeragi::consensus::NPOS_TAG {
-            ConsensusMode::Npos
-        } else {
-            ConsensusMode::Permissioned
-        };
-        let derived_mode = crate::sumeragi::effective_consensus_mode_for_height_from_world(
-            &self.world,
-            checkpoint_block_height,
-            status_fallback_mode,
-        );
-        let npos_mode_active = commit_cert_for_block.as_ref().map_or_else(
-            || {
-                matches!(derived_mode, ConsensusMode::Npos)
-                    || status_mode_tag == crate::sumeragi::consensus::NPOS_TAG
-            },
-            |commit_cert| commit_cert.mode_tag == crate::sumeragi::consensus::NPOS_TAG,
-        );
+        let npos_mode_active = self.world.sumeragi_npos_parameters().is_some()
+            || commit_cert_for_block.as_ref().is_some_and(|commit_cert| {
+                commit_cert.mode_tag == crate::sumeragi::consensus::NPOS_TAG
+            });
         let roster_source = if checkpoint_topology.is_empty() {
             if world_peers.is_empty() {
                 Vec::new()
@@ -42210,24 +41847,98 @@ impl<'state> StateBlock<'state> {
         };
         self.commit_topology.mutate_vec(|vec| *vec = next_topology);
 
-        if let Some(commit_cert) = commit_cert_for_block {
-            let should_update = match self.world.commit_qcs.get(&commit_cert.subject_block_hash) {
-                Some(existing) => existing.view <= commit_cert.view,
-                None => true,
-            };
-            if should_update {
-                self.world
-                    .commit_qcs
-                    .insert(commit_cert.subject_block_hash, commit_cert);
+        if !checkpoint_topology.is_empty() {
+            let active_lane_ids = self
+                .nexus
+                .enabled
+                .then(|| nexus_active_lane_ids(&self.nexus));
+            let stake_snapshot = CommitStakeSnapshot::from_roster_with_active_lanes(
+                self.world(),
+                &checkpoint_topology,
+                active_lane_ids.as_ref(),
+            );
+            if let Some(commit_cert) = commit_cert_for_block {
+                if commit_cert.validator_set == checkpoint_topology {
+                    let checkpoint = ValidatorSetCheckpoint::new_with_chain_order(
+                        checkpoint_block_height,
+                        commit_cert.view,
+                        checkpoint_block_hash,
+                        commit_cert.chain_order_hash,
+                        commit_cert.rechain_seq,
+                        commit_cert.parent_state_root,
+                        commit_cert.post_state_root,
+                        commit_cert.validator_set.clone(),
+                        commit_cert.aggregate.signers_bitmap.clone(),
+                        commit_cert.aggregate.bls_aggregate_signature.clone(),
+                        commit_cert.validator_set_hash_version,
+                        None,
+                    );
+                    let recorded = if hinted_commit_cert
+                        .as_ref()
+                        .is_some_and(|hint| hint == &commit_cert)
+                    {
+                        self.state_ref.record_commit_roster_internal(
+                            &commit_cert,
+                            &checkpoint,
+                            stake_snapshot,
+                            false,
+                            false,
+                            write_commit_roster_sidecar,
+                            false,
+                        )
+                    } else {
+                        self.state_ref.record_commit_roster_internal(
+                            &commit_cert,
+                            &checkpoint,
+                            stake_snapshot,
+                            false,
+                            true,
+                            write_commit_roster_sidecar,
+                            false,
+                        )
+                    };
+                    match recorded {
+                        Ok(true) => {
+                            let should_update =
+                                match self.world.commit_qcs.get(&commit_cert.subject_block_hash) {
+                                    Some(existing) => existing.view <= commit_cert.view,
+                                    None => true,
+                                };
+                            if should_update {
+                                self.world
+                                    .commit_qcs
+                                    .insert(commit_cert.subject_block_hash, commit_cert.clone());
+                            }
+                        }
+                        Ok(false) => {}
+                        Err(err) => {
+                            error!(
+                                ?err,
+                                height = checkpoint_block_height,
+                                block = %checkpoint_block_hash,
+                                "commit roster journal is fenced; skipping WSV commit-QC publication"
+                            );
+                        }
+                    }
+                } else {
+                    warn!(
+                        height = checkpoint_block_height,
+                        block = %checkpoint_block_hash,
+                        expected = checkpoint_topology.len(),
+                        actual = commit_cert.validator_set.len(),
+                        "skipping commit roster record: validator set mismatch"
+                    );
+                }
+            } else {
+                warn!(
+                    height = checkpoint_block_height,
+                    block = %checkpoint_block_hash,
+                    "missing commit certificate; skipping commit roster record"
+                );
             }
         }
 
         self.maybe_apply_nexus_autoscale(block);
-        let pacing_event = self.apply_pacing_governor(block);
-
-        if let Some(event) = pacing_event {
-            self.world.external_event_buf.push(event);
-        }
         self.world.external_event_buf.push(
             BlockEvent {
                 header: block.as_ref().header(),
@@ -42235,7 +41946,7 @@ impl<'state> StateBlock<'state> {
             }
             .into(),
         );
-        Ok(self.world.take_external_events())
+        self.world.take_external_events()
     }
 
     fn ensure_prospective_autoscale_lane_committee(
@@ -42796,116 +42507,6 @@ impl<'state> StateBlock<'state> {
             });
         }
 
-        samples
-    }
-
-    fn apply_pacing_governor(&mut self, block: &CommittedBlock) -> Option<EventBox> {
-        let cfg = self.pacing_governor;
-
-        let prev_factor = self
-            .state_ref
-            .world
-            .parameters
-            .view()
-            .get()
-            .sumeragi()
-            .pacing_factor_bps();
-        let (current_factor, target_block_time_ms) = {
-            let params = self.world.parameters.get();
-            (
-                params.sumeragi.pacing_factor_bps,
-                params.sumeragi.effective_block_time_ms(),
-            )
-        };
-        if current_factor != prev_factor {
-            debug!(
-                current_factor,
-                prev_factor, "pacing governor skipping: pacing_factor_bps updated in block"
-            );
-            return None;
-        }
-
-        let samples = self.collect_pacing_samples(block, cfg.window_blocks);
-        let decision = pacing_governor::evaluate_pacing_governor(
-            cfg,
-            &samples,
-            current_factor,
-            target_block_time_ms,
-        )?;
-
-        let old_value = iroha_data_model::parameter::Parameter::Sumeragi(
-            iroha_data_model::parameter::SumeragiParameter::PacingFactorBps(current_factor),
-        );
-        let new_value = iroha_data_model::parameter::Parameter::Sumeragi(
-            iroha_data_model::parameter::SumeragiParameter::PacingFactorBps(
-                decision.new_factor_bps,
-            ),
-        );
-        {
-            let params = self.world.parameters.get_mut();
-            params.set_parameter(new_value.clone());
-        }
-
-        let header = block.as_ref().header();
-        info!(
-            height = header.height().get(),
-            view = header.view_change_index(),
-            action = ?decision.action,
-            current_factor_bps = current_factor,
-            new_factor_bps = decision.new_factor_bps,
-            view_change_ratio_permille = decision.view_change_ratio_permille,
-            commit_spacing_ratio_permille = decision.commit_spacing_ratio_permille,
-            avg_spacing_ms = decision.avg_spacing_ms,
-            target_block_time_ms = decision.target_block_time_ms,
-            sample_count = decision.sample_count,
-            "pacing governor adjusted pacing_factor_bps"
-        );
-
-        let data_event: data_pre::DataEvent =
-            data_pre::ConfigurationEvent::Changed(data_pre::ParameterChanged {
-                old_value,
-                new_value,
-            })
-            .into();
-        Some(EventBox::Data(SharedDataEvent::from(data_event)))
-    }
-
-    fn collect_pacing_samples(
-        &self,
-        block: &CommittedBlock,
-        window_blocks: usize,
-    ) -> Vec<pacing_governor::PacingSample> {
-        let header = block.as_ref().header();
-        let height = header.height().get();
-        let window_blocks = window_blocks.max(2);
-        let start_height = height
-            .saturating_sub(window_blocks.saturating_sub(1) as u64)
-            .max(1);
-        let mut samples = Vec::with_capacity(window_blocks);
-
-        for h in start_height..height {
-            let height_usize = match usize::try_from(h) {
-                Ok(value) => value,
-                Err(_) => {
-                    debug!(
-                        height = h,
-                        "pacing governor skipping: block height exceeds usize"
-                    );
-                    return Vec::new();
-                }
-            };
-            let Some(height_nz) = NonZeroUsize::new(height_usize) else {
-                continue;
-            };
-            let Some(block) = self.kura.get_block(height_nz) else {
-                debug!(height = h, "pacing governor missing block in kura");
-                return Vec::new();
-            };
-            let block_header = block.header();
-            samples.push(pacing_governor::PacingSample::from(&block_header));
-        }
-
-        samples.push(pacing_governor::PacingSample::from(&header));
         samples
     }
 
@@ -44539,6 +44140,11 @@ mod tiered_snapshot_diff_tests {
         SccpOutboundMessageKeyV1,
         SccpOutboundPendingMessageRecordV1,
     ) {
+        let key_pair = checked_keypair();
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let sender = authority
+            .to_i105_for_discriminant(iroha_sccp::SCCP_TAIRA_I105_DISCRIMINANT_V1)
+            .expect("retained SCCP inventory sender has one canonical Taira I105 rendering");
         let payload = iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
             version: 1,
             source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
@@ -44550,7 +44156,7 @@ mod tiered_snapshot_diff_tests {
             asset_id: b"xor".to_vec(),
             amount: 77,
             sender_codec: iroha_sccp::SCCP_CODEC_CANONICAL_TEXT,
-            sender: b"sora:retained-archive".to_vec(),
+            sender: sender.into_bytes(),
             recipient_codec: iroha_sccp::SCCP_CODEC_EVM_ADDRESS20,
             recipient: [0x22; 20].to_vec(),
             route_id_codec: iroha_sccp::SCCP_CODEC_CANONICAL_TEXT,
@@ -44567,8 +44173,6 @@ mod tiered_snapshot_diff_tests {
         )
         .expect("retained SCCP inventory payload validates");
 
-        let key_pair = checked_keypair();
-        let authority = AccountId::new(key_pair.public_key().clone());
         let transaction = TransactionBuilder::new(
             ChainId::from(iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1),
             authority,
@@ -44770,7 +44374,6 @@ mod tiered_snapshot_diff_tests {
         record.source_identity_hash =
             iroha_data_model::bridge::sccp_source_identity_hash_v1(&route.source_identity)
                 .expect("fixture source identity hash");
-        record.anchor_interval_height = record.trust_anchor.checkpoint_height + 1;
         let successor = SccpNativeTrustAnchorV1 {
             anchor_hash: [0x98; 32],
             checkpoint_height: record.trust_anchor.checkpoint_height + 10,
@@ -46157,9 +45760,9 @@ mod tiered_snapshot_diff_tests {
 
     #[test]
     fn sccp_local_profile_rejects_malformed_direct_terminal_record() {
-        let (mut world, key, message, mut proof, _, _) = world_with_valid_sccp_outbound_history();
+        let (mut world, key, _message, mut proof, _, _) = world_with_valid_sccp_outbound_history();
         proof.accepted_at_height = 0;
-        replace_complete_sccp_outbound_history(&mut world, key, message, proof);
+        world.sccp_outbound_proofs.insert(key, proof);
         let state = direct_sccp_state_at_height_one(world, exact_sccp_finality_kura());
 
         let error = validate_sccp_state_local_profile(&state)
@@ -46729,7 +46332,7 @@ mod tiered_snapshot_diff_tests {
             },
             1,
         );
-        assert_rejected(malformed, "forged malformed key", "malformed key");
+        assert_rejected(malformed, "forged malformed key", "nonzero anchor hash");
     }
 
     #[test]
@@ -46859,11 +46462,7 @@ mod tiered_snapshot_diff_tests {
         assert!(message.is_well_formed_for_key(&other_lane_key));
         assert!(proof.is_well_formed_for_key(&other_lane_key));
         replace_complete_sccp_outbound_history(&mut world, other_lane_key, message, proof);
-        assert_rejected(
-            world,
-            "cross-lane route",
-            "identity-mismatched payload evidence",
-        );
+        assert_rejected(world, "cross-lane route", "belongs to another exact lane");
     }
 
     #[test]
@@ -46878,12 +46477,7 @@ mod tiered_snapshot_diff_tests {
             world.sccp_outbound_message_index = Storage::default();
             world.sccp_outbound_proofs = Storage::default();
             world.sccp_outbound_proofs.insert(key, proof);
-            let state = State::new_with_chain(
-                world,
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-                ChainId::from(iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1),
-            );
+            let state = direct_sccp_state_at_height_one(world, Kura::blank_kura_for_testing());
             let error = validate_sccp_state_local_profile(&state)
                 .expect_err("forged in-memory outbound proof index must fail closed");
             assert!(
@@ -47129,6 +46723,41 @@ mod transfer_transcript_tests {
     }
 
     #[test]
+    fn transfer_transcript_identity_preflight_is_replay_aware() {
+        let kura = Kura::blank_kura_for_testing();
+        let query = crate::query::store::LiveQueryStore::start_test();
+        let state = State::new(World::default(), Arc::clone(&kura), query);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+
+        {
+            let mut transaction = block.transaction();
+            let error = transaction
+                .require_transfer_transcript_identity("test transfer")
+                .expect_err("live transfer without call_hash must fail closed");
+            assert!(error.to_string().contains("transaction call_hash"));
+
+            let call_hash = iroha_crypto::Hash::prehashed([0xA5; iroha_crypto::Hash::LENGTH]);
+            transaction.tx_call_hash = Some(call_hash);
+            assert_eq!(
+                transaction
+                    .require_transfer_transcript_identity("test transfer")
+                    .expect("live transfer with call_hash must pass"),
+                Some(call_hash)
+            );
+        }
+
+        block.replay_compatibility = true;
+        let transaction = block.transaction();
+        assert_eq!(
+            transaction
+                .require_transfer_transcript_identity("test replay transfer")
+                .expect("replay transfer intentionally skips transcript identity"),
+            None
+        );
+    }
+
+    #[test]
     fn replay_transfer_transcripts_skip_fastpq_work_without_call_hash() {
         let kura = Kura::blank_kura_for_testing();
         let query = crate::query::store::LiveQueryStore::start_test();
@@ -47315,10 +46944,10 @@ mod transfer_transcript_tests {
             .build(&ALICE_ID);
             let alice_asset_id = AssetId::new(asset_definition_id.clone(), ALICE_ID.clone());
             let bob_asset_id = AssetId::new(asset_definition_id, BOB_ID.clone());
-            let alice_asset = Asset::new(alice_asset_id.clone(), Numeric::from(10_u32));
+            let alice_asset = Asset::new(alice_asset_id.clone(), Quantity::from(10_u32));
             let mut assets = vec![alice_asset];
             if let Some(balance) = receiver_asset_balance {
-                assets.push(Asset::new(bob_asset_id.clone(), Numeric::from(balance)));
+                assets.push(Asset::new(bob_asset_id.clone(), Quantity::from(balance)));
             }
             let world = World::with_assets(
                 [domain],
@@ -47351,7 +46980,7 @@ mod transfer_transcript_tests {
         {
             let mut tx = block_seq.transaction();
             tx.tx_call_hash = Some(call_hash);
-            Transfer::asset_numeric(alice_asset_id.clone(), 3_u32, BOB_ID.clone())
+            Transfer::asset_quantity(alice_asset_id.clone(), 3_u32, BOB_ID.clone())
                 .execute(&ALICE_ID, &mut tx)
                 .expect("sequential transfer");
             tx.apply();
@@ -47366,7 +46995,7 @@ mod transfer_transcript_tests {
         let state_det = State::new(world_det, Arc::clone(&kura_det), query_det);
         let mut block_det = state_det.block(header);
         let instruction: InstructionBox =
-            Transfer::asset_numeric(alice_asset_id.clone(), 3_u32, BOB_ID.clone()).into();
+            Transfer::asset_quantity(alice_asset_id.clone(), 3_u32, BOB_ID.clone()).into();
         let mut delta = DetachedStateTransactionDelta::default();
         crate::executor::execute_instruction_detached(&ALICE_ID, &instruction, &mut delta)
             .expect("detached transfer should be recorded");
@@ -47419,7 +47048,7 @@ mod transfer_transcript_tests {
         let mut block_batch = state_batch.block(header);
         let mut first_delta = DetachedStateTransactionDelta::default();
         let first_instruction: InstructionBox =
-            Transfer::asset_numeric(alice_asset_id.clone(), 3_u32, BOB_ID.clone()).into();
+            Transfer::asset_quantity(alice_asset_id.clone(), 3_u32, BOB_ID.clone()).into();
         crate::executor::execute_instruction_detached(
             &ALICE_ID,
             &first_instruction,
@@ -47428,7 +47057,7 @@ mod transfer_transcript_tests {
         .expect("first detached transfer should be recorded");
         let mut second_delta = DetachedStateTransactionDelta::default();
         let second_instruction: InstructionBox =
-            Transfer::asset_numeric(alice_asset_id.clone(), 2_u32, BOB_ID.clone()).into();
+            Transfer::asset_quantity(alice_asset_id.clone(), 2_u32, BOB_ID.clone()).into();
         crate::executor::execute_instruction_detached(
             &ALICE_ID,
             &second_instruction,
@@ -47958,23 +47587,52 @@ mod block_proof_tests {
     }
 }
 
-/// Resolve the validator roster for a replayed block from authenticated local state.
-///
-/// The current state is the result of validating and applying the preceding block, so its commit
-/// topology is the authority for the next replay step. The supplied topology is trusted only as a
-/// bootstrap source before replay has reconstructed any topology. Decodable journal, sidecar, and
-/// successor-block metadata must never select replay signature order on their own.
+/// Resolve the validator roster for a replayed block using persisted roster metadata.
 fn replay_roster_for_block(
     state: &State,
+    kura: &Kura,
+    block: &SignedBlock,
     fallback: &crate::sumeragi::network_topology::Topology,
+    commit_roster_snapshot: Option<&CommitRosterSnapshot>,
 ) -> Vec<PeerId> {
+    let height = block.header().height().get();
+    let block_hash = block.hash();
+
+    if let Some(snapshot) = commit_roster_snapshot {
+        let roster = if snapshot.commit_qc.validator_set.is_empty() {
+            snapshot.validator_checkpoint.validator_set.clone()
+        } else {
+            snapshot.commit_qc.validator_set.clone()
+        };
+        if !roster.is_empty() {
+            return roster;
+        }
+    }
+
+    let successor_height = height.saturating_add(1);
+    if let Ok(successor_height_usize) = usize::try_from(successor_height)
+        && let Some(successor) = NonZeroUsize::new(successor_height_usize)
+            .and_then(|height_nz| kura.get_block(height_nz))
+        && let Some(evidence) = successor.previous_roster_evidence()
+        && evidence.height == height
+        && evidence.block_hash == block_hash
+        && !evidence.validator_checkpoint.validator_set.is_empty()
+    {
+        return evidence.validator_checkpoint.validator_set.clone();
+    }
+
+    let fallback_roster = fallback.as_ref().to_vec();
+    if !fallback_roster.is_empty() {
+        return fallback_roster;
+    }
+
     let view = state.view();
     let commit_topology = view.commit_topology();
     if !commit_topology.is_empty() {
         return commit_topology.iter().cloned().collect();
     }
 
-    fallback.as_ref().to_vec()
+    Vec::new()
 }
 
 fn prune_restored_commit_qcs_for_replay(state: &mut State, start_height: u64) {
@@ -48207,7 +47865,7 @@ fn ensure_replayed_results_match_committed(
 
 /// Replay blocks from the local Kura store into the provided [`State`], rebuilding world state
 /// when a snapshot is unavailable.
-/// Uses the configured consensus mode as a fallback when resolving topology rotation.
+/// Uses the genesis-selected consensus mode when resolving topology rotation.
 ///
 /// # Errors
 /// Returns an error if block retrieval or application fails.
@@ -48216,7 +47874,7 @@ pub fn replay_blocks_from_kura(
     state: &mut State,
     topology: &crate::sumeragi::network_topology::Topology,
     block_count: usize,
-    fallback_consensus_mode: iroha_config::parameters::actual::ConsensusMode,
+    fallback_consensus_mode: iroha_data_model::block::consensus_v2::ConsensusMode,
 ) -> Result<()> {
     replay_blocks_from_kura_range(
         kura,
@@ -48311,137 +47969,9 @@ fn hash_only_replay_snapshot_hash(
     Ok(Some(kura_hash))
 }
 
-/// Rebuild a retained Commit authority while replay still exposes the exact parent WSV.
-///
-/// Structural journal metadata never becomes authority by itself. The candidate must match the
-/// canonical block and its cross-linked commit manifest, then pass roster/stake/PoP/signature
-/// validation against the parent state before that block is applied.
-fn restore_authenticated_commit_authority_during_replay(
-    kura: &Kura,
-    state: &State,
-    block: &SignedBlock,
-    replay_roster: &[PeerId],
-    consensus_mode: iroha_config::parameters::actual::ConsensusMode,
-    required: bool,
-) -> Result<Option<crate::sumeragi::AuthenticatedCommitRoster>> {
-    let height = block.header().height().get();
-    let view = block.header().view_change_index();
-    let block_hash = block.hash();
-    let Some(snapshot) = state.commit_roster_snapshot_for_block(height, block_hash) else {
-        if required {
-            return Err(eyre!(
-                "retained canonical block #{height} has no strict commit-roster snapshot"
-            ));
-        }
-        return Ok(None);
-    };
-    if !state.commit_roster_journal_matches_exact(
-        &snapshot.commit_qc,
-        &snapshot.validator_checkpoint,
-        snapshot.stake_snapshot.as_ref(),
-    ) {
-        if required {
-            return Err(eyre!(
-                "retained canonical block #{height} is missing its exact commit-rosters.norito row"
-            ));
-        }
-        return Ok(None);
-    }
-    let existing_manifest = kura.commit_manifest(height).wrap_err_with(|| {
-        format!("failed to read commit manifest while rebuilding block #{height} authority")
-    })?;
-    if let Some(manifest) = existing_manifest.as_ref() {
-        let binding = kura
-            .commit_manifest_binding_state(manifest)
-            .wrap_err_with(|| format!("failed to verify block #{height} manifest binding"))?;
-        let authority_matches = manifest.binds_commit_authority(
-            &snapshot.commit_qc,
-            &snapshot.validator_checkpoint,
-            snapshot.stake_snapshot.as_ref(),
-        );
-        match binding {
-            crate::kura::CommitManifestBindingState::Bound if !authority_matches => {
-                return Err(eyre!(
-                    "WSV-bound block #{height} manifest seals a different commit authority"
-                ));
-            }
-            crate::kura::CommitManifestBindingState::Mismatched => {
-                return Err(eyre!(
-                    "block #{height} WSV checkpoint contains a different manifest digest"
-                ));
-            }
-            crate::kura::CommitManifestBindingState::Unbound => {
-                iroha_logger::warn!(
-                    height,
-                    block = %block_hash,
-                    "replay will repair an incomplete post-Kura commit-authority manifest after parent-state authentication"
-                );
-            }
-            crate::kura::CommitManifestBindingState::Bound => {}
-        }
-    }
-
-    let world = state.world_view();
-    let nexus = state.nexus_snapshot();
-    let active_lane_ids = nexus
-        .enabled
-        .then(|| crate::state::nexus_active_lane_ids(&nexus));
-    let expected_epoch = match consensus_mode {
-        iroha_config::parameters::actual::ConsensusMode::Permissioned => 0,
-        iroha_config::parameters::actual::ConsensusMode::Npos => {
-            crate::sumeragi::epoch_for_height_from_world(&world, height)
-        }
-    };
-    let canonical_authority =
-        crate::sumeragi::main_loop::qc::authenticate_and_record_replay_commit_roster_snapshot(
-            &snapshot,
-            block_hash,
-            height,
-            view,
-            consensus_mode,
-            expected_epoch,
-            replay_roster,
-            &state.chain_id,
-            &world,
-            active_lane_ids.as_ref(),
-        )
-        .map_err(|reason| eyre!("block #{height} canonical replay authority failed: {reason}"))?;
-
-    // A second retained row is not trusted merely because it is durable. Revalidate every row
-    // against the same parent WSV. Invalid fabricated rows are ignored; a second valid aggregate
-    // reaches the atomic status ledger and activates the conflict halt.
-    for candidate in state.persisted_commit_qc_candidates_at_height(height) {
-        if candidate == snapshot.commit_qc {
-            continue;
-        }
-        match crate::sumeragi::main_loop::qc::authenticate_and_record_replay_commit_qc_with_fixed_authority(
-            &candidate,
-            &canonical_authority,
-            &world,
-        ) {
-            Ok(()) => {}
-            Err("replay_commit_authority_conflict") => {
-                return Err(eyre!(
-                    "authenticated conflicting retained Commit authorities at height {height}"
-                ));
-            }
-            Err(reason) => {
-                iroha_logger::warn!(
-                    height,
-                    candidate_block = %candidate.subject_block_hash,
-                    reason,
-                    "ignoring non-authoritative retained commit-roster candidate during replay"
-                );
-            }
-        }
-    }
-    drop(world);
-    Ok(Some(canonical_authority))
-}
-
 /// Replay blocks from the local Kura store into the provided [`State`], starting at `start_height`
 /// and continuing through `block_count` (inclusive). Use this to catch up from a snapshot.
-/// Uses the configured consensus mode as a fallback when resolving topology rotation.
+/// Uses the genesis-selected consensus mode when resolving topology rotation.
 ///
 /// # Errors
 /// Returns an error if block retrieval or application fails.
@@ -48452,9 +47982,9 @@ pub fn replay_blocks_from_kura_range(
     topology: &crate::sumeragi::network_topology::Topology,
     start_height: usize,
     block_count: usize,
-    fallback_consensus_mode: iroha_config::parameters::actual::ConsensusMode,
+    fallback_consensus_mode: iroha_data_model::block::consensus_v2::ConsensusMode,
 ) -> Result<()> {
-    use iroha_config::parameters::actual::ConsensusMode;
+    use iroha_data_model::block::consensus_v2::ConsensusMode;
     use std::num::NonZeroUsize;
 
     if block_count == 0 {
@@ -48469,13 +47999,6 @@ pub fn replay_blocks_from_kura_range(
 
     let replay_started = Instant::now();
     let mut replay_timing = ReplayKuraTiming::default();
-    let retained_authority_floor = {
-        let block_count = u64::try_from(block_count)?;
-        let retention = u64::try_from(kura.block_sync_roster_retention().get())?;
-        block_count
-            .saturating_sub(retention.saturating_sub(1))
-            .max(1)
-    };
     let genesis_account = {
         let view = state.view();
         let maybe = view
@@ -48527,8 +48050,17 @@ pub fn replay_blocks_from_kura_range(
         let signed_block = (*block_arc).clone();
         let view = signed_block.header().view_change_index();
         let height = signed_block.header().height().get();
+        let block_hash = signed_block.hash();
         let topology_start = Instant::now();
-        let roster = replay_roster_for_block(state, topology);
+        let replay_commit_roster_snapshot =
+            state.commit_roster_snapshot_for_block(height, block_hash);
+        let roster = replay_roster_for_block(
+            state,
+            kura,
+            &signed_block,
+            topology,
+            replay_commit_roster_snapshot.as_ref(),
+        );
         let mut block_topology = crate::sumeragi::network_topology::Topology::new(roster.clone());
         let wsv_checkpoint = kura
             .wsv_checkpoint(height)
@@ -48542,22 +48074,10 @@ pub fn replay_blocks_from_kura_range(
         }
         let (effective_mode, prf_seed) = {
             let view = state.view();
-            let mode = crate::sumeragi::effective_consensus_mode_for_height_from_world(
-                view.world(),
-                height,
-                fallback_consensus_mode,
-            );
+            let mode = crate::sumeragi::effective_consensus_mode(&view, fallback_consensus_mode);
             let seed = Some(crate::sumeragi::prf_seed_for_height(&view, height));
             (mode, seed)
         };
-        let replay_authority = restore_authenticated_commit_authority_during_replay(
-            kura.as_ref(),
-            state,
-            &signed_block,
-            &roster,
-            effective_mode,
-            height == 1 || height >= retained_authority_floor,
-        )?;
         match effective_mode {
             ConsensusMode::Permissioned => {
                 block_topology.canonicalize_order();
@@ -48805,13 +48325,13 @@ pub fn replay_blocks_from_kura_range(
             replay_timing.apply_committed_transactions += apply_committed_start.elapsed();
         }
         let apply_without_execution_start = Instant::now();
-        let _ = state_block
-            .apply_without_execution_with_commit_roster(
-                &committed_block,
-                roster,
-                replay_authority.as_ref(),
-            )
-            .map_err(|error| eyre!(error))?;
+        let _ = state_block.apply_without_execution_with_commit_qc_for_replay(
+            &committed_block,
+            roster,
+            replay_commit_roster_snapshot
+                .as_ref()
+                .map(|snapshot| &snapshot.commit_qc),
+        );
         replay_timing.apply_without_execution += apply_without_execution_start.elapsed();
         let staged_merge_entry = state_block.staged_merge_entry().cloned();
         let commit_start = Instant::now();
@@ -48828,76 +48348,6 @@ pub fn replay_blocks_from_kura_range(
                 })?;
         }
         replay_timing.commit += commit_start.elapsed();
-        if let Some(authority) = replay_authority.as_ref() {
-            let replayed_state_hash = crate::snapshot::canonical_state_snapshot_hash(state);
-            if let Some(checkpoint) = wsv_checkpoint.as_ref()
-                && checkpoint.state_hash() != replayed_state_hash
-            {
-                return Err(eyre!(
-                    "retained replay authority at height {height} is not bound to the replayed WSV checkpoint"
-                ));
-            }
-            if wsv_checkpoint.is_none() {
-                kura.store_wsv_checkpoint(
-                    height,
-                    committed_block.as_ref().hash(),
-                    replayed_state_hash,
-                )
-                .wrap_err_with(|| {
-                    format!("failed to repair WSV checkpoint for replayed block #{height}")
-                })?;
-            }
-            let manifest = kura
-                .commit_manifest(height)
-                .wrap_err_with(|| format!("failed to re-read block #{height} manifest"))?;
-            let qc = authority.commit_qc();
-            let manifest_is_exact =
-                match manifest.as_ref() {
-                    Some(manifest) => match kura
-                        .commit_manifest_binding_state(manifest)
-                        .wrap_err_with(|| {
-                            format!("failed to verify replayed block #{height} manifest")
-                        })? {
-                        crate::kura::CommitManifestBindingState::Bound => manifest
-                            .binds_commit_authority(
-                                qc,
-                                authority.validator_checkpoint(),
-                                authority.stake_snapshot(),
-                            ),
-                        crate::kura::CommitManifestBindingState::Unbound => false,
-                        crate::kura::CommitManifestBindingState::Mismatched => {
-                            return Err(eyre!(
-                                "replayed block #{height} checkpoint manifest digest changed"
-                            ));
-                        }
-                    },
-                    None => false,
-                };
-            if !manifest_is_exact {
-                // Rewriting the checkpoint first clears any crash-left manifest digest; the
-                // following manifest write then republishes one exact complete binding.
-                kura.store_wsv_checkpoint(
-                    height,
-                    committed_block.as_ref().hash(),
-                    replayed_state_hash,
-                )
-                .wrap_err_with(|| {
-                    format!("failed to repair WSV checkpoint for replayed block #{height}")
-                })?;
-                let manifest = crate::kura::CommitManifest::new(
-                    height,
-                    committed_block.as_ref().hash(),
-                    Some(qc.parent_state_root),
-                    Some(qc.post_state_root),
-                    replayed_state_hash,
-                    Some(Hash::new(qc.encode())),
-                )
-                .with_authenticated_commit_authority(authority);
-                kura.store_commit_manifest(manifest).wrap_err_with(|| {
-                    format!("failed to seal replayed block #{height} commit authority")
-                })?;
-            }
-        }
         if let Some(checkpoint) = wsv_checkpoint {
             let checkpoint_hash_start = Instant::now();
             let actual = crate::snapshot::canonical_state_snapshot_hash(state);
@@ -48959,14 +48409,12 @@ pub fn replay_blocks_from_kura_range(
 mod replay_validation_tests {
     use std::{collections::BTreeSet, sync::Arc};
 
-    use iroha_config::parameters::actual::ConsensusMode;
     use iroha_crypto::SignatureOf;
     use iroha_data_model::{
         ChainId, ValidationFail,
         account::{AccountAlias, AccountAliasDomain, AccountId},
         asset::{AssetDefinition, AssetDefinitionId, AssetId},
-        block::{BlockSignature, SignedBlock},
-        consensus::VALIDATOR_SET_HASH_VERSION_V1,
+        block::{BlockSignature, SignedBlock, consensus_v2::ConsensusMode},
         isi::{
             InstructionBox, Log, Mint, Register, SetKeyValue,
             domain_link::{SetAccountAliasBinding, SetPrimaryAccountAlias},
@@ -49113,38 +48561,6 @@ mod replay_validation_tests {
         )
     }
 
-    fn apply_replay_validated_block_without_kura_store(
-        state: &State,
-        topology: &crate::sumeragi::network_topology::Topology,
-        block: SignedBlock,
-        chain_id: &ChainId,
-        genesis_account: &AccountId,
-    ) -> SignedBlock {
-        let time_source = TimeSource::new_system();
-        let mut voting_block = None;
-        let (valid_block, mut state_block) = ValidBlock::validate_keep_voting_block_for_replay(
-            block,
-            topology,
-            chain_id,
-            genesis_account,
-            &time_source,
-            state,
-            &mut voting_block,
-            false,
-            false,
-            false,
-        )
-        .unpack(|_| {})
-        .expect("block validates for no-store replay fixture");
-        let committed = valid_block.commit_unchecked().unpack(|_| {});
-        let committed_signed = committed.as_ref().clone();
-        let _events = state_block.apply_without_execution(&committed, topology.as_ref().to_vec());
-        state_block
-            .commit()
-            .expect("commit no-store replay fixture block");
-        committed_signed
-    }
-
     fn strip_execution_context_and_resign_for_test(
         block: &mut SignedBlock,
         private_key: &iroha_crypto::PrivateKey,
@@ -49220,66 +48636,6 @@ mod replay_validation_tests {
         );
         configure_private_replay_route(&mut state, lane_id, dataspace_id);
         state
-    }
-
-    fn persist_permissioned_genesis_replay_authority(
-        state: &State,
-        kura: &Kura,
-        genesis_hash: HashOf<BlockHeader>,
-        roster: &[PeerId],
-    ) {
-        let mut canonical_roster = roster.to_vec();
-        canonical_roster.sort();
-        canonical_roster.dedup();
-        let zero_root = Hash::prehashed([0; Hash::LENGTH]);
-        let qc = Qc {
-            phase: crate::sumeragi::consensus::Phase::Commit,
-            subject_block_hash: genesis_hash,
-            parent_state_root: zero_root,
-            post_state_root: zero_root,
-            height: 1,
-            view: 0,
-            epoch: 0,
-            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
-            rechain_seq: 0,
-            mode_tag: crate::sumeragi::consensus::PERMISSIONED_TAG.to_owned(),
-            highest_qc: None,
-            validator_set_hash: HashOf::new(&canonical_roster),
-            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-            validator_set: canonical_roster.clone(),
-            aggregate: crate::sumeragi::consensus::QcAggregate {
-                signers_bitmap: vec![0; canonical_roster.len().div_ceil(8)],
-                bls_aggregate_signature: Vec::new(),
-            },
-        };
-        let checkpoint = ValidatorSetCheckpoint::new_with_chain_order(
-            1,
-            0,
-            genesis_hash,
-            qc.chain_order_hash,
-            0,
-            zero_root,
-            zero_root,
-            canonical_roster,
-            qc.aggregate.signers_bitmap.clone(),
-            Vec::new(),
-            VALIDATOR_SET_HASH_VERSION_V1,
-            None,
-        );
-        {
-            let mut journal = state.commit_roster_journal.write();
-            assert!(journal.upsert(qc.clone(), checkpoint.clone(), None));
-            journal
-                .persist()
-                .expect("persist canonical genesis replay authority");
-        }
-        assert!(kura.write_roster_metadata(&crate::kura::RosterSidecar::new(
-            1,
-            genesis_hash,
-            Some(qc),
-            Some(checkpoint),
-            None,
-        )));
     }
 
     #[test]
@@ -49576,497 +48932,6 @@ mod replay_validation_tests {
     }
 
     #[test]
-    fn replay_authenticates_pre_wsv_commit_authority_and_repairs_absent_manifest() {
-        run_replay_validation_test_on_stack("replay_repairs_absent_commit_manifest", || {
-            replay_commit_authority_repair_case(ReplayCommitManifestFixture::Absent)
-        });
-    }
-
-    #[test]
-    fn replay_authenticates_pre_wsv_commit_authority_and_replaces_unbound_manifest() {
-        run_replay_validation_test_on_stack("replay_replaces_unbound_commit_manifest", || {
-            replay_commit_authority_repair_case(ReplayCommitManifestFixture::Unbound)
-        });
-    }
-
-    #[test]
-    fn replay_rejects_mismatched_bound_commit_manifest_without_repair() {
-        run_replay_validation_test_on_stack(
-            "replay_rejects_mismatched_bound_commit_manifest",
-            || replay_commit_authority_repair_case(ReplayCommitManifestFixture::Mismatched),
-        );
-    }
-
-    #[test]
-    fn replay_rejects_missing_published_commit_manifest_without_repair() {
-        run_replay_validation_test_on_stack(
-            "replay_rejects_missing_published_commit_manifest",
-            || replay_commit_authority_repair_case(ReplayCommitManifestFixture::PublishedMissing),
-        );
-    }
-
-    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-    enum ReplayCommitManifestFixture {
-        Absent,
-        Unbound,
-        Mismatched,
-        PublishedMissing,
-    }
-
-    #[allow(clippy::too_many_lines)]
-    fn replay_commit_authority_repair_case(manifest_fixture: ReplayCommitManifestFixture) {
-        use std::borrow::Cow;
-
-        use iroha_config::{
-            base::WithOrigin,
-            kura::InitMode,
-            parameters::actual::{Kura as KuraConfig, LaneConfig as RuntimeLaneConfig},
-        };
-        use iroha_crypto::{Algorithm, Signature};
-        use iroha_data_model::consensus::{VALIDATOR_SET_HASH_VERSION_V1, ValidatorSetCheckpoint};
-        use iroha_genesis::{GENESIS_DOMAIN_ID, GenesisBuilder, GenesisTopologyEntry};
-        use norito::codec::Encode;
-
-        let _history_guard = crate::sumeragi::status::commit_history_test_guard();
-        crate::sumeragi::status::reset_commit_certs_for_tests();
-        crate::sumeragi::status::reset_validator_checkpoints_for_tests();
-
-        let case = match manifest_fixture {
-            ReplayCommitManifestFixture::Absent => "absent-manifest",
-            ReplayCommitManifestFixture::Unbound => "unbound-manifest",
-            ReplayCommitManifestFixture::Mismatched => "mismatched-manifest",
-            ReplayCommitManifestFixture::PublishedMissing => "published-missing-manifest",
-        };
-        let chain_id = ChainId::from(format!("iroha:test:replay-authority-{case}"));
-        let temp_dir = tempfile::tempdir().expect("temp dir");
-        let kura_cfg = KuraConfig {
-            init_mode: InitMode::Strict,
-            store_dir: WithOrigin::inline(temp_dir.path().join("kura")),
-            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
-            blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
-            debug_output_new_blocks: false,
-            merge_ledger_cache_capacity:
-                iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
-            fsync_mode: iroha_config::kura::FsyncMode::Batched,
-            fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
-            block_sync_roster_retention:
-                iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
-            roster_sidecar_retention:
-                iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
-            eviction_required_replicas:
-                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
-        };
-        let (kura, _) =
-            Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("initialize Kura");
-
-        let validator = crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-        let roster = vec![PeerId::new(validator.public_key().clone())];
-        let topology = crate::sumeragi::network_topology::Topology::new(roster.clone());
-        let topology_entry = GenesisTopologyEntry::new(
-            roster[0].clone(),
-            iroha_crypto::bls_normal_pop_prove(validator.private_key())
-                .expect("generate validator proof of possession"),
-        );
-        let executor_path = super::permission_cache_tests::ensure_executor_bytecode(&temp_dir);
-        let genesis_block =
-            GenesisBuilder::new(chain_id.clone(), &executor_path, "ivm/libs/not/installed")
-                .set_topology(vec![topology_entry])
-                .build_and_sign(&SAMPLE_GENESIS_ACCOUNT_KEYPAIR)
-                .expect("build genesis")
-                .0;
-        let genesis_id = (*SAMPLE_GENESIS_ACCOUNT_ID).clone();
-        let make_world = || {
-            World::with(
-                [Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_id)],
-                [new_genesis_account(&genesis_id).build(&genesis_id)],
-                [],
-            )
-        };
-        let configure = |state: &State| {
-            let mut params = state.world.parameters.block();
-            params.sumeragi.key_require_hsm = false;
-            params.commit();
-        };
-
-        // Materialize the parent WSV twice. Only the replay target stores genesis in Kura; the
-        // producer copy exists solely to create the canonical height-two payload and expected WSV.
-        let replay_target = State::new_with_chain(
-            make_world(),
-            Arc::clone(&kura),
-            crate::query::store::LiveQueryStore::start_test(),
-            chain_id.clone(),
-        );
-        configure(&replay_target);
-        let genesis_block = commit_replay_validated_block_with_options(
-            &replay_target,
-            &topology,
-            genesis_block,
-            &chain_id,
-            &genesis_id,
-            false,
-            false,
-        );
-        let producer = State::new_with_chain(
-            make_world(),
-            Arc::clone(&kura),
-            crate::query::store::LiveQueryStore::start_test(),
-            chain_id.clone(),
-        );
-        configure(&producer);
-        let producer_genesis = apply_replay_validated_block_without_kura_store(
-            &producer,
-            &topology,
-            genesis_block.clone(),
-            &chain_id,
-            &genesis_id,
-        );
-        assert_eq!(producer_genesis.hash(), genesis_block.hash());
-        assert_eq!(replay_target.view().height(), 1);
-        assert_eq!(producer.view().height(), 1);
-
-        let transaction = TransactionBuilder::new(chain_id.clone(), genesis_id.clone())
-            .with_instructions([Log::new(
-                iroha_logger::Level::INFO,
-                "pre-WSV authority recovery".to_owned(),
-            )])
-            .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
-        let accepted = crate::prelude::AcceptedTransaction::new_unchecked(Cow::Owned(transaction));
-        let block = crate::block::BlockBuilder::new(vec![accepted])
-            .chain(0, Some(&producer_genesis))
-            .sign(validator.private_key())
-            .unpack(|_| {});
-        let committed = commit_replay_validated_block_with_options(
-            &producer,
-            &topology,
-            block.into(),
-            &chain_id,
-            &genesis_id,
-            false,
-            false,
-        );
-        let height = committed.header().height().get();
-        let view = committed.header().view_change_index();
-        assert_eq!(height, 2);
-        assert!(
-            kura.wsv_checkpoint(height)
-                .expect("read pre-replay WSV checkpoint")
-                .is_none(),
-            "fixture must stop before WSV checkpoint publication"
-        );
-
-        let zero_root = iroha_crypto::Hash::prehashed([0; iroha_crypto::Hash::LENGTH]);
-        let vote = crate::sumeragi::consensus::Vote {
-            phase: crate::sumeragi::consensus::Phase::Commit,
-            block_hash: committed.hash(),
-            parent_state_root: zero_root,
-            post_state_root: zero_root,
-            height,
-            view,
-            epoch: 0,
-            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
-            rechain_seq: 0,
-            highest_qc: None,
-            signer: 0,
-            bls_sig: Vec::new(),
-        };
-        let preimage = crate::sumeragi::consensus::vote_preimage(
-            &chain_id,
-            crate::sumeragi::consensus::PERMISSIONED_TAG,
-            &vote,
-        );
-        let signature = Signature::try_new(validator.private_key(), &preimage)
-            .expect("sign Commit vote")
-            .payload()
-            .to_vec();
-        let aggregate_signature =
-            iroha_crypto::bls_normal_aggregate_signatures(&[signature.as_slice()])
-                .expect("aggregate Commit signature");
-        let signers_bitmap = vec![1_u8];
-        let commit_qc = crate::sumeragi::consensus::Qc {
-            phase: crate::sumeragi::consensus::Phase::Commit,
-            subject_block_hash: committed.hash(),
-            parent_state_root: zero_root,
-            post_state_root: zero_root,
-            height,
-            view,
-            epoch: 0,
-            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
-            rechain_seq: 0,
-            mode_tag: crate::sumeragi::consensus::PERMISSIONED_TAG.to_owned(),
-            highest_qc: None,
-            validator_set_hash: HashOf::new(&roster),
-            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-            validator_set: roster.clone(),
-            aggregate: crate::sumeragi::consensus::QcAggregate {
-                signers_bitmap: signers_bitmap.clone(),
-                bls_aggregate_signature: aggregate_signature,
-            },
-        };
-        let checkpoint = ValidatorSetCheckpoint::new_with_chain_order(
-            height,
-            view,
-            committed.hash(),
-            commit_qc.chain_order_hash,
-            commit_qc.rechain_seq,
-            zero_root,
-            zero_root,
-            roster.clone(),
-            signers_bitmap,
-            commit_qc.aggregate.bls_aggregate_signature.clone(),
-            VALIDATOR_SET_HASH_VERSION_V1,
-            None,
-        );
-
-        {
-            let mut journal = replay_target.commit_roster_journal.write();
-            assert!(
-                journal.upsert(commit_qc.clone(), checkpoint.clone(), None),
-                "canonical pre-Kura authority must enter the durable journal"
-            );
-            journal
-                .persist()
-                .expect("persist pre-Kura Commit authority");
-        }
-        assert!(kura.write_roster_metadata(&crate::kura::RosterSidecar::new(
-            height,
-            committed.hash(),
-            Some(commit_qc.clone()),
-            Some(checkpoint.clone()),
-            None,
-        )));
-        assert!(replay_target.commit_roster_artifacts_match_exact(&commit_qc, &checkpoint, None,));
-
-        let expected_state_hash = crate::snapshot::canonical_state_snapshot_hash(&producer);
-        let original_manifest = crate::kura::CommitManifest::new(
-            height,
-            committed.hash(),
-            Some(commit_qc.parent_state_root),
-            Some(commit_qc.post_state_root),
-            expected_state_hash,
-            Some(iroha_crypto::Hash::new(commit_qc.encode())),
-        );
-        match manifest_fixture {
-            ReplayCommitManifestFixture::Absent => {
-                assert!(
-                    kura.commit_manifest(height)
-                        .expect("read absent manifest")
-                        .is_none(),
-                    "fixture must stop before manifest publication"
-                );
-            }
-            ReplayCommitManifestFixture::Unbound => {
-                kura.store_commit_manifest(original_manifest)
-                    .expect("store unbound manifest fixture");
-                kura.store_wsv_checkpoint(height, committed.hash(), expected_state_hash)
-                    .expect("store checkpoint after unbound manifest");
-                let manifest = kura
-                    .commit_manifest(height)
-                    .expect("read unbound manifest fixture")
-                    .expect("unbound manifest fixture must exist");
-                assert_eq!(
-                    kura.commit_manifest_binding_state(&manifest)
-                        .expect("inspect unbound manifest fixture"),
-                    crate::kura::CommitManifestBindingState::Unbound,
-                );
-            }
-            ReplayCommitManifestFixture::Mismatched => {
-                kura.store_wsv_checkpoint(height, committed.hash(), expected_state_hash)
-                    .expect("store manifest-binding checkpoint");
-                kura.store_commit_manifest(original_manifest)
-                    .expect("publish original manifest binding");
-                let mismatched = crate::kura::CommitManifest::new(
-                    height,
-                    committed.hash(),
-                    Some(iroha_crypto::Hash::new(b"mismatched bound parent root")),
-                    Some(commit_qc.post_state_root),
-                    expected_state_hash,
-                    Some(iroha_crypto::Hash::new(commit_qc.encode())),
-                );
-                kura.overwrite_commit_manifest_without_binding_for_tests(&mismatched)
-                    .expect("replace manifest without updating published checkpoint digest");
-                let manifest = kura
-                    .commit_manifest(height)
-                    .expect("read mismatched manifest fixture")
-                    .expect("mismatched manifest fixture must exist");
-                assert_eq!(
-                    kura.commit_manifest_binding_state(&manifest)
-                        .expect("inspect mismatched manifest fixture"),
-                    crate::kura::CommitManifestBindingState::Mismatched,
-                );
-            }
-            ReplayCommitManifestFixture::PublishedMissing => {
-                kura.store_wsv_checkpoint(height, committed.hash(), expected_state_hash)
-                    .expect("store manifest-binding checkpoint");
-                kura.store_commit_manifest(original_manifest)
-                    .expect("publish original manifest binding");
-                kura.remove_commit_manifest_without_binding_for_tests(height)
-                    .expect("remove published manifest bytes only");
-                let error = kura
-                    .commit_manifest(height)
-                    .expect_err("published manifest absence must already fail closed");
-                assert!(
-                    matches!(
-                        error,
-                        crate::kura::Error::NoritoFrame(norito::core::Error::Message(ref message))
-                            if message.contains("manifest is missing")
-                    ),
-                    "{error:?}"
-                );
-            }
-        }
-
-        let mut replay_target = replay_target;
-        let replay = replay_blocks_from_kura_range(
-            &kura,
-            &mut replay_target,
-            &topology,
-            2,
-            2,
-            ConsensusMode::Permissioned,
-        );
-        if matches!(
-            manifest_fixture,
-            ReplayCommitManifestFixture::Mismatched | ReplayCommitManifestFixture::PublishedMissing
-        ) {
-            let error = replay.expect_err("published manifest corruption must fail closed");
-            let expected_message = if manifest_fixture == ReplayCommitManifestFixture::Mismatched {
-                "different manifest digest"
-            } else {
-                "manifest is missing"
-            };
-            assert!(format!("{error:?}").contains(expected_message), "{error:?}");
-            assert_eq!(replay_target.view().height(), 1);
-            assert!(!crate::sumeragi::status::commit_qc_is_recorded(&commit_qc));
-            assert!(
-                replay_target
-                    .world_view()
-                    .commit_qcs()
-                    .get(&committed.hash())
-                    .is_none(),
-                "digest mismatch must stop before WSV authority restoration"
-            );
-            if manifest_fixture == ReplayCommitManifestFixture::Mismatched {
-                let manifest = kura
-                    .commit_manifest(height)
-                    .expect("re-read mismatched manifest")
-                    .expect("mismatched manifest remains preserved");
-                assert_eq!(
-                    kura.commit_manifest_binding_state(&manifest)
-                        .expect("reclassify mismatched binding"),
-                    crate::kura::CommitManifestBindingState::Mismatched,
-                    "failed replay must preserve evidence instead of repairing it"
-                );
-            } else {
-                assert!(
-                    kura.commit_manifest(height).is_err(),
-                    "failed replay must preserve the dangling published-manifest claim"
-                );
-            }
-            crate::sumeragi::status::reset_commit_certs_for_tests();
-            crate::sumeragi::status::reset_validator_checkpoints_for_tests();
-            return;
-        }
-        replay.expect("parent-state authentication must carry the Commit authority through replay");
-        assert_eq!(replay_target.view().height(), 2);
-        assert_eq!(
-            replay_target.view().latest_block_hash(),
-            Some(committed.hash())
-        );
-        assert!(
-            crate::sumeragi::status::commit_qc_is_recorded(&commit_qc),
-            "parent-state validation must register the exact Commit subject before state apply"
-        );
-        assert_eq!(
-            replay_target
-                .world_view()
-                .commit_qcs()
-                .get(&committed.hash()),
-            Some(&commit_qc),
-            "authenticated replay authority must enter the repaired WSV"
-        );
-
-        let repaired_state_hash = crate::snapshot::canonical_state_snapshot_hash(&replay_target);
-        let repaired_checkpoint = kura
-            .wsv_checkpoint(height)
-            .expect("read repaired WSV checkpoint")
-            .expect("replay must publish the missing WSV checkpoint");
-        assert_eq!(
-            kura.get_durable_block_hash(
-                NonZeroUsize::new(usize::try_from(height).expect("height fits usize"))
-                    .expect("non-zero height"),
-            ),
-            Some(committed.hash()),
-        );
-        assert_eq!(repaired_checkpoint.state_hash(), repaired_state_hash);
-        let repaired_manifest = kura
-            .commit_manifest(height)
-            .expect("read repaired commit manifest")
-            .expect("replay must seal a complete commit manifest");
-        assert!(repaired_manifest.binds_commit_authority(&commit_qc, &checkpoint, None));
-        assert!(
-            kura.commit_manifest_has_wsv_binding(&repaired_manifest)
-                .expect("verify repaired manifest binding")
-        );
-
-        crate::sumeragi::status::reset_commit_certs_for_tests();
-        crate::sumeragi::status::reset_validator_checkpoints_for_tests();
-    }
-
-    #[test]
-    fn replay_selects_npos_at_scheduled_permissioned_to_npos_activation_height() {
-        assert_replay_target_height_mode_selection(
-            iroha_data_model::parameter::system::SumeragiConsensusMode::Npos,
-            ConsensusMode::Permissioned,
-            ConsensusMode::Npos,
-        );
-    }
-
-    #[test]
-    fn replay_selects_permissioned_at_scheduled_npos_to_permissioned_activation_height() {
-        assert_replay_target_height_mode_selection(
-            iroha_data_model::parameter::system::SumeragiConsensusMode::Permissioned,
-            ConsensusMode::Npos,
-            ConsensusMode::Permissioned,
-        );
-    }
-
-    fn assert_replay_target_height_mode_selection(
-        next_mode: iroha_data_model::parameter::system::SumeragiConsensusMode,
-        pre_activation_mode: ConsensusMode,
-        activation_mode: ConsensusMode,
-    ) {
-        const ACTIVATION_HEIGHT: u64 = 7;
-
-        let world = World::new();
-        {
-            let mut block = world.block();
-            let parameters = block.parameters.get_mut();
-            parameters.sumeragi.next_mode = Some(next_mode);
-            parameters.sumeragi.mode_activation_height = Some(ACTIVATION_HEIGHT);
-            block.commit();
-        }
-        let world = world.view();
-        assert_eq!(
-            crate::sumeragi::effective_consensus_mode_for_height_from_world(
-                &world,
-                ACTIVATION_HEIGHT - 1,
-                pre_activation_mode,
-            ),
-            pre_activation_mode,
-            "replay must keep the pre-activation mode for the parent height"
-        );
-        assert_eq!(
-            crate::sumeragi::effective_consensus_mode_for_height_from_world(
-                &world,
-                ACTIVATION_HEIGHT,
-                pre_activation_mode,
-            ),
-            activation_mode,
-            "replay must authenticate the activation block under its target-height mode"
-        );
-    }
-
-    #[test]
     fn replay_rotates_topology_for_npos_prf_leader() {
         run_replay_validation_test_on_stack(
             "replay_rotates_topology_for_npos_prf_leader",
@@ -50226,15 +49091,15 @@ mod replay_validation_tests {
     }
 
     #[test]
-    fn replay_rejects_fabricated_commit_roster_journal_authority() {
+    fn replay_uses_commit_roster_journal_for_signature_order() {
         run_replay_validation_test_on_stack(
-            "replay_rejects_fabricated_commit_roster_journal_authority",
-            replay_rejects_fabricated_commit_roster_journal_authority_impl,
+            "replay_uses_commit_roster_journal_for_signature_order",
+            replay_uses_commit_roster_journal_for_signature_order_impl,
         );
     }
 
     #[allow(clippy::too_many_lines)]
-    fn replay_rejects_fabricated_commit_roster_journal_authority_impl() {
+    fn replay_uses_commit_roster_journal_for_signature_order_impl() {
         use std::{borrow::Cow, collections::BTreeSet};
 
         use iroha_config::{
@@ -50384,15 +49249,16 @@ mod replay_validation_tests {
         kura.store_block(Arc::new(signed_block.clone()))
             .expect("store block");
 
-        // Persist a fully decodable, internally self-consistent journal row whose fabricated
-        // validator is unrelated to the configured topology. Structural journal validation must
-        // accept the row, while replay must never use it to choose block signature order.
-        let fabricated_keypair = crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-        let fabricated_roster = vec![PeerId::new(fabricated_keypair.public_key().clone())];
-        let signers_bitmap = vec![1_u8];
-        let fabricated_signature = vec![0xA5; 96];
+        let signatures: Vec<_> = signed_block.signatures().cloned().collect();
+        let mut signers_bitmap = vec![0u8; roster.len().div_ceil(8)];
+        for signature in &signatures {
+            let idx = usize::try_from(signature.index()).unwrap_or(usize::MAX);
+            if idx < roster.len() {
+                signers_bitmap[idx / 8] |= 1u8 << (idx % 8);
+            }
+        }
         let block_hash = signed_block.hash();
-        let validator_set_hash = HashOf::new(&fabricated_roster);
+        let validator_set_hash = HashOf::new(&roster);
         let commit_cert = Qc {
             phase: crate::sumeragi::consensus::Phase::Commit,
             subject_block_hash: block_hash,
@@ -50407,10 +49273,10 @@ mod replay_validation_tests {
             highest_qc: None,
             validator_set_hash,
             validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-            validator_set: fabricated_roster.clone(),
+            validator_set: roster.clone(),
             aggregate: crate::sumeragi::consensus::QcAggregate {
                 signers_bitmap: signers_bitmap.clone(),
-                bls_aggregate_signature: fabricated_signature.clone(),
+                bls_aggregate_signature: Vec::new(),
             },
         };
         let checkpoint = ValidatorSetCheckpoint::new(
@@ -50419,68 +49285,15 @@ mod replay_validation_tests {
             block_hash,
             commit_cert.parent_state_root,
             commit_cert.post_state_root,
-            fabricated_roster.clone(),
+            roster,
             signers_bitmap,
-            fabricated_signature,
-            VALIDATOR_SET_HASH_VERSION_V1,
-            None,
-        );
-        let journal_path = state.commit_roster_journal_path();
-        let mut fabricated_journal =
-            CommitRosterJournal::new(journal_path.clone(), kura.block_sync_roster_retention());
-        let mut genesis_roster = roster.clone();
-        genesis_roster.sort();
-        genesis_roster.dedup();
-        let genesis_zero_root = Hash::prehashed([0; Hash::LENGTH]);
-        let genesis_qc = Qc {
-            phase: crate::sumeragi::consensus::Phase::Commit,
-            subject_block_hash: genesis_signed.hash(),
-            parent_state_root: genesis_zero_root,
-            post_state_root: genesis_zero_root,
-            height: 1,
-            view: 0,
-            epoch: 0,
-            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
-            rechain_seq: 0,
-            mode_tag: crate::sumeragi::consensus::PERMISSIONED_TAG.to_owned(),
-            highest_qc: None,
-            validator_set_hash: HashOf::new(&genesis_roster),
-            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-            validator_set: genesis_roster.clone(),
-            aggregate: crate::sumeragi::consensus::QcAggregate {
-                signers_bitmap: vec![0; genesis_roster.len().div_ceil(8)],
-                bls_aggregate_signature: Vec::new(),
-            },
-        };
-        let genesis_checkpoint = ValidatorSetCheckpoint::new_with_chain_order(
-            1,
-            0,
-            genesis_signed.hash(),
-            genesis_qc.chain_order_hash,
-            0,
-            genesis_zero_root,
-            genesis_zero_root,
-            genesis_roster,
-            genesis_qc.aggregate.signers_bitmap.clone(),
             Vec::new(),
             VALIDATOR_SET_HASH_VERSION_V1,
             None,
         );
-        assert!(fabricated_journal.upsert(genesis_qc.clone(), genesis_checkpoint.clone(), None,));
-        assert!(kura.write_roster_metadata(&crate::kura::RosterSidecar::new(
-            1,
-            genesis_signed.hash(),
-            Some(genesis_qc),
-            Some(genesis_checkpoint),
-            None,
-        )));
-        fabricated_journal.upsert(commit_cert.clone(), checkpoint, None);
-        fabricated_journal
-            .persist()
-            .expect("persist fabricated but decodable journal");
-        let fabricated_journal =
-            CommitRosterJournal::load(journal_path, kura.block_sync_roster_retention())
-                .expect("fabricated journal is structurally decodable");
+        state
+            .record_commit_roster(&commit_cert, &checkpoint, None)
+            .expect("commit-roster test setup should retain known journal durability");
 
         let replay_world = World::with(
             [Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_id)],
@@ -50498,56 +49311,33 @@ mod replay_validation_tests {
             params_block.sumeragi.key_require_hsm = false;
             params_block.commit();
         }
-        *replay_state.commit_roster_journal.write() = fabricated_journal;
-        assert_eq!(
-            replay_state
-                .commit_roster_snapshot_for_block(height, block_hash)
-                .expect("fabricated snapshot remains available as an unauthenticated hint")
-                .commit_qc
-                .validator_set,
-            fabricated_roster
-        );
 
         let fallback_topology = crate::sumeragi::network_topology::Topology::new(vec![
             PeerId::new(peer_a.public_key().clone()),
             PeerId::new(peer_b.public_key().clone()),
         ]);
 
-        let error = replay_blocks_from_kura(
+        replay_blocks_from_kura(
             &kura,
             &mut replay_state,
             &fallback_topology,
             2,
             ConsensusMode::Permissioned,
         )
-        .expect_err("replay must reject fabricated retained authority");
-        let diagnostic = format!("{error:?}");
-        assert!(
-            diagnostic.contains("canonical replay authority failed")
-                || diagnostic
-                    .contains("certified commit-roster authority is not exact and durable"),
-            "{error:?}"
-        );
-        assert_eq!(
-            replay_state.view().height(),
-            1,
-            "replay must stop after the authenticated canonical genesis root"
-        );
-        assert!(!crate::sumeragi::status::commit_qc_is_recorded(
-            &commit_cert
-        ));
+        .expect("replay should honor commit roster journal ordering");
+        assert_eq!(replay_state.view().height(), 2);
     }
 
     #[test]
-    fn replay_rejects_recent_block_without_commit_roster_metadata() {
+    fn replay_recovers_rotated_signature_topology_without_roster_metadata() {
         run_replay_validation_test_on_stack(
-            "replay_rejects_recent_block_without_commit_roster_metadata",
-            replay_rejects_recent_block_without_commit_roster_metadata_impl,
+            "replay_recovers_rotated_signature_topology_without_roster_metadata",
+            replay_recovers_rotated_signature_topology_without_roster_metadata_impl,
         );
     }
 
     #[allow(clippy::too_many_lines)]
-    fn replay_rejects_recent_block_without_commit_roster_metadata_impl() {
+    fn replay_recovers_rotated_signature_topology_without_roster_metadata_impl() {
         use std::{borrow::Cow, collections::BTreeSet};
 
         use iroha_crypto::{Algorithm, SignatureOf};
@@ -50610,12 +49400,6 @@ mod replay_validation_tests {
         );
         kura.store_block(Arc::new(genesis_block.clone()))
             .expect("store genesis");
-        persist_permissioned_genesis_replay_authority(
-            &state,
-            &kura,
-            genesis_block.hash(),
-            fallback_topology.as_ref(),
-        );
 
         let height = 2_u64;
         let view = 0_u64;
@@ -50692,25 +49476,18 @@ mod replay_validation_tests {
             params_block.commit();
         }
 
-        let error = replay_blocks_from_kura(
+        replay_blocks_from_kura(
             &kura,
             &mut replay_state,
             &fallback_topology,
             2,
             ConsensusMode::Permissioned,
         )
-        .expect_err("replay must reject a retained block without strict authority metadata");
-        let diagnostic = format!("{error:?}");
-        assert!(
-            diagnostic.contains("retained canonical block #2 has no strict commit-roster snapshot")
-                || diagnostic
-                    .contains("certified commit-roster authority is not exact and durable"),
-            "{error:?}"
-        );
-        assert_eq!(replay_state.view().height(), 1);
+        .expect("replay should recover via rotated signature topology");
+        assert_eq!(replay_state.view().height(), 2);
         assert_eq!(
             replay_state.view().latest_block_hash(),
-            Some(genesis_block.hash())
+            Some(signed_block2.hash())
         );
     }
 
@@ -51048,7 +49825,7 @@ mod replay_validation_tests {
                 AssetDefinition::numeric(asset_definition_id.clone())
                     .with_name("credit".to_owned()),
             )),
-            InstructionBox::from(Mint::asset_numeric(Numeric::from(7_u32), asset_id.clone())),
+            InstructionBox::from(Mint::asset_quantity(7_u32, asset_id.clone())),
             InstructionBox::from(SetKeyValue::account(
                 user_id.clone(),
                 "tier".parse::<Name>().expect("account metadata key"),
@@ -51096,7 +49873,7 @@ mod replay_validation_tests {
             dataspace_id,
         );
         let block3_instructions = vec![
-            InstructionBox::from(Mint::asset_numeric(Numeric::from(5_u32), asset_id.clone())),
+            InstructionBox::from(Mint::asset_quantity(5_u32, asset_id.clone())),
             InstructionBox::from(SetAccountAliasBinding::bind(
                 user_id.clone(),
                 audit_alias,
@@ -51708,7 +50485,7 @@ mod permission_cache_tests {
             base::WithOrigin,
             kura::InitMode,
             parameters::{
-                actual::{ConsensusMode, Kura as Config, LaneConfig},
+                actual::{Kura as Config, LaneConfig},
                 defaults::kura::BLOCKS_IN_MEMORY,
             },
         };
@@ -52645,6 +51422,23 @@ impl StateTransaction<'_, '_> {
         Ok(())
     }
 
+    #[cfg(test)]
+    /// Return transaction and staged block SCCP work for side-effect assertions.
+    pub(crate) fn sccp_verifier_work_for_testing(
+        &self,
+    ) -> (SccpVerifierWorkV1, SccpVerifierWorkV1) {
+        (
+            self.sccp_verifier_work_in_tx,
+            self.sccp_verifier_work_after_block,
+        )
+    }
+
+    #[cfg(test)]
+    /// Return the number of transfer transcripts staged by this transaction.
+    pub(crate) fn pending_transfer_transcript_count_for_testing(&self) -> usize {
+        self.pending_transfer_transcripts.len()
+    }
+
     /// Reserve deterministic SCCP verifier work before dispatching any proof-controlled
     /// cryptography.
     ///
@@ -52939,6 +51733,32 @@ impl StateTransaction<'_, '_> {
         }
     }
 
+    /// Require the deterministic identity used by transfer transcripts before balance mutation.
+    ///
+    /// Committed-block replay deliberately skips transcript construction, so historical execution
+    /// remains valid even when the original transaction identity is unavailable to the replay
+    /// adapter. Live execution must fail closed before mutating balances or holder indexes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error`] when live execution has no transaction `call_hash`.
+    pub(crate) fn require_transfer_transcript_identity(
+        &self,
+        context: &str,
+    ) -> Result<Option<iroha_crypto::Hash>, Error> {
+        if self.replay_compatibility {
+            return Ok(None);
+        }
+        self.tx_call_hash.map(Some).ok_or_else(|| {
+            Error::InvariantViolation(
+                format!(
+                    "{context} requires a transaction call_hash before balance or transcript mutation"
+                )
+                .into(),
+            )
+        })
+    }
+
     /// Record a transfer delta so the FASTPQ prover can consume a structured transcript.
     pub fn record_transfer_transcript(
         &mut self,
@@ -52957,14 +51777,11 @@ impl StateTransaction<'_, '_> {
         if deltas.is_empty() {
             return Ok(());
         }
-        if self.replay_compatibility {
+        let Some(batch_hash) =
+            self.require_transfer_transcript_identity("FastPQ transfer transcript recording")?
+        else {
             return Ok(());
-        }
-        let batch_hash = self.tx_call_hash.ok_or_else(|| {
-            Error::InvariantViolation(
-                "FastPQ transfer transcript recording requires a transaction call_hash".into(),
-            )
-        })?;
+        };
         let authority_digest = crate::fastpq::authority_digest(authority);
         let poseidon_preimage_digest = match deltas.as_slice() {
             [delta] => Some(crate::fastpq::poseidon_preimage_digest(delta, &batch_hash)),
@@ -53145,10 +51962,6 @@ impl StateTransaction<'_, '_> {
         let Self {
             committed_fragments,
             touched_lanes,
-            mode_cutover_next_set_in_block,
-            mode_cutover_activation_set_in_block,
-            mode_cutover_next_set_in_tx,
-            mode_cutover_activation_set_in_tx,
             world,
             block_hashes,
             commit_topology: committed_topology,
@@ -53207,12 +52020,6 @@ impl StateTransaction<'_, '_> {
         *block_zk = zk;
         *block_sccp_registry = sccp_registry;
         *block_sccp_verifier_work = sccp_verifier_work_after_block;
-        if mode_cutover_next_set_in_tx {
-            *mode_cutover_next_set_in_block = true;
-        }
-        if mode_cutover_activation_set_in_tx {
-            *mode_cutover_activation_set_in_block = true;
-        }
         if let Some(lane_id) = current_lane_id {
             touched_lanes.insert(lane_id);
         }
@@ -53754,6 +52561,132 @@ impl StateTransaction<'_, '_> {
         Json::from(payload)
     }
 
+    fn execute_generic_ivm_trigger_program(
+        &mut self,
+        id: &TriggerId,
+        authority: &AccountId,
+        event: &EventBox,
+        metadata: &Metadata,
+        summary: &crate::smartcontracts::ivm::cache::GenericProgramSummary,
+        nft_seq_base_override: Option<u64>,
+    ) -> Result<ExecutionStep, ValidationFail> {
+        crate::smartcontracts::ivm::validate_generic_execution_context(
+            &self.world,
+            metadata,
+            summary.code_hash,
+        )?;
+        let eff_cycles = crate::executor::validate_prepared_ivm_execution_policy(
+            self,
+            &summary.metadata,
+            summary.code_offset,
+            summary.program(),
+        )?;
+        let gas_cap = crate::smartcontracts::ivm::gas_limit_for_cycles(eff_cycles);
+        let remaining_block_budget = if self.gas_limit_per_block == 0 {
+            u64::MAX
+        } else {
+            self.gas_limit_per_block.saturating_sub(
+                self.gas_used_in_block_so_far
+                    .saturating_add(self.last_tx_gas_used),
+            )
+        };
+        let mut gas_limit = gas_cap.min(remaining_block_budget);
+        if gas_limit == u64::MAX {
+            gas_limit = DEFAULT_TRIGGER_GAS_LIMIT;
+        }
+
+        let (prepared_contract_cache, amx_analysis) = {
+            let mut cache = self.ivm_cache.lock();
+            let prepared_contract_cache = cache.prepared_contract_cache();
+            let amx_analysis = cache.analyze_generic_program(summary).map_err(|error| {
+                ValidationFail::InternalError(format!(
+                    "invalid admitted generic-trigger analysis: {error}"
+                ))
+            })?;
+            (prepared_contract_cache, amx_analysis)
+        };
+        let mut vm = IVM::new(gas_limit);
+        vm.set_zk_trace_enabled(false);
+        vm.load_program(summary.program())
+            .map_err(|error| ValidationFail::InternalError(error.to_string()))?;
+        vm.set_max_cycles(eff_cycles.get());
+        vm.set_gas_limit(gas_limit);
+
+        let host_args = self.trigger_host_args(event, Json::default());
+        let accounts = self.trigger_accounts_snapshot();
+        let streaming_metadata =
+            crate::pipeline::overlay::resolve_streaming_metadata(self, authority);
+        let bound_contract_records =
+            crate::smartcontracts::code::snapshot_bound_contract_records_by_subject(self);
+        let axt_policy_snapshot = self.axt_policy_snapshot();
+        let mut host = crate::smartcontracts::ivm::host::CoreHostImpl::with_accounts_and_args(
+            authority.clone(),
+            accounts,
+            host_args,
+        );
+        host.set_generic_execution();
+        host.set_prepared_contract_cache(prepared_contract_cache);
+        host.set_amx_analysis(amx_analysis);
+        host.set_amx_limits(
+            crate::smartcontracts::ivm::host::CoreHost::amx_limits_from_config(&self.pipeline),
+        );
+        host.set_axt_timing(self.nexus.axt);
+        host.hydrate_axt_replay_ledger(self);
+        let current_block_time_ms = u64::try_from(self._curr_block.creation_time().as_millis())
+            .expect("block creation timestamp must fit into u64");
+        host.set_trigger_id(id.clone());
+        host.set_block_time_ms(current_block_time_ms);
+        let default_base = self._curr_block.height().get().saturating_mul(256);
+        host.set_nft_seq_base(nft_seq_base_override.unwrap_or(default_base));
+        #[cfg(feature = "telemetry")]
+        host.set_telemetry(self.telemetry.clone());
+        host.set_crypto_config(self.crypto());
+        host.set_zk_config(&self.zk);
+        host.set_chain_id(self.chain_id());
+        host.set_public_inputs_from_parameters(self.world.parameters.get());
+        host.set_vrf_epoch_seeds_from_world(&self.world);
+        host.set_query_state(self);
+        host.set_bound_contract_records_by_subject_snapshot(bound_contract_records);
+        host = host.with_axt_policy_snapshot(&axt_policy_snapshot);
+        crate::pipeline::overlay::apply_streaming_metadata(&mut host, streaming_metadata);
+        host.set_zk_snapshots_from_world(&self.world, &self.zk)
+            .map_err(|error| {
+                ValidationFail::InternalError(format!("invalid ZK snapshot state: {error}"))
+            })?;
+
+        let run_result = vm.run_with_host(&mut host);
+        let trigger_gas_used = gas_limit.saturating_sub(vm.remaining_gas());
+        if let Err(error) = run_result {
+            let error =
+                crate::smartcontracts::ivm::map_vm_error_with_context_to_validation(&vm, &error);
+            {
+                let _consumed_host = host;
+            }
+            self.last_tx_gas_used = self.last_tx_gas_used.saturating_add(trigger_gas_used);
+            return Err(error);
+        }
+
+        let artifacts = host.into_execution_artifacts(None);
+        self.last_tx_gas_used = self.last_tx_gas_used.saturating_add(trigger_gas_used);
+        let artifacts = artifacts?;
+        crate::validation_fee::enforce_opaque_deferred_instruction_groups(
+            &artifacts.queued_instructions_by_authority(),
+            self,
+            None,
+        )
+        .map_err(|rejection| match rejection {
+            TransactionRejectionReason::Validation(fail) => fail,
+            other => ValidationFail::NotPermitted(format!(
+                "validation-fee policy resolution failed during generic IVM trigger execution: {other:?}"
+            )),
+        })?;
+        let queued_instructions = artifacts.queued_instructions();
+        let step = ExecutionStep(ConstVec::from(queued_instructions));
+        self.seed_time_trigger_call_hash(id, authority, event, &step);
+        let queued = artifacts.apply_to_transaction(self, authority)?;
+        Ok(ConstVec::<InstructionBox>::from(queued).into())
+    }
+
     /// Execute any condition of trigger, staging its state changes.
     ///
     /// Returns the execution step on success, or the rejection reason on failure.
@@ -53823,14 +52756,45 @@ impl StateTransaction<'_, '_> {
                         .map_err(|e| ValidationFail::InternalError(e.to_string()))?
                     }
                 };
-                let meta = summary.metadata.clone();
-                crate::pipeline::overlay::validate_header_policy(&meta)
-                    .map_err(ValidationFail::IvmAdmission)?;
-                let eff_cycles = NonZeroU64::new(
-                    meta.max_cycles
-                        .min(self.pipeline.ivm_max_cycles_upper_bound.get()),
+                let live_code = self
+                    .world
+                    .contract_code
+                    .get(&identity.code_hash)
+                    .ok_or_else(|| {
+                        ValidationFail::NotPermitted(format!(
+                            "contract bytecode `{}` not found in WSV",
+                            identity.code_hash
+                        ))
+                    })?;
+                if summary.prepared_contract().artifact() != live_code.as_slice() {
+                    return Err(ValidationFail::NotPermitted(format!(
+                        "cached contract bytecode `{}` does not match live WSV",
+                        identity.code_hash
+                    ))
+                    .into());
+                }
+                let eff_cycles = crate::executor::validate_prepared_ivm_execution_policy(
+                    self,
+                    &summary.metadata,
+                    summary.code_offset,
+                    live_code.as_ref(),
+                )?;
+                let manifest = self
+                    .world
+                    .contract_manifests
+                    .get(&identity.code_hash)
+                    .ok_or_else(|| {
+                        ValidationFail::NotPermitted(format!(
+                            "contract instance `{}` has no manifest",
+                            identity.contract_address
+                        ))
+                    })?;
+                crate::smartcontracts::ivm::validate_manifest_hashes(
+                    manifest,
+                    summary.code_hash,
+                    summary.abi_hash,
                 )
-                .expect("validated IVM metadata and pipeline ceiling are positive");
+                .map_err(ValidationFail::IvmAdmission)?;
                 let gas_cap = crate::smartcontracts::ivm::gas_limit_for_cycles(eff_cycles);
                 let remaining_block_budget = if self.gas_limit_per_block == 0 {
                     u64::MAX
@@ -53979,93 +52943,146 @@ impl StateTransaction<'_, '_> {
                             ))
                         })?;
                     let bytecode = bytecode.clone();
-                    let summary = {
+                    let admitted = {
                         let mut cache = self.ivm_cache.lock();
                         cache
-                            .summarize_program(bytecode.as_ref())
-                            .map_err(|e| ValidationFail::InternalError(e.to_string()))?
+                            .summarize_executable(bytecode.as_ref())
+                            .map_err(crate::smartcontracts::ivm::program_admission_error)?
                     };
-                    let meta = summary.metadata.clone();
-                    crate::pipeline::overlay::validate_header_policy(&meta)
-                        .map_err(ValidationFail::IvmAdmission)?;
-                    let eff_cycles = NonZeroU64::new(
-                        meta.max_cycles
-                            .min(self.pipeline.ivm_max_cycles_upper_bound.get()),
-                    )
-                    .expect("validated IVM metadata and pipeline ceiling are positive");
-                    let gas_cap = crate::smartcontracts::ivm::gas_limit_for_cycles(eff_cycles);
-                    let remaining_block_budget = if self.gas_limit_per_block == 0 {
-                        u64::MAX
-                    } else {
-                        self.gas_limit_per_block.saturating_sub(
-                            self.gas_used_in_block_so_far
-                                .saturating_add(self.last_tx_gas_used),
-                        )
-                    };
-                    let mut gas_limit = gas_cap.min(remaining_block_budget);
-                    if gas_limit == u64::MAX {
-                        gas_limit = DEFAULT_TRIGGER_GAS_LIMIT;
-                    }
-                    let selector = crate::executor::requested_contract_entrypoint(
-                        &contract_call_metadata,
-                    )?
-                    .ok_or_else(|| {
-                        ValidationFail::NotPermitted(
-                            "self-describing raw-IVM trigger callback requires explicit contract_entrypoint metadata"
-                                .to_owned(),
-                        )
-                    })?;
-                    let runtime_identity = crate::executor::require_raw_contract_runtime_identity(
-                        &self.world,
-                        summary.code_hash,
-                        &contract_call_metadata,
-                    )?;
-                    let entrypoint_authorization =
-                        crate::executor::authorize_prepared_raw_contract_selector(
-                            &self.world,
-                            authority,
-                            summary.prepared_contract(),
-                            &selector,
-                            &runtime_identity,
-                        )?;
-                    let contract_subject =
-                        crate::smartcontracts::code::fetch_bound_contract_subject(
-                            self,
-                            &runtime_identity.contract_address,
-                        )
-                        .ok_or_else(|| {
-                            ValidationFail::NotPermitted(format!(
-                                "contract instance `{}` has no valid subject binding",
-                                runtime_identity.contract_address
-                            ))
-                        })?;
-                    let transition = crate::executor::validate_prepared_contract_lifecycle_call(
-                        &self.world,
-                        &runtime_identity.contract_address,
-                        runtime_identity.code_hash,
-                        summary.prepared_contract(),
-                        &selector,
-                    )?;
-                    debug_assert!(
-                        transition.is_none(),
-                        "trigger lifecycle selectors are rejected before state validation"
-                    );
-                    let trigger_args = self.trigger_args_from_event(&event);
-                    let mut contract_call_context =
-                        crate::executor::parse_prepared_trigger_call_execution_context(
-                            &contract_call_metadata,
-                            summary.prepared_contract(),
-                            &trigger_args,
-                            gas_limit,
-                        )?;
-                    contract_call_context.bind_runtime_identity(runtime_identity, contract_subject);
-                    let mut vm = summary
-                        .checkout_runtime(gas_limit)
-                        .map_err(|e| ValidationFail::InternalError(e.to_string()))?;
-                    if let Some(entrypoint_pc) = contract_call_context.entrypoint_pc() {
-                        let code_len = vm.memory.code_len();
-                        vm.set_register(1, code_len);
-                        vm.set_program_counter(entrypoint_pc).map_err(|err| {
+                    match admitted {
+                        crate::smartcontracts::ivm::cache::ExecutableProgramSummary::Generic(
+                            summary,
+                        ) => (
+                            self.execute_generic_ivm_trigger_program(
+                                id,
+                                authority,
+                                &event,
+                                &contract_call_metadata,
+                                &summary,
+                                nft_seq_base_override,
+                            ),
+                            None,
+                        ),
+                        crate::smartcontracts::ivm::cache::ExecutableProgramSummary::Contract(
+                            summary,
+                        ) => {
+                            let eff_cycles =
+                                crate::executor::validate_prepared_ivm_execution_policy(
+                                    self,
+                                    &summary.metadata,
+                                    summary.code_offset,
+                                    bytecode.as_ref(),
+                                )?;
+                            let gas_cap =
+                                crate::smartcontracts::ivm::gas_limit_for_cycles(eff_cycles);
+                            let remaining_block_budget = if self.gas_limit_per_block == 0 {
+                                u64::MAX
+                            } else {
+                                self.gas_limit_per_block.saturating_sub(
+                                    self.gas_used_in_block_so_far
+                                        .saturating_add(self.last_tx_gas_used),
+                                )
+                            };
+                            let mut gas_limit = gas_cap.min(remaining_block_budget);
+                            if gas_limit == u64::MAX {
+                                gas_limit = DEFAULT_TRIGGER_GAS_LIMIT;
+                            }
+                            let selector = crate::executor::requested_contract_entrypoint(
+                                &contract_call_metadata,
+                            )?
+                            .ok_or_else(|| {
+                                ValidationFail::NotPermitted(
+                                    "self-describing raw-IVM trigger callback requires explicit contract_entrypoint metadata"
+                                        .to_owned(),
+                                )
+                            })?;
+                            let runtime_identity =
+                                crate::executor::require_raw_contract_runtime_identity(
+                                    &self.world,
+                                    summary.code_hash,
+                                    &contract_call_metadata,
+                                )?;
+                            let live_code = self
+                                .world
+                                .contract_code
+                                .get(&runtime_identity.code_hash)
+                                .ok_or_else(|| {
+                                    ValidationFail::NotPermitted(format!(
+                                        "contract bytecode `{}` not found in WSV",
+                                        runtime_identity.code_hash
+                                    ))
+                                })?;
+                            if live_code.as_slice() != bytecode.as_ref() {
+                                return Err(ValidationFail::NotPermitted(format!(
+                                    "raw-IVM trigger bytecode `{}` does not match live WSV",
+                                    runtime_identity.code_hash
+                                ))
+                                .into());
+                            }
+                            let manifest = self
+                                .world
+                                .contract_manifests
+                                .get(&runtime_identity.code_hash)
+                                .ok_or_else(|| {
+                                    ValidationFail::NotPermitted(format!(
+                                        "contract instance `{}` has no manifest",
+                                        runtime_identity.contract_address
+                                    ))
+                                })?;
+                            crate::smartcontracts::ivm::validate_manifest_hashes(
+                                manifest,
+                                summary.code_hash,
+                                summary.abi_hash,
+                            )
+                            .map_err(ValidationFail::IvmAdmission)?;
+                            let entrypoint_authorization =
+                                crate::executor::authorize_prepared_raw_contract_selector(
+                                    &self.world,
+                                    authority,
+                                    summary.prepared_contract(),
+                                    &selector,
+                                    &runtime_identity,
+                                )?;
+                            let contract_subject =
+                                crate::smartcontracts::code::fetch_bound_contract_subject(
+                                    self,
+                                    &runtime_identity.contract_address,
+                                )
+                                .ok_or_else(|| {
+                                    ValidationFail::NotPermitted(format!(
+                                        "contract instance `{}` has no valid subject binding",
+                                        runtime_identity.contract_address
+                                    ))
+                                })?;
+                            let transition =
+                                crate::executor::validate_prepared_contract_lifecycle_call(
+                                    &self.world,
+                                    &runtime_identity.contract_address,
+                                    runtime_identity.code_hash,
+                                    summary.prepared_contract(),
+                                    &selector,
+                                )?;
+                            debug_assert!(
+                                transition.is_none(),
+                                "trigger lifecycle selectors are rejected before state validation"
+                            );
+                            let trigger_args = self.trigger_args_from_event(&event);
+                            let mut contract_call_context =
+                                crate::executor::parse_prepared_trigger_call_execution_context(
+                                    &contract_call_metadata,
+                                    summary.prepared_contract(),
+                                    &trigger_args,
+                                    gas_limit,
+                                )?;
+                            contract_call_context
+                                .bind_runtime_identity(runtime_identity, contract_subject);
+                            let mut vm = summary
+                                .checkout_runtime(gas_limit)
+                                .map_err(|e| ValidationFail::InternalError(e.to_string()))?;
+                            if let Some(entrypoint_pc) = contract_call_context.entrypoint_pc() {
+                                let code_len = vm.memory.code_len();
+                                vm.set_register(1, code_len);
+                                vm.set_program_counter(entrypoint_pc).map_err(|err| {
                             let selector = contract_call_context
                                 .runtime_context()
                                 .map(|runtime| runtime.entrypoint)
@@ -54074,92 +53091,101 @@ impl StateTransaction<'_, '_> {
                                 "contract entrypoint `{selector}` resolved to invalid pc: {err}"
                             ))
                         })?;
-                    }
-                    let host_args =
-                        self.trigger_host_args(&event, contract_call_context.args().clone());
-                    let contract_runtime_context = contract_call_context.runtime_context();
-                    // Attach core IVM host adapter. Stateful syscalls enqueue ISIs
-                    // which we collect after `vm.run()` and return as the trigger step.
-                    let accounts = self.trigger_accounts_snapshot();
-                    let mut host =
+                            }
+                            let host_args = self
+                                .trigger_host_args(&event, contract_call_context.args().clone());
+                            let contract_runtime_context = contract_call_context.runtime_context();
+                            // Attach core IVM host adapter. Stateful syscalls enqueue ISIs
+                            // which we collect after `vm.run()` and return as the trigger step.
+                            let accounts = self.trigger_accounts_snapshot();
+                            let mut host =
                         crate::smartcontracts::ivm::host::CoreHostImpl::with_accounts_and_args(
                             authority.clone(),
                             accounts,
                             host_args,
                         );
-                    if let Some(record) = contract_call_context.prepared_argument_record() {
-                        host.set_entrypoint_argument_record(Some(record.clone()));
-                    }
-                    host.set_prepared_contract_cache(summary.prepared_contract_cache());
-                    let current_block_time_ms =
-                        u64::try_from(self._curr_block.creation_time().as_millis())
-                            .expect("block creation timestamp must fit into u64");
-                    host.set_trigger_id(id.clone());
-                    host.set_block_time_ms(current_block_time_ms);
-                    // Seed sample NFT helper sequence with a deterministic base so repeated
-                    // executions (including multiple time-trigger matches in one block) generate
-                    // unique ids without relying on mutable global state.
-                    let default_base = self._curr_block.height().get().saturating_mul(256);
-                    host.set_nft_seq_base(nft_seq_base_override.unwrap_or(default_base));
-                    #[cfg(feature = "telemetry")]
-                    host.set_telemetry(self.telemetry.clone());
-                    host.set_crypto_config(self.crypto());
-                    host.set_zk_config(&self.zk);
-                    host.set_chain_id(self.chain_id());
-                    host.set_public_inputs_from_parameters(self.world.parameters.get());
-                    host.set_vrf_epoch_seeds_from_world(&self.world);
-                    host.set_query_state(self);
-                    host.set_contract_runtime_context(contract_runtime_context.clone());
-                    host.set_contract_entrypoint_authorization(Some(entrypoint_authorization));
-                    host.set_zk_snapshots_from_world(&self.world, &self.zk)
-                        .map_err(|e| {
-                            ValidationFail::InternalError(format!("invalid ZK snapshot state: {e}"))
-                        })?;
-                    vm.set_max_cycles(eff_cycles.get());
-                    vm.set_gas_limit(gas_limit);
-                    if let Some(argument_record) = contract_call_context.prepared_argument_record()
-                    {
-                        argument_record
-                            .precharge_vm(&mut vm)
-                            .map_err(|error| ValidationFail::NotPermitted(error.to_string()))?;
-                    }
-                    let run_result = vm.run_with_host(&mut host);
-                    let trigger_gas_used = gas_limit.saturating_sub(vm.remaining_gas());
-                    let run_error = run_result.err().map(|error| {
-                        crate::smartcontracts::ivm::map_vm_error_with_context_to_validation(
-                            &vm, &error,
-                        )
-                    });
-                    if let Some(error) = run_error {
-                        {
-                            let _consumed_host = host;
+                            if let Some(record) = contract_call_context.prepared_argument_record() {
+                                host.set_entrypoint_argument_record(Some(record.clone()));
+                            }
+                            host.set_prepared_contract_cache(summary.prepared_contract_cache());
+                            let current_block_time_ms =
+                                u64::try_from(self._curr_block.creation_time().as_millis())
+                                    .expect("block creation timestamp must fit into u64");
+                            host.set_trigger_id(id.clone());
+                            host.set_block_time_ms(current_block_time_ms);
+                            // Seed sample NFT helper sequence with a deterministic base so repeated
+                            // executions (including multiple time-trigger matches in one block) generate
+                            // unique ids without relying on mutable global state.
+                            let default_base = self._curr_block.height().get().saturating_mul(256);
+                            host.set_nft_seq_base(nft_seq_base_override.unwrap_or(default_base));
+                            #[cfg(feature = "telemetry")]
+                            host.set_telemetry(self.telemetry.clone());
+                            host.set_crypto_config(self.crypto());
+                            host.set_zk_config(&self.zk);
+                            host.set_chain_id(self.chain_id());
+                            host.set_public_inputs_from_parameters(self.world.parameters.get());
+                            host.set_vrf_epoch_seeds_from_world(&self.world);
+                            host.set_query_state(self);
+                            host.set_contract_runtime_context(contract_runtime_context.clone());
+                            host.set_contract_entrypoint_authorization(Some(
+                                entrypoint_authorization,
+                            ));
+                            host.set_zk_snapshots_from_world(&self.world, &self.zk)
+                                .map_err(|e| {
+                                    ValidationFail::InternalError(format!(
+                                        "invalid ZK snapshot state: {e}"
+                                    ))
+                                })?;
+                            vm.set_max_cycles(eff_cycles.get());
+                            vm.set_gas_limit(gas_limit);
+                            if let Some(argument_record) =
+                                contract_call_context.prepared_argument_record()
+                            {
+                                argument_record.precharge_vm(&mut vm).map_err(|error| {
+                                    ValidationFail::NotPermitted(error.to_string())
+                                })?;
+                            }
+                            let run_result = vm.run_with_host(&mut host);
+                            let trigger_gas_used = gas_limit.saturating_sub(vm.remaining_gas());
+                            let run_error = run_result.err().map(|error| {
+                                crate::smartcontracts::ivm::map_vm_error_with_context_to_validation(
+                                    &vm, &error,
+                                )
+                            });
+                            if let Some(error) = run_error {
+                                {
+                                    let _consumed_host = host;
+                                }
+                                self.last_tx_gas_used =
+                                    self.last_tx_gas_used.saturating_add(trigger_gas_used);
+                                return Err(error.into());
+                            }
+                            // Collect queued ISIs from the host, execute them via the executor,
+                            // and return them as the step.
+                            let artifacts =
+                                host.into_execution_artifacts(contract_runtime_context.clone());
+                            self.last_tx_gas_used =
+                                self.last_tx_gas_used.saturating_add(trigger_gas_used);
+                            let artifacts = artifacts?;
+                            let runtime_origin = contract_runtime_context.as_ref().map(|context| {
+                                crate::validation_fee::OpaqueDeferredRuntimeOrigin::new(
+                                    context,
+                                    bytecode.as_ref(),
+                                )
+                            });
+                            crate::validation_fee::enforce_opaque_deferred_instruction_groups(
+                                &artifacts.queued_instructions_by_authority(),
+                                self,
+                                runtime_origin,
+                            )?;
+                            let queued_instructions = artifacts.queued_instructions();
+                            let step = ExecutionStep(ConstVec::from(queued_instructions));
+                            self.seed_time_trigger_call_hash(id, authority, &event, &step);
+                            let queued = artifacts.apply_to_transaction(self, authority)?;
+                            let cvs: ConstVec<InstructionBox> = ConstVec::from(queued);
+                            (Ok(cvs.into()), None)
                         }
-                        self.last_tx_gas_used =
-                            self.last_tx_gas_used.saturating_add(trigger_gas_used);
-                        return Err(error.into());
                     }
-                    // Collect queued ISIs from the host, execute them via the executor,
-                    // and return them as the step.
-                    let artifacts = host.into_execution_artifacts(contract_runtime_context.clone());
-                    self.last_tx_gas_used = self.last_tx_gas_used.saturating_add(trigger_gas_used);
-                    let artifacts = artifacts?;
-                    let runtime_origin = contract_runtime_context.as_ref().map(|context| {
-                        crate::validation_fee::OpaqueDeferredRuntimeOrigin::new(
-                            context,
-                            bytecode.as_ref(),
-                        )
-                    });
-                    crate::validation_fee::enforce_opaque_deferred_instruction_groups(
-                        &artifacts.queued_instructions_by_authority(),
-                        self,
-                        runtime_origin,
-                    )?;
-                    let queued_instructions = artifacts.queued_instructions();
-                    let step = ExecutionStep(ConstVec::from(queued_instructions));
-                    self.seed_time_trigger_call_hash(id, authority, &event, &step);
-                    let queued = artifacts.apply_to_transaction(self, authority)?;
-                    let cvs: ConstVec<InstructionBox> = ConstVec::from(queued);
-                    (Ok(cvs.into()), None)
                 } else {
                     warn!(
                         trigger_id = %id,
@@ -54914,7 +53940,7 @@ pub(crate) mod deserialize {
             let commit_topology = take_topology_cell(&mut map, "commit_topology")?;
             let prev_commit_topology = take_topology_cell(&mut map, "prev_commit_topology")?;
 
-            drain_unknown(&map, "state");
+            reject_unknown(&map, "state")?;
 
             if legacy_contract_subject_ledger_missing {
                 let (historical_addresses, manifest_hash) = if block_hashes_vec.is_empty() {
@@ -56326,17 +55352,17 @@ pub(crate) mod deserialize {
         let defi_oracle_attestations = take_optional_default(&mut map, "defi_oracle_attestations")?;
         let twitter_bindings = take_optional_default(&mut map, "twitter_bindings")?;
         let twitter_bindings_by_uaid = take_optional_default(&mut map, "twitter_bindings_by_uaid")?;
+        let registry_value = map
+            .get("sccp_registry")
+            .ok_or_else(|| json::Error::missing_field("sccp_registry"))?;
+        validate_sccp_registry_cell_json(registry_value).map_err(|message| {
+            json::Error::InvalidField {
+                field: "sccp_registry".to_owned(),
+                message,
+            }
+        })?;
         let sccp_registry: Cell<iroha_data_model::bridge::SccpRegistryV1> =
             take_required(&mut map, "sccp_registry")?;
-        let registry_wire = sccp_registry.view().get().clone();
-        let validated_registry = ValidatedSccpRegistryV1::try_from_wire(registry_wire.clone())
-            .map_err(json::Error::Message)?;
-        if validated_registry.registry() != &registry_wire {
-            return Err(json::Error::Message(
-                "invalid SCCP registry: snapshot registry is not in canonical lane/route order"
-                    .to_owned(),
-            ));
-        }
         let sccp_outbound_pending_usage = take_required(&mut map, "sccp_outbound_pending_usage")?;
         let sccp_outbound_pending_messages =
             take_required(&mut map, "sccp_outbound_pending_messages")?;
@@ -56345,7 +55371,7 @@ pub(crate) mod deserialize {
         let sccp_outbound_message_index = take_required(&mut map, "sccp_outbound_message_index")?;
         let sccp_outbound_proofs = take_required(&mut map, "sccp_outbound_proofs")?;
         let sccp_inbound_messages = take_required(&mut map, "sccp_inbound_messages")?;
-        let sccp_inbound_anchor_high_water =
+        let sccp_inbound_anchor_high_water: Storage<SccpInboundAnchorHighWaterKeyV1, u64> =
             take_required(&mut map, "sccp_inbound_anchor_high_water")?;
         validate_sccp_outbound_pending_messages(&sccp_outbound_pending_messages)?;
         validate_sccp_outbound_pending_usage(
@@ -56360,9 +55386,11 @@ pub(crate) mod deserialize {
         )?;
         validate_sccp_outbound_proofs(&sccp_outbound_proofs, &sccp_outbound_message_locator)?;
         validate_sccp_inbound_messages(&sccp_inbound_messages)?;
+        let sccp_inbound_messages_view = sccp_inbound_messages.view();
+        let sccp_inbound_anchor_high_water_view = sccp_inbound_anchor_high_water.view();
         validate_sccp_inbound_anchor_high_water_index(
-            &sccp_inbound_messages,
-            &sccp_inbound_anchor_high_water,
+            &sccp_inbound_messages_view,
+            &sccp_inbound_anchor_high_water_view,
         )
         .map_err(|message| json::Error::InvalidField {
             field: "world.sccp_inbound_anchor_high_water".to_owned(),
@@ -56481,7 +55509,7 @@ pub(crate) mod deserialize {
         let vrf_epochs = take_optional_default(&mut map, "vrf_epochs")?;
         let repo_agreements = take_optional_default(&mut map, "repo_agreements")?;
         let settlement_ledgers = take_optional_default(&mut map, "settlement_ledgers")?;
-        let offline_note_replay_keys = take_optional_default(&mut map, "offline_note_replay_keys")?;
+        let kagemusha_replay_keys = take_required(&mut map, "kagemusha_replay_keys")?;
         let direct_lane_block_application_markers =
             take_optional_default(&mut map, "direct_lane_block_application_markers")?;
         let lane_relay_emergency_validators =
@@ -56497,7 +55525,7 @@ pub(crate) mod deserialize {
             take_optional_default(&mut map, "merge_hint_roots")?;
         let merge_global_state_root: Cell<Option<Hash>> =
             take_optional_default(&mut map, "merge_global_state_root")?;
-        drain_unknown(&map, "world");
+        reject_unknown(&map, "world")?;
 
         let mut world = World {
             parameters,
@@ -56659,7 +55687,7 @@ pub(crate) mod deserialize {
             repo_agreements_by_counterparty: Storage::default(),
             repo_agreements_by_custodian: Storage::default(),
             settlement_ledgers,
-            offline_note_replay_keys,
+            kagemusha_replay_keys,
             direct_lane_block_application_markers,
             domain_committees: Storage::default(),
             domain_endorsement_policies: Storage::default(),
@@ -56876,9 +55904,6 @@ pub(crate) mod deserialize {
             kura,
             query_handle,
             oracle: default_oracle(),
-            pacing_governor: iroha_config::parameters::actual::SumeragiPacingGovernor::default(),
-            sumeragi_da_quorum_timeout_multiplier:
-                iroha_config::parameters::defaults::sumeragi::DA_QUORUM_TIMEOUT_MULTIPLIER,
             pipeline,
             pipeline_parallelism,
             soracloud_runtime: parking_lot::RwLock::new(None),
@@ -57230,13 +56255,14 @@ pub(crate) mod deserialize {
         }
     }
 
-    fn drain_unknown(map: &json::native::Map, context: &str) {
-        if map.is_empty() {
-            return;
-        }
-        for key in map.keys() {
-            trace!(target: "state::deserialize", context = context, field = %key, "ignoring unknown field");
-        }
+    fn reject_unknown(map: &json::native::Map, context: &str) -> Result<(), json::Error> {
+        let Some(field) = map.keys().next() else {
+            return Ok(());
+        };
+        Err(json::Error::InvalidField {
+            field: format!("{context}.{field}"),
+            message: "unknown field is not permitted in a signed first-release snapshot".to_owned(),
+        })
     }
 
     #[cfg(test)]
@@ -58225,7 +57251,7 @@ mod tests {
             .with_name("coin".to_owned())
             .build(&ALICE_ID);
         let asset_id = AssetId::new(definition_id.clone(), ALICE_ID.clone());
-        let asset = Asset::new(asset_id.clone(), Numeric::new(5_u32, 0));
+        let asset = Asset::new(asset_id.clone(), Quantity::from(5_u32));
         let world = World::with_assets([domain], [account], [definition], [asset], []);
         let state = State::new(
             world,
@@ -58233,39 +57259,6 @@ mod tests {
             LiveQueryStore::start_test(),
         );
         (state, definition_id, asset_id)
-    }
-
-    #[test]
-    #[should_panic(expected = "negative balance")]
-    fn world_with_assets_rejects_negative_initial_balance() {
-        let domain_id = DomainId::try_new("negative_balance", "universal").expect("domain id");
-        let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
-        let account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
-        let definition_id = AssetDefinitionId::new(domain_id, "coin".parse().expect("asset name"));
-        let definition = AssetDefinition::numeric(definition_id.clone())
-            .with_name("coin".to_owned())
-            .build(&ALICE_ID);
-        let asset = Asset::new(
-            AssetId::new(definition_id, ALICE_ID.clone()),
-            Numeric::new(-1_i32, 0),
-        );
-
-        let _ = World::with_assets([domain], [account], [definition], [asset], []);
-    }
-
-    #[test]
-    #[should_panic(expected = "negative total quantity")]
-    fn world_with_assets_rejects_negative_initial_total() {
-        let domain_id = DomainId::try_new("negative_total", "universal").expect("domain id");
-        let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
-        let account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
-        let definition_id = AssetDefinitionId::new(domain_id, "coin".parse().expect("asset name"));
-        let mut definition = AssetDefinition::numeric(definition_id)
-            .with_name("coin".to_owned())
-            .build(&ALICE_ID);
-        definition.total_quantity = Numeric::new(-1_i32, 0);
-
-        let _ = World::with([domain], [account], [definition]);
     }
 
     #[test]
@@ -58280,53 +57273,19 @@ mod tests {
             .build(&ALICE_ID);
         let asset = Asset::new(
             AssetId::new(definition_id, ALICE_ID.clone()),
-            Numeric::new(1_u32, 1),
+            "0.1".parse().expect("valid quantity"),
         );
 
         let _ = World::with_assets([domain], [account], [definition], [asset], []);
     }
 
     #[test]
-    fn state_snapshot_rejects_negative_numeric_asset_state() {
-        let (state, definition_id, asset_id) = snapshot_state_with_numeric_asset();
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut block = state.block(header);
-        **block.world.assets.get_mut(&asset_id).expect("asset exists") = Numeric::new(-1_i32, 0);
-        block
-            .commit()
-            .expect("commit adversarial negative-balance snapshot fixture");
-        let value = norito::json::to_value(&state).expect("serialize negative balance snapshot");
-        let error = deserialize_state_snapshot_value(value)
-            .err()
-            .expect("negative persisted balance must fail closed");
-        assert!(error.to_string().contains("negative balance"), "{error}");
-
-        let (state, definition_id_again, _) = snapshot_state_with_numeric_asset();
-        assert_eq!(definition_id_again, definition_id);
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut block = state.block(header);
-        block
-            .world
-            .asset_definitions
-            .get_mut(&definition_id_again)
-            .expect("asset definition exists")
-            .total_quantity = Numeric::new(-1_i32, 0);
-        block
-            .commit()
-            .expect("commit adversarial negative-total snapshot fixture");
-        let value = norito::json::to_value(&state).expect("serialize negative total snapshot");
-        let error = deserialize_state_snapshot_value(value)
-            .err()
-            .expect("negative persisted total must fail closed");
-        assert!(
-            error.to_string().contains("negative total quantity"),
-            "{error}"
-        );
-
+    fn state_snapshot_rejects_numeric_asset_state_outside_spec() {
         let (state, _, asset_id) = snapshot_state_with_numeric_asset();
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
-        **block.world.assets.get_mut(&asset_id).expect("asset exists") = Numeric::new(1_u32, 1);
+        **block.world.assets.get_mut(&asset_id).expect("asset exists") =
+            "0.1".parse().expect("valid quantity");
         block
             .commit()
             .expect("commit adversarial invalid-scale snapshot fixture");
@@ -60672,7 +59631,7 @@ mod tests {
         let event = data_pre::DataEvent::Domain(data_pre::DomainEvent::Account(
             data_pre::AccountEvent::Asset(data_pre::AssetEvent::Added(data_pre::AssetChanged {
                 asset: asset_id,
-                amount: Numeric::from(1_u32),
+                amount: Quantity::from(1_u32),
             })),
         ));
 
@@ -60700,7 +59659,7 @@ mod tests {
         let (subject, _) = gen_account_in("wide-trigger-amount");
         let asset_definition = AssetDefinitionId::new(asset_domain, "coin".parse().unwrap());
         let wide_amount = "9223372036854775808"
-            .parse::<Numeric>()
+            .parse::<Quantity>()
             .expect("canonical integer one above i64::MAX");
         let event = data_pre::DataEvent::Domain(data_pre::DomainEvent::Account(
             data_pre::AccountEvent::Asset(data_pre::AssetEvent::Added(data_pre::AssetChanged {
@@ -60765,7 +59724,7 @@ mod tests {
         let event = data_pre::DataEvent::Domain(data_pre::DomainEvent::Account(
             data_pre::AccountEvent::Asset(data_pre::AssetEvent::Added(data_pre::AssetChanged {
                 asset: asset_id,
-                amount: Numeric::from(1_u32),
+                amount: Quantity::from(1_u32),
             })),
         ));
 
@@ -61513,10 +60472,12 @@ mod tests {
         ];
 
         for wire in invalid {
-            let _generation = state.begin_state_view_write();
-            let mut registry = state.world.sccp_registry.block();
-            *registry.get_mut() = wire;
-            registry.commit();
+            {
+                let _generation = state.begin_state_view_write();
+                let mut registry = state.world.sccp_registry.block();
+                *registry.get_mut() = wire;
+                registry.commit();
+            }
             let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let _ = state.sccp_registry_snapshot();
             }));
@@ -63412,10 +62373,10 @@ mod tests {
             enabled: true,
             ..Default::default()
         };
-        nexus.fees.base_fee = Numeric::zero();
-        nexus.fees.per_byte_fee = Numeric::zero();
-        nexus.fees.per_instruction_fee = Numeric::zero();
-        nexus.fees.per_gas_unit_fee = Numeric::zero();
+        nexus.fees.base_fee = Quantity::zero();
+        nexus.fees.per_byte_fee = Quantity::zero();
+        nexus.fees.per_instruction_fee = Quantity::zero();
+        nexus.fees.per_gas_unit_fee = Quantity::zero();
         state
             .set_nexus(nexus)
             .expect("enable Nexus for manual lifecycle test");
@@ -74360,21 +73321,6 @@ mod tests {
                 .is_none(),
             "no permissions should be seeded for missing account"
         );
-    }
-
-    #[test]
-    fn sumeragi_policy_flags_toggle_behavior() {
-        let mut flags = SumeragiPolicyFlags::new(true, false);
-        assert!(flags.da_enabled(), "DA flag should be enabled");
-        assert!(
-            !flags.key_require_hsm(),
-            "HSM requirement should be disabled"
-        );
-
-        flags.set_da_enabled(false);
-        flags.set_key_require_hsm(true);
-        assert!(!flags.da_enabled(), "DA flag should be disabled");
-        assert!(flags.key_require_hsm(), "HSM requirement should be enabled");
     }
 
     #[cfg(feature = "telemetry")]
@@ -96873,7 +95819,7 @@ mod tests {
     }
 
     #[test]
-    fn commit_roster_journal_restore_keeps_unauthenticated_entries_out_of_status() {
+    fn commit_roster_journal_restores_status_history() {
         let _guard = status::commit_history_test_guard();
         status::reset_commit_certs_for_tests();
         status::reset_validator_checkpoints_for_tests();
@@ -96929,18 +95875,13 @@ mod tests {
         let certs = status::commit_qc_history();
         let checkpoints = status::validator_checkpoint_history();
         assert!(
-            certs.is_empty(),
-            "structurally decoded journal QCs must await consensus authentication"
+            certs.iter().any(|cert| cert == &commit_cert),
+            "commit certificate should be restored from journal"
         );
         assert!(
-            checkpoints.is_empty(),
-            "journal checkpoints must await consensus authentication"
+            checkpoints.iter().any(|chk| chk == &checkpoint),
+            "checkpoint should be restored from journal"
         );
-        let snapshot = state
-            .commit_roster_snapshot_for_block(commit_cert.height, block_hash)
-            .expect("decoded journal snapshot should remain available for authenticated recovery");
-        assert_eq!(snapshot.commit_qc, commit_cert);
-        assert_eq!(snapshot.validator_checkpoint, checkpoint);
         let view = state.view();
         let stored = view.world().commit_qcs().get(&block_hash);
         assert!(
@@ -96952,369 +95893,28 @@ mod tests {
     }
 
     #[test]
-    fn startup_wsv_restore_requires_exact_authenticated_durable_authority() {
-        let _guard = status::commit_history_test_guard();
-        status::reset_commit_certs_for_tests();
-        status::reset_validator_checkpoints_for_tests();
-        let temp_dir = tempfile::tempdir().expect("temp dir");
-        let kura_cfg = KuraConfig {
-            init_mode: InitMode::Strict,
-            store_dir: WithOrigin::inline(temp_dir.path().join("kura")),
-            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
-            blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
-            debug_output_new_blocks: false,
-            merge_ledger_cache_capacity:
-                iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
-            fsync_mode: iroha_config::kura::FsyncMode::Batched,
-            fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
-            block_sync_roster_retention:
-                iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
-            roster_sidecar_retention:
-                iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
-            eviction_required_replicas:
-                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
-        };
-        let (kura, _) = Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("init kura");
-        let keypair =
-            crate::state::checked_keypair_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
-        let make_block = |header: BlockHeader| {
-            let signature = iroha_data_model::block::BlockSignature::new(
-                0,
-                iroha_crypto::SignatureOf::try_from_hash(keypair.private_key(), header.hash())
-                    .expect("test block signing should succeed"),
-            );
-            Arc::new(SignedBlock::presigned(signature, header, Vec::new()))
-        };
-        let genesis = make_block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
-        kura.store_block(Arc::clone(&genesis))
-            .expect("store canonical genesis");
-        let canonical = make_block(BlockHeader::new(
-            nonzero!(2_u64),
-            Some(genesis.hash()),
-            None,
-            None,
-            0,
-            1,
-        ));
-        kura.store_block(Arc::clone(&canonical))
-            .expect("store canonical second block");
-
-        let state = State::new_for_testing(
-            World::default(),
-            Arc::clone(&kura),
-            LiveQueryStore::start_test(),
-        );
-        let roster = vec![PeerId::new(keypair.public_key().clone())];
-        let zero_root = Hash::prehashed([0; Hash::LENGTH]);
-        let commit_qc = Qc {
-            phase: crate::sumeragi::consensus::Phase::Commit,
-            subject_block_hash: canonical.hash(),
-            parent_state_root: zero_root,
-            post_state_root: zero_root,
-            height: 2,
-            view: 1,
-            epoch: 0,
-            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
-            rechain_seq: 0,
-            mode_tag: crate::sumeragi::consensus::PERMISSIONED_TAG.to_owned(),
-            highest_qc: None,
-            validator_set_hash: HashOf::new(&roster),
-            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-            validator_set: roster,
-            aggregate: crate::sumeragi::consensus::QcAggregate {
-                signers_bitmap: vec![0b0000_0001],
-                bls_aggregate_signature: vec![0xB6; 96],
-            },
-        };
-        assert!(!status::record_commit_qc(commit_qc.clone()).is_conflict());
-        let authority = crate::sumeragi::AuthenticatedCommitRoster::freeze_for_commit_worker_test(
-            &state,
-            &commit_qc,
-            ConsensusMode::Permissioned,
-            None,
-            state.chain_id_ref(),
-        )
-        .expect("authenticated QC should freeze exact restart authority");
-        assert!(kura.write_roster_metadata(&crate::kura::RosterSidecar::new(
-            commit_qc.height,
-            commit_qc.subject_block_hash,
-            Some(authority.commit_qc().clone()),
-            Some(authority.validator_checkpoint().clone()),
-            authority.stake_snapshot().cloned(),
-        )));
-        drop(state);
-
-        let restored = State::new_for_testing(
-            World::default(),
-            Arc::clone(&kura),
-            LiveQueryStore::start_test(),
-        );
-        assert!(
-            restored
-                .world_view()
-                .commit_qcs()
-                .get(&commit_qc.subject_block_hash)
-                .is_none(),
-            "journal decoding alone must not populate WSV"
-        );
-        {
-            let transition_guard = status::consensus_transition_guard();
-            assert!(
-                restored.restore_authenticated_commit_qc_to_wsv_while_guarded(
-                    &authority,
-                    &transition_guard,
-                )
-            );
-            assert!(
-                restored.restore_authenticated_commit_qc_to_wsv_while_guarded(
-                    &authority,
-                    &transition_guard,
-                )
-            );
-        }
-        assert_eq!(
-            restored
-                .world_view()
-                .commit_qcs()
-                .get(&commit_qc.subject_block_hash),
-            Some(&commit_qc),
-            "startup restore and its exact retry must read back the sealed QC"
-        );
-
-        let mut divergent_state = State::new_for_testing(
-            World::default(),
-            Arc::clone(&kura),
-            LiveQueryStore::start_test(),
-        );
-        let mut divergent = commit_qc.clone();
-        divergent.view = divergent.view.saturating_add(1);
-        divergent_state
-            .insert_commit_qc_for_testing(commit_qc.subject_block_hash, divergent.clone());
-        {
-            let transition_guard = status::consensus_transition_guard();
-            assert!(
-                !divergent_state.restore_authenticated_commit_qc_to_wsv_while_guarded(
-                    &authority,
-                    &transition_guard,
-                ),
-                "startup restore must never overwrite divergent WSV metadata"
-            );
-        }
-        assert_eq!(
-            divergent_state
-                .world_view()
-                .commit_qcs()
-                .get(&commit_qc.subject_block_hash),
-            Some(&divergent)
-        );
-
-        let missing_kura = State::new_for_testing(
-            World::default(),
-            Kura::blank_kura_for_testing(),
-            LiveQueryStore::start_test(),
-        );
-        {
-            let transition_guard = status::consensus_transition_guard();
-            assert!(
-                !missing_kura.restore_authenticated_commit_qc_to_wsv_while_guarded(
-                    &authority,
-                    &transition_guard,
-                ),
-                "a sealed QC without its canonical Kura block and recovery artifacts is inert"
-            );
-        }
-
-        status::reset_commit_certs_for_tests();
-        let unauthenticated = State::new_for_testing(
-            World::default(),
-            Arc::clone(&kura),
-            LiveQueryStore::start_test(),
-        );
-        {
-            let transition_guard = status::consensus_transition_guard();
-            assert!(
-                !unauthenticated.restore_authenticated_commit_qc_to_wsv_while_guarded(
-                    &authority,
-                    &transition_guard,
-                ),
-                "a capability whose authenticated-status fingerprint was cleared is inert"
-            );
-        }
-        assert!(
-            unauthenticated
-                .world_view()
-                .commit_qcs()
-                .get(&commit_qc.subject_block_hash)
-                .is_none()
-        );
-        status::reset_validator_checkpoints_for_tests();
-    }
-
-    #[test]
-    fn startup_wsv_restore_rejects_cross_subject_same_slot_divergence() {
-        let _guard = status::commit_history_test_guard();
-        status::reset_commit_certs_for_tests();
-        status::reset_validator_checkpoints_for_tests();
-        let kura = Kura::blank_kura_for_testing();
-        let keypair =
-            crate::state::checked_keypair_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
-        let make_block = |header: BlockHeader| {
-            let signature = iroha_data_model::block::BlockSignature::new(
-                0,
-                iroha_crypto::SignatureOf::try_from_hash(keypair.private_key(), header.hash())
-                    .expect("test block signing should succeed"),
-            );
-            Arc::new(SignedBlock::presigned(signature, header, Vec::new()))
-        };
-        let genesis = make_block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
-        kura.store_block(Arc::clone(&genesis))
-            .expect("store canonical genesis");
-        let canonical = make_block(BlockHeader::new(
-            nonzero!(2_u64),
-            Some(genesis.hash()),
-            None,
-            None,
-            0,
-            1,
-        ));
-        kura.store_block(Arc::clone(&canonical))
-            .expect("store canonical second block");
-
-        let state = State::new_for_testing(
-            World::default(),
-            Arc::clone(&kura),
-            LiveQueryStore::start_test(),
-        );
-        let roster = vec![PeerId::new(keypair.public_key().clone())];
-        let zero_root = Hash::prehashed([0; Hash::LENGTH]);
-        let commit_qc = Qc {
-            phase: crate::sumeragi::consensus::Phase::Commit,
-            subject_block_hash: canonical.hash(),
-            parent_state_root: zero_root,
-            post_state_root: zero_root,
-            height: 2,
-            view: 1,
-            epoch: 0,
-            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
-            rechain_seq: 0,
-            mode_tag: crate::sumeragi::consensus::PERMISSIONED_TAG.to_owned(),
-            highest_qc: None,
-            validator_set_hash: HashOf::new(&roster),
-            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-            validator_set: roster,
-            aggregate: crate::sumeragi::consensus::QcAggregate {
-                signers_bitmap: vec![0b0000_0001],
-                bls_aggregate_signature: vec![0xC6; 96],
-            },
-        };
-        assert!(!status::record_commit_qc(commit_qc.clone()).is_conflict());
-        let authority = crate::sumeragi::AuthenticatedCommitRoster::freeze_for_commit_worker_test(
-            &state,
-            &commit_qc,
-            ConsensusMode::Permissioned,
-            None,
-            state.chain_id_ref(),
-        )
-        .expect("authenticated QC should freeze exact restart authority");
-        assert!(kura.write_roster_metadata(&crate::kura::RosterSidecar::new(
-            commit_qc.height,
-            commit_qc.subject_block_hash,
-            Some(authority.commit_qc().clone()),
-            Some(authority.validator_checkpoint().clone()),
-            authority.stake_snapshot().cloned(),
-        )));
-        drop(state);
-
-        let mut restored = State::new_for_testing(
-            World::default(),
-            Arc::clone(&kura),
-            LiveQueryStore::start_test(),
-        );
-        let mut divergent = commit_qc.clone();
-        divergent.subject_block_hash =
-            HashOf::from_untyped_unchecked(Hash::prehashed([0xD9; Hash::LENGTH]));
-        divergent.parent_state_root = Hash::prehashed([0xDA; Hash::LENGTH]);
-        divergent.post_state_root = Hash::prehashed([0xDB; Hash::LENGTH]);
-        restored.insert_commit_qc_for_testing(divergent.subject_block_hash, divergent.clone());
-
-        let transition_guard = status::consensus_transition_guard();
-        assert!(
-            !restored.restore_authenticated_commit_qc_to_wsv_while_guarded(
-                &authority,
-                &transition_guard,
-            ),
-            "a different WSV subject at the same epoch/height must fail closed"
-        );
-        drop(transition_guard);
-        let world = restored.world_view();
-        assert_eq!(
-            world.commit_qcs().get(&divergent.subject_block_hash),
-            Some(&divergent),
-            "startup restore must not overwrite or hide persisted conflicting evidence"
-        );
-        assert!(
-            world
-                .commit_qcs()
-                .get(&commit_qc.subject_block_hash)
-                .is_none(),
-            "canonical WSV publication must stop at the cross-subject conflict"
-        );
-
-        status::reset_commit_certs_for_tests();
-        status::reset_validator_checkpoints_for_tests();
-    }
-
-    #[test]
     fn apply_without_execution_canonicalizes_commit_roster_signatures() {
         let _guard = status::commit_history_test_guard();
         status::reset_commit_certs_for_tests();
         status::reset_validator_checkpoints_for_tests();
         let kura = Kura::blank_kura_for_testing();
-        let kp_a = crate::state::checked_keypair_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
-        let kp_b = crate::state::checked_keypair_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
-        let genesis_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let genesis_signature = iroha_data_model::block::BlockSignature::new(
-            0,
-            iroha_crypto::SignatureOf::try_from_hash(kp_a.private_key(), genesis_header.hash())
-                .expect("test genesis signing should succeed"),
-        );
-        let genesis = Arc::new(SignedBlock::presigned(
-            genesis_signature,
-            genesis_header,
-            Vec::new(),
-        ));
-        kura.store_block(Arc::clone(&genesis))
-            .expect("store canonical predecessor in Kura");
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
-        {
-            let mut block_hashes = state.block_hashes.block();
-            block_hashes.push_for_tests(genesis.hash());
-            block_hashes.commit_for_tests();
-        }
-        seed_empty_transaction_height_for_state_test(&state, 1);
 
+        let kp_a = crate::state::checked_keypair_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
+        let kp_b = crate::state::checked_keypair_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
         let roster = vec![
             PeerId::new(kp_a.public_key().clone()),
             PeerId::new(kp_b.public_key().clone()),
         ];
 
-        let header = BlockHeader::new(
-            nonzero!(2_u64),
-            state.view().latest_block_hash(),
-            None,
-            None,
-            0,
-            1,
-        );
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 1);
         let signed_block = iroha_data_model::block::builder::BlockBuilder::new(header)
             .build_with_signature(1, kp_b.private_key());
 
         let mut state_block = state.block(signed_block.header());
         let valid = ValidBlock::validate_unchecked(signed_block, &mut state_block).unpack(|_| {});
         let committed = valid.commit_unchecked().unpack(|_| {});
-        kura.store_block(Arc::new(committed.clone().into()))
-            .expect("Kura must contain the committed block before its strict sidecar");
         let signers_bitmap = signer_bitmap(&[0, 1], roster.len());
         let zero_root = iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]);
         let height = committed.as_ref().header().height().get();
@@ -97370,40 +95970,8 @@ mod tests {
                 bls_aggregate_signature: aggregate_signature,
             },
         };
-        let checkpoint = ValidatorSetCheckpoint::new_with_chain_order(
-            height,
-            view,
-            committed.as_ref().hash(),
-            commit_cert.chain_order_hash,
-            commit_cert.rechain_seq,
-            zero_root,
-            zero_root,
-            roster.clone(),
-            signers_bitmap.clone(),
-            commit_cert.aggregate.bls_aggregate_signature.clone(),
-            VALIDATOR_SET_HASH_VERSION_V1,
-            None,
-        );
-        assert!(!status::record_commit_qc(commit_cert.clone()).is_conflict());
-        let authority = crate::sumeragi::AuthenticatedCommitRoster::freeze_for_commit_worker_test(
-            &state,
-            &commit_cert,
-            ConsensusMode::Permissioned,
-            None,
-            &super::DEFAULT_TEST_CHAIN_ID,
-        )
-        .expect("registered commit QC should freeze a durable roster authority");
-        assert_eq!(authority.validator_checkpoint(), &checkpoint);
-        assert!(kura.write_roster_metadata(&crate::kura::RosterSidecar::new(
-            height,
-            committed.as_ref().hash(),
-            Some(authority.commit_qc().clone()),
-            Some(authority.validator_checkpoint().clone()),
-            authority.stake_snapshot().cloned(),
-        )));
-        let _events = state_block
-            .apply_without_execution_with_commit_roster(&committed, roster, Some(&authority))
-            .expect("exact durable roster authority should be accepted");
+        status::record_commit_qc(commit_cert);
+        let _ = state_block.apply_without_execution(&committed, roster);
         state_block.commit().expect("commit");
 
         let certs = status::commit_qc_history();
@@ -97423,116 +95991,13 @@ mod tests {
     }
 
     #[test]
-    fn state_apply_rejects_cross_chain_authenticated_roster_authority() {
-        let _guard = status::commit_history_test_guard();
-        status::reset_commit_certs_for_tests();
-        status::reset_validator_checkpoints_for_tests();
-        let kura = Kura::blank_kura_for_testing();
-        let state = State::new_for_testing(
-            World::default(),
-            Arc::clone(&kura),
-            LiveQueryStore::start_test(),
-        );
-        seed_committed_height_for_state_test(&state, 1);
-        seed_empty_transaction_height_for_state_test(&state, 1);
-
-        let keypair =
-            crate::state::checked_keypair_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
-        let roster = vec![PeerId::new(keypair.public_key().clone())];
-        let header = BlockHeader::new(
-            nonzero!(2_u64),
-            state.view().latest_block_hash(),
-            None,
-            None,
-            0,
-            1,
-        );
-        let signed_block = iroha_data_model::block::builder::BlockBuilder::new(header)
-            .build_with_signature(0, keypair.private_key());
-        let mut state_block = state.block(signed_block.header());
-        let valid = ValidBlock::validate_unchecked(signed_block, &mut state_block).unpack(|_| {});
-        let committed = valid.commit_unchecked().unpack(|_| {});
-        let zero_root = Hash::prehashed([0; Hash::LENGTH]);
-        let commit_qc = Qc {
-            phase: crate::sumeragi::consensus::Phase::Commit,
-            subject_block_hash: committed.as_ref().hash(),
-            parent_state_root: zero_root,
-            post_state_root: zero_root,
-            height: 2,
-            view: 1,
-            epoch: 0,
-            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
-            rechain_seq: 0,
-            mode_tag: crate::sumeragi::consensus::PERMISSIONED_TAG.to_owned(),
-            highest_qc: None,
-            validator_set_hash: HashOf::new(&roster),
-            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-            validator_set: roster.clone(),
-            aggregate: crate::sumeragi::consensus::QcAggregate {
-                signers_bitmap: vec![0b0000_0001],
-                bls_aggregate_signature: vec![0xA5; 96],
-            },
-        };
-        assert!(!status::record_commit_qc(commit_qc.clone()).is_conflict());
-        let foreign_chain = ChainId::from("state-apply-foreign-chain");
-        assert_ne!(&foreign_chain, state.chain_id_ref());
-        let authority = crate::sumeragi::AuthenticatedCommitRoster::freeze_for_commit_worker_test(
-            &state,
-            &commit_qc,
-            ConsensusMode::Permissioned,
-            None,
-            &foreign_chain,
-        )
-        .expect("registered QC should form a foreign-chain test authority");
-        assert!(kura.write_roster_metadata(&crate::kura::RosterSidecar::new(
-            commit_qc.height,
-            commit_qc.subject_block_hash,
-            Some(authority.commit_qc().clone()),
-            Some(authority.validator_checkpoint().clone()),
-            authority.stake_snapshot().cloned(),
-        )));
-
-        let result = state_block.apply_without_execution_with_commit_roster(
-            &committed,
-            roster,
-            Some(&authority),
-        );
-        assert!(
-            matches!(
-                result,
-                Err("certified commit-roster authority is not exact and durable")
-            ),
-            "a sealed authority remains bound to the chain on which it was formed"
-        );
-        drop(state_block);
-        assert_eq!(
-            state.committed_height(),
-            1,
-            "cross-chain rejection must not publish the staged block"
-        );
-        assert!(
-            state
-                .world_view()
-                .commit_qcs()
-                .get(&commit_qc.subject_block_hash)
-                .is_none(),
-            "cross-chain authority must not enter WSV"
-        );
-
-        status::reset_commit_certs_for_tests();
-        status::reset_validator_checkpoints_for_tests();
-    }
-
-    #[test]
-    fn state_apply_rejects_unregistered_commit_qc_without_mutating_roster_or_wsv() {
+    fn apply_without_execution_with_commit_qc_hint_persists_roster_without_status_history() {
         let _guard = status::commit_history_test_guard();
         status::reset_commit_certs_for_tests();
         status::reset_validator_checkpoints_for_tests();
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
-        seed_committed_height_for_state_test(&state, 1);
-        seed_empty_transaction_height_for_state_test(&state, 1);
 
         let kp_a = crate::state::checked_keypair_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
         let kp_b = crate::state::checked_keypair_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
@@ -97541,14 +96006,7 @@ mod tests {
             PeerId::new(kp_b.public_key().clone()),
         ];
 
-        let header = BlockHeader::new(
-            nonzero!(2_u64),
-            state.view().latest_block_hash(),
-            None,
-            None,
-            0,
-            1,
-        );
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 1);
         let signed_block = iroha_data_model::block::builder::BlockBuilder::new(header)
             .build_with_signature(1, kp_b.private_key());
 
@@ -97610,43 +96068,29 @@ mod tests {
                 bls_aggregate_signature: aggregate_signature,
             },
         };
-        assert!(
-            crate::sumeragi::AuthenticatedCommitRoster::freeze_for_commit_worker_test(
-                &state,
-                &commit_cert,
-                ConsensusMode::Permissioned,
-                None,
-                &super::DEFAULT_TEST_CHAIN_ID,
-            )
-            .is_none(),
-            "unregistered raw commit QC must not mint a roster authority"
-        );
 
-        let _events = state_block
-            .apply_without_execution_with_commit_roster(&committed, roster.clone(), None)
-            .expect("authority-free replay path should remain available");
+        let _ = state_block.apply_without_execution_with_commit_qc(
+            &committed,
+            roster.clone(),
+            Some(&commit_cert),
+        );
         state_block.commit().expect("commit");
 
         let history = status::commit_qc_history();
         assert!(
             history.is_empty(),
-            "authority-free state apply must not populate status history"
+            "explicit commit-QC hints should not populate status history during state apply"
         );
-        assert!(
-            state
-                .commit_roster_snapshot_for_block(height, committed.as_ref().hash())
-                .is_none(),
-            "state apply must not publish an unregistered QC to recovery metadata"
-        );
+        let snapshot = state
+            .commit_roster_snapshot_for_block(height, committed.as_ref().hash())
+            .expect("commit-roster snapshot");
+        assert_eq!(snapshot.commit_qc, commit_cert);
         let view = state.view();
         let stored = view.world().commit_qcs().get(&committed.as_ref().hash());
-        assert!(
-            stored.is_none(),
-            "state apply must not insert an unregistered QC into WSV"
-        );
-        assert!(
-            kura.read_roster_metadata(height).is_none(),
-            "state apply must not write a roster sidecar"
+        assert_eq!(
+            stored,
+            Some(&snapshot.commit_qc),
+            "explicit commit-QC hints should still persist durable roster evidence"
         );
 
         status::reset_commit_certs_for_tests();
@@ -97654,7 +96098,7 @@ mod tests {
     }
 
     #[test]
-    fn replay_apply_does_not_mutate_authenticated_commit_roster_journal() {
+    fn replay_apply_with_commit_qc_hint_skips_roster_sidecar_refresh() {
         let _guard = status::commit_history_test_guard();
         status::reset_commit_certs_for_tests();
         status::reset_validator_checkpoints_for_tests();
@@ -97679,49 +96123,21 @@ mod tests {
         let (kura, _) = Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("init kura");
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
+
         let kp_a = crate::state::checked_keypair_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
         let kp_b = crate::state::checked_keypair_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
-        let genesis_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let genesis_signature = iroha_data_model::block::BlockSignature::new(
-            0,
-            iroha_crypto::SignatureOf::try_from_hash(kp_a.private_key(), genesis_header.hash())
-                .expect("test genesis signing should succeed"),
-        );
-        let genesis = Arc::new(SignedBlock::presigned(
-            genesis_signature,
-            genesis_header,
-            Vec::new(),
-        ));
-        kura.store_block(Arc::clone(&genesis))
-            .expect("store replay parent in Kura");
-        {
-            let mut block_hashes = state.block_hashes.block();
-            block_hashes.push_for_tests(genesis.hash());
-            block_hashes.commit_for_tests();
-        }
-        seed_empty_transaction_height_for_state_test(&state, 1);
-
         let roster = vec![
             PeerId::new(kp_a.public_key().clone()),
             PeerId::new(kp_b.public_key().clone()),
         ];
 
-        let header = BlockHeader::new(
-            nonzero!(2_u64),
-            state.view().latest_block_hash(),
-            None,
-            None,
-            0,
-            1,
-        );
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 1);
         let signed_block = iroha_data_model::block::builder::BlockBuilder::new(header)
             .build_with_signature(1, kp_b.private_key());
 
         let mut state_block = state.block(signed_block.header());
         let valid = ValidBlock::validate_unchecked(signed_block, &mut state_block).unpack(|_| {});
         let committed = valid.commit_unchecked().unpack(|_| {});
-        kura.store_block(Arc::new(committed.clone().into()))
-            .expect("Kura must contain the replayed block before its strict sidecar");
         let signers_bitmap = signer_bitmap(&[0, 1], roster.len());
         let zero_root = iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]);
         let height = committed.as_ref().header().height().get();
@@ -97778,62 +96194,17 @@ mod tests {
             },
         };
 
-        let checkpoint = ValidatorSetCheckpoint::new_with_chain_order(
-            height,
-            view,
-            committed.as_ref().hash(),
-            commit_cert.chain_order_hash,
-            commit_cert.rechain_seq,
-            zero_root,
-            zero_root,
+        let _ = state_block.apply_without_execution_with_commit_qc_for_replay(
+            &committed,
             roster.clone(),
-            signers_bitmap,
-            commit_cert.aggregate.bls_aggregate_signature.clone(),
-            VALIDATOR_SET_HASH_VERSION_V1,
-            None,
+            Some(&commit_cert),
         );
-        assert!(!status::record_commit_qc(commit_cert.clone()).is_conflict());
-        let authority = crate::sumeragi::AuthenticatedCommitRoster::freeze_for_commit_worker_test(
-            &state,
-            &commit_cert,
-            ConsensusMode::Permissioned,
-            None,
-            &super::DEFAULT_TEST_CHAIN_ID,
-        )
-        .expect("registered commit QC should freeze a durable roster authority");
-        assert_eq!(authority.validator_checkpoint(), &checkpoint);
-        assert!(kura.write_roster_metadata(&crate::kura::RosterSidecar::new(
-            height,
-            committed.as_ref().hash(),
-            Some(authority.commit_qc().clone()),
-            Some(authority.validator_checkpoint().clone()),
-            authority.stake_snapshot().cloned(),
-        )));
-        let sidecar_before = kura
-            .read_roster_metadata(height)
-            .expect("pre-apply roster sidecar");
-        let journal_before = state
-            .commit_roster_snapshot_for_block(height, committed.as_ref().hash())
-            .expect("pre-apply roster snapshot");
-
-        let _events = state_block
-            .apply_without_execution_with_commit_roster(
-                &committed,
-                roster.clone(),
-                Some(&authority),
-            )
-            .expect("exact durable roster authority should be accepted");
         state_block.commit().expect("commit");
 
         let snapshot = state
             .commit_roster_snapshot_for_block(height, committed.as_ref().hash())
             .expect("commit-roster snapshot");
-        assert_eq!(snapshot, journal_before);
         assert_eq!(snapshot.commit_qc, commit_cert);
-        assert!(
-            snapshot.stake_snapshot.is_none(),
-            "permissioned state apply must preserve the absent stake snapshot"
-        );
         let view = state.view();
         let stored = view.world().commit_qcs().get(&committed.as_ref().hash());
         assert_eq!(
@@ -97841,17 +96212,10 @@ mod tests {
             Some(&snapshot.commit_qc),
             "replay should still preserve durable commit-roster evidence"
         );
-        let sidecar_after = kura
-            .read_roster_metadata(height)
-            .expect("post-apply roster sidecar");
-        assert_eq!(sidecar_after.height, sidecar_before.height);
-        assert_eq!(sidecar_after.block_hash, sidecar_before.block_hash);
-        assert_eq!(sidecar_after.commit_qc, sidecar_before.commit_qc);
-        assert_eq!(
-            sidecar_after.validator_checkpoint,
-            sidecar_before.validator_checkpoint
+        assert!(
+            kura.read_roster_metadata(height).is_none(),
+            "replay must not rewrite retained roster sidecars for historical blocks"
         );
-        assert_eq!(sidecar_after.stake_snapshot, sidecar_before.stake_snapshot);
 
         status::reset_commit_certs_for_tests();
         status::reset_validator_checkpoints_for_tests();
@@ -97889,20 +96253,7 @@ mod tests {
 
         let kp = crate::state::checked_keypair_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
         let peer = PeerId::new(kp.public_key().clone());
-        let genesis_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let genesis_signature = iroha_data_model::block::BlockSignature::new(
-            0,
-            iroha_crypto::SignatureOf::try_from_hash(kp.private_key(), genesis_header.hash())
-                .expect("test block signing should succeed"),
-        );
-        let genesis = Arc::new(SignedBlock::presigned(
-            genesis_signature,
-            genesis_header,
-            Vec::new(),
-        ));
-        kura.store_block(Arc::clone(&genesis))
-            .expect("store canonical genesis block");
-        let header = BlockHeader::new(nonzero!(2_u64), Some(genesis.hash()), None, None, 0, 1);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let signature = iroha_data_model::block::BlockSignature::new(
             0,
             iroha_crypto::SignatureOf::try_from_hash(kp.private_key(), header.hash())
@@ -97913,15 +96264,15 @@ mod tests {
         kura.store_block(Arc::clone(&canonical_block))
             .expect("store canonical block");
         let roster = vec![peer];
-        let signers_bitmap = vec![0b0000_0001];
-        let bls_aggregate_signature = vec![0xAA; 96];
+        let signers_bitmap = vec![0];
+        let bls_aggregate_signature = Vec::new();
         let commit_cert = Qc {
             phase: crate::sumeragi::consensus::Phase::Commit,
             subject_block_hash: block_hash,
             parent_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
             post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
-            height: 2,
-            view: 1,
+            height: 1,
+            view: 0,
             epoch: 0,
             chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
             rechain_seq: 0,
@@ -97936,7 +96287,7 @@ mod tests {
             },
         };
         let checkpoint = ValidatorSetCheckpoint::new(
-            2,
+            1,
             commit_cert.view,
             block_hash,
             commit_cert.parent_state_root,
@@ -97948,7 +96299,9 @@ mod tests {
             None,
         );
 
-        state.record_commit_roster(&commit_cert, &checkpoint, None);
+        state
+            .record_commit_roster(&commit_cert, &checkpoint, None)
+            .expect("canonical commit-roster recording should retain known journal durability");
 
         let sidecar = kura
             .read_roster_metadata(commit_cert.height)
@@ -97971,7 +96324,7 @@ mod tests {
     }
 
     #[test]
-    fn commit_roster_with_sidecar_durably_persists_journal() {
+    fn commit_roster_with_sidecar_keeps_hot_path_journal_in_memory() {
         let _guard = status::commit_history_test_guard();
         status::reset_commit_certs_for_tests();
         status::reset_validator_checkpoints_for_tests();
@@ -98002,38 +96355,26 @@ mod tests {
 
         let kp = crate::state::checked_keypair_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
         let peer = PeerId::new(kp.public_key().clone());
-        let make_block = |header: BlockHeader| {
-            let signature = iroha_data_model::block::BlockSignature::new(
-                0,
-                iroha_crypto::SignatureOf::try_from_hash(kp.private_key(), header.hash())
-                    .expect("test block signing should succeed"),
-            );
-            Arc::new(SignedBlock::presigned(signature, header, Vec::new()))
-        };
-        let genesis = make_block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
-        kura.store_block(Arc::clone(&genesis))
-            .expect("store canonical genesis");
-        let canonical_block = make_block(BlockHeader::new(
-            nonzero!(2_u64),
-            Some(genesis.hash()),
-            None,
-            None,
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let signature = iroha_data_model::block::BlockSignature::new(
             0,
-            1,
-        ));
+            iroha_crypto::SignatureOf::try_from_hash(kp.private_key(), header.hash())
+                .expect("test block signing should succeed"),
+        );
+        let canonical_block = Arc::new(SignedBlock::presigned(signature, header, Vec::new()));
         let block_hash = canonical_block.hash();
         kura.store_block(Arc::clone(&canonical_block))
             .expect("store canonical block");
         let roster = vec![peer];
-        let signers_bitmap = vec![0b0000_0001];
-        let bls_aggregate_signature = vec![0xAA; 96];
+        let signers_bitmap = vec![0];
+        let bls_aggregate_signature = Vec::new();
         let commit_cert = Qc {
             phase: crate::sumeragi::consensus::Phase::Commit,
             subject_block_hash: block_hash,
             parent_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
             post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
-            height: 2,
-            view: 1,
+            height: 1,
+            view: 0,
             epoch: 0,
             chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
             rechain_seq: 0,
@@ -98048,7 +96389,7 @@ mod tests {
             },
         };
         let checkpoint = ValidatorSetCheckpoint::new(
-            2,
+            1,
             commit_cert.view,
             block_hash,
             commit_cert.parent_state_root,
@@ -98059,13 +96400,11 @@ mod tests {
             VALIDATOR_SET_HASH_VERSION_V1,
             None,
         );
-        assert!(
-            !status::record_commit_qc(commit_cert.clone()).is_conflict(),
-            "test commit QC should enter authenticated finality"
-        );
 
         assert!(
-            state.record_commit_roster_with_sidecar(&commit_cert, &checkpoint, None),
+            state
+                .record_commit_roster_with_sidecar(&commit_cert, &checkpoint, None)
+                .expect("in-memory journal update should retain known durability"),
             "committed sidecar path should accept canonical roster metadata"
         );
         assert!(
@@ -98079,8 +96418,8 @@ mod tests {
         assert!(
             reloaded
                 .get(commit_cert.height, commit_cert.subject_block_hash)
-                .is_some(),
-            "committed sidecar path must retain the authenticated restart fence"
+                .is_none(),
+            "committed sidecar path must not rewrite the full journal on the hot commit path"
         );
         let snapshot = state
             .commit_roster_journal
@@ -98090,96 +96429,6 @@ mod tests {
         assert_eq!(snapshot.commit_qc, commit_cert);
         assert_eq!(snapshot.validator_checkpoint, checkpoint);
         assert!(snapshot.stake_snapshot.is_none());
-
-        status::reset_commit_certs_for_tests();
-        status::reset_validator_checkpoints_for_tests();
-    }
-
-    #[test]
-    fn commit_roster_rejects_checkpoint_signed_subject_divergence() {
-        let _guard = status::commit_history_test_guard();
-        status::reset_commit_certs_for_tests();
-        status::reset_validator_checkpoints_for_tests();
-        let kura = Kura::blank_kura_for_testing();
-        let state = State::new_for_testing(
-            World::default(),
-            Arc::clone(&kura),
-            LiveQueryStore::start_test(),
-        );
-
-        let keypair =
-            crate::state::checked_keypair_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
-        let roster = vec![PeerId::new(keypair.public_key().clone())];
-        let block_hash =
-            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xD7; Hash::LENGTH]));
-        let parent_state_root = Hash::new(b"commit-roster-parent");
-        let post_state_root = Hash::new(b"commit-roster-post");
-        let chain_order_hash = Hash::new(b"commit-roster-chain-order");
-        let signers_bitmap = vec![0b0000_0001];
-        let aggregate_signature = vec![0xD8; 96];
-        let commit_qc = Qc {
-            phase: crate::sumeragi::consensus::Phase::Commit,
-            subject_block_hash: block_hash,
-            parent_state_root,
-            post_state_root,
-            height: 2,
-            view: 1,
-            epoch: 0,
-            chain_order_hash,
-            rechain_seq: 7,
-            mode_tag: crate::sumeragi::consensus::PERMISSIONED_TAG.to_string(),
-            highest_qc: None,
-            validator_set_hash: HashOf::new(&roster),
-            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-            validator_set: roster.clone(),
-            aggregate: crate::sumeragi::consensus::QcAggregate {
-                signers_bitmap: signers_bitmap.clone(),
-                bls_aggregate_signature: aggregate_signature.clone(),
-            },
-        };
-        let checkpoint = ValidatorSetCheckpoint::new_with_chain_order(
-            commit_qc.height,
-            commit_qc.view,
-            block_hash,
-            chain_order_hash,
-            commit_qc.rechain_seq,
-            parent_state_root,
-            post_state_root,
-            roster,
-            signers_bitmap,
-            aggregate_signature,
-            VALIDATOR_SET_HASH_VERSION_V1,
-            None,
-        );
-        assert!(!status::record_commit_qc(commit_qc.clone()).is_conflict());
-
-        let mut bad_parent = checkpoint.clone();
-        bad_parent.parent_state_root = Hash::new(b"different parent");
-        let mut bad_post = checkpoint.clone();
-        bad_post.post_state_root = Hash::new(b"different post");
-        let mut bad_chain_order = checkpoint.clone();
-        bad_chain_order.chain_order_hash = Hash::new(b"different chain order");
-        let mut bad_rechain = checkpoint;
-        bad_rechain.rechain_seq = bad_rechain.rechain_seq.saturating_add(1);
-
-        for (field, mismatched) in [
-            ("parent_state_root", bad_parent),
-            ("post_state_root", bad_post),
-            ("chain_order_hash", bad_chain_order),
-            ("rechain_seq", bad_rechain),
-        ] {
-            assert!(
-                !state.record_commit_roster_hint(&commit_qc, &mismatched, None),
-                "checkpoint with divergent {field} must fail before journal publication"
-            );
-        }
-        assert!(
-            state
-                .commit_roster_snapshot_for_block(commit_qc.height, block_hash)
-                .is_none(),
-            "no mismatched signed subject may reach durable roster metadata"
-        );
-        assert!(status::validator_checkpoint_history().is_empty());
 
         status::reset_commit_certs_for_tests();
         status::reset_validator_checkpoints_for_tests();
@@ -98228,15 +96477,15 @@ mod tests {
         kura.store_block(Arc::clone(&canonical_block))
             .expect("store canonical block");
         let roster = vec![peer];
-        let signers_bitmap = vec![0b0000_0001];
-        let bls_aggregate_signature = vec![0xAA; 96];
+        let signers_bitmap = vec![0];
+        let bls_aggregate_signature = Vec::new();
         let commit_cert = Qc {
             phase: crate::sumeragi::consensus::Phase::Commit,
             subject_block_hash: block_hash,
             parent_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
             post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
             height: 1,
-            view: 1,
+            view: 0,
             epoch: 0,
             chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
             rechain_seq: 0,
@@ -98262,6 +96511,29 @@ mod tests {
             VALIDATOR_SET_HASH_VERSION_V1,
             None,
         );
+        let mut mismatched_checkpoint = checkpoint.clone();
+        mismatched_checkpoint.post_state_root = Hash::new(b"corrupt sidecar post-state root");
+        kura.write_roster_metadata(&crate::kura::RosterSidecar::new(
+            1,
+            block_hash,
+            Some(commit_cert.clone()),
+            Some(mismatched_checkpoint),
+            None,
+        ));
+        assert!(
+            state
+                .commit_roster_snapshot_for_block(1, block_hash)
+                .is_none(),
+            "non-canonical sidecar must be rejected before warming the immutable journal"
+        );
+        assert!(
+            state
+                .commit_roster_journal
+                .read()
+                .get(1, block_hash)
+                .is_none(),
+            "rejected sidecar must not fence out a later exact tuple"
+        );
         kura.write_roster_metadata(&crate::kura::RosterSidecar::new(
             1,
             block_hash,
@@ -98280,8 +96552,8 @@ mod tests {
                 .commit_roster_journal
                 .read()
                 .get(1, block_hash)
-                .is_none(),
-            "read-only sidecar fallback must not publish an unauthenticated journal entry"
+                .is_some(),
+            "sidecar fallback should warm the in-memory journal"
         );
         status::reset_commit_certs_for_tests();
         status::reset_validator_checkpoints_for_tests();
@@ -98342,7 +96614,9 @@ mod tests {
         );
 
         assert!(
-            state.record_commit_roster(&commit_cert, &checkpoint, None),
+            state
+                .record_commit_roster(&commit_cert, &checkpoint, None)
+                .expect("canonical journal persistence should retain known durability"),
             "uncommitted commit roster should still populate the journal"
         );
         assert!(
@@ -98360,7 +96634,7 @@ mod tests {
     }
 
     #[test]
-    fn commit_roster_hint_is_durable_and_duplicate_upgrade_populates_commit_state() {
+    fn commit_roster_hint_skips_world_and_sidecar_writes() {
         let _guard = status::commit_history_test_guard();
         status::reset_commit_certs_for_tests();
         status::reset_validator_checkpoints_for_tests();
@@ -98371,30 +96645,10 @@ mod tests {
             LiveQueryStore::start_test(),
         );
 
+        let block_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xC5; Hash::LENGTH]));
         let keypair =
             crate::state::checked_keypair_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
-        let make_block = |header: BlockHeader| {
-            let signature = iroha_data_model::block::BlockSignature::new(
-                0,
-                iroha_crypto::SignatureOf::try_from_hash(keypair.private_key(), header.hash())
-                    .expect("test block signing should succeed"),
-            );
-            Arc::new(SignedBlock::presigned(signature, header, Vec::new()))
-        };
-        let genesis = make_block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
-        kura.store_block(Arc::clone(&genesis))
-            .expect("store canonical genesis");
-        let canonical = make_block(BlockHeader::new(
-            nonzero!(2_u64),
-            Some(genesis.hash()),
-            None,
-            None,
-            0,
-            0,
-        ));
-        let block_hash = canonical.hash();
-        kura.store_block(canonical)
-            .expect("store canonical successor");
         let roster = vec![PeerId::new(keypair.public_key().clone())];
         let signers_bitmap = vec![0b0000_0001];
         let bls_aggregate_signature = vec![0xBE; 96];
@@ -98432,17 +96686,15 @@ mod tests {
             VALIDATOR_SET_HASH_VERSION_V1,
             None,
         );
-        assert!(
-            !status::record_commit_qc(commit_cert.clone()).is_conflict(),
-            "test commit QC should enter authenticated finality"
-        );
 
         assert!(
-            state.record_commit_roster_hint(&commit_cert, &checkpoint, None),
+            state
+                .record_commit_roster_hint(&commit_cert, &checkpoint, None)
+                .expect("canonical hint persistence should retain known durability"),
             "commit roster hint should populate recovery metadata"
         );
         assert!(
-            kura.read_roster_metadata(commit_cert.height).is_none(),
+            kura.read_roster_metadata(2).is_none(),
             "hint recording must not write committed-height sidecars"
         );
         let view = state.view();
@@ -98453,132 +96705,114 @@ mod tests {
                 .is_none(),
             "hint recording must not mutate WSV commit-QC storage"
         );
-        drop(view);
-        let durable = CommitRosterJournal::load(
-            CommitRosterJournal::journal_path(&kura.store_root()),
-            kura.block_sync_roster_retention(),
-        )
-        .expect("reload durable pre-Kura hint");
-        assert!(
-            durable
-                .get(commit_cert.height, commit_cert.subject_block_hash)
-                .is_some(),
-            "authenticated pre-Kura hint must survive a process restart"
-        );
         assert_eq!(
             state
-                .commit_roster_snapshot_for_block(commit_cert.height, block_hash)
+                .commit_roster_snapshot_for_block(2, block_hash)
                 .map(|snapshot| snapshot.commit_qc),
-            Some(commit_cert.clone())
+            Some(commit_cert)
         );
-        let synthesized_post_state_stake =
-            CommitStakeSnapshot::from_roster(&state.world_view(), &commit_cert.validator_set)
-                .expect("test roster yields a synthetic stake snapshot");
-        assert!(
-            !state.record_commit_roster_hint(
-                &commit_cert,
-                &checkpoint,
-                Some(synthesized_post_state_stake),
-            ),
-            "permissioned roster authority must reject synthesized post-state stake"
-        );
-        assert!(
-            state
-                .commit_roster_snapshot_for_block(commit_cert.height, block_hash)
-                .is_some_and(|snapshot| snapshot.stake_snapshot.is_none()),
-            "failed normalization attempt must not rewrite the exact absent snapshot"
-        );
-
-        {
-            let mut block_hashes = state.block_hashes.block();
-            block_hashes.push_for_tests(genesis.hash());
-            block_hashes.push_for_tests(block_hash);
-            block_hashes.commit_for_tests();
-        }
-        assert!(
-            state.record_commit_roster_with_sidecar(&commit_cert, &checkpoint, None),
-            "canonical duplicate should upgrade the durable hint"
-        );
-        let view = state.view();
-        assert_eq!(
-            view.world().commit_qcs().get(&block_hash),
-            Some(&commit_cert),
-            "duplicate upgrade must populate WSV commit-QC state"
-        );
-        drop(view);
-        let sidecar = kura
-            .read_roster_metadata(commit_cert.height)
-            .expect("duplicate upgrade should persist strict roster sidecar");
-        assert_eq!(sidecar.commit_qc, Some(commit_cert));
-        assert_eq!(sidecar.validator_checkpoint, Some(checkpoint));
         status::reset_commit_certs_for_tests();
         status::reset_validator_checkpoints_for_tests();
     }
 
+    fn commit_roster_test_tuple(
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+        signature_byte: u8,
+        roster: &[PeerId],
+    ) -> (Qc, ValidatorSetCheckpoint) {
+        let zero_root = Hash::prehashed([0; Hash::LENGTH]);
+        let signers_bitmap = vec![1];
+        let aggregate_signature = vec![signature_byte; 96];
+        let validator_set = roster.to_vec();
+        let commit_qc = Qc {
+            phase: crate::sumeragi::consensus::Phase::Commit,
+            subject_block_hash: block_hash,
+            parent_state_root: zero_root,
+            post_state_root: zero_root,
+            height,
+            view,
+            epoch: 0,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
+            mode_tag: crate::sumeragi::consensus::PERMISSIONED_TAG.to_string(),
+            highest_qc: None,
+            validator_set_hash: HashOf::new(&validator_set),
+            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set: validator_set.clone(),
+            aggregate: crate::sumeragi::consensus::QcAggregate {
+                signers_bitmap: signers_bitmap.clone(),
+                bls_aggregate_signature: aggregate_signature.clone(),
+            },
+        };
+        let checkpoint = ValidatorSetCheckpoint::new(
+            height,
+            view,
+            block_hash,
+            zero_root,
+            zero_root,
+            validator_set,
+            signers_bitmap,
+            aggregate_signature,
+            VALIDATOR_SET_HASH_VERSION_V1,
+            None,
+        );
+        (commit_qc, checkpoint)
+    }
+
     #[test]
     fn commit_roster_hint_rejects_divergent_same_subject_prepared_tuple() {
-        let _guard = status::commit_history_test_guard();
-        status::reset_commit_certs_for_tests();
-        status::reset_validator_checkpoints_for_tests();
         let kura = Kura::blank_kura_for_testing();
         let state = State::new_for_testing(
             World::default(),
             Arc::clone(&kura),
             LiveQueryStore::start_test(),
         );
-
         let block_hash =
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xC6; Hash::LENGTH]));
         let keypair =
             crate::state::checked_keypair_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
         let roster = vec![PeerId::new(keypair.public_key().clone())];
-        let zero_root = Hash::prehashed([0; Hash::LENGTH]);
-        let make_tuple = |view: u64, signature_byte: u8| {
-            let signers_bitmap = vec![0b0000_0001];
-            let aggregate_signature = vec![signature_byte; 96];
-            let qc = Qc {
-                phase: crate::sumeragi::consensus::Phase::Commit,
-                subject_block_hash: block_hash,
-                parent_state_root: zero_root,
-                post_state_root: zero_root,
-                height: 2,
-                view,
-                epoch: 0,
-                chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
-                rechain_seq: 0,
-                mode_tag: crate::sumeragi::consensus::PERMISSIONED_TAG.to_string(),
-                highest_qc: None,
-                validator_set_hash: HashOf::new(&roster),
-                validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-                validator_set: roster.clone(),
-                aggregate: crate::sumeragi::consensus::QcAggregate {
-                    signers_bitmap: signers_bitmap.clone(),
-                    bls_aggregate_signature: aggregate_signature.clone(),
-                },
-            };
-            let checkpoint = ValidatorSetCheckpoint::new(
-                qc.height,
-                view,
-                block_hash,
-                zero_root,
-                zero_root,
-                roster.clone(),
-                signers_bitmap,
-                aggregate_signature,
-                VALIDATOR_SET_HASH_VERSION_V1,
-                None,
-            );
-            (qc, checkpoint)
-        };
-        let (prepared_qc, prepared_checkpoint) = make_tuple(1, 0xC7);
-        let (replacement_qc, replacement_checkpoint) = make_tuple(2, 0xC8);
+        let (prepared_qc, prepared_checkpoint) =
+            commit_roster_test_tuple(block_hash, 2, 1, 0xC7, &roster);
+        let (replacement_qc, replacement_checkpoint) =
+            commit_roster_test_tuple(block_hash, 2, 2, 0xC8, &roster);
 
-        assert!(!status::record_commit_qc(prepared_qc.clone()).is_conflict());
-        assert!(state.record_commit_roster_hint(&prepared_qc, &prepared_checkpoint, None));
-        assert!(!status::record_commit_qc(replacement_qc.clone()).is_conflict());
+        let mut mismatched_checkpoint = prepared_checkpoint.clone();
+        mismatched_checkpoint.post_state_root = Hash::prehashed([0xC9; Hash::LENGTH]);
         assert!(
-            !state.record_commit_roster_hint(&replacement_qc, &replacement_checkpoint, None),
-            "a later same-subject QC must not replace the exact prepared tuple"
+            !state
+                .record_commit_roster_hint(&prepared_qc, &mismatched_checkpoint, None)
+                .expect("invalid input should not make journal durability ambiguous"),
+            "a checkpoint with a different signed subject must be rejected before publication"
+        );
+        let mut missing_stake_qc = prepared_qc.clone();
+        missing_stake_qc.mode_tag = crate::sumeragi::consensus::NPOS_TAG.to_owned();
+        assert!(
+            !state
+                .record_commit_roster_hint(&missing_stake_qc, &prepared_checkpoint, None)
+                .expect("invalid input should not make journal durability ambiguous"),
+            "a non-genesis NPoS tuple without authoritative stake must be rejected"
+        );
+        assert!(
+            state
+                .commit_roster_journal
+                .read()
+                .get(prepared_qc.height, block_hash)
+                .is_none(),
+            "invalid tuples must not reach the journal"
+        );
+        assert!(
+            state
+                .record_commit_roster_hint(&prepared_qc, &prepared_checkpoint, None)
+                .expect("prepared tuple should persist with known durability")
+        );
+        assert!(
+            !state
+                .record_commit_roster_hint(&replacement_qc, &replacement_checkpoint, None)
+                .expect("immutable-tuple rejection should retain known durability"),
+            "a later same-subject tuple must not replace prepared authority"
         );
 
         let snapshot = state
@@ -98588,73 +96822,40 @@ mod tests {
             .expect("prepared tuple must remain in memory");
         assert_eq!(snapshot.commit_qc, prepared_qc);
         assert_eq!(snapshot.validator_checkpoint, prepared_checkpoint);
-        assert!(snapshot.stake_snapshot.is_none());
-
-        let reloaded = CommitRosterJournal::load(
+        let durable = CommitRosterJournal::load(
             CommitRosterJournal::journal_path(&kura.store_root()),
             kura.block_sync_roster_retention(),
         )
-        .expect("reload exact prepared tuple");
-        let durable = reloaded
-            .get(snapshot.commit_qc.height, block_hash)
-            .expect("prepared tuple must remain durable");
+        .expect("reload durable prepared tuple")
+        .get(snapshot.commit_qc.height, block_hash)
+        .expect("prepared tuple must remain durable");
         assert_eq!(durable, snapshot);
-        assert!(kura.read_roster_metadata(2).is_none());
         assert!(state.world_view().commit_qcs().get(&block_hash).is_none());
-
-        status::reset_commit_certs_for_tests();
-        status::reset_validator_checkpoints_for_tests();
+        assert!(kura.read_roster_metadata(2).is_none());
     }
 
     #[test]
-    fn commit_roster_hint_persistence_failure_is_transactional_and_rejected() {
-        let _guard = status::commit_history_test_guard();
-        status::reset_commit_certs_for_tests();
-        status::reset_validator_checkpoints_for_tests();
+    fn commit_roster_persistence_and_rollback_failure_fences_without_publication() {
         let kura = Kura::blank_kura_for_testing();
         let state = State::new_for_testing(
             World::default(),
             Arc::clone(&kura),
             LiveQueryStore::start_test(),
         );
-        let kp = crate::state::checked_keypair_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
-        let roster = vec![PeerId::new(kp.public_key().clone())];
         let block_hash =
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xD5; Hash::LENGTH]));
-        let zero_root = Hash::prehashed([0; Hash::LENGTH]);
-        let commit_cert = Qc {
-            phase: crate::sumeragi::consensus::Phase::Commit,
-            subject_block_hash: block_hash,
-            parent_state_root: zero_root,
-            post_state_root: zero_root,
-            height: 2,
-            view: 1,
-            epoch: 0,
-            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
-            rechain_seq: 0,
-            mode_tag: crate::sumeragi::consensus::PERMISSIONED_TAG.to_string(),
-            highest_qc: None,
-            validator_set_hash: HashOf::new(&roster),
-            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-            validator_set: roster.clone(),
-            aggregate: crate::sumeragi::consensus::QcAggregate {
-                signers_bitmap: vec![1],
-                bls_aggregate_signature: vec![0xD6; 96],
-            },
-        };
-        let checkpoint = ValidatorSetCheckpoint::new(
-            2,
-            1,
-            block_hash,
-            zero_root,
-            zero_root,
-            roster,
-            vec![1],
-            vec![0xD6; 96],
-            VALIDATOR_SET_HASH_VERSION_V1,
-            None,
-        );
-        assert!(!status::record_commit_qc(commit_cert.clone()).is_conflict());
+        let keypair =
+            crate::state::checked_keypair_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
+        let roster = vec![PeerId::new(keypair.public_key().clone())];
+        let (commit_qc, checkpoint) = commit_roster_test_tuple(block_hash, 2, 1, 0xD6, &roster);
+        {
+            let mut block_hashes = state.block_hashes.block();
+            block_hashes.push_for_tests(HashOf::<BlockHeader>::from_untyped_unchecked(
+                Hash::prehashed([0xD4; Hash::LENGTH]),
+            ));
+            block_hashes.push_for_tests(block_hash);
+            block_hashes.commit_for_tests();
+        }
 
         let blocking_parent = kura.store_root().join("commit-roster-parent-is-file");
         std::fs::File::create(&blocking_parent).expect("create blocking parent file");
@@ -98663,103 +96864,90 @@ mod tests {
             kura.block_sync_roster_retention(),
         );
 
+        let outcome = state.record_commit_roster(&commit_qc, &checkpoint, None);
         assert!(
-            !state.record_commit_roster_hint(&commit_cert, &checkpoint, None),
-            "authenticated hint must be rejected when fsync persistence cannot complete"
+            matches!(
+                outcome,
+                Err(CommitRosterJournalError::StorageUnknown { .. })
+            ),
+            "an unavailable rollback path must fence journal storage instead of reporting a retryable rejection"
         );
         assert!(
             state
                 .commit_roster_journal
                 .read()
-                .get(commit_cert.height, block_hash)
+                .get(commit_qc.height, block_hash)
                 .is_none(),
             "failed persistence must not publish the candidate in memory"
         );
         assert!(
-            state.world_view().commit_qcs().get(&block_hash).is_none(),
-            "failed pre-Kura hint must not mutate WSV"
+            state.commit_roster_journal.read().storage_is_unknown(),
+            "an unavailable compensation path must retain the process-lifetime fence"
         );
-        status::reset_commit_certs_for_tests();
-        status::reset_validator_checkpoints_for_tests();
+        assert!(
+            state.world_view().commit_qcs().get(&block_hash).is_none(),
+            "failed persistence must not mutate WSV"
+        );
+        assert!(
+            kura.read_roster_metadata(commit_qc.height).is_none(),
+            "failed persistence must not write the committed-height sidecar"
+        );
     }
 
     #[test]
-    fn commit_roster_hint_exact_retry_repersists_deleted_durable_journal() {
-        let _guard = status::commit_history_test_guard();
-        status::reset_commit_certs_for_tests();
-        status::reset_validator_checkpoints_for_tests();
-        let temp_dir = tempfile::tempdir().expect("temp dir");
-        let kura =
-            strict_kura_for_testing(temp_dir.path().join("kura"), &RuntimeLaneConfig::default());
+    fn commit_roster_double_namespace_sync_failure_fences_publication_until_restart() {
+        let kura = Kura::blank_kura_for_testing();
         let state = State::new_for_testing(
             World::default(),
             Arc::clone(&kura),
             LiveQueryStore::start_test(),
         );
+        let block_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xD7; Hash::LENGTH]));
         let keypair =
             crate::state::checked_keypair_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
         let roster = vec![PeerId::new(keypair.public_key().clone())];
-        let block_hash =
-            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xE5; Hash::LENGTH]));
-        let zero_root = Hash::prehashed([0; Hash::LENGTH]);
-        let signers_bitmap = vec![1];
-        let aggregate_signature = vec![0xE6; 96];
-        let commit_cert = Qc {
-            phase: crate::sumeragi::consensus::Phase::Commit,
-            subject_block_hash: block_hash,
-            parent_state_root: zero_root,
-            post_state_root: zero_root,
-            height: 2,
-            view: 1,
-            epoch: 0,
-            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
-            rechain_seq: 0,
-            mode_tag: crate::sumeragi::consensus::PERMISSIONED_TAG.to_string(),
-            highest_qc: None,
-            validator_set_hash: HashOf::new(&roster),
-            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-            validator_set: roster.clone(),
-            aggregate: crate::sumeragi::consensus::QcAggregate {
-                signers_bitmap: signers_bitmap.clone(),
-                bls_aggregate_signature: aggregate_signature.clone(),
-            },
-        };
-        let checkpoint = ValidatorSetCheckpoint::new(
-            commit_cert.height,
-            commit_cert.view,
-            block_hash,
-            zero_root,
-            zero_root,
-            roster,
-            signers_bitmap,
-            aggregate_signature,
-            VALIDATOR_SET_HASH_VERSION_V1,
-            None,
-        );
-        assert!(!status::record_commit_qc(commit_cert.clone()).is_conflict());
-        assert!(state.record_commit_roster_hint(&commit_cert, &checkpoint, None));
-        assert!(state.commit_roster_journal_matches_exact(&commit_cert, &checkpoint, None));
+        let (commit_qc, checkpoint) = commit_roster_test_tuple(block_hash, 2, 1, 0xD8, &roster);
+        {
+            let mut block_hashes = state.block_hashes.block();
+            block_hashes.push_for_tests(HashOf::<BlockHeader>::from_untyped_unchecked(
+                Hash::prehashed([0xD6; Hash::LENGTH]),
+            ));
+            block_hashes.push_for_tests(block_hash);
+            block_hashes.commit_for_tests();
+        }
+        state
+            .commit_roster_journal
+            .write()
+            .fail_after_rename_once_for_tests();
 
-        let journal_path = state.commit_roster_journal_path();
-        std::fs::remove_file(&journal_path).expect("delete durable commit roster journal");
+        let outcome = state.record_commit_roster_hint(&commit_qc, &checkpoint, None);
         assert!(
-            !state.commit_roster_journal_matches_exact(&commit_cert, &checkpoint, None),
-            "stale in-memory authority must not satisfy durable readback"
+            matches!(
+                outcome,
+                Err(CommitRosterJournalError::StorageUnknown { .. })
+            ),
+            "double post-rename sync failure must return an explicit storage-unknown outcome"
         );
-
         assert!(
-            state.record_commit_roster_hint(&commit_cert, &checkpoint, None),
-            "the exact authenticated retry must rewrite the deleted recovery fence"
+            state.commit_roster_journal.read().storage_is_unknown(),
+            "ambiguous replacement must leave a process-lifetime journal fence"
         );
-        assert!(journal_path.exists());
-        assert!(state.commit_roster_journal_matches_exact(&commit_cert, &checkpoint, None));
         assert!(
-            state.world_view().commit_qcs().get(&block_hash).is_none(),
-            "the hint retry must remain WSV read-only"
+            matches!(
+                state.record_commit_roster_with_sidecar(&commit_qc, &checkpoint, None),
+                Err(CommitRosterJournalError::StorageUnknown { .. })
+            ),
+            "the fatal fence must not degrade into ordinary retry semantics"
         );
-
-        status::reset_commit_certs_for_tests();
-        status::reset_validator_checkpoints_for_tests();
+        assert!(
+            state
+                .commit_roster_snapshot_for_block(commit_qc.height, block_hash)
+                .is_none(),
+            "block sync must not consume a namespace readback while durability is unknown"
+        );
+        assert!(state.world_view().commit_qcs().get(&block_hash).is_none());
+        assert!(kura.read_roster_metadata(commit_qc.height).is_none());
     }
 
     #[test]
@@ -98824,7 +97012,9 @@ mod tests {
         }
 
         assert!(
-            state.record_commit_roster(&commit_cert, &checkpoint, None),
+            state
+                .record_commit_roster(&commit_cert, &checkpoint, None)
+                .expect("initial journal persistence should retain known durability"),
             "initial canonical commit roster should be accepted"
         );
         kura.write_roster_metadata(&crate::kura::RosterSidecar::new(
@@ -98855,7 +97045,9 @@ mod tests {
         assert_eq!(stale_sidecar.block_hash, stale_hash);
 
         assert!(
-            state.record_commit_roster(&commit_cert, &checkpoint, None),
+            state
+                .record_commit_roster(&commit_cert, &checkpoint, None)
+                .expect("exact retry should retain known journal durability"),
             "duplicate canonical commit roster should be accepted"
         );
 
@@ -98867,60 +97059,6 @@ mod tests {
         assert_eq!(repaired.validator_checkpoint, Some(checkpoint));
         status::reset_commit_certs_for_tests();
         status::reset_validator_checkpoints_for_tests();
-    }
-
-    #[test]
-    fn persisted_commit_qc_candidates_reject_cross_height_sidecar_qc() {
-        let kura = Kura::blank_kura_for_testing();
-        let state = State::new_for_testing(
-            World::default(),
-            Arc::clone(&kura),
-            LiveQueryStore::start_test(),
-        );
-        let keypair =
-            crate::state::checked_keypair_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
-        let roster = vec![PeerId::new(keypair.public_key().clone())];
-        let embedded_hash =
-            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xD4; Hash::LENGTH]));
-        let wrapper_hash =
-            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xD5; Hash::LENGTH]));
-        let zero_root = Hash::prehashed([0; Hash::LENGTH]);
-        let cross_height_qc = Qc {
-            phase: crate::sumeragi::consensus::Phase::Commit,
-            subject_block_hash: embedded_hash,
-            parent_state_root: zero_root,
-            post_state_root: zero_root,
-            height: 2,
-            view: 0,
-            epoch: 0,
-            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
-            rechain_seq: 0,
-            mode_tag: crate::sumeragi::consensus::PERMISSIONED_TAG.to_owned(),
-            highest_qc: None,
-            validator_set_hash: HashOf::new(&roster),
-            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-            validator_set: roster,
-            aggregate: crate::sumeragi::consensus::QcAggregate {
-                signers_bitmap: vec![1],
-                bls_aggregate_signature: vec![0xD6; 96],
-            },
-        };
-        assert!(kura.write_roster_metadata(&crate::kura::RosterSidecar::new(
-            1,
-            wrapper_hash,
-            Some(cross_height_qc.clone()),
-            None,
-            None,
-        )));
-        assert_eq!(
-            kura.read_roster_commit_qc_candidate(1),
-            Some(cross_height_qc),
-            "raw extraction should expose the adversarial fixture to the slot fence"
-        );
-        assert!(
-            state.persisted_commit_qc_candidates_at_height(1).is_empty(),
-            "a sidecar slot must never lend its authority to an embedded QC at another height"
-        );
     }
 
     #[test]
@@ -98990,7 +97128,9 @@ mod tests {
         );
 
         assert!(
-            !state.record_commit_roster(&stale_cert, &stale_checkpoint, None),
+            !state
+                .record_commit_roster(&stale_cert, &stale_checkpoint, None)
+                .expect("canonical-hash rejection should retain known durability"),
             "Kura's committed block hash should reject a stale same-height roster"
         );
         assert!(
@@ -99075,11 +97215,15 @@ mod tests {
         }
 
         assert!(
-            state.record_commit_roster(&canonical_cert, &canonical_checkpoint, None),
+            state
+                .record_commit_roster(&canonical_cert, &canonical_checkpoint, None)
+                .expect("canonical journal persistence should retain known durability"),
             "canonical commit roster should be accepted"
         );
         assert!(
-            !state.record_commit_roster(&stale_cert, &stale_checkpoint, None),
+            !state
+                .record_commit_roster(&stale_cert, &stale_checkpoint, None)
+                .expect("stale tuple rejection should retain known durability"),
             "stale same-height commit roster must not replace canonical metadata"
         );
 
@@ -103524,7 +101668,7 @@ mod tests {
         .expect("register asset definition");
 
         let asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
-        Mint::asset_numeric(5_u32, asset_id.clone())
+        Mint::asset_quantity(5_u32, asset_id.clone())
             .execute(&ALICE_ID, &mut stx)
             .expect("mint tracked balance");
         stx.world.asset_metadata.insert(
@@ -103780,7 +101924,7 @@ mod tests {
 
         let global_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
         let (_, global_asset_value) =
-            Asset::new(global_asset_id.clone(), Numeric::new(1, 0)).into_key_value();
+            Asset::new(global_asset_id.clone(), Quantity::from(1)).into_key_value();
         stx.world
             .assets
             .insert(global_asset_id.clone(), global_asset_value);
@@ -103795,7 +101939,7 @@ mod tests {
             ),
         );
         let (_, scoped_asset_value) =
-            Asset::new(scoped_asset_id.clone(), Numeric::new(1, 0)).into_key_value();
+            Asset::new(scoped_asset_id.clone(), Quantity::from(1)).into_key_value();
         stx.world
             .assets
             .insert(scoped_asset_id.clone(), scoped_asset_value);
@@ -103909,8 +102053,7 @@ mod tests {
             scoped_asset_id.clone(),
             other_asset_id,
         ] {
-            let (_, asset_value) =
-                Asset::new(asset_id.clone(), Numeric::new(1, 0)).into_key_value();
+            let (_, asset_value) = Asset::new(asset_id.clone(), Quantity::from(1)).into_key_value();
             stx.world.assets.insert(asset_id.clone(), asset_value);
             stx.world.track_asset_holder(&asset_id);
         }
@@ -104037,7 +102180,7 @@ mod tests {
         .expect("register asset definition");
 
         let asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
-        let (_, asset_value) = Asset::new(asset_id.clone(), Numeric::new(9, 0)).into_key_value();
+        let (_, asset_value) = Asset::new(asset_id.clone(), 9_u32).into_key_value();
         stx.world.assets.insert(asset_id.clone(), asset_value);
         stx.world.track_asset_holder(&asset_id);
 
@@ -104047,7 +102190,7 @@ mod tests {
             .expect("asset total query succeeds");
         assert_eq!(
             tracked_total,
-            Numeric::zero(),
+            Quantity::zero(),
             "query should return tracked definition total quantity"
         );
     }
@@ -104078,7 +102221,7 @@ mod tests {
             }
             .build(&ALICE_ID);
             let asset_id = AssetId::of(asset_def_id.clone(), ALICE_ID.clone());
-            let asset = Asset::new(asset_id.clone(), Numeric::new(0, 0));
+            let asset = Asset::new(asset_id.clone(), Quantity::from(0));
 
             let world = World::with_assets([domain], [account], [asset_def], [asset], []);
             (world, domain_id, asset_def_id, asset_id, ALICE_ID.clone())
@@ -104105,7 +102248,7 @@ mod tests {
         let mut block_seq = state_seq.block(header);
         {
             let mut stx = block_seq.transaction();
-            Mint::asset_numeric(5_u32, asset_id.clone())
+            Mint::asset_quantity(5_u32, asset_id.clone())
                 .execute(&authority, &mut stx)
                 .expect("mint");
             SetKeyValue::account(authority.clone(), account_key.clone(), Json::new(1u32))
@@ -104320,7 +102463,7 @@ mod tests {
         );
         let alice_asset = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
         let failing_instruction: InstructionBox =
-            Transfer::asset_numeric(alice_asset, 1_u32, BOB_ID.clone()).into();
+            Transfer::asset_quantity(alice_asset, 1_u32, BOB_ID.clone()).into();
         let trigger = Trigger::new(
             trigger_id.clone(),
             Action::new(
@@ -105248,7 +103391,7 @@ mod tests {
 
     #[test]
     fn sccp_registry_rejects_multiple_enabled_revisions_atomically() {
-        let mut lane = eth_test_lane_for_testing();
+        let mut lane = sccp_evm_lane_for_testing(SccpNetworkV1::EthereumMainnet);
         let anchor = iroha_data_model::bridge::SccpNativeTrustAnchorV1 {
             backend: iroha_data_model::bridge::BridgeNativeProofBackendV1::EthereumBeacon,
             anchor_hash: [0xA5; 32],
@@ -105625,7 +103768,7 @@ mod tests {
             let mut state_block = state.block(header);
             {
                 let mut stx = state_block.transaction();
-                Mint::asset_numeric(1_u32, asset_id.clone())
+                Mint::asset_quantity(1_u32, asset_id.clone())
                     .execute(&ALICE_ID, &mut stx)
                     .unwrap();
                 SetKeyValue::account(
@@ -105636,7 +103779,7 @@ mod tests {
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
                 let trigger_action = Action::new(
-                    vec![InstructionBox::from(Burn::asset_numeric(
+                    vec![InstructionBox::from(Burn::asset_quantity(
                         1_u32,
                         asset_id.clone(),
                     ))],
@@ -105768,6 +103911,122 @@ mod tests {
         assert!(
             view.world.asset_definition(&asset_definition_id).is_err(),
             "asset definition created by a failing trigger must not persist",
+        );
+    }
+
+    #[test]
+    fn authenticated_generic_ivm_trigger_executes_without_contract_identity() {
+        use iroha_data_model::{
+            events::execute_trigger::{ExecuteTriggerEvent, ExecuteTriggerEventFilter},
+            transaction::{Executable, IvmBytecode},
+            trigger::{
+                Trigger,
+                action::{Action, Repeats},
+            },
+        };
+
+        let state = State::new(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let trigger_id: TriggerId = "generic_ivm_callback".parse().expect("trigger id");
+        let mut program = ivm::ProgramMetadata {
+            max_cycles: 100,
+            ..ivm::ProgramMetadata::default()
+        }
+        .encode();
+        program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+        let generic_code_hash = ivm::contract_code_hash(&program);
+
+        let block1 = new_dummy_block_with_payload(|header| {
+            header.set_height(nonzero!(1_u64));
+        });
+        {
+            let mut state_block = state.block(block1.as_ref().header());
+            let mut transaction = state_block.transaction();
+            Register::domain(Domain::new(
+                DomainId::try_new("wonderland", "universal").expect("domain id"),
+            ))
+            .execute(&ALICE_ID, &mut transaction)
+            .expect("register domain");
+            Register::account(new_sample_account(&ALICE_ID))
+                .execute(&ALICE_ID, &mut transaction)
+                .expect("register account");
+            Grant::account_permission(
+                iroha_executor_data_model::permission::trigger::CanRegisterTrigger {
+                    authority: ALICE_ID.clone(),
+                },
+                ALICE_ID.clone(),
+            )
+            .execute(&ALICE_ID, &mut transaction)
+            .expect("grant trigger registration");
+            Register::trigger(Trigger::new(
+                trigger_id.clone(),
+                Action::new(
+                    Executable::Ivm(IvmBytecode::from_compiled(program)),
+                    Repeats::Indefinitely,
+                    ALICE_ID.clone(),
+                    ExecuteTriggerEventFilter::new()
+                        .for_trigger(trigger_id.clone())
+                        .under_authority(ALICE_ID.clone()),
+                ),
+            ))
+            .execute(&ALICE_ID, &mut transaction)
+            .expect("register authenticated generic trigger");
+            transaction.apply();
+            state_block.commit().expect("commit generic trigger");
+        }
+
+        let block2 = new_dummy_block_with_payload(|header| {
+            header.set_height(nonzero!(2_u64));
+        });
+        let mut state_block = state.block(block2.as_ref().header());
+        let mut transaction = state_block.transaction();
+        let event = ExecuteTriggerEvent {
+            trigger_id: trigger_id.clone(),
+            authority: ALICE_ID.clone(),
+            args: Json::default(),
+        };
+        let step = transaction
+            .execute_called_trigger(&trigger_id, &event)
+            .expect("generic IVM trigger executes at pc zero");
+        assert!(step.0.is_empty());
+
+        transaction.world.contract_manifests.insert(
+            generic_code_hash,
+            iroha_data_model::smart_contract::manifest::ContractManifest {
+                seiyaku_name: None,
+                code_hash: Some(generic_code_hash),
+                abi_hash: Some(Hash::prehashed(ivm::syscalls::compute_abi_hash(
+                    ivm::SyscallPolicy::AbiV1,
+                ))),
+                compiler_fingerprint: None,
+                features_bitmap: None,
+                access_set_hints: None,
+                entrypoints: None,
+                states: None,
+                kotoba: None,
+                error_codes: None,
+                provenance: None,
+            },
+        );
+        let events_before = transaction.world.external_event_buf.len();
+        let error = transaction
+            .execute_called_trigger(&trigger_id, &event)
+            .expect_err("a manifest-bound hash must not execute as a generic trigger");
+        assert!(
+            matches!(
+                &error,
+                TransactionRejectionReason::Validation(ValidationFail::NotPermitted(message))
+                    if message.contains("contract manifest")
+            ),
+            "unexpected generic-trigger binding error: {error:?}"
+        );
+        assert_eq!(
+            transaction.world.external_event_buf.len(),
+            events_before,
+            "generic-trigger binding rejection must emit no completion event"
         );
     }
 
@@ -105953,6 +104212,46 @@ mod tests {
                 .get(&metadata_marker)
                 .cloned()
                 .expect("authorized raw trigger writes its metadata marker");
+            let live_manifest = stx
+                .world
+                .contract_manifests
+                .remove(code_hash)
+                .expect("remove raw-trigger manifest for adversarial check");
+            let missing_manifest_events_before = stx.world.external_event_buf.len();
+            ivm::reset_argument_record_decode_count();
+            let missing_manifest = stx
+                .execute_called_trigger(&trigger_id, &event)
+                .expect_err("raw trigger must reject a missing live manifest even with warm code");
+            assert!(
+                matches!(
+                    &missing_manifest,
+                    TransactionRejectionReason::Validation(ValidationFail::NotPermitted(message))
+                        if message.contains("has no manifest")
+                ),
+                "unexpected missing-manifest trigger error: {missing_manifest:?}"
+            );
+            assert_eq!(
+                ivm::argument_record_decode_count(),
+                0,
+                "missing trigger manifest must reject before event argument decoding"
+            );
+            assert_eq!(
+                stx.world.external_event_buf.len(),
+                missing_manifest_events_before,
+                "missing trigger manifest must emit no completion event"
+            );
+            assert_eq!(
+                stx.world
+                    .account(&contract_subject)
+                    .expect("raw trigger contract subject account")
+                    .metadata()
+                    .get(&metadata_marker),
+                Some(&authorized_marker),
+                "missing trigger manifest must apply no queued effect"
+            );
+            stx.world
+                .contract_manifests
+                .insert(code_hash, live_manifest);
             Revoke::account_permission(callback_permission.clone(), ALICE_ID.clone())
                 .execute(&ALICE_ID, &mut stx)
                 .expect("revoke raw IVM trigger entrypoint permission");
@@ -106523,7 +104822,7 @@ seiyaku IdentitylessRawCallback {
             })
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
-            Mint::asset_numeric(1_000_u32, gold_source.clone())
+            Mint::asset_quantity(1_000_u32, gold_source.clone())
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
             Grant::account_permission(
@@ -106628,7 +104927,7 @@ seiyaku IdentitylessRawCallback {
             let mut state_block = state.block(block2.as_ref().header());
             let mut stx = state_block.transaction();
 
-            Mint::asset_numeric(5_u32, rose_target.clone())
+            Mint::asset_quantity(5_u32, rose_target.clone())
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
 
@@ -108797,76 +107096,6 @@ seiyaku IdentitylessRawCallback {
     }
 
     #[test]
-    fn apply_without_execution_updates_pacing_factor_with_governor() {
-        let kura = Kura::blank_kura_for_testing();
-        let query = LiveQueryStore::start_test();
-        let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query);
-
-        state.set_sumeragi_pacing_governor(
-            iroha_config::parameters::actual::SumeragiPacingGovernor {
-                window_blocks: 3,
-                view_change_pressure_permille: 100,
-                view_change_clear_permille: 10,
-                commit_spacing_pressure_permille: 2_000,
-                commit_spacing_clear_permille: 1_100,
-                step_up_bps: 1_000,
-                step_down_bps: 100,
-                min_factor_bps: 10_000,
-                max_factor_bps: 20_000,
-            },
-        );
-
-        {
-            let mut params_block = state.world.parameters.block();
-            params_block.sumeragi.block_time_ms = 1_000;
-            params_block.sumeragi.commit_time_ms = 1_000;
-            params_block.sumeragi.pacing_factor_bps = 10_000;
-            params_block.commit();
-        }
-
-        let block1 = new_dummy_block_with_payload(|header| {
-            header.set_height(nonzero!(1_u64));
-            header.creation_time_ms = 1_000;
-            header.set_view_change_index(0);
-        });
-        kura.store_block(block1.clone()).expect("store block1");
-        let block2 = new_dummy_block_with_payload(|header| {
-            header.set_height(nonzero!(2_u64));
-            header.creation_time_ms = 2_000;
-            header.set_view_change_index(0);
-        });
-        kura.store_block(block2.clone()).expect("store block2");
-
-        let block3 = new_dummy_block_with_payload(|header| {
-            header.set_height(nonzero!(3_u64));
-            header.creation_time_ms = 3_000;
-            header.set_view_change_index(2);
-        });
-        {
-            let mut state_block = state.block(block1.as_ref().header().clone());
-            let _ = state_block.apply_without_execution(&block1, Vec::new());
-            state_block.commit().expect("commit state block1");
-        }
-        {
-            let mut state_block = state.block(block2.as_ref().header().clone());
-            let _ = state_block.apply_without_execution(&block2, Vec::new());
-            state_block.commit().expect("commit state block2");
-        }
-        let mut state_block = state.block(block3.as_ref().header().clone());
-        let _ = state_block.apply_without_execution(&block3, Vec::new());
-        state_block.commit().expect("commit state block");
-
-        let updated = state
-            .world
-            .parameters
-            .view()
-            .get()
-            .sumeragi()
-            .pacing_factor_bps();
-        assert_eq!(updated, 11_000);
-    }
-
-    #[test]
     fn apply_without_execution_derives_commit_topology_when_roster_missing() {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
@@ -109039,8 +107268,8 @@ seiyaku IdentitylessRawCallback {
     }
 
     fn setup_nexus_fee_merge_state(
-        sponsor_balance: Numeric,
-        fee_amount: Numeric,
+        sponsor_balance: Quantity,
+        fee_amount: Quantity,
         source_id: [u8; 32],
     ) -> (State, AccountId, AssetDefinitionId, Vec<KeyPair>) {
         let (sponsor_id, _sponsor_kp) = gen_account_in("wonderland");
@@ -109104,9 +107333,9 @@ seiyaku IdentitylessRawCallback {
                 instruction_count: 0,
                 gas_used: 0,
                 base_fee: fee_amount,
-                per_byte_fee: Numeric::zero(),
-                per_instruction_fee: Numeric::zero(),
-                per_gas_unit_fee: Numeric::zero(),
+                per_byte_fee: Quantity::zero(),
+                per_instruction_fee: Quantity::zero(),
+                per_gas_unit_fee: Quantity::zero(),
             },
         }];
         let envelope = LaneRelayEnvelope::new(
@@ -109146,67 +107375,9 @@ seiyaku IdentitylessRawCallback {
     }
 
     #[test]
-    fn nexus_fee_receipt_rejects_negative_amounts_and_schedule_rates() {
-        let fee_asset_id = iroha_config::parameters::defaults::nexus::fees::fee_asset_id();
-        let payer = gen_account_in("fee_receipt_negative").0;
-        let receipt = NexusFeeReceipt {
-            version: 1,
-            source_id: [0xA9; 32],
-            dataspace_id: DataSpaceId::UNIVERSAL,
-            lane_id: LaneId::new(0),
-            block_height: 1,
-            payer_account_id: payer,
-            fee_asset_id: fee_asset_id.clone(),
-            fee_amount: Numeric::one(),
-            schedule: NexusFeeScheduleInputs {
-                tx_bytes_len: 0,
-                instruction_count: 0,
-                gas_used: 0,
-                base_fee: Numeric::one(),
-                per_byte_fee: Numeric::zero(),
-                per_instruction_fee: Numeric::zero(),
-                per_gas_unit_fee: Numeric::zero(),
-            },
-        };
-        let negative = Numeric::new(-1_i32, 0);
-        let mut cases = Vec::new();
-        let mut case = receipt.clone();
-        case.fee_amount = negative.clone();
-        case.schedule.base_fee = negative.clone();
-        cases.push(case);
-        let mut case = receipt.clone();
-        case.schedule.base_fee = negative.clone();
-        cases.push(case);
-        let mut case = receipt.clone();
-        case.schedule.per_byte_fee = negative.clone();
-        cases.push(case);
-        let mut case = receipt.clone();
-        case.schedule.per_instruction_fee = negative.clone();
-        cases.push(case);
-        let mut case = receipt;
-        case.schedule.per_gas_unit_fee = negative;
-        cases.push(case);
-
-        for case in cases {
-            let error = State::validate_nexus_fee_receipt(
-                &case,
-                LaneId::new(0),
-                DataSpaceId::UNIVERSAL,
-                1,
-                &fee_asset_id,
-            )
-            .expect_err("negative Nexus fee receipt field must be rejected");
-            assert!(matches!(
-                error,
-                MergeLedgerCommitError::InvalidNexusFeeReceipt(_)
-            ));
-        }
-    }
-
-    #[test]
     fn commit_merge_entry_burns_nexus_fee_receipts_once() {
         let (state, sponsor_id, asset_def_id, commit_keypairs) =
-            setup_nexus_fee_merge_state(Numeric::from(10_u32), Numeric::from(3_u32), [0x42; 32]);
+            setup_nexus_fee_merge_state(Quantity::from(10_u32), Quantity::from(3_u32), [0x42; 32]);
         let candidate = state
             .merge_entry_candidates_from_lane_relays()
             .into_iter()
@@ -109261,7 +107432,7 @@ seiyaku IdentitylessRawCallback {
     #[test]
     fn commit_merge_entry_rejects_tampered_canonical_settlement_hash() {
         let (state, sponsor_id, asset_def_id, commit_keypairs) =
-            setup_nexus_fee_merge_state(Numeric::from(10_u32), Numeric::from(3_u32), [0x46; 32]);
+            setup_nexus_fee_merge_state(Quantity::from(10_u32), Quantity::from(3_u32), [0x46; 32]);
         let mut candidate = state
             .merge_entry_candidates_from_lane_relays()
             .into_iter()
@@ -109294,7 +107465,7 @@ seiyaku IdentitylessRawCallback {
     #[test]
     fn commit_merge_entry_rejects_commitment_changed_after_hashing() {
         let (state, sponsor_id, asset_def_id, commit_keypairs) =
-            setup_nexus_fee_merge_state(Numeric::from(10_u32), Numeric::from(3_u32), [0x47; 32]);
+            setup_nexus_fee_merge_state(Quantity::from(10_u32), Quantity::from(3_u32), [0x47; 32]);
         let mut candidate = state
             .merge_entry_candidates_from_lane_relays()
             .into_iter()
@@ -109327,7 +107498,7 @@ seiyaku IdentitylessRawCallback {
     #[test]
     fn commit_merge_entry_rejects_insufficient_nexus_fee_balance_without_partial_burn() {
         let (state, sponsor_id, asset_def_id, commit_keypairs) =
-            setup_nexus_fee_merge_state(Numeric::from(1_u32), Numeric::from(3_u32), [0x43; 32]);
+            setup_nexus_fee_merge_state(Quantity::from(1_u32), Quantity::from(3_u32), [0x43; 32]);
         let candidate = state
             .merge_entry_candidates_from_lane_relays()
             .into_iter()
@@ -109352,7 +107523,7 @@ seiyaku IdentitylessRawCallback {
     #[test]
     fn merge_append_failure_does_not_mutate_fee_state_or_replay_markers() {
         let (state, sponsor_id, asset_def_id, commit_keypairs) =
-            setup_nexus_fee_merge_state(Numeric::from(10_u32), Numeric::from(3_u32), [0x44; 32]);
+            setup_nexus_fee_merge_state(Quantity::from(10_u32), Quantity::from(3_u32), [0x44; 32]);
         let candidate = state
             .merge_entry_candidates_from_lane_relays()
             .into_iter()
@@ -109378,7 +107549,7 @@ seiyaku IdentitylessRawCallback {
     fn staged_fee_merge_kura_failure_publishes_no_burn_or_receipt_cache() {
         let source_id = [0x47; 32];
         let (state, sponsor_id, asset_def_id, commit_keypairs) =
-            setup_nexus_fee_merge_state(Numeric::from(10_u32), Numeric::from(3_u32), source_id);
+            setup_nexus_fee_merge_state(Quantity::from(10_u32), Quantity::from(3_u32), source_id);
         let candidate = state
             .merge_entry_candidates_from_lane_relays()
             .into_iter()
@@ -109453,7 +107624,7 @@ seiyaku IdentitylessRawCallback {
     fn staged_fee_merge_missing_transaction_membership_publishes_no_burn_or_receipt_cache() {
         let source_id = [0x46; 32];
         let (state, sponsor_id, asset_def_id, commit_keypairs) =
-            setup_nexus_fee_merge_state(Numeric::from(10_u32), Numeric::from(3_u32), source_id);
+            setup_nexus_fee_merge_state(Quantity::from(10_u32), Quantity::from(3_u32), source_id);
         let candidate = state
             .merge_entry_candidates_from_lane_relays()
             .into_iter()
@@ -109503,7 +107674,7 @@ seiyaku IdentitylessRawCallback {
     fn restart_rejects_orphan_merge_sidecar_without_burning_or_truncating() {
         let source_id = [0x45; 32];
         let (state, sponsor_id, asset_def_id, commit_keypairs) =
-            setup_nexus_fee_merge_state(Numeric::from(10_u32), Numeric::from(3_u32), source_id);
+            setup_nexus_fee_merge_state(Quantity::from(10_u32), Quantity::from(3_u32), source_id);
         let candidate = state
             .merge_entry_candidates_from_lane_relays()
             .into_iter()
@@ -109543,7 +107714,7 @@ seiyaku IdentitylessRawCallback {
     fn exact_merge_carrier_replay_burns_settlement_once() {
         let source_id = [0x45; 32];
         let (state, sponsor_id, asset_def_id, commit_keypairs) =
-            setup_nexus_fee_merge_state(Numeric::from(10_u32), Numeric::from(3_u32), source_id);
+            setup_nexus_fee_merge_state(Quantity::from(10_u32), Quantity::from(3_u32), source_id);
         let candidate = state
             .merge_entry_candidates_from_lane_relays()
             .into_iter()
@@ -109594,7 +107765,7 @@ seiyaku IdentitylessRawCallback {
     fn restart_replays_durable_merge_settlement_exactly_once() {
         let source_id = [0x45; 32];
         let (state, sponsor_id, asset_def_id, commit_keypairs) =
-            setup_nexus_fee_merge_state(Numeric::from(10_u32), Numeric::from(3_u32), source_id);
+            setup_nexus_fee_merge_state(Quantity::from(10_u32), Quantity::from(3_u32), source_id);
         let candidate = state
             .merge_entry_candidates_from_lane_relays()
             .into_iter()
@@ -110874,7 +109045,7 @@ seiyaku IdentitylessRawCallback {
         let by_call = Trigger::new(
             by_call_id.clone(),
             Action::new(
-                vec![InstructionBox::from(Mint::asset_numeric(
+                vec![InstructionBox::from(Mint::asset_quantity(
                     1_u32,
                     asset_id.clone(),
                 ))],
@@ -111906,7 +110077,7 @@ seiyaku IdentitylessRawCallback {
 
         let pipeline_trigger_id: TriggerId = "pipeline_mint_then_failing_data".parse().unwrap();
         let pipeline_action = Action::new(
-            vec![InstructionBox::from(Mint::asset_numeric(
+            vec![InstructionBox::from(Mint::asset_quantity(
                 1_u32,
                 asset_id.clone(),
             ))],
@@ -111997,7 +110168,7 @@ seiyaku IdentitylessRawCallback {
 
         let by_call_id: TriggerId = "call_then_failing_data".parse().unwrap();
         let by_call_action = Action::new(
-            vec![InstructionBox::from(Mint::asset_numeric(
+            vec![InstructionBox::from(Mint::asset_quantity(
                 1_u32,
                 asset_id.clone(),
             ))],
@@ -112248,7 +110419,7 @@ seiyaku IdentitylessRawCallback {
         {
             let mut stx = state_block1.transaction();
             let action = Action::new(
-                vec![InstructionBox::from(Mint::asset_numeric(
+                vec![InstructionBox::from(Mint::asset_quantity(
                     1_u32,
                     alice_asset_id.clone(),
                 ))],
@@ -112406,7 +110577,7 @@ seiyaku IdentitylessRawCallback {
         {
             let mut stx = state_block1.transaction();
             let action = Action::new(
-                vec![InstructionBox::from(Mint::asset_numeric(
+                vec![InstructionBox::from(Mint::asset_quantity(
                     1_u32,
                     alice_asset_id.clone(),
                 ))],
@@ -112544,7 +110715,7 @@ seiyaku IdentitylessRawCallback {
         {
             let mut stx = state_block1.transaction();
             let action = Action::new(
-                vec![InstructionBox::from(Mint::asset_numeric(
+                vec![InstructionBox::from(Mint::asset_quantity(
                     1_u32,
                     alice_asset_id.clone(),
                 ))],
@@ -113805,7 +111976,7 @@ seiyaku IdentitylessRawCallback {
         let mut state_block = state.block(header);
         {
             let mut stx = state_block.transaction();
-            Mint::asset_numeric(1_u32, asset_id.clone())
+            Mint::asset_quantity(1_u32, asset_id.clone())
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
 
@@ -114156,7 +112327,7 @@ seiyaku IdentitylessRawCallback {
         let mut state_block = state.block(block.as_ref().header());
 
         let mut delta = DetachedStateTransactionDelta::default();
-        let new_min_finality = 222_u64;
+        let new_min_finality = 50_u64;
         delta.set_parameter(Parameter::Sumeragi(SumeragiParameter::MinFinalityMs(
             new_min_finality,
         )));
@@ -114182,6 +112353,37 @@ seiyaku IdentitylessRawCallback {
                 false
             }),
             "expected ConfigurationEvent::Changed"
+        );
+    }
+
+    #[test]
+    fn detached_delta_cannot_bypass_post_genesis_sumeragi_freeze() {
+        use iroha_data_model::parameter::{Parameter, SumeragiParameter};
+
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query);
+        let block = new_dummy_block_with_payload(|header| {
+            header.set_height(NonZeroU64::new(2).expect("non-zero test height"));
+        });
+        let mut state_block = state.block(block.as_ref().header());
+        let original = state_block.world.parameters().sumeragi().block_time_ms();
+
+        let mut delta = DetachedStateTransactionDelta::default();
+        delta.set_parameter(Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(
+            original.saturating_add(1),
+        )));
+
+        let error = delta
+            .merge_into(&mut state_block, &ALICE_ID)
+            .expect_err("detached execution must honor the v2 genesis freeze");
+        assert!(
+            error.to_string().contains("genesis-frozen"),
+            "unexpected error: {error:?}"
+        );
+        assert_eq!(
+            state_block.world.parameters().sumeragi().block_time_ms(),
+            original
         );
     }
 
@@ -114245,7 +112447,7 @@ seiyaku IdentitylessRawCallback {
         let by_call = Trigger::new(
             by_call_id.clone(),
             Action::new(
-                vec![InstructionBox::from(Mint::asset_numeric(
+                vec![InstructionBox::from(Mint::asset_quantity(
                     1_u32,
                     asset_id.clone(),
                 ))],
@@ -114358,7 +112560,7 @@ seiyaku IdentitylessRawCallback {
         let trigger = Trigger::new(
             trigger_id.clone(),
             Action::new(
-                vec![InstructionBox::from(Mint::asset_numeric(
+                vec![InstructionBox::from(Mint::asset_quantity(
                     1_u32,
                     asset_id.clone(),
                 ))],
@@ -114829,7 +113031,7 @@ seiyaku IdentitylessRawCallback {
         .execute(&ALICE_ID, &mut stx)
         .unwrap();
         let asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
-        Mint::asset_numeric(numeric!(1), asset_id.clone())
+        Mint::asset_quantity(1_u32, asset_id.clone())
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
 
@@ -114887,7 +113089,7 @@ seiyaku IdentitylessRawCallback {
         .execute(&ALICE_ID, &mut stx)
         .unwrap();
         let asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
-        Mint::asset_numeric(numeric!(1), asset_id.clone())
+        Mint::asset_quantity(1_u32, asset_id.clone())
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
 
@@ -114945,7 +113147,7 @@ seiyaku IdentitylessRawCallback {
                 .with_name(__asset_definition_id.name().to_string())
         }
         .build(&ALICE_ID);
-        let asset = Asset::new(asset_id.clone(), Numeric::new(1, 0));
+        let asset = Asset::new(asset_id.clone(), Quantity::from(1));
 
         let mut world = World::with_assets([domain], [account], [asset_def], [asset], []);
         let mut metadata = Metadata::default();

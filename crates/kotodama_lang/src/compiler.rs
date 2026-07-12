@@ -169,6 +169,7 @@ impl StatePathHint {
 struct CompilationArtifacts {
     bytes: Vec<u8>,
     compile_report: CompileReport,
+    contract_interface: EmbeddedContractInterfaceV1,
 }
 
 struct LoweredCompilation {
@@ -1477,7 +1478,9 @@ pub struct CompilerOptions {
     /// Selects production artifact compilation or explicit local-test compilation.
     ///
     /// Production mode rejects test declarations and test-capable typed HIR;
-    /// it never silently strips them from a deployable artifact.
+    /// it never silently strips them from a deployable artifact. Test mode
+    /// emits an ABI-authenticated generic IVM 1.0 harness without a deployable
+    /// CNTR section.
     pub mode: CompilerMode,
 }
 
@@ -10419,9 +10422,22 @@ seiyaku CompilerFixture {
             mode: CompilerMode::Test,
             ..CompilerOptions::default()
         });
-        let (_code, _manifest, report) = test_mode
+        let (code, _manifest, report) = test_mode
             .compile_source_with_manifest_and_report(src)
             .expect("compile in test mode");
+        let parsed = ProgramMetadata::parse(&code).expect("parse test harness metadata");
+        assert_eq!(parsed.metadata.version_minor, 0);
+        assert_eq!(parsed.metadata.abi_version, KOTODAMA_ABI_VERSION);
+        assert!(
+            parsed.contract_interface.is_none(),
+            "local test harnesses must use the authenticated generic profile"
+        );
+        let mut stale_abi = code.clone();
+        stale_abi[17] ^= 1;
+        assert!(matches!(
+            ProgramMetadata::parse(&stale_abi),
+            Err(ivm_abi::VMError::ArtifactAbiHashMismatch { .. })
+        ));
         assert!(
             report
                 .source_map
@@ -10441,6 +10457,17 @@ seiyaku CompilerFixture {
                 .iter()
                 .all(|entry| entry.function_name != "helper"),
             "an ordinary unreachable private function must not become a test root"
+        );
+
+        let production_code = Compiler::new()
+            .compile_source("seiyaku ProductionFixture { view fn inspect() {} }")
+            .expect("compile production contract");
+        let production_metadata =
+            ProgramMetadata::parse(&production_code).expect("parse production metadata");
+        assert_eq!(production_metadata.metadata.version_minor, 1);
+        assert!(
+            production_metadata.contract_interface.is_some(),
+            "production contracts must retain their CNTR interface"
         );
     }
 
@@ -12510,6 +12537,37 @@ impl Compiler {
                     Ok(0)
                 }
             };
+            let load_pointer_value = |temp: &ir::Temp,
+                                      target: u8,
+                                      scratch: u8,
+                                      expected_kind: ir::DataRefKind,
+                                      code: &mut Vec<u8>|
+             -> Result<(), String> {
+                if let Some(literal) = string_map.get(&(func_idx, *temp)) {
+                    let actual_kind = dataref_kind_map
+                        .get(&(func_idx, *temp))
+                        .copied()
+                        .ok_or_else(|| {
+                            format!("pointer literal {:?} has no ABI kind metadata", temp)
+                        })?;
+                    if actual_kind != expected_kind {
+                        return Err(format!(
+                            "pointer literal {:?} has ABI kind {actual_kind:?}, expected {expected_kind:?}",
+                            temp
+                        ));
+                    }
+                    emit_literal_load(
+                        code,
+                        &fixups,
+                        target,
+                        data_key_for_pointer(actual_kind, literal),
+                    );
+                } else {
+                    let source = src_reg(temp, scratch, code)?;
+                    push_word(code, encode_addi(target, source, 0)?);
+                }
+                Ok(())
+            };
             let dst_reg = |t: &ir::Temp| -> (u8, bool, i64) {
                 if let Some(r) = alloc.regs.get(t) {
                     (*r as u8, false, 0)
@@ -13083,9 +13141,8 @@ impl Compiler {
                                 let r_asset = src_reg(asset, scratch2, &mut code)?;
                                 push_word(&mut code, encode_addi(11, r_asset, 0)?);
                             }
-                            // r12 = amount
-                            let r_amt = src_reg(amount, scratch1, &mut code)?;
-                            push_word(&mut code, encode_addi(12, r_amt, 0)?);
+                            // r12 = &Quantity
+                            load_pointer_value(amount, 12, scratch1, DRK::Quantity, &mut code)?;
 
                             // Mirror TLVs for r10 and r11 into INPUT to satisfy pointer-ABI validation.
                             let pub_word = encoding::wide::encode_sys(
@@ -13116,7 +13173,6 @@ impl Compiler {
                             asset,
                             amount,
                         } => {
-                            let r_amt = src_reg(amount, scratch1, &mut code)?;
                             // r10 = &AccountId
                             if let Some(k_acc) = string_map
                                 .get(&(func_idx, *account))
@@ -13137,7 +13193,7 @@ impl Compiler {
                                 let r_asset = src_reg(asset, scratch2, &mut code)?;
                                 push_word(&mut code, encode_addi(11, r_asset, 0)?);
                             }
-                            push_word(&mut code, encode_addi(12, r_amt, 0)?);
+                            load_pointer_value(amount, 12, scratch1, DRK::Quantity, &mut code)?;
                             // Mirror TLVs for r10 and r11 into INPUT to satisfy pointer‑ABI validation.
                             let pub_word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
@@ -14351,7 +14407,6 @@ impl Compiler {
                             dataspace,
                         } => {
                             // Pointer-ABI: accept literal pointers (from string_map) or runtime pointers.
-                            let r_amt = src_reg(amount, scratch1, &mut code)?;
                             if let Some(from_str) = string_map
                                 .get(&(func_idx, *from))
                                 .map(|s| DataKey(DataKind::Account, s.clone()))
@@ -14379,7 +14434,7 @@ impl Compiler {
                                 let r_asset = src_reg(asset, scratch2, &mut code)?;
                                 push_word(&mut code, encode_addi(12, r_asset, 0)?);
                             }
-                            push_word(&mut code, encode_addi(13, r_amt, 0)?);
+                            load_pointer_value(amount, 13, scratch1, DRK::Quantity, &mut code)?;
                             if let Some(dataspace_str) = string_map
                                 .get(&(func_idx, *dataspace))
                                 .map(|s| DataKey(DataKind::DataSpaceId, s.clone()))
@@ -14428,7 +14483,6 @@ impl Compiler {
                             asset,
                             amount,
                         } => {
-                            let r_amt = src_reg(amount, scratch1, &mut code)?;
                             if let Some(from_str) = string_map
                                 .get(&(func_idx, *from))
                                 .map(|s| DataKey(DataKind::Account, s.clone()))
@@ -14456,7 +14510,7 @@ impl Compiler {
                                 let r_asset = src_reg(asset, scratch2, &mut code)?;
                                 push_word(&mut code, encode_addi(12, r_asset, 0)?);
                             }
-                            push_word(&mut code, encode_addi(13, r_amt, 0)?);
+                            load_pointer_value(amount, 13, scratch1, DRK::Quantity, &mut code)?;
                             let pub_word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
                                 syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
@@ -14485,7 +14539,6 @@ impl Compiler {
                             amount,
                             evidence_hashes,
                         } => {
-                            let r_amount = src_reg(amount, scratch1, &mut code)?;
                             if let Some(escrow_str) = string_map
                                 .get(&(func_idx, *escrow))
                                 .map(|s| DataKey(DataKind::Name, s.clone()))
@@ -14504,7 +14557,7 @@ impl Compiler {
                                 let r_asset = src_reg(asset, scratch2, &mut code)?;
                                 push_word(&mut code, encode_addi(11, r_asset, 0)?);
                             }
-                            push_word(&mut code, encode_addi(12, r_amount, 0)?);
+                            load_pointer_value(amount, 12, scratch1, DRK::Quantity, &mut code)?;
                             let pub_word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
                                 syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
@@ -14601,10 +14654,20 @@ impl Compiler {
                             seller_amount,
                             evidence_hashes,
                         } => {
-                            let r_buyer = src_reg(buyer_amount, scratch1, &mut code)?;
-                            let r_seller = src_reg(seller_amount, scratch2, &mut code)?;
-                            push_word(&mut code, encode_addi(11, r_buyer, 0)?);
-                            push_word(&mut code, encode_addi(12, r_seller, 0)?);
+                            load_pointer_value(
+                                buyer_amount,
+                                11,
+                                scratch1,
+                                DRK::Quantity,
+                                &mut code,
+                            )?;
+                            load_pointer_value(
+                                seller_amount,
+                                12,
+                                scratch2,
+                                DRK::Quantity,
+                                &mut code,
+                            )?;
                             if let Some(escrow_str) = string_map
                                 .get(&(func_idx, *escrow))
                                 .map(|s| DataKey(DataKind::Name, s.clone()))
@@ -18276,7 +18339,16 @@ impl Compiler {
 
         let meta = ProgramMetadata {
             version_major: 1,
-            version_minor: 1,
+            // Local test harnesses are executable tooling images, not
+            // deployable contracts. Keep them on the authenticated generic
+            // 1.0 profile so the VM does not interpret their private test
+            // functions as a production CNTR interface. The separately
+            // projected runtime artifact is compiled in Production mode and
+            // therefore remains a self-describing 1.1 contract.
+            version_minor: match self.opts.mode {
+                CompilerMode::Production => 1,
+                CompilerMode::Test => 0,
+            },
             mode,
             vector_length: 0,
             max_cycles: self.opts.max_cycles,
@@ -18706,10 +18778,14 @@ impl Compiler {
                 .collect(),
             states: state_descriptors,
         };
-        // Compute the indexed literal table and patch LDLIT/LDI64 words. Contract artifacts are laid out as:
-        //   [ header | CNTR | LTLB? | code ]
+        // Compute the indexed literal table and patch LDLIT/LDI64 words.
+        // Production contracts use `[header | CNTR | LTLB? | code]`; local
+        // test harnesses use the generic `[header | LTLB? | code]` profile.
         let meta_bytes = meta.encode();
-        let contract_section = contract_interface.encode_section();
+        let contract_section = match self.opts.mode {
+            CompilerMode::Production => contract_interface.encode_section(),
+            CompilerMode::Test => Vec::new(),
+        };
         let need_literals = !key_order.is_empty();
         // Literal table length and offsets
         let lit_count = key_order.len() as u64;
@@ -18814,6 +18890,7 @@ impl Compiler {
         Ok(CompilationArtifacts {
             bytes: out,
             compile_report,
+            contract_interface,
         })
     }
 
@@ -18900,14 +18977,36 @@ impl Compiler {
         ),
         String,
     > {
-        let bytes = artifacts.bytes.clone();
+        let CompilationArtifacts {
+            bytes,
+            compile_report,
+            contract_interface: generated_contract_interface,
+        } = artifacts;
         let parsed = crate::metadata::ProgramMetadata::parse(&bytes)
             .map_err(|e| format!("manifest parse header: {e}"))?;
-        let contract_interface = parsed.contract_interface.ok_or_else(|| {
-            "manifest parse header: missing embedded contract interface".to_owned()
-        })?;
+        let contract_interface = match (self.opts.mode, parsed.contract_interface) {
+            (CompilerMode::Production, Some(embedded)) => {
+                if embedded != generated_contract_interface {
+                    return Err(
+                        "manifest parse header: embedded contract interface differs from the compiler-owned descriptor"
+                            .to_owned(),
+                    );
+                }
+                embedded
+            }
+            (CompilerMode::Production, None) => {
+                return Err("manifest parse header: missing embedded contract interface".to_owned());
+            }
+            (CompilerMode::Test, None) => generated_contract_interface,
+            (CompilerMode::Test, Some(_)) => {
+                return Err(
+                    "manifest parse header: local test harness unexpectedly embeds a CNTR section"
+                        .to_owned(),
+                );
+            }
+        };
         let code_hash = crate::metadata::contract_code_hash(&bytes);
-        if artifacts.compile_report.artifact_hash != code_hash {
+        if compile_report.artifact_hash != code_hash {
             return Err("compiler report hash does not match compiled artifact".to_owned());
         }
         let meta = parsed.metadata;
@@ -18943,7 +19042,7 @@ impl Compiler {
             kotoba: (!contract_interface.kotoba.is_empty()).then_some(contract_interface.kotoba),
             provenance: None,
         };
-        Ok((bytes, manifest, artifacts.compile_report))
+        Ok((bytes, manifest, compile_report))
     }
 
     /// Compile source and produce a manifest plus access-hint diagnostics.
@@ -22474,7 +22573,6 @@ fn build_entrypoint_descriptors(
     func_start_offsets: &HashMap<String, usize>,
 ) -> Result<Vec<EmbeddedEntrypointDescriptor>, String> {
     let mut hints_by_name: HashMap<&str, (&IndexSet<String>, &IndexSet<String>)> = HashMap::new();
-    let mut hintable_by_name: HashMap<&str, bool> = HashMap::new();
     let mut hint_report_by_name: HashMap<&str, &HintReport> = HashMap::new();
     for ((func, sets), report) in ir_functions
         .iter()
@@ -22482,7 +22580,6 @@ fn build_entrypoint_descriptors(
         .zip(hint_reports.iter())
     {
         hints_by_name.insert(&func.name, (&sets.reads, &sets.writes));
-        hintable_by_name.insert(&func.name, report.emitted);
         hint_report_by_name.insert(&func.name, report);
     }
 
@@ -22533,23 +22630,32 @@ fn build_entrypoint_descriptors(
                             kind: EntryPointKind|
      -> Result<EmbeddedEntrypointDescriptor, String> {
         let hint_name = entrypoint_ir_symbol_name(func);
-        let include_hints = hintable_by_name
-            .get(hint_name.as_str())
-            .copied()
-            .unwrap_or(false);
-        let (mut reads, mut writes): (Vec<String>, Vec<String>) = if include_hints {
-            hints_by_name
-                .get(hint_name.as_str())
-                .map(|(r, w)| {
-                    (
-                        r.iter().cloned().collect::<Vec<_>>(),
-                        w.iter().cloned().collect::<Vec<_>>(),
-                    )
+        let mut hint_names = vec![hint_name.as_str()];
+        if hint_name != func.name {
+            hint_names.push(func.name.as_str());
+        }
+        let reports = hint_names
+            .iter()
+            .map(|name| {
+                hint_report_by_name.get(name).copied().ok_or_else(|| {
+                    format!("missing access-hint report for entrypoint function `{name}`")
                 })
-                .unwrap_or_else(|| (Vec::new(), Vec::new()))
-        } else {
-            (Vec::new(), Vec::new())
-        };
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let include_hints = reports.iter().any(|report| report.emitted);
+        let mut read_set = IndexSet::new();
+        let mut write_set = IndexSet::new();
+        if include_hints {
+            for name in &hint_names {
+                let (reads, writes) = hints_by_name.get(name).copied().ok_or_else(|| {
+                    format!("missing access hints for entrypoint function `{name}`")
+                })?;
+                read_set.extend(reads.iter().cloned());
+                write_set.extend(writes.iter().cloned());
+            }
+        }
+        let mut reads = read_set.into_iter().collect::<Vec<_>>();
+        let mut writes = write_set.into_iter().collect::<Vec<_>>();
         if include_hints && (reads.is_empty() || writes.is_empty()) {
             let (fallback_reads, fallback_writes) =
                 crate::semantic::function_state_accesses(func, &typed.states);
@@ -22564,7 +22670,12 @@ fn build_entrypoint_descriptors(
             .get(func.name.as_str())
             .cloned()
             .unwrap_or_default();
-        let report = hint_report_by_name.get(hint_name.as_str()).copied();
+        let skipped_reasons = reports
+            .iter()
+            .flat_map(|report| report.skipped_reasons.iter().cloned())
+            .collect::<IndexSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
         let entry_pc = func_start_offsets
             .get(&func.name)
             .copied()
@@ -22618,10 +22729,9 @@ fn build_entrypoint_descriptors(
             permission: func.modifiers.permission.clone(),
             read_keys: reads,
             write_keys: writes,
-            access_hints_complete: report.and_then(|r| r.emitted.then_some(r.complete)),
-            access_hints_skipped: report
-                .map(|r| r.skipped_reasons.clone())
-                .unwrap_or_default(),
+            access_hints_complete: include_hints
+                .then_some(reports.iter().all(|report| report.complete)),
+            access_hints_skipped: skipped_reasons,
             triggers,
             entry_pc: entry_pc as u64,
         })

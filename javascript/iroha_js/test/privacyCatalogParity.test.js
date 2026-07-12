@@ -1336,7 +1336,7 @@ function productionTestArtifact(label) {
 }
 
 test("privacy algorithm JS internal review evidence test artifact helper uses SHA-256", () => {
-  const label = "kagemusha-test-artifact";
+  const label = "pasta-cycle-test-artifact";
   assert.deepEqual(productionTestArtifact(label), {
     label,
     uri: `sha256:${createHash("sha256").update(label).digest("hex")}`,

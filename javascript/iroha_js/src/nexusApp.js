@@ -14,6 +14,11 @@ import {
   finalizeBrowserSignedTransaction,
   validateBrowserTransferSignable,
 } from "./transactionCodec.js";
+import {
+  KotodamaQuantity,
+  NumericV1,
+  NumericV1Error,
+} from "./numericV1.js";
 
 const ALGORITHM_ED25519 = "ed25519";
 const ALGORITHM_ED25519_TAG = 0;
@@ -526,6 +531,31 @@ function requireNonEmptyString(value, context) {
     throw new TypeError(`${context} must be a non-empty string`);
   }
   return value.trim();
+}
+
+function normalizeTransferQuantity(value) {
+  try {
+    if (value instanceof KotodamaQuantity) {
+      return NumericV1.encodeQuantityJson(value);
+    }
+    if (typeof value === "string") {
+      return NumericV1.decodeQuantityJson(value).toString();
+    }
+    if (typeof value === "bigint") {
+      return new KotodamaQuantity(value, 0).toString();
+    }
+    throw new NexusAppError(
+      "invalid_transfer_input",
+      "transfer quantity must be a KotodamaQuantity, canonical quantity string, or bigint; JavaScript numbers are rejected",
+    );
+  } catch (error) {
+    if (!(error instanceof NumericV1Error)) throw error;
+    throw new NexusAppError(
+      "invalid_transfer_input",
+      `transfer quantity must be canonical and non-negative (${error.code})`,
+      error,
+    );
+  }
 }
 
 function irohaPrehash(payloadBytes) {
@@ -2092,11 +2122,12 @@ export class NexusAppClient {
       input.chainId ?? this.config.chainId,
       "chainId",
     );
+    const quantity = normalizeTransferQuantity(input.quantity);
     const payloadInput = {
       chainId,
       authority,
       sourceAssetHoldingId,
-      quantity: input.quantity,
+      quantity,
       destinationAccountId,
       metadata: input.metadata ?? null,
       creationTimeMs: input.creationTimeMs ?? null,

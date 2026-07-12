@@ -1568,7 +1568,7 @@ fn shield_rejected_when_policy_disallows() {
                 .with_name(asset_def_id.name().to_string()),
         )
         .into(),
-        Mint::asset_numeric(1_000u64, AssetId::of(asset_def_id.clone(), owner.clone())).into(),
+        Mint::asset_quantity(1_000u64, AssetId::of(asset_def_id.clone(), owner.clone())).into(),
     ] {
         stx.world
             .executor()
@@ -1736,7 +1736,7 @@ fn zk_transfer_rejected_when_policy_transparent() {
                 .with_name(asset_def_id.name().to_string()),
         )
         .into(),
-        Mint::asset_numeric(1_000u64, AssetId::of(asset_def_id.clone(), owner.clone())).into(),
+        Mint::asset_quantity(1_000u64, AssetId::of(asset_def_id.clone(), owner.clone())).into(),
     ] {
         stx.world
             .executor()
@@ -1899,7 +1899,7 @@ fn shield_burns_and_unshield_mints() {
                 .with_name(asset_def_id.name().to_string()),
         )
         .into(),
-        Mint::asset_numeric(1000u64, AssetId::of(asset_def_id.clone(), owner.clone())).into(),
+        Mint::asset_quantity(1000u64, AssetId::of(asset_def_id.clone(), owner.clone())).into(),
         iroha_data_model::isi::verifying_keys::RegisterVerifyingKey {
             id: transfer_vk_id.clone(),
             record: transfer_vk_record,
@@ -2169,7 +2169,7 @@ fn zk_roots_are_bounded_in_world_state() {
                 .with_name(asset_def_id.name().to_string()),
         )
         .into(),
-        Mint::asset_numeric(10_000u64, AssetId::of(asset_def_id.clone(), owner.clone())).into(),
+        Mint::asset_quantity(10_000u64, AssetId::of(asset_def_id.clone(), owner.clone())).into(),
         // Register zk policy (Hybrid; allow shield)
         iroha_data_model::isi::zk::RegisterZkAsset::new(
             asset_def_id.clone(),
@@ -2336,7 +2336,7 @@ fn frontier_checkpoints_respect_reorg_depth_bound() {
                     .with_name(asset_def_id.name().to_string()),
             )
             .into(),
-            Mint::asset_numeric(10_000u64, AssetId::of(asset_def_id.clone(), owner.clone())).into(),
+            Mint::asset_quantity(10_000u64, AssetId::of(asset_def_id.clone(), owner.clone())).into(),
             iroha_data_model::isi::zk::RegisterZkAsset::new(
                 asset_def_id.clone(),
                 iroha_data_model::isi::zk::ZkAssetMode::Hybrid,

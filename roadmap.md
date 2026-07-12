@@ -3,25 +3,18 @@
 Last updated: 2026-07-12
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
-The detailed engineering backlog lives in
-[`docs/source/engineering_backlog.md`](./docs/source/engineering_backlog.md),
-and completed history lives in [`status.md`](./status.md).
+Completed history lives in [`status.md`](./status.md).
 
-Kagemusha V2 transport and proof admission are fail-closed for the first release.
-The only public product selector is `recursive_spend_v1`; it requires exact
-bridge ABI 18 and the governed
-`kagemusha.offline.recursive_spend.artifact_manifest.v3` manifest with the V3
-atomic artifact lifecycle. ABI-6/ABI-7 fixtures and unsuffixed recursive-spend
-helpers are not first-release compatibility surfaces. The typed V2 native
-capability and artifact manifest retain the internal `recursive_spend_v2` mode;
-that value is not accepted as a product selector.
-`KAGEMUSHA_RECURSIVE_SPEND_V2_PROOF_BACKEND_AVAILABLE = false` is the
+Kagemusha transport and proof admission are fail-closed for the first release.
+It is one mode-free protocol with exact bridge ABI 19 and the governed
+`kagemusha.offline.recursive_spend.artifact_manifest.v3` manifest using the V3
+atomic artifact lifecycle. Typed V2/V3 names are internal wire versions, not
+runtime product selectors.
+`KAGEMUSHA_RECURSIVE_SPEND_PROOF_BACKEND_AVAILABLE = false` is the
 authoritative release state: Core top-up execution and every proof-gated
-init/append/redeem-change/verify/redeem path remain unavailable. Record-backed
-lineage and semantic aggregation are validation and fixture-convergence
-scaffolding, not funded alternatives. The 64-depth branch bound and eight-hop
-semantic limit are protocol bounds, not availability signals.
-The remaining release work is the ABI-18 two-layer Pasta IPA/Poseidon backend:
+init/append/verify/redeem path remain unavailable. The 64-depth branch bound is
+a protocol bound, not an availability signal.
+The remaining release work is the ABI-19 two-layer Pasta IPA/Poseidon backend:
 an EqAffine/Vesta transition proof and EpAffine/Pallas state wrapper must
 authenticate the previous recursive proof and current transition proof under
 fixed verifier keys, bind their exact public instances to the Kagemusha
@@ -74,15 +67,6 @@ planned.
 **Next checkpoints:** normative schemas and parameter bounds for the XOR balance
 sheet and Phoenix series, followed by the smallest useful producer-credit pilot
 and adversarial simulation harness.
-
-Sumeragi restart safety now keeps authenticated local Prepare/Commit vote locks
-in a durable Kura-adjacent journal before any vote can be broadcast. Conflicting
-authenticated commit certificates for the same height and epoch activate a
-process-wide fail-closed halt that is exposed through the detailed consensus
-status endpoint and observed by actor, block-sync, and worker-result paths.
-Rollout remains gated on a coordinated four-validator restart exercise that
-demonstrates recovered same-height locks, consistent frontier continuation, and
-operator alerting for the safety-halt payload before these changes reach Taira.
 
 SoraNet handshake admission for the first release now has a single production
 policy: PoW is mandatory, the Argon2 puzzle gate stays enabled, and SM helper /
@@ -894,6 +878,14 @@ permanent replay protection and proof history; immutable sidecars count in
 total/operator disk usage but are excluded from the evictable-body budget. No
 total-state bound is claimed.
 
+Kura disk accounting is publication ordered across canonical rewrites, retired
+trees, lane-geometry mutations, state journals, projections, query indexes, and
+roster persistence. Cached readers wait for an in-flight filesystem mutation;
+partial cleanup or scan failure invalidates the affected total instead of
+publishing a stale value. Once a canonical rewrite is durably committed, a
+cleanup failure is reported as deferred cleanup and cannot make callers retry a
+successful logical commit.
+
 The remaining SCCP release work is external, independently verifiable evidence:
 
 - obtain independently audited, reproducible semantic circuit, witness
@@ -902,6 +894,9 @@ The remaining SCCP release work is external, independently verifiable evidence:
 - deploy the exact contracts and native source-verifier material, obtain
   authenticated finalized verifier/runtime readbacks, and confirm every
   governed runtime/key/policy hash;
+- execute the locked TRON artifact on a real TVM/TRE runtime and retain
+  identity-checked included success and negative receipts; EVM compatibility
+  execution is not TVM evidence;
 - apply the typed governance actions, run successful value-moving canaries in
   both directions, and confirm replay, stale-revision, wrong-route, and
   unavailable-ingress failures remain closed;
@@ -4730,7 +4725,7 @@ from the first release and must not appear as launch blockers or evidence rows.
   including missing transition-profile, append-boundary, lineage-witness,
   verify, and redeem helpers, and must reject broken ABI-version probes or
   permissive native helpers that accept malformed probe archives, so published
-  consumers cannot select `recursive_spend_v1` from an incomplete or
+  consumers cannot report Kagemusha availability from an incomplete or
   insufficiently validating native binding. The package-dist
   wrappers must keep dispatching valid archives through the expected native
   method, returning copied `Buffer` outputs and passing owned archive copies to
@@ -23764,7 +23759,7 @@ digest-bound pending-XSD source probe summaries for reviewed
   a verified record-backed lineage witness and a verifying final recursive proof
   serialize instructions. Witnessless Reserved-lineage requests return no
   instruction bytes for every circuit and hop while
-  `KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1 = false`.
+  the retired lineage-transition gate disabled.
   Active lineage verifier records, chain/asset, root, final commitment, proof,
   and nullifier checks remain mandatory on the record-backed path.
   Ledger recursive redeem execution now checks the final unshield/redeem proof
@@ -23832,7 +23827,7 @@ digest-bound pending-XSD source probe summaries for reviewed
   probes now require the complete ABI-6 native surface - init, append, both
   transition-profile helpers, append-boundary derivation, both lineage-witness
   helpers, verify, and redeem - so old native libraries cannot claim
-  `recursive_spend_v1` support without the witness path and append-boundary
+  retired recursive-spend support without the witness path and append-boundary
   surface needed for safe redemption. Python direct helper calls and the
   optional C# P/Invoke wrapper now apply the same complete-surface guard before
   producing recursive spend output, and Python/Kotlin/JVM/Java Android
@@ -23855,10 +23850,10 @@ digest-bound pending-XSD source probe summaries for reviewed
   bridge-loader tests pin packaged artifacts to at least ABI 6, the Node NAPI
   host exports `connectNoritoBridgeAbiVersion`, and the Python PyO3 extension
   exports `kagemusha_recursive_spend_native_bridge_abi_version`. The SDK surfaces also
-  expose one common preferred offline spend-mode selector: `recursive_spend_v1`
-  only when the exact ABI-18 recursive backend is available, and no preferred
-  production mode otherwise. `recursive_compact_v1` remains an
-  admission-neutral projection and never wins product selection;
+  historically exposed a preferred offline spend-mode selector only when the
+  exact pre-release recursive backend was available. That selector and the
+  admission-neutral compact projection are retired; the first release is
+  mode-free and exposes only Kagemusha readiness.
   Kotlin/JVM and Java
   Android probe the native bridge ABI version plus verify and both lineage
   witness JNI symbols, C# probes the matching P/Invoke symbols, and
@@ -28911,13 +28906,28 @@ signed ancestor-linked solid-block header proof,
   compiler service. The content-addressed module graph, atomic publisher,
   canonical formatter, structural CST, LSP, and human/JSON/SARIF diagnostics
   must continue to share one grammar and compiler session.
-- Preserve typed-HIR test linking and its exact multi-source attribution. Local
-  suites use a crate-private validated artifact profile with an authenticated
-  terminal return descriptor, while any invocable target is projected into a
-  separate ordinarily admitted runtime artifact. Keep the normative grammar,
-  CST recovery, formatter, LSP data, and generated editor tables synchronized;
-  test-only selectors and syscalls must never enter production admission or the
-  ABI-v1 hash.
+- Replace the local test runner's temporary cross-file AST merge with
+  typed-HIR test linking. The release frontend now keeps canonical `NodeId` and
+  exact `SourceRange` facts in an orthogonal side table through resolution and
+  semantic diagnostics, including multi-source attribution; typed HIR and
+  optimized MIR intentionally contain no source-wrapper nodes, and metadata
+  presence is byte-neutral. Keep the normative grammar, CST recovery, formatter,
+  LSP data, and generated editor tables synchronized as this final test-linking
+  cleanup lands.
+- Preserve single-evaluation aggregate lowering: synthetic struct fields,
+  tuple/nested destructuring, and aggregate `Option` joins must project one
+  captured source value, while virtual pointer-backed fields must materialize
+  their exact typed literals before durable-state encoding. Keep mixed
+  pointer/scalar `StateMap` requests, present/absent/nested fallback side
+  effects, and malformed dynamic-pointer cases in the release regression set.
+- Keep local test suites immutable after compilation. Their return sentinel is
+  part of the compiler-produced CNTR artifact, is authenticated as a terminal
+  return descriptor by a crate-private validation profile, and remains distinct
+  from any separately prepared, ordinarily admitted runtime artifact. The
+  runner checks both compiler report hashes before loading; nested runtime calls
+  terminate through compiler-emitted entrypoint wrappers rather than post-build
+  byte mutation. Test-only selectors and syscalls must never enter production
+  admission or the ABI-v1 hash.
 - Preserve the corrected ABI-v1 artifact contract: `code_hash` covers the
   complete canonical `.to` image, debug data is a hash-keyed sidecar, CNTR is
   validated rather than trusted, and transitive bytecode effects/access drive

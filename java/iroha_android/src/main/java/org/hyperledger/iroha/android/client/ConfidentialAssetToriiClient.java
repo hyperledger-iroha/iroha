@@ -10,7 +10,6 @@ import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import org.hyperledger.iroha.android.client.transport.TransportRequest;
-import org.hyperledger.iroha.android.offline.OfflineToriiException;
 
 /** Lightweight Torii client for confidential-asset query endpoints. */
 public final class ConfidentialAssetToriiClient {
@@ -140,8 +139,8 @@ public final class ConfidentialAssetToriiClient {
               if (throwable != null) {
                 final Throwable cause =
                     throwable instanceof CompletionException ? throwable.getCause() : throwable;
-                final OfflineToriiException error =
-                    new OfflineToriiException(
+                final ConfidentialAssetToriiException error =
+                    new ConfidentialAssetToriiException(
                         "Confidential asset request failed: " + summarizeCauseMessage(cause),
                         cause,
                         null,
@@ -159,8 +158,8 @@ public final class ConfidentialAssetToriiClient {
                   new ClientResponse(
                       response.statusCode(), response.body(), response.message(), null, rejectCode);
               if (response.statusCode() < 200 || response.statusCode() >= 300) {
-                final OfflineToriiException error =
-                    new OfflineToriiException(
+                final ConfidentialAssetToriiException error =
+                    new ConfidentialAssetToriiException(
                         buildHttpFailureMessage(
                             request,
                             response.statusCode(),
@@ -179,8 +178,8 @@ public final class ConfidentialAssetToriiClient {
                 notifyResponse(request, clientResponse);
                 future.complete(parsed);
               } catch (final RuntimeException ex) {
-                final OfflineToriiException error =
-                    new OfflineToriiException(
+                final ConfidentialAssetToriiException error =
+                    new ConfidentialAssetToriiException(
                         buildParseFailureMessage(request, response.statusCode(), bodyPreview),
                         ex,
                         response.statusCode(),

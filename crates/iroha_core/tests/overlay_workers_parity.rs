@@ -101,13 +101,13 @@ fn overlay_parallel_workers_parity() {
             )])
             .sign(iroha_test_samples::ALICE_KEYPAIR.private_key()),
         TransactionBuilder::new(chain_id.clone(), alice_id.clone())
-            .with_instructions([Mint::asset_numeric(7_u32, a_coin.clone())])
+            .with_instructions([Mint::asset_quantity(7_u32, a_coin.clone())])
             .sign(iroha_test_samples::ALICE_KEYPAIR.private_key()),
         TransactionBuilder::new(chain_id.clone(), alice_id.clone())
-            .with_instructions([Burn::asset_numeric(2_u32, b_coin.clone())])
+            .with_instructions([Burn::asset_quantity(2_u32, b_coin.clone())])
             .sign(iroha_test_samples::ALICE_KEYPAIR.private_key()),
         TransactionBuilder::new(chain_id.clone(), alice_id.clone())
-            .with_instructions([Transfer::asset_numeric(
+            .with_instructions([Transfer::asset_quantity(
                 a_coin.clone(),
                 5_u32,
                 bob_id.clone(),

@@ -893,7 +893,7 @@ async fn typed_core_query_pagination_is_deterministic_on_four_peers() -> Result<
                 AssetDefinition::numeric(asset_definition_id.clone())
                     .with_name(format!("Typed query asset {index}")),
             ))
-            .with_genesis_instruction(Mint::asset_numeric(index + 1, asset_id))
+            .with_genesis_instruction(Mint::asset_quantity(index + 1, asset_id))
             .with_genesis_instruction(Register::nft(Nft::new(nft_id, Metadata::default())));
     }
     let context = stringify!(typed_core_query_pagination_is_deterministic_on_four_peers);
@@ -1139,9 +1139,9 @@ async fn contract_state_survives_across_calls_in_sora_profile_network() -> Resul
     let builder = NetworkBuilder::new()
         .with_min_peers(4)
         .with_pipeline_time(Duration::from_secs(4))
+        .with_npos_consensus()
         .with_config_layer(|layer| {
             layer
-                .write(["sumeragi", "consensus_mode"], "npos")
                 .write(["nexus", "enabled"], true)
                 .write(["nexus", "lane_count"], 1i64);
         })

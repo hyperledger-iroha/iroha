@@ -2,7 +2,7 @@ import Foundation
 import CryptoKit
 
 public enum KagemushaDeviceAttestation {
-    public static let deviceAttestationChallengeDomain = "iroha:offline-note:device-attestation-challenge:v1"
+    public static let deviceAttestationChallengeDomain = "iroha:kagemusha:device-attestation-challenge:v1"
     public static let deviceAttestationEvidencePrefix = "offline-device-attestation-evidence-v1"
     public static let registrationVersion: UInt16 = 1
     public static let iosAppAttestPlatform = "ios-appattest"
@@ -52,7 +52,7 @@ public enum KagemushaDeviceAttestationError: Error, LocalizedError, Equatable {
     }
 }
 
-public struct OfflineDeviceAttestationRegistration: Equatable, Sendable {
+public struct KagemushaDeviceAttestationRegistration: Equatable, Sendable {
     public let version: UInt16
     public let platform: String
     public let keyId: String
@@ -435,8 +435,8 @@ public struct OfflineDeviceAttestationRegistration: Equatable, Sendable {
 
     public func replacingAttestationEvidence(attestationReport: Data,
                                              evidence: Data,
-                                             challengeHash: Data? = nil) throws -> OfflineDeviceAttestationRegistration {
-        try OfflineDeviceAttestationRegistration(
+                                             challengeHash: Data? = nil) throws -> KagemushaDeviceAttestationRegistration {
+        try KagemushaDeviceAttestationRegistration(
             version: version,
             platform: platform,
             keyId: keyId,
@@ -632,17 +632,17 @@ fileprivate struct OfflineAndroidKeyMintChallengePreimage {
     }
 }
 
-public struct RegisterOfflineDeviceAttestationRequest: Sendable {
+public struct RegisterKagemushaDeviceAttestationRequest: Sendable {
     public let chainId: String
     public let authority: String
-    public let registration: OfflineDeviceAttestationRegistration
+    public let registration: KagemushaDeviceAttestationRegistration
     public let ttlMs: UInt64?
     public let nonce: UInt32?
     public let metadata: [String: ToriiJSONValue]
 
     public init(chainId: String,
                 authority: String,
-                registration: OfflineDeviceAttestationRegistration,
+                registration: KagemushaDeviceAttestationRegistration,
                 ttlMs: UInt64? = nil,
                 nonce: UInt32? = nil,
                 metadata: [String: ToriiJSONValue] = [:]) {
@@ -868,7 +868,7 @@ enum KagemushaDeviceAttestationEncoding {
     }
 
     static func encodeDeviceAttestationRegistration(
-        _ registration: OfflineDeviceAttestationRegistration
+        _ registration: KagemushaDeviceAttestationRegistration
     ) throws -> Data {
         var writer = CompactNoritoWriter()
         writer.writeField(CompactNorito.encodeUInt16(registration.version))
@@ -1047,27 +1047,27 @@ enum KagemushaDeviceAttestationEncoding {
     }
 }
 
-public struct OfflineDeviceAttestationUnsignedTransaction: Sendable {
+public struct KagemushaDeviceAttestationUnsignedTransaction: Sendable {
     public let signingHash: Data
     fileprivate let transactionPayload: Data
 
     public func signed(signature: Data) throws -> SignedTransactionEnvelope {
-        try OfflineDeviceAttestationTransactionEncoder.finalizeUnsignedTransaction(
+        try KagemushaDeviceAttestationTransactionEncoder.finalizeUnsignedTransaction(
             transactionPayload: transactionPayload,
             signature: signature
         )
     }
 }
 
-private enum OfflineDeviceAttestationTransactionEncoder {
+private enum KagemushaDeviceAttestationTransactionEncoder {
     private static let signedTransactionWireVersion: UInt8 = 1
     private static let instructionWireName =
         "iroha_data_model::isi::offline::RegisterOfflineDeviceAttestation"
 
     static func encodeUnsigned(
-        request: RegisterOfflineDeviceAttestationRequest,
+        request: RegisterKagemushaDeviceAttestationRequest,
         creationTimeMs: UInt64
-    ) throws -> OfflineDeviceAttestationUnsignedTransaction {
+    ) throws -> KagemushaDeviceAttestationUnsignedTransaction {
         let ids = try TransactionInputValidator.validate(
             chainId: request.chainId,
             authorityId: request.authority
@@ -1082,14 +1082,14 @@ private enum OfflineDeviceAttestationTransactionEncoder {
             instructionPayload: instruction,
             metadata: request.metadata
         )
-        return OfflineDeviceAttestationUnsignedTransaction(
+        return KagemushaDeviceAttestationUnsignedTransaction(
             signingHash: IrohaHash.hash(payload),
             transactionPayload: payload
         )
     }
 
     private static func encodeInstruction(
-        registration: OfflineDeviceAttestationRegistration
+        registration: KagemushaDeviceAttestationRegistration
     ) throws -> Data {
         var concrete = CompactNoritoWriter()
         concrete.writeField(
@@ -1180,10 +1180,10 @@ private enum OfflineDeviceAttestationTransactionEncoder {
 }
 
 public extension IrohaSDK {
-    func buildUnsignedRegisterOfflineDeviceAttestation(
-        request: RegisterOfflineDeviceAttestationRequest
-    ) throws -> OfflineDeviceAttestationUnsignedTransaction {
-        try OfflineDeviceAttestationTransactionEncoder.encodeUnsigned(
+    func buildUnsignedRegisterKagemushaDeviceAttestation(
+        request: RegisterKagemushaDeviceAttestationRequest
+    ) throws -> KagemushaDeviceAttestationUnsignedTransaction {
+        try KagemushaDeviceAttestationTransactionEncoder.encodeUnsigned(
             request: request,
             creationTimeMs: creationTimeProvider()
         )

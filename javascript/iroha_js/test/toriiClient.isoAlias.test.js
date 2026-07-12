@@ -72,7 +72,7 @@ test("resolveAliasByIndex rejects non-numeric indices early", async () => {
   assert.equal(fetchCalls, 0, "invalid indices should not trigger network calls");
 });
 
-test("resolveAlias normalises IBAN input and parses alias responses", async () => {
+test("resolveAlias normalises IBAN input and requires canonical alias responses", async () => {
   let lastRequest = null;
   const client = new ToriiClient("https://example.test", {
     fetchImpl: async (input, init) => {
@@ -85,9 +85,9 @@ test("resolveAlias normalises IBAN input and parses alias responses", async () =
         "request payload should carry normalised IBAN",
       );
       return jsonResponse(200, {
-        alias: "de89 3704 0044 0532 0130 00",
+        alias: "DE89370400440532013000",
         account_id: VALID_ACCOUNT_ID,
-        index: "42",
+        index: 42,
         source: "runtime",
       });
     },
@@ -160,7 +160,7 @@ test("resolveAlias returns null for missing aliases and rejects when runtime is 
   );
 });
 
-test("resolveAliasByIndex posts payloads and normalises responses", async () => {
+test("resolveAliasByIndex posts payloads and requires canonical responses", async () => {
   let lastRequest = null;
   const client = new ToriiClient("https://example.test", {
     fetchImpl: async (input, init) => {
@@ -168,9 +168,9 @@ test("resolveAliasByIndex posts payloads and normalises responses", async () => 
       const parsed = JSON.parse(init.body);
       assert.equal(parsed.index, 7);
       return jsonResponse(200, {
-        alias: "GB82 WEST 1234 5698 7654 32",
+        alias: "GB82WEST12345698765432",
         account_id: ALT_ACCOUNT_ID,
-        index: "7",
+        index: 7,
         source: "imported",
       });
     },

@@ -214,7 +214,10 @@ use iroha_data_model::{
     sorafs::pin_registry::{PinStatus, StorageClass},
     zk::{BackendTag, OpenVerifyEnvelope, OpenVerifyEnvelopeBounds, StarkFriOpenProofV1},
 };
-use iroha_primitives::{json::Json, numeric::Numeric};
+use iroha_primitives::{
+    json::Json,
+    numeric::{Numeric, Quantity},
+};
 use mv::storage::StorageReadOnly;
 
 use super::{
@@ -8772,9 +8775,13 @@ fn transfer_hf_shared_lease_amount(
         return Ok(());
     }
     let source_asset_id = AssetId::new(lease_asset_definition_id.clone(), authority.clone());
-    iroha_data_model::isi::Transfer::<Asset, Numeric, iroha_data_model::account::Account>::asset_numeric(
+    iroha_data_model::isi::Transfer::<
+        Asset,
+        Quantity,
+        iroha_data_model::account::Account,
+    >::asset_quantity(
         source_asset_id,
-        Numeric::new(amount_nanos, 0),
+        Quantity::from(amount_nanos),
         destination.clone(),
     )
     .execute(authority, state_transaction)
@@ -18557,8 +18564,8 @@ mod tests {
                 .with_name(asset_definition_id.name().to_string()),
         )
         .execute(&SAMPLE_GENESIS_ACCOUNT_ID, state_transaction)?;
-        Mint::asset_numeric(
-            Numeric::new(escrow_balance, 0),
+        Mint::asset_quantity(
+            escrow_balance,
             AssetId::new(asset_definition_id.clone(), ALICE_ID.clone()),
         )
         .execute(&SAMPLE_GENESIS_ACCOUNT_ID, state_transaction)?;
@@ -44296,13 +44303,13 @@ mod tests {
                     .with_name(lease_asset_definition_id.name().to_string()),
             )
             .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)?;
-            Mint::asset_numeric(
-                Numeric::new(100_000, 0),
+            Mint::asset_quantity(
+                100_000_u32,
                 AssetId::new(lease_asset_definition_id.clone(), ALICE_ID.clone()),
             )
             .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)?;
-            Mint::asset_numeric(
-                Numeric::new(100_000, 0),
+            Mint::asset_quantity(
+                100_000_u32,
                 AssetId::new(lease_asset_definition_id.clone(), BOB_ID.clone()),
             )
             .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)?;

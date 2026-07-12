@@ -38,7 +38,7 @@ use thiserror::Error;
 
 use super::{
     InboundBlockMessage, LaneRelayMessage,
-    main_loop::lane_scheduler::{prepare_v2_lane_payload_plan, proposal_lookahead_enabled},
+    lane_planner::{prepare_v2_lane_payload_plan, proposal_lookahead_enabled},
     message::BlockMessage,
     v2_candidate::{
         CandidateDescriptor, CandidateWorkProvider, CandidateWorkUnavailable, PreparedCandidateWork,

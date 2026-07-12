@@ -195,13 +195,13 @@ fn kotodama_pointer_abi_asset_ops_end_to_end() {
     assert_eq!(queued.len(), 3, "expected three enqueued instructions");
     let expected_asset_id = AssetId::of(asset_def.clone(), from.clone());
     let expected_asset_id_to = AssetId::of(asset_def.clone(), to.clone());
-    let mint = iroha_data_model::isi::Mint::asset_numeric(1000u32, expected_asset_id.clone());
-    let transfer = iroha_data_model::isi::Transfer::asset_numeric(
+    let mint = iroha_data_model::isi::Mint::asset_quantity(1000u32, expected_asset_id.clone());
+    let transfer = iroha_data_model::isi::Transfer::asset_quantity(
         expected_asset_id.clone(),
         500u32,
         to.clone(),
     );
-    let burn = iroha_data_model::isi::Burn::asset_numeric(100u32, expected_asset_id_to.clone());
+    let burn = iroha_data_model::isi::Burn::asset_quantity(100u32, expected_asset_id_to.clone());
 
     tx.tx_call_hash = Some(iroha_crypto::Hash::prehashed(
         [0x51; iroha_crypto::Hash::LENGTH],
@@ -304,7 +304,7 @@ fn kotodama_state_loaded_pointers_drive_transfer_asset() {
     let reg_asset_def = RegisterBox::from(Register::asset_definition(
         AssetDefinition::numeric(asset_def.clone()).with_name(asset_def.name().to_string()),
     ));
-    let mint = MintBox::from(Mint::asset_numeric(
+    let mint = MintBox::from(Mint::asset_quantity(
         1u32,
         AssetId::of(asset_def.clone(), authority.clone()),
     ));

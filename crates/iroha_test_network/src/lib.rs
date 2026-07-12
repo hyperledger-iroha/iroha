@@ -32,14 +32,11 @@ use fslock::LockFile;
 use fslock_ports::AllocatedPort;
 use futures::{prelude::*, stream::FuturesUnordered};
 use iroha::{client::Client, data_model::prelude::*};
-use iroha_config::{
-    base::{
-        ParameterOrigin,
-        env::MockEnv,
-        read::ConfigReader,
-        toml::{TomlSource, WriteExt as _, Writer as TomlWriter},
-    },
-    parameters::actual::ConsensusMode,
+use iroha_config::base::{
+    ParameterOrigin,
+    env::MockEnv,
+    read::ConfigReader,
+    toml::{TomlSource, WriteExt as _, Writer as TomlWriter},
 };
 use iroha_core::sumeragi::consensus::{
     NPOS_TAG, PERMISSIONED_TAG, PROTO_VERSION, compute_consensus_fingerprint_from_params,
@@ -103,6 +100,10 @@ use toml::{Table, Value, map::Entry};
 use tracing::{Instrument, debug, error, info, info_span, warn};
 
 use crate::config::ensure_genesis_results;
+
+/// Consensus mode frozen into the test network's signed genesis profile.
+pub use iroha_data_model::block::consensus_v2::ConsensusMode;
+
 const TEST_SNS_LEASE_PAYMENT_NANOS: u64 = 500_000_000;
 const TEST_SNS_LEASE_VISIBILITY_TIMEOUT: Duration = Duration::from_secs(120);
 const TEST_SNS_LEASE_VISIBILITY_POLL: Duration = Duration::from_millis(250);
@@ -450,11 +451,6 @@ const MIN_PIPELINE_TIME_MS: u64 = 2;
 /// Interval at which we emit watchdog logs while waiting for block 1.
 const GENESIS_BLOCK_LOG_INTERVAL: Duration = Duration::from_secs(10);
 const POST_GENESIS_LIVENESS_WINDOW: Duration = Duration::from_secs(5);
-const DEFAULT_RBC_STORE_MAX_SESSIONS: i64 = 256;
-const DEFAULT_RBC_STORE_SOFT_SESSIONS: i64 = 192;
-const DEFAULT_RBC_STORE_MAX_BYTES: i64 = 64 * 1024 * 1024;
-const DEFAULT_RBC_STORE_SOFT_BYTES: i64 = 48 * 1024 * 1024;
-const LOCALNET_RBC_CHUNK_MAX_BYTES: i64 = 256 * 1024;
 const DEFAULT_NETWORK_PEERS: usize = 4;
 const DA_ENABLED_ENV: &str = "SUMERAGI_DA_ENABLED";
 const SERIALIZE_NETWORKS_ENV: &str = "IROHA_TEST_SERIALIZE_NETWORKS";
@@ -467,7 +463,7 @@ const BUILD_COMMAND_TIMEOUT_DEFAULT: Duration = Duration::from_secs(20 * 60);
 const NETWORK_PERMIT_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const NETWORK_PERMIT_LOG_INTERVAL: Duration = Duration::from_secs(60);
 const NETWORK_PERMIT_STALE_TTL: Duration = Duration::from_secs(60 * 60 * 12);
-// Keep test-network parallelism conservative; DA/RBC-heavy suites are resource intensive.
+// Keep test-network parallelism conservative; DA-heavy suites are resource intensive.
 const DEFAULT_NETWORK_PARALLELISM_PEERS: usize = 64;
 const DEFAULT_NETWORK_PARALLELISM_LIMIT: usize = 1;
 const TEST_CONCURRENCY_OVERSUBSCRIPTION: usize = 2;
@@ -2322,7 +2318,6 @@ pub struct Network {
     // startup settings. Cache that derived block separately.
     cached_genesis_augmented: OnceLock<GenesisBlock>,
     config_layers: Vec<Table>,
-    sumeragi_overrides: Vec<SumeragiParameter>,
     topology_entries: Vec<GenesisTopologyEntry>,
     auto_populate_trusted_peer_pops: bool,
     _permit: NetworkPermit,
@@ -2406,32 +2401,11 @@ impl Network {
         self.consensus_profile.clone()
     }
 
-    fn config_sumeragi_flag(&self, path: &[&str]) -> Option<bool> {
-        self.config_layers.iter().rev().find_map(|layer| {
-            let table = layer.get("sumeragi").and_then(Value::as_table)?;
-            get_nested_value(table, path).and_then(Value::as_bool)
-        })
-    }
-
-    fn parameter_flag<F>(&self, map: F) -> Option<bool>
-    where
-        F: Fn(&SumeragiParameter) -> Option<bool>,
-    {
-        self.sumeragi_overrides.iter().find_map(map)
-    }
-
     fn log_startup_diagnostics(&self) {
-        let config_da_enabled = self.config_sumeragi_flag(&["da", "enabled"]);
-        let param_da_enabled = self.parameter_flag(|param| match param {
-            SumeragiParameter::DaEnabled(value) => Some(*value),
-            _ => None,
-        });
-
         let handshake_fingerprint = self.consensus_profile.fingerprint();
         debug!(
             total_peers = self.peers.len(),
             consensus_da_enabled = self.consensus_profile.params.da_enabled,
-            sumeragi_overrides = ?self.sumeragi_overrides,
             "sumeragi configuration snapshot prior to peer bootstrap"
         );
 
@@ -2440,22 +2414,13 @@ impl Network {
             commit_time = ?self.commit_time,
             pipeline_time = ?self.pipeline_time(),
             block_sync_gossip_period = ?self.block_sync_gossip_period,
-            config_da_enabled,
-            param_da_enabled,
+            consensus_da_enabled = self.consensus_profile.params.da_enabled,
             handshake_mode = self.consensus_profile.mode_tag,
             handshake_bls_domain = self.consensus_profile.bls_domain,
             handshake_proto_versions = ?self.consensus_profile.wire_proto_versions,
             handshake_fingerprint = %format_args!("0x{}", hex_lower(&handshake_fingerprint)),
             "consensus bootstrap configuration"
         );
-
-        if config_da_enabled != param_da_enabled {
-            warn!(
-                config_da_enabled,
-                param_da_enabled,
-                "Data availability enablement mismatch between config and parameters"
-            );
-        }
     }
 
     /// Add a peer to the network.
@@ -2882,7 +2847,7 @@ impl Network {
         self.block_time + self.commit_time
     }
 
-    /// DA commit-quorum timeout (block_time + 4 * commit_time) used by RBC-aware waits.
+    /// DA commit-quorum timeout used by certified-body waits.
     pub fn da_commit_quorum_timeout(&self) -> Duration {
         self.block_time
             .saturating_add(self.commit_time.saturating_mul(4))
@@ -2906,7 +2871,7 @@ impl Network {
             return base;
         }
 
-        // Allow at least 60 seconds per peer by default to accommodate slower DA/RBC startup
+        // Allow at least 60 seconds per peer by default to accommodate slower DA startup
         // under host contention (e.g., multiple full peers bootstrapping simultaneously).
         let dynamic_secs = u128::from(PEER_STARTUP_TIMEOUT_PER_PEER_SECS)
             .saturating_mul(peers)
@@ -3795,6 +3760,7 @@ pub struct NetworkBuilder {
     block_sync_gossip_period: Duration,
     sumeragi_parameters: Vec<SumeragiParameter>,
     sumeragi_da_enabled: Option<bool>,
+    consensus_mode: ConsensusMode,
     auto_populate_trusted_peer_pops: bool,
     npos_genesis_bootstrap_stake: Option<u64>,
 }
@@ -4203,209 +4169,6 @@ fn resolve_da_proof_policies(
         .map(|config| iroha_core::da::proof_policy_bundle(&config.nexus.lane_config))
 }
 
-fn apply_debug_rbc_defaults(table: &mut Table) {
-    let Some(sumeragi) = table.get_mut("sumeragi").and_then(Value::as_table_mut) else {
-        return;
-    };
-    let Some(debug) = sumeragi.get_mut("debug").and_then(Value::as_table_mut) else {
-        return;
-    };
-    let Some(rbc) = debug.get_mut("rbc").and_then(Value::as_table_mut) else {
-        return;
-    };
-
-    let defaults = [
-        ("shuffle_chunks", Value::Boolean(false)),
-        ("duplicate_inits", Value::Boolean(false)),
-        ("corrupt_witness_ack", Value::Boolean(false)),
-        ("corrupt_ready_signature", Value::Boolean(false)),
-        ("drop_validator_mask", Value::Integer(0)),
-        ("equivocate_chunk_mask", Value::Integer(0)),
-        ("equivocate_validator_mask", Value::Integer(0)),
-        ("conflicting_ready_mask", Value::Integer(0)),
-        ("partial_chunk_mask", Value::Integer(0)),
-    ];
-
-    for (key, value) in defaults {
-        rbc.entry(key.to_string()).or_insert(value);
-    }
-}
-
-fn normalize_legacy_sumeragi_config(table: &mut Table) {
-    let Some(sumeragi) = table.get_mut("sumeragi").and_then(Value::as_table_mut) else {
-        return;
-    };
-
-    let mut move_key = |legacy_key: &str, path: &[&str], convert_seconds: bool| {
-        if path.is_empty() {
-            return;
-        }
-        let should_insert = get_nested_value(sumeragi, path).is_none();
-        let Some(mut value) = sumeragi.remove(legacy_key) else {
-            return;
-        };
-        if !should_insert {
-            return;
-        }
-        if convert_seconds {
-            value = match value {
-                Value::Integer(secs) => Value::Integer(secs.saturating_mul(1_000)),
-                other => other,
-            };
-        }
-        let (parent_path, leaf_key) = path.split_at(path.len() - 1);
-        let mut current = &mut *sumeragi;
-        for segment in parent_path {
-            let entry = current
-                .entry((*segment).to_string())
-                .or_insert_with(|| Value::Table(Table::new()));
-            if !entry.is_table() {
-                *entry = Value::Table(Table::new());
-            }
-            current = entry.as_table_mut().expect("entry is a table");
-        }
-        current.insert(leaf_key[0].to_string(), value);
-    };
-
-    move_key("collectors_k", &["collectors", "k"], false);
-    move_key(
-        "collectors_redundant_send_r",
-        &["collectors", "redundant_send_r"],
-        false,
-    );
-    move_key("da_enabled", &["da", "enabled"], false);
-    move_key(
-        "da_quorum_timeout_multiplier",
-        &["advanced", "da", "quorum_timeout_multiplier"],
-        false,
-    );
-    move_key(
-        "da_availability_timeout_multiplier",
-        &["advanced", "da", "availability_timeout_multiplier"],
-        false,
-    );
-    move_key(
-        "pacemaker_backoff_multiplier",
-        &["advanced", "pacemaker", "backoff_multiplier"],
-        false,
-    );
-    move_key(
-        "pacemaker_rtt_floor_multiplier",
-        &["advanced", "pacemaker", "rtt_floor_multiplier"],
-        false,
-    );
-    move_key(
-        "pacemaker_max_backoff_ms",
-        &["advanced", "pacemaker", "max_backoff_ms"],
-        false,
-    );
-    move_key(
-        "pacemaker_jitter_frac_permille",
-        &["advanced", "pacemaker", "jitter_frac_permille"],
-        false,
-    );
-    move_key(
-        "msg_channel_cap_blocks",
-        &["advanced", "queues", "blocks"],
-        false,
-    );
-    move_key(
-        "rbc_chunk_max_bytes",
-        &["advanced", "rbc", "chunk_max_bytes"],
-        false,
-    );
-    move_key(
-        "rbc_disk_store_max_bytes",
-        &["advanced", "rbc", "disk_store_max_bytes"],
-        false,
-    );
-    move_key(
-        "rbc_disk_store_ttl_secs",
-        &["advanced", "rbc", "disk_store_ttl_ms"],
-        true,
-    );
-    move_key(
-        "rbc_payload_chunks_per_tick",
-        &["advanced", "rbc", "payload_chunks_per_tick"],
-        false,
-    );
-    move_key(
-        "rbc_pending_max_bytes",
-        &["advanced", "rbc", "pending_max_bytes"],
-        false,
-    );
-    move_key(
-        "rbc_pending_max_chunks",
-        &["advanced", "rbc", "pending_max_chunks"],
-        false,
-    );
-    move_key(
-        "rbc_pending_ttl_ms",
-        &["advanced", "rbc", "pending_ttl_ms"],
-        false,
-    );
-    move_key(
-        "rbc_rebroadcast_sessions_per_tick",
-        &["advanced", "rbc", "rebroadcast_sessions_per_tick"],
-        false,
-    );
-    move_key(
-        "rbc_session_ttl_secs",
-        &["advanced", "rbc", "session_ttl_ms"],
-        true,
-    );
-    move_key(
-        "rbc_store_max_bytes",
-        &["advanced", "rbc", "store_max_bytes"],
-        false,
-    );
-    move_key(
-        "rbc_store_max_sessions",
-        &["advanced", "rbc", "store_max_sessions"],
-        false,
-    );
-    move_key(
-        "rbc_store_soft_bytes",
-        &["advanced", "rbc", "store_soft_bytes"],
-        false,
-    );
-    move_key(
-        "rbc_store_soft_sessions",
-        &["advanced", "rbc", "store_soft_sessions"],
-        false,
-    );
-    move_key(
-        "epoch_length_blocks",
-        &["npos", "epoch_length_blocks"],
-        false,
-    );
-    move_key(
-        "use_stake_snapshot_roster",
-        &["npos", "use_stake_snapshot_roster"],
-        false,
-    );
-    move_key(
-        "vrf_commit_deadline_offset",
-        &["npos", "vrf", "commit_deadline_offset_blocks"],
-        false,
-    );
-    move_key(
-        "vrf_reveal_deadline_offset",
-        &["npos", "vrf", "reveal_deadline_offset_blocks"],
-        false,
-    );
-}
-
-fn merged_sumeragi_config(config_layers: &[Table]) -> Table {
-    let mut merged = Table::new();
-    for layer in config_layers {
-        if let Some(table) = layer.get("sumeragi").and_then(Value::as_table) {
-            merge_tables(&mut merged, table);
-        }
-    }
-    merged
-}
-
 fn get_nested_value<'a>(table: &'a Table, path: &[&str]) -> Option<&'a Value> {
     if path.is_empty() {
         return None;
@@ -4636,22 +4399,6 @@ fn resolve_npos_bootstrap_stake(genesis_isi: &[Vec<InstructionBox>], requested: 
     requested.max(min_self_bond)
 }
 
-fn resolve_consensus_mode_from_config(table: &Table) -> ConsensusMode {
-    let Some(raw) = table.get("consensus_mode").and_then(Value::as_str) else {
-        return ConsensusMode::Permissioned;
-    };
-    if raw.eq_ignore_ascii_case("npos") {
-        ConsensusMode::Npos
-    } else if raw.eq_ignore_ascii_case("permissioned") {
-        ConsensusMode::Permissioned
-    } else {
-        warn!(
-            mode = raw,
-            "unsupported consensus_mode override in test network config"
-        );
-        ConsensusMode::Permissioned
-    }
-}
 impl Default for NetworkBuilder {
     fn default() -> Self {
         Self::new()
@@ -4680,6 +4427,7 @@ impl NetworkBuilder {
             block_sync_gossip_period: DEFAULT_BLOCK_SYNC,
             sumeragi_parameters: Vec::new(),
             sumeragi_da_enabled: None,
+            consensus_mode: ConsensusMode::Permissioned,
             auto_populate_trusted_peer_pops: true,
             npos_genesis_bootstrap_stake: Some(SumeragiNposParameters::default().min_self_bond()),
         };
@@ -4709,7 +4457,6 @@ impl NetworkBuilder {
             )
             .write(["concurrency", "rayon_global_threads"], concurrency_threads)
             .write(["pipeline", "workers"], concurrency_threads);
-        apply_debug_rbc_defaults(&mut default_layer);
         builder.config_layers.push(default_layer);
         builder
     }
@@ -4822,11 +4569,33 @@ impl NetworkBuilder {
         }
     }
 
-    /// Enable or disable data availability (RBC + availability QC gating) in the initial parameters.
+    /// Select data availability in the initial signed parameters.
+    ///
+    /// Iroha 3 requires DA, so a `false` request is canonicalized back to `true` while building.
     pub fn with_data_availability_enabled(mut self, enabled: bool) -> Self {
         self.sumeragi_da_enabled = Some(enabled);
         self.push_sumeragi_parameter(SumeragiParameter::DaEnabled(enabled));
         self
+    }
+
+    /// Select the consensus mode committed by the signed genesis block.
+    ///
+    /// Consensus mode is protocol state, not a mutable node-local setting. All
+    /// validators in a test network therefore receive the same signed genesis
+    /// selection regardless of their local configuration layers.
+    pub fn with_consensus_mode(mut self, mode: ConsensusMode) -> Self {
+        self.consensus_mode = mode;
+        self
+    }
+
+    /// Select permissioned consensus in the signed genesis block.
+    pub fn with_permissioned_consensus(self) -> Self {
+        self.with_consensus_mode(ConsensusMode::Permissioned)
+    }
+
+    /// Select NPoS consensus in the signed genesis block.
+    pub fn with_npos_consensus(self) -> Self {
+        self.with_consensus_mode(ConsensusMode::Npos)
     }
 
     /// Automatically generate BLS key material and PoP records for trusted peers.
@@ -4842,10 +4611,11 @@ impl NetworkBuilder {
     /// Override the NPoS bootstrap stake amount injected into genesis.
     ///
     /// This registers Nexus/IVM domains, a gas account, the default stake asset, and per-peer
-    /// validator accounts funded with the stake amount, then activates them. NPoS bootstrap is
-    /// enabled by default when the consensus mode is `npos`.
+    /// validator accounts funded with the stake amount, then activates them. Calling this method
+    /// also selects NPoS in the signed genesis consensus profile.
     pub fn with_npos_genesis_bootstrap(mut self, stake_amount: u64) -> Self {
         assert!(stake_amount > 0, "stake_amount must be non-zero");
+        self.consensus_mode = ConsensusMode::Npos;
         self.npos_genesis_bootstrap_stake = Some(stake_amount);
         self
     }
@@ -4903,17 +4673,12 @@ impl NetworkBuilder {
         let mut table = Table::new();
         let mut writer = TomlWriter::new(&mut table);
         f(&mut writer);
-        normalize_legacy_sumeragi_config(&mut table);
-        apply_debug_rbc_defaults(&mut table);
         self.config_layers.push(table);
         self
     }
 
     /// Push a pre-built TOML configuration layer.
     pub fn with_config_table(mut self, table: Table) -> Self {
-        let mut table = table;
-        normalize_legacy_sumeragi_config(&mut table);
-        apply_debug_rbc_defaults(&mut table);
         self.config_layers.push(table);
         self
     }
@@ -5024,6 +4789,7 @@ impl NetworkBuilder {
             block_sync_gossip_period,
             sumeragi_parameters,
             sumeragi_da_enabled,
+            consensus_mode,
             auto_populate_trusted_peer_pops,
             npos_genesis_bootstrap_stake,
         } = self;
@@ -5064,16 +4830,11 @@ impl NetworkBuilder {
         }
 
         let mut sumeragi_parameters = sumeragi_parameters;
-        let merged_sumeragi = merged_sumeragi_config(&config_layers);
         let default_da_enabled = true;
-        let config_da_enabled = read_bool(&merged_sumeragi, &["da", "enabled"]);
-        let mut da_enabled = sumeragi_da_enabled
-            .or(config_da_enabled)
-            .unwrap_or(default_da_enabled);
+        let mut da_enabled = sumeragi_da_enabled.unwrap_or(default_da_enabled);
         if !da_enabled {
             warn!(
                 builder_override = sumeragi_da_enabled,
-                config_override = config_da_enabled,
                 "iroha3 requires data availability; forcing DA enabled"
             );
             da_enabled = true;
@@ -5082,19 +4843,11 @@ impl NetworkBuilder {
             n_peers,
             default_da_enabled,
             builder_override = sumeragi_da_enabled,
-            config_override = config_da_enabled,
             resolved_da_enabled = da_enabled,
             "resolved DA setting for test network"
         );
         sumeragi_parameters.retain(|param| !matches!(param, SumeragiParameter::DaEnabled(_)));
         sumeragi_parameters.push(SumeragiParameter::DaEnabled(da_enabled));
-
-        let use_sora_profile = config_requires_sora_profile(&config_layers);
-        let mut consensus_mode = resolve_consensus_mode_from_config(&merged_sumeragi);
-        if use_sora_profile && !matches!(consensus_mode, ConsensusMode::Npos) {
-            warn!("Sora profile detection forces NPoS consensus mode in test-network genesis");
-            consensus_mode = ConsensusMode::Npos;
-        }
 
         let peers: Vec<_> = (0..n_peers)
             .map(|i| {
@@ -5169,8 +4922,6 @@ impl NetworkBuilder {
                 .expect("custom genesis should be set exactly once");
         }
 
-        let sumeragi_overrides = sumeragi_parameters.clone();
-
         // Determine the effective pipeline time we report to tests.
         // By default we inject a fast localnet pipeline into genesis; callers can opt out
         // via `with_default_pipeline_time`, which keeps the baked-in Sumeragi defaults
@@ -5235,14 +4986,10 @@ impl NetworkBuilder {
 
         let npos_params_from_config = |config: &iroha_config::parameters::actual::Root| {
             let npos = &config.sumeragi.npos;
-            let collectors = &config.sumeragi.collectors;
             let chain_hash = CryptoHash::new(config.common.chain.clone().into_inner().as_bytes());
             let epoch_seed: [u8; 32] = chain_hash.into();
             let mut fallback = SumeragiNposParameters::default();
             fallback.epoch_length_blocks = npos.epoch_length_blocks.max(1);
-            fallback.k_aggregators = u16::try_from(collectors.k)
-                .expect("sumeragi.collectors.k exceeds u16 for NPoS fallback");
-            fallback.redundant_send_r = collectors.redundant_send_r;
             fallback.epoch_seed = epoch_seed;
             fallback.vrf_commit_window_blocks = npos.vrf.commit_window_blocks;
             fallback.vrf_reveal_window_blocks = npos.vrf.reveal_window_blocks;
@@ -5364,14 +5111,14 @@ impl NetworkBuilder {
                 let validator_id = peer.account_id();
                 bootstrap_tx.push(Register::account(Account::new(validator_id.clone())).into());
                 bootstrap_tx.push(
-                    Mint::asset_numeric(
+                    Mint::asset_quantity(
                         stake_amount,
                         AssetId::new(stake_asset_id.clone(), validator_id.clone()),
                     )
                     .into(),
                 );
                 bootstrap_tx.push(
-                    Mint::asset_numeric(
+                    Mint::asset_quantity(
                         fee_seed_amount,
                         AssetId::new(fee_asset_id.clone(), validator_id),
                     )
@@ -5385,7 +5132,7 @@ impl NetworkBuilder {
                 gas_account_id,
             ] {
                 bootstrap_tx.push(
-                    Mint::asset_numeric(
+                    Mint::asset_quantity(
                         fee_seed_amount,
                         AssetId::new(fee_asset_id.clone(), account_id),
                     )
@@ -5447,14 +5194,14 @@ impl NetworkBuilder {
                     .into(),
                 );
                 soracloud_validator_bootstrap.push(
-                    Mint::asset_numeric(
+                    Mint::asset_quantity(
                         500_000_u32,
                         AssetId::new(agent_wallet_asset_definition.clone(), account_id.clone()),
                     )
                     .into(),
                 );
                 soracloud_validator_bootstrap.push(
-                    Mint::asset_numeric(
+                    Mint::asset_quantity(
                         500_000_u32,
                         AssetId::new(hf_shared_lease_asset_definition.clone(), account_id),
                     )
@@ -5605,58 +5352,23 @@ impl NetworkBuilder {
         base_layer = base_layer
             .write(["network", "block_gossip_period_ms"], gossip_ms)
             // Fan-out gossip to all peers so block sync converges quickly in multi-peer
-            // integration scenarios (NPoS liveness, DA/RBC).
+            // integration scenarios (NPoS liveness and certified-body recovery).
             .write(
                 ["network", "block_gossip_size"],
                 i64::try_from(peers.len()).unwrap_or(i64::MAX),
             );
-        base_layer = base_layer.write(["sumeragi", "advanced", "queues", "blocks"], 512i64);
-        if da_enabled {
-            base_layer = base_layer
-                .write(["sumeragi", "da", "enabled"], true)
-                .write(
-                    ["sumeragi", "advanced", "rbc", "store_max_sessions"],
-                    DEFAULT_RBC_STORE_MAX_SESSIONS,
-                )
-                .write(
-                    ["sumeragi", "advanced", "rbc", "store_soft_sessions"],
-                    DEFAULT_RBC_STORE_SOFT_SESSIONS,
-                )
-                .write(
-                    ["sumeragi", "advanced", "rbc", "store_max_bytes"],
-                    DEFAULT_RBC_STORE_MAX_BYTES,
-                )
-                .write(
-                    ["sumeragi", "advanced", "rbc", "store_soft_bytes"],
-                    DEFAULT_RBC_STORE_SOFT_BYTES,
-                );
-        } else {
-            base_layer = base_layer
-                .write(["sumeragi", "da", "enabled"], false)
-                .write(["sumeragi", "advanced", "rbc", "store_max_sessions"], 0i64)
-                .write(["sumeragi", "advanced", "rbc", "store_soft_sessions"], 0i64)
-                .write(["sumeragi", "advanced", "rbc", "store_max_bytes"], 0i64)
-                .write(["sumeragi", "advanced", "rbc", "store_soft_bytes"], 0i64);
-        }
         base_layer = base_layer
-            .write(
-                ["sumeragi", "advanced", "rbc", "chunk_max_bytes"],
-                LOCALNET_RBC_CHUNK_MAX_BYTES,
-            )
+            .write(["sumeragi", "queues", "bodies"], 512i64)
             // Test networks always provision BLS validator keys; drop the HSM binding requirement
             // so genesis peer registration succeeds.
             .write(["sumeragi", "keys", "require_hsm"], false)
             .write(
                 ["genesis", "public_key"],
                 genesis_key_pair.public_key().to_string(),
-            )
-            // Keep consensus permissive for integration tests: disable precommit QC requirement
-            // so small networks can make progress even when peers start slowly.
-            .write(["sumeragi", "finality", "require_precommit_qc"], false);
+            );
         base_layer = base_layer
             // Ensure BLS batching stays enabled so PoP-based peers can register and vote.
             .write(["pipeline", "signature_batch_max_bls"], 4i64)
-            .write(["torii", "rbc_sampling", "enabled"], false)
             // Enable Norito-RPC for test networks so client-based flows keep working out of the box.
             .write(["torii", "transport", "norito_rpc", "stage"], "ga")
             .write(["torii", "transport", "norito_rpc", "enabled"], true);
@@ -5677,7 +5389,6 @@ impl NetworkBuilder {
             cached_genesis,
             cached_genesis_augmented,
             config_layers: Some(base_layer).into_iter().chain(config_layers).collect(),
-            sumeragi_overrides,
             topology_entries,
             auto_populate_trusted_peer_pops,
             _permit: permit,
@@ -7324,9 +7035,10 @@ impl NetworkPeer {
         let extra_layers: Vec<_> = cfg_extra_layers
             .enumerate()
             .map(|(i, table)| {
-                let mut owned = table.as_ref().clone();
-                apply_debug_rbc_defaults(&mut owned);
-                (format!("run-{run}-config.layer-{i}.toml"), owned)
+                (
+                    format!("run-{run}-config.layer-{i}.toml"),
+                    table.as_ref().clone(),
+                )
             })
             .collect();
 
@@ -8462,8 +8174,7 @@ mod tests {
         collections::HashSet,
         env,
         ffi::{OsStr, OsString},
-        fs,
-        io::{self, Write},
+        fs, io,
         sync::{
             Arc, Mutex,
             atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -8496,7 +8207,7 @@ mod tests {
     /// Serializes async tests that override `TEST_NETWORK_BIN_*` variables so they
     /// cannot leak into concurrently running cases.
     static PROGRAM_BIN_ENV_GUARD: AsyncMutex<()> = AsyncMutex::const_new(());
-    /// Serializes mutations of RBC/DA override env vars so tests stay deterministic.
+    /// Serializes mutations of the DA override env var so tests stay deterministic.
     static SUMERAGI_ENV_GUARD: AsyncMutex<()> = AsyncMutex::const_new(());
     /// Serializes mutations of client timeout overrides.
     static CLIENT_ENV_GUARD: AsyncMutex<()> = AsyncMutex::const_new(());
@@ -8511,30 +8222,6 @@ mod tests {
 
     async fn lock_env_guard_async(mutex: &'static AsyncMutex<()>) -> AsyncMutexGuard<'static, ()> {
         mutex.lock().await
-    }
-
-    #[derive(Clone)]
-    struct BufferWriter(Arc<Mutex<Vec<u8>>>);
-
-    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for BufferWriter {
-        type Writer = BufferGuard;
-        fn make_writer(&'a self) -> Self::Writer {
-            BufferGuard(self.0.clone())
-        }
-    }
-
-    struct BufferGuard(Arc<Mutex<Vec<u8>>>);
-
-    impl Write for BufferGuard {
-        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-            let mut guard = self.0.lock().unwrap();
-            guard.extend_from_slice(buf);
-            Ok(buf.len())
-        }
-
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
     }
 
     fn skip_network_tests(test_name: &str) -> bool {
@@ -10624,61 +10311,6 @@ exit 0
         }
     }
 
-    #[test]
-    fn startup_diagnostics_warn_on_mismatched_da_enabled() {
-        if skip_network_tests("startup_diagnostics_warn_on_mismatched_da_enabled") {
-            return;
-        }
-        let _sumeragi_guard = lock_env_guard(&SUMERAGI_ENV_GUARD);
-        let _disable_da = disable_sumeragi_env_overrides();
-        let network =
-            build_with_isolated_permit(NetworkBuilder::new().with_peers(2).with_config_layer(
-                |layer| {
-                    layer.write(["sumeragi", "da", "enabled"], false);
-                },
-            ));
-
-        let buffer = BufferWriter(Arc::new(Mutex::new(Vec::new())));
-        let subscriber = tracing_subscriber::fmt()
-            .with_max_level(tracing::Level::WARN)
-            .with_ansi(false)
-            .with_writer(buffer.clone())
-            .finish();
-
-        tracing::subscriber::with_default(subscriber, || network.log_startup_diagnostics());
-
-        let output = String::from_utf8(buffer.0.lock().unwrap().clone()).unwrap();
-        assert!(
-            output.contains("Data availability enablement mismatch"),
-            "diagnostics should warn when config/parameter DA flags diverge"
-        );
-    }
-
-    #[test]
-    fn startup_diagnostics_silent_when_da_enabled_align() {
-        if skip_network_tests("startup_diagnostics_silent_when_da_enabled_align") {
-            return;
-        }
-        let _sumeragi_guard = lock_env_guard(&SUMERAGI_ENV_GUARD);
-        let _disable_da = disable_sumeragi_env_overrides();
-        let network = build_with_isolated_permit(NetworkBuilder::new().with_peers(2));
-
-        let buffer = BufferWriter(Arc::new(Mutex::new(Vec::new())));
-        let subscriber = tracing_subscriber::fmt()
-            .with_max_level(tracing::Level::WARN)
-            .with_ansi(false)
-            .with_writer(buffer.clone())
-            .finish();
-
-        tracing::subscriber::with_default(subscriber, || network.log_startup_diagnostics());
-
-        let output = String::from_utf8(buffer.0.lock().unwrap().clone()).unwrap();
-        assert!(
-            !output.contains("Data availability enablement mismatch"),
-            "diagnostics must stay silent when DA flags align"
-        );
-    }
-
     fn reconstructed_consensus_params(block: &GenesisBlock) -> ConsensusGenesisParams {
         let mut state = iroha_data_model::parameter::Parameters::default();
         for parameter in collect_set_parameters(block) {
@@ -10772,11 +10404,7 @@ exit 0
     fn genesis_consensus_metadata_tracks_npos_mode() {
         init_instruction_registry();
         let network =
-            build_with_isolated_permit(NetworkBuilder::new().with_peers(4).with_config_layer(
-                |layer| {
-                    layer.write(["sumeragi", "consensus_mode"], "npos");
-                },
-            ));
+            build_with_isolated_permit(NetworkBuilder::new().with_peers(4).with_npos_consensus());
         let profile = network.consensus_bootstrap_profile();
         assert_eq!(
             profile.mode_tag, NPOS_TAG,
@@ -10788,7 +10416,7 @@ exit 0
         );
         assert_eq!(
             profile.params.epoch_length_blocks,
-            defaults::sumeragi::EPOCH_LENGTH_BLOCKS,
+            defaults::sumeragi::npos::EPOCH_LENGTH_BLOCKS,
             "epoch length should follow config defaults when unspecified"
         );
         assert!(
@@ -10851,34 +10479,12 @@ exit 0
                 .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
                     SumeragiParameter::RedundantSendR(2),
                 )))
+                .with_npos_consensus()
                 .with_config_layer(|layer| {
                     layer
-                        .write(["sumeragi", "consensus_mode"], "npos")
-                        .write(["sumeragi", "collectors", "k"], 2_i64)
-                        .write(["sumeragi", "collectors", "redundant_send_r"], 2_i64)
-                        .write(["sumeragi", "npos", "use_stake_snapshot_roster"], true)
+                        .write(["sumeragi", "round_timeout_ms"], 1_000_i64)
                         .write(["sumeragi", "npos", "election", "max_validators"], 4_i64)
-                        .write(["sumeragi", "npos", "epoch_length_blocks"], 3600_i64)
-                        .write(
-                            ["sumeragi", "advanced", "npos", "timeouts", "propose_ms"],
-                            400_i64,
-                        )
-                        .write(
-                            ["sumeragi", "advanced", "npos", "timeouts", "prevote_ms"],
-                            1000_i64,
-                        )
-                        .write(
-                            ["sumeragi", "advanced", "npos", "timeouts", "precommit_ms"],
-                            1500_i64,
-                        )
-                        .write(
-                            ["sumeragi", "advanced", "npos", "timeouts", "commit_ms"],
-                            2000_i64,
-                        )
-                        .write(
-                            ["sumeragi", "advanced", "npos", "timeouts", "da_ms"],
-                            1000_i64,
-                        );
+                        .write(["sumeragi", "npos", "epoch_length_blocks"], 3600_i64);
                 }),
         );
         let genesis = network.genesis();
@@ -10917,44 +10523,22 @@ exit 0
     }
 
     #[test]
-    fn genesis_consensus_metadata_respects_npos_timeout_overrides() {
+    fn genesis_consensus_metadata_respects_single_round_timeout() {
         init_instruction_registry();
-        let network =
-            build_with_isolated_permit(NetworkBuilder::new().with_peers(4).with_config_layer(
-                |layer| {
-                    layer
-                        .write(["sumeragi", "consensus_mode"], "npos")
-                        .write(
-                            ["sumeragi", "advanced", "npos", "timeouts", "propose_ms"],
-                            166i64,
-                        )
-                        .write(
-                            ["sumeragi", "advanced", "npos", "timeouts", "prevote_ms"],
-                            213i64,
-                        )
-                        .write(
-                            ["sumeragi", "advanced", "npos", "timeouts", "precommit_ms"],
-                            260i64,
-                        )
-                        .write(
-                            ["sumeragi", "advanced", "npos", "timeouts", "commit_ms"],
-                            355i64,
-                        )
-                        .write(
-                            ["sumeragi", "advanced", "npos", "timeouts", "da_ms"],
-                            307i64,
-                        )
-                        .write(
-                            ["sumeragi", "advanced", "npos", "timeouts", "aggregator_ms"],
-                            57i64,
-                        );
-                },
-            ));
+        let network = build_with_isolated_permit(
+            NetworkBuilder::new()
+                .with_peers(4)
+                .with_npos_consensus()
+                .with_config_layer(|layer| {
+                    layer.write(["sumeragi", "round_timeout_ms"], 355_i64);
+                }),
+        );
         let genesis = network.genesis();
         let actual = consensus_fingerprint_from_block(&genesis)
             .expect("genesis should contain consensus fingerprint")
             .to_ascii_lowercase();
         let profile = network.consensus_bootstrap_profile();
+        assert_eq!(profile.params.round_timeout_ms, 355);
         let expected_bytes = compute_consensus_fingerprint_from_params(
             &network.chain_id(),
             &profile.params,
@@ -10963,7 +10547,7 @@ exit 0
         let expected = format!("0x{}", hex_lower(&expected_bytes));
         assert_eq!(
             actual, expected,
-            "consensus fingerprint must respect NPoS timeout overrides"
+            "consensus fingerprint must respect the single round timeout"
         );
     }
 
@@ -11095,7 +10679,7 @@ exit 0
     }
 
     #[test]
-    fn resolve_actual_config_applies_sora_profile_when_required() {
+    fn resolve_actual_config_applies_sora_profile_non_consensus_settings() {
         let config_layers = vec![Table::new().write(["sorafs", "storage", "enabled"], true)];
 
         assert!(
@@ -11112,11 +10696,6 @@ exit 0
 
         let actual = parse_actual_config_for_genesis(merged, &config_layers)
             .expect("should resolve runtime-equivalent config");
-        assert_eq!(
-            actual.sumeragi.consensus_mode,
-            ConsensusMode::Npos,
-            "Sora profile should force NPoS consensus mode"
-        );
         assert!(
             actual.nexus.enabled,
             "Sora profile should enable nexus in resolved config"
@@ -11124,6 +10703,25 @@ exit 0
         assert!(
             actual.nexus.lane_config.entries().len() > 1,
             "Sora profile should expand lane catalog beyond single-lane defaults"
+        );
+    }
+
+    #[test]
+    fn sora_profile_does_not_override_signed_genesis_mode() {
+        init_instruction_registry();
+        let network = build_with_isolated_permit(
+            NetworkBuilder::new()
+                .with_peers(4)
+                .with_permissioned_consensus()
+                .with_config_layer(|layer| {
+                    layer.write(["sorafs", "storage", "enabled"], true);
+                }),
+        );
+
+        assert_eq!(
+            network.consensus_bootstrap_profile().mode_tag,
+            PERMISSIONED_TAG,
+            "local Sora profile selection must not override the signed genesis mode",
         );
     }
 
@@ -11403,88 +11001,6 @@ exit 0
     }
 
     #[test]
-    fn config_layers_normalize_legacy_sumeragi_keys() {
-        let builder = NetworkBuilder::new()
-            .with_config_layer(|layer| {
-                layer
-                    .write(["sumeragi", "collectors_k"], 2_i64)
-                    .write(["sumeragi", "da_enabled"], true)
-                    .write(["sumeragi", "epoch_length_blocks"], 12_i64)
-                    .write(["sumeragi", "pacemaker_max_backoff_ms"], 12_000_i64)
-                    .write(["sumeragi", "rbc_session_ttl_secs"], 5_i64);
-            })
-            .with_config_table({
-                let mut sumeragi = Table::new();
-                sumeragi.insert("collectors_redundant_send_r".into(), TomlValue::Integer(3));
-                sumeragi.insert("rbc_disk_store_ttl_secs".into(), TomlValue::Integer(7));
-                sumeragi.insert("rbc_pending_ttl_ms".into(), TomlValue::Integer(500));
-                let mut table = Table::new();
-                table.insert("sumeragi".into(), TomlValue::Table(sumeragi));
-                table
-            });
-        let NetworkBuilder { config_layers, .. } = builder;
-        let layer_from_writer = config_layers
-            .get(1)
-            .expect("custom layer from with_config_layer");
-        let layer_from_table = config_layers
-            .get(2)
-            .expect("custom layer from with_config_table");
-
-        let sumeragi_writer = layer_from_writer
-            .get("sumeragi")
-            .and_then(TomlValue::as_table)
-            .expect("sumeragi table");
-        assert!(!sumeragi_writer.contains_key("collectors_k"));
-        assert_eq!(
-            get_nested_value(sumeragi_writer, &["collectors", "k"]),
-            Some(&TomlValue::Integer(2))
-        );
-        assert!(!sumeragi_writer.contains_key("da_enabled"));
-        assert_eq!(
-            get_nested_value(sumeragi_writer, &["da", "enabled"]),
-            Some(&TomlValue::Boolean(true))
-        );
-        assert!(!sumeragi_writer.contains_key("epoch_length_blocks"));
-        assert_eq!(
-            get_nested_value(sumeragi_writer, &["npos", "epoch_length_blocks"]),
-            Some(&TomlValue::Integer(12))
-        );
-        assert!(!sumeragi_writer.contains_key("pacemaker_max_backoff_ms"));
-        assert_eq!(
-            get_nested_value(
-                sumeragi_writer,
-                &["advanced", "pacemaker", "max_backoff_ms"]
-            ),
-            Some(&TomlValue::Integer(12_000))
-        );
-        assert!(!sumeragi_writer.contains_key("rbc_session_ttl_secs"));
-        assert_eq!(
-            get_nested_value(sumeragi_writer, &["advanced", "rbc", "session_ttl_ms"]),
-            Some(&TomlValue::Integer(5_000))
-        );
-
-        let sumeragi_table = layer_from_table
-            .get("sumeragi")
-            .and_then(TomlValue::as_table)
-            .expect("sumeragi table");
-        assert!(!sumeragi_table.contains_key("collectors_redundant_send_r"));
-        assert_eq!(
-            get_nested_value(sumeragi_table, &["collectors", "redundant_send_r"]),
-            Some(&TomlValue::Integer(3))
-        );
-        assert!(!sumeragi_table.contains_key("rbc_disk_store_ttl_secs"));
-        assert_eq!(
-            get_nested_value(sumeragi_table, &["advanced", "rbc", "disk_store_ttl_ms"]),
-            Some(&TomlValue::Integer(7_000))
-        );
-        assert!(!sumeragi_table.contains_key("rbc_pending_ttl_ms"));
-        assert_eq!(
-            get_nested_value(sumeragi_table, &["advanced", "rbc", "pending_ttl_ms"]),
-            Some(&TomlValue::Integer(500))
-        );
-    }
-
-    #[test]
     fn config_layers_without_pop_excludes_bls_entries() {
         let network = build_with_isolated_permit(
             NetworkBuilder::new()
@@ -11513,7 +11029,7 @@ exit 0
         let mut layers = network.config_layers();
         let _trusted = layers.next().expect("trusted peers layer");
         let base = layers.next().expect("base config layer").into_owned();
-        let rbc_flag = base
+        let sumeragi = base
             .get("sumeragi")
             .unwrap_or_else(|| {
                 let keys = base.keys().cloned().collect::<Vec<_>>();
@@ -11521,17 +11037,14 @@ exit 0
             })
             .as_table()
             .expect("sumeragi entry must be a table");
-        let rbc_flag =
-            get_nested_value(rbc_flag, &["da", "enabled"]).and_then(toml::Value::as_bool);
-        assert_eq!(
-            rbc_flag,
-            Some(true),
-            "base config should enable DA by default"
+        assert!(
+            get_nested_value(sumeragi, &["da", "enabled"]).is_none(),
+            "DA must come from signed genesis rather than local configuration"
         );
     }
 
     #[test]
-    fn base_config_increases_block_queue_capacity() {
+    fn base_config_increases_body_queue_capacity() {
         let _guard = lock_env_guard(&CONFIG_ENV_GUARD);
         let network = NetworkBuilder::new().build();
 
@@ -11541,36 +11054,12 @@ exit 0
         let cap = base
             .get("sumeragi")
             .and_then(TomlValue::as_table)
-            .and_then(|table| get_nested_value(table, &["advanced", "queues", "blocks"]))
+            .and_then(|table| get_nested_value(table, &["queues", "bodies"]))
             .and_then(TomlValue::as_integer);
         assert_eq!(
             cap,
             Some(512),
-            "test network should raise block queue capacity to avoid dropped sync updates"
-        );
-    }
-
-    #[test]
-    fn default_network_sets_localnet_rbc_chunk_max_bytes() {
-        let _guard = lock_env_guard(&SUMERAGI_ENV_GUARD);
-        let _disable_da = disable_sumeragi_env_overrides();
-        let network = NetworkBuilder::new().build();
-
-        let mut layers = network.config_layers();
-        let _trusted = layers.next().expect("trusted peers layer");
-        let base = layers.next().expect("base config layer").into_owned();
-        let rbc_chunk_max = base
-            .get("sumeragi")
-            .and_then(toml::Value::as_table)
-            .and_then(|sumeragi| {
-                get_nested_value(sumeragi, &["advanced", "rbc", "chunk_max_bytes"])
-            })
-            .and_then(toml::Value::as_integer);
-
-        assert_eq!(
-            rbc_chunk_max,
-            Some(LOCALNET_RBC_CHUNK_MAX_BYTES),
-            "base config should set a larger localnet RBC chunk size"
+            "test network should raise certified-body queue capacity to avoid dropped sync updates"
         );
     }
 
@@ -11770,10 +11259,12 @@ exit 0
             .with_peers(2)
             .with_auto_populated_trusted_peers()
             .with_npos_genesis_bootstrap(stake_amount)
-            .with_config_layer(|layer| {
-                layer.write(["sumeragi", "consensus_mode"], "npos");
-            })
             .build();
+        assert_eq!(
+            network.consensus_bootstrap_profile().mode_tag,
+            NPOS_TAG,
+            "NPoS bootstrap must select NPoS in signed genesis",
+        );
         let genesis = network.genesis();
         let mut has_register = false;
         let mut has_activate = false;
@@ -11810,9 +11301,7 @@ exit 0
             NetworkBuilder::new()
                 .with_peers(2)
                 .with_auto_populated_trusted_peers()
-                .with_config_layer(|layer| {
-                    layer.write(["sumeragi", "consensus_mode"], "npos");
-                }),
+                .with_npos_consensus(),
         );
         let genesis = network.genesis();
         let mut has_register = false;
@@ -11850,9 +11339,7 @@ exit 0
             NetworkBuilder::new()
                 .with_peers(2)
                 .with_auto_populated_trusted_peers()
-                .with_config_layer(|layer| {
-                    layer.write(["sumeragi", "consensus_mode"], "npos");
-                })
+                .with_npos_consensus()
                 .without_npos_genesis_bootstrap(),
         );
         let genesis = network.genesis();
@@ -11933,9 +11420,7 @@ exit 0
                 .with_genesis_instruction(SetParameter::new(Parameter::Custom(
                     npos_params.into_custom_parameter(),
                 )))
-                .with_config_layer(|layer| {
-                    layer.write(["sumeragi", "consensus_mode"], "npos");
-                }),
+                .with_npos_consensus(),
         );
         let genesis = network.genesis();
         let mut seen = false;
@@ -11966,9 +11451,6 @@ exit 0
             .with_peers(1)
             .with_auto_populated_trusted_peers()
             .with_npos_genesis_bootstrap(stake_amount)
-            .with_config_layer(|layer| {
-                layer.write(["sumeragi", "consensus_mode"], "npos");
-            })
             .build();
 
         let mut merged = Table::new();
@@ -12000,9 +11482,7 @@ exit 0
         let network = NetworkBuilder::new()
             .with_peers(2)
             .with_auto_populated_trusted_peers()
-            .with_config_layer(|layer| {
-                layer.write(["sumeragi", "consensus_mode"], "npos");
-            })
+            .with_npos_consensus()
             .build();
         let genesis = network.genesis();
         let fee_asset_definition_id: AssetDefinitionId = defaults::nexus::fees::fee_asset_id()
@@ -12285,26 +11765,7 @@ exit 0
 
         assert_eq!(saw_da_enabled, Some(true));
 
-        let mut layers = network.config_layers();
-        let _trusted = layers.next().expect("trusted peers layer present");
-        let base_layer = layers
-            .next()
-            .expect("base config layer present")
-            .into_owned();
-
-        let sumeragi = base_layer
-            .get("sumeragi")
-            .and_then(|value| value.as_table())
-            .expect("sumeragi table present");
-        assert_eq!(
-            get_nested_value(sumeragi, &["da", "enabled"]).and_then(|value| value.as_bool()),
-            Some(true)
-        );
-        assert_eq!(
-            get_nested_value(sumeragi, &["advanced", "rbc", "store_max_sessions"])
-                .and_then(|value| value.as_integer()),
-            Some(DEFAULT_RBC_STORE_MAX_SESSIONS)
-        );
+        assert!(network.consensus_bootstrap_profile().params.da_enabled);
     }
 
     #[test]
@@ -12757,9 +12218,7 @@ exit 0
         let network = build_with_isolated_permit(
             NetworkBuilder::new()
                 .with_peers(4)
-                .with_config_layer(|layer| {
-                    layer.write(["sumeragi", "consensus_mode"], "npos");
-                })
+                .with_npos_consensus()
                 .without_npos_genesis_bootstrap()
                 .with_genesis_block(|topology, topology_entries| {
                     genesis_factory_with_post_topology(

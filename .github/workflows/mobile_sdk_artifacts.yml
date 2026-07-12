@@ -93,6 +93,9 @@ jobs:
           fi
       - name: Validate Apple mobile SDK artifact
         run: bash scripts/check_mobile_sdk_artifacts.sh --apple-only
+      - name: Test Swift SDK
+        working-directory: IrohaSwift
+        run: swift test
       - name: Package Apple mobile SDK artifact
         run: bash scripts/package_mobile_sdk_artifacts.sh --apple --version "$MOBILE_SDK_VERSION"
       - uses: actions/upload-artifact@v4

@@ -323,15 +323,6 @@ extension NoritoNativeBridge {
         )
     }
 
-    func kagemushaRecursiveSpendBuildRedemptionIntentV2(
-        requestArchive: Data
-    ) throws -> Data? {
-        try callKagemushaV2Archive(
-            symbol: "connect_norito_kagemusha_recursive_spend_build_redemption_intent_v2",
-            archive: requestArchive
-        )
-    }
-
     func kagemushaRecursiveSpendInitV2(requestArchive: Data) throws -> Data? {
         try callKagemushaV2Archive(
             symbol: "connect_norito_kagemusha_recursive_spend_init_v2",
@@ -398,13 +389,6 @@ extension NoritoNativeBridge {
             symbol: "connect_norito_kagemusha_recursive_spend_redeem_finalize_request_v2",
             first: unsignedArchive,
             second: authorizationArchive
-        )
-    }
-
-    func kagemushaRecursiveSpendRedeemChangeV2(requestArchive: Data) throws -> Data? {
-        try callKagemushaV2Archive(
-            symbol: "connect_norito_kagemusha_recursive_spend_redeem_change_v2",
-            archive: requestArchive
         )
     }
 

@@ -24,10 +24,7 @@ use iroha_data_model::{
         musubi::{
             AssertMusubiReleaseExists, PublishMusubiRelease, SetMusubiShortAlias, YankMusubiRelease,
         },
-        offline::{
-            KagemushaTransfer, RedeemKagemushaRecursiveV2, TopUpKagemushaRecursive,
-            TopUpKagemushaRecursiveV2,
-        },
+        offline::{RedeemKagemushaRecursiveV2, TopUpKagemushaRecursiveV2},
         settlement::{
             DvpIsi, FxCorridorPolicy, FxCorridorPolicyRegistry, PvpIsi, SetFxCorridorPolicy,
             SettleFxCorridor, SettlementInstructionBox,
@@ -2517,7 +2514,7 @@ fn instruction_transaction_dataspace_target(
         return contract_address_dataspace_target(&set_alias.contract_address);
     }
 
-    if let Some(asset_definition_id) = offline_note_asset_definition_target(any) {
+    if let Some(asset_definition_id) = confidential_asset_definition_target(any) {
         return asset_definition_dataspace_target(
             asset_definition_id,
             None,
@@ -2958,7 +2955,7 @@ fn instruction_transaction_dataspace_target_with_world<W: WorldReadOnly>(
         return contract_address_dataspace_target(&set_alias.contract_address);
     }
 
-    if let Some(asset_definition_id) = offline_note_asset_definition_target(any) {
+    if let Some(asset_definition_id) = confidential_asset_definition_target(any) {
         return asset_definition_dataspace_target_with_world(
             asset_definition_id,
             None,
@@ -3194,18 +3191,12 @@ fn multisig_propose_transaction_dataspace_target_with_world<W: WorldReadOnly>(
     .or_else(|| account_dataspace_target(Some(world), &propose.account))
 }
 
-fn offline_note_asset_definition_target(any: &dyn std::any::Any) -> Option<&AssetDefinitionId> {
-    if let Some(topup) = any.downcast_ref::<TopUpKagemushaRecursive>() {
-        return Some(topup.asset.definition());
-    }
+fn confidential_asset_definition_target(any: &dyn std::any::Any) -> Option<&AssetDefinitionId> {
     if let Some(topup) = any.downcast_ref::<TopUpKagemushaRecursiveV2>() {
         return Some(topup.request.asset.definition());
     }
     if let Some(redeem) = any.downcast_ref::<RedeemKagemushaRecursiveV2>() {
         return Some(&redeem.request.bundle.statement.asset);
-    }
-    if let Some(transfer) = any.downcast_ref::<KagemushaTransfer>() {
-        return Some(&transfer.asset);
     }
     if let Some(shield) = any.downcast_ref::<Shield>() {
         return Some(&shield.asset);
@@ -3923,7 +3914,7 @@ fn instruction_transaction_dataspace_target_needs_state(instruction: &dyn Instru
         return true;
     }
 
-    if let Some(asset_definition_id) = offline_note_asset_definition_target(any) {
+    if let Some(asset_definition_id) = confidential_asset_definition_target(any) {
         return asset_definition_id.is_opaque_canonical();
     }
 
@@ -6422,7 +6413,7 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
     use iroha_config::parameters::actual::{LaneRoutingMatcher, LaneRoutingRule};
-    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
+    use iroha_crypto::{Hash, HashOf};
     use iroha_data_model::{
         Encode, IntoKeyValue,
         account::{AccountAddress, AccountAliasDomain},
@@ -6431,7 +6422,6 @@ mod tests {
         },
         confidential::ConfidentialEncryptedPayload,
         isi::{
-            offline::KagemushaTransfer,
             prelude::{Mint, Register, Transfer},
             settlement::{
                 DvpIsi, PvpIsi, SettlementAtomicity, SettlementExecutionOrder, SettlementLeg,
@@ -6445,7 +6435,6 @@ mod tests {
             AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_MANAGED, AssetPermissionManifest,
             LaneConfig, LaneVisibility, ManifestVersion, UniversalAccountId,
         },
-        offline::OfflineNoteKeyCertificate,
         permission::Permission,
         prelude::*,
         proof::{ProofAttachment, ProofBox, VerifyingKeyId},
@@ -6882,14 +6871,6 @@ mod tests {
             .insert(account_id.clone(), scope_entry);
     }
 
-    fn sample_signature(seed: u8) -> Signature {
-        let mut payload = [0u8; 64];
-        for (idx, byte) in payload.iter_mut().enumerate() {
-            *byte = seed.wrapping_add(u8::try_from(idx).expect("index fits into u8"));
-        }
-        Signature::try_from_bytes(&payload).expect("checked queue-router signature fixture")
-    }
-
     fn dummy_zk_proof_attachment() -> ProofAttachment {
         ProofAttachment::new_ref(
             "halo2/ipa".into(),
@@ -6898,48 +6879,6 @@ mod tests {
         )
     }
 
-    fn sample_offline_certificate_keypair() -> KeyPair {
-        KeyPair::try_from_seed(vec![0xAA; 32], Algorithm::Ed25519)
-            .expect("derive offline certificate fixture key")
-    }
-
-    fn sample_offline_certificate(account_id: AccountId) -> OfflineNoteKeyCertificate {
-        let keypair = sample_offline_certificate_keypair();
-        let (_algorithm, public_key) = keypair
-            .public_key()
-            .try_to_bytes()
-            .expect("fixture public key must be valid");
-        OfflineNoteKeyCertificate {
-            version: iroha_data_model::offline::OFFLINE_NOTE_KEY_CERTIFICATE_VERSION,
-            platform: "ios-appattest".to_owned(),
-            key_id: "one-use-key".to_owned(),
-            device_id: "device-1".to_owned(),
-            account_id,
-            public_key: public_key.to_vec(),
-            assertion_scheme: "apple-appattest-counter".to_owned(),
-            assertion_key_algorithm: "app-attest-p256".to_owned(),
-            assertion_public_key: vec![0x04; 65],
-            assertion_usage_count_limit: None,
-            one_use: true,
-            issuer_signature: sample_signature(0x44),
-        }
-    }
-
-    #[test]
-    fn sample_offline_certificate_uses_checked_seed_derivation() {
-        let (account_id, _) = gen_account_in("wonderland");
-        let certificate = sample_offline_certificate(account_id.clone());
-        let keypair = sample_offline_certificate_keypair();
-        let (_algorithm, expected_public_key) = keypair
-            .public_key()
-            .try_to_bytes()
-            .expect("fixture public key must be valid");
-
-        assert_eq!(certificate.account_id, account_id);
-        assert_eq!(certificate.public_key, expected_public_key.to_vec());
-    }
-
-    #[test]
     fn applies_account_and_instruction_rules() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
         let (_bob_id, _) = gen_account_in("wonderland");
@@ -6978,7 +6917,7 @@ mod tests {
             "xor".parse().unwrap(),
         );
         let asset_id = AssetId::of(asset_definition.clone(), alice_id.clone());
-        let mint = Mint::asset_numeric(1u32, asset_id);
+        let mint = Mint::asset_quantity(1u32, asset_id);
         let register = Register::asset_definition(
             AssetDefinition::numeric(asset_definition.clone())
                 .with_name(asset_definition.name().to_string()),
@@ -9870,7 +9809,7 @@ mod tests {
         let tx = sample_executable_transaction(
             &alice_id,
             alice_keypair.private_key(),
-            sample_proved_executable(vec![InstructionBox::from(Mint::asset_numeric(
+            sample_proved_executable(vec![InstructionBox::from(Mint::asset_quantity(
                 1_u32,
                 AssetId::of(asset_definition.clone(), alice_id.clone()),
             ))]),
@@ -10013,7 +9952,7 @@ mod tests {
             &alice_id,
             alice_keypair.private_key(),
             sample_proved_executable(vec![
-                InstructionBox::from(Mint::asset_numeric(
+                InstructionBox::from(Mint::asset_quantity(
                     1_u32,
                     AssetId::of(asset_definition.clone(), alice_id.clone()),
                 )),
@@ -10774,7 +10713,7 @@ mod tests {
             "aed".parse().unwrap(),
         );
         let asset_id = AssetId::of(asset_definition, sender_id.clone());
-        let transfer = Transfer::asset_numeric(asset_id, 1_u32, receiver_id.clone());
+        let transfer = Transfer::asset_quantity(asset_id, 1_u32, receiver_id.clone());
         let tx = sample_transaction(
             &sender_id,
             sender_keypair.private_key(),
@@ -10887,7 +10826,7 @@ mod tests {
             DomainId::try_new("cash", "paynet").expect("asset definition domain"),
             "pkr".parse().expect("asset definition name"),
         );
-        let transfer = Transfer::asset_numeric(
+        let transfer = Transfer::asset_quantity(
             AssetId::of(asset_definition, sender_id.clone()),
             1_u32,
             receiver_id,
@@ -10932,7 +10871,7 @@ mod tests {
         let opaque_asset_definition =
             AssetDefinitionId::parse_address_literal(&asset_definition.canonical_address())
                 .expect("opaque canonical asset definition id");
-        let transfer = Transfer::asset_numeric(
+        let transfer = Transfer::asset_quantity(
             AssetId::of(opaque_asset_definition, sender_id.clone()),
             1_u32,
             receiver_id,
@@ -10968,77 +10907,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn opaque_kagemusha_transfer_defers_to_state_for_asset_definition_dataspace() {
-        let (sender_id, sender_keypair) = gen_account_in("wonderland");
-        let dataspace_id = DataSpaceId::new(10);
-        let dataspace_catalog = dataspace_catalog(&[(dataspace_id, "paynet")]);
-        let lane_catalog = catalog_with_lane_dataspaces(&[
-            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
-            (LaneId::new(2), dataspace_id),
-        ]);
-        let router = ConfigLaneRouter::new(
-            LaneRoutingPolicy {
-                default_lane: LaneId::SINGLE,
-                default_dataspace: DataSpaceId::UNIVERSAL,
-                rules: vec![],
-            },
-            dataspace_catalog.clone(),
-            lane_catalog.clone(),
-        );
-        let projected_asset_definition = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("cash", "universal").expect("asset definition domain"),
-            "unit".parse().expect("asset definition name"),
-        );
-        let opaque_asset_definition = AssetDefinitionId::parse_address_literal(
-            &projected_asset_definition.canonical_address(),
-        )
-        .expect("opaque canonical asset definition id");
-        let mut state = state_with_asset_definitions(
-            vec![
-                AssetDefinition::numeric(opaque_asset_definition.clone())
-                    .with_name("unit".to_owned())
-                    .with_balance_scope_policy(AssetBalancePolicy::DataspaceRestricted)
-                    .build(&sender_id),
-            ],
-            dataspace_catalog,
-            lane_catalog,
-        );
-        bind_asset_definition_alias(&mut state, &opaque_asset_definition, "unit#paynet");
-
-        let kagemusha = KagemushaTransfer::new(
-            opaque_asset_definition,
-            vec![[0x11; 32]],
-            vec![[0x22; 32]],
-            ProofAttachment::new_ref(
-                "halo2/ipa".into(),
-                ProofBox::new("halo2/ipa".into(), vec![0xCA, 0xFE]),
-                VerifyingKeyId::new("halo2/ipa", "offline-kagemusha-transfer"),
-            ),
-            Some([0x33; 32]),
-        );
-        let tx = sample_transaction(
-            &sender_id,
-            sender_keypair.private_key(),
-            vec![InstructionBox::from(kagemusha)],
-        );
-
-        assert_eq!(
-            router
-                .try_route_without_state(&tx)
-                .expect("opaque Kagemusha transfer should defer to state"),
-            None
-        );
-
-        assert_eq!(
-            router
-                .try_route_with_view(&tx, &state.view())
-                .expect("Kagemusha route must resolve with state"),
-            RoutingDecision::new(LaneId::new(2), dataspace_id)
-        );
-    }
-
-    #[test]
     fn opaque_asset_transfer_uses_stored_asset_alias_dataspace() {
         let (sender_id, sender_keypair) = gen_account_in("wonderland");
         let (receiver_id, _) = gen_account_in("wonderland");
@@ -11065,7 +10933,7 @@ mod tests {
             &transparent_asset_definition.canonical_address(),
         )
         .expect("opaque canonical asset definition id");
-        let transfer = Transfer::asset_numeric(
+        let transfer = Transfer::asset_quantity(
             AssetId::of(opaque_asset_definition.clone(), sender_id.clone()),
             1_u32,
             receiver_id,
@@ -11137,7 +11005,7 @@ mod tests {
             &transparent_asset_definition.canonical_address(),
         )
         .expect("opaque canonical asset definition id");
-        let transfer = Transfer::asset_numeric(
+        let transfer = Transfer::asset_quantity(
             AssetId::of(opaque_asset_definition.clone(), sender_id.clone()),
             1_u32,
             receiver_id.clone(),
@@ -11548,7 +11416,7 @@ mod tests {
             DomainId::try_new("cash", "universal").expect("asset definition domain"),
             "pkr".parse().expect("asset definition name"),
         );
-        let transfer = Transfer::asset_numeric(
+        let transfer = Transfer::asset_quantity(
             AssetId::of(asset_definition.clone(), sender_id.clone()),
             1_u32,
             receiver_id,
@@ -11840,7 +11708,7 @@ mod tests {
         let tx = sample_transaction(
             &alice_id,
             alice_keypair.private_key(),
-            vec![InstructionBox::from(Mint::asset_numeric(
+            vec![InstructionBox::from(Mint::asset_quantity(
                 1_u32,
                 AssetId::of(asset_definition.clone(), alice_id.clone()),
             ))],
@@ -11910,7 +11778,7 @@ mod tests {
         let tx = sample_transaction(
             &alice_id,
             alice_keypair.private_key(),
-            vec![InstructionBox::from(Mint::asset_numeric(
+            vec![InstructionBox::from(Mint::asset_quantity(
                 1_u32,
                 AssetId::of(asset_definition.clone(), alice_id.clone()),
             ))],
@@ -11981,7 +11849,7 @@ mod tests {
         let tx = sample_transaction(
             &alice_id,
             alice_keypair.private_key(),
-            vec![InstructionBox::from(Burn::asset_numeric(
+            vec![InstructionBox::from(Burn::asset_quantity(
                 1_u32,
                 AssetId::of(asset_definition.clone(), alice_id.clone()),
             ))],
@@ -12039,7 +11907,7 @@ mod tests {
         let tx = sample_transaction(
             &alice_id,
             alice_keypair.private_key(),
-            vec![InstructionBox::from(Mint::asset_numeric(
+            vec![InstructionBox::from(Mint::asset_quantity(
                 1_u32,
                 AssetId::of(asset_definition.clone(), alice_id.clone()),
             ))],
@@ -12090,7 +11958,7 @@ mod tests {
         let tx = sample_transaction(
             &alice_id,
             alice_keypair.private_key(),
-            vec![InstructionBox::from(Burn::asset_numeric(
+            vec![InstructionBox::from(Burn::asset_quantity(
                 1_u32,
                 AssetId::of(asset_definition.clone(), alice_id.clone()),
             ))],
@@ -12142,7 +12010,7 @@ mod tests {
         let tx = sample_transaction(
             &alice_id,
             alice_keypair.private_key(),
-            vec![InstructionBox::from(Transfer::asset_numeric(
+            vec![InstructionBox::from(Transfer::asset_quantity(
                 AssetId::of(asset_definition.clone(), alice_id.clone()),
                 1_u32,
                 bob_id,
@@ -12199,7 +12067,7 @@ mod tests {
         let tx = sample_transaction(
             &alice_id,
             alice_keypair.private_key(),
-            vec![InstructionBox::from(Mint::asset_numeric(
+            vec![InstructionBox::from(Mint::asset_quantity(
                 1_u32,
                 scoped_asset_id,
             ))],
@@ -12261,7 +12129,7 @@ mod tests {
         let tx = sample_transaction(
             &alice_id,
             alice_keypair.private_key(),
-            vec![InstructionBox::from(Transfer::asset_numeric(
+            vec![InstructionBox::from(Transfer::asset_quantity(
                 scoped_asset_id,
                 1_u32,
                 bob_id,
@@ -12323,7 +12191,7 @@ mod tests {
         let tx = sample_transaction(
             &alice_id,
             alice_keypair.private_key(),
-            vec![InstructionBox::from(Mint::asset_numeric(
+            vec![InstructionBox::from(Mint::asset_quantity(
                 1_u32,
                 scoped_asset_id,
             ))],
@@ -12384,7 +12252,7 @@ mod tests {
         let tx = sample_transaction(
             &alice_id,
             alice_keypair.private_key(),
-            vec![InstructionBox::from(Burn::asset_numeric(
+            vec![InstructionBox::from(Burn::asset_quantity(
                 1_u32,
                 scoped_asset_id,
             ))],
@@ -12440,7 +12308,7 @@ mod tests {
         let tx = sample_transaction(
             &alice_id,
             alice_keypair.private_key(),
-            vec![InstructionBox::from(Transfer::asset_numeric(
+            vec![InstructionBox::from(Transfer::asset_quantity(
                 scoped_asset_id,
                 1_u32,
                 bob_id,
@@ -12721,7 +12589,7 @@ mod tests {
         let tx = sample_transaction(
             &alice_id,
             alice_keypair.private_key(),
-            vec![InstructionBox::from(Mint::asset_numeric(
+            vec![InstructionBox::from(Mint::asset_quantity(
                 1_u32,
                 AssetId::with_scope(
                     asset_definition.clone(),
@@ -12770,7 +12638,7 @@ mod tests {
         let tx = sample_transaction(
             &alice_id,
             alice_keypair.private_key(),
-            vec![InstructionBox::from(Mint::asset_numeric(
+            vec![InstructionBox::from(Mint::asset_quantity(
                 1_u32,
                 AssetId::with_scope(
                     asset_definition.clone(),
@@ -12829,7 +12697,7 @@ mod tests {
         let tx = sample_transaction(
             &alice_id,
             alice_keypair.private_key(),
-            vec![InstructionBox::from(Burn::asset_numeric(
+            vec![InstructionBox::from(Burn::asset_quantity(
                 1_u32,
                 AssetId::of(asset_definition.clone(), alice_id.clone()),
             ))],
@@ -13340,7 +13208,7 @@ mod tests {
             &transparent_asset_definition.canonical_address(),
         )
         .expect("opaque canonical asset definition id");
-        let transfer = Transfer::asset_numeric(
+        let transfer = Transfer::asset_quantity(
             AssetId::of(opaque_asset_definition.clone(), sender_id.clone()),
             1_u32,
             receiver_id,
@@ -13405,7 +13273,7 @@ mod tests {
         let tx = sample_transaction(
             &sender_id,
             sender_keypair.private_key(),
-            vec![InstructionBox::from(Mint::asset_numeric(
+            vec![InstructionBox::from(Mint::asset_quantity(
                 1_u32,
                 AssetId::of(opaque_asset_definition.clone(), sender_id.clone()),
             ))],
@@ -13465,7 +13333,7 @@ mod tests {
         let tx = sample_transaction(
             &sender_id,
             sender_keypair.private_key(),
-            vec![InstructionBox::from(Mint::asset_numeric(
+            vec![InstructionBox::from(Mint::asset_quantity(
                 1_u32,
                 AssetId::of(opaque_asset_definition.clone(), sender_id.clone()),
             ))],
@@ -13547,7 +13415,7 @@ mod tests {
         let tx = sample_transaction(
             &sender_id,
             sender_keypair.private_key(),
-            vec![InstructionBox::from(Mint::asset_numeric(
+            vec![InstructionBox::from(Mint::asset_quantity(
                 1_u32,
                 AssetId::of(opaque_asset_definition.clone(), sender_id.clone()),
             ))],
@@ -13629,7 +13497,7 @@ mod tests {
         let tx = sample_transaction(
             &sender_id,
             sender_keypair.private_key(),
-            vec![InstructionBox::from(Transfer::asset_numeric(
+            vec![InstructionBox::from(Transfer::asset_quantity(
                 AssetId::of(opaque_asset_definition.clone(), sender_id.clone()),
                 1_u32,
                 receiver_id,
@@ -13711,7 +13579,7 @@ mod tests {
         let tx = sample_transaction(
             &sender_id,
             sender_keypair.private_key(),
-            vec![InstructionBox::from(Burn::asset_numeric(
+            vec![InstructionBox::from(Burn::asset_quantity(
                 1_u32,
                 AssetId::of(opaque_asset_definition.clone(), sender_id.clone()),
             ))],
@@ -13779,7 +13647,7 @@ mod tests {
             &transparent_asset_definition.canonical_address(),
         )
         .expect("opaque canonical asset definition id");
-        let transfer = Transfer::asset_numeric(
+        let transfer = Transfer::asset_quantity(
             AssetId::of(opaque_asset_definition.clone(), sender_id.clone()),
             1_u32,
             receiver_id,
@@ -13851,7 +13719,7 @@ mod tests {
             &transparent_asset_definition.canonical_address(),
         )
         .expect("opaque canonical asset definition id");
-        let transfer = Transfer::asset_numeric(
+        let transfer = Transfer::asset_quantity(
             AssetId::of(opaque_asset_definition, sender_id.clone()),
             1_u32,
             receiver_id,
@@ -13913,7 +13781,7 @@ mod tests {
             &transparent_asset_definition.canonical_address(),
         )
         .expect("opaque canonical asset definition id");
-        let transfer = Transfer::asset_numeric(
+        let transfer = Transfer::asset_quantity(
             AssetId::of(opaque_asset_definition, sender_id.clone()),
             1_u32,
             receiver_id,
@@ -13991,7 +13859,7 @@ mod tests {
             &transparent_asset_definition.canonical_address(),
         )
         .expect("opaque canonical asset definition id");
-        let transfer = Transfer::asset_numeric(
+        let transfer = Transfer::asset_quantity(
             AssetId::of(opaque_asset_definition, sender_id.clone()),
             1_u32,
             receiver_id,
@@ -14514,12 +14382,12 @@ mod tests {
             DomainId::try_new("uae", "universal").unwrap(),
             "aed".parse().unwrap(),
         );
-        let uae_transfer = Transfer::asset_numeric(
+        let uae_transfer = Transfer::asset_quantity(
             AssetId::of(asset_definition.clone(), uae_sender_id.clone()),
             1_u32,
             acme_receiver_id.clone(),
         );
-        let bank_transfer = Transfer::asset_numeric(
+        let bank_transfer = Transfer::asset_quantity(
             AssetId::of(asset_definition, bank_sender_id.clone()),
             1_u32,
             acme_receiver_id.clone(),

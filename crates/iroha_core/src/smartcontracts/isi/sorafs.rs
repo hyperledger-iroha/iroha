@@ -2551,7 +2551,7 @@ mod sorafs_tests {
         let fee_asset_id = state.gov.sorafs_pin_fee_asset_id.clone();
         let asset_id = AssetId::new(fee_asset_id, account.clone());
         let (asset_id, asset_value) =
-            Asset::new(asset_id, Numeric::new(amount, 0)).into_key_value();
+            Asset::new(asset_id, Quantity::from(amount)).into_key_value();
         state.world.assets.insert(asset_id, asset_value);
     }
 

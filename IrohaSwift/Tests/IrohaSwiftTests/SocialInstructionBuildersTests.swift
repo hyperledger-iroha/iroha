@@ -5,7 +5,7 @@ final class SocialInstructionBuildersTests: XCTestCase {
     private let fixturePepper = "pepper-social-v1"
     private let fixtureDigestHex = "E8A8D90BF72F280BBB4AB6D1F759521D29A08DA83CCFBB3E2EE0EDE22606FB9B"
     private let fixtureDigestLiteral = "hash:E8A8D90BF72F280BBB4AB6D1F759521D29A08DA83CCFBB3E2EE0EDE22606FB9B#E0A4"
-    private let fixtureAmount = "1.0000000000"
+    private let fixtureAmount = "1.25"
 
     func testSocialKeyedHashCanonicalizesHexToLiteral() throws {
         let binding = try SocialKeyedHash(pepperId: fixturePepper, digest: fixtureDigestHex)
@@ -79,11 +79,33 @@ final class SocialInstructionBuildersTests: XCTestCase {
         }
     }
 
-    func testRejectsEmptyAmount() throws {
+    func testSendToTwitterAcceptsValidatedQuantityValue() throws {
         let binding = try SocialKeyedHash(pepperId: fixturePepper, digest: fixtureDigestHex)
-        XCTAssertThrowsError(try SocialInstructionBuilders.sendToTwitter(binding: binding, amount: "   ")) { error in
-            guard case SocialInstructionBuilderError.invalidAmount = error else {
-            return XCTFail("Expected invalidAmount error")
+        let direct = try SocialInstructionBuilders.sendToTwitter(
+            binding: binding,
+            amount: KotodamaQuantity("1.25")
+        )
+        let sdk = try IrohaSDK(baseURL: URL(string: "https://example.test")!)
+            .buildSendToTwitter(binding: binding, amount: KotodamaQuantity("1.25"))
+
+        XCTAssertEqual(direct.data, sdk.data)
+    }
+
+    func testRejectsInvalidAmount() throws {
+        let binding = try SocialKeyedHash(pepperId: fixturePepper, digest: fixtureDigestHex)
+        let scaleTwentyNine = "0." + String(repeating: "0", count: 28) + "1"
+        let overflow = String(repeating: "9", count: 155)
+        for amount in [
+            "", " ", "\t1", "1 ", "+1", "01", "1.", ".5", "1e0", "NaN",
+            "-1", "-0", "-0.0", "0.0", "1.0", "1.2300", scaleTwentyNine, overflow,
+        ] {
+            XCTAssertThrowsError(
+                try SocialInstructionBuilders.sendToTwitter(binding: binding, amount: amount),
+                amount
+            ) { error in
+                guard case SocialInstructionBuilderError.invalidAmount = error else {
+                    return XCTFail("Expected invalidAmount error for \(amount)")
+                }
             }
         }
     }

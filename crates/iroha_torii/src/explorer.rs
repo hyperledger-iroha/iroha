@@ -1956,7 +1956,7 @@ mod tests {
         },
         trigger::DataTriggerSequence,
     };
-    use iroha_primitives::numeric::Numeric;
+    use iroha_primitives::numeric::{Numeric, Quantity};
     use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID};
     use nonzero_ext::nonzero;
 
@@ -2107,7 +2107,7 @@ mod tests {
         }
         .build(&ALICE_ID);
         definition.set_mintable(Mintable::Once);
-        definition.total_quantity = Numeric::from(100u32);
+        definition.total_quantity = Quantity::from(100u32);
         definition.metadata_mut().insert(
             "ticker".parse().unwrap(),
             json::Value::String("ROSE".into()),
@@ -2130,7 +2130,7 @@ mod tests {
             "rose".parse().unwrap(),
         );
         let asset_id = AssetId::new(def_id, ALICE_ID.clone());
-        let value = Owned::new(Numeric::from(42u32));
+        let value = Owned::new(Quantity::from(42u32));
         let entry = Ref::new(&asset_id, &value);
         let dto = ExplorerAssetDto::from_entry(entry);
         assert_eq!(dto.id, asset_id.to_string());
@@ -2511,8 +2511,8 @@ mod tests {
         );
         let alice_asset_id = AssetId::new(rose_def.clone(), ALICE_ID.clone());
         let bob_asset_id = AssetId::new(lily_def.clone(), BOB_ID.clone());
-        let alice_value = Owned::new(Numeric::from(10u32));
-        let bob_value = Owned::new(Numeric::from(5u32));
+        let alice_value = Owned::new(Quantity::from(10u32));
+        let bob_value = Owned::new(Quantity::from(5u32));
 
         let owned_page = assets_page(
             vec![
@@ -2551,8 +2551,8 @@ mod tests {
         );
         let alice_asset_id = AssetId::new(rose_def.clone(), ALICE_ID.clone());
         let bob_asset_id = AssetId::new(rose_def, BOB_ID.clone());
-        let alice_value = Owned::new(Numeric::from(10u32));
-        let bob_value = Owned::new(Numeric::from(5u32));
+        let alice_value = Owned::new(Quantity::from(10u32));
+        let bob_value = Owned::new(Quantity::from(5u32));
 
         let page = assets_page(
             vec![
@@ -2723,7 +2723,7 @@ mod tests {
             "rose".parse().unwrap(),
         );
         let asset_id = AssetId::new(asset_def.clone(), ALICE_ID.clone());
-        let transfer = Transfer::asset_numeric(asset_id, 1u32, BOB_ID.clone());
+        let transfer = Transfer::asset_quantity(asset_id, 1u32, BOB_ID.clone());
         let transfer_box: InstructionBox = transfer.into();
         assert_eq!(
             instruction_kind(&transfer_box),

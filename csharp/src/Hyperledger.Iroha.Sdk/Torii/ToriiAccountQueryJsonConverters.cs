@@ -911,33 +911,8 @@ internal static class ToriiAccountQueryJson
 
     private static void ValidateCanonicalNonNegativeNumericText(string? value, string field)
     {
-        var text = RequireExactNonEmptyText(value, field);
-        if (text[0] == '+' || text[0] == '-')
-        {
-            throw new JsonException($"{field} must be a canonical non-negative numeric string.");
-        }
-
-        var separator = text.IndexOf('.', StringComparison.Ordinal);
-        var integerPart = separator < 0 ? text : text[..separator];
-        var fractionalPart = separator < 0 ? string.Empty : text[(separator + 1)..];
-        if (integerPart.Length == 0 || integerPart.Any(static character => character is < '0' or > '9'))
-        {
-            throw new JsonException($"{field} must be a canonical non-negative numeric string.");
-        }
-
-        if (integerPart.Length > 1 && integerPart[0] == '0')
-        {
-            throw new JsonException($"{field} must be a canonical non-negative numeric string.");
-        }
-
-        if (separator >= 0
-            && (fractionalPart.Length == 0
-                || fractionalPart.Length > 28
-                || fractionalPart.Any(static character => character is < '0' or > '9')
-                || fractionalPart[^1] == '0'))
-        {
-            throw new JsonException($"{field} must be a canonical non-negative numeric string.");
-        }
+        _ = RequireExactNonEmptyText(value, field);
+        _ = ToriiQuantityJson.RequireCanonicalQuantity(value, field);
     }
 
     private static void ValidateOptionalNonNegativeInt64(long? value, string field)

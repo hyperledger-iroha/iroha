@@ -5,6 +5,7 @@ Magic
 - 4 bytes: ASCII `IVM\0` at offset 0.
 
 Layout (current)
+<!-- BEGIN GENERATED HEADER LAYOUT -->
 - Offsets and sizes (49 bytes total):
   - 0..4: magic `IVM\0`
   - 4: `version_major: u8`
@@ -13,14 +14,17 @@ Layout (current)
   - 7: `vector_length: u8`
   - 8..16: `max_cycles: u64` (little‑endian)
   - 16: `abi_version: u8`
-  - 17..49: `abi_hash: [u8; 32]` (canonical ABI descriptor hash for `abi_version`)
+  - 17..49: `abi_hash: [u8; 32]` (canonical descriptor hash for `abi_version`)
+<!-- END GENERATED HEADER LAYOUT -->
 
 Mode bits
 - `ZK = 0x01`, `VECTOR = 0x02`, `HTM = 0x04` (reserved/feature‑gated).
 
 Fields (meaning)
 - `abi_version`: syscall table and pointer‑ABI schema version.
-- `abi_hash`: canonical 32-byte ABI descriptor hash selected by `abi_version`.
+- `abi_hash`: authenticated SHA-256 commitment to the exact canonical ABI
+  descriptor selected by `abi_version`; admission validates it before prefix or
+  instruction decoding.
 - `mode`: feature bits for ZK tracing/VECTOR/HTM.
 - `vector_length`: logical vector length for vector ops (0 selects the runtime default).
 - `max_cycles`: execution padding bound used in ZK mode and admission.
@@ -85,7 +89,7 @@ The following policy summary is generated from the implementation and should not
 | Field | Policy |
 |---|---|
 | version_major | 1 |
-| version_minor | 1 |
+| version_minor | 0 or 1 (deployable CNTR contracts require 1) |
 | mode (known bits) | 0x07 (ZK=0x01, VECTOR=0x02, HTM=0x04) |
 | abi_version | 1 |
 | vector_length | 0 or 1..=64 (0 selects runtime default; independent of VECTOR bit) |
@@ -99,7 +103,9 @@ syscall numbers, their canonical argument and return signatures, each syscall's
 conservative host-access class, the sorted allowed pointer-ABI type IDs, exact
 numeric domains/rules/JSON grammars/fault ordering, and typed durable-state
 schema identities, enum tags, layouts, pointer mappings, traversal rules, and
-caps. Gas prices are deliberately excluded; `ivm::gas::schedule_hash()` commits
+caps. It also binds the Generic-program discriminator, reserved transaction
+metadata, exact contract-bound syscall denylist, and rejection phase. Gas
+prices are deliberately excluded; `ivm::gas::schedule_hash()` commits
 to the canonical gas schedule, including every staged-metering phase name and
 tag, separately. The descriptor-format revision does not introduce ABI v2:
 first-release artifacts still declare `abi_version = 1` and stale hashes fail
@@ -108,7 +114,7 @@ closed.
 <!-- BEGIN GENERATED ABI HASHES -->
 | Policy | abi_hash (hex) |
 |---|---|
-| ABI v1 | 1e4acdf5a13da87857a721c7a259562ec63e0295de1ea7e76793a2ca2fb0c6ef |
+| ABI v1 | e7ed1a6ebb7606d41c25f872546994499b56e7b72091ba52e8223e6de4926ad5 |
 <!-- END GENERATED ABI HASHES -->
 
 - ABI v1 is the sole first-release policy. Its `LDLIT`, `LDI64`, `JAL`, `JMP`, and

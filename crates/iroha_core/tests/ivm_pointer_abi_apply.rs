@@ -163,7 +163,7 @@ fn apply_queued_isis_from_corehost_transfer_asset() {
             iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
         );
     let reg_asset_def = RegisterBox::from(Register::asset_definition(new_asset_def));
-    let mint = MintBox::from(Mint::asset_numeric(
+    let mint = MintBox::from(Mint::asset_quantity(
         1000u64,
         AssetId::with_scope(
             asset_def.clone(),
@@ -345,7 +345,7 @@ fn apply_queued_isis_from_corehost_transfer_asset_with_env_encoded_ids() {
     let reg_asset_def = RegisterBox::from(Register::asset_definition(
         AssetDefinition::numeric(asset_def.clone()).with_name(asset_def.to_string()),
     ));
-    let mint = MintBox::from(Mint::asset_numeric(
+    let mint = MintBox::from(Mint::asset_quantity(
         1000u64,
         AssetId::with_scope(
             asset_def.clone(),
@@ -459,11 +459,11 @@ fn apply_queued_isis_from_compiled_json_driven_double_transfer() {
     let reg_cbdc = RegisterBox::from(Register::asset_definition(
         AssetDefinition::numeric(cbdc_asset_def.clone()).with_name("cbdc".to_owned()),
     ));
-    let mint_aed = MintBox::from(Mint::asset_numeric(
+    let mint_aed = MintBox::from(Mint::asset_quantity(
         1u64,
         AssetId::of(aed_asset_def.clone(), dst.clone()),
     ));
-    let mint_cbdc = MintBox::from(Mint::asset_numeric(
+    let mint_cbdc = MintBox::from(Mint::asset_quantity(
         ratio * 2,
         AssetId::of(cbdc_asset_def.clone(), reserve.clone()),
     ));

@@ -100,6 +100,31 @@ derived adversarial replay. Signature verification, Norito decoding, physical
 WAL framing/fsync, and the asynchronous runtime adapter remain outside this
 pure-reducer harness.
 
+## Accelerated 100,000-height chaos gate
+
+`tests/network_simulation.rs` includes an explicit ignored release gate that
+finalizes two independent 50,000-height chains: one permissioned and one with
+unequal NPoS voting power. Every height runs four production reducers, rotates
+through certified views, varies delivery order, accepts delayed old-view
+`CommitQC`s, rejects stale completions, periodically injects an under-quorum
+decision, applies the exact certified body, consumes a matching durable Kura
+receipt, and binds the resulting `CommitQC` as the next height's parent.
+
+Run it directly or through the nightly formal workflow:
+
+```text
+CARGO_TARGET_DIR=/tmp/sumeragi-v2-chaos \
+  cargo test --locked -p iroha_sumeragi_core \
+  --test network_simulation \
+  accelerated_100_000_block_chaos_preserves_chain_prefix \
+  -- --ignored --nocapture
+```
+
+The 2026-07-12 macOS arm64 run completed all 100,000 heights in 53.27 seconds
+with no conflicting decision or chain-prefix failure. This is a deterministic
+long-run implementation test, not a substitute for the deductive safety or
+conditional-liveness proofs.
+
 ## Current refinement model
 
 `src/verus_proofs.rs` now contains one safety projection for the production WAL
@@ -359,6 +384,34 @@ checks that every mapped TLA+ action name still exists in
 both `SumeragiV2Core.tla` and the Verus mapping; this prevents name drift but
 does not prove the independently parsed operator bodies equivalent.
 
+## Production WAL byte mapping
+
+`iroha_core::sumeragi::safety_wal` now delegates the live filesystem path to
+the core contract instead of carrying a second parser and append state machine:
+
+- file creation uses `encode_wal_file_header` with production BLAKE3, followed
+  by file and parent-directory synchronization;
+- startup calls `recover_wal_file`, maps its typed integrity failures, truncates
+  only the returned incomplete-tail boundary, synchronizes that truncation, and
+  derives `WalAppendState` from the verified complete prefix;
+- every live append implements `WalAppendIo` on the single open file and calls
+  `WalAppendState::append`, so the adapter receives a receipt only after the
+  shared write/flush/sync predicate succeeds and cannot retry a poisoned
+  instance; and
+- `SafetyWal::retire` requires `WalRetirementAuthorization`, derived at the
+  call site only from the actual `FinalizedHeight` returned after the exact Kura
+  block-and-`CommitQC` receipt closes the reducer and rechecked through the
+  shared retirement predicate before I/O. File removal remains followed by
+  parent-directory synchronization.
+
+The real-file tests retain canonical-layout, reopen/replay, incomplete-tail,
+complete-corruption, hash-chain, and identity-mismatch coverage and add an
+injected read-only-handle failure proving that no append acknowledgement or
+retry escapes the failed-closed state. Canonical Norito payload decoding stays
+the adapter-to-`WalEntry` mapping. BLAKE3 collision resistance and truthful OS
+file/directory synchronization remain explicit trusted contracts rather than
+Verus claims.
+
 ## Remaining work before a production correctness claim
 
 The following gaps are exact and intentional; each must be closed before the
@@ -408,40 +461,19 @@ production reducer can be described as deductively verified:
    path can create each token. Cryptographic soundness, hash collision
    resistance, executor determinism, and fsync truth remain documented proof
    assumptions.
-5. **Production WAL adapter hook.** The core now contains the executable
-   canonical header/frame codec, complete-prefix recovery, ordered append
-   lifecycle, private durable-receipt constructor, typed retirement authority,
-   adversarial crash/corruption tests, and ten newly discharged physical-WAL
-   obligations. Production `iroha_core::sumeragi::safety_wal` still duplicates
-   the older byte parser and append sequence instead of delegating to this core
-   contract, and its `retire` method does not yet require
-   `WalRetirementAuthorization`. Closing this gap requires the production
-   adapter to (a) pass BLAKE3 through `WalFileHasher` and create a missing file
-   with `encode_wal_file_header` followed by file and parent-directory sync,
-   (b) call `recover_wal_file`, truncate only to `valid_prefix_len`, and
-   synchronize that truncation before append, (c) implement `WalAppendIo` for
-   its single open file and route every append through
-   `WalAppendState::append`, and (d) require the token derived from the exact
-   `FinalizedHeight` before file removal and directory sync. The duplicate
-   constants/parser must then be deleted and the existing real-filesystem tests
-   rerun against the shared implementation.
-   Canonical Norito payload decoding remains the adapter-to-`WalEntry` mapping;
-   BLAKE3 collision resistance and truthful OS `sync_data`/directory-sync
-   results remain trusted contracts. Until this hook lands, byte refinement is
-   implemented and verified in the core but is not an exact production claim.
-6. **TLA+ action-body equivalence.** Verus now has an explicit named macro-step
+5. **TLA+ action-body equivalence.** Verus now has an explicit named macro-step
    map (source, optional certificate formation, durable boundary), and the
    verification script prevents action-name drift. The boundary delta is
    proved against the production gate. No shared generated semantics or
    cross-tool theorem yet proves those Verus definitions equivalent to the
    independently parsed TLA+ operator bodies. Crash, restart, and epoch-boundary
    actions also remain outside the executable `Reducer::step` map.
-7. **Temporal liveness.** This module proves safety-style transition
+6. **Temporal liveness.** This module proves safety-style transition
    preservation only. Fair delivery, timeout-certificate progress, rotating
    honest leaders, and the post-GST commit bound remain TLAPS liveness
    obligations plus executable simulation/integration evidence.
 
-Until all seven items are discharged, the successful current run proves the
+Until all six items are discharged, the successful current run proves the
 listed abstract obligations and the exact production commit-gate relation. It
 does not prove every line of the inner reducer, the fact-extraction functions,
-the still-duplicated production WAL adapter, or the protocol liveness theorem.
+the cryptographic/filesystem trusted contracts, or the protocol liveness theorem.

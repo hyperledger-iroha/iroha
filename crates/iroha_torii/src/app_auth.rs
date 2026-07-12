@@ -1632,7 +1632,7 @@ mod tests {
         let account = ALICE_ID.clone();
         let state = minimal_state_with_account(&account);
         let method = Method::POST;
-        let uri: Uri = "/v1/offline/issuer/refill".parse().expect("uri");
+        let uri: Uri = "/v1/transactions".parse().expect("uri");
         let unsigned_body = br#"{"request":"refill"}"#;
         let timestamp_ms = now_unix_ms();
         let nonce = "body-auth-noncanonical-base64";
@@ -1681,7 +1681,7 @@ mod tests {
         let account = ALICE_ID.clone();
         let state = minimal_state_with_account(&account);
         let method = Method::POST;
-        let uri: Uri = "/v1/offline/issuer/refill".parse().expect("uri");
+        let uri: Uri = "/v1/transactions".parse().expect("uri");
         let unsigned_body = br#"{"request":"refill"}"#;
         let timestamp_ms = now_unix_ms();
         let nonce = "body-auth-invalid-r";

@@ -149,6 +149,39 @@ final class RwaInstructionBuildersTests: XCTestCase {
             XCTAssertEqual(error as? RwaInstructionBuilderError,
                            .invalidQuantity(field: "quantity"))
         }
+
+        for value in ["-1", "+1", "01", "1.0", "1.2300", "0.0", "1e3"] {
+            XCTAssertThrowsError(
+                try RwaInstructionBuilders.redeemRwa(rwaId: fixtureRwaId, quantity: value),
+                "accepted noncanonical quantity \(value)"
+            ) { error in
+                XCTAssertEqual(error as? RwaInstructionBuilderError,
+                               .invalidQuantity(field: "quantity"))
+            }
+        }
+    }
+
+    func testRegisterAndMergeRejectNoncanonicalNestedQuantities() throws {
+        let badRoot = try NoritoJSON.fromJSONObject([
+            "domain": "commodities.sora",
+            "quantity": "10.50",
+            "spec": [:],
+            "primary_reference": "vault-cert-001",
+            "parents": [],
+        ])
+        XCTAssertThrowsError(try RwaInstructionBuilders.registerRwa(rwa: badRoot)) { error in
+            XCTAssertEqual(error as? RwaInstructionBuilderError,
+                           .invalidQuantity(field: "rwa.quantity"))
+        }
+
+        let badParent = try NoritoJSON.fromJSONObject([
+            "parents": [["rwa": fixtureRwaId, "quantity": "-1"]],
+            "primary_reference": "blend-cert-007",
+        ])
+        XCTAssertThrowsError(try RwaInstructionBuilders.mergeRwas(merge: badParent)) { error in
+            XCTAssertEqual(error as? RwaInstructionBuilderError,
+                           .invalidQuantity(field: "merge.parents[0].quantity"))
+        }
     }
 
     func testIrohaSDKConvenienceHelpersProduceSamePayloads() throws {

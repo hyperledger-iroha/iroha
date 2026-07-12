@@ -105,7 +105,6 @@ use crate::{
     sumeragi::{
         da::{GateReason, GateSatisfaction},
         message::BlockMessage,
-        rbc_store::StorePressure,
         status::{
             self, DataspaceCommitmentSnapshot, LaneCommitmentSnapshot, SettlementOutcomeKind,
         },
@@ -7198,46 +7197,6 @@ impl Telemetry {
         }
     }
 
-    /// Update persisted RBC store usage and pressure gauges.
-    pub fn set_rbc_store_pressure(&self, pressure: StorePressure) {
-        if self.enabled.load(Ordering::Relaxed) {
-            let sessions = pressure.sessions() as u64;
-            let bytes = pressure.bytes() as u64;
-            let level = match pressure {
-                StorePressure::Normal { .. } => 0,
-                StorePressure::SoftLimit { .. } => 1,
-                StorePressure::HardLimit { .. } => 2,
-            };
-            self.metrics.sumeragi_rbc_store_sessions.set(sessions);
-            self.metrics.sumeragi_rbc_store_bytes.set(bytes);
-            self.metrics.sumeragi_rbc_store_pressure.set(level);
-        }
-    }
-
-    /// Increment proposal deferral counter when RBC store back-pressure is active.
-    pub fn inc_rbc_store_backpressure_deferrals(&self) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.sumeragi_rbc_backpressure_deferrals_total.inc();
-        }
-    }
-
-    /// Increment RBC store eviction counter when persistence prunes sessions.
-    pub fn inc_rbc_store_evictions(&self, count: u64) {
-        if count == 0 || !self.enabled.load(Ordering::Relaxed) {
-            return;
-        }
-        self.metrics
-            .sumeragi_rbc_store_evictions_total
-            .inc_by(count);
-    }
-
-    /// Increment RBC persist-drop counter when the async queue is full.
-    pub fn inc_rbc_persist_drops(&self) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.sumeragi_rbc_persist_drops_total.inc();
-        }
-    }
-
     /// Increment kura persistence failure counter labeled by outcome.
     pub fn inc_kura_store_failure(&self, outcome: &'static str) {
         if self.enabled.load(Ordering::Relaxed) {
@@ -13818,7 +13777,7 @@ mod tests {
         );
         let missing_asset = AssetId::new(missing_def, sut.account_id.clone());
         let action = Action::new(
-            [Transfer::asset_numeric(
+            [Transfer::asset_quantity(
                 missing_asset,
                 1_u32,
                 sut.account_id.clone(),

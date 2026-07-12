@@ -330,7 +330,7 @@ fn multilane_router_provisions_storage_and_routes_rules() -> Result<()> {
         &chain_id,
         &authority,
         &keypair,
-        vec![InstructionBox::from(Mint::asset_numeric(
+        vec![InstructionBox::from(Mint::asset_quantity(
             1_u32,
             AssetId::new(
                 AssetDefinitionId::new(DomainId::try_new("nexus", "zk")?, "xor".parse()?),
@@ -401,7 +401,7 @@ fn multilane_router_shards_default_route_over_autoscale_elastic_lanes() -> Resul
         &chain_id,
         &authority,
         &keypair,
-        vec![InstructionBox::from(Mint::asset_numeric(
+        vec![InstructionBox::from(Mint::asset_quantity(
             1_u32,
             AssetId::new(
                 AssetDefinitionId::new(DomainId::try_new("nexus", "zk")?, "xor".parse()?),

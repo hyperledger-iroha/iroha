@@ -8,14 +8,15 @@
 use std::collections::VecDeque;
 
 use iroha_sumeragi_core::{
-    CertificateRef, ChainId, ConsensusMessageV2, ContextId, Digest, Effect, EquivocationKind,
-    Event, EventTag, Generation, HeightContext, IgnoreReason, OpaqueSignature, PayloadManifest,
-    Phase, QuorumCertificate, Reducer, Round, SignableMessage, SignatureShare, SignedVote,
-    StepDisposition, Subject, TimeoutCertificate, TimeoutSignatureGroup, Validator, ValidatorId,
-    Vote, VotingMode, VotingPower, WalEntry, WalRecord,
+    CertificateRef, ChainId, ConsensusMessageV2, ContextId, Digest, DurableCommitReceipt, Effect,
+    EquivocationKind, Event, EventTag, Generation, HeightContext, IgnoreReason, OpaqueSignature,
+    PayloadManifest, Phase, QuorumCertificate, Reducer, Round, SignableMessage, SignatureShare,
+    SignedVote, StepDisposition, Subject, TimeoutCertificate, TimeoutSignatureGroup, Validator,
+    ValidatorId, Vote, VotingMode, VotingPower, WalEntry, WalRecord,
 };
 
 const HEIGHT: u64 = 42;
+const ACCELERATED_CHAOS_HEIGHTS: u64 = 100_000;
 
 #[derive(Clone)]
 struct Envelope {
@@ -726,6 +727,319 @@ fn taira_divergent_views_converge_and_commit_within_one_rotation() {
     simulation.assert_online_committed(subject);
     assert_eq!(successful_view, 3);
     assert!(successful_view <= simulation.context.roster().len() as u64);
+}
+
+#[test]
+fn accelerated_chain_chaos_smoke_preserves_prefix() {
+    run_accelerated_chain_chaos(64, VotingMode::Permissioned);
+    run_accelerated_chain_chaos(64, VotingMode::Npos);
+}
+
+#[test]
+#[ignore = "explicit release gate: executes 100,000 finalized reducer heights"]
+fn accelerated_100_000_block_chaos_preserves_chain_prefix() {
+    let per_mode = ACCELERATED_CHAOS_HEIGHTS / 2;
+    run_accelerated_chain_chaos(per_mode, VotingMode::Permissioned);
+    run_accelerated_chain_chaos(per_mode, VotingMode::Npos);
+}
+
+fn run_accelerated_chain_chaos(height_count: u64, mode: VotingMode) {
+    let mut parent = None;
+    for height in 1..=height_count {
+        let context = accelerated_context(height, parent, mode);
+        let subject = accelerated_id(0xd0 + u8::from(mode == VotingMode::Npos), height);
+        let certified_view = height % u64::try_from(context.roster().len()).expect("small roster");
+        let commit_view = if certified_view > 0 && height.is_multiple_of(7) {
+            0
+        } else {
+            certified_view
+        };
+        let decision = certificate(&context, commit_view, Phase::Commit, subject);
+        run_accelerated_height(&context, subject, certified_view, &decision, height);
+        parent = Some(decision.reference());
+        assert_eq!(
+            parent
+                .expect("decision becomes the next parent")
+                .round()
+                .height(),
+            height
+        );
+        assert_eq!(
+            parent.expect("decision becomes the next parent").subject(),
+            subject
+        );
+    }
+}
+
+fn run_accelerated_height(
+    context: &HeightContext,
+    subject: Subject,
+    certified_view: u64,
+    decision: &QuorumCertificate,
+    chaos_sequence: u64,
+) {
+    let mut reducers = context
+        .roster()
+        .iter()
+        .map(|validator| {
+            Reducer::new(
+                context.clone(),
+                Some(validator.id()),
+                Generation::new(chaos_sequence),
+            )
+            .expect("accelerated height has a valid frozen context")
+        })
+        .collect::<Vec<_>>();
+    let mut wals = vec![Vec::<WalEntry>::new(); reducers.len()];
+    let mut signature_sequence = chaos_sequence;
+
+    if certified_view > 0 {
+        let timeout = grouped_timeout(context, certified_view - 1, None);
+        for index in accelerated_delivery_order(reducers.len(), chaos_sequence) {
+            let old_tag = reducers[index].current_tag();
+            drive_accelerated_event(
+                &mut reducers[index],
+                &mut wals[index],
+                Event::TimeoutCertificateReceived {
+                    tag: old_tag,
+                    certificate: timeout.clone(),
+                },
+                &mut signature_sequence,
+            );
+            assert_eq!(reducers[index].current_tag().view(), certified_view);
+            let disposition = reducers[index]
+                .step(Event::RetransmitElapsed { tag: old_tag })
+                .expect("stale retransmission is a safe reducer input")
+                .disposition();
+            assert!(matches!(
+                disposition,
+                StepDisposition::Ignored(IgnoreReason::WrongView | IgnoreReason::StaleGeneration)
+            ));
+        }
+    }
+
+    if chaos_sequence.is_multiple_of(97) {
+        assert_under_quorum_decision_is_transactional(&mut reducers[0], context, subject);
+    }
+    for index in accelerated_delivery_order(reducers.len(), chaos_sequence.wrapping_add(1)) {
+        let tag = reducers[index].current_tag();
+        drive_accelerated_event(
+            &mut reducers[index],
+            &mut wals[index],
+            Event::QuorumCertificateReceived {
+                tag,
+                certificate: decision.clone(),
+            },
+            &mut signature_sequence,
+        );
+    }
+
+    for (index, reducer) in reducers.into_iter().enumerate() {
+        let durable_decision = reducer
+            .durable_state()
+            .decision()
+            .expect("every accelerated validator persists a decision");
+        assert_eq!(durable_decision.reference(), decision.reference());
+        assert_eq!(reducer.applied_subject(), Some(subject));
+        assert!(wals[index]
+            .iter()
+            .any(|entry| matches!(entry.record(), WalRecord::Decision(certificate) if certificate.reference() == decision.reference())));
+        if certified_view > 0 {
+            assert!(wals[index]
+                .iter()
+                .any(|entry| matches!(entry.record(), WalRecord::InstallTimeout(certificate) if certificate.round().view() + 1 == certified_view)));
+        }
+        let receipt = DurableCommitReceipt::from_trusted_storage(
+            context.id(),
+            context.height(),
+            subject,
+            decision.reference(),
+        );
+        let finalized = reducer
+            .finish_height(receipt)
+            .expect("application and exact durable receipt close the height");
+        assert_eq!(finalized.context(), context);
+        assert_eq!(finalized.decision().reference(), decision.reference());
+    }
+}
+
+fn drive_accelerated_event(
+    reducer: &mut Reducer,
+    wal: &mut Vec<WalEntry>,
+    event: Event,
+    signature_sequence: &mut u64,
+) {
+    let effects = reducer
+        .step(event)
+        .expect("accelerated chaos event satisfies reducer guards")
+        .into_effects();
+    drive_accelerated_effects(reducer, wal, effects, signature_sequence);
+}
+
+fn drive_accelerated_effects(
+    reducer: &mut Reducer,
+    wal: &mut Vec<WalEntry>,
+    effects: Vec<Effect>,
+    signature_sequence: &mut u64,
+) {
+    let mut pending: VecDeque<_> = effects.into();
+    while let Some(effect) = pending.pop_front() {
+        let follow_up = match effect {
+            Effect::Persist { tag, entry } => {
+                wal.push(entry.clone());
+                reducer
+                    .step(Event::Persisted {
+                        tag,
+                        id: entry.id(),
+                    })
+                    .expect("in-memory chaos WAL acknowledges the requested frame")
+                    .into_effects()
+            }
+            Effect::Sign { tag, message } => {
+                *signature_sequence = signature_sequence
+                    .checked_add(1)
+                    .expect("accelerated signature sequence remains bounded");
+                let signature = simulator_signature(
+                    reducer
+                        .local_validator()
+                        .expect("accelerated nodes are validators"),
+                    *signature_sequence,
+                    &message,
+                );
+                reducer
+                    .step(Event::Signed { tag, signature })
+                    .expect("signature completes the exact durable intent")
+                    .into_effects()
+            }
+            Effect::Broadcast(_) | Effect::EnterView { .. } => Vec::new(),
+            Effect::FetchBody {
+                tag,
+                round,
+                subject,
+                ..
+            } => reducer
+                .step(Event::BodyAvailable {
+                    tag,
+                    round,
+                    subject,
+                })
+                .expect("certified signer supplies the exact body")
+                .into_effects(),
+            Effect::StoreBody {
+                tag,
+                round,
+                subject,
+            } => reducer
+                .step(Event::BodyStored {
+                    tag,
+                    round,
+                    subject,
+                })
+                .expect("accelerated body store acknowledges durability")
+                .into_effects(),
+            Effect::ValidateBody {
+                tag,
+                round,
+                subject,
+            } => reducer
+                .step(Event::ValidationCompleted {
+                    tag,
+                    round,
+                    subject,
+                    valid: true,
+                })
+                .expect("deterministic validation accepts the exact body")
+                .into_effects(),
+            Effect::Apply { tag, subject, .. } => reducer
+                .step(Event::ApplicationCompleted { tag, subject })
+                .expect("application matches the durable decision")
+                .into_effects(),
+            Effect::ReportEquivocation { .. } | Effect::ReportInvalidCertifiedBody { .. } => {
+                panic!("accelerated valid corridor emitted an adversarial report")
+            }
+        };
+        pending.extend(follow_up);
+    }
+}
+
+fn assert_under_quorum_decision_is_transactional(
+    reducer: &mut Reducer,
+    context: &HeightContext,
+    subject: Subject,
+) {
+    let before = reducer.clone();
+    let round = Round::new(context.height(), reducer.current_tag().view());
+    let signatures = context
+        .roster()
+        .iter()
+        .take(2)
+        .map(|validator| SignatureShare::new(validator.id(), OpaqueSignature::new(vec![0xee])))
+        .collect();
+    let under_quorum = QuorumCertificate::new(
+        CertificateRef::new(context.id(), round, Phase::Commit, subject),
+        signatures,
+    );
+    assert!(
+        reducer
+            .step(Event::QuorumCertificateReceived {
+                tag: reducer.current_tag(),
+                certificate: under_quorum,
+            })
+            .is_err()
+    );
+    assert_eq!(reducer, &before);
+}
+
+fn accelerated_delivery_order(length: usize, sequence: u64) -> Vec<usize> {
+    let mut order = (0..length).collect::<Vec<_>>();
+    if sequence % 2 == 1 {
+        order.reverse();
+    } else if length > 1 {
+        order.rotate_left(
+            usize::try_from(sequence % u64::try_from(length).expect("length fits u64"))
+                .expect("rotation fits usize"),
+        );
+    }
+    order
+}
+
+fn accelerated_context(
+    height: u64,
+    parent: Option<CertificateRef>,
+    mode: VotingMode,
+) -> HeightContext {
+    let roster = (1_u64..=4)
+        .map(|index| {
+            let power = match mode {
+                VotingMode::Permissioned => 1,
+                VotingMode::Npos => index,
+            };
+            Validator::new(
+                validator_id(usize::try_from(index).expect("four-validator index fits usize")),
+                VotingPower::new(power),
+            )
+        })
+        .collect();
+    HeightContext::new(
+        ContextId::new(*accelerated_id(0xa0, height).as_bytes()),
+        ChainId::repeat(0xa1 + u8::from(mode == VotingMode::Npos)),
+        height,
+        parent,
+        height / 1_000,
+        roster,
+        mode,
+        Digest::new(*accelerated_id(0xa2, height).as_bytes()),
+        Digest::new(*accelerated_id(0xa3, height).as_bytes()),
+        Digest::new(*accelerated_id(0xa4, height).as_bytes()),
+    )
+    .expect("accelerated context preserves parent and frozen-roster invariants")
+}
+
+fn accelerated_id(domain: u8, sequence: u64) -> Subject {
+    let mut bytes = [domain; 32];
+    bytes[..8].copy_from_slice(&sequence.to_le_bytes());
+    bytes[8..16].copy_from_slice(&sequence.rotate_left(17).to_le_bytes());
+    Subject::new(bytes)
 }
 
 fn context(validator_count: usize, mode: VotingMode) -> HeightContext {

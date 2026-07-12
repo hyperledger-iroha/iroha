@@ -1,7 +1,5 @@
 //! Visitor that visits every node in the Iroha syntax tree.
 
-use iroha_primitives::numeric::Numeric;
-
 use crate::{
     isi::{
         ActivateIdentifierPolicy, ClaimIdentifier, Log, RegisterIdentifierPolicy,

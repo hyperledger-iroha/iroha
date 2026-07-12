@@ -112,7 +112,7 @@ fn pay(AccountId a, AccountId b, AssetDefinitionId asset, int x) {
 }
 ```
 
-`TransferAssetBatch` fərdi `Transfer::asset_numeric` zəngləri ilə eyni icazə və arifmetik yoxlamaları həyata keçirir, lakin tək `TransferTranscript` daxilində bütün deltaları qeyd edir. Çox delta transkriptləri, hər delta öhdəlikləri təqibə düşənə qədər poseydon həzmini aradan qaldırır. Kotodama qurucusu indi avtomatik olaraq başlanğıc/son sistem zənglərini buraxır, beləliklə, müqavilələr Norito faydalı yükləri əl ilə kodlaşdırmadan toplu köçürmələri yerləşdirə bilər.
+`TransferAssetBatch` fərdi `Transfer::asset_quantity` zəngləri ilə eyni icazə və arifmetik yoxlamaları həyata keçirir, lakin tək `TransferTranscript` daxilində bütün deltaları qeyd edir. Çox delta transkriptləri, hər delta öhdəlikləri təqibə düşənə qədər poseydon həzmini aradan qaldırır. Kotodama qurucusu indi avtomatik olaraq başlanğıc/son sistem zənglərini buraxır, beləliklə, müqavilələr Norito faydalı yükləri əl ilə kodlaşdırmadan toplu köçürmələri yerləşdirə bilər.
 
 ## Sıra sayma Reqressiya Qoşqu
 

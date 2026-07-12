@@ -35,8 +35,8 @@ fn simulate_transfer_numeric() {
             let name = id.name().to_string();
             AssetDefinition::numeric(id).with_name(name)
         },
-        Mint::asset_numeric,
-        Transfer::asset_numeric,
+        Mint::asset_quantity,
+        Transfer::asset_quantity,
     )
 }
 
@@ -88,7 +88,7 @@ fn simulate_transfer<T>(
     starting_amount: T,
     amount_to_transfer: &T,
     asset_definition_ctr: impl FnOnce(AssetDefinitionId) -> <AssetDefinition as Registered>::With,
-    mint_ctr: impl FnOnce(T, AssetId) -> Mint<Numeric, Asset>,
+    mint_ctr: impl FnOnce(T, AssetId) -> Mint<Quantity, Asset>,
     transfer_ctr: impl FnOnce(AssetId, T, AccountId) -> Transfer<Asset, T, Account>,
 ) where
     T: std::fmt::Debug + Clone + Into<Numeric>,
@@ -192,7 +192,7 @@ fn should_fail_if_asset_not_found() {
             .with_name(asset_definition_id.name().to_string()),
     );
     let asset_id = AssetId::new(asset_definition_id.clone(), alice_id);
-    let transfer_asset = Transfer::asset_numeric(asset_id.clone(), numeric!(20), mouse_id.clone());
+    let transfer_asset = Transfer::asset_quantity(asset_id.clone(), 20_u32, mouse_id.clone());
 
     let instructions: [InstructionBox; 2] = [create_asset_definition.into(), transfer_asset.into()];
     let result = iroha.submit_all_blocking(instructions);

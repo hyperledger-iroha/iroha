@@ -4,7 +4,7 @@ Swift SDK targeting Hyperledger Iroha v2 and Sora Nexus (Iroha v3) nodes on Appl
 
 Features:
 - Torii HTTP client (balances, transactions, explorer instructions/transactions/RWAs, subscriptions, VPN quote/session/receipt flows, pipeline recovery, time service, ZK attachments, prover reports, contracts)
-- Offline note models, transaction builders, proof binding helpers, and readiness discovery through `/v1/offline/readiness`
+- Kagemusha cash models, transaction builders, proof binding helpers, and readiness discovery through `/v1/offline/readiness`
 - Health & metrics helpers (fetch `/v1/health` text probe and `/v1/metrics` Prometheus/JSON payloads)
 - Norito envelope encoder (header + CRC64-XZ)
 - Required Native NoritoBridge integration (`dist/NoritoBridge.xcframework`) powering transfer/mint/burn builders and JSON inspection helpers
@@ -155,10 +155,11 @@ canonical unprefixed Base58 asset-definition IDs on the Swift surface.
 
 ### Kagemusha offline cash lifecycle
 
-IrohaSwift exposes one public offline-cash product selector:
-`KagemushaOfflineSpendMode.recursiveSpend` (`recursive_spend_v1`). The
-versioned native artifact contract remains `recursive_spend_v2` and is not a
-second spend mode.
+IrohaSwift exposes only Kagemusha offline cash. There is no runtime product-mode
+field or wallet-selectable offline API. The native artifact wire contract is
+authenticated internally and is not another public API. It has no `mode` field;
+the manifest schema/version, ABI, proof backend, transcript, and circuit IDs
+identify the exact contract.
 
 Use the typed `KagemushaRecursiveSpend` and
 `KagemushaRecursiveSpendCodecs` APIs for top-up, recipient-request creation,
@@ -167,11 +168,12 @@ redemption. Amounts are canonical atomic `u128` values paired with the
 asset-definition scale; callers must reject excess decimal precision instead of
 rounding.
 
-Wallet applications own encrypted note state and QR/NFC transport. Persist inputs,
-recipient output, optional sender change, lineage witness, and operation status at
-each commit boundary. Fetch and install the complete V3 artifact set before an
-offline exchange; no network or artifact access belongs on the offline send or
-receive path.
+Wallet applications own encrypted note state and peer transport. Persist the
+opaque bundle, recipient output, optional sender change, artifact binding, and
+operation status at each commit boundary. Fetch and atomically install the
+complete V3 artifact set before an offline exchange. Every proof operation must
+receive the resulting `KagemushaRecursiveSpendInstalledArtifactSet`; no network
+or artifact access belongs on the offline send or receive path.
 
 ### Push Devices
 
@@ -283,6 +285,46 @@ operator receives only earned XOR and the customer gets the refundable balance.
 
 > **Account selectors:** Account-scoped helpers (`ToriiClient.getAssets`, `getTransactions`, and matching `IrohaSDK` shortcuts) accept canonical I105 account ids or on-chain account aliases (`name@dataspace` / `name@domain.dataspace`). Torii resolves aliases to canonical account ids before serving the response.
 
+### Detached asset transfers
+
+Use the SDK-owned two-phase `/v1/assets/transfer` flow for online payments. It
+prepares exactly one numeric transfer, requires an explicit balance scope and
+short creation/TTL window, and never accepts a private key, nonce, arbitrary
+metadata, aliases, or legacy field spellings.
+
+```swift
+let request = ToriiAssetTransferRequest(
+    authority: authority,
+    assetDefinitionId: assetDefinitionId,
+    assetBalanceScope: "dataspace:10", // or exactly "global"
+    amount: "750",
+    destination: destination,
+    memo: "invoice 42",
+    feeSponsor: sponsor,
+    creationTimeMs: torii.recommendedCreationTimeMs(),
+    transactionTtlMs: 120_000
+)
+let draft = try await torii.prepareDetachedAssetTransfer(request)
+
+// SigningKey keeps signing local. The public-key/signature overload is also
+// available for Keychain or hardware-backed signers.
+let submitted = try await torii.submitDetachedAssetTransfer(
+    draft,
+    signingKey: signingKey
+)
+let finality = try await torii.waitForDetachedAssetTransferFinality(
+    draft,
+    submittedResponse: submitted
+)
+```
+
+Preparation fails closed unless ABI-19 native inspection proves the versioned
+scaffold has the exact authority, chain, definition, source scope, amount,
+destination, memo, fee sponsor, creation time, TTL, and no extra metadata.
+Submission locally verifies Ed25519 authority/signature binding, uses native
+finalization, and requires Torii's final transaction and entrypoint hashes to
+match. `IrohaSDK` forwards the same prepare, submit, and finality methods.
+
 ### Kotodama contract manifests
 
 `ToriiClient.fetchContractManifest(codeHashHex:)` reads
@@ -296,6 +338,49 @@ preorder node tape: a `List` node carries only `capacity`, and its element subtr
 immediately. The decoder rejects the retired nested `element` field, incomplete or overlong
 tapes, and forged `AccountView`, `AssetView`, `AssetDefinitionView`, `DomainView`, `NftView`,
 or `QueryPage<View>` shapes.
+
+Contract alias and state reads are also SDK-owned. Use
+`resolveContractAlias(_:)` for `/v1/contracts/aliases/resolve` and construct a
+throwing `ToriiContractStateQuery` with one typed target (`.address` or
+`.alias`) and one typed selector (`.path`, `.paths`, or `.prefix`) before calling
+`queryContractState(_:)`. Responses reject unknown fields, duplicate JSON keys,
+non-canonical base64, selector/target substitution, invalid pagination, and the
+retired per-entry `decode_error` shape. A Torii JSON decode failure is instead a
+top-level `ToriiClientError.httpStatus` carrying Torii's stable error envelope.
+
+Wallets must use the two-step detached call flow when the signing key is held by
+the client:
+
+```swift
+let draft = try await torii.prepareDetachedContractCall(
+    ToriiContractCallRequest(
+        authority: authority,
+        contractAlias: "bisp::hbl.sbp",
+        entrypoint: "spend_to_merchant",
+        payload: .object(["amount": .string("750")]),
+        transactionTtlMs: 120_000,
+        gasLimit: 500_000
+    )
+)
+let signature = try signAfterUserPresence(draft.signingMessage)
+let response = try await torii.submitDetachedContractCall(
+    draft,
+    publicKeyHex: publicKeyHex,
+    signatureB64: signature.base64EncodedString()
+)
+let finality = try await torii.waitForDetachedContractCallFinality(
+    draft,
+    submittedResponse: response
+)
+```
+
+`ToriiContractCallDraft` retains the normalized request and all resolved
+contract, ABI, entrypoint, gas, sponsor, payload, time, and TTL bindings. Submit
+accepts only the public key and detached signature; it fails closed unless the
+returned receipt and queued pipeline status match the draft exactly.
+`waitForDetachedContractCallFinality` then uses the canonical `scope=auto`
+pipeline lookup and returns only an applied, globally scoped, state-resolved
+status with a positive block height.
 
 ### Explorer instruction history
 
@@ -625,23 +710,23 @@ operators can archive or inspect them later. When Torii rejects a replayed trans
 SDK surfaces `IrohaSDKError.toriiRejected` and leaves the remaining entries untouched so
 apps can decide how to remediate.
 
-### Offline APIs
+### Kagemusha Torii API
 
 `ToriiClient` uses only the canonical direct Torii lifecycle:
 `GET /v1/offline/readiness`, `POST /v1/offline/top-up`,
 `POST /v1/offline/redeem`, and `GET /v1/offline/operations/{operation_id}`.
-Use `getOfflineReadiness(assetDefinitionId:)`, `submitOfflineTopUp`,
-`submitOfflineRedeem`, and `getOfflineOperationStatus(operationId:)`.
+Use `getKagemushaReadiness(assetDefinitionId:)`, `submitKagemushaTopUp`,
+`submitKagemushaRedeem`, and `getKagemushaOperationStatus(operationId:)`.
 
-`OfflineTopUpRequest` and `OfflineRedeemRequest` accept only the corresponding
+`KagemushaTopUpRequest` and `KagemushaRedeemRequest` accept only the corresponding
 typed Kagemusha Norito archive. They derive the lowercase idempotency key from
 the embedded nonzero operation ID; callers cannot override it. Keep a submitted
 operation and its input note until the operation status reaches final chain
 state. A transport timeout or unknown state is not permission to create a new
 operation ID.
 
-The sole product mode is `recursive_spend_v1`. Runtime use requires the exact
-ABI 18 capability archive, the complete native V2 symbol inventory, and a
+Runtime use requires the exact ABI 19 capability archive, the complete native
+first-release symbol inventory, and a
 validated proof-backend readiness result. The V3 manifest and its six streamed
 key artifacts are content-addressed and installed atomically through
 `KagemushaRecursiveSpendArtifactInstallSessionV3`; a partial or corrupt
@@ -665,11 +750,11 @@ Redemption uses `KagemushaRecursiveSpendRedemptionIntentBuildRequest`, the
 unshield-v3 proof APIs, and `KagemushaRecursiveSpendRedeemUnsigned`. Full redeem
 has no change branch; partial redeem binds one offline change branch to the same
 proof and operation ID. `redeemSpend` returns the canonical request submitted by
-`submitOfflineRedeem`.
+`submitKagemushaRedeem`.
 
-All accumulator, proof, verifier-record, finality-proof, and lineage-witness
-archives are opaque to wallet code. Do not reconstruct or mutate them outside
-the typed codecs.
+All accumulator, proof, verifier-record, and finality-proof archives are opaque
+to wallet code. The first-release wire API has no separate lineage-witness
+archive. Do not reconstruct or mutate proof material outside the typed codecs.
 
 ### Native privacy bridge
 
@@ -680,7 +765,7 @@ admitted production privacy entrypoints, including
 `buildZkAceAuthorizationProofV1(requestArchive:)`, dispatch through the same
 production archive paths and remain fail-closed while the privacy rows are
 gated. Planned catalog entrypoints stay unexported until their production gates
-pass. Native availability in the first release requires exact ABI 18, the privacy
+pass. Native availability in the first release requires exact ABI 19, the privacy
 capability/build/verify symbols, and successful Norito probe outputs whose
 operation-specific result schema bytes match the called entry point.
 

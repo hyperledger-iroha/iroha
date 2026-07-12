@@ -4,8 +4,41 @@ import org.hyperledger.iroha.sdk.core.model.escrow.AssetEscrowStatus
 import org.hyperledger.iroha.sdk.core.model.escrow.NativeEscrowPermissions
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import org.hyperledger.iroha.sdk.numeric.KotodamaQuantity
 
 class NativeEscrowInstructionsTest {
+
+    @Test
+    fun `native escrow amounts are canonical quantities`() {
+        listOf(" ", "+1", "01", "1e0", "-1", "1.0", "1.2300").forEach { amount ->
+            assertFailsWith<IllegalArgumentException> {
+                OpenAssetEscrowInstruction("escrow", "asset", amount)
+            }
+            assertFailsWith<IllegalArgumentException> {
+                ResolveEscrowDisputeInstruction("escrow", amount, "0")
+            }
+        }
+        assertFailsWith<IllegalArgumentException> {
+            OpenAssetEscrowInstruction.fromArguments(
+                mapOf("escrow_id" to "escrow", "asset_definition" to "asset", "amount" to "1.0"),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            ResolveEscrowDisputeInstruction.fromArguments(
+                mapOf("escrow_id" to "escrow", "buyer_amount" to "1", "seller_amount" to "0.0"),
+            )
+        }
+
+        val quantity = KotodamaQuantity.parseCanonical("1.25")
+        assertEquals("1.25", OpenAssetEscrowInstruction("escrow", "asset", quantity).amount)
+        assertEquals(
+            listOf("1.25", "1.25"),
+            ResolveEscrowDisputeInstruction("escrow", quantity, quantity).let {
+                listOf(it.buyerAmount, it.sellerAmount)
+            },
+        )
+    }
 
     @Test
     fun `open asset escrow uses native escrow argument schema`() {

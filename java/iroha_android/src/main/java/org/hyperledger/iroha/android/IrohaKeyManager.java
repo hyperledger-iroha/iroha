@@ -475,7 +475,7 @@ public final class IrohaKeyManager {
   }
 
   /**
-   * Generates an ephemeral key pair suitable for offline transaction signing.
+   * Generates an ephemeral key pair for short-lived transaction signing.
    *
    * <p>Ephemeral keys are never persisted; providers may favour software-backed generation even
    * when hardware-backed providers are present to avoid exhausting secure hardware key slots.

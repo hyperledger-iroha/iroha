@@ -448,7 +448,7 @@ fn validate_kagemusha_v2_redeem_snapshot(
 }
 
 fn ensure_kagemusha_v2_backend_available() -> Result<(), Error> {
-    if iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_V2_PROOF_BACKEND_AVAILABLE {
+    if iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PROOF_BACKEND_AVAILABLE {
         return Ok(());
     }
     Err(Error::AppServiceUnavailable {
@@ -1694,7 +1694,7 @@ fn ensure_kagemusha_v2_topup_anchor_matches_request(
         || anchor.current_note != request.current_note
         || anchor.topup_operation_id != request.authorization.operation_id
         || anchor.topup_operation_id != request.operation_id
-        || anchor.artifact_generation != request.artifact_generation
+        || anchor.artifact_binding != request.artifact_binding
     {
         return Err(offline_operation_index_inconsistent(
             "The finalized top-up anchor does not match the admitted signed request.",
@@ -1884,7 +1884,8 @@ mod tests {
         },
         nexus::{DataSpaceId, LaneId},
         offline::{
-            KAGEMUSHA_REQUEST_AUTHORIZATION_MAX_TTL_MS_V2, KagemushaRequestAuthorizationV2,
+            KAGEMUSHA_REQUEST_AUTHORIZATION_MAX_TTL_MS_V2,
+            KagemushaRecursiveSpendArtifactBindingV3, KagemushaRequestAuthorizationV2,
             KagemushaScaledAmountV2, KagemushaSpendableNoteDescriptorV2,
             KagemushaTopUpShieldEvidenceV2, KagemushaVerifiedFoldBundle,
             KagemushaVerifiedFoldRecordBundle,
@@ -1962,7 +1963,10 @@ mod tests {
                     attachment
                 },
             },
-            artifact_generation: "submission-coordinator-fixture".to_owned(),
+            artifact_binding: KagemushaRecursiveSpendArtifactBindingV3 {
+                generation: "submission-coordinator-fixture".to_owned(),
+                manifest_sha256: [0x69; 32],
+            },
             operation_id,
             authorization: KagemushaRequestAuthorizationV2 {
                 authority,
@@ -2872,7 +2876,7 @@ mod tests {
         };
 
         let mut conflicting = request.clone();
-        conflicting.artifact_generation.push_str("-forged");
+        conflicting.artifact_binding.generation.push_str("-forged");
         let error = match issuer.claim_submission(submission_test_binding(&conflicting)) {
             Err(error) => error,
             Ok(_) => panic!("same operation id with changed fields must conflict"),
@@ -3667,7 +3671,10 @@ mod tests {
         )
         .expect("identical authoritative replay remains idempotent");
         let mut conflicting = original;
-        conflicting.artifact_generation.push_str("-conflict");
+        conflicting
+            .artifact_binding
+            .generation
+            .push_str("-conflict");
         assert!(matches!(
             ensure_same_offline_request(
                 &recovered.request.as_ref(),

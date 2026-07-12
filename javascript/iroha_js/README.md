@@ -85,150 +85,11 @@ proof, `validatePdpCommitmentChallenge(...)` or
 `validatePdpBundle(...)` for the full commitment/challenge/proof set.
 `SORAFS_PDP_PAYLOAD_KINDS` exports stable kind labels.
 
-## Native Recursive Kagemusha Spend
+## Offline cash SDK boundary
 
-Native builds expose recursive Kagemusha spend helpers from the exact ABI-18
-crypto surface. ABI 7 exposes source-stable `recursive_compact_v1`
-compact-token symbols for `kagemusha-recursive-compact-v1` as a separate,
-non-product projection. Use
-`kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes`
-and `kagemushaVerifyRecursiveCompactPaymentToken`; gate them with
-`isKagemushaRecursiveCompactPaymentTokenNativeAvailable()` and
-`isKagemushaRecursiveCompactPaymentTokenVerifierNativeAvailable()`. The
-recursive-spend compact projection verifier is exposed separately as
-`kagemushaVerifyRecursiveSpendCompactPaymentTokenProjection(...)`; gate it with
-`isKagemushaRecursiveSpendCompactPaymentTokenProjectionVerifierNativeAvailable()`.
-It accepts raw Norito compact-token and verifier-record archives, rejects empty,
-malformed, oversized, non-integer, bool, negative-height, unsafe-number, or
-out-of-u64 height inputs before native dispatch, and
-returns the native boolean receiver result. ABI 7 now
-carries the one-hop LEN=4 compact-token proof path when the native host includes
-the packaged compact one-hop proving-key archive and matching verifier-slice
-material. Production selection requires the exact ABI-18 Pasta-cycle recursive
-spend backend and its signed V3 artifact set. Reserved-lineage recursive spend
-is a proof-composition reservation: a missing packaged key, the generic
-compact-token reservation, and the multi-hop verifier-batch reservation remain
-reserved ABI-7 state. The `recursive_compact_v1` identifier describes an
-admission-neutral projection and is never a spend-again product selector.
-`preferredKagemushaOfflineSpendMode()` selects `recursive_spend_v1`
-when the native host reports native bridge ABI 18 exactly and every required
-recursive-spend method rejects the malformed availability probe, and otherwise
-returns `null` rather than falling back to archived checked-prefold fixtures:
-`kagemushaRecursiveSpendInit`,
-`kagemushaRecursiveSpendAppend`,
-`kagemushaRecursiveSpendTransitionProfileInit`,
-`kagemushaRecursiveSpendTransitionProfileAppend`,
-the append-boundary helper `kagemushaRecursiveSpendLineageAppendBoundary`, both
-lineage-witness helpers, `kagemushaRecursiveSpendVerify`, and
-`kagemushaRecursiveSpendRedeem`. Explicit capability selection must pass both
-`recursiveCompactAvailable` and `recursiveSpendAvailable`; single-argument
-selectors are not shipped.
-`isKagemushaSpendAgainMode(...)` accepts only the first-release public
-`recursive_spend_v1` label and rejects the internal artifact mode
-`recursive_spend_v2` and the compact projection.
-
-Typed Node callers can build the ABI-18 recursive spend request archives without
-hand-framing Norito payloads. Use
-`encodeKagemushaRecursiveSpendInitRequest(...)`,
-`encodeKagemushaRecursiveSpendAppendRequest(...)`,
-`encodeKagemushaRecursiveSpendVerifyRequest(...)`, and
-`encodeKagemushaRecursiveSpendRedeemRequest(...)` to encode typed object inputs;
-use `decodeKagemushaRecursiveSpendVerifyResult(...)` and
-`decodeKagemushaRecursiveSpendBundle(...)` to inspect returned native archives.
-`kagemushaRecursiveSpendInitTyped(...)`,
-`kagemushaRecursiveSpendAppendTyped(...)`,
-`kagemushaRecursiveSpendVerifyTyped(...)`, and
-`kagemushaRecursiveSpendRedeemTyped(...)` validate exact schemas, nested
-archives, canonical positive note amounts, account recipients, lineage records,
-and previous proof material before delegating to the native bridge.
-
-Transaction builders expose the same Kagemusha instruction surface without
-asking wallet code to reframe native archives. Use
-`buildKagemushaInstructionArchiveInstruction({ instructionType, instructionArchive })`
-for a typed `KagemushaTransfer` or `RedeemKagemushaRecursive` instruction
-archive, `buildKagemushaInstructionTransaction(...)` to sign a single archived
-instruction, and `buildKagemushaRecursiveRedeemTransaction(...)` to derive the
-redeem instruction from a native recursive redeem request before signing. These
-helpers require valid Norito archives, reject empty, malformed, tampered, or
-wrong-type instruction archives, and keep recursive redeem derivation inside the
-native host.
-
-The lower-level native helper inputs and outputs are raw Norito archives. The
-transition-profile helpers return the canonical Reserved-lineage accumulator
-transition profile for fixture generation and circuit preflight. Browser-only
-builds expose matching stubs that throw native-only errors.
-`kagemushaRecursiveSpendLineageAppendBoundary(profileArchive)` derives the
-compact append-boundary Norito archive from a full append transition profile
-with native opening preflight material. The append-boundary digest uses the
-public `KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_DOMAIN_V1` domain,
-plus
-`KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_CHAIN_ASSET_BINDING_DOMAIN_V1`
-and
-`KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_FINAL_NOTE_BINDING_DOMAIN_V1`
-for chain/asset and final-root/current-note binding.
-`previous_recursive_proof_open_envelopes_archive` is opaque native prover
-material: JavaScript wallet code must pass it through Norito unchanged and must
-not construct, rewrite, or mutate it. The native NAPI host validates
-`vk_commitment`, `public_inputs_schema_hash`, and `domain_tag` against the exact
-previous bundle before proving or returning output bytes.
-`kagemushaBuildPallasOpenEnvelopesArchive(recordBundleArchive)` and
-`kagemushaBuildPreviousProofOpenEnvelopesArchive(previousBundleArchive)` ask the
-native NAPI host to generate the opaque Pallas opening archives for the
-current-hop record bundle and the previous recursive proof. Gate both with
-`isKagemushaPallasOpenEnvelopeBuilderNativeAvailable()`; browser builds expose
-native-only stubs that fail closed.
-Native append streams the previous recursive proof bytes and per-hop accumulator
-material into native-owned accumulator digests (`recursive_proof_chain_digest`,
-lineage/aggregation transcript, fixed-window schedule/shared-manifest/table-base,
-verifier-witness batch, transition-profile, append-opening-preflight,
-append-boundary, scalar-projection, and previous/resulting accumulator digests);
-SDK code must not derive, supply, or patch accumulator state.
-generic proof-state (`proofState`, `ProofState`, `proof_state`),
-recursive/lineage proof-state, aggregation-transcript, fixed-window
-table-schedule/shared-manifest/table-base, verifier-witness batch,
-transition-profile binding, append-opening preflight, recursive verifier
-scalar-projection, and previous/resulting accumulator aliases are native-owned
-material, not JavaScript or TypeScript request fields.
-Init requests may omit both packaged lineage key artifacts to select the
-semantic recursive aggregation path. That bundle is valid for offline
-acceptance and re-spending, while online redemption must carry the
-record-backed lineage witness. Supplying exactly one of `lineage_verifier_key`
-or `lineage_proving_key_archive` is rejected. Reserved-lineage append-output
-requests must still include the append lineage key artifacts in the raw Norito
-request. Use `kagemushaRecursiveSpendLineageKeyArtifactsForInit(...)` and
-`kagemushaRecursiveSpendLineageKeyArtifactsForAppend(...)` to package and
-validate these verifier/proving key artifacts before building a witnessless
-Reserved-lineage request once transition verification is wired. The current
-release does not select or prove that path.
-Verify request archives must pass the same public-binding preflight before the
-native host returns a `KagemushaRecursiveSpendVerifyResultV1`: Reserved-lineage
-bundles require a matching active `lineage_verifier_record`, semantic bundles
-must omit it, and unsupported proof attachments are rejected as malformed
-requests rather than soft invalid proof results.
-Decoded verify results expose only the redeem-specific
-`lineageWitnessRequiredForRedeem` /
-`lineage_witness_required_for_redeem` fields for the redeem decision.
-Reserved-lineage append output is valid only when the previous bundle is
-already Reserved-lineage; semantic previous bundles keep using semantic append
-plus a record-backed lineage witness.
-Typed redeem request builders accept the single-record
-`lineageVerifierRecord` / `lineage_verifier_record` path plus
-`lineageVerifierRecords` / raw `lineage_verifier_records` for additional
-Reserved-lineage verifier records. Use the plural field for multi-profile
-record-backed lineage witnesses, or place every Reserved-lineage verifier
-record there for vector-only callers.
-
-`KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1` is currently `64`,
-and `KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1` is
-`false`. The hop constant is only the protocol bound: witnessless
-Reserved-lineage redeem and append fail closed for every circuit and hop count,
-and redeem requires a record-backed lineage witness.
-Wallets should use the exported `canRedeem...`, `requires...LineageWitness...`,
-`preferred...AppendOutput...`, and `canSelect...AppendOutput...` helpers and
-select semantic recursive aggregation while transition verification is
-unavailable. Semantic append is bounded by the separate
-`KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS` constant; the witnessless max-hop constant
-does not enable witnessless admission.
+The JavaScript package is a general-purpose chain SDK. Kagemusha wallet
+operations are supported by the Swift SDK, so JavaScript does not publish a
+wallet lifecycle, Torii wallet helpers, proof wrappers, or peer transport.
 
 ## Native Privacy Bridge
 
@@ -392,40 +253,7 @@ browser codec, rejects conflicting byte/hash aliases, and rechecks the signable
 payload prehash. Torii response hash aliases are likewise conflict-checked
 before status polling or receipt construction.
 
-For offline cash screens and headless wallet flows, use the dedicated
-`offline-cash` subpath. It validates cached setup for local exchange, syncs
-pending audit receipts before loading more cash, and hides NFC unless the app
-reports explicit support.
-
-```js
-import {
-  OfflineCashLifecycleController,
-  assertOfflineCashConfigurationSnapshotUsable,
-  offlineCashAvailableTransportKinds,
-} from "@iroha/iroha-js/offline-cash";
-
-assertOfflineCashConfigurationSnapshotUsable(cachedSnapshot, {
-  nowMs: Date.now(),
-  requiredNativeBridgeAbiVersion: 7,
-});
-
-const controller = new OfflineCashLifecycleController({
-  wallet: offlineWallet,
-  auditReceiptSynchronizer,
-});
-
-await controller.load("pkr#sbp", "500"); // syncs pending audit receipts first
-
-const transportKinds = offlineCashAvailableTransportKinds({
-  qrStreaming: true,
-  nfc: deviceSupportsNfc && appHasHceEntitlement
-    ? { supported: true }
-    : { supported: false, reason: "NFC requires device and app HCE support." },
-  nearby: true,
-});
-```
-
-Kotodama V1 uses the Rust compiler as its only implementation. Node loads it
+ Kotodama V1 uses the Rust compiler as its only implementation. Node loads it
 through `iroha_js_host` and performs compilation off the event-loop thread:
 
 ```js
@@ -3541,12 +3369,16 @@ plain object. Passing primitives, arrays, or class instances throws a
 `TypeError` before any HTTP call, keeping the JS-04 validation guarantees aligned
 with the Rust/Python SDKs.
 
-All pagination knobs (`limit`, `offset`, `pageSize`, `maxItems`, `fetch_size`) accept the
-`NumericLike` inputs used across the transaction builders (`number`, `string`, or `bigint`).
-They are normalised via the same unsigned-integer validators before any request fires
+All pagination knobs (`limit`, `offset`, `pageSize`, `maxItems`, `fetch_size`) accept
+`number`, `string`, or `bigint`. They are normalised via unsigned-integer validators before any request fires
 (integers only, up to `Number.MAX_SAFE_INTEGER`), so passing `"25"` or `10n` behaves
 exactly like `25` while still surfacing a `TypeError` when the value is negative,
 fractional, NaN, or otherwise invalid.
+
+Asset and RWA quantities use the stricter `QuantityInput` surface:
+`KotodamaQuantity`, an exact canonical quantity string, or `bigint`. JavaScript
+`number` is deliberately rejected, and strings are never trimmed or rewritten;
+for example `"1"` is valid while `" 1"`, `"01"`, `"+1"`, and `"1.0"` are not.
 
 The first-release Offline HTTP surface is a sharp `/v1` contract: asset-scoped
 readiness, asynchronous top-up and redemption commands, and one pollable

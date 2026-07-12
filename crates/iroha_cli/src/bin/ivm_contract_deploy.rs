@@ -1,5 +1,5 @@
-//! Deploy a contract by registering code/manifest through an IVM transaction,
-//! then activating and alias-binding it through a plain instruction batch.
+//! Deploy a contract with governance-attributed native registration,
+//! activation, and alias-binding instruction transactions.
 #![allow(
     clippy::cast_lossless,
     clippy::cast_possible_truncation,
@@ -38,7 +38,7 @@ use iroha::{
         prelude::*,
         query::account::prelude::FindAccountById,
         smart_contract::{CONTRACT_DEPLOY_NONCE_METADATA_KEY, ContractAlias},
-        transaction::{Executable, IvmBytecode, TransactionBuilder},
+        transaction::TransactionBuilder,
     },
 };
 use iroha_config::parameters::{
@@ -48,7 +48,9 @@ use iroha_config::parameters::{
         torii,
     },
 };
-use iroha_crypto::{Hash, KeyPair, PrivateKey};
+#[cfg(test)]
+use iroha_crypto::Hash;
+use iroha_crypto::{KeyPair, PrivateKey};
 use iroha_primitives::json::Json;
 use iroha_version::codec::EncodeVersioned;
 use sorafs_manifest::alias_cache::AliasCachePolicy;
@@ -57,12 +59,17 @@ use url::Url;
 
 const DEFAULT_CHAIN_DISCRIMINANT_TAIRA: u16 = 369;
 const DEFAULT_IVM_GAS_LIMIT: u64 = 1_000_000;
-const DEFAULT_MAX_DIRECT_REGISTER_BYTES_TX_BYTES: usize = 900_000;
+#[cfg(test)]
 const DEFAULT_MAX_CYCLES: u64 = 1_000_000;
+#[cfg(test)]
 const STAGED_REGISTER_CHUNK_BYTES: usize = 24_000;
+#[cfg(test)]
 const COPY_WORD_BYTES: usize = 8;
+#[cfg(test)]
 const LITERAL_DATA_START: i16 = 16;
+#[cfg(test)]
 const WIDE_IMM_MIN: i64 = -128;
+#[cfg(test)]
 const WIDE_IMM_MAX: i64 = 127;
 
 #[derive(Parser, Debug)]
@@ -97,17 +104,16 @@ struct Args {
     transaction_ttl_ms: Option<u64>,
     #[arg(long, default_value_t = 300_000)]
     torii_request_timeout_ms: u64,
-    #[arg(long, default_value_t = DEFAULT_MAX_DIRECT_REGISTER_BYTES_TX_BYTES)]
-    max_direct_register_bytes_tx_bytes: usize,
     #[arg(long)]
     out_dir: Option<PathBuf>,
     #[arg(long, default_value_t = false)]
     emit_only: bool,
     #[arg(long, default_value_t = false)]
     skip_register_bytes: bool,
-    #[arg(long, default_value_t = false)]
-    force_direct_register: bool,
 }
+
+#[cfg(test)]
+use iroha::data_model::transaction::{Executable, IvmBytecode};
 
 fn default_alias_cache_policy() -> AliasCachePolicy {
     AliasCachePolicy::new(
@@ -198,20 +204,15 @@ fn insert_gov_manifest_approvers(metadata: &mut Metadata, approvers: &[String]) 
     Ok(())
 }
 
-fn ivm_transaction_metadata(gas_asset_id: Option<&str>, gas_limit: u64) -> Result<Metadata> {
-    let mut metadata = Metadata::default();
-    insert_gas_asset_id(&mut metadata, gas_asset_id)?;
-    iroha::data_model::transaction::insert_transaction_gas_limit(&mut metadata, gas_limit);
-    Ok(metadata)
-}
-
-fn instruction_transaction_metadata(
+fn deployment_transaction_metadata(
     gas_asset_id: Option<&str>,
+    gas_limit: u64,
     contract_address: &iroha::data_model::smart_contract::ContractAddress,
     gov_manifest_approvers: &[String],
 ) -> Result<Metadata> {
     let mut metadata = Metadata::default();
     insert_gas_asset_id(&mut metadata, gas_asset_id)?;
+    iroha::data_model::transaction::insert_transaction_gas_limit(&mut metadata, gas_limit);
     insert_string_metadata(
         &mut metadata,
         "gov_contract_address",
@@ -261,6 +262,7 @@ fn resolve_alias_dataspace(
     }
 }
 
+#[cfg(test)]
 fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(7 + payload.len() + Hash::LENGTH);
     out.extend_from_slice(&type_id.to_be_bytes());
@@ -272,6 +274,7 @@ fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     out
 }
 
+#[cfg(test)]
 fn typed_tlv<T: norito::NoritoSerialize>(
     pointer_type: ivm::PointerType,
     value: &T,
@@ -280,10 +283,12 @@ fn typed_tlv<T: norito::NoritoSerialize>(
     Ok(make_tlv(pointer_type as u16, &payload))
 }
 
+#[cfg(test)]
 fn push_word(code: &mut Vec<u8>, word: u32) {
     code.extend_from_slice(&word.to_le_bytes());
 }
 
+#[cfg(test)]
 fn chunk_immediate(value: i64) -> i8 {
     if value > WIDE_IMM_MAX {
         WIDE_IMM_MAX as i8
@@ -294,6 +299,7 @@ fn chunk_immediate(value: i64) -> i8 {
     }
 }
 
+#[cfg(test)]
 fn emit_addi(code: &mut Vec<u8>, rd: u8, rs1: u8, mut value: i64) {
     if rd != rs1 {
         push_word(
@@ -311,11 +317,13 @@ fn emit_addi(code: &mut Vec<u8>, rd: u8, rs1: u8, mut value: i64) {
     }
 }
 
+#[cfg(test)]
 fn norito_tlv<T: norito::NoritoSerialize>(value: &T) -> Result<Vec<u8>> {
     let payload = norito::to_bytes(value)?;
     Ok(make_tlv(ivm::PointerType::NoritoBytes as u16, &payload))
 }
 
+#[cfg(test)]
 fn push_syscall(code: &mut Vec<u8>, syscall: u32) -> Result<()> {
     push_word(
         code,
@@ -327,6 +335,7 @@ fn push_syscall(code: &mut Vec<u8>, syscall: u32) -> Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
 fn emit_load64(code: &mut Vec<u8>, rd: u8, base: u8, imm: i8) {
     push_word(
         code,
@@ -334,6 +343,7 @@ fn emit_load64(code: &mut Vec<u8>, rd: u8, base: u8, imm: i8) {
     );
 }
 
+#[cfg(test)]
 fn emit_store64(code: &mut Vec<u8>, base: u8, rs: u8, imm: i8) {
     push_word(
         code,
@@ -341,10 +351,12 @@ fn emit_store64(code: &mut Vec<u8>, base: u8, rs: u8, imm: i8) {
     );
 }
 
+#[cfg(test)]
 fn emit_rr(code: &mut Vec<u8>, opcode: u8, rd: u8, rs1: u8, rs2: u8) {
     push_word(code, ivm::encoding::wide::encode_rr(opcode, rd, rs1, rs2));
 }
 
+#[cfg(test)]
 fn assemble_program_with_literals(code: &[u8], literal_data: &[u8]) -> Vec<u8> {
     let mut program = ivm::ProgramMetadata {
         version_major: 1,
@@ -369,49 +381,12 @@ fn assemble_program_with_literals(code: &[u8], literal_data: &[u8]) -> Vec<u8> {
     program
 }
 
+#[cfg(test)]
 fn literal_ptr(offset: usize) -> Result<i16> {
     i16::try_from(offset).map_err(|_| eyre!("literal section grew beyond i16 addressable range"))
 }
 
-fn build_single_register_program<T: norito::NoritoSerialize>(
-    payload: &T,
-    syscall: u32,
-    publish_input: bool,
-) -> Result<Vec<u8>> {
-    let tlv = norito_tlv(payload)?;
-    let ptr = literal_ptr(LITERAL_DATA_START as usize)?;
-    let mut code = Vec::new();
-    emit_addi(&mut code, 10, 0, i64::from(ptr));
-    if publish_input {
-        push_syscall(&mut code, ivm::syscalls::SYSCALL_INPUT_PUBLISH_TLV)?;
-    }
-    push_syscall(&mut code, syscall)?;
-    code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
-    Ok(assemble_program_with_literals(&code, &tlv))
-}
-
-fn build_state_set_program(path: &Name, value: &[u8]) -> Result<Vec<u8>> {
-    let path_tlv = typed_tlv(ivm::PointerType::Name, path)?;
-    let value_tlv = make_tlv(ivm::PointerType::NoritoBytes as u16, value);
-    let path_ptr = literal_ptr(LITERAL_DATA_START as usize)?;
-    let value_ptr = literal_ptr(LITERAL_DATA_START as usize + path_tlv.len())?;
-    let mut literal_data = Vec::with_capacity(path_tlv.len() + value_tlv.len());
-    literal_data.extend_from_slice(&path_tlv);
-    literal_data.extend_from_slice(&value_tlv);
-
-    let mut code = Vec::new();
-    emit_addi(&mut code, 10, 0, i64::from(path_ptr));
-    push_syscall(&mut code, ivm::syscalls::SYSCALL_INPUT_PUBLISH_TLV)?;
-    emit_addi(&mut code, 12, 10, 0);
-    emit_addi(&mut code, 10, 0, i64::from(value_ptr));
-    push_syscall(&mut code, ivm::syscalls::SYSCALL_INPUT_PUBLISH_TLV)?;
-    emit_addi(&mut code, 11, 10, 0);
-    emit_addi(&mut code, 10, 12, 0);
-    push_syscall(&mut code, ivm::syscalls::SYSCALL_STATE_SET)?;
-    push_word(&mut code, ivm::encoding::wide::encode_halt());
-    Ok(assemble_program_with_literals(&code, &literal_data))
-}
-
+#[cfg(test)]
 fn build_staged_register_program_inner(
     paths: &[Name],
     chunk_sizes: &[usize],
@@ -496,10 +471,6 @@ fn build_staged_register_program_inner(
     Ok(assemble_program_with_literals(&code, &literal_data))
 }
 
-fn build_staged_register_program(paths: &[Name], chunk_sizes: &[usize]) -> Result<Vec<u8>> {
-    build_staged_register_program_inner(paths, chunk_sizes, true, true)
-}
-
 #[cfg(test)]
 fn build_staged_copy_program(paths: &[Name], chunk_sizes: &[usize]) -> Result<Vec<u8>> {
     build_staged_register_program_inner(paths, chunk_sizes, false, false)
@@ -510,6 +481,7 @@ fn build_staged_register_only_program(paths: &[Name], chunk_sizes: &[usize]) -> 
     build_staged_register_program_inner(paths, chunk_sizes, true, false)
 }
 
+#[cfg(test)]
 fn staged_chunk_paths(code_hash: Hash, chunk_count: usize) -> Result<Vec<Name>> {
     let code_hash_hex = hex::encode(<[u8; 32]>::from(code_hash));
     let prefix = &code_hash_hex[..12];
@@ -518,6 +490,7 @@ fn staged_chunk_paths(code_hash: Hash, chunk_count: usize) -> Result<Vec<Name>> 
         .collect()
 }
 
+#[cfg(test)]
 fn split_bytes(bytes: &[u8], chunk_size: usize) -> Vec<Vec<u8>> {
     bytes
         .chunks(chunk_size)
@@ -525,6 +498,7 @@ fn split_bytes(bytes: &[u8], chunk_size: usize) -> Vec<Vec<u8>> {
         .collect()
 }
 
+#[cfg(test)]
 fn padded_chunk_bytes(chunk: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(chunk.len() + COPY_WORD_BYTES);
     out.extend_from_slice(chunk);
@@ -535,7 +509,6 @@ fn padded_chunk_bytes(chunk: &[u8]) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::BTreeMap;
 
     fn checked_ivm_contract_deploy_ed25519_key_fixture() -> KeyPair {
         KeyPair::try_random_with_algorithm(iroha_crypto::Algorithm::Ed25519)
@@ -594,6 +567,101 @@ mod tests {
     }
 
     #[test]
+    fn direct_contract_registration_uses_native_instructions() -> Result<()> {
+        let key_pair = checked_ivm_contract_deploy_ed25519_key_fixture();
+        let authority = AccountId::of(key_pair.public_key().clone());
+        let request = RegisterSmartContractBytes {
+            code_hash: Hash::new(b"direct-register-instruction"),
+            code: vec![1, 2, 3, 4],
+        };
+        let tx = sign_instruction_transaction(
+            &ChainId::from("ivm-contract-deploy-direct-register-test"),
+            &authority,
+            key_pair.private_key(),
+            None,
+            Metadata::default(),
+            [InstructionBox::from(request)],
+        )?;
+
+        assert!(matches!(
+            tx.instructions(),
+            Executable::Instructions(instructions) if instructions.len() == 1
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn every_deployment_transaction_carries_identical_governance_metadata() -> Result<()> {
+        let key_pair = checked_ivm_contract_deploy_ed25519_key_fixture();
+        let authority = AccountId::of(key_pair.public_key().clone());
+        let contract_address = iroha::data_model::smart_contract::ContractAddress::derive(
+            DEFAULT_CHAIN_DISCRIMINANT_TAIRA,
+            &authority,
+            7,
+            DataSpaceId::UNIVERSAL,
+        )
+        .map_err(|error| eyre!(error.to_string()))?;
+        let approvers = vec![authority.to_string()];
+        let metadata = deployment_transaction_metadata(
+            Some("fee#ivm"),
+            42_000,
+            &contract_address,
+            &approvers,
+        )?;
+        let chain = ChainId::from("ivm-contract-deploy-metadata-test");
+        let transactions = (0..3)
+            .map(|_| {
+                sign_instruction_transaction(
+                    &chain,
+                    &authority,
+                    key_pair.private_key(),
+                    None,
+                    metadata.clone(),
+                    Vec::<InstructionBox>::new(),
+                )
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        for transaction in &transactions {
+            assert_eq!(transaction.metadata(), &metadata);
+            assert_eq!(
+                iroha::data_model::transaction::parse_transaction_gas_limit(
+                    transaction.metadata()
+                )?,
+                Some(42_000)
+            );
+            for key in [
+                "gov_contract_address",
+                "contract_address",
+                "gov_manifest_approvers",
+            ] {
+                assert!(
+                    transaction.metadata().get(&Name::from_str(key)?).is_some(),
+                    "missing governance key {key}"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn deployment_metadata_rejects_blank_governance_approvers() {
+        let key_pair = checked_ivm_contract_deploy_ed25519_key_fixture();
+        let authority = AccountId::of(key_pair.public_key().clone());
+        let contract_address = iroha::data_model::smart_contract::ContractAddress::derive(
+            DEFAULT_CHAIN_DISCRIMINANT_TAIRA,
+            &authority,
+            0,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("derive test address");
+
+        let error = deployment_transaction_metadata(None, 1, &contract_address, &["  ".to_owned()])
+            .expect_err("blank governance approver must fail before signing");
+        assert!(error.to_string().contains("must not be blank"));
+    }
+
+    #[test]
     fn staged_copy_program_reconstructs_register_request_tlv() {
         let request = RegisterSmartContractBytes {
             code_hash: Hash::new(b"stage-test"),
@@ -631,12 +699,7 @@ mod tests {
     }
 
     #[test]
-    fn staged_register_program_runs_under_contract_runtime_host() {
-        let authority = AccountId::of(
-            checked_ivm_contract_deploy_ed25519_key_fixture()
-                .public_key()
-                .clone(),
-        );
+    fn generic_profile_rejects_legacy_state_staging_program() {
         let request = RegisterSmartContractBytes {
             code_hash: Hash::new(b"stage-runtime"),
             code: (0..59_201).map(|index| (index % 251) as u8).collect(),
@@ -646,54 +709,22 @@ mod tests {
         let chunk_sizes: Vec<_> = chunks.iter().map(Vec::len).collect();
         let chunk_paths = staged_chunk_paths(Hash::new(b"stage-runtime-test"), chunks.len())
             .expect("chunk paths");
-        let copy_program =
-            build_staged_copy_program(&chunk_paths, &chunk_sizes).expect("build staged copy");
         let register_program = build_staged_register_only_program(&chunk_paths, &chunk_sizes)
             .expect("build staged register");
 
-        let mut snapshot = BTreeMap::new();
-        for (path, chunk) in chunk_paths.iter().zip(&chunks) {
-            snapshot.insert(
-                path.clone(),
-                make_tlv(
-                    ivm::PointerType::NoritoBytes as u16,
-                    &padded_chunk_bytes(chunk),
-                ),
-            );
-        }
-
-        let mut copy_vm = ivm::IVM::new(DEFAULT_MAX_CYCLES);
-        let mut copy_host = iroha_core::smartcontracts::ivm::host::CoreHost::new(authority.clone());
-        copy_host.set_durable_state_snapshot(snapshot.clone());
-        copy_vm.set_host(copy_host);
-        copy_vm
-            .load_program(&copy_program)
-            .expect("load staged copy program");
-        copy_vm.run().expect("run staged copy program");
-        let heap_ptr = copy_vm.register(8);
-        let copied = copy_vm
-            .memory
-            .load_region(heap_ptr, register_request_tlv.len() as u64)
-            .expect("read reconstructed heap bytes");
-        assert_eq!(copied, register_request_tlv);
-
-        let mut register_vm = ivm::IVM::new(DEFAULT_MAX_CYCLES);
-        let mut register_host = iroha_core::smartcontracts::ivm::host::CoreHost::new(authority);
-        register_host.set_durable_state_snapshot(snapshot);
-        register_vm.set_host(register_host);
-        register_vm
-            .load_program(&register_program)
-            .expect("load staged register program");
-        register_vm.run().expect("run staged register program");
+        let error = iroha_core::smartcontracts::ivm::cache::IvmCache::new()
+            .summarize_executable(&register_program)
+            .expect_err("generic programs must not access raw durable state");
+        assert!(matches!(
+            error,
+            ivm::VMError::GenericSyscallNotAllowed {
+                syscall: ivm::syscalls::SYSCALL_STATE_GET
+            }
+        ));
     }
 
     #[test]
-    fn staged_register_program_runs_under_contract_runtime_host_with_nine_chunks() {
-        let authority = AccountId::of(
-            checked_ivm_contract_deploy_ed25519_key_fixture()
-                .public_key()
-                .clone(),
-        );
+    fn generic_profile_rejects_large_legacy_state_staging_program() {
         let request = RegisterSmartContractBytes {
             code_hash: Hash::new(b"stage-runtime-large"),
             code: (0..200_123).map(|index| (index % 251) as u8).collect(),
@@ -707,27 +738,15 @@ mod tests {
         let register_program = build_staged_register_only_program(&chunk_paths, &chunk_sizes)
             .expect("build staged register");
 
-        let mut snapshot = BTreeMap::new();
-        for (path, chunk) in chunk_paths.iter().zip(&chunks) {
-            snapshot.insert(
-                path.clone(),
-                make_tlv(
-                    ivm::PointerType::NoritoBytes as u16,
-                    &padded_chunk_bytes(chunk),
-                ),
-            );
-        }
-
-        let mut register_vm = ivm::IVM::new(DEFAULT_MAX_CYCLES);
-        let mut register_host = iroha_core::smartcontracts::ivm::host::CoreHost::new(authority);
-        register_host.set_durable_state_snapshot(snapshot);
-        register_vm.set_host(register_host);
-        register_vm
-            .load_program(&register_program)
-            .expect("load staged register program");
-        register_vm
-            .run()
-            .expect("run large staged register program");
+        let error = iroha_core::smartcontracts::ivm::cache::IvmCache::new()
+            .summarize_executable(&register_program)
+            .expect_err("large generic staging must fail at admission");
+        assert!(matches!(
+            error,
+            ivm::VMError::GenericSyscallNotAllowed {
+                syscall: ivm::syscalls::SYSCALL_STATE_GET
+            }
+        ));
     }
 
     #[test]
@@ -768,6 +787,7 @@ mod tests {
     }
 }
 
+#[cfg(test)]
 fn sign_ivm_transaction(
     chain_id: &ChainId,
     authority: &AccountId,
@@ -874,93 +894,44 @@ fn main() -> Result<()> {
         .wrap_err("failed to sign contract manifest")?;
     let code_hash = verified.code_hash;
     let transaction_ttl = args.transaction_ttl_ms.map(Duration::from_millis);
-    let tx_metadata = ivm_transaction_metadata(args.gas_asset_id.as_deref(), args.gas_limit)?;
+    // Registration and activation are one governance operation. Bind every
+    // transaction in the sequence to the same contract address and approver
+    // set so protected-lane admission cannot observe a partially attributed
+    // deployment.
+    let tx_metadata = deployment_transaction_metadata(
+        args.gas_asset_id.as_deref(),
+        args.gas_limit,
+        &contract_address,
+        &args.gov_manifest_approvers,
+    )?;
     let register_request = RegisterSmartContractBytes {
         code_hash,
         code: code.clone(),
     };
-    let register_bytes_program = build_single_register_program(
-        &register_request,
-        ivm::syscalls::SYSCALL_REGISTER_SMART_CONTRACT_BYTES,
-        false,
-    )?;
-    let direct_register_bytes_tx = sign_ivm_transaction(
+    let register_bytes_tx = sign_instruction_transaction(
         &client.chain,
         &authority,
         &private_key,
         transaction_ttl,
         tx_metadata.clone(),
-        register_bytes_program,
+        [InstructionBox::from(register_request)],
     )?;
-    let direct_register_bytes_tx_size = direct_register_bytes_tx.encode_versioned().len();
-    let use_staged_register = !args.force_direct_register
-        && direct_register_bytes_tx_size > args.max_direct_register_bytes_tx_bytes;
-
-    let mut register_stage_tx_hashes = Vec::new();
-    let mut register_plans: Vec<(String, String, SignedTransaction)> = Vec::new();
-    let register_bytes_tx_hash;
-    let register_bytes_tx_strategy;
-    if use_staged_register {
-        let register_request_tlv = norito_tlv(&register_request)?;
-        let chunks = split_bytes(&register_request_tlv, STAGED_REGISTER_CHUNK_BYTES);
-        let chunk_paths = staged_chunk_paths(code_hash, chunks.len())?;
-        for (index, (path, chunk)) in chunk_paths.iter().zip(chunks.iter()).enumerate() {
-            let chunk_program = build_state_set_program(path, &padded_chunk_bytes(chunk))?;
-            let chunk_tx = sign_ivm_transaction(
-                &client.chain,
-                &authority,
-                &private_key,
-                transaction_ttl,
-                tx_metadata.clone(),
-                chunk_program,
-            )?;
-            register_stage_tx_hashes.push(chunk_tx.hash().to_string());
-            register_plans.push((
-                format!("stage_register_bytes_chunk_{index:03}"),
-                format!("stage-register-bytes-chunk-{index:03}"),
-                chunk_tx,
-            ));
-        }
-        let chunk_sizes = chunks.iter().map(Vec::len).collect::<Vec<_>>();
-        let staged_register_program = build_staged_register_program(&chunk_paths, &chunk_sizes)?;
-        let staged_register_tx = sign_ivm_transaction(
-            &client.chain,
-            &authority,
-            &private_key,
-            transaction_ttl,
-            tx_metadata.clone(),
-            staged_register_program,
-        )?;
-        register_bytes_tx_hash = staged_register_tx.hash();
-        register_bytes_tx_strategy = "staged_state_chunks";
-        register_plans.push((
-            "register_bytes_via_ivm".to_owned(),
-            "register-bytes-via-ivm".to_owned(),
-            staged_register_tx,
-        ));
-    } else {
-        register_bytes_tx_hash = direct_register_bytes_tx.hash();
-        register_bytes_tx_strategy = "direct";
-        register_plans.push((
-            "register_bytes_via_ivm".to_owned(),
-            "register-bytes-via-ivm".to_owned(),
-            direct_register_bytes_tx,
-        ));
-    }
-    let register_manifest_program = build_single_register_program(
-        &RegisterSmartContractCode {
-            manifest: manifest.clone(),
-        },
-        ivm::syscalls::SYSCALL_REGISTER_SMART_CONTRACT_CODE,
-        true,
-    )?;
-    let register_manifest_tx = sign_ivm_transaction(
+    let direct_register_bytes_tx_size = register_bytes_tx.encode_versioned().len();
+    let register_bytes_tx_hash = register_bytes_tx.hash();
+    let register_plans = vec![(
+        "register_bytes".to_owned(),
+        "register-bytes".to_owned(),
+        register_bytes_tx,
+    )];
+    let register_manifest_tx = sign_instruction_transaction(
         &client.chain,
         &authority,
         &private_key,
         transaction_ttl,
-        tx_metadata,
-        register_manifest_program,
+        tx_metadata.clone(),
+        [InstructionBox::from(RegisterSmartContractCode {
+            manifest: manifest.clone(),
+        })],
     )?;
 
     let nonce_key =
@@ -994,11 +965,7 @@ fn main() -> Result<()> {
         &authority,
         &private_key,
         transaction_ttl,
-        instruction_transaction_metadata(
-            args.gas_asset_id.as_deref(),
-            &contract_address,
-            &args.gov_manifest_approvers,
-        )?,
+        tx_metadata,
         activate_instructions,
     )?;
 
@@ -1010,8 +977,8 @@ fn main() -> Result<()> {
         register_plans
     };
     planned_txs.push((
-        "register_manifest_via_ivm".to_owned(),
-        "register-manifest-via-ivm".to_owned(),
+        "register_manifest".to_owned(),
+        "register-manifest".to_owned(),
         register_manifest_tx,
     ));
     planned_txs.push(("activate".to_owned(), "activate".to_owned(), activate_tx));
@@ -1073,11 +1040,11 @@ fn main() -> Result<()> {
         "deploy_nonce": (deploy_nonce),
         "next_deploy_nonce": (next_nonce),
         "code_hash_hex": (code_hash_hex.clone()),
-        "register_bytes_tx_strategy": (register_bytes_tx_strategy),
+        "register_bytes_tx_strategy": ("direct"),
         "direct_register_bytes_tx_size": (direct_register_bytes_tx_size as u64),
-        "register_bytes_via_ivm_tx_hash": (register_bytes_tx_hash),
-        "register_bytes_stage_tx_hashes": (register_stage_tx_hashes),
-        "register_manifest_via_ivm_tx_hash": (register_manifest_tx_hash),
+        "register_bytes_tx_hash": (register_bytes_tx_hash),
+        "register_bytes_stage_tx_hashes": (Vec::<String>::new()),
+        "register_manifest_tx_hash": (register_manifest_tx_hash),
         "activate_tx_hash": (activate_tx_hash),
         "operation_receipt": (operation_receipt),
         "terminal_kind": (if args.emit_only { "Prepared" } else { "Committed" }),

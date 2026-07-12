@@ -33,7 +33,7 @@ fn send_tx_with_different_chain_id() {
         AssetDefinition::numeric(__asset_definition_id.clone())
             .with_name(__asset_definition_id.name().to_string())
     });
-    let register_asset = Mint::asset_numeric(
+    let register_asset = Mint::asset_quantity(
         numeric!(10),
         AssetId::new(asset_definition_id.clone(), sender_id.clone()),
     );
@@ -49,7 +49,7 @@ fn send_tx_with_different_chain_id() {
     let chain_id_1 = ChainId::from("1");
     assert_ne!(chain_id_0, chain_id_1);
 
-    let transfer_instruction = Transfer::asset_numeric(
+    let transfer_instruction = Transfer::asset_quantity(
         AssetId::new(
             AssetDefinitionId::new(
                 DomainId::try_new("wonderland", "universal").unwrap(),

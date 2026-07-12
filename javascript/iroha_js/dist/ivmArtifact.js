@@ -2,9 +2,12 @@ import { sha256 } from "@noble/hashes/sha2";
 
 import { blake2b256 } from "./blake2b.js";
 
-export const IVM_PROGRAM_HEADER_LENGTH = 17;
+export const IVM_PROGRAM_HEADER_LENGTH = 49;
 /** Default ledger limit for one complete deployed IVM artifact. */
 export const IVM_ARTIFACT_MAX_BYTES = 4 * 1024 * 1024;
+const CONTRACT_CODE_HASH_DOMAIN = new TextEncoder().encode(
+  "iroha:ivm:contract-artifact:v1\0",
+);
 
 const arrayBufferByteLengthGetter = Object.getOwnPropertyDescriptor(
   ArrayBuffer.prototype,
@@ -136,8 +139,9 @@ function bytesToHex(bytes) {
 
 /**
  * Compute both identities required by proved deployed-contract submission.
- * `codeHashHex` matches ledger/Core hashing of bytes after the fixed IVM header;
- * `artifactSha256Hex` commits to every header and body byte.
+ * `codeHashHex` matches the current ledger/Core domain-separated hash of the
+ * complete deployable artifact. `artifactSha256Hex` is an independent digest
+ * over the same complete byte image.
  */
 export function computeIvmArtifactHashes(artifact) {
   const bytes = artifactBytes(artifact);
@@ -155,13 +159,12 @@ export function computeIvmArtifactHashes(artifact) {
   ) {
     throw new TypeError("IVM artifact has an invalid program header magic");
   }
-  const byteBuffer = typedArrayBufferGetter.call(bytes);
-  const codeBytes = new Uint8ArrayIntrinsic(
-    byteBuffer,
-    IVM_PROGRAM_HEADER_LENGTH,
-    byteLength - IVM_PROGRAM_HEADER_LENGTH,
+  const codeHashInput = new Uint8ArrayIntrinsic(
+    CONTRACT_CODE_HASH_DOMAIN.length + byteLength,
   );
-  const rawCodeHash = blake2b256(codeBytes);
+  Reflect.apply(typedArraySet, codeHashInput, [CONTRACT_CODE_HASH_DOMAIN]);
+  Reflect.apply(typedArraySet, codeHashInput, [bytes, CONTRACT_CODE_HASH_DOMAIN.length]);
+  const rawCodeHash = blake2b256(codeHashInput);
   const codeHash = copyArrayBufferBytes(
     typedArrayBufferGetter.call(rawCodeHash),
     typedArrayByteOffsetGetter.call(rawCodeHash),

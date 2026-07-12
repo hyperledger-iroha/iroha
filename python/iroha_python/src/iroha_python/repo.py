@@ -6,16 +6,26 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Dict, Mapping, Optional, Union
 
+from .numeric_v1 import KotodamaQuantity, NumericV1Codec
+
 if TYPE_CHECKING:  # pragma: no cover - typing only
-    from .tx import NumericLike
+    from .tx import QuantityLike
 else:
-    NumericLike = Union[str, int, float, Decimal]
+    QuantityLike = Union[KotodamaQuantity, str, int, Decimal]
 
 
-def _normalize_quantity(value: NumericLike) -> str:
+def _normalize_quantity(value: QuantityLike) -> str:
     from .tx import _normalize_quantity as _tx_normalize_quantity
 
     return _tx_normalize_quantity(value)
+
+
+def _decode_quantity(value: Any, context: str) -> str:
+    if type(value) is not str:
+        raise TypeError(f"{context} must be a canonical JSON string")
+    if len(value) > 155:
+        raise ValueError(f"{context} exceeds the canonical V1 text bound")
+    return str(NumericV1Codec.decode_quantity_json(value))
 
 
 def _normalize_metadata(metadata: Optional[Mapping[str, Any]]) -> Optional[Mapping[str, Any]]:
@@ -100,7 +110,7 @@ class RepoCashLeg:
     """Cash consideration exchanged during repo initiation and unwind."""
 
     asset_definition_id: str
-    quantity: NumericLike
+    quantity: QuantityLike
     metadata: Optional[Mapping[str, Any]] = None
 
     def to_payload(self) -> Mapping[str, Any]:
@@ -118,7 +128,7 @@ class RepoCollateralLeg:
     """Collateral pledged for the repo lifecycle."""
 
     asset_definition_id: str
-    quantity: NumericLike
+    quantity: QuantityLike
     metadata: Optional[Mapping[str, Any]] = None
 
     def to_payload(self) -> Mapping[str, Any]:
@@ -180,11 +190,21 @@ class RepoAgreementRecord:
         cash_payload = require("cash_leg")
         collateral_payload = require("collateral_leg")
         governance_payload = require("governance")
+        if not isinstance(cash_payload, Mapping):
+            raise TypeError("repo cash_leg must be an object")
+        if not isinstance(collateral_payload, Mapping):
+            raise TypeError("repo collateral_leg must be an object")
+        if not isinstance(governance_payload, Mapping):
+            raise TypeError("repo governance must be an object")
+        if "quantity" not in cash_payload:
+            raise KeyError("repo cash_leg payload missing `quantity` field")
+        if "quantity" not in collateral_payload:
+            raise KeyError("repo collateral_leg payload missing `quantity` field")
         cash_leg = RepoCashLeg(
             asset_definition_id=_require_non_empty_string(
                 cash_payload.get("asset_definition_id"), "repo cash_leg.asset_definition_id"
             ),
-            quantity=_normalize_quantity(cash_payload.get("quantity", 0)),
+            quantity=_decode_quantity(cash_payload["quantity"], "repo cash_leg.quantity"),
             metadata=_normalize_metadata(cash_payload.get("metadata")),
         )
         collateral_meta = collateral_payload.get("metadata")
@@ -192,7 +212,10 @@ class RepoAgreementRecord:
             asset_definition_id=_require_non_empty_string(
                 collateral_payload.get("asset_definition_id"), "repo collateral_leg.asset_definition_id"
             ),
-            quantity=_normalize_quantity(collateral_payload.get("quantity", 0)),
+            quantity=_decode_quantity(
+                collateral_payload["quantity"],
+                "repo collateral_leg.quantity",
+            ),
             metadata=_normalize_metadata(collateral_meta),
         )
         governance = RepoGovernance(

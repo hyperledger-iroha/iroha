@@ -216,11 +216,7 @@ impl<T: Write> RunArgs<T> for LocalnetWizardArgs {
             extra_accounts,
             assets,
             block_time_ms: None,
-            commit_time_ms: None,
-            redundant_send_r: None,
             consensus_mode,
-            next_consensus_mode: None,
-            mode_activation_height: None,
         };
 
         tui::status("Generating localnet (interactive)");

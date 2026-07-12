@@ -3500,7 +3500,7 @@ mod tests {
                 domain: hbl_domain.clone(),
             }),
         );
-        Mint::asset_numeric(
+        Mint::asset_quantity(
             1_000_u64,
             AssetId::of(payment_asset_definition_id.clone(), multisig_id.clone()),
         )

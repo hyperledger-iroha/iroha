@@ -223,10 +223,13 @@ impl KagemushaTopUpFinalityVerifier {
         if expected_anchor.asset_scale != manifest.asset_scale {
             return Err(KagemushaTopUpFinalityVerifyError::ScaleMismatch);
         }
-        if expected_anchor.artifact_generation != manifest.generation
+        if expected_anchor.artifact_binding.generation != manifest.generation
             || roster_artifact.artifact_generation != manifest.generation
         {
             return Err(KagemushaTopUpFinalityVerifyError::ArtifactGenerationMismatch);
+        }
+        if expected_anchor.artifact_binding.manifest_sha256 != expected_manifest_sha256 {
+            return Err(KagemushaTopUpFinalityVerifyError::ManifestDigestMismatch);
         }
         if expected_anchor.finalized_height != context.height
             || context.height != certificate.round.height
@@ -471,7 +474,7 @@ mod tests {
         offline::{
             KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V3,
             KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_VERSION_V3,
-            KAGEMUSHA_RECURSIVE_SPEND_MODE_V2, KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3,
+            KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3,
             KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1,
             KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_IPA_K_V1,
             KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V1,
@@ -490,11 +493,12 @@ mod tests {
             KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_VERSION_V2,
             KAGEMUSHA_TOPUP_FINALITY_ROSTER_FILE_NAME_V2, KagemushaPastaCycleArtifactKindV3,
             KagemushaPastaCycleArtifactV3, KagemushaPastaCycleParityV1,
-            KagemushaPastaCycleProofProfileV1, KagemushaRecursiveSpendArtifactManifestV3,
-            KagemushaRecursiveSpendTopUpAnchorV2, KagemushaScaledAmountV2,
-            KagemushaSpendableNoteDescriptorV2, KagemushaTopUpAnchorMerkleProofV2,
-            KagemushaTopUpFinalityCompactQcV2, KagemushaTopUpFinalityHeightContextV2,
-            KagemushaTopUpFinalityProofV2, KagemushaTopUpFinalityRosterArtifactReferenceV2,
+            KagemushaPastaCycleProofProfileV1, KagemushaRecursiveSpendArtifactBindingV3,
+            KagemushaRecursiveSpendArtifactManifestV3, KagemushaRecursiveSpendTopUpAnchorV2,
+            KagemushaScaledAmountV2, KagemushaSpendableNoteDescriptorV2,
+            KagemushaTopUpAnchorMerkleProofV2, KagemushaTopUpFinalityCompactQcV2,
+            KagemushaTopUpFinalityHeightContextV2, KagemushaTopUpFinalityProofV2,
+            KagemushaTopUpFinalityRosterArtifactReferenceV2,
             KagemushaTopUpFinalityRosterArtifactV2, KagemushaTopUpFinalityRosterWindowV2,
         },
         peer::PeerId,
@@ -590,6 +594,73 @@ mod tests {
             KeyPair::try_from_seed(vec![0x51; 32], Algorithm::Ed25519).expect("payer key");
         let payer = AccountId::new(payer_key.public_key().clone());
         let height = 42;
+        let window = KagemushaTopUpFinalityRosterWindowV2 {
+            activates_at_height: 1,
+            withdraws_at_height: 100,
+            consensus_mode: ConsensusMode::Permissioned,
+            validator_set: validator_set.clone(),
+            validator_set_pops: fixed_pops.clone(),
+        };
+        let roster = KagemushaTopUpFinalityRosterArtifactV2 {
+            version: KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_VERSION_V2,
+            chain_id: chain_id.clone(),
+            artifact_generation: "release-generation-1".to_owned(),
+            windows: vec![window],
+        };
+        let roster_bytes = norito::to_bytes(&roster).expect("roster bytes");
+        let roster_digest = Sha256::digest(&roster_bytes).into();
+        let manifest = KagemushaRecursiveSpendArtifactManifestV3 {
+            schema: KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V3.to_owned(),
+            version: KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_VERSION_V3,
+            bridge_abi_version: KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3,
+            proof_backend: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1.to_owned(),
+            transcript_profile: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V1.to_owned(),
+            generation: "release-generation-1".to_owned(),
+            source_commit: "0123456789abcdef0123456789abcdef01234567".to_owned(),
+            chain_id: chain_id.clone(),
+            asset: asset.clone(),
+            asset_scale: 2,
+            activation_height: 1,
+            withdrawal_height: 100,
+            max_proof_bytes: KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROOF_BYTES_V3,
+            profiles: vec![
+                profile(
+                    KagemushaPastaCycleParityV1::TransitionEq,
+                    KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_EQ_CIRCUIT_ID_V1,
+                    [
+                        KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PARAMETERS_FILE_NAME_V3,
+                        KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROVING_KEY_FILE_NAME_V3,
+                        KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_VERIFYING_KEY_FILE_NAME_V3,
+                    ],
+                    0x20,
+                ),
+                profile(
+                    KagemushaPastaCycleParityV1::StateEp,
+                    KAGEMUSHA_RECURSIVE_SPEND_STATE_EP_CIRCUIT_ID_V1,
+                    [
+                        KAGEMUSHA_RECURSIVE_SPEND_STATE_PARAMETERS_FILE_NAME_V3,
+                        KAGEMUSHA_RECURSIVE_SPEND_STATE_PROVING_KEY_FILE_NAME_V3,
+                        KAGEMUSHA_RECURSIVE_SPEND_STATE_VERIFYING_KEY_FILE_NAME_V3,
+                    ],
+                    0x30,
+                ),
+            ],
+            topup_finality_roster_artifact: KagemushaTopUpFinalityRosterArtifactReferenceV2 {
+                file_name: KAGEMUSHA_TOPUP_FINALITY_ROSTER_FILE_NAME_V2.to_owned(),
+                size_bytes: u64::try_from(roster_bytes.len()).expect("roster size"),
+                sha256: roster_digest,
+                artifact_generation: "release-generation-1".to_owned(),
+                circuit_id: KAGEMUSHA_TOPUP_FINALITY_CIRCUIT_ID_V2.to_owned(),
+                purpose: KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_PURPOSE_V2.to_owned(),
+                artifact_type: KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_TYPE_V2.to_owned(),
+                required_bridge_abi_version: KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3,
+            },
+            benchmark_evidence_sha256: [0x71; 32],
+            cryptographic_review_sha256: [0x72; 32],
+            release_attestation_sha256: [0x73; 32],
+        };
+        manifest.validate().expect("manifest");
+        let manifest_digest = canonical_sha256(&manifest).expect("manifest digest");
         let operation_id = [0xA5; 32];
         let note = KagemushaSpendableNoteDescriptorV2 {
             chain_id: chain_id.clone(),
@@ -612,7 +683,10 @@ mod tests {
             topup_operation_id: operation_id,
             shield_verifier_id: VerifyingKeyId::new("halo2/ipa", "topup-shield-v2"),
             shield_verifier_commitment: [0x14; 32],
-            artifact_generation: "release-generation-1".to_owned(),
+            artifact_binding: KagemushaRecursiveSpendArtifactBindingV3 {
+                generation: manifest.generation.clone(),
+                manifest_sha256: manifest_digest,
+            },
             finalized_height: height,
             finalized_tx_hash: [0x15; 32],
             anchor_digest: [0; 32],
@@ -761,74 +835,6 @@ mod tests {
                     .collect(),
             },
         };
-        let window = KagemushaTopUpFinalityRosterWindowV2 {
-            activates_at_height: 1,
-            withdraws_at_height: 100,
-            consensus_mode: ConsensusMode::Permissioned,
-            validator_set,
-            validator_set_pops: fixed_pops,
-        };
-        let roster = KagemushaTopUpFinalityRosterArtifactV2 {
-            version: KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_VERSION_V2,
-            chain_id: chain_id.clone(),
-            artifact_generation: "release-generation-1".to_owned(),
-            windows: vec![window],
-        };
-        let roster_bytes = norito::to_bytes(&roster).expect("roster bytes");
-        let roster_digest = Sha256::digest(&roster_bytes).into();
-        let manifest = KagemushaRecursiveSpendArtifactManifestV3 {
-            schema: KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V3.to_owned(),
-            version: KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_VERSION_V3,
-            bridge_abi_version: KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3,
-            mode: KAGEMUSHA_RECURSIVE_SPEND_MODE_V2.to_owned(),
-            proof_backend: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1.to_owned(),
-            transcript_profile: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V1.to_owned(),
-            generation: "release-generation-1".to_owned(),
-            source_commit: "0123456789abcdef0123456789abcdef01234567".to_owned(),
-            chain_id,
-            asset,
-            asset_scale: 2,
-            activation_height: 1,
-            withdrawal_height: 100,
-            max_proof_bytes: KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROOF_BYTES_V3,
-            profiles: vec![
-                profile(
-                    KagemushaPastaCycleParityV1::TransitionEq,
-                    KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_EQ_CIRCUIT_ID_V1,
-                    [
-                        KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PARAMETERS_FILE_NAME_V3,
-                        KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROVING_KEY_FILE_NAME_V3,
-                        KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_VERIFYING_KEY_FILE_NAME_V3,
-                    ],
-                    0x20,
-                ),
-                profile(
-                    KagemushaPastaCycleParityV1::StateEp,
-                    KAGEMUSHA_RECURSIVE_SPEND_STATE_EP_CIRCUIT_ID_V1,
-                    [
-                        KAGEMUSHA_RECURSIVE_SPEND_STATE_PARAMETERS_FILE_NAME_V3,
-                        KAGEMUSHA_RECURSIVE_SPEND_STATE_PROVING_KEY_FILE_NAME_V3,
-                        KAGEMUSHA_RECURSIVE_SPEND_STATE_VERIFYING_KEY_FILE_NAME_V3,
-                    ],
-                    0x30,
-                ),
-            ],
-            topup_finality_roster_artifact: KagemushaTopUpFinalityRosterArtifactReferenceV2 {
-                file_name: KAGEMUSHA_TOPUP_FINALITY_ROSTER_FILE_NAME_V2.to_owned(),
-                size_bytes: u64::try_from(roster_bytes.len()).expect("roster size"),
-                sha256: roster_digest,
-                artifact_generation: "release-generation-1".to_owned(),
-                circuit_id: KAGEMUSHA_TOPUP_FINALITY_CIRCUIT_ID_V2.to_owned(),
-                purpose: KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_PURPOSE_V2.to_owned(),
-                artifact_type: KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_TYPE_V2.to_owned(),
-                required_bridge_abi_version: KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3,
-            },
-            benchmark_evidence_sha256: [0x71; 32],
-            cryptographic_review_sha256: [0x72; 32],
-            release_attestation_sha256: [0x73; 32],
-        };
-        manifest.validate().expect("manifest");
-        let manifest_digest = canonical_sha256(&manifest).expect("manifest digest");
         Fixture {
             proof,
             roster,
@@ -1047,7 +1053,7 @@ mod tests {
         );
 
         let mut anchor = fixture.anchor.clone();
-        anchor.artifact_generation = "other-generation".to_owned();
+        anchor.artifact_binding.generation = "other-generation".to_owned();
         anchor = anchor
             .finalize_digest()
             .expect("alternate generation anchor");
@@ -1064,6 +1070,26 @@ mod tests {
                 )
                 .unwrap_err(),
             KagemushaTopUpFinalityVerifyError::ArtifactGenerationMismatch
+        );
+
+        let mut anchor = fixture.anchor.clone();
+        anchor.artifact_binding.manifest_sha256[0] ^= 1;
+        anchor = anchor
+            .finalize_digest()
+            .expect("alternate manifest-bound anchor");
+        let mut proof = fixture.proof.clone();
+        proof.anchor = anchor.compact_ref().unwrap();
+        assert_eq!(
+            verifier
+                .verify(
+                    &proof,
+                    &fixture.roster,
+                    &anchor,
+                    &fixture.manifest,
+                    fixture.manifest_digest,
+                )
+                .unwrap_err(),
+            KagemushaTopUpFinalityVerifyError::ManifestDigestMismatch
         );
 
         let mut anchor = fixture.anchor.clone();

@@ -5,7 +5,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Hyperledger.Iroha.Crypto;
 using Hyperledger.Iroha.Norito;
-using Hyperledger.Iroha.Offline;
+using Hyperledger.Iroha.Numeric;
 using Hyperledger.Iroha.Transactions;
 
 namespace Hyperledger.Iroha.Sdk.Tests;
@@ -42,7 +42,7 @@ public sealed class TransactionBuilderTests
         Assert.Throws<ArgumentException>(() => context.EncodeAccountId($" {FixtureAccountId}"));
         Assert.Throws<ArgumentException>(() => context.EncodeName(" display_name"));
         Assert.Throws<ArgumentException>(() => context.EncodeOptionalString(" memo "));
-        Assert.Throws<ArgumentException>(() => context.EncodeNumeric(" 15.7500"));
+        Assert.Throws<ArgumentNullException>(() => context.EncodeQuantity(null!));
         Assert.Throws<ArgumentException>(() => context.EncodeAssetDefinitionId(" 62Fk4FPcMuLvW5QjDGNF2a4jAmjM"));
         Assert.Throws<ArgumentException>(() => context.EncodeNftId(" dragon$wonderland"));
         Assert.Throws<ArgumentException>(() => context.EncodeHashLiteral(" " + new string('a', 64)));
@@ -51,9 +51,9 @@ public sealed class TransactionBuilderTests
     private const string FixtureAssetDefinitionId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
 
     [Theory]
-    [InlineData("swift_transfer_asset_basic", 761, 1379, "670e42748e47402ec28a9090befd3bcbe0a2e82ef362405a0c237daac3111d65")]
-    [InlineData("swift_mint_asset_basic", 651, 1269, "83de89f2a66af6f3c33658c26aa66d1c88f6903c0e278f11b4bd0b7f4db3d287")]
-    [InlineData("swift_burn_asset_basic", 651, 1269, "fe23070b7c9a3ca13a624d4d9ff7f90c046626e62a07dea68c5137d2104faba7")]
+    [InlineData("swift_transfer_asset_basic", 760, 1378, "6b53feec300853b8b83254701fb64a0c14b3bcf423fb5adcfdca116dd7f94855")]
+    [InlineData("swift_mint_asset_basic", 650, 1268, "63be57674418ffa41d3e3d44b4f00ad7a9082c19f62237552ab1ad55c435ea53")]
+    [InlineData("swift_burn_asset_basic", 650, 1268, "dba14577aa2f4ce40232e50c6ca4eb9ff54a5ee59331754d554c881b7b3bc423")]
     public void BuildSignedProducesDeterministicGoldenOutputs(
         string fixtureName,
         int expectedPayloadLength,
@@ -315,48 +315,47 @@ public sealed class TransactionBuilderTests
     }
 
     [Theory]
-    [InlineData("0")]
     [InlineData("0.0")]
     [InlineData("0.0000")]
     [InlineData("-1")]
     [InlineData("-1.25")]
-    public void AssetQuantityInstructionsRejectNonPositiveValuesBeforeSigning(string quantity)
+    public void AssetQuantityInstructionsRejectNoncanonicalOrNegativeValuesBeforeSigning(string quantity)
     {
         var builder = NewTransactionBuilder();
 
-        Assert.Throws<ArgumentOutOfRangeException>(() =>
+        Assert.Throws<ArgumentException>(() =>
         {
             builder.TransferAsset(FixtureAssetDefinitionId, quantity, FixtureAccountId);
         });
-        Assert.Throws<ArgumentOutOfRangeException>(() =>
+        Assert.Throws<ArgumentException>(() =>
         {
             builder.MintAsset(FixtureAssetDefinitionId, quantity, FixtureAccountId);
         });
-        Assert.Throws<ArgumentOutOfRangeException>(() =>
+        Assert.Throws<ArgumentException>(() =>
         {
             builder.BurnAsset(FixtureAssetDefinitionId, quantity, FixtureAccountId);
         });
-        Assert.Throws<ArgumentOutOfRangeException>(() =>
+        Assert.Throws<ArgumentException>(() =>
         {
             TransactionInstruction.TransferAsset(FixtureAssetDefinitionId, quantity, FixtureAccountId);
         });
-        Assert.Throws<ArgumentOutOfRangeException>(() =>
+        Assert.Throws<ArgumentException>(() =>
         {
             TransactionInstruction.MintAsset(FixtureAssetDefinitionId, quantity, FixtureAccountId);
         });
-        Assert.Throws<ArgumentOutOfRangeException>(() =>
+        Assert.Throws<ArgumentException>(() =>
         {
             TransactionInstruction.BurnAsset(FixtureAssetDefinitionId, quantity, FixtureAccountId);
         });
-        Assert.Throws<ArgumentOutOfRangeException>(() =>
+        Assert.Throws<ArgumentException>(() =>
         {
             _ = new TransferAssetInstruction(FixtureAssetDefinitionId, quantity, FixtureAccountId);
         });
-        Assert.Throws<ArgumentOutOfRangeException>(() =>
+        Assert.Throws<ArgumentException>(() =>
         {
             _ = new MintAssetInstruction(FixtureAssetDefinitionId, quantity, FixtureAccountId);
         });
-        Assert.Throws<ArgumentOutOfRangeException>(() =>
+        Assert.Throws<ArgumentException>(() =>
         {
             _ = new BurnAssetInstruction(FixtureAssetDefinitionId, quantity, FixtureAccountId);
         });
@@ -364,9 +363,9 @@ public sealed class TransactionBuilderTests
         var transfer = TransactionInstruction.TransferAsset(FixtureAssetDefinitionId, "1", FixtureAccountId);
         var mint = TransactionInstruction.MintAsset(FixtureAssetDefinitionId, "1", FixtureAccountId);
         var burn = TransactionInstruction.BurnAsset(FixtureAssetDefinitionId, "1", FixtureAccountId);
-        Assert.Throws<ArgumentOutOfRangeException>(() => transfer with { Quantity = quantity });
-        Assert.Throws<ArgumentOutOfRangeException>(() => mint with { Quantity = quantity });
-        Assert.Throws<ArgumentOutOfRangeException>(() => burn with { Quantity = quantity });
+        Assert.Throws<ArgumentException>(() => transfer with { Quantity = quantity });
+        Assert.Throws<ArgumentException>(() => mint with { Quantity = quantity });
+        Assert.Throws<ArgumentException>(() => burn with { Quantity = quantity });
         Assert.Empty(builder.Instructions);
     }
 
@@ -552,24 +551,21 @@ public sealed class TransactionBuilderTests
     [InlineData("1 0")]
     [InlineData("1.\u00A00")]
     [InlineData("1\u0000")]
-    public void TransactionEncodingContextRejectsNonExactNumerics(string numeric)
+    public void CanonicalQuantityParserRejectsNonExactNumerics(string numeric)
     {
-        var context = new TransactionEncodingContext(FixtureAccountId);
-
-        Assert.Throws<ArgumentException>(() => context.EncodeNumeric(numeric));
+        Assert.Throws<NumericV1.NumericException>(() => NumericV1.QuantityValue.ParseCanonical(numeric));
     }
 
     [Theory]
     [InlineData("0")]
-    [InlineData("0.0")]
     [InlineData("1")]
-    [InlineData("1.2300")]
-    [InlineData("-1.25")]
-    public void TransactionEncodingContextAcceptsCanonicalNumerics(string numeric)
+    [InlineData("1.23")]
+    [InlineData("0.0000000000000000000000000001")]
+    public void TransactionEncodingContextAcceptsCanonicalQuantities(string numeric)
     {
         var context = new TransactionEncodingContext(FixtureAccountId);
 
-        Assert.NotEmpty(context.EncodeNumeric(numeric));
+        Assert.NotEmpty(context.EncodeQuantity(NumericV1.QuantityValue.ParseCanonical(numeric)));
     }
 
     [Theory]
@@ -710,7 +706,7 @@ public sealed class TransactionBuilderTests
     public async Task LedgerClientSubmitAndWaitPollsUntilTerminalState()
     {
         var transaction = new TransactionBuilder("00000042", "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53")
-            .TransferAsset("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", "15.7500", "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53")
+            .TransferAsset("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", "15.75", "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53")
             .SetCreationTimeMilliseconds(1736000000000)
             .SetTimeToLiveMilliseconds(3500)
             .SetNonce(17)
@@ -973,478 +969,6 @@ public sealed class TransactionBuilderTests
             instruction => Assert.IsType<MintTriggerRepetitionsInstruction>(instruction),
             instruction => Assert.IsType<BurnTriggerRepetitionsInstruction>(instruction),
             instruction => Assert.IsType<ExecuteTriggerInstruction>(instruction));
-    }
-
-    [Fact]
-    public void AddInstructionAcceptsKagemushaInstructionArchiveFactories()
-    {
-        var redeemArchive = KagemushaArchive(
-            KagemushaInstructionType.RedeemRecursive,
-            new byte[] { 1, 2, 3 });
-        var transferArchive = KagemushaArchive(
-            KagemushaInstructionType.Transfer,
-            new byte[] { 4, 5, 6 });
-
-        var builder = new TransactionBuilder(
-                "00000042",
-                "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53")
-            .AddInstruction(TransactionInstruction.KagemushaInstructionArchive(
-                KagemushaInstructionType.Transfer,
-                transferArchive))
-            .KagemushaRecursiveTopUp(new KagemushaRecursiveSpendTopUpInstructionArchive(transferArchive))
-            .KagemushaRecursiveRedeem(new KagemushaRecursiveSpendRedeemInstructionArchive(redeemArchive));
-
-        Assert.Collection(
-            builder.Instructions,
-            instruction =>
-            {
-                var kagemusha = Assert.IsType<KagemushaInstructionArchiveInstruction>(instruction);
-                Assert.Equal(KagemushaInstructionType.Transfer, kagemusha.InstructionType);
-            },
-            instruction =>
-            {
-                var kagemusha = Assert.IsType<KagemushaInstructionArchiveInstruction>(instruction);
-                Assert.Equal(KagemushaInstructionType.Transfer, kagemusha.InstructionType);
-                Assert.Equal(transferArchive, kagemusha.InstructionArchive);
-            },
-            instruction =>
-            {
-                var kagemusha = Assert.IsType<KagemushaInstructionArchiveInstruction>(instruction);
-                Assert.Equal(KagemushaInstructionType.RedeemRecursive, kagemusha.InstructionType);
-            });
-    }
-
-    [Fact]
-    public void KagemushaRecursiveRedeemMetadataOverloadRejectsInvalidChangeOutputBeforeNativeBridge()
-    {
-        var builder = NewTransactionBuilder();
-        var malformedRequestArchive = new byte[] { 0xde, 0xad, 0xbe, 0xef };
-
-        AssertArgumentDiagnostic(
-            "changeOutput is required when publicAmount is less than current note amount",
-            "hasChangeOutput",
-            () => builder.KagemushaRecursiveRedeem(
-                malformedRequestArchive,
-                publicAmount: "40",
-                currentNoteAmount: "100",
-                hasChangeOutput: false));
-        Assert.Empty(builder.Instructions);
-
-        AssertArgumentDiagnostic(
-            "publicAmount must be less than current note amount when changeOutput is present",
-            "publicAmount",
-            () => builder.KagemushaRecursiveRedeem(
-                malformedRequestArchive,
-                publicAmount: "100",
-                currentNoteAmount: "100",
-                hasChangeOutput: true));
-        Assert.Empty(builder.Instructions);
-
-        AssertArgumentDiagnostic(
-            "publicAmount must not exceed current note amount",
-            "publicAmount",
-            () => builder.KagemushaRecursiveRedeem(
-                malformedRequestArchive,
-                publicAmount: "101",
-                currentNoteAmount: "100",
-                hasChangeOutput: false));
-        Assert.Empty(builder.Instructions);
-
-        var shortChangeOutput = new byte[31];
-        Array.Fill(shortChangeOutput, (byte)0x01);
-        AssertArgumentDiagnostic(
-            "changeOutput must be exactly 32 bytes",
-            "changeOutput",
-            () => builder.KagemushaRecursiveRedeem(
-                malformedRequestArchive,
-                publicAmount: "40",
-                currentNoteAmount: "100",
-                changeOutput: shortChangeOutput));
-        Assert.Empty(builder.Instructions);
-
-        var zeroChangeOutput = new byte[32];
-        AssertArgumentDiagnostic(
-            "changeOutput must be non-zero",
-            "changeOutput",
-            () => builder.KagemushaRecursiveRedeem(
-                malformedRequestArchive,
-                publicAmount: "40",
-                currentNoteAmount: "100",
-                changeOutput: zeroChangeOutput));
-        Assert.Empty(builder.Instructions);
-    }
-
-    [Theory]
-    [InlineData(" 40", "100", "publicAmount")]
-    [InlineData("40 ", "100", "publicAmount")]
-    [InlineData("+40", "100", "publicAmount")]
-    [InlineData("-40", "100", "publicAmount")]
-    [InlineData("40.0", "100", "publicAmount")]
-    [InlineData("40", " 100", "currentNoteAmount")]
-    [InlineData("40", "100 ", "currentNoteAmount")]
-    [InlineData("40", "+100", "currentNoteAmount")]
-    [InlineData("40", "-100", "currentNoteAmount")]
-    [InlineData("40", "100.0", "currentNoteAmount")]
-    public void KagemushaRecursiveRedeemMetadataOverloadRejectsMalformedAmountsBeforeNativeBridge(
-        string publicAmount,
-        string currentNoteAmount,
-        string expectedParamName)
-    {
-        var builder = NewTransactionBuilder();
-        var malformedRequestArchive = new byte[] { 0xde, 0xad, 0xbe, 0xef };
-
-        AssertArgumentDiagnostic(
-            $"{expectedParamName} must be a decimal integer",
-            expectedParamName,
-            () => builder.KagemushaRecursiveRedeem(
-                malformedRequestArchive,
-                publicAmount,
-                currentNoteAmount,
-                hasChangeOutput: true));
-        Assert.Empty(builder.Instructions);
-    }
-
-    [Fact]
-    public void KagemushaRecursiveRedeemMetadataOverloadRejectsInvalidLineageBeforeNativeBridge()
-    {
-        var builder = NewTransactionBuilder();
-        var malformedRequestArchive = new byte[] { 0xde, 0xad, 0xbe, 0xef };
-
-        AssertArgumentDiagnostic(
-            "lineageWitness is required for this bundle",
-            "hasLineageWitness",
-            () => builder.KagemushaRecursiveRedeem(
-                malformedRequestArchive,
-                KagemushaRecursiveSpendNative.RecursiveAggregationProofCircuitIdV1,
-                hopCount: 1u,
-                hasLineageWitness: false,
-                hasLineageVerifierRecord: false));
-        Assert.Empty(builder.Instructions);
-
-        AssertArgumentDiagnostic(
-            "lineageVerifierRecord is required for reserved-lineage bundles",
-            "hasLineageVerifierRecord",
-            () => builder.KagemushaRecursiveRedeem(
-                malformedRequestArchive,
-                KagemushaRecursiveSpendNative.RecursiveSpendLineageAppendProofCircuitIdV1,
-                hopCount: 1u,
-                hasLineageWitness: true,
-                hasLineageVerifierRecord: false));
-        Assert.Empty(builder.Instructions);
-
-        AssertArgumentDiagnostic(
-            "lineageVerifierRecord is required for reserved-lineage bundles",
-            "lineageVerifierRecordCount",
-            () => builder.KagemushaRecursiveRedeem(
-                malformedRequestArchive,
-                KagemushaRecursiveSpendNative.RecursiveSpendLineageAppendProofCircuitIdV1,
-                hopCount: 1u,
-                hasLineageWitness: true,
-                hasLineageVerifierRecord: false,
-                lineageVerifierRecordCount: 0));
-        Assert.Empty(builder.Instructions);
-
-        AssertArgumentDiagnostic(
-            "lineageVerifierRecords count must be non-negative",
-            "lineageVerifierRecordCount",
-            () => builder.KagemushaRecursiveRedeem(
-                malformedRequestArchive,
-                KagemushaRecursiveSpendNative.RecursiveSpendLineageAppendProofCircuitIdV1,
-                hopCount: 1u,
-                hasLineageWitness: true,
-                hasLineageVerifierRecord: false,
-                lineageVerifierRecordCount: -1));
-        Assert.Empty(builder.Instructions);
-    }
-
-    [Fact]
-    public void KagemushaRecursiveRedeemMetadataOverloadRejectsLineageAndAmountDriftBeforeNativeBridge()
-    {
-        var builder = NewTransactionBuilder();
-        var malformedRequestArchive = new byte[] { 0xde, 0xad, 0xbe, 0xef };
-
-        AssertArgumentDiagnostic(
-            "lineageWitness is required for this bundle",
-            "hasLineageWitness",
-            () => builder.KagemushaRecursiveRedeem(
-                malformedRequestArchive,
-                KagemushaRecursiveSpendNative.RecursiveAggregationProofCircuitIdV1,
-                hopCount: 1u,
-                hasLineageWitness: false,
-                hasLineageVerifierRecord: true,
-                publicAmount: "100",
-                currentNoteAmount: "100",
-                hasChangeOutput: false));
-        Assert.Empty(builder.Instructions);
-
-        AssertArgumentDiagnostic(
-            "changeOutput is required when publicAmount is less than current note amount",
-            "hasChangeOutput",
-            () => builder.KagemushaRecursiveRedeem(
-                malformedRequestArchive,
-                KagemushaRecursiveSpendNative.RecursiveAggregationProofCircuitIdV1,
-                hopCount: 1u,
-                hasLineageWitness: true,
-                hasLineageVerifierRecord: false,
-                publicAmount: "40",
-                currentNoteAmount: "100",
-                hasChangeOutput: false));
-        Assert.Empty(builder.Instructions);
-    }
-
-    [Fact]
-    public void KagemushaRecursiveRedeemMetadataOverloadsAllowValidRelationshipsBeforeNativeRequestValidation()
-    {
-        var builder = NewTransactionBuilder();
-        var malformedRequestArchive = new byte[] { 0xde, 0xad, 0xbe, 0xef };
-
-        AssertArgumentDiagnostic(
-            "Request archive must be a valid Norito archive.",
-            "requestArchive",
-            () => builder.KagemushaRecursiveRedeem(
-                malformedRequestArchive,
-                publicAmount: "100",
-                currentNoteAmount: "100",
-                hasChangeOutput: false));
-        Assert.Empty(builder.Instructions);
-
-        AssertArgumentDiagnostic(
-            "Request archive must be a valid Norito archive.",
-            "requestArchive",
-            () => builder.KagemushaRecursiveRedeem(
-                malformedRequestArchive,
-                publicAmount: "40",
-                currentNoteAmount: "100",
-                hasChangeOutput: true));
-        Assert.Empty(builder.Instructions);
-
-        var validChangeOutput = new byte[32];
-        Array.Fill(validChangeOutput, (byte)0x42);
-        AssertArgumentDiagnostic(
-            "Request archive must be a valid Norito archive.",
-            "requestArchive",
-            () => builder.KagemushaRecursiveRedeem(
-                malformedRequestArchive,
-                publicAmount: "40",
-                currentNoteAmount: "100",
-                changeOutput: validChangeOutput));
-        Assert.Empty(builder.Instructions);
-
-        AssertArgumentDiagnostic(
-            "Request archive must be a valid Norito archive.",
-            "requestArchive",
-            () => builder.KagemushaRecursiveRedeem(
-                malformedRequestArchive,
-                KagemushaRecursiveSpendNative.RecursiveAggregationProofCircuitIdV1,
-                hopCount: 1u,
-                hasLineageWitness: true,
-                hasLineageVerifierRecord: false));
-        Assert.Empty(builder.Instructions);
-
-        AssertArgumentDiagnostic(
-            "Request archive must be a valid Norito archive.",
-            "requestArchive",
-            () => builder.KagemushaRecursiveRedeem(
-                malformedRequestArchive,
-                KagemushaRecursiveSpendNative.RecursiveSpendLineageAppendProofCircuitIdV1,
-                hopCount: 2u,
-                hasLineageWitness: true,
-                hasLineageVerifierRecord: false,
-                lineageVerifierRecordCount: 2));
-        Assert.Empty(builder.Instructions);
-
-        AssertArgumentDiagnostic(
-            "Request archive must be a valid Norito archive.",
-            "requestArchive",
-            () => builder.KagemushaRecursiveRedeem(
-                malformedRequestArchive,
-                KagemushaRecursiveSpendNative.RecursiveAggregationProofCircuitIdV1,
-                hopCount: 1u,
-                hasLineageWitness: true,
-                hasLineageVerifierRecord: false,
-                publicAmount: "40",
-                currentNoteAmount: "100",
-                hasChangeOutput: true));
-        Assert.Empty(builder.Instructions);
-
-        AssertArgumentDiagnostic(
-            "Request archive must be a valid Norito archive.",
-            "requestArchive",
-            () => builder.KagemushaRecursiveRedeem(
-                malformedRequestArchive,
-                KagemushaRecursiveSpendNative.RecursiveAggregationProofCircuitIdV1,
-                hopCount: 1u,
-                hasLineageWitness: true,
-                hasLineageVerifierRecord: false,
-                publicAmount: "40",
-                currentNoteAmount: "100",
-                changeOutput: validChangeOutput));
-        Assert.Empty(builder.Instructions);
-
-        AssertArgumentDiagnostic(
-            "Request archive must be a valid Norito archive.",
-            "requestArchive",
-            () => builder.KagemushaRecursiveRedeem(
-                malformedRequestArchive,
-                KagemushaRecursiveSpendNative.RecursiveSpendLineageAppendProofCircuitIdV1,
-                hopCount: 2u,
-                hasLineageWitness: true,
-                hasLineageVerifierRecord: false,
-                lineageVerifierRecordCount: 1,
-                publicAmount: "40",
-                currentNoteAmount: "100",
-                changeOutput: validChangeOutput));
-        Assert.Empty(builder.Instructions);
-    }
-
-    [Fact]
-    public void BuildSignedEmbedsKagemushaInstructionArchiveWithoutReframing()
-    {
-        var archive = KagemushaArchive(
-            KagemushaInstructionType.RedeemRecursive,
-            new byte[] { 9, 8, 7, 6 },
-            flags: 0x26);
-
-        var envelope = new TransactionBuilder(
-                "00000042",
-                "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53")
-            .KagemushaInstructionArchive(KagemushaInstructionType.RedeemRecursive, archive)
-            .SetCreationTimeMilliseconds(1736000000000)
-            .SetTimeToLiveMilliseconds(3500)
-            .SetNonce(17)
-            .BuildSigned(Convert.FromHexString(FixtureSeedHex));
-
-        var instructions = ReadEncodedInstructions(envelope.PayloadBytes);
-        var instruction = Assert.Single(instructions);
-        Assert.Equal("iroha_data_model::isi::offline::RedeemKagemushaRecursive", instruction.WireId);
-        Assert.Equal(archive, instruction.Payload);
-        Assert.Equal((byte)0x26, instruction.Payload[39]);
-
-        AssertSignedEnvelopeStructure(envelope, Convert.FromHexString(FixtureSeedHex));
-    }
-
-    [Fact]
-    public void BuildSignedEmbedsKagemushaRecursiveTopUpAsTransferArchive()
-    {
-        var archive = KagemushaArchive(
-            KagemushaInstructionType.Transfer,
-            new byte[] { 6, 7, 8, 9 },
-            flags: 0x26);
-
-        var envelope = new TransactionBuilder(
-                "00000042",
-                "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53")
-            .KagemushaRecursiveTopUp(new KagemushaRecursiveSpendTopUpInstructionArchive(archive))
-            .SetCreationTimeMilliseconds(1736000000000)
-            .SetTimeToLiveMilliseconds(3500)
-            .SetNonce(18)
-            .BuildSigned(Convert.FromHexString(FixtureSeedHex));
-
-        var instructions = ReadEncodedInstructions(envelope.PayloadBytes);
-        var instruction = Assert.Single(instructions);
-        Assert.Equal("iroha_data_model::isi::offline::KagemushaTransfer", instruction.WireId);
-        Assert.Equal(archive, instruction.Payload);
-        Assert.Equal((byte)0x26, instruction.Payload[39]);
-
-        AssertSignedEnvelopeStructure(envelope, Convert.FromHexString(FixtureSeedHex));
-    }
-
-    [Fact]
-    public void KagemushaInstructionArchiveAcceptsNativeAbi7RedeemInstructionFixture()
-    {
-        var archive = SharedRecursiveSpendAbi7Archive("redeem_instruction");
-        var instruction = TransactionInstruction.KagemushaInstructionArchive(
-            KagemushaInstructionType.RedeemRecursive,
-            archive);
-
-        Assert.Equal(KagemushaInstructionType.RedeemRecursive, instruction.InstructionType);
-        Assert.Equal(archive, instruction.InstructionArchive);
-    }
-
-    [Fact]
-    public void KagemushaInstructionArchiveRejectsMalformedWrongTypeAndMismatchedType()
-    {
-        AssertArgumentDiagnostic(
-            "Kagemusha instruction archive must not be empty.",
-            "instructionArchive",
-            () => TransactionInstruction.KagemushaInstructionArchive(
-                KagemushaInstructionType.RedeemRecursive,
-                Array.Empty<byte>()));
-
-        AssertArgumentDiagnostic(
-            "Kagemusha instruction archive must be a valid Norito instruction archive.",
-            "instructionArchive",
-            () => TransactionInstruction.KagemushaInstructionArchive(
-                KagemushaInstructionType.RedeemRecursive,
-                new byte[] { 0 }));
-
-        AssertArgumentDiagnostic(
-            "Kagemusha instruction archive schema must match RedeemKagemushaRecursive.",
-            "instructionArchive",
-            () => TransactionInstruction.KagemushaInstructionArchive(
-                KagemushaInstructionType.RedeemRecursive,
-                NoritoCodec.Encode("KagemushaRecursiveSpendRedeemRequestV1", new byte[] { 1, 2, 3 })));
-
-        AssertArgumentDiagnostic(
-            "Kagemusha instruction archive schema must match RedeemKagemushaRecursive.",
-            "instructionArchive",
-            () => TransactionInstruction.KagemushaInstructionArchive(
-                KagemushaInstructionType.RedeemRecursive,
-                KagemushaArchive(KagemushaInstructionType.Transfer, new byte[] { 1, 2, 3 })));
-
-        AssertArgumentDiagnostic(
-            "Kagemusha instruction archive must contain a non-empty Norito payload.",
-            "instructionArchive",
-            () => TransactionInstruction.KagemushaInstructionArchive(
-                KagemushaInstructionType.RedeemRecursive,
-                KagemushaArchive(KagemushaInstructionType.RedeemRecursive, Array.Empty<byte>())));
-
-        var compressed = KagemushaArchive(KagemushaInstructionType.RedeemRecursive, new byte[] { 1, 2, 3 });
-        compressed[22] = 1;
-        AssertArgumentDiagnostic(
-            "Kagemusha instruction archive must be a valid Norito instruction archive.",
-            "instructionArchive",
-            () => TransactionInstruction.KagemushaInstructionArchive(
-                KagemushaInstructionType.RedeemRecursive,
-                compressed));
-
-        var unsupportedFlags = KagemushaArchive(KagemushaInstructionType.RedeemRecursive, new byte[] { 1, 2, 3 });
-        unsupportedFlags[39] = 0x08;
-        AssertArgumentDiagnostic(
-            "Kagemusha instruction archive must be a valid Norito instruction archive.",
-            "instructionArchive",
-            () => TransactionInstruction.KagemushaInstructionArchive(
-                KagemushaInstructionType.RedeemRecursive,
-                unsupportedFlags));
-
-        var invalidFieldBitset = KagemushaArchive(KagemushaInstructionType.RedeemRecursive, new byte[] { 1, 2, 3 });
-        invalidFieldBitset[39] = 0x20;
-        AssertArgumentDiagnostic(
-            "Kagemusha instruction archive must be a valid Norito instruction archive.",
-            "instructionArchive",
-            () => TransactionInstruction.KagemushaInstructionArchive(
-                KagemushaInstructionType.RedeemRecursive,
-                invalidFieldBitset));
-
-        var nonZeroPadding = WithHeaderPadding(
-            KagemushaArchive(KagemushaInstructionType.RedeemRecursive, new byte[] { 1, 2, 3 }),
-            new byte[] { 0x7f });
-        AssertArgumentDiagnostic(
-            "Kagemusha instruction archive must be a valid Norito instruction archive.",
-            "instructionArchive",
-            () => TransactionInstruction.KagemushaInstructionArchive(
-                KagemushaInstructionType.RedeemRecursive,
-                nonZeroPadding));
-
-        var excessivePadding = WithHeaderPadding(
-            KagemushaArchive(KagemushaInstructionType.RedeemRecursive, new byte[] { 1, 2, 3 }),
-            new byte[65]);
-        AssertArgumentDiagnostic(
-            "Kagemusha instruction archive must be a valid Norito instruction archive.",
-            "instructionArchive",
-            () => TransactionInstruction.KagemushaInstructionArchive(
-                KagemushaInstructionType.RedeemRecursive,
-                excessivePadding));
     }
 
     [Fact]
@@ -2345,59 +1869,6 @@ public sealed class TransactionBuilderTests
     {
         Assert.True(framedPayload.Length >= NoritoHeader.EncodedLength);
         return framedPayload[NoritoHeader.EncodedLength..];
-    }
-
-    private static byte[] KagemushaArchive(
-        KagemushaInstructionType instructionType,
-        byte[] payload,
-        byte flags = 0)
-    {
-        return NoritoCodec.Encode(instructionType.WireName(), payload, flags);
-    }
-
-    private static byte[] WithHeaderPadding(byte[] archive, byte[] padding)
-    {
-        var padded = new byte[archive.Length + padding.Length];
-        Array.Copy(archive, 0, padded, 0, NoritoHeader.EncodedLength);
-        Array.Copy(padding, 0, padded, NoritoHeader.EncodedLength, padding.Length);
-        Array.Copy(
-            archive,
-            NoritoHeader.EncodedLength,
-            padded,
-            NoritoHeader.EncodedLength + padding.Length,
-            archive.Length - NoritoHeader.EncodedLength);
-        return padded;
-    }
-
-    private static byte[] SharedRecursiveSpendAbi7Archive(string archiveName)
-    {
-        using var document = LoadSharedRecursiveSpendAbi7Archives();
-        var archive = document.RootElement
-            .GetProperty("archives")
-            .EnumerateArray()
-            .First(candidate => candidate.GetProperty("name").GetString() == archiveName);
-        return Convert.FromBase64String(archive.GetProperty("bytes_base64").GetString()!);
-    }
-
-    private static JsonDocument LoadSharedRecursiveSpendAbi7Archives()
-    {
-        var directory = new DirectoryInfo(AppContext.BaseDirectory);
-        while (directory != null)
-        {
-            var candidate = Path.Combine(
-                directory.FullName,
-                "fixtures",
-                "kagemusha_recursive_spend_abi7",
-                "archives.json");
-            if (File.Exists(candidate))
-            {
-                return JsonDocument.Parse(File.ReadAllText(candidate));
-            }
-
-            directory = directory.Parent;
-        }
-
-        throw new FileNotFoundException("missing shared recursive spend ABI-7 archives fixture");
     }
 
     private sealed record EncodedInstruction(string WireId, byte[] Payload);

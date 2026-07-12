@@ -171,7 +171,7 @@ async fn two_non_intersecting_execution_paths() -> Result<()> {
         })
         .await??;
 
-        let instruction = Mint::asset_numeric(1u32, asset_id.clone());
+        let instruction = Mint::asset_quantity(1u32, asset_id.clone());
         let alias_domain = DomainId::try_new("wonderland", "universal")?;
         let account_alias = AccountAlias::new(
             "mintrose".parse()?,

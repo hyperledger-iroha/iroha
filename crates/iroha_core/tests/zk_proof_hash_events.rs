@@ -72,7 +72,7 @@ fn zk_events_carry_proof_hash_in_metadata_inserted() {
     let expected_hash_unshield = iroha_core::zk::hash_proof(&pr_unshield);
 
     let instructions: Vec<InstructionBox> = vec![
-        Mint::asset_numeric(10_000u64, asset.clone()).into(),
+        Mint::asset_quantity(10_000u64, asset.clone()).into(),
         InstructionBox::from(iroha_data_model::isi::zk::RegisterZkAsset::new(
             asset_def_id.clone(),
             iroha_data_model::isi::zk::ZkAssetMode::Hybrid,

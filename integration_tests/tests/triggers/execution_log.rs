@@ -28,9 +28,9 @@ async fn client_verifies_transaction_entrypoint_and_result_proofs() -> Result<()
     );
     let alice_rose = AssetId::new(rose_def.clone(), ALICE_ID.clone());
     let bob_rose = AssetId::new(rose_def, BOB_ID.clone());
-    let user_instruction = Transfer::asset_numeric(alice_rose.clone(), 5u32, BOB_ID.clone());
+    let user_instruction = Transfer::asset_quantity(alice_rose.clone(), 5u32, BOB_ID.clone());
     let data_trigger_instruction =
-        Transfer::asset_numeric(bob_rose.clone(), 3u32, ALICE_ID.clone());
+        Transfer::asset_quantity(bob_rose.clone(), 3u32, ALICE_ID.clone());
 
     // Initialize a network with a registered data-trigger at genesis.
     let builder = NetworkBuilder::new()
@@ -124,7 +124,7 @@ async fn client_verifies_transaction_entrypoint_and_result_proofs() -> Result<()
 
     // Fault injection: proof should now fail for a tampered entrypoint.
     let mut tampered_tx = committed_tx.clone();
-    let self_transfer = Transfer::asset_numeric(alice_rose, 100u32, ALICE_ID.clone());
+    let self_transfer = Transfer::asset_quantity(alice_rose, 100u32, ALICE_ID.clone());
     // Inject a zero-net-effect, self-neutralizing instruction.
     tampered_tx.inject_instructions([self_transfer]);
     let leaf = tampered_tx.entrypoint().hash();

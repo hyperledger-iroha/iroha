@@ -390,7 +390,8 @@ class ShieldInstruction private constructor(
             this.amount = canonicalU128(amount, "amount")
         }
 
-        fun setAmount(amount: Number?) = setAmount(amount?.toString())
+        /** Sets the exact unsigned amount without converting through a lossy host number. */
+        fun setAmount(amount: BigInteger?) = setAmount(amount?.toString())
 
         fun setNoteCommitment(noteCommitment: ByteArray?) = apply {
             this.noteCommitment = fixedNonZeroBytes(noteCommitment, 32, "noteCommitment")

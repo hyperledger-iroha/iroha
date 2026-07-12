@@ -1484,8 +1484,8 @@ impl UnstableNetwork {
                 builder_client.transaction_ttl = Some(min_ttl);
             }
         }
-        let mint_asset = Mint::asset_numeric(
-            Numeric::one(),
+        let mint_asset = Mint::asset_quantity(
+            1_u32,
             AssetId::new(ctx.asset_definition_id.clone(), ctx.account_id.clone()),
         );
         let mut tx_metadata = Metadata::default();

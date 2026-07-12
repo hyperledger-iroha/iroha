@@ -11,7 +11,6 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
 import org.hyperledger.iroha.sdk.client.transport.TransportRequest
 import org.hyperledger.iroha.sdk.client.transport.TransportResponse
-import org.hyperledger.iroha.sdk.offline.OfflineToriiException
 
 class ConfidentialAssetToriiClientTest {
     @Test
@@ -255,7 +254,7 @@ class ConfidentialAssetToriiClientTest {
     }
 
     @Test
-    fun nonSuccessResponsesSurfaceOfflineToriiException() {
+    fun nonSuccessResponsesSurfaceConfidentialAssetToriiException() {
         val client = ConfidentialAssetToriiClient.builder()
             .executor(CapturingExecutor("""{"error":"not ready"}""", status = 503, message = "Unavailable"))
             .baseUri(URI.create("https://example.com"))
@@ -265,7 +264,7 @@ class ConfidentialAssetToriiClientTest {
             client.getZkAssetRoots(ZkRootsRequest("usd#bank")).join()
         }.cause
 
-        require(error is OfflineToriiException)
+        require(error is ConfidentialAssetToriiException)
         assertEquals(503, error.statusCode)
         require(error.message?.contains("/v1/zk/roots") == true)
     }

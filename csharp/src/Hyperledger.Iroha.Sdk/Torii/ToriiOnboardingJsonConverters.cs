@@ -21,7 +21,7 @@ internal static class ToriiOnboardingJson
         RequireCanonicalAccountId(response.AccountId, $"{context}.account_id");
         ToriiSseEventJson.RequireExactTokenText(response.AssetDefinitionId, $"{context}.asset_definition_id");
         ToriiSseEventJson.RequireExactTokenText(response.AssetId, $"{context}.asset_id");
-        ToriiSseEventJson.RequireExactTokenText(response.Amount, $"{context}.amount");
+        _ = ToriiQuantityJson.RequireCanonicalQuantity(response.Amount, $"{context}.amount");
         ValidateOptionalTransactionHashHex(response.TransactionHashHex, $"{context}.tx_hash_hex");
         ToriiSseEventJson.RequireExactTokenText(response.Status, $"{context}.status");
     }

@@ -2377,7 +2377,7 @@ mod asset {
         }
 
         instructions.push(InstructionBox::from(
-            iroha::data_model::isi::Transfer::asset_numeric(id, args.quantity.clone(), to.clone()),
+            iroha::data_model::isi::Transfer::asset_quantity(id, args.quantity.clone(), to.clone()),
         ));
         Ok(instructions)
     }
@@ -2408,26 +2408,26 @@ mod asset {
                         .resolve_asset_id(context)
                         .wrap_err("failed to resolve asset identifier")?;
                     let instruction =
-                        iroha::data_model::isi::Mint::asset_numeric(args.quantity, id);
+                        iroha::data_model::isi::Mint::asset_quantity(args.quantity, id);
                     let submit = if args.no_wait {
                         context.finish_unconfirmed([instruction])
                     } else {
                         context.finish([instruction])
                     };
-                    submit.wrap_err("Failed to mint numeric asset")
+                    submit.wrap_err("Failed to mint asset quantity")
                 }
                 Burn(args) => {
                     let id = args
                         .resolve_asset_id(context)
                         .wrap_err("failed to resolve asset identifier")?;
                     let instruction =
-                        iroha::data_model::isi::Burn::asset_numeric(args.quantity, id);
+                        iroha::data_model::isi::Burn::asset_quantity(args.quantity, id);
                     let submit = if args.no_wait {
                         context.finish_unconfirmed([instruction])
                     } else {
                         context.finish([instruction])
                     };
-                    submit.wrap_err("Failed to burn numeric asset")
+                    submit.wrap_err("Failed to burn asset quantity")
                 }
                 Transfer(args) => {
                     let id = args
@@ -2949,7 +2949,7 @@ mod asset {
         pub to: String,
         /// Transfer amount (integer or decimal)
         #[arg(short, long)]
-        pub quantity: Numeric,
+        pub quantity: Quantity,
         /// Attempt to register the destination when implicit receive is disabled.
         #[arg(long)]
         pub ensure_destination: bool,
@@ -2992,7 +2992,7 @@ mod asset {
         pub scope: Option<iroha::data_model::asset::AssetBalanceScope>,
         /// Amount of change (integer or decimal)
         #[arg(short, long)]
-        pub quantity: Numeric,
+        pub quantity: Quantity,
         /// Submit without waiting for confirmation.
         #[arg(long)]
         pub no_wait: bool,
@@ -3106,7 +3106,6 @@ mod asset {
         use super::*;
         use iroha::data_model::isi::{Instruction, TransferBox};
         use iroha_crypto::Algorithm;
-        use iroha_primitives::numeric::Numeric;
 
         fn fixture_key_pair(seed: u8) -> KeyPair {
             KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
@@ -3129,7 +3128,7 @@ mod asset {
                 account: Some(asset_id.account().to_string()),
                 scope: None,
                 to: to.to_string(),
-                quantity: Numeric::new(5, 0),
+                quantity: Quantity::from(5_u32),
                 ensure_destination,
                 no_wait: false,
             };
@@ -4117,7 +4116,7 @@ mod multisig {
             /// Number of ordered proposals to skip after fetching cursor pages
             #[arg(long, default_value_t = 0)]
             offset: u64,
-            /// Cursor page size for each remote proposals query request
+            /// Cursor page size for each remote proposals list request
             #[arg(long)]
             fetch_size: Option<u64>,
         },
@@ -4263,7 +4262,7 @@ mod multisig {
         selector: &str,
         cursor: Option<String>,
         limit: Option<u64>,
-    ) -> Result<iroha::client::MultisigProposalsQueryRequest> {
+    ) -> Result<iroha::client::MultisigProposalsListRequest> {
         if selector.is_empty() || selector.trim() != selector {
             eyre::bail!("multisig selectors must be exact non-empty literals");
         }
@@ -4277,7 +4276,7 @@ mod multisig {
                 "multisig selector `{selector}` must be a canonical I105 account id or account alias"
             ),
         };
-        Ok(iroha::client::MultisigProposalsQueryRequest {
+        Ok(iroha::client::MultisigProposalsListRequest {
             multisig_account_id,
             multisig_account_alias,
             status: vec![COLLECTING_SIGNATURES_STATUS.to_owned()],
@@ -4319,8 +4318,8 @@ mod multisig {
     ) -> Result<Vec<MultisigListAllEntry>>
     where
         F: FnMut(
-            iroha::client::MultisigProposalsQueryRequest,
-        ) -> Result<iroha::client::MultisigProposalsQueryResponse>,
+            iroha::client::MultisigProposalsListRequest,
+        ) -> Result<iroha::client::MultisigProposalsListResponse>,
     {
         if selectors.is_empty() {
             eyre::bail!("at least one --multisig-selector is required");
@@ -4402,7 +4401,7 @@ mod multisig {
         offset: u64,
         limit: Option<u64>,
     ) -> Result<Vec<MultisigListAllEntry>> {
-        let mut fetch_page = |request| client.post_multisig_proposals_query(&request);
+        let mut fetch_page = |request| client.post_multisig_proposals_list(&request);
         let entries = collect_multisig_proposals_with(selectors, fetch_size, &mut fetch_page)?;
         let offset = usize::try_from(offset).wrap_err("multisig offset exceeds usize")?;
         let limit = limit
@@ -4502,26 +4501,26 @@ mod multisig {
             let second_account = AccountId::new(fixture_key_pair(0x52).public_key().clone());
             let selectors = vec!["first@sbp".to_owned(), "second@sbp".to_owned()];
             let mut requests = Vec::new();
-            let mut fetch_page = |request: iroha::client::MultisigProposalsQueryRequest| {
+            let mut fetch_page = |request: iroha::client::MultisigProposalsListRequest| {
                 let selector = request
                     .multisig_account_alias
                     .clone()
                     .expect("alias selector");
                 requests.push((selector.clone(), request.cursor.clone(), request.limit));
                 let page = match (selector.as_str(), request.cursor.as_deref()) {
-                    ("first@sbp", None) => iroha::client::MultisigProposalsQueryResponse {
+                    ("first@sbp", None) => iroha::client::MultisigProposalsListResponse {
                         resolved_multisig_account_id: first_account.clone(),
                         proposals: vec![sample_proposal_entry("0", 5)],
                         next_cursor: Some("first-next".to_owned()),
                     },
                     ("first@sbp", Some("first-next")) => {
-                        iroha::client::MultisigProposalsQueryResponse {
+                        iroha::client::MultisigProposalsListResponse {
                             resolved_multisig_account_id: first_account.clone(),
                             proposals: vec![sample_proposal_entry("2", 3)],
                             next_cursor: None,
                         }
                     }
-                    ("second@sbp", None) => iroha::client::MultisigProposalsQueryResponse {
+                    ("second@sbp", None) => iroha::client::MultisigProposalsListResponse {
                         resolved_multisig_account_id: second_account.clone(),
                         proposals: vec![
                             sample_proposal_entry("1", 4),
@@ -4559,7 +4558,7 @@ mod multisig {
         #[test]
         fn selector_explicit_collection_rejects_empty_duplicate_and_repeated_cursor_inputs() {
             let mut never_fetch =
-                |_request| -> Result<iroha::client::MultisigProposalsQueryResponse> {
+                |_request| -> Result<iroha::client::MultisigProposalsListResponse> {
                     panic!("invalid selector must fail before I/O")
                 };
             assert!(collect_multisig_proposals_with(&[], None, &mut never_fetch).is_err());
@@ -4567,7 +4566,7 @@ mod multisig {
                 collect_multisig_proposals_with(
                     &["same@sbp".to_owned(), "same@sbp".to_owned()],
                     None,
-                    &mut |request| Ok(iroha::client::MultisigProposalsQueryResponse {
+                    &mut |request| Ok(iroha::client::MultisigProposalsListResponse {
                         resolved_multisig_account_id: AccountId::new(
                             fixture_key_pair(0x53).public_key().clone(),
                         ),
@@ -4580,7 +4579,7 @@ mod multisig {
 
             let account = AccountId::new(fixture_key_pair(0x54).public_key().clone());
             let mut fetch = |_request| {
-                Ok(iroha::client::MultisigProposalsQueryResponse {
+                Ok(iroha::client::MultisigProposalsListResponse {
                     resolved_multisig_account_id: account.clone(),
                     proposals: Vec::new(),
                     next_cursor: Some("loop".to_owned()),
@@ -4597,7 +4596,7 @@ mod multisig {
             let selectors = vec!["first@sbp".to_owned(), "second@sbp".to_owned()];
             let identical = sample_proposal_entry("b", 7);
             let mut fetch_identical = |_request| {
-                Ok(iroha::client::MultisigProposalsQueryResponse {
+                Ok(iroha::client::MultisigProposalsListResponse {
                     resolved_multisig_account_id: account.clone(),
                     proposals: vec![identical.clone()],
                     next_cursor: None,
@@ -4615,7 +4614,7 @@ mod multisig {
                 if calls == 2 {
                     entry.operation_type = "MINT".to_owned();
                 }
-                Ok(iroha::client::MultisigProposalsQueryResponse {
+                Ok(iroha::client::MultisigProposalsListResponse {
                     resolved_multisig_account_id: account.clone(),
                     proposals: vec![entry],
                     next_cursor: None,
@@ -8753,28 +8752,6 @@ mod tests {
 
         let args = Args::try_parse_from(["iroha", "tools", "address", "convert", "sora1"])
             .expect("parse address conversion");
-        assert!(args.command.allows_fallback_config());
-
-        let args = Args::try_parse_from([
-            "iroha",
-            "app",
-            "zk",
-            "kagemusha",
-            "recursive-compact-key-artifacts",
-            "--vk-out",
-            "recursive-compact-len4.vk",
-            "--pk-out",
-            "recursive-compact-len4.pk",
-            "--key-artifacts-out",
-            "recursive-compact-key-artifacts.norito",
-            "--verifier-keys-out",
-            "recursive-compact-verifier-keys.norito",
-            "--confidential-transfer-v2-verifier-record-out",
-            "confidential-transfer-v2-verifier-record.norito",
-            "--record-out",
-            "recursive-compact-len4.record.norito",
-        ])
-        .expect("parse offline Kagemusha compact key artifact command");
         assert!(args.command.allows_fallback_config());
 
         let args =

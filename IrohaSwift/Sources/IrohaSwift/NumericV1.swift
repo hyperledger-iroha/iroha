@@ -345,6 +345,9 @@ private enum NumericV1Internal {
         _ kind: NumericV1Kind,
         frame: Data
     ) throws -> (mantissa: KotodamaInt, scale: UInt8) {
+        // `Data.SubSequence` is also `Data` and retains its source indices.
+        // Rebase every externally supplied collection before absolute header access.
+        let frame = Data(frame)
         let maximum = frameHeaderBytes + 4 + maximumMantissaBytes + (kind.isScaled ? 1 : 0)
         guard frame.count >= frameHeaderBytes else {
             throw numericFailure(.frameTooShort, "frame is truncated")
@@ -412,6 +415,8 @@ private enum NumericV1Internal {
     }
 
     static func decodeEnvelope(_ kind: NumericV1Kind, envelope: Data) throws -> Data {
+        // See `decodeFrame`: callers may pass a non-zero-index Data slice.
+        let envelope = Data(envelope)
         guard envelope.count >= envelopeHeaderBytes else {
             throw numericFailure(.truncatedEnvelope, "envelope is truncated")
         }
@@ -595,7 +600,9 @@ private enum NumericV1Internal {
     static func constantTimeEqual(_ left: Data, _ right: Data) -> Bool {
         guard left.count == right.count else { return false }
         var difference: UInt8 = 0
-        for index in left.indices { difference |= left[index] ^ right[index] }
+        for (leftByte, rightByte) in zip(left, right) {
+            difference |= leftByte ^ rightByte
+        }
         return difference == 0
     }
 

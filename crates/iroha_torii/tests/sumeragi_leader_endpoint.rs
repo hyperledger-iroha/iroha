@@ -1,41 +1,77 @@
+//! Router-level coverage for the authoritative Sumeragi v2 leader endpoint.
+
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-//! Router-level test for GET /v1/sumeragi/leader
-#![allow(clippy::redundant_closure_for_method_calls)]
 #![cfg(feature = "telemetry")]
 
-#[tokio::test]
-async fn sumeragi_leader_endpoint_shape() {
-    use axum::{Router, routing::get};
-    use iroha_core::sumeragi::status;
-    use tower::ServiceExt;
+use std::sync::Mutex;
 
-    // Seed status
-    status::set_leader_index(2);
-    status::set_prf_context([7u8; 32], 123, 4);
+use axum::{Router, body::Body, http::Request, routing::get};
+use http_body_util::BodyExt as _;
+use iroha_core::sumeragi::status;
+use iroha_crypto::{Hash, HashOf};
+use iroha_data_model::block::consensus_v2::{
+    HeightContext, HeightContextId, PROTOCOL_VERSION, SumeragiV2BodyState, SumeragiV2Status,
+    SumeragiV2StatusPhase,
+};
+use tower::ServiceExt as _;
+
+static LEADER_ENDPOINT_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+#[tokio::test]
+async fn sumeragi_leader_endpoint_uses_authoritative_v2_round() {
+    let _guard = LEADER_ENDPOINT_TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    status::set_v2_status(SumeragiV2Status {
+        protocol_version: PROTOCOL_VERSION,
+        node_fingerprint: Hash::new(b"node"),
+        build_fingerprint: Hash::new(b"build"),
+        config_fingerprint: Hash::new(b"config"),
+        height_context_id: HeightContextId(HashOf::<HeightContext>::from_untyped_unchecked(
+            Hash::new(b"height-context"),
+        )),
+        height: 123,
+        view: 4,
+        phase: SumeragiV2StatusPhase::AwaitingProposal,
+        leader: 2,
+        locked_prepare_qc: None,
+        highest_prepare_qc: None,
+        last_timeout_certificate: None,
+        body_state: SumeragiV2BodyState::Missing,
+        pending_persistence_id: None,
+        last_committed_height: 122,
+        last_committed_subject: None,
+    });
 
     let app = Router::new().route(
         "/v1/sumeragi/leader",
         get(|| async move { iroha_torii::handle_v1_sumeragi_leader(None).await }),
     );
-
-    let resp = app
+    let response = app
         .oneshot(
-            axum::http::Request::builder()
+            Request::builder()
                 .uri("/v1/sumeragi/leader")
-                .body(axum::body::Body::empty())
-                .unwrap(),
+                .body(Body::empty())
+                .expect("leader request"),
         )
         .await
-        .unwrap();
-    assert_eq!(resp.status(), axum::http::StatusCode::OK);
-    let body = http_body_util::BodyExt::collect(resp.into_body())
+        .expect("leader response");
+    status::clear_v2_status();
+
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    let body = response
+        .into_body()
+        .collect()
         .await
-        .unwrap()
+        .expect("collect leader response")
         .to_bytes();
-    let v: norito::json::Value = norito::json::from_slice(&body).unwrap();
-    assert_eq!(v.get("leader_index").and_then(|x| x.as_u64()), Some(2));
-    assert!(v.get("prf").is_some());
-    let prf = v.get("prf").unwrap();
-    assert_eq!(prf.get("height").and_then(|x| x.as_u64()), Some(123));
-    assert_eq!(prf.get("view").and_then(|x| x.as_u64()), Some(4));
+    let value: norito::json::Value = norito::json::from_slice(&body).expect("decode leader JSON");
+    assert_eq!(value.get("leader_index").and_then(|x| x.as_u64()), Some(2));
+    let round = value
+        .get("prf")
+        .and_then(norito::json::Value::as_object)
+        .expect("round context");
+    assert_eq!(round.get("height").and_then(|x| x.as_u64()), Some(123));
+    assert_eq!(round.get("view").and_then(|x| x.as_u64()), Some(4));
+    assert!(round.get("epoch_seed").is_none());
 }

@@ -19,7 +19,7 @@ import org.hyperledger.iroha.sdk.norito.NoritoEncoder
 import org.hyperledger.iroha.sdk.norito.NoritoHeader
 import org.hyperledger.iroha.sdk.norito.SchemaHash
 import org.hyperledger.iroha.sdk.norito.TypeAdapter
-import java.math.BigDecimal
+import org.hyperledger.iroha.sdk.numeric.KotodamaQuantity
 import java.math.BigInteger
 import java.nio.charset.StandardCharsets
 
@@ -61,7 +61,7 @@ object TransferWirePayloadEncoder {
      * @param assetId The internal asset balance-bucket literal
      * (`<base58-asset-definition-id>#<i105-account-id>` with an optional
      * `#dataspace:<id>` suffix; canonical asset-definition ids are Base58)
-     * @param amount The amount to transfer as a string (e.g., "10" or "10.50")
+     * @param amount The canonical quantity to transfer as a string (e.g., "10" or "10.5")
      * @param destinationAccountId The recipient's account ID
      * @return InstructionBox with wire payload ready for Norito encoding
      */
@@ -70,6 +70,14 @@ object TransferWirePayloadEncoder {
         val wirePayload = encodeTransferBox(assetId, amount, destinationAccountId)
         return InstructionBox.fromWirePayload(WIRE_NAME, wirePayload)
     }
+
+    /** Encodes an asset transfer from a lossless validated quantity value. */
+    @JvmStatic
+    fun encodeAssetTransfer(
+        assetId: String,
+        quantity: KotodamaQuantity,
+        destinationAccountId: String,
+    ): InstructionBox = encodeAssetTransfer(assetId, quantity.toString(), destinationAccountId)
 
     /**
      * Encodes an `AccountId` bare payload using the same layout expected by transaction
@@ -136,16 +144,19 @@ object TransferWirePayloadEncoder {
     }
 
     private fun parseNumericAmount(amount: String): NumericValue {
-        val decimal = BigDecimal(amount)
-        val scale = maxOf(0, decimal.scale())
-        require(scale <= 28) { "Numeric scale exceeds Iroha limit of 28: $scale" }
-        val mantissa = decimal.movePointRight(scale).toBigIntegerExact()
-        require(mantissa.bitLength() < 512) { "Numeric mantissa exceeds Iroha limit of 512 bits: ${mantissa.bitLength()}" }
-        return NumericValue(mantissa, scale)
+        val quantity = KotodamaQuantity.parseCanonical(amount)
+        return NumericValue(quantity.mantissa, quantity.scale)
     }
 
     private class NumericValue(val mantissa: BigInteger, val scale: Int) {
-        fun render(): String = BigDecimal(mantissa, scale).toPlainString()
+        init {
+            val canonical = KotodamaQuantity.of(mantissa, scale)
+            require(canonical.mantissa == mantissa && canonical.scale == scale) {
+                "Asset transfer quantity is not canonically encoded"
+            }
+        }
+
+        fun render(): String = KotodamaQuantity.of(mantissa, scale).toString()
     }
 
     private class TransferAssetPayload(val source: AssetId, val amount: NumericValue, val destination: AccountId)

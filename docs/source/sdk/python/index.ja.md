@@ -107,6 +107,6 @@ the node could not evaluate it.
 from iroha_python import ToriiClient
 
 client = ToriiClient("https://torii.sora.example")
-readiness = client.get_offline_readiness(asset_definition_id="xor#wonderland")
+readiness = client.get_kagemusha_readiness(asset_definition_id="xor#wonderland")
 print("offline ready", readiness.ready, readiness.blockers)
 ```

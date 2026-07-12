@@ -9,9 +9,14 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass, replace
-from typing import Any, Callable, Mapping, Optional, Protocol, Union
+from typing import TYPE_CHECKING, Any, Callable, Mapping, Optional, Protocol, Union
 
 from .crypto import hash_blake2b_32
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from .tx import QuantityLike
+else:  # pragma: no cover - postponed annotations only
+    QuantityLike = Any
 
 BytesLike = Union[bytes, bytearray, memoryview, str]
 
@@ -76,10 +81,10 @@ class NexusApprovedAccount:
 
 @dataclass(frozen=True)
 class NexusTransferInput:
-    """V1 numeric asset transfer input."""
+    """V1 nominal-quantity asset transfer input."""
 
     source_asset_id: str
-    quantity: Union[str, int, float]
+    quantity: QuantityLike
     destination_account_id: str
     authority: Optional[str] = None
     metadata: Optional[Mapping[str, Any]] = None
@@ -387,7 +392,7 @@ class DefaultNexusTransactionCodec:
                 metadata=payload_input.get("metadata"),
             )
         )
-        draft.transfer_asset_numeric(
+        draft.transfer_asset_quantity(
             str(payload_input.get("source_asset_id", payload_input.get("sourceAssetId"))),
             payload_input["quantity"],
             str(payload_input.get("destination_account_id", payload_input.get("destinationAccountId"))),
@@ -668,6 +673,8 @@ class NexusAppClient:
     def build_transfer_draft(self, input: NexusTransferInput) -> NexusTransferDraft:
         """Build a canonical signable transfer payload."""
 
+        from .tx import _normalize_quantity
+
         authority = input.authority or self.config.authority
         if not authority:
             raise NexusAppError("missing_authority", "transfer authority is required")
@@ -676,11 +683,15 @@ class NexusAppClient:
                 "transaction_codec_unavailable",
                 "transaction codec with build_transfer_payload is required",
             )
+        try:
+            quantity = _normalize_quantity(input.quantity)
+        except (TypeError, ValueError) as exc:
+            raise NexusAppError("invalid_quantity", str(exc)) from exc
         payload_input = {
             "chain_id": self.config.chain_id,
             "authority": authority,
             "source_asset_id": input.source_asset_id,
-            "quantity": str(input.quantity),
+            "quantity": quantity,
             "destination_account_id": input.destination_account_id,
             "metadata": input.metadata,
             "creation_time_ms": input.creation_time_ms,
@@ -729,7 +740,10 @@ class NexusAppClient:
             signing_public_key=signing_public_key,
             native=native,
         )
-        return NexusTransferDraft(replace(input, authority=authority), signable)
+        return NexusTransferDraft(
+            replace(input, authority=authority, quantity=quantity),
+            signable,
+        )
 
     def request_signature(
         self,

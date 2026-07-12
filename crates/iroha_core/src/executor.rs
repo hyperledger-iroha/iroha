@@ -30,7 +30,7 @@ use iroha_data_model::{
     isi::{
         CustomInstruction, GrantBox, InstructionBox, InstructionBox as DMInstructionBox,
         RemoveKeyValueBox, RevokeBox, SetKeyValueBox, TransferBox,
-        error::{InstructionExecutionError, MathError},
+        error::InstructionExecutionError,
         mint_burn::MintBox,
         register::RegisterBox,
     },
@@ -56,7 +56,7 @@ use iroha_executor_data_model::{
 use iroha_logger::{debug, trace, warn};
 use iroha_primitives::{
     json::Json,
-    numeric::{Numeric, NumericSpec},
+    numeric::{Numeric, NumericSpec, Quantity},
 };
 use ivm::runtime::IvmConfig;
 use ivm::{IVM, Memory, RuntimeTemplate, VMError};
@@ -74,7 +74,10 @@ use crate::zk::PreverifyResult;
 use crate::{
     gas as isi_gas,
     settlement::{PendingNexusFeeReceipt, PendingSettlement, QuoteError, VolatilityBucket},
-    smartcontracts::{Execute as _, code, ivm::cache::IvmCache},
+    smartcontracts::{
+        Execute as _, code,
+        ivm::cache::{ExecutableProgramSummary, IvmCache},
+    },
     state::{StateReadOnly, StateTransaction, WorldReadOnly},
     sumeragi::status::{self as sumeragi_status, NexusFeeEvent, NexusFeePayer},
 };
@@ -229,15 +232,6 @@ impl FixtureExecutorKind {
     }
 }
 
-fn ensure_detached_asset_quantity_non_negative(quantity: &Numeric) -> Result<(), ValidationFail> {
-    if quantity.mantissa().is_negative() {
-        return Err(ValidationFail::InstructionFailed(
-            InstructionExecutionError::Math(MathError::NegativeValue),
-        ));
-    }
-    Ok(())
-}
-
 /// Execute a single instruction in a detached overlay, recording only the state deltas.
 ///
 /// This helper is used by the parallel validator to pre-apply side-effect-free
@@ -308,8 +302,7 @@ pub(crate) fn execute_instruction_detached(
         match mb {
             MintBox::Asset(m) => {
                 let asset_id = m.destination.clone();
-                let qty = m.object.clone();
-                ensure_detached_asset_quantity_non_negative(&qty)?;
+                let qty = m.object.clone().into_numeric();
                 // Record per-account balance increase and total supply increase
                 delta.add_asset_add(asset_id.clone(), qty.clone());
                 delta.add_total_add(asset_id.definition().clone(), qty);
@@ -328,8 +321,7 @@ pub(crate) fn execute_instruction_detached(
         match bb {
             BurnBox::Asset(b) => {
                 let asset_id = b.destination.clone();
-                let qty = b.object.clone();
-                ensure_detached_asset_quantity_non_negative(&qty)?;
+                let qty = b.object.clone().into_numeric();
                 // Record per-account balance decrease and total supply decrease
                 delta.add_asset_sub(asset_id.clone(), qty.clone());
                 delta.add_total_sub(asset_id.definition().clone(), qty);
@@ -365,8 +357,7 @@ pub(crate) fn execute_instruction_detached(
         match tb {
             TransferBox::Asset(t) => {
                 let src = t.source.clone();
-                let qty = t.object.clone();
-                ensure_detached_asset_quantity_non_negative(&qty)?;
+                let qty = t.object.clone().into_numeric();
                 delta.transfer_asset(src, t.destination.clone(), qty);
             }
             TransferBox::Domain(t) => {
@@ -657,7 +648,7 @@ fn should_charge_pipeline_gas_asset(
 ) -> bool {
     !skip_nexus_fee
         && gas_asset_opt.is_some()
-        && (!nexus_enabled || nexus_fees.per_gas_unit_fee <= Numeric::zero())
+        && (!nexus_enabled || nexus_fees.per_gas_unit_fee.is_zero())
 }
 
 fn is_sora_v2_tx_hash_literal(value: &str) -> bool {
@@ -748,7 +739,7 @@ fn successful_claim_fee_exempt_instructions(
         MintBox::Asset(mint) => {
             mint.destination.account() == &recipient
                 && mint.destination.definition() == &asset_def
-                && mint.object.clone() > Numeric::zero()
+                && !mint.object.is_zero()
         }
         MintBox::TriggerRepetitions(_) => false,
     }
@@ -784,9 +775,6 @@ fn nexus_protocol_fee_exempt_instruction(instruction: &InstructionBox) -> bool {
 
 fn nexus_fee_exempt_instruction(instruction: &InstructionBox) -> bool {
     nexus_protocol_fee_exempt_instruction(instruction)
-        || instruction
-            .as_any()
-            .is::<iroha_data_model::isi::offline::KagemushaTransfer>()
 }
 
 fn nexus_fee_exempt_instructions(instructions: &[InstructionBox]) -> bool {
@@ -830,37 +818,6 @@ fn redeem_funded_nexus_fee_capacity(
     let mut candidate_redeems: Vec<(AssetDefinitionId, Numeric)> = Vec::new();
     for instruction in instructions {
         let any = instruction.as_any();
-        if any
-            .downcast_ref::<iroha_data_model::isi::offline::AuditOfflineNote>()
-            .is_some()
-        {
-            continue;
-        }
-        if let Some(redeem) =
-            any.downcast_ref::<iroha_data_model::isi::offline::RedeemOfflineNote>()
-        {
-            let redemption = &redeem.redemption;
-            if &redemption.recipient != payer || redemption.asset.account() != payer {
-                return Ok(None);
-            }
-            candidate_redeems.push((
-                redemption.asset.definition().clone(),
-                redemption.amount.clone(),
-            ));
-            continue;
-        }
-        if let Some(redeem) =
-            any.downcast_ref::<iroha_data_model::isi::offline::RedeemKagemushaRecursive>()
-        {
-            if &redeem.recipient != payer {
-                return Ok(None);
-            }
-            candidate_redeems.push((
-                redeem.bundle.accumulator.asset.clone(),
-                Numeric::new(redeem.public_amount, 0),
-            ));
-            continue;
-        }
         if let Some(redeem) =
             any.downcast_ref::<iroha_data_model::isi::offline::RedeemKagemushaRecursiveV2>()
         {
@@ -872,7 +829,7 @@ fn redeem_funded_nexus_fee_capacity(
             // unsupported instruction.
             // TODO: Remove this gate only when the V2 proof backend and complete
             // Core execution path ship atomically.
-            if !iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_V2_PROOF_BACKEND_AVAILABLE {
+            if !iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PROOF_BACKEND_AVAILABLE {
                 return Ok(None);
             }
             if &redeem.request.recipient != payer {
@@ -915,7 +872,9 @@ fn redeem_funded_nexus_fee_capacity(
     let existing_balance = world
         .assets()
         .get(&payer_asset)
-        .map_or_else(Numeric::zero, |balance| (**balance).clone());
+        .map_or_else(Numeric::zero, |balance| {
+            balance.as_ref().as_numeric().clone()
+        });
     let capacity = checked_nexus_fee_add(
         existing_balance,
         redeemed_amount,
@@ -983,7 +942,9 @@ fn check_redeem_funded_lane_relay_fee_balance(
     let available = world
         .assets()
         .get(&payer_asset)
-        .map_or_else(Numeric::zero, |balance| (**balance).clone());
+        .map_or_else(Numeric::zero, |balance| {
+            balance.as_ref().as_numeric().clone()
+        });
     let unsettled = unsettled_verified_nexus_fee_amount(world, payer, cfg.fee_asset_id.as_str())?;
     let required = checked_nexus_fee_add(fee.clone(), unsettled, "unsettled receipts")?;
     let required = checked_nexus_fee_add(required, in_flight_fees, "in-flight receipts")?;
@@ -1105,13 +1066,11 @@ fn unsettled_verified_nexus_fee_amount(
             if world.smart_contract_state().get(&marker).is_some() {
                 continue;
             }
-            if receipt.fee_amount.mantissa().is_negative() {
-                return Err(NexusFeeAdmissionError::ConfigInvalid(format!(
-                    "verified lane relay contains negative Nexus fee receipt {}",
-                    hex::encode(receipt.source_id)
-                )));
-            }
-            total = checked_nexus_fee_add(total, receipt.fee_amount.clone(), "unsettled receipts")?;
+            total = checked_nexus_fee_add(
+                total,
+                receipt.fee_amount.as_numeric().clone(),
+                "unsettled receipts",
+            )?;
         }
     }
     Ok(total)
@@ -1156,7 +1115,9 @@ fn check_lane_relay_burn_fee_budget(
     let required = checked_nexus_fee_add(required, in_flight_fees, "in-flight receipts")?;
     let required = checked_nexus_fee_add(
         required,
-        cfg.sponsor_verified_balance_safety_floor.clone(),
+        cfg.sponsor_verified_balance_safety_floor
+            .as_numeric()
+            .clone(),
         "safety floor",
     )?;
     if record.verified_balance < required {
@@ -1483,7 +1444,7 @@ fn authorize_fee_sponsor_policy_from_ids(
             continue;
         }
         if let Some(max_fee) = &policy.max_fee
-            && fee > max_fee
+            && fee > max_fee.as_numeric()
         {
             continue;
         }
@@ -1559,6 +1520,58 @@ fn authorize_fee_sponsor_policy_for_state_transaction(
 pub(crate) fn parse_gas_limit(metadata: &Metadata) -> Result<Option<u64>, ValidationFail> {
     iroha_data_model::transaction::parse_transaction_gas_limit(metadata)
         .map_err(|err| ValidationFail::NotPermitted(err.to_string()))
+}
+
+fn overlay_build_error_to_validation_fail(
+    error: crate::pipeline::overlay::OverlayBuildError,
+) -> ValidationFail {
+    match error {
+        crate::pipeline::overlay::OverlayBuildError::HeaderPolicy(error) => {
+            ValidationFail::IvmAdmission(error)
+        }
+        crate::pipeline::overlay::OverlayBuildError::AxtReject(context) => {
+            ValidationFail::AxtReject(context)
+        }
+        other => ValidationFail::NotPermitted(other.to_string()),
+    }
+}
+
+/// Apply the canonical first-release IVM admission policy to an already prepared program.
+///
+/// Preparation authenticates and predecodes the image, while this check binds execution to the
+/// live node/governance limits. Keeping it shared prevents direct, trigger, and proved dispatch
+/// from assigning different meaning to the same ABI V1 header.
+pub(crate) fn validate_prepared_ivm_execution_policy<R: StateReadOnly>(
+    state: &R,
+    metadata: &ivm::ProgramMetadata,
+    code_offset: usize,
+    bytecode: &[u8],
+) -> Result<std::num::NonZeroU64, ValidationFail> {
+    crate::pipeline::overlay::validate_header_policy(metadata)
+        .map_err(ValidationFail::IvmAdmission)?;
+    if metadata.mode & ivm::ivm_mode::ZK != 0
+        && !(state.zk().halo2.enabled || state.zk().stark.enabled)
+    {
+        return Err(ValidationFail::IvmAdmission(
+            iroha_data_model::executor::IvmAdmissionError::UnsupportedFeatureBits(
+                ivm::ivm_mode::ZK,
+            ),
+        ));
+    }
+    let effective_cycles = crate::smartcontracts::ivm::validate_cycle_limits(
+        metadata,
+        state.pipeline().ivm_max_cycles_upper_bound,
+        state.world().parameters().smart_contract().fuel(),
+    )
+    .map_err(ValidationFail::IvmAdmission)?;
+    crate::pipeline::overlay::enforce_pre_execution_policy(
+        state.pipeline().ivm_max_cycles_upper_bound,
+        metadata,
+        code_offset,
+        bytecode,
+    )
+    .map_err(overlay_build_error_to_validation_fail)?;
+    Ok(effective_cycles)
 }
 
 #[derive(Clone, Debug)]
@@ -2656,47 +2669,47 @@ pub(crate) fn compute_nexus_fee_amount(
     tx_bytes_len: usize,
     instruction_count: usize,
     gas_used: u64,
-) -> Result<Numeric, ValidationFail> {
-    for (label, value) in [
-        ("base_fee", &cfg.base_fee),
-        ("per_byte_fee", &cfg.per_byte_fee),
-        ("per_instruction_fee", &cfg.per_instruction_fee),
-        ("per_gas_unit_fee", &cfg.per_gas_unit_fee),
-        ("sponsor_max_fee", &cfg.sponsor_max_fee),
-        (
-            "sponsor_verified_balance_safety_floor",
-            &cfg.sponsor_verified_balance_safety_floor,
-        ),
-    ] {
-        if value.mantissa().is_negative() {
-            return Err(ValidationFail::InternalError(format!(
-                "nexus.fees.{label} must be non-negative"
-            )));
-        }
-    }
+) -> Result<Quantity, ValidationFail> {
     let tx_bytes_u64 = u64::try_from(tx_bytes_len).map_err(|_| {
         ValidationFail::InternalError("transaction too large for fee accounting".to_owned())
     })?;
     let instr_u64 = u64::try_from(instruction_count).map_err(|_| {
         ValidationFail::InternalError("instruction count too large for fee accounting".to_owned())
     })?;
-    let mut fee = cfg.base_fee.clone();
+    let mut fee = cfg.base_fee.as_numeric().clone();
     fee = Executor::checked_numeric_add(
         fee,
-        Executor::checked_numeric_mul_u64(&cfg.per_byte_fee, tx_bytes_u64, "fee amount")?,
+        Executor::checked_numeric_mul_u64(
+            cfg.per_byte_fee.as_numeric(),
+            tx_bytes_u64,
+            "fee amount",
+        )?,
         "fee amount",
     )?;
     fee = Executor::checked_numeric_add(
         fee,
-        Executor::checked_numeric_mul_u64(&cfg.per_instruction_fee, instr_u64, "fee amount")?,
+        Executor::checked_numeric_mul_u64(
+            cfg.per_instruction_fee.as_numeric(),
+            instr_u64,
+            "fee amount",
+        )?,
         "fee amount",
     )?;
-    Executor::checked_numeric_add(
+    let fee = Executor::checked_numeric_add(
         fee,
-        Executor::checked_numeric_mul_u64(&cfg.per_gas_unit_fee, gas_used, "fee amount")?,
+        Executor::checked_numeric_mul_u64(
+            cfg.per_gas_unit_fee.as_numeric(),
+            gas_used,
+            "fee amount",
+        )?,
         "fee amount",
-    )
-    .map(Numeric::trim_trailing_zeros)
+    )?
+    .trim_trailing_zeros();
+    Quantity::from_canonical_numeric(fee).map_err(|error| {
+        ValidationFail::InternalError(format!(
+            "computed nexus fee left the quantity domain: {error}"
+        ))
+    })
 }
 
 fn fee_bound_for_admission(
@@ -2775,7 +2788,7 @@ pub(crate) fn check_external_nexus_fee_admission(
     let fee = compute_nexus_fee_amount(&nexus.fees, tx_bytes_len, instruction_count, gas_used)
         .map_err(validation_fail_to_nexus_fee_admission_error)?;
 
-    if fee <= Numeric::zero() {
+    if fee.is_zero() {
         return Ok(());
     }
 
@@ -2785,7 +2798,7 @@ pub(crate) fn check_external_nexus_fee_admission(
                 "fee sponsorship is disabled".to_owned(),
             ));
         }
-        if nexus.fees.sponsor_max_fee > Numeric::zero() && fee > nexus.fees.sponsor_max_fee {
+        if !nexus.fees.sponsor_max_fee.is_zero() && fee > nexus.fees.sponsor_max_fee {
             return Err(NexusFeeAdmissionError::Rejected(
                 "fee exceeds sponsor_max_fee".to_owned(),
             ));
@@ -2803,7 +2816,7 @@ pub(crate) fn check_external_nexus_fee_admission(
             &sponsor,
             policy_ids,
             transaction,
-            &fee,
+            fee.as_numeric(),
             route_dataspace_id,
         )?;
         sponsor
@@ -2818,7 +2831,7 @@ pub(crate) fn check_external_nexus_fee_admission(
         observation_time_ms,
         next_block_height,
         has_fee_sponsor,
-        &fee,
+        fee.as_numeric(),
         Numeric::zero(),
     )?;
     if redeem_funded_nexus_fee {
@@ -2830,7 +2843,13 @@ pub(crate) fn check_external_nexus_fee_admission(
         .lane_relay_burn_receipts_active_at(next_block_height)
     {
         check_lane_relay_burn_canonical_sponsor(world, &nexus.fees, &payer)?;
-        return check_lane_relay_burn_fee_budget(world, &nexus.fees, &payer, &fee, Numeric::zero());
+        return check_lane_relay_burn_fee_budget(
+            world,
+            &nexus.fees,
+            &payer,
+            fee.as_numeric(),
+            Numeric::zero(),
+        );
     }
 
     if externally_settled_sponsored_fee {
@@ -2857,8 +2876,8 @@ pub(crate) fn check_external_nexus_fee_admission(
         )));
     };
 
-    let available = (**balance).clone();
-    if available < fee {
+    let available = balance.as_ref().as_numeric().clone();
+    if available < fee.as_numeric().clone() {
         return Err(NexusFeeAdmissionError::Rejected(format!(
             "fee balance for payer `{payer}` is insufficient: requires {fee}, available {available}"
         )));
@@ -3080,7 +3099,7 @@ pub(crate) fn charge_fees_for_applied_overlay_with_encoded_len(
             state_transaction.block_unix_timestamp_ms(),
             state_transaction.block_height(),
             fee_sponsor.is_some(),
-            &fee,
+            fee.as_numeric(),
             in_flight_fees,
         )
         .map_err(nexus_fee_admission_error_to_validation_fail)?;
@@ -3291,14 +3310,12 @@ impl Executor {
             ),
         };
         let payer_asset = AssetId::with_scope(asset_definition_id.clone(), payer, payer_scope);
-        let qty = Numeric::try_new(fee_u128, 0).map_err(|_| {
-            ValidationFail::NotPermitted("fee amount exceeds supported numeric bounds".to_owned())
-        })?;
+        let qty = Quantity::from(fee_u128);
         let transfer = iroha_data_model::isi::Transfer::<
             Asset,
-            Numeric,
+            Quantity,
             iroha_data_model::account::Account,
-        >::asset_numeric(payer_asset, qty, tech_account);
+        >::asset_quantity(payer_asset, qty, tech_account);
         let instr: DMInstructionBox = transfer.into();
         execute_gas_fee_transfer_instruction(&definition, instr, authority, state_transaction)
             .map_err(|err| {
@@ -3388,7 +3405,7 @@ impl Executor {
         let cfg = state_transaction.nexus.fees.clone();
         let fee = compute_nexus_fee_amount(&cfg, tx_bytes_len, instruction_count, gas_used)?;
 
-        if fee <= Numeric::zero() {
+        if fee.is_zero() {
             return Ok(());
         }
         let payer_kind = if sponsor.is_some() {
@@ -3412,7 +3429,7 @@ impl Executor {
                     "fee sponsorship is disabled".to_owned(),
                 ));
             }
-            if cfg.sponsor_max_fee > Numeric::zero() && fee > cfg.sponsor_max_fee {
+            if !cfg.sponsor_max_fee.is_zero() && fee > cfg.sponsor_max_fee {
                 let payer_id = sponsor.to_string();
                 sumeragi_status::record_nexus_fee_event(NexusFeeEvent::SponsorCapExceeded {
                     payer_id: payer_id.clone(),
@@ -3435,7 +3452,7 @@ impl Executor {
                 authority,
                 &sponsor,
                 transaction,
-                &fee,
+                fee.as_numeric(),
             ) {
                 let sponsor_id = sponsor.to_string();
                 let authority_id = authority.to_string();
@@ -3479,7 +3496,7 @@ impl Executor {
                     &cfg,
                     &payer,
                     state_transaction.block_unix_timestamp_ms(),
-                    &fee,
+                    fee.as_numeric(),
                     in_flight_fees,
                 )
                 .map_err(|err| match err {
@@ -3500,7 +3517,7 @@ impl Executor {
                     &state_transaction.world,
                     &cfg,
                     &payer,
-                    &fee,
+                    fee.as_numeric(),
                     in_flight_fees,
                 )
                 .map_err(|err| match err {
@@ -3568,7 +3585,7 @@ impl Executor {
             return Ok(());
         }
 
-        let burn = Burn::asset_numeric(fee.clone(), payer_asset);
+        let burn = Burn::asset_quantity(fee.clone(), payer_asset);
         let instr: DMInstructionBox = burn.into();
         let previous_tx_dataspace_id = state_transaction.current_dataspace_id;
         let previous_world_dataspace_id = state_transaction.world.current_dataspace_id;
@@ -4042,9 +4059,9 @@ impl Executor {
                     gas_used,
                 )?
             } else {
-                Numeric::zero()
+                Quantity::zero()
             };
-            if state_transaction.nexus.fees.sponsor_max_fee > Numeric::zero()
+            if !state_transaction.nexus.fees.sponsor_max_fee.is_zero()
                 && sponsorship_fee > state_transaction.nexus.fees.sponsor_max_fee
             {
                 return Err(ValidationFail::NotPermitted(
@@ -4056,7 +4073,7 @@ impl Executor {
                 authority,
                 sponsor,
                 &transaction,
-                &sponsorship_fee,
+                sponsorship_fee.as_numeric(),
             ) {
                 sumeragi_status::record_nexus_fee_event(NexusFeeEvent::SponsorUnauthorized {
                     sponsor_id: sponsor.to_string(),
@@ -4113,7 +4130,7 @@ impl Executor {
                 state_transaction.block_unix_timestamp_ms(),
                 state_transaction.block_height(),
                 fee_sponsor.is_some(),
-                &nexus_fee,
+                nexus_fee.as_numeric(),
                 in_flight_fees,
             )
             .map_err(nexus_fee_admission_error_to_validation_fail)?
@@ -4403,19 +4420,6 @@ impl Executor {
                 ));
             }
 
-            let map_overlay_error =
-                |err: crate::pipeline::overlay::OverlayBuildError| -> ValidationFail {
-                    match err {
-                        crate::pipeline::overlay::OverlayBuildError::HeaderPolicy(e) => {
-                            ValidationFail::IvmAdmission(e)
-                        }
-                        crate::pipeline::overlay::OverlayBuildError::AxtReject(ctx) => {
-                            ValidationFail::AxtReject(ctx)
-                        }
-                        other => ValidationFail::NotPermitted(other.to_string()),
-                    }
-                };
-
             let summary = ivm_cache
                 .summarize_program(proved.bytecode.as_ref())
                 .map_err(|e| ValidationFail::InternalError(e.to_string()))?;
@@ -4440,14 +4444,14 @@ impl Executor {
                 summary.code_offset,
                 proved.bytecode.as_ref(),
             )
-            .map_err(map_overlay_error)?;
+            .map_err(overlay_build_error_to_validation_fail)?;
 
             crate::pipeline::overlay::validate_contract_binding(
                 state_transaction,
                 &transaction,
                 &summary,
             )
-            .map_err(map_overlay_error)?;
+            .map_err(overlay_build_error_to_validation_fail)?;
 
             let selector = requested_contract_entrypoint(transaction.metadata())?.ok_or_else(|| {
                 ValidationFail::NotPermitted(
@@ -4488,7 +4492,7 @@ impl Executor {
                 &transaction,
                 summary.code_hash,
             )
-            .map_err(map_overlay_error)?;
+            .map_err(overlay_build_error_to_validation_fail)?;
 
             let replay = crate::pipeline::overlay::verify_ivm_proved_execution(
                 state_transaction,
@@ -4496,7 +4500,7 @@ impl Executor {
                 proved,
                 &summary,
             )
-            .map_err(map_overlay_error)?;
+            .map_err(overlay_build_error_to_validation_fail)?;
             Some(replay)
         } else {
             None
@@ -4591,23 +4595,54 @@ impl Executor {
                         identity.contract_address
                     ))
                 })?;
+                let code_bytes = state_transaction
+                    .world
+                    .contract_code()
+                    .get(&identity.code_hash)
+                    .ok_or_else(|| {
+                        ValidationFail::NotPermitted(format!(
+                            "contract bytecode `{}` not found in WSV",
+                            identity.code_hash
+                        ))
+                    })?;
                 let summary = if let Some(summary) = ivm_cache
                     .cached_program_summary(identity.code_hash)
                     .map_err(|error| ValidationFail::InternalError(error.to_string()))?
                 {
                     summary
                 } else {
-                    code::with_code_bytes(state_transaction, &identity.code_hash, |bytecode| {
-                        ivm_cache.summarize_program_with_hash(identity.code_hash, bytecode)
-                    })
+                    ivm_cache
+                        .summarize_program_with_hash(identity.code_hash, code_bytes.as_ref())
+                        .map_err(|error| ValidationFail::InternalError(error.to_string()))?
+                };
+                if summary.prepared_contract().artifact() != code_bytes.as_slice() {
+                    return Err(ValidationFail::NotPermitted(format!(
+                        "cached contract bytecode `{}` does not match live WSV",
+                        identity.code_hash
+                    )));
+                }
+                let effective_cycles = validate_prepared_ivm_execution_policy(
+                    state_transaction,
+                    &summary.metadata,
+                    summary.code_offset,
+                    code_bytes.as_ref(),
+                )?;
+                let manifest = state_transaction
+                    .world
+                    .contract_manifests()
+                    .get(&identity.code_hash)
                     .ok_or_else(|| {
                         ValidationFail::NotPermitted(format!(
-                            "contract bytecode `{}` not found in WSV",
-                            identity.code_hash
+                            "contract instance `{}` has no manifest",
+                            identity.contract_address
                         ))
-                    })?
-                    .map_err(|error| ValidationFail::InternalError(error.to_string()))?
-                };
+                    })?;
+                crate::smartcontracts::ivm::validate_manifest_hashes(
+                    manifest,
+                    summary.code_hash,
+                    summary.abi_hash,
+                )
+                .map_err(ValidationFail::IvmAdmission)?;
                 let lifecycle_transition = validate_prepared_contract_lifecycle_call(
                     &state_transaction.world,
                     &call.contract_address,
@@ -4632,6 +4667,7 @@ impl Executor {
                 let mut runtime = summary
                     .checkout_runtime(effective_limit)
                     .map_err(|e| ValidationFail::InternalError(e.to_string()))?;
+                runtime.set_max_cycles(effective_cycles.get());
                 runtime.set_gas_limit(effective_limit);
                 if let Some(argument_record) = contract_call_context.argument_record.as_ref() {
                     argument_record
@@ -4744,15 +4780,142 @@ impl Executor {
                         .saturating_sub(state_transaction.gas_used_in_block_so_far)
                 };
                 let effective_limit = gas_limit_md.min(block_remaining);
-                let summary = ivm_cache
-                    .summarize_program(bytes.as_ref())
-                    .map_err(|e| ValidationFail::InternalError(e.to_string()))?;
+                let admitted = ivm_cache
+                    .summarize_executable(bytes.as_ref())
+                    .map_err(crate::smartcontracts::ivm::program_admission_error)?;
+                let summary = match admitted {
+                    ExecutableProgramSummary::Contract(summary) => summary,
+                    ExecutableProgramSummary::Generic(summary) => {
+                        crate::smartcontracts::ivm::validate_generic_execution_context(
+                            &state_transaction.world,
+                            &md,
+                            summary.code_hash,
+                        )?;
+                        let effective_cycles = validate_prepared_ivm_execution_policy(
+                            state_transaction,
+                            &summary.metadata,
+                            summary.code_offset,
+                            summary.program(),
+                        )?;
+
+                        let prepared_contract_cache = ivm_cache.prepared_contract_cache();
+                        let amx_analysis =
+                            ivm_cache
+                                .analyze_generic_program(&summary)
+                                .map_err(|error| {
+                                    ValidationFail::InternalError(format!(
+                                        "invalid admitted generic-program analysis: {error}"
+                                    ))
+                                })?;
+                        let streaming_metadata =
+                            crate::pipeline::overlay::resolve_streaming_metadata(
+                                state_transaction,
+                                authority,
+                            );
+                        let bound_contract_records =
+                            code::snapshot_bound_contract_records_by_subject(state_transaction);
+                        let axt_policy_snapshot = state_transaction.axt_policy_snapshot();
+                        let mut runtime = ivm_cache
+                            .checkout_generic_runtime(&summary, effective_limit)
+                            .map_err(|e| ValidationFail::InternalError(e.to_string()))?;
+                        runtime.set_max_cycles(effective_cycles.get());
+                        runtime.set_gas_limit(effective_limit);
+                        let accounts = state_transaction.accounts_snapshot();
+                        let mut host =
+                            CoreCoreHost::with_accounts(authority.clone(), Arc::clone(&accounts));
+                        host.set_generic_execution();
+                        host.set_prepared_contract_cache(prepared_contract_cache);
+                        host.set_amx_analysis(amx_analysis);
+                        host.set_amx_limits(
+                            crate::smartcontracts::ivm::host::CoreHost::amx_limits_from_config(
+                                state_transaction.pipeline(),
+                            ),
+                        );
+                        host.set_axt_timing(state_transaction.nexus().axt);
+                        host.hydrate_axt_replay_ledger(state_transaction);
+                        host.set_crypto_config(Arc::clone(&state_transaction.crypto));
+                        host.set_zk_config(&state_transaction.zk);
+                        host.set_public_inputs_from_parameters(
+                            state_transaction.world.parameters.get(),
+                        );
+                        host.set_vrf_epoch_seeds_from_world(&state_transaction.world);
+                        host.set_query_state(state_transaction);
+                        host.set_bound_contract_records_by_subject_snapshot(bound_contract_records);
+                        host = host.with_axt_policy_snapshot(&axt_policy_snapshot);
+                        crate::pipeline::overlay::apply_streaming_metadata(
+                            &mut host,
+                            streaming_metadata,
+                        );
+                        host.set_chain_id(&state_transaction.chain_id);
+                        #[cfg(feature = "telemetry")]
+                        host.set_telemetry(state_transaction.telemetry.clone());
+                        host.set_zk_snapshots_from_world(
+                            &state_transaction.world,
+                            &state_transaction.zk,
+                        )
+                        .map_err(|err| {
+                            ValidationFail::InternalError(format!(
+                                "invalid ZK snapshot state: {err}"
+                            ))
+                        })?;
+                        if let Err(err) = runtime.run_with_host(&mut host) {
+                            return Err(
+                                crate::smartcontracts::ivm::map_vm_error_with_context_to_validation(
+                                    &runtime, &err,
+                                ),
+                            );
+                        }
+                        let gas_used = effective_limit.saturating_sub(runtime.remaining_gas());
+                        let artifacts = host.into_execution_artifacts(None)?;
+                        let _executed =
+                            artifacts.apply_to_transaction(state_transaction, authority)?;
+                        state_transaction.last_tx_gas_used = gas_used;
+                        Self::enforce_transaction_gas_fits_block(state_transaction, gas_used)?;
+
+                        if should_charge_pipeline_gas_asset(
+                            skip_nexus_fee,
+                            state_transaction.nexus.enabled,
+                            &state_transaction.nexus.fees,
+                            &gas_asset_opt,
+                        ) && let Some(gas_asset_id_str) = gas_asset_opt
+                        {
+                            Self::charge_pipeline_gas_asset_fee(
+                                state_transaction,
+                                authority,
+                                &transaction_for_fee,
+                                tx_hash,
+                                settlement_source_id,
+                                &gas_asset_id_str,
+                                gas_used,
+                                fee_sponsor.as_ref(),
+                            )?;
+                        }
+                        Self::charge_nexus_fees(
+                            state_transaction,
+                            authority,
+                            &transaction_for_fee,
+                            tx_hash,
+                            fee_sponsor,
+                            tx_bytes_len,
+                            0,
+                            gas_used,
+                            false,
+                        )?;
+                        return Ok(());
+                    }
+                };
+                let effective_cycles = validate_prepared_ivm_execution_policy(
+                    state_transaction,
+                    &summary.metadata,
+                    summary.code_offset,
+                    bytes.as_ref(),
+                )?;
                 crate::pipeline::overlay::validate_contract_binding(
                     state_transaction,
                     &transaction_for_fee,
                     &summary,
                 )
-                .map_err(|error| ValidationFail::NotPermitted(error.to_string()))?;
+                .map_err(overlay_build_error_to_validation_fail)?;
                 let selector = requested_contract_entrypoint(&md)?.ok_or_else(|| {
                     ValidationFail::NotPermitted(
                         "self-describing raw-IVM contract dispatch requires explicit contract_entrypoint metadata"
@@ -4810,6 +4973,7 @@ impl Executor {
                 let mut runtime = summary
                     .checkout_runtime(effective_limit)
                     .map_err(|e| ValidationFail::InternalError(e.to_string()))?;
+                runtime.set_max_cycles(effective_cycles.get());
                 runtime.set_gas_limit(effective_limit);
                 if let Some(argument_record) = contract_call_context
                     .as_ref()
@@ -6132,7 +6296,7 @@ fn execute_multisig_custom_instruction_if_present(
 #[derive(Debug, Clone, norito::derive::JsonDeserialize, norito::derive::JsonSerialize)]
 struct FixtureMintAssetForAllAccounts {
     asset_definition: AssetDefinitionId,
-    quantity: Numeric,
+    quantity: Quantity,
 }
 
 #[derive(Debug, Clone)]
@@ -6294,7 +6458,7 @@ fn execute_fixture_simple_custom_instruction(
         .collect();
     for account_id in account_ids {
         let asset_id = AssetId::new(instruction.asset_definition.clone(), account_id);
-        iroha_data_model::isi::Mint::asset_numeric(instruction.quantity.clone(), asset_id)
+        iroha_data_model::isi::Mint::asset_quantity(instruction.quantity.clone(), asset_id)
             .execute(authority, state_transaction)
             .map_err(ValidationFail::from)?;
     }
@@ -6501,7 +6665,7 @@ fn evaluate_fixture_numeric_query_value(
                 .world
                 .assets
                 .get(&asset_id)
-                .map(|value| value.as_ref().clone())
+                .map(|value| value.as_ref().as_numeric().clone())
                 .unwrap_or_else(Numeric::zero))
         }
         "FindTotalAssetQuantityByAssetDefinitionId" => {
@@ -6514,6 +6678,7 @@ fn evaluate_fixture_numeric_query_value(
             state_transaction
                 .world
                 .asset_total_amount(&asset_definition_id)
+                .map(Quantity::into_numeric)
                 .map_err(ValidationFail::from)
         }
         _ => Err(ValidationFail::InternalError(format!(
@@ -6583,9 +6748,9 @@ fn extract_account_metadata_target(instruction: &InstructionBox) -> Option<Accou
 
 fn extract_transfer_asset(
     instruction: &InstructionBox,
-) -> Option<Transfer<Asset, Numeric, Account>> {
+) -> Option<Transfer<Asset, Quantity, Account>> {
     let instr_any = instruction.as_any();
-    if let Some(transfer) = instr_any.downcast_ref::<Transfer<Asset, Numeric, Account>>() {
+    if let Some(transfer) = instr_any.downcast_ref::<Transfer<Asset, Quantity, Account>>() {
         return Some(transfer.clone());
     }
     if let Some(transfer_box) = instr_any.downcast_ref::<TransferBox>() {
@@ -6594,13 +6759,13 @@ fn extract_transfer_asset(
             _ => None,
         };
     }
-    if !instruction_has_concrete_type::<Transfer<Asset, Numeric, Account>>(instruction) {
+    if !instruction_has_concrete_type::<Transfer<Asset, Quantity, Account>>(instruction) {
         return None;
     }
     let bytes = instruction.dyn_encode();
     std::panic::catch_unwind(|| {
         let mut slice = &bytes[..];
-        Transfer::<Asset, Numeric, Account>::decode(&mut slice).ok()
+        Transfer::<Asset, Quantity, Account>::decode(&mut slice).ok()
     })
     .ok()
     .flatten()
@@ -6885,23 +7050,32 @@ where
                         call.contract_address
                     ))
                 })?;
+            let code_bytes = state
+                .world()
+                .contract_code()
+                .get(&identity.code_hash)
+                .ok_or_else(|| {
+                    ValidationFail::NotPermitted(format!(
+                        "contract bytecode `{}` not found in WSV",
+                        identity.code_hash
+                    ))
+                })?;
             let summary = if let Some(summary) = ivm_cache
                 .cached_program_summary(identity.code_hash)
                 .map_err(|error| ValidationFail::InternalError(error.to_string()))?
             {
                 summary
             } else {
-                code::with_code_bytes(state, &identity.code_hash, |bytecode| {
-                    ivm_cache.summarize_program_with_hash(identity.code_hash, bytecode)
-                })
-                .ok_or_else(|| {
-                    ValidationFail::NotPermitted(format!(
-                        "contract bytecode `{}` not found in WSV",
-                        identity.code_hash
-                    ))
-                })?
-                .map_err(|error| ValidationFail::InternalError(error.to_string()))?
+                ivm_cache
+                    .summarize_program_with_hash(identity.code_hash, code_bytes.as_ref())
+                    .map_err(|error| ValidationFail::InternalError(error.to_string()))?
             };
+            if summary.prepared_contract().artifact() != code_bytes.as_slice() {
+                return Err(ValidationFail::NotPermitted(format!(
+                    "cached contract bytecode `{}` does not match live WSV",
+                    identity.code_hash
+                )));
+            }
             authorize_prepared_contract_selector(
                 state.world(),
                 authority,
@@ -6909,12 +7083,51 @@ where
                 &call.entrypoint,
                 &identity,
             )
-            .map(drop)
+            .map(drop)?;
+            validate_prepared_ivm_execution_policy(
+                state,
+                &summary.metadata,
+                summary.code_offset,
+                code_bytes.as_ref(),
+            )?;
+            let manifest = state
+                .world()
+                .contract_manifests()
+                .get(&identity.code_hash)
+                .ok_or_else(|| {
+                    ValidationFail::NotPermitted(format!(
+                        "contract instance `{}` has no manifest",
+                        identity.contract_address
+                    ))
+                })?;
+            crate::smartcontracts::ivm::validate_manifest_hashes(
+                manifest,
+                summary.code_hash,
+                summary.abi_hash,
+            )
+            .map_err(ValidationFail::IvmAdmission)
         }
         Executable::Ivm(bytecode) => {
-            let summary = ivm_cache
-                .summarize_program(bytecode.as_ref())
-                .map_err(|error| ValidationFail::InternalError(error.to_string()))?;
+            let admitted = ivm_cache
+                .summarize_executable(bytecode.as_ref())
+                .map_err(crate::smartcontracts::ivm::program_admission_error)?;
+            let summary = match admitted {
+                ExecutableProgramSummary::Generic(summary) => {
+                    crate::smartcontracts::ivm::validate_generic_execution_context(
+                        state.world(),
+                        transaction.metadata(),
+                        summary.code_hash,
+                    )?;
+                    validate_prepared_ivm_execution_policy(
+                        state,
+                        &summary.metadata,
+                        summary.code_offset,
+                        summary.program(),
+                    )?;
+                    return Ok(());
+                }
+                ExecutableProgramSummary::Contract(summary) => summary,
+            };
             let selector = requested_contract_entrypoint(transaction.metadata())?.ok_or_else(|| {
                 ValidationFail::NotPermitted(
                     "self-describing raw-IVM contract dispatch requires explicit contract_entrypoint metadata"
@@ -6933,6 +7146,14 @@ where
                 &selector,
                 &identity,
             )?;
+            validate_prepared_ivm_execution_policy(
+                state,
+                &summary.metadata,
+                summary.code_offset,
+                bytecode.as_ref(),
+            )?;
+            crate::pipeline::overlay::validate_contract_binding(state, transaction, &summary)
+                .map_err(overlay_build_error_to_validation_fail)?;
             Ok(())
         }
         Executable::IvmProved(proved) => {
@@ -6957,6 +7178,14 @@ where
                 &selector,
                 &identity,
             )?;
+            validate_prepared_ivm_execution_policy(
+                state,
+                &summary.metadata,
+                summary.code_offset,
+                proved.bytecode.as_ref(),
+            )?;
+            crate::pipeline::overlay::validate_contract_binding(state, transaction, &summary)
+                .map_err(overlay_build_error_to_validation_fail)?;
             Ok(())
         }
     }
@@ -7067,7 +7296,7 @@ fn can_transfer_asset(
     world: &impl WorldReadOnly,
     authority: &AccountId,
     contract_runtime_context: Option<&ContractRuntimeExecutionContext>,
-    transfer: &Transfer<Asset, Numeric, Account>,
+    transfer: &Transfer<Asset, Quantity, Account>,
 ) -> Result<bool, ValidationFail> {
     if transfer.source().account() == authority {
         return Ok(true);
@@ -8260,7 +8489,7 @@ mod tests {
         let mut nexus_fees = NexusFees::default();
         let gas_asset = Some("xor#universal".to_owned());
 
-        nexus_fees.per_gas_unit_fee = Numeric::zero();
+        nexus_fees.per_gas_unit_fee = Quantity::zero();
         assert!(should_charge_pipeline_gas_asset(
             false,
             true,
@@ -8268,7 +8497,7 @@ mod tests {
             &gas_asset
         ));
 
-        nexus_fees.per_gas_unit_fee = Numeric::new(1, 3);
+        nexus_fees.per_gas_unit_fee = "0.001".parse().expect("valid gas fee");
         assert!(!should_charge_pipeline_gas_asset(
             false,
             true,
@@ -8351,7 +8580,7 @@ mod tests {
         state: &State,
         payer: &AccountId,
         fee_asset_id: &str,
-        fee_amount: Numeric,
+        fee_amount: Quantity,
         source_id: [u8; 32],
     ) {
         let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
@@ -8369,9 +8598,9 @@ mod tests {
                 instruction_count: 0,
                 gas_used: 0,
                 base_fee: fee_amount,
-                per_byte_fee: Numeric::zero(),
-                per_instruction_fee: Numeric::zero(),
-                per_gas_unit_fee: Numeric::zero(),
+                per_byte_fee: Quantity::zero(),
+                per_instruction_fee: Quantity::zero(),
+                per_gas_unit_fee: Quantity::zero(),
             },
         };
         let settlement = iroha_data_model::block::consensus::LaneBlockCommitment {
@@ -8619,42 +8848,9 @@ mod tests {
     }
 
     #[test]
-    fn detached_asset_instructions_reject_negative_quantities_before_recording() {
-        let definition_id = AssetDefinitionId::new(
-            DomainId::try_new("detached_negative", "universal").expect("domain id"),
-            "coin".parse().expect("asset name"),
-        );
-        let asset_id = AssetId::new(definition_id, alice());
+    fn detached_asset_instructions_cannot_be_constructed_with_negative_quantities() {
         let negative = Numeric::new(-1_i32, 0);
-        let instructions: [InstructionBox; 3] = [
-            Mint::asset_numeric(negative.clone(), asset_id.clone()).into(),
-            Burn::asset_numeric(negative.clone(), asset_id.clone()).into(),
-            Transfer::asset_numeric(asset_id, negative, BOB_ID.clone()).into(),
-        ];
-
-        for instruction in instructions {
-            let mut delta = crate::state::DetachedStateTransactionDelta::default();
-            let error = execute_instruction_detached(&alice(), &instruction, &mut delta)
-                .expect_err("negative detached asset quantity must be rejected");
-            assert!(matches!(
-                error,
-                ValidationFail::InstructionFailed(InstructionExecutionError::Math(
-                    MathError::NegativeValue
-                ))
-            ));
-        }
-    }
-
-    #[test]
-    fn nexus_fee_computation_rejects_negative_runtime_schedule() {
-        let mut fees = iroha_config::parameters::actual::NexusFees::default();
-        fees.base_fee = Numeric::new(-1_i32, 0);
-        let error = compute_nexus_fee_amount(&fees, 1, 1, 1)
-            .expect_err("negative runtime fee schedule must fail closed");
-        assert!(matches!(
-            error,
-            ValidationFail::InternalError(message) if message.contains("must be non-negative")
-        ));
+        assert!(Quantity::try_from_numeric(negative).is_err());
     }
 
     #[test]
@@ -9204,7 +9400,7 @@ mod tests {
             .with_name("XOR".to_owned())
             .build(&seller);
         let seller_asset_id = AssetId::of(asset_definition_id.clone(), seller.clone());
-        let seller_asset = Asset::new(seller_asset_id.clone(), Numeric::from(100_u64));
+        let seller_asset = Asset::new(seller_asset_id.clone(), Quantity::from(100_u64));
         let world = World::with_assets(
             [domain],
             [seller_account],
@@ -9432,7 +9628,7 @@ mod tests {
             ),
             user1.clone(),
         );
-        let instruction = InstructionBox::from(Transfer::asset_numeric(
+        let instruction = InstructionBox::from(Transfer::asset_quantity(
             transfer_asset_id,
             1_u32,
             user2.clone(),
@@ -9486,7 +9682,7 @@ mod tests {
             ),
             user1.clone(),
         );
-        let instruction = InstructionBox::from(Transfer::asset_numeric(
+        let instruction = InstructionBox::from(Transfer::asset_quantity(
             transfer_asset_id,
             1_u32,
             user2.clone(),
@@ -9541,7 +9737,7 @@ mod tests {
             .with_name("coin".to_owned())
             .build(&user1);
         let transfer_asset_id = AssetId::new(asset_definition_id.clone(), user1.clone());
-        let source_balance = Asset::new(transfer_asset_id.clone(), Numeric::new(10, 0));
+        let source_balance = Asset::new(transfer_asset_id.clone(), Quantity::from(10));
 
         let world = World::with_assets(
             [alice_domain, users_domain, defs_domain],
@@ -9562,7 +9758,7 @@ mod tests {
         let mut block = state.block(header);
 
         let executor = super::Executor::Initial;
-        let instruction = InstructionBox::from(Transfer::asset_numeric(
+        let instruction = InstructionBox::from(Transfer::asset_quantity(
             transfer_asset_id,
             1_u32,
             user2.clone(),
@@ -9623,7 +9819,7 @@ mod tests {
             .with_name("coin".to_owned())
             .build(&user1);
         let transfer_asset_id = AssetId::new(asset_definition_id.clone(), user1.clone());
-        let source_balance = Asset::new(transfer_asset_id.clone(), Numeric::new(10, 0));
+        let source_balance = Asset::new(transfer_asset_id.clone(), Quantity::from(10));
 
         let world = World::with_assets(
             [alice_domain, users_domain, defs_domain],
@@ -9644,7 +9840,7 @@ mod tests {
         let mut block = state.block(header);
 
         let executor = super::Executor::Initial;
-        let instruction = InstructionBox::from(Transfer::asset_numeric(
+        let instruction = InstructionBox::from(Transfer::asset_quantity(
             transfer_asset_id,
             1_u32,
             user2.clone(),
@@ -10365,10 +10561,10 @@ mod tests {
         {
             let nexus = state.nexus.get_mut();
             nexus.enabled = true;
-            nexus.fees.base_fee = Numeric::from(1_u32);
-            nexus.fees.per_byte_fee = Numeric::zero();
-            nexus.fees.per_instruction_fee = Numeric::zero();
-            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.fees.base_fee = Quantity::from(1_u32);
+            nexus.fees.per_byte_fee = Quantity::zero();
+            nexus.fees.per_instruction_fee = Quantity::zero();
+            nexus.fees.per_gas_unit_fee = Quantity::zero();
             nexus.fees.sponsorship_enabled = true;
             nexus.fees.external_settlement_enabled = true;
             nexus.fees.fee_asset_id = asset_def_id.to_string();
@@ -10524,10 +10720,10 @@ mod tests {
         {
             let nexus = state.nexus.get_mut();
             nexus.enabled = true;
-            nexus.fees.base_fee = Numeric::from(1_u32);
-            nexus.fees.per_byte_fee = Numeric::zero();
-            nexus.fees.per_instruction_fee = Numeric::zero();
-            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.fees.base_fee = Quantity::from(1_u32);
+            nexus.fees.per_byte_fee = Quantity::zero();
+            nexus.fees.per_instruction_fee = Quantity::zero();
+            nexus.fees.per_gas_unit_fee = Quantity::zero();
             nexus.fees.fee_asset_id = "xor#universal".to_owned();
             nexus.fees.burn_from_unix_timestamp_ms = 0;
             nexus.fees.settlement_mode =
@@ -10553,73 +10749,6 @@ mod tests {
         )
     }
 
-    fn kagemusha_fee_test_recursive_bundle(
-        asset: AssetDefinitionId,
-    ) -> iroha_data_model::offline::KagemushaRecursiveSpendBundleV1 {
-        use iroha_data_model::offline::{
-            KagemushaRecursiveAggregationProof, KagemushaRecursiveAggregationProofPublicInputs,
-            KagemushaRecursiveSpendAccumulatorV1, KagemushaRecursiveSpendBundleV1,
-            KagemushaSpendableNoteDescriptorV1,
-        };
-        use iroha_data_model::proof::{ProofBox, VerifyingKeyId};
-
-        KagemushaRecursiveSpendBundleV1 {
-            accumulator: KagemushaRecursiveSpendAccumulatorV1 {
-                domain: "iroha:kagemusha:v1:recursive-spend-accumulator".to_owned(),
-                chain_id: ChainId::from("fee-policy-chain"),
-                asset,
-                initial_root: [0x10; 32],
-                final_root: [0x11; 32],
-                topup_anchor_nullifiers: vec![[0x12; 32]],
-                hop_count: 1,
-                lineage_digest: [0x13; 32],
-                aggregation_transcript_digest: [0x14; 32],
-                nullifier_digest: Hash::new("fee-policy:nullifiers"),
-                output_commitment_digest: Hash::new("fee-policy:outputs"),
-                fold_digest: Hash::new("fee-policy:fold"),
-                recursive_proof_chain_digest: [0x15; 32],
-                transition_profile_binding_digest: [0x16; 32],
-                append_opening_preflight_digest: [0x17; 32],
-                append_boundary_digest: [0x18; 32],
-                verifier_params_fingerprint: [0x19; 32],
-                fixed_window_table_schedule_digest: [0x1A; 32],
-                fixed_window_shared_table_manifest_digest: [0x1B; 32],
-                fixed_window_table_base_digest: [0x1C; 32],
-                verifier_witness_batch_digest: [0x1D; 32],
-                verifier_opening_len: 4,
-                current_note: KagemushaSpendableNoteDescriptorV1 {
-                    note_commitment: [0x20; 32],
-                    spend_nullifier: [0x21; 32],
-                    amount: Numeric::new(1, 0),
-                },
-            },
-            recursive_proof: KagemushaRecursiveAggregationProof {
-                verifier_key_id: VerifyingKeyId::new("halo2/ipa", "fee-policy-recursive"),
-                public_inputs: KagemushaRecursiveAggregationProofPublicInputs {
-                    domain: "fee-policy-recursive".to_owned(),
-                    evidence_digest: [0x30; 32],
-                    folded_public_inputs_hash: [0x31; 32],
-                    aggregation_transcript_digest: [0x32; 32],
-                    verifier_params_fingerprint: [0x33; 32],
-                    fixed_window_table_schedule_digest: [0x34; 32],
-                    fixed_window_shared_table_manifest_digest: [0x35; 32],
-                    fixed_window_table_base_digest: [0x36; 32],
-                    verifier_witness_batch_digest: [0x37; 32],
-                    recursive_proof_chain_digest: [0x38; 32],
-                    transition_profile_binding_digest: [0x39; 32],
-                    append_opening_preflight_digest: [0x3A; 32],
-                    append_boundary_digest: [0x3B; 32],
-                    recursive_verifier_scalar_projection_digest: [0x3C; 32],
-                    verifier_opening_len: 4,
-                    verifier_witness_count: 1,
-                    hop_count: 1,
-                },
-                public_inputs_hash: Hash::new("fee-policy:recursive-inputs"),
-                proof: ProofBox::new("halo2/ipa".parse().expect("backend ident"), vec![0x5A; 32]),
-            },
-        }
-    }
-
     fn kagemusha_fee_test_recursive_redeem_v2(
         asset: AssetDefinitionId,
         recipient: AccountId,
@@ -10628,10 +10757,11 @@ mod tests {
         use iroha_data_model::{
             confidential::ConfidentialStatus,
             offline::{
-                KAGEMUSHA_RECURSIVE_SPEND_RESERVED_INIT_PROOF_CIRCUIT_ID_V2,
+                KAGEMUSHA_RECURSIVE_SPEND_STATE_EP_CIRCUIT_ID_V1,
+                KagemushaRecursiveSpendArtifactBindingV3,
                 KagemushaRecursiveSpendBranchClaimV2, KagemushaRecursiveSpendBundleV2,
-                KagemushaRecursiveSpendLineageModeV2, KagemushaRecursiveSpendProofV2,
-                KagemushaRecursiveSpendPublicStatementV2, KagemushaRecursiveSpendRedeemRequestV2,
+                KagemushaRecursiveSpendProofV2, KagemushaRecursiveSpendPublicStatementV2,
+                KagemushaRecursiveSpendRedeemRequestV2,
                 KagemushaRecursiveSpendRedemptionIntentBuildRequestV2,
                 KagemushaRecursiveSpendTopUpAnchorV2, KagemushaRequestAuthorizationV2,
                 KagemushaScaledAmountV2, KagemushaSpendableNoteDescriptorV2,
@@ -10653,7 +10783,10 @@ mod tests {
             spend_nullifier: [0x42; 32],
             amount,
         };
-        let artifact_generation = "fee-policy-v2";
+        let artifact_binding = KagemushaRecursiveSpendArtifactBindingV3 {
+            generation: "fee-policy-v3".to_owned(),
+            manifest_sha256: [0x43; 32],
+        };
         let topup_operation_id = [0x47; 32];
         let topup_anchor = KagemushaRecursiveSpendTopUpAnchorV2 {
             version: 2,
@@ -10672,7 +10805,7 @@ mod tests {
                 "fee-policy-kagemusha-topup-shield-v2",
             ),
             shield_verifier_commitment: [0x53; 32],
-            artifact_generation: artifact_generation.to_owned(),
+            artifact_binding: artifact_binding.clone(),
             finalized_height: 1,
             finalized_tx_hash: [0x54; 32],
             anchor_digest: [0; 32],
@@ -10689,7 +10822,7 @@ mod tests {
             .expect("canonical fee-policy V2 root claim");
         let verifier_key_id = VerifyingKeyId::new(
             "halo2/ipa",
-            KAGEMUSHA_RECURSIVE_SPEND_RESERVED_INIT_PROOF_CIRCUIT_ID_V2,
+            KAGEMUSHA_RECURSIVE_SPEND_STATE_EP_CIRCUIT_ID_V1,
         );
         let statement = KagemushaRecursiveSpendPublicStatementV2 {
             chain_id: chain_id.clone(),
@@ -10702,8 +10835,7 @@ mod tests {
             current_note: note.clone(),
             branch_claims: vec![branch_claim],
             transition: None,
-            artifact_generation: artifact_generation.to_owned(),
-            lineage_mode: KagemushaRecursiveSpendLineageModeV2::Reserved,
+            artifact_binding,
             verifier_key_id: verifier_key_id.clone(),
         };
         let public_statement_digest = statement
@@ -10736,7 +10868,7 @@ mod tests {
             recipient: recipient.clone(),
             public_amount: amount,
             change_output: None,
-            change_artifact_generation: None,
+            change_artifact_binding: None,
             unshield_public_inputs,
             unshield_public_inputs_digest: unshield_public_inputs
                 .digest()
@@ -10745,15 +10877,6 @@ mod tests {
         }
         .into_intent()
         .expect("canonical fee-policy V2 redemption intent");
-        let mut lineage_verifier_record = VerifyingKeyRecord::new(
-            1,
-            KAGEMUSHA_RECURSIVE_SPEND_RESERVED_INIT_PROOF_CIRCUIT_ID_V2,
-            BackendTag::Halo2IpaPasta,
-            "pallas",
-            [0x4F; 32],
-            [0x50; 32],
-        );
-        lineage_verifier_record.status = ConfidentialStatus::Active;
         let authorization = KagemushaRequestAuthorizationV2 {
             authority: recipient.clone(),
             device_id: "fee-policy-v2-device".to_owned(),
@@ -10776,8 +10899,6 @@ mod tests {
             amount,
             redeem_proof: kagemusha_fee_test_proof_attachment("fee-policy-kagemusha-redeem-v2"),
             redemption,
-            lineage_witness: None,
-            lineage_verifier_record,
             offline_change: None,
             block_height: 1,
             operation_id,
@@ -11154,9 +11275,9 @@ mod tests {
     #[test]
     fn nexus_fee_sponsor_policy_local_max_fee_rejects_even_when_global_cap_allows() {
         let mut fixture = sponsored_fee_admission_fixture(true);
-        fixture.state.nexus.get_mut().fees.sponsor_max_fee = Numeric::zero();
+        fixture.state.nexus.get_mut().fees.sponsor_max_fee = Quantity::zero();
         let mut policy = default_fee_sponsor_policy(&fixture.sponsor_id);
-        policy.max_fee = Some(Numeric::new(1, 1));
+        policy.max_fee = Some("0.1".parse().expect("valid sponsor fee cap"));
         fixture
             .state
             .world
@@ -11392,7 +11513,8 @@ mod tests {
     #[test]
     fn nexus_fee_sponsor_max_fee_applies_after_fee_metering() {
         let mut fixture = sponsored_fee_admission_fixture(true);
-        fixture.state.nexus.get_mut().fees.sponsor_max_fee = Numeric::new(1, 1);
+        fixture.state.nexus.get_mut().fees.sponsor_max_fee =
+            "0.1".parse().expect("valid sponsor fee cap");
         let (executable, metadata) = dpn_contract_call_executable_and_metadata(
             &fixture.authority_id,
             "transfer_dpn",
@@ -11468,7 +11590,7 @@ mod tests {
         let mut state = State::new(world, kura, query_handle);
         let nexus = state.nexus.get_mut();
         nexus.enabled = true;
-        nexus.fees.base_fee = Numeric::from(1_u32);
+        nexus.fees.base_fee = Quantity::from(1_u32);
         nexus.fees.sponsorship_enabled = false;
         nexus.fees.fee_asset_id = "4cuvDVPuLBKJyN6dPbRQhmLh68sU".to_string();
         nexus.fees.fee_sink_account_id = sink_id.to_string();
@@ -11516,7 +11638,7 @@ mod tests {
         let mut state = State::new(world, kura, query_handle);
         let nexus = state.nexus.get_mut();
         nexus.enabled = true;
-        nexus.fees.base_fee = Numeric::from(1_u32);
+        nexus.fees.base_fee = Quantity::from(1_u32);
         nexus.fees.sponsorship_enabled = true;
         nexus.fees.fee_asset_id = "4cuvDVPuLBKJyN6dPbRQhmLh68sU".to_string();
         nexus.fees.fee_sink_account_id = sink_id.to_string();
@@ -11602,10 +11724,10 @@ mod tests {
         {
             let nexus = state.nexus.get_mut();
             nexus.enabled = true;
-            nexus.fees.base_fee = Numeric::from(1_u32);
-            nexus.fees.per_byte_fee = Numeric::zero();
-            nexus.fees.per_instruction_fee = Numeric::zero();
-            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.fees.base_fee = Quantity::from(1_u32);
+            nexus.fees.per_byte_fee = Quantity::zero();
+            nexus.fees.per_instruction_fee = Quantity::zero();
+            nexus.fees.per_gas_unit_fee = Quantity::zero();
             nexus.fees.sponsorship_enabled = true;
             nexus.fees.fee_asset_id = asset_def_id.to_string();
             nexus.fees.fee_sink_account_id = sink_id.to_string();
@@ -11720,10 +11842,10 @@ mod tests {
         {
             let nexus = state.nexus.get_mut();
             nexus.enabled = true;
-            nexus.fees.base_fee = Numeric::from(1_u32);
-            nexus.fees.per_byte_fee = Numeric::zero();
-            nexus.fees.per_instruction_fee = Numeric::zero();
-            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.fees.base_fee = Quantity::from(1_u32);
+            nexus.fees.per_byte_fee = Quantity::zero();
+            nexus.fees.per_instruction_fee = Quantity::zero();
+            nexus.fees.per_gas_unit_fee = Quantity::zero();
             nexus.fees.sponsorship_enabled = true;
             nexus.fees.fee_asset_id = asset_def_id.to_string();
             nexus.fees.fee_sink_account_id = sink_id.to_string();
@@ -11822,10 +11944,10 @@ mod tests {
         {
             let nexus = state.nexus.get_mut();
             nexus.enabled = true;
-            nexus.fees.base_fee = Numeric::from(1_u32);
-            nexus.fees.per_byte_fee = Numeric::zero();
-            nexus.fees.per_instruction_fee = Numeric::zero();
-            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.fees.base_fee = Quantity::from(1_u32);
+            nexus.fees.per_byte_fee = Quantity::zero();
+            nexus.fees.per_instruction_fee = Quantity::zero();
+            nexus.fees.per_gas_unit_fee = Quantity::zero();
             nexus.fees.sponsorship_enabled = true;
             nexus.fees.external_settlement_enabled = true;
             nexus.fees.fee_asset_id = asset_def_id.to_string();
@@ -11919,10 +12041,10 @@ mod tests {
         {
             let nexus = state.nexus.get_mut();
             nexus.enabled = true;
-            nexus.fees.base_fee = Numeric::from(1_u32);
-            nexus.fees.per_byte_fee = Numeric::zero();
-            nexus.fees.per_instruction_fee = Numeric::zero();
-            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.fees.base_fee = Quantity::from(1_u32);
+            nexus.fees.per_byte_fee = Quantity::zero();
+            nexus.fees.per_instruction_fee = Quantity::zero();
+            nexus.fees.per_gas_unit_fee = Quantity::zero();
             nexus.fees.sponsorship_enabled = true;
             nexus.fees.fee_asset_id = asset_def_id.to_string();
             nexus.fees.fee_sink_account_id = sponsor_id.to_string();
@@ -12002,10 +12124,10 @@ mod tests {
         {
             let nexus = state.nexus.get_mut();
             nexus.enabled = true;
-            nexus.fees.base_fee = Numeric::from(1_u32);
-            nexus.fees.per_byte_fee = Numeric::zero();
-            nexus.fees.per_instruction_fee = Numeric::zero();
-            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.fees.base_fee = Quantity::from(1_u32);
+            nexus.fees.per_byte_fee = Quantity::zero();
+            nexus.fees.per_instruction_fee = Quantity::zero();
+            nexus.fees.per_gas_unit_fee = Quantity::zero();
             nexus.fees.fee_asset_id = fee_asset_id.to_owned();
             nexus.fees.fee_sink_account_id = sink_id.to_string();
             nexus.fees.burn_from_unix_timestamp_ms = 0;
@@ -12066,10 +12188,10 @@ mod tests {
         {
             let nexus = state.nexus.get_mut();
             nexus.enabled = true;
-            nexus.fees.base_fee = Numeric::from(1_u32);
-            nexus.fees.per_byte_fee = Numeric::zero();
-            nexus.fees.per_instruction_fee = Numeric::zero();
-            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.fees.base_fee = Quantity::from(1_u32);
+            nexus.fees.per_byte_fee = Quantity::zero();
+            nexus.fees.per_instruction_fee = Quantity::zero();
+            nexus.fees.per_gas_unit_fee = Quantity::zero();
             nexus.fees.fee_asset_id = "xor#universal".to_owned();
             nexus.fees.burn_from_unix_timestamp_ms = 0;
             nexus.fees.settlement_mode =
@@ -12106,10 +12228,10 @@ mod tests {
         {
             let nexus = state.nexus.get_mut();
             nexus.enabled = true;
-            nexus.fees.base_fee = Numeric::from(1_u32);
-            nexus.fees.per_byte_fee = Numeric::zero();
-            nexus.fees.per_instruction_fee = Numeric::zero();
-            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.fees.base_fee = Quantity::from(1_u32);
+            nexus.fees.per_byte_fee = Quantity::zero();
+            nexus.fees.per_instruction_fee = Quantity::zero();
+            nexus.fees.per_gas_unit_fee = Quantity::zero();
             nexus.fees.fee_asset_id = "xor#universal".to_owned();
             nexus.fees.burn_from_unix_timestamp_ms = 0;
             nexus.fees.settlement_mode =
@@ -12139,56 +12261,6 @@ mod tests {
             .expect("protocol proof registration must not require a fee receipt");
     }
 
-    #[test]
-    fn nexus_fee_kagemusha_transfer_is_fee_exempt_offline_offline() {
-        let (state, authority_id, authority_kp, asset_def_id) =
-            nexus_fee_lane_relay_burn_admission_fixture();
-        let transfer = iroha_data_model::isi::offline::KagemushaTransfer::new(
-            asset_def_id,
-            vec![[0x11; 32]],
-            vec![[0x22; 32]],
-            kagemusha_fee_test_proof_attachment("fee-policy-kagemusha-transfer"),
-            Some([0x33; 32]),
-        );
-        let tx = signed_fee_policy_transaction(
-            authority_id,
-            &authority_kp,
-            InstructionBox::from(transfer),
-        );
-        let view = state.view();
-        check_external_nexus_fee_admission(&view.world, &view.nexus, &tx, 0, 2, None)
-            .expect("offline-offline Kagemusha transfer must not require a fee budget");
-    }
-
-    #[test]
-    fn nexus_fee_kagemusha_transfer_batch_is_fee_exempt_offline_offline() {
-        let (state, authority_id, authority_kp, asset_def_id) =
-            nexus_fee_lane_relay_burn_admission_fixture();
-        let first = iroha_data_model::isi::offline::KagemushaTransfer::new(
-            asset_def_id.clone(),
-            vec![[0x11; 32]],
-            vec![[0x22; 32]],
-            kagemusha_fee_test_proof_attachment("fee-policy-kagemusha-transfer-first"),
-            Some([0x33; 32]),
-        );
-        let second = iroha_data_model::isi::offline::KagemushaTransfer::new(
-            asset_def_id,
-            vec![[0x44; 32]],
-            vec![[0x55; 32]],
-            kagemusha_fee_test_proof_attachment("fee-policy-kagemusha-transfer-second"),
-            Some([0x66; 32]),
-        );
-        let tx = signed_fee_policy_batch_transaction(
-            authority_id,
-            &authority_kp,
-            vec![InstructionBox::from(first), InstructionBox::from(second)],
-        );
-        let view = state.view();
-        check_external_nexus_fee_admission(&view.world, &view.nexus, &tx, 0, 2, None)
-            .expect("pure offline-offline Kagemusha transfer batch must not require a fee budget");
-    }
-
-    #[test]
     fn nexus_fee_online_to_offline_shield_requires_fee_budget() {
         let (state, authority_id, authority_kp, asset_def_id) =
             nexus_fee_lane_relay_burn_admission_fixture();
@@ -12203,67 +12275,9 @@ mod tests {
         assert_lane_relay_burn_requires_fee_budget(&state, &tx);
     }
 
-    #[test]
-    fn nexus_fee_kagemusha_mixed_with_online_topup_requires_fee_budget() {
-        let (state, authority_id, authority_kp, asset_def_id) =
-            nexus_fee_lane_relay_burn_admission_fixture();
-        let transfer = iroha_data_model::isi::offline::KagemushaTransfer::new(
-            asset_def_id.clone(),
-            vec![[0x11; 32]],
-            vec![[0x22; 32]],
-            kagemusha_fee_test_proof_attachment("fee-policy-kagemusha-transfer-mixed"),
-            Some([0x33; 32]),
-        );
-        let shield = iroha_data_model::isi::zk::Shield::new(
-            asset_def_id,
-            authority_id.clone(),
-            1,
-            [0x44; 32],
-            iroha_data_model::confidential::ConfidentialEncryptedPayload::default(),
-        );
-        let tx = signed_fee_policy_batch_transaction(
-            authority_id,
-            &authority_kp,
-            vec![InstructionBox::from(transfer), shield.into()],
-        );
-        assert_lane_relay_burn_requires_fee_budget(&state, &tx);
-    }
-
-    #[test]
-    fn nexus_fee_kagemusha_recursive_redeem_requires_fee_budget() {
-        let (state, authority_id, authority_kp, asset_def_id) =
-            nexus_fee_lane_relay_burn_admission_fixture();
-        let redeem = iroha_data_model::isi::offline::RedeemKagemushaRecursive::new(
-            kagemusha_fee_test_recursive_bundle(asset_def_id),
-            authority_id.clone(),
-            1,
-            kagemusha_fee_test_proof_attachment("fee-policy-kagemusha-redeem"),
-        );
-        let tx = signed_fee_policy_transaction(authority_id, &authority_kp, redeem.into());
-        assert_lane_relay_burn_requires_fee_budget(&state, &tx);
-    }
-
-    #[test]
-    fn nexus_fee_offline_to_online_kagemusha_redeem_can_fund_fee_from_redeemed_amount() {
-        let (mut state, authority_id, authority_kp, asset_def_id) =
-            nexus_fee_lane_relay_burn_admission_fixture();
-        state.nexus.get_mut().fees.fee_asset_id = asset_def_id.to_string();
-        let redeem = iroha_data_model::isi::offline::RedeemKagemushaRecursive::new(
-            kagemusha_fee_test_recursive_bundle(asset_def_id),
-            authority_id.clone(),
-            1,
-            kagemusha_fee_test_proof_attachment("fee-policy-kagemusha-redeem-funded"),
-        );
-        let tx = signed_fee_policy_transaction(authority_id, &authority_kp, redeem.into());
-        let view = state.view();
-        check_external_nexus_fee_admission(&view.world, &view.nexus, &tx, 0, 2, None)
-            .expect("same-asset offline-to-online redeem can fund its Nexus fee");
-    }
-
-    #[test]
     fn unavailable_kagemusha_v2_redeem_cannot_self_fund_nexus_fee() {
         assert!(
-            !iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_V2_PROOF_BACKEND_AVAILABLE,
+            !iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PROOF_BACKEND_AVAILABLE,
             "this regression test must be replaced by end-to-end V2 execution coverage when the backend ships"
         );
         let (mut state, authority_id, authority_kp, asset_def_id) =
@@ -12288,43 +12302,6 @@ mod tests {
         assert_lane_relay_burn_requires_fee_budget(&state, &tx);
     }
 
-    #[test]
-    fn nexus_fee_offline_to_online_kagemusha_redeem_below_fee_is_rejected() {
-        let (mut state, authority_id, authority_kp, asset_def_id) =
-            nexus_fee_lane_relay_burn_admission_fixture();
-        let nexus = state.nexus.get_mut();
-        nexus.fees.fee_asset_id = asset_def_id.to_string();
-        nexus.fees.base_fee = Numeric::from(2_u32);
-        let redeem = iroha_data_model::isi::offline::RedeemKagemushaRecursive::new(
-            kagemusha_fee_test_recursive_bundle(asset_def_id),
-            authority_id.clone(),
-            1,
-            kagemusha_fee_test_proof_attachment("fee-policy-kagemusha-redeem-underfunded"),
-        );
-        let tx = signed_fee_policy_transaction(authority_id, &authority_kp, redeem.into());
-        let view = state.view();
-        let err = check_external_nexus_fee_admission(&view.world, &view.nexus, &tx, 0, 2, None)
-            .expect_err("offline-to-online redeem below the fee must be rejected");
-        assert!(matches!(err, NexusFeeAdmissionError::Rejected(_)));
-    }
-
-    #[test]
-    fn nexus_fee_kagemusha_redeem_to_third_party_does_not_self_fund_fee() {
-        let (mut state, authority_id, authority_kp, asset_def_id) =
-            nexus_fee_lane_relay_burn_admission_fixture();
-        state.nexus.get_mut().fees.fee_asset_id = asset_def_id.to_string();
-        let (recipient_id, _recipient_kp) = gen_account_in("wonderland");
-        let redeem = iroha_data_model::isi::offline::RedeemKagemushaRecursive::new(
-            kagemusha_fee_test_recursive_bundle(asset_def_id),
-            recipient_id,
-            1,
-            kagemusha_fee_test_proof_attachment("fee-policy-kagemusha-redeem-third-party"),
-        );
-        let tx = signed_fee_policy_transaction(authority_id, &authority_kp, redeem.into());
-        assert_lane_relay_burn_requires_fee_budget(&state, &tx);
-    }
-
-    #[test]
     fn nexus_fee_lane_relay_burn_redeem_funded_balance_records_receipt_without_budget() {
         let _guard = crate::sumeragi::status::nexus_fee_test_lock()
             .lock()
@@ -12341,7 +12318,7 @@ mod tests {
             .build(&payer_id);
         let payer_asset = Asset::new(
             AssetId::of(asset_def_id.clone(), payer_id.clone()),
-            Numeric::from(1_u32),
+            1_u32,
         );
         let world = World::with_assets([domain], [payer], [asset_definition], [payer_asset], []);
         let kura = Kura::blank_kura_for_testing();
@@ -12351,10 +12328,10 @@ mod tests {
         {
             let nexus = state.nexus.get_mut();
             nexus.enabled = true;
-            nexus.fees.base_fee = Numeric::from(1_u32);
-            nexus.fees.per_byte_fee = Numeric::zero();
-            nexus.fees.per_instruction_fee = Numeric::zero();
-            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.fees.base_fee = Quantity::from(1_u32);
+            nexus.fees.per_byte_fee = Quantity::zero();
+            nexus.fees.per_instruction_fee = Quantity::zero();
+            nexus.fees.per_gas_unit_fee = Quantity::zero();
             nexus.fees.fee_asset_id = asset_def_id.to_string();
             nexus.fees.burn_from_unix_timestamp_ms = 0;
             nexus.fees.settlement_mode =
@@ -12451,10 +12428,10 @@ mod tests {
         {
             let nexus = state.nexus.get_mut();
             nexus.enabled = true;
-            nexus.fees.base_fee = Numeric::from(1_u32);
-            nexus.fees.per_byte_fee = Numeric::zero();
-            nexus.fees.per_instruction_fee = Numeric::zero();
-            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.fees.base_fee = Quantity::from(1_u32);
+            nexus.fees.per_byte_fee = Quantity::zero();
+            nexus.fees.per_instruction_fee = Quantity::zero();
+            nexus.fees.per_gas_unit_fee = Quantity::zero();
             nexus.fees.fee_asset_id = asset_def_id.to_string();
             nexus.fees.fee_sink_account_id = sink_id.to_string();
             nexus.fees.burn_from_unix_timestamp_ms = 0;
@@ -12529,10 +12506,10 @@ mod tests {
         {
             let nexus = state.nexus.get_mut();
             nexus.enabled = true;
-            nexus.fees.base_fee = Numeric::from(1_u32);
-            nexus.fees.per_byte_fee = Numeric::zero();
-            nexus.fees.per_instruction_fee = Numeric::zero();
-            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.fees.base_fee = Quantity::from(1_u32);
+            nexus.fees.per_byte_fee = Quantity::zero();
+            nexus.fees.per_instruction_fee = Quantity::zero();
+            nexus.fees.per_gas_unit_fee = Quantity::zero();
             nexus.fees.fee_asset_id = asset_def_id.to_string();
             nexus.fees.fee_sink_account_id = sink_id.to_string();
             nexus.fees.settlement_mode =
@@ -12578,10 +12555,10 @@ mod tests {
         {
             let nexus = state.nexus.get_mut();
             nexus.enabled = true;
-            nexus.fees.base_fee = Numeric::from(1_u32);
-            nexus.fees.per_byte_fee = Numeric::zero();
-            nexus.fees.per_instruction_fee = Numeric::zero();
-            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.fees.base_fee = Quantity::from(1_u32);
+            nexus.fees.per_byte_fee = Quantity::zero();
+            nexus.fees.per_instruction_fee = Quantity::zero();
+            nexus.fees.per_gas_unit_fee = Quantity::zero();
             nexus.fees.fee_asset_id = asset_def_id.to_string();
             nexus.fees.fee_sink_account_id = sink_id.to_string();
             nexus.fees.settlement_mode =
@@ -12656,10 +12633,10 @@ mod tests {
         {
             let nexus = state.nexus.get_mut();
             nexus.enabled = true;
-            nexus.fees.base_fee = Numeric::from(1_u32);
-            nexus.fees.per_byte_fee = Numeric::zero();
-            nexus.fees.per_instruction_fee = Numeric::zero();
-            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.fees.base_fee = Quantity::from(1_u32);
+            nexus.fees.per_byte_fee = Quantity::zero();
+            nexus.fees.per_instruction_fee = Quantity::zero();
+            nexus.fees.per_gas_unit_fee = Quantity::zero();
             nexus.fees.fee_asset_id = asset_def_id.to_string();
             nexus.fees.fee_sink_account_id = sink_id.to_string();
             nexus.fees.burn_from_unix_timestamp_ms = 0;
@@ -12723,10 +12700,10 @@ mod tests {
         {
             let nexus = state.nexus.get_mut();
             nexus.enabled = true;
-            nexus.fees.base_fee = Numeric::from(1_u32);
-            nexus.fees.per_byte_fee = Numeric::zero();
-            nexus.fees.per_instruction_fee = Numeric::zero();
-            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.fees.base_fee = Quantity::from(1_u32);
+            nexus.fees.per_byte_fee = Quantity::zero();
+            nexus.fees.per_instruction_fee = Quantity::zero();
+            nexus.fees.per_gas_unit_fee = Quantity::zero();
             nexus.fees.fee_asset_id = asset_def_id.to_string();
             nexus.fees.fee_sink_account_id = sink_id.to_string();
             nexus.fees.burn_from_unix_timestamp_ms = 0;
@@ -12797,7 +12774,7 @@ mod tests {
         {
             let nexus = state.nexus.get_mut();
             nexus.enabled = true;
-            nexus.fees.per_instruction_fee = Numeric::from(1_u32);
+            nexus.fees.per_instruction_fee = Quantity::from(1_u32);
             nexus.fees.fee_asset_id = asset_def_id.to_string();
             nexus.fees.fee_sink_account_id = sink_id.to_string();
             nexus.fees.burn_from_unix_timestamp_ms = 0;
@@ -12817,7 +12794,7 @@ mod tests {
             Json::new(recipient_id.to_string()),
         );
         let instruction: InstructionBox =
-            Mint::asset_numeric(3_u32, AssetId::of(asset_def_id, recipient_id)).into();
+            Mint::asset_quantity(3_u32, AssetId::of(asset_def_id, recipient_id)).into();
         let chain: ChainId = "test-chain".parse().unwrap();
         let tx = TransactionBuilder::new(chain, authority_id)
             .with_metadata(metadata)
@@ -12859,7 +12836,7 @@ mod tests {
         {
             let nexus = state.nexus.get_mut();
             nexus.enabled = true;
-            nexus.fees.per_instruction_fee = Numeric::from(1_u32);
+            nexus.fees.per_instruction_fee = Quantity::from(1_u32);
             nexus.fees.fee_asset_id = asset_def_id.to_string();
             nexus.fees.fee_sink_account_id = sink_id.to_string();
             nexus.fees.burn_from_unix_timestamp_ms = 0;
@@ -12875,7 +12852,7 @@ mod tests {
             Json::new(recipient_id.to_string()),
         );
         let instruction: InstructionBox =
-            Mint::asset_numeric(3_u32, AssetId::of(asset_def_id, recipient_id)).into();
+            Mint::asset_quantity(3_u32, AssetId::of(asset_def_id, recipient_id)).into();
         let chain: ChainId = "test-chain".parse().unwrap();
         let tx = TransactionBuilder::new(chain, authority_id)
             .with_metadata(metadata)
@@ -12912,7 +12889,7 @@ mod tests {
         }
         .build(&alice_id);
         let payer_asset = AssetId::of(asset_def_id.clone(), alice_id.clone());
-        let payer_balance = Asset::new(payer_asset, Numeric::new(10_000, 0));
+        let payer_balance = Asset::new(payer_asset, Quantity::from(10_000));
         let world = World::with_assets([dom], [alice, sink], [ad], [payer_balance], []);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();
@@ -12921,7 +12898,7 @@ mod tests {
         {
             let nexus = state.nexus.get_mut();
             nexus.enabled = true;
-            nexus.fees.base_fee = Numeric::from(1_u32);
+            nexus.fees.base_fee = Quantity::from(1_u32);
             nexus.fees.fee_asset_id = asset_def_id.to_string();
             nexus.fees.fee_sink_account_id = sink_id.to_string();
             nexus.fees.burn_from_unix_timestamp_ms = 0;
@@ -13011,19 +12988,19 @@ mod tests {
         {
             let nexus = state.nexus.get_mut();
             nexus.enabled = true;
-            nexus.fees.base_fee = Numeric::zero();
-            nexus.fees.per_byte_fee = Numeric::zero();
-            nexus.fees.per_instruction_fee = Numeric::new(1, 3);
-            nexus.fees.per_gas_unit_fee = Numeric::new(5, 5);
+            nexus.fees.base_fee = Quantity::zero();
+            nexus.fees.per_byte_fee = Quantity::zero();
+            nexus.fees.per_instruction_fee = "0.001".parse().expect("valid instruction fee");
+            nexus.fees.per_gas_unit_fee = "0.00005".parse().expect("valid gas fee");
             nexus.fees.sponsorship_enabled = false;
             nexus.fees.fee_asset_id = asset_def_id.to_string();
             nexus.fees.fee_sink_account_id = sink_id.to_string();
             nexus.fees.burn_from_unix_timestamp_ms = 0;
         }
 
-        let instruction: InstructionBox = Transfer::asset_numeric(
+        let instruction: InstructionBox = Transfer::asset_quantity(
             AssetId::of(asset_def_id.clone(), payer_id.clone()),
-            Numeric::from(1_u32),
+            1_u32,
             recipient_id.clone(),
         )
         .into();
@@ -13109,10 +13086,10 @@ mod tests {
         {
             let nexus = state.nexus.get_mut();
             nexus.enabled = true;
-            nexus.fees.base_fee = Numeric::zero();
-            nexus.fees.per_byte_fee = Numeric::zero();
-            nexus.fees.per_instruction_fee = Numeric::new(1, 3);
-            nexus.fees.per_gas_unit_fee = Numeric::new(5, 5);
+            nexus.fees.base_fee = Quantity::zero();
+            nexus.fees.per_byte_fee = Quantity::zero();
+            nexus.fees.per_instruction_fee = "0.001".parse().expect("valid instruction fee");
+            nexus.fees.per_gas_unit_fee = "0.00005".parse().expect("valid gas fee");
             nexus.fees.sponsorship_enabled = false;
             nexus.fees.fee_asset_id = asset_def_id.to_string();
             nexus.fees.fee_sink_account_id = sink_id.to_string();
@@ -13183,7 +13160,7 @@ mod tests {
         }
         .build(&payer_id);
         let payer_asset = AssetId::of(asset_def_id.clone(), payer_id.clone());
-        let payer_balance = Asset::new(payer_asset, Numeric::new(10_000, 0));
+        let payer_balance = Asset::new(payer_asset, Quantity::from(10_000));
         let world = World::with_assets([dom], [payer, tech], [ad], [payer_balance], []);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();
@@ -13547,6 +13524,65 @@ seiyaku GuardedValue {
             .get(&metadata_marker)
             .cloned()
             .expect("authorized direct call writes its metadata marker");
+
+        let live_code = state_tx
+            .world
+            .contract_code
+            .remove(code_hash)
+            .expect("remove live bytecode for warm-cache adversarial check");
+        ivm::reset_argument_record_decode_count();
+        let missing_code = super::Executor::Initial
+            .execute_transaction(
+                &mut state_tx,
+                &authority,
+                transaction.clone(),
+                &mut ivm_cache,
+            )
+            .expect_err("a warm cache must not substitute for missing live bytecode");
+        assert!(missing_code.to_string().contains("not found in WSV"));
+        assert_eq!(ivm::argument_record_decode_count(), 0);
+        assert_eq!(
+            state_tx
+                .world
+                .account(&authority)
+                .expect("authority account")
+                .metadata()
+                .get(&metadata_marker),
+            Some(&authorized_marker),
+            "missing live bytecode must apply no queued effect"
+        );
+        state_tx.world.contract_code.insert(code_hash, live_code);
+
+        let live_manifest = state_tx
+            .world
+            .contract_manifests
+            .remove(code_hash)
+            .expect("remove live manifest for warm-cache adversarial check");
+        ivm::reset_argument_record_decode_count();
+        let missing_manifest = super::Executor::Initial
+            .execute_transaction(
+                &mut state_tx,
+                &authority,
+                transaction.clone(),
+                &mut ivm_cache,
+            )
+            .expect_err("a warm cache must not substitute for a missing live manifest");
+        assert!(missing_manifest.to_string().contains("has no manifest"));
+        assert_eq!(ivm::argument_record_decode_count(), 0);
+        assert_eq!(
+            state_tx
+                .world
+                .account(&authority)
+                .expect("authority account")
+                .metadata()
+                .get(&metadata_marker),
+            Some(&authorized_marker),
+            "missing live manifest must apply no queued effect"
+        );
+        state_tx
+            .world
+            .contract_manifests
+            .insert(code_hash, live_manifest);
 
         Revoke::account_permission(entrypoint_permission.clone(), authority.clone())
             .execute(&authority, &mut state_tx)
@@ -13995,6 +14031,134 @@ seiyaku IdentityRequired {
             .expect("parse generic raw ivm context");
 
         assert!(context.is_none());
+    }
+
+    #[test]
+    fn direct_generic_ivm_remains_reachable_and_rejects_contract_metadata() {
+        let chain_id = ChainId::from("generic-direct-ivm");
+        let authority = ALICE_ID.clone();
+        let domain = Domain::new(DomainId::try_new("wonderland", "universal").expect("domain id"))
+            .build(&authority);
+        let account = Account::new(authority.clone()).build(&authority);
+        let state = State::new_with_chain(
+            World::with([domain], [account], []),
+            Kura::blank_kura_for_testing(),
+            query::store::LiveQueryStore::start_test(),
+            chain_id.clone(),
+        );
+        let mut program = ivm::ProgramMetadata {
+            max_cycles: 100,
+            ..ivm::ProgramMetadata::default()
+        }
+        .encode();
+        program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+        let generic_code_hash = ivm::contract_code_hash(&program);
+        let executable = Executable::Ivm(IvmBytecode::from_compiled(program));
+        let transaction = |metadata: Metadata| {
+            TransactionBuilder::new(chain_id.clone(), authority.clone())
+                .with_metadata(metadata)
+                .with_executable(executable.clone())
+                .sign(ALICE_KEYPAIR.private_key())
+        };
+        let mut gas_metadata = Metadata::default();
+        gas_metadata.insert(
+            "gas_limit".parse().expect("gas-limit metadata key"),
+            Json::new(1_000_000_u64),
+        );
+        let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+        let mut state_transaction = block.transaction();
+        let mut ivm_cache = IvmCache::new();
+
+        super::Executor::Initial
+            .execute_transaction(
+                &mut state_transaction,
+                &authority,
+                transaction(gas_metadata.clone()),
+                &mut ivm_cache,
+            )
+            .expect("contract-less generic IVM must execute at pc zero");
+
+        let mut reserved_metadata = gas_metadata;
+        reserved_metadata.insert(
+            "contract_manifest"
+                .parse()
+                .expect("contract-manifest metadata key"),
+            Json::from_string_unchecked("malformed-reserved-value".to_owned()),
+        );
+        let error = super::Executor::Initial
+            .execute_transaction(
+                &mut state_transaction,
+                &authority,
+                transaction(reserved_metadata),
+                &mut ivm_cache,
+            )
+            .expect_err("generic IVM must not accept contract metadata");
+        assert!(
+            error.to_string().contains("reserved `contract_manifest`"),
+            "unexpected generic-metadata rejection: {error}"
+        );
+
+        state_transaction.world.contract_manifests.insert(
+            generic_code_hash,
+            iroha_data_model::smart_contract::manifest::ContractManifest {
+                seiyaku_name: None,
+                code_hash: Some(generic_code_hash),
+                abi_hash: Some(Hash::prehashed(ivm::syscalls::compute_abi_hash(
+                    ivm::SyscallPolicy::AbiV1,
+                ))),
+                compiler_fingerprint: None,
+                features_bitmap: None,
+                access_set_hints: None,
+                entrypoints: None,
+                states: None,
+                kotoba: None,
+                error_codes: None,
+                provenance: None,
+            },
+        );
+        let error = super::Executor::Initial
+            .execute_transaction(
+                &mut state_transaction,
+                &authority,
+                transaction({
+                    let mut metadata = Metadata::default();
+                    metadata.insert(
+                        "gas_limit".parse().expect("gas-limit metadata key"),
+                        Json::new(1_000_000_u64),
+                    );
+                    metadata
+                }),
+                &mut ivm_cache,
+            )
+            .expect_err("a manifest-bound hash must not execute as generic IVM");
+        assert!(error.to_string().contains("contract manifest"));
+        state_transaction
+            .world
+            .contract_manifests
+            .remove(generic_code_hash);
+
+        state_transaction.pipeline.ivm_max_cycles_upper_bound = nonzero!(50_u64);
+        let error = super::Executor::Initial
+            .execute_transaction(
+                &mut state_transaction,
+                &authority,
+                transaction({
+                    let mut metadata = Metadata::default();
+                    metadata.insert(
+                        "gas_limit".parse().expect("gas-limit metadata key"),
+                        Json::new(1_000_000_u64),
+                    );
+                    metadata
+                }),
+                &mut ivm_cache,
+            )
+            .expect_err("direct generic IVM must honor the live cycle ceiling");
+        assert!(matches!(
+            error,
+            ValidationFail::IvmAdmission(
+                iroha_data_model::executor::IvmAdmissionError::MaxCyclesExceedsUpperBound(_)
+            )
+        ));
     }
 
     #[test]

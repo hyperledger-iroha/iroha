@@ -2559,8 +2559,8 @@ pub mod isi {
                     destination_value
                         .clone()
                         .into_inner()
-                        .checked_add(source_amount.clone())
-                        .ok_or(MathError::Overflow)
+                        .checked_add(&source_amount)
+                        .map_err(|_| MathError::Overflow)
                 })
                 .transpose()?;
 
@@ -5995,7 +5995,7 @@ mod tests {
         .execute(&authority, &mut tx)
         .expect("register asset definition");
         let asset_id = AssetId::new(asset_def_id.clone(), account_id.clone());
-        let asset = Asset::new(asset_id.clone(), Numeric::new(5, 0));
+        let asset = Asset::new(asset_id.clone(), Quantity::from(5));
         let (asset_id, asset_value) = asset.into_key_value();
         tx.world.assets.insert(asset_id.clone(), asset_value);
         tx.world.track_asset_holder(&asset_id);
@@ -8842,10 +8842,10 @@ mod tests {
         Register::asset_definition(definition)
             .execute(&authority, &mut tx)
             .expect("register global definition");
-        Mint::asset_numeric(10_u32, AssetId::of(definition_id.clone(), ALICE_ID.clone()))
+        Mint::asset_quantity(10_u32, AssetId::of(definition_id.clone(), ALICE_ID.clone()))
             .execute(&authority, &mut tx)
             .expect("mint alice");
-        Mint::asset_numeric(5_u32, AssetId::of(definition_id.clone(), BOB_ID.clone()))
+        Mint::asset_quantity(5_u32, AssetId::of(definition_id.clone(), BOB_ID.clone()))
             .execute(&authority, &mut tx)
             .expect("mint bob");
 

@@ -125,9 +125,9 @@ fn transfer_to_missing_account_creates_account_by_default() {
     let (dest, _) = seeded_account(2);
 
     let tx = TransactionBuilder::new(chain_id, alice_id.clone())
-        .with_instructions([Transfer::asset_numeric(
+        .with_instructions([Transfer::asset_quantity(
             alice_asset_id.clone(),
-            Numeric::new(10, 0),
+            10_u32,
             dest.clone(),
         )])
         .sign(alice_kp.private_key());
@@ -174,9 +174,9 @@ fn transfer_to_missing_account_rejected_in_explicit_domain() {
     let (dest, _) = seeded_account(2);
 
     let tx = TransactionBuilder::new(chain_id, alice_id.clone())
-        .with_instructions([Transfer::asset_numeric(
+        .with_instructions([Transfer::asset_quantity(
             alice_asset_id.clone(),
-            Numeric::new(10, 0),
+            10_u32,
             dest.clone(),
         )])
         .sign(alice_kp.private_key());
@@ -216,8 +216,8 @@ fn multiple_receipts_in_one_tx_create_account_once() {
 
     let tx = TransactionBuilder::new(chain_id, alice_id.clone())
         .with_instructions([
-            Transfer::asset_numeric(alice_asset_id.clone(), Numeric::new(5, 0), dest.clone()),
-            Transfer::asset_numeric(alice_asset_id.clone(), Numeric::new(7, 0), dest.clone()),
+            Transfer::asset_quantity(alice_asset_id.clone(), 5_u32, dest.clone()),
+            Transfer::asset_quantity(alice_asset_id.clone(), 7_u32, dest.clone()),
         ])
         .sign(alice_kp.private_key());
     let accepted = accept_transaction(&state, tx);
@@ -250,8 +250,8 @@ fn transaction_quota_limits_implicit_accounts() {
 
     let tx = TransactionBuilder::new(chain_id, alice_id.clone())
         .with_instructions([
-            Transfer::asset_numeric(alice_asset_id.clone(), Numeric::new(5, 0), dest1.clone()),
-            Transfer::asset_numeric(alice_asset_id.clone(), Numeric::new(5, 0), dest2.clone()),
+            Transfer::asset_quantity(alice_asset_id.clone(), 5_u32, dest1.clone()),
+            Transfer::asset_quantity(alice_asset_id.clone(), 5_u32, dest2.clone()),
         ])
         .sign(alice_kp.private_key());
     let accepted = accept_transaction(&state, tx);
@@ -300,18 +300,18 @@ fn block_quota_limits_creations_across_transactions() {
     let (dest2, _) = seeded_account(3);
 
     let tx1 = TransactionBuilder::new(chain_id.clone(), alice_id.clone())
-        .with_instructions([Transfer::asset_numeric(
+        .with_instructions([Transfer::asset_quantity(
             alice_asset_id.clone(),
-            Numeric::new(10, 0),
+            10_u32,
             dest1.clone(),
         )])
         .sign(alice_kp.private_key());
     let accepted1 = accept_transaction(&state, tx1);
 
     let tx2 = TransactionBuilder::new(chain_id, alice_id.clone())
-        .with_instructions([Transfer::asset_numeric(
+        .with_instructions([Transfer::asset_quantity(
             alice_asset_id.clone(),
-            Numeric::new(3, 0),
+            3_u32,
             dest2.clone(),
         )])
         .sign(alice_kp.private_key());
@@ -361,9 +361,9 @@ fn missing_default_role_rejects_in_pipeline() {
     let (dest, _) = seeded_account(11);
 
     let tx = TransactionBuilder::new(chain_id, alice_id.clone())
-        .with_instructions([Transfer::asset_numeric(
+        .with_instructions([Transfer::asset_quantity(
             alice_asset_id.clone(),
-            Numeric::new(5, 0),
+            5_u32,
             dest.clone(),
         )])
         .sign(alice_kp.private_key());
@@ -404,9 +404,9 @@ fn implicit_account_can_spend_without_roles() {
     let (bob_id, bob_kp) = seeded_account(5);
 
     let tx1 = TransactionBuilder::new(chain_id.clone(), alice_id.clone())
-        .with_instructions([Transfer::asset_numeric(
+        .with_instructions([Transfer::asset_quantity(
             alice_asset_id.clone(),
-            Numeric::new(7, 0),
+            7_u32,
             bob_id.clone(),
         )])
         .sign(alice_kp.private_key());
@@ -423,9 +423,9 @@ fn implicit_account_can_spend_without_roles() {
     assert_eq!(balance(&state, &alice_asset_id), Numeric::new(13, 0));
 
     let tx2 = TransactionBuilder::new(chain_id, bob_id.clone())
-        .with_instructions([Transfer::asset_numeric(
+        .with_instructions([Transfer::asset_quantity(
             bob_asset_id.clone(),
-            Numeric::new(5, 0),
+            5_u32,
             alice_id.clone(),
         )])
         .sign(bob_kp.private_key());
@@ -454,8 +454,8 @@ fn multi_receipts_within_transaction_succeed_in_open_domain() {
 
     let tx = TransactionBuilder::new(chain_id, alice_id.clone())
         .with_instructions([
-            Transfer::asset_numeric(alice_asset_id.clone(), Numeric::new(5, 0), dest1.clone()),
-            Transfer::asset_numeric(alice_asset_id.clone(), Numeric::new(7, 0), dest2.clone()),
+            Transfer::asset_quantity(alice_asset_id.clone(), 5_u32, dest1.clone()),
+            Transfer::asset_quantity(alice_asset_id.clone(), 7_u32, dest2.clone()),
         ])
         .sign(alice_kp.private_key());
     let accepted = accept_transaction(&state, tx);
@@ -504,8 +504,8 @@ fn tx_cap_rejects_multiple_implicit_creations() {
 
     let tx = TransactionBuilder::new(chain_id, alice_id.clone())
         .with_instructions([
-            Transfer::asset_numeric(alice_asset_id.clone(), Numeric::new(1, 0), dest1.clone()),
-            Transfer::asset_numeric(alice_asset_id.clone(), Numeric::new(1, 0), dest2.clone()),
+            Transfer::asset_quantity(alice_asset_id.clone(), 1_u32, dest1.clone()),
+            Transfer::asset_quantity(alice_asset_id.clone(), 1_u32, dest2.clone()),
         ])
         .sign(alice_kp.private_key());
     let accepted = accept_transaction(&state, tx);

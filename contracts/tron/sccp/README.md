@@ -94,6 +94,8 @@ post-proof contract check. Public signal 10 (the eleventh signal) separately
 binds the governed SORA finality anchor. Both policy hashes are immutable
 verifier getters, are pinned by the route's typed `VerifierPolicyV1` constructor
 tuple, and are rechecked before every proof dispatch.
+Governed destination deployment records carry that tuple as required
+`outbound_proof_policy`; policy-less JSON and Norito records are invalid.
 
 Governed route state must store typed TRON addresses and fixed-width hashes and
 derive this binding; clients must never select deployment identity with request

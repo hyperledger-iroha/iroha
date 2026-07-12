@@ -420,7 +420,6 @@ fn configure_da_ingest_layer<'a>(
 ) {
     layer
         .write(["nexus", "enabled"], true)
-        .write(["sumeragi", "consensus_mode"], "npos")
         .write(
             ["torii", "da_ingest", "manifest_store_dir"],
             manifest_dir.display().to_string(),

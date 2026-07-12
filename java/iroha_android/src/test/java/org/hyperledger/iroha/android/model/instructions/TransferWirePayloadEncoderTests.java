@@ -6,6 +6,7 @@ package org.hyperledger.iroha.android.model.instructions;
 import java.util.Arrays;
 import org.hyperledger.iroha.android.address.AccountAddress;
 import org.hyperledger.iroha.android.model.InstructionBox;
+import org.hyperledger.iroha.android.numeric.NumericV1;
 import org.hyperledger.iroha.android.testing.TestAccountIds;
 import org.hyperledger.iroha.android.testing.TestAssetDefinitionIds;
 import org.hyperledger.iroha.norito.CRC64;
@@ -21,6 +22,8 @@ public final class TransferWirePayloadEncoderTests {
     encodeAssetTransferAcceptsCanonicalAssetId();
     encodeAssetTransferAcceptsDataspaceScopedAssetId();
     decodeAssetTransferRoundTripsCanonicalStrings();
+    encodeAssetTransferRejectsNoncanonicalQuantities();
+    decodeAssetTransferRejectsNoncanonicalQuantity();
     encodeAssetTransferAcceptsMultisigI105AssetOwner();
     decodeAccountIdRoundTripsMultisigI105();
     encodeAssetTransferRejectsMalformedAssetId();
@@ -59,14 +62,53 @@ public final class TransferWirePayloadEncoderTests {
     final String definitionAddress = TestAssetDefinitionIds.PRIMARY;
     final String assetId = definitionAddress + "#" + ACCOUNT_ID + "#dataspace:42";
     final InstructionBox box =
-        TransferWirePayloadEncoder.encodeAssetTransfer(assetId, "10.50", ACCOUNT_ID);
+        TransferWirePayloadEncoder.encodeAssetTransfer(assetId, "10.5", ACCOUNT_ID);
 
     final TransferWirePayloadEncoder.DecodedAssetTransfer decoded =
         TransferWirePayloadEncoder.decodeAssetTransferPayload(wirePayloadBytes(box));
 
     assert assetId.equals(decoded.assetId()) : "decoded asset id mismatch";
-    assert "10.50".equals(decoded.amount()) : "decoded amount mismatch";
+    assert "10.5".equals(decoded.amount()) : "decoded amount mismatch";
     assert ACCOUNT_ID.equals(decoded.destinationAccountId()) : "decoded destination mismatch";
+  }
+
+  private static void encodeAssetTransferRejectsNoncanonicalQuantities() {
+    final String assetId = TestAssetDefinitionIds.PRIMARY + "#" + ACCOUNT_ID;
+    for (final String amount : new String[] {" ", "+1", "01", "1e0", "-1", "1.0", "1.2300"}) {
+      boolean threw = false;
+      try {
+        TransferWirePayloadEncoder.encodeAssetTransfer(assetId, amount, ACCOUNT_ID);
+      } catch (final IllegalArgumentException expected) {
+        threw = true;
+      }
+      assert threw : "noncanonical quantity was accepted: " + amount;
+    }
+
+    final InstructionBox typed =
+        TransferWirePayloadEncoder.encodeAssetTransfer(
+            assetId, NumericV1.QuantityValue.parseCanonical("10"), ACCOUNT_ID);
+    assert wirePayloadBytes(typed).length > 0 : "typed quantity must encode";
+  }
+
+  private static void decodeAssetTransferRejectsNoncanonicalQuantity() {
+    final InstructionBox box =
+        TransferWirePayloadEncoder.encodeAssetTransfer(
+            TestAssetDefinitionIds.PRIMARY + "#" + ACCOUNT_ID, "10", ACCOUNT_ID);
+    final NoritoHeader.DecodeResult decoded = NoritoHeader.decode(wirePayloadBytes(box), null);
+    decoded.header().validateChecksum(decoded.payload());
+    final byte[] payload = decoded.payload().clone();
+    final byte[] canonicalNumeric = {5, 1, 0, 0, 0, 10, 4, 0, 0, 0, 0};
+    final int numericOffset = indexOf(payload, canonicalNumeric);
+    assert numericOffset >= 0 : "canonical transfer numeric payload was not found";
+    payload[numericOffset + canonicalNumeric.length - 1] = 1;
+
+    boolean threw = false;
+    try {
+      TransferWirePayloadEncoder.decodeAssetTransferPayload(reframe(decoded.header(), payload));
+    } catch (final IllegalArgumentException expected) {
+      threw = true;
+    }
+    assert threw : "noncanonical transfer quantity wire payload must be rejected";
   }
 
   private static void encodeAssetTransferAcceptsMultisigI105AssetOwner() throws Exception {
@@ -244,6 +286,20 @@ public final class TransferWirePayloadEncoderTests {
       builder.append(String.format("%02x", value & 0xFF));
     }
     return builder.toString();
+  }
+
+  private static int indexOf(final byte[] haystack, final byte[] needle) {
+    for (int start = 0; start <= haystack.length - needle.length; start++) {
+      boolean matches = true;
+      for (int index = 0; index < needle.length; index++) {
+        if (haystack[start + index] != needle[index]) {
+          matches = false;
+          break;
+        }
+      }
+      if (matches) return start;
+    }
+    return -1;
   }
 
   private static byte[] reframe(final NoritoHeader header, final byte[] payload) {

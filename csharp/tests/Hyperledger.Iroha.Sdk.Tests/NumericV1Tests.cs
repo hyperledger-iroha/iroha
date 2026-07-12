@@ -244,6 +244,39 @@ public sealed class NumericV1Tests
             var bytes = Convert.FromHexString(vector.GetProperty("hex").GetString()!);
             AssertNumericError(expected, () => DecodeFixtureInput(input, decodeAs, bytes));
         }
+
+        foreach (var vector in root.GetProperty("invalid_text").EnumerateArray())
+        {
+            var kind = vector.GetProperty("kind").GetString()!;
+            var input = vector.GetProperty("input");
+            var expected = FixtureErrorCode(vector.GetProperty("expected").GetString()!);
+            AssertNumericError(expected, () => DecodeInvalidText(kind, input));
+        }
+    }
+
+    private static void DecodeInvalidText(string kind, JsonElement input)
+    {
+        if (input.ValueKind == JsonValueKind.String)
+        {
+            var value = input.GetString()!;
+            switch (kind)
+            {
+                case "int": _ = NumericV1.DecodeIntJson(value); break;
+                case "decimal": _ = NumericV1.DecodeDecimalJson(value); break;
+                case "quantity": _ = NumericV1.DecodeQuantityJson(value); break;
+                default: throw new Xunit.Sdk.XunitException($"unknown numeric text kind {kind}");
+            }
+            return;
+        }
+
+        var json = input.GetRawText();
+        switch (kind)
+        {
+            case "int": _ = JsonSerializer.Deserialize<NumericV1.IntValue>(json); break;
+            case "decimal": _ = JsonSerializer.Deserialize<NumericV1.DecimalValue>(json); break;
+            case "quantity": _ = JsonSerializer.Deserialize<NumericV1.QuantityValue>(json); break;
+            default: throw new Xunit.Sdk.XunitException($"unknown numeric text kind {kind}");
+        }
     }
 
     private static void DecodeFixtureInput(string input, string decodeAs, byte[] bytes)

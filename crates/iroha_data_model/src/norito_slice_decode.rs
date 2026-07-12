@@ -178,15 +178,6 @@ impl_decode_from_slice_via_archived! {
     crate::soradns::ResolverDirectoryRecordV1,
     crate::soradns::ResolverRevocationRecordV1,
     crate::soradns::RadRevokeReason,
-    crate::offline::OfflineNoteAuditBundle,
-    crate::offline::OfflineNoteAuditPublicInputs,
-    crate::offline::OfflineNoteIssue,
-    crate::offline::OfflineNoteIssuedClaim,
-    crate::offline::OfflineNoteKeyCertificatePayload,
-    crate::offline::OfflineNoteKeyCertificate,
-    crate::offline::OfflineNoteRecursiveProof,
-    crate::offline::OfflineNoteRedeemPublicInputs,
-    crate::offline::OfflineNoteRedeem,
 }
 
 // Governance types (feature-gated, but default-enabled)

@@ -171,7 +171,7 @@ fn build_faucet_test_context_with_registration(
 
     {
         let mut seed_instructions: Vec<InstructionBox> = vec![
-            Mint::asset_numeric(
+            Mint::asset_quantity(
                 50_000_u32,
                 AssetId::new(asset_definition_id.clone(), authority_id.clone()),
             )
@@ -179,7 +179,7 @@ fn build_faucet_test_context_with_registration(
         ];
         if prefund_user {
             seed_instructions.push(
-                Mint::asset_numeric(
+                Mint::asset_quantity(
                     1_u32,
                     AssetId::new(asset_definition_id.clone(), user_id.clone()),
                 )

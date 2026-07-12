@@ -13,6 +13,7 @@ import {
   decodePdpCommitmentHeader,
   TransactionStatusError,
   TransactionTimeoutError,
+  TransactionBatchAdmissionAmbiguousError,
   IsoMessageTimeoutError,
   buildRbcSampleRequest,
   buildSorafsOrderbookEventsWebSocketUrl,
@@ -1648,12 +1649,8 @@ test("registerVerifyingKey accepts current production backend labels", async () 
     "halo2/ipa",
     "halo2/ipa:ivm-execution-v1",
     "halo2/pasta/ivm-execution-v1",
-    "halo2/pasta/kagemusha-folded-v1",
+    "halo2/ipa-pasta-cycle-v1",
     "halo2/pasta/kaigi-roster-v1",
-    "halo2/pasta/kagemusha-recursive-aggregation-v1",
-    "halo2/pasta/kagemusha-recursive-compact-v1",
-    "halo2/pasta/kagemusha-recursive-spend-lineage-onehop-v1",
-    "halo2/pasta/kagemusha-recursive-spend-lineage-append-v1",
     "halo2/pasta/anon-transfer-2x2-merkle16-poseidon-diversified",
     "stark/fri",
     "stark/fri/sha256-goldilocks",
@@ -1680,10 +1677,7 @@ test("updateVerifyingKey accepts current production backend labels", async () =>
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const backends = [
-    "halo2/pasta/kagemusha-recursive-aggregation-v1",
-    "halo2/pasta/kagemusha-recursive-compact-v1",
-    "halo2/pasta/kagemusha-recursive-spend-lineage-onehop-v1",
-    "halo2/pasta/kagemusha-recursive-spend-lineage-append-v1",
+    "halo2/ipa-pasta-cycle-v1",
     "stark/fri/sha256-goldilocks",
   ];
   for (const [index, backend] of backends.entries()) {
@@ -2052,7 +2046,7 @@ test("resolveAlias parses exact payload fields", async () => {
         jsonData: {
           alias: "GB82WEST12345698765432",
           account_id: FIXTURE_ALICE_ID,
-          index: "5",
+          index: 5,
           source: "iso_bridge",
         },
         headers: { "content-type": "application/json" },
@@ -2067,7 +2061,7 @@ test("resolveAlias parses exact payload fields", async () => {
   });
 });
 
-test("resolveAlias canonicalizes IBANs returned by Torii", async () => {
+test("resolveAlias rejects non-canonical IBANs returned by Torii", async () => {
   const client = new ToriiClient(BASE_URL, {
     fetchImpl: async () =>
       createResponse({
@@ -2079,9 +2073,41 @@ test("resolveAlias canonicalizes IBANs returned by Torii", async () => {
         headers: { "content-type": "application/json" },
       }),
   });
-  const resolved = await client.resolveAlias(VALID_IBAN);
-  assert.equal(resolved.alias, VALID_IBAN);
-  assert.equal(resolved.account_id, FIXTURE_ALICE_ID);
+  await assert.rejects(
+    () => client.resolveAlias(VALID_IBAN),
+    /alias resolve response\.alias must be canonical/,
+  );
+});
+
+test("resolveAlias rejects coercible or unexpected response fields", async () => {
+  const cases = [
+    [
+      "numeric string index",
+      { alias: VALID_IBAN, account_id: FIXTURE_ALICE_ID, index: "5" },
+      /index must be a non-negative JSON safe integer/,
+    ],
+    [
+      "non-canonical account",
+      { alias: VALID_IBAN, account_id: "alice@wonderland" },
+      /account_id must not include '@domain'|account_id must be canonical/,
+    ],
+    [
+      "unexpected field",
+      { alias: VALID_IBAN, account_id: FIXTURE_ALICE_ID, ignored: true },
+      /unsupported fields: ignored/,
+    ],
+  ];
+  for (const [label, jsonData, pattern] of cases) {
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () =>
+        createResponse({
+          status: 200,
+          jsonData,
+          headers: { "content-type": "application/json" },
+        }),
+    });
+    await assert.rejects(() => client.resolveAlias(VALID_IBAN), pattern, label);
+  }
 });
 
 test("resolveAlias normalizes IBAN input before issuing the request", async () => {
@@ -8313,8 +8339,96 @@ test("submitTransactionBatch rejects malformed accepted-count admission headers"
 
   await assert.rejects(
     () => client.submitTransactionBatch(payloads),
-    /submitTransactionBatch\.acceptedCount/,
+    (error) => {
+      assert.ok(error instanceof TransactionBatchAdmissionAmbiguousError);
+      assert.equal(error.expectedCount, 1);
+      assert.equal(error.acceptedCount, null);
+      assert.equal(error.ambiguous, true);
+      assert.equal(error.retryable, false);
+      assert.match(error.message, /submitTransactionBatch\.acceptedCount/);
+      return true;
+    },
   );
+});
+
+test("submitTransactionBatch requires a canonical accepted-count admission header", async () => {
+  for (const header of [null, "", " 1", "01", "+1", "2"]) {
+    let batchPosts = 0;
+    const fetchImpl = async (url) => {
+      if (url === `${BASE_URL}/v1/node/capabilities`) {
+        return createBatchCapabilitiesResponse();
+      }
+      assert.equal(url, `${BASE_URL}/v1/pipeline/transactions/batch`);
+      batchPosts += 1;
+      return createResponse({
+        status: 202,
+        headers: header === null ? {} : { "x-iroha-transactions-accepted": header },
+      });
+    };
+    const client = new ToriiClient(BASE_URL, { fetchImpl, __nativeBinding: {} });
+    await assert.rejects(
+      () => client.submitTransactionBatch([Buffer.from([0xde, 0xad])]),
+      TransactionBatchAdmissionAmbiguousError,
+      `header ${String(header)}`,
+    );
+    assert.equal(batchPosts, 1, `header ${String(header)}`);
+  }
+});
+
+test("submitTransactionBatch never retries a lost POST response", async () => {
+  let batchPosts = 0;
+  const lostResponse = new TypeError("socket closed after request bytes were sent");
+  const fetchImpl = async (url) => {
+    if (url === `${BASE_URL}/v1/node/capabilities`) {
+      return createBatchCapabilitiesResponse();
+    }
+    assert.equal(url, `${BASE_URL}/v1/pipeline/transactions/batch`);
+    batchPosts += 1;
+    throw lostResponse;
+  };
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl,
+    maxRetries: 9,
+    retryMethods: ["POST"],
+    retryStatuses: [503],
+    __nativeBinding: {},
+  });
+
+  await assert.rejects(
+    () => client.submitTransactionBatch([Buffer.from([0xde, 0xad])]),
+    (error) => {
+      assert.ok(error instanceof TransactionBatchAdmissionAmbiguousError);
+      assert.equal(error.cause, lostResponse);
+      assert.equal(error.retryable, false);
+      return true;
+    },
+  );
+  assert.equal(batchPosts, 1);
+});
+
+test("submitTransactionBatch never retries retryable HTTP statuses", async () => {
+  let batchPosts = 0;
+  const fetchImpl = async (url) => {
+    if (url === `${BASE_URL}/v1/node/capabilities`) {
+      return createBatchCapabilitiesResponse();
+    }
+    assert.equal(url, `${BASE_URL}/v1/pipeline/transactions/batch`);
+    batchPosts += 1;
+    return createResponse({ status: 503, textBody: "temporarily unavailable" });
+  };
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl,
+    maxRetries: 9,
+    retryMethods: ["POST"],
+    retryStatuses: [503],
+    __nativeBinding: {},
+  });
+
+  await assert.rejects(
+    () => client.submitTransactionBatch([Buffer.from([0xde, 0xad])]),
+    (error) => error instanceof ToriiHttpError && error.status === 503,
+  );
+  assert.equal(batchPosts, 1);
 });
 
 test("submitTransaction deframes NRT0 payloads before posting versioned pipeline bytes", async () => {
@@ -15347,7 +15461,7 @@ test("listExplorerRwas encodes owner/domain filters and pagination", async () =>
             id: SAMPLE_RWA_ID,
             owned_by: SAMPLE_ACCOUNT_ID,
             quantity: "10.5",
-            held_quantity: "1.0",
+            held_quantity: "1",
             primary_reference: "vault-cert-001",
             status: "active",
             is_frozen: false,
@@ -15377,7 +15491,7 @@ test("listExplorerRwas encodes owner/domain filters and pagination", async () =>
     id: SAMPLE_RWA_ID,
     ownedBy: SAMPLE_ACCOUNT_ID,
     quantity: "10.5",
-    heldQuantity: "1.0",
+    heldQuantity: "1",
     primaryReference: "vault-cert-001",
     status: "active",
     isFrozen: false,
@@ -15386,7 +15500,7 @@ test("listExplorerRwas encodes owner/domain filters and pagination", async () =>
       id: SAMPLE_RWA_ID,
       owned_by: SAMPLE_ACCOUNT_ID,
       quantity: "10.5",
-      held_quantity: "1.0",
+      held_quantity: "1",
       primary_reference: "vault-cert-001",
       status: "active",
       is_frozen: false,
@@ -15439,6 +15553,43 @@ test("getExplorerRwaDetail encodes path and decodes response", async () => {
       metadata: {},
     },
   });
+});
+
+test("explorer RWA readbacks reject noncanonical quantity fields", async () => {
+  for (const record of [
+    {
+      id: SAMPLE_RWA_ID,
+      owned_by: SAMPLE_ACCOUNT_ID,
+      quantity: "1.0",
+      held_quantity: "0",
+      primary_reference: "vault-cert",
+      status: null,
+      is_frozen: false,
+      metadata: {},
+    },
+    {
+      id: SAMPLE_RWA_ID,
+      owned_by: SAMPLE_ACCOUNT_ID,
+      quantity: "1",
+      held_quantity: "-1",
+      primary_reference: "vault-cert",
+      status: null,
+      is_frozen: false,
+      metadata: {},
+    },
+  ]) {
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () => createResponse({
+        status: 200,
+        jsonData: { pagination: {}, items: [record] },
+        headers: { "content-type": "application/json" },
+      }),
+    });
+    await assert.rejects(
+      () => client.listExplorerRwas(),
+      /canonical non-negative Kotodama V1 quantity/u,
+    );
+  }
 });
 
 test("queryRwas posts structured envelope", async () => {
@@ -16111,6 +16262,26 @@ test("listAccountAssets enforces canonical quantity strings", async () => {
     () => client.listAccountAssets(FIXTURE_ALICE_ID),
     /account asset list response\.items\[0]\.quantity/,
   );
+});
+
+test("listAccountAssets rejects noncanonical quantity spellings", async () => {
+  for (const quantity of [-1, "01", "1.0", "1.20", " 1", "1e0"]) {
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () =>
+        createResponse({
+          status: 200,
+          jsonData: {
+            items: [{ asset_id: FIXTURE_ASSET_ID_A, quantity }],
+            total: 1,
+          },
+          headers: { "content-type": "application/json" },
+        }),
+    });
+    await assert.rejects(
+      () => client.listAccountAssets(FIXTURE_ALICE_ID),
+      /account asset list response\.items\[0\]\.quantity/,
+    );
+  }
 });
 
 test("listAccountAssets rejects camelCase assetId fields", async () => {
@@ -20586,6 +20757,98 @@ test("callContract response requires operation_receipt", async () => {
   );
 });
 
+test("callContract rejects coercible, non-canonical, or unexpected response fields", async () => {
+  const contractAddress =
+    "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7";
+  const makePayload = () => ({
+    ok: true,
+    submitted: false,
+    dataspace: "universal",
+    contract_address: contractAddress,
+    code_hash_hex: "1".repeat(64),
+    abi_hash_hex: "2".repeat(64),
+    tx_hash_hex: null,
+    creation_time_ms: 42,
+    transaction_ttl_ms: 5_000,
+    entrypoint: "increment",
+    entrypoint_hash_hex: "4".repeat(64),
+    transaction_scaffold_b64: "AQ==",
+    signed_transaction_b64: null,
+    signing_message_b64: "Ag==",
+    operation_receipt: {
+      operation_kind: "contract_call",
+      status: "pending_signature",
+      transport: "torii",
+      dataspace: "universal",
+      contract_address: contractAddress,
+      code_hash_hex: "1".repeat(64),
+      abi_hash_hex: "2".repeat(64),
+      entrypoint: "increment",
+      entrypoint_hash_hex: "4".repeat(64),
+      gas_limit: 42,
+      payload_digest_hex: "5".repeat(64),
+    },
+  });
+  const cases = [
+    ["string boolean", (value) => { value.ok = "false"; }, /ok must be a boolean/],
+    ["numeric boolean", (value) => { value.submitted = 0; }, /submitted must be a boolean/],
+    [
+      "numeric string timestamp",
+      (value) => { value.creation_time_ms = "42"; },
+      /creation_time_ms must be a non-negative JSON safe integer/,
+    ],
+    [
+      "uppercase hash",
+      (value) => { value.code_hash_hex = "A".repeat(64); },
+      /code_hash_hex must be an exact lowercase 32-byte hex string/,
+    ],
+    [
+      "noncanonical base64",
+      (value) => { value.transaction_scaffold_b64 = "AQ"; },
+      /transaction_scaffold_b64 must be exact standard-base64/,
+    ],
+    [
+      "unexpected response field",
+      (value) => { value.ignored = true; },
+      /unsupported fields: ignored/,
+    ],
+    [
+      "unexpected receipt field",
+      (value) => { value.operation_receipt.ignored = true; },
+      /operation_receipt contains unsupported fields: ignored/,
+    ],
+    [
+      "numeric string receipt gas",
+      (value) => { value.operation_receipt.gas_limit = "42"; },
+      /gas_limit must be a positive JSON safe integer/,
+    ],
+  ];
+  for (const [label, mutate, pattern] of cases) {
+    const payload = makePayload();
+    mutate(payload);
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () =>
+        createResponse({
+          status: 200,
+          jsonData: payload,
+          headers: { "content-type": "application/json" },
+        }),
+    });
+    await assert.rejects(
+      () =>
+        client.callContract({
+          authority: FIXTURE_ALICE_ID,
+          privateKey: "ed25519:deadbeef",
+          contractAddress,
+          entrypoint: "increment",
+          gasLimit: 42,
+        }),
+      pattern,
+      label,
+    );
+  }
+});
+
 test("callContract rejects missing gasLimit", async () => {
   const client = new ToriiClient(BASE_URL, {
     fetchImpl: async () => {
@@ -21059,7 +21322,7 @@ test("multisig response decoders reject non-exact resolved account ids", async (
       clientWithResponse({
         resolved_multisig_account_id: paddedAccountId,
         proposals: [],
-      }).queryMultisigProposals(selector),
+      }).listMultisigProposals(selector),
     pattern,
   );
   await assert.rejects(
@@ -21069,7 +21332,7 @@ test("multisig response decoders reject non-exact resolved account ids", async (
         proposal_id: proposalId,
         instructions_hash: proposalId,
         proposal: { approvals: [] },
-      }).lookupMultisigProposal({ ...selector, instructionsHash: proposalId }),
+      }).getMultisigProposal({ ...selector, instructionsHash: proposalId }),
     pattern,
   );
 });
@@ -21213,15 +21476,15 @@ test("ToriiClient source and dist use only first-release multisig proposal route
     const source = readFileSync(new URL(relativePath, import.meta.url), "utf8");
     assert.doesNotMatch(
       source,
-      /["']\/v1\/multisig\/proposals\/(?:list|get)["']/,
+      /["']\/v1\/multisig\/proposals\/(?:query|lookup)["']/,
       `${relativePath} must not retain retired multisig proposal paths`,
     );
-    assert.match(source, /["']\/v1\/multisig\/proposals\/query["']/);
-    assert.match(source, /["']\/v1\/multisig\/proposals\/lookup["']/);
+    assert.match(source, /["']\/v1\/multisig\/proposals\/list["']/);
+    assert.match(source, /["']\/v1\/multisig\/proposals\/get["']/);
   }
 });
 
-test("queryMultisigProposals decodes proposal entries", async () => {
+test("listMultisigProposals decodes proposal entries", async () => {
   let captured;
   const responsePayload = {
     resolved_multisig_account_id: FIXTURE_ALICE_ID,
@@ -21254,13 +21517,13 @@ test("queryMultisigProposals decodes proposal entries", async () => {
       });
     },
   });
-  const result = await client.queryMultisigProposals({
+  const result = await client.listMultisigProposals({
     multisigAccountAlias: "cbdc@banka",
     status: ["collecting_signatures"],
     cursor: "page-1",
     limit: 25,
   });
-  assert.equal(captured.url, `${BASE_URL}/v1/multisig/proposals/query`);
+  assert.equal(captured.url, `${BASE_URL}/v1/multisig/proposals/list`);
   assert.deepEqual(JSON.parse(captured.init.body), {
     multisig_account_alias: "cbdc@banka",
     status: ["COLLECTING_SIGNATURES"],
@@ -21270,7 +21533,7 @@ test("queryMultisigProposals decodes proposal entries", async () => {
   assert.deepEqual(result, responsePayload);
 });
 
-test("lookupMultisigProposal resolves by instructions hash", async () => {
+test("getMultisigProposal resolves by instructions hash", async () => {
   let captured;
   const responsePayload = {
     resolved_multisig_account_id: FIXTURE_ALICE_ID,
@@ -21294,11 +21557,11 @@ test("lookupMultisigProposal resolves by instructions hash", async () => {
     });
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const result = await client.lookupMultisigProposal({
+  const result = await client.getMultisigProposal({
     multisigAccountAlias: "cbdc@banka",
     instructionsHash: "e".repeat(64),
   });
-  assert.equal(captured.url, `${BASE_URL}/v1/multisig/proposals/lookup`);
+  assert.equal(captured.url, `${BASE_URL}/v1/multisig/proposals/get`);
   assert.deepEqual(JSON.parse(captured.init.body), {
     multisig_account_alias: "cbdc@banka",
     instructions_hash: "e".repeat(64),
@@ -21306,7 +21569,7 @@ test("lookupMultisigProposal resolves by instructions hash", async () => {
   assert.deepEqual(result, responsePayload);
 });
 
-test("queryMultisigProposals rejects unsupported request and response statuses", async () => {
+test("listMultisigProposals rejects unsupported request and response statuses", async () => {
   const noFetchClient = new ToriiClient(BASE_URL, {
     fetchImpl: async () => {
       throw new Error("fetch should not be invoked");
@@ -21314,7 +21577,7 @@ test("queryMultisigProposals rejects unsupported request and response statuses",
   });
   await assert.rejects(
     () =>
-      noFetchClient.queryMultisigProposals({
+      noFetchClient.listMultisigProposals({
         multisigAccountAlias: "cbdc@banka",
         status: ["READY_TO_SUBMIT"],
       }),
@@ -21322,7 +21585,7 @@ test("queryMultisigProposals rejects unsupported request and response statuses",
   );
   await assert.rejects(
     () =>
-      noFetchClient.queryMultisigProposals({
+      noFetchClient.listMultisigProposals({
         multisigAccountId: FIXTURE_ALICE_ID,
         multisigAccountAlias: "cbdc@banka",
       }),
@@ -21330,7 +21593,7 @@ test("queryMultisigProposals rejects unsupported request and response statuses",
   );
   await assert.rejects(
     () =>
-      noFetchClient.lookupMultisigProposal({
+      noFetchClient.getMultisigProposal({
         multisigAccountId: FIXTURE_ALICE_ID,
         proposalId: "f".repeat(64),
         instructionsHash: "f".repeat(64),
@@ -21361,10 +21624,10 @@ test("queryMultisigProposals rejects unsupported request and response statuses",
   });
   await assert.rejects(
     () =>
-      invalidResponseClient.queryMultisigProposals({
+      invalidResponseClient.listMultisigProposals({
         multisigAccountAlias: "cbdc@banka",
       }),
-    /multisig proposals query response\.proposals\[0\]\.status must be one of/,
+    /multisig proposals list response\.proposals\[0\]\.status must be one of/,
   );
 });
 
@@ -23451,6 +23714,59 @@ test("getGovernanceContract mirrors response handling", async () => {
   assert.equal(result.code_hash_hex, "1".repeat(64));
 });
 
+test("getGovernanceContract rejects coercible, non-canonical, or unexpected fields", async () => {
+  const contractAddress =
+    "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7";
+  const cases = [
+    [
+      "string boolean",
+      {
+        found: "false",
+        contract_address: contractAddress,
+        dataspace: "universal",
+        code_hash_hex: "1".repeat(64),
+      },
+      /found must be a boolean/,
+    ],
+    [
+      "uppercase hash",
+      {
+        found: true,
+        contract_address: contractAddress,
+        dataspace: "universal",
+        code_hash_hex: "A".repeat(64),
+      },
+      /code_hash_hex must be an exact lowercase 32-byte hex string/,
+    ],
+    [
+      "unexpected field",
+      {
+        found: true,
+        contract_address: contractAddress,
+        dataspace: "universal",
+        code_hash_hex: "1".repeat(64),
+        ignored: true,
+      },
+      /unsupported fields: ignored/,
+    ],
+  ];
+  for (const [label, jsonData, pattern] of cases) {
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () =>
+        createResponse({
+          status: 200,
+          jsonData,
+          headers: { "content-type": "application/json" },
+        }),
+    });
+    await assert.rejects(
+      () => client.getGovernanceContract(contractAddress),
+      pattern,
+      label,
+    );
+  }
+});
+
 test("getGovernanceContract rejects unsupported option keys", async () => {
   const client = new ToriiClient(BASE_URL, {
     fetchImpl: async () => {
@@ -23809,674 +24125,7 @@ test("queryTriggers rejects unsupported option keys", async () => {
   assert.equal(fetchCalled, false);
 });
 
-const OFFLINE_OPERATION_BYTES = Array.from({ length: 32 }, () => 0x11);
-const OFFLINE_OPERATION_ID = "11".repeat(32);
-const OFFLINE_TRANSACTION_HASH = "22".repeat(32);
-const OFFLINE_EVALUATED_BLOCK_HASH = "33".repeat(32);
-const OFFLINE_STATUS_URI = `/v1/offline/operations/${OFFLINE_OPERATION_ID}`;
-const OFFLINE_ASSET_DEFINITION_ID = "xor#sora";
-const OFFLINE_CANONICAL_ASSET_DEFINITION_ID = "7EAD8EFYUx1aVKZPUU1fyKvr8dF1";
-const OFFLINE_OTHER_CANONICAL_ASSET_DEFINITION_ID = "61CtjvNd9T3THAR65GsMVHr82Bjc";
-const OFFLINE_ASSET_ID = "xor##alice";
-
-function offlineActiveTransferVerifier(overrides = {}) {
-  return {
-    id: { backend: "halo2-ipa-pasta", name: "transfer-v2" },
-    version: 7,
-    circuit_id: "confidential-transfer-v2",
-    commitment: "44".repeat(32),
-    public_inputs_schema_hash: "55".repeat(32),
-    max_proof_bytes: 4096,
-    activation_height: 1,
-    withdrawal_height: null,
-    ...overrides,
-  };
-}
-
-function offlineActiveTopUpShieldVerifier(overrides = {}) {
-  return offlineActiveTransferVerifier({
-    id: { backend: "halo2-ipa-pasta", name: "topup-shield-v2" },
-    circuit_id: "kagemusha-topup-shield-v2",
-    commitment: "66".repeat(32),
-    public_inputs_schema_hash: "77".repeat(32),
-    ...overrides,
-  });
-}
-
-function offlineReadinessPayload(overrides = {}) {
-  return {
-    asset_definition_id: OFFLINE_CANONICAL_ASSET_DEFINITION_ID,
-    asset_scale: 4,
-    evaluated_block_height: 42,
-    evaluated_block_hash: OFFLINE_EVALUATED_BLOCK_HASH,
-    active_transfer_verifier: offlineActiveTransferVerifier(),
-    active_topup_shield_verifier: offlineActiveTopUpShieldVerifier(),
-    ready: true,
-    blockers: [],
-    ...overrides,
-  };
-}
-
-function offlineTopUpRequest(overrides = {}) {
-  return {
-    asset: OFFLINE_ASSET_ID,
-    amount: { atomic_units: 9_007_199_254_740_993n, scale: 4 },
-    current_note: { version: 2 },
-    record_bundle: { version: 2 },
-    pallas_open_envelopes_archive: [1, 2, 3],
-    artifact_generation: "generation-1",
-    operation_id: [...OFFLINE_OPERATION_BYTES],
-    authorization: { operation_id: [...OFFLINE_OPERATION_BYTES] },
-    ...overrides,
-  };
-}
-
-function offlineRedeemRequest(overrides = {}) {
-  return {
-    bundle: { version: 2 },
-    recipient: FIXTURE_ALICE_ID,
-    amount: { atomic_units: 7n, scale: 0 },
-    redeem_proof: { version: 1 },
-    redemption: { version: 2 },
-    lineage_verifier_record: { id: "lineage-vk" },
-    block_height: 41n,
-    operation_id: [...OFFLINE_OPERATION_BYTES],
-    authorization: { operation_id: [...OFFLINE_OPERATION_BYTES] },
-    ...overrides,
-  };
-}
-
-function offlineOperationReference(overrides = {}) {
-  return {
-    operation_id: OFFLINE_OPERATION_ID,
-    kind: { kind: "top_up", value: null },
-    state: { state: "pending", value: null },
-    transaction_hash: OFFLINE_TRANSACTION_HASH,
-    status_uri: OFFLINE_STATUS_URI,
-    submitted_at_ms: 1_725_000_000_123,
-    ...overrides,
-  };
-}
-
-function offlineFixedBytes(byte) {
-  return Array(32).fill(byte);
-}
-
-function offlineTopUpAnchor(overrides = {}) {
-  const amount = { atomic_units: 17, scale: 4 };
-  return {
-    version: 2,
-    chain_id: "wonderland",
-    payer: FIXTURE_ALICE_ID,
-    asset: OFFLINE_ASSET_ID,
-    asset_scale: 4,
-    amount,
-    initial_root: offlineFixedBytes(0x10),
-    finalized_root: offlineFixedBytes(0x20),
-    topup_anchor_nullifiers: [offlineFixedBytes(0x31)],
-    current_note: {
-      chain_id: "wonderland",
-      asset: OFFLINE_ASSET_DEFINITION_ID,
-      note_commitment: offlineFixedBytes(0x41),
-      spend_nullifier: offlineFixedBytes(0x51),
-      amount: { ...amount },
-    },
-    topup_operation_id: offlineFixedBytes(0x11),
-    transfer_verifier_id: { backend: "halo2/ipa", name: "offline-transfer" },
-    transfer_verifier_commitment: offlineFixedBytes(0x61),
-    artifact_generation: "generation-1",
-    finalized_height: 12,
-    finalized_tx_hash: offlineFixedBytes(0x22),
-    anchor_digest: offlineFixedBytes(0x71),
-    ...overrides,
-  };
-}
-
-function offlineTopUpFinalityProof(
-  anchor = offlineTopUpAnchor(),
-  finalizedHeight = 12,
-  overrides = {},
-) {
-  return {
-    version: 1,
-    anchor: {
-      topup_operation_id: [...(anchor.topup_operation_id ?? OFFLINE_OPERATION_BYTES)],
-      anchor_digest: [...(anchor.anchor_digest ?? offlineFixedBytes(0x71))],
-    },
-    commit_qc: {
-      height_context: {
-        height: finalizedHeight,
-        opaque_context: { protocol_version: 2 },
-      },
-      certificate: {
-        round: { height: finalizedHeight, view: 0 },
-        opaque_certificate: [1, 2, 3],
-      },
-    },
-    anchor_path: { leaf_index: 0, leaf_count: 1, siblings: [] },
-    ...overrides,
-  };
-}
-
-test("getOfflineReadiness sends the required exact asset selector and parses blockers", async () => {
-  let capturedRequest;
-  const payload = offlineReadinessPayload({
-    ready: false,
-    blockers: [{ code: "proof_backend_unavailable", message: "Proof backend unavailable" }],
-  });
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async (url, init = {}) => {
-      capturedRequest = { url, init };
-      return createResponse({
-        status: 200,
-        jsonData: payload,
-        headers: { "content-type": "application/json" },
-      });
-    },
-  });
-
-  const response = await client.getOfflineReadiness(OFFLINE_ASSET_DEFINITION_ID);
-  const url = new URL(capturedRequest.url);
-  assert.equal(url.pathname, "/v1/offline/readiness");
-  assert.equal(url.searchParams.get("asset_definition_id"), OFFLINE_ASSET_DEFINITION_ID);
-  assert.equal(capturedRequest.init.method, "GET");
-  assert.equal(capturedRequest.init.headers.Accept, "application/json");
-  assert.deepEqual(response, payload);
-});
-
-test("getOfflineReadiness parses a full-range u64 without rounding", async () => {
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => createResponse({
-      status: 200,
-      textBody: `{"asset_definition_id":"${OFFLINE_CANONICAL_ASSET_DEFINITION_ID}",`
-        + `"asset_scale":4,"evaluated_block_height":18446744073709551615,"evaluated_block_hash":"${OFFLINE_EVALUATED_BLOCK_HASH}",`
-        + `"active_transfer_verifier":${JSON.stringify(offlineActiveTransferVerifier())},`
-        + `"active_topup_shield_verifier":${JSON.stringify(offlineActiveTopUpShieldVerifier())},`
-        + '"ready":true,"blockers":[]}',
-      headers: { "content-type": "application/json" },
-    }),
-  });
-
-  const response = await client.getOfflineReadiness(OFFLINE_ASSET_DEFINITION_ID);
-  assert.equal(response.evaluated_block_height, (1n << 64n) - 1n);
-});
-
-test("getOfflineReadiness rejects invalid selectors and contradictory snapshots", async () => {
-  let fetchCount = 0;
-  const noFetchClient = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => {
-      fetchCount += 1;
-      throw new Error("must not fetch");
-    },
-  });
-  for (const asset of [undefined, "", ` ${OFFLINE_ASSET_DEFINITION_ID}`, `${OFFLINE_ASSET_DEFINITION_ID} `]) {
-    await assert.rejects(() => noFetchClient.getOfflineReadiness(asset), /assetDefinitionId/);
-  }
-  assert.equal(fetchCount, 0);
-
-  for (const payload of [
-    offlineReadinessPayload({ asset_definition_id: "different-asset" }),
-    offlineReadinessPayload({ ready: true, blockers: [{ code: "not_ready", message: "no" }] }),
-    offlineReadinessPayload({ ready: false, blockers: [] }),
-    offlineReadinessPayload({ evaluated_block_height: -1 }),
-    offlineReadinessPayload({ evaluated_block_height: 1n << 64n }),
-    offlineReadinessPayload({ evaluated_block_hash: undefined }),
-    offlineReadinessPayload({ evaluated_block_hash: "33" }),
-    offlineReadinessPayload({ evaluated_block_hash: "AB".repeat(32) }),
-    offlineReadinessPayload({ blockers: [{ code: "NOT-CANONICAL", message: "no" }] }),
-    offlineReadinessPayload({ ready: false, blockers: [{ code: "not_ready", message: "" }] }),
-    offlineReadinessPayload({ ready: false, blockers: [{ code: "not_ready", message: " leading" }] }),
-    offlineReadinessPayload({ ready: false, blockers: [{ code: "not_ready", message: "line\nbreak" }] }),
-    offlineReadinessPayload({ asset_scale: undefined }),
-    offlineReadinessPayload({ asset_scale: -1 }),
-    offlineReadinessPayload({ asset_scale: 1n << 32n }),
-    offlineReadinessPayload({ asset_scale: 29 }),
-    offlineReadinessPayload({
-      asset_scale: null,
-      ready: false,
-      blockers: [{ code: "not_ready", message: "missing scale" }],
-    }),
-    offlineReadinessPayload({ active_transfer_verifier: null }),
-    offlineReadinessPayload({ active_topup_shield_verifier: undefined }),
-    offlineReadinessPayload({ active_topup_shield_verifier: null }),
-    offlineReadinessPayload({
-      active_transfer_verifier: offlineActiveTransferVerifier({ max_proof_bytes: 0 }),
-    }),
-    offlineReadinessPayload({
-      active_transfer_verifier: offlineActiveTransferVerifier({ activation_height: 43 }),
-    }),
-    offlineReadinessPayload({
-      active_transfer_verifier: offlineActiveTransferVerifier({ withdrawal_height: 42 }),
-    }),
-    offlineReadinessPayload({
-      active_transfer_verifier: offlineActiveTransferVerifier({ commitment: "AA".repeat(32) }),
-    }),
-    offlineReadinessPayload({
-      active_topup_shield_verifier: offlineActiveTopUpShieldVerifier({ max_proof_bytes: 0 }),
-    }),
-    offlineReadinessPayload({
-      active_topup_shield_verifier: offlineActiveTopUpShieldVerifier({ activation_height: 43 }),
-    }),
-    offlineReadinessPayload({
-      active_topup_shield_verifier: offlineActiveTopUpShieldVerifier({ withdrawal_height: 42 }),
-    }),
-    offlineReadinessPayload({
-      ready: false,
-      blockers: [{
-        code: "topup_shield_verifier_unavailable",
-        message: "top-up shield verifier unavailable",
-      }],
-    }),
-    offlineReadinessPayload({
-      ready: false,
-      blockers: [
-        { code: "not_ready", message: "one" },
-        { code: "not_ready", message: "two" },
-      ],
-    }),
-  ]) {
-    const client = new ToriiClient(BASE_URL, {
-      fetchImpl: async () => createResponse({
-        status: 200,
-        jsonData: payload,
-        headers: { "content-type": "application/json" },
-      }),
-    });
-    await assert.rejects(() => client.getOfflineReadiness(OFFLINE_ASSET_DEFINITION_ID));
-  }
-
-  const unknownStrippingClient = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => createResponse({
-      status: 200,
-      jsonData: offlineReadinessPayload({ unknown_member: "ignored" }),
-      headers: { "content-type": "application/json" },
-    }),
-  });
-  const stripped = await unknownStrippingClient.getOfflineReadiness(
-    OFFLINE_ASSET_DEFINITION_ID,
-  );
-  assert.equal(Object.hasOwn(stripped, "unknown_member"), false);
-
-  const expectedUnavailableClient = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => createResponse({
-      status: 200,
-      jsonData: offlineReadinessPayload({
-        asset_scale: 29,
-        active_transfer_verifier: {
-          ...offlineActiveTransferVerifier(),
-          ignored_verifier_field: true,
-        },
-        ready: false,
-        blockers: [{ code: "asset_scale_unsupported", message: "unsupported scale" }],
-      }),
-      headers: { "content-type": "application/json" },
-    }),
-  });
-  const expectedUnavailable = await expectedUnavailableClient.getOfflineReadiness(
-    OFFLINE_ASSET_DEFINITION_ID,
-  );
-  assert.equal(expectedUnavailable.asset_scale, 29);
-  assert.equal(
-    Object.hasOwn(expectedUnavailable.active_transfer_verifier, "ignored_verifier_field"),
-    false,
-  );
-
-  const topUpShieldUnavailableClient = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => createResponse({
-      status: 200,
-      jsonData: offlineReadinessPayload({
-        active_topup_shield_verifier: null,
-        ready: false,
-        blockers: [{
-          code: "topup_shield_verifier_unavailable",
-          message: "top-up shield verifier unavailable",
-        }],
-      }),
-      headers: { "content-type": "application/json" },
-    }),
-  });
-  const topUpUnavailable = await topUpShieldUnavailableClient.getOfflineReadiness(
-    OFFLINE_ASSET_DEFINITION_ID,
-  );
-  assert.equal(topUpUnavailable.active_topup_shield_verifier, null);
-
-  const wrongMediaTypeClient = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => createResponse({
-      status: 200,
-      jsonData: offlineReadinessPayload(),
-      headers: { "content-type": "text/plain" },
-    }),
-  });
-  await assert.rejects(
-    () => wrongMediaTypeClient.getOfflineReadiness(OFFLINE_ASSET_DEFINITION_ID),
-    /Content-Type application\/json/,
-  );
-
-  const mismatchedCanonicalClient = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => createResponse({
-      status: 200,
-      jsonData: offlineReadinessPayload({
-        asset_definition_id: OFFLINE_OTHER_CANONICAL_ASSET_DEFINITION_ID,
-      }),
-      headers: { "content-type": "application/json" },
-    }),
-  });
-  await assert.rejects(
-    () => mismatchedCanonicalClient.getOfflineReadiness(
-      OFFLINE_CANONICAL_ASSET_DEFINITION_ID,
-    ),
-    /does not match the requested asset/,
-  );
-});
-
-test("submitOfflineTopUp sends direct JSON and derives Idempotency-Key from signed bytes", async () => {
-  let capturedRequest;
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async (url, init) => {
-      capturedRequest = { url, init };
-      return createResponse({
-        status: 202,
-        jsonData: offlineOperationReference(),
-        headers: { "content-type": "application/json", location: OFFLINE_STATUS_URI },
-      });
-    },
-  });
-
-  const reference = await client.submitOfflineTopUp(offlineTopUpRequest());
-  assert.equal(capturedRequest.url, `${BASE_URL}/v1/offline/top-up`);
-  assert.equal(capturedRequest.init.method, "POST");
-  assert.equal(capturedRequest.init.headers["Content-Type"], "application/json");
-  assert.equal(capturedRequest.init.headers.Accept, "application/json");
-  assert.equal(capturedRequest.init.headers["Idempotency-Key"], OFFLINE_OPERATION_ID);
-  assert.match(capturedRequest.init.body, /"atomic_units":9007199254740993/u);
-  assert.doesNotMatch(capturedRequest.init.body, /base64|request_archive|norito_payload/iu);
-  assert.deepEqual(reference, offlineOperationReference());
-});
-
-test("submitOfflineRedeem uses the one final route and typed redeem reference", async () => {
-  let capturedRequest;
-  const redeemReference = offlineOperationReference({ kind: { kind: "redeem", value: null } });
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async (url, init) => {
-      capturedRequest = { url, init };
-      return createResponse({
-        status: 202,
-        jsonData: redeemReference,
-        headers: { "content-type": "application/json", Location: OFFLINE_STATUS_URI },
-      });
-    },
-  });
-
-  assert.deepEqual(await client.submitOfflineRedeem(offlineRedeemRequest()), redeemReference);
-  assert.equal(capturedRequest.url, `${BASE_URL}/v1/offline/redeem`);
-  assert.equal(capturedRequest.init.headers["Idempotency-Key"], OFFLINE_OPERATION_ID);
-  assert.match(capturedRequest.init.body, /"block_height":41/u);
-});
-
-test("offline command validation rejects malformed and conflicting operation IDs before fetch", async () => {
-  let fetchCount = 0;
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => {
-      fetchCount += 1;
-      throw new Error("must not fetch");
-    },
-  });
-  const sparse = [...OFFLINE_OPERATION_BYTES];
-  delete sparse[3];
-  const cyclic = offlineTopUpRequest();
-  cyclic.current_note.self = cyclic.current_note;
-  const cases = [
-    { request_archive: "whole-payload-wrapper" },
-    offlineTopUpRequest({ operation_id: new Uint8Array(OFFLINE_OPERATION_BYTES) }),
-    offlineTopUpRequest({ operation_id: OFFLINE_OPERATION_BYTES.slice(1) }),
-    offlineTopUpRequest({ operation_id: Array(32).fill(0) }),
-    offlineTopUpRequest({ operation_id: sparse }),
-    offlineTopUpRequest({ operation_id: [...OFFLINE_OPERATION_BYTES.slice(0, 31), 256] }),
-    offlineTopUpRequest({ authorization: { operation_id: Array(32).fill(0x12) } }),
-    offlineTopUpRequest({ amount: { atomic_units: 1, scale: 29 } }),
-    offlineTopUpRequest({ artifact_generation: "é".repeat(65) }),
-    cyclic,
-  ];
-  for (const request of cases) {
-    await assert.rejects(() => client.submitOfflineTopUp(request));
-  }
-  await assert.rejects(
-    () => client.submitOfflineRedeem(offlineRedeemRequest({ block_height: -1 })),
-    /block_height/,
-  );
-  assert.equal(fetchCount, 0);
-});
-
-test("offline 202 references are cross-checked against command, status URI, and Location", async () => {
-  const cases = [
-    [offlineOperationReference({ operation_id: "33".repeat(32) }), OFFLINE_STATUS_URI],
-    [offlineOperationReference({ kind: { kind: "redeem", value: null } }), OFFLINE_STATUS_URI],
-    [offlineOperationReference({ status_uri: "/v1/offline/operations/legacy" }), OFFLINE_STATUS_URI],
-    [offlineOperationReference({ submitted_at_ms: -1 }), OFFLINE_STATUS_URI],
-    [offlineOperationReference(), "/v1/offline/operations/" + "44".repeat(32)],
-    [offlineOperationReference(), null],
-  ];
-  for (const [payload, location] of cases) {
-    const client = new ToriiClient(BASE_URL, {
-      fetchImpl: async () => createResponse({
-        status: 202,
-        jsonData: payload,
-        headers: { "content-type": "application/json", ...(location ? { location } : {}) },
-      }),
-    });
-    await assert.rejects(() => client.submitOfflineTopUp(offlineTopUpRequest()));
-  }
-});
-
-test("getOfflineOperationStatus parses all three tagged states", async () => {
-  const statuses = [
-    {
-      state: "pending",
-      value: {
-        operation_id: OFFLINE_OPERATION_ID,
-        kind: { kind: "top_up", value: null },
-        transaction_hash: OFFLINE_TRANSACTION_HASH,
-        submitted_at_ms: 10,
-      },
-    },
-    {
-      state: "applied",
-      value: {
-        operation_id: OFFLINE_OPERATION_ID,
-        result: {
-          kind: "top_up",
-          result: {
-            transaction_hash: OFFLINE_TRANSACTION_HASH,
-            finalized_block_height: 12,
-            server_time_ms: 13,
-            anchor: offlineTopUpAnchor(),
-            finality_proof: offlineTopUpFinalityProof(),
-          },
-        },
-      },
-    },
-    {
-      state: "rejected",
-      value: {
-        operation_id: OFFLINE_OPERATION_ID,
-        kind: { kind: "redeem", value: null },
-        transaction_hash: OFFLINE_TRANSACTION_HASH,
-        error: { code: "offline_operation_rejected", message: "rejected", details: { layer: "torii" } },
-      },
-    },
-  ];
-  for (const expected of statuses) {
-    let capturedUrl;
-    const client = new ToriiClient(BASE_URL, {
-      fetchImpl: async (url) => {
-        capturedUrl = url;
-        return createResponse({
-          status: 200,
-          jsonData: expected,
-          headers: { "content-type": "application/json" },
-        });
-      },
-    });
-    assert.deepEqual(await client.getOfflineOperationStatus(OFFLINE_OPERATION_ID), expected);
-    assert.equal(capturedUrl, `${BASE_URL}${OFFLINE_STATUS_URI}`);
-  }
-});
-
-test("applied top-up preserves a direct typed finality proof and its opaque verifier fields", async () => {
-  const proof = offlineTopUpFinalityProof();
-  proof.commit_qc.future_qc_field = { opaque: [7, 8, 9] };
-  proof.anchor_path.future_path_field = "preserved";
-  const payload = {
-    state: "applied",
-    value: {
-      operation_id: OFFLINE_OPERATION_ID,
-      result: {
-        kind: "top_up",
-        result: {
-          transaction_hash: OFFLINE_TRANSACTION_HASH,
-          finalized_block_height: 12,
-          server_time_ms: 13,
-          anchor: offlineTopUpAnchor(),
-          finality_proof: proof,
-        },
-      },
-    },
-  };
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => createResponse({
-      status: 200,
-      jsonData: payload,
-      headers: { "content-type": "application/json" },
-    }),
-  });
-
-  const status = await client.getOfflineOperationStatus(OFFLINE_OPERATION_ID);
-  assert.deepEqual(status.value.result.result.finality_proof, proof);
-  proof.commit_qc.future_qc_field.opaque[0] = 255;
-  assert.deepEqual(
-    status.value.result.result.finality_proof.commit_qc.future_qc_field,
-    { opaque: [7, 8, 9] },
-  );
-});
-
-test("applied top-up rejects missing, mismatched, and type-confused finality proofs", async () => {
-  const applied = (proof, { includeProof = true } = {}) => {
-    const result = {
-      transaction_hash: OFFLINE_TRANSACTION_HASH,
-      finalized_block_height: 12,
-      server_time_ms: 13,
-      anchor: offlineTopUpAnchor(),
-    };
-    if (includeProof) result.finality_proof = proof;
-    return {
-      state: "applied",
-      value: {
-        operation_id: OFFLINE_OPERATION_ID,
-        result: { kind: "top_up", result },
-      },
-    };
-  };
-  const base = offlineTopUpFinalityProof();
-  const invalid = [
-    applied(undefined, { includeProof: false }),
-    applied("bm90LWEtZGlyZWN0LXByb29m"),
-    applied({ ...base, version: 2 }),
-    applied({
-      ...base,
-      anchor: { ...base.anchor, topup_operation_id: offlineFixedBytes(0x12) },
-    }),
-    applied({
-      ...base,
-      anchor: { ...base.anchor, anchor_digest: offlineFixedBytes(0x72) },
-    }),
-    applied({ ...base, commit_qc: [] }),
-    applied({
-      ...base,
-      commit_qc: { ...base.commit_qc, height_context: [] },
-    }),
-    applied({
-      ...base,
-      commit_qc: {
-        ...base.commit_qc,
-        height_context: { ...base.commit_qc.height_context, height: 11 },
-      },
-    }),
-    applied({
-      ...base,
-      commit_qc: { ...base.commit_qc, certificate: [] },
-    }),
-    applied({
-      ...base,
-      commit_qc: {
-        ...base.commit_qc,
-        certificate: { ...base.commit_qc.certificate, round: [] },
-      },
-    }),
-    applied({
-      ...base,
-      commit_qc: {
-        ...base.commit_qc,
-        certificate: {
-          ...base.commit_qc.certificate,
-          round: { ...base.commit_qc.certificate.round, height: 13 },
-        },
-      },
-    }),
-    applied({ ...base, anchor_path: [] }),
-  ];
-
-  for (const payload of invalid) {
-    const client = new ToriiClient(BASE_URL, {
-      fetchImpl: async () => createResponse({
-        status: 200,
-        jsonData: payload,
-        headers: { "content-type": "application/json" },
-      }),
-    });
-    await assert.rejects(
-      () => client.getOfflineOperationStatus(OFFLINE_OPERATION_ID),
-    );
-  }
-});
-
-test("offline status validation rejects noncanonical paths and adversarial envelopes", async () => {
-  let fetchCount = 0;
-  const noFetchClient = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => {
-      fetchCount += 1;
-      throw new Error("must not fetch");
-    },
-  });
-  for (const operationId of ["AB".repeat(32), "00".repeat(32), "11", `${OFFLINE_OPERATION_ID}/extra`]) {
-    await assert.rejects(() => noFetchClient.getOfflineOperationStatus(operationId));
-  }
-  assert.equal(fetchCount, 0);
-
-  const invalidStatuses = [
-    { state: "unknown", value: { operation_id: OFFLINE_OPERATION_ID } },
-    { state: "pending", value: { operation_id: "33".repeat(32), kind: { kind: "top_up" }, transaction_hash: OFFLINE_TRANSACTION_HASH, submitted_at_ms: 1 } },
-    { state: "pending", value: { operation_id: OFFLINE_OPERATION_ID, kind: { kind: "top_up", value: {} }, transaction_hash: OFFLINE_TRANSACTION_HASH, submitted_at_ms: 1 } },
-    { state: "pending", value: { operation_id: OFFLINE_OPERATION_ID, kind: { kind: "top_up" }, transaction_hash: "AB".repeat(32), submitted_at_ms: 1 } },
-    { state: "applied", value: { operation_id: OFFLINE_OPERATION_ID, result: { kind: "redeem", result: { transaction_hash: OFFLINE_TRANSACTION_HASH, finalized_block_height: 1, server_time_ms: 2, anchor: {} } } } },
-    { state: "applied", value: { operation_id: OFFLINE_OPERATION_ID, result: { kind: "redeem", result: { transaction_hash: OFFLINE_TRANSACTION_HASH, finalized_block_height: 1, server_time_ms: 2, finality_proof: {} } } } },
-    { state: "rejected", value: { operation_id: OFFLINE_OPERATION_ID, kind: { kind: "redeem" }, transaction_hash: OFFLINE_TRANSACTION_HASH, error: { code: "INVALID-CODE", message: "no" } } },
-    { state: "rejected", value: { operation_id: OFFLINE_OPERATION_ID, kind: { kind: "redeem" }, transaction_hash: OFFLINE_TRANSACTION_HASH, error: { code: "rejected", message: "" } } },
-    { state: "rejected", value: { operation_id: OFFLINE_OPERATION_ID, kind: { kind: "redeem" }, transaction_hash: OFFLINE_TRANSACTION_HASH, error: { code: "rejected", message: " leading" } } },
-    { state: "rejected", value: { operation_id: OFFLINE_OPERATION_ID, kind: { kind: "redeem" }, transaction_hash: OFFLINE_TRANSACTION_HASH, error: { code: "rejected", message: "line\nbreak" } } },
-  ];
-  for (const payload of invalidStatuses) {
-    const client = new ToriiClient(BASE_URL, {
-      fetchImpl: async () => createResponse({
-        status: 200,
-        jsonData: payload,
-        headers: { "content-type": "application/json" },
-      }),
-    });
-    await assert.rejects(() => client.getOfflineOperationStatus(OFFLINE_OPERATION_ID));
-  }
-});
-
-test("deleteTrigger tolerates missing records", async () => {
+ test("deleteTrigger tolerates missing records", async () => {
   const fetchImpl = async () => createResponse({ status: 404 });
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const result = await client.deleteTrigger("apps::obsolete");
@@ -26251,6 +25900,14 @@ function validNodeCapabilitiesPayload() {
       },
     },
   };
+}
+
+function createBatchCapabilitiesResponse() {
+  return createResponse({
+    status: 200,
+    jsonData: validNodeCapabilitiesPayload(),
+    headers: { "content-type": "application/json" },
+  });
 }
 
 function createResponse({ status, jsonData = {}, arrayData, textBody, headers }) {

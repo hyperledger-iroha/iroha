@@ -12,7 +12,7 @@ use iroha_data_model::{
     query::{error::QueryExecutionFail as QueryError, sns::prelude::*},
     sns::{NameControllerV1, RegisterNameRequestV1, RenewNameRequestV1, SuffixId},
 };
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::{Numeric, Quantity};
 use iroha_telemetry::metrics;
 use norito::codec::Decode;
 
@@ -430,9 +430,15 @@ fn charge_sns_quote(
         return Ok(crate::sns::payment_proof_for_quote(quote, payer));
     }
 
-    Transfer::asset_numeric(
+    let charge = Quantity::from_canonical_numeric(xor_nanos_to_numeric(quote.charge_amount))
+        .map_err(|error| {
+            InstructionExecutionError::InvariantViolation(
+                format!("SNS quote left the asset quantity domain: {error}").into(),
+            )
+        })?;
+    Transfer::asset_quantity(
         AssetId::of(quote.payment_asset_definition_id.clone(), payer.clone()),
-        xor_nanos_to_numeric(quote.charge_amount),
+        charge,
         quote.collector_account.clone(),
     )
     .execute(authority, state_transaction)?;
@@ -887,7 +893,7 @@ mod tests {
         {
             let mut block = state.block(next_header(&state));
             let mut stx = block.transaction();
-            Mint::asset_numeric(
+            Mint::asset_quantity(
                 1_000_u64,
                 AssetId::of(payment_asset_definition_id.clone(), authority.clone()),
             )
@@ -992,7 +998,7 @@ mod tests {
         {
             let mut block = state.block(next_header(&state));
             let mut stx = block.transaction();
-            Mint::asset_numeric(
+            Mint::asset_quantity(
                 1_000_u64,
                 AssetId::of(payment_asset_definition_id.clone(), authority.clone()),
             )
@@ -1109,7 +1115,7 @@ mod tests {
         {
             let mut block = state.block(next_header(&state));
             let mut stx = block.transaction();
-            Mint::asset_numeric(
+            Mint::asset_quantity(
                 1_000_u64,
                 AssetId::of(payment_asset_definition_id.clone(), authority.clone()),
             )
@@ -1170,7 +1176,7 @@ mod tests {
         {
             let mut block = state.block(next_header(&state));
             let mut stx = block.transaction();
-            Mint::asset_numeric(
+            Mint::asset_quantity(
                 2_u64,
                 AssetId::of(payment_asset_definition_id.clone(), payer.clone()),
             )
@@ -1200,7 +1206,7 @@ mod tests {
         {
             let mut block = state.block(next_header(&state));
             let mut stx = block.transaction();
-            Mint::asset_numeric(
+            Mint::asset_quantity(
                 2_u64,
                 AssetId::of(payment_asset_definition_id.clone(), payer.clone()),
             )
@@ -1320,7 +1326,7 @@ mod tests {
         {
             let mut block = state.block(next_header(&state));
             let mut stx = block.transaction();
-            Mint::asset_numeric(
+            Mint::asset_quantity(
                 1_000_u64,
                 AssetId::of(payment_asset_definition_id.clone(), authority.clone()),
             )

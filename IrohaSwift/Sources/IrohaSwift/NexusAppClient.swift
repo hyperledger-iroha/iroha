@@ -275,6 +275,7 @@ public struct SwiftNexusTransactionCodec: NexusTransactionCodec {
     }
 
     public func buildTransferInstructionBox(input: NexusTransferInput) throws -> Data {
+        let quantity = try KotodamaNumericV1Codec.decodeQuantityJSON(input.quantity).canonicalString
         if let parsed = CanonicalNorito.parsePublicAssetIdLiteral(input.sourceAssetID) {
             let nativeAssetDefinitionId: String
             if let dataspaceId = parsed.dataspaceId {
@@ -285,13 +286,25 @@ public struct SwiftNexusTransactionCodec: NexusTransactionCodec {
             if let nativeInstruction = try NoritoNativeBridge.shared.encodeTransferInstructionBox(
                 authority: parsed.accountId,
                 assetDefinitionId: nativeAssetDefinitionId,
-                quantity: input.quantity,
+                quantity: quantity,
                 destination: input.destinationAccountID
             ) {
                 return nativeInstruction
             }
         }
-        return try SwiftNexusTransferPayloadEncoder.encodeInstructionBox(input: input)
+        return try SwiftNexusTransferPayloadEncoder.encodeInstructionBox(
+            input: NexusTransferInput(
+                sourceAssetID: input.sourceAssetID,
+                quantity: quantity,
+                destinationAccountID: input.destinationAccountID,
+                authority: input.authority,
+                signingPublicKey: input.signingPublicKey,
+                creationTimeMs: input.creationTimeMs,
+                ttlMs: input.ttlMs,
+                nonce: input.nonce,
+                metadata: input.metadata
+            )
+        )
     }
 
     public func finalizeSignedTransaction(signable: NexusSignableTransaction,
@@ -393,7 +406,19 @@ public final class NexusAppClient {
                                 message: "Signing public key is required for an externally signed transfer.")
         }
         try validateEd25519PublicKey(signingPublicKey)
-        let normalized = input.with(authority: authority, signingPublicKey: signingPublicKey)
+        let quantity = try KotodamaNumericV1Codec
+            .decodeQuantityJSON(input.quantity).canonicalString
+        let normalized = NexusTransferInput(
+            sourceAssetID: input.sourceAssetID,
+            quantity: quantity,
+            destinationAccountID: input.destinationAccountID,
+            authority: authority,
+            signingPublicKey: signingPublicKey,
+            creationTimeMs: input.creationTimeMs,
+            ttlMs: input.ttlMs,
+            nonce: input.nonce,
+            metadata: input.metadata
+        )
         let payloadBytes = try transactionCodec.buildTransferPayload(input: normalized,
                                                                      config: config,
                                                                      authority: authority)
@@ -505,9 +530,10 @@ private enum SwiftNexusTransferPayloadEncoder {
     static func encode(input: NexusTransferInput,
                        chainId: String,
                        authority: String) throws -> Data {
+        let quantity = try KotodamaNumericV1Codec.decodeQuantityJSON(input.quantity).canonicalString
         let instruction = TransferInstructionInput(
             sourceAssetID: input.sourceAssetID,
-            quantity: input.quantity,
+            quantity: quantity,
             destinationAccountID: input.destinationAccountID
         )
         return try encodePayload(
@@ -541,15 +567,19 @@ private enum SwiftNexusTransferPayloadEncoder {
             assetDefinitionID: feeAssetDefinitionID,
             authority: authority
         )
+        let principalQuantity = try KotodamaNumericV1Codec
+            .decodeQuantityJSON(request.principal.quantity).canonicalString
+        let feeQuantity = try KotodamaNumericV1Codec
+            .decodeQuantityJSON(request.feeQuantity).canonicalString
         let instructions = [
             TransferInstructionInput(
                 sourceAssetID: principalAssetID,
-                quantity: request.principal.quantity,
+                quantity: principalQuantity,
                 destinationAccountID: destinationAccountID
             ),
             TransferInstructionInput(
                 sourceAssetID: feeAssetID,
-                quantity: request.feeQuantity,
+                quantity: feeQuantity,
                 destinationAccountID: treasuryAccountID
             ),
         ]
@@ -692,7 +722,8 @@ private enum SwiftNexusTransferPayloadEncoder {
     }
 
     private static func encodeNumeric(_ value: String) throws -> Data {
-        let numeric = try CanonicalNorito.parseNumeric(value)
+        let canonical = try KotodamaNumericV1Codec.decodeQuantityJSON(value).canonicalString
+        let numeric = try CanonicalNorito.parseNumeric(canonical)
         let mantissaBytes = try numeric.mantissaBytes(maxBytes: CanonicalNorito.maxBigIntBytes)
         var bigintWriter = CompactNoritoWriter()
         bigintWriter.writeUInt32LE(UInt32(mantissaBytes.count))
@@ -830,6 +861,10 @@ extension SwiftTransactionEncoder {
         let feeSponsor = try principal.feeSponsor.map {
             try TransactionInputValidator.sanitizeAccountId($0, field: "feeSponsor")
         }
+        let principalQuantity = try KotodamaNumericV1Codec
+            .decodeQuantityJSON(principal.quantity).canonicalString
+        let feeQuantity = try KotodamaNumericV1Codec
+            .decodeQuantityJSON(request.feeQuantity).canonicalString
         var metadata = request.transactionMetadata
         metadata[IrohaValidationFeeTransactionMetadataKey.policyVersion] =
             .number(Double(request.policyVersion))
@@ -852,10 +887,10 @@ extension SwiftTransactionEncoder {
             ttlMs: principal.ttlMs,
             nonce: principal.nonce,
             principalAssetDefinitionId: principalAssetDefinitionID,
-            principalQuantity: principal.quantity,
+            principalQuantity: principalQuantity,
             destination: destination,
             feeAssetDefinitionId: feeAssetDefinitionID,
-            feeQuantity: request.feeQuantity,
+            feeQuantity: feeQuantity,
             treasury: treasury,
             policyVersion: request.policyVersion,
             policyHashHex: normalizedPolicyHash,

@@ -62,8 +62,6 @@ mod model {
         SpaceDirectory(SpaceDirectoryEventFilter),
         /// Matches native asset escrow lifecycle events
         Escrow(EscrowEventFilter),
-        /// Matches offline settlement lifecycle events
-        Offline(OfflineNoteEventFilter),
         /// Matches oracle feed lifecycle events
         Oracle(OracleEventFilter),
         /// Matches viral incentive lifecycle events
@@ -674,18 +672,6 @@ impl Default for OracleEventFilter {
     }
 }
 
-/// An event filter for [`super::offline::OfflineNoteEvent`] values.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema)]
-#[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-pub struct OfflineNoteEventFilter {
-    /// Optional note commitment matcher.
-    pub(super) note_matcher: Option<iroha_crypto::Hash>,
-    /// Optional account matcher.
-    pub(super) account_matcher: Option<crate::account::AccountId>,
-    /// Matched event-set.
-    pub(super) event_set: super::offline::OfflineNoteEventSet,
-}
-
 /// Filter for oracle feed aggregation events.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema)]
 #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
@@ -718,45 +704,6 @@ impl OracleEventFilter {
     pub const fn for_events(mut self, event_set: super::oracle::OracleEventSet) -> Self {
         self.event_set = event_set;
         self
-    }
-}
-
-impl OfflineNoteEventFilter {
-    /// Creates a new [`OfflineNoteEventFilter`] accepting all events.
-    #[must_use]
-    pub const fn new() -> Self {
-        Self {
-            note_matcher: None,
-            account_matcher: None,
-            event_set: super::offline::OfflineNoteEventSet::all(),
-        }
-    }
-
-    /// Restricts matches to the provided note commitment.
-    #[must_use]
-    pub fn for_note(mut self, note_commitment: iroha_crypto::Hash) -> Self {
-        self.note_matcher = Some(note_commitment);
-        self
-    }
-
-    /// Restricts matches to events tied to the given account.
-    #[must_use]
-    pub fn for_account(mut self, account: crate::account::AccountId) -> Self {
-        self.account_matcher = Some(account);
-        self
-    }
-
-    /// Restricts matches to the provided event-set.
-    #[must_use]
-    pub const fn for_events(mut self, event_set: super::offline::OfflineNoteEventSet) -> Self {
-        self.event_set = event_set;
-        self
-    }
-}
-
-impl Default for OfflineNoteEventFilter {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -1083,52 +1030,6 @@ impl super::EventFilter for EscrowEventFilter {
             && escrow.status != expected
         {
             return false;
-        }
-
-        true
-    }
-}
-
-#[cfg(feature = "transparent_api")]
-impl super::EventFilter for OfflineNoteEventFilter {
-    type Event = super::offline::OfflineNoteEvent;
-
-    fn matches(&self, event: &Self::Event) -> bool {
-        if !self.event_set.matches(event) {
-            return false;
-        }
-
-        if let Some(expected_note) = &self.note_matcher {
-            let actual_note = match event {
-                super::offline::OfflineNoteEvent::NoteIssued(payload) => &payload.note_commitment,
-                super::offline::OfflineNoteEvent::NoteRedeemed(payload) => {
-                    &payload.source_note_commitment
-                }
-                super::offline::OfflineNoteEvent::AuditRecorded(_) => return false,
-            };
-            if actual_note != expected_note {
-                return false;
-            }
-        }
-
-        if let Some(expected_account) = &self.account_matcher {
-            match event {
-                super::offline::OfflineNoteEvent::NoteIssued(payload) => {
-                    if &payload.account != expected_account {
-                        return false;
-                    }
-                }
-                super::offline::OfflineNoteEvent::NoteRedeemed(payload) => {
-                    if &payload.recipient != expected_account {
-                        return false;
-                    }
-                }
-                super::offline::OfflineNoteEvent::AuditRecorded(payload) => {
-                    if &payload.account != expected_account {
-                        return false;
-                    }
-                }
-            }
         }
 
         true
@@ -1699,9 +1600,6 @@ impl EventFilter for DataEventFilter {
             (DataEventFilter::Escrow(filter), DataEvent::Escrow(escrow_event)) => {
                 filter.matches(escrow_event)
             }
-            (DataEventFilter::Offline(filter), DataEvent::Offline(offline_event)) => {
-                filter.matches(offline_event)
-            }
             (DataEventFilter::Oracle(filter), DataEvent::Oracle(oracle_event)) => {
                 filter.matches(oracle_event)
             }
@@ -1771,10 +1669,10 @@ pub mod prelude {
     pub use super::{
         AccountEventFilter, AssetDefinitionEventFilter, AssetEventFilter, BridgeEventFilter,
         ConfidentialEventFilter, ConfigurationEventFilter, DataEventFilter, DomainEventFilter,
-        EscrowEventFilter, ExecutorEventFilter, NftEventFilter, OfflineNoteEventFilter,
-        OracleEventFilter, PeerEventFilter, ProofEventFilter, RoleEventFilter, RwaEventFilter,
-        SocialEventFilter, SoradnsDirectoryEventFilter, SorafsGatewayEventFilter,
-        TriggerEventFilter, VerifyingKeyEventFilter,
+        EscrowEventFilter, ExecutorEventFilter, NftEventFilter, OracleEventFilter, PeerEventFilter,
+        ProofEventFilter, RoleEventFilter, RwaEventFilter, SocialEventFilter,
+        SoradnsDirectoryEventFilter, SorafsGatewayEventFilter, TriggerEventFilter,
+        VerifyingKeyEventFilter,
     };
 }
 #[cfg(test)]
@@ -1867,11 +1765,11 @@ mod tests {
         let other_asset = AssetId::new(other_definition, account_id);
         let matching_event = AssetEvent::Added(AssetChanged {
             asset: matching_asset,
-            amount: Numeric::new(10, 0),
+            amount: 10_u32.into(),
         });
         let other_event = AssetEvent::Added(AssetChanged {
             asset: other_asset,
-            amount: Numeric::new(10, 0),
+            amount: 10_u32.into(),
         });
 
         let filter = AssetEventFilter::new()
@@ -1892,11 +1790,11 @@ mod tests {
         let other_asset = AssetId::new(definition, checked_random_account_id());
         let matching_event = AssetEvent::Added(AssetChanged {
             asset: matching_asset.clone(),
-            amount: Numeric::new(5, 0),
+            amount: 5_u32.into(),
         });
         let other_event = AssetEvent::Added(AssetChanged {
             asset: other_asset,
-            amount: Numeric::new(5, 0),
+            amount: 5_u32.into(),
         });
 
         let filter = AssetEventFilter::new()
@@ -1921,11 +1819,11 @@ mod tests {
         let mismatched_asset = AssetId::new(other_definition, account_id);
         let matching_event = AssetEvent::Added(AssetChanged {
             asset: matching_asset.clone(),
-            amount: Numeric::new(3, 0),
+            amount: 3_u32.into(),
         });
         let mismatched_event = AssetEvent::Added(AssetChanged {
             asset: mismatched_asset,
-            amount: Numeric::new(3, 0),
+            amount: 3_u32.into(),
         });
 
         let filter = AssetEventFilter::new()
@@ -1946,7 +1844,7 @@ mod tests {
         let asset_id = AssetId::new(definition.clone(), account_id);
         let added = AssetEvent::Added(AssetChanged {
             asset: asset_id,
-            amount: Numeric::new(7, 0),
+            amount: 7_u32.into(),
         });
         let created = AssetEvent::Created(Asset::new(
             AssetId::new(definition, checked_random_account_id()),

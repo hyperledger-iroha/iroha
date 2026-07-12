@@ -173,24 +173,23 @@ mod model {
         "{block_time_ms},{commit_time_ms},{min_finality_ms},{pacing_factor_bps},{max_clock_drift_ms}_SL"
     )]
     pub struct SumeragiParameters {
-        /// Maximal amount of time (in milliseconds) a peer will wait before forcing creation of a new block.
+        /// Signed-genesis block cadence in milliseconds.
         ///
         /// A block is created if this limit or [`BlockParameters::max_transactions`] limit is reached,
         /// whichever comes first. Regardless of the limits, an empty block is never created.
-        /// This value is authoritative for both permissioned and `NPoS` pacemaker timing.
+        /// Sumeragi v2 freezes this value at startup for both permissioned and
+        /// `NPoS` operation; post-genesis updates are rejected.
         #[norito(default = "defaults::sumeragi::block_time_ms")]
         pub block_time_ms: u64,
-        /// Time (in milliseconds) a peer will wait for a block to be committed.
+        /// Retired v1 commit timeout retained for archival decoding.
         ///
-        /// If this period expires the block will request a view change
+        /// Live v2 uses one absolute `round_timeout_ms` from node configuration.
         #[norito(default = "defaults::sumeragi::commit_time_ms")]
         pub commit_time_ms: u64,
-        /// Minimum finality floor (in milliseconds) for consensus timing.
-        ///
-        /// All derived timeouts are clamped to be at least this value.
+        /// Retired v1 finality floor retained for archival decoding.
         #[norito(default = "defaults::sumeragi::min_finality_ms")]
         pub min_finality_ms: u64,
-        /// Pacing factor applied to block/commit timing (basis points, `10_000` = 1.0x).
+        /// Retired adaptive v1 pacing factor retained for archival decoding.
         #[norito(default = "defaults::sumeragi::pacing_factor_bps")]
         pub pacing_factor_bps: u32,
         /// Maximal allowed random deviation from the nominal rate
@@ -200,23 +199,21 @@ mod model {
         /// This value should be kept as low as possible to not affect soundness of the consensus
         #[norito(default = "defaults::sumeragi::max_clock_drift_ms")]
         pub max_clock_drift_ms: u64,
-        /// Number of collectors designated per height (contiguous from proxy tail, no wraparound).
+        /// Retired correctness-critical collector count retained for archival decoding.
         #[norito(default = "defaults::sumeragi::collectors_k")]
         pub collectors_k: u16,
-        /// Redundant send fanout (how many distinct collectors a validator may target on timeouts).
+        /// Retired collector fanout retained for archival decoding.
         #[norito(default = "defaults::sumeragi::redundant_send_r")]
         pub collectors_redundant_send_r: u8,
-        /// Enable data availability for Sumeragi.
+        /// Retired v1 global-RBC switch retained for archival decoding.
         ///
-        /// When enabled, block payload distribution uses Reliable Broadcast (RBC) and consensus
-        /// gates finalization on availability evidence. When disabled, RBC payload dissemination
-        /// is off and nodes rely on direct payloads.
+        /// DA is mandatory in v2 and attempts to set this field to `false` are rejected.
         #[norito(default = "defaults::sumeragi::da_enabled")]
         pub da_enabled: bool,
-        /// If set, indicates the next consensus mode to switch to at `mode_activation_height`.
+        /// Retired runtime mode-staging field retained for archival decoding only.
         #[norito(default)]
         pub next_mode: Option<SumeragiConsensusMode>,
-        /// If set, height at which to activate `next_mode`.
+        /// Retired runtime mode-activation field retained for archival decoding only.
         #[norito(default)]
         pub mode_activation_height: Option<u64>,
         /// Minimum lead time (blocks) between publishing a new consensus key and activation.
@@ -463,18 +460,18 @@ mod model {
         BlockTimeMs(u64),
         CommitTimeMs(u64),
         MinFinalityMs(u64),
-        /// Pacing factor (basis points, `10_000` = 1.0x).
+        /// Retired v1 pacing factor; live v2 rejects post-genesis updates.
         PacingFactorBps(u32),
         MaxClockDriftMs(u64),
-        /// Number of collectors per height (K). Must be >= 1.
+        /// Retired v1 collector count retained for archival decoding.
         CollectorsK(u16),
-        /// Redundant send fanout (r). Must be >= 1.
+        /// Retired v1 collector fanout retained for archival decoding.
         RedundantSendR(u8),
-        /// Enable/disable data availability (RBC payload dissemination and availability gating).
+        /// Retired v1 global-RBC switch; v2 rejects `false` because DA is mandatory.
         DaEnabled(bool),
-        /// Set the next consensus mode for future activation.
+        /// Retired runtime mode-staging value; live v2 rejects it.
         NextMode(SumeragiConsensusMode),
-        /// Set the height to activate `next_mode`.
+        /// Retired runtime mode-activation value; live v2 rejects it.
         ModeActivationHeight(u64),
     }
 
@@ -815,31 +812,31 @@ impl SumeragiParameters {
         self.max_clock_drift_ms
     }
 
-    /// Number of collectors designated per height.
+    /// Retired v1 collector count retained for archival tooling.
     #[must_use]
     pub fn collectors_k(&self) -> u16 {
         self.collectors_k
     }
 
-    /// Redundant send fanout per validator.
+    /// Retired v1 collector fanout retained for archival tooling.
     #[must_use]
     pub fn collectors_redundant_send_r(&self) -> u8 {
         self.collectors_redundant_send_r
     }
 
-    /// Whether data availability (RBC payload dissemination and availability gating) is enabled.
+    /// Retired v1 global-RBC flag; v2 requires DA regardless of this archived value.
     #[must_use]
     pub fn da_enabled(&self) -> bool {
         self.da_enabled
     }
 
-    /// Next consensus mode requested via parameter updates, if any.
+    /// Retired runtime mode request retained for archival decoding.
     #[must_use]
     pub fn next_mode(&self) -> Option<SumeragiConsensusMode> {
         self.next_mode
     }
 
-    /// Activation height for the requested consensus mode, if present.
+    /// Retired runtime mode activation height retained for archival decoding.
     #[must_use]
     pub fn mode_activation_height(&self) -> Option<u64> {
         self.mode_activation_height

@@ -132,6 +132,14 @@ class KotodamaQuantity private constructor(
             val normalized = parseScaled(value, true)
             return KotodamaQuantity(normalized.first, normalized.second)
         }
+
+        /** Parse an exact non-negative quantity only when [value] already uses canonical spelling. */
+        @JvmStatic
+        fun parseCanonical(value: String): KotodamaQuantity = parse(value).also {
+            if (it.toString() != value) {
+                fail(NumericV1ErrorCode.INVALID_TEXT, "quantity must use canonical spelling")
+            }
+        }
     }
 }
 
@@ -231,17 +239,33 @@ object NumericV1Codec {
     @JvmStatic
     fun decodeIntJson(value: String): KotodamaInt = KotodamaInt.parse(value)
 
+    /** Decode a JSON scalar, requiring the lossless string representation mandated by V1. */
+    @JvmStatic
+    fun decodeIntJsonValue(value: Any?): KotodamaInt =
+        if (value is String) decodeIntJson(value)
+        else fail(NumericV1ErrorCode.INVALID_TEXT, "int JSON value must be a string")
+
     /** Decode a canonical decimal JSON string, rejecting alternate spellings. */
     @JvmStatic
     fun decodeDecimalJson(value: String): KotodamaDecimal = KotodamaDecimal.parse(value).also {
         if (it.toString() != value) fail(NumericV1ErrorCode.INVALID_TEXT, "decimal JSON must use canonical spelling")
     }
 
+    /** Decode a JSON scalar, requiring the lossless string representation mandated by V1. */
+    @JvmStatic
+    fun decodeDecimalJsonValue(value: Any?): KotodamaDecimal =
+        if (value is String) decodeDecimalJson(value)
+        else fail(NumericV1ErrorCode.INVALID_TEXT, "decimal JSON value must be a string")
+
     /** Decode a canonical quantity JSON string, rejecting alternate spellings. */
     @JvmStatic
-    fun decodeQuantityJson(value: String): KotodamaQuantity = KotodamaQuantity.parse(value).also {
-        if (it.toString() != value) fail(NumericV1ErrorCode.INVALID_TEXT, "quantity JSON must use canonical spelling")
-    }
+    fun decodeQuantityJson(value: String): KotodamaQuantity = KotodamaQuantity.parseCanonical(value)
+
+    /** Decode a JSON scalar, requiring the lossless string representation mandated by V1. */
+    @JvmStatic
+    fun decodeQuantityJsonValue(value: Any?): KotodamaQuantity =
+        if (value is String) decodeQuantityJson(value)
+        else fail(NumericV1ErrorCode.INVALID_TEXT, "quantity JSON value must be a string")
 
     /** Encode an integer Norito frame. */
     @JvmStatic

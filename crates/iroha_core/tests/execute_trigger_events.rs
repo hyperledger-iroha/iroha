@@ -87,7 +87,7 @@ fn register_trigger(
     let register_trigger = Register::trigger(Trigger::new(
         trigger_id.clone(),
         Action::new(
-            vec![InstructionBox::from(Mint::asset_numeric(
+            vec![InstructionBox::from(Mint::asset_quantity(
                 1_u32,
                 asset_id.clone(),
             ))],

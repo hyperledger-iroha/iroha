@@ -1176,6 +1176,7 @@ async fn soracloud_status_uses_live_torii_control_plane() -> eyre::Result<()> {
     prepare_iroha_cli_test_environment();
     let builder = NetworkBuilder::new()
         .with_min_peers(4)
+        .with_npos_consensus()
         .with_config_layer(|layer| {
             layer
                 .write("telemetry_enabled", true)
@@ -1530,8 +1531,7 @@ async fn soracloud_scr_host_admission_rejects_invalid_manifests_live_torii_contr
                 .write(
                     ["crypto", "allowed_signing"],
                     soracloud_live_hf_allowed_signing(),
-                )
-                .write(["sumeragi", "consensus_mode"], "npos");
+                );
         });
     let Some(network) = sandbox::start_network_async_or_skip(
         builder,
@@ -1682,6 +1682,7 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
     prepare_iroha_cli_test_environment();
     let builder = NetworkBuilder::new()
         .with_min_peers(4)
+        .with_npos_consensus()
         .with_config_layer(|layer| {
             layer
                 .write("telemetry_enabled", true)
@@ -1689,8 +1690,7 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
                 .write(
                     ["crypto", "allowed_signing"],
                     soracloud_live_hf_allowed_signing(),
-                )
-                .write(["sumeragi", "consensus_mode"], "npos");
+                );
         });
     let Some(network) = sandbox::start_network_async_or_skip(
         builder,
@@ -2281,6 +2281,7 @@ async fn soracloud_hf_shared_lease_commands_use_live_torii_control_plane() -> ey
     let hf_api_base_url = hf_source_server.api_base_url();
     let builder = NetworkBuilder::new()
         .with_min_peers(4)
+        .with_npos_consensus()
         .with_config_layer(move |layer| {
             layer
                 .write("telemetry_enabled", true)
@@ -2289,7 +2290,6 @@ async fn soracloud_hf_shared_lease_commands_use_live_torii_control_plane() -> ey
                     ["crypto", "allowed_signing"],
                     soracloud_live_hf_allowed_signing(),
                 )
-                .write(["sumeragi", "consensus_mode"], "npos")
                 .write(
                     ["soracloud_runtime", "hf", "hub_base_url"],
                     hf_hub_base_url.clone(),
@@ -2722,6 +2722,7 @@ async fn soracloud_hf_pre_expiry_renewal_queues_and_promotes_next_window() -> ey
     let hf_api_base_url = hf_source_server.api_base_url();
     let builder = NetworkBuilder::new()
         .with_min_peers(4)
+        .with_npos_consensus()
         .with_config_layer(move |layer| {
             layer
                 .write("telemetry_enabled", true)
@@ -2730,7 +2731,6 @@ async fn soracloud_hf_pre_expiry_renewal_queues_and_promotes_next_window() -> ey
                     ["crypto", "allowed_signing"],
                     soracloud_live_hf_allowed_signing(),
                 )
-                .write(["sumeragi", "consensus_mode"], "npos")
                 .write(
                     ["soracloud_runtime", "hf", "hub_base_url"],
                     hf_hub_base_url.clone(),
@@ -3057,6 +3057,7 @@ async fn soracloud_hf_shared_lease_prorates_refunds_across_multiple_accounts() -
     let hf_api_base_url = hf_source_server.api_base_url();
     let builder = NetworkBuilder::new()
         .with_min_peers(4)
+        .with_npos_consensus()
         .with_config_layer(move |layer| {
             layer
                 .write("telemetry_enabled", true)
@@ -3065,7 +3066,6 @@ async fn soracloud_hf_shared_lease_prorates_refunds_across_multiple_accounts() -
                     ["crypto", "allowed_signing"],
                     soracloud_live_hf_allowed_signing(),
                 )
-                .write(["sumeragi", "consensus_mode"], "npos")
                 .write(
                     ["soracloud_runtime", "hf", "hub_base_url"],
                     hf_hub_base_url.clone(),

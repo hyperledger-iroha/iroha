@@ -3,6 +3,7 @@ package org.hyperledger.iroha.android.nexus;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import org.hyperledger.iroha.android.numeric.NumericV1;
 
 /** Input for the V1 numeric asset transfer flow. */
 public final class NexusTransferInput {
@@ -27,7 +28,10 @@ public final class NexusTransferInput {
 
   private NexusTransferInput(final Builder builder) {
     this.sourceAssetId = NexusModelUtils.requireNonBlank(builder.sourceAssetId, "sourceAssetId");
-    this.quantity = NexusModelUtils.requireNonBlank(builder.quantity, "quantity");
+    this.quantity =
+        NumericV1.QuantityValue.parseCanonical(
+                NexusModelUtils.requireNonBlank(builder.quantity, "quantity"))
+            .toString();
     this.destinationAccountId =
         NexusModelUtils.requireNonBlank(builder.destinationAccountId, "destinationAccountId");
     this.authority = builder.authority;
@@ -110,7 +114,13 @@ public final class NexusTransferInput {
     }
 
     public Builder quantity(final String quantity) {
-      this.quantity = quantity;
+      this.quantity = NumericV1.QuantityValue.parseCanonical(quantity).toString();
+      return this;
+    }
+
+    /** Sets a lossless validated quantity value. */
+    public Builder quantity(final NumericV1.QuantityValue quantity) {
+      this.quantity = java.util.Objects.requireNonNull(quantity, "quantity").toString();
       return this;
     }
 

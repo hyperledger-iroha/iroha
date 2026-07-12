@@ -77,7 +77,7 @@ fn genesis_domain_lease_bootstrap(domains: &BTreeSet<DomainId>) -> Result<Vec<In
         AssetDefinitionId::parse_address_literal(SNS_LEASE_PAYMENT_ASSET_DEFINITION)
             .wrap_err("parse SNS lease payment asset definition")?;
     let mut instructions = vec![
-        Mint::asset_numeric(
+        Mint::asset_quantity(
             500_000_u32,
             AssetId::new(payment_asset_definition, genesis_id.clone()),
         )

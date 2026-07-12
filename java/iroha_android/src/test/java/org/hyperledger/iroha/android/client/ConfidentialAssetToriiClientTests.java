@@ -9,7 +9,6 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import org.hyperledger.iroha.android.client.transport.TransportRequest;
 import org.hyperledger.iroha.android.client.transport.TransportResponse;
-import org.hyperledger.iroha.android.offline.OfflineToriiException;
 
 public final class ConfidentialAssetToriiClientTests {
   private ConfidentialAssetToriiClientTests() {}
@@ -22,7 +21,7 @@ public final class ConfidentialAssetToriiClientTests {
     rootsAndMerklePathsRejectNumericStrings();
     rootsAndMerklePathsRejectOverflowDuplicateKeysAndInconsistentShape();
     merklePathParserRejectsDuplicateKeysBeforeLastValueWins();
-    nonSuccessResponsesSurfaceOfflineToriiException();
+    nonSuccessResponsesSurfaceConfidentialAssetToriiException();
     System.out.println("[IrohaAndroid] ConfidentialAssetToriiClientTests passed.");
   }
 
@@ -277,7 +276,7 @@ public final class ConfidentialAssetToriiClientTests {
                     .getBytes(StandardCharsets.UTF_8)));
   }
 
-  private static void nonSuccessResponsesSurfaceOfflineToriiException() {
+  private static void nonSuccessResponsesSurfaceConfidentialAssetToriiException() {
     final ConfidentialAssetToriiClient client =
         ConfidentialAssetToriiClient.builder()
             .executor(new StubExecutor(503, "{\"error\":\"not ready\"}", "Unavailable", Map.of()))
@@ -287,8 +286,10 @@ public final class ConfidentialAssetToriiClientTests {
       client.getZkAssetRoots(new ZkRootsRequest("usd#bank")).join();
       throw new AssertionError("expected roots request failure");
     } catch (final CompletionException ex) {
-      assert ex.getCause() instanceof OfflineToriiException : "expected OfflineToriiException";
-      final OfflineToriiException error = (OfflineToriiException) ex.getCause();
+      assert ex.getCause() instanceof ConfidentialAssetToriiException
+          : "expected ConfidentialAssetToriiException";
+      final ConfidentialAssetToriiException error =
+          (ConfidentialAssetToriiException) ex.getCause();
       assert Integer.valueOf(503).equals(error.statusCode().orElse(null))
           : "status code mismatch";
       assert error.getMessage().contains("/v1/zk/roots") : "path missing from message";

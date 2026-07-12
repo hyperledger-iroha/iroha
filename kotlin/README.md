@@ -8,9 +8,8 @@ Not published to Maven Central yet. Build locally and consume via `mavenLocal()`
 
 | Artifact | Type | Description |
 |----------|------|-------------|
-| `org.hyperledger.iroha.sdk:core-jvm` | JAR | Pure Kotlin/JVM — models, codec, crypto, client, offline protocol |
+| `org.hyperledger.iroha.sdk:core-jvm` | JAR | Pure Kotlin/JVM models, codec, crypto, clients, and ABI-19 artifact streaming |
 | `org.hyperledger.iroha.sdk:client-android` | AAR | Android keystore, device telemetry, IrohaKeyManager, shared JNI bridge for ML-DSA / offline flows |
-| `org.hyperledger.iroha.sdk:offline-wallet-android` | AAR | Offline wallet APIs and attestation (Play Integrity, SafetyDetect) layered on `client-android` |
 
 ### Consumer usage
 
@@ -23,11 +22,8 @@ repositories {
 // Pure JVM — business logic modules, JUnit tests, server-side
 implementation("org.hyperledger.iroha.sdk:core-jvm:0.1-SNAPSHOT")
 
-// Android wallet without offline payments
+// Android client
 implementation("org.hyperledger.iroha.sdk:client-android:0.1-SNAPSHOT")
-
-// Android wallet with offline payments
-implementation("org.hyperledger.iroha.sdk:offline-wallet-android:0.1-SNAPSHOT")
 ```
 
 ### Torii server-sent events
@@ -48,331 +44,14 @@ Malformed or schema-expanded terminal envelopes fail closed as
 A reconnect to either canonical feed starts a new live subscription and can
 have a gap.
 
-### Offline Note wallet flow
+### Kagemusha proof artifacts
 
-`core-jvm` exposes `OfflineBearerCashWallet` over the Offline Note engine for
-the one-call app actions: load, prepare receive, pay, accept, optional audit
-publication, redeem, and sync. Offline-to-offline `pay` and `accept` are the
-local-final value transfer: the sender marks inputs spent and change spendable
-immediately, and the recipient marks the matched pending output spendable after
-local token and proof verification. No online sync is required for that
-transfer. Audit publication is an explicit optional online step that submits
-evidence but does not affect spendability. Wallets derive note commitments,
-input nullifiers, and payment token ids locally, then delegate Torii issuance,
-device attestation, proof generation/verification, persistence, and direct
-audit/redeem transaction submission through injectable interfaces. The `sync()`
-call uses an optional transaction-outcome resolver to reconcile redeem-pending
-note records once the app's Torii/outcome index observes redeem finality.
-App code should use `OfflineCashLifecycleController` around the wallet for load
-actions so pending audit receipts are submitted before the issuer sees a new
-note-issue request. Local exchange screens should validate a cached
-`OfflineCashConfigurationSnapshot` after setup and should not fetch
-capabilities when creating or accepting a device-to-device transfer.
+The JVM packages do not expose an offline-spend lifecycle. `core-jvm` retains only the exact
+ABI-19 Kagemusha V3 artifact streaming and backend-capability bridge. It installs exactly six
+Pasta artifacts atomically: transition and state parameters, proving keys, and verifying keys.
+The top-up-finality roster is authenticated release metadata, not a seventh proof-key stream.
 
-```kotlin
-val snapshot = OfflineCashConfigurationSnapshot(
-    chainId = "00000042",
-    assetDefinitionId = "pkr#sbp",
-    offlinePaymentsEnabled = true,
-    issuerPublicKeyBase64 = cachedIssuerKeyBase64,
-    nativeBridgeAbiVersion = 8,
-    createdAtMs = cachedAtMs,
-    expiresAtMs = expiresAtMs,
-)
-snapshot.requireUsableForOfflineExchange(
-    nowMs = currentTimeMs,
-    requiredNativeBridgeAbiVersion = 7,
-)
-
-val controller = OfflineCashLifecycleController(
-    wallet = offlineWallet,
-    auditReceiptSynchronizer = auditReceiptSynchronizer,
-)
-controller.load("pkr#sbp", "500")
-
-val transports = OfflineNoteTransferCapabilities.current(
-    androidHceSupported = appHasHceEntitlement && deviceSupportsNfc,
-    nearbyAvailable = true,
-).supportedModalities()
-```
-
-Do not render NFC controls when `supportedModalities()` omits NFC; non-NFC
-devices and app builds without HCE should use QR or Nearby only.
-
-The public `OfflineToriiClient` exposes only readiness for a required asset
-definition, direct-Norito top-up and redeem submissions, and operation status.
-Each readiness snapshot requires the nullable `activeTransferVerifier` and
-`activeTopUpShieldVerifier` fields. A null role must be paired exactly with its
-`transfer_verifier_unavailable` or `topup_shield_verifier_unavailable` blocker;
-every reported verifier must be active at `evaluatedBlockHeight`. A ready
-snapshot additionally requires a supported asset scale and both active
-verifier roles.
-`OfflineTopUpRequest` and `OfflineRedeemRequest` accept only the canonical
-schema-bound request archive; they derive the lowercase idempotency key from
-its nonzero 32-byte `operation_id` field, so callers cannot supply a mismatched
-operation ID.
-The fixture-only `IrohaOfflineNoteTransactionSubmitter` audit/redeem/defund
-submissions and classic proof providers fail closed. Android secure storage
-remains in the platform wallet layer. The attestation-aware fixture codec is
-exposed as `AttestedOfflineNote`, with `AttestedOfflineNoteHalo2Prover` for its
-proof fixtures; internal Norito schema labels remain unchanged. The
-Android `AndroidOfflineNoteSecureStore` rotates a non-exportable Android
-Keystore key on every committed wallet-state revision and rejects app-data
-rollback or cloned preference snapshots when the old revision key is no longer
-present.
-`KagemushaCompactPaymentTokenProver` exposes the native record-backed compact
-token prover for shielded offline-offline payments. Pass a Norito-encoded
-`KagemushaVerifiedFoldRecordBundle`; the JNI bridge verifies each private hop
-proof against its verifier record and returns a Norito-encoded
-`KagemushaCompactPaymentToken` when `connect_norito_bridge` is available and
-the native Kagemusha entry point rejects the empty-archive availability probe.
-`KagemushaRecursiveAggregationProofBundleProver` exposes the matching
-admission-neutral recursive proof-bundle path. Pass the same record-bundle
-archive plus a Norito-encoded Pallas open-envelope archive to receive a
-Norito-encoded `KagemushaRecursiveAggregationProofBundle`.
-`KagemushaRecursiveCompactPaymentTokenProver` exposes the ABI 7
-`recursive_compact_v1` compact-token surface and probes
-`kagemusha-recursive-compact-v1` separately from ABI 6 recursive spend. Use
-`proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes`
-with record-bundle, Pallas open-envelope, and recursive compact key-artifact
-archives, and `verifyRecursiveCompactPaymentToken` with compact-token and
-recursive compact verifier-key archives; gate them with `isNativeAvailable()`
-and `isVerifierNativeAvailable()`. The recursive-spend compact projection is
-exposed separately as `recursiveSpendCompactPaymentTokenFromBundle(...)`; gate
-it with `isProjectionNativeAvailable()`. The recursive-spend compact projection
-verifier is exposed as `verifyRecursiveSpendCompactPaymentTokenProjection(...)` and
-`verifyRecursiveSpendCompactPaymentTokenProjectionAtHeight(...)`; gate it with
-`isProjectionVerifierNativeAvailable()`. It accepts raw Norito compact-token
-and verifier-record archives, rejects empty, malformed, oversized, or
-negative signed-height inputs before JNI dispatch, accepts full `u64`
-activation heights through canonical unsigned decimal `String` or `BigInteger`
-overloads, and returns the native boolean receiver result. ABI 7 now carries the
-one-hop LEN=4 and package-backed
-multi-hop compact-token proof paths when the native bundle includes packaged
-compact proving-key archives and matching verifier-slice material. Production
-defaults still stay on ABI 6 Reserved-lineage recursive spend until that
-artifact set is shipped and signed for release. Empty, malformed, missing, or
-oversized local archives fail as `IllegalArgumentException`;
-`isRecursiveCompactUnavailable(error)` classifies the current bridge diagnostics
-for unavailable reserved ABI-7 compact surfaces.
-The ABI-7 launch boundary remains explicit: the one-hop LEN=4 compact-token
-proof path uses a packaged compact one-hop proving-key, while release evidence
-continues to track the proof-composition reservation, generic compact-token
-reservation, multi-hop verifier-batch reservation, and reserved ABI-7 state.
-Missing native symbols still surface as `IllegalStateException`.
-`KagemushaRecursiveSpendProver` exposes the exact ABI-18 spend-again-offline
-cash surface. Preferred mode selection returns `RECURSIVE_SPEND` only when the
-ABI probe is exactly 18 and the Pasta-cycle backend is available; its public
-wire value is exactly `recursive_spend_v1`. The internal ABI-18/V3 artifact
-manifest mode remains `recursive_spend_v2`; it is not a product selector. Other
-mode labels and permissive
-symbol-presence fallbacks are not release inputs.
-`transitionProfileInit(requestArchive)` and
-`transitionProfileAppend(requestArchive)` return the canonical Reserved-lineage
-accumulator transition profile as raw Norito archives for fixture generation
-and circuit preflight. `lineageAppendBoundary(profileArchive)` derives the
-compact append-boundary Norito archive from a full append transition profile
-with native opening preflight material. The append-boundary digest uses the
-public `RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_DOMAIN_V1` domain, plus
-`RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_CHAIN_ASSET_BINDING_DOMAIN_V1` and
-`RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_FINAL_NOTE_BINDING_DOMAIN_V1` for
-chain/asset and final-root/current-note binding.
-`KagemushaInstructionArchives` wraps a typed `KagemushaTransfer` or
-`RedeemKagemushaRecursive` instruction archive, builds a single archived
-instruction transaction payload, derives the initial `KagemushaTransfer` top-up
-instruction from a native recursive spend init request archive, or derives the
-redeem instruction from a native recursive redeem request before constructing
-that payload. These helpers require valid Norito archives, reject empty,
-malformed, tampered, or wrong-type instruction archives, and keep recursive
-top-up/redeem derivation inside the native bridge. The recursive redeem
-derivation inside the native bridge remains unchanged; top-up derivation
-consumes the init request archive, not the init result bundle alone, because
-the request carries the checked hop proof, verifier records, and Pallas opening
-metadata needed for validation.
-
-For confidential-unshield redemption, use
-`KagemushaRecursiveSpendRequestCodecs.buildRedeemProofAttachment` with the
-native unshield-v3 build result, the exact `halo2/ipa` verifier-record
-reference, and the current block height when the record has an activation or
-withdrawal boundary. The builder requires the production
-`halo2-ipa-pasta:confidential_unshield_v3` proof reference, computes the schema
-and envelope bindings with canonical Iroha `Hash` prehashes, and invokes the
-existing `PrivacyNativeBridge.verifyProof` path before it emits an attachment.
-The verify result must report the same operation and byte-identical proof with
-`verified = true`; native-unavailable, malformed, substituted-key, and invalid
-proof results fail closed. Windowless active records may omit the height,
-activation is inclusive, and withdrawal is exclusive.
-
-Use
-`canRedeemWitnessless(circuitId, hopCount)` or
-`requiresLineageWitnessForRedeem(circuitId, hopCount)` before online redeem
-construction. `RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1` is `64`, and
-`RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1` is `false`. The hop
-constant is only the protocol bound: witnessless Reserved-lineage redeem and
-append fail closed for every circuit and hop count, and redeem requires a
-record-backed lineage witness.
-`canAppendWitnesslessLineage(previousHopCount)` therefore returns `false` for
-every input while transition verification is unavailable.
-Use `preferredAppendOutputCircuitId(previousHopCount)` as the default append
-output selector; it selects semantic recursive aggregation.
-Use `canProveAppendOutputCircuitId(outputCircuitId, previousHopCount)` before
-selecting an append output circuit; semantic recursive append returns true
-for previous hop counts `1..63`, while Reserved-lineage append is not currently
-provable. The semantic append path is bounded by `COMPACT_TOKEN_MAX_HOPS`; the
-separate `RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1` remains a protocol
-bound and does not enable witnessless admission.
-Use `canSelectAppendOutputCircuitId(previousProofCircuitId, outputCircuitId,
-previousHopCount)` to apply the previous-proof transition rule before
-serializing an append request.
-`isSupportedPreviousProofCircuitId(previousProofCircuitId)` and
-`requiresPreviousLineageVerifierRecordForAppend(previousProofCircuitId)` let
-wallets reject unknown previous recursive proof circuits and include
-`previous_lineage_verifier_record` only for Reserved-lineage previous bundles.
-`requiresPreviousProofOpenEnvelopesForAppend(outputCircuitId,
-previousHopCount)` identifies whether the selected append output circuit
-requires the request to carry the previous recursive proof opening archive.
-`outputCircuitId` is the Norito append request's `output_proof_circuit_id`;
-wallets must pass either the semantic aggregation circuit id or the
-append-specific Reserved-lineage circuit id explicitly; missing, empty, and
-family-id selectors are rejected before native dispatch.
-`KagemushaRecursiveSpendProver.buildPallasOpenEnvelopesArchive(recordBundleArchive)`
-and `buildPreviousProofOpenEnvelopesArchive(previousBundleArchive)` ask the
-native bridge to generate the opaque Pallas opening archives for the current-hop
-record bundle and the previous recursive proof. Typed-codec callers can use
-`KagemushaRecursiveSpendRequestCodecs.buildPallasOpenEnvelopesArchiveForRecordBundle(recordBundle)`
-and `buildPreviousProofOpenEnvelopesArchive(previousBundle)` to route through
-the same native validators.
-`previous_recursive_proof_open_envelopes_archive` is opaque native prover
-material: Kotlin wallet code must pass it through Norito unchanged and must not
-construct, rewrite, or mutate it. The native bridge validates `vk_commitment`,
-`public_inputs_schema_hash`, and `domain_tag` against the exact previous bundle
-before proving or returning output bytes.
-Wallets use the append-boundary helper to bind that validated previous-proof
-material to the public chain/asset and final-root/current-note boundary before
-append proving.
-Native append streams the previous recursive proof bytes and per-hop accumulator
-material into native-owned accumulator digests (`recursive_proof_chain_digest`,
-lineage/aggregation transcript, fixed-window schedule/shared-manifest/table-base,
-verifier-witness batch, transition-profile, append-opening-preflight,
-append-boundary, scalar-projection, and previous/resulting accumulator digests);
-SDK code must not derive, supply, or patch accumulator state.
-generic proof-state (`proofState`, `ProofState`, `proof_state`),
-recursive/lineage proof-state, aggregation-transcript, fixed-window
-table-schedule/shared-manifest/table-base, verifier-witness batch,
-transition-profile binding, append-opening preflight, recursive verifier
-scalar-projection, and previous/resulting accumulator aliases are native-owned
-material, not Kotlin request fields.
-Verify request archives must pass the same public-binding preflight before the
-native bridge returns a `KagemushaRecursiveSpendVerifyResultV1`:
-Reserved-lineage bundles require a matching active `lineage_verifier_record`,
-semantic bundles must omit it, and unsupported proof attachments are rejected
-as malformed requests rather than soft invalid proof results.
-Decoded verify results expose only `lineageWitnessRequiredForRedeem` for the
-redeem decision.
-Init requests may omit both packaged lineage key artifacts to select the
-semantic recursive aggregation path. That bundle is valid for offline
-acceptance and re-spending, while online redemption must carry the
-record-backed lineage witness. Supplying exactly one of `lineage_verifier_key`
-or `lineage_proving_key_archive` is rejected. Reserved-lineage append-output
-requests must still include the append lineage key artifacts in the raw Norito
-request.
-Reserved-lineage append output is valid only when the previous bundle is
-already Reserved-lineage; semantic previous bundles keep using semantic append
-plus a record-backed lineage witness.
-Kotlin typed redeem builders accept the single-record `lineageVerifierRecord`
-path plus `lineageVerifierRecords` / raw `lineage_verifier_records` for
-additional Reserved-lineage verifier records. Use the plural field for
-multi-profile record-backed lineage witnesses, or place every Reserved-lineage
-verifier record there for vector-only callers.
-`KagemushaRecursiveSpendRequestCodecs` also exposes
-`encodeConfidentialTransferV2VerifierRecordArchive(verifierKeyBytes)` and
-`encodeConfidentialUnshieldV3VerifierRecordArchive(verifierKeyBytes)`. They
-produce canonical, active `offline_kagemusha` Halo2/IPA/Pallas verifier records
-with the governed circuit version, marked Iroha public-input schema hash,
-domain-separated verifier-key commitment, `halo2_default` gas schedule, 192 KiB
-proof cap, and inline key bytes. `buildRedeemProofAttachment(...)` returns the
-Norito archive, while `buildRedeemProofAttachmentValue(...)` returns the typed
-`ProofAttachment` accepted by `UnshieldInstruction.Builder.setProof`. Both
-overloads accept an optional `blockHeight`, enforce verifier lifecycle bounds,
-and call the native unshield verifier; mismatched or unsuccessful verification
-results fail closed before an attachment is returned.
-These archives follow Rust's canonical field policy: protocol-special direct
-`[u8; 32]` fields are packed, generic fixed arrays inside `Vec`/`Option` keep
-per-element framing, and `AssetDefinitionId` retains its delegated framed
-`[u8; 16]` representation. An absent trailing default `lane_privacy` field is
-omitted from `ProofAttachment` rather than encoded as an explicit `None`.
-`normalizeAppendOutputCircuitId` and `isSupportedAppendOutputCircuitId` expose
-that explicit-selector rule for wallet-side preflight.
-`RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_REQUIRED_COUNT_V1` and
-`RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_MAX_BYTES` expose the
-exactly-one-envelope cardinality rule and native 8 MiB pre-decode cap for that
-archive.
-
-### Native privacy bridge
-
-`PrivacyNativeBridge` exposes the privacy FFI surface as generic raw Norito
-archives: `capabilitiesArchive()`, `buildProof(requestArchive)`, and
-`verifyProof(requestArchive)`. The Kotlin SDK does not expose
-algorithm-specific production proof builders while the privacy rows remain
-gated. Native availability requires ABI 6 or later, the privacy
-capability/build/verify JNI symbols, and successful Norito probe outputs whose
-operation-specific result schema bytes match the called entry point.
-
-All privacy request and response payloads must stay as raw Norito archives.
-Kotlin validates archive magic, length, CRC, the 64 MiB native size cap, and the
-operation-specific result schema before returning bytes to callers. Capability
-metadata reports `privacy-production-gate-v1`, keeps `productionReady = false`,
-and remains fail-closed with missing production gates and no audit references
-until real proving, verification, chain admission, witness privacy checks,
-deterministic testing, negative/adversarial testing, replay/nullifier rejection
-testing, parser/verifier fuzzing, performance gates, and external audit signoff
-are complete.
-
-Kotlin also exposes the deterministic privacy FFI status/error-code contract
-for diagnostics and cross-language parity: `STATUS_ERROR`,
-`ERROR_NULL_POINTER`, `ERROR_MALFORMED_NORITO`,
-`ERROR_UNSUPPORTED_ALGORITHM`, `ERROR_PRODUCTION_DISABLED`, and
-`ERROR_INVALID_REQUEST`. The stable wire values are `status_error = 1`,
-`null_pointer = 1`, `malformed_norito = 2`, `unsupported_algorithm = 3`,
-`production_disabled = 4`, and `invalid_request = 5`; treat them as
-sanitized status metadata, not proof success.
-
-Wallet `load` persists newly issued local notes as `ISSUE_PENDING` until sync
-observes the matching `IssueOfflineNote` transaction commit; rejected issue
-outcomes cancel the pending note. Core wallet-note models use the current
-first-release state names. Retired `spendPending`, `SPEND_PENDING`, `changePending`, and `CHANGE_PENDING`
-wallet-note state names are rejected; first-release records must use current
-state names.
-`OfflineNoteTransferHandoff` exposes one integration surface for local token
-handoff modalities: `qrStreamingFrameBytes(token)` for animated/binary QR,
-`nfcFrameBytes(token)` for APDU-sized NFC frame exchange, and
-`nearbyPayload(token)` / `nearbyFrameBytes(token)` for Nearby Connections,
-Bluetooth, Wi-Fi Direct, or any app-owned byte channel. The receiver
-`OfflineNoteTransferStreamReceiver` accepts those stream frames and returns a
-decoded payment token when complete. Android apps can call
-`AndroidOfflineNoteTransferCapabilities.current(context)` from
-`offline-wallet-android` to include NFC only on devices that advertise HCE.
-For png2-style NFC, bind `OfflineNoteNfcApduProtocol` to an Android
-`HostApduService`/`IsoDep` reader: select the Iroha AID, exchange metadata,
-transfer bounded chunks, commit, then poll/read a local `RECEIPT_ACK`. The
-default `nfcPaymentTokenWriteApdus(token)` uses 240-byte chunks because Android
-NFC APDU limits vary by device; extended iOS-to-iOS chunks are exposed only as
-an explicit opt-in. `OfflineNoteNearbyEnvelope` provides the sorted-key
-Nearby JSON envelope with unpadded base64url payloads and a human-verifiable
-pairing challenge for Google Nearby Connections, Bluetooth, Wi-Fi Direct, or
-another reliable byte channel.
-The app-facing receiver rejects completed streams whose QR envelope kind is not
-a payment token, and direct payload decoding enforces the payment-token content
-type before Norito decode. The QR stream decoder also rejects non-canonical
-frame/envelope lengths, header counter drift, data/parity count or chunk-length
-mismatches, out-of-range wire fields, poisoned parity recovery, payload-hash
-mismatches, and conflicting repeated headers or chunks.
-The NFC APDU parser fails closed on nonzero Le bytes for no-data commands,
-non-canonical zero-length reads, and direct read helpers with invalid requested
-lengths; no-offset APDUs also reject smuggled nonzero P1/P2 bytes. Nearby
-decoding rejects fractional versions, unknown fields inside retired
-pairing-challenge objects, and challenge/receipt ACK content-type downgrades
-instead of ignoring smuggled JSON.
+Product wallets use the Swift SDK for the complete typed Kagemusha lifecycle.
 
 ---
 
@@ -383,7 +62,7 @@ instead of ignoring smuggled JSON.
 | Tool | Version | Required For |
 |------|---------|-------------|
 | JDK | 21+ | All modules |
-| Android SDK | compileSdk 35 | `client-android`, `offline-wallet-android` |
+| Android SDK | compileSdk 35 | `client-android` |
 | Rust | 1.92+ | Native `.so` build |
 | Android NDK | 28+ | Native `.so` build |
 | `cargo-ndk` | any | Native `.so` build |
@@ -400,9 +79,9 @@ These modules have no native dependencies — they build immediately.
 ./gradlew :core-jvm:test --console=plain
 ```
 
-### Step 2: Build native libraries (for `client-android` and offline-wallet consumers)
+### Step 2: Build native libraries (for `client-android`)
 
-The `libconnect_norito_bridge.so` files are **not tracked in git** — they are built from the Rust crate at `crates/connect_norito_bridge` in the same iroha repository. The Gradle task now lives on `client-android`, which owns the shared native bridge used for ML-DSA signing and offline-wallet helpers. It defaults to `../..` as the iroha root (override via `iroha.dir` in `local.properties` if needed).
+The `libconnect_norito_bridge.so` files are **not tracked in git** — they are built from the Rust crate at `crates/connect_norito_bridge` in the same iroha repository. The Gradle task now lives on `client-android`, which owns the shared native bridge used for ML-DSA signing and Kagemusha V3 artifact streaming. It defaults to `../..` as the iroha root (override via `iroha.dir` in `local.properties` if needed).
 
 **One-time setup:**
 
@@ -461,7 +140,6 @@ This makes the artifacts available to any project on the same machine via `maven
 ```bash
 ls ~/.m2/repository/org/hyperledger/iroha/sdk/core-jvm/0.1-SNAPSHOT/
 ls ~/.m2/repository/org/hyperledger/iroha/sdk/client-android/0.1-SNAPSHOT/
-ls ~/.m2/repository/org/hyperledger/iroha/sdk/offline-wallet-android/0.1-SNAPSHOT/
 ```
 
 ### Quick reference
@@ -477,7 +155,6 @@ ls ~/.m2/repository/org/hyperledger/iroha/sdk/offline-wallet-android/0.1-SNAPSHO
 # Rebuild after Rust source changes:
 ./gradlew :client-android:buildNativeLibs
 ./gradlew :client-android:publishToMavenLocal
-./gradlew :offline-wallet-android:publishToMavenLocal
 ```
 
 ## Push Device Registration
@@ -531,7 +208,7 @@ transport.updateVerifyingKey(
 
 ## Signing Algorithm Selection
 
-Android apps can now choose the transaction and offline-wallet signing
+Android apps can now choose the transaction signing
 algorithm explicitly:
 
 ```kotlin
@@ -613,11 +290,9 @@ The original Java SDK used reflection in multiple places (Android API discovery,
 
 The original SDK shipped as a single monolith. This rewrite splits it into three artifacts with clear boundaries:
 
-- **`core-jvm`** — pure JVM, no Android framework dependency. Usable in Kotlin Multiplatform modules, JUnit tests without Robolectric, server-side tools, and admin panels. Contains all protocol logic: Norito codec, transaction building, client transport, offline journal, connect protocol.
+- **`core-jvm`** — pure JVM, no Android framework dependency. Usable in Kotlin Multiplatform modules, JUnit tests without Robolectric, server-side tools, and admin panels. Contains all protocol logic: Norito codec, transaction building, client transport, connect protocol.
 
 - **`client-android`** — Android keystore integration, hardware-backed key generation, device telemetry, and the shared JNI bridge used for ML-DSA signing. Depends on `core-jvm` via `api()` — consumers get all core types transitively.
-
-- **`offline-wallet-android`** — offline wallet APIs and attestation helpers layered on `client-android`.
 
 ### Null safety
 

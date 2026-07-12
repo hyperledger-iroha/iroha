@@ -36,7 +36,7 @@ Loyihamizga yangimisiz? [Birinchi hissangizni qo'shing](#your-first-code-contrib
 - Kod va hujjatlar uchun [uslublar ko'rsatmalarimizga](#style-guides) rioya qilganingizga ishonch hosil qiling.
 - [testlar] (https://doc.rust-lang.org/cargo/commands/cargo-test.html) yozing. Ularning barchasi o'tganligiga ishonch hosil qiling (`cargo test --workspace`). Agar siz SM kriptografiya to'plamiga tegsangiz, ixtiyoriy noaniq/xususiyat jabduqlarini bajarish uchun `cargo test -p iroha_crypto --features "sm sm_proptest"` ni ham ishga tushiring.
   - Eslatma: IVM ijrochisini ishlatadigan testlar, agar `defaults/executor.to` mavjud bo'lmasa, minimal, deterministik ijrochi bayt kodini avtomatik ravishda sintez qiladi. Sinovlarni o'tkazish uchun oldindan qadam kerak emas. Paritet uchun kanonik bayt kodini yaratish uchun siz quyidagilarni bajarishingiz mumkin:
-    - `cargo run --manifest-path scripts/generate_executor_to/Cargo.toml`
+    - `cargo run --locked -p ivm --bin ivm_fixture_export -- --write`
     - `cargo run --manifest-path scripts/regenerate_codec_samples/Cargo.toml`
 - Agar siz derive/proc-makros qutilarini o'zgartirsangiz, trybuild UI to'plamlarini orqali ishga tushiring
   `make check-proc-macro-ui` (yoki

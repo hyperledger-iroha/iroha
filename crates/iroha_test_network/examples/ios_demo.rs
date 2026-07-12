@@ -14,7 +14,7 @@ use color_eyre::{
     eyre::{Context, eyre},
 };
 use iroha::{client::Client, data_model::prelude::*};
-use iroha_primitives::{json::Json, numeric::Numeric};
+use iroha_primitives::{json::Json, numeric::Quantity};
 use iroha_test_network::{NetworkBuilder, NetworkPeer, init_instruction_registry};
 use norito::json::{JsonDeserialize, JsonSerialize};
 use url::Url;
@@ -146,9 +146,9 @@ fn load_config(path: &Path) -> Result<Vec<AccountConfig>> {
     Ok(accounts)
 }
 
-fn parse_numeric(value: &str, context: &str) -> Result<Numeric> {
-    Numeric::from_str(value)
-        .wrap_err_with(|| eyre!("Failed to parse numeric amount `{value}` for {context}"))
+fn parse_quantity(value: &str, context: &str) -> Result<Quantity> {
+    Quantity::from_str(value)
+        .wrap_err_with(|| eyre!("Failed to parse asset quantity `{value}` for {context}"))
 }
 
 fn account_id_from_parts(public_key: &str) -> Result<AccountId> {
@@ -319,10 +319,10 @@ fn main() -> Result<()> {
                 .wrap_err_with(|| eyre!("Failed to register account `{account_id}`"))?;
         }
 
-        let amount = parse_numeric(&initial_balance, &account_id.to_string())?;
+        let amount = parse_quantity(&initial_balance, &account_id.to_string())?;
         let asset_instance = AssetId::new(asset_def_id.clone(), account_id.clone());
         client
-            .submit_blocking(Mint::asset_numeric(amount, asset_instance.clone()))
+            .submit_blocking(Mint::asset_quantity(amount, asset_instance.clone()))
             .wrap_err_with(|| {
                 eyre!(
                     "Failed to mint {} into asset `{}`",

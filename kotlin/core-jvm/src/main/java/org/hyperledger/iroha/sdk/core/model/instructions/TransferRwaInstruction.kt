@@ -1,5 +1,7 @@
 package org.hyperledger.iroha.sdk.core.model.instructions
 
+import org.hyperledger.iroha.sdk.numeric.KotodamaQuantity
+
 private const val ACTION = "TransferRwa"
 
 /** Typed representation of the `TransferRwa` instruction. */
@@ -33,7 +35,7 @@ class TransferRwaInstruction private constructor(
     constructor(
         sourceAccountId: String,
         rwaId: String,
-        quantity: Number,
+        quantity: KotodamaQuantity,
         destinationAccountId: String,
     ) : this(sourceAccountId, rwaId, quantity.toString(), destinationAccountId)
 
@@ -66,7 +68,7 @@ class TransferRwaInstruction private constructor(
             return TransferRwaInstruction(
                 sourceAccountId = sourceAccountId,
                 rwaId = rwaId,
-                quantity = quantity,
+                quantity = validatedQuantity(quantity),
                 destinationAccountId = destinationAccountId,
                 arguments = LinkedHashMap(arguments),
             )
@@ -84,8 +86,7 @@ class TransferRwaInstruction private constructor(
         }
 
         private fun validatedQuantity(value: String): String {
-            require(value.isNotBlank()) { "quantity must not be blank" }
-            return value
+            return requireCanonicalQuantity(value)
         }
     }
 }

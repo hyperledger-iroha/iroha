@@ -37,7 +37,7 @@ use iroha_data_model::{
 use iroha_executor_data_model::isi::multisig::MultisigPropose;
 use iroha_primitives::{
     json::Json,
-    numeric::{Numeric, NumericError},
+    numeric::{Numeric, Quantity},
 };
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR};
 use iroha_version::codec::EncodeVersioned;
@@ -540,7 +540,7 @@ impl TransactionPreview {
     }
 }
 
-/// Compose a numeric asset mint transaction assigned to the default MOCHI signer.
+/// Compose an asset quantity mint transaction assigned to the default MOCHI signer.
 ///
 /// The helper signs the transaction with the sample Alice key pair so local
 /// deployments have a predictable authority without requiring user input.
@@ -549,10 +549,10 @@ impl TransactionPreview {
 ///
 /// Returns [`ComposeError::InvalidAssetId`] when the supplied identifier cannot
 /// be parsed according to Iroha's asset id rules.
-pub fn mint_numeric_preview(
+pub fn mint_quantity_preview(
     chain_id: &str,
     asset_id: &str,
-    quantity: impl Into<Numeric>,
+    quantity: impl Into<Quantity>,
 ) -> Result<TransactionPreview, ComposeError> {
     let draft = InstructionDraft::MintAsset {
         asset: parse_asset_id(asset_id)?,
@@ -638,21 +638,21 @@ pub enum InstructionDraft {
         /// Identifier of the asset being minted.
         asset: AssetId,
         /// Positive numeric quantity to mint.
-        quantity: Numeric,
+        quantity: Quantity,
     },
     /// Burn a numeric quantity of the specified asset.
     BurnAsset {
         /// Identifier of the asset being burned.
         asset: AssetId,
         /// Quantity to burn.
-        quantity: Numeric,
+        quantity: Quantity,
     },
     /// Transfer a numeric asset between accounts.
     TransferAsset {
         /// Identifier of the asset (including source account) to transfer.
         asset: AssetId,
         /// Quantity to transfer.
-        quantity: Numeric,
+        quantity: Quantity,
         /// Destination account receiving the asset.
         destination: AccountId,
     },
@@ -987,17 +987,17 @@ impl InstructionDraft {
     fn instruction(&self) -> InstructionBox {
         match self {
             InstructionDraft::MintAsset { asset, quantity } => {
-                Mint::asset_numeric(quantity.clone(), asset.clone()).into()
+                Mint::asset_quantity(quantity.clone(), asset.clone()).into()
             }
             InstructionDraft::BurnAsset { asset, quantity } => {
-                Burn::asset_numeric(quantity.clone(), asset.clone()).into()
+                Burn::asset_quantity(quantity.clone(), asset.clone()).into()
             }
             InstructionDraft::TransferAsset {
                 asset,
                 quantity,
                 destination,
             } => {
-                Transfer::asset_numeric(asset.clone(), quantity.clone(), destination.clone()).into()
+                Transfer::asset_quantity(asset.clone(), quantity.clone(), destination.clone()).into()
             }
             InstructionDraft::RegisterDomain { domain } => {
                 Register::domain(Domain::new(domain.clone())).into()
@@ -1379,8 +1379,8 @@ fn parse_account_id(value: &str) -> Result<AccountId, ComposeError> {
         })
 }
 
-fn parse_quantity(value: &str) -> Result<Numeric, ComposeError> {
-    Numeric::from_str(value).map_err(|err: NumericError| ComposeError::InvalidQuantity {
+fn parse_quantity(value: &str) -> Result<Quantity, ComposeError> {
+    Quantity::from_str(value).map_err(|err| ComposeError::InvalidQuantity {
         quantity: value.to_owned(),
         reason: err.to_string(),
     })
@@ -1607,7 +1607,7 @@ mod tests {
             .expect("definition id");
         let asset_id = format!("{asset_def}#{account}");
 
-        let preview = mint_numeric_preview("mochi-local", &asset_id, 5_u32).expect("preview");
+        let preview = mint_quantity_preview("mochi-local", &asset_id, 5_u32).expect("preview");
 
         assert_eq!(preview.authority(), account);
         assert!(
@@ -1629,7 +1629,7 @@ mod tests {
 
     #[test]
     fn invalid_asset_id_reports_error() {
-        let err = mint_numeric_preview("chain", "invalid-format", 1_u32)
+        let err = mint_quantity_preview("chain", "invalid-format", 1_u32)
             .expect_err("invalid identifiers should produce compose error");
         matches!(err, ComposeError::InvalidAssetId { .. });
     }
@@ -1650,6 +1650,17 @@ mod tests {
             summary.contains("Transfer"),
             "summary should mention transfer action"
         );
+    }
+
+    #[test]
+    fn asset_draft_rejects_negative_quantity() {
+        let asset_id = AssetId::new(
+            "62Fk4FPcMuLvW5QjDGNF2a4jAmjM".parse().unwrap(),
+            ALICE_ID.clone(),
+        );
+        let error = InstructionDraft::mint_from_input(&asset_literal(&asset_id), "-0.01")
+            .expect_err("negative quantity must not enter an asset instruction draft");
+        assert!(matches!(error, ComposeError::InvalidQuantity { .. }));
     }
 
     #[test]
@@ -1682,11 +1693,11 @@ mod tests {
         let asset_id = AssetId::new(asset_def, ALICE_ID.clone());
         let mint = InstructionDraft::MintAsset {
             asset: asset_id.clone(),
-            quantity: Numeric::from(5_u32),
+            quantity: Quantity::from(5_u32),
         };
         let transfer = InstructionDraft::TransferAsset {
             asset: asset_id,
-            quantity: Numeric::from(3_u32),
+            quantity: Quantity::from(3_u32),
             destination: BOB_ID.clone(),
         };
         let preview =
@@ -1990,7 +2001,7 @@ mod tests {
                 asset_definition_id: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
                     .parse()
                     .expect("asset definition"),
-                amount: Numeric::from(1_u32),
+                amount: Quantity::from(1_u32),
                 destination: ImplicitAccountFeeDestination::Burn,
             }),
             min_initial_amounts: BTreeMap::new(),

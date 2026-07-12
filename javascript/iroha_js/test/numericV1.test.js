@@ -54,9 +54,9 @@ test("numeric V1 canonical construction and endpoint rejection", () => {
   }
   assert.throws(() => NumericV1.decodeQuantityJson("1.0"), { code: "invalid_text" });
   assert.throws(() => NumericV1.decodeQuantityJson("-1"), { code: "negative_quantity" });
-  assert.throws(() => NumericV1.decodeIntJson(1), TypeError);
-  assert.throws(() => NumericV1.decodeIntJson(1n), TypeError);
-  assert.throws(() => NumericV1.decodeIntJson(Object("1")), TypeError);
+  assert.throws(() => NumericV1.decodeIntJson(1), { code: "invalid_text" });
+  assert.throws(() => NumericV1.decodeIntJson(1n), { code: "invalid_text" });
+  assert.throws(() => NumericV1.decodeIntJson(Object("1")), { code: "invalid_text" });
 });
 
 test("numeric V1 revalidates SDK value subclasses before encoding", () => {
@@ -153,6 +153,19 @@ test("numeric V1 consumes the Rust-authored shared golden fixture", async () => 
       ? new KotodamaDecimal(vector.input)
       : new KotodamaQuantity(vector.input);
     assert.equal(decoded.toString(), vector.canonical, vector.id);
+  }
+
+  for (const vector of fixture.invalid_text) {
+    const decode = vector.kind === "int"
+      ? NumericV1.decodeIntJson
+      : vector.kind === "decimal"
+        ? NumericV1.decodeDecimalJson
+        : NumericV1.decodeQuantityJson;
+    assert.throws(
+      () => decode(vector.input),
+      (error) => error instanceof NumericV1Error && error.code === vector.expected,
+      vector.id,
+    );
   }
 
   for (const vector of fixture.valid) {

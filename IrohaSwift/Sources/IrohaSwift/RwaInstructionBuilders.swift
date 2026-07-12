@@ -17,11 +17,11 @@ public enum RwaInstructionBuilderError: LocalizedError, Equatable {
 
 private enum RwaInstructionPayloadBuilder {
     static func normalizedQuantity(_ quantity: String, field: String) throws -> String {
-        let trimmed = quantity.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, trimmed.rangeOfCharacter(from: .whitespacesAndNewlines) == nil else {
+        do {
+            return try KotodamaNumericV1Codec.decodeQuantityJSON(quantity).canonicalString
+        } catch {
             throw RwaInstructionBuilderError.invalidQuantity(field: field)
         }
-        return trimmed
     }
 
     static func jsonPayload(from rawJSON: String) throws -> NoritoJSON {
@@ -39,6 +39,46 @@ private enum RwaInstructionPayloadBuilder {
     static func instruction(named name: String, payload: [String: Any]) throws -> NoritoJSON {
         try NoritoJSON.fromJSONObject([name: payload])
     }
+
+    static func normalizedParents(_ value: Any?, field: String) throws -> [[String: Any]] {
+        guard let parents = value as? [[String: Any]] else {
+            throw RwaInstructionBuilderError.invalidJSONObject(field: field)
+        }
+        return try parents.enumerated().map { index, parent in
+            var normalized = parent
+            guard let quantity = parent["quantity"] as? String else {
+                throw RwaInstructionBuilderError.invalidQuantity(
+                    field: "\(field)[\(index)].quantity"
+                )
+            }
+            normalized["quantity"] = try normalizedQuantity(
+                quantity,
+                field: "\(field)[\(index)].quantity"
+            )
+            return normalized
+        }
+    }
+
+    static func normalizedNewRwa(_ value: [String: Any], field: String) throws -> [String: Any] {
+        var normalized = value
+        guard let quantity = value["quantity"] as? String else {
+            throw RwaInstructionBuilderError.invalidQuantity(field: "\(field).quantity")
+        }
+        normalized["quantity"] = try normalizedQuantity(quantity, field: "\(field).quantity")
+        if value["parents"] != nil {
+            normalized["parents"] = try normalizedParents(
+                value["parents"],
+                field: "\(field).parents"
+            )
+        }
+        return normalized
+    }
+
+    static func normalizedMerge(_ value: [String: Any], field: String) throws -> [String: Any] {
+        var normalized = value
+        normalized["parents"] = try normalizedParents(value["parents"], field: "\(field).parents")
+        return normalized
+    }
 }
 
 /// Swift helpers for building dedicated RWA instruction payloads as Norito JSON.
@@ -50,7 +90,8 @@ public enum RwaInstructionBuilders {
     /// Build a `RegisterRwa` instruction payload.
     public static func registerRwa(rwa: NoritoJSON) throws -> NoritoJSON {
         let rwaObject = try RwaInstructionPayloadBuilder.jsonObject(from: rwa, field: "rwa")
-        return try RwaInstructionPayloadBuilder.instruction(named: "RegisterRwa", payload: ["rwa": rwaObject])
+        let normalized = try RwaInstructionPayloadBuilder.normalizedNewRwa(rwaObject, field: "rwa")
+        return try RwaInstructionPayloadBuilder.instruction(named: "RegisterRwa", payload: ["rwa": normalized])
     }
 
     /// Convenience overload accepting a raw `NewRwa` JSON object.
@@ -78,7 +119,8 @@ public enum RwaInstructionBuilders {
     /// Build a `MergeRwas` instruction payload.
     public static func mergeRwas(merge: NoritoJSON) throws -> NoritoJSON {
         let mergeObject = try RwaInstructionPayloadBuilder.jsonObject(from: merge, field: "merge")
-        return try RwaInstructionPayloadBuilder.instruction(named: "MergeRwas", payload: mergeObject)
+        let normalized = try RwaInstructionPayloadBuilder.normalizedMerge(mergeObject, field: "merge")
+        return try RwaInstructionPayloadBuilder.instruction(named: "MergeRwas", payload: normalized)
     }
 
     /// Convenience overload accepting a raw `MergeRwas` JSON object.

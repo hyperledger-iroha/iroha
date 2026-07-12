@@ -2088,9 +2088,9 @@ impl TieredStateBackend {
             world.parliament_bodies
         );
         collect_map!(
-            TieredSegment::OfflineNoteReplayKeys,
-            OfflineNoteReplayKey,
-            world.offline_note_replay_keys
+            TieredSegment::KagemushaReplayKeys,
+            KagemushaReplayKey,
+            world.kagemusha_replay_keys
         );
         collect_map!(
             TieredSegment::DirectLaneBlockApplicationMarkers,
@@ -2696,7 +2696,7 @@ mod measured_bytes_impls {
         const_vec::ConstVec,
         conststr::ConstString,
         json::Json,
-        numeric::{Numeric, NumericSpec},
+        numeric::{Numeric, NumericSpec, Quantity},
     };
 
     use crate::{
@@ -2921,6 +2921,12 @@ mod measured_bytes_impls {
     impl MeasuredBytes for Numeric {
         fn measured_bytes(&self) -> usize {
             size_of::<Numeric>().saturating_add(self.mantissa().measured_bytes_extra())
+        }
+    }
+
+    impl MeasuredBytes for Quantity {
+        fn measured_bytes(&self) -> usize {
+            size_of::<Quantity>().saturating_add(self.mantissa().measured_bytes_extra())
         }
     }
 
@@ -4185,7 +4191,7 @@ enum TieredSegment {
     GovernanceSlashes,
     Council,
     ParliamentBodies,
-    OfflineNoteReplayKeys,
+    KagemushaReplayKeys,
     DirectLaneBlockApplicationMarkers,
 }
 
@@ -4232,7 +4238,7 @@ impl TieredSegment {
             TieredSegment::GovernanceSlashes => "governance_slashes",
             TieredSegment::Council => "council",
             TieredSegment::ParliamentBodies => "parliament_bodies",
-            TieredSegment::OfflineNoteReplayKeys => "offline_note_replay_keys",
+            TieredSegment::KagemushaReplayKeys => "kagemusha_replay_keys",
             TieredSegment::DirectLaneBlockApplicationMarkers => {
                 "direct_lane_block_application_markers"
             }
@@ -4292,7 +4298,7 @@ impl norito::json::JsonDeserialize for TieredSegment {
             "governance_slashes" => TieredSegment::GovernanceSlashes,
             "council" => TieredSegment::Council,
             "parliament_bodies" => TieredSegment::ParliamentBodies,
-            "offline_note_replay_keys" => TieredSegment::OfflineNoteReplayKeys,
+            "kagemusha_replay_keys" => TieredSegment::KagemushaReplayKeys,
             "direct_lane_block_application_markers" => {
                 TieredSegment::DirectLaneBlockApplicationMarkers
             }
@@ -4495,7 +4501,7 @@ pub(crate) enum TieredKeyHandle {
     GovernanceSlash(String),
     Council(u64),
     ParliamentBodies(u64),
-    OfflineNoteReplayKey(iroha_crypto::Hash),
+    KagemushaReplayKey(iroha_crypto::Hash),
     DirectLaneBlockApplicationMarker(super::DirectLaneBlockApplicationKey),
 }
 
@@ -4546,7 +4552,7 @@ impl TieredKeyHandle {
             TieredKeyHandle::GovernanceSlash(_) => TieredSegment::GovernanceSlashes,
             TieredKeyHandle::Council(_) => TieredSegment::Council,
             TieredKeyHandle::ParliamentBodies(_) => TieredSegment::ParliamentBodies,
-            TieredKeyHandle::OfflineNoteReplayKey(_) => TieredSegment::OfflineNoteReplayKeys,
+            TieredKeyHandle::KagemushaReplayKey(_) => TieredSegment::KagemushaReplayKeys,
             TieredKeyHandle::DirectLaneBlockApplicationMarker(_) => {
                 TieredSegment::DirectLaneBlockApplicationMarkers
             }
@@ -4601,7 +4607,7 @@ impl TieredKeyHandle {
             TieredKeyHandle::GovernanceSlash(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::Council(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::ParliamentBodies(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::OfflineNoteReplayKey(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::KagemushaReplayKey(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::DirectLaneBlockApplicationMarker(key) => {
                 Ok(norito::codec::Encode::encode(key))
             }
@@ -4688,8 +4694,8 @@ impl TieredKeyHandle {
             TieredKeyHandle::GovernanceSlash(id) => fetch!(world.governance_slashes, id),
             TieredKeyHandle::Council(id) => fetch!(world.council, id),
             TieredKeyHandle::ParliamentBodies(id) => fetch!(world.parliament_bodies, id),
-            TieredKeyHandle::OfflineNoteReplayKey(id) => {
-                fetch!(world.offline_note_replay_keys, id)
+            TieredKeyHandle::KagemushaReplayKey(id) => {
+                fetch!(world.kagemusha_replay_keys, id)
             }
             TieredKeyHandle::DirectLaneBlockApplicationMarker(id) => {
                 fetch!(world.direct_lane_block_application_markers, id)
@@ -4770,8 +4776,8 @@ impl TieredKeyHandle {
             TieredKeyHandle::GovernanceSlash(id) => fetch!(world.governance_slashes, id),
             TieredKeyHandle::Council(id) => fetch!(world.council, id),
             TieredKeyHandle::ParliamentBodies(id) => fetch!(world.parliament_bodies, id),
-            TieredKeyHandle::OfflineNoteReplayKey(id) => {
-                fetch!(world.offline_note_replay_keys, id)
+            TieredKeyHandle::KagemushaReplayKey(id) => {
+                fetch!(world.kagemusha_replay_keys, id)
             }
             TieredKeyHandle::DirectLaneBlockApplicationMarker(id) => {
                 fetch!(world.direct_lane_block_application_markers, id)
@@ -4873,8 +4879,8 @@ impl fmt::Display for TieredKeyHandle {
             TieredKeyHandle::GovernanceSlash(id) => write!(f, "gov_slash:{id}"),
             TieredKeyHandle::Council(id) => write!(f, "council:{id}"),
             TieredKeyHandle::ParliamentBodies(id) => write!(f, "parliament_bodies:{id}"),
-            TieredKeyHandle::OfflineNoteReplayKey(id) => {
-                write!(f, "offline_note_replay_key:{id}")
+            TieredKeyHandle::KagemushaReplayKey(id) => {
+                write!(f, "kagemusha_replay_key:{id}")
             }
             TieredKeyHandle::DirectLaneBlockApplicationMarker(id) => write!(
                 f,

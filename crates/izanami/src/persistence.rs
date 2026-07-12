@@ -10,9 +10,8 @@ use tracing::warn;
 use crate::config::{
     ChaosConfig, DEFAULT_PROGRESS_INTERVAL, DEFAULT_PROGRESS_TIMEOUT,
     DEFAULT_SHUTDOWN_DRAIN_TIMEOUT, DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
-    DEFAULT_SUMERAGI_COLLECTORS_K, DEFAULT_SUMERAGI_INLINE_BLOCK_CREATED_BACKUP_RBC,
-    DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER, DEFAULT_SUMERAGI_REDUNDANT_SEND_R, FaultArgs,
-    FaultToggles, IzanamiArgs, WorkloadProfile,
+    DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER, FaultArgs, FaultToggles, IzanamiArgs,
+    WorkloadProfile,
 };
 use crate::faults::DEFAULT_NETWORK_PACKET_LOSS_PERCENT;
 
@@ -65,12 +64,6 @@ struct StoredArgs {
     sumeragi_block_max_transactions: u64,
     #[norito(default = "default_sumeragi_proposal_queue_scan_multiplier")]
     sumeragi_proposal_queue_scan_multiplier: u64,
-    #[norito(default = "default_sumeragi_collectors_k")]
-    sumeragi_collectors_k: u64,
-    #[norito(default = "default_sumeragi_collectors_redundant_send_r")]
-    sumeragi_collectors_redundant_send_r: u64,
-    #[norito(default = "default_sumeragi_inline_block_created_backup_rbc")]
-    sumeragi_inline_block_created_backup_rbc: bool,
 }
 
 fn workload_profile_to_u8(profile: WorkloadProfile) -> u8 {
@@ -129,18 +122,6 @@ fn default_sumeragi_proposal_queue_scan_multiplier() -> u64 {
     DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER
 }
 
-fn default_sumeragi_collectors_k() -> u64 {
-    DEFAULT_SUMERAGI_COLLECTORS_K
-}
-
-fn default_sumeragi_collectors_redundant_send_r() -> u64 {
-    DEFAULT_SUMERAGI_REDUNDANT_SEND_R
-}
-
-fn default_sumeragi_inline_block_created_backup_rbc() -> bool {
-    DEFAULT_SUMERAGI_INLINE_BLOCK_CREATED_BACKUP_RBC
-}
-
 impl StoredArgs {
     fn from_args(args: &IzanamiArgs) -> Result<Self> {
         let peers = u32::try_from(args.peers)
@@ -192,9 +173,6 @@ impl StoredArgs {
             prebuild_tx_workers,
             sumeragi_block_max_transactions: args.sumeragi_block_max_transactions,
             sumeragi_proposal_queue_scan_multiplier: args.sumeragi_proposal_queue_scan_multiplier,
-            sumeragi_collectors_k: args.sumeragi_collectors_k,
-            sumeragi_collectors_redundant_send_r: args.sumeragi_collectors_redundant_send_r,
-            sumeragi_inline_block_created_backup_rbc: args.sumeragi_inline_block_created_backup_rbc,
             workload_profile: workload_profile_to_u8(args.workload_profile),
             allow_contract_deploy_in_stable: args.allow_contract_deploy_in_stable,
             log_filter: args.log_filter.clone(),
@@ -240,9 +218,6 @@ impl StoredArgs {
             prebuild_tx_workers: self.prebuild_tx_workers as usize,
             sumeragi_block_max_transactions: self.sumeragi_block_max_transactions,
             sumeragi_proposal_queue_scan_multiplier: self.sumeragi_proposal_queue_scan_multiplier,
-            sumeragi_collectors_k: self.sumeragi_collectors_k,
-            sumeragi_collectors_redundant_send_r: self.sumeragi_collectors_redundant_send_r,
-            sumeragi_inline_block_created_backup_rbc: self.sumeragi_inline_block_created_backup_rbc,
             workload_profile: workload_profile_from_u8(self.workload_profile),
             allow_contract_deploy_in_stable: self.allow_contract_deploy_in_stable,
             log_filter: self.log_filter,
@@ -337,9 +312,6 @@ mod portable_tests {
         args.prebuild_tx_workers = 4;
         args.sumeragi_block_max_transactions = 1_536;
         args.sumeragi_proposal_queue_scan_multiplier = 2;
-        args.sumeragi_collectors_k = 3;
-        args.sumeragi_collectors_redundant_send_r = 3;
-        args.sumeragi_inline_block_created_backup_rbc = true;
 
         let loaded = StoredArgs::from_args(&args)?.into_args()?;
 
@@ -355,15 +327,6 @@ mod portable_tests {
         assert_eq!(
             loaded.sumeragi_proposal_queue_scan_multiplier,
             args.sumeragi_proposal_queue_scan_multiplier
-        );
-        assert_eq!(loaded.sumeragi_collectors_k, args.sumeragi_collectors_k);
-        assert_eq!(
-            loaded.sumeragi_collectors_redundant_send_r,
-            args.sumeragi_collectors_redundant_send_r
-        );
-        assert_eq!(
-            loaded.sumeragi_inline_block_created_backup_rbc,
-            args.sumeragi_inline_block_created_backup_rbc
         );
         Ok(())
     }
@@ -525,9 +488,6 @@ mod tests {
             prebuild_tx_workers: 6,
             sumeragi_block_max_transactions: 1_536,
             sumeragi_proposal_queue_scan_multiplier: 2,
-            sumeragi_collectors_k: 3,
-            sumeragi_collectors_redundant_send_r: 3,
-            sumeragi_inline_block_created_backup_rbc: true,
             workload_profile: WorkloadProfile::Chaos,
             allow_contract_deploy_in_stable: true,
             log_filter: "debug".to_string(),
@@ -576,15 +536,6 @@ mod tests {
         assert_eq!(
             loaded.sumeragi_proposal_queue_scan_multiplier,
             args.sumeragi_proposal_queue_scan_multiplier
-        );
-        assert_eq!(loaded.sumeragi_collectors_k, args.sumeragi_collectors_k);
-        assert_eq!(
-            loaded.sumeragi_collectors_redundant_send_r,
-            args.sumeragi_collectors_redundant_send_r
-        );
-        assert_eq!(
-            loaded.sumeragi_inline_block_created_backup_rbc,
-            args.sumeragi_inline_block_created_backup_rbc
         );
         assert_eq!(loaded.workload_profile, args.workload_profile);
         assert_eq!(
@@ -653,15 +604,6 @@ mod tests {
         assert_eq!(
             loaded.sumeragi_proposal_queue_scan_multiplier,
             DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER
-        );
-        assert_eq!(loaded.sumeragi_collectors_k, DEFAULT_SUMERAGI_COLLECTORS_K);
-        assert_eq!(
-            loaded.sumeragi_collectors_redundant_send_r,
-            DEFAULT_SUMERAGI_REDUNDANT_SEND_R
-        );
-        assert_eq!(
-            loaded.sumeragi_inline_block_created_backup_rbc,
-            DEFAULT_SUMERAGI_INLINE_BLOCK_CREATED_BACKUP_RBC
         );
         assert_eq!(loaded.workload_profile, WorkloadProfile::Stable);
         assert!(!loaded.allow_contract_deploy_in_stable);

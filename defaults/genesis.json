@@ -4,7 +4,7 @@
   "chain_discriminant": 753,
   "consensus_fingerprint": "0x65fdcf7c51004c91602cc8cec2b470ea96918fab2985a79044ae6ddf77416447",
   "consensus_mode": "Npos",
-  "sumeragi_v2": {"da_layout":{"encoding":{"encoding":"ReedSolomon16"},"chunk_size_bytes":262144,"data_shards":4,"parity_shards":2,"max_payload_size_bytes":16777216,"max_chunk_count":1024},"nexus_amx_context_hash":"D446D219EB801AE752CD0168E0F47B3ACF53BA4D5C965FD2983F4F93F4DA6EA7"},
+  "sumeragi_v2": {"da_layout":{"encoding":{"encoding":"reed_solomon16","details":null},"chunk_size_bytes":262144,"data_shards":4,"parity_shards":2,"max_payload_size_bytes":16777216,"max_chunk_count":1024},"nexus_amx_context_hash":"D446D219EB801AE752CD0168E0F47B3ACF53BA4D5C965FD2983F4F93F4DA6EA7"},
   "crypto": {
     "allowed_curve_ids": [
       1,

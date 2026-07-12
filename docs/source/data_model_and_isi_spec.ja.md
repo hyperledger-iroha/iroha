@@ -183,8 +183,8 @@ ID は、`Display`/`FromStr` 往復の安定した文字列形式を持ちます
 
 ---## 実用的な例
 - 鋳造と転送:
-  - `Mint::asset_numeric(10, asset_id)` → 仕様/ミント性で許可されている場合は 10 を追加します。イベント: `AssetEvent::Added`。
-  - `Transfer::asset_numeric(asset_id, 5, to_account)` → 5 移動します。削除/追加のイベント。
+  - `Mint::asset_quantity(10, asset_id)` → 仕様/ミント性で許可されている場合は 10 を追加します。イベント: `AssetEvent::Added`。
+  - `Transfer::asset_quantity(asset_id, 5, to_account)` → 5 移動します。削除/追加のイベント。
 - メタデータの更新:
   - `SetKeyValue::account(account_id, "avatar".parse()?, json)` → アップサート; `RemoveKeyValue::account(...)` 経由で削除します。
 - 役割/権限の管理:

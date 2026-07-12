@@ -48,75 +48,6 @@ from iroha_torii_client.client import (
     NetworkTimeSnapshot,
     NetworkTimeStatus,
     MultisigResponse,
-    OfflineAppliedOperation,
-    OfflineAppliedResult,
-    OfflineAxtErrorDetails,
-    OfflineAuthorizationJson,
-    OfflineAssetScale,
-    OfflineBranchClaimJson,
-    OfflineBranchPathJson,
-    OfflineLanePrivacyMerkleVariantJson,
-    OfflineLanePrivacyMerkleWitnessJson,
-    OfflineLanePrivacyProofJson,
-    OfflineLanePrivacySnarkVariantJson,
-    OfflineLanePrivacySnarkWitnessJson,
-    OfflineLanePrivacyWitnessJson,
-    OfflineLineageModeJson,
-    OfflineLineageNodeJson,
-    OfflineLineageWitnessJson,
-    OfflineMerkleProofJson,
-    OfflineOperationKind,
-    OfflineOperationReference,
-    OfflineOperationStatus,
-    OfflinePendingState,
-    OfflinePendingOperation,
-    OfflineProofAttachmentJson,
-    OfflineProofBoxJson,
-    OfflineProofBackend,
-    OfflinePeerSplitTransitionJson,
-    OfflinePeerSplitTransitionVariantJson,
-    OfflineActiveTopUpShieldVerifier,
-    OfflineActiveTransferVerifier,
-    OfflineReadiness,
-    OfflineReadinessBlocker,
-    OfflineVerifierId,
-    OfflineRedeemChangeJson,
-    OfflineRedeemOperationResult,
-    OfflineRedeemRequest,
-    OfflineRedeemResult,
-    OfflineRecursiveSpendBundleJson,
-    OfflineRecursiveSpendProofJson,
-    OfflineRecursiveSpendStatementJson,
-    OfflineRecursiveSpendTransitionJson,
-    OfflineRedemptionChangeTransitionJson,
-    OfflineRedemptionChangeTransitionVariantJson,
-    OfflineRedemptionIntentJson,
-    OfflineRejectedOperation,
-    OfflineQueueErrorDetails,
-    OfflineErrorDetails,
-    OfflineErrorEnvelope,
-    OfflineScaledAmount,
-    OfflineScaledAmountJson,
-    OfflineSpendableNote,
-    OfflineSpendableNoteJson,
-    OfflineSpendBranchJson,
-    OfflineTopUpAnchor,
-    OfflineTopUpAnchorReferenceJson,
-    OfflineTopUpFinalityProof,
-    OfflineTopUpFinalityProofAnchor,
-    OfflineTopUpOperationResult,
-    OfflineTopUpRequest,
-    OfflineTopUpResult,
-    OfflineVerifierKeyId,
-    OfflineVerifierKeyIdJson,
-    OfflineVerifierStatus,
-    OfflineUnshieldPublicInputsJson,
-    OfflineVerifyingKeyJson,
-    OfflineVerifyingKeyRecordJson,
-    OfflineVerifiedFoldBundleJson,
-    OfflineVerifiedFoldRecordBundleJson,
-    OfflineVerifiedFoldStepJson,
-    OfflineVerifiedFoldVerifierRecordJson,
     SubscriptionActionResult,
     SubscriptionCreateResult,
     SubscriptionListItem,
@@ -164,6 +95,7 @@ from .query import (
     domain_query_envelope,
     rwa_query_envelope,
 )
+from .numeric_v1 import NumericV1Codec
 from .repo import RepoAgreementListPage
 from .sorafs import (
     SorafsAliasError,
@@ -178,11 +110,12 @@ from .sorafs import (
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from .connect import _ConnectControlBase as ConnectControlBase  # noqa: F401
     from .crypto import Instruction, SignedTransactionEnvelope  # noqa: F401
-    from .tx import TransactionDraft
+    from .tx import QuantityLike, TransactionDraft
 else:  # pragma: no cover - runtime type aliases
     Instruction = Any  # type: ignore[assignment]
     SignedTransactionEnvelope = Any  # type: ignore[assignment]
     ConnectControlBase = Any  # type: ignore[assignment]
+    QuantityLike = Any  # type: ignore[assignment]
     TransactionDraft = Any  # type: ignore[assignment]
 
 
@@ -868,8 +801,16 @@ def _asset_entry_matches_definition(
     )
 
 
+def _canonical_quantity_text(value: Any, context: str) -> str:
+    if type(value) is not str:
+        raise TypeError(f"{context} must be a canonical JSON string")
+    if len(value) > 155:
+        raise ValueError(f"{context} exceeds the canonical V1 text bound")
+    return str(NumericV1Codec.decode_quantity_json(value))
+
+
 def _quantity_decimal(value: Any) -> Decimal:
-    return Decimal(str(value if value is not None else "0"))
+    return Decimal(_canonical_quantity_text(value, "asset quantity"))
 
 
 def _leading_zero_bits(payload: bytes) -> int:
@@ -3416,8 +3357,14 @@ class ExplorerRwaRecord:
 
         identifier = _require_string("id", "explorer_rwa.id")
         owned_by = _require_string("owned_by", "explorer_rwa.owned_by")
-        quantity = _require_string("quantity", "explorer_rwa.quantity")
-        held_quantity = _require_string("held_quantity", "explorer_rwa.held_quantity")
+        quantity = _canonical_quantity_text(
+            payload.get("quantity"),
+            "explorer_rwa.quantity",
+        )
+        held_quantity = _canonical_quantity_text(
+            payload.get("held_quantity"),
+            "explorer_rwa.held_quantity",
+        )
         primary_reference = _require_string(
             "primary_reference",
             "explorer_rwa.primary_reference",
@@ -6040,9 +5987,10 @@ class AccountAsset:
         quantity = payload.get("quantity")
         if not isinstance(asset_id, str):
             raise TypeError("account asset entry missing string `asset_id` field")
-        if not isinstance(quantity, str):
-            raise TypeError("account asset entry missing string `quantity` field")
-        return cls(asset_id=asset_id, quantity=quantity)
+        return cls(
+            asset_id=asset_id,
+            quantity=_canonical_quantity_text(quantity, "account asset quantity"),
+        )
 
 
 @dataclass(frozen=True)
@@ -6327,9 +6275,13 @@ class AssetHolderRecord:
         quantity = payload.get("quantity")
         if not isinstance(account_id, str):
             raise TypeError("asset holder record missing string `account_id` field")
-        if not isinstance(quantity, str):
-            raise TypeError("asset holder record missing string `quantity` field")
-        return cls(account_id=account_id, quantity=quantity, raw=dict(payload))
+        canonical_quantity = _canonical_quantity_text(
+            quantity,
+            "asset holder quantity",
+        )
+        raw = dict(payload)
+        raw["quantity"] = canonical_quantity
+        return cls(account_id=account_id, quantity=canonical_quantity, raw=raw)
 
 
 @dataclass(frozen=True)
@@ -6371,7 +6323,30 @@ class RwaListItem:
         identifier = payload.get("id")
         if not isinstance(identifier, str) or not identifier.strip():
             raise TypeError("RWA list item missing string `id` field")
-        return cls(id=identifier.strip(), raw=dict(payload))
+        raw = dict(payload)
+        for quantity_field in ("quantity", "held_quantity"):
+            if quantity_field in raw:
+                raw[quantity_field] = _canonical_quantity_text(
+                    raw[quantity_field],
+                    f"RWA list item {quantity_field}",
+                )
+        parents = raw.get("parents")
+        if parents is not None:
+            if not isinstance(parents, list):
+                raise TypeError("RWA list item parents must be a list")
+            canonical_parents: List[Any] = []
+            for index, parent in enumerate(parents):
+                if not isinstance(parent, Mapping):
+                    raise TypeError(f"RWA list item parents[{index}] must be an object")
+                canonical_parent = dict(parent)
+                if "quantity" in canonical_parent:
+                    canonical_parent["quantity"] = _canonical_quantity_text(
+                        canonical_parent["quantity"],
+                        f"RWA list item parents[{index}].quantity",
+                    )
+                canonical_parents.append(canonical_parent)
+            raw["parents"] = canonical_parents
+        return cls(id=identifier.strip(), raw=raw)
 
 
 @dataclass(frozen=True)
@@ -6464,12 +6439,14 @@ class UaidPortfolioAsset:
             raise TypeError("portfolio asset missing `asset_id` string")
         if not isinstance(definition_id, str) or not definition_id:
             raise TypeError("portfolio asset missing `asset_definition_id` string")
-        if not isinstance(quantity, str) or not quantity:
-            raise TypeError("portfolio asset missing `quantity` string")
+        canonical_quantity = _canonical_quantity_text(
+            quantity,
+            "portfolio asset quantity",
+        )
         return cls(
             asset_id=asset_id,
             asset_definition_id=definition_id,
-            quantity=quantity,
+            quantity=canonical_quantity,
         )
 
 
@@ -11098,75 +11075,6 @@ __all__ = [
     "AssetHolderListPage",
     "AccountPermissionRecord",
     "AccountPermissionListPage",
-    "OfflineAppliedOperation",
-    "OfflineAppliedResult",
-    "OfflineAxtErrorDetails",
-    "OfflineAuthorizationJson",
-    "OfflineAssetScale",
-    "OfflineBranchClaimJson",
-    "OfflineBranchPathJson",
-    "OfflineLanePrivacyMerkleVariantJson",
-    "OfflineLanePrivacyMerkleWitnessJson",
-    "OfflineLanePrivacyProofJson",
-    "OfflineLanePrivacySnarkVariantJson",
-    "OfflineLanePrivacySnarkWitnessJson",
-    "OfflineLanePrivacyWitnessJson",
-    "OfflineLineageModeJson",
-    "OfflineLineageNodeJson",
-    "OfflineLineageWitnessJson",
-    "OfflineMerkleProofJson",
-    "OfflineOperationKind",
-    "OfflineOperationReference",
-    "OfflineOperationStatus",
-    "OfflinePendingState",
-    "OfflinePendingOperation",
-    "OfflineProofAttachmentJson",
-    "OfflineProofBoxJson",
-    "OfflineProofBackend",
-    "OfflinePeerSplitTransitionJson",
-    "OfflinePeerSplitTransitionVariantJson",
-    "OfflineActiveTopUpShieldVerifier",
-    "OfflineActiveTransferVerifier",
-    "OfflineReadiness",
-    "OfflineReadinessBlocker",
-    "OfflineVerifierId",
-    "OfflineRedeemChangeJson",
-    "OfflineRedeemOperationResult",
-    "OfflineRedeemRequest",
-    "OfflineRedeemResult",
-    "OfflineRecursiveSpendBundleJson",
-    "OfflineRecursiveSpendProofJson",
-    "OfflineRecursiveSpendStatementJson",
-    "OfflineRecursiveSpendTransitionJson",
-    "OfflineRedemptionChangeTransitionJson",
-    "OfflineRedemptionChangeTransitionVariantJson",
-    "OfflineRedemptionIntentJson",
-    "OfflineRejectedOperation",
-    "OfflineQueueErrorDetails",
-    "OfflineErrorDetails",
-    "OfflineErrorEnvelope",
-    "OfflineScaledAmount",
-    "OfflineScaledAmountJson",
-    "OfflineSpendableNote",
-    "OfflineSpendableNoteJson",
-    "OfflineSpendBranchJson",
-    "OfflineTopUpAnchor",
-    "OfflineTopUpAnchorReferenceJson",
-    "OfflineTopUpFinalityProof",
-    "OfflineTopUpFinalityProofAnchor",
-    "OfflineTopUpOperationResult",
-    "OfflineTopUpRequest",
-    "OfflineTopUpResult",
-    "OfflineVerifierKeyId",
-    "OfflineVerifierKeyIdJson",
-    "OfflineVerifierStatus",
-    "OfflineUnshieldPublicInputsJson",
-    "OfflineVerifyingKeyJson",
-    "OfflineVerifyingKeyRecordJson",
-    "OfflineVerifiedFoldBundleJson",
-    "OfflineVerifiedFoldRecordBundleJson",
-    "OfflineVerifiedFoldStepJson",
-    "OfflineVerifiedFoldVerifierRecordJson",
     "SubscriptionPlanCreateResult",
     "SubscriptionPlanListItem",
     "SubscriptionPlanListPage",
@@ -15193,14 +15101,14 @@ class ToriiClient(_BaseToriiClient):
         timeout: Optional[float] = 30.0,
         interval: float = 1.0,
     ) -> Mapping[str, Any]:
-        """Register a numeric asset definition and optionally wait for commit."""
+        """Register a quantity asset definition and optionally wait for commit."""
 
         draft = self._transaction_draft(
             chain_id=chain_id,
             authority=authority,
             metadata=transaction_metadata,
         )
-        draft.register_asset_definition_numeric(
+        draft.register_asset_definition(
             definition_id,
             self._native_transaction_account_id(owner, "owner"),
             name=name,
@@ -15221,15 +15129,7 @@ class ToriiClient(_BaseToriiClient):
             interval=interval,
         )
 
-    def register_asset_definition_numeric_and_wait(
-        self,
-        **kwargs: Any,
-    ) -> Mapping[str, Any]:
-        """Alias for :meth:`register_asset_definition_and_wait`."""
-
-        return self.register_asset_definition_and_wait(**kwargs)
-
-    def mint_asset_numeric_and_wait(
+    def mint_asset_quantity_and_wait(
         self,
         *,
         chain_id: str,
@@ -15237,20 +15137,20 @@ class ToriiClient(_BaseToriiClient):
         private_key: Optional[bytes] = None,
         private_key_hex: Optional[str] = None,
         asset_id: str,
-        quantity: Union[str, int, float, Decimal],
+        quantity: QuantityLike,
         transaction_metadata: Optional[Mapping[str, Any]] = None,
         wait: bool = True,
         timeout: Optional[float] = 30.0,
         interval: float = 1.0,
     ) -> Mapping[str, Any]:
-        """Mint a numeric asset balance and optionally wait for commit."""
+        """Mint an exact nominal asset quantity and optionally wait for commit."""
 
         draft = self._transaction_draft(
             chain_id=chain_id,
             authority=authority,
             metadata=transaction_metadata,
         )
-        draft.mint_asset_numeric(
+        draft.mint_asset_quantity(
             self._native_transaction_asset_id(asset_id, "asset_id"),
             quantity,
         )
@@ -15264,11 +15164,11 @@ class ToriiClient(_BaseToriiClient):
         )
 
     def mint_asset_and_wait(self, **kwargs: Any) -> Mapping[str, Any]:
-        """Alias for :meth:`mint_asset_numeric_and_wait`."""
+        """Alias for :meth:`mint_asset_quantity_and_wait`."""
 
-        return self.mint_asset_numeric_and_wait(**kwargs)
+        return self.mint_asset_quantity_and_wait(**kwargs)
 
-    def mint_assets_numeric_and_wait(
+    def mint_assets_quantity_and_wait(
         self,
         *,
         chain_id: str,
@@ -15281,7 +15181,7 @@ class ToriiClient(_BaseToriiClient):
         timeout: Optional[float] = 30.0,
         interval: float = 1.0,
     ) -> Mapping[str, Any]:
-        """Mint multiple numeric asset balances in one transaction."""
+        """Mint multiple exact nominal asset quantities in one transaction."""
 
         draft = self._transaction_draft(
             chain_id=chain_id,
@@ -15298,7 +15198,7 @@ class ToriiClient(_BaseToriiClient):
             )
             if "quantity" not in record:
                 raise TypeError(f"mints[{index}].quantity is required")
-            draft.mint_asset_numeric(
+            draft.mint_asset_quantity(
                 self._native_transaction_asset_id(
                     asset_id,
                     f"mints[{index}].asset_id",
@@ -15318,11 +15218,11 @@ class ToriiClient(_BaseToriiClient):
         )
 
     def mint_assets_and_wait(self, **kwargs: Any) -> Mapping[str, Any]:
-        """Alias for :meth:`mint_assets_numeric_and_wait`."""
+        """Alias for :meth:`mint_assets_quantity_and_wait`."""
 
-        return self.mint_assets_numeric_and_wait(**kwargs)
+        return self.mint_assets_quantity_and_wait(**kwargs)
 
-    def burn_asset_numeric_and_wait(
+    def burn_asset_quantity_and_wait(
         self,
         *,
         chain_id: str,
@@ -15330,20 +15230,20 @@ class ToriiClient(_BaseToriiClient):
         private_key: Optional[bytes] = None,
         private_key_hex: Optional[str] = None,
         asset_id: str,
-        quantity: Union[str, int, float, Decimal],
+        quantity: QuantityLike,
         transaction_metadata: Optional[Mapping[str, Any]] = None,
         wait: bool = True,
         timeout: Optional[float] = 30.0,
         interval: float = 1.0,
     ) -> Mapping[str, Any]:
-        """Burn a numeric asset balance and optionally wait for commit."""
+        """Burn an exact nominal asset quantity and optionally wait for commit."""
 
         draft = self._transaction_draft(
             chain_id=chain_id,
             authority=authority,
             metadata=transaction_metadata,
         )
-        draft.burn_asset_numeric(
+        draft.burn_asset_quantity(
             self._native_transaction_asset_id(asset_id, "asset_id"),
             quantity,
         )
@@ -15357,11 +15257,11 @@ class ToriiClient(_BaseToriiClient):
         )
 
     def burn_asset_and_wait(self, **kwargs: Any) -> Mapping[str, Any]:
-        """Alias for :meth:`burn_asset_numeric_and_wait`."""
+        """Alias for :meth:`burn_asset_quantity_and_wait`."""
 
-        return self.burn_asset_numeric_and_wait(**kwargs)
+        return self.burn_asset_quantity_and_wait(**kwargs)
 
-    def transfer_asset_numeric_and_wait(
+    def transfer_asset_quantity_and_wait(
         self,
         *,
         chain_id: str,
@@ -15369,21 +15269,21 @@ class ToriiClient(_BaseToriiClient):
         private_key: Optional[bytes] = None,
         private_key_hex: Optional[str] = None,
         asset_id: str,
-        quantity: Union[str, int, float, Decimal],
+        quantity: QuantityLike,
         destination: str,
         transaction_metadata: Optional[Mapping[str, Any]] = None,
         wait: bool = True,
         timeout: Optional[float] = 30.0,
         interval: float = 1.0,
     ) -> Mapping[str, Any]:
-        """Transfer a numeric asset balance and optionally wait for commit."""
+        """Transfer an exact nominal asset quantity and optionally wait for commit."""
 
         draft = self._transaction_draft(
             chain_id=chain_id,
             authority=authority,
             metadata=transaction_metadata,
         )
-        draft.transfer_asset_numeric(
+        draft.transfer_asset_quantity(
             self._native_transaction_asset_id(asset_id, "asset_id"),
             quantity,
             self._native_transaction_account_id(destination, "destination"),
@@ -15398,9 +15298,9 @@ class ToriiClient(_BaseToriiClient):
         )
 
     def transfer_asset_and_wait(self, **kwargs: Any) -> Mapping[str, Any]:
-        """Alias for :meth:`transfer_asset_numeric_and_wait`."""
+        """Alias for :meth:`transfer_asset_quantity_and_wait`."""
 
-        return self.transfer_asset_numeric_and_wait(**kwargs)
+        return self.transfer_asset_quantity_and_wait(**kwargs)
 
     def open_asset_lock_and_wait(
         self,
@@ -15412,7 +15312,7 @@ class ToriiClient(_BaseToriiClient):
         escrow_id: str,
         asset_definition_id: str,
         destination: str,
-        amount: Union[str, int, float, Decimal],
+        amount: QuantityLike,
         release_authority: Optional[str] = None,
         expires_at_ms: Optional[int] = None,
         evidence_hashes: Optional[Sequence[Any]] = None,
@@ -15461,7 +15361,7 @@ class ToriiClient(_BaseToriiClient):
         private_key: Optional[bytes] = None,
         private_key_hex: Optional[str] = None,
         escrow_id: str,
-        amount: Union[str, int, float, Decimal],
+        amount: QuantityLike,
         transaction_metadata: Optional[Mapping[str, Any]] = None,
         wait: bool = True,
         timeout: Optional[float] = 30.0,
@@ -15544,7 +15444,7 @@ class ToriiClient(_BaseToriiClient):
             interval=interval,
         )
 
-    def transfer_assets_numeric_and_wait(
+    def transfer_assets_quantity_and_wait(
         self,
         *,
         chain_id: str,
@@ -15557,7 +15457,7 @@ class ToriiClient(_BaseToriiClient):
         timeout: Optional[float] = 30.0,
         interval: float = 1.0,
     ) -> Mapping[str, Any]:
-        """Transfer multiple numeric asset balances in one transaction."""
+        """Transfer multiple exact nominal asset quantities in one transaction."""
 
         draft = self._transaction_draft(
             chain_id=chain_id,
@@ -15578,7 +15478,7 @@ class ToriiClient(_BaseToriiClient):
             )
             if "quantity" not in record:
                 raise TypeError(f"transfers[{index}].quantity is required")
-            draft.transfer_asset_numeric(
+            draft.transfer_asset_quantity(
                 self._native_transaction_asset_id(
                     asset_id,
                     f"transfers[{index}].asset_id",
@@ -15602,9 +15502,9 @@ class ToriiClient(_BaseToriiClient):
         )
 
     def transfer_assets_and_wait(self, **kwargs: Any) -> Mapping[str, Any]:
-        """Alias for :meth:`transfer_assets_numeric_and_wait`."""
+        """Alias for :meth:`transfer_assets_quantity_and_wait`."""
 
-        return self.transfer_assets_numeric_and_wait(**kwargs)
+        return self.transfer_assets_quantity_and_wait(**kwargs)
 
     def register_zk_asset_and_wait(
         self,
@@ -15892,7 +15792,7 @@ class ToriiClient(_BaseToriiClient):
         private_key_hex: Optional[str] = None,
         asset_definition_id: str,
         from_account_id: str,
-        amount: Union[str, int, float, Decimal],
+        amount: QuantityLike,
         note_commitment: Union[str, bytes, bytearray, memoryview],
         ephemeral_public_key: Union[str, bytes, bytearray, memoryview],
         nonce: Union[str, bytes, bytearray, memoryview],
@@ -15978,7 +15878,7 @@ class ToriiClient(_BaseToriiClient):
         private_key_hex: Optional[str] = None,
         asset_definition_id: str,
         to_account_id: str,
-        public_amount: Union[str, int, float, Decimal],
+        public_amount: QuantityLike,
         inputs: Iterable[Union[str, bytes, bytearray, memoryview]],
         proof: Mapping[str, Any],
         outputs: Optional[Iterable[Union[str, bytes, bytearray, memoryview]]] = None,
@@ -16377,7 +16277,7 @@ class ToriiClient(_BaseToriiClient):
         account_id_variants: Optional[Iterable[str]] = None,
         include_taira_prefix_variant: bool = False,
     ) -> Decimal:
-        """Return a numeric asset balance parsed from account asset listings."""
+        """Return an exact canonical quantity parsed from account asset listings."""
 
         definition = _require_non_empty_string(
             asset_definition_id,
@@ -16393,7 +16293,7 @@ class ToriiClient(_BaseToriiClient):
         resolved_account_id, items = result
         for item in items:
             if _asset_entry_matches_definition(item, definition, resolved_account_id):
-                return _quantity_decimal(item.get("quantity", "0"))
+                return _quantity_decimal(item.get("quantity"))
         return Decimal("0")
 
     def get_asset_definition(
