@@ -38,6 +38,16 @@ No cursor-signing key or key-rotation policy applies to this server-side design.
 The identifier is unpredictable, and allocation retries rather than overwriting
 an existing entry if a generated identifier collides.
 
+`live_query_store.capacity` is a hard process-wide bound and
+`live_query_store.capacity_per_user` is a bound for one authority. Torii
+atomically reserves a global slot before it reserves an authority slot or
+allocates an identifier, so concurrent starts on different map shards cannot
+overshoot the configured total. A failed allocation releases both
+reservations, and terminal, explicitly removed, or pruned cursors release their
+slots only after the stored entry has been removed. A start rejected by the
+global limit returns `CapacityLimit`; one rejected by the authority limit
+returns `AuthorityQuotaExceeded`.
+
 ## Authorization
 
 Every `Continue` request is a new signed query request. Torii rechecks the

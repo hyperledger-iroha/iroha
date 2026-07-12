@@ -25,8 +25,8 @@ use iroha_data_model::{
         BlockHeader, SignedBlock,
         consensus_v2::{
             BlockSubject, ConsensusMode, ConsensusRound, DataAvailabilityLayout, DualQuorum,
-            GlobalPhase, HeightContext, PROTOCOL_VERSION, PayloadEncoding, QuorumCertificate,
-            ValidatorPower, finality::V2FinalityArtifact,
+            ExecutionCommitment, GlobalPhase, HeightContext, PROTOCOL_VERSION, PayloadEncoding,
+            QuorumCertificate, ValidatorPower, finality::V2FinalityArtifact,
         },
     },
     bridge::{
@@ -106,6 +106,11 @@ fn exact_v2_fixture(chain_id: ChainId) -> (Arc<SignedBlock>, V2FinalityArtifact)
         block_hash: block.hash(),
         payload_hash: Hash::new(b"Torii exact-v2 bridge payload"),
     };
+    let execution_commitment = ExecutionCommitment::without_topups(
+        Hash::new(b"Torii exact-v2 parent state"),
+        Hash::new(b"Torii exact-v2 post state"),
+        Hash::new(b"Torii exact-v2 ordinary writes"),
+    );
     let mut commit_qc = QuorumCertificate {
         round: ConsensusRound {
             context_id: context.id(),
@@ -114,6 +119,7 @@ fn exact_v2_fixture(chain_id: ChainId) -> (Arc<SignedBlock>, V2FinalityArtifact)
         },
         phase: GlobalPhase::Commit,
         subject,
+        execution_commitment,
         signers: vec![0, 1, 2],
         aggregate_signature: vec![1],
     };

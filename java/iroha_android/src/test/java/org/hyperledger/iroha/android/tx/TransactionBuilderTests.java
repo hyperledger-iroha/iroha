@@ -34,7 +34,6 @@ import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.norito.NoritoCodecAdapter;
 import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
 import org.hyperledger.iroha.android.offline.InMemoryOfflineNoteStore;
-import org.hyperledger.iroha.android.offline.KagemushaInstructionArchives;
 import org.hyperledger.iroha.android.offline.OfflineBearerCashWallet;
 import org.hyperledger.iroha.android.offline.OfflineCashLifecycle;
 import org.hyperledger.iroha.android.offline.OfflineNote;
@@ -64,10 +63,7 @@ public final class TransactionBuilderTests {
     encodeAndSignWithKeyManagerAlias();
     instructionsVariantRoundTrips();
     transactionPayloadRejectsPaddedIdsBeforeSigning();
-    kagemushaInstructionArchivesBuildPayloads();
-    kagemushaInstructionArchivesAcceptAbi7Fixtures();
-    kagemushaInstructionArchivesRejectPaddedIdsBeforeArchiveOrNativeRedeem();
-    kagemushaInstructionArchivesRejectAdversarialInputs();
+    // Retired pre-release Kagemusha ABI-6/7 archive coverage was removed with that surface.
     offlineCashLifecycleAndTransportGuards();
     encodeAndSignEnvelopeWithAttestationBundle();
     encodeAndSignEnvelopeWithAttestationWithoutHardware();
@@ -184,6 +180,7 @@ public final class TransactionBuilderTests {
         "authority must not contain surrounding whitespace");
   }
 
+  /* Retired pre-release Kagemusha ABI-6/7 archive tests.
   private static void kagemushaInstructionArchivesBuildPayloads() {
     final byte[] archive =
         kagemushaArchive(KagemushaInstructionArchives.InstructionType.REDEEM_RECURSIVE);
@@ -480,6 +477,7 @@ public final class TransactionBuilderTests {
         "non-zero header padding must be rejected");
   }
 
+  */
   private static void offlineCashLifecycleAndTransportGuards() throws Exception {
     final OfflineCashLifecycle.TransportCapabilities capabilities =
         new OfflineCashLifecycle.TransportCapabilities(
@@ -879,6 +877,7 @@ public final class TransactionBuilderTests {
     return out;
   }
 
+  /* Retired pre-release Kagemusha ABI-6/7 fixture helpers.
   private static byte[] kagemushaArchive(final KagemushaInstructionArchives.InstructionType type) {
     return NoritoCodec.encode("payload", type.wireName(), NoritoAdapters.stringAdapter());
   }
@@ -926,6 +925,7 @@ public final class TransactionBuilderTests {
     throw new AssertionError("missing shared recursive spend ABI-7 fixture " + fileName);
   }
 
+  */
   private static OfflineNoteWallet testOfflineNoteWallet() {
     return new OfflineNoteWallet(
         "00000042",

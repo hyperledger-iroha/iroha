@@ -63,7 +63,7 @@ final class OfflineNoritoEncodingTests: XCTestCase {
             .toI105(networkPrefix: 0x02F1)
         XCTAssertNotEqual(accountId, singleKeyAccountId)
 
-        let decoded = try OfflineNoteV2Decoding.decodeCertificatePayload(
+        let decoded = try AttestedOfflineNoteDecoding.decodeCertificatePayload(
             try keyCertificatePayloadFrame(
                 accountIdPayload: try compactMultisigAccountId(memberPublicKey: memberPublicKey)
             )
@@ -128,22 +128,22 @@ final class OfflineNoritoEncodingTests: XCTestCase {
 
     private func keyCertificatePayloadFrame(accountIdPayload: Data) throws -> Data {
         var payload = Data()
-        payload.append(compactField(OfflineCompactNorito.encodeString(OfflineNoteV2Constants.keyCertificatePayloadDomain)))
-        payload.append(compactField(OfflineCompactNorito.encodeUInt16(OfflineNoteV2Constants.keyCertificateVersion)))
-        payload.append(compactField(OfflineCompactNorito.encodeString(OfflineNoteV2Constants.iosAppAttestPlatform)))
+        payload.append(compactField(OfflineCompactNorito.encodeString(AttestedOfflineNoteConstants.keyCertificatePayloadDomain)))
+        payload.append(compactField(OfflineCompactNorito.encodeUInt16(AttestedOfflineNoteConstants.keyCertificateVersion)))
+        payload.append(compactField(OfflineCompactNorito.encodeString(AttestedOfflineNoteConstants.iosAppAttestPlatform)))
         payload.append(compactField(OfflineCompactNorito.encodeString("sdk-multisig-key")))
         payload.append(compactField(OfflineCompactNorito.encodeString("sdk-device")))
         payload.append(compactField(accountIdPayload))
         payload.append(compactField(OfflineNorito.encodeBytesVec(Data(repeating: 0x11, count: 32))))
-        payload.append(compactField(OfflineCompactNorito.encodeString(OfflineNoteV2Constants.iosAppAttestAssertionScheme)))
-        payload.append(compactField(OfflineCompactNorito.encodeString(OfflineNoteV2Constants.iosAppAttestAssertionKeyAlgorithm)))
+        payload.append(compactField(OfflineCompactNorito.encodeString(AttestedOfflineNoteConstants.iosAppAttestAssertionScheme)))
+        payload.append(compactField(OfflineCompactNorito.encodeString(AttestedOfflineNoteConstants.iosAppAttestAssertionKeyAlgorithm)))
         payload.append(compactField(OfflineNorito.encodeBytesVec(p256AssertionPublicKey())))
         payload.append(compactField(
             try OfflineCompactNorito.encodeOption(Optional<UInt32>.none, encode: OfflineCompactNorito.encodeUInt32)
         ))
         payload.append(compactField(OfflineNorito.encodeBool(true)))
         return noritoEncode(
-            typeName: OfflineNoteV2TypeNames.keyCertificatePayload,
+            typeName: AttestedOfflineNoteTypeNames.keyCertificatePayload,
             payload: payload,
             flags: 2
         )

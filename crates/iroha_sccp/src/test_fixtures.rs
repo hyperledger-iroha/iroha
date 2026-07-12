@@ -13,8 +13,8 @@ use iroha_data_model::{
     account::AccountId,
     block::consensus_v2::{
         BlockSubject, ConsensusMode, ConsensusRound, DataAvailabilityLayout, DualQuorum,
-        GlobalPhase, HeightContext, PROTOCOL_VERSION, PayloadEncoding, QuorumCertificate,
-        ValidatorPower, finality::V2FinalityArtifact,
+        ExecutionCommitment, GlobalPhase, HeightContext, PROTOCOL_VERSION, PayloadEncoding,
+        QuorumCertificate, ValidatorPower, finality::V2FinalityArtifact,
     },
     bridge::{
         BRIDGE_FINALITY_PROOF_VERSION_V1, BridgeSccpDestinationProofV1,
@@ -315,6 +315,11 @@ pub(crate) fn signed_finality_proof(commitment_root: H256) -> Vec<u8> {
         },
         phase: GlobalPhase::Commit,
         subject,
+        execution_commitment: ExecutionCommitment::without_topups(
+            Hash::new(b"exact SCCP fixture parent state"),
+            Hash::new(b"exact SCCP fixture post state"),
+            Hash::new(b"exact SCCP fixture ordinary writes"),
+        ),
         signers: vec![0, 1, 2],
         aggregate_signature: vec![1],
     };

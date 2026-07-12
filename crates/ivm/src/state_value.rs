@@ -367,9 +367,6 @@ fn validate_state_atom_stream(
     schema: &StateValueSchemaV1,
     atoms: &[StateValueAtomV1],
 ) -> Result<(), VMError> {
-    if !schema.validate_atoms(atoms) {
-        return Err(VMError::DecodeError);
-    }
     let mut node_index = 0;
     let mut atom_index = 0;
     validate_state_atoms_recursive(
@@ -481,7 +478,6 @@ fn decode_validated_state_value_record(
     let record: StateValueRecordV1 =
         decode_from_bytes(payload).map_err(|_| VMError::DecodeError)?;
     if record.schema_hash != state_value_schema_hash_v1(schema_payload)
-        || !schema.validate_atoms(&record.atoms)
         || to_bytes(&record)
             .map_err(|_| VMError::DecodeError)?
             .as_slice()

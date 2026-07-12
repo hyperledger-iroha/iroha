@@ -373,6 +373,10 @@ function capabilities() {
       max_retained_native_trust_anchors_per_lane: 4096,
     },
     resource_limits: {
+      max_outbound_messages_per_block: 512,
+      max_outbound_message_payload_bytes: 4096,
+      max_pending_outbound_messages: 65_536,
+      max_pending_outbound_payload_bytes: 256 * 1024 * 1024,
       max_proofs_per_transaction: 1,
       max_proofs_per_block: 4,
       max_proof_bytes_per_proof: 8 * 1024 * 1024,
@@ -554,9 +558,10 @@ function proofRequest() {
   };
 }
 
-function recentItem(height = 9, id = MESSAGE_ID) {
+function recentItem(height = 9, id = MESSAGE_ID, commitmentIndex = 0) {
   return {
     height,
+    commitment_index: commitmentIndex,
     message_id_hex: id,
     kind: "transfer",
     source_profile: "sora-taira",
@@ -689,6 +694,9 @@ test("capabilities require exact immutable paths and reject all retired discover
   assert.equal(parsed.proof_request_path, capabilities().proof_request_path);
   assert.equal(parsed.registry_limits.max_retained_routes_per_lane, 64);
   assert.equal(parsed.registry_limits.max_retained_native_trust_anchors_per_lane, 4096);
+  assert.equal(parsed.resource_limits.max_outbound_messages_per_block, 512);
+  assert.equal(parsed.resource_limits.max_outbound_message_payload_bytes, 4096);
+  assert.equal(parsed.resource_limits.max_pending_outbound_messages, 65_536);
   assert.equal(parsed.resource_limits.max_bls_signer_contributions_per_transaction, 131713);
   const readOnly = capabilities();
   delete readOnly.proof_submit_path;
@@ -719,6 +727,16 @@ test("capabilities require exact immutable paths and reject all retired discover
   const driftedRegistryLimits = structuredClone(capabilities());
   driftedRegistryLimits.registry_limits.max_retained_routes_per_lane = 65;
   assert.throws(() => normalizeSccpCapabilities(driftedRegistryLimits), /fixed V1 capacities/u);
+  for (const [field, value] of [
+    ["max_outbound_messages_per_block", 511],
+    ["max_outbound_messages_per_block", 513],
+    ["max_outbound_message_payload_bytes", 4095],
+    ["max_outbound_message_payload_bytes", 4097],
+  ]) {
+    const drifted = structuredClone(capabilities());
+    drifted.resource_limits[field] = value;
+    assert.throws(() => normalizeSccpCapabilities(drifted), /fixed V1 capacities/u);
+  }
 });
 
 test("capabilities reject every reversed per-proof, transaction, and block limit relation", () => {
@@ -756,6 +774,8 @@ test("capability integers preserve canonical JSON tokens and the shared exact ra
 
   const boundary = structuredClone(capabilities());
   for (const field of [
+    "max_pending_outbound_messages",
+    "max_pending_outbound_payload_bytes",
     "max_proof_bytes_per_proof",
     "max_proof_bytes_per_transaction",
     "max_proof_bytes_per_block",
@@ -768,6 +788,14 @@ test("capability integers preserve canonical JSON tokens and the shared exact ra
   );
   boundary.resource_limits.max_proof_bytes_per_block = Number.MAX_SAFE_INTEGER + 1;
   assert.throws(() => normalizeSccpCapabilities(boundary), /safe integer/u);
+  for (const field of [
+    "max_pending_outbound_messages",
+    "max_pending_outbound_payload_bytes",
+  ]) {
+    const oversized = structuredClone(capabilities());
+    oversized.resource_limits[field] = Number.MAX_SAFE_INTEGER + 1;
+    assert.throws(() => normalizeSccpCapabilities(oversized), /safe integer/u);
+  }
 });
 
 test("registry checks retained-history caps before traversing attacker-controlled entries", () => {
@@ -1069,8 +1097,46 @@ test("registry accepts zero BN254 limbs but rejects an all-zero point", () => {
 });
 
 test("regenerated SCCP distribution enforces the canonical route commitments", async () => {
-  const { normalizeSccpRegistry: normalizeDistributionRegistry } =
-    await import("../dist/sccp.js");
+  const {
+    normalizeSccpCapabilities: normalizeDistributionCapabilities,
+    normalizeSccpRecentMessages: normalizeDistributionRecentMessages,
+    normalizeSccpRegistry: normalizeDistributionRegistry,
+  } = await import("../dist/sccp.js");
+  const { ToriiClient: DistributionToriiClient } = await import("../dist/toriiClient.js");
+  assert.equal(
+    normalizeDistributionCapabilities(capabilities()).resource_limits
+      .max_pending_outbound_messages,
+    65_536,
+  );
+  assert.deepEqual(
+    normalizeDistributionRecentMessages({
+      items: [recentItem(9, MESSAGE_ID, 7), recentItem(9, HASH(0x12), 8)],
+      next: { from: 9, after_index: 8 },
+    }).next,
+    { from: 9, after_index: 8 },
+  );
+  const observedUrls = [];
+  const distributionClient = new DistributionToriiClient("https://example.invalid", {
+    fetchImpl: async (url) => {
+      observedUrls.push(String(url));
+      return response({ items: [] });
+    },
+  });
+  assert.deepEqual(
+    (await distributionClient.getSccpRecentMessages({
+      from: 9,
+      after_index: 8,
+      limit: 1,
+    })).items,
+    [],
+  );
+  await assert.rejects(
+    () => distributionClient.getSccpRecentMessages({ after_index: 0 }),
+    /requires from/u,
+  );
+  assert.deepEqual(observedUrls, [
+    "https://example.invalid/v1/sccp/messages/recent?from=9&after_index=8&limit=1",
+  ]);
   for (const source of ["bsc-mainnet", "tron-mainnet"]) {
     assert.equal(
       normalizeDistributionRegistry(registry([governedRoute({ source })])).lanes.length,
@@ -1210,9 +1276,28 @@ test("route governance accepts only closed atomic actions and exact field names"
   ]) assert.throws(() => normalizeSccpRouteGovernanceAction(value));
 });
 
-test("recent discovery contains only exact bundle and proof-request links", () => {
-  const parsed = normalizeSccpRecentMessages({ items: [recentItem(9), recentItem(8, HASH(0x12))] });
+test("recent discovery validates compound commitment order, continuation, and exact links", () => {
+  const parsed = normalizeSccpRecentMessages({
+    items: [recentItem(9), recentItem(8, HASH(0x12))],
+    next: { from: 8, after_index: 0 },
+  });
   assert.deepEqual(parsed.items.map(({ height }) => height), [9, 8]);
+  assert.deepEqual(parsed.next, { from: 8, after_index: 0 });
+  const sameHeight = normalizeSccpRecentMessages({
+    items: [
+      recentItem(9, MESSAGE_ID, 509),
+      recentItem(9, HASH(0x12), 510),
+      recentItem(9, HASH(0x13), 511),
+      recentItem(8, HASH(0x14), 0),
+    ],
+  });
+  assert.deepEqual(sameHeight.items.map(({ commitment_index: index }) => index), [509, 510, 511, 0]);
+  assert.equal(sameHeight.next, null);
+  const safeHeight = normalizeSccpRecentMessages({
+    items: [recentItem(Number.MAX_SAFE_INTEGER)],
+    next: { from: Number.MAX_SAFE_INTEGER, after_index: 0 },
+  });
+  assert.equal(safeHeight.items[0].height, Number.MAX_SAFE_INTEGER);
   const retired = recentItem();
   retired.links.artifact_path = `/v1/sccp/artifacts/message/${MESSAGE_ID}`;
   assert.throws(() => normalizeSccpRecentMessages({ items: [retired] }), /retired/u);
@@ -1223,7 +1308,7 @@ test("recent discovery contains only exact bundle and proof-request links", () =
   injection.links.bundle_path += "?allow_unready=true";
   assert.throws(() => normalizeSccpRecentMessages({ items: [injection] }));
   assert.throws(() => normalizeSccpRecentMessages({ items: [recentItem(8), recentItem(9)] }));
-  assert.throws(() => normalizeSccpRecentMessages({ items: [recentItem(), recentItem()] }), /duplicate/u);
+  assert.throws(() => normalizeSccpRecentMessages({ items: [recentItem(), recentItem()] }));
   const oversized = recentItem();
   oversized.amount = (1n << 128n).toString();
   assert.throws(() => normalizeSccpRecentMessages({ items: [oversized] }), /u128/u);
@@ -1259,6 +1344,44 @@ test("recent discovery contains only exact bundle and proof-request links", () =
     const invalidProjection = recentItem();
     mutate(invalidProjection);
     assert.throws(() => normalizeSccpRecentMessages({ items: [invalidProjection] }));
+  }
+  for (const mutate of [
+    (value) => { delete value.commitment_index; },
+    (value) => { value.commitment_index = -1; },
+    (value) => { value.commitment_index = 512; },
+    (value) => { value.commitment_index = 1.5; },
+  ]) {
+    const invalidIndex = recentItem();
+    mutate(invalidIndex);
+    assert.throws(() => normalizeSccpRecentMessages({ items: [invalidIndex] }), /commitment_index/u);
+  }
+  const unsafeHeight = recentItem(Number.MAX_SAFE_INTEGER + 1);
+  assert.throws(
+    () => normalizeSccpRecentMessages({ items: [unsafeHeight] }),
+    /safe integer/u,
+  );
+  for (const items of [
+    [recentItem(9, MESSAGE_ID, 4), recentItem(9, HASH(0x12), 6)],
+    [recentItem(9, MESSAGE_ID, 4), recentItem(9, HASH(0x12), 3)],
+    [recentItem(9, MESSAGE_ID, 4), recentItem(8, HASH(0x12), 1)],
+  ]) {
+    assert.throws(() => normalizeSccpRecentMessages({ items }), /commitment index|indices/u);
+  }
+  for (const response of [
+    { items: [recentItem(9)], next: null },
+    { items: [], next: { from: 9, after_index: 0 } },
+    { items: [recentItem(9, MESSAGE_ID, 3)], next: { from: 9, after_index: 2 } },
+    { items: [recentItem(9, MESSAGE_ID, 3)], next: { from: 8, after_index: 3 } },
+    { items: [recentItem(9, MESSAGE_ID, 3)], next: { from: 0, after_index: 3 } },
+    { items: [recentItem(9, MESSAGE_ID, 3)], next: { from: 9, after_index: -1 } },
+    { items: [recentItem(9, MESSAGE_ID, 3)], next: { from: 9, after_index: 1.5 } },
+    { items: [recentItem(9, MESSAGE_ID, 3)], next: { from: 9, after_index: 512 } },
+    { items: [recentItem(9, MESSAGE_ID, 3)], next: { from: 9, after_index: 3, cursor: 1 } },
+  ]) {
+    assert.throws(
+      () => normalizeSccpRecentMessages(response),
+      /continuation|after_index|unknown|plain object|safe integer/u,
+    );
   }
 });
 
@@ -1554,13 +1677,16 @@ test("Torii exact client constructs fixed query-free endpoints and content negot
     Buffer.from(await client.getSccpProofRequest(MESSAGE_ID, { format: "norito" })),
     proofRequestFrame,
   );
-  assert.deepEqual((await client.getSccpRecentMessages({ from: 9, limit: 1 })).items, []);
+  assert.deepEqual(
+    (await client.getSccpRecentMessages({ from: 9, after_index: 3, limit: 1 })).items,
+    [],
+  );
   assert.deepEqual(observed.map(({ url }) => url), [
     "https://example.invalid/v1/sccp/capabilities",
     "https://example.invalid/v1/sccp/registry",
     `https://example.invalid/v1/sccp/proofs/message/${MESSAGE_ID}`,
     `https://example.invalid/v1/sccp/proof-requests/${MESSAGE_ID}`,
-    "https://example.invalid/v1/sccp/messages/recent?from=9&limit=1",
+    "https://example.invalid/v1/sccp/messages/recent?from=9&after_index=3&limit=1",
   ]);
 });
 
@@ -1785,6 +1911,11 @@ test("Torii exact client rejects path/query injection and retired option aliases
     { from: -1 },
     { from: "1" },
     { from: Number.MAX_SAFE_INTEGER + 1 },
+    { after_index: 0 },
+    { from: 1, after_index: -1 },
+    { from: 1, after_index: 512 },
+    { from: 1, after_index: 1.5 },
+    { from: 1, after_index: "1" },
     { limit: 0 },
     { limit: -1 },
     { limit: 51 },

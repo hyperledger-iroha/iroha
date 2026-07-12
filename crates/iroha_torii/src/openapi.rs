@@ -854,7 +854,7 @@ fn offline_readiness_operation() -> Map {
     operation.insert(
         "description".into(),
         Value::String(
-            "Evaluate offline-payment readiness for one asset definition at a specific committed block. A successfully evaluated but unavailable capability returns 200 with ready=false and typed blockers. A 503 readiness_unavailable response means Torii could not evaluate readiness."
+            "Evaluate offline-payment readiness for one asset definition at a specific committed block. The response binds the live asset scale and active confidential-transfer verifier record to that same height and block hash so clients can cross-check capabilities and release manifests. A successfully evaluated but unavailable capability returns 200 with ready=false and typed blockers. A 503 readiness_unavailable response means Torii could not evaluate readiness."
                 .to_owned(),
         ),
     );
@@ -926,10 +926,15 @@ fn offline_readiness_operation() -> Map {
     responses.insert("401".to_owned(), api_token_unauthorized_response());
     responses.insert("406".to_owned(), offline_not_acceptable_response());
     responses.insert(
+        "429".to_owned(),
+        offline_retryable_error_response(
+            "The readiness request was rejected by an ingress or route rate limit.",
+        ),
+    );
+    responses.insert(
         "503".to_owned(),
-        dual_format_response(
+        offline_retryable_error_response(
             "Torii could not evaluate readiness (readiness_unavailable).",
-            "#/components/schemas/ErrorEnvelope",
         ),
     );
     operation.insert("responses".into(), Value::Object(responses));
@@ -1008,10 +1013,12 @@ fn offline_async_operation(
         ),
         ("503", "The operation cannot currently be accepted."),
     ] {
-        responses.insert(
-            status.to_owned(),
-            dual_format_response(description, "#/components/schemas/ErrorEnvelope"),
-        );
+        let response = if matches!(status, "429" | "503") {
+            offline_retryable_error_response(description)
+        } else {
+            dual_format_response(description, "#/components/schemas/ErrorEnvelope")
+        };
+        responses.insert(status.to_owned(), response);
     }
     responses.insert("406".to_owned(), offline_not_acceptable_response());
     operation.insert("responses".into(), Value::Object(responses));
@@ -1037,7 +1044,7 @@ fn offline_operation_status_operation() -> Map {
     operation.insert(
         "description".into(),
         Value::String(
-            "Return the current tagged state of an accepted top-up or redemption. Pending responses include Retry-After. Pending state can be recovered from the transaction queue, and committed terminal state is resolved through Kura's bounded operation-id index and exact canonical carrier, including its validated merge entry when applicable; the auxiliary admission registry is process-local and eligible for pruning 24 hours after the signed authorization expires. A 503 response means that index reconstruction or the indexed block or merge history is temporarily unavailable."
+            "Return the current tagged state of an accepted top-up or redemption. Pending responses include Retry-After. Pending state can be recovered from the transaction queue, and committed terminal state is resolved through Kura's bounded operation-id index and exact canonical carrier, including its validated merge entry when applicable. The process-local admission registry retains only fixed-size canonical request bindings, shares configured count/byte capacity with in-flight reservations, never capacity-evicts an unexpired binding, and prunes accepted bindings 24 hours after signed authorization expiry. A 503 response means that admission capacity, index reconstruction, or indexed block/merge history is temporarily unavailable."
                 .to_owned(),
         ),
     );
@@ -1080,10 +1087,12 @@ fn offline_operation_status_operation() -> Map {
             "The offline operation index or indexed block body is temporarily unavailable.",
         ),
     ] {
-        responses.insert(
-            status.to_owned(),
-            dual_format_response(description, "#/components/schemas/ErrorEnvelope"),
-        );
+        let response = if matches!(status, "429" | "503") {
+            offline_retryable_error_response(description)
+        } else {
+            dual_format_response(description, "#/components/schemas/ErrorEnvelope")
+        };
+        responses.insert(status.to_owned(), response);
     }
     responses.insert("406".to_owned(), offline_not_acceptable_response());
     operation.insert("responses".into(), Value::Object(responses));
@@ -1128,6 +1137,30 @@ fn offline_not_acceptable_response() -> Value {
             }
         }
     })
+}
+
+fn offline_retryable_error_response(description: &str) -> Value {
+    let mut response = dual_format_response(description, "#/components/schemas/ErrorEnvelope");
+    if let Value::Object(response) = &mut response {
+        response.insert(
+            "headers".into(),
+            norito::json!({
+                "Retry-After": {
+                    "description": "Whole-second retry delay; the ErrorEnvelope retry_after_seconds detail carries the same value.",
+                    "schema": { "type": "integer", "minimum": 0 }
+                },
+                "Cache-Control": {
+                    "description": "Offline failures are not cacheable.",
+                    "schema": { "type": "string", "example": "no-store" }
+                },
+                "Vary": {
+                    "description": "Negotiated response dimension.",
+                    "schema": { "type": "string", "example": "Accept" }
+                }
+            }),
+        );
+    }
+    response
 }
 
 fn api_token_unauthorized_response() -> Value {
@@ -2772,26 +2805,6 @@ fn multisig_paths() -> Map {
         Value::Object(multisig_post_operation(
             "Fetch a multisig proposal.",
             "Resolve a multisig selector and fetch a proposal by `proposal_id` or `instructions_hash`.",
-            "#/components/schemas/MultisigProposalsGetRequest",
-            "#/components/schemas/MultisigProposalGetResponse",
-            "Multisig alias or proposal not found.",
-        )),
-    );
-    paths.insert(
-        "/v1/multisig/proposals/list".to_owned(),
-        Value::Object(multisig_post_operation(
-            "List active multisig proposals (compatibility route).",
-            "Compatibility spelling for `/v1/multisig/proposals/query`; resolve a multisig selector and list nonterminal proposals for the active concrete multisig authority.",
-            "#/components/schemas/MultisigProposalsListRequest",
-            "#/components/schemas/MultisigProposalsListResponse",
-            "Multisig alias not found.",
-        )),
-    );
-    paths.insert(
-        "/v1/multisig/proposals/get".to_owned(),
-        Value::Object(multisig_post_operation(
-            "Fetch a multisig proposal (compatibility route).",
-            "Compatibility spelling for `/v1/multisig/proposals/lookup`; resolve a multisig selector and fetch a proposal by `proposal_id` or `instructions_hash`.",
             "#/components/schemas/MultisigProposalsGetRequest",
             "#/components/schemas/MultisigProposalGetResponse",
             "Multisig alias or proposal not found.",
@@ -7134,7 +7147,8 @@ fn sccp_recent_messages_operation() -> Map {
         "Bridge",
         "List recent finalized SCCP outbound messages.",
         "Returns at most 50 newest messages from the authoritative height-ordered outbound index. \
-         Values outside the documented window are rejected rather than clamped.",
+         Use the returned compound cursor as paired `from` and `after_index` fields; values \
+         outside the documented window and unpaired `after_index` values are rejected.",
         "#/components/schemas/SccpRecentMessagesV1",
         vec![
             bounded_integer_query_param(
@@ -7143,6 +7157,13 @@ fn sccp_recent_messages_operation() -> Map {
                 Some("uint64"),
                 1,
                 None,
+            ),
+            bounded_integer_query_param(
+                "after_index",
+                "Optional last-consumed commitment index at `from`; requires `from` and resumes at the next position.",
+                Some("uint32"),
+                0,
+                Some(511),
             ),
             bounded_integer_query_param(
                 "limit",
@@ -8716,8 +8737,6 @@ fn is_read_operation(method: &str, path: &str) -> bool {
                     | "/v1/multisig/approvals/lookup-for-authority"
                     | "/v1/multisig/approvals/query"
                     | "/v1/multisig/approvals/query-for-authority"
-                    | "/v1/multisig/proposals/get"
-                    | "/v1/multisig/proposals/list"
                     | "/v1/multisig/proposals/lookup"
                     | "/v1/multisig/proposals/query"
                     | "/v1/multisig/spec"
@@ -11336,6 +11355,8 @@ fn sccp_artifact_and_recent_schemas(schemas: &mut Map) {
         norito::json!({
             "type": "object",
             "required": [
+                "max_outbound_messages_per_block", "max_outbound_message_payload_bytes",
+                "max_pending_outbound_messages", "max_pending_outbound_payload_bytes",
                 "max_proofs_per_transaction", "max_proofs_per_block",
                 "max_proof_bytes_per_proof", "max_proof_bytes_per_transaction",
                 "max_proof_bytes_per_block", "max_native_headers_per_transaction",
@@ -11355,6 +11376,10 @@ fn sccp_artifact_and_recent_schemas(schemas: &mut Map) {
             ],
             "additionalProperties": false,
             "properties": {
+                "max_outbound_messages_per_block": { "type": "integer", "const": 512 },
+                "max_outbound_message_payload_bytes": { "type": "integer", "const": 4096 },
+                "max_pending_outbound_messages": { "type": "integer", "minimum": 1, "maximum": json_safe_integer_max },
+                "max_pending_outbound_payload_bytes": { "type": "integer", "minimum": 1, "maximum": json_safe_integer_max },
                 "max_proofs_per_transaction": { "type": "integer", "minimum": 1, "maximum": 4294967295_u64 },
                 "max_proofs_per_block": { "type": "integer", "minimum": 1, "maximum": 4294967295_u64 },
                 "max_proof_bytes_per_proof": { "type": "integer", "minimum": 1, "maximum": json_safe_integer_max },
@@ -11617,11 +11642,28 @@ fn sccp_artifact_and_recent_schemas(schemas: &mut Map) {
         }),
     );
     schemas.insert(
+        "SccpRecentCursorV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["from", "after_index"],
+            "additionalProperties": false,
+            "properties": {
+                "from": {
+                    "type": "integer", "format": "uint64", "minimum": 1,
+                    "maximum": 18446744073709551615_u64
+                },
+                "after_index": {
+                    "type": "integer", "format": "uint32", "minimum": 0, "maximum": 511
+                }
+            }
+        }),
+    );
+    schemas.insert(
         "SccpRecentMessageV1".to_owned(),
         norito::json!({
             "type": "object",
             "required": [
-                "height", "message_id_hex", "kind", "source_profile", "target_profile",
+                "height", "commitment_index", "message_id_hex", "kind", "source_profile", "target_profile",
                 "destination_binding_hash", "route_configuration_hash", "target_domain",
                 "amount", "payload_projection", "links"
             ],
@@ -11630,6 +11672,9 @@ fn sccp_artifact_and_recent_schemas(schemas: &mut Map) {
                 "height": {
                     "type": "integer", "format": "uint64", "minimum": 1,
                     "maximum": 18446744073709551615_u64
+                },
+                "commitment_index": {
+                    "type": "integer", "format": "uint32", "minimum": 0, "maximum": 511
                 },
                 "message_id_hex": { "$ref": "#/components/schemas/SccpHex32" },
                 "kind": { "const": "transfer" },
@@ -11667,8 +11712,9 @@ fn sccp_artifact_and_recent_schemas(schemas: &mut Map) {
                 "items": {
                     "type": "array", "maxItems": 50,
                     "items": { "$ref": "#/components/schemas/SccpRecentMessageV1" },
-                    "description": "Unique messages ordered by descending block height."
-                }
+                    "description": "Unique messages ordered by descending block height and ascending commitment index."
+                },
+                "next": { "$ref": "#/components/schemas/SccpRecentCursorV1" }
             }
         }),
     );
@@ -13947,12 +13993,84 @@ fn openapi_schemas() -> Map {
         }),
     );
     schemas.insert(
+        "OfflineActiveTransferVerifier".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "id", "version", "circuit_id", "commitment",
+                "public_inputs_schema_hash", "max_proof_bytes", "activation_height",
+                "withdrawal_height"
+            ],
+            "properties": {
+                "id": { "$ref": "#/components/schemas/OfflineVerifyingKeyId" },
+                "version": {
+                    "type": "integer",
+                    "format": "uint32",
+                    "minimum": 0,
+                    "description": "Governance-managed monotonic verifier-record version."
+                },
+                "circuit_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Exact confidential-transfer circuit selected at the evaluated block."
+                },
+                "commitment": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$",
+                    "description": "Lowercase 32-byte commitment of the registered verifying key."
+                },
+                "public_inputs_schema_hash": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$",
+                    "description": "Lowercase 32-byte public-input schema hash."
+                },
+                "max_proof_bytes": {
+                    "type": "integer",
+                    "format": "uint32",
+                    "minimum": 1,
+                    "description": "Maximum transfer-proof payload accepted by the active registry record."
+                },
+                "activation_height": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 0,
+                    "description": "Inclusive activation height; zero means active since genesis."
+                },
+                "withdrawal_height": {
+                    "anyOf": [
+                        {
+                            "type": "integer",
+                            "format": "uint64",
+                            "minimum": 1
+                        },
+                        { "type": "null" }
+                    ],
+                    "description": "Exclusive withdrawal height, or null when no withdrawal is scheduled."
+                }
+            }
+        }),
+    );
+    schemas.insert(
         "OfflineReadiness".to_owned(),
         norito::json!({
             "type": "object",
-            "required": ["asset_definition_id", "evaluated_block_height", "evaluated_block_hash", "ready", "blockers"],
+            "required": [
+                "asset_definition_id", "asset_scale", "evaluated_block_height",
+                "evaluated_block_hash", "active_transfer_verifier", "ready", "blockers"
+            ],
             "properties": {
                 "asset_definition_id": { "type": "string" },
+                "asset_scale": {
+                    "anyOf": [
+                        {
+                            "type": "integer",
+                            "format": "uint32",
+                            "minimum": 0
+                        },
+                        { "type": "null" }
+                    ],
+                    "description": "Authoritative live asset-definition scale, including values above the Offline payment limit when asset_scale_unsupported is reported, or null with an asset_scale_unavailable blocker. A ready response always has scale at most 28."
+                },
                 "evaluated_block_height": {
                     "type": "integer",
                     "format": "uint64",
@@ -13963,6 +14081,13 @@ fn openapi_schemas() -> Map {
                     "type": "string",
                     "pattern": "^[0-9a-f]{64}$",
                     "description": "Lowercase hash of the evaluated committed block; clients may bind device-attestation registration to this exact snapshot."
+                },
+                "active_transfer_verifier": {
+                    "anyOf": [
+                        { "$ref": "#/components/schemas/OfflineActiveTransferVerifier" },
+                        { "type": "null" }
+                    ],
+                    "description": "Authoritative active confidential-transfer verifier at the evaluated height, or null with a transfer_verifier_unavailable blocker."
                 },
                 "ready": {
                     "type": "boolean",
@@ -18310,6 +18435,14 @@ mod tests {
         };
         assert_eq!(schema_for("from").get("minimum"), Some(&Value::from(1_u64)));
         assert_eq!(
+            schema_for("after_index").get("minimum"),
+            Some(&Value::from(0_u64))
+        );
+        assert_eq!(
+            schema_for("after_index").get("maximum"),
+            Some(&Value::from(511_u64))
+        );
+        assert_eq!(
             schema_for("limit").get("minimum"),
             Some(&Value::from(1_u64))
         );
@@ -19000,6 +19133,7 @@ mod tests {
             "SccpRegistryV1",
             "SccpMessageBundleV1",
             "SccpProofRequestV1",
+            "SccpRecentCursorV1",
             "SccpRecentMessagesV1",
             "SccpBridgeProofSubmitRequest",
             "SccpBridgeMessageSubmitRequest",
@@ -19034,7 +19168,41 @@ mod tests {
                 .and_then(Value::as_str),
             Some("#/components/schemas/SccpResourceLimitsV1")
         );
-        assert_eq!(required(schema(schemas, "SccpResourceLimitsV1")).len(), 19);
+        let resource_limits = schema(schemas, "SccpResourceLimitsV1");
+        assert_eq!(required(resource_limits).len(), 23);
+        let resource_limit_properties = resource_limits
+            .get("properties")
+            .and_then(Value::as_object)
+            .expect("SCCP resource limit properties");
+        for (field, expected) in [
+            ("max_outbound_messages_per_block", 512_u64),
+            ("max_outbound_message_payload_bytes", 4_096),
+        ] {
+            assert_eq!(
+                resource_limit_properties
+                    .get(field)
+                    .and_then(Value::as_object)
+                    .and_then(|value| value.get("const"))
+                    .and_then(Value::as_u64),
+                Some(expected),
+                "wrong fixed SCCP outbox capability for {field}"
+            );
+        }
+        for field in [
+            "max_pending_outbound_messages",
+            "max_pending_outbound_payload_bytes",
+        ] {
+            let bounds = resource_limit_properties
+                .get(field)
+                .and_then(Value::as_object)
+                .expect("pending SCCP resource-limit schema");
+            assert_eq!(bounds.get("minimum").and_then(Value::as_u64), Some(1));
+            assert_eq!(
+                bounds.get("maximum").and_then(Value::as_u64),
+                Some(iroha_data_model::bridge::SCCP_V1_JSON_SAFE_INTEGER_MAX),
+                "wrong JSON-safe SCCP pending limit bound for {field}"
+            );
+        }
         let registry_limits = schema(schemas, "SccpRegistryLimitsV1")
             .get("properties")
             .and_then(Value::as_object)
@@ -19334,7 +19502,13 @@ mod tests {
                 .keys()
                 .map(String::as_str)
                 .collect::<Vec<_>>(),
-            ["items"]
+            ["items", "next"]
+        );
+        let recent_cursor = schema(schemas, "SccpRecentCursorV1");
+        assert_eq!(required(recent_cursor), ["from", "after_index"]);
+        assert_eq!(
+            recent_cursor.get("additionalProperties"),
+            Some(&Value::Bool(false))
         );
         let recent_message = schema(schemas, "SccpRecentMessageV1");
         assert_eq!(
@@ -19346,6 +19520,7 @@ mod tests {
             recent_message_required,
             [
                 "height",
+                "commitment_index",
                 "message_id_hex",
                 "kind",
                 "source_profile",
@@ -19368,6 +19543,7 @@ mod tests {
                 .collect::<BTreeSet<_>>(),
             BTreeSet::from([
                 "height",
+                "commitment_index",
                 "message_id_hex",
                 "kind",
                 "source_profile",
@@ -19690,8 +19866,8 @@ mod tests {
         assert!(paths.contains_key("/v1/multisig/spec"));
         assert!(paths.contains_key("/v1/multisig/proposals/query"));
         assert!(paths.contains_key("/v1/multisig/proposals/lookup"));
-        assert!(paths.contains_key("/v1/multisig/proposals/list"));
-        assert!(paths.contains_key("/v1/multisig/proposals/get"));
+        assert!(!paths.contains_key("/v1/multisig/proposals/list"));
+        assert!(!paths.contains_key("/v1/multisig/proposals/get"));
         assert!(paths.contains_key("/v1/multisig/approvals/query"));
         assert!(paths.contains_key("/v1/multisig/approvals/lookup"));
         assert!(paths.contains_key("/v1/multisig/approvals/query-for-authority"));
@@ -20008,6 +20184,57 @@ mod tests {
         assert!(
             !readiness.contains_key("additionalProperties"),
             "readiness decoders tolerate and strip unknown future fields"
+        );
+        assert_eq!(
+            component_required(schemas, "OfflineReadiness"),
+            [
+                "asset_definition_id",
+                "asset_scale",
+                "evaluated_block_height",
+                "evaluated_block_hash",
+                "active_transfer_verifier",
+                "ready",
+                "blockers",
+            ]
+        );
+        assert_eq!(
+            nullable_property_ref(schemas, "OfflineReadiness", "active_transfer_verifier"),
+            "#/components/schemas/OfflineActiveTransferVerifier"
+        );
+        let readiness_scale = readiness
+            .get("properties")
+            .and_then(Value::as_object)
+            .and_then(|properties| properties.get("asset_scale"))
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("anyOf"))
+            .and_then(Value::as_array)
+            .and_then(|variants| variants.first())
+            .and_then(Value::as_object)
+            .expect("nullable readiness asset scale");
+        assert_eq!(
+            readiness_scale.get("format").and_then(Value::as_str),
+            Some("uint32")
+        );
+        assert!(
+            !readiness_scale.contains_key("maximum"),
+            "an unsupported live scale must remain decodable with its blocker"
+        );
+        assert_eq!(
+            component_required(schemas, "OfflineActiveTransferVerifier"),
+            [
+                "id",
+                "version",
+                "circuit_id",
+                "commitment",
+                "public_inputs_schema_hash",
+                "max_proof_bytes",
+                "activation_height",
+                "withdrawal_height",
+            ]
+        );
+        assert_eq!(
+            property_ref(schemas, "OfflineActiveTransferVerifier", "id"),
+            "#/components/schemas/OfflineVerifyingKeyId"
         );
         let blocker_code = schemas
             .get("OfflineReadinessBlocker")
@@ -20510,6 +20737,21 @@ mod tests {
                 .and_then(|schema| schema.get("$ref"))
                 .and_then(Value::as_str);
             assert_eq!(schema_ref, Some("#/components/schemas/ErrorEnvelope"));
+
+            for status in ["429", "503"] {
+                let headers = responses
+                    .get(status)
+                    .and_then(Value::as_object)
+                    .and_then(|response| response.get("headers"))
+                    .and_then(Value::as_object)
+                    .unwrap_or_else(|| panic!("offline {status} response headers: {path}"));
+                for header in ["Retry-After", "Cache-Control", "Vary"] {
+                    assert!(
+                        headers.contains_key(header),
+                        "offline {status} must document {header}: {path}"
+                    );
+                }
+            }
         }
 
         let status_responses = paths
@@ -20763,23 +21005,9 @@ mod tests {
             Some("read")
         );
 
-        for (path, canonical_path) in [
-            (
-                "/v1/multisig/proposals/query",
-                "/v1/multisig/proposals/query",
-            ),
-            (
-                "/v1/multisig/proposals/lookup",
-                "/v1/multisig/proposals/lookup",
-            ),
-            (
-                "/v1/multisig/proposals/list",
-                "/v1/multisig/proposals/query",
-            ),
-            (
-                "/v1/multisig/proposals/get",
-                "/v1/multisig/proposals/lookup",
-            ),
+        for path in [
+            "/v1/multisig/proposals/query",
+            "/v1/multisig/proposals/lookup",
         ] {
             let operation = paths
                 .get(path)
@@ -20792,21 +21020,6 @@ mod tests {
                 Some("read"),
                 "{path} must retain unsigned/read semantics"
             );
-            let canonical_operation = paths
-                .get(canonical_path)
-                .and_then(Value::as_object)
-                .and_then(|path| path.get("post"))
-                .and_then(Value::as_object)
-                .unwrap_or_else(|| {
-                    panic!("missing canonical multisig proposal operation: {canonical_path}")
-                });
-            for field in ["tags", "requestBody", "responses"] {
-                assert_eq!(
-                    operation.get(field),
-                    canonical_operation.get(field),
-                    "{path} must match {canonical_path} field {field}"
-                );
-            }
         }
 
         let protected_namespaces = paths
@@ -21927,6 +22140,7 @@ mod tests {
             "SccpRegistryV1",
             "SccpMessageBundleV1",
             "SccpProofRequestV1",
+            "SccpRecentCursorV1",
             "SccpRecentMessagesV1",
             "SccpBridgeProofSubmitRequest",
             "SccpBridgeMessageSubmitRequest",

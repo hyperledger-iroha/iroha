@@ -168,6 +168,7 @@ pub static DOCS: &[crate::syscalls::SyscallDoc] = &[
     crate::syscalls::SyscallDoc { number: 65572, args: "-", ret: "r10=ptr (&NoritoBytes(ContractAddress)) or 0", gas: "asset:gas/G_sysvar@ivm.core/v2 + bytes" },
     crate::syscalls::SyscallDoc { number: 65573, args: "-", ret: "r10=ptr (&Blob(entrypoint)) or 0", gas: "asset:gas/G_sysvar@ivm.core/v2 + bytes" },
     crate::syscalls::SyscallDoc { number: 65574, args: "r10=&NoritoBytes(EntrypointArgumentRecordV1), r11=&NoritoBytes(EntrypointArgumentSchemaV1)", ret: "r10=ptr (&Blob(pad:u8 then [u64; word_count]))", gas: "asset:gas/G_argument_decode@ivm.core/v2 + record + schema + output" },
+    crate::syscalls::SyscallDoc { number: 65575, args: "-", ret: "r10=ptr (&AccountId(contract subject))", gas: "asset:gas/G_sysvar@ivm.core/v2 + bytes" },
     crate::syscalls::SyscallDoc { number: 65584, args: "r10=&Name(prefix), r11=offset:u64, r12=limit:u64 (0..=64)", ret: "r10=ptr (&NoritoBytes(Vec<Name>)), r11=total:u64, r12=count:u64", gas: "asset:gas/G_state_keys@ivm.core/v2 + count + bytes" },
     crate::syscalls::SyscallDoc { number: 65585, args: "r10=&Name(path)", ret: "r10=present:u64", gas: "asset:gas/G_state_has@ivm.core/v2" },
     crate::syscalls::SyscallDoc { number: 65586, args: "r10=&Name(path)", ret: "r10=len:u64, r11=found:u64", gas: "asset:gas/G_state_len@ivm.core/v2 + bytes" },
@@ -234,4 +235,10 @@ pub static DOCS: &[crate::syscalls::SyscallDoc] = &[
     crate::syscalls::SyscallDoc { number: 65891, args: "r10=&Json(any validated region), r11=&Name(key)", ret: "r10=Option<&Int> sum handle", gas: "asset:gas/G_json_get@ivm.core/v2 + input bytes + active payload + sum allocation" },
     crate::syscalls::SyscallDoc { number: 65892, args: "r10=&Json(any validated region), r11=&Name(key)", ret: "r10=Option<&Decimal> sum handle", gas: "asset:gas/G_json_get@ivm.core/v2 + input bytes + active payload + sum allocation" },
     crate::syscalls::SyscallDoc { number: 65893, args: "r10=&Json(any validated region), r11=&Name(key)", ret: "r10=Option<&Quantity> sum handle", gas: "asset:gas/G_json_get@ivm.core/v2 + input bytes + active payload + sum allocation" },
+    crate::syscalls::SyscallDoc { number: 66048, args: "r10=&AccountId, r11=&AssetDefinitionId, r12=frozen:0/1", ret: "u64=0", gas: "asset:gas/G_sci@ivm.core/v2 + bytes" },
+    crate::syscalls::SyscallDoc { number: 66049, args: "r10=&AccountId, r11=&AssetDefinitionId, r12=&Quantity or 0", ret: "u64=0", gas: "asset:gas/G_sci@ivm.core/v2 + bytes" },
+    crate::syscalls::SyscallDoc { number: 66064, args: "r10=&Blob(alias), r11=&AccountId(replacement)", ret: "u64=0", gas: "asset:gas/G_sci@ivm.core/v2 + bytes" },
+    crate::syscalls::SyscallDoc { number: 66065, args: "r10=&Blob(alias)", ret: "u64=0", gas: "asset:gas/G_sci@ivm.core/v2 + bytes" },
+    crate::syscalls::SyscallDoc { number: 66066, args: "r10=&Blob(alias)", ret: "u64=0", gas: "asset:gas/G_sci@ivm.core/v2 + bytes" },
+    crate::syscalls::SyscallDoc { number: 66067, args: "r10=&Blob(alias)", ret: "u64=0", gas: "asset:gas/G_sci@ivm.core/v2 + bytes" },
 ];

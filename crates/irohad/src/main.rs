@@ -2946,6 +2946,11 @@ mod network_relay_tests {
                 round: sample_v2_round(5, 7),
                 phase: consensus_v2::GlobalPhase::Prepare,
                 subject: sample_v2_subject(),
+                execution_commitment: consensus_v2::ExecutionCommitment::without_topups(
+                    Hash::prehashed([0x64; 32]),
+                    Hash::prehashed([0x65; 32]),
+                    Hash::prehashed([0x66; 32]),
+                ),
                 signer: 0,
                 signature: vec![0x64],
             }),

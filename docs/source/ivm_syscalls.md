@@ -14,7 +14,8 @@ Numbering ranges
 - `0x80..=0xFF`: host/crypto helpers and reserved slots; only numbers present in the ABI v1 allowlist are accepted.
 
 Durable helpers (ABI v1)
-- The durable state helper syscalls (0x50–0x5A: STATE_{GET,SET,DEL}, ENCODE/DECODE_INT, BUILD_PATH_*, JSON/SCHEMA encode/decode) are part of the V1 ABI and included in `abi_hash` computation.
+- The allowed durable-state helpers in `0x50..=0x5A` are part of ABI V1 and included in `abi_hash`; pre-release scalar map-path syscall `0x54` is permanently retired and must not be reassigned.
+- The hash also binds the literal `CNTR` marker and framing, nominal contract-interface and state-type schemas, all embedded state-type tags/layouts/canonical samples, the nesting bound and admission rules, and the typed state-value schema/record identities and validation rules.
 - CoreHost wires STATE_{GET,SET,DEL} to WSV-backed durable smart-contract state; dev/test hosts may persist locally but must preserve identical syscall semantics.
 
 Pointer‑ABI calling convention (smart‑contract syscalls)

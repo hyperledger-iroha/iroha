@@ -682,6 +682,17 @@ pub struct HistoryWindowQuery {
     pub limit: Option<u64>,
 }
 
+/// Compound cursor window for newest-first SCCP outbox discovery.
+#[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SccpRecentWindowQuery {
+    /// Inclusive starting height; omitted starts at the newest retained height.
+    pub from: Option<u64>,
+    /// Last commitment index already consumed at `from`.
+    pub after_index: Option<u32>,
+    /// Optional result cap.
+    pub limit: Option<u64>,
+}
+
 /// Apply a height window to a newest-first history vector while clamping to a server cap.
 pub fn clamp_history_window<T, F>(
     items_newest_first: Vec<T>,
@@ -6125,7 +6136,6 @@ pub(crate) async fn handle_v1_bridge_finality_bundle(
 fn map_bridge_finality_error(err: iroha_core::bridge::BridgeFinalityError) -> Error {
     match err {
         iroha_core::bridge::BridgeFinalityError::InvalidHeight(_)
-        | iroha_core::bridge::BridgeFinalityError::BlockNotFound(_)
         | iroha_core::bridge::BridgeFinalityError::FinalityArtifactNotFound(_) => {
             Error::Query(iroha_data_model::ValidationFail::QueryFailed(
                 iroha_data_model::query::error::QueryExecutionFail::NotFound,
@@ -6232,13 +6242,13 @@ pub fn reject_sccp_query(raw_query: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-/// Parse the only two canonical query fields accepted by recent-message discovery.
-pub fn parse_sccp_recent_query(raw_query: Option<&str>) -> Result<HistoryWindowQuery> {
+/// Parse the canonical compound cursor accepted by recent-message discovery.
+pub fn parse_sccp_recent_query(raw_query: Option<&str>) -> Result<SccpRecentWindowQuery> {
     const RECENT_SCCP_MESSAGES_CAP: u64 = 50;
     const MAX_CANONICAL_QUERY_BYTES: usize = 64;
 
     let Some(query) = raw_query.filter(|query| !query.is_empty()) else {
-        return Ok(HistoryWindowQuery::default());
+        return Ok(SccpRecentWindowQuery::default());
     };
     if query.len() > MAX_CANONICAL_QUERY_BYTES {
         return Err(sccp_bad_request(
@@ -6246,7 +6256,7 @@ pub fn parse_sccp_recent_query(raw_query: Option<&str>) -> Result<HistoryWindowQ
         ));
     }
     let mut seen = BTreeSet::new();
-    let mut window = HistoryWindowQuery::default();
+    let mut window = SccpRecentWindowQuery::default();
     for segment in query.split('&') {
         if segment.is_empty() {
             return Err(sccp_bad_request(
@@ -6258,9 +6268,9 @@ pub fn parse_sccp_recent_query(raw_query: Option<&str>) -> Result<HistoryWindowQ
                 "recent SCCP query fields must use canonical `key=value` syntax",
             ));
         };
-        if !matches!(key, "from" | "limit") {
+        if !matches!(key, "from" | "after_index" | "limit") {
             return Err(sccp_bad_request(format!(
-                "recent SCCP query field `{key}` is not supported; only `from` and `limit` are allowed"
+                "recent SCCP query field `{key}` is not supported; only `from`, `after_index`, and `limit` are allowed"
             )));
         }
         if !seen.insert(key) {
@@ -6295,7 +6305,22 @@ pub fn parse_sccp_recent_query(raw_query: Option<&str>) -> Result<HistoryWindowQ
                     "recent SCCP query field `limit` must be between 1 and {RECENT_SCCP_MESSAGES_CAP}"
                 )));
             }
+            "after_index"
+                if parsed
+                    >= u64::from(
+                        iroha_data_model::bridge::SCCP_OUTBOUND_MESSAGES_MAX_PER_BLOCK_V1,
+                    ) =>
+            {
+                return Err(sccp_bad_request(format!(
+                    "recent SCCP query field `after_index` must be between 0 and {}",
+                    iroha_data_model::bridge::SCCP_OUTBOUND_MESSAGES_MAX_PER_BLOCK_V1 - 1
+                )));
+            }
             "from" => window.from = Some(parsed),
+            "after_index" => {
+                window.after_index =
+                    Some(u32::try_from(parsed).expect("bounded SCCP cursor index fits u32"));
+            }
             "limit" => window.limit = Some(parsed),
             _ => {
                 return Err(sccp_bad_request(
@@ -6303,6 +6328,11 @@ pub fn parse_sccp_recent_query(raw_query: Option<&str>) -> Result<HistoryWindowQ
                 ));
             }
         }
+    }
+    if window.after_index.is_some() && window.from.is_none() {
+        return Err(sccp_bad_request(
+            "recent SCCP query field `after_index` requires the paired `from` height",
+        ));
     }
     Ok(window)
 }
@@ -6348,6 +6378,14 @@ pub struct SccpRegistryLimitsDto {
 #[norito(deny_unknown_fields)]
 /// Consensus-critical SCCP proof and deterministic verifier-work limits.
 pub struct SccpResourceLimitsDto {
+    /// Maximum successful outbound SCCP messages committed by one block.
+    pub max_outbound_messages_per_block: u32,
+    /// Maximum canonical payload bytes retained by one outbound SCCP message.
+    pub max_outbound_message_payload_bytes: u64,
+    /// Maximum payload-bearing outbound messages awaiting destination proof acceptance.
+    pub max_pending_outbound_messages: u64,
+    /// Maximum canonical outbound payload bytes awaiting destination proof acceptance.
+    pub max_pending_outbound_payload_bytes: u64,
     /// Maximum closed SCCP proofs in one transaction.
     pub max_proofs_per_transaction: u32,
     /// Maximum closed SCCP proofs committed in one block.
@@ -6416,6 +6454,14 @@ impl SccpRegistryLimitsDto {
 impl From<iroha_config::parameters::actual::Sccp> for SccpResourceLimitsDto {
     fn from(sccp: iroha_config::parameters::actual::Sccp) -> Self {
         Self {
+            max_outbound_messages_per_block:
+                iroha_data_model::bridge::SCCP_OUTBOUND_MESSAGES_MAX_PER_BLOCK_V1,
+            max_outbound_message_payload_bytes: u64::try_from(
+                iroha_data_model::bridge::SCCP_OUTBOUND_MESSAGE_MAX_PAYLOAD_BYTES_V1,
+            )
+            .expect("SCCP outbound payload bound fits u64"),
+            max_pending_outbound_messages: sccp.max_pending_outbound_messages.get(),
+            max_pending_outbound_payload_bytes: sccp.max_pending_outbound_payload_bytes.get(),
             max_proofs_per_transaction: sccp.max_proofs_per_transaction.get(),
             max_proofs_per_block: sccp.max_proofs_per_block.get(),
             max_proof_bytes_per_proof: sccp.max_proof_bytes_per_proof.get(),
@@ -6508,6 +6554,8 @@ pub struct SccpRecentMessageLinksDto {
 pub struct SccpRecentMessageDto {
     /// Finalized SORA block height containing the message.
     pub height: u64,
+    /// Zero-based position in that block's finalized SCCP commitment tree.
+    pub commitment_index: u32,
     /// Hex-encoded canonical SCCP message identifier.
     pub message_id_hex: String,
     /// Stable closed payload kind.
@@ -6542,27 +6590,43 @@ pub struct SccpRecentMessageDto {
     pub links: SccpRecentMessageLinksDto,
 }
 
+#[derive(
+    Clone, Copy, Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,
+)]
+#[norito(deny_unknown_fields)]
+/// Compound continuation for SCCP recent-message discovery.
+pub struct SccpRecentCursorDto {
+    /// Height of the last item returned by the current page.
+    pub from: u64,
+    /// Commitment index of the last item returned by the current page.
+    pub after_index: u32,
+}
+
 #[derive(Clone, Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
 #[norito(deny_unknown_fields)]
 /// Newest-first SCCP recent-message discovery response.
 pub struct SccpRecentMessagesDto {
     /// Finalized outbound messages selected by the ordered consensus index.
     pub items: Vec<SccpRecentMessageDto>,
+    /// Continuation to pass back as paired `from` and `after_index` fields.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub next: Option<SccpRecentCursorDto>,
 }
 
 #[derive(Clone, Debug)]
 struct SccpIndexedOutboundRecord {
     key: iroha_data_model::bridge::SccpOutboundMessageKeyV1,
-    record: iroha_data_model::bridge::SccpOutboundMessageRecordV1,
+    descriptor: iroha_data_model::bridge::SccpOutboundMessageDescriptorV1,
 }
 
 fn validate_sccp_indexed_outbound_record(
     message_id: [u8; 32],
     key: iroha_data_model::bridge::SccpOutboundMessageKeyV1,
-    record: iroha_data_model::bridge::SccpOutboundMessageRecordV1,
+    descriptor: iroha_data_model::bridge::SccpOutboundMessageDescriptorV1,
     ordered_index_present: bool,
 ) -> Result<SccpIndexedOutboundRecord> {
-    if key.message_id != message_id || !record.is_well_formed_for_key(&key) {
+    if key.message_id != message_id || !descriptor.is_well_formed_for_key(&key) {
         return Err(sccp_internal_error(format!(
             "global SCCP locator for {} names a malformed or different outbound record",
             hex::encode(message_id)
@@ -6574,7 +6638,7 @@ fn validate_sccp_indexed_outbound_record(
             hex::encode(message_id)
         )));
     }
-    Ok(SccpIndexedOutboundRecord { key, record })
+    Ok(SccpIndexedOutboundRecord { key, descriptor })
 }
 
 fn sccp_indexed_outbound_record(
@@ -6582,23 +6646,37 @@ fn sccp_indexed_outbound_record(
     message_id: [u8; 32],
 ) -> Result<Option<SccpIndexedOutboundRecord>> {
     let world = state.world_view();
-    let Some((key, record)) = world.sccp_outbound_message_by_id(&message_id) else {
-        return Ok(None);
-    };
-    let key = *key;
-    let record = record.clone();
-    let expected_index = iroha_data_model::bridge::SccpOutboundMessageIndexKeyV1::new(key, &record)
-        .ok_or_else(|| {
+    let Some((key, descriptor)) = world
+        .sccp_outbound_message_descriptor_by_id(&message_id)
+        .map_err(|reason| {
             sccp_internal_error(format!(
-                "outbound SCCP record {} cannot form its ordered index key",
+                "failed to resolve global SCCP descriptor {}: {reason}",
                 hex::encode(message_id)
             ))
-        })?;
+        })?
+    else {
+        return Ok(None);
+    };
+    if !descriptor.is_well_formed_for_key(&key) {
+        return Err(sccp_internal_error(format!(
+            "outbound SCCP descriptor {} is malformed",
+            hex::encode(message_id)
+        )));
+    }
+    let expected_index =
+        iroha_data_model::bridge::SccpOutboundMessageIndexKeyV1::from_descriptor(key, descriptor);
+    let expected_index = expected_index.ok_or_else(|| {
+        sccp_internal_error(format!(
+            "outbound SCCP descriptor {} cannot form its ordered index key",
+            hex::encode(message_id)
+        ))
+    })?;
     let ordered_index_present = world
         .sccp_outbound_message_index()
         .get(&expected_index)
         .is_some();
-    validate_sccp_indexed_outbound_record(message_id, key, record, ordered_index_present).map(Some)
+    validate_sccp_indexed_outbound_record(message_id, key, descriptor, ordered_index_present)
+        .map(Some)
 }
 
 fn sccp_historical_route_for_record<'a>(
@@ -6606,7 +6684,7 @@ fn sccp_historical_route_for_record<'a>(
     indexed: &SccpIndexedOutboundRecord,
 ) -> Result<&'a iroha_data_model::bridge::SccpGovernedRouteV1> {
     let by_binding = registry
-        .historical_route_by_destination_binding(indexed.record.destination_binding_hash)
+        .historical_route_by_destination_binding(indexed.descriptor.destination_binding_hash)
         .ok_or_else(|| {
             sccp_internal_error(format!(
                 "outbound SCCP message {} names no retained destination binding",
@@ -6614,7 +6692,7 @@ fn sccp_historical_route_for_record<'a>(
             ))
         })?;
     let by_configuration = registry
-        .historical_route_by_configuration(indexed.record.route_configuration_hash)
+        .historical_route_by_configuration(indexed.descriptor.route_configuration_hash)
         .ok_or_else(|| {
             sccp_internal_error(format!(
                 "outbound SCCP message {} names no retained route configuration",
@@ -6628,9 +6706,9 @@ fn sccp_historical_route_for_record<'a>(
     if by_binding.key() != by_configuration.key()
         || expected_outbound_lane != indexed.key.lane
         || by_binding.destination_binding_hash().ok()
-            != Some(indexed.record.destination_binding_hash)
+            != Some(indexed.descriptor.destination_binding_hash)
         || by_binding.route_configuration_hash().ok()
-            != Some(indexed.record.route_configuration_hash)
+            != Some(indexed.descriptor.route_configuration_hash)
     {
         return Err(sccp_internal_error(format!(
             "outbound SCCP message {} aliases two governed routes or a different exact lane",
@@ -6770,7 +6848,7 @@ mod sccp_first_release_api_tests {
     fn indexed_fixture() -> (
         [u8; 32],
         iroha_data_model::bridge::SccpOutboundMessageKeyV1,
-        iroha_data_model::bridge::SccpOutboundMessageRecordV1,
+        iroha_data_model::bridge::SccpOutboundPendingMessageRecordV1,
     ) {
         let exact = iroha_sccp::sccp_exact_outbound_test_fixture_v1();
         let message_id = exact.bundle.commitment.message_id;
@@ -6779,13 +6857,14 @@ mod sccp_first_release_api_tests {
             message_id,
         )
         .expect("valid indexed fixture key");
-        let record = iroha_data_model::bridge::SccpOutboundMessageRecordV1 {
+        let record = iroha_data_model::bridge::SccpOutboundPendingMessageRecordV1 {
             destination_binding_hash: exact.bundle.commitment.context.destination_binding_hash,
             route_configuration_hash: exact.bundle.commitment.context.route_configuration_hash,
             payload_hash: exact.bundle.commitment.payload_hash,
             payload_bytes: iroha_sccp::canonical_sccp_payload_bytes(&exact.bundle.payload)
                 .expect("canonical exact outbound payload"),
             recorded_at_height: 9,
+            commitment_index: 0,
         };
         (message_id, key, record)
     }
@@ -6837,6 +6916,8 @@ mod sccp_first_release_api_tests {
             Some("from=7"),
             Some("limit=50"),
             Some("from=7&limit=50"),
+            Some("from=7&after_index=0"),
+            Some("from=7&after_index=511&limit=50"),
         ] {
             assert!(validate_sccp_recent_query(valid).is_ok());
         }
@@ -6852,12 +6933,20 @@ mod sccp_first_release_api_tests {
                 .limit,
             Some(50)
         );
+        assert_eq!(
+            parse_sccp_recent_query(Some("from=7&after_index=12"))
+                .expect("canonical compound recent cursor")
+                .after_index,
+            Some(12)
+        );
         for invalid in [
             "network_id_hex=00",
             "proof_bytes_hex=00",
             "allow_unready=true",
             "from=1&from=2",
             "limit=1&limit=2",
+            "after_index=0",
+            "from=1&after_index=0&after_index=1",
             "from=1&&limit=2",
             "f%72om=1",
             "from=1&",
@@ -6871,6 +6960,9 @@ mod sccp_first_release_api_tests {
             "limit=0",
             "limit=51",
             "limit=18446744073709551615",
+            "from=1&after_index=512",
+            "from=1&after_index=01",
+            "from=1&after_index=+1",
         ] {
             assert!(
                 validate_sccp_recent_query(Some(invalid)).is_err(),
@@ -6885,17 +6977,25 @@ mod sccp_first_release_api_tests {
 
         let state = empty_taira_state();
         for window in [
-            HistoryWindowQuery {
+            SccpRecentWindowQuery {
                 from: Some(0),
+                after_index: None,
                 limit: Some(1),
             },
-            HistoryWindowQuery {
+            SccpRecentWindowQuery {
                 from: Some(1),
+                after_index: None,
                 limit: Some(0),
             },
-            HistoryWindowQuery {
+            SccpRecentWindowQuery {
                 from: Some(1),
+                after_index: None,
                 limit: Some(51),
+            },
+            SccpRecentWindowQuery {
+                from: None,
+                after_index: Some(0),
+                limit: Some(1),
             },
         ] {
             assert!(
@@ -6908,43 +7008,37 @@ mod sccp_first_release_api_tests {
     #[test]
     fn locator_record_validation_rejects_tamper_and_missing_index() {
         let (message_id, key, record) = indexed_fixture();
-        assert!(
-            validate_sccp_indexed_outbound_record(message_id, key, record.clone(), true).is_ok()
-        );
+        let descriptor = record.descriptor();
+        assert!(validate_sccp_indexed_outbound_record(message_id, key, descriptor, true).is_ok());
 
         let wrong_id = [0x12; 32];
-        assert!(
-            validate_sccp_indexed_outbound_record(wrong_id, key, record.clone(), true).is_err()
-        );
-        assert!(
-            validate_sccp_indexed_outbound_record(message_id, key, record.clone(), false).is_err()
-        );
+        assert!(validate_sccp_indexed_outbound_record(wrong_id, key, descriptor, true).is_err());
+        assert!(validate_sccp_indexed_outbound_record(message_id, key, descriptor, false).is_err());
 
         for hostile in [
-            iroha_data_model::bridge::SccpOutboundMessageRecordV1 {
+            iroha_data_model::bridge::SccpOutboundMessageDescriptorV1 {
                 destination_binding_hash: [0; 32],
-                ..record.clone()
+                ..descriptor
             },
-            iroha_data_model::bridge::SccpOutboundMessageRecordV1 {
-                route_configuration_hash: record.destination_binding_hash,
-                ..record.clone()
+            iroha_data_model::bridge::SccpOutboundMessageDescriptorV1 {
+                route_configuration_hash: descriptor.destination_binding_hash,
+                ..descriptor
             },
-            iroha_data_model::bridge::SccpOutboundMessageRecordV1 {
-                payload_hash: record.route_configuration_hash,
-                ..record.clone()
+            iroha_data_model::bridge::SccpOutboundMessageDescriptorV1 {
+                payload_hash: descriptor.route_configuration_hash,
+                ..descriptor
             },
-            iroha_data_model::bridge::SccpOutboundMessageRecordV1 {
+            iroha_data_model::bridge::SccpOutboundMessageDescriptorV1 {
                 recorded_at_height: 0,
-                ..record.clone()
+                ..descriptor
             },
-            iroha_data_model::bridge::SccpOutboundMessageRecordV1 {
-                payload_bytes: Vec::new(),
-                ..record.clone()
+            iroha_data_model::bridge::SccpOutboundMessageDescriptorV1 {
+                commitment_index: iroha_data_model::bridge::SCCP_OUTBOUND_MESSAGES_MAX_PER_BLOCK_V1,
+                ..descriptor
             },
         ] {
             assert!(
-                validate_sccp_indexed_outbound_record(message_id, key, hostile.clone(), true)
-                    .is_err(),
+                validate_sccp_indexed_outbound_record(message_id, key, hostile, true).is_err(),
                 "malformed durable record must reject: {hostile:?}"
             );
         }
@@ -6968,6 +7062,7 @@ mod sccp_first_release_api_tests {
             assert!(
                 history.insert(iroha_data_model::bridge::SccpOutboundMessageIndexKeyV1 {
                     recorded_at_height: height,
+                    commitment_index: 0,
                     lane,
                     message_id,
                 })
@@ -6999,6 +7094,74 @@ mod sccp_first_release_api_tests {
             selected
                 .iter()
                 .all(|entry| entry.recorded_at_height <= FROM)
+        );
+    }
+
+    #[test]
+    fn recent_compound_cursor_pages_all_512_same_height_entries_once() {
+        use std::collections::BTreeSet;
+
+        const HEIGHT: u64 = 42;
+        const LIMIT: usize = 50;
+        let lane = iroha_data_model::bridge::SccpLaneIdV1 {
+            source: iroha_data_model::bridge::SccpNetworkV1::SoraTaira,
+            target: iroha_data_model::bridge::SccpNetworkV1::EthereumSepolia,
+        };
+        let mut history = BTreeSet::new();
+        for commitment_index in 0..iroha_data_model::bridge::SCCP_OUTBOUND_MESSAGES_MAX_PER_BLOCK_V1
+        {
+            let mut message_id = [0_u8; 32];
+            message_id[..4].copy_from_slice(&(commitment_index + 1).to_le_bytes());
+            assert!(
+                history.insert(iroha_data_model::bridge::SccpOutboundMessageIndexKeyV1 {
+                    recorded_at_height: HEIGHT,
+                    commitment_index,
+                    lane,
+                    message_id,
+                })
+            );
+        }
+
+        let mut after = None;
+        let mut observed = Vec::new();
+        let mut pages = 0;
+        loop {
+            let start = after.map_or_else(
+                || {
+                    iroha_data_model::bridge::SccpOutboundMessageIndexKeyV1::range_start_at_or_before(
+                        HEIGHT,
+                    )
+                },
+                |index| {
+                    iroha_data_model::bridge::SccpOutboundMessageIndexKeyV1::range_start_after(
+                        HEIGHT, index,
+                    )
+                    .expect("valid same-height cursor")
+                },
+            );
+            let selected = history
+                .range(start..)
+                .take(LIMIT + 1)
+                .copied()
+                .collect::<Vec<_>>();
+            let has_more = selected.len() > LIMIT;
+            let page = selected.into_iter().take(LIMIT).collect::<Vec<_>>();
+            if page.is_empty() {
+                break;
+            }
+            pages += 1;
+            observed.extend(page.iter().map(|entry| entry.commitment_index));
+            if !has_more {
+                break;
+            }
+            after = page.last().map(|entry| entry.commitment_index);
+        }
+
+        assert_eq!(pages, 11);
+        assert_eq!(
+            observed,
+            (0..iroha_data_model::bridge::SCCP_OUTBOUND_MESSAGES_MAX_PER_BLOCK_V1)
+                .collect::<Vec<_>>()
         );
     }
 
@@ -7107,6 +7270,30 @@ mod sccp_first_release_api_tests {
             state.zk_snapshot().sccp.max_proofs_per_transaction.get()
         );
         assert_eq!(
+            capabilities.resource_limits.max_outbound_messages_per_block,
+            512
+        );
+        assert_eq!(
+            capabilities
+                .resource_limits
+                .max_outbound_message_payload_bytes,
+            4_096
+        );
+        assert_eq!(
+            capabilities.resource_limits.max_pending_outbound_messages,
+            state.zk_snapshot().sccp.max_pending_outbound_messages.get()
+        );
+        assert_eq!(
+            capabilities
+                .resource_limits
+                .max_pending_outbound_payload_bytes,
+            state
+                .zk_snapshot()
+                .sccp
+                .max_pending_outbound_payload_bytes
+                .get()
+        );
+        assert_eq!(
             capabilities
                 .resource_limits
                 .max_bls_signer_contributions_per_block,
@@ -7123,6 +7310,12 @@ mod sccp_first_release_api_tests {
                 "required SCCP capability limit surface is missing: {required}"
             );
         }
+        for required in [
+            "max_pending_outbound_messages",
+            "max_pending_outbound_payload_bytes",
+        ] {
+            assert!(encoded.contains(required), "missing SCCP limit {required}");
+        }
         for retired in ["manifests", "artifacts", "jobs", "allow_unready"] {
             assert!(
                 !encoded.contains(retired),
@@ -7132,30 +7325,35 @@ mod sccp_first_release_api_tests {
     }
 
     #[test]
-    fn recent_projection_survives_missing_historical_block_body() {
+    fn recent_projection_fails_closed_without_immutable_finality_archive() {
         let state = empty_taira_state();
         let (message_id, key, record) = indexed_fixture();
         state
             .insert_sccp_outbound_message_for_testing(key, record)
             .expect("insert exact indexed fixture");
 
-        let recent = collect_recent_sccp_messages(
+        let error = collect_recent_sccp_messages(
             &state,
-            &HistoryWindowQuery {
+            &SccpRecentWindowQuery {
                 from: None,
+                after_index: None,
                 limit: Some(1),
             },
         )
-        .expect("durable outbox projection must not depend on historical block bodies");
-        assert_eq!(recent.items.len(), 1);
-        assert_eq!(recent.items[0].message_id_hex, hex::encode(message_id));
+        .expect_err("recent readback requires immutable retained-header finality and archive");
+        assert!(
+            error
+                .to_string()
+                .contains("finality artifact for height 9 not found"),
+            "unexpected missing-archive error: {error}"
+        );
 
         let error = sccp_message_bundle_for_request(&state, message_id)
-            .expect_err("proof material still requires its finalized block body");
+            .expect_err("proof material still requires an exact retained-header finality record");
         let Error::Query(iroha_data_model::ValidationFail::InternalError(message)) = error else {
             panic!("unexpected missing-block error: {error}");
         };
-        assert!(message.contains("finalized block body is unavailable"));
+        assert!(message.contains("finality artifact for height 9 not found"));
     }
 
     #[tokio::test]
@@ -7589,170 +7787,23 @@ fn build_sccp_finality_proof_bytes(
     })
 }
 
-fn validate_sccp_durable_outbox_record(
-    state: &CoreState,
-    height: u64,
-    message: &iroha_core::bridge::RecordedSccpMessage,
+fn validate_archived_sccp_message_descriptor(
+    indexed: &SccpIndexedOutboundRecord,
+    message: &iroha_core::bridge::ValidatedSccpOutboundMessageProjectionV1,
 ) -> Result<()> {
-    let key = iroha_data_model::bridge::SccpOutboundMessageKeyV1::new(
-        message.context.lane,
-        message.commitment.message_id,
-    )
-    .ok_or_else(|| sccp_internal_error("committed SCCP message has an invalid exact replay key"))?;
-    let record = state.sccp_outbound_message_record(&key).ok_or_else(|| {
-        sccp_internal_error(format!(
-            "committed SCCP message {} has no durable outbox record",
-            hex::encode(key.message_id)
-        ))
-    })?;
-    if !record.is_well_formed_for_key(&key)
-        || record.destination_binding_hash != message.context.destination_binding_hash
-        || record.route_configuration_hash != message.context.route_configuration_hash
-        || record.payload_hash != message.commitment.payload_hash
-        || record.recorded_at_height != height
+    if message.commitment_index != indexed.descriptor.commitment_index
+        || message.commitment.message_id != indexed.key.message_id
+        || message.context.lane != indexed.key.lane
+        || message.context.destination_binding_hash != indexed.descriptor.destination_binding_hash
+        || message.context.route_configuration_hash != indexed.descriptor.route_configuration_hash
+        || message.commitment.payload_hash != indexed.descriptor.payload_hash
     {
         return Err(sccp_internal_error(format!(
-            "durable outbox record for SCCP message {} does not match its committed lane, binding, route configuration, payload, and height",
-            hex::encode(key.message_id)
+            "SCCP message {} disagrees with its authenticated commitment index, lane, binding, route configuration, or payload",
+            hex::encode(indexed.key.message_id)
         )));
     }
     Ok(())
-}
-
-struct ValidatedSccpBlockMessages {
-    commitment_root: [u8; 32],
-    messages: Vec<iroha_core::bridge::RecordedSccpMessage>,
-    positions: BTreeMap<[u8; 32], usize>,
-}
-
-fn validate_sccp_block_messages(
-    state: &CoreState,
-    height: u64,
-    block: &iroha_data_model::block::SignedBlock,
-    indexed_records: &[SccpIndexedOutboundRecord],
-) -> Result<Option<ValidatedSccpBlockMessages>> {
-    if indexed_records.is_empty() {
-        return Ok(None);
-    }
-    if indexed_records
-        .iter()
-        .any(|indexed| indexed.record.recorded_at_height != height)
-    {
-        return Err(sccp_internal_error(format!(
-            "SCCP block group mixes records outside height {height}"
-        )));
-    }
-
-    let messages = iroha_core::bridge::collect_sccp_messages_from_signed_block(block);
-    for recorded in &messages {
-        validate_sccp_durable_outbox_record(state, height, recorded)?;
-    }
-    let Some(commitment_root) = iroha_core::bridge::sccp_commitment_root_from_messages(&messages)
-    else {
-        return Err(sccp_internal_error(format!(
-            "failed to reconstruct SCCP commitment root for block {height}"
-        )));
-    };
-    let Some(anchored_root) = block.header().sccp_commitment_root() else {
-        return Err(sccp_internal_error(format!(
-            "SCCP message {} is present in block {height}, but the finalized block header does not anchor an SCCP commitment root",
-            hex::encode(indexed_records[0].key.message_id)
-        )));
-    };
-    if anchored_root != commitment_root {
-        return Err(sccp_internal_error(format!(
-            "finalized block {height} anchors SCCP root 0x{}, but committed SCCP messages reconstruct to 0x{}",
-            hex::encode(anchored_root),
-            hex::encode(commitment_root)
-        )));
-    }
-
-    let mut positions = BTreeMap::new();
-    for (index, message) in messages.iter().enumerate() {
-        if positions
-            .insert(message.commitment.message_id, index)
-            .is_some()
-        {
-            return Err(sccp_internal_error(format!(
-                "finalized block {height} contains a duplicate SCCP message identifier {}",
-                hex::encode(message.commitment.message_id)
-            )));
-        }
-    }
-    Ok(Some(ValidatedSccpBlockMessages {
-        commitment_root,
-        messages,
-        positions,
-    }))
-}
-
-fn reconstruct_sccp_message_bundles_from_block(
-    state: &CoreState,
-    height: u64,
-    block: &iroha_data_model::block::SignedBlock,
-    indexed_records: &[SccpIndexedOutboundRecord],
-) -> Result<Vec<TairaSccpMessageProofV1>> {
-    let Some(validated) = validate_sccp_block_messages(state, height, block, indexed_records)?
-    else {
-        return Ok(Vec::new());
-    };
-    let commitment_root = validated.commitment_root;
-    let messages = validated.messages;
-    let message_positions = validated.positions;
-    let commitments = messages
-        .iter()
-        .map(|message| message.commitment.clone())
-        .collect::<Vec<_>>();
-    let finality_proof = iroha_core::bridge::build_finality_proof(state, height)
-        .map_err(map_bridge_finality_error)?;
-    let finality_proof_bytes = build_sccp_finality_proof_bytes(&finality_proof, commitment_root)?;
-
-    let mut bundles = Vec::with_capacity(indexed_records.len());
-    for indexed in indexed_records {
-        let index = *message_positions
-            .get(&indexed.key.message_id)
-            .ok_or_else(|| {
-                sccp_internal_error(format!(
-                    "SCCP message {} is indexed at height {height}, but that block contains no matching successful record",
-                    hex::encode(indexed.key.message_id)
-                ))
-            })?;
-        let message = &messages[index];
-        if sccp_message_source_domain(&message.payload) != iroha_sccp::SCCP_DOMAIN_SORA {
-            return Err(sccp_bad_request(
-                "SCCP transparent proof readback is reserved for SORA-origin messages; inbound messages use protocol-native admission",
-            ));
-        }
-        let merkle_proof =
-            iroha_sccp::commitment_merkle_proof(&commitments, index).ok_or_else(|| {
-                sccp_internal_error(format!(
-                    "failed to derive SCCP Merkle proof for message {} in block {height}",
-                    hex::encode(message.commitment.message_id)
-                ))
-            })?;
-        let bundle = TairaSccpMessageProofV1 {
-            version: 1,
-            commitment_root,
-            commitment: message.commitment.clone(),
-            merkle_proof,
-            payload: message.payload.clone(),
-            finality_proof: finality_proof_bytes.clone(),
-        };
-        if bundle.commitment.context.lane != indexed.key.lane
-            || bundle.commitment.context.destination_binding_hash
-                != indexed.record.destination_binding_hash
-            || bundle.commitment.context.route_configuration_hash
-                != indexed.record.route_configuration_hash
-            || bundle.commitment.payload_hash != indexed.record.payload_hash
-        {
-            return Err(sccp_internal_error(format!(
-                "SCCP message {} disagrees with its indexed lane, destination binding, route configuration, or payload",
-                hex::encode(indexed.key.message_id)
-            )));
-        }
-        bundles.push(bundle);
-    }
-    Ok(bundles)
 }
 
 fn reconstruct_sccp_message_bundles_from_indexed_records(
@@ -7762,32 +7813,64 @@ fn reconstruct_sccp_message_bundles_from_indexed_records(
     let Some(first) = indexed_records.first() else {
         return Ok(Vec::new());
     };
-    let recorded_at_height = first.record.recorded_at_height;
-    let height = usize::try_from(recorded_at_height).map_err(|_| {
-        sccp_internal_error(format!(
-            "SCCP message {} records a block height that is not representable on this host",
-            hex::encode(first.key.message_id)
-        ))
-    })?;
-    let height_nz = NonZeroUsize::new(height).ok_or_else(|| {
-        sccp_internal_error(format!(
-            "SCCP message {} records forbidden block height zero",
-            hex::encode(first.key.message_id)
-        ))
-    })?;
-    let block = state.block_by_height(height_nz).ok_or_else(|| {
-        sccp_internal_error(format!(
-            "SCCP message {} is indexed at height {}, but the finalized block body is unavailable",
-            hex::encode(first.key.message_id),
-            recorded_at_height
-        ))
-    })?;
-    reconstruct_sccp_message_bundles_from_block(
-        state,
-        recorded_at_height,
-        block.as_ref(),
-        indexed_records,
-    )
+    let height = first.descriptor.recorded_at_height;
+    if indexed_records
+        .iter()
+        .any(|indexed| indexed.descriptor.recorded_at_height != height)
+    {
+        return Err(sccp_internal_error(format!(
+            "SCCP proof request mixes records outside height {height}"
+        )));
+    }
+    let finalized = iroha_core::bridge::validated_sccp_finalized_messages_at_height(state, height)
+        .map_err(|reason| sccp_internal_error(reason))?
+        .ok_or_else(|| {
+            sccp_internal_error(format!(
+                "SCCP message {} is indexed at height {height}, but the finalized projection is empty",
+                hex::encode(first.key.message_id)
+            ))
+        })?;
+    let commitments = finalized
+        .messages
+        .iter()
+        .map(|message| message.commitment.clone())
+        .collect::<Vec<_>>();
+    let finality_proof_bytes =
+        build_sccp_finality_proof_bytes(&finalized.finality_proof, finalized.commitment_root)?;
+    let mut bundles = Vec::with_capacity(indexed_records.len());
+    for indexed in indexed_records {
+        let index = usize::try_from(indexed.descriptor.commitment_index)
+            .expect("bounded SCCP commitment index fits usize");
+        let message = finalized.messages.get(index).ok_or_else(|| {
+            sccp_internal_error(format!(
+                "SCCP message {} names absent commitment index {} at height {height}",
+                hex::encode(indexed.key.message_id),
+                indexed.descriptor.commitment_index
+            ))
+        })?;
+        validate_archived_sccp_message_descriptor(indexed, message)?;
+        if sccp_message_source_domain(&message.payload) != iroha_sccp::SCCP_DOMAIN_SORA {
+            return Err(sccp_bad_request(
+                "SCCP transparent proof readback is reserved for SORA-origin messages; inbound messages use protocol-native admission",
+            ));
+        }
+        let merkle_proof =
+            iroha_sccp::commitment_merkle_proof(&commitments, index).ok_or_else(|| {
+                sccp_internal_error(format!(
+                    "failed to derive SCCP Merkle proof for message {} at height {height}",
+                    hex::encode(indexed.key.message_id)
+                ))
+            })?;
+        bundles.push(TairaSccpMessageProofV1 {
+            version: 1,
+            commitment_root: finalized.commitment_root,
+            commitment: message.commitment.clone(),
+            merkle_proof,
+            payload: message.payload.clone(),
+            finality_proof: finality_proof_bytes.clone(),
+        });
+    }
+    Ok(bundles)
 }
 
 fn reconstruct_sccp_message_bundle_from_indexed_record(
@@ -7940,6 +8023,7 @@ fn recent_message_entry_from_projection(
     let amount = recent_message_projection_amount(&payload_projection);
     Ok(SccpRecentMessageDto {
         height,
+        commitment_index: message.commitment_index,
         message_id_hex: message_id_hex.clone(),
         kind: sccp_message_payload_kind_key(&message.payload).to_owned(),
         source_profile: context.lane.source.profile_key().to_owned(),
@@ -7967,49 +8051,55 @@ fn take_bounded_recent_sccp_index_keys(
 }
 
 fn recent_sccp_entries_from_indexed_records(
+    state: &CoreState,
     indexed_records: &[SccpIndexedOutboundRecord],
 ) -> Result<Vec<SccpRecentMessageDto>> {
     let mut entries = Vec::with_capacity(indexed_records.len());
-    for indexed in indexed_records {
-        let message = iroha_core::bridge::validate_sccp_outbound_message_record_v1(
-            &indexed.key,
-            &indexed.record,
-        )
-        .ok_or_else(|| {
-            sccp_internal_error(format!(
-                "SCCP message {} has malformed canonical payload evidence in its authoritative outbox record",
-                hex::encode(indexed.key.message_id)
-            ))
-        })?;
-        if sccp_message_source_domain(&message.payload) != iroha_sccp::SCCP_DOMAIN_SORA {
-            return Err(sccp_bad_request(
-                "SCCP recent readback is reserved for SORA-origin messages; inbound messages use protocol-native admission",
-            ));
+    let mut offset = 0;
+    while offset < indexed_records.len() {
+        let height = indexed_records[offset].descriptor.recorded_at_height;
+        let end = indexed_records[offset..]
+            .iter()
+            .position(|indexed| indexed.descriptor.recorded_at_height != height)
+            .map_or(indexed_records.len(), |relative| offset + relative);
+        let finalized =
+            iroha_core::bridge::validated_sccp_finalized_messages_at_height(state, height)
+                .map_err(sccp_internal_error)?
+                .ok_or_else(|| {
+                    sccp_internal_error(format!(
+                        "SCCP recent index at height {height} names an empty finalized projection"
+                    ))
+                })?;
+        for indexed in &indexed_records[offset..end] {
+            let index = usize::try_from(indexed.descriptor.commitment_index)
+                .expect("bounded SCCP commitment index fits usize");
+            let message = finalized.messages.get(index).ok_or_else(|| {
+                sccp_internal_error(format!(
+                    "SCCP recent message {} names absent commitment index {} at height {height}",
+                    hex::encode(indexed.key.message_id),
+                    indexed.descriptor.commitment_index,
+                ))
+            })?;
+            validate_archived_sccp_message_descriptor(indexed, message)?;
+            if sccp_message_source_domain(&message.payload) != iroha_sccp::SCCP_DOMAIN_SORA {
+                return Err(sccp_bad_request(
+                    "SCCP recent readback is reserved for SORA-origin messages; inbound messages use protocol-native admission",
+                ));
+            }
+            entries.push(recent_message_entry_from_projection(
+                height,
+                indexed.key.message_id,
+                message,
+            )?);
         }
-        if message.commitment.context.lane != indexed.key.lane
-            || message.commitment.context.destination_binding_hash
-                != indexed.record.destination_binding_hash
-            || message.commitment.context.route_configuration_hash
-                != indexed.record.route_configuration_hash
-            || message.commitment.payload_hash != indexed.record.payload_hash
-        {
-            return Err(sccp_internal_error(format!(
-                "SCCP message {} disagrees with its indexed lane, destination binding, route configuration, or payload",
-                hex::encode(indexed.key.message_id)
-            )));
-        }
-        entries.push(recent_message_entry_from_projection(
-            indexed.record.recorded_at_height,
-            indexed.key.message_id,
-            &message,
-        )?);
+        offset = end;
     }
     Ok(entries)
 }
 
 fn collect_recent_sccp_messages(
     state: &CoreState,
-    window: &HistoryWindowQuery,
+    window: &SccpRecentWindowQuery,
 ) -> Result<SccpRecentMessagesDto> {
     const RECENT_SCCP_MESSAGES_CAP: usize = 50;
 
@@ -8017,6 +8107,19 @@ fn collect_recent_sccp_messages(
         return Err(sccp_bad_request(
             "recent SCCP query field `from` must be a positive block height",
         ));
+    }
+    if window.after_index.is_some() && window.from.is_none() {
+        return Err(sccp_bad_request(
+            "recent SCCP query field `after_index` requires the paired `from` height",
+        ));
+    }
+    if window.after_index.is_some_and(|index| {
+        index >= iroha_data_model::bridge::SCCP_OUTBOUND_MESSAGES_MAX_PER_BLOCK_V1
+    }) {
+        return Err(sccp_bad_request(format!(
+            "recent SCCP query field `after_index` must be between 0 and {}",
+            iroha_data_model::bridge::SCCP_OUTBOUND_MESSAGES_MAX_PER_BLOCK_V1 - 1
+        )));
     }
     if window
         .limit
@@ -8037,21 +8140,29 @@ fn collect_recent_sccp_messages(
     // large history.
     let selected = {
         let world = state.world_view();
-        let start =
+        let start = if let Some(after_index) = window.after_index {
+            iroha_data_model::bridge::SccpOutboundMessageIndexKeyV1::range_start_after(
+                through_height,
+                after_index,
+            )
+            .ok_or_else(|| sccp_bad_request("invalid SCCP recent compound cursor"))?
+        } else {
             iroha_data_model::bridge::SccpOutboundMessageIndexKeyV1::range_start_at_or_before(
                 through_height,
-            );
+            )
+        };
         take_bounded_recent_sccp_index_keys(
             world
                 .sccp_outbound_message_index()
                 .range(start..)
                 .map(|(index_key, _)| *index_key),
-            limit,
+            limit.saturating_add(1),
         )
     };
 
-    let mut indexed_records = Vec::with_capacity(selected.len());
-    for index_key in selected {
+    let has_more = selected.len() > limit;
+    let mut indexed_records = Vec::with_capacity(selected.len().min(limit));
+    for index_key in selected.into_iter().take(limit) {
         let indexed =
             sccp_indexed_outbound_record(state, index_key.message_id)?.ok_or_else(|| {
                 sccp_internal_error(format!(
@@ -8059,8 +8170,10 @@ fn collect_recent_sccp_messages(
                     hex::encode(index_key.message_id)
                 ))
             })?;
-        if index_key.message_key() != indexed.key
-            || index_key.recorded_at_height != indexed.record.recorded_at_height
+        if iroha_data_model::bridge::SccpOutboundMessageIndexKeyV1::from_descriptor(
+            indexed.key,
+            indexed.descriptor,
+        ) != Some(index_key)
         {
             return Err(sccp_internal_error(format!(
                 "ordered SCCP index entry {} disagrees with its authoritative outbound record",
@@ -8070,14 +8183,21 @@ fn collect_recent_sccp_messages(
         indexed_records.push(indexed);
     }
 
-    let items = recent_sccp_entries_from_indexed_records(&indexed_records)?;
+    let items = recent_sccp_entries_from_indexed_records(state, &indexed_records)?;
     if items.len() != indexed_records.len() {
         return Err(sccp_internal_error(
             "SCCP recent-message outbox projection returned an incomplete page",
         ));
     }
 
-    Ok(SccpRecentMessagesDto { items })
+    let next = has_more
+        .then_some(indexed_records.last())
+        .flatten()
+        .map(|last| SccpRecentCursorDto {
+            from: last.descriptor.recorded_at_height,
+            after_index: last.descriptor.commitment_index,
+        });
+    Ok(SccpRecentMessagesDto { items, next })
 }
 
 /// GET /v1/sccp/proofs/message/{message_id} — SORA-origin SCCP message bundle.
@@ -8138,7 +8258,7 @@ pub async fn handle_v1_sccp_capabilities(
 #[iroha_futures::telemetry_future]
 pub(crate) async fn handle_v1_sccp_messages_recent(
     state: Arc<CoreState>,
-    window: HistoryWindowQuery,
+    window: SccpRecentWindowQuery,
     format: crate::utils::ResponseFormat,
     admission: crate::QueryAdmissionPermit,
 ) -> Result<Response> {
@@ -13354,11 +13474,7 @@ fn encode_contract_state_pointer_tlv_bytes(
     let (type_id, payload) = match ty {
         ivm::EmbeddedStateType::Int => {
             let value = raw.parse::<iroha_primitives::bigint::BigInt>().ok()?;
-            let frame = iroha_primitives::numeric_abi::IntValueV1::try_new(value)
-                .ok()?
-                .encode_frame()
-                .ok()?;
-            (PointerType::Int, frame)
+            return ivm::numeric_tlv::encode_int(&value).ok();
         }
         ivm::EmbeddedStateType::Decimal => {
             let value = raw
@@ -13366,11 +13482,7 @@ fn encode_contract_state_pointer_tlv_bytes(
                 .ok()?
                 .canonicalize_decimal()
                 .ok()?;
-            let frame = iroha_primitives::numeric_abi::DecimalValueV1::try_from_numeric(value)
-                .ok()?
-                .encode_frame()
-                .ok()?;
-            (PointerType::Decimal, frame)
+            return ivm::numeric_tlv::encode_decimal(&value).ok();
         }
         ivm::EmbeddedStateType::Quantity => {
             let value = raw
@@ -13378,11 +13490,8 @@ fn encode_contract_state_pointer_tlv_bytes(
                 .ok()?
                 .canonicalize_decimal()
                 .ok()?;
-            let quantity = iroha_primitives::numeric::Quantity::try_from_numeric(value).ok()?;
-            let frame = iroha_primitives::numeric_abi::QuantityValueV1::new(quantity)
-                .encode_frame()
-                .ok()?;
-            (PointerType::Quantity, frame)
+            let value = iroha_primitives::numeric::Quantity::try_from_numeric(value).ok()?;
+            return ivm::numeric_tlv::encode_quantity(&value).ok();
         }
         ivm::EmbeddedStateType::Name => {
             let value: iroha_data_model::name::Name = raw.parse().ok()?;
@@ -13514,30 +13623,8 @@ fn decode_contract_state_scalar_json(
 
     match ty {
         ivm::EmbeddedStateType::Int => {
-            if tlv.type_id != PointerType::Int {
-                return Err("expected Int payload for int state".into());
-            }
-            let value = iroha_primitives::numeric_abi::IntValueV1::decode_frame(payload)
-                .map_err(|err| format!("decode int: {err}"))?
-                .into_int();
-            Ok(norito::json::Value::from(value.to_string()))
-        }
-        ivm::EmbeddedStateType::Decimal => {
-            if tlv.type_id != PointerType::Decimal {
-                return Err("expected Decimal payload for decimal state".into());
-            }
-            let value = iroha_primitives::numeric_abi::DecimalValueV1::decode_frame(payload)
-                .map_err(|err| format!("decode decimal: {err}"))?
-                .into_numeric();
-            Ok(norito::json::Value::from(value.to_string()))
-        }
-        ivm::EmbeddedStateType::Quantity => {
-            if tlv.type_id != PointerType::Quantity {
-                return Err("expected Quantity payload for quantity state".into());
-            }
-            let value = iroha_primitives::numeric_abi::QuantityValueV1::decode_frame(payload)
-                .map_err(|err| format!("decode quantity: {err}"))?
-                .into_quantity();
+            let value = ivm::numeric_tlv::decode_int_bytes(bytes)
+                .map_err(|err| format!("decode int: {err}"))?;
             Ok(norito::json::Value::from(value.to_string()))
         }
         ivm::EmbeddedStateType::Bool => {
@@ -13547,6 +13634,16 @@ fn decode_contract_state_scalar_json(
             let value: i64 =
                 norito::decode_from_bytes(payload).map_err(|err| format!("decode bool: {err}"))?;
             Ok(norito::json::Value::from(value != 0))
+        }
+        ivm::EmbeddedStateType::Decimal => {
+            let value = ivm::numeric_tlv::decode_decimal_bytes(bytes)
+                .map_err(|err| format!("decode decimal: {err}"))?;
+            Ok(norito::json::Value::from(value.to_string()))
+        }
+        ivm::EmbeddedStateType::Quantity => {
+            let value = ivm::numeric_tlv::decode_quantity_bytes(bytes)
+                .map_err(|err| format!("decode quantity: {err}"))?;
+            Ok(norito::json::Value::from(value.to_string()))
         }
         ivm::EmbeddedStateType::Json => {
             let payload = decode_contract_state_pointer_payload(bytes, PointerType::Json, "Json")?;
@@ -14383,6 +14480,69 @@ mod contract_state_tests {
             decoded,
             norito::json::Value::from("9223372036854775000".to_owned())
         );
+    }
+
+    #[test]
+    fn contract_state_map_key_suffix_uses_canonical_numeric_pointer_envelopes() {
+        let int = "42"
+            .parse::<iroha_primitives::bigint::BigInt>()
+            .expect("parse int");
+        let decimal = "7.00"
+            .parse::<iroha_primitives::numeric::Numeric>()
+            .expect("parse decimal")
+            .canonicalize_decimal()
+            .expect("canonical decimal");
+        let quantity = iroha_primitives::numeric::Quantity::try_from_numeric(decimal.clone())
+            .expect("canonical quantity");
+
+        for (ty, raw, expected) in [
+            (
+                ivm::EmbeddedStateType::Int,
+                "42",
+                ivm::numeric_tlv::encode_int(&int).expect("encode int"),
+            ),
+            (
+                ivm::EmbeddedStateType::Decimal,
+                "7.00",
+                ivm::numeric_tlv::encode_decimal(&decimal).expect("encode decimal"),
+            ),
+            (
+                ivm::EmbeddedStateType::Quantity,
+                "7.00",
+                ivm::numeric_tlv::encode_quantity(&quantity).expect("encode quantity"),
+            ),
+        ] {
+            let expected = hex::encode(expected);
+            assert_eq!(
+                contract_state_stored_map_key_suffix(&ty, raw).as_deref(),
+                Some(expected.as_str())
+            );
+        }
+    }
+
+    #[test]
+    fn decode_contract_state_scalar_json_supports_decimal_and_quantity() {
+        let decimal = "123.450"
+            .parse::<iroha_primitives::numeric::Numeric>()
+            .expect("parse decimal")
+            .canonicalize_decimal()
+            .expect("canonical decimal");
+        let quantity = iroha_primitives::numeric::Quantity::try_from_numeric(decimal.clone())
+            .expect("canonical quantity");
+
+        let decimal_json = decode_contract_state_scalar_json(
+            &ivm::numeric_tlv::encode_decimal(&decimal).expect("encode decimal"),
+            &ivm::EmbeddedStateType::Decimal,
+        )
+        .expect("decode decimal");
+        let quantity_json = decode_contract_state_scalar_json(
+            &ivm::numeric_tlv::encode_quantity(&quantity).expect("encode quantity"),
+            &ivm::EmbeddedStateType::Quantity,
+        )
+        .expect("decode quantity");
+
+        assert_eq!(decimal_json, Value::from(decimal.to_string()));
+        assert_eq!(quantity_json, Value::from(quantity.to_string()));
     }
 
     #[test]
@@ -15620,7 +15780,7 @@ fn prepare_bridge_proof_submit(
             )
         })?;
     if destination_proof.route_configuration_hash
-        != material.indexed.record.route_configuration_hash
+        != material.indexed.descriptor.route_configuration_hash
     {
         return Err(conversion_error(
             "destination proof route configuration differs from the finalized outbound record"
@@ -15643,7 +15803,7 @@ fn prepare_bridge_proof_submit(
     let range_start_height = bridge_proof.range.start_height;
     let range_end_height = bridge_proof.range.end_height;
     let route_configuration_hash_hex =
-        hex::encode(material.indexed.record.route_configuration_hash);
+        hex::encode(material.indexed.descriptor.route_configuration_hash);
     let backend = bridge_proof.backend_label();
 
     let prepared = if direct_submit {
@@ -17016,7 +17176,7 @@ fn execute_contract_view(
         message: error.to_string(),
         vm_diagnostic: None,
     })?;
-    let live_alias = resolve_exact_contract_runtime_alias(
+    let _live_alias = resolve_exact_contract_runtime_alias(
         &query_view.world,
         contract_address,
         contract_alias,
@@ -17054,13 +17214,17 @@ fn execute_contract_view(
         authority.clone(),
         query_view.accounts_snapshot(),
     );
-    host.bind_prevalidated_contract_runtime_context(
-        contract_address.clone(),
-        live_alias,
+    host.bind_deployed_contract_runtime_context(
+        &query_view,
+        contract_address,
         program.code_hash,
-        selector.to_owned(),
-        runtime_permission,
-    );
+        program.prepared_contract(),
+        selector,
+    )
+    .map_err(|error| ContractViewExecutionError {
+        message: error.to_string(),
+        vm_diagnostic: None,
+    })?;
     let arguments = prepare_contract_argument_record(
         program.prepared_contract(),
         selector,
@@ -17183,7 +17347,7 @@ fn execute_contract_call_simulation(
         gas_used: 0,
         queued_instructions: Vec::new(),
     })?;
-    let live_alias = resolve_exact_contract_runtime_alias(
+    let _live_alias = resolve_exact_contract_runtime_alias(
         &query_view.world,
         contract_address,
         contract_alias,
@@ -17234,13 +17398,20 @@ fn execute_contract_call_simulation(
         authority.clone(),
         query_view.accounts_snapshot(),
     );
-    host.bind_prevalidated_contract_runtime_context(
-        contract_address.clone(),
-        live_alias,
+    host.bind_deployed_contract_runtime_context(
+        &query_view,
+        contract_address,
         program.code_hash,
-        selector.to_owned(),
-        runtime_permission,
-    );
+        program.prepared_contract(),
+        selector,
+    )
+    .map_err(|error| ContractCallSimulationError {
+        message: error.to_string(),
+        vm_diagnostic: None,
+        normalized_payload: normalized_payload.clone(),
+        gas_used: 0,
+        queued_instructions: Vec::new(),
+    })?;
     let arguments = prepare_contract_argument_record(
         program.prepared_contract(),
         selector,
@@ -50700,9 +50871,7 @@ pub fn stream_resume_unsupported_response() -> Response {
     );
     response
         .extensions_mut()
-        .insert(crate::utils::HttpErrorCode::new(
-            "stream_resume_unsupported",
-        ));
+        .insert(crate::ReviewedProtocolNativeError::StreamResumeUnsupported);
     response
 }
 
@@ -59513,9 +59682,15 @@ mod sse_stream_tests {
         assert_eq!(
             response
                 .extensions()
+                .get::<crate::ReviewedProtocolNativeError>(),
+            Some(&crate::ReviewedProtocolNativeError::StreamResumeUnsupported)
+        );
+        assert!(
+            response
+                .extensions()
                 .get::<crate::utils::HttpErrorCode>()
-                .map(crate::utils::HttpErrorCode::as_str),
-            Some("stream_resume_unsupported")
+                .is_none(),
+            "the response boundary assigns the public error code after validation"
         );
         assert_eq!(
             response

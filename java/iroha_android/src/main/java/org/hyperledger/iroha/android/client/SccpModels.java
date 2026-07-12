@@ -10,6 +10,15 @@ import org.hyperledger.iroha.android.sccp.SccpNetworkV1;
 
 /** Immutable DTOs for the closed exact first-release SCCP API. */
 public final class SccpModels {
+  /** Fixed maximum number of successful outbound SCCP messages in one V1 block. */
+  public static final int SCCP_OUTBOUND_MESSAGES_MAX_PER_BLOCK_V1 = 512;
+
+  /** Fixed maximum retained canonical payload size for one V1 outbound SCCP message. */
+  public static final int SCCP_OUTBOUND_MESSAGE_MAX_PAYLOAD_BYTES_V1 = 4_096;
+
+  private static final BigInteger U64_MAX =
+      BigInteger.ONE.shiftLeft(64).subtract(BigInteger.ONE);
+
   private SccpModels() {}
 
   /** The sole payload admitted by SCCP V1. */
@@ -51,6 +60,10 @@ public final class SccpModels {
 
   /** Consensus-critical SCCP proof and deterministic verifier-work limits. */
   public static final class ResourceLimits {
+    public final long maxOutboundMessagesPerBlock;
+    public final BigInteger maxOutboundMessagePayloadBytes;
+    public final BigInteger maxPendingOutboundMessages;
+    public final BigInteger maxPendingOutboundPayloadBytes;
     public final long maxProofsPerTransaction;
     public final long maxProofsPerBlock;
     public final BigInteger maxProofBytesPerProof;
@@ -72,6 +85,10 @@ public final class SccpModels {
     public final long maxBn254PairingChecksPerBlock;
 
     ResourceLimits(
+        final long maxOutboundMessagesPerBlock,
+        final BigInteger maxOutboundMessagePayloadBytes,
+        final BigInteger maxPendingOutboundMessages,
+        final BigInteger maxPendingOutboundPayloadBytes,
         final long maxProofsPerTransaction,
         final long maxProofsPerBlock,
         final BigInteger maxProofBytesPerProof,
@@ -91,6 +108,10 @@ public final class SccpModels {
         final long maxBlsSignerContributionsPerBlock,
         final long maxBn254PairingChecksPerTransaction,
         final long maxBn254PairingChecksPerBlock) {
+      this.maxOutboundMessagesPerBlock = maxOutboundMessagesPerBlock;
+      this.maxOutboundMessagePayloadBytes = maxOutboundMessagePayloadBytes;
+      this.maxPendingOutboundMessages = maxPendingOutboundMessages;
+      this.maxPendingOutboundPayloadBytes = maxPendingOutboundPayloadBytes;
       this.maxProofsPerTransaction = maxProofsPerTransaction;
       this.maxProofsPerBlock = maxProofsPerBlock;
       this.maxProofBytesPerProof = maxProofBytesPerProof;
@@ -316,7 +337,8 @@ public final class SccpModels {
   }
 
   public static final class RecentMessage {
-    public final long height;
+    public final BigInteger height;
+    public final int commitmentIndex;
     public final String messageIdHex;
     public final String sourceProfile;
     public final String targetProfile;
@@ -331,7 +353,8 @@ public final class SccpModels {
     public final RecentMessageLinks links;
 
     RecentMessage(
-        final long height,
+        final BigInteger height,
+        final int commitmentIndex,
         final String messageIdHex,
         final String sourceProfile,
         final String targetProfile,
@@ -345,6 +368,7 @@ public final class SccpModels {
         final Map<String, Object> payloadProjection,
         final RecentMessageLinks links) {
       this.height = height;
+      this.commitmentIndex = commitmentIndex;
       this.messageIdHex = messageIdHex;
       this.sourceProfile = sourceProfile;
       this.targetProfile = targetProfile;
@@ -360,11 +384,32 @@ public final class SccpModels {
     }
   }
 
+  /** Exact continuation for the newest-first SCCP outbound-message index. */
+  public static final class RecentCursor {
+    public final BigInteger from;
+    public final int afterIndex;
+
+    public RecentCursor(final BigInteger from, final int afterIndex) {
+      if (from == null || from.signum() <= 0 || from.compareTo(U64_MAX) > 0) {
+        throw new IllegalArgumentException("from must be a positive u64 height");
+      }
+      if (afterIndex < 0 || afterIndex >= SCCP_OUTBOUND_MESSAGES_MAX_PER_BLOCK_V1) {
+        throw new IllegalArgumentException(
+            "afterIndex must be between 0 and "
+                + (SCCP_OUTBOUND_MESSAGES_MAX_PER_BLOCK_V1 - 1));
+      }
+      this.from = from;
+      this.afterIndex = afterIndex;
+    }
+  }
+
   public static final class RecentMessages {
     public final List<RecentMessage> items;
+    public final RecentCursor next;
 
-    RecentMessages(final List<RecentMessage> items) {
+    RecentMessages(final List<RecentMessage> items, final RecentCursor next) {
       this.items = Collections.unmodifiableList(new ArrayList<>(items));
+      this.next = next;
     }
   }
 

@@ -132,6 +132,18 @@ test("ToriiBrowserClient rejects adversarial Offline inputs before fetch", async
     /must match/,
   );
   await assert.rejects(
+    () => client.submitOfflineTopUp(browserOfflineTopUpRequest({
+      amount: { atomic_units: 1, scale: 29 },
+    })),
+    /scale/,
+  );
+  await assert.rejects(
+    () => client.submitOfflineTopUp(browserOfflineTopUpRequest({
+      artifact_generation: "é".repeat(65),
+    })),
+    /128/,
+  );
+  await assert.rejects(
     () => client.getOfflineOperationStatus("AB".repeat(32)),
     /lowercase/,
   );

@@ -23787,6 +23787,40 @@ function offlineOperationReference(overrides = {}) {
   };
 }
 
+function offlineFixedBytes(byte) {
+  return Array(32).fill(byte);
+}
+
+function offlineTopUpAnchor(overrides = {}) {
+  const amount = { atomic_units: 17, scale: 4 };
+  return {
+    version: 2,
+    chain_id: "wonderland",
+    payer: FIXTURE_ALICE_ID,
+    asset: OFFLINE_ASSET_ID,
+    asset_scale: 4,
+    amount,
+    initial_root: offlineFixedBytes(0x10),
+    finalized_root: offlineFixedBytes(0x20),
+    topup_anchor_nullifiers: [offlineFixedBytes(0x31)],
+    current_note: {
+      chain_id: "wonderland",
+      asset: OFFLINE_ASSET_DEFINITION_ID,
+      note_commitment: offlineFixedBytes(0x41),
+      spend_nullifier: offlineFixedBytes(0x51),
+      amount: { ...amount },
+    },
+    topup_operation_id: offlineFixedBytes(0x11),
+    transfer_verifier_id: { backend: "halo2/ipa", name: "offline-transfer" },
+    transfer_verifier_commitment: offlineFixedBytes(0x61),
+    artifact_generation: "generation-1",
+    finalized_height: 12,
+    finalized_tx_hash: offlineFixedBytes(0x22),
+    anchor_digest: offlineFixedBytes(0x71),
+    ...overrides,
+  };
+}
+
 test("getOfflineReadiness sends the required exact asset selector and parses blockers", async () => {
   let capturedRequest;
   const payload = offlineReadinessPayload({
@@ -23953,6 +23987,8 @@ test("offline command validation rejects malformed and conflicting operation IDs
     offlineTopUpRequest({ operation_id: sparse }),
     offlineTopUpRequest({ operation_id: [...OFFLINE_OPERATION_BYTES.slice(0, 31), 256] }),
     offlineTopUpRequest({ authorization: { operation_id: Array(32).fill(0x12) } }),
+    offlineTopUpRequest({ amount: { atomic_units: 1, scale: 29 } }),
+    offlineTopUpRequest({ artifact_generation: "é".repeat(65) }),
     cyclic,
   ];
   for (const request of cases) {
@@ -24007,7 +24043,7 @@ test("getOfflineOperationStatus parses all three tagged states", async () => {
             transaction_hash: OFFLINE_TRANSACTION_HASH,
             finalized_block_height: 12,
             server_time_ms: 13,
-            anchor: { version: 2 },
+            anchor: offlineTopUpAnchor(),
           },
         },
       },

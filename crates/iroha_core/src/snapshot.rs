@@ -2987,7 +2987,7 @@ mod tests {
             state
                 .world
                 .peers
-                .get()
+                .view()
                 .iter()
                 .all(|peer| peer.public_key() != historical_validator.public_key()),
             "historical validator must be absent from the live peer roster"
@@ -3194,7 +3194,7 @@ mod tests {
             let store_dir = tmp_root.path().join(label);
             try_write_snapshot(&state, &store_dir, &snapshot_key, TEST_CHUNK_SIZE)
                 .expect("write adversarially signed snapshot fixture");
-            let error = try_read_snapshot(
+            let error = match try_read_snapshot(
                 &store_dir,
                 &kura,
                 LiveQueryStore::start_test,
@@ -3204,8 +3204,10 @@ mod tests {
                 &state.chain_id,
                 #[cfg(feature = "telemetry")]
                 StateTelemetry::new(<_>::default(), true),
-            )
-            .expect_err("signed snapshot with malformed commit-QC archive must reject");
+            ) {
+                Ok(_) => panic!("signed snapshot with malformed commit-QC archive must reject"),
+                Err(error) => error,
+            };
             assert!(
                 matches!(error, TryReadError::Serialization(_)),
                 "unexpected {label} archive rejection: {error:?}"
@@ -3373,7 +3375,7 @@ mod tests {
     }
 
     #[test]
-    async fn snapshot_roundtrip_preserves_sccp_outbound_messages() {
+    async fn snapshot_roundtrip_preserves_sccp_outbound_pending_messages() {
         let tmp_root = tempdir().unwrap();
         let store_dir = tmp_root.path().join("snapshot");
         let kura = Kura::blank_kura_for_testing();
@@ -3402,17 +3404,18 @@ mod tests {
             lane: exact.bundle.commitment.context.lane,
             message_id: exact.bundle.commitment.message_id,
         };
-        let record = iroha_data_model::bridge::SccpOutboundMessageRecordV1 {
+        let record = iroha_data_model::bridge::SccpOutboundPendingMessageRecordV1 {
             destination_binding_hash: exact.bundle.commitment.context.destination_binding_hash,
             route_configuration_hash: exact.bundle.commitment.context.route_configuration_hash,
             payload_hash: exact.bundle.commitment.payload_hash,
             payload_bytes: iroha_sccp::canonical_sccp_payload_bytes(&exact.bundle.payload)
                 .expect("exact fixture payload encodes canonically"),
             recorded_at_height: u64::try_from(state.view().height()).expect("height fits u64"),
+            commitment_index: 0,
         };
         state
             .insert_sccp_outbound_message_for_testing(key, record.clone())
-            .expect("canonical SCCP outbox fixture inserts");
+            .expect("insert canonical SCCP outbound snapshot fixture");
         let key_pair = checked_random_snapshot_keypair();
 
         try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE).unwrap();
@@ -3422,8 +3425,12 @@ mod tests {
         let snapshot_value: json::Value =
             json::from_slice(&snapshot_bytes).expect("snapshot JSON should parse");
         assert!(
-            snapshot_world_has_field(&snapshot_value, "sccp_outbound_messages"),
+            snapshot_world_has_field(&snapshot_value, "sccp_outbound_pending_messages"),
             "new snapshots must carry the SCCP outbound replay registry"
+        );
+        assert!(
+            snapshot_world_has_field(&snapshot_value, "sccp_outbound_pending_usage"),
+            "new snapshots must carry exact SCCP pending usage"
         );
 
         let snapshot_state = try_read_snapshot(
@@ -3442,11 +3449,20 @@ mod tests {
         let restored = snapshot_state
             .view()
             .world
-            .sccp_outbound_messages
+            .sccp_outbound_pending_messages
             .get(&key)
             .cloned()
             .expect("SCCP outbound replay key should survive snapshot roundtrip");
         assert_eq!(restored, record);
+        assert_eq!(
+            snapshot_state
+                .view()
+                .world
+                .sccp_outbound_pending_usage
+                .get()
+                .message_count,
+            1
+        );
     }
 
     #[test]

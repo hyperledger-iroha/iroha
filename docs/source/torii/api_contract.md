@@ -74,13 +74,16 @@ Norito:
 | `application/*;q=0.7` | `application/x-norito` (wildcard-only tie uses the endpoint default) |
 | `image/png` | `406` with a JSON `ErrorEnvelope` whose code is `response_not_acceptable` |
 
-Typed request bodies require `Content-Type`. JSON and Norito use the media types
-above; unsupported or missing types return `415 Unsupported Media Type`, while
-an empty, malformed, or schema-invalid body under a supported type returns
-`400 Bad Request`. Because `Content-Type` is a singleton field, repeated or
-non-ASCII values return `400 request_content_type_invalid` before a command
-handler runs. Request decoding never sniffs bytes and never falls back to
-a whole-payload base64 wrapper. Negotiation failures, typed extractor
+Typed request bodies require `Content-Type`. A request body uses exactly
+`application/json`, optionally with one `charset=utf-8` parameter, or the
+parameter-free `application/x-norito`; suffix JSON and wildcard media ranges
+apply to response negotiation only. Unsupported or missing types return `415
+Unsupported Media Type`, while an empty, malformed, or schema-invalid body
+under a supported type returns `400 Bad Request`. Because `Content-Type` is a
+singleton field, repeated, non-ASCII, or syntactically invalid values return
+`400 request_content_type_invalid` before a command handler runs. Request
+decoding never sniffs bytes and never falls back to a whole-payload base64
+wrapper. Negotiation failures, typed extractor
 rejections, and handler errors use the shared typed error envelope whenever a
 response representation can be selected. Router path and method misses are
 typed application errors; protocol streams remain documented transport
@@ -142,12 +145,17 @@ Canonical error responses remove incompatible content encodings, advertise
 their exact `Content-Length`, and carry `Vary: Accept`. A `HEAD` error advertises
 the length of the corresponding typed representation but emits no body.
 
-Only a catalogued protocol-surface response that already declares a non-JSON,
-non-Norito media type bypasses body normalization. Its protocol-native error
-body is preserved and telemetry records `protocol_native_error`. This exception
-covers such contracts as an SSE establishment error; errors after a stream has
-started follow that stream's terminal framing instead of the finite HTTP
-envelope.
+Merely belonging to the protocol surface or declaring a non-JSON media type
+does not bypass body normalization. A finite protocol-native error must match
+an explicit reviewed allowlist entry, including route, status, media type, and
+protocol discriminator. The current allowlist contains only a `400` SSE resume
+rejection on the catalogued global or contract SSE route with
+`Content-Type: text/event-stream` and
+`X-Iroha-Stream-Error: stream_resume_unsupported`; telemetry records the same
+stable `stream_resume_unsupported` code. An unmarked response or a response
+whose marker appears on another route is replaced by the ordinary typed
+envelope. Errors after a stream has started follow that stream's terminal
+framing instead of the finite HTTP envelope.
 
 Offline readiness blocker messages follow the same exact human-text grammar as
 error messages. Their blocker `code`, not their message, is the stable SDK
@@ -171,6 +179,16 @@ value is individually valid. A node configured to require API tokens but
 containing no tokens reports `503 api_token_unavailable`. Every canonical
 finite `429` or `503` response includes both `Retry-After` and a matching typed
 retry hint.
+
+Connection-level pre-authentication capacity and rate gates run before
+credential validation. For Offline command routes admitted by that bounded
+gate, API-token authentication is completed before request media-type,
+idempotency-key, or body validation. An unauthenticated or duplicate-token
+request therefore receives the authentication failure even if its
+`Content-Type`, idempotency key, and body are also malformed; no command body
+extractor or handler runs. After a valid singleton token, Torii applies
+route-level access/rate policy, then exact `Content-Type` validation, then
+command-header validation, and only then decodes the body.
 
 ## Reviewed protocol exceptions
 
@@ -272,8 +290,8 @@ stable error code, method, status, latency, and exact request/response body
 sizes when known. JSON and Norito retain their established content-type labels;
 all other response content types are reduced to a bounded media category.
 Typed `ErrorEnvelope` responses copy their validated code into an internal
-response extension. Reviewed non-typed protocol errors use
-`error_code="protocol_native_error"`. An ordinary failed response can be
+response extension. Reviewed non-typed protocol errors use their exact finite
+allowlist code, currently `error_code="stream_resume_unsupported"`. An ordinary failed response can be
 reported as `error_code="unclassified"` only if code outside the assembled
 Torii router bypasses the normalization boundary; that is an actionable
 contract violation, not a supported response form.
@@ -317,6 +335,13 @@ Torii instance that accepted the command. A load balancer must therefore keep a
 client on that instance from submission until the operation commits. A pending
 lookup sent to a different instance can return `404`; that response never
 authorizes the client to recycle or change the operation id.
+
+Accepted request bindings and in-flight reservations share the configured
+positive `operation_registry_max_entries` and `operation_registry_max_bytes`
+budgets under `torii.offline_issuer`. They retain fixed-size canonical digests,
+not proof-bearing request DTOs. Capacity never evicts an unexpired binding: a
+new unique command receives typed `503 offline_operation_capacity_exhausted`,
+while an identical accepted replay or in-flight follower remains available.
 
 Every Torii replica allowed to accept Offline commands for one deployment must
 use the same Offline issuer identity and behaviorally identical issuer policy.

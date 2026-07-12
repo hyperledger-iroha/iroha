@@ -223,6 +223,14 @@ pub struct SccpRegistryLimits {
 #[norito(deny_unknown_fields)]
 /// Consensus-critical SCCP proof and verifier-work limits.
 pub struct SccpResourceLimits {
+    /// Maximum successful outbound SCCP messages committed by one block.
+    pub max_outbound_messages_per_block: u32,
+    /// Maximum canonical bytes retained for one outbound SCCP payload.
+    pub max_outbound_message_payload_bytes: u64,
+    /// Maximum payload-bearing outbound messages awaiting destination proof acceptance.
+    pub max_pending_outbound_messages: u64,
+    /// Maximum canonical outbound payload bytes awaiting destination proof acceptance.
+    pub max_pending_outbound_payload_bytes: u64,
     /// Maximum closed SCCP proofs in one transaction.
     pub max_proofs_per_transaction: u32,
     /// Maximum closed SCCP proofs committed in one block.
@@ -326,6 +334,16 @@ fn expected_sccp_registry_limits() -> SccpRegistryLimits {
 }
 
 fn validate_sccp_resource_limits(limits: SccpResourceLimits) -> Result<()> {
+    if limits.max_outbound_messages_per_block
+        != iroha_data_model::bridge::SCCP_OUTBOUND_MESSAGES_MAX_PER_BLOCK_V1
+        || limits.max_outbound_message_payload_bytes
+            != u64::try_from(iroha_data_model::bridge::SCCP_OUTBOUND_MESSAGE_MAX_PAYLOAD_BYTES_V1)
+                .expect("SCCP outbound payload bound fits u64")
+    {
+        return Err(eyre!(
+            "SCCP capabilities advertise incompatible fixed outbound message limits"
+        ));
+    }
     macro_rules! require_nonzero {
         ($($field:ident),+ $(,)?) => {
             $(if limits.$field == 0 {
@@ -337,6 +355,10 @@ fn validate_sccp_resource_limits(limits: SccpResourceLimits) -> Result<()> {
         };
     }
     require_nonzero!(
+        max_outbound_messages_per_block,
+        max_outbound_message_payload_bytes,
+        max_pending_outbound_messages,
+        max_pending_outbound_payload_bytes,
         max_proofs_per_transaction,
         max_proofs_per_block,
         max_proof_bytes_per_proof,
@@ -368,6 +390,9 @@ fn validate_sccp_resource_limits(limits: SccpResourceLimits) -> Result<()> {
         };
     }
     require_json_safe!(
+        max_outbound_message_payload_bytes,
+        max_pending_outbound_messages,
+        max_pending_outbound_payload_bytes,
         max_proof_bytes_per_proof,
         max_proof_bytes_per_transaction,
         max_proof_bytes_per_block,
@@ -569,6 +594,8 @@ pub struct SccpRecentMessageLinks {
 pub struct SccpRecentMessage {
     /// Height of the finalized SORA block that anchored the message.
     pub height: u64,
+    /// Zero-based position in the finalized SCCP commitment tree.
+    pub commitment_index: u32,
     /// Hex-encoded canonical lane-bound SCCP message id.
     pub message_id_hex: String,
     /// Stable logical SCCP payload kind.
@@ -605,6 +632,26 @@ pub struct SccpRecentMessage {
 
 #[derive(
     Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+#[norito(deny_unknown_fields)]
+/// Compound continuation returned by recent SCCP discovery.
+pub struct SccpRecentCursor {
+    /// Height of the last returned item.
+    pub from: u64,
+    /// Commitment index of the last returned item.
+    pub after_index: u32,
+}
+
+#[derive(
+    Clone,
     Debug,
     PartialEq,
     Eq,
@@ -618,6 +665,10 @@ pub struct SccpRecentMessage {
 pub struct SccpRecentMessages {
     /// Newest-first committed outbound SCCP messages.
     pub items: Vec<SccpRecentMessage>,
+    /// Continuation for the next page when additional entries exist.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub next: Option<SccpRecentCursor>,
 }
 
 fn sccp_recent_projection_text(value: &iroha_sccp::SccpNormalizedCodecValueV1) -> Option<&str> {
@@ -706,6 +757,7 @@ fn validate_sccp_recent_messages(messages: &SccpRecentMessages) -> Result<()> {
     }
     let mut message_ids = std::collections::BTreeSet::new();
     let mut previous_height = u64::MAX;
+    let mut previous_commitment_index = None;
     for (index, item) in messages.items.iter().enumerate() {
         let label = format!("SCCP recent item {index}");
         if item.height == 0 || item.height > previous_height {
@@ -713,7 +765,26 @@ fn validate_sccp_recent_messages(messages: &SccpRecentMessages) -> Result<()> {
                 "{label} must have a positive height in newest-first order"
             ));
         }
+        if item.commitment_index
+            >= iroha_data_model::bridge::SCCP_OUTBOUND_MESSAGES_MAX_PER_BLOCK_V1
+        {
+            return Err(eyre!("{label} has an out-of-range commitment index"));
+        }
+        if item.height == previous_height {
+            if previous_commitment_index
+                .is_some_and(|previous| item.commitment_index != previous + 1)
+            {
+                return Err(eyre!(
+                    "{label} must follow the previous same-height commitment index"
+                ));
+            }
+        } else if index != 0 && item.commitment_index != 0 {
+            return Err(eyre!(
+                "{label} must begin an older block at commitment index zero"
+            ));
+        }
         previous_height = item.height;
+        previous_commitment_index = Some(item.commitment_index);
         let message_id =
             decode_exact_nonzero_sccp_hex32(&item.message_id_hex, &format!("{label} message id"))?;
         if !message_ids.insert(message_id) {
@@ -768,6 +839,21 @@ fn validate_sccp_recent_messages(messages: &SccpRecentMessages) -> Result<()> {
             return Err(eyre!("{label} contains a mismatched SCCP readback link"));
         }
     }
+    match (messages.next, messages.items.last()) {
+        (Some(next), Some(last))
+            if next.from == last.height && next.after_index == last.commitment_index => {}
+        (Some(_), Some(_)) => {
+            return Err(eyre!(
+                "SCCP recent continuation must identify the last returned item"
+            ));
+        }
+        (Some(_), None) => {
+            return Err(eyre!(
+                "SCCP recent continuation is forbidden for an empty page"
+            ));
+        }
+        (None, _) => {}
+    }
     Ok(())
 }
 
@@ -776,6 +862,8 @@ fn validate_sccp_recent_messages(messages: &SccpRecentMessages) -> Result<()> {
 pub struct SccpRecentMessagesQuery {
     /// Inclusive block height from which to scan backwards.
     pub from: Option<u64>,
+    /// Last commitment index already consumed at `from`.
+    pub after_index: Option<u32>,
     /// Maximum number of messages to return; Torii caps this at 50.
     pub limit: Option<u64>,
 }
@@ -785,11 +873,24 @@ impl SccpRecentMessagesQuery {
     ///
     /// # Errors
     ///
-    /// Returns an error for block height zero or a result limit outside `1..=50`.
+    /// Returns an error for block height zero, an unpaired/out-of-range commitment cursor, or a
+    /// result limit outside `1..=50`.
     pub fn validate(self) -> Result<()> {
         if self.from == Some(0) {
             return Err(eyre!(
                 "SCCP recent query `from` must be a positive block height"
+            ));
+        }
+        if self.after_index.is_some() && self.from.is_none() {
+            return Err(eyre!(
+                "SCCP recent query `after_index` requires the paired `from` height"
+            ));
+        }
+        if self.after_index.is_some_and(|index| {
+            index >= iroha_data_model::bridge::SCCP_OUTBOUND_MESSAGES_MAX_PER_BLOCK_V1
+        }) {
+            return Err(eyre!(
+                "SCCP recent query `after_index` must be between 0 and 511"
             ));
         }
         if self.limit.is_some_and(|limit| !(1..=50).contains(&limit)) {
@@ -802,6 +903,10 @@ impl SccpRecentMessagesQuery {
         self.validate()?;
         if let Some(from) = self.from {
             url.query_pairs_mut().append_pair("from", &from.to_string());
+        }
+        if let Some(after_index) = self.after_index {
+            url.query_pairs_mut()
+                .append_pair("after_index", &after_index.to_string());
         }
         if let Some(limit) = self.limit {
             url.query_pairs_mut()
@@ -6212,6 +6317,102 @@ impl Client {
                 "offline readiness response has an inconsistent ready/blockers state"
             ));
         }
+        let has_blocker = |code: &str| {
+            readiness
+                .blockers
+                .iter()
+                .any(|blocker| blocker.code == code)
+        };
+        match readiness.asset_scale {
+            None if !has_blocker("asset_scale_unavailable") => {
+                return Err(eyre!(
+                    "offline readiness response omitted the live asset scale without an asset_scale_unavailable blocker"
+                ));
+            }
+            Some(scale)
+                if scale > iroha_data_model::offline::KAGEMUSHA_SCALED_AMOUNT_MAX_SCALE_V2
+                    && !has_blocker("asset_scale_unsupported") =>
+            {
+                return Err(eyre!(
+                    "offline readiness response exposes an unsupported asset scale without an asset_scale_unsupported blocker"
+                ));
+            }
+            Some(scale)
+                if scale <= iroha_data_model::offline::KAGEMUSHA_SCALED_AMOUNT_MAX_SCALE_V2
+                    && (has_blocker("asset_scale_unavailable")
+                        || has_blocker("asset_scale_unsupported")) =>
+            {
+                return Err(eyre!(
+                    "offline readiness response has an inconsistent asset scale blocker"
+                ));
+            }
+            _ => {}
+        }
+        match readiness.active_transfer_verifier.as_ref() {
+            None if !has_blocker("transfer_verifier_unavailable") => {
+                return Err(eyre!(
+                    "offline readiness response omitted the active transfer verifier without a transfer_verifier_unavailable blocker"
+                ));
+            }
+            Some(verifier) => {
+                if has_blocker("transfer_verifier_unavailable") {
+                    return Err(eyre!(
+                        "offline readiness response contains both an active transfer verifier and an unavailable blocker"
+                    ));
+                }
+                if !iroha_data_model::proof::verifying_key_id_field_is_portable(
+                    &verifier.id.backend,
+                ) || !iroha_data_model::proof::verifying_key_id_field_is_portable(
+                    &verifier.id.name,
+                ) {
+                    return Err(eyre!(
+                        "offline readiness response contains a non-portable transfer verifier id"
+                    ));
+                }
+                if !iroha_data_model::zk::open_verify_circuit_id_is_portable(&verifier.circuit_id) {
+                    return Err(eyre!(
+                        "offline readiness response contains a non-portable confidential-transfer circuit id"
+                    ));
+                }
+                Self::require_lower_hex_32(
+                    &verifier.commitment,
+                    "active_transfer_verifier.commitment",
+                )?;
+                Self::require_lower_hex_32(
+                    &verifier.public_inputs_schema_hash,
+                    "active_transfer_verifier.public_inputs_schema_hash",
+                )?;
+                if verifier.commitment.bytes().all(|byte| byte == b'0')
+                    || verifier
+                        .public_inputs_schema_hash
+                        .bytes()
+                        .all(|byte| byte == b'0')
+                {
+                    return Err(eyre!(
+                        "offline readiness response contains zero transfer-verifier metadata"
+                    ));
+                }
+                if verifier.max_proof_bytes == 0 {
+                    return Err(eyre!(
+                        "offline readiness response selected a transfer verifier with a zero proof limit"
+                    ));
+                }
+                if verifier.activation_height > readiness.evaluated_block_height {
+                    return Err(eyre!(
+                        "offline readiness response selected a transfer verifier before activation"
+                    ));
+                }
+                if verifier.withdrawal_height.is_some_and(|withdrawal_height| {
+                    withdrawal_height <= verifier.activation_height
+                        || readiness.evaluated_block_height >= withdrawal_height
+                }) {
+                    return Err(eyre!(
+                        "offline readiness response selected a transfer verifier outside its activation window"
+                    ));
+                }
+            }
+            None => {}
+        }
         Ok(readiness)
     }
 
@@ -6912,14 +7113,34 @@ mod offline_client_tests {
             .expect("response")
     }
 
+    fn active_transfer_verifier() -> iroha_torii_shared::offline_api::OfflineActiveTransferVerifier
+    {
+        iroha_torii_shared::offline_api::OfflineActiveTransferVerifier {
+            id: iroha_torii_shared::offline_api::OfflineVerifierId {
+                backend: "halo2/ipa".to_owned(),
+                name: "confidential-transfer-v2".to_owned(),
+            },
+            version: 1,
+            circuit_id: "halo2/pasta/ipa/anon-transfer-2x2-merkle16-poseidon-diversified"
+                .to_owned(),
+            commitment: "11".repeat(32),
+            public_inputs_schema_hash: "22".repeat(32),
+            max_proof_bytes: 65_536,
+            activation_height: 1,
+            withdrawal_height: None,
+        }
+    }
+
     #[test]
     fn readiness_request_is_typed_negotiated_and_asset_bound() {
         let asset_definition_id: AssetDefinitionId =
             "xor#wonderland".parse().expect("asset definition id");
         let readiness = OfflineReadiness {
             asset_definition_id: asset_definition_id.to_string(),
+            asset_scale: Some(9),
             evaluated_block_height: 19,
             evaluated_block_hash: "ab".repeat(32),
+            active_transfer_verifier: Some(active_transfer_verifier()),
             ready: false,
             blockers: vec![iroha_torii_shared::offline_api::OfflineReadinessBlocker {
                 code: "issuer_key_missing".to_owned(),
@@ -6960,15 +7181,19 @@ mod offline_client_tests {
         for readiness in [
             OfflineReadiness {
                 asset_definition_id: "rose#wonderland".to_owned(),
+                asset_scale: Some(9),
                 evaluated_block_height: 1,
                 evaluated_block_hash: "ab".repeat(32),
+                active_transfer_verifier: Some(active_transfer_verifier()),
                 ready: true,
                 blockers: Vec::new(),
             },
             OfflineReadiness {
                 asset_definition_id: requested.to_string(),
+                asset_scale: Some(9),
                 evaluated_block_height: 1,
                 evaluated_block_hash: "ab".repeat(32),
+                active_transfer_verifier: Some(active_transfer_verifier()),
                 ready: true,
                 blockers: vec![iroha_torii_shared::offline_api::OfflineReadinessBlocker {
                     code: "forged".to_owned(),
@@ -6977,8 +7202,10 @@ mod offline_client_tests {
             },
             OfflineReadiness {
                 asset_definition_id: requested.to_string(),
+                asset_scale: Some(9),
                 evaluated_block_height: 1,
                 evaluated_block_hash: "AB".repeat(32),
+                active_transfer_verifier: Some(active_transfer_verifier()),
                 ready: true,
                 blockers: Vec::new(),
             },
@@ -6996,6 +7223,62 @@ mod offline_client_tests {
             assert!(
                 error.to_string().contains("offline readiness response")
                     || error.to_string().contains("evaluated_block_hash"),
+                "unexpected error: {error:#}"
+            );
+        }
+    }
+
+    #[test]
+    fn readiness_rejects_unbound_scale_and_verifier_snapshots() {
+        let requested: AssetDefinitionId = "xor#wonderland".parse().expect("asset definition id");
+        let unrelated_blocker = || iroha_torii_shared::offline_api::OfflineReadinessBlocker {
+            code: "proof_backend_unavailable".to_owned(),
+            message: "proof backend is unavailable".to_owned(),
+        };
+        let mut future_verifier = active_transfer_verifier();
+        future_verifier.activation_height = 2;
+        for readiness in [
+            OfflineReadiness {
+                asset_definition_id: requested.to_string(),
+                asset_scale: None,
+                evaluated_block_height: 1,
+                evaluated_block_hash: "ab".repeat(32),
+                active_transfer_verifier: Some(active_transfer_verifier()),
+                ready: false,
+                blockers: vec![unrelated_blocker()],
+            },
+            OfflineReadiness {
+                asset_definition_id: requested.to_string(),
+                asset_scale: Some(9),
+                evaluated_block_height: 1,
+                evaluated_block_hash: "ab".repeat(32),
+                active_transfer_verifier: None,
+                ready: false,
+                blockers: vec![unrelated_blocker()],
+            },
+            OfflineReadiness {
+                asset_definition_id: requested.to_string(),
+                asset_scale: Some(9),
+                evaluated_block_height: 1,
+                evaluated_block_hash: "ab".repeat(32),
+                active_transfer_verifier: Some(future_verifier),
+                ready: false,
+                blockers: vec![unrelated_blocker()],
+            },
+        ] {
+            let response = HttpResponse::builder()
+                .status(StatusCode::OK)
+                .header("content-type", APPLICATION_NORITO)
+                .body(norito::to_bytes(&readiness).expect("encode readiness"))
+                .expect("response");
+            let error = with_mock_http(
+                respond_with(&Arc::new(Mutex::new(Vec::new())), response),
+                || client_with_base_url(base_url()).get_offline_readiness(&requested),
+            )
+            .expect_err("unbound readiness metadata must fail closed");
+            assert!(
+                error.to_string().contains("asset scale")
+                    || error.to_string().contains("transfer verifier"),
                 "unexpected error: {error:#}"
             );
         }
@@ -7140,8 +7423,10 @@ mod offline_client_tests {
     fn negotiated_decoder_rejects_retired_and_missing_media_types() {
         let readiness = OfflineReadiness {
             asset_definition_id: "xor#wonderland".to_owned(),
+            asset_scale: Some(9),
             evaluated_block_height: 1,
             evaluated_block_hash: "ab".repeat(32),
+            active_transfer_verifier: Some(active_transfer_verifier()),
             ready: true,
             blockers: Vec::new(),
         };
@@ -29914,6 +30199,10 @@ mod tests {
                 max_retained_native_trust_anchors_per_lane: 4_096,
             },
             resource_limits: SccpResourceLimits {
+                max_outbound_messages_per_block: 512,
+                max_outbound_message_payload_bytes: 4_096,
+                max_pending_outbound_messages: 65_536,
+                max_pending_outbound_payload_bytes: 256 * 1024 * 1024,
                 max_proofs_per_transaction: 1,
                 max_proofs_per_block: 4,
                 max_proof_bytes_per_proof: 8 * 1024 * 1024,
@@ -29943,6 +30232,7 @@ mod tests {
         SccpRecentMessages {
             items: vec![SccpRecentMessage {
                 height: 42,
+                commitment_index: 0,
                 message_id_hex: "67".repeat(32),
                 kind: "transfer".to_owned(),
                 source_profile: "sora-taira".to_owned(),
@@ -29986,6 +30276,7 @@ mod tests {
                     proof_request_path: format!("/v1/sccp/proof-requests/{}", "67".repeat(32)),
                 },
             }],
+            next: None,
         }
     }
 
@@ -30184,6 +30475,10 @@ mod tests {
             };
         }
         assert_zero_resource_limit_rejects!(
+            max_outbound_messages_per_block,
+            max_outbound_message_payload_bytes,
+            max_pending_outbound_messages,
+            max_pending_outbound_payload_bytes,
             max_proofs_per_transaction,
             max_proofs_per_block,
             max_proof_bytes_per_proof,
@@ -30220,12 +30515,28 @@ mod tests {
             };
         }
         assert_unsafe_json_resource_limit_rejects!(
+            max_outbound_message_payload_bytes,
+            max_pending_outbound_messages,
+            max_pending_outbound_payload_bytes,
             max_proof_bytes_per_proof,
             max_proof_bytes_per_transaction,
             max_proof_bytes_per_block,
             max_native_header_bytes_per_transaction,
             max_native_header_bytes_per_block,
         );
+
+        let mut drifted_outbox = valid.clone();
+        drifted_outbox
+            .resource_limits
+            .max_outbound_messages_per_block = 511;
+        validate_sccp_capabilities(&drifted_outbox)
+            .expect_err("drifted fixed SCCP outbound message cap must reject");
+        let mut drifted_payload = valid.clone();
+        drifted_payload
+            .resource_limits
+            .max_outbound_message_payload_bytes = 4_095;
+        validate_sccp_capabilities(&drifted_payload)
+            .expect_err("drifted fixed SCCP outbound payload cap must reject");
 
         let mut per_proof_over_transaction = valid.clone();
         per_proof_over_transaction
@@ -30528,6 +30839,7 @@ mod tests {
             client_with_base_url(base_url()).get_sccp_recent_messages_with_query(
                 SccpRecentMessagesQuery {
                     from: Some(42),
+                    after_index: Some(12),
                     limit: Some(7),
                 },
             )
@@ -30537,26 +30849,40 @@ mod tests {
         assert_eq!(decoded, payload);
         let snapshot = store.lock().expect("snapshot lock")[0].clone();
         assert_eq!(snapshot.url.path(), "/v1/sccp/messages/recent");
-        assert_eq!(snapshot.url.query(), Some("from=42&limit=7"));
+        assert_eq!(snapshot.url.query(), Some("from=42&after_index=12&limit=7"));
         assert_eq!(snapshot.max_response_bytes, SCCP_RECENT_RESPONSE_MAX_BYTES);
         assert_single_accept_header(&snapshot, APPLICATION_NORITO);
 
         for query in [
             SccpRecentMessagesQuery {
                 from: Some(0),
+                after_index: None,
                 limit: Some(1),
             },
             SccpRecentMessagesQuery {
                 from: Some(1),
+                after_index: None,
                 limit: Some(0),
             },
             SccpRecentMessagesQuery {
                 from: Some(1),
+                after_index: None,
                 limit: Some(51),
             },
             SccpRecentMessagesQuery {
                 from: Some(1),
+                after_index: None,
                 limit: Some(u64::MAX),
+            },
+            SccpRecentMessagesQuery {
+                from: None,
+                after_index: Some(0),
+                limit: Some(1),
+            },
+            SccpRecentMessagesQuery {
+                from: Some(1),
+                after_index: Some(512),
+                limit: Some(1),
             },
         ] {
             assert!(query.validate().is_err());
@@ -30577,6 +30903,24 @@ mod tests {
         let mut duplicate = valid.clone();
         duplicate.items.push(duplicate.items[0].clone());
         assert!(validate_sccp_recent_messages(&duplicate).is_err());
+
+        let mut out_of_range_index = valid.clone();
+        out_of_range_index.items[0].commitment_index = 512;
+        assert!(validate_sccp_recent_messages(&out_of_range_index).is_err());
+
+        let mut wrong_cursor = valid.clone();
+        wrong_cursor.next = Some(SccpRecentCursor {
+            from: 42,
+            after_index: 1,
+        });
+        assert!(validate_sccp_recent_messages(&wrong_cursor).is_err());
+
+        let mut exact_cursor = valid.clone();
+        exact_cursor.next = Some(SccpRecentCursor {
+            from: 42,
+            after_index: 0,
+        });
+        validate_sccp_recent_messages(&exact_cursor).expect("exact compound cursor validates");
 
         let mut aliased = valid.clone();
         aliased.items[0].route_configuration_hash =
@@ -30658,9 +31002,25 @@ mod tests {
             norito::json::from_value::<SccpRecentMessages>(missing_projection).is_err(),
             "required payload projection must not default during JSON decoding"
         );
+        let mut missing_index = norito::json::to_value(&valid).expect("recent response JSON value");
+        let first_item = missing_index
+            .as_object_mut()
+            .and_then(|root| root.get_mut("items"))
+            .and_then(norito::json::Value::as_array_mut)
+            .and_then(|items| items.first_mut())
+            .and_then(norito::json::Value::as_object_mut)
+            .expect("first recent response item");
+        assert!(first_item.remove("commitment_index").is_some());
+        assert!(
+            norito::json::from_value::<SccpRecentMessages>(missing_index).is_err(),
+            "required commitment index must not default during JSON decoding"
+        );
 
         let template = valid.items[0].clone();
-        let mut oversized = SccpRecentMessages { items: Vec::new() };
+        let mut oversized = SccpRecentMessages {
+            items: Vec::new(),
+            next: None,
+        };
         for index in 0_u8..51 {
             let mut item = template.clone();
             item.height = u64::from(51 - index);

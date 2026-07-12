@@ -344,10 +344,19 @@ pub mod isi {
         Ok(())
     }
 
-    fn ensure_asset_transfer_control_owner(
+    #[derive(Clone, Copy)]
+    enum TransferControlCapability {
+        Freeze,
+        DailyLimit,
+        OwnerOnly,
+    }
+
+    fn ensure_asset_transfer_control_authority(
         state_transaction: &StateTransaction<'_, '_>,
         authority: &AccountId,
+        account_id: &AccountId,
         asset_definition_id: &AssetDefinitionId,
+        capability: TransferControlCapability,
     ) -> Result<(), Error> {
         let owner = state_transaction
             .world
@@ -357,9 +366,58 @@ pub mod isi {
         if owner == *authority {
             return Ok(());
         }
+        let account_domain = state_transaction
+            .world
+            .account(account_id)?
+            .label()
+            .and_then(|label| label.domain.as_ref())
+            .cloned()
+            .ok_or_else(|| {
+                InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "transfer-control target account {account_id} has no canonical on-chain domain label"
+                    )
+                    .into(),
+                )
+            })?;
+        let required: Option<Permission> = match capability {
+            TransferControlCapability::Freeze => Some(
+                iroha_executor_data_model::permission::asset::CanSetAssetTransferFreeze {
+                    asset_definition: asset_definition_id.clone(),
+                    account_domain,
+                }
+                .into(),
+            ),
+            TransferControlCapability::DailyLimit => Some(
+                iroha_executor_data_model::permission::asset::CanSetAssetTransferDailyLimit {
+                    asset_definition: asset_definition_id.clone(),
+                    account_domain,
+                }
+                .into(),
+            ),
+            TransferControlCapability::OwnerOnly => None,
+        };
+        if required.as_ref().is_some_and(|required| {
+            state_transaction
+                .world
+                .account_permissions_iter(authority)
+                .is_ok_and(|permissions| permissions.into_iter().any(|actual| actual == required))
+                || state_transaction
+                    .world
+                    .account_roles_iter(authority)
+                    .any(|role_id| {
+                        state_transaction
+                            .world
+                            .roles
+                            .get(role_id)
+                            .is_some_and(|role| role.permissions().any(|actual| actual == required))
+                    })
+        }) {
+            return Ok(());
+        }
         Err(InstructionExecutionError::InvariantViolation(
             format!(
-                "account {authority} cannot manage transfer controls for asset definition {asset_definition_id}; owner is {owner}"
+                "account {authority} lacks an exact asset- and account-domain-scoped transfer-control permission for {account_id} and {asset_definition_id}; owner is {owner}"
             )
             .into(),
         ))
@@ -1712,10 +1770,12 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            ensure_asset_transfer_control_owner(
+            ensure_asset_transfer_control_authority(
                 state_transaction,
                 authority,
+                &self.account_id,
                 &self.asset_definition_id,
+                TransferControlCapability::Freeze,
             )?;
             state_transaction.world.account(&self.account_id)?;
 
@@ -1745,10 +1805,12 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            ensure_asset_transfer_control_owner(
+            ensure_asset_transfer_control_authority(
                 state_transaction,
                 authority,
+                &self.account_id,
                 &self.asset_definition_id,
+                TransferControlCapability::OwnerOnly,
             )?;
             state_transaction.world.account(&self.account_id)?;
 
@@ -1778,10 +1840,25 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            ensure_asset_transfer_control_owner(
+            if self.limits.len() != 1 || self.limits[0].window != AssetTransferControlWindow::Day {
+                let asset_definition = state_transaction
+                    .world
+                    .asset_definition(&self.asset_definition_id)?;
+                let owner = asset_definition.owned_by();
+                if owner != authority {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "delegated daily-limit permission accepts exactly one DAY limit"
+                            .to_owned()
+                            .into(),
+                    ));
+                }
+            }
+            ensure_asset_transfer_control_authority(
                 state_transaction,
                 authority,
+                &self.account_id,
                 &self.asset_definition_id,
+                TransferControlCapability::DailyLimit,
             )?;
             state_transaction.world.account(&self.account_id)?;
 
@@ -3033,7 +3110,10 @@ pub mod query {
             AssetTransferControlWindow, AssetTransferLimit, DOMAIN_ASSET_USAGE_POLICY_METADATA_KEY,
             DomainAssetUsagePolicyV1,
         };
-        use iroha_data_model::isi::transfer::{TransferAssetBatch, TransferAssetBatchEntry};
+        use iroha_data_model::isi::{
+            error::InstructionEvaluationError,
+            transfer::{TransferAssetBatch, TransferAssetBatchEntry},
+        };
         use iroha_data_model::nexus::{
             Allowance, AllowanceWindow, AssetPermissionManifest, CapabilityScope, DataSpaceId,
             ManifestEffect, ManifestEntry,
@@ -4379,6 +4459,14 @@ pub mod query {
                 ))
             ));
             assert!(stx.world.assets.get(&asset_id).is_none());
+            assert_eq!(
+                stx.world
+                    .asset_definition(&definition_id)
+                    .expect("asset definition must remain present")
+                    .total_quantity(),
+                &Numeric::zero(),
+                "rejected out-of-spec values must not mutate aggregate supply"
+            );
         }
 
         #[test]

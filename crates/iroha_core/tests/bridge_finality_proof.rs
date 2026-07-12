@@ -1,9 +1,6 @@
 //! Exact Sumeragi-v2 bridge finality proof construction and verification tests.
 
-use std::{
-    num::{NonZeroU64, NonZeroUsize},
-    sync::Arc,
-};
+use std::{num::NonZeroU64, sync::Arc};
 
 use iroha_core::bridge::{
     BridgeFinalityError, BridgeStateReadOnly, FinalityProofVerificationConfig,
@@ -16,8 +13,8 @@ use iroha_data_model::{
         BlockHeader, BlockSignature, SignedBlock,
         consensus_v2::{
             BlockSubject, ConsensusMode, ConsensusRound, DataAvailabilityLayout, DualQuorum,
-            GlobalPhase, HeightContext, PROTOCOL_VERSION, PayloadEncoding, QuorumCertificate,
-            ValidatorPower, finality::V2FinalityArtifact,
+            ExecutionCommitment, GlobalPhase, HeightContext, PROTOCOL_VERSION, PayloadEncoding,
+            QuorumCertificate, ValidatorPower, finality::V2FinalityArtifact,
         },
     },
     peer::PeerId,
@@ -95,6 +92,11 @@ fn fixture() -> Fixture {
         payload_hash: Hash::new(b"bridge core v2 payload"),
     };
     let signers = vec![0, 1, 2];
+    let execution_commitment = ExecutionCommitment::without_topups(
+        Hash::new(b"bridge core v2 parent state"),
+        Hash::new(b"bridge core v2 post state"),
+        Hash::new(b"bridge core v2 ordinary writes"),
+    );
     let mut commit_qc = QuorumCertificate {
         round: ConsensusRound {
             context_id: context.id(),
@@ -103,6 +105,7 @@ fn fixture() -> Fixture {
         },
         phase: GlobalPhase::Commit,
         subject,
+        execution_commitment,
         signers,
         aggregate_signature: vec![1],
     };
@@ -142,7 +145,7 @@ fn fixture() -> Fixture {
 
 struct TestState {
     chain_id: ChainId,
-    block: Option<Arc<SignedBlock>>,
+    retained_header: Option<BlockHeader>,
     artifact: Result<Option<V2FinalityArtifact>, String>,
 }
 
@@ -151,29 +154,40 @@ impl BridgeStateReadOnly for TestState {
         &self.chain_id
     }
 
-    fn bridge_block_by_height(&self, height: NonZeroUsize) -> Option<Arc<SignedBlock>> {
-        self.block
-            .as_ref()
-            .filter(|block| u64::try_from(height.get()).ok() == Some(block.header().height().get()))
-            .cloned()
-    }
-
     fn bridge_verified_v2_finality_artifact(
         &self,
         _height: u64,
     ) -> Result<Option<VerifiedV2FinalityArtifact>, String> {
         self.artifact
             .clone()?
-            .map(VerifiedV2FinalityArtifact::verify)
+            .zip(self.retained_header.clone())
+            .map(|(artifact, header)| {
+                VerifiedV2FinalityArtifact::verify_for_header(header, artifact)
+            })
             .transpose()
             .map_err(|error| format!("test storage rejected finality artifact: {error}"))
+    }
+
+    fn bridge_verified_v2_finality_with_sccp_archive(
+        &self,
+        height: u64,
+    ) -> Result<
+        Option<(
+            VerifiedV2FinalityArtifact,
+            Vec<iroha_core::bridge::ValidatedSccpOutboundMessageProjectionV1>,
+        )>,
+        String,
+    > {
+        Ok(self
+            .bridge_verified_v2_finality_artifact(height)?
+            .map(|verified| (verified, Vec::new())))
     }
 }
 
 fn state_from_fixture(fixture: &Fixture) -> TestState {
     TestState {
         chain_id: fixture.chain_id.clone(),
-        block: Some(fixture.block.clone()),
+        retained_header: Some(fixture.block.header()),
         artifact: Ok(Some(fixture.artifact.clone())),
     }
 }

@@ -2170,6 +2170,7 @@ CI_GUARD_PATHS = (
     "ci/check_kagemusha_recursive_spend_policy.sh",
     "ci/check_kagemusha_recursive_spend_payload_bench.sh",
     "ci/check_kagemusha_recursive_spend_sdk_parity.sh",
+    "ci/check_kagemusha_v3_release_contract.sh",
     "ci/check_kagemusha_recursive_spend_python_sdk.sh",
 )
 ACTIVE_KAGEMUSHA_TODO_SCAN_PATHS = (
@@ -2184,7 +2185,9 @@ ACTIVE_KAGEMUSHA_TODO_SCAN_PATHS = (
     "crates/iroha_core/src/zk/kagemusha_recursion_adapter.rs",
     "crates/iroha_core/src/zk/kagemusha_v2.rs",
     "crates/iroha_core/src/tx.rs",
+    "crates/iroha_core/src/sumeragi/exec.rs",
     "crates/iroha_core/src/smartcontracts/isi/offline.rs",
+    "crates/iroha_data_model/src/block/consensus_v2.rs",
     "crates/iroha_data_model/src/isi/offline.rs",
     "crates/connect_norito_bridge/src/lib.rs",
     "crates/iroha_js_host/src/lib.rs",
@@ -2238,7 +2241,6 @@ ACTIVE_KAGEMUSHA_TODO_SCAN_PATHS = (
     "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendV2Codecs.swift",
     "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendV2Native.swift",
     "IrohaSwift/Sources/IrohaSwift/KagemushaScaledAmount.swift",
-    "IrohaSwift/Sources/IrohaSwift/OfflineKagemushaAbi7CapabilityContract.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/KagemushaCompactPaymentTokenProverTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/KagemushaInstructionTransactionEncoderTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveAggregationProofBundleProverTests.swift",
@@ -2249,7 +2251,6 @@ ACTIVE_KAGEMUSHA_TODO_SCAN_PATHS = (
     "IrohaSwift/Tests/IrohaSwiftTests/KagemushaScaledAmountTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/KagemushaTopUpParityTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/KagemushaVerifierRecordTestFixtures.swift",
-    "IrohaSwift/Tests/IrohaSwiftTests/OfflineKagemushaAbi7CapabilityContractTests.swift",
     "java/iroha_android/README.md",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaCompactPaymentTokenProver.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaInstructionArchives.java",
@@ -2528,7 +2529,10 @@ TORII_OFFLINE_V2_KAGEMUSHA_REDEEM_COVERAGE = {
         "async fn handler_offline_redeem(",
         "crate::utils::extractors::NoritoJson(request): crate::utils::extractors::NoritoJson<",
         "iroha_torii_shared::offline_api::OfflineRedeemRequest,",
-        'check_access(&app, &headers, Some(remote.ip()), "v1/offline/redeem").await?;',
+        "async fn enforce_offline_command_prebody_admission(",
+        'Some("v1/offline/redeem")',
+        "if let Err(error) = check_access(&app, &headers, remote, route_hint).await {",
+        "offline_v2_issuer::validate_command_headers_before_body(&headers)",
         "offline_v2_issuer::handle_redeem(app, &headers, request).await",
         "&route_catalog::offline::REDEEM,",
         "catalog_post(handler_offline_redeem)",
@@ -2546,9 +2550,9 @@ TORII_OFFLINE_V2_KAGEMUSHA_REDEEM_COVERAGE = {
         "require_idempotency_key(headers, redeem_request.authorization.operation_id)?;",
         "let requested = OfflineOperationRequest::Redeem(&redeem_request);",
         "RedeemKagemushaRecursiveV2::new(redeem_request.clone())",
-        "record.request.authorization().operation_id,",
+        "let operation_id = record.request.authorization().operation_id;",
         "PATH_OFFLINE_REDEEM,",
-        "record.request.kind().into(),",
+        "let kind = record.request.kind();",
         "unavailable_v2_backend_fails_closed_with_stable_service_error",
         "applied_kagemusha_v2_finality_preserves_requested_operation_id",
     ),
@@ -2780,11 +2784,19 @@ WORKFLOW_MAIN_GUARD_COMMANDS = (
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh",
     ),
     (
+        "Kagemusha ABI-18/V3 release contract",
+        "ci/check_kagemusha_v3_release_contract.sh",
+    ),
+    (
         "Kagemusha recursive spend Reserved-lineage policy",
         "ci/check_kagemusha_recursive_spend_policy.sh",
     ),
 )
 HEADER_NEGATIVE_CONTROL_COMMANDS = (
+    (
+        "exact bridge ABI 18 negative control",
+        "ci/check_connect_norito_bridge_header.sh --negative-control-bad-bridge-abi",
+    ),
     (
         "missing recursive header declaration negative control",
         "ci/check_connect_norito_bridge_header.sh --negative-control-missing-recursive-header",
@@ -8331,6 +8343,11 @@ if mode == "--negative-control-torii-offline-v2-kagemusha-redeem":
             "crates/iroha_torii/src/lib.rs",
             "iroha_torii_shared::offline_api::OfflineRedeemRequest,",
             "iroha_torii_shared::offline_api::WrappedOfflineRedeemRequest,",
+        ),
+        (
+            "crates/iroha_torii/src/lib.rs",
+            'Some("v1/offline/redeem")',
+            'Some("v1/offline/v2/notes/redeem")',
         ),
         (
             "crates/iroha_torii/src/lib.rs",

@@ -15,6 +15,10 @@ public sealed record SccpRegistryLimits(
 
 /// <summary>Consensus-critical SCCP proof and deterministic verifier-work limits.</summary>
 public sealed record SccpResourceLimits(
+    uint MaxOutboundMessagesPerBlock,
+    ulong MaxOutboundMessagePayloadBytes,
+    ulong MaxPendingOutboundMessages,
+    ulong MaxPendingOutboundPayloadBytes,
     uint MaxProofsPerTransaction,
     uint MaxProofsPerBlock,
     ulong MaxProofBytesPerProof,
@@ -181,6 +185,7 @@ public sealed record SccpRecentMessageLinks(string BundlePath, string ProofReque
 
 public sealed record SccpRecentMessage(
     ulong Height,
+    uint CommitmentIndex,
     string MessageIdHex,
     SccpPayloadKindV1 Kind,
     SccpLaneIdV1 Lane,
@@ -193,7 +198,11 @@ public sealed record SccpRecentMessage(
     string PayloadProjectionJson,
     SccpRecentMessageLinks Links);
 
-public sealed record SccpRecentMessages(IReadOnlyList<SccpRecentMessage> Items)
+public sealed record SccpRecentCursor(ulong From, uint AfterIndex);
+
+public sealed record SccpRecentMessages(
+    IReadOnlyList<SccpRecentMessage> Items,
+    SccpRecentCursor? Next)
 {
     public static SccpRecentMessages Parse(ReadOnlyMemory<byte> json) => SccpExactParser.ParseRecent(json);
 }
@@ -299,6 +308,10 @@ internal static class SccpExactParser
         SccpJson.ExactFields(
             item,
             [
+                "max_outbound_messages_per_block",
+                "max_outbound_message_payload_bytes",
+                "max_pending_outbound_messages",
+                "max_pending_outbound_payload_bytes",
                 "max_proofs_per_transaction", "max_proofs_per_block",
                 "max_proof_bytes_per_proof", "max_proof_bytes_per_transaction",
                 "max_proof_bytes_per_block", "max_native_headers_per_transaction",
@@ -318,6 +331,18 @@ internal static class SccpExactParser
             ],
             "SCCP resource limits");
         var limits = new SccpResourceLimits(
+            SccpJson.UInt32(item, "max_outbound_messages_per_block", 512, 512),
+            SccpJson.UInt64(item, "max_outbound_message_payload_bytes", 4_096, 4_096),
+            SccpJson.UInt64(
+                item,
+                "max_pending_outbound_messages",
+                1,
+                JsonSafeIntegerMaximum),
+            SccpJson.UInt64(
+                item,
+                "max_pending_outbound_payload_bytes",
+                1,
+                JsonSafeIntegerMaximum),
             SccpJson.UInt32(item, "max_proofs_per_transaction", 1, uint.MaxValue),
             SccpJson.UInt32(item, "max_proofs_per_block", 1, uint.MaxValue),
             SccpJson.UInt64(item, "max_proof_bytes_per_proof", 1, JsonSafeIntegerMaximum),
@@ -756,7 +781,11 @@ internal static class SccpExactParser
     {
         using var document = SccpJson.Parse(json, "SCCP recent messages");
         var root = document.RootElement;
-        SccpJson.ExactFields(root, ["items"], "SCCP recent messages");
+        SccpJson.ExactFields(
+            root,
+            ["items", "next"],
+            ["items"],
+            "SCCP recent messages");
         var values = Array(root, "items");
         if (values.Length > 50)
         {
@@ -770,7 +799,7 @@ internal static class SccpExactParser
             var item = values[index];
             HashSet<string> required =
             [
-                "height", "message_id_hex", "kind", "source_profile", "target_profile",
+                "height", "commitment_index", "message_id_hex", "kind", "source_profile", "target_profile",
                 "destination_binding_hash", "route_configuration_hash", "target_domain", "amount",
                 "payload_projection", "links",
             ];
@@ -846,20 +875,54 @@ internal static class SccpExactParser
             }
 
             messages.Add(new SccpRecentMessage(
-                SccpJson.UInt64(item, "height", 1), id, SccpPayloadKindV1.Transfer, lane,
+                SccpJson.UInt64(item, "height", 1),
+                SccpJson.UInt32(item, "commitment_index", 0, 511),
+                id, SccpPayloadKindV1.Transfer, lane,
                 binding, configuration, assetId, routeId, recipient, amount, projection,
                 new SccpRecentMessageLinks(bundlePath, requestPath)));
         }
 
         for (var index = 1; index < messages.Count; index++)
         {
-            if (messages[index].Height > messages[index - 1].Height)
+            var previous = messages[index - 1];
+            var current = messages[index];
+            if (current.Height > previous.Height)
             {
                 throw new ArgumentException("Recent SCCP messages must be newest first.");
             }
+
+            if (current.Height == previous.Height
+                && current.CommitmentIndex != previous.CommitmentIndex + 1)
+            {
+                throw new ArgumentException(
+                    "Recent SCCP messages at one height must have contiguous ascending commitment indices.");
+            }
+
+            if (current.Height < previous.Height && current.CommitmentIndex != 0)
+            {
+                throw new ArgumentException(
+                    "Recent SCCP messages at an older height must begin at commitment index zero.");
+            }
         }
 
-        return new SccpRecentMessages(messages);
+        SccpRecentCursor? next = null;
+        if (root.TryGetProperty("next", out var nextElement))
+        {
+            SccpJson.ExactFields(nextElement, ["from", "after_index"], "SCCP recent cursor");
+            next = new SccpRecentCursor(
+                SccpJson.UInt64(nextElement, "from", 1),
+                SccpJson.UInt32(nextElement, "after_index", 0, 511));
+            var last = messages.LastOrDefault();
+            if (last is null
+                || next.From != last.Height
+                || next.AfterIndex != last.CommitmentIndex)
+            {
+                throw new ArgumentException(
+                    "Recent SCCP continuation must identify the last returned item.");
+            }
+        }
+
+        return new SccpRecentMessages(messages, next);
     }
 
     private static SccpGovernedRouteV1 ParseGovernedRoute(

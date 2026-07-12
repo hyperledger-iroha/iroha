@@ -4,11 +4,11 @@ import XCTest
 final class ToriiOfflineCashAPIModelsTests: XCTestCase {
     func testPublicRequestSchemaNamesMatchRust() {
         XCTAssertEqual(
-            KagemushaRecursiveSpendV2.topUpRequestWireName,
+            KagemushaRecursiveSpend.topUpRequestWireName,
             "iroha.torii.v1.offline.top_up.request"
         )
         XCTAssertEqual(
-            KagemushaRecursiveSpendV2.redeemRequestWireName,
+            KagemushaRecursiveSpend.redeemRequestWireName,
             "iroha.torii.v1.offline.redeem.request"
         )
     }
@@ -120,7 +120,7 @@ final class ToriiOfflineCashAPIModelsTests: XCTestCase {
         XCTAssertEqual(anchor.digest, Data(repeating: 0xd8, count: 32))
         XCTAssertEqual(
             anchor.digest,
-            try KagemushaRecursiveSpendV2Codecs.decodeTopUpAnchor(archive).anchorDigest
+            try KagemushaRecursiveSpendCodecs.decodeTopUpAnchor(archive).anchorDigest
         )
         XCTAssertEqual(anchor, try OfflineTopUpAnchor(noritoArchive: archive))
 
@@ -341,13 +341,13 @@ final class ToriiOfflineCashAPIModelsTests: XCTestCase {
         let operationId = Data(repeating: 0xab, count: 32)
         let expectedOperationId = String(repeating: "ab", count: 32)
         let topUpArchive = requestArchive(
-            schema: KagemushaRecursiveSpendV2.topUpRequestWireName,
+            schema: KagemushaRecursiveSpend.topUpRequestWireName,
             fieldCount: 8,
             operationIdFieldIndex: 6,
             operationId: operationId
         )
         let redeemArchive = requestArchive(
-            schema: KagemushaRecursiveSpendV2.redeemRequestWireName,
+            schema: KagemushaRecursiveSpend.redeemRequestWireName,
             fieldCount: 11,
             operationIdFieldIndex: 9,
             operationId: operationId
@@ -365,13 +365,13 @@ final class ToriiOfflineCashAPIModelsTests: XCTestCase {
     func testRequestsRequireTheirExactSchemaAndOperationIdField() throws {
         let operationId = Data(repeating: 0x11, count: 32)
         let topUpArchive = requestArchive(
-            schema: KagemushaRecursiveSpendV2.topUpRequestWireName,
+            schema: KagemushaRecursiveSpend.topUpRequestWireName,
             fieldCount: 8,
             operationIdFieldIndex: 6,
             operationId: operationId
         )
         let redeemArchive = requestArchive(
-            schema: KagemushaRecursiveSpendV2.redeemRequestWireName,
+            schema: KagemushaRecursiveSpend.redeemRequestWireName,
             fieldCount: 11,
             operationIdFieldIndex: 9,
             operationId: operationId
@@ -381,7 +381,7 @@ final class ToriiOfflineCashAPIModelsTests: XCTestCase {
         XCTAssertThrowsError(try OfflineRedeemRequest(noritoArchive: topUpArchive))
         XCTAssertThrowsError(
             try OfflineTopUpRequest(noritoArchive: requestArchive(
-                schema: KagemushaRecursiveSpendV2.topUpRequestWireName,
+                schema: KagemushaRecursiveSpend.topUpRequestWireName,
                 fieldCount: 8,
                 operationIdFieldIndex: 5,
                 operationId: operationId
@@ -389,7 +389,7 @@ final class ToriiOfflineCashAPIModelsTests: XCTestCase {
         )
         XCTAssertThrowsError(
             try OfflineRedeemRequest(noritoArchive: requestArchive(
-                schema: KagemushaRecursiveSpendV2.redeemRequestWireName,
+                schema: KagemushaRecursiveSpend.redeemRequestWireName,
                 fieldCount: 11,
                 operationIdFieldIndex: 8,
                 operationId: operationId
@@ -404,7 +404,7 @@ final class ToriiOfflineCashAPIModelsTests: XCTestCase {
             Data(repeating: 0x11, count: 33),
         ] {
             XCTAssertThrowsError(try OfflineTopUpRequest(noritoArchive: requestArchive(
-                schema: KagemushaRecursiveSpendV2.topUpRequestWireName,
+                schema: KagemushaRecursiveSpend.topUpRequestWireName,
                 fieldCount: 8,
                 operationIdFieldIndex: 6,
                 operationId: operationId
@@ -412,7 +412,7 @@ final class ToriiOfflineCashAPIModelsTests: XCTestCase {
                 XCTAssertEqual(error as? OfflineOperationError, .invalidField("operation_id"))
             }
             XCTAssertThrowsError(try OfflineRedeemRequest(noritoArchive: requestArchive(
-                schema: KagemushaRecursiveSpendV2.redeemRequestWireName,
+                schema: KagemushaRecursiveSpend.redeemRequestWireName,
                 fieldCount: 11,
                 operationIdFieldIndex: 9,
                 operationId: operationId
@@ -429,7 +429,7 @@ final class ToriiOfflineCashAPIModelsTests: XCTestCase {
             operationIdFieldIndex: 6,
             operationId: operationId
         )
-        let schema = KagemushaRecursiveSpendV2.topUpRequestWireName
+        let schema = KagemushaRecursiveSpend.topUpRequestWireName
 
         var trailingBytePayload = canonicalPayload
         trailingBytePayload.append(0xff)
@@ -515,14 +515,14 @@ final class ToriiOfflineCashAPIModelsTests: XCTestCase {
             .fromAccount(publicKey: fixed32(0xc0))
             .toI105(networkPrefix: 0x02f1)
         let amount = try KagemushaScaledAmount(atomicUnits: "1", scale: 2)
-        let note = try KagemushaSpendableNoteDescriptorV2(
+        let note = try KagemushaSpendableNoteDescriptor(
             chainID: "swift-offline-api",
             assetDefinitionID: assetDefinitionId,
             noteCommitment: fixed32(0xd0),
             spendNullifier: fixed32(0xd1),
             amount: amount
         )
-        let draft = try KagemushaRecursiveSpendTopUpAnchorV2(
+        let draft = try KagemushaRecursiveSpendTopUpAnchor(
             version: 2,
             chainID: note.chainID,
             payer: payer,
@@ -542,7 +542,7 @@ final class ToriiOfflineCashAPIModelsTests: XCTestCase {
             anchorDigest: fixed32(0xd8),
             archive: Data([1])
         )
-        return try KagemushaRecursiveSpendV2Codecs.encodeTopUpAnchor(draft)
+        return try KagemushaRecursiveSpendCodecs.encodeTopUpAnchor(draft)
     }
 
     private static let operationId = String(repeating: "11", count: 32)

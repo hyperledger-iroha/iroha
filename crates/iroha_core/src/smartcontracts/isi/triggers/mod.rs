@@ -1189,7 +1189,7 @@ mod tests {
         block::ValidBlock,
         kura::Kura,
         query::store::LiveQueryStore,
-        smartcontracts::{Error, Execute, ValidQuery},
+        smartcontracts::{Error, Execute, ValidQuery, isi::triggers::set::SetReadOnly},
         state::{State, World},
         sumeragi::network_topology::Topology,
     };

@@ -49,7 +49,9 @@ from typing import (
     Optional,
     Sequence,
     Tuple,
+    TypedDict,
     Union,
+    cast,
 )
 from urllib.parse import parse_qsl, quote, urlencode, urlsplit
 
@@ -59,6 +61,7 @@ from .norito_frame import validate_norito_frame
 from .sccp import (
     SccpBridgeSubmitResponse,
     SccpCapabilities,
+    SccpRecentCursor,
     SccpRecentMessages,
     SccpRegistry,
     SccpRegistryLimits,
@@ -362,6 +365,7 @@ __all__ = [
     "SccpRegistryLimits",
     "SccpResourceLimits",
     "SccpRegistry",
+    "SccpRecentCursor",
     "SccpRecentMessages",
     "SccpBridgeSubmitResponse",
     "RuntimeAbiActive",
@@ -432,9 +436,55 @@ __all__ = [
     "SumeragiQcEntry",
     "OfflineReadinessBlocker",
     "OfflineReadiness",
+    "OfflineAssetScale",
+    "OfflineScaledAmountJson",
+    "OfflineSpendableNoteJson",
+    "OfflineAuthorizationJson",
+    "OfflineVerifierKeyIdJson",
+    "OfflineProofBoxJson",
+    "OfflineVerifyingKeyJson",
+    "OfflineProofBackend",
+    "OfflineVerifierStatus",
+    "OfflineVerifyingKeyRecordJson",
+    "OfflineMerkleProofJson",
+    "OfflineLanePrivacyMerkleWitnessJson",
+    "OfflineLanePrivacySnarkWitnessJson",
+    "OfflineLanePrivacyMerkleVariantJson",
+    "OfflineLanePrivacySnarkVariantJson",
+    "OfflineLanePrivacyWitnessJson",
+    "OfflineLanePrivacyProofJson",
+    "OfflineVerifiedFoldStepJson",
+    "OfflineVerifiedFoldBundleJson",
+    "OfflineVerifiedFoldVerifierRecordJson",
+    "OfflineVerifiedFoldRecordBundleJson",
+    "OfflineProofAttachmentJson",
+    "OfflineRecursiveSpendBundleJson",
+    "OfflineTopUpAnchorReferenceJson",
+    "OfflineBranchPathJson",
+    "OfflineBranchClaimJson",
+    "OfflineSpendBranchJson",
+    "OfflineLineageModeJson",
+    "OfflinePeerSplitTransitionJson",
+    "OfflineRedemptionChangeTransitionJson",
+    "OfflinePeerSplitTransitionVariantJson",
+    "OfflineRedemptionChangeTransitionVariantJson",
+    "OfflineRecursiveSpendTransitionJson",
+    "OfflineRecursiveSpendStatementJson",
+    "OfflineRecursiveSpendProofJson",
+    "OfflineUnshieldPublicInputsJson",
+    "OfflineRedemptionIntentJson",
+    "OfflineLineageNodeJson",
+    "OfflineLineageWitnessJson",
+    "OfflineRedeemChangeJson",
+    "OfflineTopUpRequest",
+    "OfflineRedeemRequest",
     "OfflineOperationKind",
     "OfflinePendingState",
     "OfflineOperationReference",
+    "OfflineScaledAmount",
+    "OfflineSpendableNote",
+    "OfflineVerifierKeyId",
+    "OfflineTopUpAnchor",
     "OfflineTopUpResult",
     "OfflineRedeemResult",
     "OfflineTopUpOperationResult",
@@ -2372,6 +2422,450 @@ class RbcSample:
     samples: List[RbcChunkSample]
 
 
+OfflineAssetScale = Literal[
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16,
+    17,
+    18,
+    19,
+    20,
+    21,
+    22,
+    23,
+    24,
+    25,
+    26,
+    27,
+    28,
+]
+
+
+class OfflineScaledAmountJson(TypedDict):
+    """Direct JSON shape of one positive, scale-bound Offline amount."""
+
+    atomic_units: int
+    scale: OfflineAssetScale
+
+
+class OfflineSpendableNoteJson(TypedDict):
+    """Direct JSON shape of one scale-, chain-, and asset-bound note."""
+
+    chain_id: str
+    asset: str
+    note_commitment: List[int]
+    spend_nullifier: List[int]
+    amount: OfflineScaledAmountJson
+
+
+class _OfflineAuthorizationJsonOptional(TypedDict, total=False):
+    app_attest_evidence_sha256: Optional[List[int]]
+    app_attest_evidence: Optional[List[int]]
+
+
+class OfflineAuthorizationJson(_OfflineAuthorizationJsonOptional):
+    """Self-contained device authorization embedded in an Offline command."""
+
+    authority: str
+    device_id: str
+    operation_id: List[int]
+    issued_at_ms: int
+    expires_at_ms: int
+    nonce: List[int]
+    payload_digest: List[int]
+    signature: str
+
+
+class OfflineVerifierKeyIdJson(TypedDict):
+    """Registry identity of one proof verifier."""
+
+    backend: str
+    name: str
+
+
+class OfflineProofBoxJson(TypedDict):
+    """Opaque proof bytes with their backend identity."""
+
+    backend: str
+    bytes: List[int]
+
+
+class OfflineVerifyingKeyJson(TypedDict):
+    """Opaque verifier bytes with their backend identity."""
+
+    backend: str
+    bytes: List[int]
+
+
+OfflineProofBackend = Literal[
+    "halo2-ipa-pasta",
+    "halo2-bn254",
+    "groth16",
+    "stark",
+    "unsupported",
+    "halo2-ipa-orchard",
+    "groth16-bls12-377",
+    "fcmp-plus-plus-curve-tree",
+    "lattice-pcs-sis",
+    "miden-stark",
+    "aztec-plonkish-private-kernel",
+    "pq-masp-stark-fri",
+    "anonymous-pgc",
+    "verange",
+    "zkat",
+    "recursive-anonymous-admission",
+    "vega-existing-credential-zk",
+    "silent-threshold-anoncred",
+    "zk-x509",
+    "sis-with-hints",
+]
+OfflineVerifierStatus = Literal["Proposed", "Active", "Withdrawn"]
+
+
+class _OfflineVerifyingKeyRecordJsonOptional(TypedDict, total=False):
+    owner_manifest_id: Optional[str]
+    gas_schedule_id: Optional[str]
+    metadata_uri_cid: Optional[str]
+    vk_bytes_cid: Optional[str]
+    activation_height: Optional[int]
+    withdraw_height: Optional[int]
+    key: Optional[OfflineVerifyingKeyJson]
+
+
+class OfflineVerifyingKeyRecordJson(_OfflineVerifyingKeyRecordJsonOptional):
+    """Governance-managed verifier record submitted with Offline proofs."""
+
+    version: int
+    circuit_id: str
+    namespace: str
+    backend: OfflineProofBackend
+    curve: str
+    public_inputs_schema_hash: List[int]
+    commitment: List[int]
+    vk_len: int
+    max_proof_bytes: int
+    status: OfflineVerifierStatus
+
+
+class OfflineMerkleProofJson(TypedDict):
+    """Merkle authentication path carried by a lane-privacy witness."""
+
+    leaf_index: int
+    audit_path: List[Optional[str]]
+
+
+class OfflineLanePrivacyMerkleWitnessJson(TypedDict):
+    """Typed Merkle lane-privacy witness."""
+
+    leaf: List[int]
+    proof: OfflineMerkleProofJson
+
+
+class OfflineLanePrivacySnarkWitnessJson(TypedDict):
+    """Typed base64 SNARK lane-privacy witness."""
+
+    public_inputs: str
+    proof: str
+
+
+class OfflineLanePrivacyMerkleVariantJson(TypedDict):
+    """Merkle variant of a lane-privacy witness."""
+
+    kind: Literal["merkle"]
+    payload: OfflineLanePrivacyMerkleWitnessJson
+
+
+class OfflineLanePrivacySnarkVariantJson(TypedDict):
+    """SNARK variant of a lane-privacy witness."""
+
+    kind: Literal["snark"]
+    payload: OfflineLanePrivacySnarkWitnessJson
+
+
+OfflineLanePrivacyWitnessJson = Union[
+    OfflineLanePrivacyMerkleVariantJson,
+    OfflineLanePrivacySnarkVariantJson,
+]
+
+
+class OfflineLanePrivacyProofJson(TypedDict):
+    """Lane commitment identity and its typed privacy witness."""
+
+    commitment_id: List[int]
+    witness: OfflineLanePrivacyWitnessJson
+
+
+class _OfflineProofAttachmentJsonOptional(TypedDict, total=False):
+    vk_commitment: Optional[List[int]]
+    envelope_hash: Optional[List[int]]
+    lane_privacy: Optional[OfflineLanePrivacyProofJson]
+
+
+class OfflineProofAttachmentJson(_OfflineProofAttachmentJsonOptional):
+    """Typed proof attachment used by Offline commands."""
+
+    backend: str
+    proof: OfflineProofBoxJson
+    vk_ref: OfflineVerifierKeyIdJson
+
+
+class OfflineVerifiedFoldStepJson(TypedDict):
+    """One checked confidential-transfer proof step."""
+
+    root_before: List[int]
+    input_nullifiers: List[List[int]]
+    output_commitments: List[List[int]]
+    root_after: List[int]
+    attachment: OfflineProofAttachmentJson
+    verifier_key: OfflineVerifyingKeyJson
+
+
+class OfflineVerifiedFoldBundleJson(TypedDict):
+    """Chain- and asset-bound ordered transfer proof steps."""
+
+    chain_id: str
+    asset: str
+    steps: List[OfflineVerifiedFoldStepJson]
+
+
+class OfflineVerifiedFoldVerifierRecordJson(TypedDict):
+    """Registry record selected by one checked fold step."""
+
+    id: OfflineVerifierKeyIdJson
+    record: OfflineVerifyingKeyRecordJson
+
+
+class OfflineVerifiedFoldRecordBundleJson(TypedDict):
+    """Checked one-hop proof bundle in direct Norito JSON form."""
+
+    bundle: OfflineVerifiedFoldBundleJson
+    verifier_records: List[OfflineVerifiedFoldVerifierRecordJson]
+
+
+class OfflineTopUpAnchorReferenceJson(TypedDict):
+    """Compact chain-resolvable identity of one finalized top-up."""
+
+    topup_operation_id: List[int]
+    anchor_digest: List[int]
+
+
+class OfflineBranchPathJson(TypedDict):
+    """Canonical branch coordinate inside one top-up lineage."""
+
+    lineage_root: List[int]
+    depth: int
+    path_bits: List[int]
+
+
+class OfflineBranchClaimJson(TypedDict):
+    """Replay-safe conflict claim for one spendable lineage leaf."""
+
+    path: OfflineBranchPathJson
+    transition_tags: str
+
+
+class _OfflineTaggedUnitJsonOptional(TypedDict, total=False):
+    value: None
+
+
+class OfflineSpendBranchJson(_OfflineTaggedUnitJsonOptional):
+    """Recipient or sender-change output role."""
+
+    branch: Literal["recipient", "change"]
+
+
+class OfflineLineageModeJson(_OfflineTaggedUnitJsonOptional):
+    """Witnessless Reserved or record-backed semantic lineage mode."""
+
+    mode: Literal["reserved", "semantic"]
+
+
+class OfflinePeerSplitTransitionJson(TypedDict):
+    """Proof-bound peer-split transition payload."""
+
+    binding_digest: List[int]
+    branch: OfflineSpendBranchJson
+    recipient_request_digest: List[int]
+    operation_id: List[int]
+    parent_max_proof_step_count: int
+    parent_max_peer_hop_count: int
+
+
+class OfflineRedemptionChangeTransitionJson(TypedDict):
+    """Proof-bound partial-redemption change transition payload."""
+
+    binding_digest: List[int]
+    parent_bundle_digest: List[int]
+    operation_id: List[int]
+    parent_proof_step_count: int
+    parent_peer_hop_count: int
+
+
+class OfflinePeerSplitTransitionVariantJson(TypedDict):
+    """Tagged peer-split transition."""
+
+    transition: Literal["peer_split"]
+    value: OfflinePeerSplitTransitionJson
+
+
+class OfflineRedemptionChangeTransitionVariantJson(TypedDict):
+    """Tagged partial-redemption change transition."""
+
+    transition: Literal["redemption_change"]
+    value: OfflineRedemptionChangeTransitionJson
+
+
+OfflineRecursiveSpendTransitionJson = Union[
+    OfflinePeerSplitTransitionVariantJson,
+    OfflineRedemptionChangeTransitionVariantJson,
+]
+
+
+class _OfflineRecursiveSpendStatementJsonOptional(TypedDict, total=False):
+    transition: Optional[OfflineRecursiveSpendTransitionJson]
+
+
+class OfflineRecursiveSpendStatementJson(_OfflineRecursiveSpendStatementJsonOptional):
+    """Exact public statement bound by one recursive spend proof."""
+
+    chain_id: str
+    asset: str
+    asset_scale: OfflineAssetScale
+    final_root: List[int]
+    topup_anchor_refs: List[OfflineTopUpAnchorReferenceJson]
+    proof_step_count: int
+    peer_hop_count: int
+    current_note: OfflineSpendableNoteJson
+    branch_claims: List[OfflineBranchClaimJson]
+    artifact_generation: str
+    lineage_mode: OfflineLineageModeJson
+    verifier_key_id: OfflineVerifierKeyIdJson
+
+
+class OfflineRecursiveSpendProofJson(TypedDict):
+    """Recursive proof and its exact verifier/public-statement bindings."""
+
+    verifier_key_id: OfflineVerifierKeyIdJson
+    public_statement_digest: List[int]
+    proof: OfflineProofBoxJson
+
+
+class OfflineRecursiveSpendBundleJson(TypedDict):
+    """Scale-carrying recursive state submitted for redemption."""
+
+    statement: OfflineRecursiveSpendStatementJson
+    recursive_proof: OfflineRecursiveSpendProofJson
+
+
+class OfflineUnshieldPublicInputsJson(TypedDict):
+    """Canonical unshield public words bound by a redemption transition."""
+
+    input_commitment_0: List[int]
+    input_commitment_1: List[int]
+    nullifier_0: List[int]
+    nullifier_1: List[int]
+    change_output_commitment: List[int]
+    root: List[int]
+    public_amount: List[int]
+    asset_tag: List[int]
+    chain_tag: List[int]
+
+
+class _OfflineRedemptionIntentJsonOptional(TypedDict, total=False):
+    change_output: Optional[OfflineSpendableNoteJson]
+    change_artifact_generation: Optional[str]
+
+
+class OfflineRedemptionIntentJson(_OfflineRedemptionIntentJsonOptional):
+    """Canonical public redemption intent covered by the authorization."""
+
+    chain_id: str
+    asset: str
+    input_note: OfflineSpendableNoteJson
+    parent_branch_claims: List[OfflineBranchClaimJson]
+    parent_topup_anchor_refs: List[OfflineTopUpAnchorReferenceJson]
+    parent_proof_step_count: int
+    parent_peer_hop_count: int
+    parent_bundle_digest: List[int]
+    input_root: List[int]
+    recipient: str
+    public_amount: OfflineScaledAmountJson
+    unshield_public_inputs: OfflineUnshieldPublicInputsJson
+    unshield_public_inputs_digest: List[int]
+    operation_id: List[int]
+
+
+class OfflineLineageNodeJson(TypedDict):
+    """One canonical transition node in a semantic-lineage DAG."""
+
+    result_bundle_digest: List[int]
+    parent_bundle_digests: List[List[int]]
+    proof_step_count: int
+    verified_at_block_height: int
+    transition_archive: List[int]
+
+
+class OfflineLineageWitnessJson(TypedDict):
+    """Record-backed semantic lineage witness."""
+
+    nodes: List[OfflineLineageNodeJson]
+    final_bundle_digest: List[int]
+
+
+class OfflineRedeemChangeJson(TypedDict):
+    """Proof-bound change branch retained after partial redemption."""
+
+    output: OfflineSpendableNoteJson
+    branch_claims: List[OfflineBranchClaimJson]
+    bundle: OfflineRecursiveSpendBundleJson
+
+
+class OfflineTopUpRequest(TypedDict):
+    """Closed first-release JSON request for ``POST /v1/offline/top-up``."""
+
+    asset: str
+    amount: OfflineScaledAmountJson
+    current_note: OfflineSpendableNoteJson
+    record_bundle: OfflineVerifiedFoldRecordBundleJson
+    pallas_open_envelopes_archive: List[int]
+    artifact_generation: str
+    operation_id: List[int]
+    authorization: OfflineAuthorizationJson
+
+
+class _OfflineRedeemRequestOptional(TypedDict, total=False):
+    lineage_witness: Optional[OfflineLineageWitnessJson]
+    offline_change: Optional[OfflineRedeemChangeJson]
+
+
+class OfflineRedeemRequest(_OfflineRedeemRequestOptional):
+    """Closed first-release JSON request for ``POST /v1/offline/redeem``."""
+
+    bundle: OfflineRecursiveSpendBundleJson
+    recipient: str
+    amount: OfflineScaledAmountJson
+    redeem_proof: OfflineProofAttachmentJson
+    redemption: OfflineRedemptionIntentJson
+    lineage_verifier_record: OfflineVerifyingKeyRecordJson
+    block_height: int
+    operation_id: List[int]
+    authorization: OfflineAuthorizationJson
+
+
 _OFFLINE_READINESS_PATH = "/v1/offline/readiness"
 _OFFLINE_TOP_UP_PATH = "/v1/offline/top-up"
 _OFFLINE_REDEEM_PATH = "/v1/offline/redeem"
@@ -2382,6 +2876,7 @@ _OFFLINE_ERROR_CODE_RE = re.compile(r"^[a-z0-9][a-z0-9_]{0,63}$")
 _OFFLINE_MAX_U32 = (1 << 32) - 1
 _OFFLINE_MAX_U64 = (1 << 64) - 1
 _OFFLINE_MAX_U128 = (1 << 128) - 1
+_OFFLINE_MAX_ASSET_SCALE = 28
 _OFFLINE_MAX_JSON_DEPTH = 128
 _OFFLINE_MAX_JSON_RESPONSE_BYTES = 256 * 1024
 
@@ -2531,12 +3026,12 @@ def _offline_scaled_amount(value: Any, context: str) -> None:
     _offline_unsigned(
         _offline_required(amount, "scale", context),
         f"{context}.scale",
-        _OFFLINE_MAX_U32,
+        _OFFLINE_MAX_ASSET_SCALE,
     )
 
 
 def _normalize_offline_command(
-    request: Mapping[str, Any],
+    request: Union[OfflineTopUpRequest, OfflineRedeemRequest],
     context: str,
     kind: Literal["top_up", "redeem"],
 ) -> Tuple[bytes, str]:
@@ -2576,9 +3071,11 @@ def _normalize_offline_command(
             _offline_required(record, "artifact_generation", context),
             f"{context}.artifact_generation",
         )
-        if len(generation) > 128 or any(ord(character) < 32 or ord(character) == 127 for character in generation):
+        if len(generation.encode("utf-8")) > 128 or any(
+            ord(character) < 32 or ord(character) == 127 for character in generation
+        ):
             raise RuntimeError(
-                f"{context}.artifact_generation must be at most 128 non-control characters"
+                f"{context}.artifact_generation must be at most 128 non-control UTF-8 bytes"
             )
     else:
         _offline_mapping(_offline_required(record, "bundle", context), f"{context}.bundle")
@@ -2720,13 +3217,63 @@ class OfflineOperationReference:
 
 
 @dataclass(frozen=True)
+class OfflineScaledAmount:
+    """Lossless positive amount at the authoritative Offline asset scale."""
+
+    atomic_units: int
+    scale: OfflineAssetScale
+
+
+@dataclass(frozen=True)
+class OfflineSpendableNote:
+    """Typed note descriptor embedded in a finalized top-up anchor."""
+
+    chain_id: str
+    asset: str
+    note_commitment: Tuple[int, ...]
+    spend_nullifier: Tuple[int, ...]
+    amount: OfflineScaledAmount
+
+
+@dataclass(frozen=True)
+class OfflineVerifierKeyId:
+    """Backend and registry name of a verifier selected at finalization."""
+
+    backend: str
+    name: str
+
+
+@dataclass(frozen=True)
+class OfflineTopUpAnchor:
+    """Closed, cross-checked finalized receipt returned by an applied top-up."""
+
+    version: Literal[2]
+    chain_id: str
+    payer: str
+    asset: str
+    asset_scale: OfflineAssetScale
+    amount: OfflineScaledAmount
+    initial_root: Tuple[int, ...]
+    finalized_root: Tuple[int, ...]
+    topup_anchor_nullifiers: Tuple[Tuple[int, ...], ...]
+    current_note: OfflineSpendableNote
+    topup_operation_id: Tuple[int, ...]
+    transfer_verifier_id: OfflineVerifierKeyId
+    transfer_verifier_commitment: Tuple[int, ...]
+    artifact_generation: str
+    finalized_height: int
+    finalized_tx_hash: Tuple[int, ...]
+    anchor_digest: Tuple[int, ...]
+
+
+@dataclass(frozen=True)
 class OfflineTopUpResult:
     """Terminal result of an applied top-up."""
 
     transaction_hash: str
     finalized_block_height: int
     server_time_ms: int
-    anchor: Mapping[str, Any]
+    anchor: OfflineTopUpAnchor
 
 
 @dataclass(frozen=True)
@@ -3019,7 +3566,237 @@ def _offline_error(value: Any, context: str) -> OfflineErrorEnvelope:
     return OfflineErrorEnvelope(code=code, message=message, details=details)
 
 
-def _offline_applied_result(value: Any, context: str) -> OfflineAppliedResult:
+def _offline_fixed_bytes(
+    value: Any,
+    context: str,
+    *,
+    non_zero: bool = False,
+) -> Tuple[int, ...]:
+    raw = _offline_byte_array(value, context, 32)
+    if non_zero and not any(raw):
+        raise RuntimeError(f"{context} must not be all zero")
+    return tuple(raw)
+
+
+def _offline_scaled_amount_model(value: Any, context: str) -> OfflineScaledAmount:
+    record = _offline_mapping(value, context)
+    return OfflineScaledAmount(
+        atomic_units=_offline_unsigned(
+            _offline_required(record, "atomic_units", context),
+            f"{context}.atomic_units",
+            _OFFLINE_MAX_U128,
+            positive=True,
+        ),
+        scale=cast(
+            OfflineAssetScale,
+            _offline_unsigned(
+                _offline_required(record, "scale", context),
+                f"{context}.scale",
+                _OFFLINE_MAX_ASSET_SCALE,
+            ),
+        ),
+    )
+
+
+def _offline_spendable_note(value: Any, context: str) -> OfflineSpendableNote:
+    record = _offline_mapping(value, context)
+    note_commitment = _offline_fixed_bytes(
+        _offline_required(record, "note_commitment", context),
+        f"{context}.note_commitment",
+        non_zero=True,
+    )
+    spend_nullifier = _offline_fixed_bytes(
+        _offline_required(record, "spend_nullifier", context),
+        f"{context}.spend_nullifier",
+        non_zero=True,
+    )
+    if spend_nullifier == note_commitment:
+        raise RuntimeError(f"{context}.spend_nullifier must differ from note_commitment")
+    return OfflineSpendableNote(
+        chain_id=_offline_exact_string(
+            _offline_required(record, "chain_id", context), f"{context}.chain_id"
+        ),
+        asset=_offline_exact_string(
+            _offline_required(record, "asset", context), f"{context}.asset"
+        ),
+        note_commitment=note_commitment,
+        spend_nullifier=spend_nullifier,
+        amount=_offline_scaled_amount_model(
+            _offline_required(record, "amount", context), f"{context}.amount"
+        ),
+    )
+
+
+def _offline_verifier_key_id(value: Any, context: str) -> OfflineVerifierKeyId:
+    record = _offline_mapping(value, context)
+    backend = _offline_exact_string(
+        _offline_required(record, "backend", context), f"{context}.backend"
+    )
+    name = _offline_exact_string(
+        _offline_required(record, "name", context), f"{context}.name"
+    )
+    if len(backend.encode("utf-8")) > 256:
+        raise RuntimeError(f"{context}.backend must contain at most 256 UTF-8 bytes")
+    if len(name.encode("utf-8")) > 256:
+        raise RuntimeError(f"{context}.name must contain at most 256 UTF-8 bytes")
+    return OfflineVerifierKeyId(
+        backend=backend,
+        name=name,
+    )
+
+
+def _offline_top_up_anchor(
+    value: Any,
+    context: str,
+    *,
+    expected_operation_id: str,
+    expected_transaction_hash: str,
+    expected_finalized_height: int,
+) -> OfflineTopUpAnchor:
+    record = _offline_mapping(value, context)
+    version = _offline_unsigned(
+        _offline_required(record, "version", context), f"{context}.version", (1 << 16) - 1
+    )
+    if version != 2:
+        raise RuntimeError(f"{context}.version must be 2")
+    amount = _offline_scaled_amount_model(
+        _offline_required(record, "amount", context), f"{context}.amount"
+    )
+    asset_scale = cast(
+        OfflineAssetScale,
+        _offline_unsigned(
+            _offline_required(record, "asset_scale", context),
+            f"{context}.asset_scale",
+            _OFFLINE_MAX_ASSET_SCALE,
+        ),
+    )
+    if asset_scale != amount.scale:
+        raise RuntimeError(f"{context}.asset_scale must equal amount.scale")
+
+    initial_root = _offline_fixed_bytes(
+        _offline_required(record, "initial_root", context),
+        f"{context}.initial_root",
+        non_zero=True,
+    )
+    finalized_root = _offline_fixed_bytes(
+        _offline_required(record, "finalized_root", context),
+        f"{context}.finalized_root",
+        non_zero=True,
+    )
+    if initial_root == finalized_root:
+        raise RuntimeError(f"{context}.finalized_root must differ from initial_root")
+
+    raw_nullifiers = _offline_required(record, "topup_anchor_nullifiers", context)
+    if not isinstance(raw_nullifiers, list) or not 1 <= len(raw_nullifiers) <= 2:
+        raise RuntimeError(
+            f"{context}.topup_anchor_nullifiers must contain one or two entries"
+        )
+    topup_anchor_nullifiers = tuple(
+        _offline_fixed_bytes(
+            raw,
+            f"{context}.topup_anchor_nullifiers[{index}]",
+            non_zero=True,
+        )
+        for index, raw in enumerate(raw_nullifiers)
+    )
+    if any(
+        left >= right
+        for left, right in zip(topup_anchor_nullifiers, topup_anchor_nullifiers[1:])
+    ):
+        raise RuntimeError(
+            f"{context}.topup_anchor_nullifiers must be strictly sorted and unique"
+        )
+
+    current_note = _offline_spendable_note(
+        _offline_required(record, "current_note", context), f"{context}.current_note"
+    )
+    chain_id = _offline_exact_string(
+        _offline_required(record, "chain_id", context), f"{context}.chain_id"
+    )
+    if current_note.chain_id != chain_id:
+        raise RuntimeError(f"{context}.current_note.chain_id must equal chain_id")
+    if current_note.amount != amount:
+        raise RuntimeError(f"{context}.current_note.amount must equal amount")
+    if any(
+        nullifier in (current_note.note_commitment, current_note.spend_nullifier)
+        for nullifier in topup_anchor_nullifiers
+    ):
+        raise RuntimeError(
+            f"{context}.topup_anchor_nullifiers must not reuse current note material"
+        )
+
+    topup_operation_id = _offline_fixed_bytes(
+        _offline_required(record, "topup_operation_id", context),
+        f"{context}.topup_operation_id",
+        non_zero=True,
+    )
+    if bytes(topup_operation_id).hex() != expected_operation_id:
+        raise RuntimeError(f"{context}.topup_operation_id does not match the operation")
+    finalized_height = _offline_unsigned(
+        _offline_required(record, "finalized_height", context),
+        f"{context}.finalized_height",
+        _OFFLINE_MAX_U64,
+        positive=True,
+    )
+    if finalized_height != expected_finalized_height:
+        raise RuntimeError(
+            f"{context}.finalized_height does not match finalized_block_height"
+        )
+    finalized_tx_hash = _offline_fixed_bytes(
+        _offline_required(record, "finalized_tx_hash", context),
+        f"{context}.finalized_tx_hash",
+        non_zero=True,
+    )
+    if bytes(finalized_tx_hash).hex() != expected_transaction_hash:
+        raise RuntimeError(f"{context}.finalized_tx_hash does not match transaction_hash")
+    artifact_generation = _offline_exact_string(
+        _offline_required(record, "artifact_generation", context),
+        f"{context}.artifact_generation",
+    )
+    if len(artifact_generation.encode("utf-8")) > 128:
+        raise RuntimeError(
+            f"{context}.artifact_generation must contain at most 128 UTF-8 bytes"
+        )
+
+    return OfflineTopUpAnchor(
+        version=2,
+        chain_id=chain_id,
+        payer=_offline_exact_string(
+            _offline_required(record, "payer", context), f"{context}.payer"
+        ),
+        asset=_offline_exact_string(
+            _offline_required(record, "asset", context), f"{context}.asset"
+        ),
+        asset_scale=asset_scale,
+        amount=amount,
+        initial_root=initial_root,
+        finalized_root=finalized_root,
+        topup_anchor_nullifiers=topup_anchor_nullifiers,
+        current_note=current_note,
+        topup_operation_id=topup_operation_id,
+        transfer_verifier_id=_offline_verifier_key_id(
+            _offline_required(record, "transfer_verifier_id", context),
+            f"{context}.transfer_verifier_id",
+        ),
+        transfer_verifier_commitment=_offline_fixed_bytes(
+            _offline_required(record, "transfer_verifier_commitment", context),
+            f"{context}.transfer_verifier_commitment",
+            non_zero=True,
+        ),
+        artifact_generation=artifact_generation,
+        finalized_height=finalized_height,
+        finalized_tx_hash=finalized_tx_hash,
+        anchor_digest=_offline_fixed_bytes(
+            _offline_required(record, "anchor_digest", context),
+            f"{context}.anchor_digest",
+            non_zero=True,
+        ),
+    )
+
+
+def _offline_applied_result(
+    value: Any, context: str, operation_id: str
+) -> OfflineAppliedResult:
     record = _offline_mapping(value, context)
     kind = _offline_required(record, "kind", context)
     if kind not in ("top_up", "redeem"):
@@ -3043,11 +3820,12 @@ def _offline_applied_result(value: Any, context: str) -> OfflineAppliedResult:
         positive=True,
     )
     if kind == "top_up":
-        anchor = _offline_mapping(
-            _snapshot_offline_json(
-                _offline_required(result, "anchor", result_context), f"{result_context}.anchor"
-            ),
+        anchor = _offline_top_up_anchor(
+            _offline_required(result, "anchor", result_context),
             f"{result_context}.anchor",
+            expected_operation_id=operation_id,
+            expected_transaction_hash=transaction_hash,
+            expected_finalized_height=finalized_block_height,
         )
         return OfflineTopUpOperationResult(
             OfflineTopUpResult(
@@ -3106,7 +3884,9 @@ def _offline_operation_status(
         return OfflineAppliedOperation(
             operation_id=operation_id,
             result=_offline_applied_result(
-                _offline_required(value, "result", value_context), f"{value_context}.result"
+                _offline_required(value, "result", value_context),
+                f"{value_context}.result",
+                operation_id,
             ),
         )
     return OfflineRejectedOperation(
@@ -4931,7 +5711,11 @@ class ToriiClient:
         )
 
     def get_sccp_recent_messages(
-        self, *, from_height: Optional[int] = None, limit: Optional[int] = None
+        self,
+        *,
+        from_height: Optional[int] = None,
+        after_index: Optional[int] = None,
+        limit: Optional[int] = None,
     ) -> SccpRecentMessages:
         """Fetch newest-first SCCP messages (`GET /v1/sccp/messages/recent`)."""
 
@@ -4944,6 +5728,18 @@ class ToriiClient:
             ):
                 raise ValueError("SCCP recent-message from_height must be a positive u64")
             params_dict["from"] = str(from_height)
+        if after_index is not None:
+            if from_height is None:
+                raise ValueError(
+                    "SCCP recent-message after_index requires the paired from_height"
+                )
+            if (
+                isinstance(after_index, bool)
+                or not isinstance(after_index, int)
+                or not 0 <= after_index <= 511
+            ):
+                raise ValueError("SCCP recent-message after_index must be an integer in 0..511")
+            params_dict["after_index"] = str(after_index)
         if limit is not None:
             if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 50:
                 raise ValueError("SCCP recent-message limit must be an integer in 1..50")
@@ -6183,7 +6979,7 @@ class ToriiClient:
         return OfflineReadiness.from_payload(payload, asset)
 
     def submit_offline_top_up(
-        self, request: Mapping[str, Any]
+        self, request: OfflineTopUpRequest
     ) -> OfflineOperationReference:
         """Submit one directly structured JSON top-up command."""
 
@@ -6198,7 +6994,7 @@ class ToriiClient:
         )
 
     def submit_offline_redeem(
-        self, request: Mapping[str, Any]
+        self, request: OfflineRedeemRequest
     ) -> OfflineOperationReference:
         """Submit one directly structured JSON redemption command."""
 

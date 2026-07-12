@@ -268,6 +268,13 @@ pub enum PermissionToken {
     ManageTriggers,
     /// Permission to register and unregister peers.
     ManagePeers,
+    /// Permission to invoke one exact entrypoint of one deployed contract instance.
+    ContractEntrypoint {
+        /// Immutable deployed contract address.
+        contract: ContractAddress,
+        /// Exact case-sensitive public selector.
+        entrypoint: String,
+    },
     /// Opaque custom permission token used by contract entrypoints and tests.
     Custom(String),
 }
@@ -3513,7 +3520,6 @@ impl IVMHost for WsvHost {
                 let name = self.decode_name_reg(vm, 10)?;
                 crate::host::validate_declared_state_path(vm, &name)?;
                 let path = name.as_ref();
-                self.log_read_key(path);
                 if self.tx_active
                     && let Some(entry) = self.state_overlay.get(path)
                 {
@@ -3528,11 +3534,15 @@ impl IVMHost for WsvHost {
                             let len = Self::state_value_payload_len(val)?;
                             let gas = Self::state_query_gas(len);
                             preflight_reserved_syscall_gas(vm, gas)?;
-                            Self::load_state_value(vm, val)?;
+                            crate::host::validate_declared_state_value_payload(vm, &name, val)?;
+                            let val = val.clone();
+                            self.log_read_key(path);
+                            Self::load_state_value(vm, &val)?;
                             return Ok(gas);
                         }
                         None => {
                             preflight_reserved_syscall_gas(vm, 16)?;
+                            self.log_read_key(path);
                             vm.set_register(10, 0);
                             return Ok(16);
                         }
@@ -3542,10 +3552,13 @@ impl IVMHost for WsvHost {
                     let len = Self::state_value_payload_len(&env)?;
                     let gas = Self::state_query_gas(len);
                     preflight_reserved_syscall_gas(vm, gas)?;
+                    crate::host::validate_declared_state_value_payload(vm, &name, &env)?;
+                    self.log_read_key(path);
                     Self::load_state_value(vm, &env)?;
                     Ok(gas)
                 } else {
                     preflight_reserved_syscall_gas(vm, 16)?;
+                    self.log_read_key(path);
                     vm.set_register(10, 0);
                     Ok(16)
                 }
@@ -8513,9 +8526,9 @@ mod tests_null_decode {
         let noncanonical_ptr = vm
             .alloc_input_tlv(&make_tlv(
                 PointerType::Quantity,
-                &norito::to_bytes(&noncanonical).expect("encode noncanonical Amount"),
+                &norito::to_bytes(&noncanonical).expect("encode noncanonical quantity"),
             ))
-            .expect("allocate noncanonical Amount");
+            .expect("allocate noncanonical quantity");
         vm.set_register(12, noncanonical_ptr);
         assert_eq!(host.decode_amount_reg(&vm, 12), Err(VMError::DecodeError));
     }

@@ -58,6 +58,10 @@ public final class SccpJsonParser {
           "max_retained_native_trust_anchors_per_lane");
   private static final Set<String> RESOURCE_LIMIT_FIELDS =
       Set.of(
+          "max_outbound_messages_per_block",
+          "max_outbound_message_payload_bytes",
+          "max_pending_outbound_messages",
+          "max_pending_outbound_payload_bytes",
           "max_proofs_per_transaction",
           "max_proofs_per_block",
           "max_proof_bytes_per_proof",
@@ -178,6 +182,7 @@ public final class SccpJsonParser {
   private static final Set<String> RECENT_FIELDS =
       Set.of(
           "height",
+          "commitment_index",
           "message_id_hex",
           "kind",
           "source_profile",
@@ -194,6 +199,7 @@ public final class SccpJsonParser {
   private static final Set<String> RECENT_REQUIRED =
       Set.of(
           "height",
+          "commitment_index",
           "message_id_hex",
           "kind",
           "source_profile",
@@ -328,6 +334,19 @@ public final class SccpJsonParser {
     exactFields(value, RESOURCE_LIMIT_FIELDS, "SCCP resource limits");
     final SccpModels.ResourceLimits result =
         new SccpModels.ResourceLimits(
+            requiredU32(value, "max_outbound_messages_per_block"),
+            requiredUnsignedInteger(
+                value,
+                "max_outbound_message_payload_bytes",
+                MAX_JSON_SAFE_INTEGER,
+                true),
+            requiredUnsignedInteger(
+                value, "max_pending_outbound_messages", MAX_JSON_SAFE_INTEGER, true),
+            requiredUnsignedInteger(
+                value,
+                "max_pending_outbound_payload_bytes",
+                MAX_JSON_SAFE_INTEGER,
+                true),
             requiredU32(value, "max_proofs_per_transaction"),
             requiredU32(value, "max_proofs_per_block"),
             requiredUnsignedInteger(
@@ -358,6 +377,13 @@ public final class SccpJsonParser {
             requiredU32(value, "max_bls_signer_contributions_per_block"),
             requiredU32(value, "max_bn254_pairing_checks_per_transaction"),
             requiredU32(value, "max_bn254_pairing_checks_per_block"));
+    if (result.maxOutboundMessagesPerBlock
+            != SccpModels.SCCP_OUTBOUND_MESSAGES_MAX_PER_BLOCK_V1
+        || !result.maxOutboundMessagePayloadBytes.equals(
+            BigInteger.valueOf(SccpModels.SCCP_OUTBOUND_MESSAGE_MAX_PAYLOAD_BYTES_V1))) {
+      throw new IllegalArgumentException(
+          "SCCP outbound-message limits must equal the fixed V1 capacities");
+    }
     if (result.maxProofBytesPerProof.compareTo(result.maxProofBytesPerTransaction) > 0) {
       throw new IllegalArgumentException(
           "SCCP per-proof byte limit exceeds its transaction limit");
@@ -708,10 +734,10 @@ public final class SccpJsonParser {
 
   public static SccpModels.RecentMessages parseRecentMessages(final byte[] bytes) {
     final Map<String, Object> root = rootObject(bytes, "SCCP recent messages");
-    exactFields(root, Set.of("items"), "SCCP recent messages");
+    exactFields(root, Set.of("items", "next"), Set.of("items"), "SCCP recent messages");
     final List<SccpModels.RecentMessage> items = new ArrayList<>();
     final Set<String> ids = new HashSet<>();
-    long previous = Long.MAX_VALUE;
+    SccpModels.RecentMessage previous = null;
     final List<Object> values = requiredList(root, "items");
     if (values.size() > 50) {
       throw new IllegalArgumentException("SCCP recent response exceeds 50 items");
@@ -719,16 +745,46 @@ public final class SccpJsonParser {
     for (int index = 0; index < values.size(); index++) {
       final SccpModels.RecentMessage item =
           parseRecent(objectValue(values.get(index), "items[" + index + "]"), index);
-      if (item.height > previous) {
-        throw new IllegalArgumentException("SCCP recent messages must be newest-first");
+      if (previous != null
+          && !(previous.height.compareTo(item.height) > 0
+              || (previous.height.equals(item.height)
+                  && previous.commitmentIndex < item.commitmentIndex))) {
+        throw new IllegalArgumentException(
+            "SCCP recent messages must use strict height-descending/index-ascending order");
       }
       if (!ids.add(item.messageIdHex)) {
         throw new IllegalArgumentException("SCCP recent messages contain duplicate message ids");
       }
-      previous = item.height;
+      previous = item;
       items.add(item);
     }
-    return new SccpModels.RecentMessages(items);
+    final SccpModels.RecentCursor next;
+    if (root.get("next") == null) {
+      next = null;
+    } else {
+      final Map<String, Object> value = requiredObject(root, "next");
+      exactFields(value, Set.of("from", "after_index"), "SCCP recent messages.next");
+      next =
+          new SccpModels.RecentCursor(
+              requiredUnsignedInteger(value, "from", MAX_U64, true),
+              requiredInt(
+                  value,
+                  "after_index",
+                  0,
+                  SccpModels.SCCP_OUTBOUND_MESSAGES_MAX_PER_BLOCK_V1 - 1));
+    }
+    if (next != null) {
+      if (items.isEmpty()) {
+        throw new IllegalArgumentException(
+            "SCCP recent messages.next requires a non-empty page");
+      }
+      final SccpModels.RecentMessage last = items.get(items.size() - 1);
+      if (!next.from.equals(last.height) || next.afterIndex != last.commitmentIndex) {
+        throw new IllegalArgumentException(
+            "SCCP recent messages.next must identify the last returned item");
+      }
+    }
+    return new SccpModels.RecentMessages(items, next);
   }
 
   private static ParsedRoute parseGovernedRoute(
@@ -1311,7 +1367,12 @@ public final class SccpJsonParser {
             routeId,
             label + ".payload_projection");
     return new SccpModels.RecentMessage(
-        requiredLong(value, "height", 1, Long.MAX_VALUE),
+        requiredUnsignedInteger(value, "height", MAX_U64, true),
+        requiredInt(
+            value,
+            "commitment_index",
+            0,
+            SccpModels.SCCP_OUTBOUND_MESSAGES_MAX_PER_BLOCK_V1 - 1),
         messageId,
         source.profileKey(),
         target.profileKey(),

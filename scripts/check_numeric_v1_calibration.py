@@ -106,6 +106,8 @@ def evaluate_calibration(root: Path) -> tuple[float, list[CalibrationSample]]:
         if denominator <= 0:
             raise CalibrationError(f"numeric denominator must be positive: {benchmark}")
         denominator_kind = "work" if "work=" in matched.group(0) else "gas"
+        # Only the entry benchmark executes a VM program. The direct bigint,
+        # decimal, and codec cases contain no EMPTY_HARNESS work to subtract.
         if "/entry_control_pipeline/" in benchmark:
             median_ns -= empty_median
             if median_ns <= 0:
@@ -192,7 +194,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     report = {
         "format": "iroha.numeric-v1.calibration.v1",
         "add_repetitions": ADD_REPETITIONS,
-        "empty_harness_subtracted": True,
+        "empty_harness_subtracted_from": [
+            "scalar_add",
+            "entry_control_pipeline",
+        ],
         "scalar_add_ns": add_ns,
         "safety_margin": SAFETY_MARGIN,
         "maximum_weight": MAX_WEIGHT,

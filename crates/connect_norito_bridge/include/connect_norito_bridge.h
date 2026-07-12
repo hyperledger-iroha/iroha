@@ -285,210 +285,6 @@ int32_t connect_norito_offline_verify_note_audit_with_vk(
     unsigned long vk_norito_len,
     int32_t* out_valid);
 
-// Verify private Kagemusha hop proofs against verifier records and generate a compact folded-token proof.
-// Input: Norito-archive bytes of `KagemushaVerifiedFoldRecordBundle`.
-// Output: Norito-archive bytes of `KagemushaCompactPaymentToken`.
-int32_t connect_norito_kagemusha_prove_verified_compact_payment_token_with_records(
-    const uint8_t* verified_record_bundle_norito_ptr,
-    unsigned long verified_record_bundle_norito_len,
-    uint8_t** out_compact_token_ptr,
-    unsigned long* out_compact_token_len);
-
-// Verify private Kagemusha hop proofs plus proof-derived Pallas opening envelopes and
-// generate an admission-neutral recursive aggregation proof bundle.
-// Input 1: Norito-archive bytes of `KagemushaVerifiedFoldRecordBundle`.
-// Input 2: Norito-archive bytes of `Vec<iroha_data_model::zk::OpenVerifyEnvelope>`.
-// Output: Norito-archive bytes of `KagemushaRecursiveAggregationProofBundle`.
-int32_t connect_norito_kagemusha_prove_verified_recursive_aggregation_proof_bundle_with_records_and_pallas_open_envelopes(
-    const uint8_t* verified_record_bundle_norito_ptr,
-    unsigned long verified_record_bundle_norito_len,
-    const uint8_t* pallas_open_envelopes_norito_ptr,
-    unsigned long pallas_open_envelopes_norito_len,
-    uint8_t** out_proof_bundle_ptr,
-    unsigned long* out_proof_bundle_len);
-
-// Build metadata-bound Pallas open envelopes for a Kagemusha verified record bundle.
-// Input: Norito-archive bytes of `KagemushaVerifiedFoldRecordBundle`.
-// Output: Norito-archive bytes of `Vec<OpenVerifyEnvelope>`, one envelope per hop.
-int32_t connect_norito_kagemusha_build_pallas_open_envelopes_archive(
-    const uint8_t* verified_record_bundle_norito_ptr,
-    unsigned long verified_record_bundle_norito_len,
-    uint8_t** out_pallas_open_envelopes_ptr,
-    unsigned long* out_pallas_open_envelopes_len);
-
-// Build the one-envelope Pallas opening archive required for reserved-lineage append
-// over a previous recursive spend bundle.
-// Input: Norito-archive bytes of `KagemushaRecursiveSpendBundleV1`.
-// Output: Norito-archive bytes of `Vec<OpenVerifyEnvelope>`.
-int32_t connect_norito_kagemusha_build_previous_proof_open_envelopes_archive(
-    const uint8_t* previous_bundle_norito_ptr,
-    unsigned long previous_bundle_norito_len,
-    uint8_t** out_previous_open_envelopes_ptr,
-    unsigned long* out_previous_open_envelopes_len);
-
-// ABI 7 recursive compact-token prover surface for `kagemusha-recursive-compact-v1`.
-// Input archives are Norito-encoded `KagemushaVerifiedFoldRecordBundle`,
-// ordered Pallas opening envelopes, and
-// `KagemushaRecursiveCompactKeyArtifactsV1`.
-// Output is a Norito-encoded `KagemushaCompactPaymentToken`.
-int32_t connect_norito_kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes(
-    const uint8_t* verified_record_bundle_norito_ptr,
-    unsigned long verified_record_bundle_norito_len,
-    const uint8_t* pallas_open_envelopes_norito_ptr,
-    unsigned long pallas_open_envelopes_norito_len,
-    const uint8_t* recursive_compact_key_artifacts_norito_ptr,
-    unsigned long recursive_compact_key_artifacts_norito_len,
-    uint8_t** out_compact_token_ptr,
-    unsigned long* out_compact_token_len);
-
-// Verify an ABI 7 recursive compact Kagemusha token against a verifier-key package.
-// Input 1: Norito-archive bytes of `KagemushaCompactPaymentToken`.
-// Input 2: Norito-archive bytes of `KagemushaRecursiveCompactVerifierKeysV1`.
-// Malformed archives and malformed token bindings return ERR_KAGEMUSHA_PROVE.
-// Proof payloads below the ABI-7 compact floor return ERR_KAGEMUSHA_PROVE.
-// Preverified tokens with cryptographically invalid proof bodies return success
-// with `*out_valid = 0`.
-int32_t connect_norito_kagemusha_verify_recursive_compact_payment_token(
-    const uint8_t* compact_token_norito_ptr,
-    unsigned long compact_token_norito_len,
-    const uint8_t* recursive_compact_verifier_keys_norito_ptr,
-    unsigned long recursive_compact_verifier_keys_norito_len,
-    uint8_t* out_valid);
-
-// Verify a projected recursive spend compact Kagemusha token against a lineage verifier record.
-// Input 1: Norito-archive bytes of `KagemushaCompactPaymentToken`.
-// Input 2: Norito-archive bytes of `VerifyingKeyRecord`.
-// Malformed archives, non-lineage circuit ids, inactive/windowed records without
-// a height, and malformed token bindings return ERR_KAGEMUSHA_PROVE.
-// Output: `*out_valid = 1` only when the projected token verifies.
-int32_t connect_norito_kagemusha_verify_recursive_spend_compact_payment_token_projection(
-    const uint8_t* compact_token_norito_ptr,
-    unsigned long compact_token_norito_len,
-    const uint8_t* verifier_record_norito_ptr,
-    unsigned long verifier_record_norito_len,
-    uint8_t* out_valid);
-
-// Verify a projected recursive spend compact Kagemusha token at `block_height`.
-int32_t connect_norito_kagemusha_verify_recursive_spend_compact_payment_token_projection_at_height(
-    const uint8_t* compact_token_norito_ptr,
-    unsigned long compact_token_norito_len,
-    const uint8_t* verifier_record_norito_ptr,
-    unsigned long verifier_record_norito_len,
-    uint64_t block_height,
-    uint8_t* out_valid);
-
-// Project a recursive spend bundle into an ABI 7 recursive compact Kagemusha token.
-// Input: Norito-archive bytes of `KagemushaRecursiveSpendBundleV1`.
-// Output: Norito-archive bytes of `KagemushaCompactPaymentToken`.
-int32_t connect_norito_kagemusha_recursive_spend_compact_payment_token_from_bundle(
-    const uint8_t* bundle_norito_ptr,
-    unsigned long bundle_norito_len,
-    uint8_t** out_compact_token_ptr,
-    unsigned long* out_compact_token_len);
-
-// Initialize production recursive Kagemusha spendable offline cash.
-// Input: Norito-archive bytes of `KagemushaRecursiveSpendInitRequestV1`.
-// Output: Norito-archive bytes of `KagemushaRecursiveSpendBundleV1`.
-int32_t connect_norito_kagemusha_recursive_spend_init(
-    const uint8_t* request_norito_ptr,
-    unsigned long request_norito_len,
-    uint8_t** out_bundle_ptr,
-    unsigned long* out_bundle_len);
-
-// Append one offline hop to production recursive Kagemusha spendable cash.
-// Input: Norito-archive bytes of `KagemushaRecursiveSpendAppendRequestV1`.
-// Output: Norito-archive bytes of `KagemushaRecursiveSpendBundleV1`.
-int32_t connect_norito_kagemusha_recursive_spend_append(
-    const uint8_t* request_norito_ptr,
-    unsigned long request_norito_len,
-    uint8_t** out_bundle_ptr,
-    unsigned long* out_bundle_len);
-
-// Prepare the chain-facing online-to-offline Kagemusha top-up instruction.
-// Input: Norito-archive bytes of `KagemushaRecursiveSpendTopUpRequestV1`.
-// Output: Norito-archive bytes of `TopUpKagemushaRecursive`.
-int32_t connect_norito_kagemusha_recursive_spend_topup(
-    const uint8_t* request_norito_ptr,
-    unsigned long request_norito_len,
-    uint8_t** out_instruction_ptr,
-    unsigned long* out_instruction_len);
-
-// Build the canonical initial Reserved-lineage accumulator transition profile.
-// Input: Norito-archive bytes of `KagemushaRecursiveSpendInitRequestV1`.
-// Output: Norito-archive bytes of `KagemushaRecursiveSpendTransitionProfileV1`.
-int32_t connect_norito_kagemusha_recursive_spend_transition_profile_init(
-    const uint8_t* request_norito_ptr,
-    unsigned long request_norito_len,
-    uint8_t** out_profile_ptr,
-    unsigned long* out_profile_len);
-
-// Build the canonical append Reserved-lineage accumulator transition profile.
-// Input: Norito-archive bytes of `KagemushaRecursiveSpendAppendRequestV1`.
-// Output: Norito-archive bytes of `KagemushaRecursiveSpendTransitionProfileV1`.
-int32_t connect_norito_kagemusha_recursive_spend_transition_profile_append(
-    const uint8_t* request_norito_ptr,
-    unsigned long request_norito_len,
-    uint8_t** out_profile_ptr,
-    unsigned long* out_profile_len);
-
-// Build the compact Reserved-lineage append boundary from a transition profile.
-// Input: Norito-archive bytes of `KagemushaRecursiveSpendTransitionProfileV1`.
-// Output: Norito-archive bytes of `KagemushaRecursiveSpendLineageAppendBoundaryV1`.
-int32_t connect_norito_kagemusha_recursive_spend_lineage_append_boundary(
-    const uint8_t* profile_norito_ptr,
-    unsigned long profile_norito_len,
-    uint8_t** out_boundary_ptr,
-    unsigned long* out_boundary_len);
-
-// Build the initial recursive spend lineage witness.
-// Inputs: Norito-archive bytes of `KagemushaRecursiveSpendInitRequestV1`
-// and the resulting `KagemushaRecursiveSpendBundleV1`.
-// Output: Norito-archive bytes of `KagemushaRecursiveSpendLineageWitnessV1`.
-int32_t connect_norito_kagemusha_recursive_spend_lineage_witness_from_init_result(
-    const uint8_t* request_norito_ptr,
-    unsigned long request_norito_len,
-    const uint8_t* bundle_norito_ptr,
-    unsigned long bundle_norito_len,
-    uint8_t** out_witness_ptr,
-    unsigned long* out_witness_len);
-
-// Append one hop of recursive spend lineage witness material.
-// Inputs: Norito-archive bytes of the previous
-// `KagemushaRecursiveSpendLineageWitnessV1`, the
-// `KagemushaRecursiveSpendAppendRequestV1`, and the resulting
-// `KagemushaRecursiveSpendBundleV1`.
-// Output: Norito-archive bytes of the appended lineage witness.
-int32_t connect_norito_kagemusha_recursive_spend_lineage_witness_append_result(
-    const uint8_t* previous_witness_norito_ptr,
-    unsigned long previous_witness_norito_len,
-    const uint8_t* request_norito_ptr,
-    unsigned long request_norito_len,
-    const uint8_t* bundle_norito_ptr,
-    unsigned long bundle_norito_len,
-    uint8_t** out_witness_ptr,
-    unsigned long* out_witness_len);
-
-// Verify production recursive Kagemusha spendable offline cash.
-// Input: Norito-archive bytes of `KagemushaRecursiveSpendVerifyRequestV1`.
-// Output: Norito-archive bytes of `KagemushaRecursiveSpendVerifyResultV1`.
-// Malformed request archives, including missing or forged Reserved-lineage
-// verifier records and unsupported proof attachments, return
-// ERR_KAGEMUSHA_PROVE instead of a diagnostic result archive.
-int32_t connect_norito_kagemusha_recursive_spend_verify(
-    const uint8_t* request_norito_ptr,
-    unsigned long request_norito_len,
-    uint8_t** out_result_ptr,
-    unsigned long* out_result_len);
-
-// Prepare an online recursive Kagemusha redeem instruction.
-// Input: Norito-archive bytes of `KagemushaRecursiveSpendRedeemRequestV1`.
-// Output: Norito-archive bytes of `RedeemKagemushaRecursive`.
-int32_t connect_norito_kagemusha_recursive_spend_redeem(
-    const uint8_t* request_norito_ptr,
-    unsigned long request_norito_len,
-    uint8_t** out_instruction_ptr,
-    unsigned long* out_instruction_len);
-
 // ---------------- Kagemusha recursive spend ABI 18 / artifact V3 ----------------
 // Returns canonical Norito `KagemushaRecursiveSpendNativeCapabilitiesV1`.
 // Callers must require `proof_backend_available`; symbol presence alone is not
@@ -497,24 +293,32 @@ int32_t connect_norito_kagemusha_recursive_spend_capabilities_v1(
     uint8_t** out_capabilities_ptr,
     unsigned long* out_capabilities_len);
 
-// Verifies canonical Norito `KagemushaTopUpFinalityProofV2` against a
-// canonical, pre-fetched `KagemushaTopUpFinalityRosterArtifactV2`. The final
-// argument is the exact nonzero SHA-256 selected by an authenticated manifest;
-// a generation label is not a trust anchor. Returns 0 only after the roster
-// digest, Commit-QC aggregate, and exact anchor path all verify.
+// Verifies canonical Norito `KagemushaTopUpFinalityProofV2` against the
+// complete canonical `KagemushaRecursiveSpendTopUpAnchorV2` and a canonical,
+// pre-fetched `KagemushaTopUpFinalityRosterArtifactV2`. The canonical V3
+// manifest and its exact nonzero SHA-256 are passed directly; native code
+// selects the roster descriptor from that typed manifest rather than trusting
+// a parallel JSON projection or generation label. Returns 0 only after the
+// manifest and roster digests, full anchor bindings, Commit-QC aggregate, and
+// exact anchor path all verify.
 int32_t connect_norito_kagemusha_topup_finality_verify_v2(
     const uint8_t* proof_norito_ptr,
     unsigned long proof_norito_len,
     const uint8_t* roster_norito_ptr,
     unsigned long roster_norito_len,
-    const uint8_t* expected_roster_sha256_ptr,
-    unsigned long expected_roster_sha256_len);
+    const uint8_t* anchor_norito_ptr,
+    unsigned long anchor_norito_len,
+    const uint8_t* manifest_norito_ptr,
+    unsigned long manifest_norito_len,
+    const uint8_t* expected_manifest_sha256_ptr,
+    unsigned long expected_manifest_sha256_len);
 
 // Streams one complete published KRV3KEY package. Begin pins the canonical
 // Norito manifest to a trusted SHA-256 and selects exactly one content-
 // addressed artifact from it. Finalize re-parses and re-hashes the actual open
-// file descriptor. A finalized handle does not authorize proving until native
-// capabilities also report the audited proof backend available.
+// file descriptor. A finalized handle does not authorize proving until all
+// six roles are installed atomically and native capabilities also report the
+// audited proof backend available.
 int32_t connect_norito_kagemusha_recursive_spend_artifact_begin_v3(
     const uint8_t* manifest_norito_ptr,
     unsigned long manifest_norito_len,
@@ -530,28 +334,29 @@ int32_t connect_norito_kagemusha_recursive_spend_artifact_write_v3(
 int32_t connect_norito_kagemusha_recursive_spend_artifact_finalize_v3(uint64_t handle);
 int32_t connect_norito_kagemusha_recursive_spend_artifact_cancel_v3(uint64_t handle);
 
+// Installs exactly six finalized handles as one manifest-bound generation.
+// Caller order is ignored; native code retains manifest profile/role order.
+// Success consumes every handle atomically. Failure consumes none and leaves
+// the previously installed generation unchanged.
+int32_t connect_norito_kagemusha_recursive_spend_artifact_set_install_v3(
+    const uint8_t* manifest_norito_ptr,
+    unsigned long manifest_norito_len,
+    const uint8_t* expected_manifest_sha256_ptr,
+    unsigned long expected_manifest_sha256_len,
+    const uint64_t* handles_ptr,
+    unsigned long handles_len);
+int32_t connect_norito_kagemusha_recursive_spend_artifact_set_is_installed_v3(
+    const uint8_t* manifest_norito_ptr,
+    unsigned long manifest_norito_len,
+    const uint8_t* expected_manifest_sha256_ptr,
+    unsigned long expected_manifest_sha256_len,
+    uint8_t* out_installed);
+// The digest guard prevents a stale owner from uninstalling a newer release.
+int32_t connect_norito_kagemusha_recursive_spend_artifact_set_uninstall_v3(
+    const uint8_t* expected_manifest_sha256_ptr,
+    unsigned long expected_manifest_sha256_len);
+
 // ---------------- Legacy V2 protocol scaffolding ----------------
-#define CONNECT_NORITO_KAGEMUSHA_ARTIFACT_ROLE_LINEAGE_INIT_V2 3
-#define CONNECT_NORITO_KAGEMUSHA_ARTIFACT_ROLE_LINEAGE_APPEND_V2 4
-#define CONNECT_NORITO_KAGEMUSHA_ARTIFACT_ROLE_REDEEM_CHANGE_V2 5
-
-// Streams an exact content-addressed proving package directly to a private
-// local spool. Finalize checks the declared byte count and SHA-256. Cancel also
-// releases finalized artifacts. Peer calls never fetch artifacts or depend on
-// network availability.
-int32_t connect_norito_kagemusha_recursive_spend_artifact_begin_v2(
-    const uint8_t* reference_norito_ptr,
-    unsigned long reference_norito_len,
-    uint32_t expected_role,
-    uint64_t* out_handle);
-
-int32_t connect_norito_kagemusha_recursive_spend_artifact_write_v2(
-    uint64_t handle,
-    const uint8_t* chunk_ptr,
-    unsigned long chunk_len);
-
-int32_t connect_norito_kagemusha_recursive_spend_artifact_finalize_v2(uint64_t handle);
-int32_t connect_norito_kagemusha_recursive_spend_artifact_cancel_v2(uint64_t handle);
 
 // Receiver request signing and sender verification. Signing-byte and digest
 // outputs are raw byte strings (the digest is exactly 32 bytes); request inputs

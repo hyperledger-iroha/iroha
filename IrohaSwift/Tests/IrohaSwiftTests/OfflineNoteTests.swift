@@ -51,13 +51,13 @@ final class OfflineNoteTests: XCTestCase {
     ) -> OfflineCompactKeyCertificate {
         OfflineCompactKeyCertificate(
             version: base.version,
-            platform: platform ?? OfflineNoteV2Constants.androidKeyMintPlatform,
+            platform: platform ?? AttestedOfflineNoteConstants.androidKeyMintPlatform,
             keyId: base.keyId,
             deviceId: base.deviceId,
             accountId: base.accountId,
             publicKey: publicKey ?? base.publicKey,
-            assertionScheme: OfflineNoteV2Constants.androidKeyMintAssertionScheme,
-            assertionKeyAlgorithm: OfflineNoteV2Constants.androidKeyMintAssertionKeyAlgorithm,
+            assertionScheme: AttestedOfflineNoteConstants.androidKeyMintAssertionScheme,
+            assertionKeyAlgorithm: AttestedOfflineNoteConstants.androidKeyMintAssertionKeyAlgorithm,
             assertionPublicKey: omitAssertionPublicKey
                 ? nil
                 : (assertionPublicKey ?? base.assertionPublicKey),

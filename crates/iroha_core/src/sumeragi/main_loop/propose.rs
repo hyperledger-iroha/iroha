@@ -1151,6 +1151,7 @@ fn preflight_proposal_transaction(
             streaming_meta,
             ivm_cache,
             state_block.pipeline.dynamic_prepass,
+            None,
         )
         .map_err(|err| err.to_string())?;
     let overlay = prepared.overlay;
@@ -6091,7 +6092,12 @@ impl Actor {
                         &routing_batch,
                         &nexus,
                         proposal_height,
-                        |key| world_view.sccp_outbound_messages().get(key).is_some(),
+                        |key| {
+                            world_view
+                                .sccp_outbound_message_locator()
+                                .get(&key.message_id)
+                                .is_some()
+                        },
                     )?
                     .is_empty()
                 };

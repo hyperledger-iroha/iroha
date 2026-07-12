@@ -5707,7 +5707,7 @@ export class ToriiClient {
 
   /**
    * Fetch newest-first SCCP message discovery (`GET /v1/sccp/messages/recent`).
-   * @param {{from?: number, limit?: number, signal?: AbortSignal}} [options]
+   * @param {{from?: number, after_index?: number, limit?: number, signal?: AbortSignal}} [options]
    * @returns {Promise<object>}
    */
   async getSccpRecentMessages(options = {}) {
@@ -5715,7 +5715,8 @@ export class ToriiClient {
       message: "must be a plain object",
     });
     const unknown = Object.keys(record).find(
-      (key) => key !== "from" && key !== "limit" && key !== "signal",
+      (key) =>
+        key !== "from" && key !== "after_index" && key !== "limit" && key !== "signal",
     );
     if (unknown !== undefined) {
       throw new TypeError(`getSccpRecentMessages.options contains unknown field \`${unknown}\``);
@@ -5728,6 +5729,21 @@ export class ToriiClient {
         );
       }
       params.from = String(record.from);
+    }
+    if (record.after_index !== undefined) {
+      if (record.from === undefined) {
+        throw new TypeError("getSccpRecentMessages.options.after_index requires from");
+      }
+      if (
+        !Number.isSafeInteger(record.after_index) ||
+        record.after_index < 0 ||
+        record.after_index > 511
+      ) {
+        throw new TypeError(
+          "getSccpRecentMessages.options.after_index must be an integer in 0..511",
+        );
+      }
+      params.after_index = String(record.after_index);
     }
     if (record.limit !== undefined) {
       if (!Number.isSafeInteger(record.limit) || record.limit < 1 || record.limit > 50) {

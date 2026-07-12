@@ -92,6 +92,50 @@ def test_json_boundary_accepts_only_canonical_strings() -> None:
                 decoder(non_string)
 
 
+def test_hostile_builtin_subclasses_are_rejected_before_user_hooks() -> None:
+    class HostileStr(str):
+        def encode(self, *_args: object, **_kwargs: object) -> bytes:
+            raise AssertionError("hostile str.encode executed")
+
+        def __str__(self) -> str:
+            raise AssertionError("hostile str.__str__ executed")
+
+    class HostileInt(int):
+        def __lt__(self, _other: object) -> bool:
+            raise AssertionError("hostile int comparison executed")
+
+        def __int__(self) -> int:
+            raise AssertionError("hostile int conversion executed")
+
+    class HostileBytes(bytes):
+        def __bytes__(self) -> bytes:
+            raise AssertionError("hostile bytes conversion executed")
+
+    for value in (HostileStr("1"), HostileInt(1)):
+        for constructor in (KotodamaInt, KotodamaDecimal, KotodamaQuantity):
+            with pytest.raises(TypeError):
+                constructor(cast(Any, value))
+
+    for decoder in (
+        NumericV1Codec.decode_int_json,
+        NumericV1Codec.decode_decimal_json,
+        NumericV1Codec.decode_quantity_json,
+    ):
+        with pytest.raises(TypeError):
+            decoder(HostileStr("1"))
+
+    envelope = NumericV1Codec.encode_int_envelope(1)
+    with pytest.raises(TypeError):
+        NumericV1Codec.decode_int_envelope(HostileBytes(envelope))
+
+    class HostileKotodamaInt(KotodamaInt):
+        def __str__(self) -> str:
+            raise AssertionError("hostile numeric __str__ executed")
+
+    with pytest.raises(TypeError):
+        NumericV1Codec.encode_int_frame(HostileKotodamaInt(1))
+
+
 def test_signed_512_bit_endpoints_and_neighbors() -> None:
     for value in (INT_MIN, INT_MAX):
         integer = KotodamaInt(value)

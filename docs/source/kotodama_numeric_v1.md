@@ -270,7 +270,7 @@ The schema names and 16-byte schema hashes are:
 | `decimal` | `iroha.numeric.DecimalValueV1` | `ba2ffed52e4d8ee16f17efefe1828524` |
 | `quantity` | `iroha.numeric.QuantityValueV1` | `e4769984c81ce0e8b678f2eb06274ee3` |
 
-ABI V1 descriptor format 3 embeds a versioned numeric-semantics record. It
+ABI V1 descriptor format 4 embeds a versioned numeric-semantics record. It
 binds all three value domains, exact-intermediate and result-validation rules,
 the complete operator/conversion/wrapping rules, canonicalization, integer and
 decimal division behavior, and the ordered arithmetic and validation failure
@@ -325,6 +325,29 @@ source reorder cannot silently alter persisted state. Any change to one of
 these durable wire identities changes the ABI V1 hash. This is still ABI
 version 1: first-release artifacts carrying an earlier hash are rejected at
 admission rather than interpreted under new semantics.
+
+The descriptor also binds the literal `CNTR` section marker and framing,
+nominal `EmbeddedContractInterfaceV1` and `EmbeddedStateTypeV1` schema names
+and hashes, the complete ordered table of all 20 one-byte state-type tags with
+canonical sample frames and layouts, the 256-node nesting limit, and the exact
+admission rules. A `StateMap` is a top-level durable collection only and cannot
+appear inside another state type. Its key must be one of the supported
+canonical scalar domains; tuples require at least two elements, structs must
+have a canonical nonempty name and canonical unique nonempty fields, and list
+capacity is `1..=64`. Admission rejects a CNTR tree that the runtime cannot
+reconstruct and validate.
+
+When CNTR metadata is present, `STATE_GET`, `STATE_SET`, `STATE_DEL`,
+`STATE_HAS`, and `STATE_LEN` accept only a declared scalar path or a canonical
+child of a declared `StateMap`; a bare map base is a collection prefix, not a
+value. `STATE_KEYS` and `STATE_COUNT` also accept that bare map base. Before a
+write mutates state, and before a present read publishes bytes to the guest,
+the host reconstructs the exact schema from CNTR and requires a canonical
+`StateValueRecordV1` whose schema hash, active atom stream, pointer types,
+pointer hashes, and leaf payloads all match it. Contract execution without its
+CNTR section fails closed. Generic non-contract VM tooling without CNTR retains
+bounded raw-path/raw-value behavior; it cannot be used as a contract-runtime
+fallback.
 
 The digest is the uniform pointer-ABI frame-integrity binding: it proves that
 the bounded frame snapshot subsequently decoded is exactly the frame carried
@@ -491,8 +514,10 @@ generic five-gas `SCALLX` instruction charge is asserted against the VM's total
 consumption but excluded from that denominator, so it cannot hide an
 underpriced numeric entry phase. For each supported
 baseline hardware tier, maintainers compare median time per declared work cell
-against the scalar IVM `ADD` baseline after subtracting the measured
-`EMPTY_HARNESS` cost. The
+against the scalar IVM `ADD` baseline. `ADD` and the VM-based numeric entry
+pipeline subtract the measured `EMPTY_HARNESS` cost before normalization;
+direct bigint, decimal, and frame-codec benchmarks do not contain that VM
+harness and therefore are not adjusted by it. The
 rounded-up worst ratio, plus a minimum 25% safety margin, MUST remain no greater
 than `4`; bounded dispatch/control overhead MUST remain no greater than `16`
 baseline gas units. A failure requires increasing the constants, changing the
@@ -508,9 +533,9 @@ Windows x86-64) and captures each exact host/toolchain identity, console
 transcript, and complete Criterion directory as a retained build artifact; tag
 publication must not proceed without the archived M1 Ultra reference record
 and every matrix run passing.
-`scripts/check_numeric_v1_calibration.py` subtracts
-the measured empty harness, normalizes every declared work/gas denominator,
-applies the 25% margin, and fails the workflow when factor `4` is insufficient.
+`scripts/check_numeric_v1_calibration.py` applies that harness adjustment,
+normalizes every declared work/gas denominator, applies the 25% margin, and
+fails the workflow when factor `4` is insufficient.
 
 The fixed entry charge includes bounded register-contract checks (required-zero
 registers, failure mode, and rounding tag). It is not followed by hidden fixed

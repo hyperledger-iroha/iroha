@@ -2,7 +2,13 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![cfg(feature = "app_api")]
 
-use std::{convert::Infallible, sync::Arc};
+use std::{
+    convert::Infallible,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+};
 
 use axum::body::{Body, Bytes};
 use axum::extract::connect_info::ConnectInfo;
@@ -26,6 +32,20 @@ fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
 
 fn connect_info() -> ConnectInfo<std::net::SocketAddr> {
     ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 0)))
+}
+
+fn tracked_oversized_body(limit: u64) -> (Body, Arc<AtomicUsize>) {
+    let polls = Arc::new(AtomicUsize::new(0));
+    let body_polls = Arc::clone(&polls);
+    let oversized_len = usize::try_from(limit)
+        .expect("test body limit fits usize")
+        .checked_add(1)
+        .expect("test body limit can be incremented");
+    let body = Body::from_stream(futures::stream::once(async move {
+        body_polls.fetch_add(1, Ordering::SeqCst);
+        Ok::<_, Infallible>(Bytes::from(vec![b' '; oversized_len]))
+    }));
+    (body, polls)
 }
 
 #[tokio::test]
@@ -172,6 +192,65 @@ async fn offline_router_exposes_only_the_final_first_release_contract() {
         );
     }
 
+    for query in [
+        "asset_definition_id=xor%23wonderland&ignored=value",
+        "asset_definition_id=%",
+        "asset_definition_id=%2",
+        "asset_definition_id=%GG",
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/v1/offline/readiness?{query}"))
+                    .header(ACCEPT, "application/json")
+                    .extension(connect_info())
+                    .body(Body::empty())
+                    .expect("invalid readiness query request"),
+            )
+            .await
+            .expect("invalid readiness query response");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "query={query}");
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .expect("collect invalid-query error")
+            .to_bytes();
+        let error: iroha_torii_shared::ErrorEnvelope =
+            norito::json::from_slice(&body).expect("decode invalid-query error");
+        assert_eq!(error.code(), "request_query_invalid", "query={query}");
+    }
+
+    for query in [
+        "asset_definition_id=%20xor%23wonderland",
+        "asset_definition_id=xor%23wonderland%20",
+        "asset_definition_id=+xor%23wonderland",
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/v1/offline/readiness?{query}"))
+                    .header(ACCEPT, "application/json")
+                    .extension(connect_info())
+                    .body(Body::empty())
+                    .expect("noncanonical readiness query request"),
+            )
+            .await
+            .expect("noncanonical readiness query response");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "query={query}");
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .expect("collect noncanonical-query error")
+            .to_bytes();
+        let error: iroha_torii_shared::ErrorEnvelope =
+            norito::json::from_slice(&body).expect("decode noncanonical-query error");
+        assert_eq!(error.code(), "asset_definition_id_invalid", "query={query}");
+    }
+
     let readiness = app
         .clone()
         .oneshot(
@@ -191,6 +270,85 @@ async fn offline_router_exposes_only_the_final_first_release_contract() {
     );
 
     for path in ["/v1/offline/top-up", "/v1/offline/redeem"] {
+        enum RejectedHeaders {
+            MissingIdempotency,
+            DuplicateIdempotency,
+            ForbiddenCanonicalAuth,
+        }
+
+        for (case, expected_status, expected_code) in [
+            (
+                RejectedHeaders::MissingIdempotency,
+                StatusCode::BAD_REQUEST,
+                "idempotency_key_missing",
+            ),
+            (
+                RejectedHeaders::DuplicateIdempotency,
+                StatusCode::BAD_REQUEST,
+                "idempotency_key_invalid",
+            ),
+            (
+                RejectedHeaders::ForbiddenCanonicalAuth,
+                StatusCode::FORBIDDEN,
+                "offline_auth_header_unsupported",
+            ),
+        ] {
+            let (body, body_polls) = tracked_oversized_body(OFFLINE_COMMAND_BODY_LIMIT);
+            let mut request = Request::builder()
+                .method(Method::POST)
+                .uri(path)
+                .header(CONTENT_TYPE, "application/json")
+                .header(ACCEPT, "application/json")
+                .extension(connect_info())
+                .body(body)
+                .expect("pre-body admission request");
+            let idempotency_key: HeaderValue = "11"
+                .repeat(32)
+                .parse()
+                .expect("canonical idempotency key fixture");
+            match case {
+                RejectedHeaders::MissingIdempotency => {}
+                RejectedHeaders::DuplicateIdempotency => {
+                    request
+                        .headers_mut()
+                        .append("idempotency-key", idempotency_key.clone());
+                    request
+                        .headers_mut()
+                        .append("idempotency-key", idempotency_key);
+                }
+                RejectedHeaders::ForbiddenCanonicalAuth => {
+                    request
+                        .headers_mut()
+                        .insert("idempotency-key", idempotency_key);
+                    request.headers_mut().insert(
+                        "x-iroha-account",
+                        HeaderValue::from_static("untrusted-offline-caller"),
+                    );
+                }
+            }
+
+            let response = app
+                .clone()
+                .oneshot(request)
+                .await
+                .expect("pre-body admission response");
+            assert_eq!(response.status(), expected_status, "path={path}");
+            assert_eq!(
+                body_polls.load(Ordering::SeqCst),
+                0,
+                "body stream was polled before rejecting headers for path={path}"
+            );
+            let body = response
+                .into_body()
+                .collect()
+                .await
+                .expect("collect pre-body admission response")
+                .to_bytes();
+            let error: iroha_torii_shared::ErrorEnvelope =
+                norito::json::from_slice(&body).expect("decode pre-body admission error");
+            assert_eq!(error.code(), expected_code, "path={path}");
+        }
+
         let json = app
             .clone()
             .oneshot(
@@ -199,6 +357,7 @@ async fn offline_router_exposes_only_the_final_first_release_contract() {
                     .uri(path)
                     .header(CONTENT_TYPE, "application/json")
                     .header(ACCEPT, "application/json")
+                    .header("idempotency-key", "11".repeat(32))
                     .extension(connect_info())
                     .body(axum::body::Body::from("{}"))
                     .expect("typed JSON request"),
@@ -219,6 +378,7 @@ async fn offline_router_exposes_only_the_final_first_release_contract() {
                     .uri(path)
                     .header(CONTENT_TYPE, "application/x-norito")
                     .header(ACCEPT, "application/x-norito")
+                    .header("idempotency-key", "11".repeat(32))
                     .extension(connect_info())
                     .body(axum::body::Body::from("not-a-norito-archive"))
                     .expect("typed Norito request"),
@@ -248,6 +408,75 @@ async fn offline_router_exposes_only_the_final_first_release_contract() {
             StatusCode::UNSUPPORTED_MEDIA_TYPE
         );
 
+        for (content_type, expected_status, expected_code) in [
+            (
+                "application/problem+json",
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                "request_content_type_unsupported",
+            ),
+            (
+                "application/x-norito; profile=offline",
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                "request_content_type_unsupported",
+            ),
+            (
+                "application/json; charset =utf-8",
+                StatusCode::BAD_REQUEST,
+                "request_content_type_invalid",
+            ),
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method(Method::POST)
+                        .uri(path)
+                        .header(CONTENT_TYPE, content_type)
+                        .header(ACCEPT, "application/json")
+                        .extension(connect_info())
+                        .body(Body::from("{"))
+                        .expect("request with adversarial content type"),
+                )
+                .await
+                .expect("content-type classification response");
+            assert_eq!(response.status(), expected_status, "path={path}");
+            let body = response
+                .into_body()
+                .collect()
+                .await
+                .expect("collect content-type error")
+                .to_bytes();
+            let error: iroha_torii_shared::ErrorEnvelope =
+                norito::json::from_slice(&body).expect("decode content-type error");
+            assert_eq!(error.code(), expected_code, "path={path}");
+        }
+
+        let json_with_charset = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri(path)
+                    .header(CONTENT_TYPE, "application/json; charset=\"UTF-8\"")
+                    .header(ACCEPT, "application/json")
+                    .header("idempotency-key", "11".repeat(32))
+                    .extension(connect_info())
+                    .body(Body::from("{}"))
+                    .expect("JSON request with supported charset"),
+            )
+            .await
+            .expect("supported charset response");
+        assert_eq!(json_with_charset.status(), StatusCode::BAD_REQUEST);
+        let body = json_with_charset
+            .into_body()
+            .collect()
+            .await
+            .expect("collect supported-charset decode error")
+            .to_bytes();
+        let error: iroha_torii_shared::ErrorEnvelope =
+            norito::json::from_slice(&body).expect("decode supported-charset error");
+        assert_eq!(error.code(), "request_json_invalid", "path={path}");
+
         for (content_type, expected_code) in [
             ("application/json", "request_json_invalid"),
             ("application/x-norito", "request_norito_invalid"),
@@ -260,6 +489,7 @@ async fn offline_router_exposes_only_the_final_first_release_contract() {
                         .uri(path)
                         .header(CONTENT_TYPE, content_type)
                         .header(ACCEPT, "application/json")
+                        .header("idempotency-key", "11".repeat(32))
                         .extension(connect_info())
                         .body(axum::body::Body::empty())
                         .expect("empty typed request"),
@@ -329,6 +559,7 @@ async fn offline_router_exposes_only_the_final_first_release_contract() {
                     .uri(path)
                     .header(CONTENT_TYPE, "application/json")
                     .header(ACCEPT, "application/json")
+                    .header("idempotency-key", "11".repeat(32))
                     .extension(connect_info())
                     .body(Body::from(vec![
                         b' ';
@@ -370,6 +601,7 @@ async fn offline_router_exposes_only_the_final_first_release_contract() {
                     .uri(path)
                     .header(CONTENT_TYPE, "application/json")
                     .header(ACCEPT, "application/json")
+                    .header("idempotency-key", "11".repeat(32))
                     .extension(connect_info())
                     .body(Body::from_stream(body_chunks))
                     .expect("request above the configured limit"),

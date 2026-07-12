@@ -133,6 +133,19 @@ fn is_list_intrinsic(name: &str) -> bool {
     )
 }
 
+fn is_lowered_intrinsic(name: &str) -> bool {
+    name == STATE_MAP_GET_INTRINSIC
+        || is_list_intrinsic(name)
+        || matches!(
+            name,
+            DECIMAL_DIV_ROUND_INTRINSIC
+                | QUANTITY_DIV_ROUND_INTRINSIC
+                | QUANTITY_RATIO_ROUND_INTRINSIC
+                | DECIMAL_TO_INT_TRUNC_INTRINSIC
+                | DECIMAL_TO_INT_ROUND_INTRINSIC
+        )
+}
+
 fn is_canonical_type_spelling(name: &str) -> bool {
     V1_SOURCE_TYPE_NAMES.contains(&name)
         || matches!(
@@ -148,16 +161,7 @@ fn is_canonical_type_spelling(name: &str) -> bool {
 /// Return whether a source declaration collides with compiler-owned names.
 pub fn is_reserved_source_declaration(name: &str, is_function: bool) -> bool {
     name.starts_with(LINKED_SYMBOL_PREFIX)
-        || name == STATE_MAP_GET_INTRINSIC
-        || is_list_intrinsic(name)
-        || matches!(
-            name,
-            DECIMAL_DIV_ROUND_INTRINSIC
-                | QUANTITY_DIV_ROUND_INTRINSIC
-                | QUANTITY_RATIO_ROUND_INTRINSIC
-                | DECIMAL_TO_INT_TRUNC_INTRINSIC
-                | DECIMAL_TO_INT_ROUND_INTRINSIC
-        )
+        || is_lowered_intrinsic(name)
         || is_canonical_type_spelling(name)
         || (is_function
             && (Builtin::from_name(name).is_some() || Builtin::from_source_name(name).is_some()))
@@ -2343,6 +2347,11 @@ fn validate_production_projection_expr(
                     }
                     _ => {}
                 }
+            } else if is_lowered_intrinsic(name) {
+                // Member operations and exact numeric helpers are lowered into
+                // compiler-owned calls before the test target is projected.
+                // They do not have source declarations and must survive the
+                // production-call-graph validation as intrinsic leaves.
             } else if removed.contains(name) {
                 return Err(SemanticError {
                     code: "E_TEST_ONLY_PRODUCTION",
@@ -7857,6 +7866,84 @@ fn analyze_surface_builtin_call(
                 ty: Type::Unit,
             })
         }
+        Builtin::SetAssetTransferFreeze => {
+            if arg_typed.len() != 3
+                || !(arg_typed[0].ty == Type::AccountId
+                    && arg_typed[1].ty == Type::AssetDefinitionId
+                    && arg_typed[2].ty == Type::Bool)
+            {
+                return Err(SemanticError {
+                    code: "K2003",
+                    message:
+                        "ledger::asset::set_transfer_freeze expects (AccountId, AssetDefinitionId, bool)"
+                            .into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Unit,
+            })
+        }
+        Builtin::SetAssetTransferDailyLimit => {
+            if arg_typed.len() != 3
+                || !(arg_typed[0].ty == Type::AccountId
+                    && arg_typed[1].ty == Type::AssetDefinitionId
+                    && resolve_struct_type(&arg_typed[2].ty)
+                        == Type::Option(Box::new(Type::Quantity)))
+            {
+                return Err(SemanticError {
+                    code: "K2003",
+                    message:
+                        "ledger::asset::set_transfer_daily_limit expects (AccountId, AssetDefinitionId, Option<quantity>)"
+                            .into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Unit,
+            })
+        }
+        Builtin::AccountRecoveryPropose => {
+            if arg_typed.len() != 2
+                || !(arg_typed[0].ty == Type::String && arg_typed[1].ty == Type::AccountId)
+            {
+                return Err(SemanticError {
+                    code: "K2003",
+                    message: "ledger::account::recovery::propose expects (string, AccountId)"
+                        .into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Unit,
+            })
+        }
+        Builtin::AccountRecoveryApprove
+        | Builtin::AccountRecoveryCancel
+        | Builtin::AccountRecoveryFinalize => {
+            if arg_typed.len() != 1 || arg_typed[0].ty != Type::String {
+                return Err(SemanticError {
+                    code: "K2003",
+                    message: format!("{} expects (string)", builtin.source_name()),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Unit,
+            })
+        }
         Builtin::NftMintAsset => {
             if arg_typed.len() != 2
                 || !(arg_typed[0].ty == Type::NftId && arg_typed[1].ty == Type::AccountId)
@@ -9493,7 +9580,7 @@ fn analyze_surface_builtin_call(
                 ty: Type::Json,
             })
         }
-        Builtin::Authority | Builtin::SysvarAuthority => {
+        Builtin::Authority | Builtin::SysvarAuthority | Builtin::ContractSubject => {
             if !arg_typed.is_empty() {
                 return Err(SemanticError {
                     code: "K2003",

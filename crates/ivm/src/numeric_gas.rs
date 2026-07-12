@@ -600,7 +600,7 @@ mod tests {
                 mantissa_limbs: 3,
                 scale: 28,
             }),
-            Ok(28)
+            Ok(52)
         );
         assert_eq!(
             work_step_gas(NumericWorkStep::ScaleByPowerOfTen {
@@ -625,7 +625,7 @@ mod tests {
                 mantissa_limbs: 3,
                 remaining_scale: 28,
             }),
-            Ok(28)
+            Ok(52)
         );
         assert_eq!(
             work_step_gas(NumericWorkStep::Normalize {
@@ -641,7 +641,7 @@ mod tests {
                 denominator_limbs: 3,
                 output_scale: 28,
             }),
-            Ok(116)
+            Ok(220)
         );
         assert_eq!(
             work_step_gas(NumericWorkStep::RoundedDivision {

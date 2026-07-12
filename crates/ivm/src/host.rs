@@ -1093,6 +1093,12 @@ pub const fn registered_host_syscall_gas_formula(number: u32) -> Option<HostSysc
             | syscalls::SYSCALL_SORACLOUD_EMIT_MAILBOX_MESSAGE
             | syscalls::SYSCALL_SORACLOUD_APPEND_JOURNAL
             | syscalls::SYSCALL_SORACLOUD_PUBLISH_CHECKPOINT
+            | syscalls::SYSCALL_SET_ASSET_TRANSFER_FREEZE
+            | syscalls::SYSCALL_SET_ASSET_TRANSFER_DAILY_LIMIT
+            | syscalls::SYSCALL_ACCOUNT_RECOVERY_PROPOSE
+            | syscalls::SYSCALL_ACCOUNT_RECOVERY_APPROVE
+            | syscalls::SYSCALL_ACCOUNT_RECOVERY_CANCEL
+            | syscalls::SYSCALL_ACCOUNT_RECOVERY_FINALIZE
     ) {
         return Some(HostSyscallGasFormula::ConservativeEnvelope);
     }
@@ -1160,6 +1166,7 @@ pub const fn registered_host_syscall_gas_formula(number: u32) -> Option<HostSysc
             | syscalls::SYSCALL_SYSVAR_BLOCK_TIME_MS
             | syscalls::SYSCALL_SYSVAR_AUTHORITY
             | syscalls::SYSCALL_SYSVAR_CONTRACT_ADDRESS
+            | syscalls::SYSCALL_SYSVAR_CONTRACT_SUBJECT
             | syscalls::SYSCALL_SYSVAR_ENTRYPOINT
             | syscalls::SYSCALL_DECODE_ARGUMENT_RECORD
             | syscalls::SYSCALL_STATE_MAP_KEY_AT
@@ -3084,6 +3091,7 @@ impl IVMHost for DefaultHost {
                     validate_state_value_payload_len(value.len())?;
                     let gas = state_value_gas(path_len, value.len());
                     preflight_reserved_syscall_gas(vm, gas)?;
+                    validate_declared_state_value_payload(vm, &path, value)?;
                     let value = value.clone();
                     self.access_log.read_keys.insert(path.as_ref().to_string());
                     let ptr = Self::alloc_norito_bytes_tlv(vm, &value)?;
@@ -6386,9 +6394,9 @@ mod tests {
         let noncanonical_ptr = vm
             .alloc_input_tlv(&test_tlv(
                 PointerType::Quantity,
-                &norito::to_bytes(&noncanonical).expect("encode noncanonical Amount"),
+                &norito::to_bytes(&noncanonical).expect("encode noncanonical quantity"),
             ))
-            .expect("allocate noncanonical Amount");
+            .expect("allocate noncanonical quantity");
         vm.set_register(13, noncanonical_ptr);
         assert_eq!(
             DefaultHost::expect_amount(&vm, 13),

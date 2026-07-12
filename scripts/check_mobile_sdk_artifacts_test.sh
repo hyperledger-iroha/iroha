@@ -127,13 +127,9 @@ PLIST
     "connect_norito_kagemusha_recursive_spend_artifact_write_v3",
     "connect_norito_kagemusha_recursive_spend_artifact_finalize_v3",
     "connect_norito_kagemusha_recursive_spend_artifact_cancel_v3",
-    "connect_norito_kagemusha_recursive_spend_init",
-    "connect_norito_kagemusha_recursive_spend_append",
-    "connect_norito_kagemusha_recursive_spend_verify",
-    "connect_norito_kagemusha_recursive_spend_redeem",
-    "connect_norito_kagemusha_recursive_spend_topup",
-    "connect_norito_kagemusha_recursive_spend_lineage_witness_from_init_result",
-    "connect_norito_kagemusha_recursive_spend_lineage_witness_append_result",
+    "connect_norito_kagemusha_recursive_spend_artifact_set_install_v3",
+    "connect_norito_kagemusha_recursive_spend_artifact_set_is_installed_v3",
+    "connect_norito_kagemusha_recursive_spend_artifact_set_uninstall_v3",
     "connect_norito_kagemusha_recursive_spend_init_v2",
     "connect_norito_kagemusha_recursive_spend_topup_unsigned_payload_digest_v2",
     "connect_norito_kagemusha_recursive_spend_topup_finalize_request_v2",
@@ -159,11 +155,7 @@ PLIST
     "connect_norito_kagemusha_recursive_spend_peer_payment_validate_v2",
     "connect_norito_kagemusha_recursive_spend_bundle_summary_v2",
     "connect_norito_kagemusha_recursive_spend_build_split_intent_v2",
-    "connect_norito_kagemusha_recursive_spend_build_redemption_intent_v2",
-    "connect_norito_kagemusha_recursive_spend_artifact_begin_v2",
-    "connect_norito_kagemusha_recursive_spend_artifact_write_v2",
-    "connect_norito_kagemusha_recursive_spend_artifact_finalize_v2",
-    "connect_norito_kagemusha_recursive_spend_artifact_cancel_v2"
+    "connect_norito_kagemusha_recursive_spend_build_redemption_intent_v2"
   ],
   "hashes": {
     "ios-arm64": "$hash_a",
@@ -218,6 +210,13 @@ run_expect_fail() {
 fixture="$TMP_DIR/valid"
 make_fixture "$fixture"
 run_expect_pass "$fixture"
+
+wrong_bridge_abi="$TMP_DIR/wrong-bridge-abi"
+make_fixture "$wrong_bridge_abi"
+sed -i.bak 's/"native_bridge_abi_version": 18/"native_bridge_abi_version": 17/' \
+  "$wrong_bridge_abi/dist/NoritoBridge.artifacts.json"
+rm -f "$wrong_bridge_abi/dist/NoritoBridge.artifacts.json.bak"
+run_expect_fail "$wrong_bridge_abi" "exact first-release NoritoBridge ABI 18"
 
 enabled_privacy="$TMP_DIR/enabled-privacy"
 make_fixture "$enabled_privacy"
@@ -301,10 +300,18 @@ run_expect_fail "$header_mismatch" "NoritoBridge bridge header differs in ios-ar
 symbol_inventory_mismatch="$TMP_DIR/symbol-inventory-mismatch"
 make_fixture "$symbol_inventory_mismatch"
 sed -i.bak \
-  's/connect_norito_kagemusha_recursive_spend_lineage_witness_append_result/unexpected_symbol/' \
+  's/connect_norito_kagemusha_recursive_spend_build_redemption_intent_v2/unexpected_symbol/' \
   "$symbol_inventory_mismatch/dist/NoritoBridge.artifacts.json"
 rm -f "$symbol_inventory_mismatch/dist/NoritoBridge.artifacts.json.bak"
 run_expect_fail "$symbol_inventory_mismatch" "required symbol inventory is missing or non-canonical"
+
+legacy_symbol_reintroduced="$TMP_DIR/legacy-symbol-reintroduced"
+make_fixture "$legacy_symbol_reintroduced"
+sed -i.bak '/"connect_norito_kagemusha_recursive_spend_init_v2",/i\
+    "connect_norito_kagemusha_recursive_spend_init",' \
+  "$legacy_symbol_reintroduced/dist/NoritoBridge.artifacts.json"
+rm -f "$legacy_symbol_reintroduced/dist/NoritoBridge.artifacts.json.bak"
+run_expect_fail "$legacy_symbol_reintroduced" "required symbol inventory is missing or non-canonical"
 
 missing_android_publication="$TMP_DIR/missing-android-publication"
 make_fixture "$missing_android_publication"

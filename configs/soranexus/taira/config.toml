@@ -186,6 +186,9 @@ max_proof_bytes_block = 16777216
 [zk.sccp]
 # One bridge proof plus its receipt fits below the governed 10 MiB transaction ceiling. Four
 # independent proofs may share a block; CPU-heavy work is reserved before cryptographic dispatch.
+# Pending payload state covers 128 maximally full SCCP blocks and is released per accepted proof.
+max_pending_outbound_messages = 65536
+max_pending_outbound_payload_bytes = 268435456
 max_proofs_per_transaction = 1
 max_proofs_per_block = 4
 max_proof_bytes_per_proof = 8388608

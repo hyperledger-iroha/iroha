@@ -54,11 +54,11 @@ function fail(code, message) {
 }
 
 function asBytes(value, context) {
-  if (value instanceof Uint8Array) return value;
+  if (value instanceof Uint8Array) return Uint8Array.from(value);
   if (ArrayBuffer.isView(value)) {
-    return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+    return Uint8Array.from(new Uint8Array(value.buffer, value.byteOffset, value.byteLength));
   }
-  if (value instanceof ArrayBuffer) return new Uint8Array(value);
+  if (value instanceof ArrayBuffer) return Uint8Array.from(new Uint8Array(value));
   throw new TypeError(`${context} must be an ArrayBuffer or Uint8Array`);
 }
 
@@ -337,6 +337,22 @@ export class KotodamaQuantity {
   }
 }
 
+function canonicalIntValue(value) {
+  return value instanceof KotodamaInt ? new KotodamaInt(value.value) : new KotodamaInt(value);
+}
+
+function canonicalDecimalValue(value) {
+  return value instanceof KotodamaDecimal
+    ? new KotodamaDecimal(value.mantissa, value.scale)
+    : new KotodamaDecimal(value);
+}
+
+function canonicalQuantityValue(value) {
+  return value instanceof KotodamaQuantity
+    ? new KotodamaQuantity(value.mantissa, value.scale)
+    : new KotodamaQuantity(value);
+}
+
 function bodyFor(kind, value) {
   const schema = SCHEMAS[kind];
   const mantissa = kind === "int" ? value.value : value.mantissa;
@@ -446,21 +462,21 @@ export const NumericV1 = Object.freeze({
   MAX_MANTISSA_BYTES,
   MAX_SCALE: 28,
   schemas: SCHEMAS,
-  encodeIntFrame: (value) => frameFor("int", value instanceof KotodamaInt ? value : new KotodamaInt(value)),
-  encodeDecimalFrame: (value) => frameFor("decimal", value instanceof KotodamaDecimal ? value : new KotodamaDecimal(value)),
-  encodeQuantityFrame: (value) => frameFor("quantity", value instanceof KotodamaQuantity ? value : new KotodamaQuantity(value)),
+  encodeIntFrame: (value) => frameFor("int", canonicalIntValue(value)),
+  encodeDecimalFrame: (value) => frameFor("decimal", canonicalDecimalValue(value)),
+  encodeQuantityFrame: (value) => frameFor("quantity", canonicalQuantityValue(value)),
   decodeIntFrame: (bytes) => decodeFrame("int", bytes),
   decodeDecimalFrame: (bytes) => decodeFrame("decimal", bytes),
   decodeQuantityFrame: (bytes) => decodeFrame("quantity", bytes),
-  encodeIntEnvelope: (value) => envelopeFor("int", value instanceof KotodamaInt ? value : new KotodamaInt(value)),
-  encodeDecimalEnvelope: (value) => envelopeFor("decimal", value instanceof KotodamaDecimal ? value : new KotodamaDecimal(value)),
-  encodeQuantityEnvelope: (value) => envelopeFor("quantity", value instanceof KotodamaQuantity ? value : new KotodamaQuantity(value)),
+  encodeIntEnvelope: (value) => envelopeFor("int", canonicalIntValue(value)),
+  encodeDecimalEnvelope: (value) => envelopeFor("decimal", canonicalDecimalValue(value)),
+  encodeQuantityEnvelope: (value) => envelopeFor("quantity", canonicalQuantityValue(value)),
   decodeIntEnvelope: (bytes) => decodeEnvelope("int", bytes),
   decodeDecimalEnvelope: (bytes) => decodeEnvelope("decimal", bytes),
   decodeQuantityEnvelope: (bytes) => decodeEnvelope("quantity", bytes),
-  encodeIntJson: (value) => (value instanceof KotodamaInt ? value : new KotodamaInt(value)).toString(),
-  encodeDecimalJson: (value) => (value instanceof KotodamaDecimal ? value : new KotodamaDecimal(value)).toString(),
-  encodeQuantityJson: (value) => (value instanceof KotodamaQuantity ? value : new KotodamaQuantity(value)).toString(),
+  encodeIntJson: (value) => canonicalIntValue(value).toString(),
+  encodeDecimalJson: (value) => canonicalDecimalValue(value).toString(),
+  encodeQuantityJson: (value) => canonicalQuantityValue(value).toString(),
   decodeIntJson: (value) => new KotodamaInt(value),
   decodeDecimalJson: (value) => {
     const decoded = new KotodamaDecimal(value);

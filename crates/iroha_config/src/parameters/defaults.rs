@@ -1842,6 +1842,13 @@ pub mod torii {
             "100000".to_string()
         }
 
+        /// Maximum number of accepted bindings plus in-flight reservations retained in memory.
+        pub const OPERATION_REGISTRY_MAX_ENTRIES: usize = 4_096;
+        /// Canonical bytes charged for each admitted binding or in-flight reservation.
+        pub const OPERATION_REGISTRY_ACCOUNTED_BYTES_PER_ENTRY: usize = 32 + 1 + 32 + 32 + 8 + 8;
+        /// Maximum canonical bytes reserved by accepted bindings and in-flight operations.
+        pub const OPERATION_REGISTRY_MAX_BYTES: usize = 512 * 1024;
+
         /// Certificate TTL in milliseconds.
         pub const CERTIFICATE_TTL_MS: u64 = 7 * 24 * 60 * 60 * 1_000;
         /// Authorization refresh interval in milliseconds.
@@ -2861,6 +2868,16 @@ pub mod zk {
 
         /// Maximum closed SCCP proofs in one transaction.
         pub const MAX_PROOFS_PER_TRANSACTION: NonZeroU32 = nonzero!(1_u32);
+        /// Maximum payload-bearing outbound messages awaiting destination proof acceptance.
+        ///
+        /// This covers 128 completely full 512-message SCCP blocks, providing explicit relay
+        /// outage headroom while hard-bounding consensus-state map overhead.
+        pub const MAX_PENDING_OUTBOUND_MESSAGES: NonZeroU64 = nonzero!(65_536_u64);
+        /// Maximum canonical payload bytes awaiting destination proof acceptance.
+        ///
+        /// The 256 MiB allowance likewise covers 128 full blocks at the fixed 2 MiB/block V1
+        /// payload ceiling. Accepted payloads move immediately to Kura's immutable archive.
+        pub const MAX_PENDING_OUTBOUND_PAYLOAD_BYTES: NonZeroU64 = nonzero!(256_u64 * 1024 * 1024);
         /// Maximum closed SCCP proofs committed in one block.
         pub const MAX_PROOFS_PER_BLOCK: NonZeroU32 = nonzero!(4_u32);
         /// Maximum canonical bytes retained for one closed SCCP bridge proof.

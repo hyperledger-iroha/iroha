@@ -40,6 +40,9 @@ pub const NPOS_TAG: &str = "iroha2-consensus::npos-sumeragi@v2";
 pub const PERMISSIONED_BLS_DOMAIN: &str = "bls-iroha2:permissioned-sumeragi:v2";
 /// BLS domain selected by an NPoS v2 genesis.
 pub const NPOS_BLS_DOMAIN: &str = "bls-iroha2:npos-sumeragi:v2";
+/// Maximum block-local Kagemusha top-up anchors authenticated by one execution commitment.
+pub const MAX_KAGEMUSHA_TOPUP_ANCHORS_PER_BLOCK: u32 = 16;
+const KAGEMUSHA_TOPUP_POST_STATE_ROOT_DOMAIN: &[u8] = b"iroha:kagemusha:v2:post-state-root";
 /// Canonical Nexus/AMX context commitment for the repository's recommended
 /// single-lane defaults and no staged public-lane validators.
 ///
@@ -343,7 +346,7 @@ impl HeightContext {
     /// Return the typed hash that identifies every round in this context.
     ///
     /// The identity commits to the parent CommitQC's semantic finality key
-    /// (parent context, height, phase, and subject), rather than its view,
+    /// (parent context, height, phase, subject, and execution commitment), rather than its view,
     /// aggregate signature, or signer subset. Two nodes that finalized the same
     /// parent through different valid CommitQCs must derive the same next-height
     /// context.
@@ -366,6 +369,7 @@ impl HeightContext {
                     height: certificate.round.height,
                     phase: certificate.phase,
                     subject: certificate.subject,
+                    execution_commitment: certificate.execution_commitment,
                 }),
             roster: self.roster.clone(),
             quorum: self.quorum,
@@ -423,6 +427,7 @@ impl HeightContext {
             (_, Some(_)) => {}
         }
         if let Some(parent) = &self.parent_commit_qc {
+            parent.execution_commitment.validate()?;
             if parent.signers.len() > MAX_VALIDATORS_PER_HEIGHT {
                 return Err(ValidationError::TooManySigners);
             }
@@ -512,6 +517,7 @@ struct ParentCommitIdentity {
     height: Height,
     phase: GlobalPhase,
     subject: BlockSubject,
+    execution_commitment: ExecutionCommitment,
 }
 
 /// Typed identifier of a complete [`HeightContext`].
@@ -613,12 +619,120 @@ pub struct BlockSubject {
     pub payload_hash: Hash,
 }
 
+/// Deterministic state-transition commitment authenticated by every Prepare and Commit vote.
+///
+/// The commitment is derived from the exact state-block execution witness
+/// after deterministic candidate validation.  It is never
+/// reconstructed from the proposal header or supplied by an untrusted caller.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[norito(deny_unknown_fields)]
+pub struct ExecutionCommitment {
+    /// Root of the witnessed pre-state values for keys changed by the block.
+    pub parent_state_root: Hash,
+    /// Root of the complete deterministic post-state projection.
+    pub post_state_root: Hash,
+    /// Root of all canonical last-write-wins writes other than Kagemusha top-up anchors.
+    pub ordinary_writes_root: Hash,
+    /// Root of the canonical balanced Kagemusha top-up tree, when the block has top-ups.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub topup_anchor_root: Option<Hash>,
+    /// Number of real Kagemusha top-up leaves committed by `topup_anchor_root`.
+    pub topup_anchor_count: u32,
+}
+
+impl ExecutionCommitment {
+    /// Construct a transition that contains no Kagemusha top-up anchors.
+    #[must_use]
+    pub const fn without_topups(
+        parent_state_root: Hash,
+        post_state_root: Hash,
+        ordinary_writes_root: Hash,
+    ) -> Self {
+        Self {
+            parent_state_root,
+            post_state_root,
+            ordinary_writes_root,
+            topup_anchor_root: None,
+            topup_anchor_count: 0,
+        }
+    }
+
+    /// Construct a commitment and enforce its canonical top-up projection.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when root presence disagrees with the count, the
+    /// bounded top-up count is exceeded, or the combined post-state root is
+    /// not the canonical hash of the advertised top-up projection.
+    pub fn new(
+        parent_state_root: Hash,
+        post_state_root: Hash,
+        ordinary_writes_root: Hash,
+        topup_anchor_root: Option<Hash>,
+        topup_anchor_count: u32,
+    ) -> Result<Self, ValidationError> {
+        let commitment = Self {
+            parent_state_root,
+            post_state_root,
+            ordinary_writes_root,
+            topup_anchor_root,
+            topup_anchor_count,
+        };
+        commitment.validate()?;
+        Ok(commitment)
+    }
+
+    /// Validate the canonical count/root relationship and combined top-up root.
+    pub fn validate(&self) -> Result<(), ValidationError> {
+        match (self.topup_anchor_count, self.topup_anchor_root) {
+            (0, None) => Ok(()),
+            (0, Some(_)) | (_, None) => Err(ValidationError::InvalidExecutionCommitment),
+            (count, Some(root)) if count <= MAX_KAGEMUSHA_TOPUP_ANCHORS_PER_BLOCK => {
+                if self.post_state_root
+                    != Self::topup_post_state_root(count, self.ordinary_writes_root, root)
+                {
+                    return Err(ValidationError::ExecutionCommitmentPostRootMismatch);
+                }
+                Ok(())
+            }
+            (_, Some(_)) => Err(ValidationError::TooManyKagemushaTopupAnchors),
+        }
+    }
+
+    /// Derive the canonical combined post-state root for a non-empty top-up tree.
+    #[must_use]
+    pub fn topup_post_state_root(
+        topup_anchor_count: u32,
+        ordinary_writes_root: Hash,
+        topup_anchor_root: Hash,
+    ) -> Hash {
+        let mut preimage = Vec::with_capacity(
+            KAGEMUSHA_TOPUP_POST_STATE_ROOT_DOMAIN.len()
+                + 1
+                + core::mem::size_of::<u32>()
+                + 2 * Hash::LENGTH,
+        );
+        preimage.extend_from_slice(KAGEMUSHA_TOPUP_POST_STATE_ROOT_DOMAIN);
+        preimage.push(0);
+        preimage.extend_from_slice(&topup_anchor_count.to_le_bytes());
+        preimage.extend_from_slice(ordinary_writes_root.as_ref());
+        preimage.extend_from_slice(topup_anchor_root.as_ref());
+        Hash::new(preimage)
+    }
+}
+
 /// One global Prepare or Commit vote.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[norito(deny_unknown_fields)]
 pub struct Vote {
     /// Round in which the vote was issued.
     pub round: ConsensusRound,
@@ -626,6 +740,8 @@ pub struct Vote {
     pub phase: GlobalPhase,
     /// Exact proposal subject.
     pub subject: BlockSubject,
+    /// Exact deterministic execution result certified by this vote.
+    pub execution_commitment: ExecutionCommitment,
     /// Signer index in the height context roster.
     pub signer: ValidatorIndex,
     /// BLS signature over the canonical vote preimage.
@@ -647,6 +763,7 @@ impl Vote {
             round: self.round,
             phase: self.phase,
             subject: self.subject,
+            execution_commitment: self.execution_commitment,
         };
         signature_preimage(b"iroha:sumeragi:v2:vote", &payload.encode())
     }
@@ -658,6 +775,7 @@ impl Vote {
     pub fn validate(&self, context: &HeightContext) -> Result<(), ValidationError> {
         validate_round(self.round, context)?;
         validate_validator_index(self.signer, context)?;
+        self.execution_commitment.validate()?;
         require_signature(&self.signature)
     }
 }
@@ -668,6 +786,7 @@ impl Vote {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[norito(deny_unknown_fields)]
 pub struct VoteSignaturePayload {
     /// Sumeragi protocol revision.
     pub protocol_version: u16,
@@ -677,6 +796,8 @@ pub struct VoteSignaturePayload {
     pub phase: GlobalPhase,
     /// Exact block and payload subject.
     pub subject: BlockSubject,
+    /// Exact deterministic execution result.
+    pub execution_commitment: ExecutionCommitment,
 }
 
 /// Stable reference to a full quorum certificate.
@@ -685,6 +806,7 @@ pub struct VoteSignaturePayload {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[norito(deny_unknown_fields)]
 pub struct QuorumCertificateRef {
     /// Certified round.
     pub round: ConsensusRound,
@@ -692,6 +814,8 @@ pub struct QuorumCertificateRef {
     pub phase: GlobalPhase,
     /// Certified subject.
     pub subject: BlockSubject,
+    /// Certified deterministic execution result.
+    pub execution_commitment: ExecutionCommitment,
 }
 
 impl QuorumCertificateRef {
@@ -708,6 +832,7 @@ impl QuorumCertificateRef {
             && self.round.context_id == other.round.context_id
             && self.round.height == other.round.height
             && self.subject == other.subject
+            && self.execution_commitment == other.execution_commitment
     }
 }
 
@@ -725,6 +850,8 @@ pub struct QuorumCertificate {
     pub phase: GlobalPhase,
     /// Certified proposal subject.
     pub subject: BlockSubject,
+    /// Certified deterministic execution result shared by every signature.
+    pub execution_commitment: ExecutionCommitment,
     /// Strictly increasing signer indices.
     pub signers: Vec<ValidatorIndex>,
     /// BLS aggregate signature for the canonical signer sequence.
@@ -739,6 +866,7 @@ impl QuorumCertificate {
             round: self.round,
             phase: self.phase,
             subject: self.subject,
+            execution_commitment: self.execution_commitment,
         }
     }
 
@@ -753,6 +881,7 @@ impl QuorumCertificate {
     /// valid under `context`.
     pub fn validate(&self, context: &HeightContext) -> Result<(), ValidationError> {
         validate_round(self.round, context)?;
+        self.execution_commitment.validate()?;
         context
             .quorum
             .validate_signers(&self.signers, &context.roster)?;
@@ -778,6 +907,7 @@ impl QuorumCertificate {
             round: self.round,
             phase: self.phase,
             subject: self.subject,
+            execution_commitment: self.execution_commitment,
             signer,
             signature: Vec::new(),
         }
@@ -1926,6 +2056,12 @@ pub enum ValidationError {
     SignerNotInCertificate,
     /// A signed message carries no signature bytes.
     MissingSignature,
+    /// Execution commitment count/root presence is not canonical.
+    InvalidExecutionCommitment,
+    /// The advertised Kagemusha top-up count exceeds the consensus bound.
+    TooManyKagemushaTopupAnchors,
+    /// A top-up execution commitment's combined post root is not canonical.
+    ExecutionCommitmentPostRootMismatch,
     /// An aggregate certificate or timeout group carries no aggregate signature.
     MissingAggregateSignature,
     /// A signature or aggregate exceeds the protocol allocation bound.
@@ -2059,6 +2195,15 @@ impl fmt::Display for ValidationError {
             Self::SignerOutOfRange => f.write_str("signer index is outside the voting roster"),
             Self::SignerNotInCertificate => f.write_str("signer is not present in the certificate"),
             Self::MissingSignature => f.write_str("signed message has an empty signature"),
+            Self::InvalidExecutionCommitment => {
+                f.write_str("execution commitment top-up count/root presence is inconsistent")
+            }
+            Self::TooManyKagemushaTopupAnchors => {
+                f.write_str("execution commitment exceeds the Kagemusha top-up anchor limit")
+            }
+            Self::ExecutionCommitmentPostRootMismatch => {
+                f.write_str("execution commitment post-state root is not canonical")
+            }
             Self::MissingAggregateSignature => {
                 f.write_str("certificate has an empty aggregate signature")
             }
@@ -2301,6 +2446,36 @@ mod tests {
         assert!(GlobalPhase::decode_all(&mut legacy_implicit_zero).is_err());
     }
 
+    #[test]
+    fn execution_commitment_enforces_topup_shape_count_and_combined_root() {
+        let parent = Hash::new(b"parent");
+        let ordinary = Hash::new(b"ordinary writes");
+        let topup = Hash::new(b"topup tree");
+        let post = ExecutionCommitment::topup_post_state_root(2, ordinary, topup);
+        let canonical = ExecutionCommitment::new(parent, post, ordinary, Some(topup), 2)
+            .expect("canonical top-up commitment");
+        assert_eq!(canonical.validate(), Ok(()));
+
+        assert_eq!(
+            ExecutionCommitment::new(parent, Hash::new(b"wrong"), ordinary, Some(topup), 2),
+            Err(ValidationError::ExecutionCommitmentPostRootMismatch)
+        );
+        assert_eq!(
+            ExecutionCommitment::new(parent, post, ordinary, Some(topup), 0),
+            Err(ValidationError::InvalidExecutionCommitment)
+        );
+        assert_eq!(
+            ExecutionCommitment::new(
+                parent,
+                post,
+                ordinary,
+                Some(topup),
+                MAX_KAGEMUSHA_TOPUP_ANCHORS_PER_BLOCK + 1,
+            ),
+            Err(ValidationError::TooManyKagemushaTopupAnchors)
+        );
+    }
+
     #[cfg(feature = "json")]
     #[test]
     fn genesis_context_json_uses_nexus_amx_context_name_only() {
@@ -2376,6 +2551,17 @@ mod tests {
         }
     }
 
+    fn execution_commitment(seed: u8) -> ExecutionCommitment {
+        ExecutionCommitment::new(
+            Hash::new([seed, 3]),
+            Hash::new([seed, 4]),
+            Hash::new([seed, 5]),
+            None,
+            0,
+        )
+        .expect("canonical fixture execution commitment")
+    }
+
     fn qc(
         context: &HeightContext,
         view: View,
@@ -2386,6 +2572,9 @@ mod tests {
             round: round(context, view),
             phase,
             subject: subject(u8::try_from(view + 1).expect("small fixture view")),
+            execution_commitment: execution_commitment(
+                u8::try_from(view + 1).expect("small fixture view"),
+            ),
             signers,
             aggregate_signature: vec![0x5A; 48],
         }
@@ -2441,6 +2630,33 @@ mod tests {
             .roster
             .resize(MAX_VALIDATORS_PER_HEIGHT + 1, repeated);
         assert_eq!(oversized.validate(), Err(ValidationError::RosterTooLarge));
+
+        let mut invalid_parent_execution = context(&[1, 1, 1, 1]);
+        invalid_parent_execution.height = 2;
+        invalid_parent_execution.parent_commit_qc = Some(QuorumCertificate {
+            round: ConsensusRound {
+                context_id: HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
+                    b"invalid parent execution context",
+                ))),
+                height: 1,
+                view: 0,
+            },
+            phase: GlobalPhase::Commit,
+            subject: subject(0x61),
+            execution_commitment: ExecutionCommitment {
+                parent_state_root: Hash::new(b"parent state"),
+                post_state_root: Hash::new(b"post state"),
+                ordinary_writes_root: Hash::new(b"ordinary writes"),
+                topup_anchor_root: None,
+                topup_anchor_count: 1,
+            },
+            signers: vec![0, 1, 2],
+            aggregate_signature: vec![0x62; 48],
+        });
+        assert_eq!(
+            invalid_parent_execution.validate(),
+            Err(ValidationError::InvalidExecutionCommitment)
+        );
     }
 
     #[test]
@@ -2500,6 +2716,7 @@ mod tests {
             round: parent_round,
             phase: GlobalPhase::Commit,
             subject: parent_subject,
+            execution_commitment: execution_commitment(0x44),
             signers: vec![0, 1, 2],
             aggregate_signature: vec![0x11; 48],
         });
@@ -2511,12 +2728,21 @@ mod tests {
             },
             phase: GlobalPhase::Commit,
             subject: parent_subject,
+            execution_commitment: execution_commitment(0x44),
             signers: vec![0, 1, 3],
             aggregate_signature: vec![0x22; 48],
         });
 
         assert_ne!(left.parent_commit_qc, right.parent_commit_qc);
         assert_eq!(left.id(), right.id());
+
+        let mut different_execution = right.clone();
+        different_execution
+            .parent_commit_qc
+            .as_mut()
+            .expect("parent certificate")
+            .execution_commitment = execution_commitment(0x45);
+        assert_ne!(left.id(), different_execution.id());
 
         let mut different_subject = right.clone();
         different_subject
@@ -2735,6 +2961,7 @@ mod tests {
                 round: manifest.round,
                 phase: GlobalPhase::Prepare,
                 subject: manifest.subject,
+                execution_commitment: prepare.execution_commitment,
                 signer: 0,
                 signature: vec![1],
             }),
@@ -2971,6 +3198,7 @@ mod tests {
             round: proposal_round,
             phase: GlobalPhase::Prepare,
             subject: proposal.subject,
+            execution_commitment: execution_commitment(0x33),
             signer: 0,
             signature: vec![0x33; 48],
         };
@@ -2978,6 +3206,13 @@ mod tests {
         assert!(
             vote.signature_preimage()
                 .starts_with(b"iroha:sumeragi:v2:vote")
+        );
+        let mut different_execution = vote.clone();
+        different_execution.execution_commitment = execution_commitment(0x34);
+        assert_ne!(
+            different_execution.signature_preimage(),
+            vote.signature_preimage(),
+            "vote signatures must authenticate the deterministic execution result"
         );
 
         let timeout = TimeoutVote {
@@ -3024,6 +3259,7 @@ mod tests {
             round: parent_round,
             phase: GlobalPhase::Commit,
             subject: parent_subject,
+            execution_commitment: execution_commitment(0x70),
             signers: vec![0, 1, 2],
             aggregate_signature: vec![0x31; 48],
         });
@@ -3034,6 +3270,7 @@ mod tests {
             round: parent_round,
             phase: GlobalPhase::Commit,
             subject: parent_subject,
+            execution_commitment: execution_commitment(0x70),
             signers: vec![0, 1, 3],
             aggregate_signature: vec![0x32; 48],
         };
@@ -3131,6 +3368,7 @@ mod tests {
                 round: manifest.round,
                 phase: GlobalPhase::Prepare,
                 subject: manifest.subject,
+                execution_commitment: execution_commitment(9),
                 signers: vec![0, 1, 2],
                 aggregate_signature: vec![0x55; 48],
             },

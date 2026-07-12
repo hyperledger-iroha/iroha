@@ -1327,6 +1327,7 @@ function normalizeRegistryLimits(value) {
 
 function normalizeResourceLimits(value) {
   const countFields = new Set([
+    "max_outbound_messages_per_block",
     "max_proofs_per_transaction",
     "max_proofs_per_block",
     "max_native_headers_per_transaction",
@@ -1343,6 +1344,9 @@ function normalizeResourceLimits(value) {
     "max_bn254_pairing_checks_per_block",
   ]);
   const byteFields = new Set([
+    "max_outbound_message_payload_bytes",
+    "max_pending_outbound_messages",
+    "max_pending_outbound_payload_bytes",
     "max_proof_bytes_per_proof",
     "max_proof_bytes_per_transaction",
     "max_proof_bytes_per_block",
@@ -1364,6 +1368,12 @@ function normalizeResourceLimits(value) {
       ]),
     ),
   );
+  if (
+    limits.max_outbound_messages_per_block !== 512 ||
+    limits.max_outbound_message_payload_bytes !== 4096
+  ) {
+    throw new TypeError("SCCP outbound message limits must equal the fixed V1 capacities");
+  }
   if (limits.max_proof_bytes_per_proof > limits.max_proof_bytes_per_transaction) {
     throw new TypeError("SCCP per-proof byte limit exceeds its transaction limit");
   }
@@ -1679,7 +1689,12 @@ function parsePayloadProjection(value, expectedDomain, label) {
 
 /** Normalize newest-first SCCP discovery with only bundle and proof-request links. */
 export function normalizeSccpRecentMessages(value) {
-  const root = exactFields(value, new Set(["items"]), "SCCP recent messages");
+  const root = exactFields(
+    value,
+    new Set(["items", "next"]),
+    "SCCP recent messages",
+    new Set(["items"]),
+  );
   const rawItems = array(root.items, "SCCP recent messages.items");
   if (rawItems.length > 50) {
     throw new TypeError("SCCP recent messages must contain at most 50 items");
@@ -1688,6 +1703,7 @@ export function normalizeSccpRecentMessages(value) {
     const label = `SCCP recent messages.items[${index}]`;
     const allowed = new Set([
       "height",
+      "commitment_index",
       "message_id_hex",
       "kind",
       "source_profile",
@@ -1704,6 +1720,7 @@ export function normalizeSccpRecentMessages(value) {
     ]);
     const required = new Set([
       "height",
+      "commitment_index",
       "message_id_hex",
       "kind",
       "source_profile",
@@ -1780,6 +1797,12 @@ export function normalizeSccpRecentMessages(value) {
     }
     return Object.freeze({
       height: integer(record.height, `${label}.height`, 1),
+      commitment_index: integer(
+        record.commitment_index,
+        `${label}.commitment_index`,
+        0,
+        511,
+      ),
       message_id_hex: messageId,
       kind: "transfer",
       source_profile: source.profile,
@@ -1799,14 +1822,52 @@ export function normalizeSccpRecentMessages(value) {
     });
   });
   for (let index = 1; index < items.length; index += 1) {
-    if (items[index - 1].height < items[index].height) {
-      throw new TypeError("SCCP recent messages must be newest-first");
+    const previous = items[index - 1];
+    const current = items[index];
+    if (previous.height < current.height) {
+      throw new TypeError("SCCP recent messages must be height-descending");
+    }
+    if (
+      previous.height === current.height &&
+      current.commitment_index !== previous.commitment_index + 1
+    ) {
+      throw new TypeError(
+        "SCCP recent messages at one height must have contiguous ascending commitment indices",
+      );
+    }
+    if (previous.height > current.height && current.commitment_index !== 0) {
+      throw new TypeError("SCCP recent messages at an older height must begin at commitment index zero");
     }
   }
   if (new Set(items.map(({ message_id_hex: messageId }) => messageId)).size !== items.length) {
     throw new TypeError("SCCP recent messages contain duplicate message ids");
   }
-  return Object.freeze({ items: Object.freeze(items) });
+  let next = null;
+  if (root.next !== undefined) {
+    const cursor = exactFields(
+      root.next,
+      new Set(["from", "after_index"]),
+      "SCCP recent messages.next",
+    );
+    next = Object.freeze({
+      from: integer(cursor.from, "SCCP recent messages.next.from", 1),
+      after_index: integer(
+        cursor.after_index,
+        "SCCP recent messages.next.after_index",
+        0,
+        511,
+      ),
+    });
+    const last = items.at(-1);
+    if (
+      last === undefined ||
+      next.from !== last.height ||
+      next.after_index !== last.commitment_index
+    ) {
+      throw new TypeError("SCCP recent continuation must identify the last returned item");
+    }
+  }
+  return Object.freeze({ items: Object.freeze(items), next });
 }
 
 function validateCodecValue(record, codecField, valueField, domain = null) {

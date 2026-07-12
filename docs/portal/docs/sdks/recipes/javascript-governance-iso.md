@@ -375,8 +375,8 @@ TORII_URL=https://torii.nexus.example \
 node -e '
   import { ToriiClient } from "@iroha/iroha-js";
   const client = new ToriiClient(process.env.TORII_URL);
-  const readiness = await client.getOfflineReadiness();
-  console.log(readiness.offline_kagemusha_recursive_compact_available);
+  const readiness = await client.getOfflineReadiness("xor#wonderland");
+  console.log(readiness.ready, readiness.blockers);
 '
 ```
 

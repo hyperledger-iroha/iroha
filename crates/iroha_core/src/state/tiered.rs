@@ -1967,9 +1967,9 @@ impl TieredStateBackend {
             world.account_roles
         );
         collect_map!(
-            TieredSegment::SccpOutboundMessages,
+            TieredSegment::SccpOutboundPendingMessages,
             SccpOutboundMessage,
-            world.sccp_outbound_messages
+            world.sccp_outbound_pending_messages
         );
         collect_map!(
             TieredSegment::SccpOutboundMessageLocators,
@@ -2645,7 +2645,7 @@ mod measured_bytes_impls {
             BridgeNativeProtocolProofV1, BridgeProof, BridgeProofPayload, BridgeProofRange,
             BridgeProofRecord, BridgeSccpDestinationProofBackendV1, BridgeSccpDestinationProofV1,
             BridgeTransparentProof, SccpNativeTrustAnchorV1, SccpOutboundMessageKeyV1,
-            SccpOutboundMessageRecordV1, SccpOutboundProofRecordV1,
+            SccpOutboundPendingMessageRecordV1, SccpOutboundProofRecordV1,
             sccp::SccpInboundMessageRecordV1,
         },
         common::Owned,
@@ -3457,9 +3457,9 @@ mod measured_bytes_impls {
         }
     }
 
-    impl MeasuredBytes for SccpOutboundMessageRecordV1 {
+    impl MeasuredBytes for SccpOutboundPendingMessageRecordV1 {
         fn measured_bytes(&self) -> usize {
-            let mut total = size_of::<SccpOutboundMessageRecordV1>();
+            let mut total = size_of::<SccpOutboundPendingMessageRecordV1>();
             total = total.saturating_add(self.payload_hash.measured_bytes_extra());
             total = total.saturating_add(self.payload_bytes.measured_bytes_extra());
             total = total.saturating_add(self.recorded_at_height.measured_bytes_extra());
@@ -4158,7 +4158,7 @@ enum TieredSegment {
     Roles,
     AccountPermissions,
     AccountRoles,
-    SccpOutboundMessages,
+    SccpOutboundPendingMessages,
     SccpOutboundMessageLocators,
     SccpOutboundMessageIndex,
     SccpOutboundProofs,
@@ -4205,7 +4205,7 @@ impl TieredSegment {
             TieredSegment::Roles => "roles",
             TieredSegment::AccountPermissions => "account_permissions",
             TieredSegment::AccountRoles => "account_roles",
-            TieredSegment::SccpOutboundMessages => "sccp_outbound_messages",
+            TieredSegment::SccpOutboundPendingMessages => "sccp_outbound_pending_messages",
             TieredSegment::SccpOutboundMessageLocators => "sccp_outbound_message_locator",
             TieredSegment::SccpOutboundMessageIndex => "sccp_outbound_message_index",
             TieredSegment::SccpOutboundProofs => "sccp_outbound_proofs",
@@ -4264,7 +4264,7 @@ impl norito::json::JsonDeserialize for TieredSegment {
             "rwas" => TieredSegment::Rwas,
             "roles" => TieredSegment::Roles,
             "account_permissions" => TieredSegment::AccountPermissions,
-            "sccp_outbound_messages" => TieredSegment::SccpOutboundMessages,
+            "sccp_outbound_pending_messages" => TieredSegment::SccpOutboundPendingMessages,
             "sccp_outbound_message_locator" => TieredSegment::SccpOutboundMessageLocators,
             "sccp_outbound_message_index" => TieredSegment::SccpOutboundMessageIndex,
             "sccp_outbound_proofs" => TieredSegment::SccpOutboundProofs,
@@ -4515,7 +4515,7 @@ impl TieredKeyHandle {
             TieredKeyHandle::Role(_) => TieredSegment::Roles,
             TieredKeyHandle::AccountPermission(_) => TieredSegment::AccountPermissions,
             TieredKeyHandle::AccountRole(_) => TieredSegment::AccountRoles,
-            TieredKeyHandle::SccpOutboundMessage(_) => TieredSegment::SccpOutboundMessages,
+            TieredKeyHandle::SccpOutboundMessage(_) => TieredSegment::SccpOutboundPendingMessages,
             TieredKeyHandle::SccpOutboundMessageLocator(_) => {
                 TieredSegment::SccpOutboundMessageLocators
             }
@@ -4647,7 +4647,9 @@ impl TieredKeyHandle {
             TieredKeyHandle::Role(id) => fetch!(world.roles, id),
             TieredKeyHandle::AccountPermission(id) => fetch!(world.account_permissions, id),
             TieredKeyHandle::AccountRole(id) => fetch!(world.account_roles, id),
-            TieredKeyHandle::SccpOutboundMessage(id) => fetch!(world.sccp_outbound_messages, id),
+            TieredKeyHandle::SccpOutboundMessage(id) => {
+                fetch!(world.sccp_outbound_pending_messages, id)
+            }
             TieredKeyHandle::SccpOutboundMessageLocator(id) => {
                 fetch!(world.sccp_outbound_message_locator, id)
             }
@@ -4727,7 +4729,9 @@ impl TieredKeyHandle {
             TieredKeyHandle::Role(id) => fetch!(world.roles, id),
             TieredKeyHandle::AccountPermission(id) => fetch!(world.account_permissions, id),
             TieredKeyHandle::AccountRole(id) => fetch!(world.account_roles, id),
-            TieredKeyHandle::SccpOutboundMessage(id) => fetch!(world.sccp_outbound_messages, id),
+            TieredKeyHandle::SccpOutboundMessage(id) => {
+                fetch!(world.sccp_outbound_pending_messages, id)
+            }
             TieredKeyHandle::SccpOutboundMessageLocator(id) => {
                 fetch!(world.sccp_outbound_message_locator, id)
             }
@@ -4814,8 +4818,9 @@ impl fmt::Display for TieredKeyHandle {
             }
             TieredKeyHandle::SccpOutboundMessageIndex(id) => write!(
                 f,
-                "sccp_outbound_message_index:{}:{}:{}:{}",
+                "sccp_outbound_message_index:{}:{}:{}:{}:{}",
                 id.recorded_at_height,
+                id.commitment_index,
                 id.lane.source.profile_key(),
                 id.lane.target.profile_key(),
                 id.message_id.encode_hex::<String>()
@@ -5001,6 +5006,7 @@ mod tests {
             finality_block_hash: [0xB5; 32],
             destination_proof_commitment: [0xB6; 32],
             finality_height: 42,
+            commitment_index: 0,
             accepted_at_height: 43,
         };
         assert!(record.is_well_formed_for_key(&key));
@@ -5313,7 +5319,7 @@ mod tests {
     }
 
     #[test]
-    fn record_world_snapshot_includes_sccp_outbound_messages() {
+    fn record_world_snapshot_includes_sccp_outbound_pending_messages() {
         let temp = tempdir().expect("tmpdir");
         let mut backend =
             TieredStateBackend::new(true, 0, 0, 0, Some(temp.path().to_path_buf()), None, 0, 0);
@@ -5323,15 +5329,22 @@ mod tests {
             lane: exact.bundle.commitment.context.lane,
             message_id: exact.bundle.commitment.message_id,
         };
-        let record = iroha_data_model::bridge::SccpOutboundMessageRecordV1 {
+        let record = iroha_data_model::bridge::SccpOutboundPendingMessageRecordV1 {
             destination_binding_hash: exact.bundle.commitment.context.destination_binding_hash,
             route_configuration_hash: exact.bundle.commitment.context.route_configuration_hash,
             payload_hash: exact.bundle.commitment.payload_hash,
             payload_bytes: iroha_sccp::canonical_sccp_payload_bytes(&exact.bundle.payload)
                 .expect("exact fixture payload encodes canonically"),
             recorded_at_height: 42,
+            commitment_index: 0,
         };
-        world.sccp_outbound_messages.insert(key.clone(), record);
+        let usage = iroha_data_model::bridge::SccpOutboundPendingUsageV1::default()
+            .checked_add_payload(record.payload_bytes.len())
+            .expect("one pending fixture payload");
+        world
+            .sccp_outbound_pending_messages
+            .insert(key.clone(), record);
+        world.sccp_outbound_pending_usage = mv::cell::Cell::new(usage);
 
         backend
             .record_world_snapshot(&world)
@@ -5345,7 +5358,7 @@ mod tests {
             .iter()
             .chain(&manifest.cold_entries)
             .find(|entry| {
-                entry.segment == TieredSegment::SccpOutboundMessages
+                entry.segment == TieredSegment::SccpOutboundPendingMessages
                     && entry.key_payload == key_payload
             })
             .expect("SCCP outbound replay key should be snapshotted");
@@ -5382,7 +5395,10 @@ mod tests {
 
         assert_eq!(entry.last_present_snapshot, manifest.snapshot_index);
         assert_eq!(entry.last_mutated_snapshot, manifest.snapshot_index);
-        assert_eq!(entry.value_size_bytes, record.measured_bytes());
+        assert_eq!(
+            entry.value_size_bytes,
+            MeasuredBytes::measured_bytes(&record)
+        );
     }
 
     #[test]
@@ -5474,7 +5490,10 @@ mod tests {
 
         assert_eq!(entry.last_present_snapshot, manifest.snapshot_index);
         assert_eq!(entry.last_mutated_snapshot, manifest.snapshot_index);
-        assert_eq!(entry.value_size_bytes, record.measured_bytes());
+        assert_eq!(
+            entry.value_size_bytes,
+            MeasuredBytes::measured_bytes(&record)
+        );
     }
 
     #[test]

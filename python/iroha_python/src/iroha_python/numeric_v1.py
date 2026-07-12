@@ -87,9 +87,9 @@ def _fail(code: str, message: str) -> NoReturn:
 
 
 def _as_bytes(value: object, context: str) -> bytes:
-    if isinstance(value, bytes):
+    if type(value) is bytes:
         return value
-    if isinstance(value, (bytearray, memoryview)):
+    if type(value) in (bytearray, memoryview):
         return bytes(value)
     raise TypeError(f"{context} must be bytes-like")
 
@@ -101,11 +101,9 @@ def _check_int_range(value: int) -> int:
 
 
 def _checked_int(value: Union[int, str], context: str) -> int:
-    if isinstance(value, bool):
-        raise TypeError(f"{context} must be an int or canonical integer string")
-    if isinstance(value, int):
+    if type(value) is int:
         return value
-    if isinstance(value, str):
+    if type(value) is str:
         if _CANONICAL_INT_RE.fullmatch(value) is None or value == "-0":
             _fail("invalid_text", f"{context} must use canonical base-10 syntax")
         if len(value.encode("ascii")) > _MAX_INT_TEXT_BYTES:
@@ -115,11 +113,11 @@ def _checked_int(value: Union[int, str], context: str) -> int:
 
 
 def _normalize_scaled(mantissa: Union[int, str], scale: int, *, quantity: bool) -> tuple[int, int]:
-    if isinstance(scale, bool) or not isinstance(scale, int) or scale < 0:
+    if type(scale) is not int or scale < 0:
         _fail("invalid_scale", "numeric scale must be a non-negative integer")
 
     normalized_scale = scale
-    if isinstance(mantissa, str):
+    if type(mantissa) is str:
         if _CANONICAL_INT_RE.fullmatch(mantissa) is None or mantissa == "-0":
             _fail("invalid_text", "mantissa must use canonical base-10 syntax")
         negative = mantissa.startswith("-")
@@ -159,7 +157,7 @@ def _normalize_scaled(mantissa: Union[int, str], scale: int, *, quantity: bool) 
 
 
 def _parse_scaled(value: object, *, quantity: bool) -> tuple[int, int]:
-    if not isinstance(value, str):
+    if type(value) is not str:
         raise TypeError("decimal and quantity values must be strings")
     matched = _SCALED_RE.fullmatch(value)
     if matched is None or value == "-0":
@@ -432,25 +430,25 @@ class NumericV1Codec:
 
     @staticmethod
     def encode_int_json(value: Union[KotodamaInt, int, str]) -> str:
-        return str(value if isinstance(value, KotodamaInt) else KotodamaInt(value))
+        return str(value if type(value) is KotodamaInt else KotodamaInt(value))
 
     @staticmethod
     def encode_decimal_json(value: Union[KotodamaDecimal, str]) -> str:
-        return str(value if isinstance(value, KotodamaDecimal) else KotodamaDecimal(value))
+        return str(value if type(value) is KotodamaDecimal else KotodamaDecimal(value))
 
     @staticmethod
     def encode_quantity_json(value: Union[KotodamaQuantity, str]) -> str:
-        return str(value if isinstance(value, KotodamaQuantity) else KotodamaQuantity(value))
+        return str(value if type(value) is KotodamaQuantity else KotodamaQuantity(value))
 
     @staticmethod
     def decode_int_json(value: object) -> KotodamaInt:
-        if not isinstance(value, str):
+        if type(value) is not str:
             raise TypeError("int JSON must be a string")
         return KotodamaInt(value)
 
     @staticmethod
     def decode_decimal_json(value: object) -> KotodamaDecimal:
-        if not isinstance(value, str):
+        if type(value) is not str:
             raise TypeError("decimal JSON must be a string")
         decoded = KotodamaDecimal(value)
         if str(decoded) != value:
@@ -459,7 +457,7 @@ class NumericV1Codec:
 
     @staticmethod
     def decode_quantity_json(value: object) -> KotodamaQuantity:
-        if not isinstance(value, str):
+        if type(value) is not str:
             raise TypeError("quantity JSON must be a string")
         decoded = KotodamaQuantity(value)
         if str(decoded) != value:
@@ -468,16 +466,16 @@ class NumericV1Codec:
 
     @staticmethod
     def encode_int_frame(value: Union[KotodamaInt, int, str]) -> bytes:
-        return _frame_for("int", value if isinstance(value, KotodamaInt) else KotodamaInt(value))
+        return _frame_for("int", value if type(value) is KotodamaInt else KotodamaInt(value))
 
     @staticmethod
     def encode_decimal_frame(value: Union[KotodamaDecimal, str]) -> bytes:
-        numeric = value if isinstance(value, KotodamaDecimal) else KotodamaDecimal(value)
+        numeric = value if type(value) is KotodamaDecimal else KotodamaDecimal(value)
         return _frame_for("decimal", numeric)
 
     @staticmethod
     def encode_quantity_frame(value: Union[KotodamaQuantity, str]) -> bytes:
-        numeric = value if isinstance(value, KotodamaQuantity) else KotodamaQuantity(value)
+        numeric = value if type(value) is KotodamaQuantity else KotodamaQuantity(value)
         return _frame_for("quantity", numeric)
 
     @staticmethod
@@ -500,17 +498,17 @@ class NumericV1Codec:
 
     @staticmethod
     def encode_int_envelope(value: Union[KotodamaInt, int, str]) -> bytes:
-        numeric = value if isinstance(value, KotodamaInt) else KotodamaInt(value)
+        numeric = value if type(value) is KotodamaInt else KotodamaInt(value)
         return _envelope_for("int", numeric)
 
     @staticmethod
     def encode_decimal_envelope(value: Union[KotodamaDecimal, str]) -> bytes:
-        numeric = value if isinstance(value, KotodamaDecimal) else KotodamaDecimal(value)
+        numeric = value if type(value) is KotodamaDecimal else KotodamaDecimal(value)
         return _envelope_for("decimal", numeric)
 
     @staticmethod
     def encode_quantity_envelope(value: Union[KotodamaQuantity, str]) -> bytes:
-        numeric = value if isinstance(value, KotodamaQuantity) else KotodamaQuantity(value)
+        numeric = value if type(value) is KotodamaQuantity else KotodamaQuantity(value)
         return _envelope_for("quantity", numeric)
 
     @staticmethod

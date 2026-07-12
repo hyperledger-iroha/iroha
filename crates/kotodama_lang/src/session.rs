@@ -1917,6 +1917,38 @@ mod tests {
     }
 
     #[test]
+    fn test_target_projection_retains_lowered_list_intrinsics() {
+        let target = TestSourceUnit {
+            source_name: "list-runtime.ko".to_owned(),
+            source: r#"seiyaku ListRuntime {
+                view fn count(List<int, 4> values) -> int {
+                    let length = values.len();
+                    let _contains = values.contains(1);
+                    let _first = values.get(0);
+                    var List<int, 4> copy = [];
+                    let _pushed = copy.try_push(1);
+                    return length;
+                }
+                #[test]
+                fn empty_list() { test::assert(count([]) == 0); }
+            }"#
+            .to_owned(),
+        };
+
+        let outputs = CompilerSession::new(CompilerOptions {
+            mode: CompilerMode::Test,
+            ..CompilerOptions::default()
+        })
+        .build_test_sources(&target, &[])
+        .expect("lowered list intrinsics must survive runtime projection");
+
+        assert!(
+            outputs.runtime.is_some(),
+            "public view requires runtime output"
+        );
+    }
+
+    #[test]
     fn standalone_test_graph_keeps_stable_distinct_sources_and_typed_target_state() {
         let target = TestSourceUnit {
             source_name: "contracts/counter.ko".to_owned(),

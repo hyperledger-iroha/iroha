@@ -311,6 +311,10 @@ final class SccpV1Tests: XCTestCase {
         XCTAssertEqual(parsed.proofRequestPath, "/v1/sccp/proof-requests/{message_id}")
         XCTAssertEqual(parsed.registryLimits.maxRetainedRoutesPerLane, 64)
         XCTAssertEqual(parsed.registryLimits.maxRetainedNativeTrustAnchorsPerLane, 4_096)
+        XCTAssertEqual(parsed.resourceLimits.maxOutboundMessagesPerBlock, 512)
+        XCTAssertEqual(parsed.resourceLimits.maxOutboundMessagePayloadBytes, 4_096)
+        XCTAssertEqual(parsed.resourceLimits.maxPendingOutboundMessages, 65_536)
+        XCTAssertEqual(parsed.resourceLimits.maxPendingOutboundPayloadBytes, 256 * 1024 * 1024)
         XCTAssertEqual(parsed.resourceLimits.maxBlsSignerContributionsPerTransaction, 131_713)
         var readOnly = try jsonObject(valid)
         readOnly.removeValue(forKey: "proof_submit_path")
@@ -333,6 +337,8 @@ final class SccpV1Tests: XCTestCase {
         }
 
         let resourceKeys = [
+            "max_outbound_messages_per_block", "max_outbound_message_payload_bytes",
+            "max_pending_outbound_messages", "max_pending_outbound_payload_bytes",
             "max_proofs_per_transaction", "max_proofs_per_block", "max_proof_bytes_per_proof",
             "max_proof_bytes_per_transaction", "max_proof_bytes_per_block",
             "max_native_headers_per_transaction", "max_native_headers_per_block",
@@ -351,6 +357,29 @@ final class SccpV1Tests: XCTestCase {
             limits[key] = 0
             object["resource_limits"] = limits
             XCTAssertThrowsError(try SccpCapabilities.parse(jsonData(object)), key)
+        }
+
+        for (field, value) in [
+            ("max_outbound_messages_per_block", 511),
+            ("max_outbound_messages_per_block", 513),
+            ("max_outbound_message_payload_bytes", 4_095),
+            ("max_outbound_message_payload_bytes", 4_097),
+        ] {
+            var drifted = try jsonObject(valid)
+            var limits = drifted["resource_limits"] as! [String: Any]
+            limits[field] = value
+            drifted["resource_limits"] = limits
+            XCTAssertThrowsError(try SccpCapabilities.parse(jsonData(drifted)), field)
+        }
+        for field in [
+            "max_outbound_messages_per_block", "max_outbound_message_payload_bytes",
+            "max_pending_outbound_messages", "max_pending_outbound_payload_bytes",
+        ] {
+            var missing = try jsonObject(valid)
+            var limits = missing["resource_limits"] as! [String: Any]
+            limits.removeValue(forKey: field)
+            missing["resource_limits"] = limits
+            XCTAssertThrowsError(try SccpCapabilities.parse(jsonData(missing)), field)
         }
 
         let orderingRelations = [
@@ -415,7 +444,8 @@ final class SccpV1Tests: XCTestCase {
         for field in [
             "max_proof_bytes_per_proof", "max_proof_bytes_per_transaction",
             "max_proof_bytes_per_block", "max_native_header_bytes_per_transaction",
-            "max_native_header_bytes_per_block",
+            "max_native_header_bytes_per_block", "max_pending_outbound_messages",
+            "max_pending_outbound_payload_bytes",
         ] {
             boundaryLimits[field] = jsonSafeMaximum
         }
@@ -427,6 +457,13 @@ final class SccpV1Tests: XCTestCase {
         boundaryLimits["max_proof_bytes_per_block"] = jsonSafeMaximum + 1
         boundary["resource_limits"] = boundaryLimits
         XCTAssertThrowsError(try SccpCapabilities.parse(jsonData(boundary)))
+        for field in ["max_pending_outbound_messages", "max_pending_outbound_payload_bytes"] {
+            var overflow = try jsonObject(valid)
+            var limits = overflow["resource_limits"] as! [String: Any]
+            limits[field] = jsonSafeMaximum + 1
+            overflow["resource_limits"] = limits
+            XCTAssertThrowsError(try SccpCapabilities.parse(jsonData(overflow)), field)
+        }
     }
 
     func testRegistryValidatesFullPolicyElevenSignalKeyAndRouteCommitment() throws {
@@ -712,7 +749,26 @@ final class SccpV1Tests: XCTestCase {
     func testRecentMessagesRejectRetiredLinksInjectionAliasesAndOrdering() throws {
         let first = recentItem(height: 9, id: String(repeating: "11", count: 32))
         let second = recentItem(height: 8, id: String(repeating: "12", count: 32))
-        XCTAssertEqual(try SccpRecentMessages.parse(jsonData(["items": [first, second]])).items.map(\.height), [9, 8])
+        let page = try SccpRecentMessages.parse(jsonData(["items": [first, second]]))
+        XCTAssertEqual(page.items.map(\.height), [9, 8])
+        XCTAssertNil(page.next)
+
+        let sameHeightFirst = recentItem(
+            height: UInt64.max,
+            id: String(repeating: "13", count: 32),
+            commitmentIndex: 510
+        )
+        let sameHeightLast = recentItem(
+            height: UInt64.max,
+            id: String(repeating: "14", count: 32),
+            commitmentIndex: 511
+        )
+        let continued = try SccpRecentMessages.parse(jsonData([
+            "items": [sameHeightFirst, sameHeightLast],
+            "next": ["from": UInt64.max, "after_index": 511],
+        ]))
+        XCTAssertEqual(continued.items.map(\.commitmentIndex), [510, 511])
+        XCTAssertEqual(continued.next, SccpRecentCursor(from: UInt64.max, afterIndex: 511))
 
         var retired = first
         var retiredLinks = retired["links"] as! [String: Any]
@@ -727,6 +783,54 @@ final class SccpV1Tests: XCTestCase {
         XCTAssertThrowsError(try SccpRecentMessages.parse(jsonData(["items": [injection]])))
         XCTAssertThrowsError(try SccpRecentMessages.parse(jsonData(["items": [second, first]])))
         XCTAssertThrowsError(try SccpRecentMessages.parse(jsonData(["items": [first, first]])))
+
+        var missingIndex = first
+        missingIndex.removeValue(forKey: "commitment_index")
+        XCTAssertThrowsError(try SccpRecentMessages.parse(jsonData(["items": [missingIndex]])))
+        var outOfRangeIndex = first
+        outOfRangeIndex["commitment_index"] = 512
+        XCTAssertThrowsError(try SccpRecentMessages.parse(jsonData(["items": [outOfRangeIndex]])))
+        var unknownItemField = first
+        unknownItemField["commitment_position"] = 0
+        XCTAssertThrowsError(try SccpRecentMessages.parse(jsonData(["items": [unknownItemField]])))
+        XCTAssertThrowsError(try SccpRecentMessages.parse(jsonData([
+            "items": [first], "cursor": ["from": 9, "after_index": 0],
+        ])))
+        for indices in [[1, 1], [1, 3], [2, 1]] {
+            let sameHeight = [
+                recentItem(
+                    height: 9,
+                    id: String(repeating: "15", count: 32),
+                    commitmentIndex: UInt32(indices[0])
+                ),
+                recentItem(
+                    height: 9,
+                    id: String(repeating: "16", count: 32),
+                    commitmentIndex: UInt32(indices[1])
+                ),
+            ]
+            XCTAssertThrowsError(try SccpRecentMessages.parse(jsonData(["items": sameHeight])))
+        }
+        let olderStartsMidBlock = recentItem(
+            height: 8, id: String(repeating: "17", count: 32), commitmentIndex: 1
+        )
+        XCTAssertThrowsError(try SccpRecentMessages.parse(jsonData([
+            "items": [first, olderStartsMidBlock],
+        ])))
+        let cursorAttacks: [Any] = [
+            NSNull(),
+            ["from": 9, "after_index": 1],
+            ["from": 9, "after_index": 0, "extra": 0],
+            ["from": 9, "after_index": 512],
+        ]
+        for next in cursorAttacks {
+            XCTAssertThrowsError(try SccpRecentMessages.parse(jsonData([
+                "items": [first], "next": next,
+            ])))
+        }
+        XCTAssertThrowsError(try SccpRecentMessages.parse(jsonData([
+            "items": [], "next": ["from": 9, "after_index": 0],
+        ])))
 
         var missingProjection = first
         missingProjection.removeValue(forKey: "payload_projection")
@@ -798,11 +902,16 @@ final class SccpV1Tests: XCTestCase {
         _ = try await client.getSccpRegistry()
         _ = try await client.getSccpMessageBundle(messageIdHex: id)
         _ = try await client.getSccpProofRequest(messageIdHex: id)
-        _ = try await client.getSccpRecentMessages(from: 9, limit: 1)
+        _ = try await client.getSccpRecentMessages(from: UInt64.max, afterIndex: 511, limit: 1)
         XCTAssertEqual(observed.map { URL(string: $0)!.path }, [
             "/v1/sccp/capabilities", "/v1/sccp/registry", "/v1/sccp/proofs/message/\(id)",
             "/v1/sccp/proof-requests/\(id)", "/v1/sccp/messages/recent",
         ])
+        let recentQuery = URLComponents(string: observed.last!)!.queryItems!
+        XCTAssertEqual(
+            Dictionary(uniqueKeysWithValues: recentQuery.map { ($0.name, $0.value!) }),
+            ["from": String(UInt64.max), "after_index": "511", "limit": "1"]
+        )
         let calls = observed.count
         for attack in [
             "0x\(id)", String(repeating: "AB", count: 32), "\(id)?network=bsc",
@@ -819,6 +928,14 @@ final class SccpV1Tests: XCTestCase {
                 XCTFail("accepted a zero-valued recent-message query")
             } catch {}
         }
+        do {
+            _ = try await client.getSccpRecentMessages(afterIndex: 0)
+            XCTFail("accepted an unpaired recent-message cursor")
+        } catch {}
+        do {
+            _ = try await client.getSccpRecentMessages(from: 1, afterIndex: 512)
+            XCTFail("accepted an out-of-range recent-message cursor")
+        } catch {}
         XCTAssertEqual(observed.count, calls)
     }
 
@@ -1034,6 +1151,10 @@ final class SccpV1Tests: XCTestCase {
                 "max_retained_native_trust_anchors_per_lane": 4_096,
             ],
             "resource_limits": [
+                "max_outbound_messages_per_block": 512,
+                "max_outbound_message_payload_bytes": 4_096,
+                "max_pending_outbound_messages": 65_536,
+                "max_pending_outbound_payload_bytes": 256 * 1024 * 1024,
                 "max_proofs_per_transaction": 1,
                 "max_proofs_per_block": 4,
                 "max_proof_bytes_per_proof": 8 * 1024 * 1024,
@@ -1177,9 +1298,14 @@ final class SccpV1Tests: XCTestCase {
         ])
     }
 
-    private func recentItem(height: UInt64, id: String) -> [String: Any] {
+    private func recentItem(
+        height: UInt64,
+        id: String,
+        commitmentIndex: UInt32 = 0
+    ) -> [String: Any] {
         [
             "height": height,
+            "commitment_index": commitmentIndex,
             "message_id_hex": id,
             "kind": "transfer",
             "source_profile": "sora-taira",

@@ -107,7 +107,9 @@ its nonzero 32-byte `operation_id` field, so callers cannot supply a mismatched
 operation ID.
 The fixture-only `IrohaOfflineNoteTransactionSubmitter` audit/redeem/defund
 submissions and classic proof providers fail closed. Android secure storage
-remains in the platform wallet layer. The
+remains in the platform wallet layer. The attestation-aware fixture codec is
+exposed as `AttestedOfflineNote`, with `AttestedOfflineNoteHalo2Prover` for its
+proof fixtures; internal Norito schema labels remain unchanged. The
 Android `AndroidOfflineNoteSecureStore` rotates a non-exportable Android
 Keystore key on every committed wallet-state revision and rejects app-data
 rollback or cloned preference snapshots when the old revision key is no longer
@@ -152,12 +154,11 @@ proof path uses a packaged compact one-hop proving-key, while release evidence
 continues to track the proof-composition reservation, generic compact-token
 reservation, multi-hop verifier-batch reservation, and reserved ABI-7 state.
 Missing native symbols still surface as `IllegalStateException`.
-`KagemushaRecursiveSpendProver` exposes the ABI 6 spend-again-offline cash
-surface. Preferred mode selection chooses `recursive_spend_v1` after the JNI
-native bridge ABI-version probe succeeds and init, append, both transition-profile helpers,
-the append-boundary helper, both lineage-witness helpers, verify, and redeem
-reject the empty-archive availability probes instead of accepting permissive
-native calls.
+`KagemushaRecursiveSpendProver` exposes the exact ABI-18 spend-again-offline
+cash surface. Preferred mode selection returns `RECURSIVE_SPEND_V1` only when the
+ABI probe is exactly 18 and the Pasta-cycle backend is available; its stable
+wire value remains `recursive_spend_v1`. Older bridge modes and permissive
+symbol-presence fallbacks are not release inputs.
 `transitionProfileInit(requestArchive)` and
 `transitionProfileAppend(requestArchive)` return the canonical Reserved-lineage
 accumulator transition profile as raw Norito archives for fixture generation

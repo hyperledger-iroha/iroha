@@ -13,10 +13,13 @@ ABI policy
 - `abi_hash` commits to every sorted allowed syscall number, its canonical argument and return
   signatures, its conservative host-access class, every sorted allowed pointer-ABI type ID, and
   the complete ABI-v1 semantic descriptor. That descriptor includes numeric domains, arithmetic
-  rules, canonical JSON grammars, fault ordering, and typed durable-state schema/record identities,
-  enum tags, layouts, traversal rules, pointer mappings, and caps. Display names and gas prices are
-  not part of this digest. `ivm::gas::schedule_hash()` commits to the canonical gas schedule and
-  every staged-metering phase name/tag independently.
+  rules, canonical JSON grammars, fault ordering, the CNTR marker/framing, nominal contract-interface
+  and state-type schema identities, every embedded state-type tag/layout/sample frame, admission and
+  depth rules, and typed durable-state schema/record identities, enum tags, layouts, traversal rules,
+  pointer mappings, caps, operation-specific state paths, and CNTR-bound read/write record validation.
+  Display names and gas prices are not part of this digest.
+  `ivm::gas::schedule_hash()` commits to the canonical gas schedule and every staged-metering phase
+  name/tag independently.
 - Every allowed syscall must have exactly one explicit row in `spec/syscalls.toml`. Documentation
   generation rejects missing, duplicate, or extra rows instead of inventing an ABI signature from
   naming heuristics.
@@ -334,8 +337,15 @@ Extended query/sysvar surface (`SYSTEM` / SCALLX)
 - 0x010024 SYSVAR_CONTRACT_ADDRESS — Args: none → `ptr (&NoritoBytes(ContractAddress))` or `0` — Gas: G_sysvar + bytes
 - 0x010025 SYSVAR_ENTRYPOINT — Args: none → `ptr (&Blob(entrypoint))` or `0` — Gas: G_sysvar + bytes
 - 0x010026 DECODE_ARGUMENT_RECORD — Args: raw hosts use `r10=&NoritoBytes(EntrypointArgumentRecordV1)`; prepared contract calls use the exact host-issued `&NoritoBytes(domain-separated record binding)`; `r11=&NoritoBytes(EntrypointArgumentSchemaV1)` → `r10=&Blob(pad:u8 then [u64; word_count])` — Gas: G_argument_decode + record + schema + materialized output. Prepared calls first validate the trusted flat schema and derive its conservative maximum aggregate and pointer-allocation bound; that bound must be affordable before the untrusted canonical record is decoded. Raw syscall quoting authenticates neither payload: it uses only bounded record/schema envelope lengths and reserves the full HEAP before schema and record authentication. For prepared calls, the complete signed record remains host-owned and the guest sees only its domain-separated binding. Before any allocation, the host preflights the complete aligned TLV sequence plus raw aggregate storage. Pointer TLVs and the output word table prefer INPUT and spill into owned HEAP, while raw `List` and sum storage is always owned HEAP. The record limit is inclusive at 1 MiB. Raw hosts then validate the schema hash, canonical flat atoms, inactive sum payloads, and every embedded typed pointer. JSON-to-record conversion occurs only at Torii/CLI tooling boundaries.
+- 0x010027 SYSVAR_CONTRACT_SUBJECT — Args: none → `ptr (&AccountId(contract subject))` — Gas: G_sysvar + bytes. Calls outside a deployed-contract scope fail closed.
+- 0x010200 SET_ASSET_TRANSFER_FREEZE — Args: `r10=&AccountId, r11=&AssetDefinitionId, r12=frozen:0/1` → 0 — Gas: G_sci + bytes
+- 0x010201 SET_ASSET_TRANSFER_DAILY_LIMIT — Args: `r10=&AccountId, r11=&AssetDefinitionId, r12=&Quantity or 0` → 0 — Gas: G_sci + bytes
+- 0x010210 ACCOUNT_RECOVERY_PROPOSE — Args: `r10=&Blob(alias), r11=&AccountId(replacement)` → 0 — Gas: G_sci + bytes
+- 0x010211 ACCOUNT_RECOVERY_APPROVE — Args: `r10=&Blob(alias)` → 0 — Gas: G_sci + bytes
+- 0x010212 ACCOUNT_RECOVERY_CANCEL — Args: `r10=&Blob(alias)` → 0 — Gas: G_sci + bytes
+- 0x010213 ACCOUNT_RECOVERY_FINALIZE — Args: `r10=&Blob(alias)` → 0 — Gas: G_sci + bytes
 - 0x010030 STATE_KEYS — Args: `r10=&Name(prefix), r11=offset, r12=limit` (`0..=64`, where `0` returns an empty page) → `ptr (&NoritoBytes(Vec<Name>))`, `r11=total`, `r12=count` — Gas: G_state_keys + count + bytes
-  - Enumerates durable-state keys in canonical sorted order. In contract-runtime scope, internal storage prefixes are stripped before return, and staged tombstones are applied before pagination. The ledger host seeks directly to the scoped ordered prefix and does not materialize unrelated global keys; its `count` gas component conservatively includes every textual-prefix candidate examined across persisted state and the transaction overlay. Limits above 64 are rejected by every host.
+  - Enumerates durable-state keys in canonical sorted order. With CNTR metadata, the prefix must resolve to a declared path; a bare `StateMap` base is accepted here and by `STATE_COUNT`, but rejected by value operations. In contract-runtime scope, internal storage prefixes are stripped before return, and staged tombstones are applied before pagination. The ledger host seeks directly to the scoped ordered prefix and does not materialize unrelated global keys; its `count` gas component conservatively includes every textual-prefix candidate examined across persisted state and the transaction overlay. Limits above 64 are rejected by every host.
 - 0x010031 STATE_HAS — Args: `r10=&Name(path)` → `r10=present` — Gas: G_state_has
   - Tests durable-state key presence with the same scoped overlay, base-state, and tombstone resolution as `STATE_GET`.
 - 0x010032 STATE_LEN — Args: `r10=&Name(path)` → `r10=len`, `r11=found` — Gas: G_state_len + bytes
@@ -659,6 +669,7 @@ node enforces that policy unconditionally.
 | 0x10024 | SYSVAR_CONTRACT_ADDRESS | - | r10=ptr (&NoritoBytes(ContractAddress)) or 0 | asset:gas/G_sysvar@ivm.core/v2 + bytes |
 | 0x10025 | SYSVAR_ENTRYPOINT | - | r10=ptr (&Blob(entrypoint)) or 0 | asset:gas/G_sysvar@ivm.core/v2 + bytes |
 | 0x10026 | DECODE_ARGUMENT_RECORD | r10=&NoritoBytes(EntrypointArgumentRecordV1), r11=&NoritoBytes(EntrypointArgumentSchemaV1) | r10=ptr (&Blob(pad:u8 then [u64; word_count])) | asset:gas/G_argument_decode@ivm.core/v2 + record + schema + output |
+| 0x10027 | SYSVAR_CONTRACT_SUBJECT | - | r10=ptr (&AccountId(contract subject)) | asset:gas/G_sysvar@ivm.core/v2 + bytes |
 | 0x10030 | STATE_KEYS | r10=&Name(prefix), r11=offset:u64, r12=limit:u64 (0..=64) | r10=ptr (&NoritoBytes(Vec<Name>)), r11=total:u64, r12=count:u64 | asset:gas/G_state_keys@ivm.core/v2 + count + bytes |
 | 0x10031 | STATE_HAS | r10=&Name(path) | r10=present:u64 | asset:gas/G_state_has@ivm.core/v2 |
 | 0x10032 | STATE_LEN | r10=&Name(path) | r10=len:u64, r11=found:u64 | asset:gas/G_state_len@ivm.core/v2 + bytes |
@@ -725,6 +736,12 @@ node enforces that policy unconditionally.
 | 0x10163 | JSON_GET_INT_DIRECT | r10=&Json(any validated region), r11=&Name(key) | r10=Option<&Int> sum handle | asset:gas/G_json_get@ivm.core/v2 + input bytes + active payload + sum allocation |
 | 0x10164 | JSON_GET_DECIMAL_DIRECT | r10=&Json(any validated region), r11=&Name(key) | r10=Option<&Decimal> sum handle | asset:gas/G_json_get@ivm.core/v2 + input bytes + active payload + sum allocation |
 | 0x10165 | JSON_GET_QUANTITY_DIRECT | r10=&Json(any validated region), r11=&Name(key) | r10=Option<&Quantity> sum handle | asset:gas/G_json_get@ivm.core/v2 + input bytes + active payload + sum allocation |
+| 0x10200 | SET_ASSET_TRANSFER_FREEZE | r10=&AccountId, r11=&AssetDefinitionId, r12=frozen:0/1 | u64=0 | asset:gas/G_sci@ivm.core/v2 + bytes |
+| 0x10201 | SET_ASSET_TRANSFER_DAILY_LIMIT | r10=&AccountId, r11=&AssetDefinitionId, r12=&Quantity or 0 | u64=0 | asset:gas/G_sci@ivm.core/v2 + bytes |
+| 0x10210 | ACCOUNT_RECOVERY_PROPOSE | r10=&Blob(alias), r11=&AccountId(replacement) | u64=0 | asset:gas/G_sci@ivm.core/v2 + bytes |
+| 0x10211 | ACCOUNT_RECOVERY_APPROVE | r10=&Blob(alias) | u64=0 | asset:gas/G_sci@ivm.core/v2 + bytes |
+| 0x10212 | ACCOUNT_RECOVERY_CANCEL | r10=&Blob(alias) | u64=0 | asset:gas/G_sci@ivm.core/v2 + bytes |
+| 0x10213 | ACCOUNT_RECOVERY_FINALIZE | r10=&Blob(alias) | u64=0 | asset:gas/G_sci@ivm.core/v2 + bytes |
 <!-- END GENERATED SYSCALLS -->
 
 

@@ -24,6 +24,10 @@ use crate::{
 use ed25519_dalek::{Signature as Ed25519Signature, Verifier as _};
 use ed25519_dalek::{Signer as _, SigningKey};
 use iroha_data_model::prelude::{Mintable, Name};
+use iroha_data_model::{
+    nexus::DataSpaceId,
+    smart_contract::{CHAIN_DISCRIMINANT_MAINNET, ContractAddress},
+};
 use iroha_primitives::{json::Json, numeric::Numeric, numeric_abi::DecimalValueV1};
 use ivm_abi::entrypoint::EntrypointArgumentSchemaV1;
 use ivm_abi::state_value::{
@@ -116,6 +120,7 @@ struct CompiledSuite {
 struct RuntimeEntrypoint {
     pc: u64,
     argument_schema: Option<EntrypointArgumentSchemaV1>,
+    permission: Option<String>,
 }
 
 #[derive(Clone)]
@@ -150,6 +155,7 @@ struct KotoTestHost {
     base_public_inputs: BTreeMap<Name, Vec<u8>>,
     entrypoints: HashMap<String, RuntimeEntrypoint>,
     program: Option<Vec<u8>>,
+    contract_address: ContractAddress,
     last_test_error: Option<String>,
     supplemental_trace_pcs: Vec<u64>,
     supplemental_delta_trace: Vec<crate::zk::DeltaEntry>,
@@ -652,6 +658,7 @@ fn compile_suite(suite: &DiscoveredSuite, zk_enabled: bool) -> Result<CompiledSu
                                 RuntimeEntrypoint {
                                     pc: runtime_pc_base.saturating_add(entry.entry_pc),
                                     argument_schema: entry.argument_schema.clone(),
+                                    permission: entry.permission.clone(),
                                 },
                             )
                         })
@@ -935,6 +942,26 @@ fn apply_fixture_action(
             }
             Err("fixture action `grant_permission` expects 1 or 2 arguments".to_string())
         }
+        "grant_contract_entrypoint_permission" => {
+            expect_arg_count(action, 2)?;
+            let alias = eval_actor_alias_expr(&action.args[0])?;
+            let entrypoint = eval_string_expr(&action.args[1])?;
+            if entrypoint.is_empty() || entrypoint.trim() != entrypoint {
+                return Err(
+                    "fixture contract entrypoint permission requires a non-empty canonical selector"
+                        .to_owned(),
+                );
+            }
+            let account = host
+                .actor_account(&alias)
+                .ok_or_else(|| format!("unknown actor `{alias}`"))?;
+            let permission = PermissionToken::ContractEntrypoint {
+                contract: host.contract_address.clone(),
+                entrypoint,
+            };
+            host.inner_mut().wsv.grant_permission(&account, permission);
+            Ok(())
+        }
         "register_domain" => {
             expect_arg_count(action, 1)?;
             let domain = eval_domain_expr(&action.args[0])?;
@@ -1053,12 +1080,20 @@ impl KotoTestHost {
         program: Option<Vec<u8>>,
         entrypoints: HashMap<String, RuntimeEntrypoint>,
     ) -> Self {
+        let contract_address = ContractAddress::derive(
+            CHAIN_DISCRIMINANT_MAINNET,
+            &inner.caller_subject(),
+            0,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("Kotodama test contract address derivation must be deterministic");
         Self {
             inner,
             actors: HashMap::new(),
             base_public_inputs: BTreeMap::new(),
             entrypoints,
             program,
+            contract_address,
             last_test_error: None,
             supplemental_trace_pcs: Vec::new(),
             supplemental_delta_trace: Vec::new(),
@@ -1263,6 +1298,21 @@ impl KotoTestHost {
                 ));
             }
         };
+        if runtime_entrypoint.permission.as_deref() == Some("CanInvokeContractEntrypoint") {
+            let permission = PermissionToken::ContractEntrypoint {
+                contract: self.contract_address.clone(),
+                entrypoint: entrypoint.clone(),
+            };
+            if !self.inner.wsv.has_permission(&actor.account, &permission) {
+                if expect_reject {
+                    vm.set_register(10, 0);
+                    return Ok(0);
+                }
+                return self.fail_test(format!(
+                    "actor `{actor_alias}` lacks exact CanInvokeContractEntrypoint permission for `{entrypoint}`"
+                ));
+            }
+        }
         let Some(program) = self.program.as_deref() else {
             return self.fail_test(format!(
                 "runtime entrypoint `{entrypoint}` has no compiled runtime artifact"
@@ -3260,6 +3310,52 @@ mod tests {
         assert_eq!(
             host.actors["seller"].seed.expect("stored actor seed"),
             actor_seed
+        );
+    }
+
+    #[test]
+    fn fixture_entrypoint_grant_is_address_and_selector_scoped() {
+        let caller = parse_account_literal(DEFAULT_CALLER).expect("caller");
+        let actor = caller.clone();
+        let mut host = KotoTestHost::new(
+            WsvHost::new_with_subject(MockWorldStateView::default(), caller, HashMap::new()),
+            None,
+            HashMap::new(),
+        );
+        host.register_actor("operator".to_owned(), actor.clone())
+            .expect("register fixture actor");
+        let mut public_inputs = BTreeMap::new();
+        apply_fixture_action(
+            &FixtureAction {
+                name: "grant_contract_entrypoint_permission".to_owned(),
+                args: vec![
+                    Expr::String("operator".to_owned()),
+                    Expr::String("apply".to_owned()),
+                ],
+            },
+            &mut host,
+            &mut public_inputs,
+        )
+        .expect("grant exact fixture permission");
+
+        let exact = PermissionToken::ContractEntrypoint {
+            contract: host.contract_address.clone(),
+            entrypoint: "apply".to_owned(),
+        };
+        let wrong_selector = PermissionToken::ContractEntrypoint {
+            contract: host.contract_address.clone(),
+            entrypoint: "other".to_owned(),
+        };
+        assert!(host.inner.wsv.has_permission(&actor, &exact));
+        assert!(!host.inner.wsv.has_permission(&actor, &wrong_selector));
+
+        host.inner.wsv.grant_permission(
+            &actor,
+            PermissionToken::Custom("CanInvokeContractEntrypoint".to_owned()),
+        );
+        assert!(
+            !host.inner.wsv.has_permission(&actor, &wrong_selector),
+            "name-only grants must never materialize a scoped entrypoint capability"
         );
     }
 

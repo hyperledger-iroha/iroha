@@ -4,18 +4,22 @@
 use std::time::Instant;
 
 use iroha_data_model::{
-    asset::AssetId,
+    asset::{AssetBalancePolicy, AssetBalanceScope, AssetId},
     isi::{
-        error::{InstructionEvaluationError, InstructionExecutionError},
+        error::{InstructionEvaluationError, InstructionExecutionError, InvalidParameterError},
         settlement::{
-            DvpIsi, PvpIsi, SettlementAtomicity, SettlementExecutionOrder,
+            DvpIsi, FxCorridorPolicy, FxCorridorPolicyRegistry, PvpIsi, SetFxCorridorPolicy,
+            SettleFxCorridor, SettlementAtomicity, SettlementExecutionOrder,
             SettlementInstructionBox, SettlementLeg, SettlementPlan,
         },
     },
     prelude::*,
     query::error::FindError,
 };
-use iroha_primitives::numeric::{Numeric, NumericSpec};
+use iroha_primitives::{
+    json::Json,
+    numeric::{Numeric, NumericSpec},
+};
 
 use super::*;
 use crate::smartcontracts::isi::asset::isi::assert_numeric_spec_with;
@@ -27,6 +31,8 @@ use crate::sumeragi::status::SettlementOutcomeKind;
 pub(crate) const SETTLEMENT_KIND_DVP: &str = "dvp";
 #[cfg_attr(not(feature = "telemetry"), allow(dead_code))]
 pub(crate) const SETTLEMENT_KIND_PVP: &str = "pvp";
+pub(crate) const CAN_SET_FX_CORRIDOR_POLICY: &str = "CanSetFxCorridorPolicy";
+pub(crate) const CAN_SETTLE_FX_CORRIDOR: &str = "CanSettleFxCorridor";
 
 impl Execute for SettlementInstructionBox {
     fn execute(
@@ -37,6 +43,8 @@ impl Execute for SettlementInstructionBox {
         match self {
             SettlementInstructionBox::Dvp(isi) => isi.execute(authority, stx),
             SettlementInstructionBox::Pvp(isi) => isi.execute(authority, stx),
+            SettlementInstructionBox::SetFxCorridorPolicy(isi) => isi.execute(authority, stx),
+            SettlementInstructionBox::SettleFxCorridor(isi) => isi.execute(authority, stx),
         }
     }
 }
@@ -151,6 +159,107 @@ fn pvp_leg_snapshots(
             committed: counter_committed,
         },
     ]
+}
+
+fn fx_corridor_leg_snapshots(
+    outcome: &SettlementPairOutcome,
+    source_leg: &SettlementLeg,
+    destination_leg: &SettlementLeg,
+) -> Vec<SettlementLegSnapshot> {
+    vec![
+        SettlementLegSnapshot {
+            role: SettlementLegRole::FxSource,
+            leg: source_leg.clone(),
+            committed: outcome.first_committed,
+        },
+        SettlementLegSnapshot {
+            role: SettlementLegRole::FxDestination,
+            leg: destination_leg.clone(),
+            committed: outcome.second_committed,
+        },
+    ]
+}
+
+fn has_named_permission(
+    stx: &StateTransaction<'_, '_>,
+    authority: &AccountId,
+    permission_name: &str,
+) -> bool {
+    let matches_name = |permission: &Permission| permission.name() == permission_name;
+
+    if stx
+        .world
+        .account_permissions
+        .get(authority)
+        .is_some_and(|permissions| permissions.iter().any(matches_name))
+    {
+        return true;
+    }
+
+    stx.world
+        .account_roles
+        .iter()
+        .filter_map(|(role_key, ())| {
+            if &role_key.account == authority {
+                stx.world.roles.get(&role_key.id)
+            } else {
+                None
+            }
+        })
+        .any(|role| role.permissions().any(matches_name))
+}
+
+fn invalid_fx_parameter(message: impl Into<String>) -> Error {
+    InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+        message.into(),
+    ))
+}
+
+fn fx_policy_registry(stx: &StateTransaction<'_, '_>) -> Result<FxCorridorPolicyRegistry, Error> {
+    let parameters = stx.world.parameters.get();
+    let Some(custom) = parameters
+        .custom()
+        .get(&FxCorridorPolicyRegistry::parameter_id())
+    else {
+        return Ok(FxCorridorPolicyRegistry::default());
+    };
+    FxCorridorPolicyRegistry::from_custom_parameter(custom)
+        .map_err(|err| invalid_fx_parameter(format!("invalid FX corridor policy registry: {err}")))?
+        .ok_or_else(|| invalid_fx_parameter("FX corridor policy registry id mismatch"))
+}
+
+fn fx_policy(stx: &StateTransaction<'_, '_>, policy_id: &Name) -> Result<FxCorridorPolicy, Error> {
+    fx_policy_registry(stx)?
+        .get(policy_id)
+        .cloned()
+        .ok_or_else(|| invalid_fx_parameter(format!("FX corridor policy `{policy_id}` not found")))
+}
+
+fn validate_fx_policy_entities(
+    stx: &StateTransaction<'_, '_>,
+    policy: &FxCorridorPolicy,
+) -> Result<(), Error> {
+    if let Some(message) = policy.invariant_error() {
+        return Err(invalid_fx_parameter(message));
+    }
+
+    ensure_account_exists(stx, &policy.source_account)?;
+    ensure_account_exists(stx, &policy.source_sink)?;
+    ensure_account_exists(stx, &policy.destination_reserve)?;
+
+    for asset_definition_id in [
+        &policy.source_asset_definition_id,
+        &policy.destination_asset_definition_id,
+    ] {
+        let definition = stx.world.asset_definition(asset_definition_id)?;
+        if definition.balance_scope_policy() != AssetBalancePolicy::DataspaceRestricted {
+            return Err(invalid_fx_parameter(format!(
+                "FX corridor asset `{asset_definition_id}` must use DataspaceRestricted balances"
+            )));
+        }
+    }
+
+    Ok(())
 }
 
 fn ensure_account_exists(stx: &StateTransaction<'_, '_>, account: &AccountId) -> Result<(), Error> {
@@ -297,13 +406,87 @@ fn deposit_numeric_asset_exact(
     id: &AssetId,
     amount: &Numeric,
 ) -> Result<(), Error> {
-    let dst = stx.world.asset_or_insert_exact(id, Numeric::zero())?;
-    let quantity: &mut Numeric = &mut *dst;
-    *quantity = quantity
-        .clone()
-        .checked_add(amount.clone())
-        .ok_or(MathError::Overflow)?;
+    let is_nonzero = {
+        let dst = stx.world.asset_or_insert_exact(id, Numeric::zero())?;
+        let quantity: &mut Numeric = &mut *dst;
+        *quantity = quantity
+            .clone()
+            .checked_add(amount.clone())
+            .ok_or(MathError::Overflow)?;
+        !quantity.is_zero()
+    };
+    if is_nonzero {
+        stx.world.track_nonzero_asset_holder(id);
+    }
     Ok(())
+}
+
+fn scoped_fx_leg_asset_ids(leg: &SettlementLeg, dataspace: DataSpaceId) -> (AssetId, AssetId) {
+    let scope = AssetBalanceScope::Dataspace(dataspace);
+    (
+        AssetId::with_scope(
+            leg.asset_definition_id().clone(),
+            leg.from().clone(),
+            scope.clone(),
+        ),
+        AssetId::with_scope(leg.asset_definition_id().clone(), leg.to().clone(), scope),
+    )
+}
+
+fn ensure_scoped_fx_leg_funding(
+    stx: &StateTransaction<'_, '_>,
+    leg: &SettlementLeg,
+    dataspace: DataSpaceId,
+) -> Result<(), Error> {
+    let (source, _) = scoped_fx_leg_asset_ids(leg, dataspace);
+    let available = stx
+        .world
+        .assets
+        .get(&source)
+        .map_or_else(Numeric::zero, |balance| balance.as_ref().clone());
+    let funded = available
+        .clone()
+        .checked_sub(leg.quantity().clone())
+        .is_some_and(|remaining| !remaining.mantissa().is_negative());
+    if !funded {
+        return Err(InstructionExecutionError::InvariantViolation(
+            format!(
+                "FX corridor leg requires {} but only {} is available for {} in dataspace {}",
+                leg.quantity(),
+                available,
+                leg.from(),
+                dataspace.as_u64()
+            )
+            .into(),
+        ));
+    }
+    Ok(())
+}
+
+fn apply_scoped_fx_leg(
+    stx: &mut StateTransaction<'_, '_>,
+    leg: &SettlementLeg,
+    dataspace: DataSpaceId,
+    spec: NumericSpec,
+) -> Result<(), Error> {
+    assert_numeric_spec_with(leg.quantity(), spec)?;
+    let (source, destination) = scoped_fx_leg_asset_ids(leg, dataspace);
+    withdraw_numeric_asset_exact(stx, &source, leg.quantity())?;
+    if let Err(err) = deposit_numeric_asset_exact(stx, &destination, leg.quantity()) {
+        deposit_numeric_asset_exact(stx, &source, leg.quantity())?;
+        return Err(err);
+    }
+    Ok(())
+}
+
+fn rollback_scoped_fx_leg(
+    stx: &mut StateTransaction<'_, '_>,
+    leg: &SettlementLeg,
+    dataspace: DataSpaceId,
+) -> Result<(), Error> {
+    let (source, destination) = scoped_fx_leg_asset_ids(leg, dataspace);
+    withdraw_numeric_asset_exact(stx, &destination, leg.quantity())?;
+    deposit_numeric_asset_exact(stx, &source, leg.quantity())
 }
 
 fn enforce_atomicity(plan: SettlementPlan) {
@@ -421,6 +604,73 @@ fn execute_settlement_pair(
     Ok(outcome)
 }
 
+fn exact_fx_destination_amount(
+    source_amount: &Numeric,
+    destination_spec: NumericSpec,
+    policy: &FxCorridorPolicy,
+) -> Result<Numeric, Error> {
+    let numerator = source_amount
+        .clone()
+        .checked_mul(
+            Numeric::from(policy.rate_numerator),
+            NumericSpec::unconstrained(),
+        )
+        .ok_or(MathError::Overflow)?;
+    let denominator = Numeric::from(policy.rate_denominator);
+    let destination_amount = numerator
+        .clone()
+        .checked_div(denominator.clone(), destination_spec)
+        .ok_or(MathError::Overflow)?;
+    let reconstructed = destination_amount
+        .clone()
+        .checked_mul(denominator, NumericSpec::unconstrained())
+        .ok_or(MathError::Overflow)?;
+    if reconstructed != numerator {
+        return Err(invalid_fx_parameter(
+            "FX corridor rate does not produce an exact destination quantity",
+        ));
+    }
+    assert_numeric_spec_with(&destination_amount, destination_spec)?;
+    if destination_amount.is_zero() {
+        return Err(invalid_fx_parameter(
+            "FX corridor destination quantity must be non-zero",
+        ));
+    }
+    Ok(destination_amount)
+}
+
+fn execute_scoped_fx_pair(
+    stx: &mut StateTransaction<'_, '_>,
+    source: (&SettlementLeg, DataSpaceId, NumericSpec),
+    destination: (&SettlementLeg, DataSpaceId, NumericSpec),
+) -> Result<SettlementPairOutcome, SettlementPairError> {
+    let mut outcome = SettlementPairOutcome::default();
+    if let Err(err) = apply_scoped_fx_leg(stx, source.0, source.1, source.2) {
+        return Err(SettlementPairError::new(outcome, err));
+    }
+    outcome.first_committed = true;
+
+    #[cfg(feature = "telemetry")]
+    let first_leg_finished_at = Instant::now();
+
+    if let Err(err) = apply_scoped_fx_leg(stx, destination.0, destination.1, destination.2) {
+        if let Err(rollback_err) = rollback_scoped_fx_leg(stx, source.0, source.1) {
+            log_atomicity_warning("FX source", &rollback_err);
+        } else {
+            outcome.first_committed = false;
+        }
+        return Err(SettlementPairError::new(outcome, err));
+    }
+    outcome.second_committed = true;
+
+    #[cfg(feature = "telemetry")]
+    {
+        let elapsed_ms = first_leg_finished_at.elapsed().as_millis();
+        outcome.fx_window_ms = Some(u64::try_from(elapsed_ms).unwrap_or(u64::MAX));
+    }
+    Ok(outcome)
+}
+
 fn validate_dvp_preconditions(
     authority: &AccountId,
     stx: &mut StateTransaction<'_, '_>,
@@ -484,6 +734,225 @@ fn validate_pvp_preconditions(
     enforce_atomicity(plan);
 
     Ok((primary_spec, counter_spec))
+}
+
+fn validate_fx_settlement_preconditions(
+    authority: &AccountId,
+    stx: &mut StateTransaction<'_, '_>,
+    instruction: &SettleFxCorridor,
+) -> Result<
+    (
+        FxCorridorPolicy,
+        SettlementLeg,
+        SettlementLeg,
+        NumericSpec,
+        NumericSpec,
+    ),
+    Error,
+> {
+    if !has_named_permission(stx, authority, CAN_SETTLE_FX_CORRIDOR) {
+        return Err(InstructionExecutionError::InvariantViolation(
+            format!("not permitted: {CAN_SETTLE_FX_CORRIDOR}").into(),
+        ));
+    }
+    if stx
+        .world
+        .settlement_ledgers
+        .get(&instruction.settlement_id)
+        .is_some()
+    {
+        return Err(InstructionExecutionError::InvariantViolation(
+            format!(
+                "settlement id `{}` has already been committed",
+                instruction.settlement_id
+            )
+            .into(),
+        ));
+    }
+
+    let policy = fx_policy(stx, &instruction.policy_id)?;
+    validate_fx_policy_entities(stx, &policy)?;
+    if !policy.enabled {
+        return Err(InstructionExecutionError::InvariantViolation(
+            format!("FX corridor policy `{}` is disabled", policy.policy_id).into(),
+        ));
+    }
+    if authority != &policy.source_account {
+        return Err(InstructionExecutionError::InvariantViolation(
+            "FX corridor settlement must be authorised by the policy source account".into(),
+        ));
+    }
+    if instruction.expected_policy_revision != policy.revision {
+        return Err(invalid_fx_parameter(format!(
+            "FX corridor policy revision mismatch: expected {}, active {}",
+            instruction.expected_policy_revision, policy.revision
+        )));
+    }
+    if instruction.source_asset_definition_id != policy.source_asset_definition_id
+        || instruction.destination_asset_definition_id != policy.destination_asset_definition_id
+    {
+        return Err(invalid_fx_parameter(
+            "FX corridor instruction assets do not match the active policy",
+        ));
+    }
+    if instruction.recipient == policy.destination_reserve {
+        return Err(invalid_fx_parameter(
+            "FX corridor recipient must differ from the destination reserve",
+        ));
+    }
+    ensure_account_exists(stx, &instruction.recipient)?;
+    if instruction.source_amount.is_zero() || instruction.source_amount.mantissa().is_negative() {
+        return Err(invalid_fx_parameter(
+            "FX corridor source quantity must be positive",
+        ));
+    }
+
+    let source_spec = stx
+        .numeric_spec_for(&policy.source_asset_definition_id)
+        .map_err(Error::from)?;
+    let destination_spec = stx
+        .numeric_spec_for(&policy.destination_asset_definition_id)
+        .map_err(Error::from)?;
+    assert_numeric_spec_with(&instruction.source_amount, source_spec)?;
+    let destination_amount =
+        exact_fx_destination_amount(&instruction.source_amount, destination_spec, &policy)?;
+
+    let source_leg = SettlementLeg::new(
+        policy.source_asset_definition_id.clone(),
+        instruction.source_amount.clone(),
+        policy.source_account.clone(),
+        policy.source_sink.clone(),
+    );
+    let destination_leg = SettlementLeg::new(
+        policy.destination_asset_definition_id.clone(),
+        destination_amount,
+        policy.destination_reserve.clone(),
+        instruction.recipient.clone(),
+    );
+    ensure_scoped_fx_leg_funding(stx, &source_leg, policy.source_dataspace)?;
+    ensure_scoped_fx_leg_funding(stx, &destination_leg, policy.destination_dataspace)?;
+
+    Ok((
+        policy,
+        source_leg,
+        destination_leg,
+        source_spec,
+        destination_spec,
+    ))
+}
+
+impl Execute for SetFxCorridorPolicy {
+    fn execute(
+        self,
+        authority: &AccountId,
+        stx: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        if !has_named_permission(stx, authority, CAN_SET_FX_CORRIDOR_POLICY) {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!("not permitted: {CAN_SET_FX_CORRIDOR_POLICY}").into(),
+            ));
+        }
+        validate_fx_policy_entities(stx, &self.policy)?;
+
+        let mut registry = fx_policy_registry(stx)?;
+        let expected_revision = match registry.get(&self.policy.policy_id) {
+            Some(previous) => previous
+                .revision
+                .checked_add(1)
+                .ok_or_else(|| invalid_fx_parameter("FX corridor policy revision overflow"))?,
+            None => 1,
+        };
+        if self.policy.revision != expected_revision {
+            return Err(invalid_fx_parameter(format!(
+                "FX corridor policy revision must be {expected_revision}"
+            )));
+        }
+        registry.upsert(self.policy);
+        SetParameter::new(Parameter::Custom(registry.into_custom_parameter()))
+            .execute(authority, stx)
+    }
+}
+
+pub(crate) fn admission_validate_fx_corridor(
+    authority: &AccountId,
+    stx: &mut StateTransaction<'_, '_>,
+    instruction: &SettleFxCorridor,
+) -> Result<(), Error> {
+    let _ = validate_fx_settlement_preconditions(authority, stx, instruction)?;
+    Ok(())
+}
+
+impl Execute for SettleFxCorridor {
+    fn execute(
+        self,
+        authority: &AccountId,
+        stx: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        let (policy, source_leg, destination_leg, source_spec, destination_spec) =
+            validate_fx_settlement_preconditions(authority, stx, &self)?;
+
+        let outcome = execute_scoped_fx_pair(
+            stx,
+            (&source_leg, policy.source_dataspace, source_spec),
+            (
+                &destination_leg,
+                policy.destination_dataspace,
+                destination_spec,
+            ),
+        )
+        .map_err(SettlementPairError::into_error)?;
+
+        let plan = SettlementPlan::new(
+            SettlementExecutionOrder::DeliveryThenPayment,
+            SettlementAtomicity::AllOrNothing,
+        );
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            "fx_corridor_policy_id"
+                .parse()
+                .expect("valid FX corridor metadata key"),
+            Json::new(policy.policy_id.to_string()),
+        );
+        metadata.insert(
+            "fx_source_dataspace"
+                .parse()
+                .expect("valid FX source-dataspace metadata key"),
+            Json::new(policy.source_dataspace.as_u64()),
+        );
+        metadata.insert(
+            "fx_destination_dataspace"
+                .parse()
+                .expect("valid FX destination-dataspace metadata key"),
+            Json::new(policy.destination_dataspace.as_u64()),
+        );
+        let legs = fx_corridor_leg_snapshots(&outcome, &source_leg, &destination_leg);
+        record_settlement_snapshot(
+            stx,
+            authority,
+            &self.settlement_id,
+            plan,
+            metadata,
+            SettlementKind::FxCorridor,
+            legs,
+            SettlementOutcomeRecord::Success(SettlementSuccessRecord {
+                first_committed: outcome.first_committed,
+                second_committed: outcome.second_committed,
+                fx_window_ms: outcome.fx_window_ms,
+            }),
+        );
+
+        iroha_logger::info!(
+            settlement_id = %self.settlement_id,
+            policy_id = %policy.policy_id,
+            source_dataspace = policy.source_dataspace.as_u64(),
+            destination_dataspace = policy.destination_dataspace.as_u64(),
+            source_amount = %source_leg.quantity(),
+            destination_amount = %destination_leg.quantity(),
+            recipient = %self.recipient,
+            "native FX corridor settlement executed"
+        );
+        Ok(())
+    }
 }
 
 pub(crate) fn admission_validate_dvp(
@@ -804,10 +1273,12 @@ impl Execute for PvpIsi {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use iroha_data_model::{
         account::Account,
         asset::{
-            Asset, AssetDefinition,
+            Asset, AssetBalancePolicy, AssetDefinition,
             prelude::{AssetDefinitionId, AssetId},
         },
         block::BlockHeader,
@@ -817,7 +1288,7 @@ mod tests {
         metadata::Metadata,
     };
     use iroha_primitives::numeric::{Numeric, NumericSpec};
-    use iroha_test_samples::{ALICE_ID, BOB_ID};
+    use iroha_test_samples::{ALICE_ID, BOB_ID, CARPENTER_ID, SAMPLE_GENESIS_ACCOUNT_ID};
     use nonzero_ext::nonzero;
 
     use super::*;
@@ -838,6 +1309,327 @@ mod tests {
 
     fn settlement_state() -> (State, AssetDefinitionId, AssetDefinitionId) {
         settlement_state_with_balances(Numeric::from(10u32), Numeric::from(1_000u32))
+    }
+
+    fn fx_corridor_state(
+        source_balance: u32,
+        destination_balance: u32,
+        rate_numerator: u64,
+        rate_denominator: u64,
+        enabled: bool,
+    ) -> (State, FxCorridorPolicy) {
+        let domain_id = DomainId::try_new("fx", "universal").expect("FX domain");
+        let source_asset_definition_id =
+            AssetDefinitionId::new(domain_id.clone(), "aed".parse().expect("AED name"));
+        let destination_asset_definition_id =
+            AssetDefinitionId::new(domain_id.clone(), "pkr".parse().expect("PKR name"));
+        let source_dataspace = DataSpaceId::new(10);
+        let destination_dataspace = DataSpaceId::new(12);
+
+        let mut world = World::with_assets(
+            [Domain::new(domain_id).build(&ALICE_ID)],
+            [
+                Account::new(ALICE_ID.clone()).build(&ALICE_ID),
+                Account::new(BOB_ID.clone()).build(&ALICE_ID),
+                Account::new(CARPENTER_ID.clone()).build(&ALICE_ID),
+                Account::new(SAMPLE_GENESIS_ACCOUNT_ID.clone()).build(&ALICE_ID),
+            ],
+            [
+                AssetDefinition::numeric(source_asset_definition_id.clone())
+                    .with_balance_scope_policy(AssetBalancePolicy::DataspaceRestricted)
+                    .build(&ALICE_ID),
+                AssetDefinition::numeric(destination_asset_definition_id.clone())
+                    .with_balance_scope_policy(AssetBalancePolicy::DataspaceRestricted)
+                    .build(&ALICE_ID),
+            ],
+            [
+                Asset::new(
+                    AssetId::with_scope(
+                        source_asset_definition_id.clone(),
+                        ALICE_ID.clone(),
+                        AssetBalanceScope::Dataspace(source_dataspace),
+                    ),
+                    Numeric::from(source_balance),
+                ),
+                Asset::new(
+                    AssetId::with_scope(
+                        destination_asset_definition_id.clone(),
+                        SAMPLE_GENESIS_ACCOUNT_ID.clone(),
+                        AssetBalanceScope::Dataspace(destination_dataspace),
+                    ),
+                    Numeric::from(destination_balance),
+                ),
+            ],
+            [],
+        );
+        world.account_permissions.insert(
+            ALICE_ID.clone(),
+            BTreeSet::from([
+                Permission::new(CAN_SET_FX_CORRIDOR_POLICY.to_owned(), Json::new(())),
+                Permission::new(CAN_SETTLE_FX_CORRIDOR.to_owned(), Json::new(())),
+            ]),
+        );
+        let policy = FxCorridorPolicy {
+            policy_id: "aed_to_pkr".parse().expect("policy id"),
+            revision: 1,
+            source_dataspace,
+            source_account: ALICE_ID.clone(),
+            source_asset_definition_id,
+            source_sink: CARPENTER_ID.clone(),
+            destination_dataspace,
+            destination_reserve: SAMPLE_GENESIS_ACCOUNT_ID.clone(),
+            destination_asset_definition_id,
+            rate_numerator,
+            rate_denominator,
+            enabled,
+        };
+        let state = State::new(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        (state, policy)
+    }
+
+    fn fx_settlement(policy: &FxCorridorPolicy, id: &str, source_amount: u32) -> SettleFxCorridor {
+        SettleFxCorridor {
+            policy_id: policy.policy_id.clone(),
+            expected_policy_revision: policy.revision,
+            source_asset_definition_id: policy.source_asset_definition_id.clone(),
+            destination_asset_definition_id: policy.destination_asset_definition_id.clone(),
+            settlement_id: id.parse().expect("settlement id"),
+            recipient: BOB_ID.clone(),
+            source_amount: Numeric::from(source_amount),
+        }
+    }
+
+    #[test]
+    fn fx_corridor_settles_exact_rate_atomically_and_rejects_replay() {
+        let (state, policy) = fx_corridor_state(10, 1_000, 76, 1, true);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut stx = block.transaction();
+        SetFxCorridorPolicy {
+            policy: policy.clone(),
+        }
+        .execute(&ALICE_ID, &mut stx)
+        .expect("policy registration succeeds");
+        let instruction = fx_settlement(&policy, "fx_001", 10);
+        instruction
+            .clone()
+            .execute(&ALICE_ID, &mut stx)
+            .expect("FX settlement succeeds");
+
+        let balance = |id: AssetId| {
+            stx.world
+                .assets
+                .get(&id)
+                .map_or_else(Numeric::zero, |value| value.as_ref().clone())
+        };
+        assert_eq!(
+            balance(AssetId::with_scope(
+                policy.source_asset_definition_id.clone(),
+                CARPENTER_ID.clone(),
+                AssetBalanceScope::Dataspace(policy.source_dataspace),
+            )),
+            Numeric::from(10_u32)
+        );
+        assert_eq!(
+            balance(AssetId::with_scope(
+                policy.destination_asset_definition_id.clone(),
+                SAMPLE_GENESIS_ACCOUNT_ID.clone(),
+                AssetBalanceScope::Dataspace(policy.destination_dataspace),
+            )),
+            Numeric::from(240_u32)
+        );
+        assert_eq!(
+            balance(AssetId::with_scope(
+                policy.destination_asset_definition_id.clone(),
+                BOB_ID.clone(),
+                AssetBalanceScope::Dataspace(policy.destination_dataspace),
+            )),
+            Numeric::from(760_u32)
+        );
+        let ledger = stx
+            .world
+            .settlement_ledgers
+            .get(&instruction.settlement_id)
+            .expect("FX outcome recorded");
+        assert_eq!(ledger.entries.len(), 1);
+        assert_eq!(ledger.entries[0].kind, SettlementKind::FxCorridor);
+        assert!(ledger.entries[0].outcome.is_success());
+
+        let replay = instruction
+            .execute(&ALICE_ID, &mut stx)
+            .expect_err("settlement id replay must fail");
+        assert!(replay.to_string().contains("already been committed"));
+    }
+
+    #[test]
+    fn fx_corridor_rejects_policy_and_signed_intent_mismatches() {
+        let (state, policy) = fx_corridor_state(10, 1_000, 76, 1, true);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut stx = block.transaction();
+        SetFxCorridorPolicy {
+            policy: policy.clone(),
+        }
+        .execute(&ALICE_ID, &mut stx)
+        .expect("policy registration succeeds");
+
+        let mut wrong_revision = fx_settlement(&policy, "fx_wrong_revision", 1);
+        wrong_revision.expected_policy_revision = 2;
+        assert!(
+            wrong_revision
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("revision mismatch must fail")
+                .to_string()
+                .contains("revision mismatch")
+        );
+
+        let mut wrong_asset = fx_settlement(&policy, "fx_wrong_asset", 1);
+        wrong_asset.source_asset_definition_id = policy.destination_asset_definition_id.clone();
+        assert!(
+            wrong_asset
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("asset mismatch must fail")
+                .to_string()
+                .contains("do not match")
+        );
+
+        let mut reserve_recipient = fx_settlement(&policy, "fx_reserve_recipient", 1);
+        reserve_recipient.recipient = policy.destination_reserve.clone();
+        assert!(
+            reserve_recipient
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("reserve recipient must fail")
+                .to_string()
+                .contains("recipient")
+        );
+
+        stx.world.account_permissions.insert(
+            BOB_ID.clone(),
+            BTreeSet::from([Permission::new(
+                CAN_SETTLE_FX_CORRIDOR.to_owned(),
+                Json::new(()),
+            )]),
+        );
+        assert!(
+            fx_settlement(&policy, "fx_wrong_authority", 1)
+                .execute(&BOB_ID, &mut stx)
+                .expect_err("misgranted permission must not bypass source ownership")
+                .to_string()
+                .contains("policy source account")
+        );
+
+        let mut revision_two = policy.clone();
+        revision_two.revision = 3;
+        assert!(
+            SetFxCorridorPolicy {
+                policy: revision_two
+            }
+            .execute(&ALICE_ID, &mut stx)
+            .expect_err("policy revision must be monotonic")
+            .to_string()
+            .contains("must be 2")
+        );
+
+        let mut disabled = policy.clone();
+        disabled.revision = 2;
+        disabled.enabled = false;
+        SetFxCorridorPolicy {
+            policy: disabled.clone(),
+        }
+        .execute(&ALICE_ID, &mut stx)
+        .expect("disabled policy revision is a valid governance update");
+        assert!(
+            fx_settlement(&disabled, "fx_disabled", 1)
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("disabled policy must reject settlement")
+                .to_string()
+                .contains("disabled")
+        );
+    }
+
+    #[test]
+    fn fx_corridor_policy_static_invariants_fail_closed() {
+        let (_, policy) = fx_corridor_state(1, 76, 76, 1, true);
+        let mut cases = Vec::new();
+        let mut zero_revision = policy.clone();
+        zero_revision.revision = 0;
+        cases.push(zero_revision);
+        let mut universal_source = policy.clone();
+        universal_source.source_dataspace = DataSpaceId::UNIVERSAL;
+        cases.push(universal_source);
+        let mut same_dataspace = policy.clone();
+        same_dataspace.destination_dataspace = same_dataspace.source_dataspace;
+        cases.push(same_dataspace);
+        let mut same_account = policy.clone();
+        same_account.source_sink = same_account.source_account.clone();
+        cases.push(same_account);
+        let mut same_asset = policy.clone();
+        same_asset.destination_asset_definition_id = same_asset.source_asset_definition_id.clone();
+        cases.push(same_asset);
+        let mut zero_rate = policy;
+        zero_rate.rate_denominator = 0;
+        cases.push(zero_rate);
+
+        assert!(
+            cases
+                .iter()
+                .all(|candidate| candidate.invariant_error().is_some())
+        );
+    }
+
+    #[test]
+    fn fx_corridor_preflight_preserves_source_on_non_exact_or_unfunded_payout() {
+        let (state, policy) = fx_corridor_state(10, 1, 1, 3, true);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut stx = block.transaction();
+        SetFxCorridorPolicy {
+            policy: policy.clone(),
+        }
+        .execute(&ALICE_ID, &mut stx)
+        .expect("policy registration succeeds");
+        assert!(
+            fx_settlement(&policy, "fx_fractional", 1)
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("non-exact integer payout must fail")
+                .to_string()
+                .contains("exact destination")
+        );
+
+        let source_id = AssetId::with_scope(
+            policy.source_asset_definition_id.clone(),
+            ALICE_ID.clone(),
+            AssetBalanceScope::Dataspace(policy.source_dataspace),
+        );
+        assert_eq!(
+            **stx.world.assets.get(&source_id).expect("source unchanged"),
+            Numeric::from(10_u32)
+        );
+
+        let mut policy_two = policy.clone();
+        policy_two.revision = 2;
+        policy_two.rate_numerator = 2;
+        policy_two.rate_denominator = 1;
+        SetFxCorridorPolicy {
+            policy: policy_two.clone(),
+        }
+        .execute(&ALICE_ID, &mut stx)
+        .expect("monotonic policy update succeeds");
+        assert!(
+            fx_settlement(&policy_two, "fx_unfunded", 1)
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("reserve preflight must fail")
+                .to_string()
+                .contains("only 1 is available")
+        );
+        assert_eq!(
+            **stx.world.assets.get(&source_id).expect("source unchanged"),
+            Numeric::from(10_u32)
+        );
     }
 
     fn settlement_state_with_balances(

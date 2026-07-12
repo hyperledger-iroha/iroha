@@ -15,7 +15,6 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     env,
     error::Error,
-    ffi::{OsStr, OsString},
     fs::{self, File},
     io::{self, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
@@ -81,9 +80,9 @@ files, the exact validated finality-roster archive, manifest.norito, its
 manifest.norito.sha256 content identifier, and manifest.json in an owner-only
 staging directory. After every staged byte is read back and verified, the
 complete directory is promoted atomically without replacing an existing path.
-The publication corridor currently requires Unix directory durability and
-fails closed on unsupported targets. This command does not authenticate the
-evidence or sign the manifest.
+The publication corridor currently requires Linux, Android, macOS, or iOS
+directory durability and fails closed on unsupported targets. This command
+does not authenticate the evidence or sign the manifest.
 ";
 
 const REQUIRED_OPTIONS: &[&str] = &[
@@ -170,20 +169,6 @@ const INPUT_OPEN_FLAGS: i32 = 0x0002_0000 | 0x0000_0800;
     target_os = "dragonfly"
 ))]
 const INPUT_OPEN_FLAGS: i32 = 0x0000_0100 | 0x0000_0004;
-#[cfg(all(
-    unix,
-    not(any(
-        target_os = "linux",
-        target_os = "android",
-        target_os = "macos",
-        target_os = "ios",
-        target_os = "freebsd",
-        target_os = "netbsd",
-        target_os = "openbsd",
-        target_os = "dragonfly"
-    ))
-))]
-compile_error!("the V3 bundle packager requires defined O_NOFOLLOW and O_NONBLOCK flags");
 #[cfg(windows)]
 const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
 
@@ -364,20 +349,35 @@ fn parse_digest(
 }
 
 fn build_bundle(options: &BTreeMap<String, String>) -> Result<(), Box<dyn Error>> {
-    #[cfg(not(unix))]
+    #[cfg(not(any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "macos",
+        target_os = "ios"
+    )))]
     return Err(
-        "Kagemusha V3 bundle publication requires Unix directory fsync and no-replace rename"
+        "Kagemusha V3 bundle publication requires a supported Linux, Android, macOS, or iOS no-replace rename and directory fsync corridor"
             .into(),
     );
 
-    #[cfg(unix)]
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "macos",
+        target_os = "ios"
+    ))]
     {
-        build_bundle_unix(options)
+        build_bundle_supported(options)
     }
 }
 
-#[cfg(unix)]
-fn build_bundle_unix(options: &BTreeMap<String, String>) -> Result<(), Box<dyn Error>> {
+#[cfg(any(
+    target_os = "linux",
+    target_os = "android",
+    target_os = "macos",
+    target_os = "ios"
+))]
+fn build_bundle_supported(options: &BTreeMap<String, String>) -> Result<(), Box<dyn Error>> {
     let out_dir = PathBuf::from(required(options, "out-dir"));
     if out_dir.exists() {
         return Err(format!("output directory already exists: {}", out_dir.display()).into());
@@ -441,9 +441,13 @@ fn build_bundle_unix(options: &BTreeMap<String, String>) -> Result<(), Box<dyn E
     let (roster_bytes, topup_finality_roster_artifact) =
         prepare_topup_finality_roster(&mut roster_input, &metadata)?;
 
-    let staging = tempfile::Builder::new()
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let mut staging_builder = tempfile::Builder::new();
+    staging_builder
         .prefix(".kagemusha-v3-staging-")
-        .tempdir_in(&trusted_parent.path)?;
+        .permissions(fs::Permissions::from_mode(0o700));
+    let staging = staging_builder.tempdir_in(&trusted_parent.path)?;
     let staging_name = staging
         .path()
         .file_name()
@@ -657,15 +661,15 @@ fn prepare_topup_finality_roster(
     }
     input.rewind_and_verify()?;
     let roster: KagemushaTopUpFinalityRosterArtifactV2 = norito::decode_from_bytes(&bytes)?;
-    roster
-        .validate()
-        .map_err(|error| io::Error::other(error.to_string()))?;
     if norito::to_bytes(&roster)? != bytes {
         return Err("top-up finality roster is not canonically encoded".into());
     }
     if roster.chain_id != metadata.chain_id || roster.artifact_generation != metadata.generation {
         return Err("top-up finality roster chain or generation mismatch".into());
     }
+    roster
+        .validate()
+        .map_err(|error| io::Error::other(error.to_string()))?;
     let mut covered_until = metadata.activation_height;
     for window in &roster.windows {
         if window.withdraws_at_height <= covered_until {
@@ -702,7 +706,15 @@ fn prepare_topup_finality_roster(
     Ok((bytes, descriptor))
 }
 
-#[cfg(test)]
+#[cfg(all(
+    test,
+    any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "macos",
+        target_os = "ios"
+    )
+))]
 fn package_input(
     source_path: &Path,
     out_dir: &Path,
@@ -839,6 +851,17 @@ fn package_prepared_input(
     Ok((header, descriptor))
 }
 
+#[cfg(any(
+    windows,
+    target_os = "linux",
+    target_os = "android",
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "freebsd",
+    target_os = "netbsd",
+    target_os = "openbsd",
+    target_os = "dragonfly"
+))]
 fn open_input(path: &Path, maximum: u64, label: &str) -> Result<OpenedInput, Box<dyn Error>> {
     let before = fs::symlink_metadata(path)?;
     if before.file_type().is_symlink() || !before.is_file() {
@@ -895,6 +918,21 @@ fn open_input(path: &Path, maximum: u64, label: &str) -> Result<OpenedInput, Box
     Ok(input)
 }
 
+#[cfg(not(any(
+    windows,
+    target_os = "linux",
+    target_os = "android",
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "freebsd",
+    target_os = "netbsd",
+    target_os = "openbsd",
+    target_os = "dragonfly"
+)))]
+fn open_input(_path: &Path, _maximum: u64, _label: &str) -> Result<OpenedInput, Box<dyn Error>> {
+    Err("Kagemusha V3 bundle input opening is unsupported on this target".into())
+}
+
 fn hash_open_file(
     input: &mut File,
     expected_size: u64,
@@ -946,14 +984,24 @@ impl OpenedInput {
     }
 }
 
-#[cfg(unix)]
+#[cfg(any(
+    target_os = "linux",
+    target_os = "android",
+    target_os = "macos",
+    target_os = "ios"
+))]
 struct TrustedOutputParent {
     path: PathBuf,
     file: File,
-    output_name: OsString,
+    output_name: std::ffi::OsString,
 }
 
-#[cfg(unix)]
+#[cfg(any(
+    target_os = "linux",
+    target_os = "android",
+    target_os = "macos",
+    target_os = "ios"
+))]
 impl TrustedOutputParent {
     fn open(out_dir: &Path) -> Result<Self, Box<dyn Error>> {
         use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
@@ -968,6 +1016,7 @@ impl TrustedOutputParent {
             .filter(|path| !path.as_os_str().is_empty())
             .unwrap_or(Path::new("."));
         let path = fs::canonicalize(parent)?;
+        let effective_uid = rustix::process::geteuid().as_raw();
         for ancestor in path.ancestors() {
             let metadata = fs::symlink_metadata(ancestor)?;
             if metadata.file_type().is_symlink() || !metadata.is_dir() {
@@ -978,9 +1027,9 @@ impl TrustedOutputParent {
                 .into());
             }
             let mode = metadata.permissions().mode();
-            if mode & 0o022 != 0 && mode & 0o1000 == 0 {
+            if !trusted_parent_metadata(mode, metadata.uid(), effective_uid) {
                 return Err(format!(
-                    "output parent chain is writable by another principal without sticky protection: {}",
+                    "output parent chain has untrusted ownership or writable permissions: {}",
                     ancestor.display()
                 )
                 .into());
@@ -1009,7 +1058,8 @@ impl TrustedOutputParent {
         })
     }
 
-    fn publish(&self, staging_name: &OsStr) -> io::Result<()> {
+    fn publish(&self, staging_name: &std::ffi::OsStr) -> Result<(), Box<dyn Error>> {
+        self.file.sync_all()?;
         rustix::fs::renameat_with(
             &self.file,
             staging_name,
@@ -1017,8 +1067,24 @@ impl TrustedOutputParent {
             &self.output_name,
             rustix::fs::RenameFlags::NOREPLACE,
         )?;
-        self.file.sync_all()
+        self.file.sync_all().map_err(|error| {
+            format!(
+                "bundle directory was promoted as {} but parent-directory durability failed: {error}",
+                self.path.join(&self.output_name).display()
+            )
+            .into()
+        })
     }
+}
+
+#[cfg(any(
+    target_os = "linux",
+    target_os = "android",
+    target_os = "macos",
+    target_os = "ios"
+))]
+fn trusted_parent_metadata(mode: u32, owner_uid: u32, effective_uid: u32) -> bool {
+    (owner_uid == 0 || owner_uid == effective_uid) && (mode & 0o022 == 0 || mode & 0o1000 != 0)
 }
 
 struct PublicationDirectory {
@@ -1028,7 +1094,7 @@ struct PublicationDirectory {
 
 impl PublicationDirectory {
     #[cfg(unix)]
-    fn open_at(parent: &File, path: PathBuf, name: &OsStr) -> io::Result<Self> {
+    fn open_at(parent: &File, path: PathBuf, name: &std::ffi::OsStr) -> io::Result<Self> {
         use rustix::fs::{Mode, OFlags};
 
         let file = File::from(rustix::fs::openat(
@@ -1040,7 +1106,15 @@ impl PublicationDirectory {
         Self::validate(path, file)
     }
 
-    #[cfg(test)]
+    #[cfg(all(
+        test,
+        any(
+            target_os = "linux",
+            target_os = "android",
+            target_os = "macos",
+            target_os = "ios"
+        )
+    ))]
     fn open_existing(path: PathBuf) -> io::Result<Self> {
         let before = fs::symlink_metadata(&path)?;
         if before.file_type().is_symlink() || !before.is_dir() {
@@ -1310,13 +1384,21 @@ fn verify_owner_private_regular_file(file: &File) -> io::Result<()> {
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(all(
+    test,
+    any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "macos",
+        target_os = "ios"
+    )
+))]
 mod tests {
     use std::{collections::BTreeSet, fs};
 
-    use iroha_crypto::{Algorithm, HashOf, KeyPair};
+    use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
-        consensus::VALIDATOR_SET_HASH_VERSION_V1,
+        block::consensus_v2::{ConsensusMode, ValidatorPower},
         domain::DomainId,
         offline::{
             KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_PROOF_ENVELOPE_VERSION_V1,
@@ -1380,7 +1462,10 @@ mod tests {
             .collect::<Vec<_>>();
         let validator_set = keypairs
             .iter()
-            .map(|key| PeerId::from(key.public_key().clone()))
+            .map(|key| ValidatorPower {
+                validator: PeerId::from(key.public_key().clone()),
+                power: 1,
+            })
             .collect::<Vec<_>>();
         let validator_set_pops = keypairs
             .iter()
@@ -1391,7 +1476,6 @@ mod tests {
                     .expect("96-byte BLS proof of possession")
             })
             .collect::<Vec<_>>();
-        let validator_set_hash = HashOf::new(&validator_set);
         let roster = KagemushaTopUpFinalityRosterArtifactV2 {
             version: KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_VERSION_V2,
             chain_id: ChainId::from("kagemusha-pasta-cycle"),
@@ -1399,8 +1483,7 @@ mod tests {
             windows: vec![KagemushaTopUpFinalityRosterWindowV2 {
                 activates_at_height: 100,
                 withdraws_at_height: 1_000,
-                validator_set_hash: *validator_set_hash.as_ref(),
-                validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+                consensus_mode: ConsensusMode::Permissioned,
                 validator_set,
                 validator_set_pops,
             }],
@@ -1640,6 +1723,16 @@ mod tests {
                     .to_string_lossy()
                     .ends_with(".tmp"))
         );
+        assert!(
+            fs::read_dir(temporary.path())
+                .expect("read publication parent")
+                .all(|entry| !entry
+                    .expect("publication parent entry")
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".kagemusha-v3-staging-")),
+            "successful publication must not leave a staging alias"
+        );
         #[cfg(unix)]
         {
             use std::os::unix::fs::MetadataExt as _;
@@ -1777,6 +1870,95 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn publication_rejects_untrusted_parent_and_dangling_destination() {
+        use std::os::unix::fs::{PermissionsExt as _, symlink};
+
+        assert!(trusted_parent_metadata(0o755, 0, 501));
+        assert!(trusted_parent_metadata(0o700, 501, 501));
+        assert!(trusted_parent_metadata(0o1777, 0, 501));
+        assert!(!trusted_parent_metadata(0o1777, 777, 501));
+        assert!(!trusted_parent_metadata(0o777, 501, 501));
+
+        let untrusted_root = tempfile::tempdir().expect("untrusted root");
+        let mut untrusted_options = valid_options(untrusted_root.path());
+        let untrusted_parent = untrusted_root.path().join("world-writable");
+        fs::create_dir(&untrusted_parent).expect("create untrusted parent");
+        fs::set_permissions(&untrusted_parent, fs::Permissions::from_mode(0o777))
+            .expect("make parent world-writable");
+        let untrusted_output = untrusted_parent.join("bundle");
+        untrusted_options.insert(
+            "out-dir".to_owned(),
+            untrusted_output.to_string_lossy().into_owned(),
+        );
+        assert!(build_bundle(&untrusted_options).is_err());
+        assert!(!untrusted_output.exists());
+
+        let dangling_root = tempfile::tempdir().expect("dangling root");
+        let dangling_options = valid_options(dangling_root.path());
+        let dangling_output = PathBuf::from(required(&dangling_options, "out-dir"));
+        symlink(dangling_root.path().join("missing"), &dangling_output)
+            .expect("create dangling output symlink");
+        assert!(!dangling_output.exists());
+        assert!(build_bundle(&dangling_options).is_err());
+        assert!(
+            fs::symlink_metadata(dangling_output)
+                .expect("dangling symlink remains")
+                .file_type()
+                .is_symlink()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn publication_promotion_never_replaces_a_racing_destination() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let output = temporary.path().join("bundle");
+        let parent = TrustedOutputParent::open(&output).expect("trusted output parent");
+        let mut staging_builder = tempfile::Builder::new();
+        staging_builder
+            .prefix(".kagemusha-v3-staging-")
+            .permissions(fs::Permissions::from_mode(0o700));
+        let staging = staging_builder
+            .tempdir_in(&parent.path)
+            .expect("staging directory");
+        let staging_name = staging.path().file_name().expect("staging name").to_owned();
+
+        fs::create_dir(&output).expect("create racing destination");
+        fs::write(output.join("sentinel"), b"preserve").expect("write racing sentinel");
+        assert!(parent.publish(&staging_name).is_err());
+        assert_eq!(
+            fs::read(output.join("sentinel")).expect("read racing sentinel"),
+            b"preserve"
+        );
+        assert!(staging.path().is_dir());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn staged_readback_detects_same_length_corruption() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let publication_path = temporary.path().join("publication");
+        fs::create_dir(&publication_path).expect("create publication directory");
+        fs::set_permissions(&publication_path, fs::Permissions::from_mode(0o700))
+            .expect("make publication owner-private");
+        let publication = PublicationDirectory::open_existing(publication_path.clone())
+            .expect("open publication");
+        let mut file = publication
+            .create_file("probe")
+            .expect("create staged file");
+        file.write_all(b"safe").expect("write staged file");
+        file.sync_all().expect("sync staged file");
+        drop(file);
+        fs::write(publication_path.join("probe"), b"evil").expect("corrupt staged file");
+        assert!(publication.verify_exact_file("probe", b"safe", 4).is_err());
+    }
+
     #[test]
     fn finality_roster_rejects_chain_generation_window_and_pop_substitution() {
         fn assert_rejected(mutate: impl FnOnce(&mut KagemushaTopUpFinalityRosterArtifactV2)) {
@@ -1811,6 +1993,31 @@ mod tests {
     }
 
     #[test]
+    fn finality_roster_rejects_context_before_expensive_pop_validation() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let options = valid_options(temporary.path());
+        let path = Path::new(required(&options, "topup-finality-roster"));
+        let bytes = fs::read(path).expect("read roster fixture");
+        let mut roster: KagemushaTopUpFinalityRosterArtifactV2 =
+            norito::decode_from_bytes(&bytes).expect("decode roster fixture");
+        roster.chain_id = ChainId::from("attacker-chain");
+        roster.windows[0].validator_set_pops[0][0] ^= 1;
+        fs::write(
+            path,
+            norito::to_bytes(&roster).expect("encode hostile roster"),
+        )
+        .expect("write hostile roster");
+
+        let error = build_bundle(&options).expect_err("hostile roster must fail");
+        assert!(
+            error
+                .to_string()
+                .contains("top-up finality roster chain or generation mismatch"),
+            "untrusted context must be rejected before BLS PoP validation: {error}"
+        );
+    }
+
+    #[test]
     fn finality_roster_rejects_noncanonical_or_trailing_bytes() {
         let temporary = tempfile::tempdir().expect("temporary directory");
         let options = valid_options(temporary.path());
@@ -1827,7 +2034,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn package_input_rejects_symlinks() {
-        use std::os::unix::fs::symlink;
+        use std::os::unix::fs::{PermissionsExt as _, symlink};
 
         let temporary = tempfile::tempdir().expect("temporary directory");
         let source = temporary.path().join("source");
@@ -1836,6 +2043,8 @@ mod tests {
         fs::write(&source, b"payload").expect("write source");
         symlink(&source, &link).expect("create symlink");
         fs::create_dir(&output).expect("create output");
+        fs::set_permissions(&output, fs::Permissions::from_mode(0o700))
+            .expect("make output owner-private");
         assert!(
             package_input(
                 &link,
