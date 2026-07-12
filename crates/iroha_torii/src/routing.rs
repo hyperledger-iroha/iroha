@@ -17480,13 +17480,31 @@ fn normalize_contract_payload(
             "contract payload is required for parameterized entrypoints".to_owned(),
         )),
         (Some(schema), Some(payload)) => {
-            ivm::encode_argument_record_from_json(schema, payload).map_err(|error| {
+            // `IrohaJson` deliberately preserves the exact source slice during
+            // request decoding. Do not carry that transport representation into
+            // signed metadata: insignificant whitespace and object-key order
+            // must not produce different payload digests or transaction bytes.
+            // Parsing through `Value` also rejects duplicate object keys and
+            // trailing tokens before any contract schema consumes the payload.
+            let parsed = payload.try_into_any_norito::<Value>().map_err(|error| {
+                conversion_error(format!(
+                    "contract payload for entrypoint `{}` must be one strict JSON value without duplicate object keys: {error}",
+                    descriptor.name
+                ))
+            })?;
+            let canonical = IrohaJson::from_norito_value_ref(&parsed).map_err(|error| {
+                conversion_error(format!(
+                    "failed to canonicalize contract payload for entrypoint `{}`: {error}",
+                    descriptor.name
+                ))
+            })?;
+            ivm::encode_argument_record_from_json(schema, &canonical).map_err(|error| {
                 conversion_error(format!(
                     "contract payload for entrypoint `{}` does not match its exact argument schema: {error}",
                     descriptor.name
                 ))
             })?;
-            Ok(Some(payload.clone()))
+            Ok(Some(canonical))
         }
     }
 }
@@ -21980,6 +21998,93 @@ mod contract_payload_normalization_tests {
         assert_eq!(error, "permission denied");
         assert!(!normalization_attempted.get());
         assert_eq!(ivm::argument_record_decode_count(), 0);
+    }
+
+    #[test]
+    fn normalize_contract_payload_is_permutation_invariant_and_compact() {
+        let descriptor = json_descriptor();
+        let first = IrohaJson::from_string_unchecked(
+            r#" { "ev" : { "z" : "last", "a" : 1, "b" : [true, false] } } "#.to_owned(),
+        );
+        let permuted = IrohaJson::from_string_unchecked(
+            r#"{"ev":{"b":[true,false],"a":1,"z":"last"}}"#.to_owned(),
+        );
+
+        let first = normalize_contract_payload(&descriptor, Some(&first))
+            .expect("first payload must normalize")
+            .expect("payload");
+        let permuted = normalize_contract_payload(&descriptor, Some(&permuted))
+            .expect("permuted payload must normalize")
+            .expect("payload");
+
+        assert_eq!(first, permuted);
+        assert_eq!(first.get(), r#"{"ev":{"a":1,"b":[true,false],"z":"last"}}"#);
+        assert_eq!(
+            contract_payload_digest_hex(Some(&first)),
+            contract_payload_digest_hex(Some(&permuted)),
+        );
+        let schema = descriptor
+            .argument_schema
+            .as_ref()
+            .expect("argument schema");
+        assert_eq!(
+            ivm::encode_argument_record_from_json(schema, &first)
+                .expect("first canonical argument record"),
+            ivm::encode_argument_record_from_json(schema, &permuted)
+                .expect("permuted canonical argument record"),
+        );
+    }
+
+    #[test]
+    fn normalize_contract_payload_rejects_duplicate_keys_and_trailing_tokens() {
+        let descriptor = json_descriptor();
+        for (label, raw) in [
+            ("duplicate root", r#"{"ev":{},"ev":{"a":1}}"#),
+            ("duplicate nested", r#"{"ev":{"a":1,"a":2}}"#),
+            ("trailing object", r#"{"ev":{"a":1}} {}"#),
+            ("trailing scalar", r#"{"ev":{"a":1}} true"#),
+        ] {
+            let payload = IrohaJson::from_string_unchecked(raw.to_owned());
+            let error = match normalize_contract_payload(&descriptor, Some(&payload)) {
+                Ok(_) => panic!("{label} must be rejected"),
+                Err(error) => error,
+            };
+            let message = expect_conversion(error);
+            assert!(
+                message.contains("one strict JSON value without duplicate object keys"),
+                "unexpected {label} error: {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn normalize_contract_payload_canonicalizes_numbers_and_rejects_malformed_numbers() {
+        let descriptor = json_descriptor();
+        let payload = IrohaJson::from_string_unchecked(
+            r#"{"ev":{"negative_zero":-0,"max_u64":18446744073709551615,"min_i64":-9223372036854775808,"one_exp":1e0}}"#
+                .to_owned(),
+        );
+        let normalized = normalize_contract_payload(&descriptor, Some(&payload))
+            .expect("finite endpoint numbers must normalize")
+            .expect("payload");
+        assert_eq!(
+            normalized.get(),
+            r#"{"ev":{"max_u64":18446744073709551615,"min_i64":-9223372036854775808,"negative_zero":-0.0,"one_exp":1.0}}"#
+        );
+
+        for raw in [
+            r#"{"ev":{"n":01}}"#,
+            r#"{"ev":{"n":+1}}"#,
+            r#"{"ev":{"n":1.}}"#,
+            r#"{"ev":{"n":1e}}"#,
+            r#"{"ev":{"n":1e9999}}"#,
+            r#"{"ev":{"n":NaN}}"#,
+            r#"{"ev":{"n":Infinity}}"#,
+        ] {
+            let payload = IrohaJson::from_string_unchecked(raw.to_owned());
+            normalize_contract_payload(&descriptor, Some(&payload))
+                .expect_err("malformed or non-finite JSON number must be rejected");
+        }
     }
 
     #[test]
