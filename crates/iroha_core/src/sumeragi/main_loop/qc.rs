@@ -1983,6 +1983,9 @@ impl Actor {
     }
 
     pub(super) fn try_replay_deferred_qcs(&mut self) -> bool {
+        if self.kura_recovery_required() {
+            return false;
+        }
         if self.deferred_qcs.is_empty() {
             self.deferred_qc_roster_state.clear();
             return false;
@@ -2102,6 +2105,9 @@ impl Actor {
 
         let mut progress = false;
         for action in actions {
+            if self.kura_recovery_required() {
+                break;
+            }
             match action {
                 ReplayAction::Obsolete { key, qc, reason } => {
                     self.deferred_qc_roster_state.remove(&key);
@@ -2183,12 +2189,18 @@ impl Actor {
                     progress |= fetched || recovered;
                 }
             }
+            if self.kura_recovery_required() {
+                break;
+            }
         }
 
         progress
     }
 
     pub(super) fn try_replay_deferred_missing_payload_qcs(&mut self, now: Instant) -> bool {
+        if self.kura_recovery_required() {
+            return false;
+        }
         if self.deferred_missing_payload_qcs.is_empty() {
             return false;
         }
@@ -2308,6 +2320,9 @@ impl Actor {
 
         let mut progress = false;
         for action in actions {
+            if self.kura_recovery_required() {
+                break;
+            }
             match action {
                 ReplayAction::Obsolete { key, qc, reason } => {
                     self.deferred_missing_payload_qcs.remove(&key);
@@ -2528,6 +2543,9 @@ impl Actor {
                     }
                     progress |= branch_progress;
                 }
+            }
+            if self.kura_recovery_required() {
+                break;
             }
         }
 
@@ -5344,6 +5362,9 @@ impl Actor {
         block_known_for_lock = self.block_known_for_lock(qc.subject_block_hash);
         if block_known_for_lock {
             self.apply_or_mark_commit_qc_for_known_block(qc, topology.as_ref(), true);
+            if self.kura_recovery_required() {
+                return true;
+            }
         } else if let Some(pending) = self.pending.pending_blocks.get_mut(&qc.subject_block_hash) {
             pending.note_commit_qc_observed(qc.epoch);
             info!(
@@ -7222,6 +7243,9 @@ impl Actor {
         allow_cached_qc_validation: bool,
         expected_chain_order_override: Option<(Hash, u64)>,
     ) -> Result<()> {
+        if self.kura_recovery_required() {
+            return Ok(());
+        }
         let mut aggregate_ok = aggregate_ok;
         // Prepare certificates are view-scoped; commit/new-view certificates can safely arrive
         // after a local view change and still unlock progress, so don't drop them as stale.
@@ -7919,13 +7943,22 @@ impl Actor {
                 self.qc_cache.insert(qc_cache_key, qc.clone());
                 if matches!(qc.phase, crate::sumeragi::consensus::Phase::NewView) {
                     let _ = self.replay_deferred_votes_for_slot(qc.height, qc.view, "new_view_qc");
+                    if self.kura_recovery_required() {
+                        return Ok(());
+                    }
                     let _ = self
                         .maybe_start_validation_for_pending_after_new_view_qc(&qc, "new_view_qc");
+                    if self.kura_recovery_required() {
+                        return Ok(());
+                    }
                     let _ = self.maybe_retry_local_commit_votes_after_new_view_qc(
                         &qc,
                         topology.as_ref(),
                         "new_view_qc",
                     );
+                    if self.kura_recovery_required() {
+                        return Ok(());
+                    }
                     let _ = self.request_missing_commit_vote_payloads_after_new_view_qc(
                         &qc,
                         topology.as_ref(),
@@ -8250,12 +8283,21 @@ impl Actor {
         self.qc_cache.insert(qc_cache_key, qc.clone());
         if matches!(qc.phase, crate::sumeragi::consensus::Phase::NewView) {
             let _ = self.replay_deferred_votes_for_slot(qc.height, qc.view, "new_view_qc");
+            if self.kura_recovery_required() {
+                return Ok(());
+            }
             let _ = self.maybe_start_validation_for_pending_after_new_view_qc(&qc, "new_view_qc");
+            if self.kura_recovery_required() {
+                return Ok(());
+            }
             let _ = self.maybe_retry_local_commit_votes_after_new_view_qc(
                 &qc,
                 topology.as_ref(),
                 "new_view_qc",
             );
+            if self.kura_recovery_required() {
+                return Ok(());
+            }
             let _ = self.request_missing_commit_vote_payloads_after_new_view_qc(
                 &qc,
                 topology.as_ref(),
@@ -8291,6 +8333,9 @@ impl Actor {
             if self.maybe_validate_pending_for_commit_qc(&qc, &commit_topology) {
                 block_known_for_lock = self.block_known_for_lock(qc.subject_block_hash);
             }
+            if self.kura_recovery_required() {
+                return Ok(());
+            }
         }
         if matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit) && block_known_locally {
             self.apply_or_mark_commit_qc_for_known_block(
@@ -8298,6 +8343,9 @@ impl Actor {
                 &commit_topology,
                 block_known_for_lock,
             );
+            if self.kura_recovery_required() {
+                return Ok(());
+            }
         }
         if !block_known_for_lock {
             if let Some(lock) = self.locked_qc {
@@ -8319,11 +8367,17 @@ impl Actor {
         commit_topology: &[PeerId],
         mut block_known_for_lock: bool,
     ) {
+        if self.kura_recovery_required() {
+            return;
+        }
         if !block_known_for_lock
             && !commit_topology.is_empty()
             && self.maybe_validate_pending_for_commit_qc(qc, commit_topology)
         {
             block_known_for_lock = self.block_known_for_lock(qc.subject_block_hash);
+        }
+        if self.kura_recovery_required() {
+            return;
         }
         if block_known_for_lock && !commit_topology.is_empty() {
             let commit_ready = self
@@ -8347,6 +8401,9 @@ impl Actor {
                     qc.height,
                     qc.view,
                 );
+                if self.kura_recovery_required() {
+                    return;
+                }
             } else if let Some(pending) =
                 self.pending.pending_blocks.get_mut(&qc.subject_block_hash)
             {

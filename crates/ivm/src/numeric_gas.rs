@@ -12,9 +12,14 @@ use iroha_primitives::numeric::NumericWorkStep;
 /// This value is included in the gas-schedule descriptor. Any change to a
 /// logical-work formula, charge-point ordering, or stable staged-phase tag
 /// MUST increment it and regenerate the gas-schedule golden hash.
-pub const NUMERIC_GAS_FORMULA_VERSION_V1: u64 = 3;
+pub const NUMERIC_GAS_FORMULA_VERSION_V1: u64 = 4;
 /// Fixed staged-syscall entry charge.
-pub const NUMERIC_ENTRY_GAS: u64 = 16;
+///
+/// The value is calibrated against the complete admitted-call control path,
+/// including deterministic dispatch and staged-context initialization.  It is
+/// intentionally higher than the arithmetic limb rate because that fixed work
+/// is substantial even when pointer validation fails immediately.
+pub const NUMERIC_ENTRY_GAS: u64 = 384;
 /// Gas charged for each logical 64-bit limb of arithmetic work.
 pub const NUMERIC_GAS_PER_LIMB_WORK: u64 = 4;
 /// Pointer-ABI header bytes read before trusting an envelope length.
@@ -678,6 +683,6 @@ mod tests {
     #[test]
     fn zero_work_is_not_artificially_rounded_up() {
         assert_eq!(work_gas(0), Ok(0));
-        assert_eq!(successful_call_gas(39, 0, 0, 0, 0, 0, 0, 0), Ok(55));
+        assert_eq!(successful_call_gas(39, 0, 0, 0, 0, 0, 0, 0), Ok(423));
     }
 }

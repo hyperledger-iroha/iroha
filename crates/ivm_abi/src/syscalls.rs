@@ -783,6 +783,49 @@ pub fn is_syscall_allowed(policy: crate::SyscallPolicy, number: u32) -> bool {
     syscalls_for_policy(policy).binary_search(&number).is_ok()
 }
 
+/// ABI V1 syscalls that require an authenticated contract identity or its
+/// durable-state namespace and are therefore unavailable to generic programs.
+///
+/// Generic programs are identified by the absence of a canonical `CNTR`
+/// section. Keep this list strictly sorted: it is encoded into the canonical
+/// ABI descriptor and is therefore consensus-visible.
+pub const GENERIC_PROGRAM_DENIED_SYSCALLS_V1: &[u32] = &[
+    SYSCALL_GRANT_CONTRACT_ENTRYPOINT,
+    SYSCALL_REVOKE_CONTRACT_ENTRYPOINT,
+    SYSCALL_DEACTIVATE_CONTRACT_INSTANCE,
+    SYSCALL_REMOVE_SMART_CONTRACT_BYTES,
+    SYSCALL_REGISTER_SMART_CONTRACT_CODE,
+    SYSCALL_REGISTER_SMART_CONTRACT_BYTES,
+    SYSCALL_ACTIVATE_CONTRACT_INSTANCE,
+    SYSCALL_STATE_GET,
+    SYSCALL_STATE_SET,
+    SYSCALL_STATE_DEL,
+    SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION,
+    SYSCALL_CALL_CONTRACT,
+    SYSCALL_SYSVAR_CONTRACT_ADDRESS,
+    SYSCALL_SYSVAR_ENTRYPOINT,
+    SYSCALL_SYSVAR_CONTRACT_SUBJECT,
+    SYSCALL_STATE_KEYS,
+    SYSCALL_STATE_HAS,
+    SYSCALL_STATE_LEN,
+    SYSCALL_STATE_COUNT,
+];
+
+/// Return whether an ABI syscall is available to a contract-less program.
+///
+/// The result is false both for syscalls outside the selected ABI and for the
+/// ABI-bound generic-program denylist. Admission and host dispatch must both
+/// apply this function so a rejected program cannot produce side effects.
+#[must_use]
+pub fn is_generic_program_syscall_allowed(policy: crate::SyscallPolicy, number: u32) -> bool {
+    is_syscall_allowed(policy, number)
+        && match policy {
+            crate::SyscallPolicy::AbiV1 => GENERIC_PROGRAM_DENIED_SYSCALLS_V1
+                .binary_search(&number)
+                .is_err(),
+        }
+}
+
 /// Host-state access conservatively implied by an ABI syscall.
 ///
 /// This classification is intentionally independent of compiler metadata. It
@@ -1718,7 +1761,7 @@ pub fn render_abi_hashes_markdown_table() -> String {
 }
 
 const ABI_V1_SURFACE_DOMAIN: &[u8] = b"IVM_ABI_V1_FULL_SURFACE\0";
-const ABI_SURFACE_DESCRIPTOR_FORMAT_VERSION: u16 = 5;
+const ABI_SURFACE_DESCRIPTOR_FORMAT_VERSION: u16 = 6;
 const PROGRAM_HEADER_LAYOUT_V1: &str = "49-bytes:magic[4]=IVM\\0;version_major:u8;version_minor:u8;mode:u8;vector_length:u8;max_cycles:u64le;abi_version:u8;abi_hash[32]=SHA-256(canonical-ABI-descriptor-for-abi_version);abi-hash-validated-before-prefix-or-instruction-decode";
 const NUMERIC_MANTISSA_BITS_V1: u16 = 512;
 const DECIMAL_MAX_SCALE_V1: u8 = 28;
@@ -1964,6 +2007,18 @@ struct AbiDurableStateSurface {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+struct AbiGenericProgramSurface {
+    semantics_version: u8,
+    artifact_discriminator: &'static str,
+    allowed_syscall_rule: &'static str,
+    denied_syscalls: Vec<u32>,
+    rejection: &'static str,
+    validation_points: &'static str,
+    durable_state: &'static str,
+    reserved_transaction_metadata: &'static str,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct AbiSurface {
     descriptor_format_version: u16,
     policy_tag: u8,
@@ -1975,6 +2030,7 @@ struct AbiSurface {
     entrypoint: AbiEntrypointSurface,
     numeric: AbiNumericSurface,
     indexed_literals: Vec<AbiIndexedLiteralSurface>,
+    generic_program: AbiGenericProgramSurface,
     durable_state: AbiDurableStateSurface,
 }
 
@@ -2776,6 +2832,35 @@ fn encode_abi_surface(surface: &AbiSurface) -> Result<Vec<u8>, AbiSurfaceError> 
     )?;
     descriptor.u8("policy_tag", surface.policy_tag)?;
     descriptor.text("program_header_layout", surface.program_header_layout)?;
+    descriptor.record("generic_program", |generic| {
+        generic.u8(
+            "semantics_version",
+            surface.generic_program.semantics_version,
+        )?;
+        generic.text(
+            "artifact_discriminator",
+            surface.generic_program.artifact_discriminator,
+        )?;
+        generic.text(
+            "allowed_syscall_rule",
+            surface.generic_program.allowed_syscall_rule,
+        )?;
+        generic.sequence(
+            "denied_syscalls",
+            &surface.generic_program.denied_syscalls,
+            |record, syscall| record.u32("number", *syscall),
+        )?;
+        generic.text("rejection", surface.generic_program.rejection)?;
+        generic.text(
+            "validation_points",
+            surface.generic_program.validation_points,
+        )?;
+        generic.text("durable_state", surface.generic_program.durable_state)?;
+        generic.text(
+            "reserved_transaction_metadata",
+            surface.generic_program.reserved_transaction_metadata,
+        )
+    })?;
     descriptor.sequence(
         "indexed_literals",
         &surface.indexed_literals,
@@ -3470,6 +3555,16 @@ fn collect_abi_surface(policy: crate::SyscallPolicy) -> Result<AbiSurface, AbiSu
             result: "sign-preserving 64-bit register value",
         },
     ];
+    let generic_program = AbiGenericProgramSurface {
+        semantics_version: 1,
+        artifact_discriminator: "canonical-CNTR-section-absent-after-fixed-header-and-optional-literal-table",
+        allowed_syscall_rule: "exact-ABI-policy-surface-minus-denied-syscalls",
+        denied_syscalls: GENERIC_PROGRAM_DENIED_SYSCALLS_V1.to_vec(),
+        rejection: "GenericSyscallNotAllowed(syscall-number)-before-side-effects",
+        validation_points: "static-instruction-analysis-during-admission-and-defense-in-depth-before-host-quote-or-dispatch",
+        durable_state: "unavailable-without-authenticated-contract-identity-and-namespace",
+        reserved_transaction_metadata: "reject-presence-before-decode-in-order:contract_manifest,gov_contract_address,gov_manifest_approvers,contract_address,contract_alias,contract_entrypoint,contract_payload",
+    };
     let durable_state = AbiDurableStateSurface {
         semantics_version: 3,
         contract_interface_section_magic: crate::metadata::CONTRACT_INTERFACE_SECTION_MAGIC,
@@ -3507,9 +3602,9 @@ fn collect_abi_surface(policy: crate::SyscallPolicy) -> Result<AbiSurface, AbiSu
         map_path_derivation: "base + slash + lowercase_hex(canonical_norito_key_payload)",
         page_overflow: "reject before selected-page materialization",
         operation_path_rules_version: 1,
-        operation_path_rules: "CNTR-present:value-operations(STATE_GET,STATE_SET,STATE_DEL,STATE_HAS,STATE_LEN)=declared-non-map-base-or-canonical-StateMap-child-only;bare-StateMap-base-rejected;scan-operations(STATE_KEYS,STATE_COUNT)=same-declared-path-validation-with-bare-StateMap-base-allowed;CNTR-absent=raw-path-compatibility",
+        operation_path_rules: "CNTR-present:value-operations(STATE_GET,STATE_SET,STATE_DEL,STATE_HAS,STATE_LEN)=declared-non-map-base-or-canonical-StateMap-child-only;bare-StateMap-base-rejected;scan-operations(STATE_KEYS,STATE_COUNT)=same-declared-path-validation-with-bare-StateMap-base-allowed;CNTR-absent=all-durable-state-syscalls-rejected-by-generic-program-profile",
         state_value_validation_version: 1,
-        state_value_validation: "CNTR-present:STATE_SET-before-mutation-and-present-STATE_GET-before-publication-reconstruct-exact-StateValueSchemaV1-from-declared-scalar-type-or-StateMap-value-type;require-canonical-StateValueRecordV1-with-schema_hash=iroha_crypto::Hash::new(KOTODAMA_STATE_VALUE_SCHEMA_V1\\0||exact-canonical-Norito-schema-frame);validate-exact-active-only-atom-stream,pointer-policy,pointer-type,pointer-envelope-hash,and-canonical-leaf-payload;CNTR-absent=bounded-raw-NoritoBytes-payload",
+        state_value_validation: "CNTR-present:STATE_SET-before-mutation-and-present-STATE_GET-before-publication-reconstruct-exact-StateValueSchemaV1-from-declared-scalar-type-or-StateMap-value-type;require-canonical-StateValueRecordV1-with-schema_hash=iroha_crypto::Hash::new(KOTODAMA_STATE_VALUE_SCHEMA_V1\\0||exact-canonical-Norito-schema-frame);validate-exact-active-only-atom-stream,pointer-policy,pointer-type,pointer-envelope-hash,and-canonical-leaf-payload;CNTR-absent=unavailable",
         typed_value: typed_state_value_surface_v1()?,
     };
     Ok(AbiSurface {
@@ -3523,6 +3618,7 @@ fn collect_abi_surface(policy: crate::SyscallPolicy) -> Result<AbiSurface, AbiSu
         entrypoint,
         numeric,
         indexed_literals,
+        generic_program,
         durable_state,
     })
 }
@@ -3674,6 +3770,62 @@ mod tests {
             assert!(!is_syscall_allowed(crate::SyscallPolicy::AbiV1, syscall));
             assert!(syscall > u8::MAX as u32);
         }
+    }
+
+    #[test]
+    fn generic_program_syscall_profile_is_sorted_complete_and_fail_closed() {
+        assert!(
+            GENERIC_PROGRAM_DENIED_SYSCALLS_V1
+                .windows(2)
+                .all(|pair| pair[0] < pair[1]),
+            "ABI-bound denylist must remain strictly sorted"
+        );
+        assert_eq!(
+            GENERIC_PROGRAM_DENIED_SYSCALLS_V1,
+            &[
+                SYSCALL_GRANT_CONTRACT_ENTRYPOINT,
+                SYSCALL_REVOKE_CONTRACT_ENTRYPOINT,
+                SYSCALL_DEACTIVATE_CONTRACT_INSTANCE,
+                SYSCALL_REMOVE_SMART_CONTRACT_BYTES,
+                SYSCALL_REGISTER_SMART_CONTRACT_CODE,
+                SYSCALL_REGISTER_SMART_CONTRACT_BYTES,
+                SYSCALL_ACTIVATE_CONTRACT_INSTANCE,
+                SYSCALL_STATE_GET,
+                SYSCALL_STATE_SET,
+                SYSCALL_STATE_DEL,
+                SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION,
+                SYSCALL_CALL_CONTRACT,
+                SYSCALL_SYSVAR_CONTRACT_ADDRESS,
+                SYSCALL_SYSVAR_ENTRYPOINT,
+                SYSCALL_SYSVAR_CONTRACT_SUBJECT,
+                SYSCALL_STATE_KEYS,
+                SYSCALL_STATE_HAS,
+                SYSCALL_STATE_LEN,
+                SYSCALL_STATE_COUNT,
+            ]
+        );
+        for &syscall in GENERIC_PROGRAM_DENIED_SYSCALLS_V1 {
+            assert!(is_syscall_allowed(crate::SyscallPolicy::AbiV1, syscall));
+            assert!(!is_generic_program_syscall_allowed(
+                crate::SyscallPolicy::AbiV1,
+                syscall
+            ));
+        }
+        for syscall in [
+            SYSCALL_REGISTER_DOMAIN,
+            SYSCALL_INT_ADD,
+            SYSCALL_SUBSCRIPTION_BILL,
+            SYSCALL_SUBSCRIPTION_RECORD_USAGE,
+        ] {
+            assert!(is_generic_program_syscall_allowed(
+                crate::SyscallPolicy::AbiV1,
+                syscall
+            ));
+        }
+        assert!(!is_generic_program_syscall_allowed(
+            crate::SyscallPolicy::AbiV1,
+            u32::MAX
+        ));
     }
 
     #[test]
@@ -4178,6 +4330,51 @@ mod tests {
         });
         assert_surface_mutation_changes_hash(|changed| {
             changed.durable_state.typed_value.decoded_word_bytes += 1;
+        });
+    }
+
+    #[test]
+    fn abi_hash_descriptor_binds_generic_program_semantics() {
+        let generic = canonical_surface().generic_program;
+        assert_eq!(generic.semantics_version, 1);
+        assert_eq!(generic.denied_syscalls, GENERIC_PROGRAM_DENIED_SYSCALLS_V1);
+        assert!(
+            generic
+                .artifact_discriminator
+                .contains("CNTR-section-absent")
+        );
+        assert!(generic.rejection.contains("before-side-effects"));
+        assert!(generic.validation_points.contains("host-quote-or-dispatch"));
+        assert!(generic.durable_state.contains("unavailable"));
+        assert!(
+            generic
+                .reserved_transaction_metadata
+                .contains("contract_payload")
+        );
+
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.generic_program.semantics_version += 1;
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.generic_program.artifact_discriminator = "mutated-discriminator";
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.generic_program.allowed_syscall_rule = "allow-all";
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            let _ = changed.generic_program.denied_syscalls.pop();
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.generic_program.rejection = "ignore";
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.generic_program.validation_points = "execution-only";
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.generic_program.durable_state = "raw-global-state";
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.generic_program.reserved_transaction_metadata = "accept-all";
         });
     }
 

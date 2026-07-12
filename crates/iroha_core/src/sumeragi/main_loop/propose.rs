@@ -7507,6 +7507,9 @@ impl Actor {
         now: Instant,
         trigger: &'static str,
     ) -> bool {
+        if self.kura_recovery_required() {
+            return false;
+        }
         let mut progressed = self
             .maybe_rebroadcast_cached_proposal(height, view, pending_queue_len, now)
             .is_some();
@@ -7547,6 +7550,9 @@ impl Actor {
 
         let commit_topology = self.effective_commit_topology();
         for block_hash in pending_hashes {
+            if self.kura_recovery_required() {
+                return progressed;
+            }
             if self.maybe_emit_local_commit_vote_for_pending_event(
                 block_hash,
                 height,
@@ -7556,6 +7562,9 @@ impl Actor {
             ) {
                 progressed = true;
                 continue;
+            }
+            if self.kura_recovery_required() {
+                return progressed;
             }
 
             if self.maybe_replay_known_block_commit_evidence(
@@ -7571,6 +7580,9 @@ impl Actor {
                     None,
                 );
                 progressed = true;
+            }
+            if self.kura_recovery_required() {
+                return progressed;
             }
         }
 
@@ -7641,6 +7653,9 @@ impl Actor {
                 now,
                 "same_height_owner_live",
             );
+            if self.kura_recovery_required() {
+                return true;
+            }
             if !progressed {
                 self.nudge_frontier_recovery_proposal_retry(now);
             }
@@ -8901,6 +8916,9 @@ impl Actor {
                     now,
                     "cached_proposal_metadata_mismatch",
                 );
+                if self.kura_recovery_required() {
+                    return false;
+                }
                 warn!(
                     height,
                     view = view_idx,
@@ -9555,6 +9573,9 @@ impl Actor {
                 now,
                 "authoritative_slot_owner",
             );
+            if self.kura_recovery_required() {
+                return false;
+            }
             if !progressed {
                 self.nudge_frontier_recovery_proposal_retry(now);
             }
@@ -9627,6 +9648,9 @@ impl Actor {
                 now,
                 "slot_has_proposal_evidence",
             );
+            if self.kura_recovery_required() {
+                return false;
+            }
             if !progressed {
                 if let Some((view_age, stale_window)) = self
                     .stale_slot_proposal_evidence_allows_recovery_rotation(

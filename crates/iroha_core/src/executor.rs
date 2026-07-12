@@ -74,7 +74,10 @@ use crate::zk::PreverifyResult;
 use crate::{
     gas as isi_gas,
     settlement::{PendingNexusFeeReceipt, PendingSettlement, QuoteError, VolatilityBucket},
-    smartcontracts::{Execute as _, code, ivm::cache::IvmCache},
+    smartcontracts::{
+        Execute as _, code,
+        ivm::cache::{ExecutableProgramSummary, IvmCache},
+    },
     state::{StateReadOnly, StateTransaction, WorldReadOnly},
     sumeragi::status::{self as sumeragi_status, NexusFeeEvent, NexusFeePayer},
 };
@@ -1939,6 +1942,7 @@ fn prepare_validated_contract_argument_record(
 
 type ResolvedContractEntrypoint = (u64, Option<String>, Option<ivm::EntrypointArgumentSchemaV1>);
 
+#[cfg(test)]
 fn resolve_callable_contract_entrypoint(
     bytecode: &[u8],
     selector: &str,
@@ -1969,6 +1973,7 @@ fn resolve_callable_contract_entrypoint(
     ))
 }
 
+#[cfg(test)]
 fn resolve_nested_contract_entrypoint(
     bytecode: &[u8],
     selector: &str,
@@ -2169,6 +2174,7 @@ impl ContractDispatchSource<'_> {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn parse_contract_call_execution_context(
     metadata: &Metadata,
     bytecode: &[u8],
@@ -2494,6 +2500,7 @@ fn parse_contract_call_execution_context_from_source(
     }))
 }
 
+#[cfg(test)]
 pub(crate) fn parse_contract_invocation_execution_context(
     invocation: &ContractInvocation,
     bytecode: &[u8],
@@ -2532,6 +2539,7 @@ pub(crate) fn parse_contract_invocation_execution_context(
     })
 }
 
+#[cfg(test)]
 pub(crate) fn parse_nested_contract_invocation_execution_context(
     invocation: &ContractInvocation,
     bytecode: &[u8],
@@ -4716,9 +4724,141 @@ impl Executor {
                         .saturating_sub(state_transaction.gas_used_in_block_so_far)
                 };
                 let effective_limit = gas_limit_md.min(block_remaining);
-                let summary = ivm_cache
-                    .summarize_program(bytes.as_ref())
-                    .map_err(|e| ValidationFail::InternalError(e.to_string()))?;
+                let admitted = ivm_cache
+                    .summarize_executable(bytes.as_ref())
+                    .map_err(crate::smartcontracts::ivm::program_admission_error)?;
+                let summary = match admitted {
+                    ExecutableProgramSummary::Contract(summary) => summary,
+                    ExecutableProgramSummary::Generic(summary) => {
+                        crate::smartcontracts::ivm::validate_generic_execution_metadata(&md)?;
+                        if summary.metadata.mode & ivm::ivm_mode::ZK != 0
+                            && !(state_transaction.zk.halo2.enabled
+                                || state_transaction.zk.stark.enabled)
+                        {
+                            return Err(ValidationFail::IvmAdmission(
+                                iroha_data_model::executor::IvmAdmissionError::UnsupportedFeatureBits(
+                                    ivm::ivm_mode::ZK,
+                                ),
+                            ));
+                        }
+                        let effective_cycles = crate::smartcontracts::ivm::validate_cycle_limits(
+                            &summary.metadata,
+                            state_transaction.pipeline.ivm_max_cycles_upper_bound,
+                            state_transaction
+                                .world
+                                .parameters
+                                .get()
+                                .smart_contract()
+                                .fuel(),
+                        )
+                        .map_err(ValidationFail::IvmAdmission)?;
+
+                        let prepared_contract_cache = ivm_cache.prepared_contract_cache();
+                        let amx_analysis =
+                            ivm_cache
+                                .analyze_generic_program(&summary)
+                                .map_err(|error| {
+                                    ValidationFail::InternalError(format!(
+                                        "invalid admitted generic-program analysis: {error}"
+                                    ))
+                                })?;
+                        let streaming_metadata =
+                            crate::pipeline::overlay::resolve_streaming_metadata(
+                                state_transaction,
+                                authority,
+                            );
+                        let bound_contract_records =
+                            code::snapshot_bound_contract_records_by_subject(state_transaction);
+                        let axt_policy_snapshot = state_transaction.axt_policy_snapshot();
+                        let mut runtime = ivm_cache
+                            .checkout_generic_runtime(&summary, effective_limit)
+                            .map_err(|e| ValidationFail::InternalError(e.to_string()))?;
+                        runtime.set_max_cycles(effective_cycles.get());
+                        runtime.set_gas_limit(effective_limit);
+                        let accounts = state_transaction.accounts_snapshot();
+                        let mut host =
+                            CoreCoreHost::with_accounts(authority.clone(), Arc::clone(&accounts));
+                        host.set_generic_execution();
+                        host.set_prepared_contract_cache(prepared_contract_cache);
+                        host.set_amx_analysis(amx_analysis);
+                        host.set_amx_limits(
+                            crate::smartcontracts::ivm::host::CoreHost::amx_limits_from_config(
+                                state_transaction.pipeline(),
+                            ),
+                        );
+                        host.set_axt_timing(state_transaction.nexus().axt);
+                        host.hydrate_axt_replay_ledger(state_transaction);
+                        host.set_crypto_config(Arc::clone(&state_transaction.crypto));
+                        host.set_zk_config(&state_transaction.zk);
+                        host.set_public_inputs_from_parameters(
+                            state_transaction.world.parameters.get(),
+                        );
+                        host.set_vrf_epoch_seeds_from_world(&state_transaction.world);
+                        host.set_query_state(state_transaction);
+                        host.set_bound_contract_records_by_subject_snapshot(bound_contract_records);
+                        host = host.with_axt_policy_snapshot(&axt_policy_snapshot);
+                        crate::pipeline::overlay::apply_streaming_metadata(
+                            &mut host,
+                            streaming_metadata,
+                        );
+                        host.set_chain_id(&state_transaction.chain_id);
+                        #[cfg(feature = "telemetry")]
+                        host.set_telemetry(state_transaction.telemetry.clone());
+                        host.set_zk_snapshots_from_world(
+                            &state_transaction.world,
+                            &state_transaction.zk,
+                        )
+                        .map_err(|err| {
+                            ValidationFail::InternalError(format!(
+                                "invalid ZK snapshot state: {err}"
+                            ))
+                        })?;
+                        if let Err(err) = runtime.run_with_host(&mut host) {
+                            return Err(
+                                crate::smartcontracts::ivm::map_vm_error_with_context_to_validation(
+                                    &runtime, &err,
+                                ),
+                            );
+                        }
+                        let gas_used = effective_limit.saturating_sub(runtime.remaining_gas());
+                        let artifacts = host.into_execution_artifacts(None)?;
+                        let _executed =
+                            artifacts.apply_to_transaction(state_transaction, authority)?;
+                        state_transaction.last_tx_gas_used = gas_used;
+                        Self::enforce_transaction_gas_fits_block(state_transaction, gas_used)?;
+
+                        if should_charge_pipeline_gas_asset(
+                            skip_nexus_fee,
+                            state_transaction.nexus.enabled,
+                            &state_transaction.nexus.fees,
+                            &gas_asset_opt,
+                        ) && let Some(gas_asset_id_str) = gas_asset_opt
+                        {
+                            Self::charge_pipeline_gas_asset_fee(
+                                state_transaction,
+                                authority,
+                                &transaction_for_fee,
+                                tx_hash,
+                                settlement_source_id,
+                                &gas_asset_id_str,
+                                gas_used,
+                                fee_sponsor.as_ref(),
+                            )?;
+                        }
+                        Self::charge_nexus_fees(
+                            state_transaction,
+                            authority,
+                            &transaction_for_fee,
+                            tx_hash,
+                            fee_sponsor,
+                            tx_bytes_len,
+                            0,
+                            gas_used,
+                            false,
+                        )?;
+                        return Ok(());
+                    }
+                };
                 crate::pipeline::overlay::validate_contract_binding(
                     state_transaction,
                     &transaction_for_fee,
@@ -6859,9 +6999,18 @@ where
             .map(drop)
         }
         Executable::Ivm(bytecode) => {
-            let summary = ivm_cache
-                .summarize_program(bytecode.as_ref())
-                .map_err(|error| ValidationFail::InternalError(error.to_string()))?;
+            let admitted = ivm_cache
+                .summarize_executable(bytecode.as_ref())
+                .map_err(crate::smartcontracts::ivm::program_admission_error)?;
+            let summary = match admitted {
+                ExecutableProgramSummary::Generic(_) => {
+                    crate::smartcontracts::ivm::validate_generic_execution_metadata(
+                        transaction.metadata(),
+                    )?;
+                    return Ok(());
+                }
+                ExecutableProgramSummary::Contract(summary) => summary,
+            };
             let selector = requested_contract_entrypoint(transaction.metadata())?.ok_or_else(|| {
                 ValidationFail::NotPermitted(
                     "self-describing raw-IVM contract dispatch requires explicit contract_entrypoint metadata"

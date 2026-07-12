@@ -49,24 +49,6 @@ private func nativeAmxTestHash(_ seed: UInt8) -> String {
     return "hash:\(body)#\(String(format: "%04X", checksum))"
 }
 
-private func canonicalKagemushaVerifierRecordArchive(
-    seed: UInt8,
-    verifierKeyLength: Int = 96
-) throws -> Data {
-    guard verifierKeyLength > 0 else {
-        throw NSError(
-            domain: "ToriiClientTests",
-            code: -1,
-            userInfo: [NSLocalizedDescriptionKey: "verifierKeyLength must be positive"]
-        )
-    }
-    return noritoEncode(
-        typeName: KagemushaRecursiveSpend.verifyingKeyRecordWireName,
-        payload: Data(repeating: seed, count: verifierKeyLength),
-        flags: NoritoHeader.compactLen
-    )
-}
-
 private func nativeAmxStatusPayload(
     preparePhase: String = "prepare",
     signature: String = String(repeating: "9a", count: 96),

@@ -388,6 +388,16 @@ fn stack_limit_for_gas(gas_limit: u64) -> u64 {
     IvmConfig::new(gas_limit).stack_limit_for_gas()
 }
 
+/// Return whether a syscall is available to a contract-less IVM program.
+///
+/// The canonical policy lives in `ivm_abi` and is hashed into ABI V1. Core
+/// delegates to it at both admission and host dispatch so the two enforcement
+/// points cannot drift.
+#[must_use]
+pub(crate) fn is_generic_syscall_allowed(number: u32) -> bool {
+    ivm::syscalls::is_generic_program_syscall_allowed(ivm::SyscallPolicy::AbiV1, number)
+}
+
 /// Summary of a compiled IVM program derived during admission.
 #[derive(Clone, Debug)]
 pub struct ProgramSummary {
@@ -405,6 +415,91 @@ pub struct ProgramSummary {
     pub abi_hash: Hash,
     /// Hash of the encoded metadata header.
     pub meta_hash: Hash,
+}
+
+/// Fully validated ABI-bound generic IVM program.
+///
+/// Generic programs deliberately have no `CNTR` interface, contract identity,
+/// entrypoints, or durable-state schema. They are used for low-level IVM
+/// executables such as system triggers and state-free low-level programs. The
+/// authenticated fixed header still binds them to the exact local ABI.
+#[derive(Clone, Debug)]
+pub struct GenericProgramSummary {
+    program: Arc<[u8]>,
+    /// Parsed program metadata.
+    pub metadata: ProgramMetadata,
+    /// Offset to the first decoded instruction.
+    pub code_offset: usize,
+    /// Length of the authenticated fixed header.
+    pub header_len: usize,
+    /// Domain-separated hash of the complete program image.
+    pub code_hash: Hash,
+    /// ABI hash authenticated by the fixed header.
+    pub abi_hash: Hash,
+    /// Hash of the canonical encoded metadata header.
+    pub meta_hash: Hash,
+}
+
+impl GenericProgramSummary {
+    /// Return the complete validated program image.
+    #[must_use]
+    pub fn program(&self) -> &[u8] {
+        &self.program
+    }
+
+    /// Clone the shared immutable program image without copying its bytes.
+    #[must_use]
+    pub fn shared_program(&self) -> Arc<[u8]> {
+        Arc::clone(&self.program)
+    }
+}
+
+/// Admission result for either a self-describing contract or a generic IVM
+/// program.
+#[derive(Clone, Debug)]
+pub enum ExecutableProgramSummary {
+    /// A deployable, self-describing `CNTR` contract.
+    Contract(ProgramSummary),
+    /// An ABI-authenticated generic program without contract identity.
+    Generic(GenericProgramSummary),
+}
+
+impl ExecutableProgramSummary {
+    /// Return the parsed metadata shared by both program kinds.
+    #[must_use]
+    pub fn metadata(&self) -> &ProgramMetadata {
+        match self {
+            Self::Contract(summary) => &summary.metadata,
+            Self::Generic(summary) => &summary.metadata,
+        }
+    }
+
+    /// Return the instruction offset shared by both program kinds.
+    #[must_use]
+    pub fn code_offset(&self) -> usize {
+        match self {
+            Self::Contract(summary) => summary.code_offset,
+            Self::Generic(summary) => summary.code_offset,
+        }
+    }
+
+    /// Return the complete program hash shared by both program kinds.
+    #[must_use]
+    pub fn code_hash(&self) -> Hash {
+        match self {
+            Self::Contract(summary) => summary.code_hash,
+            Self::Generic(summary) => summary.code_hash,
+        }
+    }
+
+    /// Return the authenticated ABI hash shared by both program kinds.
+    #[must_use]
+    pub fn abi_hash(&self) -> Hash {
+        match self {
+            Self::Contract(summary) => summary.abi_hash,
+            Self::Generic(summary) => summary.abi_hash,
+        }
+    }
 }
 
 impl ProgramSummary {
@@ -573,6 +668,7 @@ pub struct CacheStats {
 pub struct IvmCache {
     prepared_contracts: PreparedContractCache,
     summaries: BTreeMap<SummaryKey, ProgramSummary>,
+    generic_summaries: BTreeMap<SummaryKey, GenericProgramSummary>,
     runtime_templates: BTreeMap<RuntimeKey, RuntimePool>,
     analyses: BTreeMap<SummaryKey, ProgramAnalysis>,
     summary_order: VecDeque<SummaryKey>,
@@ -613,6 +709,7 @@ impl IvmCache {
         Self {
             prepared_contracts,
             summaries: BTreeMap::new(),
+            generic_summaries: BTreeMap::new(),
             runtime_templates: BTreeMap::new(),
             analyses: BTreeMap::new(),
             summary_order: VecDeque::new(),
@@ -630,6 +727,91 @@ impl IvmCache {
         let code_hash = ivm::contract_code_hash(bytecode);
         self.stats.artifact_hashes = self.stats.artifact_hashes.saturating_add(1);
         self.summarize_program_with_hash(code_hash, bytecode)
+    }
+
+    /// Validate and summarize either a self-describing contract or a generic
+    /// ABI-bound IVM program.
+    ///
+    /// The presence of a canonical `CNTR` section is the only discriminator.
+    /// Contract artifacts retain the stronger full artifact verifier and
+    /// prepared-contract cache; generic programs are fully loaded once to
+    /// validate literals, instructions, control flow, and syscall policy.
+    ///
+    /// # Errors
+    /// Returns [`ivm::VMError`] when the header, ABI binding, contract section,
+    /// literal table, or instruction stream is invalid.
+    pub fn summarize_executable(
+        &mut self,
+        bytecode: &[u8],
+    ) -> Result<ExecutableProgramSummary, ivm::VMError> {
+        let parsed = ProgramMetadata::parse(bytecode)?;
+        if parsed.contract_interface.is_some() {
+            self.summarize_program(bytecode)
+                .map(ExecutableProgramSummary::Contract)
+        } else {
+            self.summarize_generic_program(bytecode)
+                .map(ExecutableProgramSummary::Generic)
+        }
+    }
+
+    /// Validate and summarize an ABI-bound program that has no `CNTR` section.
+    ///
+    /// # Errors
+    /// Returns [`ivm::VMError::InvalidMetadata`] if a contract interface is
+    /// present or any generic-program validation fails.
+    pub fn summarize_generic_program(
+        &mut self,
+        bytecode: &[u8],
+    ) -> Result<GenericProgramSummary, ivm::VMError> {
+        let code_hash = ivm::contract_code_hash(bytecode);
+        self.stats.artifact_hashes = self.stats.artifact_hashes.saturating_add(1);
+        let key = SummaryKey::new(code_hash);
+        if let Some(hit) = self.generic_summaries.get(&key).cloned() {
+            if hit.program() != bytecode {
+                return Err(ivm::VMError::InvalidMetadata);
+            }
+            self.stats.metadata_hits = self.stats.metadata_hits.saturating_add(1);
+            self.touch_summary(key);
+            return Ok(hit);
+        }
+
+        let parsed = ProgramMetadata::parse(bytecode)?;
+        if parsed.contract_interface.is_some() {
+            return Err(ivm::VMError::InvalidMetadata);
+        }
+
+        // Loading performs the same literal, instruction, control-flow, and
+        // syscall validation used at execution. The global immutable predecode
+        // cache makes subsequent loads deterministic and inexpensive.
+        let mut verifier = ivm::IVM::new(0);
+        verifier.set_zk_trace_enabled(false);
+        verifier.load_program(bytecode)?;
+        let analysis =
+            ivm::analysis::analyze_program(bytecode).map_err(|_| ivm::VMError::InvalidMetadata)?;
+        if let Some(forbidden) = analysis
+            .syscalls
+            .iter()
+            .find(|usage| !is_generic_syscall_allowed(usage.number))
+        {
+            return Err(ivm::VMError::GenericSyscallNotAllowed {
+                syscall: forbidden.number,
+            });
+        }
+
+        let metadata = parsed.metadata;
+        let summary = GenericProgramSummary {
+            program: Arc::from(bytecode),
+            code_offset: parsed.code_offset,
+            header_len: parsed.header_len,
+            abi_hash: Hash::prehashed(ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1)),
+            meta_hash: Hash::new(metadata.encode()),
+            metadata,
+            code_hash,
+        };
+        self.insert_generic_summary(key, summary.clone());
+        self.stats.metadata_misses = self.stats.metadata_misses.saturating_add(1);
+        self.stats.preparations = self.stats.preparations.saturating_add(1);
+        Ok(summary)
     }
 
     /// Return the prepared summary for a trusted content-addressed artifact.
@@ -731,6 +913,32 @@ impl IvmCache {
         Ok(analysis)
     }
 
+    /// Analyze a validated generic program once per content-addressed summary.
+    ///
+    /// # Errors
+    /// Returns [`ProgramAnalysisError`] if the stored validated image cannot be
+    /// decoded consistently.
+    pub fn analyze_generic_program(
+        &mut self,
+        summary: &GenericProgramSummary,
+    ) -> Result<ProgramAnalysis, ProgramAnalysisError> {
+        let key = SummaryKey::new(summary.code_hash);
+        if let Some(hit) = self.analyses.get(&key).cloned() {
+            self.stats.analysis_hits = self.stats.analysis_hits.saturating_add(1);
+            self.touch_summary(key);
+            return Ok(hit);
+        }
+
+        self.stats.analysis_misses = self.stats.analysis_misses.saturating_add(1);
+        let analysis = ivm::analysis::analyze_program(summary.program())?;
+        if self.capacity != 0 {
+            self.analyses.insert(key, analysis.clone());
+            self.touch_summary(key);
+            self.evict_summaries_if_needed();
+        }
+        Ok(analysis)
+    }
+
     /// Check out a warmed runtime for `summary.code_hash`, loading it if needed.
     ///
     /// The returned lease restores and returns the VM automatically on every
@@ -745,6 +953,64 @@ impl IvmCache {
         gas_limit: u64,
     ) -> Result<RuntimeLease<'a>, ivm::VMError> {
         let (key, baseline, vm) = self.take_runtime(summary, gas_limit)?;
+        Ok(RuntimeLease {
+            cache: self,
+            key,
+            baseline,
+            vm: Some(vm),
+        })
+    }
+
+    /// Check out a warmed runtime for a validated generic IVM program.
+    ///
+    /// The returned lease restores all mutated runtime state before returning
+    /// the VM to the bounded pool. Generic programs remain contract-less: no
+    /// interface, identity, or entrypoint metadata is synthesized.
+    ///
+    /// # Errors
+    /// Propagates [`ivm::VMError`] if the validated program cannot be loaded.
+    pub fn checkout_generic_runtime<'a>(
+        &'a mut self,
+        summary: &GenericProgramSummary,
+        gas_limit: u64,
+    ) -> Result<RuntimeLease<'a>, ivm::VMError> {
+        let stack_limit = stack_limit_for_gas(gas_limit);
+        let key = RuntimeKey::new(summary.code_hash, stack_limit);
+        let cached = self.runtime_templates.get_mut(&key).and_then(|pool| {
+            pool.available
+                .pop()
+                .map(|vm| (Arc::clone(&pool.baseline), vm))
+        });
+        let (baseline, vm) = if let Some((baseline, mut vm)) = cached {
+            self.stats.runtime_hits = self.stats.runtime_hits.saturating_add(1);
+            self.touch_runtime(key);
+            vm.set_gas_limit(gas_limit);
+            (baseline, vm)
+        } else {
+            self.stats.runtime_misses = self.stats.runtime_misses.saturating_add(1);
+            let mut vm = ivm::IVM::new(gas_limit);
+            vm.set_zk_trace_enabled(false);
+            vm.load_program(summary.program())?;
+            self.stats.prepared_loads = self.stats.prepared_loads.saturating_add(1);
+            vm.set_gas_limit(gas_limit);
+            let baseline = if let Some(pool) = self.runtime_templates.get(&key) {
+                Arc::clone(&pool.baseline)
+            } else {
+                self.stats.template_builds = self.stats.template_builds.saturating_add(1);
+                Arc::new(vm.runtime_template())
+            };
+            if !self.runtime_templates.contains_key(&key) {
+                self.insert_runtime_pool(
+                    key,
+                    RuntimePool {
+                        baseline: Arc::clone(&baseline),
+                        available: Vec::new(),
+                    },
+                );
+            }
+            (baseline, vm)
+        };
+
         Ok(RuntimeLease {
             cache: self,
             key,
@@ -819,6 +1085,15 @@ impl IvmCache {
         self.evict_summaries_if_needed();
     }
 
+    fn insert_generic_summary(&mut self, key: SummaryKey, summary: GenericProgramSummary) {
+        if self.capacity == 0 {
+            return;
+        }
+        self.generic_summaries.insert(key, summary);
+        self.touch_summary(key);
+        self.evict_summaries_if_needed();
+    }
+
     fn insert_runtime_pool(&mut self, key: RuntimeKey, pool: RuntimePool) {
         if self.capacity == 0 {
             return;
@@ -878,6 +1153,7 @@ impl IvmCache {
         while self.capacity != 0 && self.summary_order.len() > self.capacity {
             if let Some(old) = self.summary_order.pop_front() {
                 self.summaries.remove(&old);
+                self.generic_summaries.remove(&old);
                 self.analyses.remove(&old);
                 self.prune_runtime_for_summary(old);
                 self.stats.evictions = self.stats.evictions.saturating_add(1);
@@ -940,6 +1216,141 @@ mod tests {
         program.extend_from_slice(&interface.encode_section());
         program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
         program
+    }
+
+    fn minimal_generic_program() -> Vec<u8> {
+        let mut program = ivm::ProgramMetadata {
+            max_cycles: 10_000,
+            ..ivm::ProgramMetadata::default()
+        }
+        .encode();
+        program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+        program
+    }
+
+    #[test]
+    fn executable_summary_distinguishes_contracts_from_generic_programs() {
+        let mut cache = IvmCache::with_capacity(4);
+        assert!(matches!(
+            cache
+                .summarize_executable(&minimal_program())
+                .expect("contract summary"),
+            ExecutableProgramSummary::Contract(_)
+        ));
+        assert!(matches!(
+            cache
+                .summarize_executable(&minimal_generic_program())
+                .expect("generic summary"),
+            ExecutableProgramSummary::Generic(_)
+        ));
+        assert!(
+            cache.summarize_generic_program(&minimal_program()).is_err(),
+            "CNTR artifacts must never be downgraded to generic programs"
+        );
+    }
+
+    #[test]
+    fn generic_runtime_is_validated_reset_and_reused() {
+        const GAS_LIMIT: u64 = 10_000;
+        let program = minimal_generic_program();
+        let mut cache = IvmCache::with_capacity(2);
+        let summary = cache
+            .summarize_generic_program(&program)
+            .expect("generic summary");
+        {
+            let mut runtime = cache
+                .checkout_generic_runtime(&summary, GAS_LIMIT)
+                .expect("generic runtime");
+            runtime.set_register(3, 77);
+            runtime.run().expect("generic HALT program");
+        }
+        let runtime = cache
+            .checkout_generic_runtime(&summary, GAS_LIMIT)
+            .expect("reused generic runtime");
+        assert_eq!(runtime.register(3), 0);
+        assert_eq!(runtime.remaining_gas(), GAS_LIMIT);
+        drop(runtime);
+        assert_eq!(cache.stats().runtime_hits, 1);
+    }
+
+    #[test]
+    fn generic_summary_rejects_disallowed_syscalls_during_preparation() {
+        let mut program = ivm::ProgramMetadata {
+            max_cycles: 10_000,
+            ..ivm::ProgramMetadata::default()
+        }
+        .encode();
+        program.extend_from_slice(&ivm::encoding::wide::encode_syscallx(u32::MAX).to_le_bytes());
+        program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+
+        assert!(
+            IvmCache::new().summarize_generic_program(&program).is_err(),
+            "unknown generic-program syscalls must fail before execution"
+        );
+    }
+
+    #[test]
+    fn generic_summary_rejects_contract_only_syscalls_with_stable_reason() {
+        for syscall in [
+            ivm::syscalls::SYSCALL_GRANT_CONTRACT_ENTRYPOINT,
+            ivm::syscalls::SYSCALL_REVOKE_CONTRACT_ENTRYPOINT,
+            ivm::syscalls::SYSCALL_DEACTIVATE_CONTRACT_INSTANCE,
+            ivm::syscalls::SYSCALL_REMOVE_SMART_CONTRACT_BYTES,
+            ivm::syscalls::SYSCALL_REGISTER_SMART_CONTRACT_CODE,
+            ivm::syscalls::SYSCALL_REGISTER_SMART_CONTRACT_BYTES,
+            ivm::syscalls::SYSCALL_ACTIVATE_CONTRACT_INSTANCE,
+            ivm::syscalls::SYSCALL_STATE_GET,
+            ivm::syscalls::SYSCALL_STATE_SET,
+            ivm::syscalls::SYSCALL_STATE_DEL,
+            ivm::syscalls::SYSCALL_STATE_KEYS,
+            ivm::syscalls::SYSCALL_STATE_HAS,
+            ivm::syscalls::SYSCALL_STATE_LEN,
+            ivm::syscalls::SYSCALL_STATE_COUNT,
+            ivm::syscalls::SYSCALL_CALL_CONTRACT,
+            ivm::syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION,
+            ivm::syscalls::SYSCALL_SYSVAR_CONTRACT_ADDRESS,
+            ivm::syscalls::SYSCALL_SYSVAR_CONTRACT_SUBJECT,
+            ivm::syscalls::SYSCALL_SYSVAR_ENTRYPOINT,
+        ] {
+            let mut program = ivm::ProgramMetadata {
+                max_cycles: 10_000,
+                ..ivm::ProgramMetadata::default()
+            }
+            .encode();
+            program.extend_from_slice(&ivm::encoding::wide::encode_syscallx(syscall).to_le_bytes());
+            program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+
+            let error = IvmCache::new()
+                .summarize_generic_program(&program)
+                .expect_err("generic syscall profile must reject contract-only calls");
+            assert_eq!(
+                error,
+                ivm::VMError::GenericSyscallNotAllowed { syscall },
+                "generic syscall profile must reject 0x{syscall:02x}"
+            );
+        }
+    }
+
+    #[test]
+    fn generic_summary_accepts_unconditional_and_context_gated_syscalls() {
+        for syscall in [
+            ivm::syscalls::SYSCALL_REGISTER_DOMAIN,
+            ivm::syscalls::SYSCALL_INT_ADD,
+            ivm::syscalls::SYSCALL_SUBSCRIPTION_BILL,
+            ivm::syscalls::SYSCALL_SUBSCRIPTION_RECORD_USAGE,
+        ] {
+            let mut program = ivm::ProgramMetadata {
+                max_cycles: 10_000,
+                ..ivm::ProgramMetadata::default()
+            }
+            .encode();
+            program.extend_from_slice(&ivm::encoding::wide::encode_syscallx(syscall).to_le_bytes());
+            program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+
+            IvmCache::new()
+                .summarize_generic_program(&program)
+                .expect("system trigger syscall belongs to the generic V1 profile");
+        }
     }
 
     #[test]

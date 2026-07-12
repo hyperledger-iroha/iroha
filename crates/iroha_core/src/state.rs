@@ -25003,6 +25003,12 @@ impl State {
         world
             .validate_non_negative_ledger_invariants()
             .expect("initial world contains invalid non-negative ledger state");
+        crate::smartcontracts::ivm::active_runtime_abi_hash(&world.view(), u64::MAX)
+            .unwrap_or_else(|error| {
+                panic!(
+                    "persisted active runtime ABI is incompatible with this node during state initialization: {error:?}"
+                )
+            });
         crate::smartcontracts::code::initialize_current_contract_subject_bindings(&mut world)
             .expect("new v2 world must contain valid contract subject bindings");
         crate::sns::seed_default_namespace_policies(&mut world);
@@ -25802,8 +25808,27 @@ impl State {
     /// Create structure to execute a block
     #[allow(clippy::too_many_lines)]
     pub fn block(&self, curr_block: BlockHeader) -> StateBlock<'_> {
-        self.block_with_pristine_stage(curr_block, |_| Ok::<(), core::convert::Infallible>(()))
-            .expect("infallible pristine block stage")
+        self.try_block(curr_block).unwrap_or_else(|error| {
+            panic!("persisted active runtime ABI is incompatible with this node: {error:?}")
+        })
+    }
+
+    /// Create a block after validating the persisted active runtime ABI.
+    ///
+    /// # Errors
+    /// Returns the stable admission reason when persisted governance state
+    /// selects an ABI surface different from this binary.
+    pub fn try_block(
+        &self,
+        curr_block: BlockHeader,
+    ) -> Result<StateBlock<'_>, iroha_data_model::executor::IvmAdmissionError> {
+        crate::smartcontracts::ivm::active_runtime_abi_hash(
+            &self.world.view(),
+            curr_block.height().get(),
+        )?;
+        Ok(self
+            .block_with_pristine_stage(curr_block, |_| Ok::<(), core::convert::Infallible>(()))
+            .expect("infallible pristine block stage"))
     }
 
     #[allow(clippy::too_many_lines)]
@@ -25929,6 +25954,16 @@ impl State {
             trust_committed_execution_results: false,
         };
         stage(&mut sb)?;
+        crate::smartcontracts::ivm::active_runtime_abi_hash(
+            &sb.world,
+            sb._curr_block.height().get(),
+        )
+        .unwrap_or_else(|error| {
+            panic!(
+                "persisted active runtime ABI is incompatible with this node at block height {}: {error:?}",
+                sb._curr_block.height().get()
+            )
+        });
         // Activate any pending public-lane validators whose scheduled epoch has begun.
         let epoch_length = sb
             .world
@@ -25993,6 +26028,14 @@ impl State {
                     && rec.manifest.start_height == now_h
                     && now_h < rec.manifest.end_height
                 {
+                    crate::smartcontracts::ivm::validate_runtime_upgrade_manifest_abi(
+                        &rec.manifest,
+                    )
+                    .unwrap_or_else(|error| {
+                        panic!(
+                            "scheduled runtime upgrade {id:?} is incompatible with this node at activation height {now_h}: {error:?}"
+                        )
+                    });
                     rec.status =
                         iroha_data_model::runtime::RuntimeUpgradeStatus::ActivatedAt(now_h);
                     wtx.runtime_upgrades.insert(id, rec);
@@ -26312,6 +26355,13 @@ impl State {
             }
             update_governance_pipeline_slas(&mut wtx, now_h, &sb.gov);
             update_oracle_change_pipeline(&mut wtx, now_h, &sb.oracle.governance);
+            crate::smartcontracts::ivm::active_runtime_abi_hash(&wtx, now_h).unwrap_or_else(
+                |error| {
+                    panic!(
+                        "runtime-upgrade registry became invalid after activation at height {now_h}: {error:?}"
+                    )
+                },
+            );
             wtx.apply();
         }
         {
@@ -27269,6 +27319,23 @@ impl State {
     #[must_use]
     pub fn pipeline_snapshot(&self) -> iroha_config::parameters::actual::Pipeline {
         self.pipeline.clone()
+    }
+
+    /// Snapshot the effective cycle ceiling for newly admitted IVM programs.
+    ///
+    /// Both node execution policy and the governance-controlled smart-contract
+    /// fuel parameter are consensus-visible admission limits, so producers must
+    /// embed the lower value in generated program headers.
+    #[must_use]
+    pub fn ivm_admission_cycle_limit(&self) -> NonZeroU64 {
+        let fuel = self.world.parameters.view().smart_contract().fuel();
+        NonZeroU64::new(
+            self.pipeline
+                .ivm_max_cycles_upper_bound
+                .get()
+                .min(fuel.get()),
+        )
+        .expect("both IVM cycle limits are non-zero")
     }
 
     /// Snapshot the current governance configuration.
@@ -32827,6 +32894,15 @@ impl State {
         carrier_header: BlockHeader,
         entry: &MergeLedgerEntry,
     ) -> Result<StateBlock<'_>, MergeLedgerCommitError> {
+        crate::smartcontracts::ivm::active_runtime_abi_hash(
+            &self.world.view(),
+            carrier_header.height().get(),
+        )
+        .map_err(|error| {
+            MergeLedgerCommitError::ExecutionStatePublication(format!(
+                "persisted active runtime ABI is incompatible with this node: {error:?}"
+            ))
+        })?;
         self.block_with_pristine_stage(carrier_header, |state_block| {
             state_block.stage_certified_merge_entry(entry)
         })
@@ -32839,6 +32915,15 @@ impl State {
         carrier_header: BlockHeader,
         reference: &iroha_data_model::block::CertifiedMergeLedgerReference,
     ) -> Result<StateBlock<'_>, MergeLedgerCommitError> {
+        crate::smartcontracts::ivm::active_runtime_abi_hash(
+            &self.world.view(),
+            carrier_header.height().get(),
+        )
+        .map_err(|error| {
+            MergeLedgerCommitError::ExecutionStatePublication(format!(
+                "persisted active runtime ABI is incompatible with this node: {error:?}"
+            ))
+        })?;
         self.block_with_pristine_stage(carrier_header, |state_block| {
             state_block.stage_certified_merge_reference(reference)
         })
@@ -38933,6 +39018,61 @@ impl ValidatedSccpRegistryV1 {
     }
 }
 
+fn validate_canonical_sccp_registry_wire(
+    wire: &SccpOnChainRegistryV1,
+) -> core::result::Result<(), String> {
+    let validated = ValidatedSccpRegistryV1::try_from_wire(wire.clone())?;
+    if validated.registry() != wire {
+        return Err(
+            "invalid SCCP registry: snapshot registry is not in canonical lane/route order"
+                .to_owned(),
+        );
+    }
+    Ok(())
+}
+
+/// Validate the exact multi-version cell envelope used to persist the SCCP registry.
+///
+/// Both the committed `blocks` value and a non-null `revert` value are consensus
+/// material: snapshot reconciliation can promote the latter back into the live
+/// state. The envelope therefore rejects missing or unknown fields and validates
+/// both registry versions before any snapshot becomes observable.
+pub(crate) fn validate_sccp_registry_cell_json(
+    value: &norito::json::Value,
+) -> core::result::Result<(), String> {
+    let norito::json::Value::Object(cell) = value else {
+        return Err(
+            "snapshot SCCP registry must use the exact `{revert,blocks}` cell envelope".to_owned(),
+        );
+    };
+    if let Some(field) = cell
+        .keys()
+        .find(|field| field.as_str() != "revert" && field.as_str() != "blocks")
+    {
+        return Err(format!(
+            "snapshot SCCP registry cell contains unknown field `{field}`"
+        ));
+    }
+    let blocks = cell
+        .get("blocks")
+        .ok_or_else(|| "snapshot SCCP registry cell is missing `blocks`".to_owned())?;
+    let revert = cell
+        .get("revert")
+        .ok_or_else(|| "snapshot SCCP registry cell is missing `revert`".to_owned())?;
+
+    let validate_value = |value: &norito::json::Value, role: &str| {
+        let wire: SccpOnChainRegistryV1 = norito::json::value::from_value(value.clone())
+            .map_err(|error| format!("snapshot SCCP registry {role} is invalid: {error}"))?;
+        validate_canonical_sccp_registry_wire(&wire)
+            .map_err(|error| format!("snapshot SCCP registry {role} is invalid: {error}"))
+    };
+    validate_value(blocks, "blocks")?;
+    if !revert.is_null() {
+        validate_value(revert, "revert")?;
+    }
+    Ok(())
+}
+
 #[derive(Debug)]
 struct SccpRegistryCache {
     registry: Arc<ValidatedSccpRegistryV1>,
@@ -43974,6 +44114,11 @@ mod tiered_snapshot_diff_tests {
         SccpOutboundMessageKeyV1,
         SccpOutboundPendingMessageRecordV1,
     ) {
+        let key_pair = checked_keypair();
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let sender = authority
+            .to_i105_for_discriminant(iroha_sccp::SCCP_TAIRA_I105_DISCRIMINANT_V1)
+            .expect("retained SCCP inventory sender has one canonical Taira I105 rendering");
         let payload = iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
             version: 1,
             source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
@@ -43985,7 +44130,7 @@ mod tiered_snapshot_diff_tests {
             asset_id: b"xor".to_vec(),
             amount: 77,
             sender_codec: iroha_sccp::SCCP_CODEC_CANONICAL_TEXT,
-            sender: b"sora:retained-archive".to_vec(),
+            sender: sender.into_bytes(),
             recipient_codec: iroha_sccp::SCCP_CODEC_EVM_ADDRESS20,
             recipient: [0x22; 20].to_vec(),
             route_id_codec: iroha_sccp::SCCP_CODEC_CANONICAL_TEXT,
@@ -44002,8 +44147,6 @@ mod tiered_snapshot_diff_tests {
         )
         .expect("retained SCCP inventory payload validates");
 
-        let key_pair = checked_keypair();
-        let authority = AccountId::new(key_pair.public_key().clone());
         let transaction = TransactionBuilder::new(
             ChainId::from(iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1),
             authority,
@@ -44205,7 +44348,6 @@ mod tiered_snapshot_diff_tests {
         record.source_identity_hash =
             iroha_data_model::bridge::sccp_source_identity_hash_v1(&route.source_identity)
                 .expect("fixture source identity hash");
-        record.anchor_interval_height = record.trust_anchor.checkpoint_height + 1;
         let successor = SccpNativeTrustAnchorV1 {
             anchor_hash: [0x98; 32],
             checkpoint_height: record.trust_anchor.checkpoint_height + 10,
@@ -45593,9 +45735,9 @@ mod tiered_snapshot_diff_tests {
 
     #[test]
     fn sccp_local_profile_rejects_malformed_direct_terminal_record() {
-        let (mut world, key, message, mut proof, _, _) = world_with_valid_sccp_outbound_history();
+        let (mut world, key, _message, mut proof, _, _) = world_with_valid_sccp_outbound_history();
         proof.accepted_at_height = 0;
-        replace_complete_sccp_outbound_history(&mut world, key, message, proof);
+        world.sccp_outbound_proofs.insert(key, proof);
         let state = direct_sccp_state_at_height_one(world, exact_sccp_finality_kura());
 
         let error = validate_sccp_state_local_profile(&state)
@@ -46165,7 +46307,7 @@ mod tiered_snapshot_diff_tests {
             },
             1,
         );
-        assert_rejected(malformed, "forged malformed key", "malformed key");
+        assert_rejected(malformed, "forged malformed key", "nonzero anchor hash");
     }
 
     #[test]
@@ -46295,11 +46437,7 @@ mod tiered_snapshot_diff_tests {
         assert!(message.is_well_formed_for_key(&other_lane_key));
         assert!(proof.is_well_formed_for_key(&other_lane_key));
         replace_complete_sccp_outbound_history(&mut world, other_lane_key, message, proof);
-        assert_rejected(
-            world,
-            "cross-lane route",
-            "identity-mismatched payload evidence",
-        );
+        assert_rejected(world, "cross-lane route", "belongs to another exact lane");
     }
 
     #[test]
@@ -46314,12 +46452,7 @@ mod tiered_snapshot_diff_tests {
             world.sccp_outbound_message_index = Storage::default();
             world.sccp_outbound_proofs = Storage::default();
             world.sccp_outbound_proofs.insert(key, proof);
-            let state = State::new_with_chain(
-                world,
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-                ChainId::from(iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1),
-            );
+            let state = direct_sccp_state_at_height_one(world, Kura::blank_kura_for_testing());
             let error = validate_sccp_state_local_profile(&state)
                 .expect_err("forged in-memory outbound proof index must fail closed");
             assert!(
@@ -52337,6 +52470,140 @@ impl StateTransaction<'_, '_> {
         Json::from(payload)
     }
 
+    fn execute_generic_ivm_trigger_program(
+        &mut self,
+        id: &TriggerId,
+        authority: &AccountId,
+        event: &EventBox,
+        metadata: &Metadata,
+        summary: &crate::smartcontracts::ivm::cache::GenericProgramSummary,
+        nft_seq_base_override: Option<u64>,
+    ) -> Result<ExecutionStep, ValidationFail> {
+        crate::smartcontracts::ivm::validate_generic_execution_metadata(metadata)?;
+        if summary.metadata.mode & ivm::ivm_mode::ZK != 0
+            && !(self.zk.halo2.enabled || self.zk.stark.enabled)
+        {
+            return Err(ValidationFail::IvmAdmission(
+                iroha_data_model::executor::IvmAdmissionError::UnsupportedFeatureBits(
+                    ivm::ivm_mode::ZK,
+                ),
+            ));
+        }
+
+        crate::pipeline::overlay::validate_header_policy(&summary.metadata)
+            .map_err(ValidationFail::IvmAdmission)?;
+        let eff_cycles = crate::smartcontracts::ivm::validate_cycle_limits(
+            &summary.metadata,
+            self.pipeline.ivm_max_cycles_upper_bound,
+            self.world.parameters.get().smart_contract().fuel(),
+        )
+        .map_err(ValidationFail::IvmAdmission)?;
+        let gas_cap = crate::smartcontracts::ivm::gas_limit_for_cycles(eff_cycles);
+        let remaining_block_budget = if self.gas_limit_per_block == 0 {
+            u64::MAX
+        } else {
+            self.gas_limit_per_block.saturating_sub(
+                self.gas_used_in_block_so_far
+                    .saturating_add(self.last_tx_gas_used),
+            )
+        };
+        let mut gas_limit = gas_cap.min(remaining_block_budget);
+        if gas_limit == u64::MAX {
+            gas_limit = DEFAULT_TRIGGER_GAS_LIMIT;
+        }
+
+        let (prepared_contract_cache, amx_analysis) = {
+            let mut cache = self.ivm_cache.lock();
+            let prepared_contract_cache = cache.prepared_contract_cache();
+            let amx_analysis = cache.analyze_generic_program(summary).map_err(|error| {
+                ValidationFail::InternalError(format!(
+                    "invalid admitted generic-trigger analysis: {error}"
+                ))
+            })?;
+            (prepared_contract_cache, amx_analysis)
+        };
+        let mut vm = IVM::new(gas_limit);
+        vm.set_zk_trace_enabled(false);
+        vm.load_program(summary.program())
+            .map_err(|error| ValidationFail::InternalError(error.to_string()))?;
+        vm.set_max_cycles(eff_cycles.get());
+        vm.set_gas_limit(gas_limit);
+
+        let host_args = self.trigger_host_args(event, Json::default());
+        let accounts = self.trigger_accounts_snapshot();
+        let streaming_metadata =
+            crate::pipeline::overlay::resolve_streaming_metadata(self, authority);
+        let bound_contract_records =
+            crate::smartcontracts::code::snapshot_bound_contract_records_by_subject(self);
+        let axt_policy_snapshot = self.axt_policy_snapshot();
+        let mut host = crate::smartcontracts::ivm::host::CoreHostImpl::with_accounts_and_args(
+            authority.clone(),
+            accounts,
+            host_args,
+        );
+        host.set_generic_execution();
+        host.set_prepared_contract_cache(prepared_contract_cache);
+        host.set_amx_analysis(amx_analysis);
+        host.set_amx_limits(
+            crate::smartcontracts::ivm::host::CoreHost::amx_limits_from_config(&self.pipeline),
+        );
+        host.set_axt_timing(self.nexus.axt);
+        host.hydrate_axt_replay_ledger(self);
+        let current_block_time_ms = u64::try_from(self._curr_block.creation_time().as_millis())
+            .expect("block creation timestamp must fit into u64");
+        host.set_trigger_id(id.clone());
+        host.set_block_time_ms(current_block_time_ms);
+        let default_base = self._curr_block.height().get().saturating_mul(256);
+        host.set_nft_seq_base(nft_seq_base_override.unwrap_or(default_base));
+        #[cfg(feature = "telemetry")]
+        host.set_telemetry(self.telemetry.clone());
+        host.set_crypto_config(self.crypto());
+        host.set_zk_config(&self.zk);
+        host.set_chain_id(self.chain_id());
+        host.set_public_inputs_from_parameters(self.world.parameters.get());
+        host.set_vrf_epoch_seeds_from_world(&self.world);
+        host.set_query_state(self);
+        host.set_bound_contract_records_by_subject_snapshot(bound_contract_records);
+        host = host.with_axt_policy_snapshot(&axt_policy_snapshot);
+        crate::pipeline::overlay::apply_streaming_metadata(&mut host, streaming_metadata);
+        host.set_zk_snapshots_from_world(&self.world, &self.zk)
+            .map_err(|error| {
+                ValidationFail::InternalError(format!("invalid ZK snapshot state: {error}"))
+            })?;
+
+        let run_result = vm.run_with_host(&mut host);
+        let trigger_gas_used = gas_limit.saturating_sub(vm.remaining_gas());
+        if let Err(error) = run_result {
+            let error =
+                crate::smartcontracts::ivm::map_vm_error_with_context_to_validation(&vm, &error);
+            {
+                let _consumed_host = host;
+            }
+            self.last_tx_gas_used = self.last_tx_gas_used.saturating_add(trigger_gas_used);
+            return Err(error);
+        }
+
+        let artifacts = host.into_execution_artifacts(None);
+        self.last_tx_gas_used = self.last_tx_gas_used.saturating_add(trigger_gas_used);
+        let artifacts = artifacts?;
+        crate::validation_fee::enforce_opaque_deferred_instruction_groups(
+            &artifacts.queued_instructions_by_authority(),
+            self,
+            None,
+        )
+        .map_err(|rejection| match rejection {
+            TransactionRejectionReason::Validation(fail) => fail,
+            other => ValidationFail::NotPermitted(format!(
+                "validation-fee policy resolution failed during generic IVM trigger execution: {other:?}"
+            )),
+        })?;
+        let queued_instructions = artifacts.queued_instructions();
+        let step = ExecutionStep(ConstVec::from(queued_instructions));
+        self.seed_time_trigger_call_hash(id, authority, event, &step);
+        let queued = artifacts.apply_to_transaction(self, authority)?;
+        Ok(ConstVec::<InstructionBox>::from(queued).into())
+    }
+
     /// Execute any condition of trigger, staging its state changes.
     ///
     /// Returns the execution step on success, or the rejection reason on failure.
@@ -52409,11 +52676,12 @@ impl StateTransaction<'_, '_> {
                 let meta = summary.metadata.clone();
                 crate::pipeline::overlay::validate_header_policy(&meta)
                     .map_err(ValidationFail::IvmAdmission)?;
-                let eff_cycles = NonZeroU64::new(
-                    meta.max_cycles
-                        .min(self.pipeline.ivm_max_cycles_upper_bound.get()),
+                let eff_cycles = crate::smartcontracts::ivm::validate_cycle_limits(
+                    &meta,
+                    self.pipeline.ivm_max_cycles_upper_bound,
+                    self.world.parameters.get().smart_contract().fuel(),
                 )
-                .expect("validated IVM metadata and pipeline ceiling are positive");
+                .map_err(ValidationFail::IvmAdmission)?;
                 let gas_cap = crate::smartcontracts::ivm::gas_limit_for_cycles(eff_cycles);
                 let remaining_block_budget = if self.gas_limit_per_block == 0 {
                     u64::MAX
@@ -52562,93 +52830,115 @@ impl StateTransaction<'_, '_> {
                             ))
                         })?;
                     let bytecode = bytecode.clone();
-                    let summary = {
+                    let admitted = {
                         let mut cache = self.ivm_cache.lock();
                         cache
-                            .summarize_program(bytecode.as_ref())
-                            .map_err(|e| ValidationFail::InternalError(e.to_string()))?
+                            .summarize_executable(bytecode.as_ref())
+                            .map_err(crate::smartcontracts::ivm::program_admission_error)?
                     };
-                    let meta = summary.metadata.clone();
-                    crate::pipeline::overlay::validate_header_policy(&meta)
-                        .map_err(ValidationFail::IvmAdmission)?;
-                    let eff_cycles = NonZeroU64::new(
-                        meta.max_cycles
-                            .min(self.pipeline.ivm_max_cycles_upper_bound.get()),
-                    )
-                    .expect("validated IVM metadata and pipeline ceiling are positive");
-                    let gas_cap = crate::smartcontracts::ivm::gas_limit_for_cycles(eff_cycles);
-                    let remaining_block_budget = if self.gas_limit_per_block == 0 {
-                        u64::MAX
-                    } else {
-                        self.gas_limit_per_block.saturating_sub(
-                            self.gas_used_in_block_so_far
-                                .saturating_add(self.last_tx_gas_used),
-                        )
-                    };
-                    let mut gas_limit = gas_cap.min(remaining_block_budget);
-                    if gas_limit == u64::MAX {
-                        gas_limit = DEFAULT_TRIGGER_GAS_LIMIT;
-                    }
-                    let selector = crate::executor::requested_contract_entrypoint(
-                        &contract_call_metadata,
-                    )?
-                    .ok_or_else(|| {
-                        ValidationFail::NotPermitted(
-                            "self-describing raw-IVM trigger callback requires explicit contract_entrypoint metadata"
-                                .to_owned(),
-                        )
-                    })?;
-                    let runtime_identity = crate::executor::require_raw_contract_runtime_identity(
-                        &self.world,
-                        summary.code_hash,
-                        &contract_call_metadata,
-                    )?;
-                    let entrypoint_authorization =
-                        crate::executor::authorize_prepared_raw_contract_selector(
-                            &self.world,
-                            authority,
-                            summary.prepared_contract(),
-                            &selector,
-                            &runtime_identity,
-                        )?;
-                    let contract_subject =
-                        crate::smartcontracts::code::fetch_bound_contract_subject(
-                            self,
-                            &runtime_identity.contract_address,
-                        )
-                        .ok_or_else(|| {
-                            ValidationFail::NotPermitted(format!(
-                                "contract instance `{}` has no valid subject binding",
-                                runtime_identity.contract_address
-                            ))
-                        })?;
-                    let transition = crate::executor::validate_prepared_contract_lifecycle_call(
-                        &self.world,
-                        &runtime_identity.contract_address,
-                        runtime_identity.code_hash,
-                        summary.prepared_contract(),
-                        &selector,
-                    )?;
-                    debug_assert!(
-                        transition.is_none(),
-                        "trigger lifecycle selectors are rejected before state validation"
-                    );
-                    let trigger_args = self.trigger_args_from_event(&event);
-                    let mut contract_call_context =
-                        crate::executor::parse_prepared_trigger_call_execution_context(
-                            &contract_call_metadata,
-                            summary.prepared_contract(),
-                            &trigger_args,
-                            gas_limit,
-                        )?;
-                    contract_call_context.bind_runtime_identity(runtime_identity, contract_subject);
-                    let mut vm = summary
-                        .checkout_runtime(gas_limit)
-                        .map_err(|e| ValidationFail::InternalError(e.to_string()))?;
-                    if let Some(entrypoint_pc) = contract_call_context.entrypoint_pc() {
-                        let code_len = vm.memory.code_len();
-                        vm.set_register(1, code_len);
-                        vm.set_program_counter(entrypoint_pc).map_err(|err| {
+                    match admitted {
+                        crate::smartcontracts::ivm::cache::ExecutableProgramSummary::Generic(
+                            summary,
+                        ) => (
+                            self.execute_generic_ivm_trigger_program(
+                                id,
+                                authority,
+                                &event,
+                                &contract_call_metadata,
+                                &summary,
+                                nft_seq_base_override,
+                            ),
+                            None,
+                        ),
+                        crate::smartcontracts::ivm::cache::ExecutableProgramSummary::Contract(
+                            summary,
+                        ) => {
+                            let meta = summary.metadata.clone();
+                            crate::pipeline::overlay::validate_header_policy(&meta)
+                                .map_err(ValidationFail::IvmAdmission)?;
+                            let eff_cycles = crate::smartcontracts::ivm::validate_cycle_limits(
+                                &meta,
+                                self.pipeline.ivm_max_cycles_upper_bound,
+                                self.world.parameters.get().smart_contract().fuel(),
+                            )
+                            .map_err(ValidationFail::IvmAdmission)?;
+                            let gas_cap =
+                                crate::smartcontracts::ivm::gas_limit_for_cycles(eff_cycles);
+                            let remaining_block_budget = if self.gas_limit_per_block == 0 {
+                                u64::MAX
+                            } else {
+                                self.gas_limit_per_block.saturating_sub(
+                                    self.gas_used_in_block_so_far
+                                        .saturating_add(self.last_tx_gas_used),
+                                )
+                            };
+                            let mut gas_limit = gas_cap.min(remaining_block_budget);
+                            if gas_limit == u64::MAX {
+                                gas_limit = DEFAULT_TRIGGER_GAS_LIMIT;
+                            }
+                            let selector = crate::executor::requested_contract_entrypoint(
+                                &contract_call_metadata,
+                            )?
+                            .ok_or_else(|| {
+                                ValidationFail::NotPermitted(
+                                    "self-describing raw-IVM trigger callback requires explicit contract_entrypoint metadata"
+                                        .to_owned(),
+                                )
+                            })?;
+                            let runtime_identity =
+                                crate::executor::require_raw_contract_runtime_identity(
+                                    &self.world,
+                                    summary.code_hash,
+                                    &contract_call_metadata,
+                                )?;
+                            let entrypoint_authorization =
+                                crate::executor::authorize_prepared_raw_contract_selector(
+                                    &self.world,
+                                    authority,
+                                    summary.prepared_contract(),
+                                    &selector,
+                                    &runtime_identity,
+                                )?;
+                            let contract_subject =
+                                crate::smartcontracts::code::fetch_bound_contract_subject(
+                                    self,
+                                    &runtime_identity.contract_address,
+                                )
+                                .ok_or_else(|| {
+                                    ValidationFail::NotPermitted(format!(
+                                        "contract instance `{}` has no valid subject binding",
+                                        runtime_identity.contract_address
+                                    ))
+                                })?;
+                            let transition =
+                                crate::executor::validate_prepared_contract_lifecycle_call(
+                                    &self.world,
+                                    &runtime_identity.contract_address,
+                                    runtime_identity.code_hash,
+                                    summary.prepared_contract(),
+                                    &selector,
+                                )?;
+                            debug_assert!(
+                                transition.is_none(),
+                                "trigger lifecycle selectors are rejected before state validation"
+                            );
+                            let trigger_args = self.trigger_args_from_event(&event);
+                            let mut contract_call_context =
+                                crate::executor::parse_prepared_trigger_call_execution_context(
+                                    &contract_call_metadata,
+                                    summary.prepared_contract(),
+                                    &trigger_args,
+                                    gas_limit,
+                                )?;
+                            contract_call_context
+                                .bind_runtime_identity(runtime_identity, contract_subject);
+                            let mut vm = summary
+                                .checkout_runtime(gas_limit)
+                                .map_err(|e| ValidationFail::InternalError(e.to_string()))?;
+                            if let Some(entrypoint_pc) = contract_call_context.entrypoint_pc() {
+                                let code_len = vm.memory.code_len();
+                                vm.set_register(1, code_len);
+                                vm.set_program_counter(entrypoint_pc).map_err(|err| {
                             let selector = contract_call_context
                                 .runtime_context()
                                 .map(|runtime| runtime.entrypoint)
@@ -52657,92 +52947,101 @@ impl StateTransaction<'_, '_> {
                                 "contract entrypoint `{selector}` resolved to invalid pc: {err}"
                             ))
                         })?;
-                    }
-                    let host_args =
-                        self.trigger_host_args(&event, contract_call_context.args().clone());
-                    let contract_runtime_context = contract_call_context.runtime_context();
-                    // Attach core IVM host adapter. Stateful syscalls enqueue ISIs
-                    // which we collect after `vm.run()` and return as the trigger step.
-                    let accounts = self.trigger_accounts_snapshot();
-                    let mut host =
+                            }
+                            let host_args = self
+                                .trigger_host_args(&event, contract_call_context.args().clone());
+                            let contract_runtime_context = contract_call_context.runtime_context();
+                            // Attach core IVM host adapter. Stateful syscalls enqueue ISIs
+                            // which we collect after `vm.run()` and return as the trigger step.
+                            let accounts = self.trigger_accounts_snapshot();
+                            let mut host =
                         crate::smartcontracts::ivm::host::CoreHostImpl::with_accounts_and_args(
                             authority.clone(),
                             accounts,
                             host_args,
                         );
-                    if let Some(record) = contract_call_context.prepared_argument_record() {
-                        host.set_entrypoint_argument_record(Some(record.clone()));
-                    }
-                    host.set_prepared_contract_cache(summary.prepared_contract_cache());
-                    let current_block_time_ms =
-                        u64::try_from(self._curr_block.creation_time().as_millis())
-                            .expect("block creation timestamp must fit into u64");
-                    host.set_trigger_id(id.clone());
-                    host.set_block_time_ms(current_block_time_ms);
-                    // Seed sample NFT helper sequence with a deterministic base so repeated
-                    // executions (including multiple time-trigger matches in one block) generate
-                    // unique ids without relying on mutable global state.
-                    let default_base = self._curr_block.height().get().saturating_mul(256);
-                    host.set_nft_seq_base(nft_seq_base_override.unwrap_or(default_base));
-                    #[cfg(feature = "telemetry")]
-                    host.set_telemetry(self.telemetry.clone());
-                    host.set_crypto_config(self.crypto());
-                    host.set_zk_config(&self.zk);
-                    host.set_chain_id(self.chain_id());
-                    host.set_public_inputs_from_parameters(self.world.parameters.get());
-                    host.set_vrf_epoch_seeds_from_world(&self.world);
-                    host.set_query_state(self);
-                    host.set_contract_runtime_context(contract_runtime_context.clone());
-                    host.set_contract_entrypoint_authorization(Some(entrypoint_authorization));
-                    host.set_zk_snapshots_from_world(&self.world, &self.zk)
-                        .map_err(|e| {
-                            ValidationFail::InternalError(format!("invalid ZK snapshot state: {e}"))
-                        })?;
-                    vm.set_max_cycles(eff_cycles.get());
-                    vm.set_gas_limit(gas_limit);
-                    if let Some(argument_record) = contract_call_context.prepared_argument_record()
-                    {
-                        argument_record
-                            .precharge_vm(&mut vm)
-                            .map_err(|error| ValidationFail::NotPermitted(error.to_string()))?;
-                    }
-                    let run_result = vm.run_with_host(&mut host);
-                    let trigger_gas_used = gas_limit.saturating_sub(vm.remaining_gas());
-                    let run_error = run_result.err().map(|error| {
-                        crate::smartcontracts::ivm::map_vm_error_with_context_to_validation(
-                            &vm, &error,
-                        )
-                    });
-                    if let Some(error) = run_error {
-                        {
-                            let _consumed_host = host;
+                            if let Some(record) = contract_call_context.prepared_argument_record() {
+                                host.set_entrypoint_argument_record(Some(record.clone()));
+                            }
+                            host.set_prepared_contract_cache(summary.prepared_contract_cache());
+                            let current_block_time_ms =
+                                u64::try_from(self._curr_block.creation_time().as_millis())
+                                    .expect("block creation timestamp must fit into u64");
+                            host.set_trigger_id(id.clone());
+                            host.set_block_time_ms(current_block_time_ms);
+                            // Seed sample NFT helper sequence with a deterministic base so repeated
+                            // executions (including multiple time-trigger matches in one block) generate
+                            // unique ids without relying on mutable global state.
+                            let default_base = self._curr_block.height().get().saturating_mul(256);
+                            host.set_nft_seq_base(nft_seq_base_override.unwrap_or(default_base));
+                            #[cfg(feature = "telemetry")]
+                            host.set_telemetry(self.telemetry.clone());
+                            host.set_crypto_config(self.crypto());
+                            host.set_zk_config(&self.zk);
+                            host.set_chain_id(self.chain_id());
+                            host.set_public_inputs_from_parameters(self.world.parameters.get());
+                            host.set_vrf_epoch_seeds_from_world(&self.world);
+                            host.set_query_state(self);
+                            host.set_contract_runtime_context(contract_runtime_context.clone());
+                            host.set_contract_entrypoint_authorization(Some(
+                                entrypoint_authorization,
+                            ));
+                            host.set_zk_snapshots_from_world(&self.world, &self.zk)
+                                .map_err(|e| {
+                                    ValidationFail::InternalError(format!(
+                                        "invalid ZK snapshot state: {e}"
+                                    ))
+                                })?;
+                            vm.set_max_cycles(eff_cycles.get());
+                            vm.set_gas_limit(gas_limit);
+                            if let Some(argument_record) =
+                                contract_call_context.prepared_argument_record()
+                            {
+                                argument_record.precharge_vm(&mut vm).map_err(|error| {
+                                    ValidationFail::NotPermitted(error.to_string())
+                                })?;
+                            }
+                            let run_result = vm.run_with_host(&mut host);
+                            let trigger_gas_used = gas_limit.saturating_sub(vm.remaining_gas());
+                            let run_error = run_result.err().map(|error| {
+                                crate::smartcontracts::ivm::map_vm_error_with_context_to_validation(
+                                    &vm, &error,
+                                )
+                            });
+                            if let Some(error) = run_error {
+                                {
+                                    let _consumed_host = host;
+                                }
+                                self.last_tx_gas_used =
+                                    self.last_tx_gas_used.saturating_add(trigger_gas_used);
+                                return Err(error.into());
+                            }
+                            // Collect queued ISIs from the host, execute them via the executor,
+                            // and return them as the step.
+                            let artifacts =
+                                host.into_execution_artifacts(contract_runtime_context.clone());
+                            self.last_tx_gas_used =
+                                self.last_tx_gas_used.saturating_add(trigger_gas_used);
+                            let artifacts = artifacts?;
+                            let runtime_origin = contract_runtime_context.as_ref().map(|context| {
+                                crate::validation_fee::OpaqueDeferredRuntimeOrigin::new(
+                                    context,
+                                    bytecode.as_ref(),
+                                )
+                            });
+                            crate::validation_fee::enforce_opaque_deferred_instruction_groups(
+                                &artifacts.queued_instructions_by_authority(),
+                                self,
+                                runtime_origin,
+                            )?;
+                            let queued_instructions = artifacts.queued_instructions();
+                            let step = ExecutionStep(ConstVec::from(queued_instructions));
+                            self.seed_time_trigger_call_hash(id, authority, &event, &step);
+                            let queued = artifacts.apply_to_transaction(self, authority)?;
+                            let cvs: ConstVec<InstructionBox> = ConstVec::from(queued);
+                            (Ok(cvs.into()), None)
                         }
-                        self.last_tx_gas_used =
-                            self.last_tx_gas_used.saturating_add(trigger_gas_used);
-                        return Err(error.into());
                     }
-                    // Collect queued ISIs from the host, execute them via the executor,
-                    // and return them as the step.
-                    let artifacts = host.into_execution_artifacts(contract_runtime_context.clone());
-                    self.last_tx_gas_used = self.last_tx_gas_used.saturating_add(trigger_gas_used);
-                    let artifacts = artifacts?;
-                    let runtime_origin = contract_runtime_context.as_ref().map(|context| {
-                        crate::validation_fee::OpaqueDeferredRuntimeOrigin::new(
-                            context,
-                            bytecode.as_ref(),
-                        )
-                    });
-                    crate::validation_fee::enforce_opaque_deferred_instruction_groups(
-                        &artifacts.queued_instructions_by_authority(),
-                        self,
-                        runtime_origin,
-                    )?;
-                    let queued_instructions = artifacts.queued_instructions();
-                    let step = ExecutionStep(ConstVec::from(queued_instructions));
-                    self.seed_time_trigger_call_hash(id, authority, &event, &step);
-                    let queued = artifacts.apply_to_transaction(self, authority)?;
-                    let cvs: ConstVec<InstructionBox> = ConstVec::from(queued);
-                    (Ok(cvs.into()), None)
                 } else {
                     warn!(
                         trigger_id = %id,
@@ -54903,17 +55202,17 @@ pub(crate) mod deserialize {
         let defi_oracle_attestations = take_optional_default(&mut map, "defi_oracle_attestations")?;
         let twitter_bindings = take_optional_default(&mut map, "twitter_bindings")?;
         let twitter_bindings_by_uaid = take_optional_default(&mut map, "twitter_bindings_by_uaid")?;
+        let registry_value = map
+            .get("sccp_registry")
+            .ok_or_else(|| json::Error::missing_field("sccp_registry"))?;
+        validate_sccp_registry_cell_json(registry_value).map_err(|message| {
+            json::Error::InvalidField {
+                field: "sccp_registry".to_owned(),
+                message,
+            }
+        })?;
         let sccp_registry: Cell<iroha_data_model::bridge::SccpRegistryV1> =
             take_required(&mut map, "sccp_registry")?;
-        let registry_wire = sccp_registry.view().get().clone();
-        let validated_registry = ValidatedSccpRegistryV1::try_from_wire(registry_wire.clone())
-            .map_err(json::Error::Message)?;
-        if validated_registry.registry() != &registry_wire {
-            return Err(json::Error::Message(
-                "invalid SCCP registry: snapshot registry is not in canonical lane/route order"
-                    .to_owned(),
-            ));
-        }
         let sccp_outbound_pending_usage = take_required(&mut map, "sccp_outbound_pending_usage")?;
         let sccp_outbound_pending_messages =
             take_required(&mut map, "sccp_outbound_pending_messages")?;
@@ -60034,10 +60333,12 @@ mod tests {
         ];
 
         for wire in invalid {
-            let _generation = state.begin_state_view_write();
-            let mut registry = state.world.sccp_registry.block();
-            *registry.get_mut() = wire;
-            registry.commit();
+            {
+                let _generation = state.begin_state_view_write();
+                let mut registry = state.world.sccp_registry.block();
+                *registry.get_mut() = wire;
+                registry.commit();
+            }
             let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let _ = state.sccp_registry_snapshot();
             }));
@@ -101885,7 +102186,7 @@ mod tests {
 
     #[test]
     fn sccp_registry_rejects_multiple_enabled_revisions_atomically() {
-        let mut lane = eth_test_lane_for_testing();
+        let mut lane = sccp_evm_lane_for_testing(SccpNetworkV1::EthereumMainnet);
         let anchor = iroha_data_model::bridge::SccpNativeTrustAnchorV1 {
             backend: iroha_data_model::bridge::BridgeNativeProofBackendV1::EthereumBeacon,
             anchor_hash: [0xA5; 32],
@@ -102406,6 +102707,85 @@ mod tests {
             view.world.asset_definition(&asset_definition_id).is_err(),
             "asset definition created by a failing trigger must not persist",
         );
+    }
+
+    #[test]
+    fn authenticated_generic_ivm_trigger_executes_without_contract_identity() {
+        use iroha_data_model::{
+            events::execute_trigger::{ExecuteTriggerEvent, ExecuteTriggerEventFilter},
+            transaction::{Executable, IvmBytecode},
+            trigger::{
+                Trigger,
+                action::{Action, Repeats},
+            },
+        };
+
+        let state = State::new(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let trigger_id: TriggerId = "generic_ivm_callback".parse().expect("trigger id");
+        let mut program = ivm::ProgramMetadata {
+            max_cycles: 100,
+            ..ivm::ProgramMetadata::default()
+        }
+        .encode();
+        program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+
+        let block1 = new_dummy_block_with_payload(|header| {
+            header.set_height(nonzero!(1_u64));
+        });
+        {
+            let mut state_block = state.block(block1.as_ref().header());
+            let mut transaction = state_block.transaction();
+            Register::domain(Domain::new(
+                DomainId::try_new("wonderland", "universal").expect("domain id"),
+            ))
+            .execute(&ALICE_ID, &mut transaction)
+            .expect("register domain");
+            Register::account(new_sample_account(&ALICE_ID))
+                .execute(&ALICE_ID, &mut transaction)
+                .expect("register account");
+            Grant::account_permission(
+                iroha_executor_data_model::permission::trigger::CanRegisterTrigger {
+                    authority: ALICE_ID.clone(),
+                },
+                ALICE_ID.clone(),
+            )
+            .execute(&ALICE_ID, &mut transaction)
+            .expect("grant trigger registration");
+            Register::trigger(Trigger::new(
+                trigger_id.clone(),
+                Action::new(
+                    Executable::Ivm(IvmBytecode::from_compiled(program)),
+                    Repeats::Indefinitely,
+                    ALICE_ID.clone(),
+                    ExecuteTriggerEventFilter::new()
+                        .for_trigger(trigger_id.clone())
+                        .under_authority(ALICE_ID.clone()),
+                ),
+            ))
+            .execute(&ALICE_ID, &mut transaction)
+            .expect("register authenticated generic trigger");
+            transaction.apply();
+            state_block.commit().expect("commit generic trigger");
+        }
+
+        let block2 = new_dummy_block_with_payload(|header| {
+            header.set_height(nonzero!(2_u64));
+        });
+        let mut state_block = state.block(block2.as_ref().header());
+        let mut transaction = state_block.transaction();
+        let event = ExecuteTriggerEvent {
+            trigger_id: trigger_id.clone(),
+            authority: ALICE_ID.clone(),
+            args: Json::default(),
+        };
+        let step = transaction
+            .execute_called_trigger(&trigger_id, &event)
+            .expect("generic IVM trigger executes at pc zero");
+        assert!(step.0.is_empty());
     }
 
     #[test]

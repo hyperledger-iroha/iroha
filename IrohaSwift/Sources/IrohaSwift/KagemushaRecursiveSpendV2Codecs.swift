@@ -1134,8 +1134,40 @@ public enum KagemushaRecursiveSpendCodecs {
         let witness = try decodeOption(reader.field(), field: "verifiedLineageWitness")
             .map(decodeLineageWitnessPayload)
         try reader.finish("verifyResult")
+        let summary = try decodeBundleSummary(summaryArchive)
         guard valid else {
             throw KagemushaRecursiveSpendError.invalidArchive("verifyResult.valid")
+        }
+        // Mirror Rust `KagemushaRecursiveSpendVerifyResultV2::validate_public_binding`
+        // before wallet code can persist a native result.
+        guard requestDigest.contains(where: { $0 != 0 }),
+              bindingDigest.contains(where: { $0 != 0 }),
+              !circuitID.isEmpty,
+              blockHeight > 0,
+              verifiedAt > 0,
+              summary.verifierKeyID == verifierKeyID else {
+            throw KagemushaRecursiveSpendError.invalidArchive("verifyResult.binding")
+        }
+        switch lineageMode {
+        case .reserved:
+            guard witness == nil,
+                  chainAdmissible == witnessless,
+                  lineageRedeemable == chainAdmissible else {
+                throw KagemushaRecursiveSpendError.invalidArchive(
+                    "verifyResult.reservedLineage"
+                )
+            }
+        case .semantic:
+            guard !witnessless,
+                  !chainAdmissible,
+                  lineageRedeemable == (witness != nil) else {
+                throw KagemushaRecursiveSpendError.invalidArchive(
+                    "verifyResult.semanticLineage"
+                )
+            }
+        }
+        guard summary.lineageMode == lineageMode else {
+            throw KagemushaRecursiveSpendError.invalidArchive("verifyResult.lineageMode")
         }
         return KagemushaRecursiveSpendVerifyResult(
             valid: valid,
@@ -1143,7 +1175,7 @@ public enum KagemushaRecursiveSpendCodecs {
             lineageRedeemable: lineageRedeemable,
             witnesslessRedemptionSupported: witnessless,
             lineageMode: lineageMode,
-            summary: try decodeBundleSummary(summaryArchive),
+            summary: summary,
             recipientRequestDigest: requestDigest,
             requestOutputBindingDigest: bindingDigest,
             verifierKeyID: verifierKeyID,

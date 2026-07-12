@@ -62,7 +62,13 @@ fn ivm_syscall_program(syscall: u32) -> IvmBytecode {
         &encoding::wide::encode_sys(instruction::wide::system::SCALL, opcode).to_le_bytes(),
     );
     code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
-    let mut blob = ProgramMetadata::default().encode();
+    let mut blob = ProgramMetadata {
+        // The helper executes one syscall and HALT. Keep a small explicit
+        // budget so trigger admission cannot interpret zero as unlimited.
+        max_cycles: 64,
+        ..ProgramMetadata::default()
+    }
+    .encode();
     blob.extend_from_slice(&code);
     IvmBytecode::from_compiled(blob)
 }

@@ -322,6 +322,9 @@ impl Actor {
                 qc.validator_set.as_slice()
             };
             self.apply_commit_qc(&qc, apply_roster, hash, height, qc.view);
+            if self.kura_recovery_required() {
+                return;
+            }
             self.request_commit_pipeline_for_pending(
                 hash,
                 super::status::RoundEventCauseTrace::QcReceived,
@@ -1233,7 +1236,7 @@ impl Actor {
         };
         let mut progress = false;
         let mut keep_rx = true;
-        loop {
+        'results: loop {
             match result_rx.try_recv() {
                 Ok(result) => {
                     let ValidationResult {
@@ -1495,6 +1498,9 @@ impl Actor {
                             self.pending.pending_blocks.insert(hash, pending);
                             self.handle_vnext_validation_result(slot, result);
                             progress = true;
+                            if self.kura_recovery_required() {
+                                break 'results;
+                            }
                             continue;
                         }
                         vnext_result = Some((slot, result));
@@ -1529,6 +1535,10 @@ impl Actor {
                                 &commit_topology,
                                 "validation_worker",
                             );
+                            if self.kura_recovery_required() {
+                                progress = true;
+                                break 'results;
+                            }
                             let _ = self.maybe_emit_local_commit_vote_for_pending_event(
                                 hash,
                                 height,
@@ -1536,6 +1546,10 @@ impl Actor {
                                 &commit_topology,
                                 "validation_passed",
                             );
+                            if self.kura_recovery_required() {
+                                progress = true;
+                                break 'results;
+                            }
                             self.request_commit_pipeline_for_pending(
                                 hash,
                                 super::status::RoundEventCauseTrace::ValidationPassed,
@@ -1589,6 +1603,10 @@ impl Actor {
                                     &commit_topology,
                                     "validation_worker_signature_recovery",
                                 );
+                                if self.kura_recovery_required() {
+                                    progress = true;
+                                    break 'results;
+                                }
                                 let _ = self.maybe_emit_local_commit_vote_for_pending_event(
                                     hash,
                                     height,
@@ -1596,6 +1614,10 @@ impl Actor {
                                     &commit_topology,
                                     "validation_passed",
                                 );
+                                if self.kura_recovery_required() {
+                                    progress = true;
+                                    break 'results;
+                                }
                                 self.request_commit_pipeline_for_pending(
                                     hash,
                                     super::status::RoundEventCauseTrace::ValidationPassed,
@@ -1625,6 +1647,9 @@ impl Actor {
                                         self.handle_vnext_validation_result(slot, result);
                                     }
                                     progress = true;
+                                    if self.kura_recovery_required() {
+                                        break 'results;
+                                    }
                                     continue;
                                 }
                                 ValidationGateOutcome::Deferred => {
@@ -1644,6 +1669,9 @@ impl Actor {
                         self.handle_vnext_validation_result(slot, result);
                     }
                     progress = true;
+                    if self.kura_recovery_required() {
+                        break 'results;
+                    }
                 }
                 Err(mpsc::TryRecvError::Empty) => break,
                 Err(mpsc::TryRecvError::Disconnected) => {
@@ -1668,6 +1696,9 @@ impl Actor {
         slot: super::vnext::SlotId,
         roots: super::vnext::ValidationRoots,
     ) {
+        if self.kura_recovery_required() {
+            return;
+        }
         let Some(mut pending) = self.pending.pending_blocks.remove(&slot.block_hash) else {
             warn!(
                 height = slot.height,
@@ -1715,6 +1746,9 @@ impl Actor {
             &commit_topology,
             "vnext_validation",
         );
+        if self.kura_recovery_required() {
+            return;
+        }
         let _ = self.maybe_emit_local_commit_vote_for_pending_event(
             slot.block_hash,
             slot.height,
@@ -1722,6 +1756,9 @@ impl Actor {
             &commit_topology,
             "vnext_validation_passed",
         );
+        if self.kura_recovery_required() {
+            return;
+        }
         self.request_commit_pipeline_for_pending(
             slot.block_hash,
             super::status::RoundEventCauseTrace::ValidationPassed,

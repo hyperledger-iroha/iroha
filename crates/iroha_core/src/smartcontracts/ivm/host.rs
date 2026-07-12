@@ -491,6 +491,8 @@ struct PreparedVerifyingKey {
 /// overlay when access logging is enabled for prepass execution.
 pub struct CoreHostImpl<QS> {
     authority: AccountId,
+    generic_execution: bool,
+    ivm_proved_execution: bool,
     current_contract_runtime_context: Option<ContractRuntimeExecutionContext>,
     current_entrypoint_authorization: Option<ContractEntrypointAuthorizationSnapshot>,
     nested_contract_call_depth: usize,
@@ -2605,6 +2607,8 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         let crypto = Arc::new(default_crypto);
         Self {
             authority,
+            generic_execution: false,
+            ivm_proved_execution: false,
             current_contract_runtime_context: None,
             current_entrypoint_authorization: None,
             nested_contract_call_depth: 0,
@@ -2729,6 +2733,8 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         let crypto = Arc::new(default_crypto);
         Self {
             authority,
+            generic_execution: false,
+            ivm_proved_execution: false,
             current_contract_runtime_context: None,
             current_entrypoint_authorization: None,
             nested_contract_call_depth: 0,
@@ -2813,6 +2819,8 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         let crypto = Arc::new(default_crypto);
         Self {
             authority,
+            generic_execution: false,
+            ivm_proved_execution: false,
             current_contract_runtime_context: None,
             current_entrypoint_authorization: None,
             nested_contract_call_depth: 0,
@@ -2913,8 +2921,40 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         &mut self,
         contract_runtime_context: Option<ContractRuntimeExecutionContext>,
     ) {
+        self.ivm_proved_execution = false;
+        if contract_runtime_context.is_some() {
+            self.generic_execution = false;
+        }
         self.current_contract_runtime_context = contract_runtime_context;
         self.current_entrypoint_authorization = None;
+    }
+
+    /// Bind this host to an admitted contract-less program.
+    ///
+    /// The explicit execution class is defense in depth for the static generic
+    /// syscall profile; absence of a contract context alone is not a safe
+    /// discriminator because hosts are also assembled before contract binding.
+    pub(crate) fn set_generic_execution(&mut self) {
+        debug_assert!(self.current_contract_runtime_context.is_none());
+        self.generic_execution = true;
+        self.ivm_proved_execution = false;
+        self.current_entrypoint_authorization = None;
+    }
+
+    /// Scope SCCP recording to an authenticated top-level `IvmProved` contract execution.
+    ///
+    /// The caller must invoke this only while deriving or deterministically replaying an
+    /// `Executable::IvmProved` payload. Merely executing a contract, or presenting an unbound
+    /// generic IVM image, must not grant the capability because the resulting overlay would not
+    /// yet be committed by an execution proof.
+    pub(crate) fn enable_sccp_recording_for_ivm_proved_execution(
+        &mut self,
+    ) -> Result<(), ivm::VMError> {
+        if self.generic_execution || !self.has_root_contract_execution_context() {
+            return Err(ivm::VMError::PermissionDenied);
+        }
+        self.ivm_proved_execution = true;
+        Ok(())
     }
 
     /// Preserve the immutable dispatch authorization for every effect emitted by this frame.
@@ -2922,6 +2962,9 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         &mut self,
         authorization: Option<ContractEntrypointAuthorizationSnapshot>,
     ) {
+        if authorization.is_none() {
+            self.ivm_proved_execution = false;
+        }
         if let (Some(context), Some(authorization)) = (
             self.current_contract_runtime_context.as_ref(),
             authorization.as_ref(),
@@ -2974,6 +3017,8 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         contract_subject: AccountId,
         authorization: ContractEntrypointAuthorizationSnapshot,
     ) {
+        self.generic_execution = false;
+        self.ivm_proved_execution = false;
         self.current_contract_runtime_context = Some(ContractRuntimeExecutionContext {
             contract_address: authorization.contract_address.clone(),
             contract_subject,
@@ -8622,6 +8667,26 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             })
     }
 
+    fn has_root_contract_execution_context(&self) -> bool {
+        let (Some(context), Some(authorization)) = (
+            self.current_contract_runtime_context.as_ref(),
+            self.current_entrypoint_authorization.as_ref(),
+        ) else {
+            return false;
+        };
+        authorization.is_root()
+            && context.contract_address == authorization.contract_address
+            && context.contract_subject == context.contract_address.subject_id()
+            && context.contract_alias == authorization.contract_alias
+            && context.entrypoint == authorization.entrypoint
+    }
+
+    fn can_record_sccp_message(&self) -> bool {
+        !self.generic_execution
+            && self.ivm_proved_execution
+            && self.has_root_contract_execution_context()
+    }
+
     fn ensure_instruction_queue_allowed(
         &self,
         instruction: &InstructionBox,
@@ -9894,6 +9959,11 @@ impl<QS> CoreHostImpl<QS> {
 impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
     fn prepare_syscall(&self, number: u32, vm: &IVM) -> Result<u64, ivm::VMError> {
         let metering = ivm::host::require_host_syscall_metering_spec(vm.syscall_policy(), number)?;
+        if self.generic_execution
+            && !crate::smartcontracts::ivm::cache::is_generic_syscall_allowed(number)
+        {
+            return Err(ivm::VMError::GenericSyscallNotAllowed { syscall: number });
+        }
         if self.lifecycle_hook_is_running()
             && matches!(
                 number,
@@ -10155,6 +10225,11 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
         // Enforce both ABI policy and exhaustive metering classification for
         // direct host calls as well as VM-dispatched execution.
         ivm::host::require_host_syscall_metering_spec(vm.syscall_policy(), number)?;
+        if self.generic_execution
+            && !crate::smartcontracts::ivm::cache::is_generic_syscall_allowed(number)
+        {
+            return Err(ivm::VMError::GenericSyscallNotAllowed { syscall: number });
+        }
         if self.lifecycle_hook_is_running()
             && matches!(
                 number,
@@ -10824,9 +10899,16 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
             }
             // Accept one of the operation-tagged instruction bridges used by Kotodama.
             ivm::syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION => {
+                let operation_tag = vm.register(11);
+                if operation_tag == ivm::syscalls::SMARTCONTRACT_INSTRUCTION_TAG_RECORD_SCCP_MESSAGE
+                    && !self.can_record_sccp_message()
+                {
+                    // Reject an unproved SCCP request before copying or decoding its attacker-
+                    // controlled payload. Other operation tags retain their own typed gates.
+                    return Err(ivm::VMError::PermissionDenied);
+                }
                 let ib = Self::decode_opaque_instruction(vm)?;
                 self.ensure_instruction_queue_allowed(&ib)?;
-                let operation_tag = vm.register(11);
                 let any_ref = ib.as_any();
                 match operation_tag {
                     ivm::syscalls::SMARTCONTRACT_INSTRUCTION_TAG_SUBMIT_BALLOT => {
@@ -10898,8 +10980,10 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                         any_ref
                             .downcast_ref::<iroha_data_model::isi::bridge::RecordSccpMessage>()
                             .ok_or(ivm::VMError::PermissionDenied)?;
-                        // SCCP message recording is proof-gated at overlay admission; this syscall
-                        // only lets proved IVM execution materialize the standard ISI overlay.
+                        // The host capability above proves that this is the authenticated root
+                        // contract frame of an IvmProved derivation or replay. Overlay admission
+                        // independently verifies and scopes the resulting proof authority while
+                        // applying the standard ISI.
                         self.queue_instruction_after_preflight(vm, ib)
                     }
                     _ => Err(ivm::VMError::PermissionDenied),
@@ -18663,10 +18747,59 @@ seiyaku OuterCaller {
         ));
     }
 
+    fn bind_sccp_test_contract(host: &mut CoreHost, nonce: u64) {
+        let authority = host.authority.clone();
+        let contract_address = ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &authority,
+            nonce,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("derive SCCP test contract address");
+        let authorization = ContractEntrypointAuthorizationSnapshot::new(
+            authority,
+            "record_sccp_message".to_owned(),
+            None,
+            &crate::smartcontracts::code::BoundContractIdentity {
+                contract_address: contract_address.clone(),
+                contract_alias: None,
+                contract_alias_binding: None,
+                code_hash: Hash::new(b"SCCP proved host test contract"),
+            },
+        );
+        host.bind_contract_runtime_context(contract_address.subject_id(), authorization);
+    }
+
+    fn enable_sccp_test_proved_execution(host: &mut CoreHost, nonce: u64) {
+        bind_sccp_test_contract(host, nonce);
+        host.enable_sccp_recording_for_ivm_proved_execution()
+            .expect("authenticated root contract can enter IvmProved execution scope");
+    }
+
+    fn assert_sccp_record_syscall_rejected(mut host: CoreHost, expected: ivm::VMError) {
+        let mut vm = ivm::IVM::new(1_000_000);
+        let instruction =
+            InstructionBox::from(crate::bridge::test_record_sccp_message(vec![1, 2, 3, 4]));
+        let payload = norito::to_bytes(&instruction).expect("encode instruction");
+        let ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &payload);
+        vm.set_register(10, ptr);
+        vm.set_register(
+            11,
+            ivm_sys::SMARTCONTRACT_INSTRUCTION_TAG_RECORD_SCCP_MESSAGE,
+        );
+
+        assert_eq!(
+            host.syscall(ivm_sys::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION, &mut vm),
+            Err(expected)
+        );
+        assert!(host.queued.is_empty());
+    }
+
     #[test]
     fn execute_instruction_syscall_allows_sccp_record_message() {
         let authority = (*ALICE_ID).clone();
         let mut host = CoreHost::new(authority);
+        enable_sccp_test_proved_execution(&mut host, 301);
         let mut vm = ivm::IVM::new(1_000_000);
         let instruction =
             InstructionBox::from(crate::bridge::test_record_sccp_message(vec![1, 2, 3, 4]));
@@ -18683,7 +18816,35 @@ seiyaku OuterCaller {
             .expect("SCCP record instruction should be queued");
 
         assert_eq!(gas, crate::gas::meter_instruction(&instruction));
-        assert_eq!(host.queued, vec![instruction]);
+        assert_eq!(host.queued.len(), 1);
+        assert_eq!(host.queued[0].instruction, instruction);
+        assert!(host.queued[0].contract_runtime_context.is_some());
+        assert!(host.queued[0].entrypoint_authorization.is_some());
+    }
+
+    #[test]
+    fn execute_instruction_syscall_rejects_sccp_without_proved_contract_scope() {
+        let authority = (*ALICE_ID).clone();
+        assert_sccp_record_syscall_rejected(
+            CoreHost::new(authority.clone()),
+            ivm::VMError::PermissionDenied,
+        );
+
+        let mut ordinary_contract = CoreHost::new(authority);
+        bind_sccp_test_contract(&mut ordinary_contract, 302);
+        assert_sccp_record_syscall_rejected(ordinary_contract, ivm::VMError::PermissionDenied);
+    }
+
+    #[test]
+    fn generic_execution_rejects_sccp_before_operation_specific_admission() {
+        let mut host = CoreHost::new((*ALICE_ID).clone());
+        host.set_generic_execution();
+        assert_sccp_record_syscall_rejected(
+            host,
+            ivm::VMError::GenericSyscallNotAllowed {
+                syscall: ivm_sys::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION,
+            },
+        );
     }
 
     #[test]
@@ -18696,6 +18857,7 @@ seiyaku OuterCaller {
 
         for retired_payload in retired_payloads {
             let mut host = CoreHost::new(authority.clone());
+            enable_sccp_test_proved_execution(&mut host, 304);
             let mut vm = ivm::IVM::new(1_000_000);
             let ptr = store_tlv(&mut vm, PointerType::Blob, &retired_payload);
             vm.set_register(10, ptr);
@@ -18746,16 +18908,13 @@ seiyaku OuterCaller {
     #[test]
     fn execute_instruction_syscall_rejects_retired_generic_instruction_types() {
         let authority = (*ALICE_ID).clone();
-        let backend: iroha_schema::Ident = "halo2/ipa".into();
-        let proof = ProofBox::new(backend.clone(), Vec::new());
-        let attachment = ProofAttachment::new_ref(
-            backend.clone(),
-            proof,
-            VerifyingKeyId::new(backend.as_str(), "retired_generic_bridge"),
-        );
-        let instruction = InstructionBox::from(DMZk::VerifyProof::new(attachment));
-        let payload = norito::to_bytes(&instruction).expect("encode VerifyProof instruction");
+        let instruction = InstructionBox::from(Log::new(
+            iroha_logger::Level::INFO,
+            "opaque generic instruction".to_owned(),
+        ));
+        let payload = norito::to_bytes(&instruction).expect("encode generic instruction");
         let mut host = CoreHost::new(authority);
+        enable_sccp_test_proved_execution(&mut host, 305);
         let mut vm = ivm::IVM::new(1_000_000);
         let ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &payload);
         vm.set_register(10, ptr);
@@ -18978,11 +19137,14 @@ seiyaku OpaqueInstructionSubmission {
     fn execute_instruction_syscall_accepts_code_literal_sccp_record_message() {
         let authority = (*ALICE_ID).clone();
         let mut host = CoreHost::new(authority);
+        enable_sccp_test_proved_execution(&mut host, 303);
         let instruction =
             InstructionBox::from(crate::bridge::test_record_sccp_message(vec![1, 2, 3, 4]));
         let payload = norito::to_bytes(&instruction).expect("encode instruction");
         let tlv = make_tlv(PointerType::NoritoBytes as u16, &payload);
-        let post_pad = (4 - ((16 + tlv.len()) % 4)) % 4;
+        let literal_descriptor_len = core::mem::size_of::<u64>();
+        let literal_data_offset = 16 + literal_descriptor_len;
+        let post_pad = (4 - ((literal_data_offset + tlv.len()) % 4)) % 4;
 
         let mut program = ivm::ProgramMetadata {
             max_cycles: 1_000_000,
@@ -18992,13 +19154,14 @@ seiyaku OpaqueInstructionSubmission {
         }
         .encode();
         program.extend_from_slice(b"LTLB");
-        program.extend_from_slice(&0u32.to_le_bytes());
+        program.extend_from_slice(&1u32.to_le_bytes());
         program.extend_from_slice(&(post_pad as u32).to_le_bytes());
         program.extend_from_slice(&(tlv.len() as u32).to_le_bytes());
+        program.extend_from_slice(&(literal_data_offset as u64).to_le_bytes());
         program.extend_from_slice(&tlv);
         program.extend(std::iter::repeat_n(0u8, post_pad));
         program.extend_from_slice(
-            &ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, 10, 0, 16)
+            &ivm::encoding::wide::encode_literal(ivm::instruction::wide::memory::LDLIT, 10, 0)
                 .to_le_bytes(),
         );
         program.extend_from_slice(
@@ -19025,7 +19188,43 @@ seiyaku OpaqueInstructionSubmission {
         vm.run_with_host(&mut host)
             .expect("code literal SCCP record instruction should be queued");
 
-        assert_eq!(host.queued, vec![instruction]);
+        assert_eq!(host.queued.len(), 1);
+        assert_eq!(host.queued[0].instruction, instruction);
+        assert!(host.queued[0].contract_runtime_context.is_some());
+        assert!(host.queued[0].entrypoint_authorization.is_some());
+    }
+
+    #[test]
+    fn execute_instruction_syscall_rejects_unindexed_literal_data_without_host_effects() {
+        let authority = (*ALICE_ID).clone();
+        let host = CoreHost::new(authority);
+        let instruction =
+            InstructionBox::from(crate::bridge::test_record_sccp_message(vec![1, 2, 3, 4]));
+        let payload = norito::to_bytes(&instruction).expect("encode instruction");
+        let tlv = make_tlv(PointerType::NoritoBytes as u16, &payload);
+        let post_pad = (4 - ((16 + tlv.len()) % 4)) % 4;
+
+        let mut program = ivm::ProgramMetadata {
+            max_cycles: 1_000_000,
+            mode: ivm::ivm_mode::ZK,
+            vector_length: 4,
+            ..Default::default()
+        }
+        .encode();
+        program.extend_from_slice(b"LTLB");
+        program.extend_from_slice(&0u32.to_le_bytes());
+        program.extend_from_slice(&(post_pad as u32).to_le_bytes());
+        program.extend_from_slice(&(tlv.len() as u32).to_le_bytes());
+        program.extend_from_slice(&tlv);
+        program.extend(std::iter::repeat_n(0u8, post_pad));
+        program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+
+        let mut vm = ivm::IVM::new(50_000_000);
+        assert!(matches!(
+            vm.load_program(&program),
+            Err(ivm::VMError::InvalidMetadata)
+        ));
+        assert!(host.queued.is_empty());
     }
 
     #[test]
@@ -26103,14 +26302,18 @@ seiyaku AliasPayout {
     }
 
     #[test]
-    fn raw_ivm_cannot_address_runtime_owned_state_namespaces() {
+    fn generic_ivm_host_rejects_all_durable_state_access() {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         for prefix in [
             "sc",
             crate::smartcontracts::code::CONTRACT_LIFECYCLE_STATE_PREFIX,
+            "sns",
+            "sealed",
+            "system",
         ] {
             let mut host = CoreHost::new(authority.clone());
+            host.set_generic_execution();
             let mut vm = IVM::new(10_000);
             let suffix = if prefix == "sc" { "/secret" } else { "" };
             let reserved_path: Name = format!("{prefix}/{}{suffix}", "00".repeat(Hash::LENGTH))
@@ -26127,22 +26330,28 @@ seiyaku AliasPayout {
             vm.set_register(11, value_ptr);
             assert_eq!(
                 host.syscall(ivm_sys::SYSCALL_STATE_SET, &mut vm),
-                Err(ivm::VMError::PermissionDenied),
-                "raw IVM must not write `{prefix}`"
+                Err(ivm::VMError::GenericSyscallNotAllowed {
+                    syscall: ivm_sys::SYSCALL_STATE_SET,
+                }),
+                "generic IVM must not write `{prefix}`"
             );
             assert!(host.durable_state_overlay.is_empty());
 
             vm.set_register(10, path_ptr);
             assert_eq!(
                 host.syscall(ivm_sys::SYSCALL_STATE_GET, &mut vm),
-                Err(ivm::VMError::PermissionDenied),
-                "raw IVM must not read `{prefix}`"
+                Err(ivm::VMError::GenericSyscallNotAllowed {
+                    syscall: ivm_sys::SYSCALL_STATE_GET,
+                }),
+                "generic IVM must not read `{prefix}`"
             );
             vm.set_register(10, path_ptr);
             assert_eq!(
                 host.syscall(ivm_sys::SYSCALL_STATE_DEL, &mut vm),
-                Err(ivm::VMError::PermissionDenied),
-                "raw IVM must not tombstone `{prefix}`"
+                Err(ivm::VMError::GenericSyscallNotAllowed {
+                    syscall: ivm_sys::SYSCALL_STATE_DEL,
+                }),
+                "generic IVM must not tombstone `{prefix}`"
             );
 
             let reserved_prefix: Name = prefix.parse().expect("valid reserved state prefix");
@@ -26152,8 +26361,10 @@ seiyaku AliasPayout {
             vm.set_register(12, ivm_sys::STATE_KEYS_MAX_ITEMS);
             assert_eq!(
                 host.syscall(ivm_sys::SYSCALL_STATE_KEYS, &mut vm),
-                Err(ivm::VMError::PermissionDenied),
-                "raw IVM must not enumerate `{prefix}`"
+                Err(ivm::VMError::GenericSyscallNotAllowed {
+                    syscall: ivm_sys::SYSCALL_STATE_KEYS,
+                }),
+                "generic IVM must not enumerate `{prefix}`"
             );
         }
     }

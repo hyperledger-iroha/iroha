@@ -25,7 +25,7 @@ use iroha_data_model::{
     nexus::{DataSpaceId, LaneId},
     transaction::signed::TransactionEntrypoint,
 };
-use norito::codec::{Decode, Encode};
+use norito::codec::{Decode, DecodeAll, Encode};
 
 use super::{
     AUTONOMOUS_LANE_BLOCKS_DATA_FILE, AUTONOMOUS_LANE_BLOCKS_INDEX_FILE,
@@ -52,6 +52,7 @@ const JOURNAL_IDENTITY_SWAP_FILE_NAME: &str = "lane_geometry_journal.norito.iden
 const JOURNAL_IDENTITY_DISPLACED_FILE_NAME: &str =
     "lane_geometry_journal.norito.identity-displaced";
 const MARKER_FILE_NAME: &str = ".lane-incarnation.norito";
+const MAX_LANE_MARKER_BYTES: usize = 1024;
 const TRANSITION_DOMAIN: &[u8] = b"iroha:kura:lane-geometry-transition:v2\0";
 const CATALOG_DOMAIN: &[u8] = b"iroha:kura:lane-geometry-catalog:v1\0";
 const CHECKPOINT_DOMAIN: &[u8] = b"iroha:kura:lane-geometry-checkpoint:v2\0";
@@ -200,6 +201,10 @@ struct GeometryFileIdentity {
     device: u64,
     #[cfg(unix)]
     inode: u64,
+    #[cfg(windows)]
+    volume_serial_number: u32,
+    #[cfg(windows)]
+    file_index: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
@@ -269,7 +274,7 @@ fn configured_catalog_store_root_identity(store_root: &Path) -> Result<GeometryF
             "Kura configured-catalog store root must be a non-symlink directory",
         ));
     }
-    Ok(geometry_file_identity(&metadata))
+    geometry_file_identity(&metadata, store_root)
 }
 
 fn configured_catalog_require_store_root_identity(
@@ -325,13 +330,13 @@ fn read_configured_catalog_journal_for_preflight(
         ));
     }
 
-    let expected_identity = geometry_file_identity(&path_metadata);
+    let expected_identity = geometry_file_identity(&path_metadata, path)?;
     let mut file = File::open(path).map_err(|error| Error::IO(error, path.to_path_buf()))?;
     let opened_metadata = file
         .metadata()
         .map_err(|error| Error::IO(error, path.to_path_buf()))?;
     if !opened_metadata.is_file()
-        || geometry_file_identity(&opened_metadata) != expected_identity
+        || geometry_file_identity(&opened_metadata, path)? != expected_identity
         || opened_metadata.len() > MAX_GEOMETRY_JOURNAL_BYTES
     {
         return Err(Error::IO(
@@ -388,11 +393,11 @@ fn read_configured_catalog_journal_for_preflight(
     let final_path_metadata =
         fs::symlink_metadata(path).map_err(|error| Error::IO(error, path.to_path_buf()))?;
     if !final_opened_metadata.is_file()
-        || geometry_file_identity(&final_opened_metadata) != expected_identity
+        || geometry_file_identity(&final_opened_metadata, path)? != expected_identity
         || final_opened_metadata.len() != u64::try_from(bytes.len()).unwrap_or(u64::MAX)
         || final_path_metadata.file_type().is_symlink()
         || !final_path_metadata.file_type().is_file()
-        || geometry_file_identity(&final_path_metadata) != expected_identity
+        || geometry_file_identity(&final_path_metadata, path)? != expected_identity
     {
         return Err(Error::IO(
             std::io::Error::new(
@@ -453,7 +458,8 @@ fn write_initial_configured_catalog_temp(
         &file
             .metadata()
             .map_err(|error| Error::IO(error, temp_path.to_path_buf()))?,
-    );
+        temp_path,
+    )?;
     file.write_all(bytes)
         .map_err(|error| Error::IO(error, temp_path.to_path_buf()))?;
     file.sync_all()
@@ -462,7 +468,7 @@ fn write_initial_configured_catalog_temp(
         .map_err(|error| Error::IO(error, temp_path.to_path_buf()))?;
     if path_metadata.file_type().is_symlink()
         || !path_metadata.file_type().is_file()
-        || geometry_file_identity(&path_metadata) != identity
+        || geometry_file_identity(&path_metadata, temp_path)? != identity
         || path_metadata.len() != u64::try_from(bytes.len()).unwrap_or(u64::MAX)
     {
         return Err(Error::IO(
@@ -539,7 +545,7 @@ fn promote_initial_configured_catalog_temp(
         .map_err(|error| Error::IO(error, temp_path.to_path_buf()))?;
     if temp_metadata.file_type().is_symlink()
         || !temp_metadata.file_type().is_file()
-        || geometry_file_identity(&temp_metadata) != temp_identity
+        || geometry_file_identity(&temp_metadata, temp_path)? != temp_identity
         || temp_metadata.len() != u64::try_from(expected_bytes.len()).unwrap_or(u64::MAX)
     {
         return Err(Error::IO(
@@ -576,7 +582,7 @@ fn promote_initial_configured_catalog_temp(
         .map_err(|error| Error::IO(error, journal_path.to_path_buf()))?;
     if journal_metadata.file_type().is_symlink()
         || !journal_metadata.file_type().is_file()
-        || geometry_file_identity(&journal_metadata) != temp_identity
+        || geometry_file_identity(&journal_metadata, journal_path)? != temp_identity
     {
         return Err(Error::IO(
             std::io::Error::new(
@@ -592,7 +598,7 @@ fn promote_initial_configured_catalog_temp(
         .map_err(|error| Error::IO(error, temp_path.to_path_buf()))?;
     if final_temp_metadata.file_type().is_symlink()
         || !final_temp_metadata.file_type().is_file()
-        || geometry_file_identity(&final_temp_metadata) != temp_identity
+        || geometry_file_identity(&final_temp_metadata, temp_path)? != temp_identity
     {
         return Err(Error::IO(
             std::io::Error::new(
@@ -880,6 +886,23 @@ impl Kura {
             previous_catalog,
             previous_lineage_root,
         )?;
+        if let Some(branch_start) = journal
+            .records
+            .iter()
+            .position(|record| record.phase == LaneGeometryPhase::RolledBack)
+        {
+            if journal.records[branch_start..]
+                .iter()
+                .any(|record| record.phase != LaneGeometryPhase::RolledBack)
+            {
+                return Err(self.geometry_error(
+                    ErrorKind::InvalidData,
+                    "lane geometry recovery left a mixed unapplied branch",
+                ));
+            }
+            journal.records.truncate(branch_start);
+            self.write_lane_geometry_journal(&journal)?;
+        }
         self.ensure_authoritative_lane_markers(
             previous,
             previous_incarnations,
@@ -931,12 +954,14 @@ impl Kura {
             if let Err(error) = self.apply_geometry_operations_forward(&operations) {
                 let rollback = self.apply_geometry_operations_rollback(&operations);
                 if let Err(rollback_error) = rollback {
-                    return Err(Error::IO(
+                    let ambiguous = Error::IO(
                         std::io::Error::other(format!(
                             "lane geometry reapply failed ({error}); rollback failed ({rollback_error})"
                         )),
                         self.lane_geometry_journal_path(),
-                    ));
+                    );
+                    self.poison_canonical_storage("lane geometry reapply rollback", &ambiguous);
+                    return Err(Error::CanonicalStoragePoisoned);
                 }
                 journal.records[existing_index].phase = LaneGeometryPhase::RolledBack;
                 self.write_lane_geometry_journal(&journal)?;
@@ -978,12 +1003,14 @@ impl Kura {
             let rollback =
                 self.apply_geometry_operations_rollback(&journal.records[record_index].operations);
             if let Err(rollback_error) = rollback {
-                return Err(Error::IO(
+                let ambiguous = Error::IO(
                     std::io::Error::other(format!(
                         "lane geometry apply failed ({error}); rollback failed ({rollback_error})"
                     )),
                     self.lane_geometry_journal_path(),
-                ));
+                );
+                self.poison_canonical_storage("lane geometry apply rollback", &ambiguous);
+                return Err(Error::CanonicalStoragePoisoned);
             }
             journal.records[record_index].phase = LaneGeometryPhase::RolledBack;
             self.write_lane_geometry_journal(&journal)?;
@@ -1203,6 +1230,7 @@ impl Kura {
         let fingerprint = geometry_catalog_fingerprint(&bindings);
         let mut journal = self.read_lane_geometry_journal()?;
         let _ = self.finish_pending_lane_geometry_gc_locked(&mut journal)?;
+        let _sidecar_guard = self.sidecar_lock.lock();
         self.reconcile_lane_geometry_history(&mut journal, fingerprint, lineage_root)?;
         self.ensure_authoritative_lane_markers(authoritative, incarnations, activation_heights)?;
         *self.lane_storage_entries.lock() = Self::lane_storage_entries_from_config(authoritative);
@@ -3299,12 +3327,24 @@ impl Kura {
         // would let a concurrent append reopen the old pathname after its cached
         // handles were dropped.
         let _write_guard = active_blocks.then(|| self.block_store_write_lock.lock());
-        if active_blocks {
-            let mut store = self.block_store.lock();
+        let mut block_store = active_blocks.then(|| self.block_store.lock());
+        if let Some(store) = block_store.as_mut() {
+            if !self.validate_path_kind(&old_blocks, true)? {
+                return Err(self.geometry_error(
+                    ErrorKind::NotFound,
+                    "active primary block store disappeared before relabel",
+                ));
+            }
             store.flush_pending_fsync(true)?;
             store.drop_cached_handles();
         }
         let mut merge_log = active_merge.then(|| self.merge_log.lock());
+        if active_merge && !self.validate_path_kind(&old_merge, false)? {
+            return Err(self.geometry_error(
+                ErrorKind::NotFound,
+                "active primary merge log disappeared before relabel",
+            ));
+        }
         if let Some(log) = merge_log.as_mut()
             && let Some(file) = log.file.as_mut()
         {
@@ -3313,12 +3353,54 @@ impl Kura {
                 inner.sync_all()
             })?;
         }
-        self.move_geometry_path(&old_blocks, &new_blocks, true)?;
-        self.move_geometry_path(&old_merge, &new_merge, false)?;
-        if active_blocks {
-            self.block_store
-                .lock()
-                .retarget_existing_path(new_blocks.clone());
+        let move_result = (|| {
+            self.move_geometry_path(&old_blocks, &new_blocks, true)?;
+            self.move_geometry_path(&old_merge, &new_merge, false)?;
+            if !self.validate_path_kind(&new_blocks, true)?
+                || !self.validate_path_kind(&new_merge, false)?
+            {
+                return Err(self.geometry_error(
+                    ErrorKind::NotFound,
+                    "relabel target binding is not fully present",
+                ));
+            }
+            self.require_lane_marker_at(&new_blocks, updated)
+        })();
+        if let Err(error) = move_result {
+            let rollback = (|| {
+                self.move_geometry_path(&new_merge, &old_merge, false)?;
+                self.move_geometry_path(&new_blocks, &old_blocks, true)?;
+                self.require_lane_marker_at(&old_blocks, previous)
+            })();
+            if let Err(rollback_error) = rollback {
+                let ambiguous = Error::IO(
+                    std::io::Error::other(format!(
+                        "active lane relabel failed ({error}); local rollback failed ({rollback_error})"
+                    )),
+                    self.lane_geometry_journal_path(),
+                );
+                self.poison_canonical_storage("active lane relabel rollback", &ambiguous);
+                return Err(Error::CanonicalStoragePoisoned);
+            }
+            return Err(error);
+        }
+        #[cfg(test)]
+        if active_blocks
+            && self
+                .pause_primary_relabel_before_retarget
+                .swap(false, std::sync::atomic::Ordering::AcqRel)
+        {
+            self.primary_relabel_paused
+                .store(true, std::sync::atomic::Ordering::Release);
+            while self
+                .primary_relabel_paused
+                .load(std::sync::atomic::Ordering::Acquire)
+            {
+                std::thread::yield_now();
+            }
+        }
+        if let Some(store) = block_store.as_mut() {
+            store.retarget_existing_path(new_blocks.clone());
             *self.active_blocks_dir.lock() = new_blocks.clone();
             self.invalidate_durable_budget_snapshot();
         }
@@ -3336,7 +3418,7 @@ impl Kura {
                 *path = new_blocks.join(suffix);
             }
         }
-        self.require_lane_marker(updated)
+        Ok(())
     }
 
     fn remove_authenticated_geometry_archive(
@@ -3919,6 +4001,15 @@ impl Kura {
     }
 
     fn move_geometry_path(&self, source: &Path, target: &Path, directory: bool) -> Result<()> {
+        if source == target {
+            if self.validate_path_kind(source, directory)? {
+                return Ok(());
+            }
+            return Err(Error::IO(
+                std::io::Error::new(ErrorKind::NotFound, "geometry path is missing"),
+                source.to_path_buf(),
+            ));
+        }
         let source_exists = self.validate_path_kind(source, directory)?;
         let target_exists = self.validate_path_kind(target, directory)?;
         match (source_exists, target_exists) {
@@ -4309,7 +4400,7 @@ impl Kura {
                 path.to_path_buf(),
             ));
         }
-        Ok(geometry_file_identity(&metadata))
+        geometry_file_identity(&metadata, path)
     }
 
     fn require_geometry_path_identity(
@@ -4336,7 +4427,7 @@ impl Kura {
         let metadata = file
             .metadata()
             .map_err(|error| Error::IO(error, path.to_path_buf()))?;
-        if !metadata.is_file() || geometry_file_identity(&metadata) != path_identity {
+        if !metadata.is_file() || geometry_file_identity(&metadata, path)? != path_identity {
             return Err(Error::IO(
                 std::io::Error::new(
                     ErrorKind::InvalidData,
@@ -5095,6 +5186,142 @@ impl Kura {
         self.store_root.join(JOURNAL_FILE_NAME)
     }
 
+    /// Resolve any interrupted primary-lane relabel before opening canonical files.
+    ///
+    /// State-driven geometry recovery runs only after Kura has loaded the canonical chain. A
+    /// primary relabel therefore needs this smaller root-level bootstrap pass so startup never
+    /// creates an empty configured path while the exact chain is already present under a durable
+    /// journal binding.
+    pub(super) fn resolve_primary_storage_paths_before_open(
+        store_root: &Path,
+        configured: &LaneConfigEntry,
+    ) -> Result<(PathBuf, PathBuf, bool)> {
+        let journal_path = store_root.join(JOURNAL_FILE_NAME);
+        let Some(bytes) = Kura::read_regular_sidecar_bytes_for(
+            store_root,
+            &journal_path,
+            store_root,
+            usize::try_from(MAX_GEOMETRY_JOURNAL_BYTES)?,
+        )?
+        else {
+            return Ok((
+                configured.blocks_dir(store_root),
+                configured.merge_log_path(store_root),
+                false,
+            ));
+        };
+        let mut cursor = bytes.as_slice();
+        let journal = LaneGeometryJournal::decode_all(&mut cursor).map_err(Error::NoritoFrame)?;
+        if journal.encode() != bytes {
+            return Err(lane_geometry_journal_structure_error(
+                store_root,
+                ErrorKind::InvalidData,
+                "lane geometry journal is not canonically encoded",
+            ));
+        }
+        validate_lane_geometry_journal_structure(store_root, &journal)?;
+
+        let primary_lane = configured.lane_id;
+        let applied_prefix = journal
+            .records
+            .iter()
+            .take_while(|record| {
+                matches!(
+                    record.phase,
+                    LaneGeometryPhase::FilesApplied | LaneGeometryPhase::CatalogPublished
+                )
+            })
+            .count();
+
+        for record in journal.records[applied_prefix..].iter().rev() {
+            for operation in record.operations.iter().rev().filter(|operation| {
+                operation.kind == LaneGeometryOperationKind::Relabel
+                    && operation.lane_id == primary_lane
+            }) {
+                let updated = operation.updated.as_ref().ok_or_else(|| {
+                    lane_geometry_journal_structure_error(
+                        store_root,
+                        ErrorKind::InvalidData,
+                        "primary relabel has no updated binding",
+                    )
+                })?;
+                let previous = operation.previous.as_ref().ok_or_else(|| {
+                    lane_geometry_journal_structure_error(
+                        store_root,
+                        ErrorKind::InvalidData,
+                        "primary relabel has no previous binding",
+                    )
+                })?;
+                bootstrap_move_geometry_binding(store_root, updated, previous)?;
+            }
+        }
+        for record in &journal.records[..applied_prefix] {
+            for operation in record.operations.iter().filter(|operation| {
+                operation.kind == LaneGeometryOperationKind::Relabel
+                    && operation.lane_id == primary_lane
+            }) {
+                let previous = operation.previous.as_ref().ok_or_else(|| {
+                    lane_geometry_journal_structure_error(
+                        store_root,
+                        ErrorKind::InvalidData,
+                        "primary relabel has no previous binding",
+                    )
+                })?;
+                let updated = operation.updated.as_ref().ok_or_else(|| {
+                    lane_geometry_journal_structure_error(
+                        store_root,
+                        ErrorKind::InvalidData,
+                        "primary relabel has no updated binding",
+                    )
+                })?;
+                bootstrap_move_geometry_binding(store_root, previous, updated)?;
+            }
+        }
+
+        let checkpoint_binding = journal.checkpoint.as_ref().and_then(|checkpoint| {
+            checkpoint
+                .bindings
+                .iter()
+                .find(|binding| binding.lane_id == primary_lane)
+        });
+        let first_previous = journal.records.iter().find_map(|record| {
+            record
+                .previous_bindings
+                .iter()
+                .find(|binding| binding.lane_id == primary_lane)
+        });
+        let mut active_binding = checkpoint_binding.or(first_previous);
+        for record in &journal.records[..applied_prefix] {
+            if let Some(binding) = record
+                .updated_bindings
+                .iter()
+                .find(|binding| binding.lane_id == primary_lane)
+            {
+                active_binding = Some(binding);
+            }
+        }
+        let Some(binding) = active_binding else {
+            return Ok((
+                configured.blocks_dir(store_root),
+                configured.merge_log_path(store_root),
+                false,
+            ));
+        };
+        let blocks = store_root.join(&binding.blocks_path);
+        let merge = store_root.join(&binding.merge_path);
+        if !bootstrap_validate_path_kind(store_root, &blocks, true)?
+            || !bootstrap_validate_path_kind(store_root, &merge, false)?
+        {
+            return Err(lane_geometry_journal_structure_error(
+                store_root,
+                ErrorKind::NotFound,
+                "durable primary binding is not fully present before Kura startup",
+            ));
+        }
+        bootstrap_require_lane_marker(store_root, &blocks, binding)?;
+        Ok((blocks, merge, true))
+    }
+
     fn geometry_error(&self, kind: ErrorKind, message: &'static str) -> Error {
         Error::IO(
             std::io::Error::new(kind, message),
@@ -5118,6 +5345,422 @@ impl Kura {
         }
         Ok(())
     }
+}
+
+fn bootstrap_validate_path_kind(store_root: &Path, path: &Path, directory: bool) -> Result<bool> {
+    let relative = path.strip_prefix(store_root).map_err(|_| {
+        lane_geometry_journal_structure_error(
+            store_root,
+            ErrorKind::InvalidInput,
+            "bootstrap geometry path escapes the Kura store root",
+        )
+    })?;
+    validate_relative_path(relative)?;
+    bootstrap_validate_existing_ancestors(store_root, path)?;
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(Error::IO(error, path.to_path_buf())),
+    };
+    if metadata.file_type().is_symlink()
+        || (directory && !metadata.is_dir())
+        || (!directory && (!metadata.is_file() || !Kura::sidecar_is_single_link(&metadata)))
+    {
+        return Err(Error::IO(
+            std::io::Error::new(
+                ErrorKind::InvalidData,
+                "bootstrap geometry path is not an authenticated regular path",
+            ),
+            path.to_path_buf(),
+        ));
+    }
+    let canonical_root =
+        fs::canonicalize(store_root).map_err(|error| Error::IO(error, store_root.to_path_buf()))?;
+    let canonical_path =
+        fs::canonicalize(path).map_err(|error| Error::IO(error, path.to_path_buf()))?;
+    if canonical_path != canonical_root.join(relative) {
+        return Err(Error::IO(
+            std::io::Error::new(
+                ErrorKind::InvalidData,
+                "bootstrap geometry path traverses a symlink or escapes the store root",
+            ),
+            path.to_path_buf(),
+        ));
+    }
+    Ok(true)
+}
+
+fn bootstrap_validate_existing_ancestors(store_root: &Path, path: &Path) -> Result<()> {
+    let relative = path.strip_prefix(store_root).map_err(|_| {
+        lane_geometry_journal_structure_error(
+            store_root,
+            ErrorKind::InvalidInput,
+            "bootstrap geometry path escapes the Kura store root",
+        )
+    })?;
+    validate_relative_path(relative)?;
+    let root_metadata = fs::symlink_metadata(store_root)
+        .map_err(|error| Error::IO(error, store_root.to_path_buf()))?;
+    if root_metadata.file_type().is_symlink() || !root_metadata.is_dir() {
+        return Err(Error::IO(
+            std::io::Error::new(
+                ErrorKind::InvalidData,
+                "bootstrap Kura root is not a non-symlink directory",
+            ),
+            store_root.to_path_buf(),
+        ));
+    }
+    let canonical_root =
+        fs::canonicalize(store_root).map_err(|error| Error::IO(error, store_root.to_path_buf()))?;
+    let components = relative.components().collect::<Vec<_>>();
+    let mut cursor = store_root.to_path_buf();
+    let mut expected = PathBuf::new();
+    for component in components.iter().take(components.len().saturating_sub(1)) {
+        cursor.push(component.as_os_str());
+        expected.push(component.as_os_str());
+        let metadata = match fs::symlink_metadata(&cursor) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == ErrorKind::NotFound => break,
+            Err(error) => return Err(Error::IO(error, cursor)),
+        };
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "bootstrap geometry ancestor is not a non-symlink directory",
+                ),
+                cursor,
+            ));
+        }
+        let canonical =
+            fs::canonicalize(&cursor).map_err(|error| Error::IO(error, cursor.clone()))?;
+        if canonical != canonical_root.join(&expected) {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "bootstrap geometry ancestor escapes the Kura store root",
+                ),
+                cursor,
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn bootstrap_ensure_geometry_directory(store_root: &Path, directory: &Path) -> Result<()> {
+    let relative = directory.strip_prefix(store_root).map_err(|_| {
+        lane_geometry_journal_structure_error(
+            store_root,
+            ErrorKind::InvalidInput,
+            "bootstrap geometry directory escapes the Kura store root",
+        )
+    })?;
+    validate_relative_path(relative)?;
+    let mut cursor = store_root.to_path_buf();
+    for component in relative.components() {
+        let parent = cursor.clone();
+        let parent_before =
+            fs::symlink_metadata(&parent).map_err(|error| Error::IO(error, parent.clone()))?;
+        if parent_before.file_type().is_symlink() || !parent_before.is_dir() {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "bootstrap geometry parent is not a non-symlink directory",
+                ),
+                parent,
+            ));
+        }
+        cursor.push(component.as_os_str());
+        match fs::create_dir(&cursor) {
+            Ok(()) => {}
+            Err(error) if error.kind() == ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(Error::IO(error, cursor)),
+        }
+        if !bootstrap_validate_path_kind(store_root, &cursor, true)? {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::NotFound,
+                    "bootstrap geometry directory disappeared after creation",
+                ),
+                cursor,
+            ));
+        }
+        let parent_after =
+            fs::symlink_metadata(&parent).map_err(|error| Error::IO(error, parent.clone()))?;
+        if geometry_file_identity(&parent_before, &parent)?
+            != geometry_file_identity(&parent_after, &parent)?
+        {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "bootstrap geometry parent changed during child creation",
+                ),
+                parent,
+            ));
+        }
+        sync_dir(&parent).map_err(|error| Error::IO(error, parent))?;
+    }
+    Ok(())
+}
+
+fn bootstrap_sync_geometry_path(store_root: &Path, path: &Path, directory: bool) -> Result<()> {
+    let before =
+        fs::symlink_metadata(path).map_err(|error| Error::IO(error, path.to_path_buf()))?;
+    if !bootstrap_validate_path_kind(store_root, path, directory)? {
+        return Err(Error::IO(
+            std::io::Error::new(ErrorKind::NotFound, "bootstrap geometry source is missing"),
+            path.to_path_buf(),
+        ));
+    }
+    if directory {
+        sync_dir(path).map_err(|error| Error::IO(error, path.to_path_buf()))?;
+    } else {
+        let file = File::open(path).map_err(|error| Error::IO(error, path.to_path_buf()))?;
+        let opened = file
+            .metadata()
+            .map_err(|error| Error::IO(error, path.to_path_buf()))?;
+        if geometry_file_identity(&before, path)? != geometry_file_identity(&opened, path)? {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "bootstrap geometry file changed while opening",
+                ),
+                path.to_path_buf(),
+            ));
+        }
+        file.sync_all()
+            .map_err(|error| Error::IO(error, path.to_path_buf()))?;
+    }
+    let after = fs::symlink_metadata(path).map_err(|error| Error::IO(error, path.to_path_buf()))?;
+    if geometry_file_identity(&before, path)? != geometry_file_identity(&after, path)? {
+        return Err(Error::IO(
+            std::io::Error::new(
+                ErrorKind::InvalidData,
+                "bootstrap geometry path changed while synchronizing",
+            ),
+            path.to_path_buf(),
+        ));
+    }
+    Ok(())
+}
+
+fn bootstrap_move_geometry_path(
+    store_root: &Path,
+    source: &Path,
+    target: &Path,
+    directory: bool,
+) -> Result<bool> {
+    if source == target {
+        if bootstrap_validate_path_kind(store_root, source, directory)? {
+            return Ok(false);
+        }
+        return Err(Error::IO(
+            std::io::Error::new(
+                ErrorKind::NotFound,
+                "unchanged primary relabel path is missing during bootstrap recovery",
+            ),
+            source.to_path_buf(),
+        ));
+    }
+    let source_exists = bootstrap_validate_path_kind(store_root, source, directory)?;
+    let target_exists = bootstrap_validate_path_kind(store_root, target, directory)?;
+    match (source_exists, target_exists) {
+        (false, false) | (false, true) => return Ok(false),
+        (true, true) => {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::AlreadyExists,
+                    "both primary relabel paths exist during bootstrap recovery",
+                ),
+                target.to_path_buf(),
+            ));
+        }
+        (true, false) => {}
+    }
+    bootstrap_sync_geometry_path(store_root, source, directory)?;
+    let identity = geometry_file_identity(
+        &fs::symlink_metadata(source).map_err(|error| Error::IO(error, source.to_path_buf()))?,
+        source,
+    )?;
+    let parent = target.parent().ok_or_else(|| {
+        Error::IO(
+            std::io::Error::new(
+                ErrorKind::InvalidInput,
+                "primary relabel target has no parent",
+            ),
+            target.to_path_buf(),
+        )
+    })?;
+    bootstrap_ensure_geometry_directory(store_root, parent)?;
+    if !bootstrap_validate_path_kind(store_root, parent, true)? {
+        return Err(Error::IO(
+            std::io::Error::new(ErrorKind::NotFound, "primary relabel parent is missing"),
+            parent.to_path_buf(),
+        ));
+    }
+    sync_dir(parent).map_err(|error| Error::IO(error, parent.to_path_buf()))?;
+    fs::rename(source, target).map_err(|error| Error::IO(error, source.to_path_buf()))?;
+    if !bootstrap_validate_path_kind(store_root, target, directory)?
+        || geometry_file_identity(
+            &fs::symlink_metadata(target)
+                .map_err(|error| Error::IO(error, target.to_path_buf()))?,
+            target,
+        )? != identity
+    {
+        return Err(Error::IO(
+            std::io::Error::new(
+                ErrorKind::InvalidData,
+                "primary relabel target identity changed during bootstrap recovery",
+            ),
+            target.to_path_buf(),
+        ));
+    }
+    if let Some(parent) = source.parent() {
+        sync_dir(parent).map_err(|error| Error::IO(error, parent.to_path_buf()))?;
+    }
+    if source.parent() != target.parent()
+        && let Some(parent) = target.parent()
+    {
+        sync_dir(parent).map_err(|error| Error::IO(error, parent.to_path_buf()))?;
+    }
+    Ok(true)
+}
+
+fn bootstrap_preflight_geometry_path(
+    store_root: &Path,
+    source: &Path,
+    target: &Path,
+    directory: bool,
+) -> Result<()> {
+    if source == target {
+        return bootstrap_validate_path_kind(store_root, source, directory)?
+            .then_some(())
+            .ok_or_else(|| {
+                Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::NotFound,
+                        "unchanged primary relabel path is missing during bootstrap recovery",
+                    ),
+                    source.to_path_buf(),
+                )
+            });
+    }
+    let source_exists = bootstrap_validate_path_kind(store_root, source, directory)?;
+    let target_exists = bootstrap_validate_path_kind(store_root, target, directory)?;
+    match (source_exists, target_exists) {
+        (false, false) => {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::NotFound,
+                    "neither primary relabel path exists during bootstrap recovery",
+                ),
+                source.to_path_buf(),
+            ));
+        }
+        (true, true) => {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::AlreadyExists,
+                    "both primary relabel paths exist during bootstrap recovery",
+                ),
+                target.to_path_buf(),
+            ));
+        }
+        (true, false) | (false, true) => {}
+    }
+    bootstrap_validate_existing_ancestors(store_root, source)?;
+    bootstrap_validate_existing_ancestors(store_root, target)
+}
+
+fn bootstrap_move_geometry_binding(
+    store_root: &Path,
+    source: &LaneGeometryBinding,
+    target: &LaneGeometryBinding,
+) -> Result<()> {
+    let source_blocks = store_root.join(&source.blocks_path);
+    let target_blocks = store_root.join(&target.blocks_path);
+    let source_merge = store_root.join(&source.merge_path);
+    let target_merge = store_root.join(&target.merge_path);
+    bootstrap_preflight_geometry_path(store_root, &source_blocks, &target_blocks, true)?;
+    bootstrap_preflight_geometry_path(store_root, &source_merge, &target_merge, false)?;
+
+    let rollback = || -> Result<()> {
+        let merge_result =
+            bootstrap_move_geometry_path(store_root, &target_merge, &source_merge, false);
+        let blocks_result =
+            bootstrap_move_geometry_path(store_root, &target_blocks, &source_blocks, true);
+        match (merge_result, blocks_result) {
+            (Ok(_), Ok(_)) => Ok(()),
+            (merge, blocks) => Err(Error::IO(
+                std::io::Error::other(format!(
+                    "primary relabel rollback failed (merge: {merge:?}; blocks: {blocks:?})"
+                )),
+                source_blocks.clone(),
+            )),
+        }
+    };
+
+    if let Err(error) =
+        bootstrap_move_geometry_path(store_root, &source_blocks, &target_blocks, true)
+    {
+        return match rollback() {
+            Ok(()) => Err(error),
+            Err(rollback_error) => Err(Error::IO(
+                std::io::Error::other(format!(
+                    "primary relabel block move failed ({error}); rollback failed ({rollback_error})"
+                )),
+                source_blocks,
+            )),
+        };
+    }
+    match bootstrap_move_geometry_path(store_root, &source_merge, &target_merge, false) {
+        Ok(_) => Ok(()),
+        Err(error) => match rollback() {
+            Ok(()) => Err(error),
+            Err(rollback_error) => Err(Error::IO(
+                std::io::Error::other(format!(
+                    "primary relabel merge move failed ({error}); block-directory rollback failed ({rollback_error})"
+                )),
+                source_blocks,
+            )),
+        },
+    }
+}
+
+fn bootstrap_require_lane_marker(
+    store_root: &Path,
+    blocks: &Path,
+    binding: &LaneGeometryBinding,
+) -> Result<()> {
+    let path = blocks.join(MARKER_FILE_NAME);
+    let Some(bytes) =
+        Kura::read_regular_sidecar_bytes_for(store_root, &path, blocks, MAX_LANE_MARKER_BYTES)?
+    else {
+        return Err(Error::IO(
+            std::io::Error::new(
+                ErrorKind::NotFound,
+                "durable primary binding has no incarnation marker",
+            ),
+            path,
+        ));
+    };
+    let mut cursor = bytes.as_slice();
+    let marker = LaneIncarnationMarker::decode_all(&mut cursor).map_err(Error::NoritoFrame)?;
+    if marker.encode() != bytes
+        || marker.version != MARKER_VERSION
+        || marker.lane_id != binding.lane_id
+        || marker.incarnation != binding.incarnation
+        || marker.activation_height != binding.activation_height
+    {
+        return Err(Error::IO(
+            std::io::Error::new(
+                ErrorKind::InvalidData,
+                "durable primary binding marker does not match its journal identity",
+            ),
+            path,
+        ));
+    }
+    Ok(())
 }
 
 fn lane_geometry_journal_structure_error(
@@ -5144,6 +5787,21 @@ fn validate_lane_geometry_journal_structure(
             ErrorKind::InvalidData,
             "lane geometry journal has an unsupported version or too many transitions",
         ));
+    }
+    let mut saw_unapplied = false;
+    for record in &journal.records {
+        match record.phase {
+            LaneGeometryPhase::FilesApplied | LaneGeometryPhase::CatalogPublished
+                if !saw_unapplied => {}
+            LaneGeometryPhase::Intent | LaneGeometryPhase::RolledBack => saw_unapplied = true,
+            LaneGeometryPhase::FilesApplied | LaneGeometryPhase::CatalogPublished => {
+                return Err(lane_geometry_journal_structure_error(
+                    store_root,
+                    ErrorKind::InvalidData,
+                    "lane geometry journal phases do not form a contiguous applied prefix",
+                ));
+            }
+        }
     }
     if let Some(checkpoint) = journal.checkpoint.as_ref() {
         validate_lane_geometry_checkpoint_structure(store_root, checkpoint)?;
@@ -5857,20 +6515,55 @@ fn validate_relative_path(path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn geometry_file_identity(metadata: &fs::Metadata) -> GeometryFileIdentity {
+fn geometry_file_identity(metadata: &fs::Metadata, path: &Path) -> Result<GeometryFileIdentity> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
 
-        GeometryFileIdentity {
+        let _ = path;
+
+        Ok(GeometryFileIdentity {
             device: metadata.dev(),
             inode: metadata.ino(),
-        }
+        })
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt as _;
+
+        let volume_serial_number = metadata.volume_serial_number().ok_or_else(|| {
+            Error::IO(
+                std::io::Error::new(
+                    ErrorKind::Unsupported,
+                    "Windows filesystem did not expose a volume serial number",
+                ),
+                path.to_path_buf(),
+            )
+        })?;
+        let file_index = metadata.file_index().ok_or_else(|| {
+            Error::IO(
+                std::io::Error::new(
+                    ErrorKind::Unsupported,
+                    "Windows filesystem did not expose a stable file index",
+                ),
+                path.to_path_buf(),
+            )
+        })?;
+        Ok(GeometryFileIdentity {
+            volume_serial_number,
+            file_index,
+        })
+    }
+    #[cfg(all(not(unix), not(windows)))]
     {
         let _ = metadata;
-        GeometryFileIdentity {}
+        Err(Error::IO(
+            std::io::Error::new(
+                ErrorKind::Unsupported,
+                "lane geometry requires stable filesystem object identities",
+            ),
+            path.to_path_buf(),
+        ))
     }
 }
 
@@ -7480,6 +8173,187 @@ mod tests {
     }
 
     #[test]
+    fn primary_relabel_files_applied_restart_recovers_exact_chain() {
+        let temp = TempDir::new().expect("temporary directory");
+        let root = temp.path().join("kura");
+        let initial_catalog = configured_primary_catalog("primary-alpha");
+        let updated_catalog = configured_primary_catalog("primary-beta");
+        let initial = RuntimeLaneConfig::from_catalog(&initial_catalog);
+        let updated = RuntimeLaneConfig::from_catalog(&updated_catalog);
+        let (incarnations, activations) = initial_geometry();
+        let kura = open_kura(&root, &initial);
+        let _ = durable_geometry_snapshot_identity(&kura, 3);
+        let expected_hashes = (1..=3)
+            .map(|height| {
+                kura.get_durable_block_hash(NonZeroUsize::new(height).expect("non-zero"))
+                    .expect("durable block hash")
+            })
+            .collect::<Vec<_>>();
+
+        kura.apply_lane_geometry_transition(
+            &initial,
+            &updated,
+            &incarnations,
+            &incarnations,
+            &activations,
+            &activations,
+            &BTreeSet::new(),
+        )
+        .expect("durably move primary files before catalog publication");
+        assert_eq!(
+            kura.read_lane_geometry_journal().unwrap().records[0].phase,
+            LaneGeometryPhase::FilesApplied
+        );
+        let old_blocks = initial.primary().blocks_dir(&root);
+        let new_blocks = updated.primary().blocks_dir(&root);
+        assert!(!old_blocks.exists());
+        assert!(new_blocks.exists());
+        drop(kura);
+
+        let reopened = open_kura(&root, &initial);
+        assert_eq!(reopened.durable_blocks_count(), 3);
+        assert_eq!(*reopened.active_blocks_dir.lock(), new_blocks);
+        assert!(
+            !old_blocks.exists(),
+            "startup must not provision an empty old path"
+        );
+        for (height, expected) in (1..=3).zip(expected_hashes) {
+            assert_eq!(
+                reopened.get_durable_block_hash(NonZeroUsize::new(height).unwrap()),
+                Some(expected)
+            );
+        }
+
+        reopened
+            .recover_lane_geometry_journal(&initial, &incarnations, &activations)
+            .expect("authoritative old catalog rolls the durable intent back");
+        assert_eq!(*reopened.active_blocks_dir.lock(), old_blocks);
+        assert!(old_blocks.exists());
+        assert!(!new_blocks.exists());
+        assert_eq!(reopened.durable_blocks_count(), 3);
+    }
+
+    struct PrimaryRelabelResumeGuard<'a>(&'a std::sync::atomic::AtomicBool);
+
+    impl Drop for PrimaryRelabelResumeGuard<'_> {
+        fn drop(&mut self) {
+            self.0.store(false, std::sync::atomic::Ordering::Release);
+        }
+    }
+
+    #[test]
+    fn primary_relabel_reader_blocks_until_retarget() {
+        let temp = TempDir::new().expect("temporary directory");
+        let root = temp.path().join("kura");
+        let initial = RuntimeLaneConfig::from_catalog(&configured_primary_catalog("reader-alpha"));
+        let updated = RuntimeLaneConfig::from_catalog(&configured_primary_catalog("reader-beta"));
+        let (incarnations, activations) = initial_geometry();
+        let kura = open_kura(&root, &initial);
+        let _ = durable_geometry_snapshot_identity(&kura, 1);
+        let expected = kura
+            .get_durable_block_hash(nonzero!(1_usize))
+            .expect("durable block hash");
+        kura.block_data.lock()[0].1 = None;
+        kura.pause_primary_relabel_before_retarget
+            .store(true, std::sync::atomic::Ordering::Release);
+
+        thread::scope(|scope| {
+            let transition = scope.spawn(|| {
+                kura.apply_lane_geometry_transition(
+                    &initial,
+                    &updated,
+                    &incarnations,
+                    &incarnations,
+                    &activations,
+                    &activations,
+                    &BTreeSet::new(),
+                )
+            });
+            let resume_guard = PrimaryRelabelResumeGuard(&kura.primary_relabel_paused);
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while !kura
+                .primary_relabel_paused
+                .load(std::sync::atomic::Ordering::Acquire)
+            {
+                assert!(Instant::now() < deadline, "primary relabel did not pause");
+                thread::yield_now();
+            }
+            assert!(
+                kura.block_store.try_lock().is_none(),
+                "the canonical BlockStore guard must span rename through retarget"
+            );
+
+            let (reader_tx, reader_rx) = mpsc::channel();
+            let reader_kura = Arc::clone(&kura);
+            let reader = scope.spawn(move || {
+                let block = reader_kura.get_block(nonzero!(1_usize));
+                reader_tx.send(block).expect("send reader result");
+            });
+            assert!(
+                reader_rx.recv_timeout(Duration::from_millis(50)).is_err(),
+                "reader must not reopen the old path while relabel is between rename and retarget"
+            );
+            drop(resume_guard);
+            transition
+                .join()
+                .expect("transition thread")
+                .expect("journaled primary relabel");
+            let block = reader_rx
+                .recv_timeout(Duration::from_secs(5))
+                .expect("reader completes after retarget")
+                .expect("canonical block remains readable");
+            assert_eq!(block.hash(), expected);
+            reader.join().expect("reader thread");
+        });
+    }
+
+    #[test]
+    fn lane_geometry_recovery_holds_sidecar_lock() {
+        let temp = TempDir::new().expect("temporary directory");
+        let root = temp.path().join("kura");
+        let initial = RuntimeLaneConfig::from_catalog(&configured_primary_catalog("lock-alpha"));
+        let updated = RuntimeLaneConfig::from_catalog(&configured_primary_catalog("lock-beta"));
+        let (incarnations, activations) = initial_geometry();
+        let kura = open_kura(&root, &initial);
+        kura.apply_lane_geometry_transition(
+            &initial,
+            &updated,
+            &incarnations,
+            &incarnations,
+            &activations,
+            &activations,
+            &BTreeSet::new(),
+        )
+        .expect("apply primary relabel");
+        kura.pause_primary_relabel_before_retarget
+            .store(true, std::sync::atomic::Ordering::Release);
+
+        thread::scope(|scope| {
+            let recovery = scope.spawn(|| {
+                kura.recover_lane_geometry_journal(&initial, &incarnations, &activations)
+            });
+            let resume_guard = PrimaryRelabelResumeGuard(&kura.primary_relabel_paused);
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while !kura
+                .primary_relabel_paused
+                .load(std::sync::atomic::Ordering::Acquire)
+            {
+                assert!(Instant::now() < deadline, "lane recovery did not pause");
+                thread::yield_now();
+            }
+            assert!(
+                kura.sidecar_lock.try_lock().is_none(),
+                "runtime geometry recovery must exclude lane sidecar I/O"
+            );
+            drop(resume_guard);
+            recovery
+                .join()
+                .expect("recovery thread")
+                .expect("recover primary relabel");
+        });
+    }
+
+    #[test]
     fn recovery_rejects_stale_incarnation_marker() {
         let temp = TempDir::new().expect("temporary directory");
         let root = temp.path().join("kura");
@@ -8718,35 +9592,6 @@ mod tests {
             &error,
             std::io::ErrorKind::InvalidData,
             "lane geometry checkpoint commitment or catalog is invalid",
-        );
-    }
-
-    #[test]
-    fn legacy_geometry_restore_fails_closed_without_retained_lineage() {
-        let temp = TempDir::new().expect("temporary directory");
-        let root = temp.path().join("kura");
-        let (initial, _) = initial_and_extended_configs();
-        let (initial_incarnations, initial_activations) = initial_geometry();
-        let kura = open_kura(&root, &initial);
-        let journal_path = kura.lane_geometry_journal_path();
-        let journal_before = fs::read(&journal_path).ok();
-
-        let error = kura
-            .restore_lane_segments_with_geometry(
-                &initial,
-                &initial_incarnations,
-                &initial_activations,
-            )
-            .expect_err("legacy restore cannot authenticate retained lineage");
-        assert_kura_io_error(
-            &error,
-            std::io::ErrorKind::InvalidInput,
-            "exact retained lane-incarnation lineage is required",
-        );
-        assert_eq!(
-            fs::read(&journal_path).ok(),
-            journal_before,
-            "rejected legacy restore must not mutate recovery state"
         );
     }
 

@@ -2673,17 +2673,44 @@ fn sccp_governed_groth16_route_matches_bundle_v1(
 ///
 /// No request field chooses deployment material. Core or Torii must resolve
 /// `governed_route` by the bundle's committed destination binding before this
-/// function is called.
+/// function is called. This entry point accepts an untrusted bundle and therefore
+/// performs the one required BLS verification before constructing the request.
 pub fn build_sccp_groth16_bn254_proof_request_from_governed_route_v1(
     bundle: &TairaSccpMessageProofV1,
     governed_route: &SccpGovernedRouteV1,
 ) -> Option<SccpGroth16Bn254ProofRequestV1> {
     let finality =
         verified_sccp_message_taira_finality_proof_cryptographically_self_consistent(bundle)?;
+    build_sccp_groth16_bn254_proof_request_from_bound_finality_v1(bundle, governed_route, &finality)
+}
+
+/// Build a canonical query-free Groth16 request after a trusted caller has already
+/// authenticated the bundle's exact finality artifact.
+///
+/// This is a structural assembly boundary, not a finality trust boundary. The supplied
+/// proof must be the exact canonical proof encoded by `bundle`, and the message, Merkle,
+/// header, route, and request bindings are still checked. No BLS operation is performed;
+/// Core calls this only after binding the proof to its `VerifiedV2FinalityArtifact` marker.
+pub fn build_sccp_groth16_bn254_proof_request_from_structurally_bound_finality_v1(
+    bundle: &TairaSccpMessageProofV1,
+    governed_route: &SccpGovernedRouteV1,
+    finality: &TairaBridgeFinalityProofV1,
+) -> Option<SccpGroth16Bn254ProofRequestV1> {
+    if decode_taira_bridge_finality_proof(&bundle.finality_proof).as_ref() != Some(finality) {
+        return None;
+    }
+    build_sccp_groth16_bn254_proof_request_from_bound_finality_v1(bundle, governed_route, finality)
+}
+
+fn build_sccp_groth16_bn254_proof_request_from_bound_finality_v1(
+    bundle: &TairaSccpMessageProofV1,
+    governed_route: &SccpGovernedRouteV1,
+    finality: &TairaBridgeFinalityProofV1,
+) -> Option<SccpGroth16Bn254ProofRequestV1> {
     if !sccp_governed_groth16_route_matches_bundle_v1(bundle, governed_route) {
         return None;
     }
-    let public_inputs = sccp_message_public_inputs(bundle)?;
+    let public_inputs = sccp_message_public_inputs_with_finality(bundle, finality)?;
     let canonical_payload_bytes = canonical_sccp_payload_bytes(&bundle.payload).ok()?;
     let bundle_bytes = canonical_taira_sccp_message_bundle_bytes_checked(bundle)?;
     let destination_binding_hash = governed_route.destination_binding_hash().ok()?;
@@ -2713,7 +2740,7 @@ pub fn build_sccp_groth16_bn254_proof_request_from_governed_route_v1(
             commitment_root: bundle.commitment_root,
             finality_proof: &bundle.finality_proof,
         },
-        finality: &finality,
+        finality,
         destination_binding_hash,
         route_configuration_hash,
         verifying_key: &verifying_key,
@@ -5903,6 +5930,54 @@ mod tests {
             recursion_depth: None,
         });
         assert!(!matches!(generic, BridgeProofPayload::SccpDestination(_)));
+    }
+
+    #[test]
+    fn request_builder_reuses_bound_finality_without_repeating_bls() {
+        let fixture = fixture();
+        let finality = decode_taira_bridge_finality_proof(&fixture.bundle.finality_proof)
+            .expect("canonical fixture finality");
+
+        reset_sccp_destination_proof_work_counters_v1();
+        for _ in 0..4 {
+            assert_eq!(
+                build_sccp_groth16_bn254_proof_request_from_structurally_bound_finality_v1(
+                    &fixture.bundle,
+                    &fixture.route,
+                    &finality,
+                ),
+                Some(fixture.request.clone())
+            );
+        }
+        let mut substituted = finality.clone();
+        substituted.finality_artifact.height =
+            substituted.finality_artifact.height.saturating_add(1);
+        assert!(
+            build_sccp_groth16_bn254_proof_request_from_structurally_bound_finality_v1(
+                &fixture.bundle,
+                &fixture.route,
+                &substituted,
+            )
+            .is_none()
+        );
+        assert_eq!(
+            sccp_destination_proof_work_counters_v1().bls_verifications,
+            0,
+            "structural assembly must reuse the caller's verified finality marker"
+        );
+
+        assert_eq!(
+            build_sccp_groth16_bn254_proof_request_from_governed_route_v1(
+                &fixture.bundle,
+                &fixture.route,
+            ),
+            Some(fixture.request.clone())
+        );
+        assert_eq!(
+            sccp_destination_proof_work_counters_v1().bls_verifications,
+            1,
+            "the untrusted entry point must still perform one BLS verification"
+        );
     }
 
     #[test]

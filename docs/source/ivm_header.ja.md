@@ -17,7 +17,7 @@ Magic
 - 4 bytes: ASCII `IVM\0` at offset 0.
 
 Layout (current)
-- Offsets and sizes (17 bytes total):
+- Offsets and sizes (49 bytes total):
   - 0..4: magic `IVM\0`
   - 4: `version_major: u8`
   - 5: `version_minor: u8`
@@ -25,12 +25,14 @@ Layout (current)
   - 7: `vector_length: u8`
   - 8..16: `max_cycles: u64` (little‑endian)
   - 16: `abi_version: u8`
+  - 17..49: `abi_hash: [u8; 32]` (canonical descriptor hash for `abi_version`)
 
 Mode bits
 - `ZK = 0x01`, `VECTOR = 0x02`, `HTM = 0x04` (reserved/feature‑gated).
 
 Fields (meaning)
 - `abi_version`: syscall table and pointer‑ABI schema version.
+- `abi_hash`: authenticated SHA-256 commitment to the exact canonical ABI descriptor selected by `abi_version`; admission validates it before prefix or instruction decoding.
 - `mode`: feature bits for ZK tracing/VECTOR/HTM.
 - `vector_length`: logical vector length for vector ops (0 → unset).
 - `max_cycles`: execution padding bound used in ZK mode and admission.
@@ -49,7 +51,7 @@ Durable state helpers and ABI surface
 - CoreHost wires STATE_{GET,SET,DEL} to WSV-backed durable smart-contract state; dev/test hosts may use overlays or local persistence but must preserve the same observable behavior.
 
 Validation
-- Generic IVM parsing accepts only `version_major = 1`, `version_minor = 1` headers.
+- Generic IVM parsing accepts `version_major = 1` with `version_minor = 0` or `1`; deployable CNTR contracts require `1.1`.
 - Contract artifacts must embed a `CNTR` section immediately after the fixed header and are rejected if that section is missing or inconsistent with the executable stream.
 - `mode` must only contain known bits: `ZK`, `VECTOR`, `HTM` (unknown bits are rejected).
 - `vector_length` is advisory and may be non‑zero even if the `VECTOR` bit is not set; admission enforces an upper bound only.
@@ -62,7 +64,7 @@ The following policy summary is generated from the implementation and should not
 | Field | Policy |
 |---|---|
 | version_major | 1 |
-| version_minor | 1 |
+| version_minor | 0 or 1 (deployable CNTR contracts require 1) |
 | mode (known bits) | 0x07 (ZK=0x01, VECTOR=0x02, HTM=0x04) |
 | abi_version | 1 |
 | vector_length | 0 or 1..=64 (advisory; independent of VECTOR bit) |

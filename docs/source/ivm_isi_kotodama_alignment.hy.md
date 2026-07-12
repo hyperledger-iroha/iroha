@@ -49,8 +49,8 @@ translator: machine-google-reviewed
 ### Kotodama → IVM
 - Առջևի հատվածներ կան (lexer/parser/minimal semantics/IR/regalloc):
 - Codegen-ը (`kotodama::compiler`) թողարկում է IVM օպերացիաների ենթաբազմություն և օգտագործում է `SCALL` ակտիվների գործառնությունների համար.
-  - `MintAsset` → սահմանել x10=հաշիվ, x11=ակտիվ, x12=&Amount; `SCALL SYSCALL_MINT_ASSET`.
-  - `BurnAsset`/`TransferAsset` նմանատիպ (գումարը փոխանցվել է որպես Amount ցուցիչ):
+  - `MintAsset` → սահմանել x10=հաշիվ, x11=ակտիվ, x12=&QuantityValueV1; `SCALL SYSCALL_MINT_ASSET`.
+  - `BurnAsset`/`TransferAsset` նմանատիպ (գումարը փոխանցվել է որպես QuantityValueV1 ցուցիչ):
 - `koto_*_demo.rs` ցուցադրումը ցուցադրվում է `WsvHost`-ի միջոցով՝ արագ փորձարկման համար ID-ներին քարտեզագրված ամբողջ թվային ինդեքսներով:
 
 ---
@@ -130,9 +130,9 @@ translator: machine-google-reviewed
 Ներկայացուցչական ենթաբազմություն — վերջնականացնել և ընդլայնել հոսթինգի իրականացման ընթացքում:- SYSCALL_REGISTER_DOMAIN (id: ptr DomainId) → ISI գրանցում
 - SYSCALL_REGISTER_ACCOUNT (id: ptr AccountId) → ISI գրանցում
 - SYSCALL_REGISTER_ASSET (id: ptr AssetDefinitionId, mintable: u8) → ISI ռեգիստր
-- SYSCALL_MINT_ASSET (հաշիվ՝ ptr AccountId, ակտիվ՝ ptr AssetDefinitionId, գումար՝ ptr Amount) → ISI Mint
-- SYSCALL_BURN_ASSET (հաշիվ՝ ptr AccountId, ակտիվ՝ ptr AssetDefinitionId, գումար՝ ptr Amount) → ISI Burn
-- SYSCALL_TRANSFER_ASSET(-ից՝ ptr AccountId, դեպի՝ ptr AccountId, ակտիվ՝ ptr AssetDefinitionId, գումարը՝ ptr Amount) → ISI Transfer
+- SYSCALL_MINT_ASSET (հաշիվ՝ ptr AccountId, ակտիվ՝ ptr AssetDefinitionId, գումար՝ ptr QuantityValueV1) → ISI Mint
+- SYSCALL_BURN_ASSET (հաշիվ՝ ptr AccountId, ակտիվ՝ ptr AssetDefinitionId, գումար՝ ptr QuantityValueV1) → ISI Burn
+- SYSCALL_TRANSFER_ASSET(-ից՝ ptr AccountId, դեպի՝ ptr AccountId, ակտիվ՝ ptr AssetDefinitionId, գումարը՝ ptr QuantityValueV1) → ISI Transfer
 - SYSCALL_TRANSFER_V1_BATCH_BEGIN() / SYSCALL_TRANSFER_V1_BATCH_END() → ISI TransferAssetBatch (բացել/փակել շրջանակը. անհատական գրառումները իջեցվել են `transfer_asset`-ի միջոցով)
 - SYSCALL_TRANSFER_V1_BATCH_APPLY (&NoritoBytes) → Ներկայացրե՛ք նախապես կոդավորված խմբաքանակ, երբ պայմանագրերն արդեն իսկ սերիականացրել են գրառումները շղթայից դուրս
 - SYSCALL_NFT_MINT_ASSET (id: ptr NftId, սեփականատերը: ptr AccountId) → ISI գրանցում

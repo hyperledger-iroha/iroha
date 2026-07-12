@@ -36,13 +36,13 @@ Pointer-ABI chaqiruv konventsiyasi (aqlli-kontrakt tizimi)
 Kanonik tizimli qo'ng'iroqlar jadvali (quyi to'plam)| Hex | Ism | Argumentlar (`r10+` da) | Qaytadi | Gaz (tayanch + o'zgaruvchan) | Eslatmalar |
 |------|--------------------------------------|------------------------------------------------------------------------|-------------|------------------------------|-------|
 | 0x1A | SET_ACCOUNT_DETAIL | `&AccountId`, `&Name`, `&Json` | `u64=0` | `G_set_detail + bytes(val)` | Hisob uchun batafsil ma'lumot yozadi |
-| 0x22 | MINT_ASSET | `&AccountId`, `&AssetDefinitionId`, `&Amount` | `u64=0` | `G_mint` | Hisobga aktivning `amount` pul pullari |
-| 0x23 | BURN_ASSET | `&AccountId`, `&AssetDefinitionId`, `&Amount` | `u64=0` | `G_burn` | Hisobdan `amount` kuyadi |
-| 0x24 | TRANSFER_V1 | `&AccountId(from)`, `&AccountId(to)`, `&AssetDefinitionId`, `&Amount` | `u64=0` | `G_transfer` | Batch-internal FASTPQ transfer; `transfer_batch` coalesces entries on this path |
+| 0x22 | MINT_ASSET | `&AccountId`, `&AssetDefinitionId`, `&QuantityValueV1` | `u64=0` | `G_mint` | Hisobga aktivning `amount` pul pullari |
+| 0x23 | BURN_ASSET | `&AccountId`, `&AssetDefinitionId`, `&QuantityValueV1` | `u64=0` | `G_burn` | Hisobdan `amount` kuyadi |
+| 0x24 | TRANSFER_V1 | `&AccountId(from)`, `&AccountId(to)`, `&AssetDefinitionId`, `&QuantityValueV1` | `u64=0` | `G_transfer` | Batch-internal FASTPQ transfer; `transfer_batch` coalesces entries on this path |
 | 0x29 | TRANSFER_V1_BATCH_BEGIN | – | `u64=0` | `G_transfer` | FASTPQ uzatish to'plami hajmini boshlang |
 | 0x2A | TRANSFER_V1_BATCH_END | – | `u64=0` | `G_transfer` | Flush to'plangan FASTPQ uzatish to'plami |
 | 0x2B | TRANSFER_V1_BATCH_Qo'llash | `r10=&NoritoBytes(TransferAssetBatch)` | `u64=0` | `G_transfer` | Norito kodlangan to'plamni bitta tizim chaqiruvida qo'llash |
-| 0x2C | TRANSFER_ASSET_SCOPED | `&AccountId(from)`, `&AccountId(to)`, `&AssetDefinitionId`, `&Amount`, `&DataSpaceId` | `u64=0` | `G_transfer` | Standalone `transfer_asset` path; global assets use global source balances and dataspace-restricted assets use `r14` |
+| 0x2C | TRANSFER_ASSET_SCOPED | `&AccountId(from)`, `&AccountId(to)`, `&AssetDefinitionId`, `&QuantityValueV1`, `&DataSpaceId` | `u64=0` | `G_transfer` | Standalone `transfer_asset` path; global assets use global source balances and dataspace-restricted assets use `r14` |
 | 0x25 | NFT_MINT_ASSET | `&NftId`, `&AccountId(owner)` | `u64=0` | `G_nft_mint_asset` | Yangi NFT | ro'yxatdan o'tkazadi
 | 0x26 | NFT_TRANSFER_ASSET | `&AccountId(from)`, `&NftId`, `&AccountId(to)` | `u64=0` | `G_nft_transfer_asset` | NFT egalik huquqini o'tkazadi |
 | 0x27 | NFT_SET_METADATA | `&NftId`, `&Name`, `&Json` | `u64=0` | `G_nft_set_metadata` | NFT metama'lumotlarini yangilaydi |

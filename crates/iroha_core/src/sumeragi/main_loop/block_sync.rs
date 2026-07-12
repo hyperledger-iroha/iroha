@@ -2318,6 +2318,9 @@ impl Actor {
         now: Instant,
         tick_deadline: Option<Instant>,
     ) -> bool {
+        if self.kura_recovery_required() {
+            return false;
+        }
         if self.quarantined_block_sync_qcs.is_empty() {
             return false;
         }
@@ -2393,6 +2396,9 @@ impl Actor {
 
         let mut progress = false;
         for action in actions {
+            if self.kura_recovery_required() {
+                break;
+            }
             match action {
                 ReplayAction::Replay {
                     key,
@@ -2460,6 +2466,9 @@ impl Actor {
                     );
                     progress = true;
                 }
+            }
+            if self.kura_recovery_required() {
+                break;
             }
         }
 
@@ -4849,6 +4858,9 @@ impl Actor {
 
     /// Replay deferred block-sync updates once commit/validation work is idle.
     pub(super) fn try_replay_deferred_block_sync_updates(&mut self) -> bool {
+        if self.kura_recovery_required() {
+            return false;
+        }
         let initial_len = self.deferred_block_sync_updates.len();
         if self.deferred_block_sync_updates.is_empty() {
             let decision =
@@ -4935,6 +4947,9 @@ impl Actor {
         update: super::message::BlockSyncUpdate,
         sender: Option<PeerId>,
     ) -> Result<()> {
+        if self.kura_recovery_required() {
+            return Ok(());
+        }
         let dedup_key = super::block_sync_update_dedup_key(&update);
         self.release_block_payload_dedup(&dedup_key);
         if crate::sumeragi::status::local_peer_removed() {
@@ -7699,6 +7714,9 @@ impl Actor {
                                 block_height,
                                 block_view,
                             );
+                            if self.kura_recovery_required() {
+                                return Ok(());
+                            }
                             if block_sync_selected_qc_process_clean_rbc_sessions(
                                 apply_commit_qc_now,
                                 self.runtime_da_enabled(),
@@ -8616,6 +8634,9 @@ impl Actor {
         response: super::message::BlockBodyResponse,
         sender: Option<PeerId>,
     ) -> Result<()> {
+        if self.kura_recovery_required() {
+            return Ok(());
+        }
         let dedup_key = super::BlockPayloadDedupKey::BlockBodyResponse {
             height: response.height,
             view: response.view,
@@ -8663,6 +8684,9 @@ impl Actor {
                 response.view,
                 "non_frontier_height",
             );
+            if self.kura_recovery_required() {
+                return Ok(());
+            }
             self.release_block_payload_dedup(&dedup_key);
             return Ok(());
         }
@@ -8683,6 +8707,9 @@ impl Actor {
                 response.view,
                 "body_not_requested",
             );
+            if self.kura_recovery_required() {
+                return Ok(());
+            }
             self.release_block_payload_dedup(&dedup_key);
             return Ok(());
         }
@@ -8767,6 +8794,9 @@ impl Actor {
                 self.handle_block_sync_update(update, sender)
             }
         };
+        if self.kura_recovery_required() {
+            return result;
+        }
         let body_materialized = self.frontier_block_materialized_locally(response.block_hash);
         if body_materialized
             && repairs_missing_highest_qc_dependency
@@ -8819,6 +8849,9 @@ impl Actor {
                 response.view,
                 "materialized_body",
             );
+            if self.kura_recovery_required() {
+                return result;
+            }
         }
         if body_materialized {
             let queue_depths = super::status::worker_queue_depth_snapshot();
@@ -8913,6 +8946,9 @@ impl Actor {
         view: u64,
         context: &'static str,
     ) {
+        if self.kura_recovery_required() {
+            return;
+        }
         let Some(qc) = qc else {
             debug_assert_eq!(
                 detached_block_body_commit_qc_decision(false, false, false),
@@ -8955,6 +8991,9 @@ impl Actor {
                 context,
                 "failed to process commit QC from ignored BlockBodyResponse"
             );
+        }
+        if self.kura_recovery_required() {
+            return;
         }
         let cached_after_handle = self
             .cached_commit_qc_for_block(block_hash, height, view)
@@ -9240,12 +9279,18 @@ impl Actor {
     }
 
     pub(super) fn drain_known_block_qc_work(&mut self, tick_deadline: Option<Instant>) -> bool {
+        if self.kura_recovery_required() {
+            return false;
+        }
         if self.known_block_qc_work.is_empty() {
             return false;
         }
         let mut progress = false;
         let mut processed = 0usize;
         while processed < KNOWN_BLOCK_QC_WORK_PER_TICK {
+            if self.kura_recovery_required() {
+                break;
+            }
             if Self::tick_budget_exhausted(tick_deadline, Instant::now()) {
                 break;
             }
@@ -9260,6 +9305,9 @@ impl Actor {
                 progress = true;
             }
             processed = processed.saturating_add(1);
+            if self.kura_recovery_required() {
+                break;
+            }
         }
         if processed > 0 {
             debug!(
@@ -9378,6 +9426,9 @@ impl Actor {
     }
 
     pub(super) fn apply_known_block_qc_work(&mut self, work: KnownBlockQcWork) -> bool {
+        if self.kura_recovery_required() {
+            return false;
+        }
         if self.block_sync_qc_is_stale_against_lock(&work.qc) {
             debug!(
                 height = work.qc.height,
@@ -9617,6 +9668,9 @@ impl Actor {
         );
         if block_known_for_commit {
             self.apply_commit_qc(&qc, topology.as_ref(), block_hash, block_height, block_view);
+            if self.kura_recovery_required() {
+                return true;
+            }
             self.qc_cache
                 .entry(Self::qc_tally_key(&qc))
                 .or_insert_with(|| qc.clone());

@@ -968,16 +968,8 @@ fn validate_snapshot_sccp_registry(value: &json::Value) -> Result<(), TryReadErr
     let Some(registry_value) = world.get("sccp_registry") else {
         return Ok(());
     };
-    let wire: crate::state::SccpOnChainRegistryV1 = json::value::from_value(registry_value.clone())
-        .map_err(|error| TryReadError::InvalidSccpRegistry(error.to_string()))?;
-    let validated = crate::state::ValidatedSccpRegistryV1::try_from_wire(wire.clone())
-        .map_err(TryReadError::InvalidSccpRegistry)?;
-    if validated.registry() != &wire {
-        return Err(TryReadError::InvalidSccpRegistry(
-            "snapshot registry is not in canonical lane/route order".to_owned(),
-        ));
-    }
-    Ok(())
+    crate::state::validate_sccp_registry_cell_json(registry_value)
+        .map_err(TryReadError::InvalidSccpRegistry)
 }
 
 fn decode_instruction_by_id<T>(instruction: &InstructionBox) -> Option<T>
@@ -3513,20 +3505,53 @@ mod tests {
 
     #[test]
     async fn signed_hostile_sccp_registry_snapshots_are_rejected_before_acceptance() {
-        let assert_rejected = |registry: crate::state::SccpOnChainRegistryV1, expected: &str| {
+        enum RegistryCellMutation {
+            Replace {
+                role: &'static str,
+                registry: crate::state::SccpOnChainRegistryV1,
+            },
+            Remove(&'static str),
+            AddUnknown,
+        }
+
+        let assert_rejected = |mutation: RegistryCellMutation, expected: &str| {
             let tmp_root = tempdir().expect("temporary snapshot root");
             let store_dir = tmp_root.path().join("snapshot");
             let kura = Kura::blank_kura_for_testing();
             let mut state = state_factory_with_kura(Arc::clone(&kura));
             state.chain_id =
                 iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1);
-            {
-                let mut cell = state.world.sccp_registry.block();
-                *cell.get_mut() = registry;
-                cell.commit();
-            }
             let mut serialized = String::new();
             serialize_state_snapshot(&state, &mut serialized, true);
+            let mut snapshot: json::Value =
+                json::from_str(&serialized).expect("valid baseline snapshot JSON");
+            let json::Value::Object(snapshot_object) = &mut snapshot else {
+                panic!("snapshot root must be an object");
+            };
+            let Some(json::Value::Object(world)) = snapshot_object.get_mut("world") else {
+                panic!("snapshot world must be an object");
+            };
+            let Some(json::Value::Object(cell)) = world.get_mut("sccp_registry") else {
+                panic!("snapshot SCCP registry must be one cell envelope");
+            };
+            match mutation {
+                RegistryCellMutation::Replace { role, registry } => {
+                    cell.insert(
+                        role.to_owned(),
+                        json::to_value(&registry).expect("hostile SCCP registry encodes"),
+                    );
+                }
+                RegistryCellMutation::Remove(role) => {
+                    assert!(cell.remove(role).is_some(), "baseline cell contains {role}");
+                }
+                RegistryCellMutation::AddUnknown => {
+                    assert!(
+                        cell.insert("future_registry".to_owned(), json::Value::Null)
+                            .is_none()
+                    );
+                }
+            }
+            serialized = json::to_json(&snapshot).expect("mutated snapshot JSON encodes");
             let key_pair = checked_random_snapshot_keypair();
             write_snapshot_bundle_from_bytes(&store_dir, serialized.as_bytes(), &key_pair);
 
@@ -3552,18 +3577,38 @@ mod tests {
         };
 
         assert_rejected(
-            crate::state::SccpOnChainRegistryV1 {
-                version: 2,
-                lanes: Vec::new(),
+            RegistryCellMutation::Replace {
+                role: "blocks",
+                registry: crate::state::SccpOnChainRegistryV1 {
+                    version: 2,
+                    lanes: Vec::new(),
+                },
             },
             "version",
         );
+        assert_rejected(
+            RegistryCellMutation::Replace {
+                role: "revert",
+                registry: crate::state::SccpOnChainRegistryV1 {
+                    version: 2,
+                    lanes: Vec::new(),
+                },
+            },
+            "revert",
+        );
+        assert_rejected(RegistryCellMutation::Remove("blocks"), "missing `blocks`");
+        assert_rejected(RegistryCellMutation::Remove("revert"), "missing `revert`");
+        assert_rejected(RegistryCellMutation::AddUnknown, "unknown field");
+
         let mut valid = sccp_registry_for_snapshot_test();
         let lane = valid.lanes.remove(0);
         assert_rejected(
-            crate::state::SccpOnChainRegistryV1 {
-                version: 1,
-                lanes: vec![lane.clone(), lane],
+            RegistryCellMutation::Replace {
+                role: "blocks",
+                registry: crate::state::SccpOnChainRegistryV1 {
+                    version: 1,
+                    lanes: vec![lane.clone(), lane],
+                },
             },
             "duplicate",
         );
@@ -3584,9 +3629,12 @@ mod tests {
         reversed_lanes.sort_by_key(|lane| lane.lane_id);
         reversed_lanes.reverse();
         assert_rejected(
-            crate::state::SccpOnChainRegistryV1 {
-                version: 1,
-                lanes: reversed_lanes,
+            RegistryCellMutation::Replace {
+                role: "blocks",
+                registry: crate::state::SccpOnChainRegistryV1 {
+                    version: 1,
+                    lanes: reversed_lanes,
+                },
             },
             "canonical lane/route order",
         );
@@ -3610,10 +3658,35 @@ mod tests {
                 deployment.verifying_key,
             )
             .expect("off-curve point remains structurally canonical");
+        let route = &mut off_curve.lanes[0].routes[0];
+        let route_configuration_hash = route
+            .destination
+            .route_configuration_hash(
+                route.lane_id,
+                &route.route_id,
+                &route.asset_key,
+                route.revision,
+                route.settlement.payload_amount_scale,
+            )
+            .expect("off-curve point remains structurally valid route input");
+        match &mut route.source_identity.emitter {
+            iroha_data_model::bridge::SccpSourceEmitterV1::Evm(emitter) => {
+                emitter.route_config_hash = route_configuration_hash;
+            }
+            iroha_data_model::bridge::SccpSourceEmitterV1::Tron(_) => {
+                unreachable!("snapshot fixture is an EVM route")
+            }
+        }
         off_curve
             .validate()
             .expect("structural registry validation must not stand in for curve validation");
-        assert_rejected(off_curve, "non-curve");
+        assert_rejected(
+            RegistryCellMutation::Replace {
+                role: "blocks",
+                registry: off_curve,
+            },
+            "non-curve",
+        );
     }
 
     #[test]

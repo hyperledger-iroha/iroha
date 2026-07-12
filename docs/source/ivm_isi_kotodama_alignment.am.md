@@ -49,8 +49,8 @@ translator: machine-google-reviewed
 ### Kotodama → IVM
 - Frontend ቁርጥራጮች አሉ (lexer/parser/ትንሽ የትርጉም/IR/regalloc)።
 - Codegen (`kotodama::compiler`) የIVM ኦፕስ ስብስብ ያመነጫል እና ለንብረት ስራዎች `SCALL` ይጠቀማል፡
-  - `MintAsset` → አዘጋጅ x10=መለያ፣ x11=ንብረት፣ x12=&Amount; `SCALL SYSCALL_MINT_ASSET`.
-  - `BurnAsset`/`TransferAsset` ተመሳሳይ (እንደ Amount ጠቋሚ የተላለፈ መጠን)።
+  - `MintAsset` → አዘጋጅ x10=መለያ፣ x11=ንብረት፣ x12=&QuantityValueV1; `SCALL SYSCALL_MINT_ASSET`.
+  - `BurnAsset`/`TransferAsset` ተመሳሳይ (እንደ QuantityValueV1 ጠቋሚ የተላለፈ መጠን)።
 - Demos `koto_*_demo.rs` `WsvHost` በመጠቀም የኢንቲጀር ኢንቲጀር ለፈጣን ሙከራ መታወቂያ ላይ ተዘጋጅቷል።
 
 ---
@@ -130,9 +130,9 @@ translator: machine-google-reviewed
 ተወካይ ንዑስ ስብስብ - በአስተናጋጅ ትግበራ ጊዜ ማጠናቀቅ እና ማስፋፋት።- SYSCALL_REGISTER_DOMAIN(መታወቂያ፡ ptr DomainId) → ISI ይመዝገቡ
 - SYSCALL_REGISTER_ACCOUNT(መታወቂያ፡ ptr AccountId) → ISI ይመዝገቡ
 - SYSCALL_REGISTER_ASSET(መታወቂያ፡ ptr AssetDefinitionId፣ mintable፡ u8) → ISI ይመዝገቡ
-- SYSCALL_MINT_ASSET (መለያ፡ ptr AccountId፣ ንብረት፡ ptr AssetDefinitionId፣ መጠን፡ ptr Amount) → ISI Mint
-- SYSCALL_BURN_ASSET(መለያ፡ ptr AccountId፣ ንብረት፡ ptr AssetDefinitionId፣ መጠን፡ ptr Amount) → ISI Burn
-- SYSCALL_TRANSFER_ASSET(ከ፡ ptr AccountId፣ ወደ ptr AccountId፣ asset: ptr AssetDefinitionId፣ መጠን፡ ptr Amount) → ISI ማስተላለፍ
+- SYSCALL_MINT_ASSET (መለያ፡ ptr AccountId፣ ንብረት፡ ptr AssetDefinitionId፣ መጠን፡ ptr QuantityValueV1) → ISI Mint
+- SYSCALL_BURN_ASSET(መለያ፡ ptr AccountId፣ ንብረት፡ ptr AssetDefinitionId፣ መጠን፡ ptr QuantityValueV1) → ISI Burn
+- SYSCALL_TRANSFER_ASSET(ከ፡ ptr AccountId፣ ወደ ptr AccountId፣ asset: ptr AssetDefinitionId፣ መጠን፡ ptr QuantityValueV1) → ISI ማስተላለፍ
 - SYSCALL_TRANSFER_V1_BATCH_BEGIN() / SYSCALL_TRANSFER_V1_BATCH_END() → ISI TransferAssetBatch (ክፍት/ክልሉን ዝጋ፤ የግለሰብ ግቤቶች በ`transfer_asset`) ዝቅ ይላሉ።
 - SYSCALL_TRANSFER_V1_BATCH_APPLY(&NoritoBytes) →ኮንትራቶች ከሰንሰለት ውጪ ያሉትን ቃላቶች በተከታታይ ሲያደርጉ ቅድመ-የተመሰጠረ ባች ያስገቡ።
 - SYSCALL_NFT_MINT_ASSET(መታወቂያ፡ ptr NftId፣ ባለቤት፡ ptr AccountId) → ISI ይመዝገቡ

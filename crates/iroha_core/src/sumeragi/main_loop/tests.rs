@@ -188747,7 +188747,9 @@ fn exec_roots_capture_fallback_uses_witness_snapshot() {
     let expected_parent = parent_state_from_witness(&expected);
     let expected_post = post_state_from_witness(&expected);
 
-    let roots = exec_roots_for_state_block(&mut state_block, block_hash, 2, 0).expect("roots");
+    let roots = exec_roots_for_state_block(&mut state_block, block_hash, 2, 0)
+        .expect("root derivation succeeds")
+        .expect("the captured execution witness produces state roots");
     assert_eq!(roots.parent_state_root, expected_parent);
     assert_eq!(roots.post_state_root, expected_post);
 }
@@ -188789,8 +188791,8 @@ fn validation_reject_reason_label_covers_error_categories() {
 
     let reason_sccp_duplicate = super::validation_reject_reason_label(
         &BlockValidationError::SccpDuplicateOutboundMessage {
-            source_domain: 1,
-            target_domain: 2,
+            source_profile: iroha_data_model::bridge::SccpNetworkV1::SoraTaira,
+            target_profile: iroha_data_model::bridge::SccpNetworkV1::EthereumMainnet,
             message_id: [0xA5; 32],
         },
     );
@@ -229746,6 +229748,8 @@ async fn assert_fatal_kura_outcome_latches_recovery(
     assert!(!actor.poll_validation_results());
     assert!(!actor.poll_qc_verify_results());
     assert!(!actor.poll_vote_verify_results());
+    assert!(!actor.poll_rbc_persist_results_inner());
+    assert!(!actor.poll_rbc_seed_results_inner());
     assert!(!actor.poll_committed_blocks());
     let mut blocked_qc = commit_qc.clone();
     blocked_qc.view = blocked_qc.view.saturating_add(2);
@@ -229788,6 +229792,168 @@ async fn da_rewrite_unknown_is_fatal_and_preserves_certified_commit() {
 async fn canonical_storage_poison_is_fatal_and_preserves_certified_commit() {
     assert_fatal_kura_outcome_latches_recovery(
         crate::kura::Error::CanonicalStoragePoisoned,
+        KuraRecoveryRequiredReason::CanonicalStoragePoisoned,
+    )
+    .await;
+}
+
+async fn assert_fatal_inline_commit_stops_candidate_pipeline(
+    expected_reason: KuraRecoveryRequiredReason,
+) {
+    let mut harness = test_actor_harness(1).await;
+    let key_pairs = harness.key_pairs.clone();
+    let actor = &mut harness.actor;
+    let parent_hash = seed_genesis_block_for_state(actor.state.as_ref());
+    let height = actor.committed_height_snapshot().saturating_add(1);
+    let view = 0;
+    let block = nonempty_block_for_actor(actor, &key_pairs, height, view, Some(parent_hash));
+    let block_hash = block.hash();
+    let epoch = actor.epoch_for_height(height);
+    let lock = QcHeaderRef {
+        phase: Phase::Commit,
+        subject_block_hash: block_hash,
+        height,
+        view,
+        epoch,
+    };
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let roots = validated_roots_for_actor_block(actor, block.clone(), &topology);
+    let mut commit_qc = qc_with_bitmap_for_actor(
+        actor,
+        block_hash,
+        height,
+        view,
+        epoch,
+        vec![1],
+        Phase::Commit,
+        &topology,
+        &key_pairs,
+    );
+    commit_qc.parent_state_root = roots.parent_state_root;
+    commit_qc.post_state_root = roots.post_state_root;
+    resign_qc_for_actor(&mut commit_qc, actor, &key_pairs);
+    let qc_key = Actor::qc_tally_key(&commit_qc);
+    actor.qc_cache.insert(qc_key, commit_qc.clone());
+    actor.locked_qc = Some(lock);
+    actor.highest_qc = Some(lock);
+    insert_validated_pending(actor, block.clone());
+    let pending = actor
+        .pending
+        .pending_blocks
+        .get_mut(&block_hash)
+        .expect("fatal candidate pending");
+    pending.parent_state_root = Some(roots.parent_state_root);
+    pending.post_state_root = Some(roots.post_state_root);
+    pending.note_commit_qc_observed(epoch);
+    pending.commit_qc_epoch = Some(epoch);
+    let committed_height_before = actor.state.committed_height();
+    let committed_tip_before = actor.state.latest_block_hash_fast();
+
+    let later = nonempty_block_for_actor(
+        actor,
+        &key_pairs,
+        height.saturating_add(1),
+        0,
+        Some(block_hash),
+    );
+    let later_hash = insert_validated_pending(actor, later);
+    let later_before = actor
+        .pending
+        .pending_blocks
+        .get(&later_hash)
+        .expect("later candidate")
+        .block
+        .encode();
+    actor.subsystems.commit.work_tx = None;
+    actor.subsystems.commit.result_rx = None;
+    match expected_reason {
+        KuraRecoveryRequiredReason::DaBlockRewriteCommitStateUnknown => actor
+            .kura
+            .fail_next_block_write_with_da_rewrite_unknown_for_tests(),
+        KuraRecoveryRequiredReason::CanonicalStoragePoisoned => actor
+            .kura
+            .fail_next_block_write_with_canonical_poison_for_tests(),
+    }
+
+    let timings = actor.process_commit_candidates_with_trigger(CommitPipelineTrigger::Event, None);
+    assert!(timings.ran, "the inline candidate pipeline must run");
+    let recovery = actor
+        .kura_recovery_required
+        .as_ref()
+        .expect("inline fatal Kura result must latch recovery");
+    assert_eq!(recovery.reason, expected_reason);
+    assert_eq!(recovery.block_hash, block_hash);
+    assert_eq!(recovery.height, height);
+    assert_eq!(recovery.view, view);
+    assert_eq!(recovery.lock, lock);
+    assert_eq!(recovery.commit_qc.as_ref(), Some(&commit_qc));
+    assert_eq!(actor.pending.pending_processing.get(), Some(block_hash));
+    assert_eq!(
+        actor.pending.pending_processing_parent.get(),
+        block.header().prev_block_hash(),
+        "the exact fatal processing parent must remain latched"
+    );
+    assert_eq!(actor.locked_qc, Some(lock));
+    assert_eq!(actor.highest_qc, Some(lock));
+    assert_eq!(actor.qc_cache.get(&qc_key), Some(&commit_qc));
+    assert_eq!(actor.state.committed_height(), committed_height_before);
+    assert_eq!(actor.state.latest_block_hash_fast(), committed_tip_before);
+    assert!(
+        actor.kura.get_block_height_by_hash(block_hash).is_none(),
+        "the injected pre-publication fatal error must not expose the candidate through Kura"
+    );
+    assert_eq!(
+        actor
+            .pending
+            .pending_blocks
+            .get(&block_hash)
+            .expect("fatal block retained")
+            .block
+            .encode(),
+        block.encode()
+    );
+    assert_eq!(
+        actor
+            .pending
+            .pending_blocks
+            .get(&later_hash)
+            .expect("later candidate remains queued")
+            .block
+            .encode(),
+        later_before,
+        "no later candidate may be processed after the inline latch"
+    );
+    assert!(!actor.should_tick());
+    assert!(actor.next_tick_deadline(Instant::now()).is_none());
+    assert!(!actor.commit_pipeline_wakeup_pending());
+    assert!(!actor.poll_commit_results());
+    assert!(!actor.poll_validation_results());
+    assert!(!actor.poll_qc_verify_results());
+    assert!(!actor.poll_vote_verify_results());
+    assert!(!actor.poll_rbc_persist_results_inner());
+    assert!(!actor.poll_rbc_seed_results_inner());
+    assert!(!actor.poll_committed_blocks());
+    assert!(
+        !actor
+            .process_commit_candidates_with_trigger(CommitPipelineTrigger::Event, None)
+            .ran,
+        "the recovery latch must gate every subsequent candidate-pipeline pass"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn da_rewrite_unknown_inline_fallback_stops_candidate_pipeline() {
+    assert_fatal_inline_commit_stops_candidate_pipeline(
+        KuraRecoveryRequiredReason::DaBlockRewriteCommitStateUnknown,
+    )
+    .await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn canonical_storage_poison_inline_fallback_stops_candidate_pipeline() {
+    assert_fatal_inline_commit_stops_candidate_pipeline(
         KuraRecoveryRequiredReason::CanonicalStoragePoisoned,
     )
     .await;

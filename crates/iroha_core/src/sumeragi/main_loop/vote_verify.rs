@@ -557,8 +557,11 @@ impl Actor {
             return false;
         }
         let mut progress = self.process_pending_vote_validation();
+        if self.kura_recovery_required() {
+            return progress;
+        }
         let Some(result_rx) = self.subsystems.vote_verify.result_rx.take() else {
-            if self.dispatch_pending_vote_verifications() {
+            if !self.kura_recovery_required() && self.dispatch_pending_vote_verifications() {
                 progress = true;
             }
             return progress;
@@ -645,6 +648,9 @@ impl Actor {
                         self.apply_validated_vote(inflight.vote, context);
                     }
                     progress = true;
+                    if self.kura_recovery_required() {
+                        break;
+                    }
                 }
                 Err(mpsc::TryRecvError::Empty) => break,
                 Err(mpsc::TryRecvError::Disconnected) => {
@@ -653,7 +659,7 @@ impl Actor {
                 }
             }
         }
-        if self.dispatch_pending_vote_verifications() {
+        if !self.kura_recovery_required() && self.dispatch_pending_vote_verifications() {
             progress = true;
         }
         if keep_rx {

@@ -1113,8 +1113,8 @@ public enum KagemushaRecursiveSpendRequestCodecs {
         let reason = try readField(&reader, readString)
         let chainAdmissible = try readField(&reader, readBool)
         let chainAdmissionReason = try readField(&reader, readString)
-        let witnesslessRedeemSupported = reader.remaining == 0 ? false : try readField(&reader, readBool)
-        let lineageWitnessRequiredForRedeem = reader.remaining == 0 ? false : try readField(&reader, readBool)
+        let witnesslessRedeemSupported = try readField(&reader, readBool)
+        let lineageWitnessRequiredForRedeem = try readField(&reader, readBool)
         guard reader.remaining == 0 else {
             throw KagemushaRecursiveSpendRequestCodecError.invalidArchive("verifyResult")
         }

@@ -223,14 +223,15 @@ the final-domain check:
 ```text
 exact_divide((ma, sa), (mb, sb)):
     if mb == 0: fail DivisionByZero
-    if ma == 0: return (0, 0)
 
-    n = ma * 10^sb
-    d = mb * 10^sa
-    if d < 0: n = -n; d = -d
-    g = gcd(abs(n), d)
-    n = n / g
-    d = d / g
+    division_operands(output_scale):
+        shift = sb + output_scale - sa
+        if shift >= 0: return (ma * 10^shift, mb)
+        else:          return (ma, mb * 10^(-shift))
+
+    n0, d0 = division_operands(0)
+    g = gcd(abs(n0), abs(d0))
+    d = abs(d0) / g
 
     twos = 0
     while d % 2 == 0: d = d / 2; twos += 1
@@ -240,16 +241,20 @@ exact_divide((ma, sa), (mb, sb)):
 
     scale = max(twos, fives)
     if scale > 28: fail ExactDivisionScaleOverflow
-    mantissa = n * 2^(scale - twos) * 5^(scale - fives)
+    n, d = division_operands(scale)
+    mantissa, remainder = truncating_div_rem(n, d)
+    require remainder == 0             # proven by classification
     result = canonicalize(mantissa, scale)
     check final scale, signed mantissa, then nominal quantity domain
     return result
 ```
 
-The zero special case is canonical without a GCD, factor-classification, or
-normalization division. Classification uses exact Euclidean quotient/remainder
-steps and repeated exact division by two and five; a host bigint library's GCD
-or radix-specific shortcut is not a different observable algorithm.
+Classification uses exact Euclidean quotient/remainder steps and repeated
+exact division by two and five, then performs exactly one quotient/remainder
+attempt at the proven scale. A zero dividend follows the same classification
+and exact-attempt sequence, but its canonical result emits no divide-by-ten
+normalization probe. A host bigint library's GCD or radix-specific shortcut is
+not a different observable algorithm.
 
 Rounded division requires an output scale and one of these stable modes:
 
@@ -288,8 +293,9 @@ Rounded decimal division is normatively equivalent to:
 rounded_divide((ma, sa), (mb, sb), output_scale, mode):
     require 0 <= output_scale <= 28
     if mb == 0: fail DivisionByZero
-    n = ma * 10^(sb + output_scale)
-    d = mb * 10^sa
+    shift = sb + output_scale - sa
+    if shift >= 0: n = ma * 10^shift; d = mb
+    else:          n = ma;              d = mb * 10^(-shift)
     q, r = truncating_div_rem(n, d)
     if r != 0:
         adjust q by at most one unit according to mode, sign(n / d),
@@ -438,9 +444,12 @@ write mutates state, and before a present read publishes bytes to the guest,
 the host reconstructs the exact schema from CNTR and requires a canonical
 `StateValueRecordV1` whose schema hash, active atom stream, pointer types,
 pointer hashes, and leaf payloads all match it. Contract execution without its
-CNTR section fails closed. Generic non-contract VM tooling without CNTR retains
-bounded raw-path/raw-value behavior; it cannot be used as a contract-runtime
-fallback.
+CNTR section fails closed. Generic non-contract VM programs have no
+authenticated durable-state namespace, so every durable-state syscall is
+rejected during static admission and again before host dispatch. They retain
+the ABI V1 pure compute, numeric, codec, crypto, output, query, and ordinary
+permission-checked ISI surface; the exact contract-bound denylist and reserved
+transaction-metadata keys are part of `abi_hash`.
 
 The digest is the uniform pointer-ABI frame-integrity binding: it proves that
 the bounded frame snapshot subsequently decoded is exactly the frame carried
@@ -548,7 +557,7 @@ never refund. Each phase is debited immediately before its bounded work begins;
 an unaffordable phase performs no work and leaves earlier phase charges
 consumed.
 
-The complete formula and stable OOG phase-tag map have gas-formula version 3.
+The complete formula and stable OOG phase-tag map have gas-formula version 4.
 That version is an input to gas-schedule descriptor format 3 under domain
 `iroha.ivm.gas-schedule.v3`. The descriptor also encodes every staged phase
 name and numeric tag directly, in tag order; the phase table is not represented
@@ -576,7 +585,7 @@ The stage charge unit is exact and uses checked `u64` arithmetic:
 
 | Phase | Charge immediately before work | Repetition |
 | --- | ---: | --- |
-| `Entry` | `16` | once per admitted numeric call |
+| `Entry` | `384` | once per admitted numeric call |
 | `PointerHeader` | `7` | once per pointer operand |
 | `PointerEnvelope` | `frame_bytes` | once per pointer operand |
 | `PayloadHash` | `32 + frame_bytes` | once per pointer operand |
@@ -594,8 +603,8 @@ machine is:
 ```text
 execute_numeric_scallx(call):
     debit 5                         # ordinary VM instruction gas
-    staged_debit(Entry, 16)
-    validate bounded entry/privacy/register contract
+    staged_debit(Entry, 384)
+    initialize the staged context and validate syscall privacy
     for pointer operand in register order:
         staged_debit(PointerHeader, 7)
         read header; validate provenance, type, version, and capped length
@@ -675,19 +684,50 @@ than `4`; bounded dispatch/control overhead MUST remain no greater than `16`
 baseline gas units. A failure requires increasing the constants, changing the
 gas-formula version/hash, and regenerating gas goldens before release—it MUST
 NOT be hidden by a hardware-specific implementation. The first-release
-reference-calibration target is Apple M1 Ultra (`Mac13,2`, arm64), Rust 1.93.1;
+reference-calibration target is Apple M1 Ultra (`Mac13,2`, arm64), Rust 1.93.1
+(`01f6ddf7588f42ae2d7eb0a2f21d44e8e96674cf`, 2026-02-11);
 release records MUST retain the Criterion output alongside the build artifacts
 and repeat the run on the slowest supported tier. This specification does not
 claim that calibration has completed unless that archived output is present.
-The `numeric_v1_calibration.yml` release workflow repeats the gate on the
-supported GitHub runner matrix (Linux x86-64, Linux arm64, Apple Silicon, and
-Windows x86-64) and captures each exact host/toolchain identity, console
-transcript, and complete Criterion directory as a retained build artifact; tag
-publication must not proceed without the archived M1 Ultra reference record
-and every matrix run passing.
-`scripts/check_numeric_v1_calibration.py` applies that harness adjustment,
-normalizes every declared work/gas denominator, applies the 25% margin, and
-fails the workflow when factor `4` is insufficient.
+The `numeric_v1_calibration.yml` release workflow is a manual or reusable
+**pre-tag** gate. It accepts only an untagged protected-branch commit, requires
+the requested full SHA to equal both the caller/source SHA and the SHA of this
+job-defining workflow (so reusable calls must use this repository at the same
+candidate commit), and targets a self-hosted runner with all of the
+`numeric-v1-release-calibration`, `apple-m1-ultra`, and `mac13-2` custom labels
+in addition to GitHub's `macOS` and `ARM64` labels.
+Those labels route the job but do not establish trust: the checker rejects a
+missing or mismatched `system_profiler` model/chip, architecture, runner
+identity, Rust release/host triple, source SHA, repository, release tag, or
+workflow-run identity. Runner provisioning MUST expose an English
+`SPHardwareDataType` record whose model is `Mac13,2` and chip is
+`Apple M1 Ultra`, Python 3, GitHub CLI, and the standard macOS `shasum`, `tar`,
+and `curl` tools. A reusable caller MUST grant `contents: write`,
+`attestations: write`, and `id-token: write`; called workflows cannot elevate a
+caller's token permissions, so a missing grant fails closed.
+
+Before the gate runs, release engineering MUST provision the dedicated,
+unpublished GitHub draft release named by `evidence_release_tag` (by default
+`numeric-v1-calibration-evidence-v1`). Its tag is a storage anchor and MUST be
+different from the candidate `release_tag`; the candidate tag itself MUST not
+exist. An accepted run packages the complete Criterion directory, structured
+host/toolchain record, exact command, console and verifier transcripts,
+machine-readable report, and per-file SHA-256 manifest. The workflow attests
+that bundle, uploads the bundle and its checksum as uniquely named assets on
+the evidence archive without clobbering any prior record, reads back GitHub's
+asset digest, and verifies again that the candidate tag is absent. The archive
+asset and repository attestation are the durable release evidence; the
+separate 14-day Actions artifact is diagnostic only and MUST NOT satisfy this
+gate. Candidate tag publication must not proceed unless the archive contains a
+passing bundle for the exact release SHA and its attestation and read-back
+digest verify.
+
+`scripts/check_numeric_v1_calibration.py` requires the structured reference
+host record, binds the report to a digest of every consumed Criterion estimate,
+applies the harness adjustment, normalizes every declared work/gas denominator,
+applies the 25% margin, and fails when factor `4` is insufficient. Supplemental
+slow-tier runs may use separate workflows, but they do not replace the required
+M1 Ultra record.
 
 The fixed entry charge includes bounded register-contract checks (required-zero
 registers, failure mode, and rounding tag). It is not followed by hidden fixed
@@ -937,3 +977,16 @@ Merge and release require:
   multiplication/alignment intermediates above the input limb maximum;
 - stale artifact/ABI-hash rejection and canonical numeric map-key tests;
 - execution parity across supported architectures and bigint backends.
+
+The dedicated `numeric_v1_fuzz.yml` gate runs the `numeric_v1` libFuzzer
+target for pull requests that touch the numeric corridor, every push to the
+main branch, release-tag pushes, reusable workflow callers, and manual runs.
+It installs `cargo-fuzz 0.13.2`, selects `nightly-2025-05-08`, and invokes
+`scripts/fuzz_smoke.sh --strict --numeric-v1-only`. Strict mode rejects a
+missing or mismatched Cargo, rustup, nightly, or cargo-fuzz prerequisite and
+propagates every target failure; it may never report a skipped fuzz run as a
+passing CI/release gate. The optimized sanitizer build uses sixteen codegen
+units to bound clean-build LLVM latency and memory without weakening sanitizer
+coverage. Running the script without `--strict` remains an
+explicitly optional developer convenience and prints a skip diagnostic when
+the pinned fuzz toolchain is unavailable.

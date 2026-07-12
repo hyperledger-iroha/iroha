@@ -49,7 +49,7 @@ translator: manual
 ### Kotodama → IVM
 - フロントエンド要素（レキサ／パーサ／最小セマンティクス／IR／レジスタ割り付け）は存在しています。
 - コード生成（`kotodama::compiler`）は IVM 命令のサブセットを出力し、アセット操作には `SCALL` を使用します。
-  - `MintAsset`: x10=account, x11=asset, x12=&Amount を設定し、`SCALL SYSCALL_MINT_ASSET`。
+  - `MintAsset`: x10=account, x11=asset, x12=&QuantityValueV1 を設定し、`SCALL SYSCALL_MINT_ASSET`。
   - `BurnAsset`／`TransferAsset` も同様。
 - `koto_*_demo.rs` のデモは `WsvHost` を利用し、整数インデックスと ID のマッピングで手軽なテストを実現しています。
 
@@ -122,9 +122,9 @@ translator: manual
 - `SYSCALL_REGISTER_DOMAIN(id: ptr DomainId)` → ISI `Register<Domain>`
 - `SYSCALL_REGISTER_ACCOUNT(id: ptr AccountId)` → ISI `Register<Account>`
 - `SYSCALL_REGISTER_ASSET(id: ptr AssetDefinitionId, mintable: u8)` → ISI `Register<AssetDefinition>`
-- `SYSCALL_MINT_ASSET(account: ptr AccountId, asset: ptr AssetDefinitionId, amount: ptr Amount)` → ISI `Mint<Numeric, Asset>`
-- `SYSCALL_BURN_ASSET(account: ptr AccountId, asset: ptr AssetDefinitionId, amount: ptr Amount)` → ISI `Burn<Numeric, Asset>`
-- `SYSCALL_TRANSFER_ASSET(from: ptr AccountId, to: ptr AccountId, asset: ptr AssetDefinitionId, amount: ptr Amount)` → ISI `Transfer<Asset>`
+- `SYSCALL_MINT_ASSET(account: ptr AccountId, asset: ptr AssetDefinitionId, amount: ptr QuantityValueV1)` → ISI `Mint<Quantity, Asset>`
+- `SYSCALL_BURN_ASSET(account: ptr AccountId, asset: ptr AssetDefinitionId, amount: ptr QuantityValueV1)` → ISI `Burn<Quantity, Asset>`
+- `SYSCALL_TRANSFER_ASSET(from: ptr AccountId, to: ptr AccountId, asset: ptr AssetDefinitionId, amount: ptr QuantityValueV1)` → ISI `Transfer<Asset>`
 - `SYSCALL_TRANSFER_V1_BATCH_BEGIN()` / `SYSCALL_TRANSFER_V1_BATCH_END()` → ISI `TransferAssetBatch`（バッチスコープの開始/終了を宣言し、各エントリは `transfer_asset` で順次適用される）
 - `SYSCALL_TRANSFER_V1_BATCH_APPLY(&NoritoBytes<TransferAssetBatch>)` → 既に Norito でエンコードされたバッチを 1 回の呼び出しで適用
 - `SYSCALL_NFT_MINT_ASSET(id: ptr NftId, owner: ptr AccountId)` → ISI `Register<Nft>`

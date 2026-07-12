@@ -2063,6 +2063,9 @@ impl Actor {
             preemptive_vote_backed_retransmit_widen_fanout(vote_count, min_votes_for_commit),
             now,
         );
+        if self.kura_recovery_required() {
+            return false;
+        }
         let action_taken = preemptive_vote_backed_retransmit_action(
             rebroadcast.votes,
             rebroadcast.block_sync,
@@ -2222,6 +2225,9 @@ impl Actor {
                 )
             })
         };
+        if self.kura_recovery_required() {
+            return false;
+        }
         let mut precommit_vote_count =
             self.pending_block_commit_votes_count(block_hash, height, view);
         // Local commit votes are emitted before async vote verification drains into vote_log.
@@ -2738,6 +2744,9 @@ impl Actor {
                 && reschedule_vote_count < min_votes_for_commit,
             now,
         );
+        if self.kura_recovery_required() {
+            return false;
+        }
         let action_taken = drop_pending
             || available_or_restored > 0
             || manifest_gate_pending
@@ -3052,6 +3061,9 @@ impl Actor {
                 )
             })
         };
+        if self.kura_recovery_required() {
+            return RescheduleRebroadcast::default();
+        }
         let current_vote_count = quorum_rebroadcast_observed_vote_count(
             self.pending_block_commit_votes_count(block_hash, height, view),
             pending.local_commit_vote_emitted(),
@@ -3301,6 +3313,10 @@ impl Actor {
         let detached = std::mem::replace(pending, placeholder);
         let replaced = self.pending.pending_blocks.insert(block_hash, detached);
         let result = f(self);
+        if self.kura_recovery_required() {
+            debug_assert!(replaced.is_none());
+            return result;
+        }
         let restored = self.pending.pending_blocks.remove(&block_hash);
         if let Some(previous) = replaced {
             self.pending.pending_blocks.insert(block_hash, previous);
@@ -3479,7 +3495,7 @@ impl Actor {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 struct RescheduleRebroadcast {
     local_vote: bool,
     votes: usize,

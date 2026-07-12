@@ -676,6 +676,94 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
         }
     }
 
+    func testABI18VerifyResultDecoderUsesClosedCurrentShape() throws {
+        let result = try KagemushaRecursiveSpendCodecs.decodeVerifyResult(
+            currentVerifyResultArchive()
+        )
+        XCTAssertTrue(result.valid)
+        XCTAssertTrue(result.chainAdmissible)
+        XCTAssertTrue(result.lineageRedeemable)
+        XCTAssertTrue(result.witnesslessRedemptionSupported)
+        XCTAssertEqual(result.lineageMode, .reserved)
+        XCTAssertEqual(result.summary.lineageMode, .reserved)
+        XCTAssertEqual(result.summary.hopCount, 1)
+        XCTAssertEqual(result.summary.amount.atomicUnits, "625")
+        XCTAssertEqual(result.summary.amount.scale, 2)
+        XCTAssertEqual(result.recipientRequestDigest, fixed32(0x51))
+        XCTAssertEqual(result.requestOutputBindingDigest, fixed32(0x52))
+        XCTAssertEqual(result.verifierKeyID, "halo2/ipa:kagemusha-v2-test")
+        XCTAssertEqual(result.verifierCircuitID, "kagemusha-recursive-spend-v2-test")
+        XCTAssertEqual(result.verifiedAtBlockHeight, 100)
+        XCTAssertEqual(result.verifiedAtMilliseconds, 1_000)
+        XCTAssertNil(result.verifiedLineageWitness)
+
+        let invalid: [(Data, KagemushaRecursiveSpendError)] = [
+            (
+                try currentVerifyResultArchive(valid: false),
+                .invalidArchive("verifyResult.valid")
+            ),
+            (
+                try currentVerifyResultArchive(recipientRequestDigestByte: 0),
+                .invalidArchive("verifyResult.binding")
+            ),
+            (
+                try currentVerifyResultArchive(requestOutputBindingDigestByte: 0),
+                .invalidArchive("verifyResult.binding")
+            ),
+            (
+                try currentVerifyResultArchive(verifierCircuitID: ""),
+                .invalidArchive("verifyResult.binding")
+            ),
+            (
+                try currentVerifyResultArchive(verifiedAtBlockHeight: 0),
+                .invalidArchive("verifyResult.binding")
+            ),
+            (
+                try currentVerifyResultArchive(verifiedAtMilliseconds: 0),
+                .invalidArchive("verifyResult.binding")
+            ),
+            (
+                try currentVerifyResultArchive(
+                    verifierKeyID: "halo2/ipa:kagemusha-v2-other"
+                ),
+                .invalidArchive("verifyResult.binding")
+            ),
+            (
+                try currentVerifyResultArchive(witnesslessRedemptionSupported: false),
+                .invalidArchive("verifyResult.reservedLineage")
+            ),
+            (
+                try currentVerifyResultArchive(lineageRedeemable: false),
+                .invalidArchive("verifyResult.reservedLineage")
+            ),
+            (
+                try currentVerifyResultArchive(summaryLineageMode: .semantic),
+                .invalidArchive("verifyResult.lineageMode")
+            ),
+            (
+                try currentVerifyResultArchive(
+                    chainAdmissible: true,
+                    lineageRedeemable: false,
+                    witnesslessRedemptionSupported: false,
+                    lineageMode: .semantic,
+                    summaryLineageMode: .semantic
+                ),
+                .invalidArchive("verifyResult.semanticLineage")
+            ),
+            (
+                try currentVerifyResultArchive(hasTrailingField: true),
+                .invalidArchive("verifyResult.trailing")
+            ),
+        ]
+        for (archive, expected) in invalid {
+            XCTAssertThrowsError(
+                try KagemushaRecursiveSpendCodecs.decodeVerifyResult(archive)
+            ) { error in
+                XCTAssertEqual(error as? KagemushaRecursiveSpendError, expected)
+            }
+        }
+    }
+
     func testNativeCapabilitiesRequireExactABI18ContractAndGateSet() throws {
         let capabilities = try KagemushaRecursiveSpendNativeCapabilities(
             bridgeABIVersion: 18,
@@ -846,7 +934,7 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
         let session = KagemushaRecursiveSpendArtifactInstallSessionV3(manifest: manifest)
         XCTAssertEqual(session.manifest, manifest)
 
-        XCTAssertThrowsError(try session.beginPastaCycleV3ArtifactIngest(
+        XCTAssertThrowsError(try session.beginArtifact(
             expectedArtifactSHA256: Data(repeating: 0, count: 32)
         )) { error in
             XCTAssertEqual(
@@ -857,7 +945,7 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
 
         // An empty pending session cancels without resolving native symbols.
         try session.cancel()
-        XCTAssertThrowsError(try session.beginPastaCycleV3ArtifactIngest(
+        XCTAssertThrowsError(try session.beginArtifact(
             expectedArtifactSHA256: fixed32(0xA5)
         )) { error in
             XCTAssertEqual(
@@ -1154,6 +1242,98 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
         var writer = OfflineCompactNoritoWriter()
         writer.writeUInt64LE(value)
         return writer.data
+    }
+
+    private func currentVerifyResultArchive(
+        valid: Bool = true,
+        chainAdmissible: Bool = true,
+        lineageRedeemable: Bool = true,
+        witnesslessRedemptionSupported: Bool = true,
+        lineageMode: KagemushaRecursiveSpendLineageMode = .reserved,
+        summaryLineageMode: KagemushaRecursiveSpendLineageMode = .reserved,
+        recipientRequestDigestByte: UInt8 = 0x51,
+        requestOutputBindingDigestByte: UInt8 = 0x52,
+        summaryVerifierKeyID: String = "halo2/ipa:kagemusha-v2-test",
+        verifierKeyID: String = "halo2/ipa:kagemusha-v2-test",
+        verifierCircuitID: String = "kagemusha-recursive-spend-v2-test",
+        verifiedAtBlockHeight: UInt64 = 100,
+        verifiedAtMilliseconds: UInt64 = 1_000,
+        hasTrailingField: Bool = false
+    ) throws -> Data {
+        let summary = try currentBundleSummaryPayload(
+            lineageMode: summaryLineageMode,
+            verifierKeyID: summaryVerifierKeyID
+        )
+        var writer = OfflineCompactNoritoWriter()
+        writer.writeField(Data([valid ? 1 : 0]))
+        writer.writeField(Data([chainAdmissible ? 1 : 0]))
+        writer.writeField(Data([lineageRedeemable ? 1 : 0]))
+        writer.writeField(Data([witnesslessRedemptionSupported ? 1 : 0]))
+        writer.writeField(uint32(lineageMode.rawValue))
+        writer.writeField(summary)
+        writer.writeField(fixed32(recipientRequestDigestByte))
+        writer.writeField(fixed32(requestOutputBindingDigestByte))
+        writer.writeField(try verifierKeyIDPayload(verifierKeyID))
+        writer.writeField(OfflineCompactNorito.encodeString(verifierCircuitID))
+        writer.writeField(optionalUInt64(nil))
+        writer.writeField(optionalUInt64(nil))
+        writer.writeField(uint64(verifiedAtBlockHeight))
+        writer.writeField(uint64(verifiedAtMilliseconds))
+        writer.writeField(option(nil))
+        if hasTrailingField {
+            writer.writeField(Data([0xA5]))
+        }
+        return noritoEncode(
+            typeName: KagemushaRecursiveSpend.verifyResultWireName,
+            payload: writer.data,
+            flags: NoritoHeader.compactLen
+        )
+    }
+
+    private func currentBundleSummaryPayload(
+        lineageMode: KagemushaRecursiveSpendLineageMode,
+        verifierKeyID: String
+    ) throws -> Data {
+        let assetBytes = try XCTUnwrap(
+            AssetDefinitionAddress.decode(assetDefinitionID())
+        )
+        var atomicUnits = Data(repeating: 0, count: 16)
+        atomicUnits[0] = 0x71
+        atomicUnits[1] = 0x02
+        let amount = fields([atomicUnits, uint32(2)])
+        let branchClaim = try KagemushaRecursiveSpendBranchClaim.root(
+            lineageRoot: fixed32(0xA0)
+        )
+        let claims = sequence([
+            try KagemushaRecursiveSpendCodecs.encodeBranchClaim(branchClaim),
+        ])
+        return fields([
+            constVector(assetBytes),
+            amount,
+            fixed32(0x31),
+            fixed32(0x32),
+            uint32(1),
+            claims,
+            OfflineCompactNorito.encodeString("generation-v2-test"),
+            try verifierKeyIDPayload(verifierKeyID),
+            uint32(lineageMode.rawValue),
+            fixed32(0x53),
+        ])
+    }
+
+    private func verifierKeyIDPayload(_ value: String) throws -> Data {
+        let parts = value.split(
+            separator: ":",
+            maxSplits: 1,
+            omittingEmptySubsequences: false
+        )
+        guard parts.count == 2, !parts[0].isEmpty, !parts[1].isEmpty else {
+            throw KagemushaRecursiveSpendError.invalidField("verifierKeyID")
+        }
+        return fields([
+            OfflineCompactNorito.encodeString(String(parts[0])),
+            OfflineCompactNorito.encodeString(String(parts[1])),
+        ])
     }
 
     private func appendUInt64BE(_ value: UInt64, to data: inout Data) {

@@ -4,34 +4,41 @@ import XCTest
 @testable import IrohaSwift
 
 final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
-    func testDecodeVerifyResultReadsAbi6AndAbi7Fields() throws {
-        let abi6 = try KagemushaRecursiveSpendRequestCodecs.decodeVerifyResult(
-            Self.sharedRecursiveSpendArchive(abi: .abi6, name: "verify_result")
-        )
-        XCTAssertFalse(abi6.valid)
-        XCTAssertEqual(abi6.hopCount, 2)
-        XCTAssertEqual(abi6.encodedBytes, 4011)
-        XCTAssertEqual(abi6.reason, "fixture recursive proof is not a production proof")
-        XCTAssertFalse(abi6.chainAdmissible)
-        XCTAssertEqual(abi6.chainAdmissionReason, "offline verification failed")
-        XCTAssertFalse(abi6.witnesslessRedeemSupported)
-        XCTAssertTrue(abi6.lineageWitnessRequiredForRedeem)
+    func testFirstReleaseVerifyResultRejectsRetiredAbi6AndAbi7Schemas() throws {
+        for abi in [FixtureAbi.abi6, .abi7] {
+            XCTAssertThrowsError(
+                try KagemushaRecursiveSpendCodecs.decodeVerifyResult(
+                    Self.sharedRecursiveSpendArchive(abi: abi, name: "verify_result")
+                )
+            ) { error in
+                XCTAssertEqual(
+                    error as? KagemushaRecursiveSpendError,
+                    .invalidArchive("verifyResult")
+                )
+            }
+        }
 
-        let abi7 = try KagemushaRecursiveSpendRequestCodecs.decodeVerifyResult(
-            Self.sharedRecursiveSpendArchive(abi: .abi7, name: "verify_result")
+        let retiredArchive = try Self.sharedRecursiveSpendArchive(
+            abi: .abi6,
+            name: "verify_result"
         )
-        XCTAssertGreaterThanOrEqual(abi7.hopCount, 1)
-        XCTAssertGreaterThan(abi7.encodedBytes, 0)
-        XCTAssertEqual(abi7.chainAdmissionReason.isEmpty, abi7.chainAdmissible)
-        XCTAssertEqual(!abi7.lineageWitnessRequiredForRedeem, abi7.witnesslessRedeemSupported)
+        let retiredPayload = try XCTUnwrap(noritoDecodeFrame(retiredArchive)).payload
+        var retiredFields = try Self.fieldPayloads(retiredPayload)
+        XCTAssertEqual(retiredFields.count, 8)
+        retiredFields.removeLast(2)
+        let missingFirstReleaseFlags = noritoEncode(
+            typeName: KagemushaRecursiveSpendRequestCodecs.verifyResultWireName,
+            payload: Self.encodeFields(retiredFields, flags: NoritoHeader.compactLen),
+            flags: NoritoHeader.compactLen
+        )
         XCTAssertThrowsError(
             try KagemushaRecursiveSpendRequestCodecs.decodeVerifyResult(
-                Self.recursiveSpendVerifyResultWithTrailingField()
+                missingFirstReleaseFlags
             )
         ) { error in
             XCTAssertEqual(
                 error as? KagemushaRecursiveSpendRequestCodecError,
-                .invalidArchive("verifyResult")
+                .invalidArchive("truncated")
             )
         }
     }

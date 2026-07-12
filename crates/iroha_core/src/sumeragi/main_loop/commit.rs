@@ -1826,7 +1826,9 @@ impl Actor {
                 }
             }
         }
-        if self.retire_committed_commit_inflight("drain_commit_results") {
+        if !self.kura_recovery_required()
+            && self.retire_committed_commit_inflight("drain_commit_results")
+        {
             summary.progress = true;
         }
         summary
@@ -4233,6 +4235,9 @@ impl Actor {
             let validation_cost = validation_start.elapsed();
             timings.validation += validation_cost;
             timings.blocks_processed = timings.blocks_processed.saturating_add(1);
+            if self.kura_recovery_required() {
+                return finish_timings(timings);
+            }
             match validation_outcome {
                 ValidationGateOutcome::Valid => {}
                 ValidationGateOutcome::Deferred => {
@@ -4558,7 +4563,7 @@ impl Actor {
             if enable_qc_pipeline && emit_precommit {
                 let parent_hash = pending.block.header().prev_block_hash();
                 let pending_roots = pending.parent_state_root.zip(pending.post_state_root);
-                if self.emit_precommit_vote(
+                let emitted = self.emit_precommit_vote(
                     hash,
                     pending_height,
                     pending_view,
@@ -4567,7 +4572,12 @@ impl Actor {
                     &local_vote_topology,
                     parent_hash,
                     pending_roots,
-                ) {
+                );
+                if self.kura_recovery_required() {
+                    self.pending.pending_blocks.entry(hash).or_insert(pending);
+                    return finish_timings(timings);
+                }
+                if emitted {
                     pending.note_local_commit_vote_emitted();
                     self.note_frontier_owner_local_vote_emitted(hash, pending_height, pending_view);
                     replay_commit_evidence_after_reinsert = Some("local_commit_vote_emitted");
@@ -4668,6 +4678,10 @@ impl Actor {
                     vote_epoch,
                     &topology,
                 );
+                if self.kura_recovery_required() {
+                    self.pending.pending_blocks.entry(hash).or_insert(pending);
+                    return finish_timings(timings);
+                }
                 if let Some(qc) =
                     self.cached_commit_qc_for_block(hash, pending_height, pending_view)
                 {
@@ -4733,10 +4747,13 @@ impl Actor {
                     epoch: commit_epoch,
                 };
                 let _ = self.finalize_pending_block(qc_header, pending, None);
-                self.pending.pending_processing.set(None);
-                self.pending.pending_processing_parent.set(None);
                 let finalize_cost = finalize_start.elapsed();
                 timings.finalize += finalize_cost;
+                if self.kura_recovery_required() {
+                    return finish_timings(timings);
+                }
+                self.pending.pending_processing.set(None);
+                self.pending.pending_processing_parent.set(None);
                 continue;
             }
             let finalize_cost = finalize_start.elapsed();
@@ -5922,6 +5939,9 @@ impl Actor {
         commit_topology: &[PeerId],
         trigger: &'static str,
     ) -> bool {
+        if self.kura_recovery_required() {
+            return false;
+        }
         let now = Instant::now();
         let Some(pending) = self.pending.pending_blocks.get(&block_hash) else {
             return false;
@@ -5968,6 +5988,9 @@ impl Actor {
             parent_hash,
             pending_roots,
         );
+        if self.kura_recovery_required() {
+            return false;
+        }
         if !emitted {
             return false;
         }
@@ -5983,6 +6006,9 @@ impl Actor {
             topology.as_ref(),
             trigger,
         );
+        if self.kura_recovery_required() {
+            return false;
+        }
         self.request_commit_pipeline_for_pending(
             block_hash,
             super::status::RoundEventCauseTrace::VoteReceived,
@@ -6030,6 +6056,9 @@ impl Actor {
 
         let mut emitted = false;
         for block_hash in candidates {
+            if self.kura_recovery_required() {
+                break;
+            }
             if self.maybe_emit_local_commit_vote_for_pending_event(
                 block_hash,
                 qc.height,
@@ -6805,6 +6834,9 @@ impl Actor {
         parent_hash: Option<HashOf<BlockHeader>>,
         pending_roots: Option<(Hash, Hash)>,
     ) -> bool {
+        if self.kura_recovery_required() {
+            return false;
+        }
         if self.is_observer() {
             return false;
         }
@@ -6833,6 +6865,9 @@ impl Actor {
             );
         }
         self.process_committed_blocks_before_consensus("emit_precommit_vote");
+        if self.kura_recovery_required() {
+            return false;
+        }
         let (consensus_mode, mode_tag, prf_seed) = self.consensus_context_for_height(height);
         let topology = self.vote_emission_topology_for_height(height, consensus_mode, topology);
         let signature_topology = topology_for_view(&topology, height, view, mode_tag, prf_seed);
@@ -7104,6 +7139,9 @@ impl Actor {
             pops,
         };
         self.apply_validated_vote(vote.clone(), context);
+        if self.kura_recovery_required() {
+            return false;
+        }
         debug!(
             height,
             view,
@@ -7233,6 +7271,9 @@ impl Actor {
         emission: NewViewVoteEmission,
         chain_order_binding_override: Option<(Hash, u64)>,
     ) -> bool {
+        if self.kura_recovery_required() {
+            return false;
+        }
         if self.is_observer() {
             return false;
         }
@@ -7258,6 +7299,9 @@ impl Actor {
         }
         if !completing_near_quorum {
             self.process_committed_blocks_before_consensus("emit_new_view_vote");
+            if self.kura_recovery_required() {
+                return false;
+            }
         }
         let epoch = self.epoch_for_height(height);
         let (consensus_mode, mode_tag, prf_seed) = self.consensus_context_for_height(height);
@@ -7458,6 +7502,9 @@ impl Actor {
             }
         } else {
             self.handle_vote(vote.clone());
+        }
+        if self.kura_recovery_required() {
+            return false;
         }
         if !self.vote_recorded_or_queued_for_validation(&vote) {
             warn!(
@@ -7805,6 +7852,9 @@ impl Actor {
         height: u64,
         view: u64,
     ) {
+        if self.kura_recovery_required() {
+            return;
+        }
         if cert.validator_set.as_slice() != roster {
             warn!(
                 height,

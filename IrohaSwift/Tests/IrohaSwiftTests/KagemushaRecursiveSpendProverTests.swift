@@ -799,7 +799,7 @@ final class KagemushaRecursiveSpendProverTests: XCTestCase {
         XCTAssertEqual(manifest["fixture_kind"] as? String, "native_bridge_norito_archives")
         XCTAssertEqual(
             manifest["native_bridge_abi_version"] as? Int,
-            Int(KagemushaRecursiveSpendProver.recursiveCompactRequiredNativeBridgeAbiVersion)
+            Int(KagemushaRecursiveCompactPaymentTokenProver.requiredNativeBridgeAbiVersion)
         )
 
         let archiveFixtureRef = try XCTUnwrap(manifest["archive_fixture"] as? [String: Any])

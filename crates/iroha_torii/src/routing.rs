@@ -10,6 +10,7 @@
 
 use core::str::FromStr;
 use std::{
+    num::NonZeroU64,
     sync::{Arc, LazyLock, RwLock},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -3495,8 +3496,6 @@ impl MaybeTelemetry {
     }
 }
 use core::convert::Infallible;
-#[cfg(feature = "app_api")]
-use std::num::NonZeroU64;
 
 use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
 use futures::stream;
@@ -6732,19 +6731,22 @@ fn sccp_exact_proof_material(
     let Some(indexed) = sccp_indexed_outbound_record(state, message_id)? else {
         return Ok(None);
     };
-    let bundle = reconstruct_sccp_message_bundle_from_indexed_record(state, indexed.clone())?;
+    let (verified_finality, bundle) =
+        reconstruct_sccp_message_bundle_from_indexed_record(state, indexed.clone())?;
     let registry = state.sccp_registry_snapshot();
     let governed_route = sccp_historical_route_for_record(registry.as_ref(), &indexed)?;
-    let request = iroha_sccp::build_sccp_groth16_bn254_proof_request_from_governed_route_v1(
-        &bundle,
-        governed_route,
-    )
-    .ok_or_else(|| {
-        sccp_internal_error(format!(
-            "failed to derive the canonical SCCP proof request for finalized message {}",
-            hex::encode(message_id)
-        ))
-    })?;
+    let request =
+        iroha_core::bridge::build_sccp_groth16_bn254_proof_request_from_verified_finality_v1(
+            &verified_finality,
+            &bundle,
+            governed_route,
+        )
+        .ok_or_else(|| {
+            sccp_internal_error(format!(
+                "failed to derive the canonical SCCP proof request for finalized message {}",
+                hex::encode(message_id)
+            ))
+        })?;
     Ok(Some(SccpExactProofMaterial {
         indexed,
         bundle,
@@ -7634,9 +7636,21 @@ mod sccp_first_release_api_tests {
             .is_some()
         );
 
-        let material = sccp_exact_proof_material(&state, message_id)
-            .expect("bodyless proof-request lookup")
-            .expect("bodyless proof request exists");
+        iroha_sccp::reset_sccp_destination_proof_work_counters_v1();
+        let mut material = None;
+        for _ in 0..4 {
+            material = Some(
+                sccp_exact_proof_material(&state, message_id)
+                    .expect("bodyless proof-request lookup")
+                    .expect("bodyless proof request exists"),
+            );
+        }
+        let material = material.expect("repeated proof construction returns material");
+        assert_eq!(
+            iroha_sccp::sccp_destination_proof_work_counters_v1().bls_verifications,
+            0,
+            "Kura-backed proof-request construction must reuse verified finality"
+        );
         assert_eq!(material.bundle, bundle);
         assert_eq!(material.indexed.descriptor.commitment_index, 0);
         let finality = iroha_sccp::decode_taira_bridge_finality_proof(&bundle.finality_proof)
@@ -8115,10 +8129,13 @@ fn validate_archived_sccp_message_descriptor(
 fn reconstruct_sccp_message_bundles_from_indexed_records(
     state: &CoreState,
     indexed_records: &[SccpIndexedOutboundRecord],
-) -> Result<Vec<TairaSccpMessageProofV1>> {
-    let Some(first) = indexed_records.first() else {
-        return Ok(Vec::new());
-    };
+) -> Result<(
+    iroha_core::bridge::VerifiedV2FinalityArtifact,
+    Vec<TairaSccpMessageProofV1>,
+)> {
+    let first = indexed_records.first().ok_or_else(|| {
+        sccp_internal_error("SCCP bundle reconstruction requires at least one indexed record")
+    })?;
     let height = first.descriptor.recorded_at_height;
     if indexed_records
         .iter()
@@ -8143,6 +8160,7 @@ fn reconstruct_sccp_message_bundles_from_indexed_records(
         .collect::<Vec<_>>();
     let finality_proof_bytes =
         build_sccp_finality_proof_bytes(&finalized.finality_proof, finalized.commitment_root)?;
+    let verified_finality = finalized.verified_finality().clone();
     let mut bundles = Vec::with_capacity(indexed_records.len());
     for indexed in indexed_records {
         let index = usize::try_from(indexed.descriptor.commitment_index)
@@ -8176,23 +8194,27 @@ fn reconstruct_sccp_message_bundles_from_indexed_records(
             finality_proof: finality_proof_bytes.clone(),
         });
     }
-    Ok(bundles)
+    Ok((verified_finality, bundles))
 }
 
 fn reconstruct_sccp_message_bundle_from_indexed_record(
     state: &CoreState,
     indexed: SccpIndexedOutboundRecord,
-) -> Result<TairaSccpMessageProofV1> {
-    let mut bundles = reconstruct_sccp_message_bundles_from_indexed_records(
+) -> Result<(
+    iroha_core::bridge::VerifiedV2FinalityArtifact,
+    TairaSccpMessageProofV1,
+)> {
+    let (verified_finality, mut bundles) = reconstruct_sccp_message_bundles_from_indexed_records(
         state,
         std::slice::from_ref(&indexed),
     )?;
-    bundles.pop().ok_or_else(|| {
+    let bundle = bundles.pop().ok_or_else(|| {
         sccp_internal_error(format!(
             "SCCP message {} produced no reconstructed finalized bundle",
             hex::encode(indexed.key.message_id)
         ))
-    })
+    })?;
+    Ok((verified_finality, bundle))
 }
 
 fn sccp_message_bundle_for_request(
@@ -8202,7 +8224,8 @@ fn sccp_message_bundle_for_request(
     let Some(indexed) = sccp_indexed_outbound_record(state, message_id)? else {
         return Ok(None);
     };
-    reconstruct_sccp_message_bundle_from_indexed_record(state, indexed).map(Some)
+    reconstruct_sccp_message_bundle_from_indexed_record(state, indexed)
+        .map(|(_, bundle)| Some(bundle))
 }
 
 fn sccp_committed_outbound_context(
@@ -69721,6 +69744,7 @@ fn build_onboarding_alias_auto_renew_instructions(
     retry_backoff_ms: u64,
     max_failures: u32,
     max_charge_amount: u64,
+    max_cycles: NonZeroU64,
 ) -> Result<(Vec<InstructionBox>, NftId)> {
     use iroha_executor_data_model::permission::nft::CanModifyNftMetadata;
     use iroha_executor_data_model::permission::trigger::CanRegisterTrigger;
@@ -69775,6 +69799,7 @@ fn build_onboarding_alias_auto_renew_instructions(
                 subscriber.clone(),
                 subscription_id.clone(),
                 lease_quote.expires_at_ms,
+                max_cycles,
             ))),
             InstructionBox::from(Transfer::nft(
                 onboarding_authority.clone(),
@@ -69979,6 +70004,7 @@ pub async fn handle_v1_accounts_onboard(
             signer.alias_auto_renew_retry_backoff_ms,
             signer.alias_auto_renew_max_failures,
             lease_quote.charge_amount,
+            app.state.ivm_admission_cycle_limit(),
         )?;
         auto_renew_instructions = instructions;
     }
@@ -70394,6 +70420,7 @@ pub async fn handle_v1_accounts_onboard_multisig(
             signer.alias_auto_renew_retry_backoff_ms,
             signer.alias_auto_renew_max_failures,
             lease_quote.charge_amount,
+            app.state.ivm_admission_cycle_limit(),
         )?;
         auto_renew_instructions = instructions;
     }
@@ -70790,6 +70817,7 @@ pub async fn handle_post_v1_account_alias_auto_renew(
                     account_id.clone(),
                     subscription_id.clone(),
                     record.expires_at_ms,
+                    app.state.ivm_admission_cycle_limit(),
                 ),
             )));
         } else {
@@ -70809,6 +70837,7 @@ pub async fn handle_post_v1_account_alias_auto_renew(
                     account_id.clone(),
                     subscription_id.clone(),
                     record.expires_at_ms,
+                    app.state.ivm_admission_cycle_limit(),
                 ),
             )));
         }
@@ -80077,7 +80106,7 @@ fn resolve_trigger_id(
 }
 
 #[cfg(feature = "app_api")]
-fn ivm_syscall_program(syscall: u32) -> IvmBytecode {
+fn ivm_syscall_program(syscall: u32, max_cycles: NonZeroU64) -> IvmBytecode {
     let opcode = u8::try_from(syscall).expect("syscall opcode fits in u8");
     let mut code = Vec::new();
     code.extend_from_slice(
@@ -80085,7 +80114,11 @@ fn ivm_syscall_program(syscall: u32) -> IvmBytecode {
             .to_le_bytes(),
     );
     code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
-    let mut blob = ivm::ProgramMetadata::default().encode();
+    let mut blob = ivm::ProgramMetadata {
+        max_cycles: max_cycles.get(),
+        ..ivm::ProgramMetadata::default()
+    }
+    .encode();
     blob.extend_from_slice(&code);
     IvmBytecode::from_compiled(blob)
 }
@@ -80096,6 +80129,7 @@ fn build_billing_trigger(
     authority: AccountId,
     subscription_id: NftId,
     charge_at_ms: u64,
+    max_cycles: NonZeroU64,
 ) -> Trigger {
     use iroha_data_model::events::time::{ExecutionTime, Schedule, TimeEventFilter};
 
@@ -80113,6 +80147,7 @@ fn build_billing_trigger(
     let action = Action::new(
         Executable::Ivm(ivm_syscall_program(
             ivm::syscalls::SYSCALL_SUBSCRIPTION_BILL,
+            max_cycles,
         )),
         Repeats::Exactly(1),
         authority,
@@ -80164,12 +80199,17 @@ fn build_account_alias_auto_renew_state(
 }
 
 #[cfg(feature = "app_api")]
-fn build_usage_trigger(trigger_id: TriggerId, authority: AccountId) -> Trigger {
+fn build_usage_trigger(
+    trigger_id: TriggerId,
+    authority: AccountId,
+    max_cycles: NonZeroU64,
+) -> Trigger {
     use iroha_data_model::events::execute_trigger::ExecuteTriggerEventFilter;
 
     let action = Action::new(
         Executable::Ivm(ivm_syscall_program(
             ivm::syscalls::SYSCALL_SUBSCRIPTION_RECORD_USAGE,
+            max_cycles,
         )),
         Repeats::Indefinitely,
         authority.clone(),
@@ -80413,12 +80453,17 @@ pub async fn handle_post_v1_subscription_create(
             authority.clone(),
             subscription_id.clone(),
             charge_at_ms,
+            state.ivm_admission_cycle_limit(),
         ),
     )));
 
     if let Some(ref usage_trigger_id) = usage_trigger_id {
         instructions.push(InstructionBox::from(Register::trigger(
-            build_usage_trigger(usage_trigger_id.clone(), authority.clone()),
+            build_usage_trigger(
+                usage_trigger_id.clone(),
+                authority.clone(),
+                state.ivm_admission_cycle_limit(),
+            ),
         )));
         let grant_provider = grant_usage_to_provider.unwrap_or(true);
         if grant_provider && plan.provider != authority {
@@ -80810,6 +80855,7 @@ pub async fn handle_post_v1_subscription_resume(
             authority.clone(),
             subscription_id.clone(),
             next_charge_ms,
+            state.ivm_admission_cycle_limit(),
         ),
     )));
     let tx = sign_app_api_transaction(
@@ -81104,6 +81150,7 @@ pub async fn handle_post_v1_subscription_charge_now(
             authority.clone(),
             subscription_id.clone(),
             charge_at_ms,
+            state.ivm_admission_cycle_limit(),
         ),
     )));
     let tx = sign_app_api_transaction(
@@ -81253,6 +81300,7 @@ mod subscription_api_tests {
             1_000,
             3,
             7,
+            defaults::pipeline::IVM_MAX_CYCLES_UPPER_BOUND,
         )
         .expect("build auto-renew instructions");
         let expected_permission: Permission =
@@ -81378,6 +81426,7 @@ mod subscription_api_tests {
                 500,
                 3,
                 200,
+                defaults::pipeline::IVM_MAX_CYCLES_UPPER_BOUND,
             )
             .expect("onboarding auto-renew instructions");
         let onboarding_tx = sign_app_api_transaction(
@@ -81700,8 +81749,25 @@ mod subscription_api_tests {
 
     #[test]
     fn ivm_syscall_program_emits_bytecode() {
-        let program = ivm_syscall_program(ivm::syscalls::SYSCALL_SUBSCRIPTION_BILL);
+        let configured_limit = NonZeroU64::new(17).expect("non-zero test cycle limit");
+        let program =
+            ivm_syscall_program(ivm::syscalls::SYSCALL_SUBSCRIPTION_BILL, configured_limit);
         assert!(!program.as_ref().is_empty());
+        assert_eq!(
+            ivm::ProgramMetadata::parse(program.as_ref())
+                .expect("generated subscription program metadata")
+                .metadata
+                .max_cycles,
+            configured_limit.get(),
+            "Torii must embed the live admission ceiling, not a compiled default"
+        );
+        let admitted = iroha_core::smartcontracts::ivm::cache::IvmCache::new()
+            .summarize_executable(program.as_ref())
+            .expect("subscription syscall helper must be a valid program");
+        assert!(matches!(
+            admitted,
+            iroha_core::smartcontracts::ivm::cache::ExecutableProgramSummary::Generic(_)
+        ));
     }
 
     #[test]
@@ -81715,6 +81781,7 @@ mod subscription_api_tests {
             authority.clone(),
             subscription_id.clone(),
             55,
+            defaults::pipeline::IVM_MAX_CYCLES_UPPER_BOUND,
         );
         assert_eq!(trigger.id(), &trigger_id);
         let meta = trigger.metadata();
@@ -81743,7 +81810,11 @@ mod subscription_api_tests {
         };
         let trigger_id: TriggerId = "usage_trigger".parse().unwrap();
         let authority = ALICE_ID.clone();
-        let trigger = build_usage_trigger(trigger_id.clone(), authority.clone());
+        let trigger = build_usage_trigger(
+            trigger_id.clone(),
+            authority.clone(),
+            defaults::pipeline::IVM_MAX_CYCLES_UPPER_BOUND,
+        );
         match trigger.action().filter() {
             EventFilterBox::ExecuteTrigger(filter) => {
                 let expected = ExecuteTriggerEventFilter::new()

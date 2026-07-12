@@ -8306,6 +8306,9 @@ impl Actor {
     }
 
     pub(in crate::sumeragi) fn poll_rbc_persist_results_inner(&mut self) -> bool {
+        if self.kura_recovery_required() {
+            return false;
+        }
         let Some(rx) = self.subsystems.da_rbc.rbc.persist_rx.as_ref() else {
             return self.flush_rbc_pending_persist_refreshes();
         };
@@ -8370,6 +8373,9 @@ impl Actor {
     }
 
     pub(in crate::sumeragi) fn poll_rbc_seed_results_inner(&mut self) -> bool {
+        if self.kura_recovery_required() {
+            return false;
+        }
         let Some(rx) = self.subsystems.da_rbc.rbc.seed_rx.as_ref() else {
             return false;
         };

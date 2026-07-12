@@ -179,6 +179,9 @@ impl Actor {
                         }
                     }
                     progress = true;
+                    if self.kura_recovery_required() {
+                        break;
+                    }
                 }
                 Err(mpsc::TryRecvError::Empty) => break,
                 Err(mpsc::TryRecvError::Disconnected) => {

@@ -36,13 +36,13 @@ translator: machine-google-reviewed
 規範系統調用表（子集）|十六進制 |名稱 |參數（在 `r10+` 中）|返回|氣體（基礎+變量）|筆記|
 |------|----------------------------------------|----------------------------------------------------------------------------|------------------------|--------------------------------------------------------|------|
 | 0x1A | 0x1A設置帳戶詳細信息 | `&AccountId`、`&Name`、`&Json` | `u64=0` | `G_set_detail + bytes(val)` |寫入帳戶詳細信息 |
-| 0x22 | 0x22 MINT_資產 | `&AccountId`、`&AssetDefinitionId`、`&Amount` | `u64=0` | `G_mint` |向賬戶鑄造 `amount` 資產 |
-| 0x23 | 0x23 BURN_ASSET | 燒毀資產`&AccountId`、`&AssetDefinitionId`、`&Amount` | `u64=0` | `G_burn` |從帳戶中燒毀 `amount` |
-| 0x24 | TRANSFER_V1 | `&AccountId(from)`, `&AccountId(to)`, `&AssetDefinitionId`, `&Amount` | `u64=0` | `G_transfer` | Batch-internal FASTPQ transfer; `transfer_batch` coalesces entries on this path |
+| 0x22 | 0x22 MINT_資產 | `&AccountId`、`&AssetDefinitionId`、`&QuantityValueV1` | `u64=0` | `G_mint` |向賬戶鑄造 `amount` 資產 |
+| 0x23 | 0x23 BURN_ASSET | 燒毀資產`&AccountId`、`&AssetDefinitionId`、`&QuantityValueV1` | `u64=0` | `G_burn` |從帳戶中燒毀 `amount` |
+| 0x24 | TRANSFER_V1 | `&AccountId(from)`, `&AccountId(to)`, `&AssetDefinitionId`, `&QuantityValueV1` | `u64=0` | `G_transfer` | Batch-internal FASTPQ transfer; `transfer_batch` coalesces entries on this path |
 | 0x29 | 0x29 TRANSFER_V1_BATCH_BEGIN | 傳輸– | `u64=0` | `G_transfer` |開始 FASTPQ 傳輸批次範圍 |
 | 0x2A | 0x2A TRANSFER_V1_BATCH_END | – | `u64=0` | `G_transfer` |刷新累積的 FASTPQ 傳輸批次 |
 | 0x2B | 0x2B TRANSFER_V1_BATCH_APPLY | 轉移_V1_BATCH_APPLY `r10=&NoritoBytes(TransferAssetBatch)` | `u64=0` | `G_transfer` |在單個系統調用中應用 Norito 編碼批處理 |
-| 0x2C | TRANSFER_ASSET_SCOPED | `&AccountId(from)`, `&AccountId(to)`, `&AssetDefinitionId`, `&Amount`, `&DataSpaceId` | `u64=0` | `G_transfer` | Standalone `transfer_asset` path; global assets use global source balances and dataspace-restricted assets use `r14` |
+| 0x2C | TRANSFER_ASSET_SCOPED | `&AccountId(from)`, `&AccountId(to)`, `&AssetDefinitionId`, `&QuantityValueV1`, `&DataSpaceId` | `u64=0` | `G_transfer` | Standalone `transfer_asset` path; global assets use global source balances and dataspace-restricted assets use `r14` |
 | 0x25 | 0x25 NFT_MINT_資產 | `&NftId`，`&AccountId(owner)` | `u64=0` | `G_nft_mint_asset` |註冊新的 NFT |
 | 0x26 | 0x26 NFT_TRANSFER_ASSET | NFT_TRANSFER_ASSET | `&AccountId(from)`、`&NftId`、`&AccountId(to)` | `u64=0` | `G_nft_transfer_asset` |轉讓 NFT 所有權 |
 | 0x27 | 0x27 NFT_SET_METADATA | NFT_SET_METADATA | `&NftId`、`&Json` | `u64=0` | `G_nft_set_metadata` |更新 NFT 元數據 |

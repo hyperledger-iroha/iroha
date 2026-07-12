@@ -827,6 +827,53 @@ mod tests {
         InboundBlockMessage::new(msg, None)
     }
 
+    fn worker_test_proposal(seed: &[u8]) -> InboundBlockMessage {
+        let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(seed));
+        inbound(BlockMessage::Proposal(Proposal {
+            header: ConsensusBlockHeader {
+                parent_hash: block_hash,
+                tx_root: Hash::new(b"tx"),
+                state_root: Hash::new(b"state"),
+                proposer: 0,
+                height: 1,
+                view: 0,
+                epoch: 0,
+                highest_qc: QcHeaderRef {
+                    height: 0,
+                    view: 0,
+                    epoch: 0,
+                    subject_block_hash: block_hash,
+                    phase: Phase::Prepare,
+                },
+            },
+            payload_hash: Hash::new(b"payload"),
+        }))
+    }
+
+    fn recovery_worker_test_config() -> WorkerLoopConfig {
+        WorkerLoopConfig {
+            time_budget: Duration::from_secs(1),
+            drain_budget_cap: Duration::from_secs(1),
+            vote_rx_drain_budget: Duration::from_secs(1),
+            block_payload_rx_drain_budget: Duration::from_secs(1),
+            block_payload_rx_drain_max_messages: 16,
+            vote_rx_drain_max_messages: 16,
+            vote_burst_cap_with_payload_backlog: VOTE_BURST_CAP_WITH_PAYLOAD_BACKLOG,
+            block_rx_drain_budget: Duration::from_secs(1),
+            block_rx_drain_max_messages: 16,
+            rbc_chunk_rx_drain_budget: Duration::from_secs(1),
+            rbc_chunk_rx_drain_max_messages: 16,
+            consensus_rx_drain_max_messages: 16,
+            lane_relay_rx_drain_max_messages: 16,
+            background_rx_drain_max_messages: 16,
+            tick_min_gap: Duration::from_millis(1),
+            tick_busy_gap: Duration::from_millis(1),
+            tick_max_gap: Duration::from_secs(1),
+            block_rx_starve_max: Duration::from_secs(1),
+            non_vote_starve_max: Duration::from_secs(1),
+        }
+    }
+
     fn checked_block_signature(
         private_key: &iroha_crypto::PrivateKey,
         block_hash: HashOf<BlockHeader>,
@@ -7281,6 +7328,102 @@ mod tests {
     }
 
     #[derive(Default)]
+    struct RecoveryAfterCommitPollingActor {
+        recovery_required: bool,
+        events: Vec<&'static str>,
+    }
+
+    #[derive(Default)]
+    struct RecoveryOnMessageActor {
+        recovery_required: bool,
+        handled: usize,
+    }
+
+    impl WorkerActor for RecoveryOnMessageActor {
+        fn recovery_required(&self) -> bool {
+            self.recovery_required
+        }
+
+        fn on_block_message(&mut self, _msg: InboundBlockMessage) -> Result<()> {
+            self.handled = self.handled.saturating_add(1);
+            self.recovery_required = true;
+            Ok(())
+        }
+
+        fn on_consensus_control(&mut self, _msg: ControlFlow) -> Result<()> {
+            Ok(())
+        }
+
+        fn on_lane_relay(&mut self, _message: LaneRelayMessage) -> Result<()> {
+            Ok(())
+        }
+
+        fn on_background_request(&mut self, _request: BackgroundRequest) -> Result<()> {
+            Ok(())
+        }
+
+        fn tick(&mut self) -> bool {
+            false
+        }
+    }
+
+    impl WorkerActor for RecoveryAfterCommitPollingActor {
+        fn recovery_required(&self) -> bool {
+            self.recovery_required
+        }
+
+        fn on_block_message(&mut self, _msg: InboundBlockMessage) -> Result<()> {
+            Ok(())
+        }
+
+        fn on_consensus_control(&mut self, _msg: ControlFlow) -> Result<()> {
+            Ok(())
+        }
+
+        fn on_lane_relay(&mut self, _message: LaneRelayMessage) -> Result<()> {
+            Ok(())
+        }
+
+        fn on_background_request(&mut self, _request: BackgroundRequest) -> Result<()> {
+            Ok(())
+        }
+
+        fn poll_commit_results(&mut self) -> bool {
+            self.events.push("commit");
+            self.recovery_required = true;
+            true
+        }
+
+        fn poll_validation_results(&mut self) -> bool {
+            self.events.push("validation");
+            true
+        }
+
+        fn poll_qc_verify_results(&mut self) -> bool {
+            self.events.push("qc");
+            true
+        }
+
+        fn poll_vote_verify_results(&mut self) -> bool {
+            self.events.push("vote");
+            true
+        }
+
+        fn poll_rbc_persist_results(&mut self) -> bool {
+            self.events.push("rbc");
+            true
+        }
+
+        fn sync_external_hints(&mut self) {
+            self.events.push("hints");
+        }
+
+        fn tick(&mut self) -> bool {
+            false
+        }
+    }
+
+    #[derive(Default)]
     struct ValidationPollingActor {
         poll_calls: usize,
     }
@@ -9999,6 +10142,106 @@ mod tests {
         assert!(actor.events.contains(&"payload"));
         assert_eq!(stats.block_payloads_handled, 1);
         assert!(stats.progress);
+    }
+
+    #[test]
+    fn worker_result_polling_stops_immediately_after_recovery_latch() {
+        let mut actor = RecoveryAfterCommitPollingActor::default();
+
+        assert!(poll_worker_results(&mut actor));
+        assert_eq!(actor.events, vec!["commit"]);
+
+        assert!(!poll_worker_results(&mut actor));
+        assert_eq!(actor.events, vec!["commit"]);
+    }
+
+    #[test]
+    fn run_worker_iteration_preserves_queued_work_after_result_latches_recovery() {
+        status::reset_worker_loop_snapshot_for_tests();
+
+        let (_vote_tx, vote_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (block_payload_tx, block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_rbc_chunk_tx, rbc_chunk_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_block_tx, block_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_consensus_tx, consensus_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_lane_tx, lane_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_background_tx, background_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        block_payload_tx
+            .send(worker_test_proposal(b"recovery-before-drain"))
+            .expect("queue proposal");
+
+        let now = Instant::now();
+        let mut loop_state = WorkerLoopState {
+            last_tick: now,
+            last_served: [now; PRIORITY_TIER_COUNT],
+            mailbox: WorkerMailboxState::new(),
+        };
+        let mut actor = RecoveryAfterCommitPollingActor::default();
+
+        let stats = run_worker_iteration(
+            &mut actor,
+            &recovery_worker_test_config(),
+            &mut loop_state,
+            &vote_rx,
+            &block_payload_rx,
+            &rbc_chunk_rx,
+            &block_rx,
+            &consensus_rx,
+            &lane_rx,
+            &background_rx,
+        );
+
+        assert_eq!(actor.events, vec!["commit"]);
+        assert_eq!(stats.block_payloads_handled, 0);
+        assert!(stats.progress);
+        assert!(loop_state.mailbox.slots.iter().all(Option::is_none));
+        assert!(block_payload_rx.try_recv().is_ok());
+    }
+
+    #[test]
+    fn run_worker_iteration_stops_drain_when_message_latches_recovery() {
+        status::reset_worker_loop_snapshot_for_tests();
+
+        let (_vote_tx, vote_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (block_payload_tx, block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_rbc_chunk_tx, rbc_chunk_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_block_tx, block_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_consensus_tx, consensus_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_lane_tx, lane_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_background_tx, background_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        block_payload_tx
+            .send(worker_test_proposal(b"recovery-first-message"))
+            .expect("queue first proposal");
+        block_payload_tx
+            .send(worker_test_proposal(b"preserved-second-message"))
+            .expect("queue second proposal");
+
+        let now = Instant::now();
+        let mut loop_state = WorkerLoopState {
+            last_tick: now,
+            last_served: [now; PRIORITY_TIER_COUNT],
+            mailbox: WorkerMailboxState::new(),
+        };
+        let mut actor = RecoveryOnMessageActor::default();
+
+        let stats = run_worker_iteration(
+            &mut actor,
+            &recovery_worker_test_config(),
+            &mut loop_state,
+            &vote_rx,
+            &block_payload_rx,
+            &rbc_chunk_rx,
+            &block_rx,
+            &consensus_rx,
+            &lane_rx,
+            &background_rx,
+        );
+
+        assert_eq!(actor.handled, 1);
+        assert_eq!(stats.block_payloads_handled, 1);
+        assert!(actor.recovery_required);
+        assert!(loop_state.mailbox.slots.iter().all(Option::is_none));
+        assert!(block_payload_rx.try_recv().is_ok());
     }
 
     #[test]
@@ -16417,6 +16660,9 @@ fn apply_adaptive_drain_caps(
 }
 
 trait WorkerActor {
+    fn recovery_required(&self) -> bool {
+        false
+    }
     fn on_block_message(&mut self, msg: InboundBlockMessage) -> Result<()>;
     fn should_drop_block_message_before_dispatch(&mut self, _msg: &InboundBlockMessage) -> bool {
         false
@@ -16460,6 +16706,9 @@ trait WorkerActor {
 }
 
 impl WorkerActor for crate::sumeragi::main_loop::Actor {
+    fn recovery_required(&self) -> bool {
+        crate::sumeragi::main_loop::Actor::kura_recovery_required(self)
+    }
     fn on_block_message(&mut self, msg: InboundBlockMessage) -> Result<()> {
         crate::sumeragi::main_loop::Actor::on_block_message(self, msg)
     }
@@ -16782,13 +17031,29 @@ impl<A> Drop for ActorGuard<'_, A> {
 }
 
 fn poll_worker_results<A: WorkerActor>(actor: &mut A) -> bool {
-    let mut progress = false;
-    progress |= actor.poll_commit_results();
+    if actor.recovery_required() {
+        return false;
+    }
+    let mut progress = actor.poll_commit_results();
+    if actor.recovery_required() {
+        return progress;
+    }
     progress |= actor.poll_validation_results();
+    if actor.recovery_required() {
+        return progress;
+    }
     progress |= actor.poll_qc_verify_results();
+    if actor.recovery_required() {
+        return progress;
+    }
     progress |= actor.poll_vote_verify_results();
+    if actor.recovery_required() {
+        return progress;
+    }
     progress |= actor.poll_rbc_persist_results();
-    actor.sync_external_hints();
+    if !actor.recovery_required() {
+        actor.sync_external_hints();
+    }
     progress
 }
 
@@ -17221,6 +17486,9 @@ fn drain_mailbox<A: WorkerActor>(
     let mut overtime_non_vote_turn = false;
     let mut phase_progress = false;
     loop {
+        if actor.recovery_required() {
+            break;
+        }
         if !mailbox.any_pending() {
             break;
         }
@@ -17423,6 +17691,9 @@ fn drain_mailbox<A: WorkerActor>(
         budgets.consume(tier);
         last_served[tier.idx()] = now;
         phase_progress = true;
+        if actor.recovery_required() {
+            break;
+        }
         mailbox.fill_slot(tier);
     }
 }
@@ -17475,6 +17746,10 @@ fn run_worker_iteration<A: WorkerActor>(
     let mut cfg = *cfg;
     if poll_worker_results(actor) {
         stats.progress = true;
+    }
+    if actor.recovery_required() {
+        stats.queue_depths = status::worker_queue_depth_snapshot();
+        return stats;
     }
     let queue_depths = status::worker_queue_depth_snapshot();
     apply_adaptive_drain_caps(&mut cfg, queue_depths);
@@ -17533,6 +17808,10 @@ fn run_worker_iteration<A: WorkerActor>(
     if poll_worker_results(actor) {
         stats.progress = true;
     }
+    if actor.recovery_required() {
+        stats.queue_depths = status::worker_queue_depth_snapshot();
+        return stats;
+    }
 
     let pre_tick_depths = status::worker_queue_depth_snapshot();
     refresh_budget_exhaustion_flags(&mut mailbox, &budgets, &mut stats);
@@ -17556,8 +17835,12 @@ fn run_worker_iteration<A: WorkerActor>(
         let tick_start = Instant::now();
         stats.progress |= actor.tick();
         stats.tick_elapsed_ms = u64::try_from(tick_start.elapsed().as_millis()).unwrap_or(u64::MAX);
-        actor.sync_external_hints();
         *last_tick = tick_now;
+        if actor.recovery_required() {
+            stats.queue_depths = status::worker_queue_depth_snapshot();
+            return stats;
+        }
+        actor.sync_external_hints();
     }
 
     if !stats.budget_exceeded && iter_start.elapsed() < cfg.time_budget {
@@ -17579,11 +17862,18 @@ fn run_worker_iteration<A: WorkerActor>(
             u64::try_from(drain_start.elapsed().as_millis()).unwrap_or(u64::MAX);
     }
 
+    if actor.recovery_required() {
+        stats.queue_depths = status::worker_queue_depth_snapshot();
+        return stats;
+    }
+
     let post_tick_depths = status::worker_queue_depth_snapshot();
     refresh_budget_exhaustion_flags(&mut mailbox, &budgets, &mut stats);
 
     stats.queue_depths = post_tick_depths;
-    actor.sync_external_hints();
+    if !actor.recovery_required() {
+        actor.sync_external_hints();
+    }
     if stats.votes_handled > 0 || stats.block_payloads_handled > 0 || stats.blocks_handled > 0 {
         iroha_logger::debug!(
             votes_handled = stats.votes_handled,
@@ -17900,9 +18190,19 @@ where
 {
     sumeragi_thread_builder(name)
         .spawn(move || {
+            let mut recovery_parked = false;
+            let mut held_after_recovery = None;
             loop {
                 if shutdown_signal.is_sent() {
                     break;
+                }
+                if recovery_parked {
+                    // A message received concurrently with the recovery latch remains owned by
+                    // this worker instead of being dropped. Do not receive another envelope until
+                    // the process is shut down for operator recovery.
+                    let _held = held_after_recovery.as_ref();
+                    std::thread::sleep(Duration::from_millis(IDLE_SHUTDOWN_POLL_MS));
+                    continue;
                 }
                 match rx.recv_timeout(Duration::from_millis(IDLE_SHUTDOWN_POLL_MS)) {
                     Ok(msg) => {
@@ -17910,15 +18210,21 @@ where
                         active.fetch_add(1, Ordering::Relaxed);
                         let mut guard = gate.enter(gate_priority);
                         status::set_worker_stage(stage);
-                        let _drained = drain_queue_batch(
-                            guard.actor_mut(),
-                            &rx,
-                            msg,
-                            max_batch_messages,
-                            queue_kind,
-                            handler_label,
-                            &mut handler,
-                        );
+                        if guard.actor_mut().recovery_required() {
+                            held_after_recovery = Some(msg);
+                            recovery_parked = true;
+                        } else {
+                            let _drained = drain_queue_batch(
+                                guard.actor_mut(),
+                                &rx,
+                                msg,
+                                max_batch_messages,
+                                queue_kind,
+                                handler_label,
+                                &mut handler,
+                            );
+                            recovery_parked = guard.actor_mut().recovery_required();
+                        }
                         status::record_worker_iteration(
                             u64::try_from(iter_start.elapsed().as_millis()).unwrap_or(u64::MAX),
                         );
@@ -17954,6 +18260,9 @@ where
     let mut next_msg = Some(first_msg);
 
     while let Some(msg) = next_msg.take() {
+        if actor.recovery_required() {
+            break;
+        }
         if let Err(err) = handler(actor, msg) {
             iroha_logger::error!(
                 ?err,
@@ -17964,7 +18273,7 @@ where
         }
         poll_worker_results(actor);
         drained = drained.saturating_add(1);
-        if drained >= max_batch_messages {
+        if actor.recovery_required() || drained >= max_batch_messages {
             break;
         }
         next_msg = rx.try_recv().ok();
@@ -17996,29 +18305,45 @@ fn spawn_tick_worker<A: WorkerActor + Send + 'static>(
                     guard.actor_mut().refresh_worker_loop_config(&mut cfg);
                     let now = Instant::now();
                     poll_worker_results(guard.actor_mut());
-                    let queue_depths = status::worker_queue_depth_snapshot();
-                    let tick_gap = if has_pending_queue_depths(queue_depths) {
-                        cfg.tick_busy_gap
+                    if guard.actor_mut().recovery_required() {
+                        status::record_worker_iteration(
+                            u64::try_from(iter_start.elapsed().as_millis()).unwrap_or(u64::MAX),
+                        );
+                        (None, cfg.tick_min_gap, false)
                     } else {
-                        cfg.tick_min_gap
-                    };
-                    let next_deadline = guard.actor_mut().next_tick_deadline(now);
-                    if next_deadline.is_some_and(|deadline| deadline <= now)
-                        && (guard.actor_mut().should_bypass_tick_gap()
-                            || should_run_tick(now, last_tick, tick_gap))
-                    {
-                        let _ = guard.actor_mut().tick();
-                        last_tick = now;
-                        guard.actor_mut().sync_external_hints();
+                        let queue_depths = status::worker_queue_depth_snapshot();
+                        let tick_gap = if has_pending_queue_depths(queue_depths) {
+                            cfg.tick_busy_gap
+                        } else {
+                            cfg.tick_min_gap
+                        };
+                        let next_deadline = guard.actor_mut().next_tick_deadline(now);
+                        let ticked = next_deadline.is_some_and(|deadline| deadline <= now)
+                            && (guard.actor_mut().should_bypass_tick_gap()
+                                || should_run_tick(now, last_tick, tick_gap));
+                        if ticked {
+                            let _ = guard.actor_mut().tick();
+                            last_tick = now;
+                        }
+                        if guard.actor_mut().recovery_required() {
+                            status::record_worker_iteration(
+                                u64::try_from(iter_start.elapsed().as_millis()).unwrap_or(u64::MAX),
+                            );
+                            (None, cfg.tick_min_gap, false)
+                        } else {
+                            if ticked {
+                                guard.actor_mut().sync_external_hints();
+                            }
+                            status::record_worker_iteration(
+                                u64::try_from(iter_start.elapsed().as_millis()).unwrap_or(u64::MAX),
+                            );
+                            (
+                                next_deadline,
+                                tick_gap,
+                                guard.actor_mut().should_bypass_tick_gap(),
+                            )
+                        }
                     }
-                    status::record_worker_iteration(
-                        u64::try_from(iter_start.elapsed().as_millis()).unwrap_or(u64::MAX),
-                    );
-                    (
-                        next_deadline,
-                        tick_gap,
-                        guard.actor_mut().should_bypass_tick_gap(),
-                    )
                 };
                 if active.fetch_sub(1, Ordering::Relaxed) == 1 {
                     status::set_worker_stage(status::WorkerLoopStage::Idle);

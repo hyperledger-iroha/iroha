@@ -169,6 +169,7 @@ impl StatePathHint {
 struct CompilationArtifacts {
     bytes: Vec<u8>,
     compile_report: CompileReport,
+    contract_interface: EmbeddedContractInterfaceV1,
 }
 
 struct LoweredCompilation {
@@ -1474,7 +1475,9 @@ pub struct CompilerOptions {
     /// Selects production artifact compilation or explicit local-test compilation.
     ///
     /// Production mode rejects test declarations and test-capable typed HIR;
-    /// it never silently strips them from a deployable artifact.
+    /// it never silently strips them from a deployable artifact. Test mode
+    /// emits an ABI-authenticated generic IVM 1.0 harness without a deployable
+    /// CNTR section.
     pub mode: CompilerMode,
 }
 
@@ -10392,9 +10395,22 @@ seiyaku CompilerFixture {
             mode: CompilerMode::Test,
             ..CompilerOptions::default()
         });
-        let (_code, _manifest, report) = test_mode
+        let (code, _manifest, report) = test_mode
             .compile_source_with_manifest_and_report(src)
             .expect("compile in test mode");
+        let parsed = ProgramMetadata::parse(&code).expect("parse test harness metadata");
+        assert_eq!(parsed.metadata.version_minor, 0);
+        assert_eq!(parsed.metadata.abi_version, KOTODAMA_ABI_VERSION);
+        assert!(
+            parsed.contract_interface.is_none(),
+            "local test harnesses must use the authenticated generic profile"
+        );
+        let mut stale_abi = code.clone();
+        stale_abi[17] ^= 1;
+        assert!(matches!(
+            ProgramMetadata::parse(&stale_abi),
+            Err(ivm_abi::VMError::ArtifactAbiHashMismatch { .. })
+        ));
         assert!(
             report
                 .source_map
@@ -10414,6 +10430,17 @@ seiyaku CompilerFixture {
                 .iter()
                 .all(|entry| entry.function_name != "helper"),
             "an ordinary unreachable private function must not become a test root"
+        );
+
+        let production_code = Compiler::new()
+            .compile_source("seiyaku ProductionFixture { view fn inspect() {} }")
+            .expect("compile production contract");
+        let production_metadata =
+            ProgramMetadata::parse(&production_code).expect("parse production metadata");
+        assert_eq!(production_metadata.metadata.version_minor, 1);
+        assert!(
+            production_metadata.contract_interface.is_some(),
+            "production contracts must retain their CNTR interface"
         );
     }
 
@@ -18230,7 +18257,16 @@ impl Compiler {
 
         let meta = ProgramMetadata {
             version_major: 1,
-            version_minor: 1,
+            // Local test harnesses are executable tooling images, not
+            // deployable contracts. Keep them on the authenticated generic
+            // 1.0 profile so the VM does not interpret their private test
+            // functions as a production CNTR interface. The separately
+            // projected runtime artifact is compiled in Production mode and
+            // therefore remains a self-describing 1.1 contract.
+            version_minor: match self.opts.mode {
+                CompilerMode::Production => 1,
+                CompilerMode::Test => 0,
+            },
             mode,
             vector_length: 0,
             max_cycles: self.opts.max_cycles,
@@ -18634,10 +18670,14 @@ impl Compiler {
                 .collect(),
             states: state_descriptors,
         };
-        // Compute the indexed literal table and patch LDLIT/LDI64 words. Contract artifacts are laid out as:
-        //   [ header | CNTR | LTLB? | code ]
+        // Compute the indexed literal table and patch LDLIT/LDI64 words.
+        // Production contracts use `[header | CNTR | LTLB? | code]`; local
+        // test harnesses use the generic `[header | LTLB? | code]` profile.
         let meta_bytes = meta.encode();
-        let contract_section = contract_interface.encode_section();
+        let contract_section = match self.opts.mode {
+            CompilerMode::Production => contract_interface.encode_section(),
+            CompilerMode::Test => Vec::new(),
+        };
         let need_literals = !key_order.is_empty();
         // Literal table length and offsets
         let lit_count = key_order.len() as u64;
@@ -18742,6 +18782,7 @@ impl Compiler {
         Ok(CompilationArtifacts {
             bytes: out,
             compile_report,
+            contract_interface,
         })
     }
 
@@ -18828,14 +18869,36 @@ impl Compiler {
         ),
         String,
     > {
-        let bytes = artifacts.bytes.clone();
+        let CompilationArtifacts {
+            bytes,
+            compile_report,
+            contract_interface: generated_contract_interface,
+        } = artifacts;
         let parsed = crate::metadata::ProgramMetadata::parse(&bytes)
             .map_err(|e| format!("manifest parse header: {e}"))?;
-        let contract_interface = parsed.contract_interface.ok_or_else(|| {
-            "manifest parse header: missing embedded contract interface".to_owned()
-        })?;
+        let contract_interface = match (self.opts.mode, parsed.contract_interface) {
+            (CompilerMode::Production, Some(embedded)) => {
+                if embedded != generated_contract_interface {
+                    return Err(
+                        "manifest parse header: embedded contract interface differs from the compiler-owned descriptor"
+                            .to_owned(),
+                    );
+                }
+                embedded
+            }
+            (CompilerMode::Production, None) => {
+                return Err("manifest parse header: missing embedded contract interface".to_owned());
+            }
+            (CompilerMode::Test, None) => generated_contract_interface,
+            (CompilerMode::Test, Some(_)) => {
+                return Err(
+                    "manifest parse header: local test harness unexpectedly embeds a CNTR section"
+                        .to_owned(),
+                );
+            }
+        };
         let code_hash = crate::metadata::contract_code_hash(&bytes);
-        if artifacts.compile_report.artifact_hash != code_hash {
+        if compile_report.artifact_hash != code_hash {
             return Err("compiler report hash does not match compiled artifact".to_owned());
         }
         let meta = parsed.metadata;
@@ -18871,7 +18934,7 @@ impl Compiler {
             kotoba: (!contract_interface.kotoba.is_empty()).then_some(contract_interface.kotoba),
             provenance: None,
         };
-        Ok((bytes, manifest, artifacts.compile_report))
+        Ok((bytes, manifest, compile_report))
     }
 
     /// Compile source and produce a manifest plus access-hint diagnostics.

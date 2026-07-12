@@ -1155,34 +1155,47 @@ impl ProgramMetadata {
             .map_err(|_| VMError::InvalidMetadata)?;
         let max_cycles = u64::from_le_bytes(max_cycles_bytes);
 
+        // Validate consensus-visible header policy in stable precedence order:
+        // version, unknown feature bits, ABI version, vector length, ABI hash.
+        // Structural length and magic failures necessarily precede these.
+        //
         // Validate header fields according to the current implementation policy.
         // - Accept generic version 1.0 and 1.1 headers.
         // - Self-describing contract artifacts remain a 1.1-only concept and are
         //   validated by higher-level artifact verification.
         // - Mode must not contain unknown bits (only ZK, VECTOR, HTM).
         // - `vector_length` is either 0 (use runtime default) or 1..=64.
-        // - ABI version is carried as-is; admission enforces allowed values.
+        // - ABI V1 is the only first-release ABI.
         const KNOWN_MODE_BITS: u8 = mode::ZK | mode::VECTOR | mode::HTM;
-        if version_major != 1 {
-            return Err(VMError::InvalidMetadata);
+        if version_major != 1 || !matches!(version_minor, 0 | 1) {
+            return Err(VMError::UnsupportedProgramVersion {
+                major: version_major,
+                minor: version_minor,
+            });
         }
-        if !matches!(version_minor, 0 | 1) {
-            return Err(VMError::InvalidMetadata);
+        let unsupported_feature_bits = mode & !KNOWN_MODE_BITS;
+        if unsupported_feature_bits != 0 {
+            return Err(VMError::UnsupportedProgramFeatureBits {
+                bits: unsupported_feature_bits,
+            });
         }
-        if mode & !KNOWN_MODE_BITS != 0 {
-            return Err(VMError::InvalidMetadata);
+        if abi_version != 1 {
+            return Err(VMError::UnsupportedProgramAbiVersion {
+                version: abi_version,
+            });
         }
         if vector_length > VECTOR_LENGTH_MAX {
-            return Err(VMError::InvalidMetadata);
+            return Err(VMError::ProgramVectorLengthTooLarge {
+                vector_length,
+                max_allowed: VECTOR_LENGTH_MAX,
+            });
         }
-        if abi_version == 1 {
-            let expected = crate::syscalls::compute_abi_hash(crate::SyscallPolicy::AbiV1);
-            if abi_hash != expected {
-                return Err(VMError::ArtifactAbiHashMismatch {
-                    expected,
-                    actual: abi_hash,
-                });
-            }
+        let expected = crate::syscalls::compute_abi_hash(crate::SyscallPolicy::AbiV1);
+        if abi_hash != expected {
+            return Err(VMError::ArtifactAbiHashMismatch {
+                expected,
+                actual: abi_hash,
+            });
         }
         // Note: vector_length may be non-zero even if VECTOR flag is off; the
         // host/runtime may ignore it depending on policy.
@@ -1416,6 +1429,69 @@ fn parse_literal_section(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fixed_header_policy_errors_have_stable_precedence() {
+        let mut bytes = ProgramMetadata {
+            max_cycles: 1,
+            ..ProgramMetadata::default()
+        }
+        .encode();
+
+        bytes[4] = 2;
+        bytes[6] = 0x80;
+        bytes[7] = VECTOR_LENGTH_MAX + 1;
+        bytes[16] = 3;
+        assert_eq!(
+            ProgramMetadata::parse(&bytes).expect_err("version must win"),
+            VMError::UnsupportedProgramVersion { major: 2, minor: 1 }
+        );
+
+        bytes[4] = 1;
+        bytes[5] = 2;
+        assert_eq!(
+            ProgramMetadata::parse(&bytes).expect_err("minor version must be explicit"),
+            VMError::UnsupportedProgramVersion { major: 1, minor: 2 }
+        );
+
+        bytes[5] = 1;
+        assert_eq!(
+            ProgramMetadata::parse(&bytes).expect_err("feature bits must precede ABI"),
+            VMError::UnsupportedProgramFeatureBits { bits: 0x80 }
+        );
+
+        bytes[6] = 0;
+        assert_eq!(
+            ProgramMetadata::parse(&bytes).expect_err("ABI must precede vector width"),
+            VMError::UnsupportedProgramAbiVersion { version: 3 }
+        );
+
+        bytes[16] = 1;
+        assert_eq!(
+            ProgramMetadata::parse(&bytes).expect_err("vector width must precede ABI hash"),
+            VMError::ProgramVectorLengthTooLarge {
+                vector_length: VECTOR_LENGTH_MAX + 1,
+                max_allowed: VECTOR_LENGTH_MAX,
+            }
+        );
+
+        bytes[7] = 0;
+        assert!(matches!(
+            ProgramMetadata::parse(&bytes),
+            Err(VMError::ArtifactAbiHashMismatch { .. })
+        ));
+
+        assert_eq!(
+            ProgramMetadata::parse(&bytes[..HEADER_SIZE - 1])
+                .expect_err("truncated fixed header is structural corruption"),
+            VMError::InvalidMetadata
+        );
+        bytes[0] ^= 0xff;
+        assert_eq!(
+            ProgramMetadata::parse(&bytes).expect_err("bad magic is structural corruption"),
+            VMError::InvalidMetadata
+        );
+    }
 
     #[test]
     fn literal_descriptors_roundtrip_kind_and_full_offset_domain() {

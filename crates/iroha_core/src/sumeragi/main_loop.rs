@@ -10927,6 +10927,9 @@ impl Actor {
     }
 
     fn wake_commit_pipeline(&mut self) {
+        if self.kura_recovery_required() {
+            return;
+        }
         self.pending.commit_pipeline_wakeup = true;
         self.subsystems.propose.pacemaker.next_deadline = Instant::now();
         if let Some(wake) = self.wake_tx.as_ref() {
@@ -10946,6 +10949,9 @@ impl Actor {
         cause: super::status::RoundEventCauseTrace,
         queue_latency_ms: Option<u64>,
     ) {
+        if self.kura_recovery_required() {
+            return;
+        }
         self.record_round_trace_event(RoundTraceEvent {
             key: RoundTraceKey { height, view },
             phase,
@@ -10962,6 +10968,9 @@ impl Actor {
         cause: super::status::RoundEventCauseTrace,
         queue_latency_ms: Option<u64>,
     ) {
+        if self.kura_recovery_required() {
+            return;
+        }
         let now = Instant::now();
         let event = self
             .pending
@@ -18788,7 +18797,7 @@ impl Drop for MessageTimingGuard {
     clippy::assigning_clones
 )]
 impl Actor {
-    fn kura_recovery_required(&self) -> bool {
+    pub(super) fn kura_recovery_required(&self) -> bool {
         self.kura_recovery_required.is_some()
     }
 
@@ -24950,6 +24959,15 @@ impl Actor {
             );
         }
         let mut progress = self.tick_mode_management();
+        macro_rules! stop_tick_on_kura_recovery {
+            () => {
+                if self.kura_recovery_required() {
+                    self.tick_in_progress = false;
+                    return progress;
+                }
+            };
+        }
+        stop_tick_on_kura_recovery!();
         progress |= quarantine_retry_progress;
         let expired_culled = if self.tick_counter % Self::TICK_EXPIRED_CULL_STRIDE == 0 {
             let _view_ctx = StateViewContextGuard::new("sumeragi.tick.cull_expired");
@@ -25000,55 +25018,68 @@ impl Actor {
             let progress = self.poll_committed_blocks();
             (progress, step_start.elapsed())
         };
+        stop_tick_on_kura_recovery!();
         if committed_progress {
             // `tick_mode_management` runs before commit polling. Re-evaluate after processing
             // newly committed blocks so activation-height cutovers cannot be missed when the
             // commit height advances mid-tick.
             progress |= self.tick_mode_management();
+            stop_tick_on_kura_recovery!();
         }
         let merge_sidecar_progress = self.tick_certified_merge_sidecars(now);
+        stop_tick_on_kura_recovery!();
         let lane_block_vote_progress = {
             let _view_ctx = StateViewContextGuard::new("sumeragi.tick.lane_block_votes");
             self.broadcast_ready_local_lane_block_votes()
         };
+        stop_tick_on_kura_recovery!();
         let committed_lane_block_progress = {
             let _view_ctx = StateViewContextGuard::new("sumeragi.tick.committed_lane_blocks");
             self.queue_committed_lane_block_sessions()
         };
+        stop_tick_on_kura_recovery!();
         let deferred_qc_progress = {
             let _view_ctx = StateViewContextGuard::new("sumeragi.tick.replay_deferred_qcs");
             self.try_replay_deferred_qcs()
         };
+        stop_tick_on_kura_recovery!();
         let deferred_missing_payload_progress = {
             let _view_ctx =
                 StateViewContextGuard::new("sumeragi.tick.replay_deferred_missing_payload_qcs");
             self.try_replay_deferred_missing_payload_qcs(now)
         };
+        stop_tick_on_kura_recovery!();
         let deferred_vote_progress = {
             let _view_ctx = StateViewContextGuard::new("sumeragi.tick.replay_deferred_votes");
             self.try_replay_deferred_votes()
         };
+        stop_tick_on_kura_recovery!();
         let deferred_block_sync_progress = {
             let _view_ctx = StateViewContextGuard::new("sumeragi.tick.replay_deferred_block_sync");
             self.try_replay_deferred_block_sync_updates()
         };
+        stop_tick_on_kura_recovery!();
         let frontier_body_progress = {
             let _view_ctx = StateViewContextGuard::new("sumeragi.tick.frontier_body_fetch");
             self.retry_frontier_block_body_fetch(now)
         };
+        stop_tick_on_kura_recovery!();
         let quarantined_block_sync_qc_progress = {
             let _view_ctx =
                 StateViewContextGuard::new("sumeragi.tick.replay_quarantined_block_sync_qcs");
             self.try_replay_quarantined_block_sync_qcs(now, tick_deadline)
         };
+        stop_tick_on_kura_recovery!();
         let known_block_qc_progress = {
             let _view_ctx = StateViewContextGuard::new("sumeragi.tick.known_block_qc_work");
             self.drain_known_block_qc_work(tick_deadline)
         };
+        stop_tick_on_kura_recovery!();
         let vnext_progress = {
             let _view_ctx = StateViewContextGuard::new("sumeragi.tick.vnext_round");
             self.tick_vnext_rounds(Self::vnext_now_ms())
         };
+        stop_tick_on_kura_recovery!();
         let (missing_block_progress, missing_block_cost) = {
             let _view_ctx = StateViewContextGuard::new("sumeragi.tick.retry_missing_block");
             let step_start = Instant::now();
@@ -25066,6 +25097,7 @@ impl Actor {
             let progress = self.reschedule_stale_pending_blocks(tick_deadline);
             (progress, step_start.elapsed())
         };
+        stop_tick_on_kura_recovery!();
         let mode_flip_pending_before_idle =
             self.config.mode_flip.enabled && self.pending_mode_flip.is_some();
         let pre_idle_proposal_backpressure = {
@@ -25118,10 +25150,12 @@ impl Actor {
             };
             (progress, step_start.elapsed())
         };
+        stop_tick_on_kura_recovery!();
         let round_liveness_progress = {
             let _view_ctx = StateViewContextGuard::new("sumeragi.tick.round_liveness_fsm");
             self.drive_round_liveness_fsm(now)
         };
+        stop_tick_on_kura_recovery!();
         let merge_committee_progress = if Self::tick_budget_exhausted(tick_deadline, Instant::now())
         {
             false
@@ -25138,9 +25172,13 @@ impl Actor {
                 }
             }
         };
+        stop_tick_on_kura_recovery!();
         let rbc_rebroadcast_progress = self.rebroadcast_stalled_rbc_payloads(now);
+        stop_tick_on_kura_recovery!();
         let rbc_outbound_progress = self.flush_rbc_outbound_chunks(now);
+        stop_tick_on_kura_recovery!();
         let rbc_session_ttl_progress = self.prune_stale_rbc_sessions(SystemTime::now());
+        stop_tick_on_kura_recovery!();
         let mut commit_pipeline_cost = Duration::ZERO;
         let mut commit_pipeline_timings = commit::CommitPipelineTimings::default();
         let mut propose_cost = Duration::ZERO;
@@ -25319,6 +25357,7 @@ impl Actor {
                 if self.on_pacemaker_propose_ready(proposal_now) {
                     progress = true;
                 }
+                stop_tick_on_kura_recovery!();
             }
             propose_cost = propose_cost.saturating_add(propose_start.elapsed());
         }
@@ -25367,6 +25406,7 @@ impl Actor {
                 if self.on_pacemaker_propose_ready(proposal_now) {
                     progress = true;
                 }
+                stop_tick_on_kura_recovery!();
             }
             propose_cost = propose_cost.saturating_add(propose_start.elapsed());
         }
@@ -25388,6 +25428,7 @@ impl Actor {
                 if self.force_view_change_if_idle(now) {
                     progress = true;
                 }
+                stop_tick_on_kura_recovery!();
             }
             idle_view_cost = idle_view_cost.saturating_add(repair_start.elapsed());
         }
@@ -29905,6 +29946,9 @@ impl Actor {
     }
 
     fn prepare_background_block_message(&self, msg: &mut BlockMessageWire) -> bool {
+        if self.kura_recovery_required() {
+            return false;
+        }
         let origin = self.common_config.peer.id();
         let mut wire_len = consensus_block_wire_len_wire(origin, msg);
         let cap = self.block_message_frame_cap(msg.as_ref());
@@ -30024,6 +30068,9 @@ impl Actor {
     }
 
     fn schedule_background(&mut self, request: BackgroundRequest) {
+        if self.kura_recovery_required() {
+            return;
+        }
         let request = match request {
             BackgroundRequest::Post { peer, mut msg } => {
                 if !self.prepare_background_block_message(&mut msg) {
@@ -30076,6 +30123,9 @@ impl Actor {
     }
 
     fn schedule_background_via_queue(&mut self, request: BackgroundRequest) {
+        if self.kura_recovery_required() {
+            return;
+        }
         let request = match request {
             BackgroundRequest::Post { peer, mut msg } => {
                 if !self.prepare_background_block_message(&mut msg) {
@@ -30179,6 +30229,9 @@ impl Actor {
     }
 
     fn dispatch_background_inline(&mut self, request: BackgroundRequest) {
+        if self.kura_recovery_required() {
+            return;
+        }
         #[cfg(feature = "telemetry")]
         let enqueued_at = Instant::now();
         #[cfg(feature = "telemetry")]
@@ -30223,6 +30276,9 @@ impl Actor {
     }
 
     fn dispatch_background_fallback(&mut self, request: BackgroundRequest) {
+        if self.kura_recovery_required() {
+            return;
+        }
         match Self::background_fallback_network_dispatch(request) {
             BackgroundFallbackNetworkDispatch::Post(post) => self.network.post(post),
             BackgroundFallbackNetworkDispatch::Broadcast(broadcast) => {
@@ -44911,6 +44967,9 @@ impl Actor {
                         "emitted local precommit to complete stalled pending quorum"
                     );
                 }
+                if self.kura_recovery_required() {
+                    return false;
+                }
             }
         }
         if local_quorum_completion_emitted > 0 {
@@ -47905,6 +47964,9 @@ impl Actor {
     }
 
     fn trigger_view_change_with_cause(&mut self, height: u64, view: u64, cause: ViewChangeCause) {
+        if self.kura_recovery_required() {
+            return;
+        }
         if matches!(
             cause,
             ViewChangeCause::QuorumTimeout
@@ -48007,6 +48069,9 @@ impl Actor {
         cause: ViewChangeCause,
         bypass_frontier_repair_suppression: bool,
     ) {
+        if self.kura_recovery_required() {
+            return;
+        }
         if let Some(current_height) = self.phase_tracker.round_height {
             if height < current_height {
                 debug!(

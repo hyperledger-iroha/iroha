@@ -18074,9 +18074,14 @@ pub mod isi {
             artifact: &SccpReceiptArtifactFixture,
         ) -> BridgeReceipt {
             let iroha_sccp::SccpPayloadV1::Transfer(payload) = &artifact.bundle.payload;
+            let direction = if payload.asset_home_domain == iroha_sccp::SCCP_DOMAIN_SORA {
+                b"release".to_vec()
+            } else {
+                b"mint".to_vec()
+            };
             BridgeReceipt {
                 lane: LaneId::SINGLE,
-                direction: b"release".to_vec(),
+                direction,
                 source_tx: artifact.bundle.commitment.message_id,
                 dest_tx: None,
                 proof_hash,
@@ -28113,9 +28118,14 @@ seiyaku GovernanceLifecycle {
                 let proof_hash = insert_bridge_proof_record_for_receipt_test(&mut stx, proof);
                 set_current_lane_for_test(&mut stx, LaneId::SINGLE);
                 let mut receipt = sccp_bridge_receipt_for_receipt_test(proof_hash, &artifact);
+                let baseline = receipt.clone();
                 let expected_error = match mismatch {
                     ReceiptMismatch::Direction => {
-                        receipt.direction = b"release".to_vec();
+                        receipt.direction = if receipt.direction == b"release" {
+                            b"mint".to_vec()
+                        } else {
+                            b"release".to_vec()
+                        };
                         "direction does not match transfer payload"
                     }
                     ReceiptMismatch::SourceTx => {
@@ -28135,6 +28145,10 @@ seiyaku GovernanceLifecycle {
                         "recipient does not match transfer payload"
                     }
                 };
+                assert_ne!(
+                    receipt, baseline,
+                    "mismatch case {index} must change the signed receipt projection"
+                );
 
                 let err = RecordBridgeReceipt::new(receipt)
                     .execute(&ALICE_ID, &mut stx)

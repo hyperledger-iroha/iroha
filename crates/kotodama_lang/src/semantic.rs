@@ -16366,9 +16366,13 @@ mod tests {
                 .unwrap_or_else(|| panic!("missing binding `{suffix}`"))
         };
 
-        assert!(matches!(binding("pair#0").expr, ExprKind::IntLiteral(ref value) if value == &BigInt::from(1_i64)));
+        assert!(
+            matches!(binding("pair#0").expr, ExprKind::IntLiteral(ref value) if value == &BigInt::from(1_i64))
+        );
         assert!(matches!(binding("pair#1").expr, ExprKind::String(ref value) if value == "two"));
-        assert!(matches!(binding("left").expr, ExprKind::IntLiteral(ref value) if value == &BigInt::from(3_i64)));
+        assert!(
+            matches!(binding("left").expr, ExprKind::IntLiteral(ref value) if value == &BigInt::from(3_i64))
+        );
         assert!(matches!(binding("right").expr, ExprKind::String(ref value) if value == "four"));
     }
 

@@ -17,6 +17,8 @@ ABI policy
   and state-type schema identities, every embedded state-type tag/layout/sample frame, admission and
   depth rules, and typed durable-state schema/record identities, enum tags, layouts, traversal rules,
   pointer mappings, caps, operation-specific state paths, and CNTR-bound read/write record validation.
+  It also binds the generic-program discriminator, reserved transaction metadata,
+  and exact sorted list of syscalls unavailable without an authenticated contract identity.
   Display names and gas prices are not part of this digest.
   `ivm::gas::schedule_hash()` commits to the canonical gas schedule and every staged-metering phase
   name/tag independently.
@@ -32,6 +34,15 @@ Admission/host guardrails
 - Admission enforces manifest `code_hash`/`abi_hash` equality for both inline metadata manifests and
   WSV‑stored manifests before execution, returning `ManifestCodeHashMismatch`/`ManifestAbiHashMismatch`
   deterministically.
+- A program without a canonical `CNTR` section is Generic. It retains pure
+  compute, numeric, codec, crypto, output, query, and ordinary permission-checked
+  ISI syscalls, but admission and host dispatch both reject the ABI-bound
+  `GENERIC_PROGRAM_DENIED_SYSCALLS_V1` list with
+  `GenericSyscallNotAllowed(syscall)` before side effects. The denied list covers
+  contract-entrypoint grants, contract code/lifecycle administration, durable
+  state, the opaque contract instruction bridge, nested contract calls, and
+  contract-identity sysvars. Generic transaction metadata may not carry the
+  reserved contract/deployment keys bound by the descriptor.
 - Admission decodes the instruction stream and rejects `SCALL` numbers outside the ABI surface with
   `ValidationFail::NotPermitted` before execution, so mutated or malformed bytecode never reaches the
   host.
@@ -183,7 +194,7 @@ Exact numeric helpers
 - Numeric syscalls use Gas: `G_numeric_staged`
   (`asset:gas/G_numeric_staged@ivm.core/v2`) and quote-free staged gas:
   `16 + input_envelope_bytes + input_hash_frame_bytes + output_envelope_bytes
-  + 2 * output_frame_bytes + 4 * logical_limb_work` (formula version 3).
+  + 2 * output_frame_bytes + 4 * logical_limb_work` (formula version 4).
   The entry weight covers dispatch, staged bookkeeping, and at most four
   bounded control-register checks. Each logical base-`2^64` work cell receives
   four units for operand access, arithmetic/carry or quotient trial, result
@@ -310,10 +321,9 @@ Durable state
 - 0x51 STATE_SET — Args: `r10=&Name(path), r11=&NoritoBytes(value)` → 0 — Gas: G_state_set + bytes
 - 0x52 STATE_DEL — Args: `r10=&Name(path)` → 0 — Gas: G_state_del
 - Deployed-contract execution scopes every path to `sc/<contract-address-hash>/`.
-  Scoped operations never read, enumerate, overwrite, or delete legacy
-  unscoped keys. Raw IVM programs without a contract runtime context continue
-  to use the exact path supplied by the program, except that the reserved `sc`
-  namespace is rejected so raw bytecode cannot address deployed-contract state.
+  Scoped operations never read, enumerate, overwrite, or delete unscoped keys.
+  Generic programs have no authenticated contract namespace, so every durable
+  state syscall is rejected during admission and again before host dispatch.
 - State gas is deterministic and byte-counted: present reads and writes charge
   the `NoritoBytes` payload length, misses and tombstones charge only the fixed
   base, and key enumeration adds the returned-key count plus encoded result

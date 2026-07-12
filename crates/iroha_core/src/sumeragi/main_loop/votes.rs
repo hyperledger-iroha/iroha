@@ -938,6 +938,9 @@ impl Actor {
     }
 
     pub(super) fn process_pending_vote_validation(&mut self) -> bool {
+        if self.kura_recovery_required() {
+            return false;
+        }
         if self.subsystems.vote_verify.pending_validation.is_empty() {
             return false;
         }
@@ -954,17 +957,26 @@ impl Actor {
         }
         let mut progress = false;
         for key in keys {
+            if self.kura_recovery_required() {
+                break;
+            }
             let Some(vote) = self.subsystems.vote_verify.pending_validation.remove(&key) else {
                 continue;
             };
             self.handle_vote(vote);
             progress = true;
+            if self.kura_recovery_required() {
+                break;
+            }
         }
         progress
     }
 
     #[allow(clippy::too_many_lines)]
     pub(super) fn handle_vote(&mut self, vote: crate::sumeragi::consensus::Vote) {
+        if self.kura_recovery_required() {
+            return;
+        }
         let committed_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
         let stale_view = self.stale_view(vote.height, vote.view);
         if self.drop_vote_for_height_or_view(&vote, committed_height, stale_view)
@@ -1175,6 +1187,9 @@ impl Actor {
         vote: crate::sumeragi::consensus::Vote,
         context: VoteProcessingContext,
     ) {
+        if self.kura_recovery_required() {
+            return;
+        }
         let committed_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
         let topology_peers = context.topology.as_ref().to_vec();
         let now = Instant::now();
@@ -1226,6 +1241,9 @@ impl Actor {
                     vote.epoch,
                     &context.topology,
                 );
+                if self.kura_recovery_required() {
+                    return;
+                }
                 if matches!(vote.phase, Phase::Commit) {
                     let qc_key = (
                         crate::sumeragi::consensus::Phase::Commit,
@@ -1289,6 +1307,9 @@ impl Actor {
                             context.topology.as_ref(),
                             "commit_vote_accepted",
                         );
+                        if self.kura_recovery_required() {
+                            return;
+                        }
                         let _ = self.maybe_replay_known_block_commit_evidence(
                             vote.block_hash,
                             vote.height,
@@ -1348,6 +1369,9 @@ impl Actor {
                         vote.epoch,
                         &context.topology,
                     );
+                    if self.kura_recovery_required() {
+                        return;
+                    }
                     debug!(
                         height = vote.height,
                         view = vote.view,
@@ -1385,7 +1409,13 @@ impl Actor {
                     vote.epoch,
                     &context.topology,
                 );
+                if self.kura_recovery_required() {
+                    return;
+                }
             }
+        }
+        if self.kura_recovery_required() {
+            return;
         }
         self.request_commit_pipeline_for_pending(
             vote.block_hash,
@@ -3891,7 +3921,10 @@ impl Actor {
     }
 
     fn replay_deferred_votes_for_block(&mut self, block_hash: HashOf<BlockHeader>) {
-        let Some(deferred) = self.deferred_votes.remove(&block_hash) else {
+        if self.kura_recovery_required() {
+            return;
+        }
+        let Some(mut deferred) = self.deferred_votes.remove(&block_hash) else {
             return;
         };
         let count = deferred.len();
@@ -3903,8 +3936,17 @@ impl Actor {
             deferred = count,
             "replaying deferred votes after roster resolution"
         );
-        for (_, vote) in deferred {
+        while let Some(key) = deferred.keys().next().cloned() {
+            let vote = deferred
+                .remove(&key)
+                .expect("deferred vote key selected from the same map");
             self.handle_vote(vote);
+            if self.kura_recovery_required() {
+                if !deferred.is_empty() {
+                    self.deferred_votes.insert(block_hash, deferred);
+                }
+                break;
+            }
         }
     }
 
@@ -3914,6 +3956,9 @@ impl Actor {
         view: u64,
         reason: &'static str,
     ) -> bool {
+        if self.kura_recovery_required() {
+            return false;
+        }
         if self.deferred_votes.is_empty() {
             return false;
         }
@@ -3942,27 +3987,37 @@ impl Actor {
             "replaying deferred votes after slot context update"
         );
         for (block_hash, keys) in replay_keys {
-            let mut replay = Vec::new();
-            let mut remove_block = false;
-            if let Some(votes) = self.deferred_votes.get_mut(&block_hash) {
-                for key in keys {
-                    if let Some(vote) = votes.remove(&key) {
-                        replay.push(vote);
-                    }
+            for key in keys {
+                if self.kura_recovery_required() {
+                    return true;
                 }
-                remove_block = votes.is_empty();
-            }
-            if remove_block {
-                self.deferred_votes.remove(&block_hash);
-            }
-            for vote in replay {
+                let vote = self
+                    .deferred_votes
+                    .get_mut(&block_hash)
+                    .and_then(|votes| votes.remove(&key));
+                let Some(vote) = vote else {
+                    continue;
+                };
+                if self
+                    .deferred_votes
+                    .get(&block_hash)
+                    .is_some_and(|votes| votes.is_empty())
+                {
+                    self.deferred_votes.remove(&block_hash);
+                }
                 self.handle_vote(vote);
+                if self.kura_recovery_required() {
+                    return true;
+                }
             }
         }
         true
     }
 
     pub(super) fn try_replay_deferred_votes(&mut self) -> bool {
+        if self.kura_recovery_required() {
+            return false;
+        }
         if self.deferred_votes.is_empty() {
             return false;
         }
