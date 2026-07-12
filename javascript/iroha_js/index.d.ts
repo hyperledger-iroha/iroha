@@ -3473,59 +3473,6 @@ export interface IdentifierClaimLookupResponse {
   expires_at_ms: number | null;
 }
 
-export interface RbcSampleRequestOptions {
-  blockHash: string;
-  height: number | string | bigint;
-  view: number | string | bigint;
-  count?: number | string | bigint;
-  seed?: number | string | bigint;
-  apiToken?: string;
-  signal?: AbortSignal;
-}
-
-export interface RbcSampleRequestOverrides {
-  count?: number | string | bigint;
-  seed?: number | string | bigint;
-  apiToken?: string;
-}
-
-export interface SumeragiRbcSnapshot {
-  sessionsActive: number;
-  sessionsPrunedTotal: number;
-  readyBroadcastsTotal: number;
-  deliverBroadcastsTotal: number;
-  payloadBytesDeliveredTotal: number;
-}
-
-export interface SumeragiRbcSession {
-  blockHash: string | null;
-  height: number;
-  view: number;
-  totalChunks: number;
-  receivedChunks: number;
-  readyCount: number;
-  delivered: boolean;
-  invalid: boolean;
-  payloadHash: string | null;
-  recovered: boolean;
-}
-
-export interface SumeragiRbcSessionsSnapshot {
-  sessionsActive: number;
-  items: ReadonlyArray<SumeragiRbcSession>;
-}
-
-export interface SumeragiRbcDeliveryStatus {
-  height: number;
-  view: number;
-  delivered: boolean;
-  present: boolean;
-  blockHash: string | null;
-  readyCount: number;
-  receivedChunks: number;
-  totalChunks: number;
-}
-
 export interface SumeragiTelemetryAvailabilityCollector {
   collector_idx: number;
   peer_id: string;
@@ -3596,29 +3543,6 @@ export interface SumeragiTelemetryReplaySnapshot {
   capturedAtUnixMs: number;
   capturedAtIso: string;
   telemetry: SumeragiTelemetrySnapshot;
-}
-
-export interface RbcMerkleProof {
-  leafIndex: number;
-  depth: number | null;
-  auditPath: ReadonlyArray<string | null>;
-}
-
-export interface RbcChunkProof {
-  index: number;
-  chunkHex: string;
-  digestHex: string;
-  proof: RbcMerkleProof;
-}
-
-export interface RbcSampleResponse {
-  blockHash: string;
-  height: number;
-  view: number;
-  totalChunks: number;
-  chunkRoot: string;
-  payloadHash: string | null;
-  samples: ReadonlyArray<RbcChunkProof>;
 }
 
 export interface ToriiAccountListItem {
@@ -5277,7 +5201,6 @@ type ToriiRuntimeNamespaceExport =
   | "TransactionTimeoutError"
   | "buildConnectWebSocketUrl"
   | "buildIdentifierRequestForPolicy"
-  | "buildRbcSampleRequest"
   | "buildSorafsOrderbookEventsWebSocketUrl"
   | "decodePdpCommitmentHeader"
   | "encodeIdentifierResolutionReceiptAttestation"
@@ -5551,14 +5474,6 @@ export interface IsoBridgeConfigSnapshot {
   currencyAssets: ReadonlyArray<IsoBridgeCurrencyBinding>;
 }
 
-export interface RbcSamplingConfigSnapshot {
-  enabled: boolean;
-  maxSamplesPerRequest: number;
-  maxBytesPerRequest: number;
-  dailyByteBudget: number;
-  ratePerMinute: number | null;
-}
-
 export interface ConnectConfigSnapshot {
   enabled: boolean;
   wsMaxSessions: number;
@@ -5579,7 +5494,6 @@ export interface ConnectConfigSnapshot {
 
 export interface ToriiFeatureConfigSnapshot {
   isoBridge: IsoBridgeConfigSnapshot | null;
-  rbcSampling: RbcSamplingConfigSnapshot | null;
   connect: ConnectConfigSnapshot | null;
 }
 
@@ -7105,26 +7019,6 @@ export interface ToriiSumeragiPrfContext {
 
 export interface ToriiSumeragiLeaderSnapshot {
   leader_index: number;
-  prf: ToriiSumeragiPrfContext;
-}
-
-export interface ToriiSumeragiCollectorEntry {
-  index: number;
-  peer_id: string;
-}
-
-export interface ToriiSumeragiCollectorsPlan {
-  consensus_mode: string;
-  mode: string;
-  topology_len: number;
-  min_votes_for_commit: number;
-  proxy_tail_index: number;
-  height: number;
-  view: number;
-  collectors_k: number;
-  redundant_send_r: number;
-  epoch_seed?: string | null;
-  collectors: ReadonlyArray<ToriiSumeragiCollectorEntry>;
   prf: ToriiSumeragiPrfContext;
 }
 
@@ -10927,10 +10821,6 @@ export declare function buildSorafsOrderbookEventsWebSocketUrl(
   options?: SorafsOrderbookEventsWebSocketParams,
 ): string;
 
-export declare function buildRbcSampleRequest(
-  session: SumeragiRbcSession,
-  overrides?: RbcSampleRequestOverrides,
-): RbcSampleRequestOptions;
 export declare function openConnectWebSocket<T = unknown>(
   options: ConnectWebSocketDialOptions<T>,
 ): T;
@@ -11964,9 +11854,6 @@ export declare class ToriiClient {
   getSumeragiLeader(options?: {
     signal?: AbortSignal;
   }): Promise<ToriiSumeragiLeaderSnapshot>;
-  getSumeragiCollectors(options?: {
-    signal?: AbortSignal;
-  }): Promise<ToriiSumeragiCollectorsPlan>;
   getSumeragiParams(options?: {
     signal?: AbortSignal;
   }): Promise<ToriiSumeragiParamsSnapshot>;
@@ -11976,23 +11863,6 @@ export declare class ToriiClient {
   getSumeragiTelemetryTyped(options?: {
     signal?: AbortSignal;
   }): Promise<SumeragiTelemetrySnapshot>;
-  getSumeragiRbc(options?: {
-    signal?: AbortSignal;
-  }): Promise<SumeragiRbcSnapshot | null>;
-  getSumeragiRbcSessions(options?: {
-    signal?: AbortSignal;
-  }): Promise<SumeragiRbcSessionsSnapshot | null>;
-  findRbcSamplingCandidate(options?: {
-    signal?: AbortSignal;
-  }): Promise<SumeragiRbcSession | null>;
-  getSumeragiRbcDelivered(
-    height: number | string | bigint,
-    view: number | string | bigint,
-    options?: { signal?: AbortSignal },
-  ): Promise<SumeragiRbcDeliveryStatus | null>;
-  sampleRbcChunks(
-    options: RbcSampleRequestOptions,
-  ): Promise<RbcSampleResponse | null>;
   listSumeragiEvidence(
     options?: SumeragiEvidenceListOptions,
   ): Promise<SumeragiEvidenceListResponse>;
@@ -12167,10 +12037,6 @@ export declare class ToriiClient {
     baseUrl: string,
     options: ConnectWebSocketParams,
   ): string;
-  static buildRbcSampleRequest(
-    session: SumeragiRbcSession,
-    overrides?: RbcSampleRequestOverrides,
-  ): RbcSampleRequestOptions;
   registerContractCode(
     request: RegisterContractCodeRequest,
   ): Promise<unknown | null>;

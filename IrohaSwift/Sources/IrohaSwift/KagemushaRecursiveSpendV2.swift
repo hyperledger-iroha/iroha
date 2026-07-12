@@ -727,20 +727,43 @@ public struct KagemushaConfidentialVerifierBinding: Equatable, Sendable {
         verifier: ToriiKagemushaActiveTransferVerifier,
         blockHeight: UInt64
     ) throws {
+        try self.init(
+            role: role,
+            backend: verifier.id.backend,
+            name: verifier.id.name,
+            circuitID: verifier.circuitId,
+            commitmentHex: verifier.commitment,
+            activationHeight: verifier.activationHeight,
+            withdrawalHeight: verifier.withdrawalHeight,
+            blockHeight: blockHeight
+        )
+    }
+
+    public init(
+        role: KagemushaRecursiveSpend.VerifierRole,
+        backend: String,
+        name: String,
+        circuitID: String,
+        commitmentHex: String,
+        activationHeight: UInt64,
+        withdrawalHeight: UInt64?,
+        blockHeight: UInt64
+    ) throws {
         guard role == .transfer || role == .unshield,
-              verifier.id.backend == role.registryBackend,
-              verifier.id.name == role.registryName,
-              verifier.circuitId == role.circuitID,
-              verifier.activationHeight <= blockHeight,
-              verifier.withdrawalHeight.map({ blockHeight < $0 }) != false,
-              let commitment = Data(hexString: verifier.commitment),
+              backend == role.registryBackend,
+              name == role.registryName,
+              circuitID == role.circuitID,
+              activationHeight <= blockHeight,
+              withdrawalHeight.map({ blockHeight < $0 }) != false,
+              commitmentHex == commitmentHex.lowercased(),
+              let commitment = Data(hexString: commitmentHex),
               commitment.count == 32,
               commitment.contains(where: { $0 != 0 }) else {
             throw KagemushaRecursiveSpendError.invalidField("confidentialVerifier")
         }
         self.role = role
-        backend = verifier.id.backend
-        name = verifier.id.name
+        self.backend = backend
+        self.name = name
         self.commitment = commitment
         self.blockHeight = blockHeight
     }

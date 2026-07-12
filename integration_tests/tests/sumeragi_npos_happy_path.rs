@@ -32,7 +32,6 @@ const METRIC_ATTEMPTS: usize = 40;
 const METRIC_INTERVAL: Duration = Duration::from_millis(250);
 const PACEMAKER_EMA_BUDGET_MS: f64 = 8_000.0;
 const BG_QUEUE_DEPTH_BUDGET: f64 = 16.0;
-const RBC_WAIT_BUDGET: Duration = Duration::from_secs(20);
 // Full-workspace runs can delay large RBC delivery under network-test permit contention.
 const RBC_DELIVERY_BUDGET: Duration = Duration::from_secs(240);
 const COMMIT_WAIT_BUDGET: Duration = Duration::from_secs(480);
@@ -157,16 +156,12 @@ async fn npos_happy_path_enforces_da_and_metrics_bounds() -> eyre::Result<()> {
 
     let http = integration_tests::http::client();
     let torii = client.torii_url.clone();
-    let collectors_url = torii
-        .join("v1/sumeragi/collectors")
-        .wrap_err("compose collectors URL")?;
-    let sessions_url = torii
-        .join("v1/sumeragi/rbc/sessions")
-        .wrap_err("compose RBC sessions URL")?;
+    let telemetry_url = torii
+        .join("v1/sumeragi/telemetry")
+        .wrap_err("compose Sumeragi telemetry URL")?;
     let metrics_url = torii.join("metrics").wrap_err("compose metrics URL")?;
 
-    ensure_vrf_collectors(&http, &collectors_url).await?;
-    wait_for_rbc_delivery(&http, &sessions_url, status.blocks, RBC_WAIT_BUDGET).await?;
+    ensure_vrf_collectors(&http, &telemetry_url).await?;
     ensure_metrics_within_bounds(
         &http,
         &metrics_url,
@@ -297,15 +292,10 @@ async fn npos_rbc_persists_payload_across_restart() -> eyre::Result<()> {
         .torii_url
         .join("status")
         .wrap_err("compose restart peer status URL")?;
-    let restart_sessions_url = reqwest::Url::parse(&format!(
-        "{}/v1/sumeragi/rbc/sessions",
-        restart_peer.torii_url()
-    ))
-    .wrap_err("compose restart peer sessions URL")?;
+    let restart_store_dir = restart_peer.kura_store_dir().join("rbc_sessions");
 
-    let inflight_handle = tokio::spawn(wait_for_rbc_session_inflight(
-        http.clone(),
-        restart_sessions_url.clone(),
+    let inflight_handle = tokio::spawn(wait_for_rbc_session_inflight_persisted(
+        restart_store_dir.clone(),
         expected_height,
         start,
         RBC_DELIVERY_BUDGET,
@@ -347,33 +337,14 @@ async fn npos_rbc_persists_payload_across_restart() -> eyre::Result<()> {
         format!("restart peer did not reach height {expected_height} within {COMMIT_WAIT_BUDGET:?}")
     })?;
 
-    let restart_store_dir = restart_peer.kura_store_dir().join("rbc_sessions");
-    if let Err(endpoint_err) = wait_for_rbc_session_recovered(
-        http.clone(),
-        restart_sessions_url,
+    wait_for_recovered_rbc_session_persisted(
+        &restart_store_dir,
         expected_height,
-        &inflight_session.block_hash,
+        inflight_session.total_chunks,
         restart_phase_start,
         RBC_DELIVERY_BUDGET,
     )
-    .await
-    {
-        if let Err(persisted_err) = wait_for_recovered_rbc_session_persisted(
-            &restart_store_dir,
-            expected_height,
-            inflight_session.total_chunks,
-            restart_phase_start,
-            RBC_DELIVERY_BUDGET,
-        )
-        .await
-        {
-            return Err(persisted_err).wrap_err_with(|| {
-                format!(
-                    "restart peer did not expose a recovered RBC session via endpoint ({endpoint_err}) or persisted snapshot"
-                )
-            });
-        }
-    }
+    .await?;
 
     wait_for_block_height(
         &http,
@@ -646,40 +617,11 @@ fn has_persisted_rbc_session_file(store_dir: &Path, expected_height: u64) -> boo
 }
 
 async fn delivered_rbc_session_summary(
-    http: &reqwest::Client,
+    _http: &reqwest::Client,
     network: &Network,
     expected_height: u64,
 ) -> eyre::Result<Option<RbcSessionView>> {
-    if let Some(summary) = persisted_rbc_session_summary(network, expected_height) {
-        return Ok(Some(summary));
-    }
-
-    for peer in network.peers() {
-        let url = peer
-            .client()
-            .torii_url
-            .join("v1/sumeragi/rbc/sessions")
-            .wrap_err("compose RBC sessions URL")?;
-        let response = http
-            .get(url)
-            .header("Accept", "application/json")
-            .send()
-            .await
-            .wrap_err("fetch RBC sessions snapshot")?;
-        if !response.status().is_success() {
-            continue;
-        }
-
-        let body = response.text().await.wrap_err("read RBC sessions body")?;
-        let value = json::from_str(&body).wrap_err("parse RBC sessions JSON")?;
-        if let Some(session) =
-            select_delivered_rbc_session(parse_rbc_sessions(&value)?, expected_height)
-        {
-            return Ok(Some(session));
-        }
-    }
-
-    Ok(None)
+    Ok(persisted_rbc_session_summary(network, expected_height))
 }
 
 async fn wait_for_delivered_rbc_session_proof(
@@ -846,40 +788,38 @@ async fn ensure_vrf_collectors(http: &reqwest::Client, url: &reqwest::Url) -> ey
         .header("Accept", "application/json")
         .send()
         .await
-        .wrap_err("fetch collectors snapshot")?;
+        .wrap_err("fetch Sumeragi telemetry snapshot")?;
     ensure!(
         response.status().is_success(),
-        "collectors endpoint returned status {}",
+        "Sumeragi telemetry endpoint returned status {}",
         response.status()
     );
-    let body = response.text().await.wrap_err("read collectors body")?;
-    let value: Value = json::from_str(&body).wrap_err("parse collectors JSON")?;
+    let body = response
+        .text()
+        .await
+        .wrap_err("read Sumeragi telemetry body")?;
+    let value: Value = json::from_str(&body).wrap_err("parse Sumeragi telemetry JSON")?;
     let root = value
         .as_object()
-        .ok_or_else(|| eyre!("collectors payload must be an object"))?;
-    ensure!(
-        matches!(
-            root.get("consensus_mode").and_then(Value::as_str),
-            Some("Npos")
-        ),
-        "collectors endpoint must report consensus_mode=\"Npos\""
-    );
+        .ok_or_else(|| eyre!("Sumeragi telemetry payload must be an object"))?;
     let collectors = root
-        .get("collectors")
+        .get("availability")
+        .and_then(Value::as_object)
+        .and_then(|availability| availability.get("collectors"))
         .and_then(Value::as_array)
-        .ok_or_else(|| eyre!("collectors payload missing collectors list"))?;
+        .ok_or_else(|| eyre!("Sumeragi telemetry payload missing availability.collectors"))?;
     ensure!(
         !collectors.is_empty(),
         "collectors list should not be empty in VRF mode"
     );
     let prf = root
-        .get("prf")
+        .get("vrf")
         .and_then(Value::as_object)
-        .ok_or_else(|| eyre!("collectors payload missing prf context"))?;
+        .ok_or_else(|| eyre!("Sumeragi telemetry payload missing vrf context"))?;
     let seed_hex = prf
-        .get("epoch_seed")
+        .get("seed_hex")
         .and_then(Value::as_str)
-        .ok_or_else(|| eyre!("collectors payload missing prf.epoch_seed"))?;
+        .ok_or_else(|| eyre!("Sumeragi telemetry payload missing vrf.seed_hex"))?;
     let seed = hex::decode(seed_hex).wrap_err("decode epoch seed hex")?;
     ensure!(
         seed.len() == 32,
@@ -891,35 +831,6 @@ async fn ensure_vrf_collectors(http: &reqwest::Client, url: &reqwest::Url) -> ey
         "epoch seed should be non-zero when VRF is active"
     );
     Ok(())
-}
-
-async fn wait_for_rbc_delivery(
-    http: &reqwest::Client,
-    url: &reqwest::Url,
-    target_height: u64,
-    budget: Duration,
-) -> eyre::Result<()> {
-    let deadline = Instant::now() + budget;
-    loop {
-        let response = http
-            .get(url.clone())
-            .header("accept", "application/json")
-            .send()
-            .await
-            .wrap_err("fetch RBC sessions snapshot")?;
-        if response.status().is_success() {
-            let body = response.text().await.wrap_err("read RBC sessions body")?;
-            let value: Value = json::from_str(&body).wrap_err("parse RBC sessions JSON")?;
-            if has_delivered_session(&value, target_height)? {
-                return Ok(());
-            }
-        }
-        ensure!(
-            Instant::now() <= deadline,
-            "timed out waiting for delivered RBC session at height {target_height}"
-        );
-        sleep(Duration::from_millis(200)).await;
-    }
 }
 
 fn has_delivered_session(root: &Value, target_height: u64) -> eyre::Result<bool> {
@@ -1126,9 +1037,8 @@ async fn wait_for_block_height_quorum(
     }
 }
 
-async fn wait_for_rbc_session_inflight(
-    http: reqwest::Client,
-    url: reqwest::Url,
+async fn wait_for_rbc_session_inflight_persisted(
+    store_dir: PathBuf,
     target_height: u64,
     start: Instant,
     budget: Duration,
@@ -1139,63 +1049,26 @@ async fn wait_for_rbc_session_inflight(
             Instant::now() <= deadline,
             "timed out waiting for in-flight RBC session at height {target_height}"
         );
-        let response = http
-            .get(url.clone())
-            .header("Accept", "application/json")
-            .send()
-            .await
-            .wrap_err("fetch RBC sessions snapshot")?;
-        if response.status().is_success() {
-            let body = response.text().await.wrap_err("read RBC sessions body")?;
-            let value = json::from_str(&body).wrap_err("parse RBC sessions JSON")?;
-            let sessions = parse_rbc_sessions(&value)?;
-            if let Some(session) = sessions.into_iter().find(|session| {
-                session.height == target_height
-                    && !session.delivered
-                    && session.received_chunks > 0
-                    && !session.invalid
-            }) {
-                return Ok(session);
-            }
+        if let Some(summary) = rbc_status::read_persisted_snapshot(&store_dir)
+            .into_iter()
+            .find(|summary| {
+                summary.height == target_height
+                    && !summary.delivered
+                    && summary.received_chunks > 0
+                    && !summary.invalid
+            })
+        {
+            return Ok(RbcSessionView {
+                block_hash: summary.block_hash.to_string(),
+                height: summary.height,
+                total_chunks: summary.total_chunks,
+                received_chunks: summary.received_chunks,
+                delivered: summary.delivered,
+                recovered: summary.recovered_from_disk,
+                invalid: summary.invalid,
+            });
         }
         sleep(Duration::from_millis(100)).await;
-    }
-}
-
-async fn wait_for_rbc_session_recovered(
-    http: reqwest::Client,
-    url: reqwest::Url,
-    target_height: u64,
-    block_hash: &str,
-    start: Instant,
-    budget: Duration,
-) -> eyre::Result<RbcSessionView> {
-    let deadline = start + budget;
-    loop {
-        ensure!(
-            Instant::now() <= deadline,
-            "timed out waiting for recovered RBC session at height {target_height}"
-        );
-        let response = http
-            .get(url.clone())
-            .header("Accept", "application/json")
-            .send()
-            .await
-            .wrap_err("fetch restart peer RBC sessions snapshot")?;
-        if response.status().is_success() {
-            let body = response.text().await.wrap_err("read RBC sessions body")?;
-            let value = json::from_str(&body).wrap_err("parse RBC sessions JSON")?;
-            let sessions = parse_rbc_sessions(&value)?;
-            if let Some(session) = sessions.into_iter().find(|session| {
-                session.height == target_height
-                    && session.block_hash == block_hash
-                    && session.recovered
-                    && !session.invalid
-            }) {
-                return Ok(session);
-            }
-        }
-        sleep(Duration::from_millis(200)).await;
     }
 }
 

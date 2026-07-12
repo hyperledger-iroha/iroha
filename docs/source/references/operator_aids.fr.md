@@ -14,15 +14,6 @@ translation_last_reviewed: 2026-01-01
 Cette page répertorie les endpoints non consensuels, destinés aux opérateurs, qui aident à la visibilité et au dépannage. Les réponses sont en JSON sauf indication contraire.
 
 Consensus (Sumeragi)
-- GET `/v1/sumeragi/new-view`
-  - Instantané des comptes de réception NEW_VIEW par `(height, view)`.
-  - Format : `{ "ts_ms": <u64>, "items": [{ "height": <u64>, "view": <u64>, "count": <u64> }, ...] }`
-  - Exemple :
-    - `curl -s http://127.0.0.1:8080/v1/sumeragi/new-view | jq .`
-- GET `/v1/sumeragi/new-view/sse` (SSE)
-  - Flux périodique (≈1 s) du même payload pour les tableaux de bord.
-  - Exemple :
-    - `curl -Ns http://127.0.0.1:8080/v1/sumeragi/new-view/sse`
 - Métriques : les jauges `sumeragi_new_view_receipts_by_hv{height,view}` reflètent les comptes.
 - GET `/v1/sumeragi/status`
   - Instantané de l’index du leader, Highest/Locked QCs (`highest_qc`/`locked_qc`, hauteurs, vues, hachages de sujet), compteurs des collecteurs/VRF, reports du pacemaker, profondeur de la file des transactions et santé du store RBC (`rbc_store.{sessions,bytes,pressure_level,persist_drops_total,evictions_total,recent_evictions[...]}`).
@@ -34,16 +25,11 @@ Consensus (Sumeragi)
   - Minuteries/configuration du pacemaker : `{ backoff_ms, rtt_floor_ms, jitter_ms, backoff_multiplier, rtt_floor_multiplier, max_backoff_ms, jitter_frac_permille }`.
 - GET `/v1/sumeragi/leader`
   - Instantané de l’index du leader. En mode NPoS, inclut le contexte PRF : `{ height, view, epoch_seed }`.
-- GET `/v1/sumeragi/collectors`
-  - Plan déterministe des collecteurs dérivé de la topologie engagée et des paramètres on-chain : exporte `mode`, le plan `(height, view)` (avec `height` égal à la hauteur actuelle de la chaîne), `collectors_k`, `redundant_send_r`, `proxy_tail_index`, `min_votes_for_commit`, la liste ordonnée des collecteurs et `epoch_seed` (hex) lorsque NPoS est actif.
+- GET `/v1/sumeragi/telemetry`
+  - Aggregated consensus telemetry: `availability.collectors` contains observed collector indices, peer IDs, and ingested-vote counts; `rbc_backlog` contains missing-chunk totals; `rbc_pending` contains bounded pre-session queue totals, drops, and limits. This is not a deterministic collector plan or a per-session RBC contract.
 - GET `/v1/sumeragi/params`
   - Instantané des paramètres Sumeragi on-chain `{ block_time_ms, commit_time_ms, min_finality_ms, pacing_factor_bps, max_clock_drift_ms, collectors_k, redundant_send_r, da_enabled, next_mode, mode_activation_height, chain_height }`.
-  - Lorsque `da_enabled` est true, la preuve de disponibilité (`availability evidence` ou RBC `READY`) est suivie mais le commit ne l’attend pas ; le `DELIVER` local RBC n’est pas non plus requis. Les opérateurs peuvent confirmer la santé du transport des payloads via les endpoints RBC ci-dessous.
-- GET `/v1/sumeragi/rbc`
-  - Compteurs agrégés de Reliable Broadcast : `{ sessions_active, sessions_pruned_total, ready_broadcasts_total, ready_rebroadcasts_skipped_total, deliver_broadcasts_total, payload_bytes_delivered_total, payload_rebroadcasts_skipped_total }`.
-- GET `/v1/sumeragi/rbc/sessions`
-  - Instantané de l’état par session (hash de bloc, height/view, comptes de chunks, indicateur delivered, marqueur `invalid`, hash de payload, booléen recovered) pour diagnostiquer les livraisons RBC bloquées et mettre en évidence les sessions récupérées après redémarrage.
-  - Raccourci CLI : `iroha --output-format text ops sumeragi rbc sessions` imprime `hash`, `height/view`, progression des chunks, compteur de ready et indicateurs invalid/delivered.
+  - When `da_enabled` is true, availability evidence is tracked but does not gate commit; local payload is required and can be satisfied via RBC `DELIVER` or block sync. Use the aggregated telemetry endpoint, Prometheus counters, status snapshots, and logs to diagnose payload transport.
 
 Preuves (audit ; hors consensus)
 - GET `/v1/sumeragi/evidence/count` → `{ "count": <u64> }`
@@ -81,36 +67,3 @@ Authentification opérateur (WebAuthn/mTLS)
 Notes
 - Ces endpoints sont des vues locales au nœud (en mémoire lorsque indiqué) et n’affectent ni le consensus ni la persistance.
 - L’accès peut être protégé par des jetons API, l’authentification opérateur (WebAuthn/mTLS) et des limites de débit selon la configuration Torii.
-
-Extraits CLI de surveillance (bash)
-
-- Interroger le snapshot JSON toutes les 2 s (affiche les 10 dernières entrées) :
-
-```bash
-#!/usr/bin/env bash
-set -euo pipefail
-TORII="${TORII:-http://127.0.0.1:8080}"
-INTERVAL="${INTERVAL:-2}"
-TOKEN="${TOKEN:-}"
-HDR=()
-if [[ -n "$TOKEN" ]]; then HDR=(-H "x-api-token: $TOKEN"); fi
-while true; do
-  curl -s "${HDR[@]}" "$TORII/v1/sumeragi/new-view" \
-    | jq -c '{ts_ms, items:(.items|sort_by([.height,.view])|reverse|.[:10])}'
-  sleep "$INTERVAL"
-done
-```
-
-- Suivre le flux SSE et formater (10 dernières entrées) :
-
-```bash
-#!/usr/bin/env bash
-set -euo pipefail
-TORII="${TORII:-http://127.0.0.1:8080}"
-TOKEN="${TOKEN:-}"
-HDR=()
-if [[ -n "$TOKEN" ]]; then HDR=(-H "x-api-token: $TOKEN"); fi
-curl -Ns "${HDR[@]}" "$TORII/v1/sumeragi/new-view/sse" \
-  | awk '/^data:/{sub(/^data: /,""); print}' \
-  | jq -c '{ts_ms, items:(.items|sort_by([.height,.view])|reverse|.[:10])}'
-```

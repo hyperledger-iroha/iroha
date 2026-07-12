@@ -32,7 +32,7 @@ use iroha_config::parameters::{
         torii,
     },
 };
-use iroha_crypto::{KeyPair, PrivateKey};
+use iroha_crypto::{Hash, KeyPair, PrivateKey};
 use iroha_primitives::json::Json;
 use sorafs_manifest::alias_cache::AliasCachePolicy;
 use sorafs_orchestrator::AnonymityPolicy;
@@ -248,6 +248,7 @@ fn resolve_contract_target(
 
 fn contract_call_metadata(
     contract_address: &ContractAddress,
+    expected_code_hash: &Hash,
     contract_alias: Option<&ContractAlias>,
     entrypoint: &str,
     gas_asset_id: Option<&str>,
@@ -260,6 +261,11 @@ fn contract_call_metadata(
         &mut metadata,
         "contract_address",
         contract_address.to_string(),
+    )?;
+    insert_string_metadata(
+        &mut metadata,
+        "contract_code_hash",
+        expected_code_hash.to_string(),
     )?;
     if let Some(alias) = contract_alias {
         insert_string_metadata(&mut metadata, "contract_alias", alias.to_string())?;
@@ -281,6 +287,7 @@ fn sign_contract_call_transaction(
     transaction_ttl: Option<Duration>,
     metadata: Metadata,
     contract_address: ContractAddress,
+    expected_code_hash: Hash,
     entrypoint: String,
     arguments: Option<Vec<u8>>,
 ) -> Result<SignedTransaction> {
@@ -296,6 +303,7 @@ fn sign_contract_call_transaction(
         .with_metadata(metadata)
         .with_executable(Executable::ContractCall(ContractInvocation {
             contract_address,
+            expected_code_hash,
             entrypoint,
             arguments,
         }))
@@ -308,7 +316,7 @@ fn encode_contract_arguments(
     contract_address: &ContractAddress,
     entrypoint: &str,
     payload: Option<&Json>,
-) -> Result<Option<Vec<u8>>> {
+) -> Result<(Hash, Option<Vec<u8>>)> {
     let binding = client
         .get_gov_contract_json(contract_address)
         .wrap_err("failed to resolve deployed contract binding")?;
@@ -319,6 +327,12 @@ fn encode_contract_arguments(
     let code_bytes = client
         .get_contract_code_bytes(code_hash)
         .wrap_err("failed to fetch deployed contract bytecode")?;
+    let expected_code_hash = ivm::contract_code_hash(&code_bytes);
+    if hex::encode(expected_code_hash.as_ref()) != code_hash {
+        return Err(eyre!(
+            "contract `{contract_address}` binding hash does not match its deployed bytecode"
+        ));
+    }
     let metadata = ivm::ProgramMetadata::parse(&code_bytes)
         .map_err(|err| eyre!("invalid deployed contract artifact: {err}"))?;
     let descriptor = metadata
@@ -332,18 +346,19 @@ fn encode_contract_arguments(
         })
         .ok_or_else(|| eyre!("deployed contract has no entrypoint `{entrypoint}`"))?;
 
-    match (descriptor.argument_schema.as_ref(), payload) {
-        (None, None) => Ok(None),
+    let arguments = match (descriptor.argument_schema.as_ref(), payload) {
+        (None, None) => None,
         (None, Some(_)) => Err(eyre!(
             "zero-parameter entrypoint `{entrypoint}` must not receive a payload"
-        )),
+        ))?,
         (Some(_), None) => Err(eyre!(
             "parameterized entrypoint `{entrypoint}` requires a payload"
-        )),
+        ))?,
         (Some(schema), Some(payload)) => ivm::encode_argument_record_from_json(schema, payload)
             .map(Some)
-            .map_err(|err| eyre!("payload does not match entrypoint schema: {err}")),
-    }
+            .map_err(|err| eyre!("payload does not match entrypoint schema: {err}"))?,
+    };
+    Ok((expected_code_hash, arguments))
 }
 
 fn payload_digest_hex(payload: Option<&Json>) -> String {
@@ -383,7 +398,7 @@ fn main() -> Result<()> {
     )?;
     let payload = parse_payload(args.payload_json.as_deref(), args.payload_file.as_deref())?;
     let payload_digest_hex = payload_digest_hex(payload.as_ref());
-    let arguments = encode_contract_arguments(
+    let (expected_code_hash, arguments) = encode_contract_arguments(
         &client,
         &contract_address,
         &args.entrypoint,
@@ -392,6 +407,7 @@ fn main() -> Result<()> {
     let transaction_ttl = args.transaction_ttl_ms.map(Duration::from_millis);
     let metadata = contract_call_metadata(
         &contract_address,
+        &expected_code_hash,
         contract_alias.as_ref(),
         &args.entrypoint,
         args.gas_asset_id.as_deref(),
@@ -406,6 +422,7 @@ fn main() -> Result<()> {
         transaction_ttl,
         metadata,
         contract_address.clone(),
+        expected_code_hash,
         args.entrypoint.clone(),
         arguments,
     )?;
@@ -420,6 +437,7 @@ fn main() -> Result<()> {
         "dataspace": (""),
         "contract_alias": (contract_alias.as_ref().map(ToString::to_string)),
         "contract_address": (contract_address.to_string()),
+        "code_hash_hex": (hex::encode(expected_code_hash.as_ref())),
         "tx_hash_hex": (tx_hash.to_string()),
         "entrypoint": (args.entrypoint.clone()),
         "entrypoint_hash_hex": (entrypoint_hash.to_string()),
@@ -435,6 +453,7 @@ fn main() -> Result<()> {
         "chain_id": (args.chain_id),
         "authority": (authority),
         "contract_address": (contract_address),
+        "code_hash_hex": (hex::encode(expected_code_hash.as_ref())),
         "contract_alias": (contract_alias),
         "entrypoint": (args.entrypoint.clone()),
         "tx_hash_hex": (tx_hash),
@@ -483,10 +502,28 @@ mod tests {
             "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
                 .parse()
                 .expect("contract address");
-        let metadata = contract_call_metadata(&address, None, "submit", None, None, 50_000, &[])
-            .expect("contract call metadata");
+        let expected_code_hash = Hash::new(b"metadata-contract-code");
+        let expected_code_hash_literal = expected_code_hash.to_string();
+        let metadata = contract_call_metadata(
+            &address,
+            &expected_code_hash,
+            None,
+            "submit",
+            None,
+            None,
+            50_000,
+            &[],
+        )
+        .expect("contract call metadata");
 
         assert!(metadata.get("contract_payload").is_none());
+        assert_eq!(
+            metadata
+                .get("contract_code_hash")
+                .and_then(|value| value.try_into_any_norito::<String>().ok())
+                .as_deref(),
+            Some(expected_code_hash_literal.as_str())
+        );
         assert_eq!(
             metadata
                 .get("contract_entrypoint")

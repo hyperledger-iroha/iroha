@@ -534,59 +534,23 @@ await torii.revokeSpaceDirectoryManifest(
 للحصول على عينات جاهزة لـ CLI بالإضافة إلى مؤشرات للعودة إلى الدليل الميداني الكامل في
 `docs/source/sdk/js/governance_iso_examples.md`.
 
-## أخذ عينات كرات الدم الحمراء وأدلة التسليم
+## Sumeragi availability telemetry
 
-تتطلب خريطة طريق JS أيضًا أخذ عينات من التزام كتلة Roadrunner (RBC) حتى يتمكن المشغلون من القيام بذلك
-إثبات أن الكتلة التي جلبوها من خلال Sumeragi تتطابق مع أدلة القطعة التي قاموا بالتحقق منها.
-استخدم المساعدين المضمنين بدلاً من إنشاء الحمولات يدويًا:1. `getSumeragiRbcSessions()` المرايا `/v1/sumeragi/rbc/sessions`، و
-   يقوم `findRbcSamplingCandidate()` بتحديد الجلسة الأولى التي تم تسليمها تلقائيًا باستخدام تجزئة الكتلة
-   (تعود مجموعة التكامل إليها في أي وقت
-   `IROHA_TORII_INTEGRATION_RBC_SAMPLE` غير محدد).
-2. `ToriiClient.buildRbcSampleRequest(session, overrides)` يقوم بتسوية `{blockHash,height,view}`
-   بالإضافة إلى تجاوزات `{count,seed,apiToken}` الاختيارية بحيث لا يتم أبدًا استخدام الأعداد السداسية أو الأعداد الصحيحة السالبة المشوهة
-   الوصول إلى Torii.
-3. يقوم `sampleRbcChunks()` بنشر الطلب إلى `/v1/sumeragi/rbc/sample`، مع إرجاع بروفات القطع
-   ومسارات Merkle (`samples[].chunkHex`، `chunkRoot`، `payloadHash`) التي يجب أرشفتها باستخدام
-   بقية أدلة التبني الخاصة بك.
-4. يلتقط `getSumeragiRbcDelivered(height, view)` بيانات تعريف تسليم المجموعة حتى يتمكن المدققون من
-   يمكن إعادة تشغيل الدليل من البداية إلى النهاية.
+Reliable broadcast remains an internal Sumeragi v2 transport and recovery mechanism.
+The public Torii catalog exposes aggregate diagnostics through
+`GET /v1/sumeragi/telemetry`; it does not publish per-session RBC state, chunk
+samples, delivery probes, or a deterministic collector plan.
 
 ```js
-import assert from "node:assert";
-import { ToriiClient } from "@iroha/iroha-js";
-
-const torii = new ToriiClient(process.env.TORII_URL ?? "http://127.0.0.1:8080", {
-  apiToken: process.env.TORII_API_TOKEN,
-});
-
-const candidate =
-  (await torii.findRbcSamplingCandidate().catch(() => null)) ??
-  (await torii.getSumeragiRbcSessions()).items.find((session) => session.delivered);
-if (!candidate) {
-  throw new Error("no delivered RBC session available; set IROHA_TORII_INTEGRATION_RBC_SAMPLE");
-}
-
-const request = ToriiClient.buildRbcSampleRequest(candidate, {
-  count: Number(process.env.RBC_SAMPLE_COUNT ?? 2),
-  seed: Number(process.env.RBC_SAMPLE_SEED ?? 0),
-  apiToken: process.env.RBC_SAMPLE_API_TOKEN ?? process.env.TORII_API_TOKEN,
-});
-
-const sample = await torii.sampleRbcChunks(request);
-sample.samples.forEach((chunk) => {
-  assert.ok(Buffer.from(chunk.chunkHex, "hex").length > 0, "chunk must be hex");
-});
-
-const delivery = await torii.getSumeragiRbcDelivered(sample.height, sample.view);
-console.log(
-  `rbc height=${sample.height} view=${sample.view} chunks=${sample.samples.length} delivered=${delivery?.delivered}`,
-);
+const telemetry = await torii.getSumeragiTelemetryTyped();
+console.log(`collector votes=${telemetry.availability.total_votes_ingested}`);
+console.log(`pending sessions=${telemetry.rbc_backlog.pending_sessions}`);
 ```
 
-احتفظ بكلا الإجابتين تحت الجذر الاصطناعي الذي ترسله إلى الإدارة. تجاوز
-الجلسة المحددة تلقائيًا عبر `RBC_SAMPLE_JSON='{"height":123,"view":4,"blockHash":"0x…"}'`
-عندما تحتاج إلى التحقق من كتلة معينة، وتعامل مع حالات الفشل في جلب لقطات RBC على أنها
-خطأ في بوابة ما قبل الرحلة بدلاً من الرجوع بصمت إلى الوضع المباشر.
+Archive `availability.collectors`, `rbc_backlog`, and `rbc_pending` from the raw
+telemetry response together with Prometheus counters and consensus logs. These
+fields are aggregate operational evidence and must not be treated as light-client
+chunk proofs or transaction-finality evidence.
 
 ## الاختبار وCI
 

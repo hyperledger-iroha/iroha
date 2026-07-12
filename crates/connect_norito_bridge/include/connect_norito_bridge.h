@@ -145,9 +145,9 @@ int32_t connect_norito_kagemusha_recursive_spend_capabilities_v1(
 // selects the roster descriptor from that typed manifest rather than trusting
 // a parallel JSON projection or generation label. Returns 0 only after the
 // manifest and roster digests, full anchor bindings, Commit-QC aggregate, and
-// exact anchor path all verify. This symbol currently returns the unavailable
-// error until the authenticated release-envelope trust root is wired and
-// recursive init consumes the verified finality result.
+// exact anchor path all verify. Recursive init performs this same verification
+// inside its native boundary. This standalone symbol remains unavailable until
+// the authenticated release-envelope trust root is wired.
 int32_t connect_norito_kagemusha_topup_finality_verify_v2(
     const uint8_t* proof_norito_ptr,
     unsigned long proof_norito_len,
@@ -344,6 +344,11 @@ int32_t connect_norito_kagemusha_recursive_spend_init_v2(
     uint8_t** out_init_result_ptr,
     unsigned long* out_init_result_len);
 
+// The init request embeds the canonical top-up anchor, compact finality proof,
+// and roster artifact. Native code authenticates the installed manifest,
+// content-addresses the exact canonical roster bytes, and verifies the proof
+// and anchor before invoking the recursive prover.
+
 // Builds a canonical unsigned top-up from a local-only secret witness and the
 // authoritative next-zero path returned by POST /v1/zk/merkle-path. Secret
 // material is zeroized by native code and never appears in the output archive.
@@ -373,8 +378,14 @@ int32_t connect_norito_kagemusha_recursive_spend_topup_v2(
     uint8_t** out_instruction_ptr,
     unsigned long* out_instruction_len);
 
-// Output: Norito `KagemushaRecursiveSpendSplitResultV2`, containing an
-// independently spendable recipient bundle and optional change bundle.
+// Input is the native-only canonical
+// `connect_norito_bridge::KagemushaRecursiveSpendAppendLocalRequestV2`:
+// opaque parents plus local note openings, exact Merkle membership witnesses,
+// optional sender-change opening, active transfer verifier binding, operation
+// id, and block height. Secrets are zeroized before return. The entrypoint
+// remains unavailable until recursive append can atomically return both the
+// split result and proof-output-bound recipient/change membership witnesses;
+// a bundle without those witnesses is not spendable cash.
 int32_t connect_norito_kagemusha_recursive_spend_append_v2(
     const uint8_t* request_norito_ptr,
     unsigned long request_norito_len,
@@ -404,8 +415,13 @@ int32_t connect_norito_kagemusha_recursive_spend_redeem_finalize_request_v2(
     uint8_t** out_result_ptr,
     unsigned long* out_result_len);
 
-// Input/output: canonical unified
-// `KagemushaRecursiveSpendRedeem{BuildRequest,BuildResult}V2`.
+// Input is the native-only canonical
+// `connect_norito_bridge::KagemushaRecursiveSpendRedeemLocalRequestV2` with
+// the owned opening, exact membership/dummy paths, exact scaled public amount,
+// optional private change opening, and active unshield-v3 verifier binding.
+// Native derives the unshield proof attachment and redemption intent; callers
+// cannot supply either. This remains unavailable until partial redemption can
+// atomically return the proof-bound offline-change membership witness.
 int32_t connect_norito_kagemusha_recursive_spend_redeem_v2(
     const uint8_t* request_norito_ptr,
     unsigned long request_norito_len,

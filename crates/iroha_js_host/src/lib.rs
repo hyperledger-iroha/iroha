@@ -2482,7 +2482,7 @@ pub fn build_confidential_unshield_proof_v3(
     })
 }
 
- /// Produce the canonical SM2 fixture output for the given distinguishing ID, seed, and message.
+/// Produce the canonical SM2 fixture output for the given distinguishing ID, seed, and message.
 #[napi]
 #[allow(clippy::needless_pass_by_value)]
 pub fn sm2_fixture_from_seed(
@@ -7122,7 +7122,6 @@ fn parse_instruction_payloads(payloads: Vec<String>) -> napi::Result<Vec<Instruc
     }
     Ok(instructions)
 }
-
 
 fn encode_trigger_action(action: &Action) -> napi::Result<String> {
     norito::to_bytes(action)
@@ -18617,19 +18616,16 @@ seiyaku Privacy {
         );
     }
 
-
     fn sample_hash(byte: u8) -> [u8; Hash::LENGTH] {
         let mut buf = [byte; Hash::LENGTH];
         buf[buf.len() - 1] |= 1;
         buf
     }
 
-
     fn sample_account(_domain: &str) -> AccountId {
         let keypair = KeyPair::random();
         AccountId::new(keypair.public_key().clone())
     }
-
 
     fn account_json_literal(account: &AccountId) -> String {
         json::to_value(account)
@@ -21529,6 +21525,46 @@ seiyaku Privacy {
     }
 
     #[test]
+    fn decode_signed_contract_call_json_exposes_expected_code_hash() {
+        disable_packed_struct_once();
+        let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let authority = AccountId::new(keypair.public_key().clone());
+        let expected_code_hash = Hash::new(b"js-decoder-contract-code");
+        let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+            0,
+            &authority,
+            3,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("contract address");
+        let transaction = TransactionBuilder::new(ChainId::from("js-contract-call"), authority)
+            .with_executable(Executable::ContractCall(
+                iroha_data_model::transaction::executable::ContractInvocation {
+                    contract_address,
+                    expected_code_hash,
+                    entrypoint: "run".to_owned(),
+                    arguments: None,
+                },
+            ))
+            .sign(keypair.private_key());
+        let bytes = norito::to_bytes(&transaction).expect("encode signed transaction");
+        let decoded = decode_signed_transaction_json(Uint8Array::from(bytes))
+            .expect("decode signed transaction JSON");
+        let value: json::Value = json::from_str(&decoded).expect("parse decoder JSON");
+        let expected_code_hash_literal = expected_code_hash.to_string();
+
+        assert_eq!(
+            value
+                .get("payload")
+                .and_then(|payload| payload.get("instructions"))
+                .and_then(|instructions| instructions.get("ContractCall"))
+                .and_then(|call| call.get("expected_code_hash"))
+                .and_then(json::Value::as_str),
+            Some(expected_code_hash_literal.as_str())
+        );
+    }
+
+    #[test]
     fn build_transaction_from_instructions_json_roundtrip() {
         disable_packed_struct_once();
         let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
@@ -21583,7 +21619,6 @@ seiyaku Privacy {
             "hash must match signed transaction hash"
         );
     }
-
 
     #[test]
     fn build_ivm_proved_transaction_roundtrip() {
@@ -21878,6 +21913,14 @@ seiyaku Privacy {
         let settle = SettleFxCorridor {
             policy_id: "aed_pkr".parse().expect("policy name"),
             expected_policy_revision: 3,
+            source_asset_definition_id: AssetDefinitionId::new(
+                DomainId::try_new("cbuae", "universal").expect("source asset domain"),
+                "aed".parse().expect("source asset name"),
+            ),
+            destination_asset_definition_id: AssetDefinitionId::new(
+                DomainId::try_new("sbp", "universal").expect("destination asset domain"),
+                "pkr".parse().expect("destination asset name"),
+            ),
             settlement_id: "fx_1".parse().expect("settlement id"),
             recipient: AccountId::new(
                 KeyPair::random_with_algorithm(Algorithm::Ed25519)
@@ -21886,9 +21929,10 @@ seiyaku Privacy {
             ),
             source_amount: Numeric::from(5_u32),
         };
+        let settle_json = json::to_value(&settle).expect("settle JSON");
         let input = norito::json!({
             "Settlement": {
-                "SettleFxCorridor": json::to_value(&settle).expect("settle JSON")
+                "SettleFxCorridor": (settle_json.clone())
             }
         });
         let instruction = value_to_instruction(input.clone()).expect("parse settlement");
@@ -21905,17 +21949,18 @@ seiyaku Privacy {
 
         let multiple = norito::json!({
             "Settlement": {
-                "SettleFxCorridor": json::to_value(&settle).expect("settle JSON"),
+                "SettleFxCorridor": (settle_json),
                 "Dvp": {}
             }
         });
         assert!(value_to_instruction(multiple).is_err());
 
         let mut invalid = settle;
-        invalid.source_amount = Numeric::from(-1_i32);
+        invalid.source_amount = Numeric::from(-1_i64);
+        let invalid_json = json::to_value(&invalid).expect("negative settle JSON");
         let negative = norito::json!({
             "Settlement": {
-                "SettleFxCorridor": json::to_value(&invalid).expect("negative settle JSON")
+                "SettleFxCorridor": (invalid_json)
             }
         });
         assert!(value_to_instruction(negative).is_err());

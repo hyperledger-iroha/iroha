@@ -289,6 +289,8 @@ def _normalize_native_halo2_pasta_backend_label(value: str) -> Optional[str]:
     backend = value
     if not backend or backend.strip() != backend:
         return None
+    if backend in _PRODUCTION_NATIVE_HALO2_PASTA_BACKENDS:
+        return backend
     for prefix, target_prefix in (
         ("halo2/pasta/ipa/", "halo2/pasta/"),
         ("halo2/pasta/", "halo2/pasta/"),

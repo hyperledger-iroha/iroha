@@ -2837,6 +2837,88 @@ public extension IrohaSDK {
         return try await toriiRestClient.prepareDetachedAssetTransfer(request)
     }
 
+    func finalizeDetachedAssetTransfer(
+        _ draft: ToriiAssetTransferDraft,
+        publicKeyHex: String,
+        signatureBase64: String
+    ) throws -> ToriiDetachedAssetTransferSubmissionEvidence {
+        guard let toriiRestClient else {
+            throw Self.restUnavailableError()
+        }
+        return try toriiRestClient.finalizeDetachedAssetTransfer(
+            draft,
+            publicKeyHex: publicKeyHex,
+            signatureBase64: signatureBase64
+        )
+    }
+
+    func finalizeDetachedAssetTransfer(
+        _ draft: ToriiAssetTransferDraft,
+        signingKey: SigningKey
+    ) throws -> ToriiDetachedAssetTransferSubmissionEvidence {
+        guard let toriiRestClient else {
+            throw Self.restUnavailableError()
+        }
+        return try toriiRestClient.finalizeDetachedAssetTransfer(
+            draft,
+            signingKey: signingKey
+        )
+    }
+
+    func submitFinalizedDetachedAssetTransfer(
+        _ evidence: ToriiDetachedAssetTransferSubmissionEvidence,
+        against draft: ToriiAssetTransferDraft
+    ) async throws -> ToriiAssetTransferResponse {
+        guard let toriiRestClient else {
+            throw Self.restUnavailableError()
+        }
+        return try await toriiRestClient.submitFinalizedDetachedAssetTransfer(
+            evidence,
+            against: draft
+        )
+    }
+
+    func reconcileDetachedAssetTransferSubmission(
+        _ evidence: ToriiDetachedAssetTransferSubmissionEvidence,
+        against draft: ToriiAssetTransferDraft? = nil,
+        pollOptions: PipelineStatusPollOptions? = nil,
+        mode: PipelineEndpointMode? = nil
+    ) async throws -> ToriiPipelineTransactionStatus {
+        guard let toriiRestClient else {
+            throw Self.restUnavailableError()
+        }
+        if let draft {
+            return try await toriiRestClient.reconcileDetachedAssetTransferSubmission(
+                evidence,
+                against: draft,
+                pollOptions: pollOptions ?? pipelinePollOptions,
+                mode: mode ?? pipelineEndpointMode
+            )
+        }
+        return try await toriiRestClient.reconcileDetachedAssetTransferSubmission(
+            evidence,
+            pollOptions: pollOptions ?? pipelinePollOptions,
+            mode: mode ?? pipelineEndpointMode
+        )
+    }
+
+    func reconcileDetachedAssetTransferSubmission(
+        _ uncertain: ToriiDetachedAssetTransferSubmissionUncertainError,
+        against draft: ToriiAssetTransferDraft,
+        pollOptions: PipelineStatusPollOptions? = nil,
+        mode: PipelineEndpointMode? = nil
+    ) async throws -> ToriiPipelineTransactionStatus {
+        guard let toriiRestClient else {
+            throw Self.restUnavailableError()
+        }
+        return try await toriiRestClient.reconcileDetachedAssetTransferSubmission(
+            uncertain,
+            against: draft,
+            pollOptions: pollOptions ?? pipelinePollOptions,
+            mode: mode ?? pipelineEndpointMode
+        )
+    }
+
     func submitDetachedAssetTransfer(
         _ draft: ToriiAssetTransferDraft,
         publicKeyHex: String,

@@ -15556,12 +15556,12 @@ impl ToriiKagemushaCommands {
                     "torii.kagemusha_commands.private_key or TORII_KAGEMUSHA_COMMANDS_PRIVATE_KEY is required"
                 )
             });
-        let key_pair = KeyPair::from_private_key(private_key.0.clone()).unwrap_or_else(|err| {
-            panic!("invalid torii.kagemusha_commands.private_key: {err}")
-        });
-        let algorithm = key_pair.public_key().try_algorithm().unwrap_or_else(|err| {
-            panic!("invalid torii.kagemusha_commands.public_key: {err}")
-        });
+        let key_pair = KeyPair::from_private_key(private_key.0.clone())
+            .unwrap_or_else(|err| panic!("invalid torii.kagemusha_commands.private_key: {err}"));
+        let algorithm = key_pair
+            .public_key()
+            .try_algorithm()
+            .unwrap_or_else(|err| panic!("invalid torii.kagemusha_commands.public_key: {err}"));
         if !matches!(algorithm, Algorithm::Ed25519 | Algorithm::Secp256k1) {
             panic!("torii.kagemusha_commands.private_key must use ed25519 or secp256k1");
         }

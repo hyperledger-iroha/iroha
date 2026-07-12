@@ -697,8 +697,8 @@ async fn npos_election_filters_stake_and_applies_after_margin() -> eyre::Result<
     .await?;
     let collectors_url = client
         .torii_url
-        .join("v1/sumeragi/collectors")
-        .wrap_err("compose collectors URL")?;
+        .join("v1/sumeragi/validator-sets")
+        .wrap_err("compose validator-set history URL")?;
     assert_no_single_collector(
         &collectors_url,
         &eligible_peer.id().to_string(),
@@ -711,8 +711,8 @@ async fn npos_election_filters_stake_and_applies_after_margin() -> eyre::Result<
     let activation_client = client_observing_height(&network, WAIT_HEIGHT, &client);
     let collectors_url = activation_client
         .torii_url
-        .join("v1/sumeragi/collectors")
-        .wrap_err("compose collectors URL")?;
+        .join("v1/sumeragi/validator-sets")
+        .wrap_err("compose validator-set history URL")?;
     let expected_peer = eligible_peer.id().to_string();
     wait_for_single_collector(&collectors_url, &expected_peer).await?;
 
@@ -726,14 +726,17 @@ async fn fetch_collectors(http: &reqwest::Client, url: &reqwest::Url) -> eyre::R
         .header("accept", "application/json")
         .send()
         .await
-        .wrap_err("fetch collectors snapshot")?;
+        .wrap_err("fetch validator-set history")?;
     ensure!(
         response.status().is_success(),
-        "collectors endpoint returned status {}",
+        "validator-set history endpoint returned status {}",
         response.status()
     );
-    let body = response.text().await.wrap_err("collectors body")?;
-    json::from_str(&body).wrap_err("parse collectors JSON")
+    let body = response
+        .text()
+        .await
+        .wrap_err("validator-set history body")?;
+    json::from_str(&body).wrap_err("parse validator-set history JSON")
 }
 
 async fn wait_for_single_collector(
@@ -778,19 +781,16 @@ async fn collector_peer_ids(
 ) -> eyre::Result<Vec<String>> {
     let snapshot = fetch_collectors(http, collectors_url).await?;
     let collector_entries = snapshot
-        .get("collectors")
+        .as_array()
+        .and_then(|snapshots| snapshots.first())
+        .and_then(|snapshot| snapshot.get("validator_set"))
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
     let peers: Vec<String> = collector_entries
         .iter()
-        .filter_map(|entry| {
-            entry
-                .as_object()
-                .and_then(|obj| obj.get("peer_id"))
-                .and_then(Value::as_str)
-                .map(str::to_owned)
-        })
+        .filter_map(Value::as_str)
+        .map(str::to_owned)
         .collect();
     Ok(peers)
 }
@@ -891,8 +891,8 @@ async fn npos_entity_correlation_limits_validator_set() -> eyre::Result<()> {
     let activation_client = client_observing_height(&network, WAIT_HEIGHT, &client);
     let collectors_url = activation_client
         .torii_url
-        .join("v1/sumeragi/collectors")
-        .wrap_err("compose collectors URL")?;
+        .join("v1/sumeragi/validator-sets")
+        .wrap_err("compose validator-set history URL")?;
     let http = integration_tests::http::client();
     let deadline = Instant::now() + COLLECTOR_RETRY;
     loop {

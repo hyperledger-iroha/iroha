@@ -7177,19 +7177,6 @@ impl Client {
         decode_parameters_response(&resp)
     }
 
-    /// GET `/v1/sumeragi/collectors` — current collector indices and peer IDs.
-    ///
-    /// # Errors
-    /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
-    pub fn get_sumeragi_collectors_json(&self) -> Result<norito::json::Value> {
-        let url = join_torii_url(&self.torii_url, "v1/sumeragi/collectors");
-        let resp = self.send_builder(
-            self.default_request(HttpMethod::GET, url)
-                .header("Accept", APPLICATION_JSON),
-        )?;
-        Self::parse_json_ok_response(&resp, "Failed to get sumeragi collectors")
-    }
-
     /// GET `/v1/sumeragi/qc` — `HighestQC`/`LockedQC` snapshot.
     ///
     /// # Errors
@@ -7257,32 +7244,6 @@ impl Client {
                 .header("Accept", APPLICATION_JSON),
         )?;
         Self::parse_json_ok_response(&resp, "Failed to get sumeragi telemetry")
-    }
-
-    /// GET `/v1/sumeragi/rbc` — RBC session/throughput counters.
-    ///
-    /// # Errors
-    /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
-    pub fn get_sumeragi_rbc_status_json(&self) -> Result<norito::json::Value> {
-        let url = join_torii_url(&self.torii_url, "v1/sumeragi/rbc");
-        let resp = self.send_builder(
-            self.operator_signed_request(HttpMethod::GET, url, Vec::new())?
-                .header("Accept", APPLICATION_JSON),
-        )?;
-        Self::parse_json_ok_response(&resp, "Failed to get sumeragi rbc status")
-    }
-
-    /// GET `/v1/sumeragi/rbc/sessions` — RBC sessions snapshot.
-    ///
-    /// # Errors
-    /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
-    pub fn get_sumeragi_rbc_sessions_json(&self) -> Result<norito::json::Value> {
-        let url = join_torii_url(&self.torii_url, "v1/sumeragi/rbc/sessions");
-        let resp = self.send_builder(
-            self.default_request(HttpMethod::GET, url)
-                .header("Accept", APPLICATION_JSON),
-        )?;
-        Self::parse_json_ok_response(&resp, "Failed to get sumeragi rbc sessions")
     }
 
     /// GET `/v1/sumeragi/evidence/count` — total persisted evidence entries.
@@ -11447,15 +11408,6 @@ mod evidence_http_tests {
         let response = json_response(StatusCode::OK, "{}");
         with_mock_http(respond_with(&store, response), || {
             client_with_base_url(base_url())
-                .get_sumeragi_collectors_json()
-                .expect("Sumeragi collectors JSON")
-        });
-        assert_json_accept(&store, "/v1/sumeragi/collectors");
-
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = json_response(StatusCode::OK, "{}");
-        with_mock_http(respond_with(&store, response), || {
-            client_with_base_url(base_url())
                 .get_sumeragi_evidence_count_json()
                 .expect("Sumeragi evidence count JSON")
         });
@@ -14396,7 +14348,7 @@ impl Client {
             request.multisig_account_id.as_ref(),
             request.multisig_account_alias.as_deref(),
         )?;
-        let url = join_torii_url(&self.torii_url, "v1/multisig/proposals/list");
+        let url = join_torii_url(&self.torii_url, "v1/multisig/proposals/search");
         let body = norito::json::to_vec(request)?;
         let resp = self
             .default_request(HttpMethod::POST, url)
@@ -14434,7 +14386,7 @@ impl Client {
             request.proposal_id.as_deref(),
             request.instructions_hash.as_deref(),
         )?;
-        let url = join_torii_url(&self.torii_url, "v1/multisig/proposals/get");
+        let url = join_torii_url(&self.torii_url, "v1/multisig/proposals/resolve");
         let body = norito::json::to_vec(request)?;
         let resp = self
             .default_request(HttpMethod::POST, url)
@@ -25506,13 +25458,12 @@ mod tests {
     #[test]
     fn sumeragi_operator_endpoints_include_signature_headers_when_key_configured() {
         type SumeragiEndpointCase = (&'static str, fn(&Client) -> Result<norito::json::Value>);
-        let cases: [SumeragiEndpointCase; 3] = [
+        let cases: [SumeragiEndpointCase; 2] = [
             (
                 "/v1/sumeragi/pacemaker",
                 Client::get_sumeragi_pacemaker_json,
             ),
             ("/v1/sumeragi/phases", Client::get_sumeragi_phases_json),
-            ("/v1/sumeragi/rbc", Client::get_sumeragi_rbc_status_json),
         ];
 
         for (path, request) in cases {
@@ -25590,20 +25541,12 @@ mod tests {
     #[test]
     fn sumeragi_json_endpoints_request_json() {
         type SumeragiEndpointCase = (&'static str, fn(&Client) -> Result<norito::json::Value>);
-        let cases: [SumeragiEndpointCase; 5] = [
+        let cases: [SumeragiEndpointCase; 3] = [
             ("/v1/sumeragi/leader", Client::get_sumeragi_leader_json),
             ("/v1/sumeragi/params", Client::get_sumeragi_params_json),
             (
-                "/v1/sumeragi/collectors",
-                Client::get_sumeragi_collectors_json,
-            ),
-            (
                 "/v1/sumeragi/telemetry",
                 Client::get_sumeragi_telemetry_json,
-            ),
-            (
-                "/v1/sumeragi/rbc/sessions",
-                Client::get_sumeragi_rbc_sessions_json,
             ),
         ];
 
@@ -25638,20 +25581,12 @@ mod tests {
     #[test]
     fn sumeragi_json_endpoints_reject_malformed_ok_payloads() {
         type SumeragiEndpointCase = (&'static str, fn(&Client) -> Result<norito::json::Value>);
-        let cases: [SumeragiEndpointCase; 5] = [
+        let cases: [SumeragiEndpointCase; 3] = [
             ("/v1/sumeragi/leader", Client::get_sumeragi_leader_json),
             ("/v1/sumeragi/params", Client::get_sumeragi_params_json),
             (
-                "/v1/sumeragi/collectors",
-                Client::get_sumeragi_collectors_json,
-            ),
-            (
                 "/v1/sumeragi/telemetry",
                 Client::get_sumeragi_telemetry_json,
-            ),
-            (
-                "/v1/sumeragi/rbc/sessions",
-                Client::get_sumeragi_rbc_sessions_json,
             ),
         ];
 
@@ -25693,7 +25628,7 @@ mod tests {
             &'static str,
             fn(&Client) -> Result<norito::json::Value>,
         );
-        let cases: [SumeragiEndpointCase; 5] = [
+        let cases: [SumeragiEndpointCase; 3] = [
             (
                 "/v1/sumeragi/leader",
                 "Failed to get sumeragi leader",
@@ -25705,19 +25640,9 @@ mod tests {
                 Client::get_sumeragi_params_json,
             ),
             (
-                "/v1/sumeragi/collectors",
-                "Failed to get sumeragi collectors",
-                Client::get_sumeragi_collectors_json,
-            ),
-            (
                 "/v1/sumeragi/telemetry",
                 "Failed to get sumeragi telemetry",
                 Client::get_sumeragi_telemetry_json,
-            ),
-            (
-                "/v1/sumeragi/rbc/sessions",
-                "Failed to get sumeragi rbc sessions",
-                Client::get_sumeragi_rbc_sessions_json,
             ),
         ];
 
@@ -25895,13 +25820,12 @@ mod tests {
     #[test]
     fn sumeragi_operator_json_endpoints_reject_duplicate_key_payloads() {
         type SumeragiEndpointCase = (&'static str, fn(&Client) -> Result<norito::json::Value>);
-        let cases: [SumeragiEndpointCase; 3] = [
+        let cases: [SumeragiEndpointCase; 2] = [
             (
                 "/v1/sumeragi/pacemaker",
                 Client::get_sumeragi_pacemaker_json,
             ),
             ("/v1/sumeragi/phases", Client::get_sumeragi_phases_json),
-            ("/v1/sumeragi/rbc", Client::get_sumeragi_rbc_status_json),
         ];
 
         for (path, request) in cases {
@@ -25976,7 +25900,7 @@ mod tests {
             &'static str,
             fn(&Client) -> Result<norito::json::Value>,
         );
-        let cases: [SumeragiEndpointCase; 3] = [
+        let cases: [SumeragiEndpointCase; 2] = [
             (
                 "/v1/sumeragi/pacemaker",
                 "Failed to get sumeragi pacemaker",
@@ -25986,11 +25910,6 @@ mod tests {
                 "/v1/sumeragi/phases",
                 "Failed to get sumeragi phases",
                 Client::get_sumeragi_phases_json,
-            ),
-            (
-                "/v1/sumeragi/rbc",
-                "Failed to get sumeragi rbc status",
-                Client::get_sumeragi_rbc_status_json,
             ),
         ];
 

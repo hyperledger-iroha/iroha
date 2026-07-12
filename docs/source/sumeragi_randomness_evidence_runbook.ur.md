@@ -41,14 +41,10 @@ Note: For the v1 release, VRF penalties jail offenders after the activation lag,
 
    ```bash
    iroha --output-format text ops sumeragi status
-   iroha --output-format text ops sumeragi collectors
-   iroha --output-format text ops sumeragi rbc status
+   iroha --output-format text ops sumeragi telemetry
    ```
 
-   `status` لائن leader/view tuple، RBC backlog، DA retries، epoch offsets، اور
-   pacemaker deferrals پرنٹ کرتی ہے؛ `collectors` collector indices کو peer IDs سے
-   map کرتا ہے تاکہ معلوم ہو کہ کون سے validators اس height پر randomness duties
-   سنبھال رہے ہیں۔
+   The status output records the leader/view and durable consensus state. The telemetry output provides aggregate `availability.collectors`, `rbc_backlog`, and `rbc_pending` fields; it is not a collector-plan or per-session RBC API.
 3. جس epoch کا آڈٹ کرنا ہے اس کا نمبر حاصل کریں:
 
    ```bash

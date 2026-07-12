@@ -2393,6 +2393,7 @@ mod tests {
         let tx = TransactionBuilder::new(chain, ALICE_ID.clone())
             .with_executable(Executable::ContractCall(ContractInvocation {
                 contract_address: contract_address.clone(),
+                expected_code_hash: iroha_crypto::Hash::prehashed([0_u8; 32]),
                 entrypoint: "contribute".to_string(),
                 arguments: Some(
                     iroha_data_model::transaction::executable::ContractArgumentRecord::try_new(

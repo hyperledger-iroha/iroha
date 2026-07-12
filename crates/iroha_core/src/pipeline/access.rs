@@ -517,6 +517,7 @@ where
             if let Some(view) = state_ro
                 && let Some(record) =
                     code::fetch_bound_contract_record(view, &call.contract_address)
+                && record.code_hash == call.expected_code_hash
             {
                 if let Some((set, source)) = manifest_access_set(
                     &record.manifest,
@@ -1814,6 +1815,7 @@ where
         ExecutableRef::ContractCall(invocation) => {
             if let Some(record) =
                 code::fetch_bound_contract_record(state_ro, &invocation.contract_address)
+                && record.code_hash == invocation.expected_code_hash
                 && let Some((hinted, _source)) = manifest_access_set(
                     &record.manifest,
                     record.code_hash,
@@ -2520,6 +2522,7 @@ mod tests {
             let transaction = TransactionBuilder::new("chain".parse().unwrap(), authority.clone())
                 .with_executable(Executable::ContractCall(ContractInvocation {
                     contract_address: contract_address.clone(),
+                    expected_code_hash: iroha_crypto::Hash::new(entrypoint.as_bytes()),
                     entrypoint: entrypoint.to_owned(),
                     arguments: None,
                 }))

@@ -10,6 +10,7 @@ MODE="${1:-}"
 
 SELF_TESTS=(
   --self-test-bad-abi
+  --self-test-retired-export
   --self-test-missing-header-symbol
   --self-test-bad-capability-signature
   --self-test-bad-proof-signature
@@ -84,6 +85,29 @@ KAGEMUSHA_EXPORTS = {
     "connect_norito_kagemusha_request_authorization_signing_bytes_v2",
     "connect_norito_kagemusha_topup_finality_verify_v2",
     "connect_norito_kagemusha_topup_shield_build_unsigned_v2",
+}
+
+# These entry points belonged to pre-release Kagemusha contracts. Keep the
+# denylist explicit so an old declaration cannot silently return alongside the
+# exact ABI-19 inventory (including from Swift's dynamically-loaded symbols).
+RETIRED_KAGEMUSHA_EXPORTS = {
+    "connect_norito_kagemusha_recursive_spend_append",
+    "connect_norito_kagemusha_recursive_spend_artifact_begin_v2",
+    "connect_norito_kagemusha_recursive_spend_artifact_cancel_v2",
+    "connect_norito_kagemusha_recursive_spend_artifact_finalize_v2",
+    "connect_norito_kagemusha_recursive_spend_artifact_write_v2",
+    "connect_norito_kagemusha_recursive_spend_build_redemption_intent_v2",
+    "connect_norito_kagemusha_recursive_spend_compact_payment_token_from_bundle",
+    "connect_norito_kagemusha_recursive_spend_init",
+    "connect_norito_kagemusha_recursive_spend_lineage_append_boundary",
+    "connect_norito_kagemusha_recursive_spend_lineage_witness_append_result",
+    "connect_norito_kagemusha_recursive_spend_lineage_witness_from_init_result",
+    "connect_norito_kagemusha_recursive_spend_redeem",
+    "connect_norito_kagemusha_recursive_spend_redeem_change_v2",
+    "connect_norito_kagemusha_recursive_spend_topup",
+    "connect_norito_kagemusha_recursive_spend_transition_profile_append",
+    "connect_norito_kagemusha_recursive_spend_transition_profile_init",
+    "connect_norito_kagemusha_recursive_spend_verify",
 }
 
 PRIVACY_EXPORTS = {
@@ -206,6 +230,16 @@ def require_signature_parity(names: set[str]) -> None:
 rust_kagemusha = rust_exports("connect_norito_kagemusha_")
 header_kagemusha = header_exports("connect_norito_kagemusha_")
 swift_kagemusha = set(re.findall(r'"(connect_norito_kagemusha_[a-z0-9_]+)"', swift))
+if KAGEMUSHA_EXPORTS & RETIRED_KAGEMUSHA_EXPORTS:
+    raise SystemExit("current and retired Kagemusha export inventories must be disjoint")
+for label, exports in (
+    ("Rust", rust_kagemusha),
+    ("C header", header_kagemusha),
+    ("Swift", swift_kagemusha),
+):
+    retired = sorted(exports & RETIRED_KAGEMUSHA_EXPORTS)
+    if retired:
+        raise SystemExit(f"{label} exposes retired Kagemusha exports: {retired}")
 exact("Rust Kagemusha", KAGEMUSHA_EXPORTS, rust_kagemusha)
 exact("C header Kagemusha", KAGEMUSHA_EXPORTS, header_kagemusha)
 exact("Rust privacy", PRIVACY_EXPORTS, rust_exports("iroha_privacy_"))
@@ -369,6 +403,14 @@ if [[ "${MODE}" == --self-test-* ]]; then
       replace_once "${tmp_rust}" \
         "const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 19;" \
         "const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 18;"
+      ;;
+    --self-test-retired-export)
+      replace_once "${tmp_rust}" \
+        "connect_norito_kagemusha_recursive_spend_init_v2" \
+        "connect_norito_kagemusha_recursive_spend_init"
+      replace_once "${tmp_header}" \
+        "connect_norito_kagemusha_recursive_spend_init_v2" \
+        "connect_norito_kagemusha_recursive_spend_init"
       ;;
     --self-test-missing-header-symbol)
       replace_once "${tmp_header}" \

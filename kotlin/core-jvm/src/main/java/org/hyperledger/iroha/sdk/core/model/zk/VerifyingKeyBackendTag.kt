@@ -382,6 +382,9 @@ enum class VerifyingKeyBackendTag(@JvmField val noritoValue: String) {
             if (backend.isEmpty() || backend.trim() != backend) {
                 return null
             }
+            if (backend in productionNativeHalo2PastaBackends) {
+                return backend
+            }
             for ((prefix, targetPrefix) in listOf(
                 "halo2/pasta/ipa/" to "halo2/pasta/",
                 "halo2/pasta/" to "halo2/pasta/",

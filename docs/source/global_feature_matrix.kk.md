@@ -25,7 +25,7 @@ translator: machine-google-reviewed
 | Reliable Broadcast (DA payload transport) | ◉ | RBC хабарлама ағыны (Init/Chunk/Ready/Deliver) тасымалдау/қалпына келтіру жолы ретінде `da_enabled=true` болғанда қосылады; қол жетімділік дәлелдері бақыланады (кеңес беру), кірісті орындау тәуелсіз. | status.md:соңғы |
 | QC күй-түбірлік байланыстыруды орындау | ◉ | Commit QCs carry `parent_state_root`/`post_state_root`; жеке орындау-QC қақпасы жоқ. | status.md:соңғы |
 | Дәлелдерді тарату және аудиттің соңғы нүктелері | ◉ | ControlFlow::Дәлелдер, Torii дәлелдемелердің соңғы нүктелері және теріс сынақтар қонды. | status.md:176; status.md:760-761 |
-| РБК телеметриясы, дайындық/жеткізу көрсеткіштері | ◉ | `/v1/sumeragi/rbc*` соңғы нүктелері және телеметриялық есептегіштер/гистограмма операторлар үшін қолжетімді. | status.md:283-284; status.md:772 |
+| Aggregated RBC and collector telemetry | ◉ | `/v1/sumeragi/telemetry` exposes `availability.collectors`, `rbc_backlog`, and `rbc_pending`; Prometheus retains detailed counters and histograms. No per-session/sample/collector-plan Torii contract is published. | status.md:283-284; status.md:772 |
 | Консенсус параметрі жарнама және топологияны тексеру | ◉ | Түйіндер `(collectors_k, redundant_send_r)` таратады және құрдастардың теңдігін растайды. | status.md:255 |
 | Рұқсат етілген PRF негізіндегі айналдыру | ◉ | Рұқсат етілген көшбасшы/коллекторды таңдау PRF тұқымын пайдаланады + канондық тізімдегі биіктік/көрініс; prev-хэш айналуы бұрынғы көмекші болып қала береді. | status.md:соңғы |
 

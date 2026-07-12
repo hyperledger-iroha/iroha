@@ -73,7 +73,7 @@ translator: manual
 
 ### トポロジ／役割取得の CLI 例
 - `iroha_cli --output-format text ops sumeragi topology` で現在の順序付きリストと役割を表示します。
-- `iroha_cli ops sumeragi collectors --height <h>` で高さ `h` のコレクターを取得します。
+- `iroha_cli --output-format text ops sumeragi telemetry` で `availability.collectors`、`rbc_backlog`、`rbc_pending` の集約観測値を取得します。高さ／View ごとの決定論的な割当計画は公開されません。
 - `iroha_cli ops sumeragi roles --peer <account>` で指定ピアの現在の役割を照会できます。
 
 ### エビデンス & スラッシング
@@ -97,7 +97,7 @@ translator: manual
 - `iroha_cli ops sumeragi status` / `GET /v1/sumeragi/status`
 - `iroha_cli --output-format text ops sumeragi params` / `GET /v1/sumeragi/params`
 - `iroha_cli --output-format text ops sumeragi topology`
-- `iroha_cli ops sumeragi collectors --height <h>`
+- `iroha_cli --output-format text ops sumeragi telemetry` / `GET /v1/sumeragi/telemetry`（集約された可用性観測値）
 - `iroha_cli --output-format text ops sumeragi evidence list`
 - `iroha_cli ops sumeragi evidence count`
 - `iroha_cli ops sumeragi evidence submit --evidence-hex <0x…>`
@@ -189,7 +189,7 @@ translator: manual
 冗長送信カウンタは DA リトライが追加コレクターへキャッシュ済み RBC ペイロードを再送したときに増えます。`npos_redundant_send_retries_update_metrics` テストでこの経路をカバーし、ダッシュボードと契約の乖離を検出します。
 
 **トリアージ手順**
-1. `iroha_cli --output-format text ops sumeragi collectors` で担当コレクターが現行の担当に残っているか確認。
+1. `/v1/sumeragi/telemetry` のコレクター活動を構成パラメータと VRF エビデンスに照らして確認します。この集約スナップショットは決定論的なコレクター割当計画を公開しません。
 2. `/v1/sumeragi/telemetry` を見て `votes_ingested` が伸びていないコレクター index を特定。単一コレクターだけ停滞しているなら一時的に `sumeragi.collectors.redundant_send_r` を増やし、票を次順位へ回す。
 3. `sumeragi_bg_post_queue_depth` と `p2p_*_throttled_total` でキューやトランスポートの逼迫を診断。
 4. FASTPQ プローバ遅延が疑われる場合は `/v1/torii/zk/prover/reports` と Torii ログでプローバの失敗を調べ、必要に応じて再起動。
@@ -204,7 +204,7 @@ translator: manual
 1. **DA/RBC 有効化**: `sumeragi.da.enabled = true` を既定とし、`availability evidence` と RBC `READY` クォーラムは監査・テレメトリ・リカバリ証跡として追跡します。ローカル payload が不足する場合は DA gate が finalize を待機させ、`RbcDeliver` またはブロック同期で満たされると続行します。
 2. **前処理**: リーダーはブロック提案と同時に RBC セッションを起動し、Collectors が投票を集約するまでに全ピアへブロック断片を配布します。
 3. **Fallback**: RBC 完了前に View 変更が発生した場合、次リーダーが同一ブロックを提案する必要性を評価し、未完セッションを踏まえて処理します。
-4. **監視**: `sumeragi_da_summary::*` と `/v1/sumeragi/rbc/sessions` を定期取得し、遅延や失敗を早期検知します。
+4. **監視**: `sumeragi_da_summary::*` と `/v1/sumeragi/telemetry` の集約 `rbc_backlog`／`rbc_pending` を定期取得し、遅延や失敗を早期検知します。セッション単位の RBC レコードは公開されません。
 5. **CI**: `integration_tests/tests/sumeragi_da.rs` が 4 ピア／6 ピアのシナリオで `LARGE_PAYLOAD_BYTES = 1024` とプロトコル READY クォーラムを検証し、30 秒の基本 RBC 配送予算、ピア追加分、RS16 プレミアム、40 秒のコミット余裕、スループット下限、キュー深さ、P2P ドロップなしを確認します。
 
 ---
@@ -231,7 +231,7 @@ NPoS のペースメーカーは VRF からリーダー／コレクタのロー�
 3. `VrfEpochRecord` を最終化して保存。
 4. `epoch_report::VrfPenaltiesReport`、ステータスカウンタ、テレメトリを更新。
 
-更新されたシードは `deterministic_collectors` でコレクター選定に再利用され、`/v1/sumeragi/collectors` で `(height, view)` とともに公開されます。
+更新されたシードは `deterministic_collectors` でコレクター選定に再利用されます。公開 `/v1/sumeragi/telemetry` が示すのは `availability.collectors` の集約された観測活動だけであり、`(height, view)` ごとの決定論的な割当計画ではありません。
 
 #### CLI とオペレーター手順
 - `iroha_cli ops sumeragi vrf-epoch --epoch <n>` で保存済みシード、参加テーブル、ペナルティ、`commit_deadline_offset`／`reveal_deadline_offset` を確認。`--output-format text` で 1 行表示。
@@ -248,7 +248,7 @@ NPoS のペースメーカーは VRF からリーダー／コレクタのロー�
     -d '{"epoch":42,"signer":1,"reveal_hex":"0x..."}'
   ```
 
-  `/v1/sumeragi/collectors` でコレクター集合 (`collectors[*].peer_id`) を、`/v1/sumeragi/status` で `prf_epoch_seed`, `prf_height`, `vrf_late_reveals_total` 等を確認できます。
+  `/v1/sumeragi/telemetry` で集約されたコレクター活動を、`/v1/sumeragi/status` で `prf_epoch_seed`, `prf_height`, `vrf_late_reveals_total` 等を確認できます。決定論的な選定はテレメトリではなく、構成パラメータと VRF エビデンスから検証してください。
 
 **ランダムネス運用チェックリスト**
 - 各ブロック後に `iroha_cli --output-format text ops sumeragi status` を確認し、`vrf_penalty_epoch` が跳ねたり `committed_no_reveal` が増えた場合は `iroha_cli --output-format text ops sumeragi vrf-epoch --epoch <n>` で不足しているバリデータを特定。

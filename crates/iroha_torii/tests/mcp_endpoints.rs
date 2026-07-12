@@ -1509,7 +1509,6 @@ async fn mcp_jsonrpc_tools_call_agent_alias_sumeragi_endpoints_dispatch() {
                 "evidence_hex": "deadbeef"
             }),
         ),
-        (1058, "iroha.sumeragi.new_view", norito::json!({})),
         (
             1060,
             "iroha.sumeragi.vrf.penalties",
@@ -2613,10 +2612,6 @@ async fn mcp_tools_list_exposes_account_and_transaction_interfaces() {
             .iter()
             .any(|name| name == "iroha.sumeragi.evidence.submit"),
         "expected agent-friendly sumeragi evidence-submit MCP tool"
-    );
-    assert!(
-        names.iter().any(|name| name == "iroha.sumeragi.new_view"),
-        "expected agent-friendly sumeragi new-view MCP tool"
     );
     assert!(
         names

@@ -621,7 +621,7 @@ mod tests {
             actual::{
                 Acceleration, BlockSync, Common, Concurrency, Confidential, Connect,
                 DataspaceGossip, FraudMonitoring, Genesis, Governance, Hijiri, IsoBridge, Ivm,
-                Kura, LiveQueryStore, Logger, Network, Nexus, Queue, RbcSampling, Root, Settlement,
+                Kura, LiveQueryStore, Logger, Network, Nexus, Queue, Root, Settlement,
                 SoranetHandshake as ActualSoranetHandshake, SoranetPow, SoranetPrivacy, Streaming,
                 StreamingSoranet, Sumeragi, TieredState, Torii, TransactionGossiper, TrustedPeers,
             },
@@ -762,8 +762,6 @@ mod tests {
                     iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_PER_SEC,
                 consensus_ingress_critical_bytes_burst:
                     iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_BURST,
-                consensus_ingress_rbc_session_limit:
-                    defaults::network::CONSENSUS_INGRESS_RBC_SESSION_LIMIT,
                 consensus_ingress_penalty_threshold:
                     defaults::network::CONSENSUS_INGRESS_PENALTY_THRESHOLD,
                 consensus_ingress_penalty_window: Duration::from_millis(
@@ -946,7 +944,6 @@ mod tests {
                     iroha_config::parameters::defaults::torii::ZK_IVM_PROVE_JOB_MAX_ENTRIES,
                 zk_ivm_prove_job_max_retained_bytes:
                     iroha_config::parameters::defaults::torii::ZK_IVM_PROVE_JOB_MAX_RETAINED_BYTES,
-                rbc_sampling: RbcSampling::default(),
                 da_ingest: iroha_config::parameters::actual::DaIngest::default(),
                 connect: Connect {
                     enabled: false,
@@ -1005,7 +1002,7 @@ mod tests {
                 mcp: iroha_config::parameters::actual::ToriiMcp::default(),
                 onboarding: None,
                 faucet: None,
-                offline_issuer: None,
+                kagemusha_commands: None,
                 proof_api: iroha_config::parameters::actual::ProofApi {
                     rate_per_minute: iroha_config::parameters::defaults::torii::PROOF_RATE_PER_MIN
                         .and_then(NonZeroU32::new),

@@ -36,14 +36,10 @@ Note: For the v1 release, VRF penalties jail offenders after the activation lag,
 
    ```bash
    iroha --output-format text ops sumeragi status
-   iroha --output-format text ops sumeragi collectors
-   iroha --output-format text ops sumeragi rbc status
+   iroha --output-format text ops sumeragi telemetry
    ```
 
-   A linha `status` imprime a tupla leader/view, backlog RBC, retries DA,
-   offsets de epoca e deferrals do pacemaker; `collectors` mapeia indices de
-   collectors para IDs de peers, mostrando quais validadores carregam tarefas
-   de aleatoriedade na altura inspecionada.
+   The status output records the leader/view and durable consensus state. The telemetry output provides aggregate `availability.collectors`, `rbc_backlog`, and `rbc_pending` fields; it is not a collector-plan or per-session RBC API.
 3. Capture o numero de epoca que deseja auditar:
 
    ```bash

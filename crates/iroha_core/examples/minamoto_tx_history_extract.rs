@@ -492,8 +492,9 @@ fn instruction_json(instruction: &InstructionBox) -> String {
 
 fn contract_call_json(call: &ContractInvocation) -> String {
     format!(
-        "{{\"ContractCall\":{{\"address\":{},\"entrypoint\":{},\"arguments\":{}}}}}",
+        "{{\"ContractCall\":{{\"address\":{},\"expected_code_hash\":{},\"entrypoint\":{},\"arguments\":{}}}}}",
         json_string(call.contract_address.as_ref()),
+        json_string(&call.expected_code_hash.to_string()),
         json_string(&call.entrypoint),
         to_json_value(&call.arguments)
     )
@@ -624,6 +625,7 @@ mod tests {
         let address = "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8";
         let call = ContractInvocation {
             contract_address: address.parse().expect("contract address"),
+            expected_code_hash: Hash::new(b"history-contract-code"),
             entrypoint: "invoke".to_owned(),
             arguments: Some(
                 ContractArgumentRecord::try_new(vec![1, 2, 3]).expect("bounded argument record"),
@@ -633,7 +635,8 @@ mod tests {
         assert_eq!(
             contract_call_json(&call),
             format!(
-                "{{\"ContractCall\":{{\"address\":\"{address}\",\"entrypoint\":\"invoke\",\"arguments\":[1,2,3]}}}}"
+                "{{\"ContractCall\":{{\"address\":\"{address}\",\"expected_code_hash\":{},\"entrypoint\":\"invoke\",\"arguments\":[1,2,3]}}}}",
+                json_string(&call.expected_code_hash.to_string())
             )
         );
     }

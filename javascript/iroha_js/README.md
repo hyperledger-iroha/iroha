@@ -1428,8 +1428,8 @@ for (const commitment of typed.lane_settlement_commitments) {
 ## Advanced Sumeragi Telemetry
 
 Torii exposes additional consensus observability endpoints. The JS SDK now
-mirrors them so operators can inspect pacemaker timers, QC snapshots, collector
-plans, and on-chain parameters without bespoke fetch plumbing:
+mirrors them so operators can inspect pacemaker timers, QC snapshots, aggregate
+telemetry, and on-chain parameters without bespoke fetch plumbing:
 
 ```js
 const pacemaker = await torii.getSumeragiPacemaker();
@@ -1448,9 +1448,6 @@ console.log(`BLS-capable peers=${Object.values(blsKeys).filter(Boolean).length}`
 
 const leader = await torii.getSumeragiLeader();
 console.log(`leader index=${leader.leader_index} epoch seed=${leader.prf.epoch_seed ?? "unset"}`);
-
-const collectors = await torii.getSumeragiCollectors();
-console.log(`collectors K=${collectors.collectors_k} redundant R=${collectors.redundant_send_r}`);
 
 const params = await torii.getSumeragiParams();
 console.log(`block time=${params.block_time_ms}ms next mode=${params.next_mode ?? "current"}`);
@@ -1548,50 +1545,15 @@ Every invocation appends a JSON line containing the capture timestamp and typed
 telemetry payload so operators can feed the bundle into replay tooling or share
 it with other SDKs.
 
-## RBC Telemetry & Sampling
+## Sumeragi Evidence
 
-Reliable broadcast (RBC) observability surfaces under `/v1/sumeragi/rbc*` and
-the authenticated sampling endpoint. `ToriiClient` exposes typed helpers so
-SDK consumers can gather telemetry, inspect delivery status, or request chunk
-samples without duplicating retry logic:
+Reliable broadcast remains an internal Sumeragi v2 protocol mechanism. Torii
+exposes aggregate RBC backlog and collector observations through
+`getSumeragiTelemetryTyped()`; it does not expose global per-session RBC,
+sampling, or collector-plan routes. Consensus evidence uses the supported
+evidence endpoints:
 
 ```js
-const telemetry = await torii.getSumeragiRbc();
-console.log(`active sessions=${telemetry?.sessionsActive ?? 0}`);
-
-const sessions = await torii.getSumeragiRbcSessions();
-for (const session of sessions?.items ?? []) {
-  console.log(
-    `height=${session.height} ready=${session.readyCount} delivered=${session.delivered}`,
-  );
-}
-
-const delivered = await torii.getSumeragiRbcDelivered(42, 0);
-if (delivered?.present) {
-  console.log(`block ${delivered.blockHash} delivered=${delivered.delivered}`);
-}
-
-const candidate = await torii.findRbcSamplingCandidate();
-if (!candidate) {
-  throw new Error("no delivered RBC sessions available for sampling");
-}
-const sampleRequest = ToriiClient.buildRbcSampleRequest(candidate, {
-  count: 3,
-  apiToken: process.env.SUMERAGI_API_TOKEN,
-});
-const samples = await torii.sampleRbcChunks(sampleRequest);
-samples?.samples.forEach(({ index, proof }) => {
-  console.log(`chunk ${index} proof depth=${proof.depth}`);
-});
-
-// Abort long-running sampling requests if your UI needs to cancel.
-const controller = new AbortController();
-await torii.sampleRbcChunks({ ...sampleRequest, signal: controller.signal });
-await torii.getSumeragiRbc({ signal: controller.signal });
-await torii.getSumeragiRbcDelivered(candidate.height, candidate.view, {
-  signal: controller.signal,
-});
-
 const evidence = await torii.listSumeragiEvidence({ limit: 20, kind: "DoublePrepare" });
 console.log(`Observed ${evidence.total} evidence entries`);
 const count = await torii.getSumeragiEvidenceCount();
@@ -1600,21 +1562,6 @@ await torii.submitSumeragiEvidence({
   apiToken: process.env.SUMERAGI_API_TOKEN,
 });
 ```
-
-Telemetry helpers return `null` when the node disables developer outputs. When
-`apiToken` is set in the constructor or environment (`IROHA_TORII_API_TOKEN`)
-the client automatically sends the required `X-API-Token` header for RBC
-sampling; pass `apiToken` directly to `sampleRbcChunks` (or the helper) only
-when overriding. Use the top-level `buildRbcSampleRequest` helper (or its
-static counterpart on `ToriiClient`) to derive a sampling payload straight
-from an active session so height/view/block-hash normalisation stays aligned
-with the roadmap’s JS4 RBC helper requirements. When manual selection is
-inconvenient, call `findRbcSamplingCandidate()` — it scans the RBC session
-snapshot for the latest delivered block hash and returns the matching
-`SumeragiRbcSession`, which can be passed directly into
-`buildRbcSampleRequest`. RBC helpers validate option objects up front (including
-unsupported keys) and accept `AbortSignal` inputs where applicable so typos and
-canceled requests never reach Torii.
 
 ## SoraFS Storage Helpers
 
@@ -3020,10 +2967,10 @@ to print the same snapshot/telemetry summary captured above.
 
 ## Config Introspection
 
-`extractToriiFeatureConfig()` normalises the ISO bridge, RBC sampling, and
-Connect sections from a parsed `iroha_config`. It performs light validation,
-renames fields into camelCase, and surfaces optional signer metadata so
-dashboards or CLIs can display feature state without manual JSON parsing.
+`extractToriiFeatureConfig()` normalises the ISO bridge and Connect sections
+from a parsed `iroha_config`. It performs light validation, renames fields into
+camelCase, and surfaces optional signer metadata so dashboards or CLIs can
+display feature state without manual JSON parsing.
 
 `extractConfidentialGasConfig()` returns the confidential verification gas schedule
 (`proofBase`, `perPublicInput`, `perProofByte`, `perNullifier`, `perCommitment`) so tooling can
@@ -3138,9 +3085,7 @@ const features = extractToriiFeatureConfig({ config });
 if (features.isoBridge?.enabled) {
   console.log(`Aliases: ${features.isoBridge.accountAliases.length}`);
 }
-if (features.rbcSampling?.enabled) {
-  console.log(`RBC budget: ${features.rbcSampling.dailyByteBudget} bytes/day`);
-}
+console.log(`Connect enabled: ${features.connect?.enabled ?? false}`);
 ```
 
 ## Continuous Integration
@@ -3206,8 +3151,7 @@ without provisioning infrastructure.
 - `IROHA_TORII_INTEGRATION_URL` — Torii base URL (required to enable the test).
 - `IROHA_TORII_INTEGRATION_API_TOKEN` — optional API token for secured nodes.
 - `IROHA_TORII_INTEGRATION_AUTH_TOKEN` — optional bearer token for auth-protected deployments.
-- `IROHA_TORII_INTEGRATION_CONFIG` — optional path to an `iroha_config` JSON file; when present the test asserts that `extractToriiFeatureConfig()` normalises ISO bridge, RBC sampling, and Connect settings.
-- `IROHA_TORII_INTEGRATION_RBC_SAMPLE` — optional JSON string (e.g., `{"blockHash":"...","height":1,"view":0}`) forwarded to `sampleRbcChunks()`; when unset the integration suite auto-selects a delivered RBC session via `findRbcSamplingCandidate()`. Supplying an explicit payload forces the test to use that session instead.
+- `IROHA_TORII_INTEGRATION_CONFIG` — optional path to an `iroha_config` JSON file; when present the test asserts that `extractToriiFeatureConfig()` normalises ISO bridge and Connect settings.
 - `IROHA_TORII_INTEGRATION_CONNECT_SESSION` — optional JSON string containing the payload for `createConnectSession()` (`{"sid":"<hex>","node":"torii.devnet.example"}` is a common pattern).
 - `IROHA_TORII_INTEGRATION_CONNECT_PREVIEW` — optional JSON object consumed by the Connect preview bootstrapper test (`{"node":"torii.devnet.example","sessionOptions":{"node":"ingress.devnet.example"}}` is sufficient). When present and `IROHA_TORII_INTEGRATION_MUTATE=1`, the suite calls `bootstrapConnectPreviewSession()`, validates the deeplink URIs/tokens, and deletes the staged session.
 - `IROHA_TORII_INTEGRATION_CONNECT_APP` — optional JSON object describing a Connect app registration payload (`{"appId":"demo","namespaces":["apps"],"metadata":{"suite":"ci"}}`); when present and `IROHA_TORII_INTEGRATION_MUTATE=1`, the suite registers the app, verifies that list/get/iterator APIs return it, and then deletes it.

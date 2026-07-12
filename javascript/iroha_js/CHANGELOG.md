@@ -4,6 +4,13 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
 
 ## [Unreleased]
 
+- Aligned the Torii client with the canonical first-release route catalog:
+  removed the global RBC sampling/session and collector-plan helpers plus the
+  retired `torii.rbc_sampling` config projection, while retaining aggregate
+  Sumeragi v2 telemetry. The resulting pinned-esbuild baselines are 851,381
+  bytes/57 modules for `toriiClient.js` and 304,434 bytes/51 modules for the
+  public browser aggregate. Multisig proposal listing and lookup use the
+  canonical `/list` and `/get` routes.
 - Hardened Kotodama compiler result normalization against malformed or hostile
   native/service output. Successful manifests, recursive entrypoint schemas,
   triggers, localization/provenance metadata, and source-map/budget sidecars

@@ -6756,6 +6756,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         };
         let invocation = iroha_data_model::transaction::executable::ContractInvocation {
             contract_address: identity.contract_address.clone(),
+            expected_code_hash: identity.code_hash,
             entrypoint,
             arguments,
         };
@@ -16366,8 +16367,12 @@ seiyaku StaleRuntimeBinding {
     ) -> iroha_data_model::transaction::executable::ContractInvocation {
         let arguments =
             encoded_contract_arguments_from_json(state, &contract_address, entrypoint, payload);
+        let expected_code_hash =
+            crate::smartcontracts::code::fetch_instance_binding(state, &contract_address)
+                .expect("installed test contract binding");
         iroha_data_model::transaction::executable::ContractInvocation {
             contract_address,
+            expected_code_hash,
             entrypoint: entrypoint.to_owned(),
             arguments: arguments.map(|arguments| {
                 iroha_data_model::transaction::executable::ContractArgumentRecord::try_new(

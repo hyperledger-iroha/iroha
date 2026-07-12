@@ -104015,6 +104015,7 @@ seiyaku IdentitylessRawCallback {
                 Action::new(
                     Executable::ContractCall(ContractInvocation {
                         contract_address: contract_address.clone(),
+                        expected_code_hash: code_hash,
                         entrypoint: "run".to_owned(),
                         arguments: Some(callback_arguments),
                     }),

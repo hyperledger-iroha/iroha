@@ -1309,4 +1309,124 @@ final class Halo2PastaTests: XCTestCase {
         XCTAssertEqual((VestaProjective.identity + VestaAffine.generator.projective).toAffine(), .generator)
     }
 
+    private static func scalarBytes(_ value: UInt64) -> Data {
+        var bytes = Data(count: 32)
+        var value = value
+        for index in 0..<8 {
+            bytes[index] = UInt8(value & 0xff)
+            value >>= 8
+        }
+        return bytes
+    }
+
+    private static func appendUInt32LE(_ value: UInt32, to data: inout Data) {
+        var littleEndian = value.littleEndian
+        data.append(contentsOf: withUnsafeBytes(of: &littleEndian, Array.init))
+    }
+
+    private static func bytes(fromLimbs limbs: [UInt64]) -> Data {
+        var bytes = Data(capacity: limbs.count * MemoryLayout<UInt64>.size)
+        for limb in limbs {
+            var remaining = limb
+            for _ in 0..<MemoryLayout<UInt64>.size {
+                bytes.append(UInt8(remaining & 0xff))
+                remaining >>= 8
+            }
+        }
+        return bytes
+    }
+
+    private static func evaluate(
+        _ coefficients: [PastaFp],
+        at point: PastaFp
+    ) -> PastaFp {
+        coefficients.reversed().reduce(PastaFp.zero) { accumulator, coefficient in
+            accumulator * point + coefficient
+        }
+    }
+
+    private static func zeroRoundIPAParameters() throws -> Halo2IPAParameters {
+        let generator = VestaAffine.generator
+        return try Halo2IPAParameters(
+            k: 0,
+            g: [generator.multiplied(by: PastaFp(3))],
+            gLagrange: [generator.multiplied(by: PastaFp(5))],
+            w: generator.multiplied(by: PastaFp(7)),
+            u: generator.multiplied(by: PastaFp(11))
+        )
+    }
+
+    private static func verifyZeroRoundSamePointMultiOpeningProof(
+        params: Halo2IPAParameters,
+        queries: [Halo2IPAProverQuery],
+        commitments: [VestaProjective],
+        proof: Data
+    ) throws -> (ok: Bool, remainingBytes: Int) {
+        precondition(params.k == 0)
+        precondition(queries.count == commitments.count)
+        precondition(!queries.isEmpty)
+
+        var reader = Halo2Blake2bReadTranscript(proof: proof)
+        let x1 = reader.squeezeChallenge().scalar
+        _ = reader.squeezeChallenge()
+
+        var aggregateCommitment = VestaProjective.identity
+        var aggregateEvaluation = PastaFp.zero
+        var power = PastaFp.one
+        for index in queries.indices.reversed() {
+            aggregateCommitment = aggregateCommitment
+                + commitments[index].multiplied(by: power)
+            aggregateEvaluation += Self.evaluate(
+                queries[index].polynomial,
+                at: queries[index].point
+            ) * power
+            power *= x1
+        }
+
+        let quotientCommitment = try reader.readPoint()
+        let evaluationPoint = reader.squeezeChallenge().scalar
+        let aggregateAtEvaluationPoint = try reader.readScalar()
+        let quotientChallenge = reader.squeezeChallenge().scalar
+        let denominatorInverse = try XCTUnwrap(
+            (evaluationPoint - queries[0].point).inverted()
+        )
+        let quotientEvaluation =
+            (aggregateAtEvaluationPoint - aggregateEvaluation) * denominatorInverse
+        let commitment = quotientCommitment.projective.multiplied(by: quotientChallenge)
+            + aggregateCommitment
+        let value = quotientEvaluation * quotientChallenge + aggregateAtEvaluationPoint
+        let verified = try Halo2IPAOpeningProof.verifyInTranscript(
+            params: params,
+            commitment: commitment,
+            point: evaluationPoint,
+            value: value,
+            transcript: &reader
+        )
+        return (verified, reader.remainingBytes)
+    }
+
+    private static func hex(_ value: String) throws -> Data {
+        let compact = value.filter { !$0.isWhitespace }
+        guard let data = Data(hexString: compact) else {
+            throw NSError(
+                domain: "Halo2PastaTests",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "Invalid hexadecimal test vector"]
+            )
+        }
+        return data
+    }
+
+    private struct SeededGenerator: RandomNumberGenerator {
+        var state: UInt64
+
+        mutating func next() -> UInt64 {
+            state = state &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
+            var value = state
+            value = (value ^ (value >> 30)) &* 0xbf58_476d_1ce4_e5b9
+            value = (value ^ (value >> 27)) &* 0x94d0_49bb_1331_11eb
+            return value ^ (value >> 31)
+        }
+    }
+
 }

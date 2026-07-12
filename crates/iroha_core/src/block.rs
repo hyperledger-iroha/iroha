@@ -26236,6 +26236,7 @@ mod tests {
             .with_executable(Executable::ContractCall(
                 iroha_data_model::transaction::executable::ContractInvocation {
                     contract_address,
+                    expected_code_hash: Hash::new(b"overlay-routing-contract-code"),
                     entrypoint: "increment".to_owned(),
                     arguments: None,
                 },
@@ -26340,6 +26341,7 @@ seiyaku GuardedOverlay {
             .with_executable(Executable::ContractCall(
                 iroha_data_model::transaction::executable::ContractInvocation {
                     contract_address,
+                    expected_code_hash: code_hash,
                     entrypoint: "write".to_owned(),
                     arguments,
                 },
@@ -26476,6 +26478,7 @@ seiyaku DynamicAccessCounter {
                 .with_executable(Executable::ContractCall(
                     iroha_data_model::transaction::executable::ContractInvocation {
                         contract_address: contract_address.clone(),
+                        expected_code_hash: code_hash,
                         entrypoint: entrypoint.to_owned(),
                         arguments,
                     },
@@ -26649,6 +26652,7 @@ seiyaku DynamicTarget {
                 .with_executable(Executable::ContractCall(
                     iroha_data_model::transaction::executable::ContractInvocation {
                         contract_address: contract_address.clone(),
+                        expected_code_hash: code_hash,
                         entrypoint: entrypoint.to_owned(),
                         arguments,
                     },

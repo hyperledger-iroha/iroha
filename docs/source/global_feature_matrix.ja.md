@@ -23,7 +23,7 @@ translator: manual
 | 信頼できるブロードキャスト（DA ペイロード輸送） | ◉ | `da_enabled=true` で RBC (Init/Chunk/Ready/Deliver) が有効化され、ペイロード配布/欠落回復に利用。コミットは availability evidence でゲート（ローカルの `DELIVER` は条件ではありません）。 | status.md:283-284 |
 | Commit QC 状態ルート束縛 | ◉ | Commit QC が parent/post state roots を保持し、execution QC ゲートは廃止。 | status.md:latest |
 | エビデンス伝搬 & 監査エンドポイント | ◉ | `ControlFlow::Evidence`、Torii エビデンス API、ネガティブテストを実装。 | status.md:176; status.md:760-761 |
-| RBC テレメトリ、準備／DELIVER メトリクス | ◉ | `/v1/sumeragi/rbc*` エンドポイントとテレメトリカウンタ／ヒストグラムを提供。 | status.md:283-284; status.md:772 |
+| Aggregated RBC and collector telemetry | ◉ | `/v1/sumeragi/telemetry` exposes `availability.collectors`, `rbc_backlog`, and `rbc_pending`; Prometheus retains detailed counters and histograms. No per-session/sample/collector-plan Torii contract is published. | status.md:283-284; status.md:772 |
 | コンセンサスパラメータ広告 & トポロジ検証 | ◉ | ノードが `(collectors_k, redundant_send_r)` をブロードキャストし、ピア間の一致を検証。 | status.md:255 |
 | Permissioned の PRF ローテーション | ◉ | Permissioned のリーダー/コレクター選出は PRF seed と height/view を用いたカノニカルロスター上の順序を使用し、前ブロックハッシュローテーションはレガシー補助として残る。 | status.md:latest |
 

@@ -3096,6 +3096,7 @@ mod tests {
                 contract_address: "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8"
                     .parse()
                     .expect("contract address"),
+                expected_code_hash: iroha_crypto::Hash::new(b"validation-fee-contract-code"),
                 entrypoint: "send_transfer".to_owned(),
                 arguments: None,
             }))

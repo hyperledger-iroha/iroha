@@ -312,7 +312,7 @@ fn seven_peer_cross_peer_consistency_basic() -> Result<()> {
 }
 
 async fn wait_for_rbc_delivery_inner(
-    client: Client,
+    _client: Client,
     store_dir: PathBuf,
     min_height: u64,
     timeout: Duration,
@@ -346,25 +346,6 @@ async fn wait_for_rbc_delivery_inner(
             return Err(eyre!(
                 "timed out waiting for RBC delivery at or above height {min_height}; last_err={last_err:?}"
             ));
-        }
-
-        match tokio::task::spawn_blocking({
-            let client = client.clone();
-            move || client.get_sumeragi_rbc_sessions_json()
-        })
-        .await
-        {
-            Ok(Ok(snapshot)) => {
-                if let Some(session) = delivered_session_for_height(&snapshot, min_height) {
-                    return Ok(session);
-                }
-            }
-            Ok(Err(err)) => {
-                last_err = Some(err.wrap_err("fetch RBC sessions"));
-            }
-            Err(err) => {
-                last_err = Some(eyre!("failed to join RBC sessions fetch: {err}"));
-            }
         }
 
         tokio::time::sleep(Duration::from_millis(200)).await;

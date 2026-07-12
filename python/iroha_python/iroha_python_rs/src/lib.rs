@@ -5854,7 +5854,7 @@ fn build_confidential_asset_hidden_transfer_proof_v1_py(
     asset_hidden_transfer_proof_v1_py_dict(py, proof)
 }
 
- #[pyfunction]
+#[pyfunction]
 #[pyo3(name = "generate_connect_keypair")]
 /// Generate an X25519 keypair for Connect.
 fn generate_connect_keypair_py(py: Python<'_>) -> PyResult<(Py<PyBytes>, Py<PyBytes>)> {
@@ -5969,10 +5969,7 @@ mod tests {
     use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
     use ed25519_dalek::SigningKey;
     use http::StatusCode;
-    use iroha_data_model::{
-        confidential::ConfidentialStatus,
-        proof::VerifyingKeyId,
-    };
+    use iroha_data_model::{confidential::ConfidentialStatus, proof::VerifyingKeyId};
     use ivm::bn254_vec::{self, FieldElem};
     use norito::to_bytes;
     use once_cell::sync::OnceCell;
@@ -10536,7 +10533,6 @@ mod tests {
         assert!(!zk_ace_result.message.contains("candidate-zk-ace-proof"));
     }
 
-
     fn provider_metadata(provider_id: &str) -> PyProviderMetadata {
         PyProviderMetadata {
             provider_id: Some(provider_id.to_string()),
@@ -10818,12 +10814,10 @@ mod tests {
         assert_eq!(decoded, expected);
     }
 
-
     #[test]
     fn privacy_bridge_abi_version_python_function_is_additive_seven() {
         assert_eq!(privacy_bridge_abi_version_py(), 7);
     }
-
 
     #[test]
     fn attachments_json_decodes_versioned_signed_transaction() {

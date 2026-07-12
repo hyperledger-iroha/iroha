@@ -591,23 +591,11 @@ if status_snapshot.status.lane_governance_sealed_total:
         print("sealed aliases:", ", ".join(status_snapshot.status.lane_governance_sealed_aliases))
 print("DA reschedules (delta):", status_snapshot.metrics.da_reschedule_delta)
 
-# Inspect latest NEW_VIEW receipts
-new_view = client.get_sumeragi_new_view_typed()
-print(new_view.ts_ms, [entry.count for entry in new_view.items])
-
-# Track RBC throughput and sessions
-rbc_metrics = client.get_sumeragi_rbc_typed()
-print(rbc_metrics.sessions_active, rbc_metrics.payload_bytes_delivered_total)
-rbc_sessions = client.get_sumeragi_rbc_sessions_typed()
-for session in rbc_sessions.items:
-    print(session.block_hash, session.delivered)
-candidate = client.find_sumeragi_rbc_sampling_candidate()
-if candidate:
-    print("sampling candidate height", candidate["height"], "view", candidate["view"])
-
-# Inspect collector plan and consensus parameters
-collectors = client.get_sumeragi_collectors_typed()
-print(collectors.consensus_mode, len(collectors.collectors))
+# Inspect aggregate consensus telemetry and parameters
+telemetry = client.get_sumeragi_telemetry_typed()
+print("RBC backlog sessions:", telemetry.rbc_backlog.pending_sessions)
+for collector in telemetry.availability.collectors:
+    print("collector", collector.collector_idx, collector.votes_ingested)
 params = client.get_sumeragi_params_typed()
 print(params.block_time_ms, params.next_mode)
 
@@ -1839,9 +1827,8 @@ no environment variables need to be exported.
   `list_asset_holders_typed`, `list_account_permissions_typed`) so pagination metadata and core
   fields (ids, ownership, balances, permission payloads) are validated before reaching downstream automation.
 - Offer event filter builders (verifying key, proof, trigger) plus streaming helpers so Torii SSE integrations avoid hand-crafted JSON payloads.
-- Extend the Torii client with consensus telemetry helpers covering `/v1/sumeragi/telemetry`,
-  RBC status/delivery snapshots, and authenticated sampling (`/v1/sumeragi/rbc/sample` with
-  `X-API-Token`) for operator tooling.
+- Extend the Torii client with typed consensus telemetry helpers covering
+  `/v1/sumeragi/telemetry` for operator tooling.
 - Surface pipeline recovery sidecars (`/v1/pipeline/recovery/{height}`), Sumeragi evidence listing/counting,
   and pipeline/witness event filters with streaming helpers so Python operators can monitor ledger history
   without reimplementing the Rust toolchain.

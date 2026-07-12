@@ -1922,6 +1922,9 @@ function normalizeNativeHalo2PastaBackendLabel(value) {
   if (backend.length === 0 || backend.trim() !== backend) {
     return null;
   }
+  if (PRODUCTION_NATIVE_HALO2_PASTA_BACKENDS.has(backend)) {
+    return backend;
+  }
   for (const [prefix, targetPrefix] of [
     ["halo2/pasta/ipa/", "halo2/pasta/"],
     ["halo2/pasta/", "halo2/pasta/"],

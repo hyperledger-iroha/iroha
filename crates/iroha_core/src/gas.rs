@@ -544,7 +544,6 @@ mod tests {
         gen_account_in("wonderland").0
     }
 
-
     #[test]
     fn set_kv_scales_with_value_length() {
         let id = sample_account();

@@ -2730,122 +2730,6 @@ fn multisig_post_operation(
     methods
 }
 
-fn multisig_authenticated_read_operation(
-    summary: &str,
-    description: &str,
-    request_schema_ref: &str,
-    response_schema_ref: &str,
-    not_found_description: &str,
-    parameters: Vec<Value>,
-    include_not_found: bool,
-    include_auth_unavailable: bool,
-) -> Map {
-    let mut methods = multisig_post_operation(
-        summary,
-        description,
-        request_schema_ref,
-        response_schema_ref,
-        not_found_description,
-    );
-    let post = methods
-        .get_mut("post")
-        .and_then(Value::as_object_mut)
-        .expect("multisig POST operation");
-    post.insert("parameters".into(), Value::Array(parameters));
-    let responses = post
-        .get_mut("responses")
-        .and_then(Value::as_object_mut)
-        .expect("multisig POST responses");
-    if !include_not_found {
-        responses.remove("404");
-    }
-    responses.insert(
-        "403".to_owned(),
-        json_response(
-            "The authenticated viewer or signed caller is not allowed to access this multisig approval.",
-            error_schema_reference(),
-        ),
-    );
-    if include_auth_unavailable {
-        responses.insert(
-            "401".to_owned(),
-            json_response(
-                "The Authorization bearer token is missing or invalid.",
-                error_schema_reference(),
-            ),
-        );
-        responses.insert(
-            "503".to_owned(),
-            json_response(
-                "JWT viewer authentication is not configured on this Torii instance.",
-                error_schema_reference(),
-            ),
-        );
-    }
-    methods
-}
-
-fn multisig_jwt_read_operation(
-    summary: &str,
-    description: &str,
-    request_schema_ref: &str,
-    response_schema_ref: &str,
-    not_found_description: &str,
-    include_not_found: bool,
-) -> Map {
-    multisig_authenticated_read_operation(
-        summary,
-        description,
-        request_schema_ref,
-        response_schema_ref,
-        not_found_description,
-        vec![string_header_param(
-            "Authorization",
-            "Required bearer JWT whose canonical subject and dataspace claims define the viewer scope.",
-            true,
-        )],
-        include_not_found,
-        true,
-    )
-}
-
-fn multisig_signed_read_operation(
-    summary: &str,
-    description: &str,
-    request_schema_ref: &str,
-    response_schema_ref: &str,
-    not_found_description: &str,
-    include_not_found: bool,
-) -> Map {
-    multisig_authenticated_read_operation(
-        summary,
-        description,
-        request_schema_ref,
-        response_schema_ref,
-        not_found_description,
-        vec![
-            string_header_param(
-                "X-Iroha-Account",
-                "Canonical caller AccountId bound into the exact request signature.",
-                true,
-            ),
-            string_header_param(
-                "X-Iroha-Signature",
-                "Canonical signature over method, URI, exact request bytes, timestamp, and nonce.",
-                true,
-            ),
-            string_header_param(
-                "X-Iroha-Timestamp-Ms",
-                "Signed Unix timestamp in milliseconds.",
-                true,
-            ),
-            string_header_param("X-Iroha-Nonce", "Signed replay-protection nonce.", true),
-        ],
-        include_not_found,
-        false,
-    )
-}
-
 fn multisig_paths() -> Map {
     let mut paths = Map::new();
     paths.insert(
@@ -6661,24 +6545,6 @@ fn sumeragi_paths() -> Map {
         }),
     );
     paths.insert(
-        "/v1/sumeragi/new-view/sse".to_owned(),
-        Value::Object(event_stream_get_operation(
-            "Sumeragi",
-            "Stream new view events.",
-            "Stream new view events via SSE.",
-        )),
-    );
-    paths.insert(
-        "/v1/sumeragi/new-view".to_owned(),
-        Value::Object(json_get_operation(
-            "Sumeragi",
-            "Fetch new view status.",
-            "Return new view status snapshot.",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
-    );
-    paths.insert(
         "/v1/sumeragi/status".to_owned(),
         Value::Object(json_get_operation(
             "Sumeragi",
@@ -8756,12 +8622,8 @@ fn is_read_operation(method: &str, path: &str) -> bool {
                     | "/v1/da/pin-intents/verify"
                     | "/v1/domains/query"
                     | "/v1/gov/council/derive-vrf"
-                    | "/v1/multisig/approvals/lookup"
-                    | "/v1/multisig/approvals/lookup-for-authority"
-                    | "/v1/multisig/approvals/query"
-                    | "/v1/multisig/approvals/query-for-authority"
-                    | "/v1/multisig/proposals/lookup"
-                    | "/v1/multisig/proposals/query"
+                    | "/v1/multisig/proposals/get"
+                    | "/v1/multisig/proposals/list"
                     | "/v1/multisig/spec"
                     | "/v1/nfts/query"
                     | "/v1/proofs/query"
@@ -18089,7 +17951,7 @@ fn openapi_schemas() -> Map {
         }),
     );
     schemas.insert(
-        "MultisigProposalsQueryRequest".to_owned(),
+        "MultisigProposalsListRequest".to_owned(),
         norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -18171,7 +18033,7 @@ fn openapi_schemas() -> Map {
         }),
     );
     schemas.insert(
-        "MultisigProposalsQueryResponse".to_owned(),
+        "MultisigProposalsListResponse".to_owned(),
         norito::json!({
             "type": "object",
             "required": ["resolved_multisig_account_id", "proposals"],
@@ -18197,7 +18059,7 @@ fn openapi_schemas() -> Map {
         }),
     );
     schemas.insert(
-        "MultisigProposalLookupRequest".to_owned(),
+        "MultisigProposalsGetRequest".to_owned(),
         norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -18244,7 +18106,7 @@ fn openapi_schemas() -> Map {
         }),
     );
     schemas.insert(
-        "MultisigProposalLookupResponse".to_owned(),
+        "MultisigProposalGetResponse".to_owned(),
         norito::json!({
             "type": "object",
             "required": ["resolved_multisig_account_id", "proposal_id", "instructions_hash", "operation_type", "proposal", "status"],
@@ -18270,183 +18132,6 @@ fn openapi_schemas() -> Map {
                         { "type": "null" }
                     ]
                 }
-            }
-        }),
-    );
-    schemas.insert(
-        "MultisigApprovalsQueryRequest".to_owned(),
-        norito::json!({
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-                "status": {
-                    "type": "array",
-                    "maxItems": 4,
-                    "uniqueItems": true,
-                    "items": {
-                        "type": "string",
-                        "enum": ["COLLECTING_SIGNATURES", "FINALIZED", "CANCELED", "EXPIRED"]
-                    },
-                    "description": "Optional active or terminal lifecycle filters."
-                },
-                "operation_type": {
-                    "type": "array",
-                    "maxItems": 32,
-                    "uniqueItems": true,
-                    "items": {
-                        "type": "string",
-                        "minLength": 1,
-                        "maxLength": 128,
-                        "pattern": "^[A-Z][A-Z0-9_]*$",
-                        "description": "Canonical ASCII uppercase operation type."
-                    }
-                },
-                "requires_my_signature": {
-                    "type": "boolean",
-                    "default": false,
-                    "description": "Return only proposals that still require a signature from the authenticated viewer or exact signed caller authority."
-                },
-                "cursor": {
-                    "oneOf": [
-                        {
-                            "type": "string",
-                            "minLength": 1,
-                            "maxLength": 512,
-                            "pattern": "^[A-Za-z0-9_-]+$",
-                            "description": "Opaque canonical base64url cursor returned by the preceding page."
-                        },
-                        { "type": "null" }
-                    ]
-                },
-                "limit": {
-                    "oneOf": [
-                        {
-                            "type": "integer",
-                            "format": "uint64",
-                            "minimum": 1,
-                            "maximum": (crate::routing::MULTISIG_PROPOSALS_MAX_PAGE_LIMIT)
-                        },
-                        { "type": "null" }
-                    ]
-                }
-            }
-        }),
-    );
-    schemas.insert(
-        "MultisigApprovalEntry".to_owned(),
-        norito::json!({
-            "type": "object",
-            "required": [
-                "multisig_account_id",
-                "multisig_account_ref",
-                "spec",
-                "proposal_id",
-                "instructions_hash",
-                "proposal",
-                "operation_type",
-                "status"
-            ],
-            "additionalProperties": false,
-            "properties": {
-                "multisig_account_id": {
-                    "type": "string",
-                    "minLength": 1,
-                    "description": "Exact canonical multisig AccountId that owns the proposal."
-                },
-                "multisig_account_ref": {
-                    "type": "string",
-                    "minLength": 64,
-                    "maxLength": 64,
-                    "pattern": "^[0-9a-f]{64}$",
-                    "description": "Fixed domain-separated reference for exact follow-up lookups."
-                },
-                "spec": { "$ref": "#/components/schemas/MultisigSpecPayload" },
-                "proposal_id": { "type": "string", "minLength": 64, "maxLength": 64, "pattern": "^[0-9a-f]{64}$" },
-                "instructions_hash": { "type": "string", "minLength": 64, "maxLength": 64, "pattern": "^[0-9a-f]{64}$" },
-                "proposal": { "$ref": "#/components/schemas/MultisigProposalPayload" },
-                "operation_type": {
-                    "type": "string",
-                    "minLength": 1,
-                    "maxLength": 128,
-                    "pattern": "^[A-Z][A-Z0-9_]*$",
-                    "description": "Canonical ASCII uppercase operation type."
-                },
-                "intent": { "$ref": "#/components/schemas/JsonValue" },
-                "status": {
-                    "type": "string",
-                    "enum": ["COLLECTING_SIGNATURES", "FINALIZED", "CANCELED", "EXPIRED"]
-                },
-                "terminal_at_ms": {
-                    "oneOf": [
-                        { "type": "integer", "format": "uint64" },
-                        { "type": "null" }
-                    ]
-                }
-            }
-        }),
-    );
-    schemas.insert(
-        "MultisigApprovalsQueryResponse".to_owned(),
-        norito::json!({
-            "type": "object",
-            "required": ["items"],
-            "additionalProperties": false,
-            "properties": {
-                "items": {
-                    "type": "array",
-                    "maxItems": (crate::routing::MULTISIG_PROPOSALS_MAX_PAGE_LIMIT),
-                    "items": { "$ref": "#/components/schemas/MultisigApprovalEntry" }
-                },
-                "next_cursor": {
-                    "oneOf": [
-                        { "type": "string", "minLength": 1, "maxLength": 512, "pattern": "^[A-Za-z0-9_-]+$" },
-                        { "type": "null" }
-                    ]
-                }
-            }
-        }),
-    );
-    schemas.insert(
-        "MultisigApprovalLookupRequest".to_owned(),
-        norito::json!({
-            "type": "object",
-            "required": ["multisig_account_ref"],
-            "additionalProperties": false,
-            "properties": {
-                "multisig_account_ref": {
-                    "type": "string",
-                    "minLength": 64,
-                    "maxLength": 64,
-                    "pattern": "^[0-9a-f]{64}$",
-                    "description": "Fixed reference of the exact viewer-visible multisig account."
-                },
-                "proposal_id": {
-                    "type": "string",
-                    "minLength": 64,
-                    "maxLength": 64,
-                    "pattern": "^[0-9a-f]{64}$"
-                },
-                "instructions_hash": {
-                    "type": "string",
-                    "minLength": 64,
-                    "maxLength": 64,
-                    "pattern": "^[0-9a-f]{64}$"
-                }
-            },
-            "oneOf": [
-                { "required": ["proposal_id"] },
-                { "required": ["instructions_hash"] }
-            ]
-        }),
-    );
-    schemas.insert(
-        "MultisigApprovalLookupResponse".to_owned(),
-        norito::json!({
-            "type": "object",
-            "required": ["item"],
-            "additionalProperties": false,
-            "properties": {
-                "item": { "$ref": "#/components/schemas/MultisigApprovalEntry" }
             }
         }),
     );
@@ -20659,14 +20344,16 @@ mod tests {
         assert!(paths.contains_key("/v1/contracts/call/multisig/approve"));
         assert!(paths.contains_key("/v1/multisig/cancel"));
         assert!(paths.contains_key("/v1/multisig/spec"));
-        assert!(paths.contains_key("/v1/multisig/proposals/query"));
-        assert!(paths.contains_key("/v1/multisig/proposals/lookup"));
-        assert!(!paths.contains_key("/v1/multisig/proposals/list"));
-        assert!(!paths.contains_key("/v1/multisig/proposals/get"));
-        assert!(paths.contains_key("/v1/multisig/approvals/query"));
-        assert!(paths.contains_key("/v1/multisig/approvals/lookup"));
-        assert!(paths.contains_key("/v1/multisig/approvals/query-for-authority"));
-        assert!(paths.contains_key("/v1/multisig/approvals/lookup-for-authority"));
+        assert!(paths.contains_key("/v1/multisig/proposals/list"));
+        assert!(paths.contains_key("/v1/multisig/proposals/get"));
+        assert!(!paths.contains_key("/v1/multisig/proposals/query"));
+        assert!(!paths.contains_key("/v1/multisig/proposals/lookup"));
+        assert!(!paths.contains_key("/v1/multisig/proposals/search"));
+        assert!(!paths.contains_key("/v1/multisig/proposals/resolve"));
+        assert!(!paths.contains_key("/v1/multisig/approvals/query"));
+        assert!(!paths.contains_key("/v1/multisig/approvals/lookup"));
+        assert!(!paths.contains_key("/v1/multisig/approvals/query-for-authority"));
+        assert!(!paths.contains_key("/v1/multisig/approvals/lookup-for-authority"));
         assert!(paths.contains_key("/v1/controls/asset-transfer/query"));
         assert!(paths.contains_key("/v1/ministry/agenda/proposals/draft"));
         assert!(paths.contains_key("/v1/ministry/agenda/proposals/{proposal_id}"));
@@ -21955,10 +21642,7 @@ mod tests {
             Some("read")
         );
 
-        for path in [
-            "/v1/multisig/proposals/query",
-            "/v1/multisig/proposals/lookup",
-        ] {
+        for path in ["/v1/multisig/proposals/list", "/v1/multisig/proposals/get"] {
             let operation = paths
                 .get(path)
                 .and_then(Value::as_object)
@@ -21971,8 +21655,10 @@ mod tests {
                 "{path} must retain unsigned/read semantics"
             );
         }
-        assert!(!paths.contains_key("/v1/multisig/proposals/list"));
-        assert!(!paths.contains_key("/v1/multisig/proposals/get"));
+        assert!(!paths.contains_key("/v1/multisig/proposals/query"));
+        assert!(!paths.contains_key("/v1/multisig/proposals/lookup"));
+        assert!(!paths.contains_key("/v1/multisig/proposals/search"));
+        assert!(!paths.contains_key("/v1/multisig/proposals/resolve"));
 
         let protected_namespaces = paths
             .get("/v1/gov/protected-namespaces")
@@ -22742,7 +22428,7 @@ mod tests {
             .expect("components schemas");
 
         let query_request = schemas
-            .get("MultisigProposalsQueryRequest")
+            .get("MultisigProposalsListRequest")
             .and_then(Value::as_object)
             .expect("multisig proposals query request schema");
         assert_eq!(
@@ -22820,8 +22506,8 @@ mod tests {
 
         for request_name in [
             "MultisigSpecRequest",
-            "MultisigProposalsQueryRequest",
-            "MultisigProposalLookupRequest",
+            "MultisigProposalsListRequest",
+            "MultisigProposalsGetRequest",
         ] {
             let request = schemas
                 .get(request_name)
@@ -22848,7 +22534,7 @@ mod tests {
         }
 
         let lookup_request = schemas
-            .get("MultisigProposalLookupRequest")
+            .get("MultisigProposalsGetRequest")
             .and_then(Value::as_object)
             .expect("multisig proposal get request schema");
         assert_eq!(
@@ -22861,7 +22547,7 @@ mod tests {
         );
 
         let query_response = schemas
-            .get("MultisigProposalsQueryResponse")
+            .get("MultisigProposalsListResponse")
             .and_then(Value::as_object)
             .and_then(|schema| schema.get("properties"))
             .and_then(Value::as_object)
@@ -22883,7 +22569,7 @@ mod tests {
                 { "type": "null" }
             ]
         });
-        for schema_name in ["MultisigProposalEntry", "MultisigProposalLookupResponse"] {
+        for schema_name in ["MultisigProposalEntry", "MultisigProposalGetResponse"] {
             let schema = schemas
                 .get(schema_name)
                 .and_then(Value::as_object)
@@ -22920,369 +22606,6 @@ mod tests {
                 .expect("proposal response status enum");
             assert_eq!(status_values, request_status);
         }
-    }
-
-    #[test]
-    fn multisig_approval_paths_use_viewer_scoped_typed_query_and_lookup_contracts() {
-        fn operation<'a>(paths: &'a Map, path: &str) -> &'a Map {
-            paths
-                .get(path)
-                .and_then(Value::as_object)
-                .and_then(|path| path.get("post"))
-                .and_then(Value::as_object)
-                .unwrap_or_else(|| panic!("missing multisig approval operation {path}"))
-        }
-
-        fn request_schema_ref<'a>(operation: &'a Map) -> &'a str {
-            operation
-                .get("requestBody")
-                .and_then(Value::as_object)
-                .and_then(|body| body.get("content"))
-                .and_then(Value::as_object)
-                .and_then(|content| content.get("application/json"))
-                .and_then(Value::as_object)
-                .and_then(|media| media.get("schema"))
-                .and_then(Value::as_object)
-                .and_then(|schema| schema.get("$ref"))
-                .and_then(Value::as_str)
-                .expect("multisig approval request schema reference")
-        }
-
-        fn response_schema_ref<'a>(operation: &'a Map) -> &'a str {
-            operation
-                .get("responses")
-                .and_then(Value::as_object)
-                .and_then(|responses| responses.get("200"))
-                .and_then(Value::as_object)
-                .and_then(|response| response.get("content"))
-                .and_then(Value::as_object)
-                .and_then(|content| content.get("application/json"))
-                .and_then(Value::as_object)
-                .and_then(|media| media.get("schema"))
-                .and_then(Value::as_object)
-                .and_then(|schema| schema.get("$ref"))
-                .and_then(Value::as_str)
-                .expect("multisig approval response schema reference")
-        }
-
-        let doc = generate_spec();
-        let paths = doc
-            .get("paths")
-            .and_then(Value::as_object)
-            .expect("paths section");
-        let schemas = doc
-            .get("components")
-            .and_then(Value::as_object)
-            .and_then(|components| components.get("schemas"))
-            .and_then(Value::as_object)
-            .expect("components schemas");
-
-        for path in [
-            "/v1/multisig/approvals/query",
-            "/v1/multisig/approvals/query-for-authority",
-        ] {
-            let operation = operation(paths, path);
-            assert_eq!(
-                request_schema_ref(operation),
-                "#/components/schemas/MultisigApprovalsQueryRequest"
-            );
-            assert_eq!(
-                response_schema_ref(operation),
-                "#/components/schemas/MultisigApprovalsQueryResponse"
-            );
-        }
-        for path in [
-            "/v1/multisig/approvals/lookup",
-            "/v1/multisig/approvals/lookup-for-authority",
-        ] {
-            let operation = operation(paths, path);
-            assert_eq!(
-                request_schema_ref(operation),
-                "#/components/schemas/MultisigApprovalLookupRequest"
-            );
-            assert_eq!(
-                response_schema_ref(operation),
-                "#/components/schemas/MultisigApprovalLookupResponse"
-            );
-        }
-        for path in [
-            "/v1/multisig/approvals/query",
-            "/v1/multisig/approvals/lookup",
-        ] {
-            let operation = operation(paths, path);
-            assert!(
-                operation
-                    .get("description")
-                    .and_then(Value::as_str)
-                    .is_some_and(|description| description.contains("JWT viewer scope")),
-                "{path} must document JWT viewer scoping"
-            );
-            let parameters = operation
-                .get("parameters")
-                .and_then(Value::as_array)
-                .expect("JWT approvals parameters");
-            assert!(parameters.iter().any(|parameter| {
-                parameter
-                    .get("name")
-                    .and_then(Value::as_str)
-                    .is_some_and(|name| name == "Authorization")
-                    && parameter.get("required").and_then(Value::as_bool) == Some(true)
-            }));
-            let responses = operation
-                .get("responses")
-                .and_then(Value::as_object)
-                .expect("JWT approvals responses");
-            for status in ["401", "403", "503"] {
-                assert!(
-                    responses.contains_key(status),
-                    "{path} must document {status}"
-                );
-            }
-            assert_eq!(responses.contains_key("404"), path.ends_with("/lookup"));
-        }
-        for path in [
-            "/v1/multisig/approvals/query-for-authority",
-            "/v1/multisig/approvals/lookup-for-authority",
-        ] {
-            let operation = operation(paths, path);
-            assert!(
-                operation
-                    .get("description")
-                    .and_then(Value::as_str)
-                    .is_some_and(|description| {
-                        description.contains("exact HTTP request signature")
-                            && description.contains("caller authority")
-                    }),
-                "{path} must document exact signed caller-authority scoping"
-            );
-            let parameters = operation
-                .get("parameters")
-                .and_then(Value::as_array)
-                .expect("signed approvals parameters");
-            for header in [
-                "X-Iroha-Account",
-                "X-Iroha-Signature",
-                "X-Iroha-Timestamp-Ms",
-                "X-Iroha-Nonce",
-            ] {
-                assert!(parameters.iter().any(|parameter| {
-                    parameter.get("name").and_then(Value::as_str) == Some(header)
-                        && parameter.get("required").and_then(Value::as_bool) == Some(true)
-                }));
-            }
-            let responses = operation
-                .get("responses")
-                .and_then(Value::as_object)
-                .expect("signed approvals responses");
-            assert!(responses.contains_key("403"));
-            assert_eq!(
-                responses.contains_key("404"),
-                path.ends_with("/lookup-for-authority")
-            );
-        }
-
-        for retired_name in [
-            "MultisigProposalsListRequest",
-            "MultisigProposalsListResponse",
-            "MultisigProposalsGetRequest",
-            "MultisigProposalGetResponse",
-            "MultisigApprovalsListRequest",
-            "MultisigApprovalsListResponse",
-            "MultisigApprovalsGetRequest",
-            "MultisigApprovalsGetResponse",
-        ] {
-            assert!(
-                !schemas.contains_key(retired_name),
-                "retired first-release component alias {retired_name} must not be emitted"
-            );
-        }
-
-        let query_request = schemas
-            .get("MultisigApprovalsQueryRequest")
-            .and_then(Value::as_object)
-            .expect("multisig approvals query request");
-        assert_eq!(
-            query_request
-                .get("additionalProperties")
-                .and_then(Value::as_bool),
-            Some(false)
-        );
-        let query_properties = query_request
-            .get("properties")
-            .and_then(Value::as_object)
-            .expect("multisig approvals query properties");
-        assert_eq!(query_properties.len(), 5);
-        for field in [
-            "status",
-            "operation_type",
-            "requires_my_signature",
-            "cursor",
-            "limit",
-        ] {
-            assert!(query_properties.contains_key(field));
-        }
-        assert!(!query_properties.contains_key("multisig_account_id"));
-        assert!(!query_properties.contains_key("multisig_account_alias"));
-        let operation_type_filter = query_properties
-            .get("operation_type")
-            .and_then(Value::as_object)
-            .and_then(|schema| schema.get("items"))
-            .and_then(Value::as_object)
-            .expect("operation_type filter item schema");
-        assert_eq!(
-            operation_type_filter
-                .get("maxLength")
-                .and_then(Value::as_u64),
-            Some(128)
-        );
-        assert_eq!(
-            operation_type_filter.get("pattern").and_then(Value::as_str),
-            Some("^[A-Z][A-Z0-9_]*$")
-        );
-        for field in ["cursor", "limit"] {
-            let alternatives = query_properties
-                .get(field)
-                .and_then(Value::as_object)
-                .and_then(|schema| schema.get("oneOf"))
-                .and_then(Value::as_array)
-                .unwrap_or_else(|| panic!("{field} must be explicitly nullable"));
-            assert!(alternatives.iter().any(|alternative| {
-                alternative
-                    .as_object()
-                    .and_then(|schema| schema.get("type"))
-                    .and_then(Value::as_str)
-                    == Some("null")
-            }));
-        }
-
-        let lookup_request = schemas
-            .get("MultisigApprovalLookupRequest")
-            .and_then(Value::as_object)
-            .expect("multisig approval lookup request");
-        assert_eq!(
-            lookup_request
-                .get("additionalProperties")
-                .and_then(Value::as_bool),
-            Some(false)
-        );
-        let lookup_required = lookup_request
-            .get("required")
-            .and_then(Value::as_array)
-            .expect("approval lookup required fields");
-        let expected_lookup_required = norito::json!(["multisig_account_ref"]);
-        assert_eq!(
-            lookup_required,
-            expected_lookup_required
-                .as_array()
-                .expect("expected approval lookup required fields")
-        );
-        assert_eq!(
-            lookup_request
-                .get("oneOf")
-                .and_then(Value::as_array)
-                .map(Vec::len),
-            Some(2),
-            "approval lookup must accept exactly one proposal selector"
-        );
-        let lookup_properties = lookup_request
-            .get("properties")
-            .and_then(Value::as_object)
-            .expect("approval lookup properties");
-        assert_eq!(lookup_properties.len(), 3);
-        assert!(!lookup_properties.contains_key("multisig_account_alias"));
-        assert_eq!(
-            lookup_properties
-                .get("multisig_account_ref")
-                .and_then(Value::as_object)
-                .and_then(|schema| schema.get("pattern"))
-                .and_then(Value::as_str),
-            Some("^[0-9a-f]{64}$")
-        );
-
-        let entry = schemas
-            .get("MultisigApprovalEntry")
-            .and_then(Value::as_object)
-            .expect("multisig approval entry");
-        let entry_required = entry
-            .get("required")
-            .and_then(Value::as_array)
-            .expect("multisig approval entry required fields");
-        for field in [
-            "multisig_account_id",
-            "multisig_account_ref",
-            "spec",
-            "proposal_id",
-            "instructions_hash",
-            "proposal",
-            "operation_type",
-            "status",
-        ] {
-            assert!(
-                entry_required
-                    .iter()
-                    .any(|value| value.as_str() == Some(field))
-            );
-        }
-        for field in ["intent", "terminal_at_ms"] {
-            assert!(
-                !entry_required
-                    .iter()
-                    .any(|value| value.as_str() == Some(field))
-            );
-        }
-        assert!(
-            entry
-                .get("properties")
-                .and_then(Value::as_object)
-                .and_then(|properties| properties.get("multisig_account_id"))
-                .and_then(Value::as_object)
-                .is_some_and(|schema| !schema.contains_key("maxLength"))
-        );
-        let entry_operation_type = entry
-            .get("properties")
-            .and_then(Value::as_object)
-            .and_then(|properties| properties.get("operation_type"))
-            .and_then(Value::as_object)
-            .expect("approval entry operation_type schema");
-        assert_eq!(
-            entry_operation_type.get("pattern").and_then(Value::as_str),
-            Some("^[A-Z][A-Z0-9_]*$")
-        );
-
-        let query_response = schemas
-            .get("MultisigApprovalsQueryResponse")
-            .and_then(Value::as_object)
-            .expect("multisig approvals query response");
-        assert_eq!(
-            query_response
-                .get("properties")
-                .and_then(Value::as_object)
-                .and_then(|properties| properties.get("items"))
-                .and_then(Value::as_object)
-                .and_then(|items| items.get("items"))
-                .and_then(Value::as_object)
-                .and_then(|items| items.get("$ref"))
-                .and_then(Value::as_str),
-            Some("#/components/schemas/MultisigApprovalEntry")
-        );
-        assert!(
-            query_response
-                .get("properties")
-                .and_then(Value::as_object)
-                .is_some_and(|properties| properties.contains_key("next_cursor"))
-        );
-        assert_eq!(
-            schemas
-                .get("MultisigApprovalLookupResponse")
-                .and_then(Value::as_object)
-                .and_then(|schema| schema.get("properties"))
-                .and_then(Value::as_object)
-                .and_then(|properties| properties.get("item"))
-                .and_then(Value::as_object)
-                .and_then(|item| item.get("$ref"))
-                .and_then(Value::as_str),
-            Some("#/components/schemas/MultisigApprovalEntry")
-        );
     }
 
     #[test]

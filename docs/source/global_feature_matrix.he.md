@@ -25,7 +25,7 @@ translator: manual
 | שערי RBC (DA + Reliable Broadcast) | ◉ | הקומיט מחכה ל-`DELIVER` של RBC בצירוף availability evidence. | status.md:283-284 |
 | קישור שורשי מצב ב-Commit QC | ◉ | Commit QC כולל parent/post state roots; אין שער execution QC נפרד. | status.md:latest |
 | הפצת Evidence ונקודות קצה לאודיט | ◉ | `ControlFlow::Evidence`, API ב-Torii ובדיקות שליליות. | status.md:176; status.md:760-761 |
-| טלמטריית RBC (מדדי מוכנות/מסירה) | ◉ | `/v1/sumeragi/rbc*` והיסטוגרמות למפעילים. | status.md:283-284; status.md:772 |
+| Aggregated RBC and collector telemetry | ◉ | `/v1/sumeragi/telemetry` exposes `availability.collectors`, `rbc_backlog`, and `rbc_pending`; Prometheus retains detailed counters and histograms. No per-session/sample/collector-plan Torii contract is published. | status.md:283-284; status.md:772 |
 | פרסום פרמטרי קונצנזוס ואימות טופולוגיה | ◉ | נודים מפרסמים `(collectors_k, redundant_send_r)` ומוודאים זהות. | status.md:255 |
 | רוטציה מבוססת PRF ב‑permissioned | ◉ | בחירת לידר/קולקטורים ב‑permissioned משתמשת ב‑PRF seed יחד עם height/view על רוסטר קנוני; רוטציה לפי האש בלוק קודם נשארת כעזר legacy. | status.md:latest |
 

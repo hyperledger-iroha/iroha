@@ -4234,8 +4234,6 @@ mod accept_stream_tests {
                 iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_PER_SEC,
             consensus_ingress_critical_bytes_burst:
                 iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_CRITICAL_BYTES_BURST,
-            consensus_ingress_rbc_session_limit:
-                iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_RBC_SESSION_LIMIT,
             consensus_ingress_penalty_threshold:
                 iroha_config::parameters::defaults::network::CONSENSUS_INGRESS_PENALTY_THRESHOLD,
             consensus_ingress_penalty_window: Duration::from_millis(
