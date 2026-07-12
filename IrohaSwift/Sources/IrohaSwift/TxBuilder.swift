@@ -1007,6 +1007,9 @@ public struct KagemushaTopUpShieldSnapshotBinding: Equatable, Sendable {
 public struct KagemushaTopUpShieldPreparation: Equatable, Sendable {
     public let unsigned: KagemushaRecursiveSpendTopUpUnsigned
     public let opening: KagemushaNoteOpening
+    /// Exact post-top-up membership and dummy-zero paths retained in encrypted
+    /// local state. This witness never enters the Torii top-up request.
+    public let membershipWitness: KagemushaNoteMembershipWitness
     public let binding: KagemushaTopUpShieldSnapshotBinding
 }
 
@@ -1156,7 +1159,7 @@ public final class IrohaSDK: @unchecked Sendable {
             asset: assetDefinitionId,
             commitments: []
         )
-        guard snapshot.frontierLen
+        guard snapshot.frontierLen + 1
                 < ToriiZkMerklePathResponse.confidentialTreeCapacityV2 else {
             throw KagemushaRecursiveSpendError.invalidField("topUp.zeroPath.capacity")
         }
@@ -1177,6 +1180,26 @@ public final class IrohaSDK: @unchecked Sendable {
             shieldVerifierCommitment: verifierCommitment,
             artifactBinding: artifactBinding
         ).buildUnsigned()
+        guard try zeroPath.root(
+            replacingLeafWith: unsigned.currentNote.noteCommitment
+        ) == unsigned.shieldEvidence.finalizedRoot,
+              unsigned.shieldEvidence.initialRoot == zeroPath.rootAtHeight,
+              unsigned.shieldEvidence.leafIndex == UInt32(zeroPath.leafIndex) else {
+            throw KagemushaRecursiveSpendError.invalidField("topUp.membershipWitness")
+        }
+        let dummyZeroPath = try zeroPath.nextZeroPathAfterInsertion(
+            commitment: unsigned.currentNote.noteCommitment,
+            expectedRoot: unsigned.shieldEvidence.finalizedRoot
+        )
+        let membershipWitness = try KagemushaNoteMembershipWitness(
+            leafIndex: UInt32(zeroPath.leafIndex),
+            inputPath: PrivacyConfidentialMerklePathWitnessV2(
+                siblings: zeroPath.siblings,
+                directions: zeroPath.directions,
+                root: unsigned.shieldEvidence.finalizedRoot
+            ),
+            dummyInputPath: PrivacyConfidentialMerklePathWitnessV2(path: dummyZeroPath)
+        )
         let currentReadiness = try await toriiRestClient.getKagemushaReadiness(
             assetDefinitionId: assetDefinitionId
         )
@@ -1192,6 +1215,7 @@ public final class IrohaSDK: @unchecked Sendable {
         return KagemushaTopUpShieldPreparation(
             unsigned: unsigned,
             opening: opening,
+            membershipWitness: membershipWitness,
             binding: KagemushaTopUpShieldSnapshotBinding(
                 assetDefinitionID: assetDefinitionId,
                 assetScale: amount.scale,

@@ -1910,8 +1910,8 @@ fn decode_sccp_bridge_submit_response(
     norito::derive::NoritoSerialize,
     norito::derive::NoritoDeserialize,
 )]
-/// Selector-explicit request for the Torii multisig proposals query API.
-pub struct MultisigProposalsQueryRequest {
+/// Selector-explicit request for the Torii multisig proposals listing API.
+pub struct MultisigProposalsListRequest {
     /// Active concrete multisig account id.
     #[norito(default)]
     pub multisig_account_id: Option<iroha_data_model::account::AccountId>,
@@ -1969,8 +1969,8 @@ pub struct MultisigProposalEntry {
     norito::derive::NoritoSerialize,
     norito::derive::NoritoDeserialize,
 )]
-/// Response payload returned by the Torii multisig proposals query API.
-pub struct MultisigProposalsQueryResponse {
+/// Response payload returned by the Torii multisig proposals listing API.
+pub struct MultisigProposalsListResponse {
     /// Canonical multisig account id resolved by the server.
     pub resolved_multisig_account_id: iroha_data_model::account::AccountId,
     /// Matching proposal entries.
@@ -1991,7 +1991,7 @@ pub struct MultisigProposalsQueryResponse {
     norito::derive::NoritoDeserialize,
 )]
 /// Selector-explicit request for one multisig proposal.
-pub struct MultisigProposalsLookupRequest {
+pub struct MultisigProposalsGetRequest {
     /// Active concrete multisig account id.
     #[norito(default)]
     pub multisig_account_id: Option<iroha_data_model::account::AccountId>,
@@ -2016,8 +2016,8 @@ pub struct MultisigProposalsLookupRequest {
     norito::derive::NoritoSerialize,
     norito::derive::NoritoDeserialize,
 )]
-/// Response payload returned by the Torii multisig proposal lookup API.
-pub struct MultisigProposalLookupResponse {
+/// Response payload returned by the Torii multisig proposal get API.
+pub struct MultisigProposalGetResponse {
     /// Canonical multisig account id resolved by the server.
     pub resolved_multisig_account_id: iroha_data_model::account::AccountId,
     /// Stable proposal identifier.
@@ -6328,7 +6328,7 @@ impl Client {
         ))
     }
 
-    fn require_lower_hex_32(value: &str, field: &'static str) -> Result<()> {
+    fn require_lower_hex_32(value: &str, field: &str) -> Result<()> {
         if value.len() == Hash::LENGTH * 2
             && value
                 .bytes()
@@ -8564,7 +8564,7 @@ mod evidence_http_tests {
     }
 
     #[test]
-    fn post_multisig_proposals_query_builds_request() {
+    fn post_multisig_proposals_list_builds_request() {
         let client = client_with_base_url(base_url());
         let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let account_id = AccountId::new(checked_random_keypair().public_key().clone());
@@ -8587,7 +8587,7 @@ mod evidence_http_tests {
         );
 
         with_mock_http(respond_with(&snapshots, response), || {
-            let request = MultisigProposalsQueryRequest {
+            let request = MultisigProposalsListRequest {
                 multisig_account_id: Some(account_id.clone()),
                 multisig_account_alias: None,
                 status: vec!["COLLECTING_SIGNATURES".to_owned()],
@@ -8595,8 +8595,8 @@ mod evidence_http_tests {
                 limit: None,
             };
             let resp = client
-                .post_multisig_proposals_query(&request)
-                .expect("post multisig proposals query");
+                .post_multisig_proposals_list(&request)
+                .expect("post multisig proposals list");
             assert_eq!(resp.resolved_multisig_account_id, account_id);
             assert_eq!(resp.proposals.len(), 1);
             assert_eq!(resp.proposals[0].proposal_id, proposal_id);
@@ -8612,7 +8612,7 @@ mod evidence_http_tests {
         assert_eq!(snapshot.method, HttpMethod::POST);
         assert_eq!(
             snapshot.url.as_str(),
-            "http://mock.local/v1/multisig/proposals/query"
+            "http://mock.local/v1/multisig/proposals/list"
         );
         let body: Value = norito::json::from_slice(&snapshot.body).expect("decode request body");
         assert_eq!(
@@ -8640,14 +8640,14 @@ mod evidence_http_tests {
 
         with_mock_http(respond_with(&snapshots, response), || {
             for request in [
-                MultisigProposalsQueryRequest {
+                MultisigProposalsListRequest {
                     multisig_account_id: None,
                     multisig_account_alias: None,
                     status: Vec::new(),
                     cursor: None,
                     limit: None,
                 },
-                MultisigProposalsQueryRequest {
+                MultisigProposalsListRequest {
                     multisig_account_id: Some(account_id.clone()),
                     multisig_account_alias: Some("cbdc@hbl.sbp".to_owned()),
                     status: Vec::new(),
@@ -8656,31 +8656,31 @@ mod evidence_http_tests {
                 },
             ] {
                 let error = client
-                    .post_multisig_proposals_query(&request)
+                    .post_multisig_proposals_list(&request)
                     .expect_err("authority selector must be exact");
                 assert!(error.to_string().contains("exactly one"));
             }
 
-            let request = MultisigProposalsLookupRequest {
+            let request = MultisigProposalsGetRequest {
                 multisig_account_id: Some(account_id.clone()),
                 multisig_account_alias: None,
                 proposal_id: None,
                 instructions_hash: None,
             };
             let error = client
-                .post_multisig_proposals_lookup(&request)
+                .post_multisig_proposals_get(&request)
                 .expect_err("proposal selector is required");
             assert!(error.to_string().contains("exactly one"));
 
             let hash = "a".repeat(64);
-            let request = MultisigProposalsLookupRequest {
+            let request = MultisigProposalsGetRequest {
                 multisig_account_id: Some(account_id),
                 multisig_account_alias: None,
                 proposal_id: Some(hash.clone()),
                 instructions_hash: Some(hash),
             };
             let error = client
-                .post_multisig_proposals_lookup(&request)
+                .post_multisig_proposals_get(&request)
                 .expect_err("dual proposal selectors must fail");
             assert!(error.to_string().contains("exactly one"));
         });
@@ -8692,7 +8692,7 @@ mod evidence_http_tests {
     }
 
     #[test]
-    fn post_multisig_proposals_lookup_builds_selector_explicit_request() {
+    fn post_multisig_proposals_get_builds_selector_explicit_request() {
         let client = client_with_base_url(base_url());
         let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let account_id = AccountId::new(checked_random_keypair().public_key().clone());
@@ -8713,7 +8713,7 @@ mod evidence_http_tests {
                 proposal_id = proposal_id,
             ),
         );
-        let request = MultisigProposalsLookupRequest {
+        let request = MultisigProposalsGetRequest {
             multisig_account_id: Some(account_id.clone()),
             multisig_account_alias: None,
             proposal_id: Some(proposal_id.clone()),
@@ -8722,8 +8722,8 @@ mod evidence_http_tests {
 
         with_mock_http(respond_with(&snapshots, response), || {
             let decoded = client
-                .post_multisig_proposals_lookup(&request)
-                .expect("post multisig proposal lookup");
+                .post_multisig_proposals_get(&request)
+                .expect("post multisig proposal get");
             assert_eq!(decoded.resolved_multisig_account_id, account_id);
             assert_eq!(decoded.proposal_id, proposal_id);
         });
@@ -8734,7 +8734,7 @@ mod evidence_http_tests {
         assert_eq!(snapshot.method, HttpMethod::POST);
         assert_eq!(
             snapshot.url.as_str(),
-            "http://mock.local/v1/multisig/proposals/lookup"
+            "http://mock.local/v1/multisig/proposals/get"
         );
         assert!(snapshot.headers.iter().any(|(name, value)| {
             name.eq_ignore_ascii_case("accept") && value == APPLICATION_JSON
@@ -14383,20 +14383,20 @@ impl Client {
             .send()
     }
 
-    /// Convenience: selector-explicit POST `/v1/multisig/proposals/query`.
+    /// Convenience: selector-explicit POST `/v1/multisig/proposals/list`.
     ///
     /// # Errors
     /// Returns an error if request construction, JSON serialization, the HTTP call,
     /// or response decoding fails.
-    pub fn post_multisig_proposals_query(
+    pub fn post_multisig_proposals_list(
         &self,
-        request: &MultisigProposalsQueryRequest,
-    ) -> Result<MultisigProposalsQueryResponse> {
+        request: &MultisigProposalsListRequest,
+    ) -> Result<MultisigProposalsListResponse> {
         validate_multisig_read_selector(
             request.multisig_account_id.as_ref(),
             request.multisig_account_alias.as_deref(),
         )?;
-        let url = join_torii_url(&self.torii_url, "v1/multisig/proposals/query");
+        let url = join_torii_url(&self.torii_url, "v1/multisig/proposals/list");
         let body = norito::json::to_vec(request)?;
         let resp = self
             .default_request(HttpMethod::POST, url)
@@ -14407,25 +14407,25 @@ impl Client {
             .send()?;
         if resp.status() != StatusCode::OK {
             return Err(eyre!(
-                "Failed to query multisig proposals with HTTP status: {}. {}",
+                "Failed to list multisig proposals with HTTP status: {}. {}",
                 resp.status(),
                 std::str::from_utf8(resp.body()).unwrap_or("")
             ));
         }
         norito::json::from_slice(resp.body())
-            .map_err(|err| eyre!("failed to decode multisig proposals query response: {err}"))
+            .map_err(|err| eyre!("failed to decode multisig proposals list response: {err}"))
     }
 
-    /// Convenience: selector-explicit POST `/v1/multisig/proposals/lookup`.
+    /// Convenience: selector-explicit POST `/v1/multisig/proposals/get`.
     ///
     /// # Errors
     /// Returns an error if the authority or proposal selector is not exact, request
     /// construction or JSON serialization fails, the HTTP call fails, or the response
     /// cannot be decoded.
-    pub fn post_multisig_proposals_lookup(
+    pub fn post_multisig_proposals_get(
         &self,
-        request: &MultisigProposalsLookupRequest,
-    ) -> Result<MultisigProposalLookupResponse> {
+        request: &MultisigProposalsGetRequest,
+    ) -> Result<MultisigProposalGetResponse> {
         validate_multisig_read_selector(
             request.multisig_account_id.as_ref(),
             request.multisig_account_alias.as_deref(),
@@ -14434,7 +14434,7 @@ impl Client {
             request.proposal_id.as_deref(),
             request.instructions_hash.as_deref(),
         )?;
-        let url = join_torii_url(&self.torii_url, "v1/multisig/proposals/lookup");
+        let url = join_torii_url(&self.torii_url, "v1/multisig/proposals/get");
         let body = norito::json::to_vec(request)?;
         let resp = self
             .default_request(HttpMethod::POST, url)
@@ -14445,13 +14445,13 @@ impl Client {
             .send()?;
         if resp.status() != StatusCode::OK {
             return Err(eyre!(
-                "Failed to lookup multisig proposal with HTTP status: {}. {}",
+                "Failed to get multisig proposal with HTTP status: {}. {}",
                 resp.status(),
                 std::str::from_utf8(resp.body()).unwrap_or("")
             ));
         }
         norito::json::from_slice(resp.body())
-            .map_err(|err| eyre!("failed to decode multisig proposal lookup response: {err}"))
+            .map_err(|err| eyre!("failed to decode multisig proposal get response: {err}"))
     }
 
     /// Convenience: POST `/v1/multisig/propose` with a typed instruction batch.

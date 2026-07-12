@@ -15503,6 +15503,73 @@ public struct ToriiAssetTransferResponse: Decodable, Sendable {
         receipt = try container.decode(ToriiAssetTransferReceipt.self, forKey: .receipt)
         signedTransaction = nil
         finalization = nil
+
+        let receiptPayloadHashIsNonzero = receipt.payloadSigningHashHex.contains { $0 != "0" }
+        guard ok,
+              receipt.operationKind == "asset_transfer",
+              receipt.transport == "torii",
+              receipt.intent == intent,
+              receiptPayloadHashIsNonzero else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .receipt,
+                in: container,
+                debugDescription: "asset transfer response receipt is not canonically bound"
+            )
+        }
+
+        if submitted {
+            guard signingPayload == nil,
+                  transactionScaffoldBase64 == nil,
+                  placeholderTransactionHashHex == nil,
+                  placeholderEntrypointHashHex == nil,
+                  let transactionHashHex,
+                  let entrypointHashHex,
+                  transactionHashHex == entrypointHashHex,
+                  transactionHashHex.contains(where: { $0 != "0" }),
+                  let pipelineStatus,
+                  pipelineStatus.hash == transactionHashHex,
+                  pipelineStatus.state == .queued,
+                  pipelineStatus.scope == "local",
+                  pipelineStatus.resolvedFrom == "queue",
+                  pipelineStatus.status.blockHeight == nil,
+                  pipelineStatus.status.rejectionReason == nil,
+                  receipt.status == "submitted",
+                  receipt.placeholderTransactionHashHex == nil,
+                  receipt.placeholderEntrypointHashHex == nil,
+                  receipt.transactionHashHex == transactionHashHex,
+                  receipt.entrypointHashHex == entrypointHashHex else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .submitted,
+                    in: container,
+                    debugDescription: "submitted asset transfer response has an invalid phase shape"
+                )
+            }
+        } else {
+            guard let signingPayload,
+                  let transactionScaffoldBase64,
+                  !transactionScaffoldBase64.isEmpty,
+                  let placeholderTransactionHashHex,
+                  let placeholderEntrypointHashHex,
+                  placeholderTransactionHashHex == placeholderEntrypointHashHex,
+                  placeholderTransactionHashHex.contains(where: { $0 != "0" }),
+                  transactionHashHex == nil,
+                  entrypointHashHex == nil,
+                  pipelineStatus == nil,
+                  receipt.status == "pending_signature",
+                  receipt.payloadSigningHashHex == signingPayload.payload.map({
+                      String(format: "%02x", $0)
+                  }).joined(),
+                  receipt.placeholderTransactionHashHex == placeholderTransactionHashHex,
+                  receipt.placeholderEntrypointHashHex == placeholderEntrypointHashHex,
+                  receipt.transactionHashHex == nil,
+                  receipt.entrypointHashHex == nil else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .submitted,
+                    in: container,
+                    debugDescription: "prepared asset transfer response has an invalid phase shape"
+                )
+            }
+        }
     }
 
     private static func decodeOptionalHash(
@@ -15569,34 +15636,16 @@ public struct ToriiAssetTransferDraft: Sendable, Equatable {
                 "asset transfer preparation did not contain a valid native transaction scaffold."
             )
         }
-        let signingHashHex = Self.lowercaseHex(inspection.payloadSigningHash)
-        let placeholderHashHex = Self.lowercaseHex(inspection.entrypointHash)
-        guard inspection.payloadSigningHash == signingPayload.payload,
-              signingHashHex == response.receipt.payloadSigningHashHex,
-              signingHashHex.contains(where: { $0 != "0" }),
-              placeholderHashHex == placeholderTransactionHashHex,
-              inspection.authority == preparedRequest.authority,
-              inspection.chain == response.intent.chainId,
-              inspection.creationTimeMs == preparedRequest.creationTimeMs,
-              inspection.timeToLiveMs == preparedRequest.transactionTtlMs,
-              case let .assetTransfer(transfer) = inspection.executable,
-              transfer.assetDefinitionId == preparedRequest.assetDefinitionId,
-              transfer.sourceAccountId == preparedRequest.authority,
-              transfer.destinationAccountId == preparedRequest.destination,
-              transfer.amount == preparedRequest.amount,
-              transfer.sourceAssetId == Self.expectedSourceAssetId(for: preparedRequest),
-              Self.scopeMatches(transfer.assetScope, literal: preparedRequest.assetBalanceScope)
-        else {
-            throw ToriiClientError.invalidPayload(
-                "native asset-transfer scaffold bindings differ from the prepared request."
-            )
-        }
-        try Self.validateMetadata(inspection.metadata, request: preparedRequest)
+        let validatedHashes = try Self.validatePreparedScaffoldBindings(
+            inspection,
+            request: preparedRequest,
+            response: response
+        )
         request = preparedRequest
         intent = response.intent
         self.signingPayload = signingPayload
         transactionScaffold = Data(scaffold)
-        payloadSigningHashHex = signingHashHex
+        payloadSigningHashHex = validatedHashes.payloadSigningHashHex
         self.placeholderTransactionHashHex = placeholderTransactionHashHex
         self.placeholderEntrypointHashHex = placeholderEntrypointHashHex
         scaffoldInspection = inspection
@@ -15606,12 +15655,70 @@ public struct ToriiAssetTransferDraft: Sendable, Equatable {
         _ response: ToriiAssetTransferResponse,
         finalization: DetachedTransactionFinalization
     ) throws {
+        try Self.validateSubmittedBindings(
+            response,
+            request: request,
+            preparedIntent: intent,
+            signingPayload: signingPayload,
+            payloadSigningHashHex: payloadSigningHashHex,
+            finalization: finalization
+        )
+    }
+
+    @discardableResult
+    static func validatePreparedScaffoldBindings(
+        _ inspection: DetachedTransactionScaffoldInspection,
+        request: ToriiAssetTransferRequest,
+        response: ToriiAssetTransferResponse
+    ) throws -> (payloadSigningHashHex: String, placeholderHashHex: String) {
+        guard !response.submitted,
+              request.matches(intent: response.intent),
+              let signingPayload = response.signingPayload,
+              let placeholderTransactionHashHex = response.placeholderTransactionHashHex else {
+            throw ToriiClientError.invalidPayload(
+                "asset transfer preparation response is not a canonical pending-signature draft."
+            )
+        }
+        let signingHashHex = Self.lowercaseHex(inspection.payloadSigningHash)
+        let placeholderHashHex = Self.lowercaseHex(inspection.entrypointHash)
+        guard inspection.payloadSigningHash == signingPayload.payload,
+              signingHashHex == response.receipt.payloadSigningHashHex,
+              signingHashHex.contains(where: { $0 != "0" }),
+              placeholderHashHex == placeholderTransactionHashHex,
+              inspection.authority == request.authority,
+              inspection.chain == response.intent.chainId,
+              inspection.creationTimeMs == request.creationTimeMs,
+              inspection.timeToLiveMs == request.transactionTtlMs,
+              case let .assetTransfer(transfer) = inspection.executable,
+              transfer.assetDefinitionId == request.assetDefinitionId,
+              transfer.sourceAccountId == request.authority,
+              transfer.destinationAccountId == request.destination,
+              transfer.amount == request.amount,
+              transfer.sourceAssetId == Self.expectedSourceAssetId(for: request),
+              Self.scopeMatches(transfer.assetScope, literal: request.assetBalanceScope)
+        else {
+            throw ToriiClientError.invalidPayload(
+                "native asset-transfer scaffold bindings differ from the prepared request."
+            )
+        }
+        try Self.validateMetadata(inspection.metadata, request: request)
+        return (signingHashHex, placeholderHashHex)
+    }
+
+    static func validateSubmittedBindings(
+        _ response: ToriiAssetTransferResponse,
+        request: ToriiAssetTransferRequest,
+        preparedIntent: ToriiAssetTransferIntent,
+        signingPayload: ToriiAssetTransferSigningPayload,
+        payloadSigningHashHex: String,
+        finalization: DetachedTransactionFinalization
+    ) throws {
         let transactionHashHex = Self.lowercaseHex(finalization.transactionHash)
         let entrypointHashHex = Self.lowercaseHex(finalization.entrypointHash)
         guard response.ok,
               response.submitted,
               request.matches(intent: response.intent),
-              response.intent == intent,
+              response.intent == preparedIntent,
               response.signingPayload == nil,
               response.transactionScaffoldBase64 == nil,
               response.placeholderTransactionHashHex == nil,
@@ -15630,7 +15737,7 @@ public struct ToriiAssetTransferDraft: Sendable, Equatable {
               response.receipt.operationKind == "asset_transfer",
               response.receipt.status == "submitted",
               response.receipt.transport == "torii",
-              response.receipt.intent == intent,
+              response.receipt.intent == preparedIntent,
               response.receipt.payloadSigningHashHex == payloadSigningHashHex,
               response.receipt.placeholderTransactionHashHex == nil,
               response.receipt.placeholderEntrypointHashHex == nil,
@@ -15640,6 +15747,79 @@ public struct ToriiAssetTransferDraft: Sendable, Equatable {
                 "submitted asset transfer is not exactly bound to its inspected detached draft."
             )
         }
+    }
+
+    static func validateAuthoritativeFinality(
+        _ status: ToriiPipelineTransactionStatus,
+        expectedTransactionHashHex: String
+    ) throws {
+        guard status.hash == expectedTransactionHashHex,
+              status.state == .applied,
+              status.scope == "global",
+              status.resolvedFrom == "state",
+              status.status.blockHeight.map({ $0 > 0 }) == true,
+              status.status.rejectionReason == nil else {
+            throw ToriiClientError.invalidPayload(
+                "detached asset transfer did not reach authoritative applied finality."
+            )
+        }
+    }
+
+    static func validateDetachedSignature(
+        publicKeyHex: String,
+        signatureBase64: String,
+        authority: String,
+        signingPayload: Data
+    ) throws -> (
+        publicKey: Data,
+        signature: Data,
+        exactPublicKeyHex: String,
+        exactSignatureBase64: String
+    ) {
+        let exactPublicKey = try ToriiRequestValidation.exactLowercase32ByteHex(
+            publicKeyHex,
+            field: "public_key_hex"
+        )
+        guard let publicKey = Data(hexString: exactPublicKey),
+              publicKey.count == 32,
+              publicKey.contains(where: { $0 != 0 }) else {
+            throw ToriiClientError.invalidPayload(
+                "public_key_hex must encode a nonzero 32-byte Ed25519 public key."
+            )
+        }
+        let exactSignature = try ToriiRequestValidation.normalizedExactBase64(
+            signatureBase64,
+            field: "signature_base64"
+        )
+        guard let signature = Data(base64Encoded: exactSignature),
+              signature.count == 64,
+              signature.contains(where: { $0 != 0 }) else {
+            throw ToriiClientError.invalidPayload(
+                "signature_base64 must encode a nonzero 64-byte Ed25519 signature."
+            )
+        }
+        guard let prefix = try? AccountAddress.inspectI105NetworkPrefix(
+            authority,
+            expectedPrefix: nil
+        ).chainDiscriminant,
+              let derivedAuthority = try? AccountId.makeI105(
+                publicKey: publicKey,
+                networkPrefix: prefix
+              ),
+              derivedAuthority == authority else {
+            throw ToriiClientError.invalidPayload(
+                "public_key_hex does not control the detached asset-transfer authority."
+            )
+        }
+        guard let verifyingKey = try? Curve25519.Signing.PublicKey(
+            rawRepresentation: publicKey
+        ),
+              verifyingKey.isValidSignature(signature, for: signingPayload) else {
+            throw ToriiClientError.invalidPayload(
+                "signature_base64 is not a valid Ed25519 signature of the inspected transfer draft."
+            )
+        }
+        return (publicKey, signature, exactPublicKey, exactSignature)
     }
 
     private static func expectedSourceAssetId(for request: ToriiAssetTransferRequest) -> String {
@@ -16372,7 +16552,7 @@ public struct ToriiMultisigProposalEntry: Decodable, Sendable, Equatable {
     }
 }
 
-public struct ToriiMultisigProposalsQueryRequest: Encodable, Sendable {
+public struct ToriiMultisigProposalsListRequest: Encodable, Sendable {
     public var selector: ToriiMultisigAccountSelector
     public var status: [ToriiMultisigProposalStatus]
     public var cursor: String?
@@ -16397,7 +16577,7 @@ public struct ToriiMultisigProposalsQueryRequest: Encodable, Sendable {
     }
 
     public func encode(to encoder: Encoder) throws {
-        let normalizedSelector = try selector.normalizedPayload(field: "multisig proposals query selector")
+        let normalizedSelector = try selector.normalizedPayload(field: "multisig proposals list selector")
         guard Set(status).count == status.count else {
             throw ToriiClientError.invalidPayload("multisig proposal status filters must be unique.")
         }
@@ -16421,7 +16601,7 @@ public struct ToriiMultisigProposalsQueryRequest: Encodable, Sendable {
     }
 }
 
-public struct ToriiMultisigProposalsQueryResponse: Decodable, Sendable, Equatable {
+public struct ToriiMultisigProposalsListResponse: Decodable, Sendable, Equatable {
     public let resolvedMultisigAccountId: String
     public let proposals: [ToriiMultisigProposalEntry]
     public let nextCursor: String?
@@ -16444,7 +16624,7 @@ public struct ToriiMultisigProposalsQueryResponse: Decodable, Sendable, Equatabl
     }
 }
 
-public struct ToriiMultisigProposalLookupRequest: Encodable, Sendable {
+public struct ToriiMultisigProposalGetRequest: Encodable, Sendable {
     public var selector: ToriiMultisigAccountSelector
     public var proposalId: String?
     public var instructionsHash: String?
@@ -16465,15 +16645,15 @@ public struct ToriiMultisigProposalLookupRequest: Encodable, Sendable {
     }
 
     public func encode(to encoder: Encoder) throws {
-        let normalizedSelector = try selector.normalizedPayload(field: "multisig proposal lookup selector")
+        let normalizedSelector = try selector.normalizedPayload(field: "multisig proposal get selector")
         let normalizedProposalId = try ToriiRequestValidation.normalizedOptionalNonEmpty(proposalId, field: "proposal_id")
         let normalizedInstructionsHash = try ToriiRequestValidation.normalizedOptional32ByteHex(
             instructionsHash,
             field: "instructions_hash"
         )
-        guard normalizedProposalId != nil || normalizedInstructionsHash != nil else {
+        guard (normalizedProposalId != nil) != (normalizedInstructionsHash != nil) else {
             throw ToriiClientError.invalidPayload(
-                "multisig proposal lookup request requires proposal_id or instructions_hash."
+                "multisig proposal get request requires exactly one of proposal_id or instructions_hash."
             )
         }
         var container = encoder.container(keyedBy: CodingKeys.self)
@@ -16484,7 +16664,7 @@ public struct ToriiMultisigProposalLookupRequest: Encodable, Sendable {
     }
 }
 
-public struct ToriiMultisigProposalLookupResponse: Decodable, Sendable, Equatable {
+public struct ToriiMultisigProposalGetResponse: Decodable, Sendable, Equatable {
     public let resolvedMultisigAccountId: String
     public let proposalId: String
     public let instructionsHash: String
@@ -21061,15 +21241,15 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     }
 
     @discardableResult
-    public func queryMultisigProposals(_ requestBody: ToriiMultisigProposalsQueryRequest,
-                                      completion: @escaping (Result<ToriiMultisigProposalsQueryResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.queryMultisigProposals(requestBody) }
+    public func listMultisigProposals(_ requestBody: ToriiMultisigProposalsListRequest,
+                                      completion: @escaping (Result<ToriiMultisigProposalsListResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) { try await self.listMultisigProposals(requestBody) }
     }
 
     @discardableResult
-    public func lookupMultisigProposal(_ requestBody: ToriiMultisigProposalLookupRequest,
-                                    completion: @escaping (Result<ToriiMultisigProposalLookupResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.lookupMultisigProposal(requestBody) }
+    public func getMultisigProposal(_ requestBody: ToriiMultisigProposalGetRequest,
+                                    completion: @escaping (Result<ToriiMultisigProposalGetResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) { try await self.getMultisigProposal(requestBody) }
     }
 
     @discardableResult
@@ -23196,49 +23376,14 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         publicKeyHex: String,
         signatureBase64: String
     ) async throws -> ToriiAssetTransferResponse {
-        let exactPublicKey = try ToriiRequestValidation.exactLowercase32ByteHex(
-            publicKeyHex,
-            field: "public_key_hex"
+        let validatedSignature = try ToriiAssetTransferDraft.validateDetachedSignature(
+            publicKeyHex: publicKeyHex,
+            signatureBase64: signatureBase64,
+            authority: draft.request.authority,
+            signingPayload: draft.signingPayload.payload
         )
-        guard let publicKey = Data(hexString: exactPublicKey),
-              publicKey.count == 32,
-              publicKey.contains(where: { $0 != 0 }) else {
-            throw ToriiClientError.invalidPayload(
-                "public_key_hex must encode a nonzero 32-byte Ed25519 public key."
-            )
-        }
-        let exactSignature = try ToriiRequestValidation.normalizedExactBase64(
-            signatureBase64,
-            field: "signature_base64"
-        )
-        guard let signature = Data(base64Encoded: exactSignature),
-              signature.count == 64,
-              signature.contains(where: { $0 != 0 }) else {
-            throw ToriiClientError.invalidPayload(
-                "signature_base64 must encode a nonzero 64-byte Ed25519 signature."
-            )
-        }
-        guard let prefix = try? AccountAddress.inspectI105NetworkPrefix(
-            draft.request.authority,
-            expectedPrefix: nil
-        ).chainDiscriminant,
-              let derivedAuthority = try? AccountId.makeI105(
-                publicKey: publicKey,
-                networkPrefix: prefix
-              ),
-              derivedAuthority == draft.request.authority else {
-            throw ToriiClientError.invalidPayload(
-                "public_key_hex does not control the detached asset-transfer authority."
-            )
-        }
-        guard let verifyingKey = try? Curve25519.Signing.PublicKey(
-            rawRepresentation: publicKey
-        ),
-              verifyingKey.isValidSignature(signature, for: draft.signingPayload.payload) else {
-            throw ToriiClientError.invalidPayload(
-                "signature_base64 is not a valid Ed25519 signature of the inspected transfer draft."
-            )
-        }
+        let publicKey = validatedSignature.publicKey
+        let signature = validatedSignature.signature
 
         let finalized: DetachedTransactionFinalizationResult
         do {
@@ -23262,8 +23407,8 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         }
 
         let submittedRequest = try draft.request.normalizedForSubmission(
-            publicKeyHex: exactPublicKey,
-            signatureBase64: exactSignature,
+            publicKeyHex: validatedSignature.exactPublicKeyHex,
+            signatureBase64: validatedSignature.exactSignatureBase64,
             nowMilliseconds: currentEpochMs()
         )
         var response = try await postDetachedAssetTransfer(submittedRequest)
@@ -23302,15 +23447,10 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
             pollOptions: pollOptions,
             mode: mode
         )
-        guard status.hash == transactionHashHex,
-              status.state == .applied,
-              status.scope == "global",
-              status.resolvedFrom == "state",
-              status.status.blockHeight.map({ $0 > 0 }) == true else {
-            throw ToriiClientError.invalidPayload(
-                "detached asset transfer did not reach authoritative applied finality."
-            )
-        }
+        try ToriiAssetTransferDraft.validateAuthoritativeFinality(
+            status,
+            expectedTransactionHashHex: transactionHashHex
+        )
         return status
     }
 
@@ -23420,24 +23560,24 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         return try decodeJSON(ToriiMultisigSpecResponse.self, from: data)
     }
 
-    public func queryMultisigProposals(_ requestBody: ToriiMultisigProposalsQueryRequest) async throws -> ToriiMultisigProposalsQueryResponse {
-        let request = try makeRequest(path: "/v1/multisig/proposals/query",
+    public func listMultisigProposals(_ requestBody: ToriiMultisigProposalsListRequest) async throws -> ToriiMultisigProposalsListResponse {
+        let request = try makeRequest(path: "/v1/multisig/proposals/list",
                                       method: .post,
                                       queryItems: nil,
                                       body: try JSONEncoder().encode(requestBody),
                                       headers: ["Content-Type": "application/json"])
         let data = try await data(for: request)
-        return try decodeJSON(ToriiMultisigProposalsQueryResponse.self, from: data)
+        return try decodeJSON(ToriiMultisigProposalsListResponse.self, from: data)
     }
 
-    public func lookupMultisigProposal(_ requestBody: ToriiMultisigProposalLookupRequest) async throws -> ToriiMultisigProposalLookupResponse {
-        let request = try makeRequest(path: "/v1/multisig/proposals/lookup",
+    public func getMultisigProposal(_ requestBody: ToriiMultisigProposalGetRequest) async throws -> ToriiMultisigProposalGetResponse {
+        let request = try makeRequest(path: "/v1/multisig/proposals/get",
                                       method: .post,
                                       queryItems: nil,
                                       body: try JSONEncoder().encode(requestBody),
                                       headers: ["Content-Type": "application/json"])
         let data = try await data(for: request)
-        return try decodeJSON(ToriiMultisigProposalLookupResponse.self, from: data)
+        return try decodeJSON(ToriiMultisigProposalGetResponse.self, from: data)
     }
 
     public func fetchContractCodeBytes(codeHashHex: String) async throws -> ToriiContractCodeBytes {

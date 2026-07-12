@@ -26211,9 +26211,9 @@ mod tests {
             LaneVisibility,
         },
         offline::{
-            KagemushaRecursiveSpendTopUpRequestV2, KagemushaRequestAuthorizationV2,
-            KagemushaScaledAmountV2, KagemushaSpendableNoteDescriptorV2,
-            KagemushaTopUpShieldEvidenceV2,
+            KagemushaRecursiveSpendArtifactBindingV3, KagemushaRecursiveSpendTopUpRequestV2,
+            KagemushaRequestAuthorizationV2, KagemushaScaledAmountV2,
+            KagemushaSpendableNoteDescriptorV2, KagemushaTopUpShieldEvidenceV2,
         },
         peer::PeerId,
         prelude::{Executor, IvmBytecode},
@@ -26476,7 +26476,10 @@ mod tests {
                     attachment
                 },
             },
-            artifact_generation: "kura-operation-index-fixture".to_owned(),
+            artifact_binding: KagemushaRecursiveSpendArtifactBindingV3 {
+                generation: "kura-operation-index-fixture".to_owned(),
+                manifest_sha256: [0x39; 32],
+            },
             operation_id: request_operation_id,
             authorization: KagemushaRequestAuthorizationV2 {
                 authority: SAMPLE_GENESIS_ACCOUNT_ID.clone(),

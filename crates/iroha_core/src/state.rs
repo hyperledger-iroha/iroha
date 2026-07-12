@@ -264,7 +264,7 @@ fn append_merge_executor_delta(
 
 use crate::{
     block::BlockValidationError,
-    commit_roster_journal::{CommitRosterJournal, CommitRosterSnapshot},
+    commit_roster_journal::{CommitRosterJournal, CommitRosterJournalError, CommitRosterSnapshot},
     da::{
         ConfidentialComputeError, DaCommitmentValidationError, DaShardCursorError,
         DaShardCursorIndex, DaShardCursorJournal, LaneEpoch,
@@ -23319,10 +23319,12 @@ impl State {
         commit_qc: &Qc,
         checkpoint: &ValidatorSetCheckpoint,
         stake_snapshot: Option<CommitStakeSnapshot>,
-    ) -> bool {
-        let _persistence_guard = self.commit_roster_journal_persistence_lock.lock();
+    ) -> Result<bool, CommitRosterJournalError> {
         let path = self.commit_roster_journal_path();
         let mut journal_guard = self.commit_roster_journal.write();
+        if journal_guard.storage_is_unknown() {
+            return Err(CommitRosterJournalError::StorageUnknown { path });
+        }
         let mut candidate = journal_guard.clone();
         if !candidate.upsert(commit_qc.clone(), checkpoint.clone(), stake_snapshot) {
             warn!(
@@ -23331,7 +23333,7 @@ impl State {
                 block = %commit_qc.subject_block_hash,
                 "refusing to replace a concurrently prepared commit-roster tuple"
             );
-            return false;
+            return Ok(false);
         }
         // Persist exact clean retries too: the durable file can disappear independently of the
         // in-memory tuple, so every authenticated durability boundary must rewrite and fsync it.
@@ -23357,7 +23359,37 @@ impl State {
                 path = %path.display(),
                 "failed to persist commit roster journal"
             );
-            return false;
+            // `persist` publishes with rename before syncing the parent directory. If that final
+            // sync fails, restore the previous journal so an operation rejected by this method
+            // cannot become authoritative after restart. If the compensating replacement also
+            // fails, neither a namespace read nor an exact payload match proves which rename will
+            // survive a crash. Fence all journal-dependent publication until process restart.
+            let outcome = if let Err(rollback_err) = journal_guard.persist() {
+                warn!(
+                    ?rollback_err,
+                    path = %path.display(),
+                    "failed to roll back commit roster journal after persistence error"
+                );
+                journal_guard.mark_storage_unknown();
+                error!(
+                    height = commit_qc.height,
+                    view = commit_qc.view,
+                    block = %commit_qc.subject_block_hash,
+                    path = %path.display(),
+                    "commit roster journal durability is unknown; restart required"
+                );
+                Err(CommitRosterJournalError::StorageUnknown { path: path.clone() })
+            } else {
+                Ok(false)
+            };
+            drop(accounting_mutation);
+            if let Err(refresh_err) = self.kura.refresh_disk_usage_bytes() {
+                warn!(
+                    ?refresh_err,
+                    "failed to reconcile Kura disk usage after commit roster rollback"
+                );
+            }
+            return outcome;
         }
         let after_bytes = match (measure_bytes(&path), measure_bytes(&tmp_path)) {
             (Some(main), Some(tmp)) => Some(main.saturating_add(tmp)),
@@ -23376,7 +23408,7 @@ impl State {
             }
         }
         *journal_guard = candidate;
-        true
+        Ok(true)
     }
 
     fn upsert_commit_roster_journal_memory(
@@ -23395,13 +23427,24 @@ impl State {
     /// Fetch a commit-roster snapshot for `height`/`block_hash` from the persisted journal.
     ///
     /// When found, the snapshot is also recorded in the in-memory status caches so subsequent
-    /// block-sync lookups can reuse it without re-reading the journal.
+    /// block-sync lookups can reuse it without re-reading the journal. Returns `None` while the
+    /// journal is fenced by unknown storage durability; restart must resolve that namespace first.
     #[must_use]
     pub fn commit_roster_snapshot_for_block(
         &self,
         height: u64,
         block_hash: HashOf<BlockHeader>,
     ) -> Option<CommitRosterSnapshot> {
+        let _persistence_guard = self.commit_roster_journal_persistence_lock.lock();
+        if self.commit_roster_journal.read().storage_is_unknown() {
+            error!(
+                height,
+                block = %block_hash,
+                path = %self.commit_roster_journal_path().display(),
+                "commit roster snapshot is fenced by unknown journal durability; restart required"
+            );
+            return None;
+        }
         if self
             .committed_hash_conflict_for_height(height, block_hash)
             .is_some()
@@ -23437,11 +23480,20 @@ impl State {
                 {
                     return None;
                 }
-                Some(CommitRosterSnapshot {
+                let snapshot = CommitRosterSnapshot {
                     commit_qc,
                     validator_checkpoint,
                     stake_snapshot: sidecar.stake_snapshot,
-                })
+                };
+                if !CommitRosterJournal::snapshot_is_canonical(&snapshot) {
+                    warn!(
+                        height,
+                        block = %block_hash,
+                        "ignoring non-canonical commit-roster sidecar snapshot"
+                    );
+                    return None;
+                }
+                Some(snapshot)
             })?;
         if !self.upsert_commit_roster_journal_memory(
             &snapshot.commit_qc,
@@ -23517,7 +23569,13 @@ impl State {
         _update_status: bool,
         write_sidecar: bool,
         persist_journal: bool,
-    ) -> bool {
+    ) -> Result<bool, CommitRosterJournalError> {
+        let _persistence_guard = self.commit_roster_journal_persistence_lock.lock();
+        if self.commit_roster_journal.read().storage_is_unknown() {
+            return Err(CommitRosterJournalError::StorageUnknown {
+                path: self.commit_roster_journal_path(),
+            });
+        }
         if !matches!(commit_qc.phase, crate::sumeragi::consensus::Phase::Commit) {
             warn!(
                 height = commit_qc.height,
@@ -23525,7 +23583,7 @@ impl State {
                 phase = ?commit_qc.phase,
                 "skipping commit roster record for non-commit certificate"
             );
-            return false;
+            return Ok(false);
         }
         let subject_block_hash = commit_qc.subject_block_hash;
         if checkpoint.height != commit_qc.height || checkpoint.block_hash != subject_block_hash {
@@ -23537,7 +23595,7 @@ impl State {
                 checkpoint_block = %checkpoint.block_hash,
                 "skipping commit roster record: checkpoint metadata mismatch"
             );
-            return false;
+            return Ok(false);
         }
         if checkpoint.view != commit_qc.view {
             warn!(
@@ -23547,7 +23605,7 @@ impl State {
                 checkpoint_view = checkpoint.view,
                 "skipping commit roster record: checkpoint view mismatch"
             );
-            return false;
+            return Ok(false);
         }
         if checkpoint.validator_set_hash_version != commit_qc.validator_set_hash_version
             || checkpoint.validator_set_hash != commit_qc.validator_set_hash
@@ -23566,7 +23624,7 @@ impl State {
                 block = %commit_qc.subject_block_hash,
                 "skipping commit roster record: checkpoint does not match commit certificate"
             );
-            return false;
+            return Ok(false);
         }
         if let Some(canonical_hash) =
             self.committed_hash_conflict_for_height(commit_qc.height, subject_block_hash)
@@ -23578,7 +23636,7 @@ impl State {
                 canonical = %canonical_hash,
                 "skipping commit roster record for non-canonical committed block"
             );
-            return false;
+            return Ok(false);
         }
         let write_sidecar = write_sidecar
             && self
@@ -23595,7 +23653,7 @@ impl State {
                 block = %commit_qc.subject_block_hash,
                 "rejecting commit roster stake snapshot: roster mismatch"
             );
-            return false;
+            return Ok(false);
         }
         match commit_qc.mode_tag.as_str() {
             crate::sumeragi::consensus::PERMISSIONED_TAG if stake_snapshot.is_some() => {
@@ -23605,7 +23663,7 @@ impl State {
                     block = %commit_qc.subject_block_hash,
                     "rejecting permissioned commit roster with a stake snapshot"
                 );
-                return false;
+                return Ok(false);
             }
             crate::sumeragi::consensus::NPOS_TAG
                 if commit_qc.height > 1 && stake_snapshot.is_none() =>
@@ -23616,7 +23674,7 @@ impl State {
                     block = %commit_qc.subject_block_hash,
                     "rejecting NPoS commit roster without an authoritative stake snapshot"
                 );
-                return false;
+                return Ok(false);
             }
             crate::sumeragi::consensus::PERMISSIONED_TAG | crate::sumeragi::consensus::NPOS_TAG => {
             }
@@ -23628,7 +23686,7 @@ impl State {
                     mode_tag = %commit_qc.mode_tag,
                     "rejecting commit roster with an unknown consensus mode"
                 );
-                return false;
+                return Ok(false);
             }
         }
         let existing_snapshot = self
@@ -23647,29 +23705,24 @@ impl State {
                 existing_view = snapshot.commit_qc.view,
                 "rejecting divergent commit-roster tuple for an already prepared block subject"
             );
-            return false;
+            return Ok(false);
         }
         if existing_snapshot.as_ref().is_some_and(|snapshot| {
             snapshot.commit_qc == *commit_qc
                 && snapshot.validator_checkpoint == *checkpoint
                 && snapshot.stake_snapshot == stake_snapshot
         }) {
-            if persist_journal
-                && !self.persist_commit_roster_journal(
+            let journal_accepted = if persist_journal {
+                self.persist_commit_roster_journal(commit_qc, checkpoint, stake_snapshot.clone())?
+            } else {
+                self.upsert_commit_roster_journal_memory(
                     commit_qc,
                     checkpoint,
                     stake_snapshot.clone(),
                 )
-            {
-                return false;
-            } else if !persist_journal
-                && !self.upsert_commit_roster_journal_memory(
-                    commit_qc,
-                    checkpoint,
-                    stake_snapshot.clone(),
-                )
-            {
-                return false;
+            };
+            if !journal_accepted {
+                return Ok(false);
             }
             // A pre-commit hint intentionally omits WSV and sidecar mutation. A later exact
             // canonical retry must still upgrade those stores after durability is confirmed.
@@ -23691,15 +23744,15 @@ impl State {
                 block = %commit_qc.subject_block_hash,
                 "accepted exact commit roster retry"
             );
-            return true;
+            return Ok(true);
         }
         let sidecar_snapshot = stake_snapshot.clone();
         if persist_journal {
-            if !self.persist_commit_roster_journal(commit_qc, checkpoint, stake_snapshot) {
-                return false;
+            if !self.persist_commit_roster_journal(commit_qc, checkpoint, stake_snapshot)? {
+                return Ok(false);
             }
         } else if !self.upsert_commit_roster_journal_memory(commit_qc, checkpoint, stake_snapshot) {
-            return false;
+            return Ok(false);
         }
         if update_world {
             self.upsert_commit_qc_in_world(commit_qc);
@@ -23707,7 +23760,7 @@ impl State {
         if write_sidecar {
             self.write_commit_roster_sidecar(commit_qc, checkpoint, sidecar_snapshot);
         }
-        true
+        Ok(true)
     }
 
     fn commit_roster_sidecar_matches(
@@ -23745,13 +23798,18 @@ impl State {
 
     /// Record commit-roster artifacts in status caches, world storage, and the journal.
     ///
-    /// Returns `true` when the roster entry is accepted or `false` when skipped.
+    /// Returns `Ok(true)` when the roster entry is accepted or `Ok(false)` when skipped.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CommitRosterJournalError::StorageUnknown`] when a prior failed journal
+    /// replacement could not establish a durable namespace and restart is required.
     pub(crate) fn record_commit_roster(
         &self,
         commit_qc: &Qc,
         checkpoint: &ValidatorSetCheckpoint,
         stake_snapshot: Option<CommitStakeSnapshot>,
-    ) -> bool {
+    ) -> Result<bool, CommitRosterJournalError> {
         self.record_commit_roster_internal(
             commit_qc,
             checkpoint,
@@ -23768,12 +23826,17 @@ impl State {
     /// This durably persists the recovery fence for block-sync validation without taking the WSV
     /// commit-QC write path or writing committed-height sidecars before the block is committed.
     /// Persistence failure is reported to consensus so it can fail closed.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CommitRosterJournalError::StorageUnknown`] when journal durability cannot be
+    /// established and the process must restart before retrying.
     pub(crate) fn record_commit_roster_hint(
         &self,
         commit_qc: &Qc,
         checkpoint: &ValidatorSetCheckpoint,
         stake_snapshot: Option<CommitStakeSnapshot>,
-    ) -> bool {
+    ) -> Result<bool, CommitRosterJournalError> {
         self.record_commit_roster_internal(
             commit_qc,
             checkpoint,
@@ -23786,12 +23849,17 @@ impl State {
     }
 
     /// Record commit-roster artifacts for a durably committed block, including sidecar.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CommitRosterJournalError::StorageUnknown`] when a prior journal replacement left
+    /// durable state ambiguous. No WSV or sidecar mutation occurs in that state.
     pub(crate) fn record_commit_roster_with_sidecar(
         &self,
         commit_qc: &Qc,
         checkpoint: &ValidatorSetCheckpoint,
         stake_snapshot: Option<CommitStakeSnapshot>,
-    ) -> bool {
+    ) -> Result<bool, CommitRosterJournalError> {
         self.record_commit_roster_internal(
             commit_qc,
             checkpoint,
@@ -41679,16 +41747,27 @@ impl<'state> StateBlock<'state> {
                             false,
                         )
                     };
-                    if recorded {
-                        let should_update =
-                            match self.world.commit_qcs.get(&commit_cert.subject_block_hash) {
-                                Some(existing) => existing.view <= commit_cert.view,
-                                None => true,
-                            };
-                        if should_update {
-                            self.world
-                                .commit_qcs
-                                .insert(commit_cert.subject_block_hash, commit_cert.clone());
+                    match recorded {
+                        Ok(true) => {
+                            let should_update =
+                                match self.world.commit_qcs.get(&commit_cert.subject_block_hash) {
+                                    Some(existing) => existing.view <= commit_cert.view,
+                                    None => true,
+                                };
+                            if should_update {
+                                self.world
+                                    .commit_qcs
+                                    .insert(commit_cert.subject_block_hash, commit_cert.clone());
+                            }
+                        }
+                        Ok(false) => {}
+                        Err(err) => {
+                            error!(
+                                ?err,
+                                height = checkpoint_block_height,
+                                block = %checkpoint_block_hash,
+                                "commit roster journal is fenced; skipping WSV commit-QC publication"
+                            );
                         }
                     }
                 } else {
@@ -49034,7 +49113,9 @@ mod replay_validation_tests {
             VALIDATOR_SET_HASH_VERSION_V1,
             None,
         );
-        state.record_commit_roster(&commit_cert, &checkpoint, None);
+        state
+            .record_commit_roster(&commit_cert, &checkpoint, None)
+            .expect("commit-roster test setup should retain known journal durability");
 
         let replay_world = World::with(
             [Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_id)],
@@ -95808,15 +95889,15 @@ mod tests {
         kura.store_block(Arc::clone(&canonical_block))
             .expect("store canonical block");
         let roster = vec![peer];
-        let signers_bitmap = vec![0b0000_0001];
-        let bls_aggregate_signature = vec![0xAA; 96];
+        let signers_bitmap = vec![0];
+        let bls_aggregate_signature = Vec::new();
         let commit_cert = Qc {
             phase: crate::sumeragi::consensus::Phase::Commit,
             subject_block_hash: block_hash,
             parent_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
             post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
             height: 1,
-            view: 1,
+            view: 0,
             epoch: 0,
             chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
             rechain_seq: 0,
@@ -95843,7 +95924,9 @@ mod tests {
             None,
         );
 
-        state.record_commit_roster(&commit_cert, &checkpoint, None);
+        state
+            .record_commit_roster(&commit_cert, &checkpoint, None)
+            .expect("canonical commit-roster recording should retain known journal durability");
 
         let sidecar = kura
             .read_roster_metadata(commit_cert.height)
@@ -95908,15 +95991,15 @@ mod tests {
         kura.store_block(Arc::clone(&canonical_block))
             .expect("store canonical block");
         let roster = vec![peer];
-        let signers_bitmap = vec![0b0000_0001];
-        let bls_aggregate_signature = vec![0xAA; 96];
+        let signers_bitmap = vec![0];
+        let bls_aggregate_signature = Vec::new();
         let commit_cert = Qc {
             phase: crate::sumeragi::consensus::Phase::Commit,
             subject_block_hash: block_hash,
             parent_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
             post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
             height: 1,
-            view: 1,
+            view: 0,
             epoch: 0,
             chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
             rechain_seq: 0,
@@ -95944,7 +96027,9 @@ mod tests {
         );
 
         assert!(
-            state.record_commit_roster_with_sidecar(&commit_cert, &checkpoint, None),
+            state
+                .record_commit_roster_with_sidecar(&commit_cert, &checkpoint, None)
+                .expect("in-memory journal update should retain known durability"),
             "committed sidecar path should accept canonical roster metadata"
         );
         assert!(
@@ -96017,15 +96102,15 @@ mod tests {
         kura.store_block(Arc::clone(&canonical_block))
             .expect("store canonical block");
         let roster = vec![peer];
-        let signers_bitmap = vec![0b0000_0001];
-        let bls_aggregate_signature = vec![0xAA; 96];
+        let signers_bitmap = vec![0];
+        let bls_aggregate_signature = Vec::new();
         let commit_cert = Qc {
             phase: crate::sumeragi::consensus::Phase::Commit,
             subject_block_hash: block_hash,
             parent_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
             post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
             height: 1,
-            view: 1,
+            view: 0,
             epoch: 0,
             chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
             rechain_seq: 0,
@@ -96050,6 +96135,29 @@ mod tests {
             bls_aggregate_signature,
             VALIDATOR_SET_HASH_VERSION_V1,
             None,
+        );
+        let mut mismatched_checkpoint = checkpoint.clone();
+        mismatched_checkpoint.post_state_root = Hash::new(b"corrupt sidecar post-state root");
+        kura.write_roster_metadata(&crate::kura::RosterSidecar::new(
+            1,
+            block_hash,
+            Some(commit_cert.clone()),
+            Some(mismatched_checkpoint),
+            None,
+        ));
+        assert!(
+            state
+                .commit_roster_snapshot_for_block(1, block_hash)
+                .is_none(),
+            "non-canonical sidecar must be rejected before warming the immutable journal"
+        );
+        assert!(
+            state
+                .commit_roster_journal
+                .read()
+                .get(1, block_hash)
+                .is_none(),
+            "rejected sidecar must not fence out a later exact tuple"
         );
         kura.write_roster_metadata(&crate::kura::RosterSidecar::new(
             1,
@@ -96131,7 +96239,9 @@ mod tests {
         );
 
         assert!(
-            state.record_commit_roster(&commit_cert, &checkpoint, None),
+            state
+                .record_commit_roster(&commit_cert, &checkpoint, None)
+                .expect("canonical journal persistence should retain known durability"),
             "uncommitted commit roster should still populate the journal"
         );
         assert!(
@@ -96203,7 +96313,9 @@ mod tests {
         );
 
         assert!(
-            state.record_commit_roster_hint(&commit_cert, &checkpoint, None),
+            state
+                .record_commit_roster_hint(&commit_cert, &checkpoint, None)
+                .expect("canonical hint persistence should retain known durability"),
             "commit roster hint should populate recovery metadata"
         );
         assert!(
@@ -96295,13 +96407,17 @@ mod tests {
         let mut mismatched_checkpoint = prepared_checkpoint.clone();
         mismatched_checkpoint.post_state_root = Hash::prehashed([0xC9; Hash::LENGTH]);
         assert!(
-            !state.record_commit_roster_hint(&prepared_qc, &mismatched_checkpoint, None),
+            !state
+                .record_commit_roster_hint(&prepared_qc, &mismatched_checkpoint, None)
+                .expect("invalid input should not make journal durability ambiguous"),
             "a checkpoint with a different signed subject must be rejected before publication"
         );
         let mut missing_stake_qc = prepared_qc.clone();
         missing_stake_qc.mode_tag = crate::sumeragi::consensus::NPOS_TAG.to_owned();
         assert!(
-            !state.record_commit_roster_hint(&missing_stake_qc, &prepared_checkpoint, None),
+            !state
+                .record_commit_roster_hint(&missing_stake_qc, &prepared_checkpoint, None)
+                .expect("invalid input should not make journal durability ambiguous"),
             "a non-genesis NPoS tuple without authoritative stake must be rejected"
         );
         assert!(
@@ -96312,9 +96428,15 @@ mod tests {
                 .is_none(),
             "invalid tuples must not reach the journal"
         );
-        assert!(state.record_commit_roster_hint(&prepared_qc, &prepared_checkpoint, None));
         assert!(
-            !state.record_commit_roster_hint(&replacement_qc, &replacement_checkpoint, None),
+            state
+                .record_commit_roster_hint(&prepared_qc, &prepared_checkpoint, None)
+                .expect("prepared tuple should persist with known durability")
+        );
+        assert!(
+            !state
+                .record_commit_roster_hint(&replacement_qc, &replacement_checkpoint, None)
+                .expect("immutable-tuple rejection should retain known durability"),
             "a later same-subject tuple must not replace prepared authority"
         );
 
@@ -96338,7 +96460,7 @@ mod tests {
     }
 
     #[test]
-    fn commit_roster_persistence_failure_is_transactional_and_rejected() {
+    fn commit_roster_persistence_and_rollback_failure_fences_without_publication() {
         let kura = Kura::blank_kura_for_testing();
         let state = State::new_for_testing(
             World::default(),
@@ -96367,9 +96489,13 @@ mod tests {
             kura.block_sync_roster_retention(),
         );
 
+        let outcome = state.record_commit_roster(&commit_qc, &checkpoint, None);
         assert!(
-            !state.record_commit_roster(&commit_qc, &checkpoint, None),
-            "commit roster must be rejected when durable persistence fails"
+            matches!(
+                outcome,
+                Err(CommitRosterJournalError::StorageUnknown { .. })
+            ),
+            "an unavailable rollback path must fence journal storage instead of reporting a retryable rejection"
         );
         assert!(
             state
@@ -96380,6 +96506,10 @@ mod tests {
             "failed persistence must not publish the candidate in memory"
         );
         assert!(
+            state.commit_roster_journal.read().storage_is_unknown(),
+            "an unavailable compensation path must retain the process-lifetime fence"
+        );
+        assert!(
             state.world_view().commit_qcs().get(&block_hash).is_none(),
             "failed persistence must not mutate WSV"
         );
@@ -96387,6 +96517,62 @@ mod tests {
             kura.read_roster_metadata(commit_qc.height).is_none(),
             "failed persistence must not write the committed-height sidecar"
         );
+    }
+
+    #[test]
+    fn commit_roster_double_namespace_sync_failure_fences_publication_until_restart() {
+        let kura = Kura::blank_kura_for_testing();
+        let state = State::new_for_testing(
+            World::default(),
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+        );
+        let block_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xD7; Hash::LENGTH]));
+        let keypair =
+            crate::state::checked_keypair_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
+        let roster = vec![PeerId::new(keypair.public_key().clone())];
+        let (commit_qc, checkpoint) = commit_roster_test_tuple(block_hash, 2, 1, 0xD8, &roster);
+        {
+            let mut block_hashes = state.block_hashes.block();
+            block_hashes.push_for_tests(HashOf::<BlockHeader>::from_untyped_unchecked(
+                Hash::prehashed([0xD6; Hash::LENGTH]),
+            ));
+            block_hashes.push_for_tests(block_hash);
+            block_hashes.commit_for_tests();
+        }
+        state
+            .commit_roster_journal
+            .write()
+            .fail_after_rename_once_for_tests();
+
+        let outcome = state.record_commit_roster_hint(&commit_qc, &checkpoint, None);
+        assert!(
+            matches!(
+                outcome,
+                Err(CommitRosterJournalError::StorageUnknown { .. })
+            ),
+            "double post-rename sync failure must return an explicit storage-unknown outcome"
+        );
+        assert!(
+            state.commit_roster_journal.read().storage_is_unknown(),
+            "ambiguous replacement must leave a process-lifetime journal fence"
+        );
+        assert!(
+            matches!(
+                state.record_commit_roster_with_sidecar(&commit_qc, &checkpoint, None),
+                Err(CommitRosterJournalError::StorageUnknown { .. })
+            ),
+            "the fatal fence must not degrade into ordinary retry semantics"
+        );
+        assert!(
+            state
+                .commit_roster_snapshot_for_block(commit_qc.height, block_hash)
+                .is_none(),
+            "block sync must not consume a namespace readback while durability is unknown"
+        );
+        assert!(state.world_view().commit_qcs().get(&block_hash).is_none());
+        assert!(kura.read_roster_metadata(commit_qc.height).is_none());
     }
 
     #[test]
@@ -96451,7 +96637,9 @@ mod tests {
         }
 
         assert!(
-            state.record_commit_roster(&commit_cert, &checkpoint, None),
+            state
+                .record_commit_roster(&commit_cert, &checkpoint, None)
+                .expect("initial journal persistence should retain known durability"),
             "initial canonical commit roster should be accepted"
         );
         kura.write_roster_metadata(&crate::kura::RosterSidecar::new(
@@ -96482,7 +96670,9 @@ mod tests {
         assert_eq!(stale_sidecar.block_hash, stale_hash);
 
         assert!(
-            state.record_commit_roster(&commit_cert, &checkpoint, None),
+            state
+                .record_commit_roster(&commit_cert, &checkpoint, None)
+                .expect("exact retry should retain known journal durability"),
             "duplicate canonical commit roster should be accepted"
         );
 
@@ -96563,7 +96753,9 @@ mod tests {
         );
 
         assert!(
-            !state.record_commit_roster(&stale_cert, &stale_checkpoint, None),
+            !state
+                .record_commit_roster(&stale_cert, &stale_checkpoint, None)
+                .expect("canonical-hash rejection should retain known durability"),
             "Kura's committed block hash should reject a stale same-height roster"
         );
         assert!(
@@ -96648,11 +96840,15 @@ mod tests {
         }
 
         assert!(
-            state.record_commit_roster(&canonical_cert, &canonical_checkpoint, None),
+            state
+                .record_commit_roster(&canonical_cert, &canonical_checkpoint, None)
+                .expect("canonical journal persistence should retain known durability"),
             "canonical commit roster should be accepted"
         );
         assert!(
-            !state.record_commit_roster(&stale_cert, &stale_checkpoint, None),
+            !state
+                .record_commit_roster(&stale_cert, &stale_checkpoint, None)
+                .expect("stale tuple rejection should retain known durability"),
             "stale same-height commit roster must not replace canonical metadata"
         );
 

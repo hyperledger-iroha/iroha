@@ -92,6 +92,21 @@ pub enum CommitRosterJournalError {
         #[source]
         source: std::io::Error,
     },
+    /// The journal was renamed into place but its parent-directory sync was not acknowledged.
+    #[error("failed to confirm commit roster journal namespace replacement at {path}: {source}")]
+    NamespaceSync {
+        /// Parent directory whose namespace sync failed.
+        path: PathBuf,
+        /// Source error.
+        #[source]
+        source: std::io::Error,
+    },
+    /// The journal namespace may refer to either side of a failed atomic replacement.
+    #[error("commit roster journal storage state is unknown at {path}; restart before retrying")]
+    StorageUnknown {
+        /// Path whose durable namespace could not be established.
+        path: PathBuf,
+    },
     /// Failed to encode the journal payload.
     #[error("failed to encode commit roster journal: {0}")]
     Encode(#[source] norito::core::Error),
@@ -133,6 +148,9 @@ pub struct CommitRosterJournal {
     path: PathBuf,
     retention: NonZeroUsize,
     dirty: bool,
+    storage_unknown: bool,
+    #[cfg(test)]
+    fail_after_rename_once: bool,
 }
 
 impl CommitRosterJournal {
@@ -161,7 +179,27 @@ impl CommitRosterJournal {
             path: path.into(),
             retention,
             dirty: false,
+            storage_unknown: false,
+            #[cfg(test)]
+            fail_after_rename_once: false,
         }
+    }
+
+    /// Inject one test-only persistence failure after the atomic rename and before directory sync.
+    #[cfg(test)]
+    pub(crate) fn fail_after_rename_once_for_tests(&mut self) {
+        self.fail_after_rename_once = true;
+    }
+
+    /// Fence this process from using a journal whose durable namespace is ambiguous.
+    pub(crate) fn mark_storage_unknown(&mut self) {
+        self.storage_unknown = true;
+    }
+
+    /// Return whether journal access requires a process restart to recover durable state.
+    #[must_use]
+    pub(crate) fn storage_is_unknown(&self) -> bool {
+        self.storage_unknown
     }
 
     /// Load a journal from disk, accepting only exact duplicate rows for one block subject.
@@ -448,14 +486,18 @@ impl CommitRosterJournal {
     /// Insert an exact commit-roster tuple without replacing a prepared tuple for the same block.
     ///
     /// Returns `true` when the tuple was inserted or was an exact retry. Returns `false` when the
-    /// journal already contains a different QC, checkpoint, or stake snapshot for the same
-    /// `(height, block_hash)` key. The first accepted tuple remains immutable.
+    /// journal is fenced by unknown storage durability or already contains a different QC,
+    /// checkpoint, or stake snapshot for the same `(height, block_hash)` key. The first accepted
+    /// tuple remains immutable.
     pub fn upsert(
         &mut self,
         commit_qc: Qc,
         validator_checkpoint: ValidatorSetCheckpoint,
         stake_snapshot: Option<CommitStakeSnapshot>,
     ) -> bool {
+        if self.storage_unknown {
+            return false;
+        }
         let key = (commit_qc.height, commit_qc.subject_block_hash);
         let snapshot = CommitRosterSnapshot {
             commit_qc,
@@ -484,13 +526,20 @@ impl CommitRosterJournal {
     ///
     /// # Errors
     ///
-    /// Returns [`CommitRosterJournalError::Write`] when the journal cannot be written or
-    /// [`CommitRosterJournalError::Encode`] when encoding fails.
+    /// Returns [`CommitRosterJournalError::Write`] when the journal cannot be written,
+    /// [`CommitRosterJournalError::Encode`] when encoding fails,
+    /// [`CommitRosterJournalError::NamespaceSync`] when a published rename is not acknowledged,
+    /// or [`CommitRosterJournalError::StorageUnknown`] after an ambiguous namespace replacement.
     pub fn persist(&mut self) -> Result<(), CommitRosterJournalError> {
         self.persist_durable()
     }
 
     fn persist_durable(&mut self) -> Result<(), CommitRosterJournalError> {
+        if self.storage_unknown {
+            return Err(CommitRosterJournalError::StorageUnknown {
+                path: self.path.clone(),
+            });
+        }
         if self.path.as_os_str().is_empty() {
             self.dirty = false;
             return Ok(());
@@ -572,12 +621,17 @@ impl CommitRosterJournal {
                     path: self.path.clone(),
                     source,
                 })?;
-                fs::rename(&tmp_path, &self.path).map_err(|source| {
-                    CommitRosterJournalError::Write {
+                if let Err(source) = fs::rename(&tmp_path, &self.path) {
+                    warn!(
+                        ?source,
+                        path = %self.path.display(),
+                        "commit roster journal namespace is unknown after replacement fallback"
+                    );
+                    self.storage_unknown = true;
+                    return Err(CommitRosterJournalError::StorageUnknown {
                         path: self.path.clone(),
-                        source,
-                    }
-                })?;
+                    });
+                }
             } else {
                 return Err(CommitRosterJournalError::Write {
                     path: self.path.clone(),
@@ -585,8 +639,16 @@ impl CommitRosterJournal {
                 });
             }
         }
+        #[cfg(test)]
+        if self.fail_after_rename_once {
+            self.fail_after_rename_once = false;
+            return Err(CommitRosterJournalError::NamespaceSync {
+                path: self.path.clone(),
+                source: io::Error::other("injected post-rename commit roster journal failure"),
+            });
+        }
         if let Some(parent) = self.path.parent() {
-            sync_dir(parent).map_err(|source| CommitRosterJournalError::Write {
+            sync_dir(parent).map_err(|source| CommitRosterJournalError::NamespaceSync {
                 path: parent.to_path_buf(),
                 source,
             })?;
@@ -599,8 +661,9 @@ impl CommitRosterJournal {
     ///
     /// # Errors
     ///
-    /// Returns [`CommitRosterJournalError::Write`] or [`CommitRosterJournalError::Encode`] when
-    /// persistence fails.
+    /// Returns [`CommitRosterJournalError::Write`], [`CommitRosterJournalError::Encode`],
+    /// [`CommitRosterJournalError::NamespaceSync`], or
+    /// [`CommitRosterJournalError::StorageUnknown`] when persistence fails.
     pub fn truncate_to_height(&mut self, height: u64) -> Result<(), CommitRosterJournalError> {
         let before = self.entries.len();
         self.entries
@@ -622,6 +685,24 @@ impl CommitRosterJournal {
         self.entries.get(&(height, block_hash)).cloned()
     }
 
+    /// Return whether a snapshot satisfies the same canonical invariants as a decoded journal
+    /// entry.
+    ///
+    /// This is used before promoting independently persisted recovery metadata into the
+    /// first-tuple-wins in-memory journal.
+    #[must_use]
+    pub(crate) fn snapshot_is_canonical(snapshot: &CommitRosterSnapshot) -> bool {
+        let record = CommitRosterRecord {
+            height: snapshot.commit_qc.height,
+            block_hash: snapshot.commit_qc.subject_block_hash,
+            commit_qc: snapshot.commit_qc.clone(),
+            validator_checkpoint: snapshot.validator_checkpoint.clone(),
+            stake_snapshot_index: None,
+            stake_snapshot: snapshot.stake_snapshot.clone(),
+        };
+        Self::validate_record(Path::new("commit-roster-sidecar"), record, &[]).is_ok()
+    }
+
     /// Re-open the durable journal and require an exact tuple match.
     ///
     /// An empty path is reserved for in-memory unit-test journals, where no durable artifact
@@ -634,6 +715,9 @@ impl CommitRosterJournal {
         checkpoint: &ValidatorSetCheckpoint,
         stake_snapshot: Option<&CommitStakeSnapshot>,
     ) -> bool {
+        if self.storage_unknown {
+            return false;
+        }
         let snapshot = if self.path.as_os_str().is_empty() {
             self.get(commit_qc.height, commit_qc.subject_block_hash)
         } else {
@@ -808,6 +892,46 @@ mod tests {
 
     fn retention(limit: usize) -> NonZeroUsize {
         NonZeroUsize::new(limit).expect("non-zero retention")
+    }
+
+    #[test]
+    fn canonical_snapshot_validation_rejects_signed_subject_mismatch() {
+        let (commit_qc, validator_checkpoint) = sample_cert(1);
+        let snapshot = CommitRosterSnapshot {
+            commit_qc,
+            validator_checkpoint,
+            stake_snapshot: None,
+        };
+        assert!(CommitRosterJournal::snapshot_is_canonical(&snapshot));
+
+        let mut mismatched = snapshot;
+        mismatched.validator_checkpoint.post_state_root =
+            iroha_crypto::Hash::new(b"mismatched post-state root");
+        assert!(!CommitRosterJournal::snapshot_is_canonical(&mismatched));
+    }
+
+    #[test]
+    fn storage_unknown_fence_rejects_use_until_reload() {
+        let dir = tempdir().expect("tempdir");
+        let path = CommitRosterJournal::journal_path(dir.path());
+        let (cert, checkpoint) = sample_cert(1);
+        let mut journal = CommitRosterJournal::new(path.clone(), retention(4));
+
+        journal.mark_storage_unknown();
+
+        assert!(journal.storage_is_unknown());
+        assert!(!journal.upsert(cert.clone(), checkpoint.clone(), None));
+        assert!(matches!(
+            journal.persist(),
+            Err(CommitRosterJournalError::StorageUnknown { .. })
+        ));
+        assert!(!journal.durable_entry_matches_exact(&cert, &checkpoint, None));
+
+        let reloaded = CommitRosterJournal::load(path, retention(4)).expect("restart reload");
+        assert!(
+            !reloaded.storage_is_unknown(),
+            "only reconstruction from the resolved post-crash namespace clears the process fence"
+        );
     }
 
     #[test]

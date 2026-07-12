@@ -30,9 +30,6 @@ public enum KagemushaRecursiveSpendError: Error, Equatable, LocalizedError {
 public struct KagemushaRecursiveSpendNativeCapabilities: Equatable, Sendable {
     public let bridgeABIVersion: UInt32
     public let artifactManifestSchema: String
-    /// Internal cryptographic contract authenticated by the installed V3
-    /// manifest. This is not a wallet-selectable spend mode.
-    public let artifactContractMode: String
     public let proofBackend: String
     public let transcriptProfile: String
     public let proofEnvelopeVersion: UInt16
@@ -46,7 +43,6 @@ public struct KagemushaRecursiveSpendNativeCapabilities: Equatable, Sendable {
     public init(
         bridgeABIVersion: UInt32,
         artifactManifestSchema: String,
-        artifactContractMode: String,
         proofBackend: String,
         transcriptProfile: String,
         proofEnvelopeVersion: UInt16,
@@ -59,7 +55,6 @@ public struct KagemushaRecursiveSpendNativeCapabilities: Equatable, Sendable {
     ) throws {
         guard bridgeABIVersion == KagemushaRecursiveSpend.requiredNativeBridgeAbiVersion,
               artifactManifestSchema == KagemushaRecursiveSpend.artifactManifestSchema,
-              artifactContractMode == KagemushaRecursiveSpend.artifactContractMode,
               proofBackend == KagemushaRecursiveSpend.pastaCycleBackend,
               transcriptProfile == KagemushaRecursiveSpend.pastaCycleTranscript,
               proofEnvelopeVersion == KagemushaRecursiveSpend.pastaCycleProofEnvelopeVersion,
@@ -74,7 +69,6 @@ public struct KagemushaRecursiveSpendNativeCapabilities: Equatable, Sendable {
         }
         self.bridgeABIVersion = bridgeABIVersion
         self.artifactManifestSchema = artifactManifestSchema
-        self.artifactContractMode = artifactContractMode
         self.proofBackend = proofBackend
         self.transcriptProfile = transcriptProfile
         self.proofEnvelopeVersion = proofEnvelopeVersion
@@ -137,9 +131,6 @@ public enum KagemushaRecursiveSpend {
     public static let maximumPeerHops: UInt32 = 64
     public static let artifactManifestSchema =
         "kagemusha.offline.recursive_spend.artifact_manifest.v3"
-    /// Sole artifact contract mode authenticated by ABI-19 capabilities and
-    /// V3 manifests. There is no alternative spend protocol.
-    static let artifactContractMode = "recursive_spend_v1"
     public static let pastaCycleBackend = "halo2/ipa-pasta-cycle-v1"
     public static let pastaCycleTranscript = "kagemusha-pasta-cycle-poseidon-v1"
     public static let pastaCycleProofEnvelopeVersion: UInt16 = 1
@@ -173,6 +164,12 @@ public enum KagemushaRecursiveSpend {
         wire("KagemushaRecipientOutputDerivationResultV2")
     public static let noteOpeningWireName =
         "connect_norito_bridge::KagemushaNoteOpeningV2"
+    public static let membershipWitnessWireName =
+        "connect_norito_bridge::KagemushaNoteMembershipWitnessV2"
+    public static let appendLocalRequestWireName =
+        "connect_norito_bridge::KagemushaRecursiveSpendAppendLocalRequestV2"
+    public static let redeemLocalRequestWireName =
+        "connect_norito_bridge::KagemushaRecursiveSpendRedeemLocalRequestV2"
     public static let branchPathWireName = wire("KagemushaRecursiveSpendBranchPathV2")
     public static let branchClaimWireName = wire("KagemushaRecursiveSpendBranchClaimV2")
     public static let recipientRequestPayloadWireName =
@@ -394,13 +391,14 @@ public enum KagemushaRecursiveSpend {
         guard verifiedAtMilliseconds == signedRecipientRequest.verifiedAtMilliseconds else {
             throw KagemushaRecursiveSpendError.invalidField("verifiedAtMilliseconds")
         }
-        guard request.split.outputArtifactBinding == installedArtifacts.binding,
+        guard request.outputArtifactBinding == installedArtifacts.binding,
               request.previousInputs.allSatisfy({
                   $0.previousBundle.summary.artifactBinding == installedArtifacts.binding
               }) else {
             throw KagemushaRecursiveSpendError.invalidField("artifactBinding")
         }
-        let requestArchive = try request.noritoEncoded()
+        var requestArchive = try request.noritoEncoded()
+        defer { requestArchive.resetBytes(in: 0..<requestArchive.count) }
         try ensureProofBackendAvailable()
         do {
             guard let output = try NoritoNativeBridge.shared.kagemushaRecursiveSpendAppendV2(
@@ -441,15 +439,15 @@ public enum KagemushaRecursiveSpend {
         installedArtifacts: KagemushaRecursiveSpendInstalledArtifactSet
     ) throws -> KagemushaRecursiveSpendRedeemBuildResult {
         try installedArtifacts.requireInstalled()
-        guard request.bundle.summary.artifactBinding == installedArtifacts.binding,
-              request.redemption.changeArtifactBinding.map({ $0 == installedArtifacts.binding })
-                ?? true else {
+        guard request.bundle.summary.artifactBinding == installedArtifacts.binding else {
             throw KagemushaRecursiveSpendError.invalidField("artifactBinding")
         }
+        var requestArchive = try request.noritoEncoded()
+        defer { requestArchive.resetBytes(in: 0..<requestArchive.count) }
         try ensureProofBackendAvailable()
         do {
             guard let result = try NoritoNativeBridge.shared
-                .kagemushaRecursiveSpendRedeemV2(requestArchive: request.noritoEncoded()) else {
+                .kagemushaRecursiveSpendRedeemV2(requestArchive: requestArchive) else {
                 throw KagemushaRecursiveSpendError.nativeBridgeUnavailable
             }
             return try KagemushaRecursiveSpendCodecs.decodeRedeemBuildResult(result)
@@ -651,6 +649,103 @@ public struct KagemushaNoteOpening: Equatable, Sendable {
     func noritoEncoded() throws -> Data {
         try KagemushaRecursiveSpendCodecs.encodeNoteOpening(self)
     }
+
+    /// Create the only opening shape accepted by unshield-v3 for a private
+    /// partial-redemption change output.
+    public static func redemptionChange(spendKey: Data, rho: Data) throws -> Self {
+        try Self(
+            spendKey: spendKey,
+            rho: rho,
+            diversifier: ConfidentialOwnerTag.defaultDiversifier()
+        )
+    }
+}
+
+/// Encrypted local membership witness retained with an owned recursive note.
+///
+/// The real path authenticates the note at `leafIndex`. The dummy path
+/// authenticates an empty leaf at the same root for the fixed two-input
+/// confidential circuits. This archive is never sent to Torii or embedded in
+/// the canonical peer-payment bundle.
+public struct KagemushaNoteMembershipWitness: Equatable, Sendable {
+    public let leafIndex: UInt32
+    public let inputPath: PrivacyConfidentialMerklePathWitnessV2
+    public let dummyInputPath: PrivacyConfidentialMerklePathWitnessV2
+
+    public init(
+        leafIndex: UInt32,
+        inputPath: PrivacyConfidentialMerklePathWitnessV2,
+        dummyInputPath: PrivacyConfidentialMerklePathWitnessV2
+    ) throws {
+        guard inputPath.root == dummyInputPath.root,
+              inputPath.root.contains(where: { $0 != 0 }),
+              leafIndex < UInt32(PrivacyConfidentialWitnessCodecs.confidentialTreeCapacityV2)
+        else {
+            throw KagemushaRecursiveSpendError.invalidField("membershipWitness")
+        }
+        for (index, direction) in inputPath.directions.enumerated() {
+            guard direction == UInt8((UInt64(leafIndex) >> UInt64(index)) & 1) else {
+                throw KagemushaRecursiveSpendError.invalidField(
+                    "membershipWitness.inputPath.directions"
+                )
+            }
+        }
+        let dummyLeafIndex = dummyInputPath.directions.enumerated().reduce(UInt32(0)) {
+            $0 | (UInt32($1.element) << UInt32($1.offset))
+        }
+        guard dummyLeafIndex != leafIndex else {
+            throw KagemushaRecursiveSpendError.invalidField(
+                "membershipWitness.dummyInputPath"
+            )
+        }
+        self.leafIndex = leafIndex
+        self.inputPath = inputPath
+        self.dummyInputPath = dummyInputPath
+    }
+
+    public func noritoEncoded() throws -> Data {
+        try KagemushaRecursiveSpendCodecs.encodeMembershipWitness(self)
+    }
+
+    public static func decode(_ archive: Data) throws -> Self {
+        try KagemushaRecursiveSpendCodecs.decodeMembershipWitness(archive)
+    }
+}
+
+/// Exact active confidential verifier selected by one Torii readiness
+/// snapshot. The native builder additionally derives the canonical verifier
+/// key and rejects a substituted commitment.
+public struct KagemushaConfidentialVerifierBinding: Equatable, Sendable {
+    public let role: KagemushaRecursiveSpend.VerifierRole
+    public let backend: String
+    public let name: String
+    public let commitment: Data
+    public let blockHeight: UInt64
+
+    public init(
+        role: KagemushaRecursiveSpend.VerifierRole,
+        verifier: ToriiKagemushaActiveTransferVerifier,
+        blockHeight: UInt64
+    ) throws {
+        guard role == .transfer || role == .unshield,
+              verifier.id.backend == role.registryBackend,
+              verifier.id.name == role.registryName,
+              verifier.circuitId == role.circuitID,
+              verifier.activationHeight <= blockHeight,
+              verifier.withdrawalHeight.map({ blockHeight < $0 }) != false,
+              let commitment = Data(hexString: verifier.commitment),
+              commitment.count == 32,
+              commitment.contains(where: { $0 != 0 }) else {
+            throw KagemushaRecursiveSpendError.invalidField("confidentialVerifier")
+        }
+        self.role = role
+        backend = verifier.id.backend
+        name = verifier.id.name
+        self.commitment = commitment
+        self.blockHeight = blockHeight
+    }
+
+    var identifier: String { "\(backend):\(name)" }
 }
 
 public struct KagemushaRecipientOutputDerivationRequest: Equatable, Sendable {
@@ -1958,44 +2053,65 @@ public struct KagemushaRecursiveSpendAppendInput: Equatable, Sendable {
 
 public struct KagemushaRecursiveSpendAppendRequest: Equatable, Sendable {
     public let previousInputs: [KagemushaRecursiveSpendAppendInput]
-    public let confidentialTransferProof: Data
-    public let split: KagemushaRecursiveSpendSplitIntent
+    public let inputOpenings: [KagemushaNoteOpening]
+    public let inputMembershipWitnesses: [KagemushaNoteMembershipWitness]
+    public let changeOpening: KagemushaNoteOpening?
+    public let outputArtifactBinding: KagemushaRecursiveSpendArtifactBinding
+    public let transferVerifier: KagemushaConfidentialVerifierBinding
+    public let operationID: Data
     public let blockHeight: UInt64
 
     public init(
         previousInputs: [KagemushaRecursiveSpendAppendInput],
-        confidentialTransferProof: Data,
-        split: KagemushaRecursiveSpendSplitIntent,
+        inputOpenings: [KagemushaNoteOpening],
+        inputMembershipWitnesses: [KagemushaNoteMembershipWitness],
+        changeOpening: KagemushaNoteOpening? = nil,
+        outputArtifactBinding: KagemushaRecursiveSpendArtifactBinding,
+        transferVerifier: KagemushaConfidentialVerifierBinding,
+        operationID: Data,
         blockHeight: UInt64
     ) throws {
-        try KagemushaRecursiveSpend.requireArchive(
-            confidentialTransferProof,
-            schema: KagemushaRecursiveSpend.proofAttachmentWireName,
-            field: "confidentialTransferProof"
+        try KagemushaRecursiveSpend.requireNonzeroFixed32(
+            operationID,
+            field: "operationID"
         )
-        guard previousInputs.count == split.inputs.count,
-              (1...2).contains(previousInputs.count),
+        guard (1...2).contains(previousInputs.count),
+              inputOpenings.count == previousInputs.count,
+              inputMembershipWitnesses.count == previousInputs.count,
               blockHeight > 0,
-              zip(previousInputs, split.inputs).allSatisfy({ previous, input in
-                  previous.previousBundle.summary.amount == input.inputNote.amount
-                    && previous.previousBundle.summary.noteCommitment
-                        == input.inputNote.noteCommitment
-                    && previous.previousBundle.summary.spendNullifier
-                        == input.inputNote.spendNullifier
-                    && previous.previousBundle.summary.branchClaims == input.branchClaims
-                    && previous.previousBundle.summary.bundleDigest == input.bundleDigest
-                    && previous.previousBundle.summary.hopCount == input.peerHopCount
-              }) else {
+              transferVerifier.role == .transfer,
+              transferVerifier.blockHeight == blockHeight,
+              previousInputs.allSatisfy({
+                  $0.previousBundle.summary.artifactBinding == outputArtifactBinding
+              }),
+              inputMembershipWitnesses.dropFirst().allSatisfy({
+                  $0.inputPath.root == inputMembershipWitnesses[0].inputPath.root
+              }),
+              inputOpenings.dropFirst().allSatisfy({
+                  $0.spendKey == inputOpenings[0].spendKey
+              }),
+              changeOpening.map({ $0.spendKey == inputOpenings[0].spendKey }) ?? true else {
             throw KagemushaRecursiveSpendError.invalidField("appendRequest")
         }
+        for (previous, current) in zip(previousInputs, previousInputs.dropFirst()) {
+            guard previous.previousBundle.summary.bundleDigest.lexicographicallyPrecedes(
+                current.previousBundle.summary.bundleDigest
+            ) else {
+                throw KagemushaRecursiveSpendError.invalidField("appendRequest.order")
+            }
+        }
         self.previousInputs = previousInputs
-        self.confidentialTransferProof = Data(confidentialTransferProof)
-        self.split = split
+        self.inputOpenings = inputOpenings
+        self.inputMembershipWitnesses = inputMembershipWitnesses
+        self.changeOpening = changeOpening
+        self.outputArtifactBinding = outputArtifactBinding
+        self.transferVerifier = transferVerifier
+        self.operationID = Data(operationID)
         self.blockHeight = blockHeight
     }
 
     public func noritoEncoded() throws -> Data {
-        try KagemushaRecursiveSpendCodecs.encodeAppendRequest(self)
+        try KagemushaRecursiveSpendCodecs.encodeAppendLocalRequest(self)
     }
 }
 
@@ -2471,58 +2587,64 @@ public struct KagemushaRecursiveSpendRedeemChangeBranch: Equatable, Sendable {
     public let bundle: KagemushaRecursiveSpendBundle
 }
 
-/// Single native proof-build request for both full and partial redemption.
-/// Individual proving artifacts, verifier records, and proof-opening envelopes
-/// are not caller inputs; native resolves everything from the installed V3 set.
+/// Native-only proving request for full or partial redemption. The note
+/// opening and membership witness are encrypted local state and are consumed
+/// only inside the bridge; wallet code never constructs an unshield proof,
+/// public-input binding, or redemption intent.
 public struct KagemushaRecursiveSpendRedeemBuildRequest: Equatable, Sendable {
     public let bundle: KagemushaRecursiveSpendBundle
+    public let inputOpening: KagemushaNoteOpening
+    public let inputMembershipWitness: KagemushaNoteMembershipWitness
     public let recipient: String
     public let publicAmount: KagemushaScaledAmount
-    public let unshieldProof: Data
-    public let redemption: KagemushaRecursiveSpendRedemptionIntent
+    public let changeOpening: KagemushaNoteOpening?
+    public let unshieldVerifier: KagemushaConfidentialVerifierBinding
     public let blockHeight: UInt64
     public let operationID: Data
 
     public init(
         bundle: KagemushaRecursiveSpendBundle,
+        inputOpening: KagemushaNoteOpening,
+        inputMembershipWitness: KagemushaNoteMembershipWitness,
         recipient: String,
         publicAmount: KagemushaScaledAmount,
-        unshieldProof: Data,
-        redemption: KagemushaRecursiveSpendRedemptionIntent,
+        changeOpening: KagemushaNoteOpening? = nil,
+        unshieldVerifier: KagemushaConfidentialVerifierBinding,
         blockHeight: UInt64,
         operationID: Data
     ) throws {
         _ = try AccountAddress.parseEncoded(recipient, expectedPrefix: 0x02F1)
-        try KagemushaRecursiveSpend.requireArchive(
-            unshieldProof,
-            schema: KagemushaRecursiveSpend.proofAttachmentWireName,
-            field: "unshieldProof"
-        )
         try KagemushaRecursiveSpend.requireNonzeroFixed32(operationID, field: "operationID")
         guard blockHeight > 0,
-              recipient == redemption.recipient,
-              publicAmount == redemption.publicAmount,
-              operationID == redemption.operationID,
-              redemption.parentBundleDigest == bundle.summary.bundleDigest,
-              redemption.inputNote.assetDefinitionID == bundle.summary.assetDefinitionID,
-              redemption.inputNote.amount == bundle.summary.amount,
-              redemption.inputNote.noteCommitment == bundle.summary.noteCommitment,
-              redemption.inputNote.spendNullifier == bundle.summary.spendNullifier,
-              redemption.parentBranchClaims == bundle.summary.branchClaims,
-              redemption.parentPeerHopCount == bundle.summary.hopCount else {
+              unshieldVerifier.role == .unshield,
+              unshieldVerifier.blockHeight == blockHeight,
+              publicAmount.scale == bundle.summary.amount.scale,
+              KagemushaScaledAmount.compareAtomicUnits(
+                  publicAmount.atomicUnits,
+                  bundle.summary.amount.atomicUnits
+              ) != .orderedDescending,
+              (publicAmount == bundle.summary.amount) == (changeOpening == nil),
+              inputMembershipWitness.inputPath.root
+                  == inputMembershipWitness.dummyInputPath.root,
+              changeOpening.map({
+                  $0.spendKey == inputOpening.spendKey
+                    && $0.diversifier == ConfidentialOwnerTag.defaultDiversifier()
+              }) ?? true else {
             throw KagemushaRecursiveSpendError.invalidField("redeemBuildRequest")
         }
         self.bundle = bundle
+        self.inputOpening = inputOpening
+        self.inputMembershipWitness = inputMembershipWitness
         self.recipient = recipient
         self.publicAmount = publicAmount
-        self.unshieldProof = Data(unshieldProof)
-        self.redemption = redemption
+        self.changeOpening = changeOpening
+        self.unshieldVerifier = unshieldVerifier
         self.blockHeight = blockHeight
         self.operationID = Data(operationID)
     }
 
     public func noritoEncoded() throws -> Data {
-        try KagemushaRecursiveSpendCodecs.encodeRedeemBuildRequest(self)
+        try KagemushaRecursiveSpendCodecs.encodeRedeemLocalRequest(self)
     }
 }
 

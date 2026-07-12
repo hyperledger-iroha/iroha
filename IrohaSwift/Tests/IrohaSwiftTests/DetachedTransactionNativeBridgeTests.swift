@@ -126,6 +126,46 @@ final class DetachedTransactionNativeBridgeTests: XCTestCase {
         XCTAssertEqual(NativeBridgeError.fromStatus(-503), .canonicalJSON)
     }
 
+    func testLinkedABI19CanonicalizerRunsEndToEndAndRejectsHostileJSON() throws {
+        let bridge = NoritoNativeBridge.shared
+        XCTAssertTrue(bridge.isDetachedTransactionVerificationAvailable)
+
+        let first = try bridge.canonicalizeJSONBlake3(
+            Data(#"{ "z": [3,2,1], "a": {"y":true,"x":null} }"#.utf8)
+        )
+        let second = try bridge.canonicalizeJSONBlake3(
+            Data(#"{"a":{"x":null,"y":true},"z":[3,2,1]}"#.utf8)
+        )
+        XCTAssertEqual(first, second)
+        XCTAssertEqual(
+            first.canonicalJSON,
+            Data(#"{"a":{"x":null,"y":true},"z":[3,2,1]}"#.utf8)
+        )
+        XCTAssertEqual(first.hash.count, 32)
+        XCTAssertTrue(first.hash.contains(where: { $0 != 0 }))
+
+        let empty = try bridge.canonicalizeJSONBlake3(Data())
+        XCTAssertTrue(empty.canonicalJSON.isEmpty)
+        XCTAssertEqual(
+            empty.hash.map { String(format: "%02x", $0) }.joined(),
+            "af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262"
+        )
+
+        for hostile in [
+            #"{"a":1,"a":2}"#,
+            #"{"nested":{"a":1,"a":2}}"#,
+            #"{"a":NaN}"#,
+            #"{"a":1} false"#,
+        ] {
+            XCTAssertThrowsError(
+                try bridge.canonicalizeJSONBlake3(Data(hostile.utf8)),
+                hostile
+            ) { error in
+                XCTAssertEqual(error as? NativeBridgeError, .canonicalJSON)
+            }
+        }
+    }
+
     func testPublicModelsAreSendable() {
         func requireSendable<T: Sendable>(_: T.Type) {}
         requireSendable(DetachedTransactionScaffoldInspection.self)

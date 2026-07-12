@@ -511,13 +511,13 @@ export type MultisigProposalStatus =
   | "CANCELED"
   | "EXPIRED";
 
-export interface MultisigProposalsQueryRequest extends MultisigAccountSelector {
+export interface MultisigProposalsListRequest extends MultisigAccountSelector {
   status?: ReadonlyArray<MultisigProposalStatus>;
   cursor?: string | null;
   limit?: number | string | bigint | null;
 }
 
-export interface MultisigProposalLookupRequest extends MultisigAccountSelector {
+export interface MultisigProposalGetRequest extends MultisigAccountSelector {
   proposalId?: string | null;
   instructionsHash?: string | null;
   proposal_id?: string | null;
@@ -699,13 +699,13 @@ export interface MultisigProposalEntry {
   terminal_at_ms: number | null;
 }
 
-export interface MultisigProposalsQueryResponse {
+export interface MultisigProposalsListResponse {
   resolved_multisig_account_id: string;
   proposals: ReadonlyArray<MultisigProposalEntry>;
   next_cursor: string | null;
 }
 
-export interface MultisigProposalLookupResponse extends MultisigProposalEntry {
+export interface MultisigProposalGetResponse extends MultisigProposalEntry {
   resolved_multisig_account_id: string;
 }
 
@@ -11073,14 +11073,14 @@ export declare class ToriiBrowserClient {
     selector: MultisigAccountSelector,
     options?: Record<string, unknown>,
   ): Promise<MultisigSpecResponse>;
-  queryMultisigProposals(
-    selector: MultisigProposalsQueryRequest,
+  listMultisigProposals(
+    selector: MultisigProposalsListRequest,
     options?: Record<string, unknown>,
-  ): Promise<MultisigProposalsQueryResponse>;
-  lookupMultisigProposal(
-    request: MultisigProposalLookupRequest,
+  ): Promise<MultisigProposalsListResponse>;
+  getMultisigProposal(
+    request: MultisigProposalGetRequest,
     options?: Record<string, unknown>,
-  ): Promise<MultisigProposalLookupResponse>;
+  ): Promise<MultisigProposalGetResponse>;
   submitMultisigPropose(
     request: Record<string, unknown>,
     options?: Record<string, unknown>,
@@ -12228,14 +12228,14 @@ export declare class ToriiClient {
     request: MultisigAccountSelector,
     options?: { signal?: AbortSignal },
   ): Promise<MultisigSpecResponse>;
-  queryMultisigProposals(
-    request: MultisigProposalsQueryRequest,
+  listMultisigProposals(
+    request: MultisigProposalsListRequest,
     options?: { signal?: AbortSignal },
-  ): Promise<MultisigProposalsQueryResponse>;
-  lookupMultisigProposal(
-    request: MultisigProposalLookupRequest,
+  ): Promise<MultisigProposalsListResponse>;
+  getMultisigProposal(
+    request: MultisigProposalGetRequest,
     options?: { signal?: AbortSignal },
-  ): Promise<MultisigProposalLookupResponse>;
+  ): Promise<MultisigProposalGetResponse>;
   getContractManifest(
     codeHashHex: string,
   ): Promise<ContractManifestRecord | null>;

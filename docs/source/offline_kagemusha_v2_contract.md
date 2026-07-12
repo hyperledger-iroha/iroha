@@ -1,8 +1,8 @@
 # Kagemusha wire and proof contract
 
-Kagemusha is the only offline-cash protocol. The public mode value is
-`recursive_spend_v1`. Suffixes on Norito types, proof envelopes, and artifact
-manifests are internal schema versions; they do not select another lifecycle.
+Kagemusha is the only offline-cash protocol. Suffixes on Norito types, proof
+envelopes, and artifact manifests are internal schema versions; they do not
+select another lifecycle.
 
 ## Exact amounts
 
@@ -76,9 +76,8 @@ scaled public amount.
 
 ## Artifacts and native bridge
 
-Bridge ABI 19 exposes one Kagemusha capability record. It must report mode
-`recursive_spend_v1`, manifest schema
-`kagemusha.offline.recursive_spend.artifact_manifest.v3`, backend
+Bridge ABI 19 exposes one Kagemusha capability record. It must report manifest
+schema `kagemusha.offline.recursive_spend.artifact_manifest.v3`, backend
 `halo2/ipa-pasta-cycle-v1`, the fixed transition/state circuit identifiers,
 and an exact proof-backend availability flag.
 

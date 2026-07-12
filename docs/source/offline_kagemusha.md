@@ -4,8 +4,9 @@ Kagemusha is the single offline-cash protocol in the first release. It supports
 exact decimal amounts, sender change, bounded two-input joins, offline multihop
 spending, and full or partial online redemption. There is no runtime product
 mode or alternative offline API. V2 request names, V3 manifests, and bridge ABI
-19 are internal wire and artifact versions; authenticated artifact manifests
-carry the fixed `recursive_spend_v1` discriminator.
+19 are internal wire and artifact versions. The manifest and native capability
+schemas have no `mode` field; schema/version, backend, transcript, and circuit
+identities pin the exact cryptographic contract.
 
 ## Amounts and assets
 
@@ -47,8 +48,9 @@ Torii reports final chain finality.
 
 Readiness and operation responses support Torii's typed response negotiation.
 Readiness is authoritative only when its block context, live asset scale,
-active transfer verifier, top-up-shield verifier, lineage verifier window,
-unshield verifier window, bridge ABI, and artifact generation agree.
+active transfer verifier, top-up-shield verifier, recursive transition and
+state verifier windows, unshield verifier window, bridge ABI, and artifact
+generation agree.
 
 ## Online to offline
 
@@ -100,8 +102,9 @@ change output and proves exact conservation between the redeemed public amount
 and the offline change branch.
 
 Core validates the finalized top-up provenance, current recursive proof,
-active lineage and unshield verifier records, nullifier freshness, exact scale,
-unshield public inputs, and optional change branch before mutating balances. It
+active recursive transition, recursive state, and unshield verifier records,
+nullifier freshness, exact scale, unshield public inputs, and optional change
+branch before mutating balances. It
 then consumes the branch nullifier, credits the exact public `Numeric`, appends
 the change commitment when present, and persists an idempotent receipt. A wallet
 keeps the source note and pending request until finality; retries reuse the same

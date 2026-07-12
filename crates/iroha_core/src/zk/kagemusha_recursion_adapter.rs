@@ -29,6 +29,485 @@ mod tests {
 
     use crate::zk::halo2_backend::assign_advice_compat;
 
+    /// Native-value loader which preserves every MSM as a canonical linear
+    /// equation instead of evaluating it away.  This is audit instrumentation
+    /// for the fixed-VK deferred-verifier wire: scalar arithmetic remains the
+    /// exact field arithmetic used by `snark-verifier`, while every curve
+    /// assertion records the complete base/coefficient vector that the
+    /// opposite-field circuit would have to authenticate.
+    mod deferred_audit {
+        use std::{
+            cell::RefCell,
+            fmt,
+            io::Read,
+            marker::PhantomData,
+            ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign},
+            rc::Rc,
+        };
+
+        use snark_verifier::{
+            Error,
+            loader::{EcPointLoader, LoadedEcPoint, LoadedScalar, Loader, ScalarLoader},
+            util::{
+                arithmetic::{
+                    Curve, CurveAffine, Field, FieldExt, FieldOps, Group, PrimeField, fe_to_fe,
+                },
+                hash::Poseidon,
+                transcript::{Transcript, TranscriptRead},
+            },
+        };
+
+        #[derive(Clone, Debug, PartialEq, Eq)]
+        pub(super) struct EquationTerm {
+            pub(super) point: Vec<u8>,
+            pub(super) coefficient: Vec<u8>,
+        }
+
+        #[derive(Clone, Debug, PartialEq, Eq)]
+        pub(super) struct Equation {
+            pub(super) annotation: String,
+            pub(super) terms: Vec<EquationTerm>,
+        }
+
+        struct State {
+            equations: Vec<Equation>,
+        }
+
+        #[derive(Clone)]
+        pub(super) struct RecordingLoader<C: CurveAffine> {
+            state: Rc<RefCell<State>>,
+            _curve: PhantomData<C>,
+        }
+
+        impl<C: CurveAffine> fmt::Debug for RecordingLoader<C> {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.debug_struct("RecordingLoader").finish_non_exhaustive()
+            }
+        }
+
+        impl<C: CurveAffine> RecordingLoader<C> {
+            pub(super) fn new() -> Self {
+                Self {
+                    state: Rc::new(RefCell::new(State {
+                        equations: Vec::new(),
+                    })),
+                    _curve: PhantomData,
+                }
+            }
+
+            pub(super) fn equations(&self) -> Vec<Equation> {
+                self.state.borrow().equations.clone()
+            }
+
+            fn same(&self, other: &Self) {
+                assert!(
+                    Rc::ptr_eq(&self.state, &other.state),
+                    "deferred audit values cannot cross loader instances"
+                );
+            }
+        }
+
+        #[derive(Clone)]
+        pub(super) struct RecordedScalar<C: CurveAffine> {
+            value: C::Scalar,
+            loader: RecordingLoader<C>,
+        }
+
+        impl<C: CurveAffine> fmt::Debug for RecordedScalar<C> {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.debug_tuple("RecordedScalar").field(&self.value).finish()
+            }
+        }
+
+        impl<C: CurveAffine> PartialEq for RecordedScalar<C> {
+            fn eq(&self, other: &Self) -> bool {
+                self.loader.same(&other.loader);
+                self.value == other.value
+            }
+        }
+
+        impl<C: CurveAffine> RecordedScalar<C> {
+            pub(super) fn canonical_bytes(&self) -> Vec<u8> {
+                self.value.to_repr().as_ref().to_vec()
+            }
+        }
+
+        macro_rules! scalar_binop {
+            ($trait:ident, $method:ident, $assign_trait:ident, $assign_method:ident, $op:tt) => {
+                impl<C: CurveAffine> $trait for RecordedScalar<C> {
+                    type Output = Self;
+
+                    fn $method(mut self, rhs: Self) -> Self::Output {
+                        self.loader.same(&rhs.loader);
+                        self.value = self.value $op rhs.value;
+                        self
+                    }
+                }
+
+                impl<C: CurveAffine> $trait<&Self> for RecordedScalar<C> {
+                    type Output = Self;
+
+                    fn $method(mut self, rhs: &Self) -> Self::Output {
+                        self.loader.same(&rhs.loader);
+                        self.value = self.value $op rhs.value;
+                        self
+                    }
+                }
+
+                impl<C: CurveAffine> $assign_trait for RecordedScalar<C> {
+                    fn $assign_method(&mut self, rhs: Self) {
+                        self.loader.same(&rhs.loader);
+                        self.value = self.value $op rhs.value;
+                    }
+                }
+
+                impl<C: CurveAffine> $assign_trait<&Self> for RecordedScalar<C> {
+                    fn $assign_method(&mut self, rhs: &Self) {
+                        self.loader.same(&rhs.loader);
+                        self.value = self.value $op rhs.value;
+                    }
+                }
+            };
+        }
+
+        scalar_binop!(Add, add, AddAssign, add_assign, +);
+        scalar_binop!(Sub, sub, SubAssign, sub_assign, -);
+        scalar_binop!(Mul, mul, MulAssign, mul_assign, *);
+
+        impl<C: CurveAffine> Neg for RecordedScalar<C> {
+            type Output = Self;
+
+            fn neg(mut self) -> Self::Output {
+                self.value = -self.value;
+                self
+            }
+        }
+
+        impl<C: CurveAffine> FieldOps for RecordedScalar<C> {
+            fn invert(&self) -> Option<Self> {
+                Option::<C::Scalar>::from(Field::invert(&self.value)).map(|value| Self {
+                    value,
+                    loader: self.loader.clone(),
+                })
+            }
+        }
+
+        impl<C: CurveAffine> LoadedScalar<C::Scalar> for RecordedScalar<C> {
+            type Loader = RecordingLoader<C>;
+
+            fn loader(&self) -> &Self::Loader {
+                &self.loader
+            }
+
+            fn pow_var(&self, exp: &Self, _: usize) -> Self {
+                self.loader.same(&exp.loader);
+                let repr = exp.value.to_repr();
+                let mut limbs = Vec::with_capacity(repr.as_ref().len().div_ceil(8));
+                for chunk in repr.as_ref().chunks(8) {
+                    let mut limb = [0_u8; 8];
+                    limb[..chunk.len()].copy_from_slice(chunk);
+                    limbs.push(u64::from_le_bytes(limb));
+                }
+                Self {
+                    value: self.value.pow_vartime(limbs),
+                    loader: self.loader.clone(),
+                }
+            }
+        }
+
+        #[derive(Clone)]
+        struct LinearTerm<C: CurveAffine> {
+            point: C,
+            coefficient: C::Scalar,
+        }
+
+        #[derive(Clone)]
+        pub(super) struct RecordedPoint<C: CurveAffine> {
+            value: C,
+            terms: Vec<LinearTerm<C>>,
+            loader: RecordingLoader<C>,
+        }
+
+        impl<C: CurveAffine> fmt::Debug for RecordedPoint<C> {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.debug_struct("RecordedPoint")
+                    .field("value", &self.value)
+                    .field("terms", &self.terms.len())
+                    .finish()
+            }
+        }
+
+        impl<C: CurveAffine> PartialEq for RecordedPoint<C> {
+            fn eq(&self, other: &Self) -> bool {
+                self.loader.same(&other.loader);
+                self.value == other.value
+            }
+        }
+
+        impl<C: CurveAffine> RecordedPoint<C> {
+            pub(super) fn canonical_bytes(&self) -> Vec<u8> {
+                self.value.to_bytes().as_ref().to_vec()
+            }
+        }
+
+        impl<C: CurveAffine> LoadedEcPoint<C> for RecordedPoint<C> {
+            type Loader = RecordingLoader<C>;
+
+            fn loader(&self) -> &Self::Loader {
+                &self.loader
+            }
+        }
+
+        fn push_term<C: CurveAffine>(
+            terms: &mut Vec<LinearTerm<C>>,
+            point: C,
+            coefficient: C::Scalar,
+        ) {
+            if coefficient == C::Scalar::ZERO {
+                return;
+            }
+            if let Some(existing) = terms.iter_mut().find(|term| term.point == point) {
+                existing.coefficient += coefficient;
+                if existing.coefficient == C::Scalar::ZERO {
+                    let index = terms
+                        .iter()
+                        .position(|term| term.point == point)
+                        .expect("existing term index");
+                    terms.remove(index);
+                }
+            } else {
+                terms.push(LinearTerm { point, coefficient });
+            }
+        }
+
+        impl<C: CurveAffine> ScalarLoader<C::Scalar> for RecordingLoader<C> {
+            type LoadedScalar = RecordedScalar<C>;
+
+            fn load_const(&self, value: &C::Scalar) -> Self::LoadedScalar {
+                RecordedScalar {
+                    value: *value,
+                    loader: self.clone(),
+                }
+            }
+
+            fn assert_eq(
+                &self,
+                annotation: &str,
+                lhs: &Self::LoadedScalar,
+                rhs: &Self::LoadedScalar,
+            ) {
+                lhs.loader.same(self);
+                rhs.loader.same(self);
+                assert_eq!(lhs.value, rhs.value, "{annotation}");
+            }
+        }
+
+        impl<C: CurveAffine> EcPointLoader<C> for RecordingLoader<C> {
+            type LoadedEcPoint = RecordedPoint<C>;
+
+            fn ec_point_load_const(&self, value: &C) -> Self::LoadedEcPoint {
+                RecordedPoint {
+                    value: *value,
+                    terms: vec![LinearTerm {
+                        point: *value,
+                        coefficient: C::Scalar::ONE,
+                    }],
+                    loader: self.clone(),
+                }
+            }
+
+            fn ec_point_assert_eq(
+                &self,
+                annotation: &str,
+                lhs: &Self::LoadedEcPoint,
+                rhs: &Self::LoadedEcPoint,
+            ) {
+                lhs.loader.same(self);
+                rhs.loader.same(self);
+                assert_eq!(lhs.value, rhs.value, "{annotation}");
+                let mut terms = Vec::new();
+                for term in &lhs.terms {
+                    push_term(&mut terms, term.point, term.coefficient);
+                }
+                for term in &rhs.terms {
+                    push_term(&mut terms, term.point, -term.coefficient);
+                }
+                let terms = terms
+                    .into_iter()
+                    .map(|term| EquationTerm {
+                        point: term.point.to_bytes().as_ref().to_vec(),
+                        coefficient: term.coefficient.to_repr().as_ref().to_vec(),
+                    })
+                    .collect();
+                self.state.borrow_mut().equations.push(Equation {
+                    annotation: annotation.to_owned(),
+                    terms,
+                });
+            }
+
+            fn multi_scalar_multiplication(
+                pairs: &[(
+                    &<Self as ScalarLoader<C::Scalar>>::LoadedScalar,
+                    &Self::LoadedEcPoint,
+                )],
+            ) -> Self::LoadedEcPoint {
+                let (first_scalar, first_point) = pairs.first().expect("non-empty MSM");
+                let loader = first_scalar.loader.clone();
+                first_point.loader.same(&loader);
+                let mut value = C::Curve::identity();
+                let mut terms = Vec::new();
+                for (scalar, point) in pairs {
+                    scalar.loader.same(&loader);
+                    point.loader.same(&loader);
+                    value += point.value * scalar.value;
+                    for term in &point.terms {
+                        push_term(&mut terms, term.point, term.coefficient * scalar.value);
+                    }
+                }
+                RecordedPoint {
+                    value: value.to_affine(),
+                    terms,
+                    loader,
+                }
+            }
+        }
+
+        impl<C: CurveAffine> Loader<C> for RecordingLoader<C> {}
+
+        pub(super) struct RecordingPoseidonTranscript<
+            C: CurveAffine,
+            R,
+            const T: usize,
+            const RATE: usize,
+            const R_F: usize,
+            const R_P: usize,
+        > {
+            loader: RecordingLoader<C>,
+            stream: R,
+            poseidon: Poseidon<C::Scalar, RecordedScalar<C>, T, RATE>,
+            pub(super) scalar_count: usize,
+            pub(super) point_count: usize,
+            pub(super) point_sources: Vec<Vec<u8>>,
+        }
+
+        impl<
+            C: CurveAffine,
+            R,
+            const T: usize,
+            const RATE: usize,
+            const R_F: usize,
+            const R_P: usize,
+        > RecordingPoseidonTranscript<C, R, T, RATE, R_F, R_P>
+        where
+            C::Scalar: FieldExt,
+        {
+            pub(super) fn new<const SECURE_MDS: usize>(
+                loader: RecordingLoader<C>,
+                stream: R,
+            ) -> Self {
+                let poseidon = Poseidon::new::<R_F, R_P, SECURE_MDS>(&loader);
+                Self {
+                    loader,
+                    stream,
+                    poseidon,
+                    scalar_count: 0,
+                    point_count: 0,
+                    point_sources: Vec::new(),
+                }
+            }
+        }
+
+        impl<
+            C: CurveAffine,
+            R,
+            const T: usize,
+            const RATE: usize,
+            const R_F: usize,
+            const R_P: usize,
+        > Transcript<C, RecordingLoader<C>> for RecordingPoseidonTranscript<C, R, T, RATE, R_F, R_P>
+        where
+            C::Scalar: FieldExt,
+        {
+            fn loader(&self) -> &RecordingLoader<C> {
+                &self.loader
+            }
+
+            fn squeeze_challenge(&mut self) -> RecordedScalar<C> {
+                self.poseidon.squeeze()
+            }
+
+            fn common_ec_point(&mut self, point: &RecordedPoint<C>) -> Result<(), Error> {
+                point.loader.same(&self.loader);
+                let coordinates: Option<snark_verifier::util::arithmetic::Coordinates<C>> =
+                    point.value.coordinates().into();
+                let coordinates = coordinates.ok_or_else(|| {
+                    Error::Transcript(
+                        std::io::ErrorKind::InvalidData,
+                        "identity point cannot enter the Poseidon transcript".to_owned(),
+                    )
+                })?;
+                let x = self.loader.load_const(&fe_to_fe(*coordinates.x()));
+                let y = self.loader.load_const(&fe_to_fe(*coordinates.y()));
+                self.poseidon.update(&[x, y]);
+                Ok(())
+            }
+
+            fn common_scalar(&mut self, scalar: &RecordedScalar<C>) -> Result<(), Error> {
+                scalar.loader.same(&self.loader);
+                self.poseidon.update(std::slice::from_ref(scalar));
+                Ok(())
+            }
+        }
+
+        impl<
+            C: CurveAffine,
+            R: Read,
+            const T: usize,
+            const RATE: usize,
+            const R_F: usize,
+            const R_P: usize,
+        > TranscriptRead<C, RecordingLoader<C>>
+            for RecordingPoseidonTranscript<C, R, T, RATE, R_F, R_P>
+        where
+            C::Scalar: FieldExt,
+        {
+            fn read_scalar(&mut self) -> Result<RecordedScalar<C>, Error> {
+                let mut repr = <C::Scalar as PrimeField>::Repr::default();
+                self.stream.read_exact(repr.as_mut()).map_err(|error| {
+                    Error::Transcript(error.kind(), "truncated scalar field".to_owned())
+                })?;
+                let value = C::Scalar::from_repr_vartime(repr).ok_or_else(|| {
+                    Error::Transcript(
+                        std::io::ErrorKind::InvalidData,
+                        "non-canonical scalar field".to_owned(),
+                    )
+                })?;
+                let value = self.loader.load_const(&value);
+                self.common_scalar(&value)?;
+                self.scalar_count += 1;
+                Ok(value)
+            }
+
+            fn read_ec_point(&mut self) -> Result<RecordedPoint<C>, Error> {
+                let mut repr = C::Repr::default();
+                self.stream.read_exact(repr.as_mut()).map_err(|error| {
+                    Error::Transcript(error.kind(), "truncated curve point".to_owned())
+                })?;
+                let value = Option::<C>::from(C::from_bytes(&repr)).ok_or_else(|| {
+                    Error::Transcript(
+                        std::io::ErrorKind::InvalidData,
+                        "non-canonical curve point".to_owned(),
+                    )
+                })?;
+                self.point_sources.push(repr.as_ref().to_vec());
+                let value = self.loader.ec_point_load_const(&value);
+                self.common_ec_point(&value)?;
+                self.point_count += 1;
+                Ok(value)
+            }
+        }
+    }
+
     #[derive(Clone, Default)]
     struct PublicValue<F: Field> {
         value: F,
@@ -96,6 +575,7 @@ mod tests {
         };
         use rand_core_06::OsRng;
         use snark_verifier::{
+            loader::ScalarLoader,
             loader::native::NativeLoader,
             pcs::{
                 AccumulationDecider, AccumulationScheme, AccumulationSchemeProver,
@@ -117,7 +597,9 @@ mod tests {
         };
 
         use super::PublicValue;
+        use super::deferred_audit::{RecordingLoader, RecordingPoseidonTranscript};
         use crate::zk::halo2_backend::{Scalar, keygen_pk, keygen_vk, params_new};
+        use snark_verifier::util::arithmetic::PrimeCurveAffine as _;
 
         const T: usize = 3;
         const RATE: usize = 2;
@@ -346,17 +828,140 @@ mod tests {
             )
             .expect("terminal transition decision");
 
+            // Re-run the exact fixed-key verifier with native scalar
+            // arithmetic and symbolic curve arithmetic. This extracts the
+            // complete MSM coefficient vectors rather than guessing from the
+            // number of transcript objects.
+            let recording_loader = RecordingLoader::<EqAffine>::new();
+            let loaded_protocol = protocol.loaded(&recording_loader);
+            let loaded_instances = instances
+                .iter()
+                .map(|column| {
+                    column
+                        .iter()
+                        .map(|value| recording_loader.load_const(value))
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>();
+            let mut recording_transcript =
+                RecordingPoseidonTranscript::<EqAffine, _, T, RATE, R_F, R_P>::new::<SECURE_MDS>(
+                    recording_loader.clone(),
+                    proof_bytes.as_slice(),
+                );
+            let recorded = SuccinctVerifier::read_proof(
+                deciding_key.as_ref(),
+                &loaded_protocol,
+                &loaded_instances,
+                &mut recording_transcript,
+            )
+            .expect("parse fixed transition proof for deferred audit");
+            let recorded_accumulators = SuccinctVerifier::verify(
+                deciding_key.as_ref(),
+                &loaded_protocol,
+                &loaded_instances,
+                &recorded,
+            )
+            .expect("extract fixed transition residual equations");
+            assert_eq!(recorded_accumulators.len(), 1);
+            let recorded_accumulator = &recorded_accumulators[0];
+            assert_eq!(recorded_accumulator.xi.len(), PRODUCTION_K as usize);
+            let equations = recording_loader.equations();
+            assert_eq!(
+                equations.len(),
+                1,
+                "the fixed IPA verifier must expose exactly one opening-residual MSM"
+            );
+
+            // Canonical point-source namespace: transcript points first in
+            // transcript order, followed by fixed protocol/SVK points. The
+            // packet carries only a u16 source index plus a canonical scalar;
+            // proof and artifact bytes supply the points themselves.
+            let mut point_sources = recording_transcript.point_sources.clone();
+            let svk = deciding_key.as_ref();
+            let mut add_fixed_source = |point: EqAffine| {
+                let bytes = point.to_bytes().as_ref().to_vec();
+                if !point_sources.iter().any(|existing| existing == &bytes) {
+                    point_sources.push(bytes);
+                }
+            };
+            for point in &protocol.preprocessed {
+                add_fixed_source(*point);
+            }
+            add_fixed_source(svk.g);
+            add_fixed_source(svk.h);
+            if let Some(point) = svk.s {
+                add_fixed_source(point);
+            }
+            add_fixed_source(EqAffine::generator());
+            if let Some(instance_key) = &protocol.instance_committing_key {
+                for point in &instance_key.bases {
+                    add_fixed_source(*point);
+                }
+                if let Some(point) = instance_key.constant {
+                    add_fixed_source(point);
+                }
+            }
+            assert!(
+                point_sources.len() <= usize::from(u16::MAX),
+                "deferred packet point namespace must fit u16"
+            );
+
+            let mut coefficient_count = 0_usize;
+            for equation in &equations {
+                assert!(!equation.terms.is_empty());
+                for term in &equation.terms {
+                    assert_eq!(term.point.len(), 32);
+                    assert_eq!(term.coefficient.len(), 32);
+                    assert!(
+                        point_sources.iter().any(|source| source == &term.point),
+                        "every residual base must resolve to proof or fixed-VK material"
+                    );
+                }
+                coefficient_count += equation.terms.len();
+            }
+            let accumulator_u = recorded_accumulator.u.canonical_bytes();
+            assert!(
+                point_sources.iter().any(|source| source == &accumulator_u),
+                "the output accumulator point must be a proof point"
+            );
+            for xi in &recorded_accumulator.xi {
+                assert_eq!(xi.canonical_bytes().len(), 32);
+            }
+
+            // Complete optimized packet layout:
+            // magic/version/parity/counts + schema/VK/instance/manifest hashes
+            // + proof length/source count/accumulator count + packet digest,
+            // followed by proof bytes, length-prefixed equations of
+            // (u16 source, scalar), and the accumulator xi/U representation.
+            const PACKET_FIXED_BYTES: usize = 8 + 2 + 1 + 1 + 4 * 32 + 2 + 2 + 1 + 1 + 32;
+            const EQUATION_HEADER_BYTES: usize = 2;
+            const EQUATION_TERM_BYTES: usize = 2 + 32;
+            let complete_deferred_packet_bytes = PACKET_FIXED_BYTES
+                + proof_bytes.len()
+                + equations.len() * EQUATION_HEADER_BYTES
+                + coefficient_count * EQUATION_TERM_BYTES
+                + recorded_accumulator.xi.len() * 32
+                + 2;
+
             let deferred_packet_upper_bound = scalar_count * 32
                 + (explicit_challenge_count + EXTRA_CHALLENGE_UPPER_BOUND) * 16
                 + (point_count + protocol.preprocessed.len() + EXTRA_COEFFICIENT_UPPER_BOUND) * 32;
             eprintln!(
-                "Kagemusha deferred packet proof={} scalars={} points={} explicit_challenges={} preprocessed={} packet_upper={}",
+                "Kagemusha deferred packet proof={} scalars={} points={} explicit_challenges={} preprocessed={} residual_equations={} residual_coefficients={} point_sources={} packet_exact={} packet_upper={}",
                 proof_bytes.len(),
                 scalar_count,
                 point_count,
                 explicit_challenge_count,
                 protocol.preprocessed.len(),
+                equations.len(),
+                coefficient_count,
+                point_sources.len(),
+                complete_deferred_packet_bytes,
                 deferred_packet_upper_bound,
+            );
+            assert!(
+                complete_deferred_packet_bytes <= deferred_packet_upper_bound,
+                "the legacy conservative bound must cover the canonical packet"
             );
             assert!(
                 deferred_packet_upper_bound <= 9_216,

@@ -26,7 +26,6 @@ public final class KagemushaRecursiveSpendProverTest {
   }
 
   private static void artifactContractIsFixed() {
-    assert "recursive_spend_v1".equals(KagemushaRecursiveSpendProver.ARTIFACT_MANIFEST_MODE);
     assert KagemushaRecursiveSpendProver.REQUIRED_NATIVE_BRIDGE_ABI_VERSION == 19;
     assert KagemushaRecursiveSpendProver.ARTIFACT_COUNT == 6;
     assert "kagemusha.offline.recursive_spend.artifact_manifest.v3"

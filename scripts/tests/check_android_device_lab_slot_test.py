@@ -7476,8 +7476,9 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
                 signer,
             )
             stale_commands = [
-                command.replace(",org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendLifecycleTest", "")
+                command
                 for command in KAGEMUSHA_ANDROID_RAW_TEST_COMMANDS
+                if "KagemushaRecursiveSpendLifecycleTest" not in command
             ]
             metadata_path = slot / "slot.json"
             metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
@@ -8554,7 +8555,7 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             report["errors"],
         )
         self.assertIn(
-            "slot.json raw_test_commands must include KagemushaDeviceLabArtifactExportTest",
+            "slot.json raw_test_commands must include org.hyperledger.iroha.sdk.offline.KagemushaDeviceLabArtifactExportTest",
             report["errors"],
         )
         self.assertIn(
@@ -8582,7 +8583,7 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             report["errors"],
         )
         self.assertIn(
-            "signed evidence artifact raw_test_commands must include KagemushaDeviceLabArtifactExportTest",
+            "signed evidence artifact raw_test_commands must include org.hyperledger.iroha.sdk.offline.KagemushaDeviceLabArtifactExportTest",
             report["errors"],
         )
         self.assertIn(
@@ -15882,7 +15883,7 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             stderr.getvalue(),
         )
         self.assertIn(
-            "slot.json raw_test_commands must include KagemushaDeviceLabArtifactExportTest",
+            "slot.json raw_test_commands must include org.hyperledger.iroha.sdk.offline.KagemushaDeviceLabArtifactExportTest",
             stderr.getvalue(),
         )
         self.assertIn(

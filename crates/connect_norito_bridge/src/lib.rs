@@ -7470,6 +7470,286 @@ impl KagemushaNoteOpeningV2 {
     }
 }
 
+/// Secret-free Merkle authentication data retained with one owned note.
+///
+/// `input_path` proves the owned commitment at `leaf_index`. `dummy_input_path`
+/// proves an empty leaf against the same root and is consumed by the fixed
+/// two-input confidential circuits when only one real note is spent. Both
+/// paths are local encrypted state; peer and Torii archives never contain
+/// them.
+#[derive(Clone, Debug, PartialEq, Eq, norito::Encode, norito::Decode)]
+struct KagemushaNoteMembershipWitnessV2 {
+    leaf_index: u32,
+    input_path: KagemushaConfidentialMerklePathV2,
+    dummy_input_path: KagemushaConfidentialMerklePathV2,
+}
+
+/// Canonical native-only representation of a confidential-v2 Merkle path.
+#[derive(Clone, Debug, PartialEq, Eq, norito::Encode, norito::Decode)]
+struct KagemushaConfidentialMerklePathV2 {
+    siblings: Vec<[u8; 32]>,
+    directions: Vec<u8>,
+    root: [u8; 32],
+}
+
+impl KagemushaConfidentialMerklePathV2 {
+    fn validate(&self) -> BridgeResult<()> {
+        const CONFIDENTIAL_TREE_DEPTH: usize = 16;
+        if self.siblings.len() != CONFIDENTIAL_TREE_DEPTH
+            || self.directions.len() != CONFIDENTIAL_TREE_DEPTH
+            || self.directions.iter().any(|direction| *direction > 1)
+            || self.root == [0; 32]
+        {
+            return Err(BridgeError::KagemushaProve);
+        }
+        Ok(())
+    }
+
+    fn validate_for_leaf_index(&self, leaf_index: u32) -> BridgeResult<()> {
+        self.validate()?;
+        if leaf_index >= (1_u32 << self.directions.len())
+            || self
+                .directions
+                .iter()
+                .enumerate()
+                .any(|(level, direction)| *direction != ((leaf_index >> level) & 1) as u8)
+        {
+            return Err(BridgeError::KagemushaProve);
+        }
+        Ok(())
+    }
+
+    fn leaf_index(&self) -> BridgeResult<u32> {
+        self.validate()?;
+        Ok(self
+            .directions
+            .iter()
+            .enumerate()
+            .fold(0_u32, |index, (level, direction)| {
+                index | (u32::from(*direction) << level)
+            }))
+    }
+
+    #[cfg(feature = "privacy-production-enabled")]
+    fn to_privacy_path(
+        &self,
+    ) -> BridgeResult<iroha_core::zk::confidential_v2::ConfidentialMerklePathV2> {
+        use iroha_core::zk::confidential_v2::CONFIDENTIAL_TREE_DEPTH_V2;
+
+        if self.siblings.len() != CONFIDENTIAL_TREE_DEPTH_V2
+            || self.directions.len() != CONFIDENTIAL_TREE_DEPTH_V2
+            || self.directions.iter().any(|direction| *direction > 1)
+            || self.root == [0; 32]
+        {
+            return Err(BridgeError::KagemushaProve);
+        }
+        Ok(iroha_core::zk::confidential_v2::ConfidentialMerklePathV2 {
+            siblings: self.siblings.clone(),
+            directions: self.directions.clone(),
+            // Native proving always recomputes these nodes. Accepting them
+            // from wallet code would create a second, unauthenticated path.
+            witness_nodes: Vec::new(),
+            root: self.root,
+        })
+    }
+
+    fn zeroize(&mut self) {
+        self.siblings.zeroize();
+        self.directions.zeroize();
+        self.root.zeroize();
+    }
+}
+
+impl KagemushaNoteMembershipWitnessV2 {
+    fn validate(&self) -> BridgeResult<()> {
+        self.input_path.validate_for_leaf_index(self.leaf_index)?;
+        self.dummy_input_path.validate()?;
+        if self.input_path.root != self.dummy_input_path.root
+            || self.dummy_input_path.leaf_index()? == self.leaf_index
+        {
+            return Err(BridgeError::KagemushaProve);
+        }
+        Ok(())
+    }
+
+    fn zeroize(&mut self) {
+        self.leaf_index.zeroize();
+        self.input_path.zeroize();
+        self.dummy_input_path.zeroize();
+    }
+}
+
+/// Local-only append carrier. It is intentionally distinct from the public
+/// `KagemushaRecursiveSpendAppendRequestV2`: note openings and membership
+/// paths are consumed inside native code and never survive in a split result.
+#[derive(Clone, Debug, norito::Encode, norito::Decode)]
+struct KagemushaRecursiveSpendAppendLocalRequestV2 {
+    previous_inputs: Vec<iroha_data_model::offline::KagemushaRecursiveSpendAppendInputV2>,
+    input_openings: Vec<KagemushaNoteOpeningV2>,
+    input_membership_witnesses: Vec<KagemushaNoteMembershipWitnessV2>,
+    change_opening: Option<KagemushaNoteOpeningV2>,
+    output_artifact_binding: iroha_data_model::offline::KagemushaRecursiveSpendArtifactBindingV3,
+    transfer_verifier_id: VerifyingKeyId,
+    transfer_verifier_commitment: [u8; 32],
+    operation_id: [u8; 32],
+    block_height: u64,
+}
+
+impl KagemushaRecursiveSpendAppendLocalRequestV2 {
+    fn zeroize(&mut self) {
+        for opening in &mut self.input_openings {
+            opening.zeroize();
+        }
+        for witness in &mut self.input_membership_witnesses {
+            witness.zeroize();
+        }
+        if let Some(change) = &mut self.change_opening {
+            change.zeroize();
+        }
+    }
+
+    fn validate_shape(&self) -> BridgeResult<()> {
+        if self.previous_inputs.is_empty()
+            || self.previous_inputs.len() > 2
+            || self.input_openings.len() != self.previous_inputs.len()
+            || self.input_membership_witnesses.len() != self.previous_inputs.len()
+            || self.operation_id == [0; 32]
+            || self.block_height == 0
+            || self.transfer_verifier_commitment == [0; 32]
+        {
+            return Err(BridgeError::KagemushaProve);
+        }
+        self.output_artifact_binding
+            .validate()
+            .map_err(|_| BridgeError::KagemushaProve)?;
+        for opening in &self.input_openings {
+            opening.validate()?;
+        }
+        for ((input, opening), witness) in self
+            .previous_inputs
+            .iter()
+            .zip(&self.input_openings)
+            .zip(&self.input_membership_witnesses)
+        {
+            witness.validate()?;
+            if witness.input_path.root != input.previous_bundle.statement.final_root
+                || opening.spend_key != self.input_openings[0].spend_key
+            {
+                return Err(BridgeError::KagemushaProve);
+            }
+        }
+        if let Some(change) = &self.change_opening {
+            change.validate()?;
+            if change.spend_key != self.input_openings[0].spend_key {
+                return Err(BridgeError::KagemushaProve);
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_for_recipient_request(
+        &self,
+        recipient_request: &iroha_data_model::offline::KagemushaRecipientPaymentRequestV2,
+    ) -> BridgeResult<()> {
+        self.validate_shape()?;
+        if self.transfer_verifier_id.backend.as_str() != iroha_core::zk::ZK_BACKEND_HALO2_IPA
+            || self.transfer_verifier_id.name
+                != iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_TRANSFER_V2
+        {
+            return Err(BridgeError::KagemushaProve);
+        }
+        let first = &self.previous_inputs[0].previous_bundle.statement;
+        let mut total = 0_u128;
+        for input in &self.previous_inputs {
+            input
+                .previous_bundle
+                .validate_public_binding()
+                .map_err(|_| BridgeError::KagemushaProve)?;
+            let statement = &input.previous_bundle.statement;
+            if statement.chain_id != first.chain_id
+                || statement.asset != first.asset
+                || statement.asset_scale != first.asset_scale
+                || statement.final_root != first.final_root
+                || statement.artifact_binding != self.output_artifact_binding
+            {
+                return Err(BridgeError::KagemushaProve);
+            }
+            total = total
+                .checked_add(statement.current_note.amount.atomic_units)
+                .ok_or(BridgeError::KagemushaProve)?;
+        }
+        if recipient_request.chain_id != first.chain_id
+            || recipient_request.asset != first.asset
+            || recipient_request.amount.scale != first.asset_scale
+            || recipient_request.amount.atomic_units > total
+            || (recipient_request.amount.atomic_units == total) != self.change_opening.is_none()
+        {
+            return Err(BridgeError::KagemushaProve);
+        }
+        Ok(())
+    }
+}
+
+/// Local-only full/partial redemption carrier. Native code derives the
+/// unshield-v3 public inputs, proof attachment, and redemption intent from
+/// this witness instead of accepting caller-synthesized proof metadata.
+#[derive(Clone, Debug, norito::Encode, norito::Decode)]
+struct KagemushaRecursiveSpendRedeemLocalRequestV2 {
+    bundle: iroha_data_model::offline::KagemushaRecursiveSpendBundleV2,
+    input_opening: KagemushaNoteOpeningV2,
+    input_membership_witness: KagemushaNoteMembershipWitnessV2,
+    recipient: AccountId,
+    public_amount: iroha_data_model::offline::KagemushaScaledAmountV2,
+    change_opening: Option<KagemushaNoteOpeningV2>,
+    unshield_verifier_id: VerifyingKeyId,
+    unshield_verifier_commitment: [u8; 32],
+    block_height: u64,
+    operation_id: [u8; 32],
+}
+
+impl KagemushaRecursiveSpendRedeemLocalRequestV2 {
+    fn zeroize(&mut self) {
+        self.input_opening.zeroize();
+        self.input_membership_witness.zeroize();
+        if let Some(change) = &mut self.change_opening {
+            change.zeroize();
+        }
+    }
+
+    fn validate_shape(&self) -> BridgeResult<()> {
+        self.bundle
+            .validate_public_binding()
+            .map_err(|_| BridgeError::KagemushaProve)?;
+        self.input_opening.validate()?;
+        self.input_membership_witness.validate()?;
+        self.public_amount
+            .validate()
+            .map_err(|_| BridgeError::KagemushaProve)?;
+        if let Some(change) = &self.change_opening {
+            change.validate()?;
+            if change.spend_key != self.input_opening.spend_key {
+                return Err(BridgeError::KagemushaProve);
+            }
+        }
+        let input_amount = self.bundle.statement.current_note.amount.atomic_units;
+        if self.operation_id == [0; 32]
+            || self.block_height == 0
+            || self.unshield_verifier_commitment == [0; 32]
+            || self.public_amount.scale != self.bundle.statement.asset_scale
+            || self.public_amount.atomic_units == 0
+            || self.public_amount.atomic_units > input_amount
+            || self.input_membership_witness.input_path.root != self.bundle.statement.final_root
+            || (self.public_amount.atomic_units == input_amount) != self.change_opening.is_none()
+            || self.unshield_verifier_id.backend.as_str() != iroha_core::zk::ZK_BACKEND_HALO2_IPA
+            || self.unshield_verifier_id.name
+                != iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_UNSHIELD_V2
+        {
+            return Err(BridgeError::KagemushaProve);
+        }
+        Ok(())
+    }
+}
+
 /// Secret-bearing, local-only request for constructing the zero-input shield
 /// transition used by a recursive Kagemusha top-up. This archive never goes
 /// to Torii and is zeroized immediately after the native prover returns.
@@ -7878,6 +8158,461 @@ fn kagemusha_recipient_output_derive_v2(
     })();
     opening.zeroize();
     outcome
+}
+
+#[cfg(feature = "privacy-production-enabled")]
+fn derive_kagemusha_owned_note_v2(
+    chain_id: &ChainId,
+    asset: &AssetDefinitionId,
+    amount: iroha_data_model::offline::KagemushaScaledAmountV2,
+    opening: &KagemushaNoteOpeningV2,
+) -> BridgeResult<iroha_data_model::offline::KagemushaSpendableNoteDescriptorV2> {
+    use iroha_core::zk::confidential_v2;
+
+    opening.validate()?;
+    amount.validate().map_err(|_| BridgeError::KagemushaProve)?;
+    let owner_tag = Zeroizing::new(
+        confidential_v2::derive_confidential_owner_tag_v2_with_diversifier(
+            &opening.spend_key,
+            opening.diversifier,
+        )
+        .map_err(|_| BridgeError::KagemushaProve)?,
+    );
+    let asset_id = asset.to_string();
+    let note = iroha_data_model::offline::KagemushaSpendableNoteDescriptorV2 {
+        chain_id: chain_id.clone(),
+        asset: asset.clone(),
+        note_commitment: confidential_v2::derive_confidential_note_v2(
+            &asset_id,
+            amount.atomic_units,
+            opening.rho,
+            *owner_tag,
+        )
+        .map_err(|_| BridgeError::KagemushaProve)?,
+        spend_nullifier: confidential_v2::derive_confidential_nullifier_v2(
+            chain_id.as_str(),
+            &asset_id,
+            &opening.spend_key,
+            opening.rho,
+        ),
+        amount,
+    };
+    note.validate_public_binding()
+        .map_err(|_| BridgeError::KagemushaProve)?;
+    Ok(note)
+}
+
+#[cfg(feature = "privacy-production-enabled")]
+fn require_kagemusha_confidential_verifier_v2(
+    id: &VerifyingKeyId,
+    commitment: [u8; 32],
+    expected_name: &str,
+    vk_box: &iroha_data_model::proof::VerifyingKeyBox,
+) -> BridgeResult<()> {
+    use iroha_core::zk::{ZK_BACKEND_HALO2_IPA, hash_vk};
+
+    if id.backend.as_str() != ZK_BACKEND_HALO2_IPA
+        || id.name != expected_name
+        || commitment == [0; 32]
+        || hash_vk(vk_box) != commitment
+    {
+        return Err(BridgeError::KagemushaProve);
+    }
+    Ok(())
+}
+
+#[cfg(feature = "privacy-production-enabled")]
+fn build_kagemusha_append_request_v2(
+    request: &KagemushaRecursiveSpendAppendLocalRequestV2,
+    recipient_request: &iroha_data_model::offline::KagemushaRecipientPaymentRequestV2,
+    verified_at_ms: u64,
+) -> BridgeResult<iroha_data_model::offline::KagemushaRecursiveSpendAppendRequestV2> {
+    use iroha_core::zk::{
+        ZK_BACKEND_HALO2_IPA,
+        confidential_v2::{
+            CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID, ConfidentialTransferInputV2,
+            ConfidentialTransferOutputV2, build_confidential_transfer_proof_v2_with_paths,
+            confidential_transfer_v2_vk_box,
+        },
+    };
+    use iroha_data_model::offline::{
+        KAGEMUSHA_VERIFIER_ROLE_TRANSFER_V2, KagemushaRecursiveSpendAppendRequestV2,
+        KagemushaRecursiveSpendSplitIntentBuildRequestV2,
+    };
+
+    request.validate_shape()?;
+    recipient_request
+        .validate_at(verified_at_ms)
+        .map_err(|_| BridgeError::KagemushaProve)?;
+    let recipient_digest = recipient_request
+        .digest()
+        .map_err(|_| BridgeError::KagemushaProve)?;
+    let first = &request.previous_inputs[0].previous_bundle.statement;
+    if recipient_request.chain_id != first.chain_id
+        || recipient_request.asset != first.asset
+        || recipient_request.amount.scale != first.asset_scale
+        || request.previous_inputs.iter().any(|input| {
+            let statement = &input.previous_bundle.statement;
+            statement.chain_id != first.chain_id
+                || statement.asset != first.asset
+                || statement.asset_scale != first.asset_scale
+                || statement.final_root != first.final_root
+                || statement.artifact_binding != request.output_artifact_binding
+        })
+    {
+        return Err(BridgeError::KagemushaProve);
+    }
+
+    let spend_key = request.input_openings[0].spend_key;
+    if request
+        .input_openings
+        .iter()
+        .any(|opening| opening.spend_key != spend_key)
+    {
+        return Err(BridgeError::KagemushaProve);
+    }
+    let mut total = 0_u128;
+    let mut inputs = Vec::with_capacity(request.previous_inputs.len());
+    let mut paths = Vec::with_capacity(2);
+    for ((input, opening), membership) in request
+        .previous_inputs
+        .iter()
+        .zip(&request.input_openings)
+        .zip(&request.input_membership_witnesses)
+    {
+        let statement = &input.previous_bundle.statement;
+        let expected = derive_kagemusha_owned_note_v2(
+            &statement.chain_id,
+            &statement.asset,
+            statement.current_note.amount,
+            opening,
+        )?;
+        if expected != statement.current_note
+            || membership.input_path.root != statement.final_root
+            || membership.dummy_input_path.root != statement.final_root
+        {
+            return Err(BridgeError::KagemushaProve);
+        }
+        total = total
+            .checked_add(statement.current_note.amount.atomic_units)
+            .ok_or(BridgeError::KagemushaProve)?;
+        inputs.push(ConfidentialTransferInputV2 {
+            amount: statement.current_note.amount.atomic_units,
+            rho: opening.rho,
+            diversifier: opening.diversifier,
+            leaf_index: usize::try_from(membership.leaf_index)
+                .map_err(|_| BridgeError::KagemushaProve)?,
+        });
+        paths.push(membership.input_path.to_privacy_path()?);
+    }
+    if inputs.len() == 1 {
+        paths.push(
+            request.input_membership_witnesses[0]
+                .dummy_input_path
+                .to_privacy_path()?,
+        );
+    }
+    if paths.len() != 2 || recipient_request.amount.atomic_units > total {
+        return Err(BridgeError::KagemushaProve);
+    }
+
+    let mut recipient_material: KagemushaRecipientOutputProverMaterialV2 =
+        decode_canonical_kagemusha_archive(&recipient_request.sender_output_prover_material)?;
+    let outcome = (|| {
+        if recipient_material.amount != recipient_request.amount.atomic_units
+            || recipient_material.rho == [0; 32]
+            || recipient_material.owner_tag == [0; 32]
+        {
+            return Err(BridgeError::KagemushaProve);
+        }
+        let asset_id = first.asset.to_string();
+        let recipient_commitment = iroha_core::zk::confidential_v2::derive_confidential_note_v2(
+            &asset_id,
+            recipient_material.amount,
+            recipient_material.rho,
+            recipient_material.owner_tag,
+        )
+        .map_err(|_| BridgeError::KagemushaProve)?;
+        if recipient_commitment != recipient_request.recipient_output.note_commitment {
+            return Err(BridgeError::KagemushaProve);
+        }
+        let mut outputs = vec![ConfidentialTransferOutputV2 {
+            amount: recipient_material.amount,
+            rho: recipient_material.rho,
+            owner_tag: recipient_material.owner_tag,
+        }];
+        let change_amount = total - recipient_request.amount.atomic_units;
+        let change_output = match (&request.change_opening, change_amount) {
+            (None, 0) => None,
+            (Some(opening), amount) if amount != 0 && opening.spend_key == spend_key => {
+                let amount = iroha_data_model::offline::KagemushaScaledAmountV2::new(
+                    amount,
+                    first.asset_scale,
+                )
+                .map_err(|_| BridgeError::KagemushaProve)?;
+                let note =
+                    derive_kagemusha_owned_note_v2(&first.chain_id, &first.asset, amount, opening)?;
+                let owner_tag = iroha_core::zk::confidential_v2::
+                    derive_confidential_owner_tag_v2_with_diversifier(
+                        &opening.spend_key,
+                        opening.diversifier,
+                    )
+                    .map_err(|_| BridgeError::KagemushaProve)?;
+                outputs.push(ConfidentialTransferOutputV2 {
+                    amount: amount.atomic_units,
+                    rho: opening.rho,
+                    owner_tag,
+                });
+                Some(note)
+            }
+            _ => return Err(BridgeError::KagemushaProve),
+        };
+        let vk_box = confidential_transfer_v2_vk_box().map_err(|_| BridgeError::KagemushaProve)?;
+        require_kagemusha_confidential_verifier_v2(
+            &request.transfer_verifier_id,
+            request.transfer_verifier_commitment,
+            KAGEMUSHA_VERIFIER_ROLE_TRANSFER_V2,
+            &vk_box,
+        )?;
+        let transfer = build_confidential_transfer_proof_v2_with_paths(
+            &first.chain_id,
+            &asset_id,
+            &spend_key,
+            &paths,
+            &inputs,
+            &outputs,
+            first.final_root,
+            CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID,
+            &vk_box,
+        )
+        .map_err(|_| BridgeError::KagemushaProve)?;
+        let expected_nullifiers = request
+            .previous_inputs
+            .iter()
+            .map(|input| input.previous_bundle.statement.current_note.spend_nullifier)
+            .collect::<Vec<_>>();
+        let mut expected_outputs = vec![recipient_request.recipient_output.note_commitment];
+        if let Some(change) = &change_output {
+            expected_outputs.push(change.note_commitment);
+        }
+        if transfer.nullifiers != expected_nullifiers
+            || transfer.output_commitments != expected_outputs
+            || transfer.root != first.final_root
+        {
+            return Err(BridgeError::KagemushaProve);
+        }
+        let mut proof = ProofAttachment::new_ref(
+            ZK_BACKEND_HALO2_IPA.into(),
+            transfer.proof,
+            request.transfer_verifier_id.clone(),
+        );
+        proof.vk_commitment = Some(request.transfer_verifier_commitment);
+        let split = KagemushaRecursiveSpendSplitIntentBuildRequestV2 {
+            previous_bundles: request
+                .previous_inputs
+                .iter()
+                .map(|input| input.previous_bundle.clone())
+                .collect(),
+            output_artifact_binding: request.output_artifact_binding.clone(),
+            transfer_amount: recipient_request.amount,
+            recipient_output: recipient_request.recipient_output.clone(),
+            change_output,
+            recipient_request_digest: recipient_digest,
+            operation_id: request.operation_id,
+        }
+        .into_intent()
+        .map_err(|_| BridgeError::KagemushaProve)?;
+        let append = KagemushaRecursiveSpendAppendRequestV2 {
+            previous_inputs: request.previous_inputs.clone(),
+            confidential_transfer_proof: proof,
+            split,
+            block_height: request.block_height,
+        };
+        append
+            .validate_public_binding()
+            .map_err(|_| BridgeError::KagemushaProve)?;
+        Ok(append)
+    })();
+    recipient_material.amount.zeroize();
+    recipient_material.rho.zeroize();
+    recipient_material.owner_tag.zeroize();
+    outcome
+}
+
+#[cfg(feature = "privacy-production-enabled")]
+fn build_kagemusha_redeem_request_v2(
+    request: &KagemushaRecursiveSpendRedeemLocalRequestV2,
+) -> BridgeResult<iroha_data_model::offline::KagemushaRecursiveSpendRedeemBuildRequestV2> {
+    use iroha_core::zk::{
+        ZK_BACKEND_HALO2_IPA,
+        confidential_v2::{
+            CONFIDENTIAL_UNSHIELD_V3_CIRCUIT_ID, ConfidentialUnshieldInputV2,
+            ConfidentialUnshieldOutputV3, build_confidential_unshield_proof_v3_with_paths,
+            confidential_unshield_v3_vk_box, default_confidential_diversifier_v2,
+            parse_unshield_public_inputs_v3,
+        },
+    };
+    use iroha_data_model::offline::{
+        KAGEMUSHA_VERIFIER_ROLE_UNSHIELD_V2, KagemushaRecursiveSpendRedeemBuildRequestV2,
+        KagemushaRecursiveSpendRedemptionIntentBuildRequestV2,
+        KagemushaUnshieldPublicInputsBindingV2,
+    };
+
+    request.validate_shape()?;
+    let statement = &request.bundle.statement;
+    let expected_input = derive_kagemusha_owned_note_v2(
+        &statement.chain_id,
+        &statement.asset,
+        statement.current_note.amount,
+        &request.input_opening,
+    )?;
+    if expected_input != statement.current_note
+        || request.input_membership_witness.input_path.root != statement.final_root
+        || request.input_membership_witness.dummy_input_path.root != statement.final_root
+    {
+        return Err(BridgeError::KagemushaProve);
+    }
+    let change_amount = statement
+        .current_note
+        .amount
+        .atomic_units
+        .checked_sub(request.public_amount.atomic_units)
+        .ok_or(BridgeError::KagemushaProve)?;
+    let change_output = match (&request.change_opening, change_amount) {
+        (None, 0) => None,
+        (Some(opening), amount)
+            if amount != 0
+                && opening.spend_key == request.input_opening.spend_key
+                && opening.diversifier == default_confidential_diversifier_v2() =>
+        {
+            Some(derive_kagemusha_owned_note_v2(
+                &statement.chain_id,
+                &statement.asset,
+                iroha_data_model::offline::KagemushaScaledAmountV2::new(
+                    amount,
+                    statement.asset_scale,
+                )
+                .map_err(|_| BridgeError::KagemushaProve)?,
+                opening,
+            )?)
+        }
+        _ => return Err(BridgeError::KagemushaProve),
+    };
+    let inputs = [ConfidentialUnshieldInputV2 {
+        amount: statement.current_note.amount.atomic_units,
+        rho: request.input_opening.rho,
+        diversifier: request.input_opening.diversifier,
+        leaf_index: usize::try_from(request.input_membership_witness.leaf_index)
+            .map_err(|_| BridgeError::KagemushaProve)?,
+    }];
+    let outputs = request
+        .change_opening
+        .as_ref()
+        .map_or_else(Vec::new, |opening| {
+            vec![ConfidentialUnshieldOutputV3 {
+                amount: change_amount,
+                rho: opening.rho,
+            }]
+        });
+    let paths = [
+        request
+            .input_membership_witness
+            .input_path
+            .to_privacy_path()?,
+        request
+            .input_membership_witness
+            .dummy_input_path
+            .to_privacy_path()?,
+    ];
+    let vk_box = confidential_unshield_v3_vk_box().map_err(|_| BridgeError::KagemushaProve)?;
+    require_kagemusha_confidential_verifier_v2(
+        &request.unshield_verifier_id,
+        request.unshield_verifier_commitment,
+        KAGEMUSHA_VERIFIER_ROLE_UNSHIELD_V2,
+        &vk_box,
+    )?;
+    let unshield = build_confidential_unshield_proof_v3_with_paths(
+        &statement.chain_id,
+        &statement.asset.to_string(),
+        &request.input_opening.spend_key,
+        &paths,
+        &inputs,
+        &outputs,
+        request.public_amount.atomic_units,
+        statement.final_root,
+        CONFIDENTIAL_UNSHIELD_V3_CIRCUIT_ID,
+        &vk_box,
+    )
+    .map_err(|_| BridgeError::KagemushaProve)?;
+    let (
+        input_commitments,
+        nullifiers,
+        change_output_commitment,
+        root,
+        public_amount,
+        asset_tag,
+        chain_tag,
+    ) = parse_unshield_public_inputs_v3(&unshield.proof.bytes)
+        .map_err(|_| BridgeError::KagemushaProve)?;
+    if input_commitments != [statement.current_note.note_commitment, [0; 32]]
+        || nullifiers != [statement.current_note.spend_nullifier, [0; 32]]
+        || unshield.nullifiers != vec![statement.current_note.spend_nullifier]
+        || unshield.output_commitments
+            != change_output
+                .as_ref()
+                .map_or_else(Vec::new, |change| vec![change.note_commitment])
+        || unshield.root != statement.final_root
+    {
+        return Err(BridgeError::KagemushaProve);
+    }
+    let public_inputs = KagemushaUnshieldPublicInputsBindingV2 {
+        input_commitment_0: input_commitments[0],
+        input_commitment_1: input_commitments[1],
+        nullifier_0: nullifiers[0],
+        nullifier_1: nullifiers[1],
+        change_output_commitment,
+        root,
+        public_amount,
+        asset_tag,
+        chain_tag,
+    };
+    let public_inputs_digest = public_inputs
+        .digest()
+        .map_err(|_| BridgeError::KagemushaProve)?;
+    let redemption = KagemushaRecursiveSpendRedemptionIntentBuildRequestV2 {
+        previous_bundle: request.bundle.clone(),
+        recipient: request.recipient.clone(),
+        public_amount: request.public_amount,
+        change_output,
+        change_artifact_binding: request
+            .change_opening
+            .as_ref()
+            .map(|_| statement.artifact_binding.clone()),
+        unshield_public_inputs: public_inputs,
+        unshield_public_inputs_digest: public_inputs_digest,
+        operation_id: request.operation_id,
+    }
+    .into_intent()
+    .map_err(|_| BridgeError::KagemushaProve)?;
+    let mut proof = ProofAttachment::new_ref(
+        ZK_BACKEND_HALO2_IPA.into(),
+        unshield.proof,
+        request.unshield_verifier_id.clone(),
+    );
+    proof.vk_commitment = Some(request.unshield_verifier_commitment);
+    let build = KagemushaRecursiveSpendRedeemBuildRequestV2 {
+        bundle: request.bundle.clone(),
+        recipient: request.recipient.clone(),
+        public_amount: request.public_amount,
+        unshield_proof: proof,
+        redemption,
+        block_height: request.block_height,
+        operation_id: request.operation_id,
+    };
+    build
+        .validate_public_binding()
+        .map_err(|_| BridgeError::KagemushaProve)?;
+    Ok(build)
 }
 
 /// Derive a receiver-owned confidential output from public request fields and
@@ -8474,16 +9209,13 @@ fn verify_kagemusha_topup_finality_against_manifest_v2(
     manifest
         .validate()
         .map_err(|_| BridgeError::KagemushaProve)?;
-    let manifest_bytes =
-        norito::to_bytes(manifest).map_err(|_| BridgeError::KagemushaProve)?;
+    let manifest_bytes = norito::to_bytes(manifest).map_err(|_| BridgeError::KagemushaProve)?;
     if expected_manifest_sha256 == [0; 32]
         || <[u8; 32]>::from(Sha256::digest(&manifest_bytes)) != expected_manifest_sha256
     {
         return Err(BridgeError::KagemushaProve);
     }
-    if roster.chain_id != manifest.chain_id || roster.artifact_generation != manifest.generation {
-        return Err(BridgeError::KagemushaProve);
-    }
+    verify_kagemusha_topup_roster_binding_v2(roster, manifest)?;
     iroha_core::zk::kagemusha_finality::verify_kagemusha_topup_finality_v2(
         proof,
         roster,
@@ -8493,6 +9225,26 @@ fn verify_kagemusha_topup_finality_against_manifest_v2(
     )
     .map(|_| ())
     .map_err(|_| BridgeError::KagemushaProve)
+}
+
+/// Bind the exact canonical roster archive to the content-addressed manifest
+/// descriptor selected by recursive init. Kept separate from QC verification
+/// so descriptor substitution has direct adversarial coverage.
+fn verify_kagemusha_topup_roster_binding_v2(
+    roster: &iroha_data_model::offline::KagemushaTopUpFinalityRosterArtifactV2,
+    manifest: &iroha_data_model::offline::KagemushaRecursiveSpendArtifactManifestV3,
+) -> BridgeResult<()> {
+    let roster_bytes = norito::to_bytes(roster).map_err(|_| BridgeError::KagemushaProve)?;
+    let roster_descriptor = &manifest.topup_finality_roster_artifact;
+    if roster.chain_id != manifest.chain_id
+        || roster.artifact_generation != manifest.generation
+        || roster_descriptor.size_bytes
+            != u64::try_from(roster_bytes.len()).map_err(|_| BridgeError::KagemushaProve)?
+        || roster_descriptor.sha256 != <[u8; 32]>::from(Sha256::digest(&roster_bytes))
+    {
+        return Err(BridgeError::KagemushaProve);
+    }
+    Ok(())
 }
 
 /// Verify one compact Kagemusha top-up finality proof against a complete
@@ -9362,8 +10114,8 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_append_v2(
         Ok(bytes) => bytes,
         Err(error) => return error.code(),
     };
-    let request = match decode_canonical_kagemusha_archive::<
-        iroha_data_model::offline::KagemushaRecursiveSpendAppendRequestV2,
+    let mut request = match decode_canonical_kagemusha_archive::<
+        KagemushaRecursiveSpendAppendLocalRequestV2,
     >(&request_bytes)
     {
         Ok(request) => request,
@@ -9376,18 +10128,42 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_append_v2(
         Ok(request) => request,
         Err(error) => return error.code(),
     };
-    if request.validate_public_binding().is_err()
-        || recipient_request.validate_at(verified_at_ms).is_err()
-        || recipient_request.digest().ok() != Some(request.split.recipient_request_digest)
+    if recipient_request.validate_at(verified_at_ms).is_err()
+        || request
+            .validate_for_recipient_request(&recipient_request)
+            .is_err()
         || request.previous_inputs.iter().any(|input| {
-            input.previous_bundle.statement.artifact_binding
-                != request.split.output_artifact_binding
+            input.previous_bundle.statement.artifact_binding != request.output_artifact_binding
         })
     {
+        request.zeroize();
         return BridgeError::KagemushaProve.code();
     }
+    if !KAGEMUSHA_RECURSIVE_SPEND_V2_PROOF_ENTRYPOINTS_CALLABLE {
+        let binding = request.output_artifact_binding.clone();
+        request.zeroize();
+        return kagemusha_recursive_spend_v2_unavailable_for_binding(
+            &binding,
+            out_split_result_ptr,
+            out_split_result_len,
+        );
+    }
+    #[cfg(feature = "privacy-production-enabled")]
+    let prepared = build_kagemusha_append_request_v2(&request, &recipient_request, verified_at_ms);
+    #[cfg(not(feature = "privacy-production-enabled"))]
+    let prepared: BridgeResult<
+        iroha_data_model::offline::KagemushaRecursiveSpendAppendRequestV2,
+    > = Err(BridgeError::KagemushaRecursiveSpendV2Unavailable);
+    let binding = request.output_artifact_binding.clone();
+    request.zeroize();
+    if prepared.is_err() {
+        return BridgeError::KagemushaProve.code();
+    }
+    // TODO: Feed `prepared` into the authenticated recursive append prover and
+    // return proof-bound recipient/change membership witnesses atomically.
+    // Availability cannot flip before that result boundary is implemented.
     kagemusha_recursive_spend_v2_unavailable_for_binding(
-        &request.split.output_artifact_binding,
+        &binding,
         out_split_result_ptr,
         out_split_result_len,
     )
@@ -9439,18 +10215,40 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_redeem_v2(
             Ok(bytes) => bytes,
             Err(error) => return error.code(),
         };
-    let request = match decode_canonical_kagemusha_archive::<
-        iroha_data_model::offline::KagemushaRecursiveSpendRedeemBuildRequestV2,
+    let mut request = match decode_canonical_kagemusha_archive::<
+        KagemushaRecursiveSpendRedeemLocalRequestV2,
     >(&request_bytes)
     {
         Ok(request) => request,
         Err(error) => return error.code(),
     };
-    if request.validate_public_binding().is_err() {
+    if request.validate_shape().is_err() {
+        request.zeroize();
         return BridgeError::KagemushaProve.code();
     }
+    let binding = request.bundle.statement.artifact_binding.clone();
+    if !KAGEMUSHA_RECURSIVE_SPEND_V2_PROOF_ENTRYPOINTS_CALLABLE {
+        request.zeroize();
+        return kagemusha_recursive_spend_v2_unavailable_for_binding(
+            &binding,
+            out_build_result_ptr,
+            out_build_result_len,
+        );
+    }
+    #[cfg(feature = "privacy-production-enabled")]
+    let prepared = build_kagemusha_redeem_request_v2(&request);
+    #[cfg(not(feature = "privacy-production-enabled"))]
+    let prepared: BridgeResult<
+        iroha_data_model::offline::KagemushaRecursiveSpendRedeemBuildRequestV2,
+    > = Err(BridgeError::KagemushaRecursiveSpendV2Unavailable);
+    request.zeroize();
+    if prepared.is_err() {
+        return BridgeError::KagemushaProve.code();
+    }
+    // TODO: Feed `prepared` into the authenticated recursive redemption prover
+    // and return the proof-bound change membership witness atomically.
     kagemusha_recursive_spend_v2_unavailable_for_binding(
-        &request.bundle.statement.artifact_binding,
+        &binding,
         out_build_result_ptr,
         out_build_result_len,
     )
@@ -9850,8 +10648,12 @@ mod detached_transaction_scaffold_tests {
     fn canonical_json_rejects_duplicates_trailing_invalid_utf8_and_bad_hash_buffer() {
         for hostile in [
             br#"{"a":1,"a":2}"#.as_slice(),
+            br#"{"outer":{"a":1,"a":2}}"#.as_slice(),
             br#"{"a":1} true"#.as_slice(),
             br#"{"a":01}"#.as_slice(),
+            br#"{"a":NaN}"#.as_slice(),
+            br#"{"a":Infinity}"#.as_slice(),
+            b"{\"a\":\"\x00\"}".as_slice(),
             &[0xFF, 0xFE][..],
         ] {
             let mut out_ptr = 1_usize as *mut u8;
@@ -9889,6 +10691,140 @@ mod detached_transaction_scaffold_tests {
         assert_eq!(status, ERR_HASH_OUT_LEN);
         assert!(out_ptr.is_null());
         assert_eq!(out_len, 0);
+    }
+
+    #[test]
+    fn inspector_ffi_rejects_null_and_oversized_inputs_and_clears_outputs() {
+        let tx = contract_scaffold(&fixture_keypair(0x39)).encode_versioned();
+
+        for (input, length, expected_status) in [
+            (ptr::null(), 0, ERR_DETACHED_TRANSACTION_SCAFFOLD),
+            (tx.as_ptr(), c_ulong::MAX, ERR_DETACHED_TRANSACTION_SCAFFOLD),
+        ] {
+            let mut out_ptr = ptr::dangling_mut::<u8>();
+            let mut out_len = 99;
+            let status = unsafe {
+                connect_norito_detached_transaction_scaffold_inspect_v1(
+                    input,
+                    length,
+                    &mut out_ptr,
+                    &mut out_len,
+                )
+            };
+            assert_eq!(status, expected_status);
+            assert!(out_ptr.is_null());
+            assert_eq!(out_len, 0);
+        }
+
+        let mut out_len = 99;
+        let status = unsafe {
+            connect_norito_detached_transaction_scaffold_inspect_v1(
+                tx.as_ptr(),
+                tx.len() as c_ulong,
+                ptr::null_mut(),
+                &mut out_len,
+            )
+        };
+        assert_eq!(status, ERR_NULL_PTR);
+        assert_eq!(out_len, 0);
+    }
+
+    #[test]
+    fn finalizer_ffi_rejects_invalid_lengths_and_null_outputs_without_stale_state() {
+        let keypair = fixture_keypair(0x3A);
+        let scaffold = contract_scaffold(&keypair);
+        let scaffold_bytes = scaffold.encode_versioned();
+        let signing_hash = iroha_crypto::HashOf::new(scaffold.payload());
+        let signature = Signature::try_new(keypair.private_key(), signing_hash.as_ref()).unwrap();
+        let public_key = keypair.public_key().to_bytes().1;
+
+        let invoke = |tx_len: c_ulong, public_key_len: c_ulong, signature_len: c_ulong| {
+            let mut signed_ptr = ptr::dangling_mut::<u8>();
+            let mut signed_len = 99;
+            let mut json_ptr = ptr::dangling_mut::<u8>();
+            let mut json_len = 99;
+            let status = unsafe {
+                connect_norito_detached_transaction_scaffold_finalize_ed25519_v1(
+                    scaffold_bytes.as_ptr(),
+                    tx_len,
+                    public_key.as_ptr(),
+                    public_key_len,
+                    signature.payload().as_ptr(),
+                    signature_len,
+                    &mut signed_ptr,
+                    &mut signed_len,
+                    &mut json_ptr,
+                    &mut json_len,
+                )
+            };
+            assert_ne!(status, 0);
+            assert!(signed_ptr.is_null());
+            assert_eq!(signed_len, 0);
+            assert!(json_ptr.is_null());
+            assert_eq!(json_len, 0);
+            status
+        };
+
+        assert_eq!(
+            invoke(c_ulong::MAX, public_key.len() as c_ulong, 64),
+            ERR_DETACHED_TRANSACTION_SCAFFOLD
+        );
+        assert_eq!(
+            invoke(scaffold_bytes.len() as c_ulong, 31, 64),
+            ERR_DETACHED_TRANSACTION_SIGNATURE
+        );
+        assert_eq!(
+            invoke(scaffold_bytes.len() as c_ulong, 32, 65),
+            ERR_DETACHED_TRANSACTION_SIGNATURE
+        );
+
+        let mut signed_len = 99;
+        let mut json_ptr = ptr::dangling_mut::<u8>();
+        let mut json_len = 99;
+        let status = unsafe {
+            connect_norito_detached_transaction_scaffold_finalize_ed25519_v1(
+                scaffold_bytes.as_ptr(),
+                scaffold_bytes.len() as c_ulong,
+                public_key.as_ptr(),
+                public_key.len() as c_ulong,
+                signature.payload().as_ptr(),
+                signature.payload().len() as c_ulong,
+                ptr::null_mut(),
+                &mut signed_len,
+                &mut json_ptr,
+                &mut json_len,
+            )
+        };
+        assert_eq!(status, ERR_NULL_PTR);
+        assert_eq!(signed_len, 0);
+        assert!(json_ptr.is_null());
+        assert_eq!(json_len, 0);
+    }
+
+    #[test]
+    fn canonical_json_ffi_rejects_null_and_oversized_inputs_without_hash_state() {
+        for (input, length, expected_status) in [
+            (ptr::null(), 1, ERR_NULL_PTR),
+            (b"null".as_ptr(), c_ulong::MAX, ERR_CANONICAL_JSON),
+        ] {
+            let mut out_ptr = ptr::dangling_mut::<u8>();
+            let mut out_len = 99;
+            let mut hash = [0xA5_u8; 32];
+            let status = unsafe {
+                connect_norito_canonical_json_blake3_v1(
+                    input,
+                    length,
+                    &mut out_ptr,
+                    &mut out_len,
+                    hash.as_mut_ptr(),
+                    hash.len() as c_ulong,
+                )
+            };
+            assert_eq!(status, expected_status);
+            assert!(out_ptr.is_null());
+            assert_eq!(out_len, 0);
+            assert_eq!(hash, [0; 32]);
+        }
     }
 }
 
@@ -10238,7 +11174,7 @@ mod kagemusha_bridge_tests {
         use iroha_data_model::offline::{
             KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V3,
             KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_VERSION_V3,
-            KAGEMUSHA_RECURSIVE_SPEND_MODE, KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3,
+            KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3,
             KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1,
             KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_IPA_K_V1,
             KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V1,
@@ -10316,7 +11252,6 @@ mod kagemusha_bridge_tests {
             schema: KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V3.to_owned(),
             version: KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_VERSION_V3,
             bridge_abi_version: KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3,
-            mode: KAGEMUSHA_RECURSIVE_SPEND_MODE.to_owned(),
             proof_backend: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1.to_owned(),
             transcript_profile: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V1.to_owned(),
             generation: generation.to_owned(),
@@ -10392,6 +11327,96 @@ mod kagemusha_bridge_tests {
             payload,
             framed,
         )
+    }
+
+    #[test]
+    fn recursive_init_roster_binding_rejects_hash_size_and_archive_substitution() {
+        use iroha_data_model::offline::{
+            KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_VERSION_V2,
+            KagemushaRecursiveSpendArtifactManifestV3, KagemushaTopUpFinalityRosterArtifactV2,
+        };
+
+        let (manifest_archive, _, _, _) = recursive_spend_v3_artifact_fixture();
+        let mut manifest: KagemushaRecursiveSpendArtifactManifestV3 =
+            norito::decode_from_bytes(&manifest_archive).expect("decode manifest fixture");
+        let roster = KagemushaTopUpFinalityRosterArtifactV2 {
+            version: KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_VERSION_V2,
+            chain_id: manifest.chain_id.clone(),
+            artifact_generation: manifest.generation.clone(),
+            // QC verification validates the complete roster and PoPs. This
+            // focused fixture exercises the preceding content-addressed trust
+            // boundary without generating BLS keys.
+            windows: Vec::new(),
+        };
+        let roster_archive = norito::to_bytes(&roster).expect("canonical roster fixture");
+        manifest.topup_finality_roster_artifact.size_bytes = roster_archive.len() as u64;
+        manifest.topup_finality_roster_artifact.sha256 = Sha256::digest(&roster_archive).into();
+        assert!(verify_kagemusha_topup_roster_binding_v2(&roster, &manifest).is_ok());
+
+        let mut wrong_hash = manifest.clone();
+        wrong_hash.topup_finality_roster_artifact.sha256[0] ^= 0x80;
+        assert!(verify_kagemusha_topup_roster_binding_v2(&roster, &wrong_hash).is_err());
+
+        let mut wrong_size = manifest.clone();
+        wrong_size.topup_finality_roster_artifact.size_bytes += 1;
+        assert!(verify_kagemusha_topup_roster_binding_v2(&roster, &wrong_size).is_err());
+
+        let mut substituted_roster = roster.clone();
+        substituted_roster.version += 1;
+        assert!(verify_kagemusha_topup_roster_binding_v2(&substituted_roster, &manifest).is_err());
+
+        let mut wrong_generation = roster;
+        wrong_generation.artifact_generation = "different-release".to_owned();
+        let wrong_generation_archive =
+            norito::to_bytes(&wrong_generation).expect("generation-substituted roster");
+        let mut recomputed_descriptor = manifest;
+        recomputed_descriptor
+            .topup_finality_roster_artifact
+            .size_bytes = wrong_generation_archive.len() as u64;
+        recomputed_descriptor.topup_finality_roster_artifact.sha256 =
+            Sha256::digest(&wrong_generation_archive).into();
+        assert!(
+            verify_kagemusha_topup_roster_binding_v2(&wrong_generation, &recomputed_descriptor,)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn recursive_note_membership_witness_rejects_malformed_and_aliased_paths() {
+        fn path(leaf_index: u32) -> KagemushaConfidentialMerklePathV2 {
+            KagemushaConfidentialMerklePathV2 {
+                siblings: vec![[0; 32]; 16],
+                directions: (0..16)
+                    .map(|level| ((leaf_index >> level) & 1) as u8)
+                    .collect(),
+                root: [0xA5; 32],
+            }
+        }
+
+        let valid = KagemushaNoteMembershipWitnessV2 {
+            leaf_index: 7,
+            input_path: path(7),
+            dummy_input_path: path(8),
+        };
+        assert!(valid.validate().is_ok());
+
+        let mut wrong_direction = valid.clone();
+        wrong_direction.input_path.directions[0] ^= 1;
+        assert!(wrong_direction.validate().is_err());
+
+        let mut truncated = valid.clone();
+        truncated.dummy_input_path.siblings.pop();
+        assert!(truncated.validate().is_err());
+
+        let mut different_root = valid.clone();
+        different_root.dummy_input_path.root = [0xB6; 32];
+        assert!(different_root.validate().is_err());
+
+        let aliased_dummy = KagemushaNoteMembershipWitnessV2 {
+            dummy_input_path: path(7),
+            ..valid
+        };
+        assert!(aliased_dummy.validate().is_err());
     }
 
     fn recursive_spend_v3_complete_artifact_set_fixture(

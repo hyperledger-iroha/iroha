@@ -13,16 +13,17 @@ const ARTIFACT = Uint8Array.from([
   0x01, 0x01, 0x01, 0x00,
   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
   0x01,
+  ...Array(32).fill(0),
 ]);
 
-test("computeIvmArtifactHashes matches ledger body and full-artifact fixtures", () => {
-  assert.equal(IVM_PROGRAM_HEADER_LENGTH, 17);
+test("computeIvmArtifactHashes matches ledger full-artifact fixtures", () => {
+  assert.equal(IVM_PROGRAM_HEADER_LENGTH, 49);
   assert.equal(IVM_ARTIFACT_MAX_BYTES, 4 * 1024 * 1024);
   assert.deepEqual(computeIvmArtifactHashes(ARTIFACT), {
     codeHashHex:
-      "0e5751c026e543b2e8ab2eb06099daa1d1e5df47778f7787faab45cdf12fe3a9",
+      "b5d6d7f7abf5989ca07b4fbee75560ab7a3dbceaafd442da66a6918e3cb147d1",
     artifactSha256Hex:
-      "2c35100f8b2b58efb195d158d462a0a3943b1cc24d63eae188674a1d476a8fca",
+      "b004dd0c3eddd8e1c729e18ce88a2c6ab225fc21f3be1ccf55bac71d403826e6",
   });
 });
 
@@ -31,7 +32,7 @@ test("computeIvmArtifactHashes distinguishes header and body substitution", () =
   const changedHeader = ARTIFACT.slice();
   changedHeader[16] ^= 0x80;
   const headerHashes = computeIvmArtifactHashes(changedHeader);
-  assert.equal(headerHashes.codeHashHex, original.codeHashHex);
+  assert.notEqual(headerHashes.codeHashHex, original.codeHashHex);
   assert.notEqual(headerHashes.artifactSha256Hex, original.artifactSha256Hex);
 
   const changedBody = Uint8Array.from([...ARTIFACT, 0x80]);
@@ -46,8 +47,8 @@ test("computeIvmArtifactHashes rejects ambiguous or malformed binary inputs", ()
     /Uint8Array, ArrayBuffer, or ArrayBuffer view/,
   );
   assert.throws(
-    () => computeIvmArtifactHashes(ARTIFACT.subarray(0, 16)),
-    /at least the 17-byte program header/,
+    () => computeIvmArtifactHashes(ARTIFACT.subarray(0, 48)),
+    /at least the 49-byte program header/,
   );
   const badMagic = ARTIFACT.slice();
   badMagic[0] ^= 0xff;

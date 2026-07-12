@@ -4431,7 +4431,7 @@ def test_get_kagemusha_readiness_rejects_adversarial_snapshots() -> None:
         missing_unshield_verifier,
         missing_recursive_transition_verifier,
         missing_recursive_state_verifier,
-        _offline_readiness_payload(product_mode="retired"),
+        _offline_readiness_payload(unexpected_field="not-part-of-readiness"),
         _offline_readiness_payload(required_bridge_abi_version=17),
         _offline_readiness_payload(max_hops=8),
         _offline_readiness_payload(asset_definition_id="different-asset"),
@@ -4718,7 +4718,7 @@ def test_offline_acceptance_cross_checks_reference_and_location() -> None:
             OFFLINE_STATUS_URI,
         ),
         (
-            _offline_operation_reference(status_uri="/v1/offline/operations/legacy"),
+            _offline_operation_reference(status_uri="/v1/offline/operations/not-a-digest"),
             OFFLINE_STATUS_URI,
         ),
         (_offline_operation_reference(), f"/v1/offline/operations/{'44' * 32}"),

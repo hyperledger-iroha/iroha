@@ -51,8 +51,6 @@ pub const OFFLINE_DEVICE_ATTESTATION_ANDROID_KEYMINT_ASSERTION_SCHEME: &str =
 pub const OFFLINE_DEVICE_ATTESTATION_ANDROID_KEYMINT_ASSERTION_KEY_ALGORITHM: &str =
     "ecdsa-p256-sha256";
 
-/// Sole Kagemusha mode bound into ABI-19 native capability and V3 artifact records.
-pub const KAGEMUSHA_RECURSIVE_SPEND_MODE: &str = "recursive_spend_v1";
 /// Maximum asset scale accepted by the exact Kagemusha V2 amount contract.
 pub const KAGEMUSHA_SCALED_AMOUNT_MAX_SCALE_V2: u32 = 28;
 /// Fixed depth-16 confidential tree capacity used by top-up shielding.
@@ -63,9 +61,11 @@ pub const KAGEMUSHA_TOPUP_SHIELD_MAX_PROOF_BYTES_V2: usize = 192 * 1024;
 pub const KAGEMUSHA_RECURSIVE_SPEND_MAX_BRANCH_DEPTH_V2: u8 = 64;
 /// Bytes retained from each domain-separated transition digest in a branch history.
 ///
-/// A 192-bit chosen-prefix tag gives a 96-bit birthday bound while keeping two
-/// depth-64 claims within the 12 KiB peer envelope. The complete 256-bit
-/// transition digest remains proof-bound in the producing statement.
+/// A 192-bit chosen-prefix tag gives a 96-bit birthday bound. At depth 64, two
+/// claims alone occupy 3,072 bytes, so this layout must not be certified against
+/// the 12 KiB peer gate until the complete proof-bearing archive is measured.
+/// The complete 256-bit transition digest remains proof-bound in the producing
+/// statement.
 pub const KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_TAG_BYTES_V2: usize = 24;
 /// Current compact top-up finality proof layout.
 pub const KAGEMUSHA_TOPUP_FINALITY_PROOF_VERSION_V2: u16 = 1;
@@ -1505,8 +1505,6 @@ mod model {
         pub version: u16,
         /// Required native bridge ABI.
         pub bridge_abi_version: u32,
-        /// Exact recursive-spend mode.
-        pub mode: String,
         /// Exact two-layer proof backend profile.
         pub proof_backend: String,
         /// Exact circuit-native transcript profile.
@@ -1572,8 +1570,6 @@ mod model {
         pub bridge_abi_version: u32,
         /// Required artifact manifest schema.
         pub artifact_manifest_schema: String,
-        /// Required recursive-spend mode.
-        pub mode: String,
         /// Required proof backend.
         pub proof_backend: String,
         /// Required transcript profile.
@@ -3263,7 +3259,6 @@ impl KagemushaRecursiveSpendArtifactManifestV3 {
         if self.schema != KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V3
             || self.version != KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_VERSION_V3
             || self.bridge_abi_version != KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3
-            || self.mode != KAGEMUSHA_RECURSIVE_SPEND_MODE
             || self.proof_backend != KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1
             || self.transcript_profile != KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V1
             || !is_kagemusha_v3_portable_identifier(&self.generation)
@@ -3369,7 +3364,6 @@ impl KagemushaRecursiveSpendNativeCapabilitiesV1 {
         if self.bridge_abi_version != KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3
             || self.artifact_manifest_schema
                 != KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V3
-            || self.mode != KAGEMUSHA_RECURSIVE_SPEND_MODE
             || self.proof_backend != KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1
             || self.transcript_profile != KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V1
             || self.proof_envelope_version
@@ -3397,7 +3391,6 @@ pub fn kagemusha_recursive_spend_native_capabilities_v1()
     KagemushaRecursiveSpendNativeCapabilitiesV1 {
         bridge_abi_version: KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3,
         artifact_manifest_schema: KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V3.to_owned(),
-        mode: KAGEMUSHA_RECURSIVE_SPEND_MODE.to_owned(),
         proof_backend: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1.to_owned(),
         transcript_profile: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V1.to_owned(),
         proof_envelope_version: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_PROOF_ENVELOPE_VERSION_V1,
@@ -4750,8 +4743,7 @@ impl KagemushaRecursiveSpendInitRequestV2 {
     pub fn validate_public_binding(&self) -> Result<(), KagemushaValidationError> {
         self.topup_anchor.validate_public_binding()?;
         self.topup_finality_proof.validate_structure()?;
-        self.topup_finality_roster_artifact
-            .validate_structure()?;
+        self.topup_finality_roster_artifact.validate_structure()?;
         self.artifact_binding.validate()?;
         if self.artifact_binding != self.topup_anchor.artifact_binding
             || self.topup_finality_proof.anchor != self.topup_anchor.compact_ref()?
@@ -5195,7 +5187,7 @@ impl KagemushaRecursiveSpendRedeemBuildRequestV2 {
 
 impl KagemushaRecursiveSpendPublicStatementV2 {
     /// Validate the canonical recursive state statement.
-    pub fn validate_context(&self) -> Result<(), KagemushaValidationError> {
+    pub fn validate_public_binding(&self) -> Result<(), KagemushaValidationError> {
         self.current_note.validate_public_binding()?;
         self.artifact_binding.validate()?;
         validate_kagemusha_root("final_root", self.final_root)?;
@@ -5250,14 +5242,9 @@ impl KagemushaRecursiveSpendPublicStatementV2 {
         Ok(())
     }
 
-    /// Alias retained for callers validating a complete public statement.
-    pub fn validate_public_binding(&self) -> Result<(), KagemushaValidationError> {
-        self.validate_context()
-    }
-
     /// Return the circuit-exposed statement digest.
     pub fn digest(&self) -> Result<[u8; 32], KagemushaValidationError> {
-        self.validate_context()?;
+        self.validate_public_binding()?;
         kagemusha_poseidon_preimage(&KagemushaRecursiveSpendPublicStatementDigestPreimageV2 {
             domain: KAGEMUSHA_RECURSIVE_SPEND_PUBLIC_STATEMENT_DIGEST_DOMAIN_V2.to_owned(),
             statement: self.clone(),
@@ -5268,7 +5255,7 @@ impl KagemushaRecursiveSpendPublicStatementV2 {
 impl KagemushaRecursiveSpendBundleV2 {
     /// Validate statement/proof identity and the constant-size peer envelope.
     pub fn validate_public_binding(&self) -> Result<(), KagemushaValidationError> {
-        self.statement.validate_context()?;
+        self.statement.validate_public_binding()?;
         if self.recursive_proof.verifier_key_id != self.statement.verifier_key_id
             || self.recursive_proof.public_statement_digest != self.statement.digest()?
             || self.recursive_proof.proof.backend.as_str()

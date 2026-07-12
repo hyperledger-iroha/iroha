@@ -19,24 +19,11 @@ use crate::{
     ivm_cache::{DecodedOp, IvmCache},
     metadata::{
         CONTRACT_FEATURE_BIT_VECTOR, CONTRACT_FEATURE_BIT_ZK, CONTRACT_FEATURE_KNOWN_BITS,
-        EmbeddedContractInterfaceV1, EmbeddedStateType, HEADER_SIZE, ParsedProgramMetadata,
-        contract_code_hash, mode,
+        EmbeddedContractInterfaceV1, EmbeddedEntrypointDescriptor, EmbeddedStateType, HEADER_SIZE,
+        KOTO_TEST_RETURN_ENTRYPOINT, ParsedProgramMetadata, contract_code_hash, mode,
     },
     prepared::{PreparedContract, PreparedContractParts, PreparedControlFlow},
 };
-
-#[derive(Clone, Copy)]
-enum ArtifactAdmissionPolicy {
-    Production,
-    KotodamaTest,
-}
-
-impl ArtifactAdmissionPolicy {
-    fn allows_syscall(self, syscall_policy: SyscallPolicy, number: u32) -> bool {
-        crate::syscalls::is_syscall_allowed(syscall_policy, number)
-            || matches!(self, Self::KotodamaTest) && crate::syscalls::is_koto_test_syscall(number)
-    }
-}
 
 /// Structurally validated contract artifact details derived from a self-describing `.to` image.
 ///
@@ -98,12 +85,12 @@ impl StdError for ContractArtifactError {}
 pub fn verify_contract_artifact(
     artifact: &[u8],
 ) -> Result<VerifiedContractArtifact, ContractArtifactError> {
-    verify_contract_artifact_with_policy(artifact, ArtifactAdmissionPolicy::Production)
+    verify_contract_artifact_with_profile(artifact, ArtifactValidationProfile::Production)
 }
 
-fn verify_contract_artifact_with_policy(
+fn verify_contract_artifact_with_profile(
     artifact: &[u8],
-    admission_policy: ArtifactAdmissionPolicy,
+    profile: ArtifactValidationProfile,
 ) -> Result<VerifiedContractArtifact, ContractArtifactError> {
     let parsed = parse_contract_metadata(artifact)?;
     let envelope = validate_contract_envelope(artifact, &parsed)?;
@@ -112,13 +99,8 @@ fn verify_contract_artifact_with_policy(
             "instruction decode failed for executable stream: {err}"
         ))
     })?;
-    let verified = verify_decoded_contract_artifact(
-        artifact,
-        &parsed,
-        envelope,
-        decoded.as_ref(),
-        admission_policy,
-    )?;
+    let verified =
+        verify_decoded_contract_artifact(artifact, &parsed, envelope, decoded.as_ref(), profile)?;
     let literal_table = decode_literal_table(
         artifact,
         parsed.header_len,
@@ -145,21 +127,39 @@ pub fn prepare_contract(artifact: Arc<[u8]>) -> Result<PreparedContract, Contrac
     PreparedContract::prepare(artifact)
 }
 
-pub(crate) fn prepare_kotodama_test_contract(
+/// Prepare a compiler-produced Kotodama test-suite artifact for local execution.
+///
+/// This path is intentionally crate-private: it accepts the compiler-owned test
+/// return descriptor and host-private `koto test` syscalls that production
+/// contract admission must continue to reject.
+pub(crate) fn prepare_koto_test_contract(
     artifact: Arc<[u8]>,
 ) -> Result<PreparedContract, ContractArtifactError> {
-    PreparedContract::prepare_with_policy(artifact, ArtifactAdmissionPolicy::KotodamaTest)
+    PreparedContract::prepare_with_profile(artifact, ArtifactValidationProfile::KotoTest)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ArtifactValidationProfile {
+    Production,
+    KotoTest,
+}
+
+impl ArtifactValidationProfile {
+    fn allows_syscall(self, number: u32) -> bool {
+        crate::syscalls::is_syscall_allowed(SyscallPolicy::AbiV1, number)
+            || (self == Self::KotoTest && crate::syscalls::is_koto_test_syscall(number))
+    }
 }
 
 impl PreparedContract {
     /// Parse, validate, index, and predecode a canonical deployable contract artifact.
     pub fn prepare(artifact: Arc<[u8]>) -> Result<Self, ContractArtifactError> {
-        Self::prepare_with_policy(artifact, ArtifactAdmissionPolicy::Production)
+        Self::prepare_with_profile(artifact, ArtifactValidationProfile::Production)
     }
 
-    fn prepare_with_policy(
+    fn prepare_with_profile(
         artifact: Arc<[u8]>,
-        admission_policy: ArtifactAdmissionPolicy,
+        profile: ArtifactValidationProfile,
     ) -> Result<Self, ContractArtifactError> {
         let parsed = parse_contract_metadata(artifact.as_ref())?;
         let envelope = validate_contract_envelope(artifact.as_ref(), &parsed)?;
@@ -178,7 +178,7 @@ impl PreparedContract {
             &parsed,
             envelope,
             decoded.as_ref(),
-            admission_policy,
+            profile,
         )?;
         let literal_table = decode_literal_table(
             artifact.as_ref(),
@@ -317,13 +317,13 @@ fn verify_decoded_contract_artifact(
     parsed: &ParsedProgramMetadata,
     envelope: ValidatedContractEnvelope,
     decoded: &[DecodedOp],
-    admission_policy: ArtifactAdmissionPolicy,
+    profile: ArtifactValidationProfile,
 ) -> Result<VerifiedContractArtifact, ContractArtifactError> {
     validate_contract_interface(
         &envelope.metadata,
         &envelope.contract_interface,
         decoded,
-        admission_policy,
+        profile,
     )?;
 
     let code_hash = contract_code_hash(artifact);
@@ -436,7 +436,7 @@ fn validate_contract_interface(
     metadata: &ProgramMetadata,
     contract_interface: &EmbeddedContractInterfaceV1,
     decoded: &[DecodedOp],
-    admission_policy: ArtifactAdmissionPolicy,
+    profile: ArtifactValidationProfile,
 ) -> Result<(), ContractArtifactError> {
     if !is_canonical_seiyaku_name(&contract_interface.seiyaku_name) {
         return Err(ContractArtifactError::invalid(
@@ -483,7 +483,7 @@ fn validate_contract_interface(
         ));
     }
 
-    validate_bytecode_security(decoded, zk_enabled, admission_policy)?;
+    validate_bytecode_security(decoded, zk_enabled, profile)?;
     let valid_pcs = decoded.iter().map(|op| op.pc).collect::<BTreeSet<_>>();
     let mut entrypoint_names = BTreeSet::new();
     let mut entrypoint_kinds = BTreeMap::new();
@@ -491,9 +491,22 @@ fn validate_contract_interface(
     let mut entrypoint_reachability = BTreeMap::new();
     let mut hajimari_seen = false;
     let mut kaizen_seen = false;
+    let mut test_return_seen = false;
 
     for entrypoint in &contract_interface.entrypoints {
-        validate_entrypoint_name(&entrypoint.name)?;
+        let is_test_return = profile == ArtifactValidationProfile::KotoTest
+            && entrypoint.name == KOTO_TEST_RETURN_ENTRYPOINT;
+        if is_test_return {
+            if test_return_seen {
+                return Err(ContractArtifactError::invalid(
+                    "CNTR declares more than one compiler-owned Kotodama test return entrypoint",
+                ));
+            }
+            validate_koto_test_return_entrypoint(entrypoint, decoded)?;
+            test_return_seen = true;
+        } else {
+            validate_entrypoint_name(&entrypoint.name)?;
+        }
         if !entrypoint_names.insert(entrypoint.name.clone()) {
             return Err(ContractArtifactError::invalid(format!(
                 "duplicate entrypoint `{}`",
@@ -515,6 +528,18 @@ fn validate_contract_interface(
         }
         let reachability =
             reachable_syscalls(decoded, entrypoint.entry_pc, entrypoint.name.as_str())?;
+        if profile == ArtifactValidationProfile::KotoTest
+            && !is_test_return
+            && reachability
+                .syscalls
+                .iter()
+                .any(|number| crate::syscalls::is_koto_test_syscall(*number))
+        {
+            return Err(ContractArtifactError::invalid(format!(
+                "deployable entrypoint `{}` reaches a host-private Kotodama test syscall",
+                entrypoint.name
+            )));
+        }
         match (&entrypoint.params[..], entrypoint.argument_schema.as_ref()) {
             ([], None) => {}
             ([], Some(_)) => {
@@ -676,6 +701,12 @@ fn validate_contract_interface(
         entrypoint_reachability.insert(entrypoint.name.clone(), reachability);
     }
 
+    if profile == ArtifactValidationProfile::KotoTest && !test_return_seen {
+        return Err(ContractArtifactError::invalid(
+            "Kotodama test-suite CNTR is missing its compiler-owned return entrypoint",
+        ));
+    }
+
     // Entrypoint authorization is enforced by dispatch metadata, not by code at
     // the target PC. Raw control flow into a distinct entrypoint would bypass
     // that target's `authorize` permission or its runtime-defined lifecycle
@@ -753,6 +784,41 @@ fn is_canonical_entrypoint_name(name: &str) -> bool {
         || is_canonical_source_declaration_name(name, true)
 }
 
+fn validate_koto_test_return_entrypoint(
+    entrypoint: &EmbeddedEntrypointDescriptor,
+    decoded: &[DecodedOp],
+) -> Result<(), ContractArtifactError> {
+    let is_exact_descriptor = entrypoint.kind == EntryPointKind::View
+        && entrypoint.params.is_empty()
+        && entrypoint.argument_schema.is_none()
+        && entrypoint.return_type.is_none()
+        && entrypoint.return_schema.is_none()
+        && entrypoint.permission.is_none()
+        && entrypoint.read_keys.is_empty()
+        && entrypoint.write_keys.is_empty()
+        && entrypoint.access_hints_complete == Some(true)
+        && entrypoint.access_hints_skipped.is_empty()
+        && entrypoint.triggers.is_empty();
+    if !is_exact_descriptor {
+        return Err(ContractArtifactError::invalid(
+            "compiler-owned Kotodama test return entrypoint has a noncanonical descriptor",
+        ));
+    }
+    let Some(last) = decoded.last() else {
+        return Err(ContractArtifactError::invalid(
+            "Kotodama test-suite executable stream is empty",
+        ));
+    };
+    if last.pc != entrypoint.entry_pc
+        || crate::instruction::wide::opcode(last.inst) != crate::instruction::wide::control::HALT
+    {
+        return Err(ContractArtifactError::invalid(
+            "compiler-owned Kotodama test return entrypoint must select the terminal HALT",
+        ));
+    }
+    Ok(())
+}
+
 fn is_canonical_seiyaku_name(name: &str) -> bool {
     is_canonical_source_declaration_name(name, false)
 }
@@ -760,7 +826,7 @@ fn is_canonical_seiyaku_name(name: &str) -> bool {
 fn validate_bytecode_security(
     decoded: &[crate::ivm_cache::DecodedOp],
     zk_enabled: bool,
-    admission_policy: ArtifactAdmissionPolicy,
+    profile: ArtifactValidationProfile,
 ) -> Result<(), ContractArtifactError> {
     use crate::instruction::wide;
 
@@ -797,7 +863,7 @@ fn validate_bytecode_security(
             )));
         }
         if let Some(number) = syscall
-            && !admission_policy.allows_syscall(SyscallPolicy::AbiV1, number)
+            && !profile.allows_syscall(number)
         {
             return Err(ContractArtifactError::invalid(format!(
                 "disallowed syscall 0x{number:06x} at pc {}",
@@ -1202,6 +1268,11 @@ fn validate_entrypoint_name(name: &str) -> Result<(), ContractArtifactError> {
             "entrypoint names must not be empty",
         ));
     }
+    if name == KOTO_TEST_RETURN_ENTRYPOINT {
+        return Err(ContractArtifactError::invalid(
+            "compiler-owned Kotodama test return selector is forbidden in deployable contracts",
+        ));
+    }
     if !is_canonical_entrypoint_name(name) {
         return Err(ContractArtifactError::invalid(format!(
             "entrypoint `{name}` is not a canonical Kotodama V1 identifier or branded lifecycle selector"
@@ -1378,6 +1449,25 @@ fn cntr_section_missing(artifact: &[u8]) -> bool {
 mod tests {
     use super::*;
 
+    #[test]
+    fn kotodama_test_profile_extends_only_the_exact_private_syscall_allowlist() {
+        let private = [
+            crate::syscalls::SYSCALL_KOTO_TEST_ACTOR_ACCOUNT,
+            crate::syscalls::SYSCALL_KOTO_TEST_ACTOR_PUBLIC_KEY,
+            crate::syscalls::SYSCALL_KOTO_TEST_ACTOR_SIGN,
+            crate::syscalls::SYSCALL_KOTO_TEST_INVOKE_ENTRYPOINT_AS,
+            crate::syscalls::SYSCALL_KOTO_TEST_EXPECT_REJECT_AS,
+        ];
+        for number in private {
+            assert!(!ArtifactValidationProfile::Production.allows_syscall(number));
+            assert!(ArtifactValidationProfile::KotoTest.allows_syscall(number));
+        }
+        for adjacent in [0x00FE_0000, 0x00FE_0006] {
+            assert!(!ArtifactValidationProfile::Production.allows_syscall(adjacent));
+            assert!(!ArtifactValidationProfile::KotoTest.allows_syscall(adjacent));
+        }
+    }
+
     fn prepared_fixture(max_cycles: u64) -> Arc<[u8]> {
         let metadata = ProgramMetadata {
             max_cycles,
@@ -1412,6 +1502,111 @@ mod tests {
         artifact.extend_from_slice(&interface.encode_section());
         artifact.extend_from_slice(&crate::encoding::wide::encode_halt().to_le_bytes());
         Arc::from(artifact.into_boxed_slice())
+    }
+
+    fn kotodama_test_fixture(
+        instructions: &[u32],
+        public_entry_pc: u64,
+        test_return_pc: u64,
+    ) -> Arc<[u8]> {
+        let metadata = ProgramMetadata::default();
+        let descriptor = |name: &str, entry_pc| EmbeddedEntrypointDescriptor {
+            name: name.to_owned(),
+            kind: EntryPointKind::View,
+            params: Vec::new(),
+            argument_schema: None,
+            return_type: None,
+            return_schema: None,
+            permission: None,
+            read_keys: Vec::new(),
+            write_keys: Vec::new(),
+            access_hints_complete: Some(true),
+            access_hints_skipped: Vec::new(),
+            triggers: Vec::new(),
+            entry_pc,
+        };
+        let interface = EmbeddedContractInterfaceV1 {
+            seiyaku_name: "KotoTestFixture".to_owned(),
+            compiler_fingerprint: "ivm-unit-tests".to_owned(),
+            abi_hash: crate::syscalls::compute_abi_hash(crate::SyscallPolicy::AbiV1),
+            features_bitmap: 0,
+            access_set_hints: None,
+            kotoba: Vec::new(),
+            entrypoints: vec![
+                descriptor("inspect", public_entry_pc),
+                descriptor(KOTO_TEST_RETURN_ENTRYPOINT, test_return_pc),
+            ],
+            error_codes: Vec::new(),
+            states: Vec::new(),
+        };
+        let mut artifact = metadata.encode();
+        artifact.extend_from_slice(&interface.encode_section());
+        for instruction in instructions {
+            artifact.extend_from_slice(&instruction.to_le_bytes());
+        }
+        Arc::from(artifact.into_boxed_slice())
+    }
+
+    #[test]
+    fn kotodama_test_preparation_is_local_only_and_validates_private_reachability() {
+        let halt = crate::encoding::wide::encode_halt();
+        let private = crate::encoding::wide::encode_syscallx(
+            crate::syscalls::SYSCALL_KOTO_TEST_ACTOR_ACCOUNT,
+        );
+        let valid = kotodama_test_fixture(&[halt, private, halt, halt], 0, 12);
+        prepare_koto_test_contract(Arc::clone(&valid))
+            .expect("unreachable test helper syscall is valid for local test preparation");
+        let production_error = prepare_contract(Arc::clone(&valid))
+            .expect_err("production preparation must reject the private test syscall");
+        assert!(production_error.to_string().contains("disallowed syscall"));
+
+        let reachable = kotodama_test_fixture(&[private, halt, halt], 0, 8);
+        let reachable_error = prepare_koto_test_contract(reachable)
+            .expect_err("a deployable entrypoint must not reach a private test syscall");
+        assert!(
+            reachable_error
+                .to_string()
+                .contains("reaches a host-private Kotodama test syscall")
+        );
+
+        let adjacent = kotodama_test_fixture(
+            &[
+                halt,
+                crate::encoding::wide::encode_syscallx(0x00FE_0006),
+                halt,
+                halt,
+            ],
+            0,
+            12,
+        );
+        let adjacent_error = prepare_koto_test_contract(adjacent)
+            .expect_err("adjacent private syscall numbers remain forbidden");
+        assert!(adjacent_error.to_string().contains("disallowed syscall"));
+    }
+
+    #[test]
+    fn kotodama_test_preparation_requires_the_exact_terminal_return_descriptor() {
+        let missing = prepared_fixture(0);
+        let missing_error = prepare_koto_test_contract(missing)
+            .expect_err("test preparation must require the compiler-owned return descriptor");
+        assert!(
+            missing_error
+                .to_string()
+                .contains("missing its compiler-owned return")
+        );
+
+        let halt = crate::encoding::wide::encode_halt();
+        let private = crate::encoding::wide::encode_syscallx(
+            crate::syscalls::SYSCALL_KOTO_TEST_ACTOR_ACCOUNT,
+        );
+        let nonterminal = kotodama_test_fixture(&[halt, private, halt, halt], 0, 8);
+        let nonterminal_error = prepare_koto_test_contract(nonterminal)
+            .expect_err("the compiler-owned return descriptor must select the final HALT");
+        assert!(
+            nonterminal_error
+                .to_string()
+                .contains("must select the terminal HALT")
+        );
     }
 
     fn indexed_literal_contract_fixture(

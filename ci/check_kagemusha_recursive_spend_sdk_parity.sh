@@ -2,9 +2,13 @@
 set -euo pipefail
 
 ROOT_DIR="${KAGEMUSHA_RECURSIVE_SPEND_SDK_PARITY_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
-MODE="${1:-}"
 
-python3 - "$ROOT_DIR" "$MODE" <<'PY'
+if [[ $# -ne 0 ]]; then
+  echo "usage: ci/check_kagemusha_recursive_spend_sdk_parity.sh" >&2
+  exit 2
+fi
+
+python3 - "$ROOT_DIR" <<'PY'
 from __future__ import annotations
 
 import re
@@ -13,7 +17,6 @@ from pathlib import Path
 
 
 root = Path(sys.argv[1]).resolve()
-mode = sys.argv[2]
 
 SWIFT_SOURCE_ROOT = Path("IrohaSwift/Sources/IrohaSwift")
 SWIFT_TEST_ROOT = Path("IrohaSwift/Tests/IrohaSwiftTests")
@@ -83,6 +86,7 @@ ALLOWED_SWIFT_OFFLINE_TEST_FILES = frozenset(
 
 ALLOWED_SWIFT_KAGEMUSHA_PUBLIC_TYPES = frozenset(
     (
+        "KagemushaConfidentialVerifierBinding",
         "KagemushaDeviceAttestation",
         "KagemushaDeviceAttestationError",
         "KagemushaDeviceAttestationRegistration",
@@ -110,6 +114,7 @@ ALLOWED_SWIFT_KAGEMUSHA_PUBLIC_TYPES = frozenset(
         "KagemushaNearbyPairingDecision",
         "KagemushaNearbyPairingSymbol",
         "KagemushaNearbyTransportPolicy",
+        "KagemushaNoteMembershipWitness",
         "KagemushaNoteOpening",
         "KagemushaOperationCodec",
         "KagemushaOperationError",
@@ -380,8 +385,6 @@ def check(texts: dict[Path, str]) -> None:
                 f"extra={sorted(actual_native_exports - expected_native_exports)}"
             )
 
-    require(swift_protocol, 'static let artifactContractMode = "recursive_spend_v1"', "Swift Kagemusha artifact contract mode")
-
     swift_api = swift_protocol + "\n" + swift_amount
     for needle in (
         "public struct KagemushaScaledAmount",
@@ -490,72 +493,6 @@ def check(texts: dict[Path, str]) -> None:
 
 
 texts = {path: read_required(path) for path in REQUIRED_FILES}
-
-negative_controls = {
-    "--negative-control-extra-swift-protocol": (
-        SWIFT_PROTOCOL,
-        "\npublic struct KagemushaAlternativeSpendProtocol {}\n",
-        "Swift Kagemusha public symbol inventory",
-    ),
-    "--negative-control-extra-native-export": (
-        NATIVE_HEADER,
-        "\nint32_t connect_norito_kagemusha_alternative_spend(void);\n",
-        "Kagemusha native export inventory",
-    ),
-    "--negative-control-direct-route": (
-        SWIFT_TORII_MODELS,
-        None,
-        "Swift direct Torii route",
-    ),
-    "--negative-control-peer-prefix": (
-        SWIFT_PEER_TRANSPORT,
-        None,
-        "Swift peer transport wire contract",
-    ),
-    "--negative-control-retired-swift-offline-api": (
-        SWIFT_PEER_TRANSPORT,
-        "\npublic enum OfflineAlternativeTransport {}\n",
-        "retired Swift offline API",
-    ),
-    "--negative-control-required-native-export": (
-        NATIVE_HEADER,
-        None,
-        "Kagemusha native export inventory",
-    ),
-}
-
-if mode:
-    if mode not in negative_controls:
-        raise SystemExit(f"unsupported parity mode: {mode}")
-    target, suffix, expected = negative_controls[mode]
-    mutated = dict(texts)
-    if suffix is not None:
-        mutated[target] += suffix
-    elif mode == "--negative-control-direct-route":
-        mutated[target] = mutated[target].replace(
-            'case topUp = "/v1/offline/top-up"',
-            'case topUp = "/v1/offline/top-up-drift"',
-            1,
-        )
-    elif mode == "--negative-control-peer-prefix":
-        mutated[target] = mutated[target].replace(
-            'paymentTextPrefix = "PKK2P."',
-            'paymentTextPrefix = "PKK2X."',
-            1,
-        )
-    else:
-        mutated[target] = mutated[target].replace(
-            "connect_norito_kagemusha_recursive_spend_append_v2",
-            "connect_norito_kagemusha_recursive_spend_append_removed_v2",
-        )
-    try:
-        check(mutated)
-    except CheckFailure as error:
-        if expected not in str(error):
-            raise SystemExit(f"negative control failed for the wrong reason: {error}")
-        print(f"negative control rejected drift: {error}")
-        raise SystemExit(0)
-    raise SystemExit(f"negative control was not rejected: {mode}")
 
 try:
     check(texts)

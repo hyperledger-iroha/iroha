@@ -157,7 +157,9 @@ canonical unprefixed Base58 asset-definition IDs on the Swift surface.
 
 IrohaSwift exposes only Kagemusha offline cash. There is no runtime product-mode
 field or wallet-selectable offline API. The native artifact wire contract is
-authenticated internally and is not another public API.
+authenticated internally and is not another public API. It has no `mode` field;
+the manifest schema/version, ABI, proof backend, transcript, and circuit IDs
+identify the exact contract.
 
 Use the typed `KagemushaRecursiveSpend` and
 `KagemushaRecursiveSpendCodecs` APIs for top-up, recipient-request creation,
@@ -750,9 +752,9 @@ has no change branch; partial redeem binds one offline change branch to the same
 proof and operation ID. `redeemSpend` returns the canonical request submitted by
 `submitKagemushaRedeem`.
 
-All accumulator, proof, verifier-record, finality-proof, and lineage-witness
-archives are opaque to wallet code. Do not reconstruct or mutate them outside
-the typed codecs.
+All accumulator, proof, verifier-record, and finality-proof archives are opaque
+to wallet code. The first-release wire API has no separate lineage-witness
+archive. Do not reconstruct or mutate proof material outside the typed codecs.
 
 ### Native privacy bridge
 

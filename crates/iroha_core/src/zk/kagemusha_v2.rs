@@ -698,8 +698,6 @@ fn branch_selector(branch: KagemushaRecursiveSpendBranchV2) -> Scalar {
     }
 }
 
-
-
 fn fill_common_statement_values(
     public: &mut [Scalar; KAGEMUSHA_RECURSIVE_SPEND_V2_INSTANCE_ROWS],
     statement: &KagemushaRecursiveSpendPublicStatementV2,
@@ -708,7 +706,7 @@ fn fill_common_statement_values(
     topup_receipt_digest: [u8; 32],
 ) -> Result<(), String> {
     statement
-        .validate_context()
+        .validate_public_binding()
         .map_err(|err| err.to_string())?;
     let [branch_claim] = statement.branch_claims.as_slice() else {
         return Err(
@@ -796,7 +794,7 @@ fn ensure_transition_statement_binding(
     transition: &[Scalar],
 ) -> Result<(), String> {
     statement
-        .validate_context()
+        .validate_public_binding()
         .map_err(|err| err.to_string())?;
     if transition.len() < KAGEMUSHA_RECURSIVE_SPEND_V2_INSTANCE_ROWS {
         return Err("Kagemusha V2 recursive proof transition instance is truncated".to_owned());
@@ -1207,8 +1205,6 @@ impl KagemushaRecursiveSpendPastaCycleArtifactsV3 {
 
 #[cfg(test)]
 mod tests {
-    use core::str::FromStr as _;
-
     use super::*;
 
     fn scalar_bytes(value: u64) -> [u8; 32] {
@@ -1222,6 +1218,7 @@ mod tests {
         use iroha_data_model::{
             ChainId,
             asset::AssetDefinitionId,
+            domain::DomainId,
             offline::{
                 KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1,
                 KAGEMUSHA_RECURSIVE_SPEND_STATE_EP_CIRCUIT_ID_V1,
@@ -1233,7 +1230,10 @@ mod tests {
         };
 
         let chain_id = ChainId::from("kagemusha-v2-statement-binding");
-        let asset = AssetDefinitionId::from_str("rose#wonderland").expect("asset id");
+        let asset = AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").expect("asset domain"),
+            "rose".parse().expect("asset name"),
+        );
         let anchor = KagemushaRecursiveSpendTopUpAnchorRefV2 {
             topup_operation_id: [0x41; 32],
             anchor_digest: [0x42; 32],
@@ -1787,7 +1787,10 @@ mod tests {
             "physical_device_performance_evidence",
         ] {
             assert!(
-                capabilities.missing_gates.iter().any(|gate| gate == required),
+                capabilities
+                    .missing_gates
+                    .iter()
+                    .any(|gate| gate == required),
                 "fail-closed capabilities must retain blocker {required}"
             );
         }

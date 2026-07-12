@@ -474,7 +474,7 @@ mod tests {
         offline::{
             KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V3,
             KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_VERSION_V3,
-            KAGEMUSHA_RECURSIVE_SPEND_MODE, KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3,
+            KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3,
             KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1,
             KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_IPA_K_V1,
             KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V1,
@@ -495,10 +495,10 @@ mod tests {
             KagemushaPastaCycleArtifactV3, KagemushaPastaCycleParityV1,
             KagemushaPastaCycleProofProfileV1, KagemushaRecursiveSpendArtifactBindingV3,
             KagemushaRecursiveSpendArtifactManifestV3, KagemushaRecursiveSpendTopUpAnchorV2,
-            KagemushaScaledAmountV2,
-            KagemushaSpendableNoteDescriptorV2, KagemushaTopUpAnchorMerkleProofV2,
-            KagemushaTopUpFinalityCompactQcV2, KagemushaTopUpFinalityHeightContextV2,
-            KagemushaTopUpFinalityProofV2, KagemushaTopUpFinalityRosterArtifactReferenceV2,
+            KagemushaScaledAmountV2, KagemushaSpendableNoteDescriptorV2,
+            KagemushaTopUpAnchorMerkleProofV2, KagemushaTopUpFinalityCompactQcV2,
+            KagemushaTopUpFinalityHeightContextV2, KagemushaTopUpFinalityProofV2,
+            KagemushaTopUpFinalityRosterArtifactReferenceV2,
             KagemushaTopUpFinalityRosterArtifactV2, KagemushaTopUpFinalityRosterWindowV2,
         },
         peer::PeerId,
@@ -613,7 +613,6 @@ mod tests {
             schema: KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V3.to_owned(),
             version: KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_VERSION_V3,
             bridge_abi_version: KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3,
-            mode: KAGEMUSHA_RECURSIVE_SPEND_MODE.to_owned(),
             proof_backend: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1.to_owned(),
             transcript_profile: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V1.to_owned(),
             generation: "release-generation-1".to_owned(),
@@ -1071,6 +1070,26 @@ mod tests {
                 )
                 .unwrap_err(),
             KagemushaTopUpFinalityVerifyError::ArtifactGenerationMismatch
+        );
+
+        let mut anchor = fixture.anchor.clone();
+        anchor.artifact_binding.manifest_sha256[0] ^= 1;
+        anchor = anchor
+            .finalize_digest()
+            .expect("alternate manifest-bound anchor");
+        let mut proof = fixture.proof.clone();
+        proof.anchor = anchor.compact_ref().unwrap();
+        assert_eq!(
+            verifier
+                .verify(
+                    &proof,
+                    &fixture.roster,
+                    &anchor,
+                    &fixture.manifest,
+                    fixture.manifest_digest,
+                )
+                .unwrap_err(),
+            KagemushaTopUpFinalityVerifyError::ManifestDigestMismatch
         );
 
         let mut anchor = fixture.anchor.clone();

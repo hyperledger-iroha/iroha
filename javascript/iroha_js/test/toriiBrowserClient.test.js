@@ -19,6 +19,14 @@ const FIXTURE_BOB_ID = AccountAddress.fromAccount({
     "hex",
   ),
 }).toI105();
+
+function jsonResponse(payload, init = {}) {
+  return new Response(JSON.stringify(payload), {
+    status: init.status ?? 200,
+    headers: { "content-type": "application/json", ...(init.headers ?? {}) },
+  });
+}
+
  test("ToriiBrowserClient strips API suffixes and calls current explorer block routes", async () => {
   const fetchImpl = async (url, init) => {
     assert.equal(String(url), "https://localhost:8080/v1/explorer/blocks?page=2&per_page=5");
@@ -189,11 +197,11 @@ test("ToriiBrowserClient source and dist use only first-release multisig proposa
     const source = readFileSync(new URL(relativePath, import.meta.url), "utf8");
     assert.doesNotMatch(
       source,
-      /["']\/v1\/multisig\/proposals\/(?:list|get)["']/,
+      /["']\/v1\/multisig\/proposals\/(?:query|lookup)["']/,
       `${relativePath} must not retain retired multisig proposal paths`,
     );
-    assert.match(source, /["']\/v1\/multisig\/proposals\/query["']/);
-    assert.match(source, /["']\/v1\/multisig\/proposals\/lookup["']/);
+    assert.match(source, /["']\/v1\/multisig\/proposals\/list["']/);
+    assert.match(source, /["']\/v1\/multisig\/proposals\/get["']/);
   }
 });
 
@@ -226,18 +234,18 @@ test("ToriiBrowserClient posts selector-explicit multisig proposal reads", async
   };
   const client = new ToriiBrowserClient("https://torii.example", { fetchImpl });
 
-  await client.queryMultisigProposals({
+  await client.listMultisigProposals({
     multisigAccountAlias: "cbdc@banka",
     status: ["collecting_signatures"],
     cursor: "page-1",
     limit: 25,
   });
-  await client.lookupMultisigProposal({
+  await client.getMultisigProposal({
     multisigAccountAlias: "cbdc@banka",
     instructionsHash: "a".repeat(64),
   });
 
-  assert.equal(calls[0].url, "https://torii.example/v1/multisig/proposals/query");
+  assert.equal(calls[0].url, "https://torii.example/v1/multisig/proposals/list");
   assert.equal(calls[0].init.method, "POST");
   assert.deepEqual(JSON.parse(calls[0].init.body), {
     multisig_account_alias: "cbdc@banka",
@@ -245,7 +253,7 @@ test("ToriiBrowserClient posts selector-explicit multisig proposal reads", async
     cursor: "page-1",
     limit: 25,
   });
-  assert.equal(calls[1].url, "https://torii.example/v1/multisig/proposals/lookup");
+  assert.equal(calls[1].url, "https://torii.example/v1/multisig/proposals/get");
   assert.equal(calls[1].init.method, "POST");
   assert.deepEqual(JSON.parse(calls[1].init.body), {
     multisig_account_alias: "cbdc@banka",
@@ -262,7 +270,7 @@ test("ToriiBrowserClient rejects unsupported multisig proposal statuses before f
 
   assert.throws(
     () =>
-      client.queryMultisigProposals({
+      client.listMultisigProposals({
         multisigAccountAlias: "cbdc@banka",
         status: ["READY_TO_SUBMIT"],
       }),
@@ -279,22 +287,22 @@ test("ToriiBrowserClient rejects implicit and ambiguous multisig selectors befor
     },
   });
 
-  assert.throws(() => client.queryMultisigProposals({}), /requires exactly one/);
+  assert.throws(() => client.listMultisigProposals({}), /requires exactly one/);
   assert.throws(
     () =>
-      client.queryMultisigProposals({
+      client.listMultisigProposals({
         multisigAccountId: FIXTURE_ALICE_ID,
         multisigAccountAlias: "cbdc@banka",
       }),
     /requires exactly one/,
   );
   assert.throws(
-    () => client.lookupMultisigProposal(FIXTURE_ALICE_ID, "b".repeat(64)),
+    () => client.getMultisigProposal(FIXTURE_ALICE_ID, "b".repeat(64)),
     /must be an object/,
   );
   assert.throws(
     () =>
-      client.lookupMultisigProposal({
+      client.getMultisigProposal({
         multisigAccountId: FIXTURE_ALICE_ID,
         proposalId: "b".repeat(64),
         instructionsHash: "b".repeat(64),

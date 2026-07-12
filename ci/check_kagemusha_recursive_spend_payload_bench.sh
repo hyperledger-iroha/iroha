@@ -33,6 +33,16 @@ if (raw_limit, hop_limit, tag_bytes) != (9_211, 64, 24):
         f"raw={raw_limit}, hops={hop_limit}, transition_tag={tag_bytes}"
     )
 
+backend = re.search(
+    r"KAGEMUSHA_RECURSIVE_SPEND_PROOF_BACKEND_AVAILABLE\s*:\s*bool\s*=\s*(true|false)\s*;",
+    rust,
+)
+if backend is None or backend.group(1) != "false":
+    raise SystemExit(
+        "production Kagemusha must remain unavailable until an exact full-archive "
+        "hop-64 benchmark fits the peer limit"
+    )
+
 encoded_bytes = (raw_limit * 4 + 2) // 3
 if encoded_bytes + 6 != 12 * 1_024:
     raise SystemExit(
@@ -50,7 +60,8 @@ for prefix in ("PKK2R.", "PKK2P.", "PKK2A."):
         raise SystemExit(f"missing canonical six-byte peer prefix: {prefix}")
 
 print(
-    "Kagemusha peer payload contract passed: "
-    "9,211 raw bytes -> 12 KiB text, constant through hop 64."
+    "Kagemusha peer transport bounds are internally consistent: "
+    "9,211 raw bytes -> 12 KiB text; production remains unavailable pending "
+    "an exact full-archive hop-64 benchmark."
 )
 PY

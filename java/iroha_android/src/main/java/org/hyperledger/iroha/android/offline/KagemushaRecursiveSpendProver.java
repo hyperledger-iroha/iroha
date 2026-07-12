@@ -15,7 +15,6 @@ import java.util.Objects;
  */
 public final class KagemushaRecursiveSpendProver {
   public static final int REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 19;
-  public static final String ARTIFACT_MANIFEST_MODE = "recursive_spend_v1";
   public static final String ARTIFACT_MANIFEST_SCHEMA =
       "kagemusha.offline.recursive_spend.artifact_manifest.v3";
   public static final List<String> ARTIFACT_FILES =

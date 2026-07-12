@@ -9,7 +9,6 @@ package org.hyperledger.iroha.sdk.offline
 class KagemushaRecursiveSpendProver private constructor() {
     companion object {
         const val REQUIRED_NATIVE_BRIDGE_ABI_VERSION: Int = 19
-        const val ARTIFACT_MANIFEST_MODE: String = "recursive_spend_v1"
         const val ARTIFACT_MANIFEST_SCHEMA: String =
             "kagemusha.offline.recursive_spend.artifact_manifest.v3"
         val ARTIFACT_FILES: List<String> = listOf(

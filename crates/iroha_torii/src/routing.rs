@@ -15903,7 +15903,7 @@ impl NormalizedAssetTransfer {
             self.authority.clone(),
             self.asset_balance_scope,
         );
-        let instruction: dm::InstructionBox = dm::Transfer::asset_numeric(
+        let instruction: InstructionBox = Transfer::asset_numeric(
             source_asset_id,
             self.amount.clone(),
             self.destination.clone(),
@@ -15927,7 +15927,7 @@ impl NormalizedAssetTransfer {
         builder.set_ttl(Duration::from_millis(self.transaction_ttl_ms));
         builder
             .with_metadata(metadata)
-            .with_instructions::<dm::InstructionBox>([instruction])
+            .with_instructions::<InstructionBox>([instruction])
     }
 
     fn receipt(
@@ -16314,6 +16314,164 @@ mod asset_transfer_request_tests {
                 .is_err(),
             "signature must not verify after an amount change"
         );
+    }
+
+    #[test]
+    fn detached_signature_rejects_every_signed_field_substitution() {
+        use base64::Engine as _;
+
+        let authority_keypair = fixture_keypair(0x3A);
+        let base_request = fixture_request(&authority_keypair);
+        let (prepared, _) = normalize(base_request.clone()).expect("normalize preparation");
+        let signing_hash = prepared
+            .transaction_builder(&ChainId::from("asset-transfer-test"))
+            .payload_hash_bytes();
+        let signature = Signature::try_new(authority_keypair.private_key(), &signing_hash)
+            .expect("sign exact payload hash");
+        let public_key_hex = hex::encode(authority_keypair.public_key().to_bytes().1);
+        let signature_base64 =
+            base64::engine::general_purpose::STANDARD.encode(signature.payload());
+
+        let mut hostile = Vec::new();
+        let mut changed = base_request.clone();
+        changed.authority = AccountId::new(fixture_keypair(0x40).public_key().clone()).to_string();
+        hostile.push(("authority", changed));
+        let mut changed = base_request.clone();
+        changed.asset_definition_id =
+            test_asset_definition_literal_from_hex("10112233445546778899aabbccddeeff");
+        hostile.push(("asset definition", changed));
+        let mut changed = base_request.clone();
+        changed.asset_balance_scope = "global".to_owned();
+        hostile.push(("asset scope/source asset", changed));
+        let mut changed = base_request.clone();
+        changed.amount = "2".to_owned();
+        hostile.push(("amount", changed));
+        let mut changed = base_request.clone();
+        changed.destination =
+            AccountId::new(fixture_keypair(0x41).public_key().clone()).to_string();
+        hostile.push(("destination", changed));
+        let mut changed = base_request.clone();
+        changed.memo = Some("changed memo".to_owned());
+        hostile.push(("memo metadata", changed));
+        let mut changed = base_request.clone();
+        changed.fee_sponsor =
+            Some(AccountId::new(fixture_keypair(0x42).public_key().clone()).to_string());
+        hostile.push(("fee sponsor metadata", changed));
+        let mut changed = base_request.clone();
+        changed.creation_time_ms -= 1;
+        hostile.push(("creation time", changed));
+        let mut changed = base_request;
+        changed.transaction_ttl_ms += 1;
+        hostile.push(("transaction TTL", changed));
+
+        for (field, mut request) in hostile {
+            request.public_key_hex = Some(public_key_hex.clone());
+            request.signature_base64 = Some(signature_base64.clone());
+            match normalize(request) {
+                Err(_) => {
+                    assert_eq!(
+                        field, "authority",
+                        "canonical non-authority mutation `{field}` should reach signature verification"
+                    );
+                }
+                Ok((transfer, AssetTransferSigningState::Submit { signature, .. })) => {
+                    assert!(
+                        transfer
+                            .transaction_builder(&ChainId::from("asset-transfer-test"))
+                            .build_with_signature(signature)
+                            .verify_signature()
+                            .is_err(),
+                        "signature must not verify after `{field}` substitution"
+                    );
+                }
+                Ok((_, AssetTransferSigningState::Prepare)) => {
+                    panic!("complete signing fields unexpectedly selected prepare for `{field}`")
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn public_key_signature_and_identifier_encodings_are_exact() {
+        use base64::Engine as _;
+
+        let authority_keypair = fixture_keypair(0x3B);
+        let (prepared, _) =
+            normalize(fixture_request(&authority_keypair)).expect("normalize preparation");
+        let signing_hash = prepared
+            .transaction_builder(&ChainId::from("asset-transfer-test"))
+            .payload_hash_bytes();
+        let signature = Signature::try_new(authority_keypair.private_key(), &signing_hash)
+            .expect("sign exact payload hash");
+        let public_key_hex = hex::encode(authority_keypair.public_key().to_bytes().1);
+        let signature_base64 =
+            base64::engine::general_purpose::STANDARD.encode(signature.payload());
+
+        for malformed_key in [
+            "0".repeat(64),
+            "A".repeat(64),
+            format!("0x{}", &public_key_hex[..62]),
+            public_key_hex[..63].to_owned(),
+            format!("{}g", &public_key_hex[..63]),
+        ] {
+            let mut request = fixture_request(&authority_keypair);
+            request.public_key_hex = Some(malformed_key.clone());
+            request.signature_base64 = Some(signature_base64.clone());
+            assert!(
+                normalize(request).is_err(),
+                "malformed public key `{malformed_key}` must fail"
+            );
+        }
+
+        let url_safe = base64::engine::general_purpose::STANDARD
+            .encode([0xFB_u8; 64])
+            .replace('+', "-")
+            .replace('/', "_");
+        for malformed_signature in [
+            base64::engine::general_purpose::STANDARD.encode([0_u8; 64]),
+            base64::engine::general_purpose::STANDARD.encode([1_u8; 63]),
+            base64::engine::general_purpose::STANDARD.encode([1_u8; 65]),
+            "!".repeat(88),
+            signature_base64.trim_end_matches('=').to_owned(),
+            format!("{signature_base64}\n"),
+            url_safe,
+        ] {
+            let mut request = fixture_request(&authority_keypair);
+            request.public_key_hex = Some(public_key_hex.clone());
+            request.signature_base64 = Some(malformed_signature.clone());
+            assert!(
+                normalize(request).is_err(),
+                "malformed signature `{malformed_signature}` must fail"
+            );
+        }
+
+        for malformed_account in [
+            String::new(),
+            "alice@wonderland".to_owned(),
+            format!(" {}", prepared.authority),
+            format!("{} ", prepared.authority),
+            "a".repeat(ASSET_TRANSFER_MAX_ACCOUNT_LITERAL_BYTES + 1),
+        ] {
+            let mut request = fixture_request(&authority_keypair);
+            request.destination = malformed_account.clone();
+            assert!(
+                normalize(request).is_err(),
+                "malformed account `{malformed_account}` must fail"
+            );
+        }
+        for malformed_definition in [
+            String::new(),
+            format!("0x{}", prepared.asset_definition_id),
+            format!("{} ", prepared.asset_definition_id),
+            "1".repeat(ASSET_TRANSFER_MAX_DEFINITION_LITERAL_BYTES + 1),
+        ] {
+            let mut request = fixture_request(&authority_keypair);
+            request.asset_definition_id = malformed_definition.clone();
+            assert!(
+                normalize(request).is_err(),
+                "malformed asset definition `{malformed_definition}` must fail"
+            );
+        }
     }
 
     #[test]
@@ -21094,7 +21252,7 @@ fn status_matches_requested_set(
 }
 
 #[cfg(feature = "app_api")]
-fn query_multisig_proposals(
+fn list_multisig_proposals(
     state: &CoreState,
     multisig_account_id: &iroha_data_model::account::AccountId,
     spec: &iroha_executor_data_model::isi::multisig::MultisigSpec,
@@ -23805,12 +23963,8 @@ mod multisig_selector_tests {
         for (kind, body) in cases {
             let rejected = match kind {
                 "spec" => norito::json::from_str::<MultisigSpecRequestDto>(body).is_err(),
-                "query" => {
-                    norito::json::from_str::<MultisigProposalsQueryRequestDto>(body).is_err()
-                }
-                "lookup" => {
-                    norito::json::from_str::<MultisigProposalLookupRequestDto>(body).is_err()
-                }
+                "query" => norito::json::from_str::<MultisigProposalsListRequestDto>(body).is_err(),
+                "lookup" => norito::json::from_str::<MultisigProposalsGetRequestDto>(body).is_err(),
                 _ => unreachable!(),
             };
             assert!(rejected, "{kind} must reject unknown fields");
@@ -24533,9 +24687,9 @@ mod multisig_selector_tests {
         );
         assert_eq!(alias_spec.spec, concrete_spec.spec);
 
-        let JsonBody(alias_list) = handle_post_multisig_proposals_query(
+        let JsonBody(alias_list) = handle_post_multisig_proposals_list(
             state.clone(),
-            NoritoJson(MultisigProposalsQueryRequestDto {
+            NoritoJson(MultisigProposalsListRequestDto {
                 selector: alias_selector(&alias_literal),
                 status: vec!["COLLECTING_SIGNATURES".to_owned()],
                 cursor: None,
@@ -24544,9 +24698,9 @@ mod multisig_selector_tests {
         )
         .await
         .expect("alias list");
-        let JsonBody(concrete_list) = handle_post_multisig_proposals_query(
+        let JsonBody(concrete_list) = handle_post_multisig_proposals_list(
             state.clone(),
-            NoritoJson(MultisigProposalsQueryRequestDto {
+            NoritoJson(MultisigProposalsListRequestDto {
                 selector: concrete_selector(multisig_account_id.clone()),
                 status: vec!["COLLECTING_SIGNATURES".to_owned()],
                 cursor: None,
@@ -24563,9 +24717,9 @@ mod multisig_selector_tests {
         assert_eq!(alias_list.proposals, concrete_list.proposals);
         assert_eq!(alias_list.proposals[0].proposal_id, active_hash);
 
-        let JsonBody(alias_get) = handle_post_multisig_proposals_lookup(
+        let JsonBody(alias_get) = handle_post_multisig_proposals_get(
             state.clone(),
-            NoritoJson(MultisigProposalLookupRequestDto {
+            NoritoJson(MultisigProposalsGetRequestDto {
                 selector: alias_selector(&alias_literal),
                 proposal_id: Some(active_hash.clone()),
                 instructions_hash: None,
@@ -24573,9 +24727,9 @@ mod multisig_selector_tests {
         )
         .await
         .expect("alias get");
-        let JsonBody(concrete_get) = handle_post_multisig_proposals_lookup(
+        let JsonBody(concrete_get) = handle_post_multisig_proposals_get(
             state,
-            NoritoJson(MultisigProposalLookupRequestDto {
+            NoritoJson(MultisigProposalsGetRequestDto {
                 selector: concrete_selector(multisig_account_id),
                 proposal_id: None,
                 instructions_hash: Some(active_hash.clone()),
@@ -24592,13 +24746,13 @@ mod multisig_selector_tests {
     }
 
     #[tokio::test]
-    async fn multisig_proposals_query_is_bounded_and_cursor_is_context_bound() {
+    async fn multisig_proposals_list_is_bounded_and_cursor_is_context_bound() {
         let (world, multisig_account_id, _signer_one, _signer_two, alias_literal, active_hash) =
             multisig_test_world();
         let state = build_state(world);
-        let JsonBody(first) = handle_post_multisig_proposals_query(
+        let JsonBody(first) = handle_post_multisig_proposals_list(
             state.clone(),
-            NoritoJson(MultisigProposalsQueryRequestDto {
+            NoritoJson(MultisigProposalsListRequestDto {
                 selector: alias_selector(&alias_literal),
                 status: Vec::new(),
                 cursor: None,
@@ -24612,9 +24766,9 @@ mod multisig_selector_tests {
         let cursor = first.next_cursor.expect("second page cursor");
         assert!(cursor.len() <= MULTISIG_PROPOSALS_CURSOR_MAX_BYTES);
 
-        let JsonBody(second) = handle_post_multisig_proposals_query(
+        let JsonBody(second) = handle_post_multisig_proposals_list(
             state.clone(),
-            NoritoJson(MultisigProposalsQueryRequestDto {
+            NoritoJson(MultisigProposalsListRequestDto {
                 selector: concrete_selector(multisig_account_id.clone()),
                 status: Vec::new(),
                 cursor: Some(cursor.clone()),
@@ -24635,9 +24789,9 @@ mod multisig_selector_tests {
             ),
             (cursor.clone(), vec!["EXPIRED".to_owned()]),
         ] {
-            let error = handle_post_multisig_proposals_query(
+            let error = handle_post_multisig_proposals_list(
                 state.clone(),
-                NoritoJson(MultisigProposalsQueryRequestDto {
+                NoritoJson(MultisigProposalsListRequestDto {
                     selector: concrete_selector(multisig_account_id.clone()),
                     status: statuses,
                     cursor: Some(cursor),
@@ -24684,9 +24838,9 @@ mod multisig_selector_tests {
                 status_fingerprint: multisig_status_fingerprint(&BTreeSet::new()),
             },
         ] {
-            let error = handle_post_multisig_proposals_query(
+            let error = handle_post_multisig_proposals_list(
                 state.clone(),
-                NoritoJson(MultisigProposalsQueryRequestDto {
+                NoritoJson(MultisigProposalsListRequestDto {
                     selector: concrete_selector(multisig_account_id.clone()),
                     status: Vec::new(),
                     cursor: Some(encode_multisig_proposals_cursor(&forged)),
@@ -24705,9 +24859,9 @@ mod multisig_selector_tests {
             instructions_hash: active_hash,
             status_fingerprint: multisig_status_fingerprint(&expired_statuses),
         });
-        let error = handle_post_multisig_proposals_query(
+        let error = handle_post_multisig_proposals_list(
             state.clone(),
-            NoritoJson(MultisigProposalsQueryRequestDto {
+            NoritoJson(MultisigProposalsListRequestDto {
                 selector: concrete_selector(multisig_account_id.clone()),
                 status: vec!["EXPIRED".to_owned()],
                 cursor: Some(filter_rebound_cursor),
@@ -24722,9 +24876,9 @@ mod multisig_selector_tests {
         assert!(message.contains("boundary is not present"));
 
         for limit in [0, MULTISIG_PROPOSALS_MAX_PAGE_LIMIT + 1] {
-            let error = handle_post_multisig_proposals_query(
+            let error = handle_post_multisig_proposals_list(
                 state.clone(),
-                NoritoJson(MultisigProposalsQueryRequestDto {
+                NoritoJson(MultisigProposalsListRequestDto {
                     selector: concrete_selector(multisig_account_id.clone()),
                     status: Vec::new(),
                     cursor: None,
@@ -24771,9 +24925,9 @@ mod multisig_selector_tests {
             )
             .expect("encode tampered proposal state"),
         );
-        let error = handle_post_multisig_proposals_lookup(
+        let error = handle_post_multisig_proposals_get(
             build_state(world),
-            NoritoJson(MultisigProposalLookupRequestDto {
+            NoritoJson(MultisigProposalsGetRequestDto {
                 selector: concrete_selector(multisig_account_id),
                 proposal_id: Some(active_hash),
                 instructions_hash: None,
@@ -24820,9 +24974,9 @@ mod multisig_selector_tests {
             norito::to_bytes(&terminal).expect("encode conflicting terminal state"),
         );
 
-        let error = handle_post_multisig_proposals_lookup(
+        let error = handle_post_multisig_proposals_get(
             build_state(world),
-            NoritoJson(MultisigProposalLookupRequestDto {
+            NoritoJson(MultisigProposalsGetRequestDto {
                 selector: concrete_selector(multisig_account_id),
                 proposal_id: Some(active_hash),
                 instructions_hash: None,
@@ -24876,9 +25030,9 @@ mod multisig_selector_tests {
         );
         let state = build_state(world);
 
-        let JsonBody(list_response) = handle_post_multisig_proposals_query(
+        let JsonBody(list_response) = handle_post_multisig_proposals_list(
             state.clone(),
-            NoritoJson(MultisigProposalsQueryRequestDto {
+            NoritoJson(MultisigProposalsListRequestDto {
                 selector: alias_selector(&alias_literal),
                 status: vec!["CANCELED".to_owned()],
                 cursor: None,
@@ -24895,9 +25049,9 @@ mod multisig_selector_tests {
             Some(1_700_000_000_333)
         );
 
-        let JsonBody(get_response) = handle_post_multisig_proposals_lookup(
+        let JsonBody(get_response) = handle_post_multisig_proposals_get(
             state,
-            NoritoJson(MultisigProposalLookupRequestDto {
+            NoritoJson(MultisigProposalsGetRequestDto {
                 selector: alias_selector(&alias_literal),
                 proposal_id: Some(canceled_hash.clone()),
                 instructions_hash: None,
@@ -24912,7 +25066,7 @@ mod multisig_selector_tests {
     }
 
     #[tokio::test]
-    async fn multisig_proposals_query_and_lookup_include_asset_transfer_control_intent() {
+    async fn multisig_proposals_list_and_lookup_include_asset_transfer_control_intent() {
         let (
             mut world,
             multisig_account_id,
@@ -24941,9 +25095,9 @@ mod multisig_selector_tests {
         );
         let state = build_state(world);
 
-        let JsonBody(list_response) = handle_post_multisig_proposals_query(
+        let JsonBody(list_response) = handle_post_multisig_proposals_list(
             state.clone(),
-            NoritoJson(MultisigProposalsQueryRequestDto {
+            NoritoJson(MultisigProposalsListRequestDto {
                 selector: concrete_selector(multisig_account_id.clone()),
                 status: vec!["COLLECTING_SIGNATURES".to_owned()],
                 cursor: None,
@@ -24971,9 +25125,9 @@ mod multisig_selector_tests {
         assert_eq!(list_intent["outgoing_frozen"].as_bool(), Some(true));
         assert_eq!(list_intent["reason"].as_str(), Some("risk review"));
 
-        let JsonBody(get_response) = handle_post_multisig_proposals_lookup(
+        let JsonBody(get_response) = handle_post_multisig_proposals_get(
             state,
-            NoritoJson(MultisigProposalLookupRequestDto {
+            NoritoJson(MultisigProposalsGetRequestDto {
                 selector: concrete_selector(multisig_account_id),
                 proposal_id: Some(freeze_hash),
                 instructions_hash: None,
@@ -24995,7 +25149,7 @@ mod multisig_selector_tests {
     }
 
     #[tokio::test]
-    async fn multisig_proposals_query_and_lookup_do_not_project_retired_pacs009_markers() {
+    async fn multisig_proposals_list_and_lookup_do_not_project_retired_pacs009_markers() {
         let (
             mut world,
             multisig_account_id,
@@ -25031,9 +25185,9 @@ mod multisig_selector_tests {
         );
         let state = build_state(world);
 
-        let JsonBody(list_response) = handle_post_multisig_proposals_query(
+        let JsonBody(list_response) = handle_post_multisig_proposals_list(
             state.clone(),
-            NoritoJson(MultisigProposalsQueryRequestDto {
+            NoritoJson(MultisigProposalsListRequestDto {
                 selector: concrete_selector(multisig_account_id.clone()),
                 status: vec!["COLLECTING_SIGNATURES".to_owned()],
                 cursor: None,
@@ -25053,9 +25207,9 @@ mod multisig_selector_tests {
             "retired marker logs must not synthesize trusted business intent",
         );
 
-        let JsonBody(get_response) = handle_post_multisig_proposals_lookup(
+        let JsonBody(get_response) = handle_post_multisig_proposals_get(
             state,
-            NoritoJson(MultisigProposalLookupRequestDto {
+            NoritoJson(MultisigProposalsGetRequestDto {
                 selector: concrete_selector(multisig_account_id.clone()),
                 proposal_id: Some(pacs009_hash),
                 instructions_hash: None,
@@ -25068,7 +25222,7 @@ mod multisig_selector_tests {
     }
 
     #[tokio::test]
-    async fn multisig_proposals_query_and_lookup_ignore_pacs009_marker_on_non_mint_proposals() {
+    async fn multisig_proposals_list_and_lookup_ignore_pacs009_marker_on_non_mint_proposals() {
         let (
             mut world,
             multisig_account_id,
@@ -25127,9 +25281,9 @@ mod multisig_selector_tests {
         );
         let state = build_state(world);
 
-        let JsonBody(list_response) = handle_post_multisig_proposals_query(
+        let JsonBody(list_response) = handle_post_multisig_proposals_list(
             state.clone(),
-            NoritoJson(MultisigProposalsQueryRequestDto {
+            NoritoJson(MultisigProposalsListRequestDto {
                 selector: concrete_selector(multisig_account_id.clone()),
                 status: vec!["COLLECTING_SIGNATURES".to_owned()],
                 cursor: None,
@@ -25153,9 +25307,9 @@ mod multisig_selector_tests {
         assert_eq!(execute_trigger_item.operation_type, "EXECUTE_TRIGGER");
         assert!(execute_trigger_item.intent.is_none());
 
-        let JsonBody(transfer_get_response) = handle_post_multisig_proposals_lookup(
+        let JsonBody(transfer_get_response) = handle_post_multisig_proposals_get(
             state.clone(),
-            NoritoJson(MultisigProposalLookupRequestDto {
+            NoritoJson(MultisigProposalsGetRequestDto {
                 selector: concrete_selector(multisig_account_id.clone()),
                 proposal_id: Some(transfer_hash),
                 instructions_hash: None,
@@ -25166,9 +25320,9 @@ mod multisig_selector_tests {
         assert_eq!(transfer_get_response.operation_type, "TRANSFER");
         assert!(transfer_get_response.intent.is_none());
 
-        let JsonBody(execute_trigger_get_response) = handle_post_multisig_proposals_lookup(
+        let JsonBody(execute_trigger_get_response) = handle_post_multisig_proposals_get(
             state,
-            NoritoJson(MultisigProposalLookupRequestDto {
+            NoritoJson(MultisigProposalsGetRequestDto {
                 selector: concrete_selector(multisig_account_id.clone()),
                 proposal_id: Some(execute_trigger_hash),
                 instructions_hash: None,
@@ -25184,7 +25338,7 @@ mod multisig_selector_tests {
     }
 
     #[tokio::test]
-    async fn multisig_proposals_query_and_lookup_ignore_malformed_pacs009_marker_on_mints() {
+    async fn multisig_proposals_list_and_lookup_ignore_malformed_pacs009_marker_on_mints() {
         let (
             mut world,
             multisig_account_id,
@@ -25211,9 +25365,9 @@ mod multisig_selector_tests {
         );
         let state = build_state(world);
 
-        let JsonBody(list_response) = handle_post_multisig_proposals_query(
+        let JsonBody(list_response) = handle_post_multisig_proposals_list(
             state.clone(),
-            NoritoJson(MultisigProposalsQueryRequestDto {
+            NoritoJson(MultisigProposalsListRequestDto {
                 selector: concrete_selector(multisig_account_id.clone()),
                 status: vec!["COLLECTING_SIGNATURES".to_owned()],
                 cursor: None,
@@ -25230,9 +25384,9 @@ mod multisig_selector_tests {
         assert_eq!(list_item.operation_type, "MINT");
         assert!(list_item.intent.is_none());
 
-        let JsonBody(get_response) = handle_post_multisig_proposals_lookup(
+        let JsonBody(get_response) = handle_post_multisig_proposals_get(
             state,
-            NoritoJson(MultisigProposalLookupRequestDto {
+            NoritoJson(MultisigProposalsGetRequestDto {
                 selector: concrete_selector(multisig_account_id.clone()),
                 proposal_id: Some(malformed_hash),
                 instructions_hash: None,
@@ -25589,9 +25743,9 @@ mod multisig_selector_tests {
         );
         let state = build_state(world);
 
-        let JsonBody(first_proposal_page) = handle_post_multisig_proposals_query(
+        let JsonBody(first_proposal_page) = handle_post_multisig_proposals_list(
             state.clone(),
-            NoritoJson(MultisigProposalsQueryRequestDto {
+            NoritoJson(MultisigProposalsListRequestDto {
                 selector: concrete_selector(multisig_account_id.clone()),
                 status: vec!["COLLECTING_SIGNATURES".to_owned()],
                 cursor: None,
@@ -25608,9 +25762,9 @@ mod multisig_selector_tests {
             .next_cursor
             .expect("bounded proposal continuation cursor");
         assert!(proposal_cursor.len() <= MULTISIG_PROPOSALS_CURSOR_MAX_BYTES);
-        let JsonBody(second_proposal_page) = handle_post_multisig_proposals_query(
+        let JsonBody(second_proposal_page) = handle_post_multisig_proposals_list(
             state.clone(),
-            NoritoJson(MultisigProposalsQueryRequestDto {
+            NoritoJson(MultisigProposalsListRequestDto {
                 selector: concrete_selector(multisig_account_id.clone()),
                 status: vec!["COLLECTING_SIGNATURES".to_owned()],
                 cursor: Some(proposal_cursor),
@@ -28467,25 +28621,25 @@ fn multisig_spec_response(
     })
 }
 
-/// POST /v1/multisig/proposals/query — query multisig proposals for an authority.
+/// POST /v1/multisig/proposals/list — list multisig proposals for a multisig authority.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
-pub async fn handle_post_multisig_proposals_query(
+pub async fn handle_post_multisig_proposals_list(
     state: Arc<CoreState>,
-    NoritoJson(req): NoritoJson<MultisigProposalsQueryRequestDto>,
-) -> Result<JsonBody<MultisigProposalsQueryResponseDto>> {
-    Ok(JsonBody(multisig_proposals_query_response(
+    NoritoJson(req): NoritoJson<MultisigProposalsListRequestDto>,
+) -> Result<JsonBody<MultisigProposalsListResponseDto>> {
+    Ok(JsonBody(multisig_proposals_list_response(
         &state, &req, None,
     )?))
 }
 
 #[cfg(feature = "app_api")]
-pub(crate) async fn handle_post_multisig_proposals_query_for_authority(
+pub(crate) async fn handle_post_multisig_proposals_list_for_authority(
     state: Arc<CoreState>,
-    req: MultisigProposalsQueryRequestDto,
+    req: MultisigProposalsListRequestDto,
     resolve_authority: AccountId,
-) -> Result<JsonBody<MultisigProposalsQueryResponseDto>> {
-    Ok(JsonBody(multisig_proposals_query_response(
+) -> Result<JsonBody<MultisigProposalsListResponseDto>> {
+    Ok(JsonBody(multisig_proposals_list_response(
         &state,
         &req,
         Some(&resolve_authority),
@@ -28493,11 +28647,11 @@ pub(crate) async fn handle_post_multisig_proposals_query_for_authority(
 }
 
 #[cfg(feature = "app_api")]
-fn multisig_proposals_query_response(
+fn multisig_proposals_list_response(
     state: &Arc<CoreState>,
-    req: &MultisigProposalsQueryRequestDto,
+    req: &MultisigProposalsListRequestDto,
     resolve_authority: Option<&AccountId>,
-) -> Result<MultisigProposalsQueryResponseDto> {
+) -> Result<MultisigProposalsListResponseDto> {
     let requested_statuses = requested_multisig_statuses(&req.status)?;
     let query_limits = app_query_limits();
     let max_page_limit = query_limits
@@ -28528,7 +28682,7 @@ fn multisig_proposals_query_response(
         .transpose()?;
     let mut remaining_scan_budget = usize::try_from(query_limits.max_fetch_size)
         .map_err(|_| conversion_error("multisig proposal scan limit exceeds usize".to_owned()))?;
-    let mut proposals = query_multisig_proposals(
+    let mut proposals = list_multisig_proposals(
         state,
         &resolved_multisig_account_id,
         &spec,
@@ -28555,32 +28709,32 @@ fn multisig_proposals_query_response(
         ))
     });
     proposals.truncate(page_limit);
-    Ok(MultisigProposalsQueryResponseDto {
+    Ok(MultisigProposalsListResponseDto {
         resolved_multisig_account_id,
         proposals,
         next_cursor,
     })
 }
 
-/// POST /v1/multisig/proposals/lookup — resolve a selector and look up a specific proposal.
+/// POST /v1/multisig/proposals/get — resolve a multisig selector and fetch a specific proposal.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
-pub async fn handle_post_multisig_proposals_lookup(
+pub async fn handle_post_multisig_proposals_get(
     state: Arc<CoreState>,
-    NoritoJson(req): NoritoJson<MultisigProposalLookupRequestDto>,
-) -> Result<JsonBody<MultisigProposalLookupResponseDto>> {
-    Ok(JsonBody(multisig_proposals_lookup_response(
+    NoritoJson(req): NoritoJson<MultisigProposalsGetRequestDto>,
+) -> Result<JsonBody<MultisigProposalGetResponseDto>> {
+    Ok(JsonBody(multisig_proposals_get_response(
         &state, &req, None,
     )?))
 }
 
 #[cfg(feature = "app_api")]
-pub(crate) async fn handle_post_multisig_proposals_lookup_for_authority(
+pub(crate) async fn handle_post_multisig_proposals_get_for_authority(
     state: Arc<CoreState>,
-    req: MultisigProposalLookupRequestDto,
+    req: MultisigProposalsGetRequestDto,
     resolve_authority: AccountId,
-) -> Result<JsonBody<MultisigProposalLookupResponseDto>> {
-    Ok(JsonBody(multisig_proposals_lookup_response(
+) -> Result<JsonBody<MultisigProposalGetResponseDto>> {
+    Ok(JsonBody(multisig_proposals_get_response(
         &state,
         &req,
         Some(&resolve_authority),
@@ -28588,11 +28742,11 @@ pub(crate) async fn handle_post_multisig_proposals_lookup_for_authority(
 }
 
 #[cfg(feature = "app_api")]
-fn multisig_proposals_lookup_response(
+fn multisig_proposals_get_response(
     state: &Arc<CoreState>,
-    req: &MultisigProposalLookupRequestDto,
+    req: &MultisigProposalsGetRequestDto,
     resolve_authority: Option<&AccountId>,
-) -> Result<MultisigProposalLookupResponseDto> {
+) -> Result<MultisigProposalGetResponseDto> {
     let (resolved_multisig_account_id, spec) =
         resolve_multisig_account_and_spec(state, &req.selector, resolve_authority)?;
     let (hash_literal, instructions_hash) =
@@ -28617,7 +28771,7 @@ fn multisig_proposals_lookup_response(
         &resolved_multisig_account_id,
         &proposal_record.proposal,
     );
-    Ok(MultisigProposalLookupResponseDto {
+    Ok(MultisigProposalGetResponseDto {
         resolved_multisig_account_id,
         proposal_id: hash_literal.clone(),
         instructions_hash: hash_literal,
@@ -28701,7 +28855,7 @@ fn multisig_approvals_query_response(
         if !multisig_approval_is_viewer_relevant(&spec, viewer_scope) {
             continue;
         }
-        let proposals = query_multisig_proposals(
+        let proposals = list_multisig_proposals(
             state,
             &multisig_account_id,
             &spec,
@@ -32372,7 +32526,7 @@ pub struct MultisigSpecResponseDto {
 )]
 #[norito(deny_unknown_fields)]
 /// Request payload for querying multisig proposals.
-pub struct MultisigProposalsQueryRequestDto {
+pub struct MultisigProposalsListRequestDto {
     /// Alias-aware selector for the multisig authority whose proposals are queried.
     #[norito(flatten)]
     pub selector: MultisigAccountSelectorDto,
@@ -32406,8 +32560,8 @@ pub struct MultisigProposalEntryDto {
 
 #[cfg(feature = "app_api")]
 #[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
-/// Response payload for a multisig proposal query.
-pub struct MultisigProposalsQueryResponseDto {
+/// Response payload for a multisig proposal list.
+pub struct MultisigProposalsListResponseDto {
     pub resolved_multisig_account_id: iroha_data_model::account::AccountId,
     pub proposals: Vec<MultisigProposalEntryDto>,
     /// Opaque cursor for the next page, absent when this page is final.
@@ -32424,8 +32578,8 @@ pub struct MultisigProposalsQueryResponseDto {
     norito::derive::NoritoSerialize,
 )]
 #[norito(deny_unknown_fields)]
-/// Request payload for looking up a single multisig proposal.
-pub struct MultisigProposalLookupRequestDto {
+/// Request payload for fetching a single multisig proposal.
+pub struct MultisigProposalsGetRequestDto {
     /// Alias-aware selector for the multisig authority that owns the proposal.
     #[norito(flatten)]
     pub selector: MultisigAccountSelectorDto,
@@ -32440,7 +32594,7 @@ pub struct MultisigProposalLookupRequestDto {
 #[cfg(feature = "app_api")]
 #[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
 /// Response payload for a selector-explicit multisig proposal read.
-pub struct MultisigProposalLookupResponseDto {
+pub struct MultisigProposalGetResponseDto {
     pub resolved_multisig_account_id: iroha_data_model::account::AccountId,
     pub proposal_id: String,
     pub instructions_hash: String,
@@ -44133,9 +44287,9 @@ pub const ENDPOINT_MULTISIG_CANCEL: &str = "/v1/multisig/cancel";
 #[cfg(feature = "app_api")]
 pub const ENDPOINT_MULTISIG_SPEC: &str = "/v1/multisig/spec";
 #[cfg(feature = "app_api")]
-pub const ENDPOINT_MULTISIG_PROPOSALS_QUERY: &str = "/v1/multisig/proposals/query";
+pub const ENDPOINT_MULTISIG_PROPOSALS_LIST: &str = "/v1/multisig/proposals/list";
 #[cfg(feature = "app_api")]
-pub const ENDPOINT_MULTISIG_PROPOSALS_LOOKUP: &str = "/v1/multisig/proposals/lookup";
+pub const ENDPOINT_MULTISIG_PROPOSALS_GET: &str = "/v1/multisig/proposals/get";
 #[cfg(feature = "app_api")]
 pub const ENDPOINT_ACCOUNTS_TRANSACTIONS_QUERY: &str =
     "/v1/accounts/{account_id}/transactions/query";

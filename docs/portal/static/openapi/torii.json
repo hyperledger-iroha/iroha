@@ -2705,12 +2705,233 @@
             "type": "string"
           },
           "multisig_account_id": {
-            "description": "Active concrete multisig account id.",
-            "maxLength": 512,
+            "description": "Active canonical multisig AccountId; native policies can make this substantially longer than a single-key identifier.",
             "minLength": 1,
             "type": "string"
           }
         },
+        "type": "object"
+      },
+      "MultisigApprovalEntry": {
+        "additionalProperties": false,
+        "properties": {
+          "instructions_hash": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "intent": {
+            "$ref": "#/components/schemas/JsonValue"
+          },
+          "multisig_account_id": {
+            "description": "Exact canonical multisig AccountId that owns the proposal.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "multisig_account_ref": {
+            "description": "Fixed domain-separated reference for exact follow-up lookups.",
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "operation_type": {
+            "description": "Canonical ASCII uppercase operation type.",
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Z][A-Z0-9_]*$",
+            "type": "string"
+          },
+          "proposal": {
+            "$ref": "#/components/schemas/MultisigProposalPayload"
+          },
+          "proposal_id": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "spec": {
+            "$ref": "#/components/schemas/MultisigSpecPayload"
+          },
+          "status": {
+            "enum": [
+              "COLLECTING_SIGNATURES",
+              "FINALIZED",
+              "CANCELED",
+              "EXPIRED"
+            ],
+            "type": "string"
+          },
+          "terminal_at_ms": {
+            "oneOf": [
+              {
+                "format": "uint64",
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "multisig_account_id",
+          "multisig_account_ref",
+          "spec",
+          "proposal_id",
+          "instructions_hash",
+          "proposal",
+          "operation_type",
+          "status"
+        ],
+        "type": "object"
+      },
+      "MultisigApprovalLookupRequest": {
+        "additionalProperties": false,
+        "oneOf": [
+          {
+            "required": [
+              "proposal_id"
+            ]
+          },
+          {
+            "required": [
+              "instructions_hash"
+            ]
+          }
+        ],
+        "properties": {
+          "instructions_hash": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "multisig_account_ref": {
+            "description": "Fixed reference of the exact viewer-visible multisig account.",
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "proposal_id": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "multisig_account_ref"
+        ],
+        "type": "object"
+      },
+      "MultisigApprovalLookupResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "item": {
+            "$ref": "#/components/schemas/MultisigApprovalEntry"
+          }
+        },
+        "required": [
+          "item"
+        ],
+        "type": "object"
+      },
+      "MultisigApprovalsQueryRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "cursor": {
+            "oneOf": [
+              {
+                "description": "Opaque canonical base64url cursor returned by the preceding page.",
+                "maxLength": 512,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9_-]+$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "limit": {
+            "oneOf": [
+              {
+                "format": "uint64",
+                "maximum": 100,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "operation_type": {
+            "items": {
+              "description": "Canonical ASCII uppercase operation type.",
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Z][A-Z0-9_]*$",
+              "type": "string"
+            },
+            "maxItems": 32,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "requires_my_signature": {
+            "default": false,
+            "description": "Return only proposals that still require a signature from the authenticated viewer or exact signed caller authority.",
+            "type": "boolean"
+          },
+          "status": {
+            "description": "Optional active or terminal lifecycle filters.",
+            "items": {
+              "enum": [
+                "COLLECTING_SIGNATURES",
+                "FINALIZED",
+                "CANCELED",
+                "EXPIRED"
+              ],
+              "type": "string"
+            },
+            "maxItems": 4,
+            "type": "array",
+            "uniqueItems": true
+          }
+        },
+        "type": "object"
+      },
+      "MultisigApprovalsQueryResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/MultisigApprovalEntry"
+            },
+            "maxItems": 100,
+            "type": "array"
+          },
+          "next_cursor": {
+            "oneOf": [
+              {
+                "maxLength": 512,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9_-]+$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "items"
+        ],
         "type": "object"
       },
       "MultisigApproveRequest": {
@@ -3066,7 +3287,67 @@
         ],
         "type": "object"
       },
-      "MultisigProposalGetResponse": {
+      "MultisigProposalLookupRequest": {
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "oneOf": [
+              {
+                "required": [
+                  "multisig_account_id"
+                ]
+              },
+              {
+                "required": [
+                  "multisig_account_alias"
+                ]
+              }
+            ]
+          },
+          {
+            "oneOf": [
+              {
+                "required": [
+                  "proposal_id"
+                ]
+              },
+              {
+                "required": [
+                  "instructions_hash"
+                ]
+              }
+            ]
+          }
+        ],
+        "properties": {
+          "instructions_hash": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "multisig_account_alias": {
+            "description": "Canonical stable alias in name@dataspace or name@domain.dataspace form.",
+            "maxLength": 512,
+            "minLength": 3,
+            "pattern": "^[^\\s@]+@(?:[^\\s.@]+\\.)?[^\\s.@]+$",
+            "type": "string"
+          },
+          "multisig_account_id": {
+            "description": "Active canonical multisig AccountId; native policies can make this substantially longer than a single-key identifier.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "proposal_id": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "MultisigProposalLookupResponse": {
         "additionalProperties": false,
         "properties": {
           "instructions_hash": {
@@ -3094,7 +3375,7 @@
             "type": "string"
           },
           "resolved_multisig_account_id": {
-            "maxLength": 512,
+            "description": "Resolved canonical multisig AccountId.",
             "minLength": 1,
             "type": "string"
           },
@@ -3171,68 +3452,7 @@
         ],
         "type": "object"
       },
-      "MultisigProposalsGetRequest": {
-        "additionalProperties": false,
-        "allOf": [
-          {
-            "oneOf": [
-              {
-                "required": [
-                  "multisig_account_id"
-                ]
-              },
-              {
-                "required": [
-                  "multisig_account_alias"
-                ]
-              }
-            ]
-          },
-          {
-            "oneOf": [
-              {
-                "required": [
-                  "proposal_id"
-                ]
-              },
-              {
-                "required": [
-                  "instructions_hash"
-                ]
-              }
-            ]
-          }
-        ],
-        "properties": {
-          "instructions_hash": {
-            "maxLength": 64,
-            "minLength": 64,
-            "pattern": "^[0-9a-f]{64}$",
-            "type": "string"
-          },
-          "multisig_account_alias": {
-            "description": "Canonical stable alias in name@dataspace or name@domain.dataspace form.",
-            "maxLength": 512,
-            "minLength": 3,
-            "pattern": "^[^\\s@]+@(?:[^\\s.@]+\\.)?[^\\s.@]+$",
-            "type": "string"
-          },
-          "multisig_account_id": {
-            "description": "Active concrete multisig account id.",
-            "maxLength": 512,
-            "minLength": 1,
-            "type": "string"
-          },
-          "proposal_id": {
-            "maxLength": 64,
-            "minLength": 64,
-            "pattern": "^[0-9a-f]{64}$",
-            "type": "string"
-          }
-        },
-        "type": "object"
-      },
-      "MultisigProposalsListRequest": {
+      "MultisigProposalsQueryRequest": {
         "additionalProperties": false,
         "oneOf": [
           {
@@ -3248,17 +3468,31 @@
         ],
         "properties": {
           "cursor": {
-            "description": "Opaque canonical base64url cursor returned by the preceding page.",
-            "maxLength": 512,
-            "minLength": 1,
-            "pattern": "^[A-Za-z0-9_-]+$",
-            "type": "string"
+            "oneOf": [
+              {
+                "description": "Opaque canonical base64url cursor returned by the preceding page.",
+                "maxLength": 512,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9_-]+$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "limit": {
-            "format": "uint64",
-            "maximum": 100,
-            "minimum": 1,
-            "type": "integer"
+            "oneOf": [
+              {
+                "format": "uint64",
+                "maximum": 100,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "multisig_account_alias": {
             "description": "Canonical stable alias in name@dataspace or name@domain.dataspace form.",
@@ -3268,8 +3502,7 @@
             "type": "string"
           },
           "multisig_account_id": {
-            "description": "Active concrete multisig account id.",
-            "maxLength": 512,
+            "description": "Active canonical multisig AccountId; native policies can make this substantially longer than a single-key identifier.",
             "minLength": 1,
             "type": "string"
           },
@@ -3290,7 +3523,7 @@
         },
         "type": "object"
       },
-      "MultisigProposalsListResponse": {
+      "MultisigProposalsQueryResponse": {
         "additionalProperties": false,
         "properties": {
           "next_cursor": {
@@ -3314,7 +3547,7 @@
             "type": "array"
           },
           "resolved_multisig_account_id": {
-            "maxLength": 512,
+            "description": "Resolved canonical multisig AccountId.",
             "minLength": 1,
             "type": "string"
           }
@@ -3515,8 +3748,7 @@
             "type": "string"
           },
           "multisig_account_id": {
-            "description": "Active concrete multisig account id.",
-            "maxLength": 512,
+            "description": "Active canonical multisig AccountId; native policies can make this substantially longer than a single-key identifier.",
             "minLength": 1,
             "type": "string"
           }
@@ -3527,7 +3759,7 @@
         "additionalProperties": false,
         "properties": {
           "resolved_multisig_account_id": {
-            "maxLength": 512,
+            "description": "Resolved canonical multisig AccountId.",
             "minLength": 1,
             "type": "string"
           },
@@ -18756,6 +18988,396 @@
         "x-iroha-tool-effect": "read"
       }
     },
+    "/v1/multisig/approvals/lookup": {
+      "post": {
+        "description": "Use the authenticated JWT viewer scope to look up one proposal for the exact fixed-size `multisig_account_ref` by `proposal_id` or `instructions_hash`.",
+        "parameters": [
+          {
+            "description": "Required bearer JWT whose canonical subject and dataspace claims define the viewer scope.",
+            "in": "header",
+            "name": "Authorization",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MultisigApprovalLookupRequest"
+              }
+            },
+            "application/x-norito": {
+              "schema": {
+                "format": "binary",
+                "type": "string"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MultisigApprovalLookupResponse"
+                }
+              }
+            },
+            "description": "Successful response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Invalid multisig selector or payload."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The Authorization bearer token is missing or invalid."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The authenticated viewer or signed caller is not allowed to access this multisig approval."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The exact multisig authority or viewer-visible approval was not found."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "JWT viewer authentication is not configured on this Torii instance."
+          }
+        },
+        "summary": "Look up a JWT-viewer-scoped multisig approval.",
+        "tags": [
+          "Multisig"
+        ],
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/multisig/approvals/lookup-for-authority": {
+      "post": {
+        "description": "Verify the exact HTTP request signature and look up one proposal visible to that caller authority for the exact fixed-size `multisig_account_ref` by `proposal_id` or `instructions_hash`.",
+        "parameters": [
+          {
+            "description": "Canonical caller AccountId bound into the exact request signature.",
+            "in": "header",
+            "name": "X-Iroha-Account",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Canonical signature over method, URI, exact request bytes, timestamp, and nonce.",
+            "in": "header",
+            "name": "X-Iroha-Signature",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Signed Unix timestamp in milliseconds.",
+            "in": "header",
+            "name": "X-Iroha-Timestamp-Ms",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Signed replay-protection nonce.",
+            "in": "header",
+            "name": "X-Iroha-Nonce",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MultisigApprovalLookupRequest"
+              }
+            },
+            "application/x-norito": {
+              "schema": {
+                "format": "binary",
+                "type": "string"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MultisigApprovalLookupResponse"
+                }
+              }
+            },
+            "description": "Successful response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Invalid multisig selector or payload."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The authenticated viewer or signed caller is not allowed to access this multisig approval."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Caller authority is not allowed to view the requested approval."
+          }
+        },
+        "summary": "Look up a signed caller-authority multisig approval.",
+        "tags": [
+          "Multisig"
+        ],
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/multisig/approvals/query": {
+      "post": {
+        "description": "Use the authenticated JWT viewer scope to query active or terminal proposals across the exact multisig authorities in which the viewer is a signatory.",
+        "parameters": [
+          {
+            "description": "Required bearer JWT whose canonical subject and dataspace claims define the viewer scope.",
+            "in": "header",
+            "name": "Authorization",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MultisigApprovalsQueryRequest"
+              }
+            },
+            "application/x-norito": {
+              "schema": {
+                "format": "binary",
+                "type": "string"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MultisigApprovalsQueryResponse"
+                }
+              }
+            },
+            "description": "Successful response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Invalid multisig selector or payload."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The Authorization bearer token is missing or invalid."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The authenticated viewer or signed caller is not allowed to access this multisig approval."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "JWT viewer authentication is not configured on this Torii instance."
+          }
+        },
+        "summary": "Query JWT-viewer-scoped multisig approvals.",
+        "tags": [
+          "Multisig"
+        ],
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/multisig/approvals/query-for-authority": {
+      "post": {
+        "description": "Verify the exact HTTP request signature and query active or terminal proposals visible to that caller authority through the signatory index.",
+        "parameters": [
+          {
+            "description": "Canonical caller AccountId bound into the exact request signature.",
+            "in": "header",
+            "name": "X-Iroha-Account",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Canonical signature over method, URI, exact request bytes, timestamp, and nonce.",
+            "in": "header",
+            "name": "X-Iroha-Signature",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Signed Unix timestamp in milliseconds.",
+            "in": "header",
+            "name": "X-Iroha-Timestamp-Ms",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Signed replay-protection nonce.",
+            "in": "header",
+            "name": "X-Iroha-Nonce",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MultisigApprovalsQueryRequest"
+              }
+            },
+            "application/x-norito": {
+              "schema": {
+                "format": "binary",
+                "type": "string"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MultisigApprovalsQueryResponse"
+                }
+              }
+            },
+            "description": "Successful response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Invalid multisig selector or payload."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The authenticated viewer or signed caller is not allowed to access this multisig approval."
+          }
+        },
+        "summary": "Query signed caller-authority multisig approvals.",
+        "tags": [
+          "Multisig"
+        ],
+        "x-iroha-tool-effect": "read"
+      }
+    },
     "/v1/multisig/approve": {
       "post": {
         "description": "Resolve a multisig selector, target a proposal by `proposal_id` or `instructions_hash`, and optionally submit the approval transaction.",
@@ -18872,14 +19494,14 @@
         "x-iroha-tool-effect": "write"
       }
     },
-    "/v1/multisig/proposals/get": {
+    "/v1/multisig/proposals/lookup": {
       "post": {
-        "description": "Resolve a multisig selector and fetch a proposal by `proposal_id` or `instructions_hash`.",
+        "description": "Resolve a multisig selector and look up a proposal by `proposal_id` or `instructions_hash`.",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/MultisigProposalsGetRequest"
+                "$ref": "#/components/schemas/MultisigProposalLookupRequest"
               }
             },
             "application/x-norito": {
@@ -18896,7 +19518,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/MultisigProposalGetResponse"
+                  "$ref": "#/components/schemas/MultisigProposalLookupResponse"
                 }
               }
             },
@@ -18923,21 +19545,21 @@
             "description": "Multisig alias or proposal not found."
           }
         },
-        "summary": "Fetch a multisig proposal.",
+        "summary": "Look up a multisig proposal.",
         "tags": [
           "Multisig"
         ],
         "x-iroha-tool-effect": "read"
       }
     },
-    "/v1/multisig/proposals/list": {
+    "/v1/multisig/proposals/query": {
       "post": {
-        "description": "Resolve a multisig selector and list proposals for the active concrete multisig authority, optionally filtered by lifecycle status.",
+        "description": "Resolve a multisig selector and query lifecycle-filtered active or terminal proposals for the active concrete multisig authority.",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/MultisigProposalsListRequest"
+                "$ref": "#/components/schemas/MultisigProposalsQueryRequest"
               }
             },
             "application/x-norito": {
@@ -18954,7 +19576,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/MultisigProposalsListResponse"
+                  "$ref": "#/components/schemas/MultisigProposalsQueryResponse"
                 }
               }
             },
@@ -18981,7 +19603,7 @@
             "description": "Multisig alias not found."
           }
         },
-        "summary": "List multisig proposals.",
+        "summary": "Query multisig proposals.",
         "tags": [
           "Multisig"
         ],

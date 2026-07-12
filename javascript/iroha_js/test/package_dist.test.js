@@ -9,11 +9,6 @@ import * as packageExports from "../dist/index.js";
 const packageJson = JSON.parse(
   readFileSync(new URL("../package.json", import.meta.url), "utf8"),
 );
-const declarations = readFileSync(
-  new URL("../index.d.ts", import.meta.url),
-  "utf8",
-);
-
 test("package dist exposes the current general-purpose SDK entrypoint", () => {
   for (const name of [
     "AccountAddress",
@@ -27,24 +22,25 @@ test("package dist exposes the current general-purpose SDK entrypoint", () => {
   }
 });
 
-test("JavaScript SDK publishes no offline-cash lifecycle", () => {
-  const forbiddenExport =
-    /(?:kagemusha|offline(?:cash|note|topup|redeem|readiness|operation|transfer)|compactpayment|recursiveaggregation)/iu;
-  const unexpected = Object.keys(packageExports).filter((name) => forbiddenExport.test(name));
-  assert.deepEqual(unexpected, []);
-
-  assert.equal(packageJson.exports["./offline-cash"], undefined);
-  assert.equal(packageJson.typesVersions?.["*"]?.["offline-cash"], undefined);
-  assert.doesNotMatch(declarations, forbiddenExport);
-});
-
-test("built entrypoint has no retired offline modules", () => {
-  const entrypoint = readFileSync(
-    new URL("../dist/index.js", import.meta.url),
-    "utf8",
-  );
-  assert.doesNotMatch(
-    entrypoint,
-    /offline(?:Api|CashLifecycle|QrStream)|kagemusha/iu,
-  );
+test("package publishes the exact general-purpose subpath inventory", () => {
+  assert.deepEqual(Object.keys(packageJson.exports).sort(), [
+    ".",
+    "./address",
+    "./blake2b",
+    "./browser",
+    "./canonical-request",
+    "./connect-browser",
+    "./crypto",
+    "./instruction-builders",
+    "./ivm-artifact",
+    "./kotodama-compiler",
+    "./nexus-app",
+    "./norito",
+    "./normalizers",
+    "./sccp",
+    "./sorafs",
+    "./torii",
+    "./torii-browser",
+    "./transaction-codec",
+  ]);
 });

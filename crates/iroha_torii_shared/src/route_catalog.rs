@@ -3657,12 +3657,8 @@ pub mod contracts_and_verification_keys {
         MULTISIG_APPROVE_POST => app_post("contracts.multisig_approve_post", "/v1/multisig/approve");
         MULTISIG_CANCEL_POST => app_post("contracts.multisig_cancel_post", "/v1/multisig/cancel");
         MULTISIG_SPEC_POST => app_post("contracts.multisig_spec_post", "/v1/multisig/spec");
-        MULTISIG_PROPOSALS_QUERY_POST => app_post("contracts.multisig_proposals_query_post", "/v1/multisig/proposals/query");
-        MULTISIG_PROPOSALS_LOOKUP_POST => app_post("contracts.multisig_proposals_lookup_post", "/v1/multisig/proposals/lookup");
-        MULTISIG_APPROVALS_QUERY_POST => app_post("contracts.multisig_approvals_query_post", "/v1/multisig/approvals/query");
-        MULTISIG_APPROVALS_LOOKUP_POST => app_post("contracts.multisig_approvals_lookup_post", "/v1/multisig/approvals/lookup");
-        MULTISIG_APPROVALS_QUERY_FOR_AUTHORITY_POST => app_post("contracts.multisig_approvals_query_for_authority_post", "/v1/multisig/approvals/query-for-authority");
-        MULTISIG_APPROVALS_LOOKUP_FOR_AUTHORITY_POST => app_post("contracts.multisig_approvals_lookup_for_authority_post", "/v1/multisig/approvals/lookup-for-authority");
+        MULTISIG_PROPOSALS_LIST_POST => app_post("contracts.multisig_proposals_list_post", "/v1/multisig/proposals/list");
+        MULTISIG_PROPOSALS_GET_POST => app_post("contracts.multisig_proposals_get_post", "/v1/multisig/proposals/get");
         CONTROLS_ASSET_TRANSFER_QUERY_POST => app_post("contracts.controls_asset_transfer_query_post", "/v1/controls/asset-transfer/query");
         ZK_VK_REGISTER_POST => app_sdk_post("contracts.zk_vk_register_post", "/v1/zk/vk/register");
         ZK_VK_UPDATE_POST => app_sdk_post("contracts.zk_vk_update_post", "/v1/zk/vk/update");
@@ -4366,12 +4362,8 @@ pub const CATALOGED_ROUTES: &[RouteDescriptor] = &[
     contracts_and_verification_keys::MULTISIG_APPROVE_POST,
     contracts_and_verification_keys::MULTISIG_CANCEL_POST,
     contracts_and_verification_keys::MULTISIG_SPEC_POST,
-    contracts_and_verification_keys::MULTISIG_PROPOSALS_QUERY_POST,
-    contracts_and_verification_keys::MULTISIG_PROPOSALS_LOOKUP_POST,
-    contracts_and_verification_keys::MULTISIG_APPROVALS_QUERY_POST,
-    contracts_and_verification_keys::MULTISIG_APPROVALS_LOOKUP_POST,
-    contracts_and_verification_keys::MULTISIG_APPROVALS_QUERY_FOR_AUTHORITY_POST,
-    contracts_and_verification_keys::MULTISIG_APPROVALS_LOOKUP_FOR_AUTHORITY_POST,
+    contracts_and_verification_keys::MULTISIG_PROPOSALS_LIST_POST,
+    contracts_and_verification_keys::MULTISIG_PROPOSALS_GET_POST,
     contracts_and_verification_keys::CONTROLS_ASSET_TRANSFER_QUERY_POST,
     contracts_and_verification_keys::ZK_VK_REGISTER_POST,
     contracts_and_verification_keys::ZK_VK_UPDATE_POST,
@@ -4756,8 +4748,12 @@ mod tests {
         }
 
         for unsupported_path in [
-            "/v1/multisig/proposals/list",
-            "/v1/multisig/proposals/get",
+            "/v1/multisig/proposals/query",
+            "/v1/multisig/proposals/lookup",
+            "/v1/multisig/approvals/query",
+            "/v1/multisig/approvals/lookup",
+            "/v1/multisig/approvals/query-for-authority",
+            "/v1/multisig/approvals/lookup-for-authority",
             "/v1/multisig/approvals/list",
             "/v1/multisig/approvals/get",
             "/v1/multisig/approvals/list_for_authority",
@@ -4785,12 +4781,8 @@ mod tests {
         }
 
         for canonical_path in [
-            "/v1/multisig/proposals/query",
-            "/v1/multisig/proposals/lookup",
-            "/v1/multisig/approvals/query",
-            "/v1/multisig/approvals/lookup",
-            "/v1/multisig/approvals/query-for-authority",
-            "/v1/multisig/approvals/lookup-for-authority",
+            "/v1/multisig/proposals/list",
+            "/v1/multisig/proposals/get",
             "/v1/controls/asset-transfer/query",
             "/v1/nexus/public-lanes/{lane_id}/validators",
         ] {
@@ -4827,7 +4819,7 @@ mod tests {
             RouteMatch::Wildcard
         );
         assert!(
-            contracts_and_verification_keys::MULTISIG_PROPOSALS_QUERY_POST
+            contracts_and_verification_keys::MULTISIG_PROPOSALS_LIST_POST
                 .projections()
                 .openapi()
         );

@@ -10322,9 +10322,8 @@ fn extract_pasta_fp_instances_impl(
 // Tiny pasta circuits used for dispatch verification across transparent IPA paths.
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 mod pasta_tiny {
-    // Dispatch-verification circuits exercise the non-native Vesta/Fq verifier
-    // foundations used by current aggregation mode 2 and the in-circuit Halo2
-    // IPA verifier gadget.
+    // Dispatch-verification circuits exercise the non-native Vesta/Fq
+    // foundations used by the in-circuit Halo2 IPA verifier gadget.
     #![cfg_attr(not(test), allow(dead_code))]
 
     use halo2_proofs::{

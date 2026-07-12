@@ -337,11 +337,12 @@ check_xcframework() {
     require_regex "$manifest" '"source_tree_dirty"[[:space:]]*:[[:space:]]*(true|false)' "NoritoBridge source dirty state"
     require_regex "$manifest" '"source_fingerprint_sha256"[[:space:]]*:[[:space:]]*"[[:xdigit:]]{64}"' "NoritoBridge source fingerprint"
     require_regex "$manifest" '"bridge_header_sha256"[[:space:]]*:[[:space:]]*"[[:xdigit:]]{64}"' "NoritoBridge header hash"
-    local required_symbols=(
-      connect_norito_bridge_abi_version
-      connect_norito_detached_transaction_scaffold_inspect_v1
-      connect_norito_detached_transaction_scaffold_finalize_ed25519_v1
-      connect_norito_canonical_json_blake3_v1
+    local manifest_dirty
+    manifest_dirty="$(manifest_json_value "$manifest" source_tree_dirty 2>/dev/null || true)"
+    if [[ "$manifest_dirty" != "false" ]]; then
+      fail "NoritoBridge release artifact must be built from a clean source tree"
+    fi
+    local required_kagemusha_symbols=(
       connect_norito_kagemusha_recursive_spend_capabilities_v1
       connect_norito_kagemusha_topup_finality_verify_v2
       connect_norito_kagemusha_topup_shield_build_unsigned_v2
@@ -377,6 +378,13 @@ check_xcframework() {
       connect_norito_kagemusha_recursive_spend_bundle_summary_v2
       connect_norito_kagemusha_recursive_spend_build_split_intent_v2
     )
+    local required_symbols=(
+      connect_norito_bridge_abi_version
+      connect_norito_detached_transaction_scaffold_inspect_v1
+      connect_norito_detached_transaction_scaffold_finalize_ed25519_v1
+      connect_norito_canonical_json_blake3_v1
+      "${required_kagemusha_symbols[@]}"
+    )
     if ! python3 - "$manifest" "${required_symbols[@]}" <<'PY'
 import json
 import sys
@@ -409,7 +417,7 @@ PY
 
     local bridge_source="$ROOT_DIR/crates/connect_norito_bridge/src/lib.rs"
     if [[ -f "$bridge_source" && -d "$ROOT_DIR/.git" ]]; then
-      local source_abi manifest_abi source_commit manifest_commit source_dirty manifest_dirty source_fingerprint manifest_fingerprint
+      local source_abi manifest_abi source_commit manifest_commit source_dirty source_fingerprint manifest_fingerprint
       source_abi="$(sed -nE 's/.*CONNECT_NORITO_BRIDGE_ABI_VERSION:[[:space:]]*u32[[:space:]]*=[[:space:]]*([0-9]+).*/\1/p' "$bridge_source" | head -n1)"
       manifest_abi="$(manifest_json_value "$manifest" native_bridge_abi_version 2>/dev/null || true)"
       if [[ "$source_abi" != "19" || "$manifest_abi" != "19" ]]; then
@@ -424,9 +432,8 @@ PY
       if [[ -n "$(git -C "$ROOT_DIR" status --porcelain -- crates/connect_norito_bridge IrohaSwift/Sources/IrohaSwift)" ]]; then
         source_dirty=true
       fi
-      manifest_dirty="$(manifest_json_value "$manifest" source_tree_dirty 2>/dev/null || true)"
-      if [[ "$manifest_dirty" != "$source_dirty" ]]; then
-        fail "NoritoBridge artifact source dirty state does not match checkout"
+      if [[ "$source_dirty" != "false" ]]; then
+        fail "NoritoBridge release artifact cannot be certified against a dirty checkout"
       fi
       source_fingerprint="$(bridge_source_fingerprint)"
       manifest_fingerprint="$(manifest_json_value "$manifest" source_fingerprint_sha256 2>/dev/null || true)"
@@ -471,6 +478,29 @@ PY
             fail "NoritoBridge $slice is missing required symbol $symbol"
           fi
         done
+        if ! python3 - "$binary" "${required_kagemusha_symbols[@]}" <<'PY'
+import subprocess
+import sys
+
+binary = sys.argv[1]
+expected = set(sys.argv[2:])
+result = subprocess.run(
+    ["nm", "-gj", binary],
+    check=False,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.DEVNULL,
+    text=True,
+)
+actual = {
+    line.strip().removeprefix("_")
+    for line in result.stdout.splitlines()
+    if line.strip().removeprefix("_").startswith("connect_norito_kagemusha_")
+}
+raise SystemExit(0 if result.returncode == 0 and actual == expected else 1)
+PY
+        then
+          fail "NoritoBridge $slice Kagemusha export inventory is not exact"
+        fi
       done
     fi
   fi

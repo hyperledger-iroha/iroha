@@ -225,11 +225,11 @@ runtime `CircuitAuthenticatedRecursionAdapter` must continue returning
 ## ABI-19 and artifact V3 contract
 
 The fail-closed production contract is now explicit even though the loader is
-not yet available. Native capability negotiation reports bridge ABI `19`, mode
-`recursive_spend_v1`, manifest schema
+not yet available. Native capabilities report bridge ABI `19`, manifest schema
 `kagemusha.offline.recursive_spend.artifact_manifest.v3`, proof backend
 `halo2/ipa-pasta-cycle-v1`, and transcript profile
-`kagemusha-pasta-cycle-poseidon-v1`. The two fixed circuit roles are:
+`kagemusha-pasta-cycle-poseidon-v1`. They carry no mode field. The two fixed
+circuit roles are:
 
 - `kagemusha-recursive-spend-transition-eq-v1`, an EqAffine/Vesta transition
   proof; and

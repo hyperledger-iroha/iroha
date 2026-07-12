@@ -37,7 +37,6 @@ build = read(build_path)
 require(
     model_path,
     model,
-    'KAGEMUSHA_RECURSIVE_SPEND_MODE: &str = "recursive_spend_v1"',
     "KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3: u32 = 19",
     'KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V3: &str =\n    "kagemusha.offline.recursive_spend.artifact_manifest.v3"',
     'KAGEMUSHA_TOPUP_FINALITY_ROSTER_FILE_NAME_V2: &str = "topup-finality-roster.norito"',
@@ -124,8 +123,6 @@ for relative in (
         text,
         "REQUIRED_NATIVE_BRIDGE_ABI_VERSION",
         "19",
-        'ARTIFACT_MANIFEST_MODE',
-        '"recursive_spend_v1"',
         '"kagemusha.offline.recursive_spend.artifact_manifest.v3"',
     )
     for file_name in artifact_constants.values():

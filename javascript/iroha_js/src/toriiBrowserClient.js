@@ -834,24 +834,24 @@ export class ToriiBrowserClient {
     });
   }
 
-  queryMultisigProposals(selector, options = {}) {
-    const opts = requireObject(options, "queryMultisigProposals options");
-    return this._json("POST", "/v1/multisig/proposals/query", {
+  listMultisigProposals(selector, options = {}) {
+    const opts = requireObject(options, "listMultisigProposals options");
+    return this._json("POST", "/v1/multisig/proposals/list", {
       body: normalizeMultisigProposalsListBody(
         selector,
-        "queryMultisigProposals selector",
+        "listMultisigProposals selector",
       ),
       signal: signalFrom(opts),
     });
   }
 
-  lookupMultisigProposal(request, options = {}) {
+  getMultisigProposal(request, options = {}) {
     const normalizedRequest = normalizeMultisigProposalGetBody(
       request,
-      "lookupMultisigProposal request",
+      "getMultisigProposal request",
     );
-    const opts = requireObject(options, "lookupMultisigProposal options");
-    return this._json("POST", "/v1/multisig/proposals/lookup", {
+    const opts = requireObject(options, "getMultisigProposal options");
+    return this._json("POST", "/v1/multisig/proposals/get", {
       body: normalizedRequest,
       signal: signalFrom(opts),
     });

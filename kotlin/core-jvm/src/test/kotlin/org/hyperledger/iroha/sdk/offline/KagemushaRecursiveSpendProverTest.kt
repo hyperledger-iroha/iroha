@@ -21,7 +21,6 @@ class KagemushaRecursiveSpendProverTest {
 
     @Test
     fun artifactContractAndInventoryAreCurrentOnly() {
-        assertEquals("recursive_spend_v1", KagemushaRecursiveSpendProver.ARTIFACT_MANIFEST_MODE)
         assertEquals(19, KagemushaRecursiveSpendProver.REQUIRED_NATIVE_BRIDGE_ABI_VERSION)
         assertEquals(6, KagemushaRecursiveSpendProver.ARTIFACT_COUNT)
         assertEquals(

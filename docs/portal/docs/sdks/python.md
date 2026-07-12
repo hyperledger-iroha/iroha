@@ -124,8 +124,9 @@ print(
 
 All five verifier fields are required nullable snapshots for distinct roles.
 Each is null exactly with its matching unavailable blocker. `ready=True`
-requires bridge ABI 19, all five active verifiers, the production proof
-backend, and recursive lineage support.
+requires bridge ABI 19, all five active verifiers, and the production proof
+backend. Kagemusha is the only offline protocol; readiness has no selectable or
+negotiated product-mode field.
 ## 6. Stream events
 
 Torii SSE helpers return live-only generators. They may reconnect within the

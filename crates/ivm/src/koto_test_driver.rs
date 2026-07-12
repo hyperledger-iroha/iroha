@@ -10,9 +10,11 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[cfg(test)]
+use crate::ProgramMetadata;
 use crate::{
     AccountId, AssetDefinitionId, DomainId, IVM, IVMHost, MockWorldStateView, PermissionToken,
-    PointerType, PreparedContract, ProgramMetadata, TraceMode, WsvHost,
+    PointerType, TraceMode, WsvHost,
     kotodama::{
         ast::{Expr, FixtureAction, FixtureDecl, FunctionKind, Item, Program, SourceUnitKind},
         compiler::{CompileReport, CompilerMode, CompilerOptions},
@@ -108,16 +110,25 @@ struct DiscoveredTestModule {
     program: Program,
 }
 
-struct CompiledSuite {
-    code: Vec<u8>,
-    suite_artifact_hash: iroha_crypto::Hash,
-    runtime_code: Option<Vec<u8>>,
+struct CompiledArtifact {
+    program: crate::PreparedContract,
     report: CompileReport,
     pc_base: u64,
+}
+
+struct CompiledSuite {
+    suite: CompiledArtifact,
+    runtime: Option<CompiledArtifact>,
     runtime_entrypoints: HashMap<String, RuntimeEntrypoint>,
     tests: Vec<CompiledTestCase>,
     fixtures: HashMap<String, FixtureDecl>,
     coverage_functions: Vec<CoverageFunction>,
+}
+
+impl CompiledSuite {
+    fn profile_artifact(&self) -> &CompiledArtifact {
+        self.runtime.as_ref().unwrap_or(&self.suite)
+    }
 }
 
 #[derive(Clone)]
@@ -158,7 +169,7 @@ struct KotoTestHost {
     actors: HashMap<String, FixtureActor>,
     base_public_inputs: BTreeMap<Name, Vec<u8>>,
     entrypoints: HashMap<String, RuntimeEntrypoint>,
-    program: Option<PreparedContract>,
+    program: Option<crate::PreparedContract>,
     contract_address: ContractAddress,
     last_test_error: Option<String>,
     supplemental_trace_pcs: Vec<u64>,
@@ -638,50 +649,68 @@ fn compile_suite(suite: &DiscoveredSuite, zk_enabled: bool) -> Result<CompiledSu
         .build_test_sources(&target, &test_modules)
         .map_err(|diagnostics| diagnostics.render_human())?;
     let test_output = outputs.suite;
-    let code = test_output.artifact;
     let test_report = test_output.report;
-    let suite_artifact_hash = test_report.artifact_hash;
-    let metadata = ProgramMetadata::parse(&code)
-        .map_err(|err| format!("failed to parse compiled program metadata: {err:?}"))?;
-    let test_pc_base = metadata.prefix_len() as u64;
-    let (runtime_code, runtime_report, runtime_pc_base, runtime_entrypoints) =
-        if let Some(runtime_output) = outputs.runtime {
-            let runtime_code = runtime_output.artifact;
-            let runtime_metadata = ProgramMetadata::parse(&runtime_code)
-                .map_err(|err| format!("failed to parse runtime program metadata: {err:?}"))?;
-            let runtime_pc_base = runtime_metadata.prefix_len() as u64;
-            let runtime_entrypoints = runtime_metadata
-                .contract_interface
-                .as_ref()
-                .map(|interface| {
-                    interface
-                        .entrypoints
-                        .iter()
-                        .map(|entry| {
-                            (
-                                entry.name.clone(),
-                                RuntimeEntrypoint {
-                                    pc: runtime_pc_base.saturating_add(entry.entry_pc),
-                                    argument_schema: entry.argument_schema.clone(),
-                                    permission: entry.permission.clone(),
-                                },
-                            )
-                        })
-                        .collect::<HashMap<_, _>>()
-                })
-                .unwrap_or_default();
-            (
-                Some(runtime_code),
-                runtime_output.report,
-                runtime_pc_base,
-                runtime_entrypoints,
-            )
-        } else {
-            (None, test_report.clone(), test_pc_base, HashMap::new())
-        };
+    let suite_program =
+        crate::contract_artifact::prepare_koto_test_contract(Arc::from(test_output.artifact))
+            .map_err(|err| format!("failed to prepare compiled Kotodama test suite: {err}"))?;
+    if suite_program.code_hash() != test_report.artifact_hash {
+        return Err(format!(
+            "compiled suite artifact hash mismatch: expected {}, got {}",
+            test_report.artifact_hash,
+            suite_program.code_hash()
+        ));
+    }
+    let test_pc_base = suite_program.instruction_entry_pc();
+    let suite_artifact = CompiledArtifact {
+        program: suite_program,
+        report: test_report,
+        pc_base: test_pc_base,
+    };
+
+    let (runtime, runtime_entrypoints) = if let Some(runtime_output) = outputs.runtime {
+        let runtime_report = runtime_output.report;
+        let runtime_program = crate::prepare_contract(Arc::from(runtime_output.artifact))
+            .map_err(|err| format!("failed to prepare compiled runtime contract: {err}"))?;
+        if runtime_program.code_hash() != runtime_report.artifact_hash {
+            return Err(format!(
+                "compiled runtime artifact hash mismatch: expected {}, got {}",
+                runtime_report.artifact_hash,
+                runtime_program.code_hash()
+            ));
+        }
+        let runtime_pc_base = runtime_program.instruction_entry_pc();
+        let runtime_entrypoints = runtime_program
+            .contract_interface()
+            .entrypoints
+            .iter()
+            .map(|entry| {
+                let pc = runtime_program
+                    .entrypoint_pc(&entry.name)
+                    .expect("prepared runtime indexes every validated entrypoint");
+                (
+                    entry.name.clone(),
+                    RuntimeEntrypoint {
+                        pc,
+                        argument_schema: entry.argument_schema.clone(),
+                        permission: entry.permission.clone(),
+                    },
+                )
+            })
+            .collect::<HashMap<_, _>>();
+        (
+            Some(CompiledArtifact {
+                program: runtime_program,
+                report: runtime_report,
+                pc_base: runtime_pc_base,
+            }),
+            runtime_entrypoints,
+        )
+    } else {
+        (None, HashMap::new())
+    };
 
     let mut test_pcs = HashMap::new();
-    for entry in &test_report.budget_report {
+    for entry in &suite_artifact.report.budget_report {
         test_pcs
             .entry(entry.function_name.clone())
             .or_insert(test_pc_base.saturating_add(entry.pc_start));
@@ -704,15 +733,16 @@ fn compile_suite(suite: &DiscoveredSuite, zk_enabled: bool) -> Result<CompiledSu
         })
         .collect::<Result<Vec<_>, String>>()?;
 
-    let coverage_functions =
-        build_coverage_functions(&suite.target_program, &runtime_report, runtime_pc_base);
+    let profile_artifact = runtime.as_ref().unwrap_or(&suite_artifact);
+    let coverage_functions = build_coverage_functions(
+        &suite.target_program,
+        &profile_artifact.report,
+        profile_artifact.pc_base,
+    );
 
     Ok(CompiledSuite {
-        code,
-        suite_artifact_hash,
-        runtime_code,
-        report: runtime_report,
-        pc_base: runtime_pc_base,
+        suite: suite_artifact,
+        runtime,
         runtime_entrypoints,
         tests,
         fixtures: suite.fixtures.clone(),
@@ -780,42 +810,23 @@ fn execute_suite(
     trace_mode: TraceMode,
     jobs: usize,
 ) -> Result<Vec<TestRunResult>, String> {
-    let suite_return_pc = compiled_suite_return_pc(&compiled.code, compiled.suite_artifact_hash)?;
-    let prepared_suite = crate::contract_artifact::prepare_kotodama_test_contract(
-        Arc::<[u8]>::from(compiled.code.clone()),
-    )
-    .map_err(|err| format!("failed to prepare compiled suite: {err}"))?;
-    let prepared_runtime = compiled
-        .runtime_code
-        .as_ref()
-        .map(|runtime_code| {
-            crate::contract_artifact::prepare_contract(Arc::<[u8]>::from(runtime_code.clone()))
-                .map_err(|err| format!("failed to prepare compiled runtime: {err}"))
-        })
-        .transpose()?;
+    let suite_return_pc = compiled
+        .suite
+        .program
+        .entrypoint_pc(crate::metadata::KOTO_TEST_RETURN_ENTRYPOINT)
+        .ok_or_else(|| "compiled suite is missing its validated return entrypoint".to_owned())?;
     let worker_count = jobs.min(compiled.tests.len().max(1));
     if worker_count == 1 {
         return compiled
             .tests
             .iter()
-            .map(|test| {
-                execute_test(
-                    compiled,
-                    test,
-                    trace_mode,
-                    &prepared_suite,
-                    prepared_runtime.as_ref(),
-                    suite_return_pc,
-                )
-            })
+            .map(|test| execute_test(compiled, test, trace_mode, suite_return_pc))
             .collect();
     }
 
     let joined = std::thread::scope(|scope| {
         let mut workers = Vec::with_capacity(worker_count);
         for worker in 0..worker_count {
-            let prepared_suite = &prepared_suite;
-            let prepared_runtime = prepared_runtime.as_ref();
             workers.push(scope.spawn(move || {
                 compiled
                     .tests
@@ -823,15 +834,8 @@ fn execute_suite(
                     .enumerate()
                     .filter(|(index, _)| index % worker_count == worker)
                     .map(|(index, test)| {
-                        execute_test(
-                            compiled,
-                            test,
-                            trace_mode,
-                            prepared_suite,
-                            prepared_runtime,
-                            suite_return_pc,
-                        )
-                        .map(|result| (index, result))
+                        execute_test(compiled, test, trace_mode, suite_return_pc)
+                            .map(|result| (index, result))
                     })
                     .collect::<Result<Vec<_>, String>>()
             }));
@@ -850,54 +854,15 @@ fn execute_suite(
     Ok(indexed.into_iter().map(|(_, result)| result).collect())
 }
 
-fn compiled_suite_return_pc(
-    program: &[u8],
-    expected_artifact_hash: iroha_crypto::Hash,
-) -> Result<u64, String> {
-    let actual_artifact_hash = crate::metadata::contract_code_hash(program);
-    if actual_artifact_hash != expected_artifact_hash {
-        return Err(format!(
-            "compiled suite artifact hash mismatch: expected {expected_artifact_hash}, got {actual_artifact_hash}"
-        ));
-    }
-    let parsed = ProgramMetadata::parse(program)
-        .map_err(|err| format!("failed to parse compiled suite metadata: {err:?}"))?;
-    let code_region_len = program
-        .len()
-        .checked_sub(parsed.header_len)
-        .ok_or_else(|| "compiled suite header exceeds artifact length".to_owned())?;
-    let return_pc = code_region_len
-        .checked_sub(core::mem::size_of::<u32>())
-        .ok_or_else(|| "compiled suite is missing its terminal return target".to_owned())?;
-    let return_offset = parsed
-        .header_len
-        .checked_add(return_pc)
-        .ok_or_else(|| "compiled suite return target offset overflow".to_owned())?;
-    let return_end = return_offset
-        .checked_add(core::mem::size_of::<u32>())
-        .ok_or_else(|| "compiled suite return target end overflow".to_owned())?;
-    let return_word = program
-        .get(return_offset..return_end)
-        .and_then(|bytes| bytes.try_into().ok())
-        .map(u32::from_le_bytes)
-        .ok_or_else(|| "compiled suite return target is truncated".to_owned())?;
-    if return_word != crate::encoding::wide::encode_halt() {
-        return Err("compiled suite is missing its compiler-owned return HALT".to_owned());
-    }
-    u64::try_from(return_pc).map_err(|_| "compiled suite return target exceeds u64".to_owned())
-}
-
 fn execute_test(
     compiled: &CompiledSuite,
     test: &CompiledTestCase,
     trace_mode: TraceMode,
-    suite_program: &PreparedContract,
-    runtime_program: Option<&PreparedContract>,
     suite_return_pc: u64,
 ) -> Result<TestRunResult, String> {
-    let mut host = build_host_for_fixture(compiled, test.fixture.as_deref(), runtime_program)?;
+    let mut host = build_host_for_fixture(compiled, test.fixture.as_deref())?;
     let mut vm = IVM::new(u64::MAX);
-    vm.load_prepared(suite_program)
+    vm.load_koto_test_prepared(&compiled.suite.program)
         .map_err(|err| format!("failed to load compiled suite: {err:?}"))?;
     vm.set_register(1, suite_return_pc);
     vm.set_program_counter(test.pc)
@@ -930,14 +895,16 @@ fn execute_test(
 fn build_host_for_fixture(
     compiled: &CompiledSuite,
     fixture_name: Option<&str>,
-    runtime_program: Option<&PreparedContract>,
 ) -> Result<KotoTestHost, String> {
     let caller = parse_account_literal(DEFAULT_CALLER)?;
     let base_host =
         WsvHost::new_with_subject(MockWorldStateView::default(), caller, HashMap::new());
     let mut host = KotoTestHost::new(
         base_host,
-        runtime_program.cloned(),
+        compiled
+            .runtime
+            .as_ref()
+            .map(|artifact| artifact.program.clone()),
         compiled.runtime_entrypoints.clone(),
     );
     let mut public_inputs = BTreeMap::new();
@@ -1184,7 +1151,7 @@ struct KotoTestHostSnapshot {
 impl KotoTestHost {
     fn new(
         inner: WsvHost,
-        program: Option<PreparedContract>,
+        program: Option<crate::PreparedContract>,
         entrypoints: HashMap<String, RuntimeEntrypoint>,
     ) -> Self {
         let contract_address = ContractAddress::derive(
@@ -2523,11 +2490,12 @@ fn percentage(numerator: u64, denominator: u64) -> f64 {
 
 fn print_profile_report(compiled: &CompiledSuite, results: &[TestRunResult]) -> Result<(), String> {
     println!("\nprofile:");
+    let profile_artifact = compiled.profile_artifact();
     for result in results {
         for (cycle, entry) in result.delta_trace.iter().enumerate() {
-            let source = compiled.report.source_map.iter().find(|map_entry| {
-                let start = compiled.pc_base.saturating_add(map_entry.pc_start);
-                let end = compiled.pc_base.saturating_add(map_entry.pc_end);
+            let source = profile_artifact.report.source_map.iter().find(|map_entry| {
+                let start = profile_artifact.pc_base.saturating_add(map_entry.pc_start);
+                let end = profile_artifact.pc_base.saturating_add(map_entry.pc_end);
                 start <= entry.pc && entry.pc < end
             });
             let value = json::object(vec![
@@ -2698,7 +2666,7 @@ mod tests {
     #[test]
     fn pure_unit_test_suite_executes_without_runtime_artifact() {
         let compiled = compiled_suite_with_fixtures(Vec::new());
-        assert!(compiled.runtime_code.is_none());
+        assert!(compiled.runtime.is_none());
         assert!(compiled.runtime_entrypoints.is_empty());
 
         let results = execute_suite(&compiled, TraceMode::Off, 1)
@@ -2715,26 +2683,43 @@ mod tests {
     #[test]
     fn compiler_owned_test_return_sentinel_preserves_artifact_verification() {
         let compiled = compiled_suite_with_fixtures(Vec::new());
-        let return_pc = compiled_suite_return_pc(&compiled.code, compiled.suite_artifact_hash)
+        let suite_program = compiled.suite.program.artifact();
+        assert_eq!(
+            compiled.suite.program.code_hash(),
+            compiled.suite.report.artifact_hash
+        );
+        let return_pc = compiled
+            .suite
+            .program
+            .entrypoint_pc(crate::metadata::KOTO_TEST_RETURN_ENTRYPOINT)
             .expect("compiler-owned suite return sentinel");
-        let parsed = ProgramMetadata::parse(&compiled.code).expect("parse compiled suite");
+        let parsed = ProgramMetadata::parse(suite_program).expect("parse compiled suite");
         assert_eq!(
             return_pc,
-            u64::try_from(compiled.code.len() - parsed.header_len - 4)
+            u64::try_from(suite_program.len() - parsed.header_len - 4)
                 .expect("suite return PC fits u64")
         );
 
         let mut vm = IVM::new(u64::MAX);
-        vm.load_program(&compiled.code)
+        vm.load_koto_test_prepared(&compiled.suite.program)
             .expect("unmodified compiler-produced test artifact must load");
+        let production_error = crate::prepare_contract(compiled.suite.program.shared_artifact())
+            .expect_err("production admission must reject the test-suite return selector");
+        assert!(
+            production_error
+                .to_string()
+                .contains("compiler-owned Kotodama test return selector"),
+            "unexpected production-admission failure: {production_error}"
+        );
 
-        let mut post_compile_mutation = compiled.code.clone();
+        let mut post_compile_mutation = suite_program.to_vec();
         post_compile_mutation
             .extend_from_slice(&crate::encoding::wide::encode_halt().to_le_bytes());
-        let error = compiled_suite_return_pc(&post_compile_mutation, compiled.suite_artifact_hash)
-            .expect_err("post-compile executable mutation must remain rejected");
+        let error =
+            crate::contract_artifact::prepare_koto_test_contract(Arc::from(post_compile_mutation))
+                .expect_err("post-compile executable mutation must remain rejected");
         assert!(
-            error.contains("artifact hash mismatch"),
+            error.to_string().contains("must select the terminal HALT"),
             "unexpected mutation failure: {error}"
         );
     }
@@ -2776,11 +2761,13 @@ mod tests {
         };
         let compiled = compile_suite(&suite, true).expect("compile ZK test suite");
         for artifact in [
-            &compiled.code,
+            compiled.suite.program.artifact(),
             compiled
-                .runtime_code
+                .runtime
                 .as_ref()
-                .expect("lifecycle target has a runtime artifact"),
+                .expect("lifecycle target has a runtime artifact")
+                .program
+                .artifact(),
         ] {
             let metadata = ProgramMetadata::parse(artifact).expect("parse compiled metadata");
             assert_ne!(metadata.metadata.mode & crate::metadata::mode::ZK, 0);
@@ -3049,15 +3036,7 @@ mod tests {
 
         let suite = discover_suite(&test_path).expect("discover suite");
         let compiled = compile_suite(&suite, false).expect("compile suite");
-        let runtime_code = compiled
-            .runtime_code
-            .as_ref()
-            .expect("contract suite runtime artifact");
-        let prepared_runtime =
-            crate::contract_artifact::prepare_contract(Arc::<[u8]>::from(runtime_code.clone()))
-                .expect("prepare contract suite runtime");
-        let mut host = build_host_for_fixture(&compiled, Some("actors"), Some(&prepared_runtime))
-            .expect("build host");
+        let mut host = build_host_for_fixture(&compiled, Some("actors")).expect("build host");
         let mut vm = IVM::new(u64::MAX);
         vm.set_trace_mode(TraceMode::PcOnly);
 
@@ -3301,16 +3280,30 @@ mod tests {
 
         let suite = discover_suite(&test_path).expect("discover suite");
         let compiled = compile_suite(&suite, false).expect("compile suite");
-        let production_error = crate::verify_contract_artifact(&compiled.code)
-            .expect_err("production admission must reject host-private test syscalls");
+        let runtime = compiled
+            .runtime
+            .as_ref()
+            .expect("standalone contract tests require a runtime artifact");
+        assert_eq!(
+            compiled.suite.report.artifact_hash,
+            crate::metadata::contract_code_hash(compiled.suite.program.artifact()),
+            "the standalone test artifact must retain its own hash when a separate runtime artifact is present"
+        );
+        assert_eq!(
+            runtime.report.artifact_hash,
+            crate::metadata::contract_code_hash(runtime.program.artifact()),
+            "the runtime report must remain bound to the deployable runtime artifact"
+        );
+        assert_ne!(
+            compiled.suite.report.artifact_hash, runtime.report.artifact_hash,
+            "test-suite and runtime projections must retain distinct artifact identities"
+        );
+        let production_error = crate::prepare_contract(compiled.suite.program.shared_artifact())
+            .expect_err("production admission must reject host-private Kotodama test bytecode");
         assert!(
             production_error.to_string().contains("disallowed syscall"),
-            "unexpected production admission error: {production_error}"
+            "unexpected production-admission failure: {production_error}"
         );
-        crate::contract_artifact::prepare_kotodama_test_contract(Arc::<[u8]>::from(
-            compiled.code.clone(),
-        ))
-        .expect("contract-backed suite must pass isolated test artifact admission");
         let results = execute_suite(&compiled, TraceMode::PcOnly, 2).expect("execute suite");
         let failures = results
             .iter()
@@ -3419,13 +3412,19 @@ mod tests {
 
         let compiled = compile_suite(&suite, false).expect("compile suite");
         assert_eq!(compiled.tests.len(), 1);
-        assert!(compiled.runtime_code.is_some());
+        let runtime = compiled
+            .runtime
+            .as_ref()
+            .expect("contract-backed suite runtime artifact");
         assert_ne!(
-            compiled.suite_artifact_hash, compiled.report.artifact_hash,
+            compiled.suite.report.artifact_hash, runtime.report.artifact_hash,
             "the test-suite and deployable runtime artifacts must retain distinct identities"
         );
-        compiled_suite_return_pc(&compiled.code, compiled.suite_artifact_hash)
-            .expect("contract-backed suite must verify against its own artifact hash");
+        compiled
+            .suite
+            .program
+            .entrypoint_pc(crate::metadata::KOTO_TEST_RETURN_ENTRYPOINT)
+            .expect("contract-backed suite must expose its validated return entrypoint");
         let names = compiled
             .coverage_functions
             .iter()
@@ -3641,7 +3640,7 @@ mod tests {
     #[test]
     fn build_host_for_fixture_rejects_unknown_fixture() {
         let compiled = compiled_suite_with_fixtures(Vec::new());
-        let err = build_host_for_fixture(&compiled, Some("missing"), None)
+        let err = build_host_for_fixture(&compiled, Some("missing"))
             .err()
             .expect("unknown fixture should fail");
         assert!(err.contains("unknown fixture"));
@@ -3666,7 +3665,7 @@ mod tests {
             ],
         };
         let compiled = compiled_suite_with_fixtures(vec![fixture]);
-        let host = build_host_for_fixture(&compiled, Some("seeded"), None).expect("build host");
+        let host = build_host_for_fixture(&compiled, Some("seeded")).expect("build host");
         assert_eq!(
             host.caller_subject(),
             parse_account_literal(DEFAULT_CALLER).expect("caller")

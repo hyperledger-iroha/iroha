@@ -87,9 +87,9 @@ proof, `validatePdpCommitmentChallenge(...)` or
 
 ## Offline cash SDK boundary
 
-The JavaScript package does not expose an offline-cash lifecycle. Kagemusha wallet
-operations are supported by the Swift SDK, so JavaScript ships no alternate protocol,
-Torii convenience routes, proof wrappers, QR transport, or compatibility surface.
+The JavaScript package is a general-purpose chain SDK. Kagemusha wallet
+operations are supported by the Swift SDK, so JavaScript does not publish a
+wallet lifecycle, Torii wallet helpers, proof wrappers, or peer transport.
 
 ## Native Privacy Bridge
 

@@ -36,8 +36,6 @@ use crate::{
     },
 };
 use iroha_crypto::{Hash, streaming::TransportCapabilityResolutionSnapshot};
-#[cfg(test)]
-use iroha_data_model::proof::ProofAttachment;
 #[cfg(not(feature = "fast_dsl"))]
 use iroha_data_model::query::{
     account::prelude::FindAccounts,

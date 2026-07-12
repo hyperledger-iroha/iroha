@@ -206,6 +206,55 @@ run_expect_fail() {
   esac
 }
 
+make_apple_inspection_tools() {
+  local tools="$1"
+  mkdir -p "$tools"
+  cat >"$tools/lipo" <<'SH'
+#!/usr/bin/env bash
+case "${*: -1}" in
+  *ios-arm64_x86_64-simulator*) printf 'arm64 x86_64\n' ;;
+  *) printf 'arm64\n' ;;
+esac
+SH
+  cat >"$tools/nm" <<'SH'
+#!/usr/bin/env bash
+binary="${*: -1}"
+root="${binary%%/dist/*}"
+python3 - "$root/dist/NoritoBridge.artifacts.json" <<'PY'
+import json
+import os
+import sys
+
+with open(sys.argv[1], "r", encoding="utf-8") as handle:
+    manifest = json.load(handle)
+for symbol in manifest["required_symbols"]:
+    print("_" + symbol)
+if os.environ.get("MOBILE_SDK_TEST_EXTRA_KAGEMUSHA") == "1":
+    print("_connect_norito_kagemusha_unexpected_v2")
+PY
+SH
+  chmod +x "$tools/lipo" "$tools/nm"
+}
+
+run_expect_binary_fail() {
+  local root="$1"
+  local expected="$2"
+  local tools="$3"
+  local output
+  if output="$(PATH="$tools:$PATH" MOBILE_SDK_SKIP_BINARY_INSPECTION=0 \
+      MOBILE_SDK_TEST_EXTRA_KAGEMUSHA=1 bash "$CHECK_SCRIPT" "$root" --apple-only 2>&1)"; then
+    printf '%s\n' "$output" >&2
+    fail "expected strict binary validation to fail for $root"
+  fi
+  case "$output" in
+    *"$expected"*) ;;
+    *)
+      printf '%s\n' "$output" >&2
+      fail "expected strict binary failure containing: $expected"
+      ;;
+  esac
+}
+
 fixture="$TMP_DIR/valid"
 make_fixture "$fixture"
 run_expect_pass "$fixture"
@@ -243,6 +292,13 @@ sed -i.bak 's/"privacy_production_enabled": false/"privacy_production_enabled": 
   "$invalid_privacy_state/dist/NoritoBridge.artifacts.json"
 rm -f "$invalid_privacy_state/dist/NoritoBridge.artifacts.json.bak"
 run_expect_fail "$invalid_privacy_state" "must contain exactly one boolean privacy_production_enabled field"
+
+dirty_source_manifest="$TMP_DIR/dirty-source-manifest"
+make_fixture "$dirty_source_manifest"
+sed -i.bak 's/"source_tree_dirty": false/"source_tree_dirty": true/' \
+  "$dirty_source_manifest/dist/NoritoBridge.artifacts.json"
+rm -f "$dirty_source_manifest/dist/NoritoBridge.artifacts.json.bak"
+run_expect_fail "$dirty_source_manifest" "release artifact must be built from a clean source tree"
 
 duplicate_mixed_privacy_state="$TMP_DIR/duplicate-mixed-privacy-state"
 make_fixture "$duplicate_mixed_privacy_state"
@@ -296,6 +352,15 @@ make_fixture "$header_mismatch"
 printf 'void unexpected(void);\n' >>"$header_mismatch/dist/NoritoBridge.xcframework/ios-arm64_x86_64-simulator/Headers/connect_norito_bridge.h"
 run_expect_fail "$header_mismatch" "NoritoBridge bridge header differs in ios-arm64_x86_64-simulator"
 
+extra_binary_symbol="$TMP_DIR/extra-binary-symbol"
+make_fixture "$extra_binary_symbol"
+inspection_tools="$TMP_DIR/inspection-tools"
+make_apple_inspection_tools "$inspection_tools"
+run_expect_binary_fail \
+  "$extra_binary_symbol" \
+  "Kagemusha export inventory is not exact" \
+  "$inspection_tools"
+
 symbol_inventory_mismatch="$TMP_DIR/symbol-inventory-mismatch"
 make_fixture "$symbol_inventory_mismatch"
 sed -i.bak \
@@ -304,13 +369,13 @@ sed -i.bak \
 rm -f "$symbol_inventory_mismatch/dist/NoritoBridge.artifacts.json.bak"
 run_expect_fail "$symbol_inventory_mismatch" "required symbol inventory is missing or non-canonical"
 
-legacy_symbol_reintroduced="$TMP_DIR/legacy-symbol-reintroduced"
-make_fixture "$legacy_symbol_reintroduced"
+extra_manifest_symbol="$TMP_DIR/extra-manifest-symbol"
+make_fixture "$extra_manifest_symbol"
 sed -i.bak '/"connect_norito_kagemusha_recursive_spend_init_v2",/i\
-    "connect_norito_kagemusha_recursive_spend_init",' \
-  "$legacy_symbol_reintroduced/dist/NoritoBridge.artifacts.json"
-rm -f "$legacy_symbol_reintroduced/dist/NoritoBridge.artifacts.json.bak"
-run_expect_fail "$legacy_symbol_reintroduced" "required symbol inventory is missing or non-canonical"
+    "connect_norito_kagemusha_unexpected_v2",' \
+  "$extra_manifest_symbol/dist/NoritoBridge.artifacts.json"
+rm -f "$extra_manifest_symbol/dist/NoritoBridge.artifacts.json.bak"
+run_expect_fail "$extra_manifest_symbol" "required symbol inventory is missing or non-canonical"
 
 missing_android_publication="$TMP_DIR/missing-android-publication"
 make_fixture "$missing_android_publication"

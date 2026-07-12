@@ -2,132 +2,225 @@
 set -euo pipefail
 
 ROOT_DIR="${KAGEMUSHA_RECURSIVE_SPEND_POLICY_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+MODE="${1:-}"
+
+if [[ -n "${MODE}" && "${MODE}" != "--self-test" ]]; then
+  echo "usage: ci/check_kagemusha_recursive_spend_policy.sh [--self-test]" >&2
+  exit 2
+fi
 
 "${ROOT_DIR}/ci/check_kagemusha_v3_release_contract.sh"
 "${ROOT_DIR}/ci/check_kagemusha_recursive_spend_sdk_parity.sh"
 "${ROOT_DIR}/ci/check_kagemusha_recursive_spend_payload_bench.sh"
 
-python3 - "${ROOT_DIR}" <<'PY'
+python3 - "${ROOT_DIR}" "${MODE}" <<'PY'
 from pathlib import Path
+import json
 import re
 import sys
 
 root = Path(sys.argv[1])
-errors: list[str] = []
+self_test = sys.argv[2] == "--self-test"
 
+JAVA_SOURCE = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProver.java"
+KOTLIN_SOURCE = "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt"
+MODEL_SOURCE = "crates/iroha_data_model/src/offline/mod.rs"
+READINESS_SOURCE = "crates/iroha_torii_shared/src/offline_api.rs"
+SWIFT_SOURCE = "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendV2.swift"
 
-def relative(path: Path) -> str:
-    return path.relative_to(root).as_posix()
-
-
-# The JVM boundary has one exact, artifact-only Kagemusha source per language.
-java_main = root / "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline"
-kotlin_main = root / "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline"
-expected_jvm = {
-    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProver.java",
-    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt",
+MANIFEST_FIELDS = {
+    "schema",
+    "version",
+    "bridge_abi_version",
+    "proof_backend",
+    "transcript_profile",
+    "generation",
+    "source_commit",
+    "chain_id",
+    "asset",
+    "asset_scale",
+    "activation_height",
+    "withdrawal_height",
+    "max_proof_bytes",
+    "profiles",
+    "topup_finality_roster_artifact",
+    "benchmark_evidence_sha256",
+    "cryptographic_review_sha256",
+    "release_attestation_sha256",
 }
-actual_jvm = {
-    relative(path)
-    for directory in (java_main, kotlin_main)
-    if directory.exists()
-    for path in directory.iterdir()
-    if path.is_file()
+
+CAPABILITY_FIELDS = {
+    "bridge_abi_version",
+    "artifact_manifest_schema",
+    "proof_backend",
+    "transcript_profile",
+    "proof_envelope_version",
+    "state_boundary_version",
+    "transition_circuit_id",
+    "state_circuit_id",
+    "max_proof_bytes",
+    "proof_backend_available",
+    "missing_gates",
 }
-if actual_jvm != expected_jvm:
-    errors.append(
-        "JVM Kagemusha source inventory mismatch: "
-        f"missing={sorted(expected_jvm - actual_jvm)}, "
-        f"extra={sorted(actual_jvm - expected_jvm)}"
-    )
 
-for source in sorted(expected_jvm):
-    text = (root / source).read_text(encoding="utf-8")
-    for literal in (
-        "REQUIRED_NATIVE_BRIDGE_ABI_VERSION",
-        "19",
-        'ARTIFACT_MANIFEST_MODE',
-        'recursive_spend_v1',
-        'kagemusha.offline.recursive_spend.artifact_manifest.v3',
-    ):
-        if literal not in text:
-            errors.append(f"{source}: missing exact Kagemusha contract literal {literal!r}")
+SWIFT_CAPABILITY_FIELDS = {
+    "bridgeABIVersion",
+    "artifactManifestSchema",
+    "proofBackend",
+    "transcriptProfile",
+    "proofEnvelopeVersion",
+    "stateBoundaryVersion",
+    "transitionCircuitID",
+    "stateCircuitID",
+    "maxProofBytes",
+    "proofBackendAvailable",
+    "missingGates",
+}
 
-# The route catalog is the authoritative public inventory. It contains exactly
-# four Kagemusha routes and exactly one descriptor for each route.
-catalog_path = root / "crates/iroha_torii_shared/src/route_catalog.rs"
-catalog = catalog_path.read_text(encoding="utf-8")
-try:
-    offline_catalog = catalog.split("pub mod offline {", 1)[1].split("\n}\n", 1)[0]
-except IndexError:
-    errors.append("Torii route catalog has no offline module")
-    offline_catalog = ""
+READINESS_FIELDS = {
+    "required_bridge_abi_version",
+    "max_hops",
+    "asset_definition_id",
+    "asset_scale",
+    "evaluated_block_height",
+    "evaluated_block_hash",
+    "active_transfer_verifier",
+    "active_topup_shield_verifier",
+    "active_unshield_verifier",
+    "active_recursive_transition_verifier",
+    "active_recursive_state_verifier",
+    "proof_backend_available",
+    "recursive_lineage_supported",
+    "ready",
+    "blockers",
+}
 
-expected_paths = {
+EXPECTED_ROUTES = {
     "READINESS": "/v1/offline/readiness",
     "TOP_UP": "/v1/offline/top-up",
     "REDEEM": "/v1/offline/redeem",
     "OPERATION": "/v1/offline/operations/{operation_id}",
 }
-actual_paths = dict(
-    re.findall(r'pub const ([A-Z_]+)_PATH: &str = "([^"]+)";', offline_catalog)
-)
-if actual_paths != expected_paths:
-    errors.append(
-        "Torii Kagemusha route inventory mismatch: "
-        f"expected={expected_paths}, actual={actual_paths}"
-    )
-if "pub const ROUTES: &[RouteDescriptor] = &[READINESS, TOP_UP, REDEEM, OPERATION];" not in offline_catalog:
-    errors.append("Torii Kagemusha descriptor inventory is not exact")
 
-torii_path = root / "crates/iroha_torii/src/lib.rs"
-torii = torii_path.read_text(encoding="utf-8")
-expected_registrations = {
-    "READINESS": "catalog_get(handler_offline_readiness)",
-    "TOP_UP": "catalog_post(handler_offline_top_up)",
-    "REDEEM": "catalog_post(handler_offline_redeem)",
-    "OPERATION": "catalog_get(handler_offline_operation_status)",
-}
-for descriptor, handler in expected_registrations.items():
-    marker = f"&route_catalog::offline::{descriptor}"
-    if torii.count(marker) != 1:
-        errors.append(f"Torii must register {marker} exactly once")
-    if handler not in torii:
-        errors.append(f"Torii is missing exact Kagemusha handler {handler}")
+def rust_struct_fields(source: str, name: str) -> set[str]:
+    match = re.search(rf"pub struct {re.escape(name)} \{{(?P<body>[\s\S]*?)\n(?:    )?\}}", source)
+    if match is None:
+        return set()
+    return set(re.findall(r"\bpub\s+([a-z][a-z0-9_]*)\s*:", match.group("body")))
 
-# Generated OpenAPI must expose the same exact path set.
-openapi_path = root / "docs/portal/static/openapi/torii.json"
-import json
+def swift_struct_fields(source: str, name: str) -> set[str]:
+    match = re.search(rf"public struct {re.escape(name)}[^{{]*\{{(?P<body>[\s\S]*?)\n\}}", source)
+    if match is None:
+        return set()
+    return set(re.findall(r"\bpublic let ([A-Za-z][A-Za-z0-9]*)\s*:", match.group("body")))
 
-openapi = json.loads(openapi_path.read_text(encoding="utf-8"))
-actual_openapi_paths = {
-    path for path in openapi.get("paths", {}) if path.startswith("/v1/offline/")
-}
-expected_openapi_paths = set(expected_paths.values())
-if actual_openapi_paths != expected_openapi_paths:
-    errors.append(
-        "OpenAPI Kagemusha route inventory mismatch: "
-        f"missing={sorted(expected_openapi_paths - actual_openapi_paths)}, "
-        f"extra={sorted(actual_openapi_paths - expected_openapi_paths)}"
-    )
+def check(model_override: str | None = None) -> list[str]:
+    errors: list[str] = []
+    model = model_override if model_override is not None else (root / MODEL_SOURCE).read_text(encoding="utf-8")
 
-# Native release scripts own the exact exported-symbol inventory. Pin the
-# shared capability identity here so route, SDK, and artifact checks cannot
-# silently select different Kagemusha contracts.
-model_path = root / "crates/iroha_data_model/src/offline/mod.rs"
-model = model_path.read_text(encoding="utf-8")
-for literal in (
-    'KAGEMUSHA_RECURSIVE_SPEND_MODE: &str = "recursive_spend_v1"',
-    'KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3: u32 = 19',
-    '"kagemusha.offline.recursive_spend.artifact_manifest.v3"',
-):
-    if literal not in model:
-        errors.append(f"data-model Kagemusha contract is missing {literal!r}")
+    java_dir = root / Path(JAVA_SOURCE).parent
+    kotlin_dir = root / Path(KOTLIN_SOURCE).parent
+    actual_sources = {
+        path.relative_to(root).as_posix()
+        for directory in (java_dir, kotlin_dir)
+        for path in directory.iterdir()
+        if path.is_file()
+    }
+    expected_sources = {JAVA_SOURCE, KOTLIN_SOURCE}
+    if actual_sources != expected_sources:
+        errors.append(
+            "JVM Kagemusha source inventory mismatch: "
+            f"missing={sorted(expected_sources - actual_sources)}, "
+            f"extra={sorted(actual_sources - expected_sources)}"
+        )
 
-if errors:
+    for source in expected_sources:
+        text = (root / source).read_text(encoding="utf-8")
+        for literal in (
+            "REQUIRED_NATIVE_BRIDGE_ABI_VERSION",
+            "19",
+            "kagemusha.offline.recursive_spend.artifact_manifest.v3",
+        ):
+            if literal not in text:
+                errors.append(f"{source}: missing contract literal {literal!r}")
+
+    for struct_name, expected in (
+        ("KagemushaRecursiveSpendArtifactManifestV3", MANIFEST_FIELDS),
+        ("KagemushaRecursiveSpendNativeCapabilitiesV1", CAPABILITY_FIELDS),
+    ):
+        actual = rust_struct_fields(model, struct_name)
+        if actual != expected:
+            errors.append(
+                f"{struct_name} field inventory mismatch: "
+                f"missing={sorted(expected - actual)}, extra={sorted(actual - expected)}"
+            )
+
+    swift = (root / SWIFT_SOURCE).read_text(encoding="utf-8")
+    actual_swift = swift_struct_fields(swift, "KagemushaRecursiveSpendNativeCapabilities")
+    if actual_swift != SWIFT_CAPABILITY_FIELDS:
+        errors.append(
+            "Swift native capability field inventory mismatch: "
+            f"missing={sorted(SWIFT_CAPABILITY_FIELDS - actual_swift)}, "
+            f"extra={sorted(actual_swift - SWIFT_CAPABILITY_FIELDS)}"
+        )
+
+    readiness = (root / READINESS_SOURCE).read_text(encoding="utf-8")
+    actual_readiness = rust_struct_fields(readiness, "OfflineReadiness")
+    if actual_readiness != READINESS_FIELDS:
+        errors.append(
+            "Torii readiness field inventory mismatch: "
+            f"missing={sorted(READINESS_FIELDS - actual_readiness)}, "
+            f"extra={sorted(actual_readiness - READINESS_FIELDS)}"
+        )
+
+    catalog = (root / "crates/iroha_torii_shared/src/route_catalog.rs").read_text(encoding="utf-8")
+    match = re.search(r"pub mod offline \{(?P<body>[\s\S]*?)\n\}", catalog)
+    if match is None:
+        errors.append("Torii route catalog has no offline module")
+    else:
+        body = match.group("body")
+        actual_routes = dict(re.findall(r'pub const ([A-Z_]+)_PATH: &str = "([^"]+)";', body))
+        if actual_routes != EXPECTED_ROUTES:
+            errors.append(f"Torii route inventory mismatch: expected={EXPECTED_ROUTES}, actual={actual_routes}")
+        expected_descriptor = "pub const ROUTES: &[RouteDescriptor] = &[READINESS, TOP_UP, REDEEM, OPERATION];"
+        if expected_descriptor not in body:
+            errors.append("Torii descriptor inventory mismatch")
+
+    openapi = json.loads((root / "docs/portal/static/openapi/torii.json").read_text(encoding="utf-8"))
+    actual_openapi = {path for path in openapi.get("paths", {}) if path.startswith("/v1/offline/")}
+    expected_openapi = set(EXPECTED_ROUTES.values())
+    if actual_openapi != expected_openapi:
+        errors.append(
+            "OpenAPI route inventory mismatch: "
+            f"missing={sorted(expected_openapi - actual_openapi)}, "
+            f"extra={sorted(actual_openapi - expected_openapi)}"
+        )
+
+    for literal in (
+        "KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3: u32 = 19",
+        "kagemusha.offline.recursive_spend.artifact_manifest.v3",
+    ):
+        if literal not in model:
+            errors.append(f"data model is missing {literal!r}")
+    return errors
+
+baseline_errors = check()
+if baseline_errors:
     print("Kagemusha first-release policy failed:", file=sys.stderr)
-    for error in errors:
+    for error in baseline_errors:
         print(f" - {error}", file=sys.stderr)
     raise SystemExit(1)
-print("Kagemusha first-release policy passed: one protocol, one route set, one artifact set.")
+
+if self_test:
+    model = (root / MODEL_SOURCE).read_text(encoding="utf-8")
+    marker = "        pub schema: String,"
+    if model.count(marker) != 1:
+        raise SystemExit("policy self-test could not identify the manifest field insertion point")
+    mutated = model.replace(marker, marker + "\n        pub unexpected_field: String,", 1)
+    mutation_errors = check(mutated)
+    if not any("field inventory mismatch" in error and "unexpected_field" in error for error in mutation_errors):
+        raise SystemExit("policy self-test failed to reject an unknown manifest field")
+    print("Kagemusha first-release policy self-test rejected an unknown artifact field")
+else:
+    print("Kagemusha first-release policy passed: exact sources, fields, routes, and artifact contract")
 PY

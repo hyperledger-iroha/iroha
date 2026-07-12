@@ -4,98 +4,64 @@ on:
   pull_request:
     paths:
       - ".github/workflows/pr_kagemusha_payload_bench.yml"
+      - "ci/check_connect_norito_bridge_header.sh"
       - "ci/check_kagemusha_*.sh"
       - "crates/connect_norito_bridge/**"
-      - "crates/iroha_core/src/**/kagemusha*"
+      - "crates/iroha/src/client.rs"
+      - "crates/iroha_core/src/zk/**"
+      - "crates/iroha_core/src/bin/kagemusha_recursive_spend_v3_bundle.rs"
       - "crates/iroha_data_model/src/offline/**"
       - "crates/iroha_torii/**"
       - "crates/iroha_torii_shared/**"
       - "IrohaSwift/**"
       - "java/iroha_android/**"
-      - "kotlin/**"
-      - "javascript/iroha_js/**"
-      - "python/iroha_python/**"
-      - "csharp/**"
-      - "scripts/build_norito_xcframework.sh"
+      - "kotlin/core-jvm/**"
+      - "python/iroha_torii_client/**"
+      - "docs/source/offline_kagemusha*.md"
+      - "docs/portal/static/openapi/torii.json"
+      - "scripts/check_android_device_lab_slot.py"
+      - "scripts/tests/check_android_device_lab_slot_test.py"
   workflow_dispatch:
+
+concurrency:
+  group: kagemusha-first-release-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
   contract:
-    name: One protocol and exact artifacts
+    name: Exact API, bridge, SDK, and artifact inventory
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+      - run: ci/check_connect_norito_bridge_header.sh
+      - run: ci/check_connect_norito_bridge_header.sh --self-test
       - run: ci/check_kagemusha_recursive_spend_policy.sh
+      - run: ci/check_kagemusha_recursive_spend_policy.sh --self-test
+      - run: python -m unittest scripts.tests.check_android_device_lab_slot_test
+      - run: python -m pytest -q python/iroha_torii_client/tests/test_client.py
 
   rust:
-    name: Native artifacts and Torii routes
+    name: Typed lifecycle and Torii contract
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test -p connect_norito_bridge recursive_spend_v3_artifact --features privacy-production-enabled
+      - run: cargo test -p iroha_torii_shared offline_api --lib
       - run: cargo test -p iroha_torii generated_spec_documents_direct_offline_dtos_and_operation_states
       - run: cargo test -p iroha_torii generated_spec_offline
       - run: cargo test -p iroha_torii generated_spec_matches_offline_negotiation_and_operation_lifecycle
+      - run: cargo test -p connect_norito_bridge recursive_spend_v3_artifact --features privacy-production-enabled
 
   swift:
-    name: Supported Swift lifecycle
+    name: Swift lifecycle surface
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
       - run: ci/check_kagemusha_recursive_spend_swift_sdk.sh
-
-  jvm:
-    name: JVM artifact-only boundary
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: "21"
-      - uses: gradle/actions/setup-gradle@v4
-      - run: ci/check_kagemusha_recursive_spend_jvm_sdk.sh
-
-  javascript:
-    name: JavaScript has no offline lifecycle
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: javascript/iroha_js
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-          cache: npm
-          cache-dependency-path: javascript/iroha_js/package-lock.json
-      - run: npm ci
-      - run: ../../ci/check_kagemusha_recursive_spend_js_sdk.sh
-
-  python:
-    name: Python has no offline lifecycle
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-      - run: ci/check_kagemusha_recursive_spend_python_sdk.sh
-
-  csharp:
-    name: C# has no offline lifecycle
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: "8.0.x"
-      - run: ci/check_kagemusha_recursive_spend_csharp_sdk.sh

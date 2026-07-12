@@ -2909,67 +2909,23 @@ fn multisig_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/multisig/proposals/query".to_owned(),
+        "/v1/multisig/proposals/list".to_owned(),
         Value::Object(multisig_post_operation(
-            "Query multisig proposals.",
-            "Resolve a multisig selector and query lifecycle-filtered active or terminal proposals for the active concrete multisig authority.",
-            "#/components/schemas/MultisigProposalsQueryRequest",
-            "#/components/schemas/MultisigProposalsQueryResponse",
+            "List multisig proposals.",
+            "Resolve a multisig selector and list lifecycle-filtered active or terminal proposals for the active concrete multisig authority.",
+            "#/components/schemas/MultisigProposalsListRequest",
+            "#/components/schemas/MultisigProposalsListResponse",
             "Multisig alias not found.",
         )),
     );
     paths.insert(
-        "/v1/multisig/proposals/lookup".to_owned(),
+        "/v1/multisig/proposals/get".to_owned(),
         Value::Object(multisig_post_operation(
-            "Look up a multisig proposal.",
-            "Resolve a multisig selector and look up a proposal by `proposal_id` or `instructions_hash`.",
-            "#/components/schemas/MultisigProposalLookupRequest",
-            "#/components/schemas/MultisigProposalLookupResponse",
+            "Get a multisig proposal.",
+            "Resolve a multisig selector and fetch a proposal by `proposal_id` or `instructions_hash`.",
+            "#/components/schemas/MultisigProposalsGetRequest",
+            "#/components/schemas/MultisigProposalGetResponse",
             "Multisig alias or proposal not found.",
-        )),
-    );
-    paths.insert(
-        "/v1/multisig/approvals/query".to_owned(),
-        Value::Object(multisig_jwt_read_operation(
-            "Query JWT-viewer-scoped multisig approvals.",
-            "Use the authenticated JWT viewer scope to query active or terminal proposals across the exact multisig authorities in which the viewer is a signatory.",
-            "#/components/schemas/MultisigApprovalsQueryRequest",
-            "#/components/schemas/MultisigApprovalsQueryResponse",
-            "No viewer-visible multisig approval was found.",
-            false,
-        )),
-    );
-    paths.insert(
-        "/v1/multisig/approvals/lookup".to_owned(),
-        Value::Object(multisig_jwt_read_operation(
-            "Look up a JWT-viewer-scoped multisig approval.",
-            "Use the authenticated JWT viewer scope to look up one proposal for the exact fixed-size `multisig_account_ref` by `proposal_id` or `instructions_hash`.",
-            "#/components/schemas/MultisigApprovalLookupRequest",
-            "#/components/schemas/MultisigApprovalLookupResponse",
-            "The exact multisig authority or viewer-visible approval was not found.",
-            true,
-        )),
-    );
-    paths.insert(
-        "/v1/multisig/approvals/query-for-authority".to_owned(),
-        Value::Object(multisig_signed_read_operation(
-            "Query signed caller-authority multisig approvals.",
-            "Verify the exact HTTP request signature and query active or terminal proposals visible to that caller authority through the signatory index.",
-            "#/components/schemas/MultisigApprovalsQueryRequest",
-            "#/components/schemas/MultisigApprovalsQueryResponse",
-            "Caller authority is not allowed to view the requested approvals.",
-            false,
-        )),
-    );
-    paths.insert(
-        "/v1/multisig/approvals/lookup-for-authority".to_owned(),
-        Value::Object(multisig_signed_read_operation(
-            "Look up a signed caller-authority multisig approval.",
-            "Verify the exact HTTP request signature and look up one caller-authority-visible proposal for the exact fixed-size `multisig_account_ref` by `proposal_id` or `instructions_hash`.",
-            "#/components/schemas/MultisigApprovalLookupRequest",
-            "#/components/schemas/MultisigApprovalLookupResponse",
-            "Caller authority is not allowed to view the requested approval.",
-            true,
         )),
     );
     paths
@@ -18807,12 +18763,22 @@ mod tests {
     }
 
     fn nullable_property_ref<'a>(schemas: &'a Map, owner: &str, property: &str) -> &'a str {
-        let variants = component_properties(schemas, owner)
+        let schema = component_properties(schemas, owner)
             .get(property)
             .and_then(Value::as_object)
-            .and_then(|schema| schema.get("oneOf"))
-            .and_then(Value::as_array)
-            .unwrap_or_else(|| panic!("{owner}.{property} nullable oneOf"));
+            .unwrap_or_else(|| panic!("{owner}.{property} property schema"));
+        let one_of = schema.get("oneOf").and_then(Value::as_array);
+        let any_of = schema.get("anyOf").and_then(Value::as_array);
+        assert!(
+            one_of.is_some() ^ any_of.is_some(),
+            "{owner}.{property} must use exactly one nullable union keyword"
+        );
+        let variants = one_of.or(any_of).expect("checked nullable union");
+        assert_eq!(
+            variants.len(),
+            2,
+            "{owner}.{property} nullable union must have exactly two variants"
+        );
         assert_eq!(
             variants
                 .get(1)
@@ -20954,7 +20920,7 @@ mod tests {
     }
 
     #[test]
-    fn generated_spec_documents_direct_offline_dtos_and_operation_states() {
+    fn generated_spec_documents_strict_typed_offline_request_schemas_and_states() {
         let doc = generate_spec();
         let schemas = doc
             .get("components")
@@ -20962,14 +20928,34 @@ mod tests {
             .and_then(|components| components.get("schemas"))
             .and_then(Value::as_object)
             .expect("component schemas");
-        for (schema_name, norito_schema_name) in [
+        for (schema_name, norito_schema_name, expected_properties) in [
             (
                 "OfflineTopUpRequest",
                 iroha_torii_shared::offline_api::OFFLINE_TOP_UP_REQUEST_SCHEMA_NAME,
+                BTreeSet::from([
+                    "amount",
+                    "artifact_binding",
+                    "asset",
+                    "authorization",
+                    "current_note",
+                    "operation_id",
+                    "shield_evidence",
+                ]),
             ),
             (
                 "OfflineRedeemRequest",
                 iroha_torii_shared::offline_api::OFFLINE_REDEEM_REQUEST_SCHEMA_NAME,
+                BTreeSet::from([
+                    "amount",
+                    "authorization",
+                    "block_height",
+                    "bundle",
+                    "offline_change",
+                    "operation_id",
+                    "recipient",
+                    "redeem_proof",
+                    "redemption",
+                ]),
             ),
         ] {
             let schema = schemas
@@ -20981,19 +20967,60 @@ mod tests {
                 Some(false),
                 "typed request JSON must reject unknown fields"
             );
+            assert_eq!(schema.get("type").and_then(Value::as_str), Some("object"));
+            assert!(
+                !schema.contains_key("oneOf") && !schema.contains_key("anyOf"),
+                "a direct typed request must not become an alternate union"
+            );
             assert!(!schema.contains_key("x-iroha-norito-type"));
             assert_eq!(
                 schema.get("x-iroha-norito-schema").and_then(Value::as_str),
                 Some(norito_schema_name)
             );
-            assert!(
-                schema
-                    .get("properties")
-                    .and_then(Value::as_object)
-                    .is_some(),
-                "typed offline request must publish its fields"
+            let properties = schema
+                .get("properties")
+                .and_then(Value::as_object)
+                .expect("typed offline request properties");
+            assert_eq!(
+                properties
+                    .keys()
+                    .map(String::as_str)
+                    .collect::<BTreeSet<_>>(),
+                expected_properties,
+                "typed request properties must match the exact first-release inventory"
             );
         }
+        assert_eq!(
+            component_required(schemas, "OfflineTopUpRequest"),
+            [
+                "asset",
+                "amount",
+                "current_note",
+                "shield_evidence",
+                "artifact_binding",
+                "operation_id",
+                "authorization",
+            ],
+            "top-up transport fields must exactly match the current typed V2 request"
+        );
+        assert_eq!(
+            component_required(schemas, "OfflineRedeemRequest"),
+            [
+                "bundle",
+                "recipient",
+                "amount",
+                "redeem_proof",
+                "redemption",
+                "block_height",
+                "operation_id",
+                "authorization",
+            ],
+            "redeem transport fields must exactly match the current typed V2 request"
+        );
+        assert_eq!(
+            nullable_property_ref(schemas, "OfflineRedeemRequest", "offline_change"),
+            "#/components/schemas/OfflineRedeemChangeBranch"
+        );
         let readiness = schemas
             .get("OfflineReadiness")
             .and_then(Value::as_object)
@@ -21317,6 +21344,33 @@ mod tests {
                 .and_then(|schema| schema.get("maximum"))
                 .and_then(Value::as_u64),
             Some(28)
+        );
+        assert_eq!(
+            component_required(schemas, "OfflineTopUpAnchor"),
+            [
+                "version",
+                "chain_id",
+                "payer",
+                "asset",
+                "asset_scale",
+                "amount",
+                "initial_root",
+                "finalized_root",
+                "shield_leaf_index",
+                "current_note",
+                "topup_operation_id",
+                "shield_verifier_id",
+                "shield_verifier_commitment",
+                "artifact_generation",
+                "finalized_height",
+                "finalized_tx_hash",
+                "anchor_digest",
+            ],
+            "top-up anchor must expose the current shield-bound V2 shape"
+        );
+        assert!(
+            !top_up_anchor.contains_key("topup_anchor_nullifiers"),
+            "the retired aggregate nullifier list must not reappear beside the typed current note"
         );
         assert_eq!(
             top_up_anchor
@@ -22796,7 +22850,7 @@ mod tests {
         let lookup_request = schemas
             .get("MultisigProposalLookupRequest")
             .and_then(Value::as_object)
-            .expect("multisig proposal lookup request schema");
+            .expect("multisig proposal get request schema");
         assert_eq!(
             lookup_request
                 .get("allOf")
@@ -22811,7 +22865,7 @@ mod tests {
             .and_then(Value::as_object)
             .and_then(|schema| schema.get("properties"))
             .and_then(Value::as_object)
-            .expect("multisig proposal query response properties");
+            .expect("multisig proposal list response properties");
         assert_eq!(
             query_response
                 .get("proposals")
@@ -25090,6 +25144,100 @@ mod tests {
         assert!(has_push, "tags should include Push");
         assert!(has_soracloud, "tags should include Soracloud");
         assert!(has_vpn, "tags should include VPN");
+    }
+
+    #[test]
+    fn detached_asset_transfer_openapi_is_strict_and_two_phase() {
+        let doc = generate_spec();
+        let operation = doc
+            .get("paths")
+            .and_then(Value::as_object)
+            .and_then(|paths| paths.get("/v1/assets/transfer"))
+            .and_then(Value::as_object)
+            .and_then(|path| path.get("post"))
+            .and_then(Value::as_object)
+            .expect("detached asset transfer POST operation");
+        let request_ref = operation
+            .get("requestBody")
+            .and_then(Value::as_object)
+            .and_then(|body| body.get("content"))
+            .and_then(Value::as_object)
+            .and_then(|content| content.get("application/json"))
+            .and_then(Value::as_object)
+            .and_then(|media| media.get("schema"))
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("$ref"))
+            .and_then(Value::as_str);
+        assert_eq!(
+            request_ref,
+            Some("#/components/schemas/AssetTransferRequest")
+        );
+        let response_ref = operation
+            .get("responses")
+            .and_then(Value::as_object)
+            .and_then(|responses| responses.get("200"))
+            .and_then(Value::as_object)
+            .and_then(|response| response.get("content"))
+            .and_then(Value::as_object)
+            .and_then(|content| content.get("application/json"))
+            .and_then(Value::as_object)
+            .and_then(|media| media.get("schema"))
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("$ref"))
+            .and_then(Value::as_str);
+        assert_eq!(
+            response_ref,
+            Some("#/components/schemas/AssetTransferResponse")
+        );
+
+        let schemas = doc
+            .get("components")
+            .and_then(Value::as_object)
+            .and_then(|components| components.get("schemas"))
+            .and_then(Value::as_object)
+            .expect("schemas");
+        let request = schemas
+            .get("AssetTransferRequest")
+            .and_then(Value::as_object)
+            .expect("asset transfer request schema");
+        assert_eq!(
+            request.get("additionalProperties"),
+            Some(&Value::Bool(false))
+        );
+        assert_eq!(
+            request.get("oneOf").and_then(Value::as_array).map(Vec::len),
+            Some(2)
+        );
+        let properties = request
+            .get("properties")
+            .and_then(Value::as_object)
+            .expect("asset transfer request properties");
+        for field in [
+            "authority",
+            "asset_definition_id",
+            "asset_balance_scope",
+            "amount",
+            "destination",
+            "creation_time_ms",
+            "transaction_ttl_ms",
+            "public_key_hex",
+            "signature_base64",
+        ] {
+            assert!(properties.contains_key(field), "missing `{field}`");
+        }
+        for forbidden in ["private_key", "nonce", "metadata", "signature_b64"] {
+            assert!(
+                !properties.contains_key(forbidden),
+                "legacy signing field `{forbidden}` must not be documented"
+            );
+        }
+        assert_eq!(
+            schemas
+                .get("AssetTransferResponse")
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("additionalProperties")),
+            Some(&Value::Bool(false))
+        );
     }
 
     #[test]
