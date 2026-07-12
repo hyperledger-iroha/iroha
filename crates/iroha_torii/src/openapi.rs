@@ -2964,7 +2964,7 @@ fn multisig_paths() -> Map {
         "/v1/multisig/approvals/lookup-for-authority".to_owned(),
         Value::Object(multisig_signed_read_operation(
             "Look up a signed caller-authority multisig approval.",
-            "Verify the exact HTTP request signature and look up one caller-authority-visible proposal for the exact fixed-size `multisig_account_ref` by `proposal_id` or `instructions_hash`.",
+            "Verify the exact HTTP request signature and look up one proposal visible to that caller authority for the exact fixed-size `multisig_account_ref` by `proposal_id` or `instructions_hash`.",
             "#/components/schemas/MultisigApprovalLookupRequest",
             "#/components/schemas/MultisigApprovalLookupResponse",
             "Caller authority is not allowed to view the requested approval.",

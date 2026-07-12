@@ -19117,7 +19117,7 @@
     },
     "/v1/multisig/approvals/lookup-for-authority": {
       "post": {
-        "description": "Verify the exact HTTP request signature and look up one caller-authority-visible proposal for the exact fixed-size `multisig_account_ref` by `proposal_id` or `instructions_hash`.",
+        "description": "Verify the exact HTTP request signature and look up one proposal visible to that caller authority for the exact fixed-size `multisig_account_ref` by `proposal_id` or `instructions_hash`.",
         "parameters": [
           {
             "description": "Canonical caller AccountId bound into the exact request signature.",
