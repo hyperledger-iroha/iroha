@@ -11006,7 +11006,7 @@ impl Actor {
     }
 
     pub(in crate::sumeragi) fn commit_pipeline_wakeup_pending(&self) -> bool {
-        self.pending.commit_pipeline_wakeup
+        !self.kura_recovery_required() && self.pending.commit_pipeline_wakeup
     }
 
     fn rbc_rebroadcast_active_with_tip_and_session(
@@ -13412,6 +13412,44 @@ impl Drop for ProposalGuardReturnQuarantine {
     }
 }
 
+/// Fatal Kura outcomes whose durable commit state cannot be retried safely in-process.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum KuraRecoveryRequiredReason {
+    DaBlockRewriteCommitStateUnknown,
+    CanonicalStoragePoisoned,
+}
+
+impl KuraRecoveryRequiredReason {
+    fn from_error(error: &crate::kura::Error) -> Option<Self> {
+        match error {
+            crate::kura::Error::DaBlockRewriteCommitStateUnknown { .. } => {
+                Some(Self::DaBlockRewriteCommitStateUnknown)
+            }
+            crate::kura::Error::CanonicalStoragePoisoned => Some(Self::CanonicalStoragePoisoned),
+            _ => None,
+        }
+    }
+
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::DaBlockRewriteCommitStateUnknown => "da_block_rewrite_commit_state_unknown",
+            Self::CanonicalStoragePoisoned => "canonical_storage_poisoned",
+        }
+    }
+}
+
+/// Exact consensus state retained when canonical Kura durability requires restart recovery.
+#[derive(Clone, Debug)]
+struct KuraRecoveryRequired {
+    reason: KuraRecoveryRequiredReason,
+    block_hash: HashOf<BlockHeader>,
+    height: u64,
+    view: u64,
+    lock: crate::sumeragi::consensus::QcHeaderRef,
+    commit_qc: Option<crate::sumeragi::consensus::Qc>,
+    post_commit_qc: Option<crate::sumeragi::consensus::QcHeaderRef>,
+}
+
 /// Lightweight wrapper around the consensus main loop.
 ///
 /// This struct subsumes the former stub actor as we integrate the
@@ -13432,6 +13470,8 @@ pub(super) struct Actor {
     queue: Arc<Queue>,
     proposal_guard_return_quarantine: ProposalGuardReturnQuarantine,
     kura: Arc<Kura>,
+    /// Fail-stop latch preserving the certified commit until explicit restart recovery.
+    kura_recovery_required: Option<KuraRecoveryRequired>,
     network: IrohaNetwork,
     subsystems: ActorSubsystems,
     block_payload_dedup: Arc<Mutex<BlockPayloadDedupCache>>,
@@ -18748,6 +18788,59 @@ impl Drop for MessageTimingGuard {
     clippy::assigning_clones
 )]
 impl Actor {
+    fn kura_recovery_required(&self) -> bool {
+        self.kura_recovery_required.is_some()
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn enter_kura_recovery_required(
+        &mut self,
+        reason: KuraRecoveryRequiredReason,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+        lock: crate::sumeragi::consensus::QcHeaderRef,
+        commit_qc: Option<crate::sumeragi::consensus::Qc>,
+        post_commit_qc: Option<crate::sumeragi::consensus::QcHeaderRef>,
+    ) {
+        if let Some(existing) = self.kura_recovery_required.as_ref() {
+            error!(
+                reason = reason.as_str(),
+                block = %block_hash,
+                height,
+                view,
+                existing_reason = existing.reason.as_str(),
+                existing_block = %existing.block_hash,
+                existing_height = existing.height,
+                existing_view = existing.view,
+                existing_lock_height = existing.lock.height,
+                existing_lock_view = existing.lock.view,
+                existing_commit_qc = existing.commit_qc.is_some(),
+                existing_post_commit_qc = existing.post_commit_qc.is_some(),
+                "ignoring additional Kura failure after recovery-required latch was set"
+            );
+            return;
+        }
+
+        self.pending.commit_pipeline_wakeup = false;
+        self.kura_recovery_required = Some(KuraRecoveryRequired {
+            reason,
+            block_hash,
+            height,
+            view,
+            lock,
+            commit_qc,
+            post_commit_qc,
+        });
+        error!(
+            reason = reason.as_str(),
+            block = %block_hash,
+            height,
+            view,
+            "canonical Kura commit state requires restart recovery; consensus is fail-stop latched"
+        );
+    }
+
     fn synthesize_commit_qc(
         state: &State,
         block: &SignedBlock,
@@ -19020,6 +19113,9 @@ impl Actor {
     }
 
     fn process_committed_blocks_before_consensus(&mut self, context: &'static str) -> bool {
+        if self.kura_recovery_required() {
+            return false;
+        }
         let Some((last_processed, state_height)) = self.unprocessed_committed_height() else {
             return self.retire_committed_commit_inflight(context);
         };
@@ -23164,6 +23260,7 @@ impl Actor {
             queue,
             proposal_guard_return_quarantine: ProposalGuardReturnQuarantine::default(),
             kura,
+            kura_recovery_required: None,
             network,
             subsystems,
             block_payload_dedup,
@@ -24487,6 +24584,9 @@ impl Actor {
     }
 
     pub(super) fn next_tick_deadline(&self, now: Instant) -> Option<Instant> {
+        if self.kura_recovery_required() {
+            return None;
+        }
         if !self.proposal_guard_return_quarantine.guards.is_empty() {
             return Some(now);
         }
@@ -24806,6 +24906,9 @@ impl Actor {
 
     #[allow(clippy::too_many_lines)]
     pub(super) fn tick(&mut self) -> bool {
+        if self.kura_recovery_required() {
+            return false;
+        }
         if self.tick_in_progress {
             warn!(
                 height = self.state.committed_height(),
@@ -25090,6 +25193,10 @@ impl Actor {
             );
             commit_pipeline_cost = commit_pipeline_timings.total;
             progress = true;
+        }
+        if self.kura_recovery_required() {
+            self.tick_in_progress = false;
+            return progress;
         }
         if self.config.mode_flip.enabled
             && self.pending_mode_flip.is_some()
@@ -25815,14 +25922,16 @@ impl Actor {
                 crate::kura::BlockBodyStatus::RemoteOnly { .. }
                     | crate::kura::BlockBodyStatus::Missing
             )
-        ) && let Err(err) = self.kura.cache_block_body(block)
-        {
-            warn!(
-                ?err,
-                height = block.header().height().get(),
-                block = %block_hash,
-                "failed to cache rehydrated Kura block body"
-            );
+        ) {
+            if let Err(err) = self.kura.cache_block_body(block) {
+                warn!(
+                    ?err,
+                    height = block.header().height().get(),
+                    block = %block_hash,
+                    "failed to cache rehydrated Kura block body"
+                );
+                return;
+            }
         }
 
         let height = block.header().height().get();
@@ -25887,6 +25996,9 @@ impl Actor {
         &mut self,
         msg: &super::InboundBlockMessage,
     ) -> bool {
+        if self.kura_recovery_required() {
+            return true;
+        }
         if matches!(msg.message, BlockMessage::Qc(_) | BlockMessage::V2(_)) {
             return false;
         }
@@ -25918,6 +26030,9 @@ impl Actor {
 
     #[allow(clippy::too_many_lines)]
     pub(super) fn on_block_message(&mut self, msg: super::InboundBlockMessage) -> Result<()> {
+        if self.kura_recovery_required() {
+            return Ok(());
+        }
         let queue_latency = msg.queue_latency_ms();
         let super::InboundBlockMessage {
             message: msg,
@@ -27832,6 +27947,9 @@ impl Actor {
     }
 
     pub(super) fn on_lane_relay_message(&mut self, message: super::LaneRelayMessage) -> Result<()> {
+        if self.kura_recovery_required() {
+            return Ok(());
+        }
         match message {
             super::LaneRelayMessage::Envelope(envelope) => {
                 let changed = self.on_lane_relay(envelope)?;
@@ -29539,6 +29657,9 @@ impl Actor {
     }
 
     pub(super) fn on_lane_relay(&mut self, envelope: LaneRelayEnvelope) -> Result<bool> {
+        if self.kura_recovery_required() {
+            return Ok(false);
+        }
         match self.state.record_lane_relay(&envelope) {
             Ok(insert) => {
                 if matches!(insert, crate::state::LaneRelayInsert::Duplicate) {
@@ -29566,6 +29687,9 @@ impl Actor {
     }
 
     pub(super) fn on_consensus_control(&mut self, msg: ControlFlow) -> Result<()> {
+        if self.kura_recovery_required() {
+            return Ok(());
+        }
         debug!(message=%Self::consensus_control_kind(&msg), "received consensus control-frame");
         match msg {
             ControlFlow::Evidence(ev) => self.handle_evidence(ev),
@@ -29574,6 +29698,9 @@ impl Actor {
 
     #[allow(clippy::unnecessary_wraps)]
     pub(super) fn on_background_request(&mut self, request: BackgroundRequest) -> Result<()> {
+        if self.kura_recovery_required() {
+            return Ok(());
+        }
         self.schedule_background(request);
         Ok(())
     }

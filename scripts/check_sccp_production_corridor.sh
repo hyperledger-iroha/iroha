@@ -1878,6 +1878,21 @@ phase_runtime_api() {
     env "CARGO_TARGET_DIR=$CARGO_TARGET_DIR" "NORITO_SKIP_BINDINGS_SYNC=$NORITO_SKIP_BINDINGS_SYNC" \
     cargo test --locked -p iroha_core --lib \
       kura::tests::startup_corruption_recovery_cannot_prune_finalized_block_bytes -- --nocapture
+  run_cmd \
+    env "CARGO_TARGET_DIR=$CARGO_TARGET_DIR" "NORITO_SKIP_BINDINGS_SYNC=$NORITO_SKIP_BINDINGS_SYNC" \
+    cargo test --locked -p iroha_core --lib \
+      kura::tests::finalized_remote_only_block_retains_header_across_restart -- --nocapture
+  run_cmd \
+    env "CARGO_TARGET_DIR=$CARGO_TARGET_DIR" "NORITO_SKIP_BINDINGS_SYNC=$NORITO_SKIP_BINDINGS_SYNC" \
+    cargo test --locked -p iroha_core --lib \
+      kura::tests::v2_finality_durably_archives_sccp_before_body_eviction_and_restart -- --nocapture
+  run_cmd \
+    env "CARGO_TARGET_DIR=$CARGO_TARGET_DIR" "NORITO_SKIP_BINDINGS_SYNC=$NORITO_SKIP_BINDINGS_SYNC" \
+    cargo test --locked -p iroha_core --lib \
+      kura::tests::retained_sccp_archive_rejects_gap_omission_swap_overflow_and_rootless_extra -- --nocapture
+  run_cmd \
+    env "CARGO_TARGET_DIR=$CARGO_TARGET_DIR" "NORITO_SKIP_BINDINGS_SYNC=$NORITO_SKIP_BINDINGS_SYNC" \
+    cargo test --locked -p iroha_core --test bridge_finality_proof -- --nocapture
 
   # Run the complete focused apply/effect module suites: these own the durable
   # body, validation, finality, and post-finality cleanup sequencing used by

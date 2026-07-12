@@ -9393,11 +9393,12 @@ fn kagemusha_topup_shield_build_unsigned_from_archive_v2(
     #[cfg(feature = "privacy-production-enabled")]
     {
         use iroha_core::zk::{
-            ZK_BACKEND_HALO2_IPA, hash_vk,
+            ZK_BACKEND_HALO2_IPA,
             confidential_v2::{
                 ConfidentialMerklePathV2, KAGEMUSHA_TOPUP_SHIELD_V2_CIRCUIT_ID,
                 build_kagemusha_topup_shield_proof_v2, kagemusha_topup_shield_v2_vk_box,
             },
+            hash_vk,
         };
         use iroha_data_model::offline::{
             KagemushaRecursiveSpendTopUpUnsignedV2, KagemushaSpendableNoteDescriptorV2,
@@ -9422,8 +9423,8 @@ fn kagemusha_topup_shield_build_unsigned_from_archive_v2(
             {
                 return Err(BridgeError::KagemushaProve);
             }
-            let vk_box = kagemusha_topup_shield_v2_vk_box()
-                .map_err(|_| BridgeError::KagemushaProve)?;
+            let vk_box =
+                kagemusha_topup_shield_v2_vk_box().map_err(|_| BridgeError::KagemushaProve)?;
             if hash_vk(&vk_box) != request.shield_verifier_commitment {
                 return Err(BridgeError::KagemushaProve);
             }
@@ -11038,14 +11039,11 @@ pub unsafe extern "C" fn connect_norito_kagemusha_topup_shield_build_unsigned_v2
 ) -> c_int {
     let result = (|| {
         clear_bridge_output_or_null(out_unsigned_ptr, out_unsigned_len)?;
-        let bytes = unsafe {
-            read_kagemusha_archive_bytes(request_norito_ptr, request_norito_len)
-        }?;
+        let bytes =
+            unsafe { read_kagemusha_archive_bytes(request_norito_ptr, request_norito_len) }?;
         let unsigned = kagemusha_topup_shield_build_unsigned_from_archive_v2(&bytes)?;
         let archive = norito::to_bytes(&unsigned).map_err(|_| BridgeError::KagemushaProve)?;
-        unsafe {
-            write_kagemusha_archive_bridge(out_unsigned_ptr, out_unsigned_len, &archive)
-        }
+        unsafe { write_kagemusha_archive_bridge(out_unsigned_ptr, out_unsigned_len, &archive) }
     })();
     bridge_result_to_code(result)
 }
@@ -12870,10 +12868,9 @@ mod offline_note_prover_tests {
             KagemushaRecursiveSpendPastaCycleArtifactsV3,
         };
         use iroha_data_model::offline::{
-            KAGEMUSHA_RECURSIVE_SPEND_MODE_V2,
             KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V3,
             KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_VERSION_V3,
-            KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3,
+            KAGEMUSHA_RECURSIVE_SPEND_MODE_V2, KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3,
             KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1,
             KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_IPA_K_V1,
             KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V1,

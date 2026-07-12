@@ -5,9 +5,9 @@ use std::{
 };
 
 use iroha_crypto::Hash;
+use ivm::ProgramMetadata;
 use ivm::analysis::{ProgramAnalysis, ProgramAnalysisError};
 use ivm::runtime::IvmConfig;
-use ivm::{ProgramMetadata, SyscallPolicy};
 use parking_lot::{Condvar, Mutex};
 
 /// Counters for the bounded prepared-contract artifact store.
@@ -78,8 +78,9 @@ impl PreparedContractCache {
     /// hash before publishing the prepared value.
     ///
     /// # Errors
-    /// Returns [`ivm::VMError::InvalidMetadata`] for malformed artifacts or an
-    /// expected-hash mismatch.
+    /// Returns [`ivm::VMError::InvalidMetadata`] for malformed artifacts,
+    /// [`ivm::VMError::ArtifactAbiHashMismatch`] for stale ABI bindings, or an
+    /// invalid-metadata error for an expected artifact-hash mismatch.
     pub fn get_or_prepare(
         &self,
         code_hash: Hash,
@@ -123,8 +124,8 @@ impl PreparedContractCache {
         }
         drop(store);
 
-        let prepared =
-            ivm::prepare_contract(Arc::from(bytecode)).map_err(|_| ivm::VMError::InvalidMetadata);
+        let prepared = ivm::prepare_contract(Arc::from(bytecode))
+            .map_err(ivm::ContractArtifactError::into_vm_error);
         let mut store = self.inner.lock();
         store.preparing.remove(&code_hash);
         let prepared = match prepared {
@@ -660,9 +661,10 @@ impl IvmCache {
         let code_offset = prepared.code_offset();
         let header_len = prepared.header_len();
         let meta_hash = Hash::new(metadata.encode());
-        // The first release has a single canonical ABI hash; admission rejects
-        // non-v1 headers after summary extraction.
-        let abi_hash = Hash::prehashed(ivm::syscalls::compute_abi_hash(SyscallPolicy::AbiV1));
+        // Contract preparation has already compared the authenticated CNTR
+        // binding with the local descriptor. Preserve the artifact-carried
+        // value here so manifest checks never substitute node-local metadata.
+        let abi_hash = Hash::prehashed(prepared.contract_interface().abi_hash);
 
         let summary = ProgramSummary {
             prepared,
@@ -913,6 +915,7 @@ mod tests {
         let interface = ivm::EmbeddedContractInterfaceV1 {
             seiyaku_name: "CacheFixture".to_owned(),
             compiler_fingerprint: "iroha-core-cache-tests".to_owned(),
+            abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
             features_bitmap: 0,
             access_set_hints: None,
             kotoba: Vec::new(),

@@ -4,9 +4,9 @@ direction: ltr
 source: docs/source/bridge_proofs.md
 status: needs-review
 generator: scripts/sync_docs_i18n.py
-source_hash: 69c9a740261d0c367d52870fc1f48775ae48307056ba9b79d2f811e0c0849f20
-source_last_modified: "2026-07-11"
-translation_last_reviewed: 2026-07-11
+source_hash: 74e29801129deccb6d5640d414289c47cf13fa9e0229fb55212b6c7710d7c5f7
+source_last_modified: "2026-07-12T07:38:49.568351+00:00"
+translation_last_reviewed: 2026-07-12
 translator: machine-assisted
 ---
 
@@ -50,6 +50,14 @@ checkpoint እንዳይመረጥ ያደርጋል። Snapshot hydration ኢንዴ
 መዝገቦች እንደገና አስልቶ ትክክለኛ እኩልነትን ይጠይቃል፤ የጠፋ፣
 ያረጀ፣ የተበላሸ ወይም መሠረት የሌለው ኢንዴክስ ውድቅ ይደረጋል።
 
+የTRON ምንጭ route ትክክለኛውን
+`transferToTaira(bytes,uint256,uint64 expectedNonce)` ABI ይጠቀማል። ስኬታማ
+አፈጻጸም `expectedNonce == transferNonce` መሆኑን ይጠይቃል፤ ከዚያም storage
+ከመጨመሩ በፊት ያንኑ እሴት ወደ canonical payload ይጽፋል። Native admission
+ሙሉውን ABI call ከpayload recipient፣ scaled amount እና nonce እንደገና ይገነባል፤
+ስለዚህ የተተወው ሁለት-argument selector፣ stale ወይም future nonce እና
+ያለቀ `uint64` nonce ሁሉ በዝግ ሁኔታ ውድቅ ይደረጋሉ።
+
 ## አንድ-ጊዜ ማረጋገጥ እና የሥራ ገደቦች
 
 የdestination እና native ማስረጃዎች አንድ ጊዜ ይፈታሉ፣ አንድ ጊዜ
@@ -82,6 +90,24 @@ consensus-bound ናቸው፤ በሁሉም validators ውስጥ ከconfig file �
 
 አንድ proof ቢበዛ 8 MiB canonical bytes ሊይዝ ይችላል። የተቋረጠ ወይም
 ውድቅ የተደረገ transaction የተዘጋጀውን ሥራ ወደ block አያፈስስም።
+
+## Outbound commitment፣ retention እና discovery
+
+እያንዳንዱ የተሳካ outbound message በblock execution order ውስጥ dense የሆነ
+`commitment_index` (`0..=511`) ያገኛል። V1 በblock 512 messages እና በmessage
+4,096 canonical payload bytes የማይቀየር ገደብ አለው። `[zk.sccp]` ደግሞ
+pending payload state-ን `max_pending_outbound_messages` (default `65536`) እና
+`max_pending_outbound_payload_bytes` (default `268435456`) በሁለቱም ይገድባል።
+
+Kura finality ከማሳተሙ ወይም block body ከመውጣቱ በፊት exact canonical header
+እና root-authenticated SCCP archive-ን immutable አድርጎ ያከማቻል። Proof፣ bundle፣
+proof request እና recent history የታሪክ block body ወይም mutable WSV payload
+አያስፈልጋቸውም። Destination proof ሲቀበል pending payload እና charge በatomic
+ሁኔታ ይወገዳሉ፣ fixed terminal descriptor ግን locator/index ጋር ይቀራል።
+Pending state የተገደበ ነው፤ terminal records እና immutable Kura history ለreplay
+protection በፍላጎት ያድጋሉ። `GET /v1/sccp/messages/recent` የገጽ መጠቆሚያ
+`{ from, after_index }` ይጠቀማል። Immutable evidence በtotal/operator disk usage
+ይቆጠራል ነገር ግን በevictable-body budget ውስጥ አይገባም።
 
 ## Torii እና HTTP ገደቦች
 

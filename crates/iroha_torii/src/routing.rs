@@ -6869,6 +6869,269 @@ mod sccp_first_release_api_tests {
         (message_id, key, record)
     }
 
+    fn signed_empty_archive_boundary_block(
+        height: u64,
+        previous: Option<&SignedBlock>,
+    ) -> Arc<SignedBlock> {
+        let signer = KeyPair::try_random().expect("SCCP archive boundary block key");
+        let header = BlockHeader::new(
+            std::num::NonZeroU64::new(height).expect("archive boundary height is nonzero"),
+            previous.map(SignedBlock::hash),
+            None,
+            None,
+            height,
+            0,
+        );
+        let signature = iroha_data_model::block::BlockSignature::new(
+            0,
+            SignatureOf::try_from_hash(signer.private_key(), header.hash())
+                .expect("sign SCCP archive boundary header"),
+        );
+        let mut block = SignedBlock::presigned(signature, header, Vec::new());
+        block
+            .set_transaction_results(Vec::new(), &[], Vec::new())
+            .expect("empty archive boundary results are complete");
+        block
+            .signatures()
+            .next()
+            .expect("archive boundary signature")
+            .signature()
+            .verify_hash(signer.public_key(), block.hash())
+            .expect("archive boundary signature verifies");
+        Arc::new(block)
+    }
+
+    fn exact_archived_sccp_state() -> (CoreState, [u8; 32]) {
+        let fixture = iroha_sccp::sccp_exact_outbound_test_fixture_v1();
+        let genesis = signed_empty_archive_boundary_block(1, None);
+        let finalized_genesis =
+            iroha_sccp::sccp_finalize_taira_block_test_fixture_v1(genesis.as_ref(), None);
+        let mut provisional_header = BlockHeader::new(
+            std::num::NonZeroU64::new(2).expect("SCCP archive height is nonzero"),
+            Some(genesis.hash()),
+            None,
+            None,
+            2,
+            0,
+        );
+        provisional_header.set_sccp_commitment_root(Some(fixture.bundle.commitment_root));
+        let incomplete_header = provisional_header.clone();
+        let payload_bytes = iroha_sccp::canonical_sccp_payload_bytes(&fixture.bundle.payload)
+            .expect("exact SCCP payload encodes");
+        let transaction_key = KeyPair::try_random().expect("SCCP archive transaction key");
+        let authority = AccountId::new(transaction_key.public_key().clone());
+        let transaction = TransactionBuilder::new(
+            iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1
+                .parse()
+                .expect("Taira chain id"),
+            authority,
+        )
+        .with_executable(Executable::IvmProved(IvmProved {
+            bytecode: IvmBytecode::from_compiled(vec![0x01, 0x02, 0x03]),
+            overlay: vec![InstructionBox::from(
+                iroha_data_model::isi::bridge::RecordSccpMessage::new(
+                    fixture.bundle.commitment.context,
+                    payload_bytes.clone(),
+                ),
+            )]
+            .into(),
+            events_commitment: Hash::new(b"events"),
+            gas_policy_commitment: Hash::new(b"gas"),
+        }))
+        .sign(transaction_key.private_key());
+        let entry_hash = transaction.hash_as_entrypoint();
+        let block_key = KeyPair::try_random().expect("SCCP archive block key");
+        let signature = iroha_data_model::block::BlockSignature::new(
+            0,
+            SignatureOf::try_from_hash(block_key.private_key(), provisional_header.hash())
+                .expect("sign exact SCCP archive header"),
+        );
+        let mut block = SignedBlock::presigned(signature, provisional_header, vec![transaction]);
+        block
+            .set_transaction_results(
+                Vec::new(),
+                &[entry_hash],
+                vec![TransactionResultInner::Ok(DataTriggerSequence::default())],
+            )
+            .expect("exact SCCP archive block results");
+        assert_ne!(
+            block.header(),
+            incomplete_header,
+            "attaching the transaction/results must finalize the header Merkle roots"
+        );
+        let final_signature = iroha_data_model::block::BlockSignature::new(
+            0,
+            SignatureOf::try_from_hash(block_key.private_key(), block.hash())
+                .expect("sign the completed SCCP archive header"),
+        );
+        block
+            .replace_signatures([final_signature].into_iter().collect())
+            .expect("replace the provisional block signature");
+        block
+            .signatures()
+            .next()
+            .expect("completed SCCP archive signature")
+            .signature()
+            .verify_hash(block_key.public_key(), block.hash())
+            .expect("completed SCCP archive signature verifies");
+
+        let fixture = fixture.with_finalized_block(&block, Some(&finalized_genesis));
+        let finality =
+            iroha_sccp::decode_taira_bridge_finality_proof(&fixture.bundle.finality_proof)
+                .expect("completed SCCP finality proof");
+        assert_eq!(block.header(), finality.block_header);
+        assert_eq!(block.hash(), finality.finality_artifact.block_hash);
+        assert_eq!(
+            fixture.request.public_inputs.finality_block_hash,
+            <[u8; 32]>::from(Hash::from(block.hash()))
+        );
+        finality
+            .finality_artifact
+            .validate_for_header(&block.header())
+            .expect("completed SCCP artifact binds the persisted block header");
+        finality
+            .finality_artifact
+            .verify()
+            .expect("completed SCCP artifact is cryptographically valid");
+
+        let block = Arc::new(block);
+        let tail = signed_empty_archive_boundary_block(3, Some(block.as_ref()));
+        let kura = Kura::blank_kura_for_testing_with_blocks_in_memory(
+            std::num::NonZeroUsize::new(1).expect("one retained body"),
+        );
+        kura.store_block(Arc::clone(&genesis))
+            .expect("store SCCP archive genesis block");
+        kura.store_block(Arc::clone(&block))
+            .expect("store exact SCCP archive block");
+        kura.store_block(Arc::clone(&tail))
+            .expect("store SCCP archive tail block");
+        let _receipt = kura
+            .store_v2_finality_artifact(&finality.finality_artifact)
+            .expect("store exact SCCP archive finality");
+        let mut state = CoreState::new_with_chain_for_testing(
+            iroha_core::state::World::default(),
+            Arc::clone(&kura),
+            iroha_core::query::store::LiveQueryStore::start_test(),
+            iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1
+                .parse()
+                .expect("Taira chain id"),
+        );
+        for canonical in [&genesis, &block, &tail] {
+            state.push_block_hash_for_testing(canonical.hash());
+        }
+        let (_, source_identity, trust_anchor) =
+            iroha_sccp::sccp_native_ethereum_transfer_inbound_test_fixture_v1();
+        assert_eq!(
+            fixture.route.source_identity, source_identity,
+            "exact archive route and native trust anchor must share one source identity"
+        );
+        state.set_sccp_registry_for_testing(
+            iroha_core::state::ValidatedSccpRegistryV1::try_from_wire(
+                iroha_data_model::bridge::SccpRegistryV1 {
+                    version: 1,
+                    lanes: vec![iroha_data_model::bridge::SccpGovernedLaneV1 {
+                        lane_id: fixture.route.lane_id,
+                        native_trust_anchors: vec![trust_anchor],
+                        current_native_trust_anchor_hash: Some(trust_anchor.anchor_hash),
+                        routes: vec![fixture.route.clone()],
+                    }],
+                },
+            )
+            .expect("exact SCCP route registry"),
+        );
+        let key = iroha_data_model::bridge::SccpOutboundMessageKeyV1 {
+            lane: fixture.bundle.commitment.context.lane,
+            message_id: fixture.bundle.commitment.message_id,
+        };
+        state
+            .insert_sccp_outbound_message_for_testing(
+                key,
+                iroha_data_model::bridge::SccpOutboundPendingMessageRecordV1 {
+                    destination_binding_hash: fixture
+                        .bundle
+                        .commitment
+                        .context
+                        .destination_binding_hash,
+                    route_configuration_hash: fixture
+                        .bundle
+                        .commitment
+                        .context
+                        .route_configuration_hash,
+                    payload_hash: fixture.bundle.commitment.payload_hash,
+                    payload_bytes,
+                    recorded_at_height: 2,
+                    commitment_index: 0,
+                },
+            )
+            .expect("insert exact SCCP outbox descriptor");
+        state
+            .transition_sccp_outbound_message_to_terminal_for_testing(
+                key,
+                iroha_data_model::bridge::SccpOutboundProofRecordV1 {
+                    payload_hash: fixture.bundle.commitment.payload_hash,
+                    destination_binding_hash: fixture
+                        .bundle
+                        .commitment
+                        .context
+                        .destination_binding_hash,
+                    route_configuration_hash: fixture
+                        .bundle
+                        .commitment
+                        .context
+                        .route_configuration_hash,
+                    finality_block_hash: <[u8; 32]>::from(Hash::from(
+                        finality.finality_artifact.block_hash,
+                    )),
+                    destination_proof_commitment: [0xE7; 32],
+                    finality_height: 2,
+                    commitment_index: 0,
+                    accepted_at_height: 3,
+                },
+            )
+            .expect("move exact SCCP message to terminal fixed replay state");
+        let world = state.world_view();
+        assert!(world.sccp_outbound_pending_messages().get(&key).is_none());
+        let stored_proof = world
+            .sccp_outbound_proofs()
+            .get(&key)
+            .copied()
+            .expect("terminal SCCP proof record");
+        assert_eq!(
+            stored_proof.finality_block_hash,
+            fixture.request.public_inputs.finality_block_hash
+        );
+        assert_eq!(stored_proof.finality_height, 2);
+        assert_eq!(
+            world.sccp_outbound_pending_usage(),
+            iroha_data_model::bridge::SccpOutboundPendingUsageV1::default()
+        );
+        drop(world);
+        let height = std::num::NonZeroUsize::new(2).expect("two is nonzero");
+        assert_eq!(kura.get_block(height).as_deref(), Some(block.as_ref()));
+        let payload_len = kura
+            .advertise_required_replicas_for_bench(height)
+            .expect("stored SCCP body length");
+        assert!(
+            kura.evict_block_bodies_for_bench(payload_len)
+                .expect("evict exact SCCP historical body")
+                >= payload_len
+        );
+        kura.remove_evicted_block_sidecar_for_testing(height)
+            .expect("make exact SCCP historical body remote-only");
+        assert!(kura.get_block(height).is_none());
+        assert_eq!(
+            kura.get_block(std::num::NonZeroUsize::new(1).expect("one is nonzero"))
+                .as_deref(),
+            Some(genesis.as_ref())
+        );
+        assert_eq!(
+            kura.get_block(std::num::NonZeroUsize::new(3).expect("three is nonzero"))
+                .as_deref(),
+            Some(tail.as_ref())
+        );
+        (state, fixture.bundle.commitment.message_id)
+    }
+
     #[test]
     fn message_id_parser_rejects_malleability_and_zero() {
         let canonical = "11".repeat(32);
@@ -7354,6 +7617,49 @@ mod sccp_first_release_api_tests {
             panic!("unexpected missing-block error: {error}");
         };
         assert!(message.contains("finality artifact for height 9 not found"));
+    }
+
+    #[test]
+    fn bundle_proof_request_and_recent_readback_survive_body_eviction() {
+        let (state, message_id) = exact_archived_sccp_state();
+
+        let bundle = sccp_message_bundle_for_request(&state, message_id)
+            .expect("bodyless bundle lookup")
+            .expect("bodyless bundle exists");
+        assert_eq!(bundle.commitment.message_id, message_id);
+        assert!(
+            iroha_sccp::verified_sccp_message_taira_finality_proof_cryptographically_self_consistent(
+                &bundle,
+            )
+            .is_some()
+        );
+
+        let material = sccp_exact_proof_material(&state, message_id)
+            .expect("bodyless proof-request lookup")
+            .expect("bodyless proof request exists");
+        assert_eq!(material.bundle, bundle);
+        assert_eq!(material.indexed.descriptor.commitment_index, 0);
+        let finality = iroha_sccp::decode_taira_bridge_finality_proof(&bundle.finality_proof)
+            .expect("bodyless bundle finality decodes");
+        assert_eq!(finality.block_header.height().get(), 2);
+        assert_eq!(
+            material.request.public_inputs.finality_block_hash,
+            <[u8; 32]>::from(Hash::from(finality.finality_artifact.block_hash))
+        );
+
+        let recent = collect_recent_sccp_messages(
+            &state,
+            &SccpRecentWindowQuery {
+                from: None,
+                after_index: None,
+                limit: Some(1),
+            },
+        )
+        .expect("bodyless recent lookup");
+        assert_eq!(recent.items.len(), 1);
+        assert_eq!(recent.items[0].commitment_index, 0);
+        assert_eq!(recent.items[0].message_id_hex, hex::encode(message_id));
+        assert!(recent.next.is_none());
     }
 
     #[tokio::test]
@@ -22083,6 +22389,7 @@ mod multisig_selector_tests {
         let interface = ivm::EmbeddedContractInterfaceV1 {
             seiyaku_name: "TestContract".to_owned(),
             compiler_fingerprint: "torii-tests".to_owned(),
+            abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
             features_bitmap: 0,
             access_set_hints: None,
             kotoba: Vec::new(),
@@ -35067,6 +35374,7 @@ mod deploy_tests {
         let interface = ivm::EmbeddedContractInterfaceV1 {
             seiyaku_name: "TestContract".to_owned(),
             compiler_fingerprint: "torii-tests".to_owned(),
+            abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
             features_bitmap: 0,
             access_set_hints: None,
             kotoba: Vec::new(),

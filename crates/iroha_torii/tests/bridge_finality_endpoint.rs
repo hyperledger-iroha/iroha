@@ -1,7 +1,10 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Bridge finality endpoints expose only Kura's exact Sumeragi-v2 artifact.
 
-use std::{num::NonZeroU64, sync::Arc};
+use std::{
+    num::{NonZeroU64, NonZeroUsize},
+    sync::Arc,
+};
 
 use axum::{
     Router,
@@ -275,6 +278,35 @@ async fn proof_and_bundle_endpoints_return_the_exact_durable_v2_artifact() {
     bundle_verifier
         .verify_bundle(&bundle)
         .expect("trusted verifier accepts exact endpoint bundle");
+}
+
+#[tokio::test]
+async fn proof_endpoint_survives_body_eviction_via_retained_header_record() {
+    let fixture = endpoint_fixture(true);
+    let height = NonZeroUsize::new(1).expect("one is nonzero");
+    let payload_len = fixture
+        .kura
+        .advertise_required_replicas_for_bench(height)
+        .expect("stored endpoint body has a positive length");
+    let freed = fixture
+        .kura
+        .evict_block_bodies_for_bench(payload_len)
+        .expect("evict endpoint block body after retained record exists");
+    assert!(freed >= payload_len);
+    assert!(
+        fixture.kura.get_block(height).is_none(),
+        "historical body must actually be absent"
+    );
+
+    for uri in ["/v1/bridge/finality/1", "/v1/bridge/finality/bundle/1"] {
+        let (status, bytes) = get_norito(&fixture.app, uri).await;
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "retained-header endpoint failed for {uri}: {}",
+            String::from_utf8_lossy(&bytes)
+        );
+    }
 }
 
 #[tokio::test]

@@ -48,6 +48,7 @@ pub enum VmTrapKind {
     AssertionFailed,
     ExceededMaxCycles,
     InvalidMetadata,
+    ArtifactAbiHashMismatch,
     InvalidVectorLength,
     MissingHalt,
     PermissionDenied,
@@ -171,6 +172,13 @@ pub enum VMError {
     AssertionFailed,
     ExceededMaxCycles,
     InvalidMetadata,
+    /// A self-describing artifact targets a different canonical ABI descriptor.
+    ArtifactAbiHashMismatch {
+        /// ABI descriptor hash required by the runtime.
+        expected: [u8; 32],
+        /// Authenticated ABI descriptor hash carried by the artifact.
+        actual: [u8; 32],
+    },
     InvalidVectorLength {
         vector_length: usize,
     },
@@ -318,6 +326,12 @@ impl fmt::Display for VMError {
             VMError::AssertionFailed => write!(f, "assertion failed (constraint violation)"),
             VMError::ExceededMaxCycles => write!(f, "execution exceeded max cycles"),
             VMError::InvalidMetadata => write!(f, "invalid program metadata"),
+            VMError::ArtifactAbiHashMismatch { expected, actual } => write!(
+                f,
+                "contract artifact ABI hash mismatch (expected={}, actual={})",
+                HexBytes(expected),
+                HexBytes(actual)
+            ),
             VMError::InvalidVectorLength { vector_length } => {
                 write!(f, "invalid vector length {vector_length}")
             }
@@ -347,6 +361,17 @@ impl fmt::Display for VMError {
                 budget_ms
             ),
         }
+    }
+}
+
+struct HexBytes<'a>(&'a [u8]);
+
+impl fmt::Display for HexBytes<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for byte in self.0 {
+            write!(f, "{byte:02x}")?;
+        }
+        Ok(())
     }
 }
 

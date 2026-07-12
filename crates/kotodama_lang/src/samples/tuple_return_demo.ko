@@ -1,7 +1,7 @@
 // Tuple return and destructuring demo.
 seiyaku TupleReturnDemo {
     fn pair(int a, int b) -> (int, int) {
-        let t = (a + 1, b + 1);
+        let t = (a, b);
         return t;
     }
 

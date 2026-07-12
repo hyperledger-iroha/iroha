@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use hickory_proto::{
-    op::{Message, MessageType, Query, ResponseCode},
+    op::{Message, Query, ResponseCode},
     rr::Record,
 };
 use norito_derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
@@ -223,7 +223,7 @@ impl ResolverState {
     }
 
     fn resolve_static(&self, request: &Message) -> Option<Message> {
-        let query = request.queries().first()?;
+        let query = request.queries.first()?;
         let key = canonical_query_name(query);
         let entry = self.static_zones.get(&key)?;
         if let Some((meta, code)) = entry
@@ -265,15 +265,12 @@ fn build_authoritative_response(
     code: ResponseCode,
     answers: &[Record],
 ) -> Message {
-    let mut response = Message::new();
-    response.set_id(request.id());
-    response.set_message_type(MessageType::Response);
-    response.set_op_code(request.op_code());
-    response.set_recursion_desired(request.recursion_desired());
-    response.set_recursion_available(true);
-    response.set_authoritative(true);
-    response.set_response_code(code);
-    if let Some(query) = request.queries().first() {
+    let mut response = Message::response(request.metadata.id, request.metadata.op_code);
+    response.metadata.recursion_desired = request.metadata.recursion_desired;
+    response.metadata.recursion_available = true;
+    response.metadata.authoritative = true;
+    response.metadata.response_code = code;
+    if let Some(query) = request.queries.first() {
         response.add_query(query.clone());
     }
     if code == ResponseCode::NoError {
@@ -391,7 +388,7 @@ mod tests {
     use std::net::Ipv4Addr;
 
     use hickory_proto::{
-        op::{Message, Query},
+        op::{Message, MessageType, OpCode, Query},
         rr::{Name, RData, Record, RecordType, rdata::A},
     };
     use iroha_crypto::{PublicKey, Signature};
@@ -481,15 +478,15 @@ mod tests {
             freeze: None,
         }]);
 
-        let mut request = Message::new();
+        let mut request = Message::new(0, MessageType::Query, OpCode::Query);
         request.add_query(Query::query(
             Name::from_ascii("example.sora").unwrap(),
             RecordType::A,
         ));
 
         let response = state.resolve_message(&request);
-        assert_eq!(response.response_code(), ResponseCode::NoError);
-        assert_eq!(response.answers().len(), 1);
+        assert_eq!(response.metadata.response_code, ResponseCode::NoError);
+        assert_eq!(response.answers.len(), 1);
     }
 
     #[test]
@@ -511,15 +508,15 @@ mod tests {
             }),
         }]);
 
-        let mut request = Message::new();
+        let mut request = Message::new(0, MessageType::Query, OpCode::Query);
         request.add_query(Query::query(
             Name::from_ascii("freeze.sora").unwrap(),
             RecordType::A,
         ));
 
         let response = state.resolve_message(&request);
-        assert_eq!(response.response_code(), ResponseCode::ServFail);
-        assert!(response.answers().is_empty());
+        assert_eq!(response.metadata.response_code, ResponseCode::ServFail);
+        assert!(response.answers.is_empty());
     }
 
     #[test]
@@ -541,15 +538,15 @@ mod tests {
             }),
         }]);
 
-        let mut request = Message::new();
+        let mut request = Message::new(0, MessageType::Query, OpCode::Query);
         request.add_query(Query::query(
             Name::from_ascii("blocked.sora").unwrap(),
             RecordType::A,
         ));
 
         let response = state.resolve_message(&request);
-        assert_eq!(response.response_code(), ResponseCode::Refused);
-        assert!(response.answers().is_empty());
+        assert_eq!(response.metadata.response_code, ResponseCode::Refused);
+        assert!(response.answers.is_empty());
     }
 
     #[test]
@@ -571,16 +568,16 @@ mod tests {
             }),
         }]);
 
-        let mut request = Message::new();
+        let mut request = Message::new(0, MessageType::Query, OpCode::Query);
         request.add_query(Query::query(
             Name::from_ascii("emergency.sora").unwrap(),
             RecordType::A,
         ));
 
         let response = state.resolve_message(&request);
-        assert_eq!(response.response_code(), ResponseCode::Refused);
+        assert_eq!(response.metadata.response_code, ResponseCode::Refused);
         assert!(
-            response.answers().is_empty(),
+            response.answers.is_empty(),
             "emergency freeze must refuse DNS answers"
         );
     }
@@ -604,16 +601,16 @@ mod tests {
             }),
         }]);
 
-        let mut request = Message::new();
+        let mut request = Message::new(0, MessageType::Query, OpCode::Query);
         request.add_query(Query::query(
             Name::from_ascii("thawing.sora").unwrap(),
             RecordType::A,
         ));
 
         let response = state.resolve_message(&request);
-        assert_eq!(response.response_code(), ResponseCode::NoError);
-        assert_eq!(response.answers().len(), 1);
-        assert_eq!(response.answers()[0], record);
+        assert_eq!(response.metadata.response_code, ResponseCode::NoError);
+        assert_eq!(response.answers.len(), 1);
+        assert_eq!(response.answers[0], record);
     }
 
     #[test]
@@ -635,16 +632,16 @@ mod tests {
             }),
         }]);
 
-        let mut request = Message::new();
+        let mut request = Message::new(0, MessageType::Query, OpCode::Query);
         request.add_query(Query::query(
             Name::from_ascii("monitoring.sora").unwrap(),
             RecordType::A,
         ));
 
         let response = state.resolve_message(&request);
-        assert_eq!(response.response_code(), ResponseCode::NoError);
-        assert_eq!(response.answers().len(), 1);
-        assert_eq!(response.answers()[0], record);
+        assert_eq!(response.metadata.response_code, ResponseCode::NoError);
+        assert_eq!(response.answers.len(), 1);
+        assert_eq!(response.answers[0], record);
     }
 
     #[test]
@@ -660,25 +657,25 @@ mod tests {
             records: vec![record],
             freeze: None,
         }]);
-        let mut request = Message::new();
+        let mut request = Message::new(0, MessageType::Query, OpCode::Query);
         request.add_query(Query::query(
             Name::from_ascii("missing.sora").unwrap(),
             RecordType::A,
         ));
         let response = state.resolve_message(&request);
-        assert_eq!(response.response_code(), ResponseCode::NXDomain);
+        assert_eq!(response.metadata.response_code, ResponseCode::NXDomain);
     }
 
     #[test]
     fn resolve_message_servfail_without_static_zones() {
         let state = ResolverState::new("resolver".into(), "global".into());
-        let mut request = Message::new();
+        let mut request = Message::new(0, MessageType::Query, OpCode::Query);
         request.add_query(Query::query(
             Name::from_ascii("missing.sora").unwrap(),
             RecordType::A,
         ));
         let response = state.resolve_message(&request);
-        assert_eq!(response.response_code(), ResponseCode::ServFail);
+        assert_eq!(response.metadata.response_code, ResponseCode::ServFail);
     }
 
     #[test]

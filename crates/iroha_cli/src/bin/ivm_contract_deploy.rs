@@ -346,11 +346,15 @@ fn emit_rr(code: &mut Vec<u8>, opcode: u8, rd: u8, rs1: u8, rs2: u8) {
 }
 
 fn assemble_program_with_literals(code: &[u8], literal_data: &[u8]) -> Vec<u8> {
-    let mut program = Vec::new();
-    program.extend_from_slice(b"IVM\0");
-    program.extend_from_slice(&[1, 1, 0, 4]);
-    program.extend_from_slice(&DEFAULT_MAX_CYCLES.to_le_bytes());
-    program.push(1);
+    let mut program = ivm::ProgramMetadata {
+        version_major: 1,
+        version_minor: 1,
+        mode: 0,
+        vector_length: 4,
+        max_cycles: DEFAULT_MAX_CYCLES,
+        abi_version: 1,
+    }
+    .encode();
     if !literal_data.is_empty() {
         let unpadded_literal_len = 16 + literal_data.len();
         let post_pad = (4 - (unpadded_literal_len % 4)) % 4;

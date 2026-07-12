@@ -245,7 +245,7 @@ fn build_values() -> Result<FixtureValues, Box<dyn Error>> {
                 round: manifest.round,
                 phase: GlobalPhase::Prepare,
                 subject: manifest.subject,
-                execution_commitment: execution_commitment(9),
+                execution_commitment: prepare.execution_commitment,
                 signer: 0,
                 signature: vec![1],
             })),

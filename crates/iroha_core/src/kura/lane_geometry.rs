@@ -861,6 +861,8 @@ impl Kura {
         }
         self.ensure_nonzero_lineage_root(previous_lineage_root)?;
         self.ensure_nonzero_lineage_root(updated_lineage_root)?;
+        let _canonical_chain_guard = self.canonical_chain_lock.lock();
+        self.resolve_canonical_storage_before_mutation()?;
         let _geometry_guard = self.lane_geometry_lock.lock();
 
         let previous_bindings =
@@ -1029,6 +1031,8 @@ impl Kura {
             return Ok(());
         }
         self.ensure_nonzero_lineage_root(lineage_root)?;
+        let _canonical_chain_guard = self.canonical_chain_lock.lock();
+        self.resolve_canonical_storage_before_mutation()?;
         let _geometry_guard = self.lane_geometry_lock.lock();
         #[cfg(test)]
         if self
@@ -1192,6 +1196,8 @@ impl Kura {
             return Ok(());
         }
         self.ensure_nonzero_lineage_root(lineage_root)?;
+        let _canonical_chain_guard = self.canonical_chain_lock.lock();
+        self.resolve_canonical_storage_before_mutation()?;
         let _geometry_guard = self.lane_geometry_lock.lock();
         let bindings = self.geometry_bindings(authoritative, incarnations, activation_heights)?;
         let fingerprint = geometry_catalog_fingerprint(&bindings);
@@ -3286,9 +3292,50 @@ impl Kura {
         let new_blocks = self.binding_blocks_path(updated);
         let old_merge = self.binding_merge_path(previous);
         let new_merge = self.binding_merge_path(updated);
+        let active_blocks = *self.active_blocks_dir.lock() == old_blocks;
+        let active_merge = *self.active_merge_path.lock() == old_merge;
+        // Keep the active block-store writer excluded from the first handle flush
+        // through the final path retarget. Releasing this guard before the rename
+        // would let a concurrent append reopen the old pathname after its cached
+        // handles were dropped.
+        let _write_guard = active_blocks.then(|| self.block_store_write_lock.lock());
+        if active_blocks {
+            let mut store = self.block_store.lock();
+            store.flush_pending_fsync(true)?;
+            store.drop_cached_handles();
+        }
+        let mut merge_log = active_merge.then(|| self.merge_log.lock());
+        if let Some(log) = merge_log.as_mut()
+            && let Some(file) = log.file.as_mut()
+        {
+            file.try_io(|inner| {
+                inner.flush()?;
+                inner.sync_all()
+            })?;
+        }
         self.move_geometry_path(&old_blocks, &new_blocks, true)?;
         self.move_geometry_path(&old_merge, &new_merge, false)?;
-        self.retarget_active_geometry_paths(&old_blocks, &new_blocks, &old_merge, &new_merge)?;
+        if active_blocks {
+            self.block_store
+                .lock()
+                .retarget_existing_path(new_blocks.clone());
+            *self.active_blocks_dir.lock() = new_blocks.clone();
+            self.invalidate_durable_budget_snapshot();
+        }
+        if let Some(log) = merge_log.as_mut() {
+            if let Some(file) = log.file.as_mut() {
+                file.path.clone_from(&new_merge);
+            }
+            *self.active_merge_path.lock() = new_merge.clone();
+        }
+        if old_blocks != new_blocks {
+            let mut plain_text = self.block_plain_text_path.lock();
+            if let Some(path) = plain_text.as_mut()
+                && let Ok(suffix) = path.strip_prefix(&old_blocks)
+            {
+                *path = new_blocks.join(suffix);
+            }
+        }
         self.require_lane_marker(updated)
     }
 
@@ -3313,6 +3360,10 @@ impl Kura {
             return Ok((0, false));
         }
 
+        // The archive root and its quarantine name are both below the counted retired-geometry
+        // tree. Register the entire rename/deletion window so a concurrent usage scan cannot
+        // publish a pre-quarantine snapshot after the archive has been removed.
+        let accounting_mutation = self.begin_total_disk_usage_mutation();
         let deletion_root = if root_exists {
             let (_, identity) =
                 self.authenticate_geometry_archive(&root, pending, merge_releases)?;
@@ -3334,6 +3385,8 @@ impl Kura {
         fs::remove_dir_all(&deletion_root)
             .map_err(|error| Error::IO(error, deletion_root.clone()))?;
         self.sync_geometry_parent(deletion_root.parent())?;
+        self.update_disk_usage_delta(bytes, 0);
+        accounting_mutation.finish();
         Ok((bytes, true))
     }
 
@@ -3884,6 +3937,11 @@ impl Kura {
         let source_identity = self.geometry_path_identity(source, directory)?;
         self.sync_geometry_path_contents(source, directory)?;
         self.require_geometry_path_identity(source, directory, source_identity)?;
+        // Active lane storage and retired geometry are both included in Kura's enforced and total
+        // usage scans. The rename preserves their exact byte totals, but it must still advance the
+        // accounting generation so a scan spanning the move retries instead of publishing a
+        // mixed directory snapshot.
+        let accounting_mutation = self.begin_total_disk_usage_mutation();
         if let Some(parent) = target.parent() {
             create_dir_all_with_context(parent)?;
             self.validate_path_kind(parent, true)?;
@@ -3895,6 +3953,7 @@ impl Kura {
         if source.parent() != target.parent() {
             self.sync_geometry_parent(target.parent())?;
         }
+        accounting_mutation.finish();
         Ok(())
     }
 
@@ -3980,18 +4039,25 @@ impl Kura {
         if blocks.exists() {
             self.require_lane_marker(binding)?;
         } else {
+            let before = Self::block_store_bytes(&blocks)?;
+            let accounting_mutation = self.begin_total_disk_usage_mutation();
             if let Some(parent) = blocks.parent() {
                 create_dir_all_with_context(parent)?;
             }
             let mut store = BlockStore::new(&blocks);
             store.create_files_if_they_do_not_exist()?;
+            let after = Self::block_store_bytes(&blocks)?;
+            self.update_disk_usage_delta(before, after);
+            accounting_mutation.finish();
             self.write_lane_marker(binding)?;
             self.sync_geometry_path_contents(&blocks, true)?;
         }
-        if let Some(parent) = merge.parent() {
-            create_dir_all_with_context(parent)?;
-        }
         if !merge.exists() {
+            let before = Self::file_len_or_zero(&merge)?;
+            let accounting_mutation = self.begin_total_disk_usage_mutation();
+            if let Some(parent) = merge.parent() {
+                create_dir_all_with_context(parent)?;
+            }
             let file = OpenOptions::new()
                 .read(true)
                 .write(true)
@@ -4002,6 +4068,9 @@ impl Kura {
             file.sync_all()
                 .map_err(|error| Error::IO(error, merge.clone()))?;
             self.sync_geometry_parent(merge.parent())?;
+            let after = Self::file_len_or_zero(&merge)?;
+            self.update_disk_usage_delta(before, after);
+            accounting_mutation.finish();
         } else {
             self.validate_path_kind(&merge, false)?;
         }
@@ -4093,7 +4162,6 @@ impl Kura {
 
     fn write_lane_marker(&self, binding: &LaneGeometryBinding) -> Result<()> {
         let blocks = self.binding_blocks_path(binding);
-        create_dir_all_with_context(&blocks)?;
         let path = blocks.join(MARKER_FILE_NAME);
         let temp = blocks.join(format!("{MARKER_FILE_NAME}.tmp"));
         self.validate_path_kind(&path, false)?;
@@ -4333,41 +4401,6 @@ impl Kura {
         Ok(())
     }
 
-    fn retarget_active_geometry_paths(
-        &self,
-        old_blocks: &Path,
-        new_blocks: &Path,
-        old_merge: &Path,
-        new_merge: &Path,
-    ) -> Result<()> {
-        {
-            let mut active = self.active_blocks_dir.lock();
-            if active.as_path() == old_blocks {
-                active.clone_from(&new_blocks.to_path_buf());
-                let _write_guard = self.block_store_write_lock.lock();
-                self.block_store
-                    .lock()
-                    .retarget_path(new_blocks.to_path_buf())?;
-                self.invalidate_durable_budget_snapshot();
-            }
-        }
-        {
-            let mut active = self.active_merge_path.lock();
-            if active.as_path() == old_merge {
-                active.clone_from(&new_merge.to_path_buf());
-            }
-        }
-        {
-            let mut plain_text = self.block_plain_text_path.lock();
-            if let Some(path) = plain_text.as_mut()
-                && let Ok(suffix) = path.strip_prefix(old_blocks)
-            {
-                *path = new_blocks.join(suffix);
-            }
-        }
-        Ok(())
-    }
-
     fn read_geometry_file_bytes(&self, path: &Path) -> Result<Option<Vec<u8>>> {
         if !self.validate_path_kind(path, false)? {
             return Ok(None);
@@ -4428,8 +4461,7 @@ impl Kura {
         match (prior_bytes, current_bytes.as_deref()) {
             (None, None) => {}
             (None, Some(current)) if current == published_bytes => {
-                fs::remove_file(&path).map_err(|error| Error::IO(error, path.clone()))?;
-                self.sync_geometry_parent(path.parent())?;
+                self.remove_accounted_geometry_file(&path)?;
             }
             (None, Some(_)) => {
                 return Err(self.geometry_error(
@@ -4470,9 +4502,7 @@ impl Kura {
                         publication_temp,
                     ));
                 }
-                fs::remove_file(&publication_temp)
-                    .map_err(|error| Error::IO(error, publication_temp.clone()))?;
-                self.sync_geometry_parent(publication_temp.parent())?;
+                self.remove_accounted_geometry_file(&publication_temp)?;
             }
             if self.validate_path_kind(&publication_temp, false)? {
                 return Err(Error::IO(
@@ -4899,6 +4929,27 @@ impl Kura {
         self.atomic_write_geometry_file(&path, &temp, &journal.encode())
     }
 
+    fn remove_accounted_geometry_file(&self, path: &Path) -> Result<()> {
+        let before = Self::file_len_or_zero(path)?;
+        let accounting_mutation = self.begin_total_disk_usage_mutation();
+        fs::remove_file(path).map_err(|error| Error::IO(error, path.to_path_buf()))?;
+        self.sync_geometry_parent(path.parent())?;
+        self.update_disk_usage_delta(before, 0);
+        accounting_mutation.finish();
+        Ok(())
+    }
+
+    fn accounted_atomic_geometry_file_len(&self, path: &Path) -> Result<u64> {
+        // The restore temp is deliberately excluded from Kura's usage scans: it is an
+        // attempt-local rollback file, whereas the authoritative journal and its publication
+        // temp are durable recovery state. All other atomic geometry files live in counted block
+        // stores or are one of those two journal names.
+        if path == self.store_root.join(JOURNAL_RESTORE_TEMP_FILE_NAME) {
+            return Ok(0);
+        }
+        Self::file_len_or_zero(path)
+    }
+
     fn atomic_write_geometry_file(&self, path: &Path, temp: &Path, bytes: &[u8]) -> Result<()> {
         if path.parent() != temp.parent() || path == temp {
             return Err(Error::IO(
@@ -4936,6 +4987,14 @@ impl Kura {
             Err(error) if error.kind() == ErrorKind::NotFound => {}
             Err(error) => return Err(Error::IO(error, path.to_path_buf())),
         }
+        self.validate_path_kind(temp, false)?;
+        let before = self
+            .accounted_atomic_geometry_file_len(path)?
+            .saturating_add(self.accounted_atomic_geometry_file_len(temp)?);
+        // The temp creation/write and target replacement are one accounting mutation. Counting
+        // both sibling names makes exact recovery of a preexisting, authenticated temp possible
+        // without transiently under-reporting either enforced or total usage.
+        let accounting_mutation = self.begin_total_disk_usage_mutation();
         if let Some(parent) = path.parent() {
             create_dir_all_with_context(parent)?;
             self.validate_path_kind(parent, true)?;
@@ -4997,7 +5056,13 @@ impl Kura {
         self.verify_open_geometry_file(path, &file)?;
         file.sync_all()
             .map_err(|error| Error::IO(error, path.to_path_buf()))?;
-        self.sync_geometry_parent(path.parent())
+        self.sync_geometry_parent(path.parent())?;
+        let after = self
+            .accounted_atomic_geometry_file_len(path)?
+            .saturating_add(self.accounted_atomic_geometry_file_len(temp)?);
+        self.update_disk_usage_delta(before, after);
+        accounting_mutation.finish();
+        Ok(())
     }
 
     fn sync_geometry_parent(&self, parent: Option<&Path>) -> Result<()> {
@@ -5822,7 +5887,15 @@ fn decode_exact<T: Decode>(bytes: &[u8]) -> std::result::Result<T, norito::core:
 
 #[cfg(test)]
 mod tests {
-    use std::{borrow::Cow, collections::BTreeMap, fs, num::NonZeroU32, sync::Arc};
+    use std::{
+        borrow::Cow,
+        collections::BTreeMap,
+        fs,
+        num::NonZeroU32,
+        sync::{Arc, mpsc},
+        thread,
+        time::{Duration, Instant},
+    };
 
     use iroha_config::{
         base::WithOrigin,
@@ -5877,6 +5950,17 @@ mod tests {
     fn open_kura(root: &Path, lane_config: &RuntimeLaneConfig) -> Arc<Kura> {
         let config = kura_config(root);
         Kura::new(&config, lane_config).expect("open test Kura").0
+    }
+
+    fn wait_for_total_usage_scan_pause(kura: &Kura) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !kura.total_disk_usage_scan_paused_for_tests() {
+            if Instant::now() >= deadline {
+                kura.resume_total_disk_usage_scan_for_tests();
+                panic!("disk-usage scan did not reach its deterministic publication barrier");
+            }
+            thread::yield_now();
+        }
     }
 
     fn kura_config(root: &Path) -> KuraConfig {
@@ -7612,6 +7696,80 @@ mod tests {
     }
 
     #[test]
+    fn journal_publication_forces_a_paused_usage_scan_to_retry_exactly() {
+        let temp = TempDir::new().expect("temporary directory");
+        let root = temp.path().join("kura");
+        let (initial, extended) = initial_and_extended_configs();
+        let kura = open_kura(&root, &initial);
+        let (initial_incarnations, initial_activations) = initial_geometry();
+        let (extended_incarnations, extended_activations) = extended_geometry();
+        kura.refresh_disk_usage_bytes()
+            .expect("establish exact usage baseline");
+
+        kura.pause_next_total_disk_usage_scan_after_scan_for_tests();
+        let scan_kura = Arc::clone(&kura);
+        let (scan_tx, scan_rx) = mpsc::channel();
+        let scan = thread::spawn(move || {
+            scan_tx
+                .send(scan_kura.refresh_disk_usage_bytes())
+                .expect("report usage scan result");
+        });
+        wait_for_total_usage_scan_pause(&kura);
+
+        let publication = kura.apply_lane_geometry_transition(
+            &initial,
+            &extended,
+            &initial_incarnations,
+            &extended_incarnations,
+            &initial_activations,
+            &extended_activations,
+            &BTreeSet::new(),
+        );
+        let remained_paused = matches!(
+            scan_rx.recv_timeout(Duration::from_millis(50)),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        );
+        kura.resume_total_disk_usage_scan_for_tests();
+        let refreshed = scan_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("paused usage scan must finish after release")
+            .expect("retried usage scan succeeds");
+        scan.join().expect("join paused usage scan");
+
+        publication.expect("publish a real lane-geometry journal transition");
+        assert!(
+            remained_paused,
+            "the deterministic scan barrier must remain active through publication"
+        );
+        assert!(
+            !kura
+                .read_lane_geometry_journal()
+                .expect("published lane-geometry journal")
+                .records
+                .is_empty(),
+            "the race must exercise a non-empty journal publication"
+        );
+        let exact_enforced = kura
+            .kura_disk_usage_bytes()
+            .expect("exact enforced usage after journal publication");
+        let exact_total = kura
+            .kura_total_disk_usage_bytes()
+            .expect("exact total usage after journal publication");
+        assert_eq!(refreshed, exact_enforced);
+        assert_eq!(
+            kura.disk_usage.load(std::sync::atomic::Ordering::Relaxed),
+            exact_enforced,
+            "a scan spanning journal publication must retry before updating enforced usage"
+        );
+        assert_eq!(
+            kura.disk_usage_total
+                .load(std::sync::atomic::Ordering::Relaxed),
+            exact_total,
+            "a scan spanning journal publication must retry before updating total usage"
+        );
+    }
+
+    #[test]
     fn public_checkpoint_requires_exact_durable_block_and_wsv_identity() {
         let temp = TempDir::new().expect("temporary directory");
         let root = temp.path().join("kura");
@@ -7908,6 +8066,73 @@ mod tests {
             kura.disk_usage.load(std::sync::atomic::Ordering::Relaxed),
             kura.kura_disk_usage_bytes()
                 .expect("exact usage after purge")
+        );
+    }
+
+    #[test]
+    fn archive_gc_through_budget_purge_forces_a_paused_usage_scan_to_retry_exactly() {
+        let temp = TempDir::new().expect("temporary directory");
+        let root = temp.path().join("kura");
+        let kura = open_kura(&root, &initial_and_extended_configs().0);
+        let fixture = prepare_retired_geometry_archive(&kura, &root);
+        kura.fail_next_lane_geometry_gc_at_stage_for_test(GC_FAIL_AFTER_COMPACTION_INTENT);
+        checkpoint_retired_geometry(&kura, &fixture, 20)
+            .expect_err("leave a durable, snapshot-proven pending archive deletion");
+        assert!(fixture.archive_root.exists());
+        kura.refresh_disk_usage_bytes()
+            .expect("establish exact pre-GC usage baseline");
+
+        kura.pause_next_total_disk_usage_scan_after_scan_for_tests();
+        let scan_kura = Arc::clone(&kura);
+        let (scan_tx, scan_rx) = mpsc::channel();
+        let scan = thread::spawn(move || {
+            scan_tx
+                .send(scan_kura.refresh_disk_usage_bytes())
+                .expect("report usage scan result");
+        });
+        wait_for_total_usage_scan_pause(&kura);
+
+        let purged = kura.purge_retired_segments();
+        let remained_paused = matches!(
+            scan_rx.recv_timeout(Duration::from_millis(50)),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        );
+        kura.resume_total_disk_usage_scan_for_tests();
+        let refreshed = scan_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("paused usage scan must finish after release")
+            .expect("retried usage scan succeeds");
+        scan.join().expect("join paused usage scan");
+
+        assert!(purged, "budget purge must resume the proven archive GC");
+        assert!(
+            remained_paused,
+            "the deterministic scan barrier must remain active through archive GC"
+        );
+        assert!(!fixture.archive_root.exists());
+        assert!(
+            kura.read_lane_geometry_journal()
+                .expect("journal after archive GC")
+                .pending_archive_gc
+                .is_empty()
+        );
+        let exact_enforced = kura
+            .kura_disk_usage_bytes()
+            .expect("exact enforced usage after archive GC");
+        let exact_total = kura
+            .kura_total_disk_usage_bytes()
+            .expect("exact total usage after archive GC");
+        assert_eq!(refreshed, exact_enforced);
+        assert_eq!(
+            kura.disk_usage.load(std::sync::atomic::Ordering::Relaxed),
+            exact_enforced,
+            "archive GC must publish its enforced-usage subtraction exactly"
+        );
+        assert_eq!(
+            kura.disk_usage_total
+                .load(std::sync::atomic::Ordering::Relaxed),
+            exact_total,
+            "archive GC must publish its total-usage subtraction exactly"
         );
     }
 

@@ -311,8 +311,7 @@ pub const KAGEMUSHA_PROVER_ROLE_REDEEM_CHANGE_V2: &str = "redeem_change_prover";
 /// Shared verifier purpose for top-up and offline split evidence.
 pub const KAGEMUSHA_VERIFIER_PURPOSE_TRANSFER_V2: &str = "offline_split";
 /// Verifier purpose for the public-to-confidential top-up transition.
-pub const KAGEMUSHA_VERIFIER_PURPOSE_TOPUP_SHIELD_V2: &str =
-    "online_to_offline_topup_shield";
+pub const KAGEMUSHA_VERIFIER_PURPOSE_TOPUP_SHIELD_V2: &str = "online_to_offline_topup_shield";
 /// Shared verifier purpose for offline-to-online redemption.
 pub const KAGEMUSHA_VERIFIER_PURPOSE_UNSHIELD_V2: &str = "offline_to_online_redemption";
 /// Shared verifier purpose for the first Reserved-lineage proof.
@@ -11053,17 +11052,9 @@ impl KagemushaRecursiveSpendInitRequestV2 {
             }
         }
         if self.topup_finality_proof.anchor != self.topup_anchor.compact_ref()?
-            || self
-                .topup_finality_proof
-                .commit_qc
-                .height_context
-                .chain_id
+            || self.topup_finality_proof.commit_qc.height_context.chain_id
                 != self.topup_anchor.chain_id
-            || self
-                .topup_finality_proof
-                .commit_qc
-                .height_context
-                .height
+            || self.topup_finality_proof.commit_qc.height_context.height
                 != self.topup_anchor.finalized_height
         {
             return Err(KagemushaFoldError::InvalidRecursiveSpendProof {
@@ -11077,11 +11068,12 @@ impl KagemushaRecursiveSpendInitRequestV2 {
 impl KagemushaTopUpShieldEvidenceV2 {
     /// Validate the typed proof envelope before authoritative ledger checks.
     pub fn validate_public_binding(&self) -> Result<(), KagemushaFoldError> {
-        let commitment = self.proof.vk_commitment.ok_or(
-            KagemushaFoldError::InvalidRecursiveSpendProof {
-                field: "shield_evidence.proof.vk_commitment",
-            },
-        )?;
+        let commitment =
+            self.proof
+                .vk_commitment
+                .ok_or(KagemushaFoldError::InvalidRecursiveSpendProof {
+                    field: "shield_evidence.proof.vk_commitment",
+                })?;
         if self.initial_root == [0; 32]
             || self.finalized_root == [0; 32]
             || self.initial_root == self.finalized_root
@@ -12806,11 +12798,7 @@ impl KagemushaRecursiveSpendLineageTransitionArchiveV2 {
                         .height_context
                         .chain_id
                         != archive.topup_anchor.chain_id
-                    || archive
-                        .topup_finality_proof
-                        .commit_qc
-                        .height_context
-                        .height
+                    || archive.topup_finality_proof.commit_qc.height_context.height
                         != archive.topup_anchor.finalized_height
                     || bundle.statement.transition.is_some()
                     || bundle.statement.proof_step_count != 1
@@ -17878,8 +17866,9 @@ mod offline_note_tests {
                         &KagemushaRecursiveSpendLineageTransitionArchiveV2::Init(
                             KagemushaRecursiveSpendLineageInitArchiveV2 {
                                 topup_anchor: anchor.clone(),
-                                topup_finality_proof:
-                                    kagemusha_topup_finality_proof_for_anchor_v2(anchor),
+                                topup_finality_proof: kagemusha_topup_finality_proof_for_anchor_v2(
+                                    anchor,
+                                ),
                                 result_bundle: bundle.clone(),
                             },
                         ),
@@ -20574,8 +20563,11 @@ mod offline_note_tests {
         ));
 
         let mut mismatched = request;
-        mismatched.topup_finality_proof.commit_qc.height_context.chain_id =
-            ChainId::from("kagemusha-v2-init-wrong-chain");
+        mismatched
+            .topup_finality_proof
+            .commit_qc
+            .height_context
+            .chain_id = ChainId::from("kagemusha-v2-init-wrong-chain");
         assert!(matches!(
             mismatched.validate_public_binding(),
             Err(KagemushaFoldError::InvalidRecursiveSpendProof {

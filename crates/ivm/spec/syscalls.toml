@@ -1051,6 +1051,12 @@ ret = "r10=ptr (&AccountId(contract subject))"
 gas = "G_sysvar + bytes"
 
 [[syscall]]
+number = "0x010028"
+args = "r10=&Blob or &NoritoBytes (validated public TLV)"
+ret = "r10=&NoritoBytes(same payload)"
+gas = "G_pointer + bytes"
+
+[[syscall]]
 number = "0x010200"
 args = "r10=&AccountId, r11=&AssetDefinitionId, r12=frozen:0/1"
 ret = "u64=0"

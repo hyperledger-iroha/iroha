@@ -9,7 +9,10 @@ license.workspace = true
 workspace = true
 
 [features]
-test-fixtures = []
+test-fixtures = [
+    "iroha_data_model/test-fixtures",
+    "iroha_data_model/transparent_api",
+]
 
 [dependencies]
 blake3 = { workspace = true }

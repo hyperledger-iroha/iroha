@@ -25,7 +25,7 @@ use super::{
 const TRON_NATIVE_ANCHOR_PREFIX_V1: &[u8] = b"sccp:tron:native-dpos-anchor:v1";
 const TRON_TRIGGER_SMART_CONTRACT_TYPE_URL_V1: &[u8] =
     b"type.googleapis.com/protocol.TriggerSmartContract";
-const TRON_NATIVE_TRANSFER_CALL_ABI_V1: &[u8] = b"transferToTaira(bytes,uint256)";
+const TRON_NATIVE_TRANSFER_CALL_ABI_V1: &[u8] = b"transferToTaira(bytes,uint256,uint64)";
 const TRON_TAIRA_TO_TOKEN_SCALE_V1: u64 = 1_000_000_000;
 const TRON_ADDRESS_BYTES: usize = 21;
 const TRON_SIGNATURE_BYTES: usize = 65;
@@ -58,25 +58,32 @@ fn sha256_bytes(payload: &[u8]) -> H256 {
     Sha256::digest(payload).into()
 }
 
-/// Build the exact concrete TRON-to-SORA transfer call admitted by V1.
+/// Build the exact nonce-bound concrete TRON-to-SORA transfer call admitted by V1.
 pub fn canonical_tron_native_transfer_call_data(
     sora_recipient: &[u8],
     taira_amount: u128,
+    nonce: u64,
 ) -> Option<Vec<u8>> {
-    if sora_recipient.is_empty() || sora_recipient.len() > 256 || taira_amount == 0 {
+    if sora_recipient.is_empty()
+        || sora_recipient.len() > 256
+        || taira_amount == 0
+        || nonce == u64::MAX
+    {
         return None;
     }
     let padded_len = sora_recipient.len().checked_add(31)? & !31;
     let selector = keccak256_bytes(TRON_NATIVE_TRANSFER_CALL_ABI_V1);
-    let mut out = Vec::with_capacity(4 + 96 + padded_len);
+    let mut out = Vec::with_capacity(4 + 128 + padded_len);
     out.extend_from_slice(&selector[..4]);
     out.extend_from_slice(&[0; 31]);
-    out.push(64);
+    out.push(96);
     out.extend_from_slice(&scaled_tron_token_amount_word(taira_amount));
+    out.extend_from_slice(&[0; 24]);
+    out.extend_from_slice(&nonce.to_be_bytes());
     out.extend_from_slice(&[0; 24]);
     out.extend_from_slice(&u64::try_from(sora_recipient.len()).ok()?.to_be_bytes());
     out.extend_from_slice(sora_recipient);
-    out.resize(4 + 96 + padded_len, 0);
+    out.resize(4 + 128 + padded_len, 0);
     Some(out)
 }
 
@@ -382,7 +389,7 @@ pub enum TronNativeTransactionError {
     WrongContract,
     /// The successful call sender differed from the canonical payload sender.
     WrongCaller,
-    /// The `TriggerSmartContract` call does not carry the exact SCCP event payload.
+    /// The recipient, scaled amount, or nonce differs from the payload-derived call.
     WrongCallData,
     /// The native transaction Merkle branch does not reconstruct the header root.
     InvalidMerkleProof,
@@ -1021,6 +1028,7 @@ fn parse_tron_trigger_sccp_call(
     expected_sender: [u8; TRON_ADDRESS_BYTES],
     expected_recipient: &[u8],
     expected_amount: u128,
+    expected_nonce: u64,
 ) -> Result<([u8; TRON_ADDRESS_BYTES], [u8; TRON_ADDRESS_BYTES]), TronNativeTransactionError> {
     let mut cursor = 0usize;
     let mut previous = 0u32;
@@ -1069,9 +1077,12 @@ fn parse_tron_trigger_sccp_call(
     if owner != expected_sender {
         return Err(TronNativeTransactionError::WrongCaller);
     }
-    let expected_data =
-        canonical_tron_native_transfer_call_data(expected_recipient, expected_amount)
-            .ok_or(TronNativeTransactionError::WrongCallData)?;
+    let expected_data = canonical_tron_native_transfer_call_data(
+        expected_recipient,
+        expected_amount,
+        expected_nonce,
+    )
+    .ok_or(TronNativeTransactionError::WrongCallData)?;
     if data != Some(expected_data.as_slice()) {
         return Err(TronNativeTransactionError::WrongCallData);
     }
@@ -1084,6 +1095,7 @@ fn parse_tron_contract_sccp_call(
     expected_sender: [u8; TRON_ADDRESS_BYTES],
     expected_recipient: &[u8],
     expected_amount: u128,
+    expected_nonce: u64,
 ) -> Result<([u8; TRON_ADDRESS_BYTES], [u8; TRON_ADDRESS_BYTES]), TronNativeTransactionError> {
     let mut cursor = 0usize;
     let mut previous = 0u32;
@@ -1117,6 +1129,7 @@ fn parse_tron_contract_sccp_call(
         expected_sender,
         expected_recipient,
         expected_amount,
+        expected_nonce,
     )
 }
 
@@ -1126,6 +1139,7 @@ fn parse_tron_raw_transaction_sccp_call(
     expected_sender: [u8; TRON_ADDRESS_BYTES],
     expected_recipient: &[u8],
     expected_amount: u128,
+    expected_nonce: u64,
 ) -> Result<([u8; TRON_ADDRESS_BYTES], [u8; TRON_ADDRESS_BYTES]), TronNativeTransactionError> {
     let mut cursor = 0usize;
     let mut previous = 0u32;
@@ -1154,6 +1168,7 @@ fn parse_tron_raw_transaction_sccp_call(
                     expected_sender,
                     expected_recipient,
                     expected_amount,
+                    expected_nonce,
                 )?);
             }
             (14, 0) => timestamp = Some(read_transaction_varint(bytes, &mut cursor)?),
@@ -1218,6 +1233,7 @@ fn parse_full_tron_sccp_transaction(
     expected_sender: [u8; TRON_ADDRESS_BYTES],
     expected_recipient: &[u8],
     expected_amount: u128,
+    expected_nonce: u64,
 ) -> Result<([u8; TRON_ADDRESS_BYTES], [u8; TRON_ADDRESS_BYTES]), TronNativeTransactionError> {
     if bytes.is_empty() || bytes.len() > TRON_MAX_TRANSACTION_BYTES {
         return Err(TronNativeTransactionError::InvalidProofShape);
@@ -1271,6 +1287,7 @@ fn parse_full_tron_sccp_transaction(
         expected_sender,
         expected_recipient,
         expected_amount,
+        expected_nonce,
     )
 }
 
@@ -1367,6 +1384,7 @@ pub fn verify_tron_native_sccp_transaction(
         || transfer.recipient.is_empty()
         || transfer.recipient.len() > 256
         || transfer.amount == 0
+        || transfer.nonce == u64::MAX
         || expected_lane_hash.iter().all(|byte| *byte == 0)
         || expected_message_id.iter().all(|byte| *byte == 0)
         || expected_payload_hash.iter().all(|byte| *byte == 0)
@@ -1390,6 +1408,7 @@ pub fn verify_tron_native_sccp_transaction(
         expected_sender_address,
         &transfer.recipient,
         transfer.amount,
+        transfer.nonce,
     )?;
     let transaction_hash = sha256_bytes(&proof.transaction_bytes);
     let reconstructed = tron_transaction_merkle_root(
@@ -1597,6 +1616,7 @@ mod tests {
         let call_data = canonical_tron_native_transfer_call_data(
             &test_transfer().recipient,
             test_transfer().amount,
+            test_transfer().nonce,
         )
         .unwrap();
 
@@ -2145,18 +2165,35 @@ mod tests {
     }
 
     #[test]
-    fn transfer_call_scales_taira_units_to_trc20_base_units() {
+    fn transfer_call_binds_nonce_and_scales_taira_units_to_trc20_base_units() {
         let recipient = b"alice@taira";
-        let call = canonical_tron_native_transfer_call_data(recipient, 77)
+        let call = canonical_tron_native_transfer_call_data(recipient, 77, 7)
             .expect("canonical scaled transfer call");
+        assert_eq!(
+            &call[..4],
+            &keccak256_bytes(TRON_NATIVE_TRANSFER_CALL_ABI_V1)[..4]
+        );
+        assert_eq!(&call[4..35], &[0; 31]);
+        assert_eq!(call[35], 96);
         let mut expected_amount_word = [0u8; 32];
         expected_amount_word[16..].copy_from_slice(&(77_u128 * 1_000_000_000).to_be_bytes());
         assert_eq!(&call[36..68], &expected_amount_word);
         assert_ne!(&call[52..68], &77_u128.to_be_bytes());
-        assert!(canonical_tron_native_transfer_call_data(recipient, u128::MAX).is_some());
-        assert!(canonical_tron_native_transfer_call_data(recipient, 0).is_none());
-        assert!(canonical_tron_native_transfer_call_data(&[], 1).is_none());
-        assert!(canonical_tron_native_transfer_call_data(&[b'a'; 257], 1).is_none());
+        assert_eq!(&call[68..92], &[0; 24]);
+        assert_eq!(&call[92..100], &7_u64.to_be_bytes());
+        assert_eq!(&call[100..124], &[0; 24]);
+        assert_eq!(
+            &call[124..132],
+            &u64::try_from(recipient.len()).unwrap().to_be_bytes()
+        );
+        assert_eq!(&call[132..132 + recipient.len()], recipient);
+        assert!(
+            canonical_tron_native_transfer_call_data(recipient, u128::MAX, u64::MAX - 1).is_some()
+        );
+        assert!(canonical_tron_native_transfer_call_data(recipient, 1, u64::MAX).is_none());
+        assert!(canonical_tron_native_transfer_call_data(recipient, 0, 7).is_none());
+        assert!(canonical_tron_native_transfer_call_data(&[], 1, 7).is_none());
+        assert!(canonical_tron_native_transfer_call_data(&[b'a'; 257], 1, 7).is_none());
     }
 
     #[test]
@@ -2179,6 +2216,38 @@ mod tests {
         assert_eq!(validated.message_id, statement.message_id);
         assert_eq!(validated.payload_hash, statement.payload_hash);
         assert_eq!(validated.source_event_digest, statement.source_event_digest);
+    }
+
+    #[test]
+    fn native_transaction_rejects_recomputed_payload_for_same_transaction_with_changed_nonce() {
+        let contract = [0x33; 20];
+        let transaction = transaction_bytes(contract, 1, TRON_TRIGGER_SMART_CONTRACT_TYPE_URL_V1);
+        let root = sha256_bytes(&transaction);
+        let proof = TronNativeTransactionProofV1 {
+            transaction_index: 0,
+            transaction_count: 1,
+            transaction_bytes: transaction,
+            merkle_branch: Vec::new(),
+        };
+        let lane = SccpLaneIdV1 {
+            source: SccpNetworkV1::TronMainnet,
+            target: SccpNetworkV1::SoraTaira,
+        };
+        let mut forged_transfer = test_transfer();
+        forged_transfer.nonce += 1;
+        let forged_payload = SccpPayloadV1::Transfer(forged_transfer);
+
+        assert_eq!(
+            verify_tron_native_sccp_transaction(
+                &proof,
+                root,
+                contract,
+                test_transaction_statement().route_config_hash,
+                lane,
+                &forged_payload,
+            ),
+            Err(TronNativeTransactionError::WrongCallData)
+        );
     }
 
     #[test]
@@ -2229,6 +2298,29 @@ mod tests {
             TronSourceDeploymentAuthenticationV1::GovernedIdentity
         );
 
+        let mut forged_transfer = test_transfer();
+        forged_transfer.nonce += 1;
+        let forged_payload = SccpPayloadV1::Transfer(forged_transfer);
+        let forged_payload_bytes = canonical_sccp_payload_bytes(&forged_payload).unwrap();
+        let forged_message_id = sccp_message_id(identity.lane, &forged_payload).unwrap();
+        let forged_payload_hash = payload_hash(&forged_payload_bytes);
+        assert_ne!(forged_message_id, statement.message_id);
+        assert_ne!(forged_payload_hash, statement.payload_hash);
+        assert_eq!(
+            verify_tron_native_source(
+                &proof,
+                &identity,
+                identity_hash,
+                anchor_hash,
+                forged_message_id,
+                forged_payload_hash,
+                &forged_payload,
+            ),
+            Err(TronNativeSourceError::Transaction(
+                TronNativeTransactionError::WrongCallData
+            ))
+        );
+
         assert_eq!(
             verify_tron_native_source(
                 &proof,
@@ -2255,6 +2347,104 @@ mod tests {
                 &payload,
             ),
             Err(TronNativeSourceError::InvalidSourceIdentity)
+        );
+    }
+
+    #[test]
+    fn native_admission_rejects_recomputed_envelope_for_changed_payload_nonce() {
+        use iroha_data_model::bridge::{
+            BridgeNativeProofBackendV1, SccpNativeTrustAnchorV1,
+            sccp::{SccpLaneIdV1, SccpTronSourceEmitterV1},
+        };
+
+        use crate::{
+            SccpNativeFinalityPointV1, SccpNativeInboundMessageProofV1,
+            SccpNativeSourceProofEnvelopeV1, SccpNativeSourceProofV1,
+            verify_sccp_native_inbound_message_proof_v1,
+        };
+
+        let contract = [0x33; 20];
+        let statement = test_transaction_statement();
+        let payload = SccpPayloadV1::Transfer(test_transfer());
+        let transaction_bytes =
+            transaction_bytes(contract, 1, TRON_TRIGGER_SMART_CONTRACT_TYPE_URL_V1);
+        let transaction_root = sha256_bytes(&transaction_bytes);
+        let (finality, anchor_hash) = proof_with_target_root(transaction_root);
+        let target_header = &finality.headers[usize::from(finality.target_header_index)];
+        let parsed_target =
+            parse_tron_raw_header(&target_header.raw_data).expect("canonical target header");
+        let target_block_id =
+            tron_block_id(parsed_target.number, sha256_bytes(&target_header.raw_data));
+        let checkpoint_height = finality.anchor.block_number;
+        let native_proof = TronNativeSourceProofV1 {
+            finality,
+            transaction: TronNativeTransactionProofV1 {
+                transaction_index: 0,
+                transaction_count: 1,
+                transaction_bytes,
+                merkle_branch: Vec::new(),
+            },
+        };
+        let identity = SccpSourceIdentityV1 {
+            lane: SccpLaneIdV1 {
+                source: SccpNetworkV1::TronMainnet,
+                target: SccpNetworkV1::SoraTaira,
+            },
+            emitter: SccpSourceEmitterV1::Tron(SccpTronSourceEmitterV1 {
+                address: contract,
+                runtime_code_hash: [0x44; 32],
+                route_config_hash: statement.route_config_hash,
+            }),
+        };
+        let identity_hash = sccp_source_identity_hash_v1(&identity).unwrap();
+        let trust_anchor = SccpNativeTrustAnchorV1 {
+            backend: BridgeNativeProofBackendV1::TronDpos,
+            checkpoint_height,
+            anchor_hash,
+        };
+        let inbound = SccpNativeInboundMessageProofV1 {
+            version: 1,
+            payload,
+            source: SccpNativeSourceProofEnvelopeV1 {
+                version: 1,
+                lane: identity.lane,
+                source_identity_hash: identity_hash,
+                trust_anchor,
+                message_id: statement.message_id,
+                payload_hash: statement.payload_hash,
+                source_event_digest: statement.source_event_digest,
+                source_finality: SccpNativeFinalityPointV1 {
+                    height: parsed_target.number,
+                    block_hash: target_block_id,
+                },
+                proof: SccpNativeSourceProofV1::TronDpos(Box::new(native_proof)),
+            },
+        };
+        let admitted =
+            verify_sccp_native_inbound_message_proof_v1(&inbound, &identity, trust_anchor)
+                .expect("canonical TRON native admission");
+        assert_eq!(admitted.message_key.message_id, statement.message_id);
+
+        let mut changed_nonce = inbound;
+        let SccpPayloadV1::Transfer(transfer) = &mut changed_nonce.payload;
+        transfer.nonce += 1;
+        let canonical_changed_payload =
+            canonical_sccp_payload_bytes(&changed_nonce.payload).unwrap();
+        changed_nonce.source.message_id =
+            sccp_message_id(identity.lane, &changed_nonce.payload).unwrap();
+        changed_nonce.source.payload_hash = payload_hash(&canonical_changed_payload);
+        changed_nonce.source.source_event_digest = sccp_lane_source_event_digest_v1(
+            identity.lane,
+            changed_nonce.source.message_id,
+            changed_nonce.source.payload_hash,
+        )
+        .unwrap();
+
+        assert_eq!(
+            verify_sccp_native_inbound_message_proof_v1(&changed_nonce, &identity, trust_anchor,),
+            Err(crate::SccpNativeAdmissionErrorV1::Tron(
+                TronNativeSourceError::Transaction(TronNativeTransactionError::WrongCallData)
+            ))
         );
     }
 
@@ -2292,16 +2482,30 @@ mod tests {
         );
 
         let valid = transaction_bytes(contract, 1, TRON_TRIGGER_SMART_CONTRACT_TYPE_URL_V1);
-        let mut legacy_unscaled = valid.clone();
         let canonical_call = canonical_tron_native_transfer_call_data(
             &test_transfer().recipient,
             test_transfer().amount,
+            test_transfer().nonce,
         )
         .expect("canonical scaled transfer call");
-        let call_offset = legacy_unscaled
+        let call_offset = valid
             .windows(canonical_call.len())
             .position(|window| window == canonical_call)
             .expect("embedded transfer call");
+        let mut old_selector = valid.clone();
+        old_selector[call_offset..call_offset + 4]
+            .copy_from_slice(&keccak256_bytes(b"transferToTaira(bytes,uint256)")[..4]);
+        assert_eq!(
+            verify_test_transaction(
+                &proof_for(old_selector.clone()),
+                sha256_bytes(&old_selector),
+                contract,
+                &statement,
+            ),
+            Err(TronNativeTransactionError::WrongCallData)
+        );
+
+        let mut legacy_unscaled = valid.clone();
         legacy_unscaled[call_offset + 36..call_offset + 52].fill(0);
         legacy_unscaled[call_offset + 52..call_offset + 68]
             .copy_from_slice(&test_transfer().amount.to_be_bytes());
@@ -2365,6 +2569,19 @@ mod tests {
                 &SccpPayloadV1::Transfer(wrong_amount),
             ),
             Err(TronNativeTransactionError::WrongCallData)
+        );
+        let mut exhausted_nonce = test_transfer();
+        exhausted_nonce.nonce = u64::MAX;
+        assert_eq!(
+            verify_tron_native_sccp_transaction(
+                &proof_for(valid.clone()),
+                sha256_bytes(&valid),
+                contract,
+                statement.route_config_hash,
+                lane,
+                &SccpPayloadV1::Transfer(exhausted_nonce),
+            ),
+            Err(TronNativeTransactionError::InvalidProofShape)
         );
         assert_eq!(
             verify_tron_native_sccp_transaction(
