@@ -81,8 +81,8 @@ fn run_block_and_events(
     // Seed initial balances: Alice 60, Bob 10
     let a_coin = AssetId::of(ad.id().clone(), alice_id.clone());
     let b_coin = AssetId::of(ad.id().clone(), bob_id.clone());
-    let a0 = Asset::new(a_coin.clone(), Numeric::new(60, 0));
-    let b0 = Asset::new(b_coin.clone(), Numeric::new(10, 0));
+    let a0 = Asset::new(a_coin.clone(), Quantity::from(60));
+    let b0 = Asset::new(b_coin.clone(), Quantity::from(10));
     let world = iroha_core::state::World::with_assets([domain], [acc_a, acc_b], [ad], [a0, b0], []);
     let kura = iroha_core::kura::Kura::blank_kura_for_testing();
     let query = iroha_core::query::store::LiveQueryStore::start_test();

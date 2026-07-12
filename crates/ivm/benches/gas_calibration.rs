@@ -336,10 +336,14 @@ fn bench_numeric_limb_work(c: &mut Criterion) {
             &envelope,
             |b, envelope| {
                 b.iter(|| {
-                    std::hint::black_box(
-                        ivm::numeric_tlv::decode_int_bytes(envelope)
-                            .expect("decode calibration envelope"),
-                    )
+                    // Production authenticates and decodes an immutable
+                    // snapshot, not the guest-memory slice in place.  Include
+                    // that bounded transport copy because the declared input
+                    // envelope bytes are its calibration denominator.
+                    let snapshot = envelope.to_vec();
+                    let value = ivm::numeric_tlv::decode_int_bytes(&snapshot)
+                        .expect("decode calibration envelope");
+                    std::hint::black_box((snapshot, value));
                 });
             },
         );
@@ -363,12 +367,30 @@ fn bench_numeric_limb_work(c: &mut Criterion) {
             ),
             &value,
             |b, value| {
-                b.iter(|| {
-                    std::hint::black_box(value.twos_byte_len());
-                    std::hint::black_box(
-                        ivm::numeric_tlv::encode_int(value).expect("encode calibration envelope"),
-                    )
-                });
+                b.iter_batched(
+                    || IVM::new(u64::MAX),
+                    |mut vm| {
+                        std::hint::black_box(value.twos_byte_len());
+                        let envelope = ivm::numeric_tlv::encode_int(value)
+                            .expect("encode calibration envelope");
+                        // Output byte gas covers both canonical construction
+                        // and publication into VM-owned memory.  Keep the
+                        // publication copy in the measured routine so release
+                        // calibration cannot approve a denominator using only
+                        // the cheaper codec half of the production pipeline.
+                        let pointer = vm
+                            .alloc_host_tlv(&envelope)
+                            .expect("publish calibration envelope");
+                        std::hint::black_box(pointer);
+                        std::hint::black_box(envelope);
+                        // Return the synthetic VM so Criterion drops it after
+                        // the timing window.  A production numeric syscall
+                        // keeps its VM alive; timing destruction of the whole
+                        // memory image would not be output-publication work.
+                        vm
+                    },
+                    BatchSize::SmallInput,
+                );
             },
         );
     }

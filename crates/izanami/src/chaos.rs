@@ -23,7 +23,7 @@ use iroha::client::{
     Client, DataModelCompatibility, PreparedTransactionPayload, TransactionWaitOptions,
     TransactionWaitOutcome, TransactionWaitTerminalStatus,
 };
-use iroha_config::{kura::FsyncMode, parameters::actual::SumeragiNposTimeouts};
+use iroha_config::kura::FsyncMode;
 use iroha_crypto::{ExposedPrivateKey, KeyPair};
 use iroha_data_model::{
     isi::{
@@ -31,9 +31,9 @@ use iroha_data_model::{
         register::RegisterPeerWithPop,
         staking::{ActivatePublicLaneValidator, RegisterPublicLaneValidator},
     },
+    parameter::BlockParameter,
     parameter::custom::{CustomParameter, CustomParameterId},
     parameter::system::SumeragiNposParameters,
-    parameter::{BlockParameter, SumeragiParameter},
     prelude::*,
     query::trigger::prelude::FindTriggers,
     trigger::action::Repeats,
@@ -64,14 +64,10 @@ use crate::{
     },
 };
 
-const IZANAMI_BLOCK_PAYLOAD_QUEUE: i64 = 4_096;
-const IZANAMI_RBC_PENDING_TTL_MS: i64 = 300_000;
-const IZANAMI_RBC_SESSION_TTL_MS: i64 = 900_000;
-const IZANAMI_RBC_PENDING_MAX_CHUNKS: i64 = 16_384;
-const IZANAMI_RBC_PENDING_MAX_BYTES: i64 = 512 * 1024 * 1024;
-const IZANAMI_RBC_PENDING_SESSION_LIMIT: i64 = 2_048;
-const IZANAMI_RBC_REBROADCAST_SESSIONS_PER_TICK: i64 = 64;
-const IZANAMI_RBC_PAYLOAD_CHUNKS_PER_TICK: i64 = 4_096;
+const IZANAMI_SUMERAGI_QUEUE_COMMANDS: i64 = 4_096;
+const IZANAMI_SUMERAGI_QUEUE_BODIES: i64 = 512;
+const IZANAMI_SUMERAGI_QUEUE_CHUNKS: i64 = 4_096;
+const IZANAMI_SUMERAGI_QUEUE_READY_BODIES: i64 = 256;
 const IZANAMI_P2P_QUEUE_CAP_HIGH: i64 = 65_536;
 const IZANAMI_P2P_QUEUE_CAP_LOW: i64 = 65_536;
 const IZANAMI_P2P_POST_QUEUE_CAP: i64 = 8_192;
@@ -91,47 +87,8 @@ const IZANAMI_TRANSACTION_GOSSIP_PUBLIC_TARGET_CAP: i64 = 64;
 const IZANAMI_NEXUS_FUSION_FLOOR_TEU: i64 = 16_000_000;
 const IZANAMI_NEXUS_FUSION_EXIT_TEU: i64 = 24_000_000;
 const IZANAMI_IVM_GAS_LIMIT_PER_BLOCK: u64 = 2_000_000_000;
-const IZANAMI_PACEMAKER_PENDING_STALL_GRACE_MS: i64 = 1_000;
-const IZANAMI_PACEMAKER_PENDING_STALL_FLOOR_MS: u64 = 100;
-const IZANAMI_SHARED_HOST_SOAK_PENDING_STALL_GRACE_MS: i64 = 300;
-const IZANAMI_PACEMAKER_ACTIVE_PENDING_SOFT_LIMIT: i64 = 16;
-const IZANAMI_PACEMAKER_RBC_BACKLOG_SESSION_SOFT_LIMIT: i64 = 16;
-const IZANAMI_PACEMAKER_RBC_BACKLOG_CHUNK_SOFT_LIMIT: i64 = 256;
-const IZANAMI_PACING_GOVERNOR_MIN_FACTOR_BPS: i64 = 10_000;
-const IZANAMI_PACING_GOVERNOR_MAX_FACTOR_BPS: i64 = 10_000;
-const IZANAMI_SHARED_HOST_SOAK_COLLECTORS_K_4_PEERS: u16 = 3;
-const IZANAMI_SHARED_HOST_SOAK_REDUNDANT_SEND_R_4_PEERS: u8 = 3;
-const IZANAMI_PACING_FACTOR_BPS: u32 = 10_000;
-// Shared-host soak profile: bias towards deterministic progress over peak throughput.
-const IZANAMI_DA_QUORUM_TIMEOUT_MULTIPLIER: i64 = 1;
-const IZANAMI_DA_AVAILABILITY_TIMEOUT_MULTIPLIER: i64 = 1;
-const IZANAMI_DA_AVAILABILITY_TIMEOUT_FLOOR_MS: i64 = 750;
-const IZANAMI_FUTURE_HEIGHT_WINDOW: i64 = 2;
-const IZANAMI_FUTURE_VIEW_WINDOW: i64 = 2;
 const IZANAMI_NPOS_BLOCK_TIME_MS: i64 = 120;
 const IZANAMI_NPOS_COMMIT_TIME_MS: i64 = 180;
-const IZANAMI_RECOVERY_HEIGHT_ATTEMPT_CAP: i64 = 24;
-const IZANAMI_RECOVERY_HEIGHT_WINDOW_MS: i64 = 3_000;
-const IZANAMI_RECOVERY_MISSING_QC_REACQUIRE_WINDOW_MS: i64 = 1_500;
-const IZANAMI_RECOVERY_DEFERRED_QC_TTL_MS: i64 = 3_000;
-const IZANAMI_RECOVERY_MISSING_BLOCK_HEIGHT_TTL_MS: i64 = IZANAMI_RECOVERY_HEIGHT_WINDOW_MS;
-const IZANAMI_RECOVERY_HASH_MISS_CAP_BEFORE_RANGE_PULL: i64 = 2;
-const IZANAMI_RECOVERY_MISSING_BLOCK_SIGNER_FALLBACK_ATTEMPTS: i64 = 1;
-const IZANAMI_RECOVERY_MISSING_BLOCK_RETRY_BACKOFF_MULTIPLIER: i64 = 3;
-const IZANAMI_RECOVERY_MISSING_BLOCK_RETRY_BACKOFF_CAP_MS: i64 = 8_000;
-const IZANAMI_RECOVERY_RANGE_PULL_ESCALATION_AFTER_HASH_MISSES: i64 = 2;
-const IZANAMI_NPOS_TIMEOUT_PROPOSE_MIN_MS: u64 = 40;
-const IZANAMI_NPOS_TIMEOUT_PREVOTE_MIN_MS: u64 = 60;
-const IZANAMI_NPOS_TIMEOUT_PRECOMMIT_MIN_MS: u64 = 80;
-const IZANAMI_NPOS_TIMEOUT_COMMIT_MIN_MS: u64 = 1;
-const IZANAMI_NPOS_TIMEOUT_DA_MIN_MS: u64 = 1;
-const IZANAMI_NPOS_TIMEOUT_AGGREGATOR_MIN_MS: u64 = 1;
-const IZANAMI_SHARED_HOST_SOAK_NPOS_TIMEOUT_PROPOSE_MIN_MS: u64 = 50;
-const IZANAMI_SHARED_HOST_SOAK_NPOS_TIMEOUT_PREVOTE_MIN_MS: u64 = 70;
-const IZANAMI_SHARED_HOST_SOAK_NPOS_TIMEOUT_PRECOMMIT_MIN_MS: u64 = 90;
-const IZANAMI_SHARED_HOST_SOAK_NPOS_TIMEOUT_COMMIT_MIN_MS: u64 = 220;
-const IZANAMI_SHARED_HOST_SOAK_NPOS_TIMEOUT_DA_MIN_MS: u64 = 220;
-const IZANAMI_SHARED_HOST_SOAK_NPOS_TIMEOUT_AGGREGATOR_MIN_MS: u64 = 10;
 const IZANAMI_PIPELINE_DYNAMIC_PREPASS: bool = true;
 const IZANAMI_PIPELINE_ACCESS_SET_CACHE_ENABLED: bool = true;
 const IZANAMI_PIPELINE_PARALLEL_OVERLAY: bool = true;
@@ -143,12 +100,6 @@ const IZANAMI_PIPELINE_SIGNATURE_BATCH_MAX_PQC: i64 = 64;
 const IZANAMI_PIPELINE_SIGNATURE_BATCH_MAX_BLS: i64 = 32;
 const IZANAMI_PIPELINE_STATELESS_CACHE_CAP: i64 = 16_384;
 const IZANAMI_KURA_FSYNC_MODE: FsyncMode = FsyncMode::Off;
-const IZANAMI_VALIDATION_WORKER_THREADS: i64 = 0;
-const IZANAMI_VALIDATION_WORK_QUEUE_CAP: i64 = 0;
-const IZANAMI_VALIDATION_RESULT_QUEUE_CAP: i64 = 0;
-const IZANAMI_VALIDATION_PENDING_CAP: i64 = 8_192;
-const IZANAMI_WORKER_ITERATION_BUDGET_CAP_MS: i64 = 250;
-const IZANAMI_WORKER_ITERATION_DRAIN_BUDGET_CAP_MS: i64 = 250;
 const IZANAMI_INGRESS_MAX_ATTEMPTS: usize = 3;
 const IZANAMI_INGRESS_UNHEALTHY_FAILURE_THRESHOLD: u32 = 2;
 const IZANAMI_INGRESS_UNHEALTHY_COOLDOWN_MS: u64 = 5_000;
@@ -170,7 +121,6 @@ const IZANAMI_PEER_LOG_BASE_LEVEL: &str = "WARN";
 const IZANAMI_TELEMETRY_PROFILE: &str = "developer";
 const IZANAMI_STRICT_HEIGHT_DIVERGENCE_MAX_BLOCKS: u64 = 16;
 const IZANAMI_STRICT_HEIGHT_DIVERGENCE_MAX_WINDOW_SECS: u64 = 60;
-const IZANAMI_SHARED_HOST_RECOVERY_MIN_DURATION_SECS: u64 = 1_200;
 const IZANAMI_SHARED_HOST_SOAK_MIN_DURATION_SECS: u64 = 3_600;
 const IZANAMI_SHARED_HOST_SOAK_TPS_FLOOR: f64 = 5.0;
 const IZANAMI_SHARED_HOST_SOAK_MAX_INFLIGHT_FLOOR: usize = 8;
@@ -187,21 +137,6 @@ const IZANAMI_STATUS_SAMPLE_MAX_PEERS: usize = 3;
 const IZANAMI_STATUS_SAMPLE_REQUEST_TIMEOUT_MS: u64 = 2_000;
 const IZANAMI_SHARED_HOST_SOAK_PROGRESS_TIMEOUT_FLOOR_SECS: u64 = 600;
 const IZANAMI_SHARED_HOST_SOAK_PIPELINE_TIME_MS: u64 = 150;
-// Shared-host permissioned stable soak still needs enough DA slack for late commit votes and
-// payload availability to converge before view rotation. A 1x window over-rotates at 4 peers.
-const IZANAMI_SHARED_HOST_SOAK_DA_QUORUM_TIMEOUT_MULTIPLIER: i64 = 2;
-const IZANAMI_SHARED_HOST_SOAK_DA_AVAILABILITY_TIMEOUT_MULTIPLIER: i64 = 2;
-const IZANAMI_SHARED_HOST_SOAK_DA_AVAILABILITY_TIMEOUT_FLOOR_MS: i64 = 300;
-const IZANAMI_TEST_NETWORK_RBC_STORE_MAX_SESSIONS: i64 = 256;
-const IZANAMI_TEST_NETWORK_RBC_STORE_SOFT_SESSIONS: i64 = 192;
-const IZANAMI_SHARED_HOST_SOAK_RBC_STORE_MAX_SESSIONS: i64 = 4_096;
-const IZANAMI_SHARED_HOST_SOAK_RBC_STORE_SOFT_SESSIONS: i64 = 3_072;
-const IZANAMI_SHARED_HOST_SOAK_RECOVERY_HEIGHT_WINDOW_MS: i64 = 2_000;
-const IZANAMI_SHARED_HOST_SOAK_RECOVERY_MISSING_QC_REACQUIRE_WINDOW_MS: i64 = 800;
-const IZANAMI_SHARED_HOST_SOAK_RECOVERY_DEFERRED_QC_TTL_MS: i64 = 2_000;
-const IZANAMI_SHARED_HOST_SOAK_RECOVERY_HASH_MISS_CAP_BEFORE_RANGE_PULL: i64 = 1;
-const IZANAMI_SHARED_HOST_SOAK_RECOVERY_MISSING_BLOCK_SIGNER_FALLBACK_ATTEMPTS: i64 = 1;
-const IZANAMI_SHARED_HOST_SOAK_RECOVERY_RANGE_PULL_ESCALATION_AFTER_HASH_MISSES: i64 = 1;
 // Shared-host stable soaks now use the hard latency gate as an acceptance check for the
 // DA-enabled 4-peer steady-state envelope. The aspirational sub-1s target remains available via
 // explicit `--latency-p95-threshold`, but the default gate should match the observed healthy run.
@@ -211,57 +146,6 @@ const IZANAMI_SHARED_HOST_SOAK_LATENCY_P95_THRESHOLD_SECS: u64 = 3;
 enum SubmissionConfirmationMode {
     BlockingApplied,
     AcceptedByIngress,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct RecoveryProfile {
-    da_quorum_timeout_multiplier: i64,
-    da_availability_timeout_multiplier: i64,
-    da_availability_timeout_floor_ms: i64,
-    height_window_ms: i64,
-    missing_qc_reacquire_window_ms: i64,
-    deferred_qc_ttl_ms: i64,
-    missing_block_height_ttl_ms: i64,
-    hash_miss_cap_before_range_pull: i64,
-    missing_block_signer_fallback_attempts: i64,
-    range_pull_escalation_after_hash_misses: i64,
-}
-
-fn baseline_recovery_profile() -> RecoveryProfile {
-    RecoveryProfile {
-        da_quorum_timeout_multiplier: IZANAMI_DA_QUORUM_TIMEOUT_MULTIPLIER,
-        da_availability_timeout_multiplier: IZANAMI_DA_AVAILABILITY_TIMEOUT_MULTIPLIER,
-        da_availability_timeout_floor_ms: IZANAMI_DA_AVAILABILITY_TIMEOUT_FLOOR_MS,
-        height_window_ms: IZANAMI_RECOVERY_HEIGHT_WINDOW_MS,
-        missing_qc_reacquire_window_ms: IZANAMI_RECOVERY_MISSING_QC_REACQUIRE_WINDOW_MS,
-        deferred_qc_ttl_ms: IZANAMI_RECOVERY_DEFERRED_QC_TTL_MS,
-        missing_block_height_ttl_ms: IZANAMI_RECOVERY_MISSING_BLOCK_HEIGHT_TTL_MS,
-        hash_miss_cap_before_range_pull: IZANAMI_RECOVERY_HASH_MISS_CAP_BEFORE_RANGE_PULL,
-        missing_block_signer_fallback_attempts:
-            IZANAMI_RECOVERY_MISSING_BLOCK_SIGNER_FALLBACK_ATTEMPTS,
-        range_pull_escalation_after_hash_misses:
-            IZANAMI_RECOVERY_RANGE_PULL_ESCALATION_AFTER_HASH_MISSES,
-    }
-}
-
-fn shared_host_recovery_profile() -> RecoveryProfile {
-    RecoveryProfile {
-        da_quorum_timeout_multiplier: IZANAMI_SHARED_HOST_SOAK_DA_QUORUM_TIMEOUT_MULTIPLIER,
-        da_availability_timeout_multiplier:
-            IZANAMI_SHARED_HOST_SOAK_DA_AVAILABILITY_TIMEOUT_MULTIPLIER,
-        da_availability_timeout_floor_ms: IZANAMI_SHARED_HOST_SOAK_DA_AVAILABILITY_TIMEOUT_FLOOR_MS,
-        height_window_ms: IZANAMI_SHARED_HOST_SOAK_RECOVERY_HEIGHT_WINDOW_MS,
-        missing_qc_reacquire_window_ms:
-            IZANAMI_SHARED_HOST_SOAK_RECOVERY_MISSING_QC_REACQUIRE_WINDOW_MS,
-        deferred_qc_ttl_ms: IZANAMI_SHARED_HOST_SOAK_RECOVERY_DEFERRED_QC_TTL_MS,
-        missing_block_height_ttl_ms: IZANAMI_SHARED_HOST_SOAK_RECOVERY_HEIGHT_WINDOW_MS,
-        hash_miss_cap_before_range_pull:
-            IZANAMI_SHARED_HOST_SOAK_RECOVERY_HASH_MISS_CAP_BEFORE_RANGE_PULL,
-        missing_block_signer_fallback_attempts:
-            IZANAMI_SHARED_HOST_SOAK_RECOVERY_MISSING_BLOCK_SIGNER_FALLBACK_ATTEMPTS,
-        range_pull_escalation_after_hash_misses:
-            IZANAMI_SHARED_HOST_SOAK_RECOVERY_RANGE_PULL_ESCALATION_AFTER_HASH_MISSES,
-    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -2064,18 +1948,6 @@ fn contains_http_429_status(message: &str) -> bool {
         || message.contains("http 429")
 }
 
-#[derive(Clone, Copy, Debug)]
-struct NposTiming {
-    block_ms: u64,
-    propose_ms: u64,
-    prevote_ms: u64,
-    precommit_ms: u64,
-    commit_timeout_ms: u64,
-    commit_time_ms: u64,
-    da_ms: u64,
-    aggregator_ms: u64,
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct NposGenesisPreflightSummary {
     peer_with_pop_count: usize,
@@ -2083,79 +1955,6 @@ struct NposGenesisPreflightSummary {
     activate_validator_count: usize,
     min_self_bond: u64,
     stake_distribution: Vec<(u64, usize)>,
-}
-
-#[derive(Clone, Copy, Debug)]
-struct NposTimeoutFloors {
-    propose_ms: u64,
-    prevote_ms: u64,
-    precommit_ms: u64,
-    commit_ms: u64,
-    da_ms: u64,
-    aggregator_ms: u64,
-}
-
-fn clamp_nonzero_ms(value: u64) -> u64 {
-    value.max(1)
-}
-
-fn pending_stall_grace_ms(block_ms: u64) -> i64 {
-    let scaled = block_ms
-        .saturating_div(2)
-        .max(IZANAMI_PACEMAKER_PENDING_STALL_FLOOR_MS);
-    let capped =
-        scaled.min(u64::try_from(IZANAMI_PACEMAKER_PENDING_STALL_GRACE_MS).unwrap_or(u64::MAX));
-    i64::try_from(capped).unwrap_or(i64::MAX)
-}
-
-fn is_shared_host_balanced_latency_profile(config: &ChaosConfig) -> bool {
-    is_shared_host_stable_recovery_run(config)
-}
-
-fn npos_timeout_floors(config: &ChaosConfig) -> NposTimeoutFloors {
-    if is_shared_host_balanced_latency_profile(config) {
-        NposTimeoutFloors {
-            propose_ms: IZANAMI_SHARED_HOST_SOAK_NPOS_TIMEOUT_PROPOSE_MIN_MS,
-            prevote_ms: IZANAMI_SHARED_HOST_SOAK_NPOS_TIMEOUT_PREVOTE_MIN_MS,
-            precommit_ms: IZANAMI_SHARED_HOST_SOAK_NPOS_TIMEOUT_PRECOMMIT_MIN_MS,
-            commit_ms: IZANAMI_SHARED_HOST_SOAK_NPOS_TIMEOUT_COMMIT_MIN_MS,
-            da_ms: IZANAMI_SHARED_HOST_SOAK_NPOS_TIMEOUT_DA_MIN_MS,
-            aggregator_ms: IZANAMI_SHARED_HOST_SOAK_NPOS_TIMEOUT_AGGREGATOR_MIN_MS,
-        }
-    } else {
-        NposTimeoutFloors {
-            propose_ms: IZANAMI_NPOS_TIMEOUT_PROPOSE_MIN_MS,
-            prevote_ms: IZANAMI_NPOS_TIMEOUT_PREVOTE_MIN_MS,
-            precommit_ms: IZANAMI_NPOS_TIMEOUT_PRECOMMIT_MIN_MS,
-            commit_ms: IZANAMI_NPOS_TIMEOUT_COMMIT_MIN_MS,
-            da_ms: IZANAMI_NPOS_TIMEOUT_DA_MIN_MS,
-            aggregator_ms: IZANAMI_NPOS_TIMEOUT_AGGREGATOR_MIN_MS,
-        }
-    }
-}
-
-fn npos_pending_stall_grace_ms(config: &ChaosConfig, block_ms: u64) -> i64 {
-    if is_shared_host_balanced_latency_profile(config) {
-        IZANAMI_SHARED_HOST_SOAK_PENDING_STALL_GRACE_MS
-    } else {
-        pending_stall_grace_ms(block_ms)
-    }
-}
-
-fn npos_collectors_and_redundancy(config: &ChaosConfig) -> (u16, u8) {
-    if is_shared_host_balanced_latency_profile(config) && config.peer_count == 4 {
-        (
-            IZANAMI_SHARED_HOST_SOAK_COLLECTORS_K_4_PEERS,
-            IZANAMI_SHARED_HOST_SOAK_REDUNDANT_SEND_R_4_PEERS,
-        )
-    } else {
-        (
-            u16::try_from(config.sumeragi_collectors_k)
-                .expect("Izanami collectors_k fits NPoS parameter"),
-            u8::try_from(config.sumeragi_collectors_redundant_send_r)
-                .expect("Izanami redundant_send_r fits NPoS parameter"),
-        )
-    }
 }
 
 fn duration_ms(duration: Duration) -> u64 {
@@ -2168,72 +1967,6 @@ fn latency_gate_soft_target_blocks(duration: Duration, threshold: Duration) -> u
     duration_ms(duration)
         .div_ceil(duration_ms(threshold))
         .max(1)
-}
-
-fn split_pipeline_time(duration: Duration) -> (u64, u64) {
-    let total_ms_u128 = duration.as_millis();
-    let total_ms = u64::try_from(total_ms_u128).expect("pipeline time fits into u64 milliseconds");
-    let mut block_ms = total_ms / 3;
-    if block_ms == 0 {
-        block_ms = 1;
-    }
-    if block_ms >= total_ms {
-        block_ms = total_ms.saturating_sub(1);
-    }
-    let mut commit_ms = total_ms.saturating_sub(block_ms);
-    if commit_ms == 0 {
-        commit_ms = 1;
-        if block_ms > 1 {
-            block_ms -= 1;
-        }
-    }
-    (block_ms, commit_ms)
-}
-
-fn derive_npos_timing(config: &ChaosConfig) -> NposTiming {
-    let (block_ms, commit_time_ms, timeout_block_ms, clamp_commit) =
-        if let Some(duration) = config.pipeline_time {
-            let (block_ms, _commit_ms) = split_pipeline_time(duration);
-            // Favor block cadence for soak tests; commit time must be >= block time.
-            // Use the block cadence for timeout derivation to avoid over-eager reschedules.
-            (block_ms, block_ms, block_ms, true)
-        } else {
-            let block_ms = u64::try_from(IZANAMI_NPOS_BLOCK_TIME_MS)
-                .expect("izanami block time must be non-negative");
-            let commit_ms = u64::try_from(IZANAMI_NPOS_COMMIT_TIME_MS)
-                .expect("izanami commit time must be non-negative");
-            (block_ms, commit_ms, block_ms, true)
-        };
-    let block_ms = clamp_nonzero_ms(block_ms);
-    let commit_time_ms = clamp_nonzero_ms(commit_time_ms);
-    let timeout_floors = npos_timeout_floors(config);
-    // Derive per-phase timeouts from the scaled block time to keep soak cadence tight.
-    let timeouts = SumeragiNposTimeouts::from_block_time(Duration::from_millis(timeout_block_ms));
-    let propose_ms = clamp_nonzero_ms(duration_ms(timeouts.propose)).max(timeout_floors.propose_ms);
-    let prevote_ms = clamp_nonzero_ms(duration_ms(timeouts.prevote)).max(timeout_floors.prevote_ms);
-    let precommit_ms =
-        clamp_nonzero_ms(duration_ms(timeouts.precommit)).max(timeout_floors.precommit_ms);
-    // Keep commit/DA windows at least as large as the target commit time for DA stability.
-    let mut commit_timeout_ms = clamp_nonzero_ms(duration_ms(timeouts.commit));
-    let mut da_ms = clamp_nonzero_ms(duration_ms(timeouts.da));
-    if clamp_commit {
-        commit_timeout_ms = commit_timeout_ms.max(commit_time_ms);
-        da_ms = da_ms.max(commit_time_ms);
-    }
-    commit_timeout_ms = commit_timeout_ms.max(timeout_floors.commit_ms);
-    da_ms = da_ms.max(timeout_floors.da_ms);
-    let aggregator_ms =
-        clamp_nonzero_ms(duration_ms(timeouts.aggregator)).max(timeout_floors.aggregator_ms);
-    NposTiming {
-        block_ms,
-        propose_ms,
-        prevote_ms,
-        precommit_ms,
-        commit_timeout_ms,
-        commit_time_ms,
-        da_ms,
-        aggregator_ms,
-    }
 }
 
 fn default_nexus_pipeline_time() -> Duration {
@@ -2445,13 +2178,6 @@ fn is_shared_host_stable_soak(config: &ChaosConfig) -> bool {
         && config.duration >= Duration::from_secs(IZANAMI_SHARED_HOST_SOAK_MIN_DURATION_SECS)
 }
 
-fn is_shared_host_stable_recovery_run(config: &ChaosConfig) -> bool {
-    matches!(config.workload_profile, WorkloadProfile::Stable)
-        && config.faulty_peers <= 1
-        && config.peer_count >= 4
-        && config.duration >= Duration::from_secs(IZANAMI_SHARED_HOST_RECOVERY_MIN_DURATION_SECS)
-}
-
 fn is_severe_stopping_recovery_run(config: &ChaosConfig) -> bool {
     matches!(config.workload_profile, WorkloadProfile::Stable)
         && config.peer_count >= 4
@@ -2518,14 +2244,6 @@ fn effective_ingress_request_timeout(config: &ChaosConfig) -> Duration {
         config.shutdown_drain_timeout.max(baseline)
     } else {
         baseline
-    }
-}
-
-fn recovery_profile_for(config: &ChaosConfig) -> RecoveryProfile {
-    if is_shared_host_stable_recovery_run(config) {
-        shared_host_recovery_profile()
-    } else {
-        baseline_recovery_profile()
     }
 }
 
@@ -2611,42 +2329,24 @@ fn consensus_mode_label(config: &ChaosConfig) -> &'static str {
 }
 
 fn log_effective_consensus_soak_overrides(config: &ChaosConfig) {
-    let recovery_profile = recovery_profile_for(config);
-    let npos_timing = derive_npos_timing(config);
-    let balanced_latency_profile = is_shared_host_balanced_latency_profile(config);
-    let pending_stall_grace_ms = npos_pending_stall_grace_ms(config, npos_timing.block_ms);
-    let (collectors_k, redundant_send_r) = npos_collectors_and_redundancy(config);
-    let latency_profile = if balanced_latency_profile {
-        "shared_host_balanced_sub_1s"
-    } else {
-        "default"
-    };
     let latency_p95_gate_ms = config
         .latency_p95_threshold
         .map(|threshold| u64::try_from(threshold.as_millis()).unwrap_or(u64::MAX))
         .unwrap_or_default();
+    let block_cadence_ms = config
+        .pipeline_time
+        .map_or_else(default_izanami_pipeline_time, |duration| duration)
+        .as_millis();
     info!(
         target: "izanami::profile",
         consensus_mode = consensus_mode_label(config),
-        shared_host_consensus_profile = is_shared_host_stable_recovery_run(config),
         shared_host_stable_soak = is_shared_host_stable_soak(config),
-        latency_profile,
         latency_p95_gate_configured = config.latency_p95_threshold.is_some(),
         latency_p95_gate_ms,
-        pending_stall_grace_ms,
-        da_fast_reschedule = balanced_latency_profile,
-        collectors_k,
-        redundant_send_r,
-        recovery_height_window_ms = recovery_profile.height_window_ms,
-        recovery_missing_qc_reacquire_window_ms = recovery_profile.missing_qc_reacquire_window_ms,
-        recovery_deferred_qc_ttl_ms = recovery_profile.deferred_qc_ttl_ms,
-        recovery_missing_block_height_ttl_ms = recovery_profile.missing_block_height_ttl_ms,
-        recovery_hash_miss_cap_before_range_pull = recovery_profile.hash_miss_cap_before_range_pull,
-        recovery_missing_block_signer_fallback_attempts = recovery_profile
-            .missing_block_signer_fallback_attempts,
-        recovery_range_pull_escalation_after_hash_misses = recovery_profile
-            .range_pull_escalation_after_hash_misses,
-        "effective consensus soak overrides"
+        block_cadence_ms,
+        round_timeout_ms = iroha_config::parameters::defaults::sumeragi::ROUND_TIMEOUT_MS,
+        max_transactions = config.sumeragi_block_max_transactions,
+        "effective first-release Sumeragi v2 soak profile"
     );
 }
 
@@ -2677,7 +2377,6 @@ fn make_network_builder(
     } else {
         Vec::new()
     };
-    let recovery_profile = recovery_profile_for(config);
     let phase_operator_keypair = sumeragi_phase_operator_keypair();
     let torii_receipt_public_key = phase_operator_keypair.public_key().to_string();
     let torii_receipt_private_key =
@@ -2685,40 +2384,18 @@ fn make_network_builder(
     let mut builder = NetworkBuilder::new()
         .with_peers(config.peer_count)
         .with_base_seed(instructions::IZANAMI_BASE_SEED);
+    builder = if config.nexus.is_some() {
+        builder.with_npos_consensus()
+    } else {
+        builder.with_permissioned_consensus()
+    };
     let npos_params = izanami_npos_parameters(config.peer_count);
     let pipeline_time = config
         .pipeline_time
         .unwrap_or_else(default_izanami_pipeline_time);
-    let (pipeline_block_ms, pipeline_commit_ms) = split_pipeline_time(pipeline_time);
-    let min_finality_floor = iroha_data_model::parameter::SumeragiParameters::default()
-        .min_finality_ms()
-        .max(1);
-    let needs_manual_pipeline_genesis = pipeline_block_ms < min_finality_floor;
-    if needs_manual_pipeline_genesis {
-        builder = builder.with_default_pipeline_time();
-        let timing_prefix = vec![
-            InstructionBox::from(SetParameter::new(Parameter::Sumeragi(
-                SumeragiParameter::CommitTimeMs(pipeline_commit_ms),
-            ))),
-            InstructionBox::from(SetParameter::new(Parameter::Sumeragi(
-                SumeragiParameter::MinFinalityMs(pipeline_block_ms),
-            ))),
-            InstructionBox::from(SetParameter::new(Parameter::Sumeragi(
-                SumeragiParameter::BlockTimeMs(pipeline_block_ms),
-            ))),
-        ];
-        if let Some(first_tx) = genesis.first_mut() {
-            first_tx.splice(0..0, timing_prefix);
-        } else {
-            genesis.push(timing_prefix);
-        }
-    } else {
-        builder = builder.with_pipeline_time(pipeline_time);
-    }
+    builder = builder.with_pipeline_time(pipeline_time);
     if let Some(profile) = &config.nexus {
-        builder = builder
-            .with_data_availability_enabled(profile.da_enabled)
-            .with_config_table(profile.config_layer.clone());
+        builder = builder.with_config_table(profile.config_layer.clone());
         let gas_account_id = instructions::nexus_gas_account_id()?.to_string();
         builder = builder.with_config_layer(move |layer| {
             layer
@@ -2768,9 +2445,8 @@ fn make_network_builder(
             });
         }
     }
-    // Inject Izanami timing into on-chain Sumeragi parameters.
-    let npos_timing = derive_npos_timing(config);
-    let (collectors_k, redundant_send_r) = npos_collectors_and_redundancy(config);
+    // The signed genesis selects consensus mode and DA layout. Only finite block
+    // limits and the NPoS election snapshot are injected here.
     let block_max_transactions = NonZeroU64::new(config.sumeragi_block_max_transactions)
         .expect("Izanami block transaction cap non-zero");
     let block_gas_limit = CustomParameter::new(
@@ -2793,41 +2469,18 @@ fn make_network_builder(
         genesis.push(injected_block_limits);
     }
     if config.nexus.is_some() {
-        let mut injected = Vec::new();
-        injected.push(InstructionBox::from(SetParameter::new(
-            Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(npos_timing.commit_time_ms)),
-        )));
-        injected.push(InstructionBox::from(SetParameter::new(
-            Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(npos_timing.block_ms)),
-        )));
-        injected.push(InstructionBox::from(SetParameter::new(
-            Parameter::Sumeragi(SumeragiParameter::PacingFactorBps(
-                IZANAMI_PACING_FACTOR_BPS,
-            )),
-        )));
-        injected.push(InstructionBox::from(SetParameter::new(
-            Parameter::Sumeragi(SumeragiParameter::CollectorsK(collectors_k)),
-        )));
-        injected.push(InstructionBox::from(SetParameter::new(
-            Parameter::Sumeragi(SumeragiParameter::RedundantSendR(redundant_send_r)),
-        )));
-        injected.push(InstructionBox::from(SetParameter::new(Parameter::Custom(
+        let injected = InstructionBox::from(SetParameter::new(Parameter::Custom(
             npos_params.into_custom_parameter(),
-        ))));
-        if !injected.is_empty() {
-            if let Some(last_tx) = genesis.last_mut() {
-                last_tx.extend(injected);
-            } else {
-                genesis.push(injected);
-            }
+        )));
+        if let Some(last_tx) = genesis.last_mut() {
+            last_tx.push(injected);
+        } else {
+            genesis.push(vec![injected]);
         }
     }
-    // Tune pipeline/validation throughput and raise payload/RBC budgets to keep long Izanami runs stable.
+    // Tune execution throughput while retaining only the bounded v2 adapter queues.
     let queue_capacity = effective_network_queue_capacity(config);
     builder = builder.with_config_layer(move |layer| {
-        let as_i64 = |value: u64| -> i64 {
-            i64::try_from(value).expect("NPoS timing fits into i64 milliseconds")
-        };
         layer
             .write(
                 ["pipeline", "dynamic_prepass"],
@@ -2957,8 +2610,46 @@ fn make_network_builder(
                     .expect("Izanami proposal scan multiplier fits config layer"),
             )
             .write(
-                ["sumeragi", "advanced", "rbc", "inline_block_created_backup"],
-                config.sumeragi_inline_block_created_backup_rbc,
+                ["sumeragi", "round_timeout_ms"],
+                i64::try_from(iroha_config::parameters::defaults::sumeragi::ROUND_TIMEOUT_MS)
+                    .expect("Sumeragi round timeout fits config layer"),
+            )
+            .write(["sumeragi", "role"], "validator")
+            .write(
+                ["sumeragi", "block", "max_payload_bytes"],
+                i64::try_from(
+                    iroha_config::parameters::defaults::sumeragi::BLOCK_MAX_PAYLOAD_BYTES.get(),
+                )
+                .expect("Sumeragi payload limit fits config layer"),
+            )
+            .write(
+                ["sumeragi", "queues", "commands"],
+                IZANAMI_SUMERAGI_QUEUE_COMMANDS,
+            )
+            .write(
+                ["sumeragi", "queues", "bodies"],
+                IZANAMI_SUMERAGI_QUEUE_BODIES,
+            )
+            .write(
+                ["sumeragi", "queues", "chunks"],
+                IZANAMI_SUMERAGI_QUEUE_CHUNKS,
+            )
+            .write(
+                ["sumeragi", "queues", "ready_bodies"],
+                IZANAMI_SUMERAGI_QUEUE_READY_BODIES,
+            )
+            .write(
+                ["sumeragi", "keys", "allowed_algorithms"],
+                TomlValue::Array(vec![TomlValue::String("bls_normal".into())]),
+            )
+            .write(
+                ["sumeragi", "keys", "allowed_hsm_providers"],
+                TomlValue::Array(
+                    iroha_config::parameters::defaults::sumeragi::key_allowed_hsm_providers()
+                        .into_iter()
+                        .map(TomlValue::String)
+                        .collect(),
+                ),
             )
             .write(
                 ["nexus", "fusion", "floor_teu"],
@@ -2967,261 +2658,6 @@ fn make_network_builder(
             .write(
                 ["nexus", "fusion", "exit_teu"],
                 IZANAMI_NEXUS_FUSION_EXIT_TEU,
-            )
-            .write(
-                ["sumeragi", "advanced", "queues", "block_payload"],
-                IZANAMI_BLOCK_PAYLOAD_QUEUE,
-            )
-            .write(
-                [
-                    "sumeragi",
-                    "advanced",
-                    "worker",
-                    "validation_worker_threads",
-                ],
-                IZANAMI_VALIDATION_WORKER_THREADS,
-            )
-            .write(
-                [
-                    "sumeragi",
-                    "advanced",
-                    "worker",
-                    "validation_work_queue_cap",
-                ],
-                IZANAMI_VALIDATION_WORK_QUEUE_CAP,
-            )
-            .write(
-                [
-                    "sumeragi",
-                    "advanced",
-                    "worker",
-                    "validation_result_queue_cap",
-                ],
-                IZANAMI_VALIDATION_RESULT_QUEUE_CAP,
-            )
-            .write(
-                ["sumeragi", "advanced", "worker", "validation_pending_cap"],
-                IZANAMI_VALIDATION_PENDING_CAP,
-            )
-            .write(
-                ["sumeragi", "advanced", "worker", "iteration_budget_cap_ms"],
-                IZANAMI_WORKER_ITERATION_BUDGET_CAP_MS,
-            )
-            .write(
-                [
-                    "sumeragi",
-                    "advanced",
-                    "worker",
-                    "iteration_drain_budget_cap_ms",
-                ],
-                IZANAMI_WORKER_ITERATION_DRAIN_BUDGET_CAP_MS,
-            )
-            .write(
-                [
-                    "sumeragi",
-                    "advanced",
-                    "pacemaker",
-                    "pending_stall_grace_ms",
-                ],
-                npos_pending_stall_grace_ms(config, npos_timing.block_ms),
-            )
-            .write(
-                ["sumeragi", "advanced", "pacemaker", "da_fast_reschedule"],
-                is_shared_host_balanced_latency_profile(config),
-            )
-            .write(
-                [
-                    "sumeragi",
-                    "advanced",
-                    "pacemaker",
-                    "active_pending_soft_limit",
-                ],
-                IZANAMI_PACEMAKER_ACTIVE_PENDING_SOFT_LIMIT,
-            )
-            .write(
-                [
-                    "sumeragi",
-                    "advanced",
-                    "pacemaker",
-                    "rbc_backlog_session_soft_limit",
-                ],
-                IZANAMI_PACEMAKER_RBC_BACKLOG_SESSION_SOFT_LIMIT,
-            )
-            .write(
-                [
-                    "sumeragi",
-                    "advanced",
-                    "pacemaker",
-                    "rbc_backlog_chunk_soft_limit",
-                ],
-                IZANAMI_PACEMAKER_RBC_BACKLOG_CHUNK_SOFT_LIMIT,
-            )
-            .write(
-                ["sumeragi", "advanced", "pacing_governor", "min_factor_bps"],
-                IZANAMI_PACING_GOVERNOR_MIN_FACTOR_BPS,
-            )
-            .write(
-                ["sumeragi", "advanced", "pacing_governor", "max_factor_bps"],
-                IZANAMI_PACING_GOVERNOR_MAX_FACTOR_BPS,
-            )
-            .write(
-                ["sumeragi", "advanced", "rbc", "pending_max_chunks"],
-                IZANAMI_RBC_PENDING_MAX_CHUNKS,
-            )
-            .write(
-                ["sumeragi", "advanced", "rbc", "pending_max_bytes"],
-                IZANAMI_RBC_PENDING_MAX_BYTES,
-            )
-            .write(
-                ["sumeragi", "advanced", "rbc", "pending_session_limit"],
-                IZANAMI_RBC_PENDING_SESSION_LIMIT,
-            )
-            .write(
-                ["sumeragi", "advanced", "rbc", "pending_ttl_ms"],
-                IZANAMI_RBC_PENDING_TTL_MS,
-            )
-            .write(
-                ["sumeragi", "advanced", "rbc", "session_ttl_ms"],
-                IZANAMI_RBC_SESSION_TTL_MS,
-            )
-            .write(
-                ["sumeragi", "advanced", "rbc", "disk_store_ttl_ms"],
-                IZANAMI_RBC_SESSION_TTL_MS,
-            )
-            .write(
-                ["sumeragi", "advanced", "rbc", "store_max_sessions"],
-                if is_shared_host_balanced_latency_profile(config) {
-                    IZANAMI_SHARED_HOST_SOAK_RBC_STORE_MAX_SESSIONS
-                } else {
-                    IZANAMI_TEST_NETWORK_RBC_STORE_MAX_SESSIONS
-                },
-            )
-            .write(
-                ["sumeragi", "advanced", "rbc", "store_soft_sessions"],
-                if is_shared_host_balanced_latency_profile(config) {
-                    IZANAMI_SHARED_HOST_SOAK_RBC_STORE_SOFT_SESSIONS
-                } else {
-                    IZANAMI_TEST_NETWORK_RBC_STORE_SOFT_SESSIONS
-                },
-            )
-            .write(
-                [
-                    "sumeragi",
-                    "advanced",
-                    "rbc",
-                    "rebroadcast_sessions_per_tick",
-                ],
-                IZANAMI_RBC_REBROADCAST_SESSIONS_PER_TICK,
-            )
-            .write(
-                ["sumeragi", "advanced", "rbc", "payload_chunks_per_tick"],
-                IZANAMI_RBC_PAYLOAD_CHUNKS_PER_TICK,
-            )
-            .write(
-                ["sumeragi", "recovery", "height_attempt_cap"],
-                IZANAMI_RECOVERY_HEIGHT_ATTEMPT_CAP,
-            )
-            .write(
-                ["sumeragi", "recovery", "height_window_ms"],
-                recovery_profile.height_window_ms,
-            )
-            .write(
-                ["sumeragi", "recovery", "missing_qc_reacquire_window_ms"],
-                recovery_profile.missing_qc_reacquire_window_ms,
-            )
-            .write(
-                ["sumeragi", "recovery", "deferred_qc_ttl_ms"],
-                recovery_profile.deferred_qc_ttl_ms,
-            )
-            .write(
-                ["sumeragi", "recovery", "missing_block_height_ttl_ms"],
-                recovery_profile.missing_block_height_ttl_ms,
-            )
-            .write(
-                ["sumeragi", "recovery", "hash_miss_cap_before_range_pull"],
-                recovery_profile.hash_miss_cap_before_range_pull,
-            )
-            .write(
-                [
-                    "sumeragi",
-                    "recovery",
-                    "missing_block_signer_fallback_attempts",
-                ],
-                recovery_profile.missing_block_signer_fallback_attempts,
-            )
-            .write(
-                [
-                    "sumeragi",
-                    "recovery",
-                    "missing_block_retry_backoff_multiplier",
-                ],
-                IZANAMI_RECOVERY_MISSING_BLOCK_RETRY_BACKOFF_MULTIPLIER,
-            )
-            .write(
-                ["sumeragi", "recovery", "missing_block_retry_backoff_cap_ms"],
-                IZANAMI_RECOVERY_MISSING_BLOCK_RETRY_BACKOFF_CAP_MS,
-            )
-            .write(
-                [
-                    "sumeragi",
-                    "recovery",
-                    "range_pull_escalation_after_hash_misses",
-                ],
-                recovery_profile.range_pull_escalation_after_hash_misses,
-            )
-            .write(
-                ["sumeragi", "advanced", "da", "quorum_timeout_multiplier"],
-                recovery_profile.da_quorum_timeout_multiplier,
-            )
-            .write(
-                [
-                    "sumeragi",
-                    "advanced",
-                    "da",
-                    "availability_timeout_multiplier",
-                ],
-                recovery_profile.da_availability_timeout_multiplier,
-            )
-            .write(
-                [
-                    "sumeragi",
-                    "advanced",
-                    "da",
-                    "availability_timeout_floor_ms",
-                ],
-                recovery_profile.da_availability_timeout_floor_ms,
-            )
-            .write(
-                ["sumeragi", "gating", "future_height_window"],
-                IZANAMI_FUTURE_HEIGHT_WINDOW,
-            )
-            .write(
-                ["sumeragi", "gating", "future_view_window"],
-                IZANAMI_FUTURE_VIEW_WINDOW,
-            )
-            .write(
-                ["sumeragi", "advanced", "npos", "timeouts", "propose_ms"],
-                as_i64(npos_timing.propose_ms),
-            )
-            .write(
-                ["sumeragi", "advanced", "npos", "timeouts", "prevote_ms"],
-                as_i64(npos_timing.prevote_ms),
-            )
-            .write(
-                ["sumeragi", "advanced", "npos", "timeouts", "precommit_ms"],
-                as_i64(npos_timing.precommit_ms),
-            )
-            .write(
-                ["sumeragi", "advanced", "npos", "timeouts", "commit_ms"],
-                as_i64(npos_timing.commit_timeout_ms),
-            )
-            .write(
-                ["sumeragi", "advanced", "npos", "timeouts", "da_ms"],
-                as_i64(npos_timing.da_ms),
-            )
-            .write(
-                ["sumeragi", "advanced", "npos", "timeouts", "aggregator_ms"],
-                as_i64(npos_timing.aggregator_ms),
             );
     });
 
@@ -5166,133 +4602,20 @@ struct BlockIntervalSummary {
     samples: u64,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-struct SumeragiPhaseSnapshot {
-    propose_ms: u64,
-    collect_da_ms: u64,
-    collect_prevote_ms: u64,
-    collect_precommit_ms: u64,
-    collect_aggregator_ms: u64,
-    commit_ms: u64,
-    pipeline_total_ms: u64,
-    collect_da_max_ms: u64,
-    collect_precommit_max_ms: u64,
-    pipeline_total_max_ms: u64,
-    pipeline_total_ema_ms: u64,
-}
-
-fn parse_sumeragi_phase_snapshot(value: norito::json::Value) -> Option<SumeragiPhaseSnapshot> {
-    let norito::json::Value::Object(root) = value else {
-        return None;
-    };
-    let ema = match root.get("ema_ms") {
-        Some(norito::json::Value::Object(ema)) => ema,
-        _ => return None,
-    };
-    let max = match root.get("max_ms") {
-        Some(norito::json::Value::Object(max)) => Some(max),
-        _ => None,
-    };
-    Some(SumeragiPhaseSnapshot {
-        propose_ms: root.get("propose_ms")?.as_u64()?,
-        collect_da_ms: root.get("collect_da_ms")?.as_u64()?,
-        collect_prevote_ms: root.get("collect_prevote_ms")?.as_u64()?,
-        collect_precommit_ms: root.get("collect_precommit_ms")?.as_u64()?,
-        collect_aggregator_ms: root.get("collect_aggregator_ms")?.as_u64()?,
-        commit_ms: root.get("commit_ms")?.as_u64()?,
-        pipeline_total_ms: root.get("pipeline_total_ms")?.as_u64()?,
-        collect_da_max_ms: max
-            .and_then(|item| item.get("collect_da_ms"))
-            .and_then(norito::json::Value::as_u64)
-            .unwrap_or_default(),
-        collect_precommit_max_ms: max
-            .and_then(|item| item.get("collect_precommit_ms"))
-            .and_then(norito::json::Value::as_u64)
-            .unwrap_or_default(),
-        pipeline_total_max_ms: max
-            .and_then(|item| item.get("pipeline_total_ms"))
-            .and_then(norito::json::Value::as_u64)
-            .unwrap_or_default(),
-        pipeline_total_ema_ms: ema.get("pipeline_total_ms")?.as_u64()?,
-    })
-}
-
-async fn sample_sumeragi_phases(peers: &[NetworkPeer]) -> Result<SumeragiPhaseSnapshot, String> {
-    let peer = peers
-        .first()
-        .cloned()
-        .ok_or_else(|| "no peers available for phase sampling".to_owned())?;
-    spawn_blocking(move || {
-        let mut client = peer.client();
-        client.set_operator_key_pair(sumeragi_phase_operator_keypair());
-        let phases = client
-            .get_sumeragi_phases_json()
-            .map_err(|err| format!("failed to fetch sumeragi phases snapshot: {err}"))?;
-        parse_sumeragi_phase_snapshot(phases)
-            .ok_or_else(|| "phase payload missing expected fields".to_owned())
-    })
-    .await
-    .map_err(|err| format!("phase sampling task failed: {err}"))?
-}
-
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct SumeragiStatusDigest {
-    view_change_install_total: u64,
-    view_change_cause_total: u64,
-    view_change_commit_failure_total: u64,
-    view_change_quorum_timeout_total: u64,
-    view_change_stake_quorum_timeout_total: u64,
-    view_change_roster_unavailable_total: u64,
-    view_change_da_gate_total: u64,
-    view_change_censorship_evidence_total: u64,
-    view_change_missing_payload_total: u64,
-    view_change_missing_qc_total: u64,
-    view_change_validation_reject_total: u64,
-    view_change_last_cause: Option<String>,
-    commit_pipeline_last_total_ms: u64,
-    commit_pipeline_ema_total_ms: u64,
-    missing_block_fetch_total: u64,
-    missing_block_fetch_last_targets: u64,
-    missing_block_fetch_last_dwell_ms: u64,
-    tx_queue_depth: u64,
-    tx_queue_capacity: u64,
-    tx_queue_retained_bytes: u64,
-    tx_queue_max_retained_bytes: u64,
-    tx_queue_saturated: bool,
-    tx_queue_saturated_by_count: bool,
-    tx_queue_saturated_by_bytes: bool,
-    tx_queue_saturated_by_age: bool,
-    tx_queue_oldest_queued_age_ms: u64,
-    pacemaker_backpressure_deferrals_total: u64,
-    commit_inflight_active: bool,
-    commit_inflight_height: u64,
-    commit_inflight_view: u64,
-    commit_inflight_elapsed_ms: u64,
-    commit_inflight_timeout_total: u64,
-    worker_loop_stage: String,
-    worker_loop_last_iteration_ms: u64,
-    worker_loop_queue_depth_total: u64,
-    qc_deferred_missing_payload_total: u64,
-    qc_deferred_resolved_total: u64,
-    qc_deferred_expired_total: u64,
-    consensus_missing_qc_reacquire_attempt_total: u64,
-    consensus_missing_qc_reacquire_success_total: u64,
-    consensus_missing_qc_reacquire_exhausted_total: u64,
-    consensus_forced_proposal_attempt_total: u64,
-    consensus_forced_proposal_success_total: u64,
-    blocksync_range_pull_escalation_total: u64,
-    blocksync_range_pull_success_total: u64,
-    blocksync_range_pull_failure_total: u64,
-    blocksync_range_pull_candidate_exhausted_total: u64,
-    rbc_store_pressure_level: u64,
-    rbc_store_evictions_total: u64,
-    rbc_store_backpressure_deferrals_total: u64,
-    rbc_store_persist_drops_total: u64,
-    pending_rbc_drops_total: u64,
-    pending_rbc_evicted_total: u64,
-    block_sync_roster_source_total: u64,
-    npos_repair_selected_stake_coverage_bps: u64,
-    npos_repair_reached_stake_quorum_coverage: bool,
+    protocol_version: u64,
+    persisted_height: u64,
+    persisted_view: u64,
+    leader: u64,
+    phase: String,
+    body_state: String,
+    pending_persistence: bool,
+    has_locked_prepare_qc: bool,
+    has_highest_prepare_qc: bool,
+    has_last_timeout_certificate: bool,
+    last_committed_height: u64,
+    committed_height_advance: u64,
     pipeline_conflict_rate_bps: u64,
     lane_tx_vertices_total: u64,
     lane_tx_edges_total: u64,
@@ -5308,120 +4631,27 @@ struct SumeragiStatusDigest {
 }
 
 impl SumeragiStatusDigest {
-    fn from_wire(wire: &iroha_data_model::block::consensus::SumeragiStatusWire) -> Self {
-        let view_change = &wire.view_change_causes;
-        let view_change_cause_total = view_change
-            .commit_failure_total
-            .saturating_add(view_change.quorum_timeout_total)
-            .saturating_add(view_change.stake_quorum_timeout_total)
-            .saturating_add(view_change.roster_unavailable_total)
-            .saturating_add(view_change.da_gate_total)
-            .saturating_add(view_change.censorship_evidence_total)
-            .saturating_add(view_change.missing_payload_total)
-            .saturating_add(view_change.missing_qc_total)
-            .saturating_add(view_change.validation_reject_total);
-        let block_sync_roster_source_total = wire
-            .block_sync_roster
-            .commit_qc_hint_total
-            .saturating_add(wire.block_sync_roster.checkpoint_hint_total)
-            .saturating_add(wire.block_sync_roster.commit_qc_history_total)
-            .saturating_add(wire.block_sync_roster.checkpoint_history_total)
-            .saturating_add(wire.block_sync_roster.roster_sidecar_total)
-            .saturating_add(wire.block_sync_roster.commit_roster_journal_total);
-        let worker_queue_depth_total = wire
-            .worker_loop
-            .queue_depths
-            .vote_rx
-            .saturating_add(wire.worker_loop.queue_depths.block_payload_rx)
-            .saturating_add(wire.worker_loop.queue_depths.rbc_chunk_rx)
-            .saturating_add(wire.worker_loop.queue_depths.block_rx)
-            .saturating_add(wire.worker_loop.queue_depths.consensus_rx)
-            .saturating_add(wire.worker_loop.queue_depths.lane_relay_rx)
-            .saturating_add(wire.worker_loop.queue_depths.background_rx);
+    fn from_json(value: &norito::json::Value) -> Self {
+        let present = |key: &str| {
+            value
+                .get(key)
+                .is_some_and(|item| !matches!(item, norito::json::Value::Null))
+        };
         Self {
-            view_change_install_total: wire.view_change_install_total,
-            view_change_cause_total,
-            view_change_commit_failure_total: view_change.commit_failure_total,
-            view_change_quorum_timeout_total: view_change.quorum_timeout_total,
-            view_change_stake_quorum_timeout_total: view_change.stake_quorum_timeout_total,
-            view_change_roster_unavailable_total: view_change.roster_unavailable_total,
-            view_change_da_gate_total: view_change.da_gate_total,
-            view_change_censorship_evidence_total: view_change.censorship_evidence_total,
-            view_change_missing_payload_total: view_change.missing_payload_total,
-            view_change_missing_qc_total: view_change.missing_qc_total,
-            view_change_validation_reject_total: view_change.validation_reject_total,
-            view_change_last_cause: view_change.last_cause.clone(),
-            commit_pipeline_last_total_ms: wire.commit_pipeline.last_total_ms,
-            commit_pipeline_ema_total_ms: wire.commit_pipeline.ema_total_ms,
-            missing_block_fetch_total: wire.missing_block_fetch.total,
-            missing_block_fetch_last_targets: wire.missing_block_fetch.last_targets,
-            missing_block_fetch_last_dwell_ms: wire.missing_block_fetch.last_dwell_ms,
-            tx_queue_depth: wire.tx_queue_depth,
-            tx_queue_capacity: wire.tx_queue_capacity,
-            tx_queue_retained_bytes: wire.tx_queue_retained_bytes,
-            tx_queue_max_retained_bytes: wire.tx_queue_max_retained_bytes,
-            tx_queue_saturated: wire.tx_queue_saturated,
-            tx_queue_saturated_by_count: wire.tx_queue_saturated_by_count,
-            tx_queue_saturated_by_bytes: wire.tx_queue_saturated_by_bytes,
-            tx_queue_saturated_by_age: wire.tx_queue_saturated_by_age,
-            tx_queue_oldest_queued_age_ms: wire.tx_queue_oldest_queued_age_ms,
-            pacemaker_backpressure_deferrals_total: wire.pacemaker_backpressure_deferrals_total,
-            commit_inflight_active: wire.commit_inflight.active,
-            commit_inflight_height: wire.commit_inflight.height,
-            commit_inflight_view: wire.commit_inflight.view,
-            commit_inflight_elapsed_ms: wire.commit_inflight.elapsed_ms,
-            commit_inflight_timeout_total: wire.commit_inflight.timeout_total,
-            worker_loop_stage: wire.worker_loop.stage.clone(),
-            worker_loop_last_iteration_ms: wire.worker_loop.last_iteration_ms,
-            worker_loop_queue_depth_total: worker_queue_depth_total,
-            qc_deferred_missing_payload_total: wire.qc_deferred_missing_payload_total,
-            qc_deferred_resolved_total: wire.qc_deferred_resolved_total,
-            qc_deferred_expired_total: wire.qc_deferred_expired_total,
-            consensus_missing_qc_reacquire_attempt_total: wire
-                .consensus_missing_qc_reacquire_attempt_total,
-            consensus_missing_qc_reacquire_success_total: wire
-                .consensus_missing_qc_reacquire_success_total,
-            consensus_missing_qc_reacquire_exhausted_total: wire
-                .consensus_missing_qc_reacquire_exhausted_total,
-            consensus_forced_proposal_attempt_total: wire.consensus_forced_proposal_attempt_total,
-            consensus_forced_proposal_success_total: wire.consensus_forced_proposal_success_total,
-            blocksync_range_pull_escalation_total: wire.blocksync_range_pull_escalation_total,
-            blocksync_range_pull_success_total: wire.blocksync_range_pull_success_total,
-            blocksync_range_pull_failure_total: wire.blocksync_range_pull_failure_total,
-            blocksync_range_pull_candidate_exhausted_total: wire
-                .blocksync_range_pull_candidate_exhausted_total,
-            rbc_store_pressure_level: u64::from(wire.rbc_store.pressure_level),
-            rbc_store_evictions_total: wire.rbc_store.evictions_total,
-            rbc_store_backpressure_deferrals_total: wire.rbc_store.backpressure_deferrals_total,
-            rbc_store_persist_drops_total: wire.rbc_store.persist_drops_total,
-            pending_rbc_drops_total: wire.pending_rbc.drops_total,
-            pending_rbc_evicted_total: wire.pending_rbc.evicted_total,
-            block_sync_roster_source_total,
-            npos_repair_selected_stake_coverage_bps: wire
-                .npos_repair_coverage
-                .as_ref()
-                .map_or(0, |coverage| {
-                    u64::from(coverage.selected_stake_coverage_bps)
-                }),
-            npos_repair_reached_stake_quorum_coverage: wire
-                .npos_repair_coverage
-                .as_ref()
-                .is_some_and(|coverage| coverage.reached_stake_quorum_coverage),
-            pipeline_conflict_rate_bps: 0,
-            lane_tx_vertices_total: 0,
-            lane_tx_edges_total: 0,
-            lane_overlay_count_total: 0,
-            lane_overlay_instr_total: 0,
-            lane_overlay_bytes_total: 0,
-            lane_rbc_chunks_total: 0,
-            lane_rbc_bytes_total: 0,
-            detached_prepared_total: 0,
-            detached_merged_total: 0,
-            detached_fallback_total: 0,
-            quarantine_executed_total: 0,
+            protocol_version: json_u64(value, "protocol_version"),
+            persisted_height: json_u64(value, "height"),
+            persisted_view: json_u64(value, "view"),
+            leader: json_u64(value, "leader"),
+            phase: json_string(value, "phase"),
+            body_state: json_string(value, "body_state"),
+            pending_persistence: present("pending_persistence_id"),
+            has_locked_prepare_qc: present("locked_prepare_qc"),
+            has_highest_prepare_qc: present("highest_prepare_qc"),
+            has_last_timeout_certificate: present("last_timeout_certificate"),
+            last_committed_height: json_u64(value, "last_committed_height"),
+            ..Self::default()
         }
     }
-
     fn apply_json_extras(&mut self, value: &norito::json::Value) {
         self.pipeline_conflict_rate_bps = json_u64(value, "pipeline_conflict_rate_bps");
         let has_pipeline_execution = if let Some(execution) = value
@@ -5504,129 +4734,20 @@ impl SumeragiStatusDigest {
 
     fn delta_from(self, start: Self) -> Self {
         Self {
-            view_change_install_total: self
-                .view_change_install_total
-                .saturating_sub(start.view_change_install_total),
-            view_change_cause_total: self
-                .view_change_cause_total
-                .saturating_sub(start.view_change_cause_total),
-            view_change_commit_failure_total: self
-                .view_change_commit_failure_total
-                .saturating_sub(start.view_change_commit_failure_total),
-            view_change_quorum_timeout_total: self
-                .view_change_quorum_timeout_total
-                .saturating_sub(start.view_change_quorum_timeout_total),
-            view_change_stake_quorum_timeout_total: self
-                .view_change_stake_quorum_timeout_total
-                .saturating_sub(start.view_change_stake_quorum_timeout_total),
-            view_change_roster_unavailable_total: self
-                .view_change_roster_unavailable_total
-                .saturating_sub(start.view_change_roster_unavailable_total),
-            view_change_da_gate_total: self
-                .view_change_da_gate_total
-                .saturating_sub(start.view_change_da_gate_total),
-            view_change_censorship_evidence_total: self
-                .view_change_censorship_evidence_total
-                .saturating_sub(start.view_change_censorship_evidence_total),
-            view_change_missing_payload_total: self
-                .view_change_missing_payload_total
-                .saturating_sub(start.view_change_missing_payload_total),
-            view_change_missing_qc_total: self
-                .view_change_missing_qc_total
-                .saturating_sub(start.view_change_missing_qc_total),
-            view_change_validation_reject_total: self
-                .view_change_validation_reject_total
-                .saturating_sub(start.view_change_validation_reject_total),
-            view_change_last_cause: (self.view_change_cause_total > start.view_change_cause_total)
-                .then(|| self.view_change_last_cause.clone())
-                .flatten(),
-            commit_pipeline_last_total_ms: self.commit_pipeline_last_total_ms,
-            commit_pipeline_ema_total_ms: self.commit_pipeline_ema_total_ms,
-            missing_block_fetch_total: self
-                .missing_block_fetch_total
-                .saturating_sub(start.missing_block_fetch_total),
-            missing_block_fetch_last_targets: self.missing_block_fetch_last_targets,
-            missing_block_fetch_last_dwell_ms: self.missing_block_fetch_last_dwell_ms,
-            tx_queue_depth: self.tx_queue_depth,
-            tx_queue_capacity: self.tx_queue_capacity,
-            tx_queue_retained_bytes: self.tx_queue_retained_bytes,
-            tx_queue_max_retained_bytes: self.tx_queue_max_retained_bytes,
-            tx_queue_saturated: self.tx_queue_saturated,
-            tx_queue_saturated_by_count: self.tx_queue_saturated_by_count,
-            tx_queue_saturated_by_bytes: self.tx_queue_saturated_by_bytes,
-            tx_queue_saturated_by_age: self.tx_queue_saturated_by_age,
-            tx_queue_oldest_queued_age_ms: self.tx_queue_oldest_queued_age_ms,
-            pacemaker_backpressure_deferrals_total: self
-                .pacemaker_backpressure_deferrals_total
-                .saturating_sub(start.pacemaker_backpressure_deferrals_total),
-            commit_inflight_active: self.commit_inflight_active,
-            commit_inflight_height: self.commit_inflight_height,
-            commit_inflight_view: self.commit_inflight_view,
-            commit_inflight_elapsed_ms: self.commit_inflight_elapsed_ms,
-            commit_inflight_timeout_total: self
-                .commit_inflight_timeout_total
-                .saturating_sub(start.commit_inflight_timeout_total),
-            worker_loop_stage: self.worker_loop_stage.clone(),
-            worker_loop_last_iteration_ms: self.worker_loop_last_iteration_ms,
-            worker_loop_queue_depth_total: self.worker_loop_queue_depth_total,
-            qc_deferred_missing_payload_total: self
-                .qc_deferred_missing_payload_total
-                .saturating_sub(start.qc_deferred_missing_payload_total),
-            qc_deferred_resolved_total: self
-                .qc_deferred_resolved_total
-                .saturating_sub(start.qc_deferred_resolved_total),
-            qc_deferred_expired_total: self
-                .qc_deferred_expired_total
-                .saturating_sub(start.qc_deferred_expired_total),
-            consensus_missing_qc_reacquire_attempt_total: self
-                .consensus_missing_qc_reacquire_attempt_total
-                .saturating_sub(start.consensus_missing_qc_reacquire_attempt_total),
-            consensus_missing_qc_reacquire_success_total: self
-                .consensus_missing_qc_reacquire_success_total
-                .saturating_sub(start.consensus_missing_qc_reacquire_success_total),
-            consensus_missing_qc_reacquire_exhausted_total: self
-                .consensus_missing_qc_reacquire_exhausted_total
-                .saturating_sub(start.consensus_missing_qc_reacquire_exhausted_total),
-            consensus_forced_proposal_attempt_total: self
-                .consensus_forced_proposal_attempt_total
-                .saturating_sub(start.consensus_forced_proposal_attempt_total),
-            consensus_forced_proposal_success_total: self
-                .consensus_forced_proposal_success_total
-                .saturating_sub(start.consensus_forced_proposal_success_total),
-            blocksync_range_pull_escalation_total: self
-                .blocksync_range_pull_escalation_total
-                .saturating_sub(start.blocksync_range_pull_escalation_total),
-            blocksync_range_pull_success_total: self
-                .blocksync_range_pull_success_total
-                .saturating_sub(start.blocksync_range_pull_success_total),
-            blocksync_range_pull_failure_total: self
-                .blocksync_range_pull_failure_total
-                .saturating_sub(start.blocksync_range_pull_failure_total),
-            blocksync_range_pull_candidate_exhausted_total: self
-                .blocksync_range_pull_candidate_exhausted_total
-                .saturating_sub(start.blocksync_range_pull_candidate_exhausted_total),
-            rbc_store_pressure_level: self.rbc_store_pressure_level,
-            rbc_store_evictions_total: self
-                .rbc_store_evictions_total
-                .saturating_sub(start.rbc_store_evictions_total),
-            rbc_store_backpressure_deferrals_total: self
-                .rbc_store_backpressure_deferrals_total
-                .saturating_sub(start.rbc_store_backpressure_deferrals_total),
-            rbc_store_persist_drops_total: self
-                .rbc_store_persist_drops_total
-                .saturating_sub(start.rbc_store_persist_drops_total),
-            pending_rbc_drops_total: self
-                .pending_rbc_drops_total
-                .saturating_sub(start.pending_rbc_drops_total),
-            pending_rbc_evicted_total: self
-                .pending_rbc_evicted_total
-                .saturating_sub(start.pending_rbc_evicted_total),
-            block_sync_roster_source_total: self
-                .block_sync_roster_source_total
-                .saturating_sub(start.block_sync_roster_source_total),
-            npos_repair_selected_stake_coverage_bps: self.npos_repair_selected_stake_coverage_bps,
-            npos_repair_reached_stake_quorum_coverage: self
-                .npos_repair_reached_stake_quorum_coverage,
+            committed_height_advance: self
+                .last_committed_height
+                .saturating_sub(start.last_committed_height),
+            protocol_version: self.protocol_version,
+            persisted_height: self.persisted_height,
+            persisted_view: self.persisted_view,
+            leader: self.leader,
+            phase: self.phase,
+            body_state: self.body_state,
+            pending_persistence: self.pending_persistence,
+            has_locked_prepare_qc: self.has_locked_prepare_qc,
+            has_highest_prepare_qc: self.has_highest_prepare_qc,
+            has_last_timeout_certificate: self.has_last_timeout_certificate,
+            last_committed_height: self.last_committed_height,
             pipeline_conflict_rate_bps: self.pipeline_conflict_rate_bps,
             lane_tx_vertices_total: self.lane_tx_vertices_total,
             lane_tx_edges_total: self.lane_tx_edges_total,
@@ -5648,6 +4769,14 @@ fn json_u64(value: &norito::json::Value, key: &str) -> u64 {
         .get(key)
         .and_then(norito::json::Value::as_u64)
         .unwrap_or_default()
+}
+
+fn json_string(value: &norito::json::Value, key: &str) -> String {
+    value
+        .get(key)
+        .and_then(norito::json::Value::as_str)
+        .unwrap_or_default()
+        .to_owned()
 }
 
 fn object_u64(object: &norito::json::Map, key: &str) -> u64 {
@@ -5675,12 +4804,10 @@ async fn sample_sumeragi_status_digest(
             client.set_operator_key_pair(sumeragi_phase_operator_keypair());
             client.torii_request_timeout =
                 bounded_sumeragi_status_sample_request_timeout(client.torii_request_timeout);
-            match client.get_sumeragi_status() {
-                Ok(status) => {
-                    let mut digest = SumeragiStatusDigest::from_wire(&status);
-                    if let Ok(json) = client.get_sumeragi_status_json() {
-                        digest.apply_json_extras(&json);
-                    }
+            match client.get_sumeragi_status_json() {
+                Ok(json) => {
+                    let mut digest = SumeragiStatusDigest::from_json(&json);
+                    digest.apply_json_extras(&json);
                     return Ok(digest);
                 }
                 Err(err) => {
@@ -6297,32 +5424,6 @@ async fn wait_for_target_blocks(
                     elapsed = ?now.duration_since(start),
                     "target block height reached"
                 );
-                match sample_sumeragi_phases(peers).await {
-                    Ok(phases) => {
-                        info!(
-                            target: "izanami::progress",
-                            phase_propose_ms = phases.propose_ms,
-                            phase_collect_da_ms = phases.collect_da_ms,
-                            phase_collect_prevote_ms = phases.collect_prevote_ms,
-                            phase_collect_precommit_ms = phases.collect_precommit_ms,
-                            phase_collect_aggregator_ms = phases.collect_aggregator_ms,
-                            phase_commit_ms = phases.commit_ms,
-                            phase_pipeline_total_ms = phases.pipeline_total_ms,
-                            phase_collect_da_max_ms = phases.collect_da_max_ms,
-                            phase_collect_precommit_max_ms = phases.collect_precommit_max_ms,
-                            phase_pipeline_total_max_ms = phases.pipeline_total_max_ms,
-                            phase_pipeline_total_ema_ms = phases.pipeline_total_ema_ms,
-                            "sumeragi phase timing snapshot at target height"
-                        );
-                    }
-                    Err(err) => {
-                        warn!(
-                            target: "izanami::progress",
-                            error = %err,
-                            "sumeragi phase timing snapshot unavailable at target height"
-                        );
-                    }
-                }
                 enforce_latency_p95_gate(
                     &block_intervals,
                     &strict_block_intervals,
@@ -6350,32 +5451,6 @@ async fn wait_for_target_blocks(
                     elapsed = ?now.duration_since(start),
                     "target block height reached"
                 );
-                match sample_sumeragi_phases(peers).await {
-                    Ok(phases) => {
-                        info!(
-                            target: "izanami::progress",
-                            phase_propose_ms = phases.propose_ms,
-                            phase_collect_da_ms = phases.collect_da_ms,
-                            phase_collect_prevote_ms = phases.collect_prevote_ms,
-                            phase_collect_precommit_ms = phases.collect_precommit_ms,
-                            phase_collect_aggregator_ms = phases.collect_aggregator_ms,
-                            phase_commit_ms = phases.commit_ms,
-                            phase_pipeline_total_ms = phases.pipeline_total_ms,
-                            phase_collect_da_max_ms = phases.collect_da_max_ms,
-                            phase_collect_precommit_max_ms = phases.collect_precommit_max_ms,
-                            phase_pipeline_total_max_ms = phases.pipeline_total_max_ms,
-                            phase_pipeline_total_ema_ms = phases.pipeline_total_ema_ms,
-                            "sumeragi phase timing snapshot at target height"
-                        );
-                    }
-                    Err(err) => {
-                        warn!(
-                            target: "izanami::progress",
-                            error = %err,
-                            "sumeragi phase timing snapshot unavailable at target height"
-                        );
-                    }
-                }
             }
             if !target_blocks_soft_kpi {
                 let mut result = TargetProgressResult {
@@ -8742,19 +7817,14 @@ mod tests {
 
     use color_eyre::eyre::{WrapErr, eyre};
     use iroha_crypto::Hash;
-    use iroha_data_model::{
-        isi::SetParameter,
-        parameter::{Parameter, SumeragiParameter},
-    };
+    use iroha_data_model::{isi::SetParameter, parameter::Parameter};
     use iroha_test_network::init_instruction_registry;
     use tokio::time::timeout;
 
     use super::*;
     use crate::config::{
         DEFAULT_PROGRESS_INTERVAL, DEFAULT_PROGRESS_TIMEOUT, DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
-        DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS, DEFAULT_SUMERAGI_COLLECTORS_K,
-        DEFAULT_SUMERAGI_INLINE_BLOCK_CREATED_BACKUP_RBC,
-        DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER, DEFAULT_SUMERAGI_REDUNDANT_SEND_R,
+        DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS, DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
         FaultArgs, FaultToggles, IzanamiArgs, NexusProfile, WorkloadProfile,
     };
     use crate::faults::DEFAULT_NETWORK_PACKET_LOSS_PERCENT;
@@ -9028,6 +8098,7 @@ mod tests {
         }
         crate::config::init_tracing_with_filter("warn");
         init_instruction_registry();
+        let nexus = NexusProfile::sora_defaults()?;
 
         let config = ChaosConfig {
             allow_net: true,
@@ -9051,17 +8122,13 @@ mod tests {
             sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
             sumeragi_proposal_queue_scan_multiplier:
                 DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
-            sumeragi_collectors_k: DEFAULT_SUMERAGI_COLLECTORS_K,
-            sumeragi_collectors_redundant_send_r: DEFAULT_SUMERAGI_REDUNDANT_SEND_R,
-            sumeragi_inline_block_created_backup_rbc:
-                DEFAULT_SUMERAGI_INLINE_BLOCK_CREATED_BACKUP_RBC,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(5)..=Duration::from_secs(5),
             packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             log_filter: "warn".to_string(),
             faults: FaultToggles::from_array([true, true, true, true]),
-            nexus: None,
+            nexus: Some(nexus),
             diagnostic_dir: None,
         };
 
@@ -9073,14 +8140,11 @@ mod tests {
         } = instructions::prepare_state(
             account_qty,
             Some(config.peer_count),
-            None,
+            config.nexus.as_ref(),
             config.workload_profile,
             config.allow_contract_deploy_in_stable,
         )?;
-        let mut builder = make_network_builder(&config, genesis)?;
-        builder = builder.with_config_layer(|layer| {
-            layer.write(["sumeragi", "consensus_mode"], "npos");
-        });
+        let builder = make_network_builder(&config, genesis)?;
 
         let network = match builder.start().await {
             Ok(network) => network,
@@ -9103,344 +8167,6 @@ mod tests {
             .wrap_err("NPoS network failed to reach expected height")?;
         network.shutdown().await;
 
-        Ok(())
-    }
-
-    #[test]
-    fn npos_genesis_sets_sumeragi_timing() -> Result<()> {
-        init_instruction_registry();
-        let profile = NexusProfile::sora_defaults()?;
-        let config = ChaosConfig {
-            allow_net: false,
-            peer_count: 4,
-            faulty_peers: 0,
-            duration: Duration::from_secs(1),
-            pipeline_time: None,
-            target_blocks: None,
-            progress_interval: DEFAULT_PROGRESS_INTERVAL,
-            progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
-            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
-            latency_p95_threshold: None,
-            fault_window_start: None,
-            fault_window_end: None,
-            seed: Some(7),
-            tps: 1.0,
-            max_inflight: 1,
-            submitters: 1,
-            prebuild_tx_buffer: 0,
-            prebuild_tx_workers: 0,
-            sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
-            sumeragi_proposal_queue_scan_multiplier:
-                DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
-            sumeragi_collectors_k: DEFAULT_SUMERAGI_COLLECTORS_K,
-            sumeragi_collectors_redundant_send_r: DEFAULT_SUMERAGI_REDUNDANT_SEND_R,
-            sumeragi_inline_block_created_backup_rbc:
-                DEFAULT_SUMERAGI_INLINE_BLOCK_CREATED_BACKUP_RBC,
-            workload_profile: WorkloadProfile::Stable,
-            allow_contract_deploy_in_stable: false,
-            fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
-            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
-            log_filter: "warn".to_string(),
-            faults: FaultToggles::from_array([true, true, true, true]),
-            nexus: Some(profile),
-            diagnostic_dir: None,
-        };
-
-        let account_qty = config.peer_count.saturating_mul(3).max(6);
-        let PreparedChaos {
-            state: _,
-            genesis,
-            recipes: _,
-        } = instructions::prepare_state(
-            account_qty,
-            Some(config.peer_count),
-            config.nexus.as_ref(),
-            config.workload_profile,
-            config.allow_contract_deploy_in_stable,
-        )?;
-
-        let network = make_network_builder(&config, genesis)?.build();
-        let timing = derive_npos_timing(&config);
-        let mut block_time = None;
-        let mut commit_time = None;
-        for isi in network.genesis_isi().iter().flatten() {
-            if let Some(set_param) = isi.as_any().downcast_ref::<SetParameter>() {
-                match set_param.inner() {
-                    Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(ms)) => {
-                        block_time = Some(*ms);
-                    }
-                    Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(ms)) => {
-                        commit_time = Some(*ms);
-                    }
-                    _ => {}
-                }
-            }
-        }
-
-        assert_eq!(
-            block_time,
-            Some(timing.block_ms),
-            "genesis should set sumeragi block_time_ms for NPoS"
-        );
-        assert_eq!(
-            commit_time,
-            Some(timing.commit_time_ms),
-            "genesis should set sumeragi commit_time_ms for NPoS"
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn npos_genesis_sets_commit_time_before_block_time() -> Result<()> {
-        init_instruction_registry();
-        let profile = NexusProfile::sora_defaults()?;
-        let config = ChaosConfig {
-            allow_net: false,
-            peer_count: 4,
-            faulty_peers: 0,
-            duration: Duration::from_secs(1),
-            pipeline_time: None,
-            target_blocks: None,
-            progress_interval: DEFAULT_PROGRESS_INTERVAL,
-            progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
-            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
-            latency_p95_threshold: None,
-            fault_window_start: None,
-            fault_window_end: None,
-            seed: Some(7),
-            tps: 1.0,
-            max_inflight: 1,
-            submitters: 1,
-            prebuild_tx_buffer: 0,
-            prebuild_tx_workers: 0,
-            sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
-            sumeragi_proposal_queue_scan_multiplier:
-                DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
-            sumeragi_collectors_k: DEFAULT_SUMERAGI_COLLECTORS_K,
-            sumeragi_collectors_redundant_send_r: DEFAULT_SUMERAGI_REDUNDANT_SEND_R,
-            sumeragi_inline_block_created_backup_rbc:
-                DEFAULT_SUMERAGI_INLINE_BLOCK_CREATED_BACKUP_RBC,
-            workload_profile: WorkloadProfile::Stable,
-            allow_contract_deploy_in_stable: false,
-            fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
-            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
-            log_filter: "warn".to_string(),
-            faults: FaultToggles::from_array([true, true, true, true]),
-            nexus: Some(profile),
-            diagnostic_dir: None,
-        };
-
-        let account_qty = config.peer_count.saturating_mul(3).max(6);
-        let PreparedChaos {
-            state: _,
-            genesis,
-            recipes: _,
-        } = instructions::prepare_state(
-            account_qty,
-            Some(config.peer_count),
-            config.nexus.as_ref(),
-            config.workload_profile,
-            config.allow_contract_deploy_in_stable,
-        )?;
-
-        let network = make_network_builder(&config, genesis)?.build();
-        let mut commit_pos = None;
-        let mut block_pos = None;
-        let mut idx = 0usize;
-        for isi in network.genesis_isi().iter().flatten() {
-            if let Some(set_param) = isi.as_any().downcast_ref::<SetParameter>() {
-                match set_param.inner() {
-                    Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(_)) => {
-                        if commit_pos.is_none() {
-                            commit_pos = Some(idx);
-                        }
-                    }
-                    Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(_)) => {
-                        if block_pos.is_none() {
-                            block_pos = Some(idx);
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            idx = idx.saturating_add(1);
-        }
-
-        let commit_pos = commit_pos.expect("commit_time_ms should be injected");
-        let block_pos = block_pos.expect("block_time_ms should be injected");
-        assert!(
-            commit_pos < block_pos,
-            "commit_time_ms must be set before block_time_ms to satisfy validation"
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn derive_npos_timing_scales_timeouts_for_pipeline_time() {
-        let config = ChaosConfig {
-            allow_net: false,
-            peer_count: 4,
-            faulty_peers: 0,
-            duration: Duration::from_secs(1),
-            pipeline_time: Some(Duration::from_millis(3_000)),
-            target_blocks: None,
-            progress_interval: DEFAULT_PROGRESS_INTERVAL,
-            progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
-            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
-            latency_p95_threshold: None,
-            fault_window_start: None,
-            fault_window_end: None,
-            seed: Some(7),
-            tps: 1.0,
-            max_inflight: 1,
-            submitters: 1,
-            prebuild_tx_buffer: 0,
-            prebuild_tx_workers: 0,
-            sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
-            sumeragi_proposal_queue_scan_multiplier:
-                DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
-            sumeragi_collectors_k: DEFAULT_SUMERAGI_COLLECTORS_K,
-            sumeragi_collectors_redundant_send_r: DEFAULT_SUMERAGI_REDUNDANT_SEND_R,
-            sumeragi_inline_block_created_backup_rbc:
-                DEFAULT_SUMERAGI_INLINE_BLOCK_CREATED_BACKUP_RBC,
-            workload_profile: WorkloadProfile::Stable,
-            allow_contract_deploy_in_stable: false,
-            fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
-            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
-            log_filter: "warn".to_string(),
-            faults: FaultToggles::from_array([true, true, true, true]),
-            nexus: None,
-            diagnostic_dir: None,
-        };
-
-        let timing = derive_npos_timing(&config);
-        let expected =
-            SumeragiNposTimeouts::from_block_time(Duration::from_millis(timing.block_ms));
-        let expected_commit = duration_ms(expected.commit).max(timing.commit_time_ms);
-        let expected_da = duration_ms(expected.da).max(timing.commit_time_ms);
-        assert_eq!(timing.commit_timeout_ms, expected_commit);
-        assert_eq!(timing.da_ms, expected_da);
-    }
-
-    #[test]
-    fn derive_npos_timing_clamps_commit_timeout_without_pipeline_time() {
-        let config = ChaosConfig {
-            allow_net: false,
-            peer_count: 4,
-            faulty_peers: 0,
-            duration: Duration::from_secs(1),
-            pipeline_time: None,
-            target_blocks: None,
-            progress_interval: DEFAULT_PROGRESS_INTERVAL,
-            progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
-            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
-            latency_p95_threshold: None,
-            fault_window_start: None,
-            fault_window_end: None,
-            seed: Some(7),
-            tps: 1.0,
-            max_inflight: 1,
-            submitters: 1,
-            prebuild_tx_buffer: 0,
-            prebuild_tx_workers: 0,
-            sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
-            sumeragi_proposal_queue_scan_multiplier:
-                DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
-            sumeragi_collectors_k: DEFAULT_SUMERAGI_COLLECTORS_K,
-            sumeragi_collectors_redundant_send_r: DEFAULT_SUMERAGI_REDUNDANT_SEND_R,
-            sumeragi_inline_block_created_backup_rbc:
-                DEFAULT_SUMERAGI_INLINE_BLOCK_CREATED_BACKUP_RBC,
-            workload_profile: WorkloadProfile::Stable,
-            allow_contract_deploy_in_stable: false,
-            fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
-            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
-            log_filter: "warn".to_string(),
-            faults: FaultToggles::from_array([true, true, true, true]),
-            nexus: None,
-            diagnostic_dir: None,
-        };
-
-        let timing = derive_npos_timing(&config);
-        let expected =
-            SumeragiNposTimeouts::from_block_time(Duration::from_millis(timing.block_ms));
-        let expected_commit = duration_ms(expected.commit).max(timing.commit_time_ms);
-        let expected_da = duration_ms(expected.da).max(timing.commit_time_ms);
-        assert_eq!(timing.commit_timeout_ms, expected_commit);
-        assert_eq!(timing.da_ms, expected_da);
-        assert!(
-            timing.propose_ms >= IZANAMI_NPOS_TIMEOUT_PROPOSE_MIN_MS,
-            "propose timeout must respect minimum floor"
-        );
-        assert!(
-            timing.prevote_ms >= IZANAMI_NPOS_TIMEOUT_PREVOTE_MIN_MS,
-            "prevote timeout must respect minimum floor"
-        );
-        assert!(
-            timing.precommit_ms >= IZANAMI_NPOS_TIMEOUT_PRECOMMIT_MIN_MS,
-            "precommit timeout must respect minimum floor"
-        );
-    }
-
-    #[test]
-    fn derive_npos_timing_uses_conservative_floors_for_shared_host_npos_soak() -> Result<()> {
-        let profile = crate::config::NexusProfile::sora_defaults()?;
-        let config = ChaosConfig {
-            allow_net: false,
-            peer_count: 4,
-            faulty_peers: 0,
-            duration: Duration::from_secs(IZANAMI_SHARED_HOST_SOAK_MIN_DURATION_SECS),
-            pipeline_time: None,
-            target_blocks: None,
-            progress_interval: DEFAULT_PROGRESS_INTERVAL,
-            progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
-            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
-            latency_p95_threshold: None,
-            fault_window_start: None,
-            fault_window_end: None,
-            seed: Some(7),
-            tps: 5.0,
-            max_inflight: 8,
-            submitters: 1,
-            prebuild_tx_buffer: 0,
-            prebuild_tx_workers: 0,
-            sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
-            sumeragi_proposal_queue_scan_multiplier:
-                DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
-            sumeragi_collectors_k: DEFAULT_SUMERAGI_COLLECTORS_K,
-            sumeragi_collectors_redundant_send_r: DEFAULT_SUMERAGI_REDUNDANT_SEND_R,
-            sumeragi_inline_block_created_backup_rbc:
-                DEFAULT_SUMERAGI_INLINE_BLOCK_CREATED_BACKUP_RBC,
-            workload_profile: WorkloadProfile::Stable,
-            allow_contract_deploy_in_stable: false,
-            fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
-            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
-            log_filter: "warn".to_string(),
-            faults: FaultToggles::from_array([true, true, true, true]),
-            nexus: Some(profile),
-            diagnostic_dir: None,
-        };
-
-        let timing = derive_npos_timing(&config);
-        assert!(
-            timing.propose_ms >= IZANAMI_SHARED_HOST_SOAK_NPOS_TIMEOUT_PROPOSE_MIN_MS
-                && timing.prevote_ms >= IZANAMI_SHARED_HOST_SOAK_NPOS_TIMEOUT_PREVOTE_MIN_MS
-                && timing.precommit_ms >= IZANAMI_SHARED_HOST_SOAK_NPOS_TIMEOUT_PRECOMMIT_MIN_MS
-                && timing.commit_timeout_ms >= IZANAMI_SHARED_HOST_SOAK_NPOS_TIMEOUT_COMMIT_MIN_MS
-                && timing.da_ms >= IZANAMI_SHARED_HOST_SOAK_NPOS_TIMEOUT_DA_MIN_MS
-                && timing.aggregator_ms >= IZANAMI_SHARED_HOST_SOAK_NPOS_TIMEOUT_AGGREGATOR_MIN_MS,
-            "shared-host NPoS soak should enforce balanced sub-1s timeout floors"
-        );
-        assert_eq!(
-            npos_pending_stall_grace_ms(&config, timing.block_ms),
-            IZANAMI_SHARED_HOST_SOAK_PENDING_STALL_GRACE_MS
-        );
-        assert_eq!(
-            npos_collectors_and_redundancy(&config),
-            (
-                IZANAMI_SHARED_HOST_SOAK_COLLECTORS_K_4_PEERS,
-                IZANAMI_SHARED_HOST_SOAK_REDUNDANT_SEND_R_4_PEERS
-            )
-        );
         Ok(())
     }
 
@@ -9470,10 +8196,6 @@ mod tests {
             sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
             sumeragi_proposal_queue_scan_multiplier:
                 DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
-            sumeragi_collectors_k: DEFAULT_SUMERAGI_COLLECTORS_K,
-            sumeragi_collectors_redundant_send_r: DEFAULT_SUMERAGI_REDUNDANT_SEND_R,
-            sumeragi_inline_block_created_backup_rbc:
-                DEFAULT_SUMERAGI_INLINE_BLOCK_CREATED_BACKUP_RBC,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
@@ -9550,10 +8272,6 @@ mod tests {
             sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
             sumeragi_proposal_queue_scan_multiplier:
                 DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
-            sumeragi_collectors_k: DEFAULT_SUMERAGI_COLLECTORS_K,
-            sumeragi_collectors_redundant_send_r: DEFAULT_SUMERAGI_REDUNDANT_SEND_R,
-            sumeragi_inline_block_created_backup_rbc:
-                DEFAULT_SUMERAGI_INLINE_BLOCK_CREATED_BACKUP_RBC,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
@@ -9644,10 +8362,6 @@ mod tests {
             sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
             sumeragi_proposal_queue_scan_multiplier:
                 DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
-            sumeragi_collectors_k: DEFAULT_SUMERAGI_COLLECTORS_K,
-            sumeragi_collectors_redundant_send_r: DEFAULT_SUMERAGI_REDUNDANT_SEND_R,
-            sumeragi_inline_block_created_backup_rbc:
-                DEFAULT_SUMERAGI_INLINE_BLOCK_CREATED_BACKUP_RBC,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
@@ -9829,10 +8543,6 @@ mod tests {
             sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
             sumeragi_proposal_queue_scan_multiplier:
                 DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
-            sumeragi_collectors_k: DEFAULT_SUMERAGI_COLLECTORS_K,
-            sumeragi_collectors_redundant_send_r: DEFAULT_SUMERAGI_REDUNDANT_SEND_R,
-            sumeragi_inline_block_created_backup_rbc:
-                DEFAULT_SUMERAGI_INLINE_BLOCK_CREATED_BACKUP_RBC,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
@@ -9873,43 +8583,6 @@ mod tests {
             )),
             "shared-host soak should default the quorum latency gate to the DA steady-state envelope when unset"
         );
-        let recovery = recovery_profile_for(&config);
-        assert_eq!(
-            recovery.height_window_ms,
-            IZANAMI_SHARED_HOST_SOAK_RECOVERY_HEIGHT_WINDOW_MS
-        );
-        assert_eq!(
-            recovery.missing_qc_reacquire_window_ms,
-            IZANAMI_SHARED_HOST_SOAK_RECOVERY_MISSING_QC_REACQUIRE_WINDOW_MS
-        );
-        assert_eq!(
-            recovery.deferred_qc_ttl_ms,
-            IZANAMI_SHARED_HOST_SOAK_RECOVERY_DEFERRED_QC_TTL_MS
-        );
-        assert_eq!(
-            recovery.hash_miss_cap_before_range_pull,
-            IZANAMI_SHARED_HOST_SOAK_RECOVERY_HASH_MISS_CAP_BEFORE_RANGE_PULL
-        );
-        assert_eq!(
-            recovery.missing_block_signer_fallback_attempts,
-            IZANAMI_SHARED_HOST_SOAK_RECOVERY_MISSING_BLOCK_SIGNER_FALLBACK_ATTEMPTS
-        );
-        assert_eq!(
-            recovery.range_pull_escalation_after_hash_misses,
-            IZANAMI_SHARED_HOST_SOAK_RECOVERY_RANGE_PULL_ESCALATION_AFTER_HASH_MISSES
-        );
-        assert_eq!(
-            recovery.da_quorum_timeout_multiplier,
-            IZANAMI_SHARED_HOST_SOAK_DA_QUORUM_TIMEOUT_MULTIPLIER
-        );
-        assert_eq!(
-            recovery.da_availability_timeout_multiplier,
-            IZANAMI_SHARED_HOST_SOAK_DA_AVAILABILITY_TIMEOUT_MULTIPLIER
-        );
-        assert_eq!(
-            recovery.da_availability_timeout_floor_ms,
-            IZANAMI_SHARED_HOST_SOAK_DA_AVAILABILITY_TIMEOUT_FLOOR_MS
-        );
     }
 
     #[test]
@@ -9936,10 +8609,6 @@ mod tests {
             sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
             sumeragi_proposal_queue_scan_multiplier:
                 DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
-            sumeragi_collectors_k: DEFAULT_SUMERAGI_COLLECTORS_K,
-            sumeragi_collectors_redundant_send_r: DEFAULT_SUMERAGI_REDUNDANT_SEND_R,
-            sumeragi_inline_block_created_backup_rbc:
-                DEFAULT_SUMERAGI_INLINE_BLOCK_CREATED_BACKUP_RBC,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
@@ -9975,78 +8644,6 @@ mod tests {
     }
 
     #[test]
-    fn shared_host_stable_soak_consensus_overrides_match_between_permissioned_and_npos() {
-        let mut permissioned = ChaosConfig {
-            allow_net: true,
-            peer_count: 4,
-            faulty_peers: 0,
-            duration: Duration::from_secs(3_600),
-            pipeline_time: None,
-            target_blocks: Some(2_000),
-            progress_interval: DEFAULT_PROGRESS_INTERVAL,
-            progress_timeout: Duration::from_secs(300),
-            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
-            latency_p95_threshold: None,
-            fault_window_start: None,
-            fault_window_end: None,
-            seed: Some(22),
-            tps: 7.0,
-            max_inflight: 13,
-            submitters: 1,
-            prebuild_tx_buffer: 0,
-            prebuild_tx_workers: 0,
-            sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
-            sumeragi_proposal_queue_scan_multiplier:
-                DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
-            sumeragi_collectors_k: DEFAULT_SUMERAGI_COLLECTORS_K,
-            sumeragi_collectors_redundant_send_r: DEFAULT_SUMERAGI_REDUNDANT_SEND_R,
-            sumeragi_inline_block_created_backup_rbc:
-                DEFAULT_SUMERAGI_INLINE_BLOCK_CREATED_BACKUP_RBC,
-            workload_profile: WorkloadProfile::Stable,
-            allow_contract_deploy_in_stable: false,
-            fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
-            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
-            log_filter: "warn".to_string(),
-            faults: FaultToggles::from_array([true, true, true, true]),
-            nexus: None,
-            diagnostic_dir: None,
-        };
-        let mut npos = ChaosConfig {
-            nexus: Some(NexusProfile::sora_defaults().expect("nexus profile")),
-            diagnostic_dir: None,
-            ..permissioned.clone()
-        };
-
-        apply_shared_host_stable_soak_profile(&mut permissioned);
-        apply_shared_host_stable_soak_profile(&mut npos);
-
-        let permissioned_recovery = recovery_profile_for(&permissioned);
-        let npos_recovery = recovery_profile_for(&npos);
-        assert_eq!(
-            permissioned_recovery, npos_recovery,
-            "stable shared-host consensus recovery tuning should be mode-parity"
-        );
-
-        let permissioned_timing = derive_npos_timing(&permissioned);
-        let npos_timing = derive_npos_timing(&npos);
-        assert_eq!(
-            npos_pending_stall_grace_ms(&permissioned, permissioned_timing.block_ms),
-            npos_pending_stall_grace_ms(&npos, npos_timing.block_ms),
-            "stable shared-host pending stall grace should be mode-parity"
-        );
-        assert_eq!(
-            npos_collectors_and_redundancy(&permissioned),
-            npos_collectors_and_redundancy(&npos),
-            "stable shared-host collector/redundancy tuning should be mode-parity"
-        );
-        assert_eq!(
-            is_shared_host_balanced_latency_profile(&permissioned),
-            is_shared_host_balanced_latency_profile(&npos),
-            "stable shared-host DA fast-reschedule policy should be mode-parity"
-        );
-    }
-
-    #[test]
     fn shared_host_stable_soak_profile_pins_canonical_load_shape() {
         let mut config = ChaosConfig {
             allow_net: true,
@@ -10070,10 +8667,6 @@ mod tests {
             sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
             sumeragi_proposal_queue_scan_multiplier:
                 DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
-            sumeragi_collectors_k: DEFAULT_SUMERAGI_COLLECTORS_K,
-            sumeragi_collectors_redundant_send_r: DEFAULT_SUMERAGI_REDUNDANT_SEND_R,
-            sumeragi_inline_block_created_backup_rbc:
-                DEFAULT_SUMERAGI_INLINE_BLOCK_CREATED_BACKUP_RBC,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
@@ -10121,10 +8714,6 @@ mod tests {
             sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
             sumeragi_proposal_queue_scan_multiplier:
                 DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
-            sumeragi_collectors_k: DEFAULT_SUMERAGI_COLLECTORS_K,
-            sumeragi_collectors_redundant_send_r: DEFAULT_SUMERAGI_REDUNDANT_SEND_R,
-            sumeragi_inline_block_created_backup_rbc:
-                DEFAULT_SUMERAGI_INLINE_BLOCK_CREATED_BACKUP_RBC,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
@@ -10142,7 +8731,6 @@ mod tests {
         assert_eq!(config.max_inflight, 8);
         assert_eq!(config.progress_timeout, Duration::from_secs(300));
         assert_eq!(config.pipeline_time, None);
-        assert_eq!(recovery_profile_for(&config), baseline_recovery_profile());
     }
 
     #[test]
@@ -10169,10 +8757,6 @@ mod tests {
             sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
             sumeragi_proposal_queue_scan_multiplier:
                 DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
-            sumeragi_collectors_k: DEFAULT_SUMERAGI_COLLECTORS_K,
-            sumeragi_collectors_redundant_send_r: DEFAULT_SUMERAGI_REDUNDANT_SEND_R,
-            sumeragi_inline_block_created_backup_rbc:
-                DEFAULT_SUMERAGI_INLINE_BLOCK_CREATED_BACKUP_RBC,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
@@ -10187,11 +8771,6 @@ mod tests {
             is_shared_host_stable_soak(&config),
             "single frozen peer should still use shared-host stable soak policy"
         );
-        assert!(
-            is_shared_host_stable_recovery_run(&config),
-            "single frozen peer should still use shared-host recovery policy"
-        );
-
         apply_shared_host_stable_soak_profile(&mut config);
 
         assert_eq!(config.tps, IZANAMI_SHARED_HOST_SOAK_TPS_FLOOR);
@@ -10206,10 +8785,6 @@ mod tests {
             Some(Duration::from_secs(
                 IZANAMI_SHARED_HOST_SOAK_LATENCY_P95_THRESHOLD_SECS
             ))
-        );
-        assert_eq!(
-            recovery_profile_for(&config),
-            shared_host_recovery_profile()
         );
     }
 
@@ -10237,10 +8812,6 @@ mod tests {
             sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
             sumeragi_proposal_queue_scan_multiplier:
                 DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
-            sumeragi_collectors_k: DEFAULT_SUMERAGI_COLLECTORS_K,
-            sumeragi_collectors_redundant_send_r: DEFAULT_SUMERAGI_REDUNDANT_SEND_R,
-            sumeragi_inline_block_created_backup_rbc:
-                DEFAULT_SUMERAGI_INLINE_BLOCK_CREATED_BACKUP_RBC,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
@@ -10281,10 +8852,6 @@ mod tests {
             sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
             sumeragi_proposal_queue_scan_multiplier:
                 DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
-            sumeragi_collectors_k: DEFAULT_SUMERAGI_COLLECTORS_K,
-            sumeragi_collectors_redundant_send_r: DEFAULT_SUMERAGI_REDUNDANT_SEND_R,
-            sumeragi_inline_block_created_backup_rbc:
-                DEFAULT_SUMERAGI_INLINE_BLOCK_CREATED_BACKUP_RBC,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
@@ -10331,10 +8898,6 @@ mod tests {
             sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
             sumeragi_proposal_queue_scan_multiplier:
                 DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
-            sumeragi_collectors_k: DEFAULT_SUMERAGI_COLLECTORS_K,
-            sumeragi_collectors_redundant_send_r: DEFAULT_SUMERAGI_REDUNDANT_SEND_R,
-            sumeragi_inline_block_created_backup_rbc:
-                DEFAULT_SUMERAGI_INLINE_BLOCK_CREATED_BACKUP_RBC,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
@@ -10384,10 +8947,6 @@ mod tests {
             sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
             sumeragi_proposal_queue_scan_multiplier:
                 DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
-            sumeragi_collectors_k: DEFAULT_SUMERAGI_COLLECTORS_K,
-            sumeragi_collectors_redundant_send_r: DEFAULT_SUMERAGI_REDUNDANT_SEND_R,
-            sumeragi_inline_block_created_backup_rbc:
-                DEFAULT_SUMERAGI_INLINE_BLOCK_CREATED_BACKUP_RBC,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
@@ -10440,10 +8999,6 @@ mod tests {
             sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
             sumeragi_proposal_queue_scan_multiplier:
                 DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
-            sumeragi_collectors_k: DEFAULT_SUMERAGI_COLLECTORS_K,
-            sumeragi_collectors_redundant_send_r: DEFAULT_SUMERAGI_REDUNDANT_SEND_R,
-            sumeragi_inline_block_created_backup_rbc:
-                DEFAULT_SUMERAGI_INLINE_BLOCK_CREATED_BACKUP_RBC,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
@@ -10496,10 +9051,6 @@ mod tests {
             sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
             sumeragi_proposal_queue_scan_multiplier:
                 DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
-            sumeragi_collectors_k: DEFAULT_SUMERAGI_COLLECTORS_K,
-            sumeragi_collectors_redundant_send_r: DEFAULT_SUMERAGI_REDUNDANT_SEND_R,
-            sumeragi_inline_block_created_backup_rbc:
-                DEFAULT_SUMERAGI_INLINE_BLOCK_CREATED_BACKUP_RBC,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
@@ -10598,10 +9149,6 @@ mod tests {
             sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
             sumeragi_proposal_queue_scan_multiplier:
                 DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
-            sumeragi_collectors_k: DEFAULT_SUMERAGI_COLLECTORS_K,
-            sumeragi_collectors_redundant_send_r: DEFAULT_SUMERAGI_REDUNDANT_SEND_R,
-            sumeragi_inline_block_created_backup_rbc:
-                DEFAULT_SUMERAGI_INLINE_BLOCK_CREATED_BACKUP_RBC,
             workload_profile: WorkloadProfile::Chaos,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
@@ -10757,10 +9304,6 @@ mod tests {
             sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
             sumeragi_proposal_queue_scan_multiplier:
                 DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
-            sumeragi_collectors_k: DEFAULT_SUMERAGI_COLLECTORS_K,
-            sumeragi_collectors_redundant_send_r: DEFAULT_SUMERAGI_REDUNDANT_SEND_R,
-            sumeragi_inline_block_created_backup_rbc:
-                DEFAULT_SUMERAGI_INLINE_BLOCK_CREATED_BACKUP_RBC,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
@@ -10905,307 +9448,6 @@ mod tests {
     }
 
     #[test]
-    fn parse_sumeragi_phase_snapshot_extracts_expected_fields() {
-        let json = norito::json::from_str::<norito::json::Value>(
-            r#"{
-                "propose_ms": 11,
-                "collect_da_ms": 22,
-                "collect_prevote_ms": 33,
-                "collect_precommit_ms": 44,
-                "collect_aggregator_ms": 55,
-                "commit_ms": 66,
-                "pipeline_total_ms": 176,
-                "max_ms": {
-                    "collect_da_ms": 122,
-                    "collect_precommit_ms": 144,
-                    "pipeline_total_ms": 276
-                },
-                "ema_ms": {
-                    "pipeline_total_ms": 123
-                }
-            }"#,
-        )
-        .expect("valid phase JSON");
-        let snapshot = parse_sumeragi_phase_snapshot(json).expect("phase snapshot should parse");
-        assert_eq!(
-            snapshot,
-            SumeragiPhaseSnapshot {
-                propose_ms: 11,
-                collect_da_ms: 22,
-                collect_prevote_ms: 33,
-                collect_precommit_ms: 44,
-                collect_aggregator_ms: 55,
-                commit_ms: 66,
-                pipeline_total_ms: 176,
-                collect_da_max_ms: 122,
-                collect_precommit_max_ms: 144,
-                pipeline_total_max_ms: 276,
-                pipeline_total_ema_ms: 123,
-            }
-        );
-    }
-
-    #[test]
-    fn parse_sumeragi_phase_snapshot_rejects_missing_ema() {
-        let json = norito::json::from_str::<norito::json::Value>(
-            r#"{
-                "propose_ms": 11,
-                "collect_da_ms": 22,
-                "collect_prevote_ms": 33,
-                "collect_precommit_ms": 44,
-                "collect_aggregator_ms": 55,
-                "commit_ms": 66,
-                "pipeline_total_ms": 176
-            }"#,
-        )
-        .expect("valid phase JSON");
-        assert!(
-            parse_sumeragi_phase_snapshot(json).is_none(),
-            "phase snapshot parser should reject incomplete payloads"
-        );
-    }
-
-    #[test]
-    fn shared_host_recovery_profile_applies_to_stable_pilot_runs() {
-        let config = ChaosConfig {
-            allow_net: true,
-            peer_count: 4,
-            faulty_peers: 0,
-            duration: Duration::from_secs(1_200),
-            pipeline_time: None,
-            target_blocks: Some(1_200),
-            progress_interval: DEFAULT_PROGRESS_INTERVAL,
-            progress_timeout: Duration::from_secs(300),
-            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
-            latency_p95_threshold: None,
-            fault_window_start: None,
-            fault_window_end: None,
-            seed: Some(12),
-            tps: 5.0,
-            max_inflight: 8,
-            submitters: 1,
-            prebuild_tx_buffer: 0,
-            prebuild_tx_workers: 0,
-            sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
-            sumeragi_proposal_queue_scan_multiplier:
-                DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
-            sumeragi_collectors_k: DEFAULT_SUMERAGI_COLLECTORS_K,
-            sumeragi_collectors_redundant_send_r: DEFAULT_SUMERAGI_REDUNDANT_SEND_R,
-            sumeragi_inline_block_created_backup_rbc:
-                DEFAULT_SUMERAGI_INLINE_BLOCK_CREATED_BACKUP_RBC,
-            workload_profile: WorkloadProfile::Stable,
-            allow_contract_deploy_in_stable: false,
-            fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
-            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
-            log_filter: "warn".to_string(),
-            faults: FaultToggles::from_array([true, true, true, true]),
-            nexus: Some(NexusProfile::sora_defaults().expect("nexus profile")),
-            diagnostic_dir: None,
-        };
-
-        assert!(!is_shared_host_stable_soak(&config));
-        assert!(is_shared_host_stable_recovery_run(&config));
-        assert_eq!(
-            recovery_profile_for(&config),
-            shared_host_recovery_profile()
-        );
-    }
-
-    #[test]
-    fn shared_host_recovery_profile_applies_to_permissioned_stable_pilot_runs() {
-        let config = ChaosConfig {
-            allow_net: true,
-            peer_count: 4,
-            faulty_peers: 0,
-            duration: Duration::from_secs(1_200),
-            pipeline_time: None,
-            target_blocks: Some(1_200),
-            progress_interval: DEFAULT_PROGRESS_INTERVAL,
-            progress_timeout: Duration::from_secs(300),
-            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
-            latency_p95_threshold: None,
-            fault_window_start: None,
-            fault_window_end: None,
-            seed: Some(13),
-            tps: 5.0,
-            max_inflight: 8,
-            submitters: 1,
-            prebuild_tx_buffer: 0,
-            prebuild_tx_workers: 0,
-            sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
-            sumeragi_proposal_queue_scan_multiplier:
-                DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
-            sumeragi_collectors_k: DEFAULT_SUMERAGI_COLLECTORS_K,
-            sumeragi_collectors_redundant_send_r: DEFAULT_SUMERAGI_REDUNDANT_SEND_R,
-            sumeragi_inline_block_created_backup_rbc:
-                DEFAULT_SUMERAGI_INLINE_BLOCK_CREATED_BACKUP_RBC,
-            workload_profile: WorkloadProfile::Stable,
-            allow_contract_deploy_in_stable: false,
-            fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
-            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
-            log_filter: "warn".to_string(),
-            faults: FaultToggles::from_array([true, true, true, true]),
-            nexus: None,
-            diagnostic_dir: None,
-        };
-
-        assert!(!is_shared_host_stable_soak(&config));
-        assert!(is_shared_host_stable_recovery_run(&config));
-        assert_eq!(
-            recovery_profile_for(&config),
-            shared_host_recovery_profile()
-        );
-    }
-
-    #[test]
-    fn shared_host_recovery_profile_does_not_apply_below_pilot_duration() {
-        let config = ChaosConfig {
-            allow_net: true,
-            peer_count: 4,
-            faulty_peers: 0,
-            duration: Duration::from_secs(600),
-            pipeline_time: None,
-            target_blocks: Some(600),
-            progress_interval: DEFAULT_PROGRESS_INTERVAL,
-            progress_timeout: Duration::from_secs(300),
-            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
-            latency_p95_threshold: None,
-            fault_window_start: None,
-            fault_window_end: None,
-            seed: Some(15),
-            tps: 5.0,
-            max_inflight: 8,
-            submitters: 1,
-            prebuild_tx_buffer: 0,
-            prebuild_tx_workers: 0,
-            sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
-            sumeragi_proposal_queue_scan_multiplier:
-                DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
-            sumeragi_collectors_k: DEFAULT_SUMERAGI_COLLECTORS_K,
-            sumeragi_collectors_redundant_send_r: DEFAULT_SUMERAGI_REDUNDANT_SEND_R,
-            sumeragi_inline_block_created_backup_rbc:
-                DEFAULT_SUMERAGI_INLINE_BLOCK_CREATED_BACKUP_RBC,
-            workload_profile: WorkloadProfile::Stable,
-            allow_contract_deploy_in_stable: false,
-            fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
-            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
-            log_filter: "warn".to_string(),
-            faults: FaultToggles::from_array([true, true, true, true]),
-            nexus: Some(NexusProfile::sora_defaults().expect("nexus profile")),
-            diagnostic_dir: None,
-        };
-
-        assert!(!is_shared_host_stable_recovery_run(&config));
-        assert_eq!(recovery_profile_for(&config), baseline_recovery_profile());
-    }
-
-    #[test]
-    fn shared_host_recovery_profile_config_layer_writes_tuned_da_timeouts() -> Result<()> {
-        init_instruction_registry();
-        let config = ChaosConfig {
-            allow_net: true,
-            peer_count: 4,
-            faulty_peers: 0,
-            duration: Duration::from_secs(1_200),
-            pipeline_time: None,
-            target_blocks: Some(1_200),
-            progress_interval: DEFAULT_PROGRESS_INTERVAL,
-            progress_timeout: Duration::from_secs(300),
-            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
-            latency_p95_threshold: None,
-            fault_window_start: None,
-            fault_window_end: None,
-            seed: Some(27),
-            tps: 5.0,
-            max_inflight: 8,
-            submitters: 1,
-            prebuild_tx_buffer: 0,
-            prebuild_tx_workers: 0,
-            sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
-            sumeragi_proposal_queue_scan_multiplier:
-                DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
-            sumeragi_collectors_k: DEFAULT_SUMERAGI_COLLECTORS_K,
-            sumeragi_collectors_redundant_send_r: DEFAULT_SUMERAGI_REDUNDANT_SEND_R,
-            sumeragi_inline_block_created_backup_rbc:
-                DEFAULT_SUMERAGI_INLINE_BLOCK_CREATED_BACKUP_RBC,
-            workload_profile: WorkloadProfile::Stable,
-            allow_contract_deploy_in_stable: false,
-            fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
-            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
-            log_filter: "warn".to_string(),
-            faults: FaultToggles::from_array([true, true, true, true]),
-            nexus: Some(NexusProfile::sora_defaults().expect("nexus profile")),
-            diagnostic_dir: None,
-        };
-
-        let account_qty = config.peer_count.saturating_mul(3).max(6);
-        let PreparedChaos { genesis, .. } = instructions::prepare_state(
-            account_qty,
-            Some(config.peer_count),
-            config.nexus.as_ref(),
-            config.workload_profile,
-            config.allow_contract_deploy_in_stable,
-        )?;
-        let builder = make_network_builder(&config, genesis)?;
-        let network = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            builder.build()
-        })) {
-            Ok(network) => network,
-            Err(payload) => {
-                let msg = payload
-                    .downcast_ref::<String>()
-                    .cloned()
-                    .or_else(|| payload.downcast_ref::<&str>().map(ToString::to_string))
-                    .unwrap_or_default();
-                if msg.contains("Operation not permitted") || msg.contains("permission denied") {
-                    return Ok(());
-                }
-                std::panic::resume_unwind(payload);
-            }
-        };
-
-        let layers: Vec<Table> = network.config_layers().map(Cow::into_owned).collect();
-        let lookup = |path: &[&str]| {
-            layers.iter().rev().find_map(|layer| {
-                let mut current = layer;
-                for (idx, key) in path.iter().enumerate() {
-                    let value = current.get(*key)?;
-                    if idx + 1 == path.len() {
-                        return value.as_integer();
-                    }
-                    current = value.as_table()?;
-                }
-                None
-            })
-        };
-
-        assert_eq!(
-            lookup(&["sumeragi", "advanced", "da", "quorum_timeout_multiplier"]),
-            Some(IZANAMI_SHARED_HOST_SOAK_DA_QUORUM_TIMEOUT_MULTIPLIER)
-        );
-        assert_eq!(
-            lookup(&[
-                "sumeragi",
-                "advanced",
-                "da",
-                "availability_timeout_multiplier"
-            ]),
-            Some(IZANAMI_SHARED_HOST_SOAK_DA_AVAILABILITY_TIMEOUT_MULTIPLIER)
-        );
-        assert_eq!(
-            lookup(&[
-                "sumeragi",
-                "advanced",
-                "da",
-                "availability_timeout_floor_ms"
-            ]),
-            Some(IZANAMI_SHARED_HOST_SOAK_DA_AVAILABILITY_TIMEOUT_FLOOR_MS)
-        );
-
-        Ok(())
-    }
-
-    #[test]
     fn shared_host_stable_soak_profile_keeps_higher_pipeline_time() {
         let mut config = ChaosConfig {
             allow_net: true,
@@ -11229,10 +9471,6 @@ mod tests {
             sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
             sumeragi_proposal_queue_scan_multiplier:
                 DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
-            sumeragi_collectors_k: DEFAULT_SUMERAGI_COLLECTORS_K,
-            sumeragi_collectors_redundant_send_r: DEFAULT_SUMERAGI_REDUNDANT_SEND_R,
-            sumeragi_inline_block_created_backup_rbc:
-                DEFAULT_SUMERAGI_INLINE_BLOCK_CREATED_BACKUP_RBC,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
@@ -11280,10 +9518,6 @@ mod tests {
             sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
             sumeragi_proposal_queue_scan_multiplier:
                 DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
-            sumeragi_collectors_k: DEFAULT_SUMERAGI_COLLECTORS_K,
-            sumeragi_collectors_redundant_send_r: DEFAULT_SUMERAGI_REDUNDANT_SEND_R,
-            sumeragi_inline_block_created_backup_rbc:
-                DEFAULT_SUMERAGI_INLINE_BLOCK_CREATED_BACKUP_RBC,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(5)..=Duration::from_secs(5),
@@ -12495,14 +10729,6 @@ mod tests {
     }
 
     #[test]
-    fn pending_stall_grace_scales_with_block_time() {
-        assert_eq!(pending_stall_grace_ms(100), 100);
-        assert_eq!(pending_stall_grace_ms(200), 100);
-        assert_eq!(pending_stall_grace_ms(300), 150);
-        assert_eq!(pending_stall_grace_ms(4_000), 1_000);
-    }
-
-    #[test]
     fn progress_state_tracks_stalls() {
         let start = Instant::now();
         let mut state = ProgressState::new(start);
@@ -12838,10 +11064,6 @@ mod tests {
             sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
             sumeragi_proposal_queue_scan_multiplier:
                 DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
-            sumeragi_collectors_k: DEFAULT_SUMERAGI_COLLECTORS_K,
-            sumeragi_collectors_redundant_send_r: DEFAULT_SUMERAGI_REDUNDANT_SEND_R,
-            sumeragi_inline_block_created_backup_rbc:
-                DEFAULT_SUMERAGI_INLINE_BLOCK_CREATED_BACKUP_RBC,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(5)..=Duration::from_secs(5),
@@ -12933,10 +11155,6 @@ mod tests {
             sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
             sumeragi_proposal_queue_scan_multiplier:
                 DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
-            sumeragi_collectors_k: DEFAULT_SUMERAGI_COLLECTORS_K,
-            sumeragi_collectors_redundant_send_r: DEFAULT_SUMERAGI_REDUNDANT_SEND_R,
-            sumeragi_inline_block_created_backup_rbc:
-                DEFAULT_SUMERAGI_INLINE_BLOCK_CREATED_BACKUP_RBC,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(5)..=Duration::from_secs(5),
@@ -13035,10 +11253,6 @@ mod tests {
             sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
             sumeragi_proposal_queue_scan_multiplier:
                 DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
-            sumeragi_collectors_k: DEFAULT_SUMERAGI_COLLECTORS_K,
-            sumeragi_collectors_redundant_send_r: DEFAULT_SUMERAGI_REDUNDANT_SEND_R,
-            sumeragi_inline_block_created_backup_rbc:
-                DEFAULT_SUMERAGI_INLINE_BLOCK_CREATED_BACKUP_RBC,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(5)..=Duration::from_secs(5),
@@ -13159,10 +11373,6 @@ mod tests {
             sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
             sumeragi_proposal_queue_scan_multiplier:
                 DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
-            sumeragi_collectors_k: DEFAULT_SUMERAGI_COLLECTORS_K,
-            sumeragi_collectors_redundant_send_r: DEFAULT_SUMERAGI_REDUNDANT_SEND_R,
-            sumeragi_inline_block_created_backup_rbc:
-                DEFAULT_SUMERAGI_INLINE_BLOCK_CREATED_BACKUP_RBC,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
@@ -13412,201 +11622,67 @@ mod tests {
     }
 
     #[test]
-    fn sumeragi_status_digest_preserves_detailed_liveness_evidence() {
-        use iroha_data_model::block::consensus::{
-            SumeragiNposRepairCoverageStatus, SumeragiStatusWire, SumeragiWorkerQueueDepths,
-        };
-
-        let mut start = SumeragiStatusWire {
-            view_change_install_total: 2,
-            ..Default::default()
-        };
-        start.view_change_causes.quorum_timeout_total = 1;
-        start.view_change_causes.missing_qc_total = 2;
-        start.missing_block_fetch.total = 3;
-        start.pacemaker_backpressure_deferrals_total = 4;
-        start.commit_inflight.timeout_total = 5;
-        start.qc_deferred_missing_payload_total = 6;
-        start.qc_deferred_resolved_total = 7;
-        start.qc_deferred_expired_total = 8;
-        start.consensus_missing_qc_reacquire_attempt_total = 9;
-        start.consensus_missing_qc_reacquire_success_total = 10;
-        start.consensus_missing_qc_reacquire_exhausted_total = 11;
-        start.consensus_forced_proposal_attempt_total = 12;
-        start.consensus_forced_proposal_success_total = 13;
-        start.blocksync_range_pull_escalation_total = 14;
-        start.blocksync_range_pull_success_total = 15;
-        start.blocksync_range_pull_failure_total = 16;
-        start.blocksync_range_pull_candidate_exhausted_total = 17;
-
-        let mut end = start.clone();
-        end.view_change_install_total = 9;
-        end.view_change_causes.commit_failure_total = 1;
-        end.view_change_causes.quorum_timeout_total = 3;
-        end.view_change_causes.stake_quorum_timeout_total = 4;
-        end.view_change_causes.roster_unavailable_total = 5;
-        end.view_change_causes.da_gate_total = 6;
-        end.view_change_causes.censorship_evidence_total = 7;
-        end.view_change_causes.missing_payload_total = 8;
-        end.view_change_causes.missing_qc_total = 11;
-        end.view_change_causes.validation_reject_total = 10;
-        end.view_change_causes.last_cause = Some("missing_qc".to_owned());
-        end.missing_block_fetch.total = 19;
-        end.missing_block_fetch.last_targets = 5;
-        end.missing_block_fetch.last_dwell_ms = 1_200;
-        end.tx_queue_depth = 73;
-        end.tx_queue_capacity = 128;
-        end.tx_queue_retained_bytes = 98_304;
-        end.tx_queue_max_retained_bytes = 131_072;
-        end.tx_queue_saturated = true;
-        end.tx_queue_saturated_by_count = false;
-        end.tx_queue_saturated_by_bytes = true;
-        end.tx_queue_saturated_by_age = true;
-        end.tx_queue_oldest_queued_age_ms = 8_500;
-        end.pacemaker_backpressure_deferrals_total = 24;
-        end.commit_inflight.active = true;
-        end.commit_inflight.height = 42;
-        end.commit_inflight.view = 3;
-        end.commit_inflight.elapsed_ms = 456;
-        end.commit_inflight.timeout_total = 35;
-        end.worker_loop.stage = "proposal_wait".to_owned();
-        end.worker_loop.last_iteration_ms = 987;
-        end.worker_loop.queue_depths = SumeragiWorkerQueueDepths {
-            vote_rx: 1,
-            block_payload_rx: 2,
-            rbc_chunk_rx: 3,
-            block_rx: 4,
-            consensus_rx: 5,
-            lane_relay_rx: 6,
-            background_rx: 7,
-        };
-        end.qc_deferred_missing_payload_total = 16;
-        end.qc_deferred_resolved_total = 27;
-        end.qc_deferred_expired_total = 38;
-        end.consensus_missing_qc_reacquire_attempt_total = 49;
-        end.consensus_missing_qc_reacquire_success_total = 60;
-        end.consensus_missing_qc_reacquire_exhausted_total = 71;
-        end.consensus_forced_proposal_attempt_total = 82;
-        end.consensus_forced_proposal_success_total = 93;
-        end.blocksync_range_pull_escalation_total = 104;
-        end.blocksync_range_pull_success_total = 115;
-        end.blocksync_range_pull_failure_total = 126;
-        end.blocksync_range_pull_candidate_exhausted_total = 137;
-        end.npos_repair_coverage = Some(SumeragiNposRepairCoverageStatus {
-            last_repair_height: 44,
-            last_repair_view: 2,
-            reason: "missing_qc".to_owned(),
-            selected_repair_peer_count: 7,
-            required_stake_quorum_bps: 6_667,
-            selected_stake_coverage_bps: 7_500,
-            reached_stake_quorum_coverage: true,
+    fn sumeragi_status_digest_tracks_v2_progress_and_lane_local_execution() {
+        let start_json = norito::json!({
+            "protocol_version": 2,
+            "height": 10,
+            "view": 1,
+            "phase": "Prepare",
+            "leader": 0,
+            "locked_prepare_qc": null,
+            "highest_prepare_qc": null,
+            "last_timeout_certificate": null,
+            "body_state": "Validated",
+            "pending_persistence_id": null,
+            "last_committed_height": 9
+        });
+        let end_json = norito::json!({
+            "protocol_version": 2,
+            "height": 13,
+            "view": 4,
+            "phase": "Commit",
+            "leader": 3,
+            "locked_prepare_qc": {"height": 13},
+            "highest_prepare_qc": {"height": 13},
+            "last_timeout_certificate": {"height": 13},
+            "body_state": "PendingApply",
+            "pending_persistence_id": 7,
+            "last_committed_height": 12,
+            "pipeline_execution": {
+                "tx_vertices_total": 3,
+                "tx_edges_total": 2,
+                "overlay_count_total": 4,
+                "overlay_instr_total": 5,
+                "overlay_bytes_total": 4096,
+                "rbc_chunks_total": 3,
+                "rbc_bytes_total": 3072,
+                "detached_prepared_total": 7,
+                "detached_merged_total": 6,
+                "detached_fallback_total": 1,
+                "quarantine_executed_total": 2
+            }
         });
 
-        let mut end_digest = SumeragiStatusDigest::from_wire(&end);
-        end_digest.apply_json_extras(&norito::json!({
-            "pipeline_conflict_rate_bps": 27,
-            "lane_activity": [
-                {
-                    "tx_vertices": 10,
-                    "tx_edges": 3,
-                    "overlay_count": 4,
-                    "overlay_instr_total": 40,
-                    "overlay_bytes_total": 400,
-                    "rbc_chunks": 2,
-                    "rbc_bytes_total": 2_048,
-                    "detached_prepared": 5,
-                    "detached_merged": 4,
-                    "detached_fallback": 1,
-                    "quarantine_executed": 0,
-                },
-                {
-                    "tx_vertices": 7,
-                    "tx_edges": 2,
-                    "overlay_count": 3,
-                    "overlay_instr_total": 30,
-                    "overlay_bytes_total": 300,
-                    "rbc_chunks": 1,
-                    "rbc_bytes_total": 1_024,
-                    "detached_prepared": 3,
-                    "detached_merged": 2,
-                    "detached_fallback": 1,
-                    "quarantine_executed": 1,
-                },
-            ],
-        }));
-        let delta = end_digest.delta_from(SumeragiStatusDigest::from_wire(&start));
+        let start = SumeragiStatusDigest::from_json(&start_json);
+        let mut end = SumeragiStatusDigest::from_json(&end_json);
+        end.apply_json_extras(&end_json);
+        let delta = end.delta_from(start);
 
-        assert_eq!(delta.view_change_install_total, 7);
-        assert_eq!(delta.view_change_cause_total, 52);
-        assert_eq!(delta.view_change_quorum_timeout_total, 2);
-        assert_eq!(delta.view_change_missing_qc_total, 9);
-        assert_eq!(delta.view_change_last_cause.as_deref(), Some("missing_qc"));
-        assert_eq!(delta.missing_block_fetch_total, 16);
-        assert_eq!(delta.missing_block_fetch_last_targets, 5);
-        assert_eq!(delta.missing_block_fetch_last_dwell_ms, 1_200);
-        assert_eq!(delta.tx_queue_depth, 73);
-        assert_eq!(delta.tx_queue_capacity, 128);
-        assert_eq!(delta.tx_queue_retained_bytes, 98_304);
-        assert_eq!(delta.tx_queue_max_retained_bytes, 131_072);
-        assert!(delta.tx_queue_saturated);
-        assert!(!delta.tx_queue_saturated_by_count);
-        assert!(delta.tx_queue_saturated_by_bytes);
-        assert!(delta.tx_queue_saturated_by_age);
-        assert_eq!(delta.tx_queue_oldest_queued_age_ms, 8_500);
-        assert_eq!(delta.pacemaker_backpressure_deferrals_total, 20);
-        assert!(delta.commit_inflight_active);
-        assert_eq!(delta.commit_inflight_height, 42);
-        assert_eq!(delta.commit_inflight_view, 3);
-        assert_eq!(delta.commit_inflight_elapsed_ms, 456);
-        assert_eq!(delta.commit_inflight_timeout_total, 30);
-        assert_eq!(delta.worker_loop_stage, "proposal_wait");
-        assert_eq!(delta.worker_loop_last_iteration_ms, 987);
-        assert_eq!(delta.worker_loop_queue_depth_total, 28);
-        assert_eq!(delta.qc_deferred_missing_payload_total, 10);
-        assert_eq!(delta.qc_deferred_resolved_total, 20);
-        assert_eq!(delta.qc_deferred_expired_total, 30);
-        assert_eq!(delta.consensus_missing_qc_reacquire_attempt_total, 40);
-        assert_eq!(delta.consensus_missing_qc_reacquire_success_total, 50);
-        assert_eq!(delta.consensus_missing_qc_reacquire_exhausted_total, 60);
-        assert_eq!(delta.consensus_forced_proposal_attempt_total, 70);
-        assert_eq!(delta.consensus_forced_proposal_success_total, 80);
-        assert_eq!(delta.blocksync_range_pull_escalation_total, 90);
-        assert_eq!(delta.blocksync_range_pull_success_total, 100);
-        assert_eq!(delta.blocksync_range_pull_failure_total, 110);
-        assert_eq!(delta.blocksync_range_pull_candidate_exhausted_total, 120);
-        assert_eq!(delta.npos_repair_selected_stake_coverage_bps, 7_500);
-        assert!(delta.npos_repair_reached_stake_quorum_coverage);
-        assert_eq!(delta.pipeline_conflict_rate_bps, 27);
-        assert_eq!(delta.lane_tx_vertices_total, 17);
-        assert_eq!(delta.lane_tx_edges_total, 5);
-        assert_eq!(delta.lane_overlay_count_total, 7);
-        assert_eq!(delta.lane_overlay_instr_total, 70);
-        assert_eq!(delta.lane_overlay_bytes_total, 700);
+        assert_eq!(delta.protocol_version, 2);
+        assert_eq!(delta.persisted_height, 13);
+        assert_eq!(delta.persisted_view, 4);
+        assert_eq!(delta.leader, 3);
+        assert_eq!(delta.phase, "Commit");
+        assert_eq!(delta.body_state, "PendingApply");
+        assert!(delta.pending_persistence);
+        assert!(delta.has_locked_prepare_qc);
+        assert!(delta.has_highest_prepare_qc);
+        assert!(delta.has_last_timeout_certificate);
+        assert_eq!(delta.last_committed_height, 12);
+        assert_eq!(delta.committed_height_advance, 3);
         assert_eq!(delta.lane_rbc_chunks_total, 3);
         assert_eq!(delta.lane_rbc_bytes_total, 3_072);
-        assert_eq!(delta.detached_prepared_total, 8);
         assert_eq!(delta.detached_merged_total, 6);
-        assert_eq!(delta.detached_fallback_total, 2);
-        assert_eq!(delta.quarantine_executed_total, 1);
-
-        let mut compact_digest = SumeragiStatusDigest::default();
-        compact_digest.apply_json_extras(&norito::json!({
-            "pipeline_execution": {
-                "tx_vertices_total": 99,
-                "detached_merged_total": 44,
-                "detached_fallback_total": 3,
-            },
-            "lane_activity": [
-                {
-                    "tx_vertices": 1,
-                    "detached_merged": 1,
-                    "detached_fallback": 1,
-                },
-            ],
-        }));
-        assert_eq!(compact_digest.lane_tx_vertices_total, 99);
-        assert_eq!(compact_digest.detached_merged_total, 44);
-        assert_eq!(compact_digest.detached_fallback_total, 3);
     }
 
     #[test]
@@ -13827,10 +11903,6 @@ mod tests {
             sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
             sumeragi_proposal_queue_scan_multiplier:
                 DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
-            sumeragi_collectors_k: DEFAULT_SUMERAGI_COLLECTORS_K,
-            sumeragi_collectors_redundant_send_r: DEFAULT_SUMERAGI_REDUNDANT_SEND_R,
-            sumeragi_inline_block_created_backup_rbc:
-                DEFAULT_SUMERAGI_INLINE_BLOCK_CREATED_BACKUP_RBC,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(5)..=Duration::from_secs(20),
@@ -14202,12 +12274,12 @@ mod tests {
     }
 
     #[test]
-    fn make_network_builder_applies_pipeline_time() -> Result<()> {
+    fn make_network_builder_emits_only_strict_sumeragi_v2_config() -> Result<()> {
         init_instruction_registry();
         let pipeline_time = Duration::from_millis(300);
         let config = ChaosConfig {
             allow_net: true,
-            peer_count: 2,
+            peer_count: 4,
             faulty_peers: 0,
             duration: Duration::from_secs(1),
             pipeline_time: Some(pipeline_time),
@@ -14227,10 +12299,6 @@ mod tests {
             sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
             sumeragi_proposal_queue_scan_multiplier:
                 DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
-            sumeragi_collectors_k: DEFAULT_SUMERAGI_COLLECTORS_K,
-            sumeragi_collectors_redundant_send_r: DEFAULT_SUMERAGI_REDUNDANT_SEND_R,
-            sumeragi_inline_block_created_backup_rbc:
-                DEFAULT_SUMERAGI_INLINE_BLOCK_CREATED_BACKUP_RBC,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
@@ -14249,513 +12317,94 @@ mod tests {
             config.workload_profile,
             config.allow_contract_deploy_in_stable,
         )?;
-        let builder = make_network_builder(&config, genesis)?;
-        let network = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            builder.build()
-        })) {
-            Ok(network) => network,
-            Err(payload) => {
-                let msg = payload
-                    .downcast_ref::<String>()
-                    .cloned()
-                    .or_else(|| payload.downcast_ref::<&str>().map(ToString::to_string))
-                    .unwrap_or_default();
-                if msg.contains("Operation not permitted") || msg.contains("permission denied") {
-                    return Ok(());
-                }
-                std::panic::resume_unwind(payload);
-            }
-        };
+        let network = make_network_builder(&config, genesis)?.build();
 
         assert_eq!(network.pipeline_time(), pipeline_time);
-        let mut params = Parameters::default();
-        for tx in network.genesis_isi() {
-            for isi in tx {
-                let Some(set_param) = isi.as_any().downcast_ref::<SetParameter>() else {
-                    continue;
-                };
-                params.set_parameter(set_param.inner().clone());
-            }
-        }
-        let gas_limit_parameter = params
-            .custom()
-            .get(&CustomParameterId::new(
-                "ivm_gas_limit_per_block"
-                    .parse()
-                    .expect("static gas-limit parameter name is valid"),
-            ))
-            .expect("Izanami genesis should pin a high block gas limit");
-        let gas_limit = gas_limit_parameter
-            .payload()
-            .try_into_any_norito::<u64>()
-            .expect("gas limit payload should decode as u64");
-        assert_eq!(gas_limit, IZANAMI_IVM_GAS_LIMIT_PER_BLOCK);
         let layers: Vec<Table> = network.config_layers().map(Cow::into_owned).collect();
-        let read_i64 = |layer: &Table, path: &[&str]| -> Option<i64> {
-            let mut current = layer;
-            for (idx, key) in path.iter().enumerate() {
-                let value = current.get(*key)?;
-                if idx + 1 == path.len() {
-                    return value.as_integer();
+        let lookup = |path: &[&str]| {
+            layers.iter().rev().find_map(|layer| {
+                let mut current = layer;
+                for (idx, key) in path.iter().enumerate() {
+                    let value = current.get(*key)?;
+                    if idx + 1 == path.len() {
+                        return Some(value);
+                    }
+                    current = value.as_table()?;
                 }
-                current = value.as_table()?;
-            }
-            None
+                None
+            })
         };
-        let read_bool = |layer: &Table, path: &[&str]| -> Option<bool> {
-            let mut current = layer;
-            for (idx, key) in path.iter().enumerate() {
-                let value = current.get(*key)?;
-                if idx + 1 == path.len() {
-                    return value.as_bool();
-                }
-                current = value.as_table()?;
-            }
-            None
-        };
-        let read_string = |layer: &Table, path: &[&str]| -> Option<String> {
-            let mut current = layer;
-            for (idx, key) in path.iter().enumerate() {
-                let value = current.get(*key)?;
-                if idx + 1 == path.len() {
-                    return value.as_str().map(str::to_string);
-                }
-                current = value.as_table()?;
-            }
-            None
-        };
-        let read_string_array = |layer: &Table, path: &[&str]| -> Option<Vec<String>> {
-            let mut current = layer;
-            for (idx, key) in path.iter().enumerate() {
-                let value = current.get(*key)?;
-                if idx + 1 == path.len() {
-                    return Some(
-                        value
-                            .as_array()?
-                            .iter()
-                            .map(|entry| entry.as_str().map(str::to_string))
-                            .collect::<Option<Vec<_>>>()?,
-                    );
-                }
-                current = value.as_table()?;
-            }
-            None
-        };
-        let lookup = |path| layers.iter().rev().find_map(|layer| read_i64(layer, path));
-        let lookup_bool = |path| layers.iter().rev().find_map(|layer| read_bool(layer, path));
-        let lookup_string = |path| {
-            layers
-                .iter()
-                .rev()
-                .find_map(|layer| read_string(layer, path))
-        };
-        let lookup_string_array = |path| {
-            layers
-                .iter()
-                .rev()
-                .find_map(|layer| read_string_array(layer, path))
-        };
-        let npos_timing = derive_npos_timing(&config);
-        let npos_propose_ms =
-            i64::try_from(npos_timing.propose_ms).expect("npos propose timeout fits into i64");
-        let npos_prevote_ms =
-            i64::try_from(npos_timing.prevote_ms).expect("npos prevote timeout fits into i64");
-        let npos_precommit_ms =
-            i64::try_from(npos_timing.precommit_ms).expect("npos precommit timeout fits into i64");
-        let npos_commit_ms = i64::try_from(npos_timing.commit_timeout_ms)
-            .expect("npos commit timeout fits into i64");
-        let npos_da_ms = i64::try_from(npos_timing.da_ms).expect("npos DA timeout fits into i64");
-        let npos_aggregator_ms = i64::try_from(npos_timing.aggregator_ms)
-            .expect("npos aggregator timeout fits into i64");
-        let pending_stall_ms = npos_pending_stall_grace_ms(&config, npos_timing.block_ms);
+
         assert_eq!(
-            lookup_bool(&["pipeline", "dynamic_prepass"]),
-            Some(IZANAMI_PIPELINE_DYNAMIC_PREPASS)
+            lookup(&["sumeragi", "round_timeout_ms"]).and_then(TomlValue::as_integer),
+            Some(
+                i64::try_from(iroha_config::parameters::defaults::sumeragi::ROUND_TIMEOUT_MS)
+                    .expect("round timeout fits i64")
+            )
         );
         assert_eq!(
-            lookup_bool(&["pipeline", "access_set_cache_enabled"]),
-            Some(IZANAMI_PIPELINE_ACCESS_SET_CACHE_ENABLED)
+            lookup(&["sumeragi", "role"]).and_then(TomlValue::as_str),
+            Some("validator")
         );
         assert_eq!(
-            lookup_bool(&["pipeline", "parallel_overlay"]),
-            Some(IZANAMI_PIPELINE_PARALLEL_OVERLAY)
-        );
-        assert_eq!(
-            lookup_bool(&["pipeline", "parallel_apply"]),
-            Some(IZANAMI_PIPELINE_PARALLEL_APPLY)
-        );
-        assert_eq!(
-            lookup(&["pipeline", "workers"]),
-            Some(IZANAMI_PIPELINE_WORKERS)
-        );
-        assert_eq!(
-            lookup(&["pipeline", "signature_batch_max_ed25519"]),
-            Some(IZANAMI_PIPELINE_SIGNATURE_BATCH_MAX_ED25519)
-        );
-        assert_eq!(
-            lookup(&["pipeline", "signature_batch_max_secp256k1"]),
-            Some(IZANAMI_PIPELINE_SIGNATURE_BATCH_MAX_SECP256K1)
-        );
-        assert_eq!(
-            lookup(&["pipeline", "signature_batch_max_pqc"]),
-            Some(IZANAMI_PIPELINE_SIGNATURE_BATCH_MAX_PQC)
-        );
-        assert_eq!(
-            lookup(&["pipeline", "signature_batch_max_bls"]),
-            Some(IZANAMI_PIPELINE_SIGNATURE_BATCH_MAX_BLS)
-        );
-        assert_eq!(
-            lookup(&["pipeline", "stateless_cache_cap"]),
-            Some(IZANAMI_PIPELINE_STATELESS_CACHE_CAP)
-        );
-        assert_eq!(
-            lookup_string(&["kura", "fsync_mode"]),
-            Some(IZANAMI_KURA_FSYNC_MODE.to_string())
-        );
-        assert_eq!(
-            lookup(&["network", "p2p_queue_cap_high"]),
-            Some(IZANAMI_P2P_QUEUE_CAP_HIGH)
-        );
-        assert_eq!(
-            lookup(&["network", "p2p_queue_cap_low"]),
-            Some(IZANAMI_P2P_QUEUE_CAP_LOW)
-        );
-        assert_eq!(
-            lookup(&["network", "p2p_post_queue_cap"]),
-            Some(IZANAMI_P2P_POST_QUEUE_CAP)
-        );
-        assert_eq!(
-            lookup(&["network", "p2p_subscriber_queue_cap"]),
-            Some(IZANAMI_P2P_SUBSCRIBER_QUEUE_CAP)
-        );
-        assert_eq!(lookup(&["queue", "capacity"]), Some(IZANAMI_QUEUE_CAPACITY));
-        assert_eq!(
-            lookup(&["queue", "capacity_per_user"]),
-            Some(IZANAMI_QUEUE_CAPACITY)
-        );
-        assert_eq!(
-            lookup_string_array(&["torii", "preauth_allow_cidrs"]),
-            Some(vec!["127.0.0.0/8".to_string(), "::1/128".to_string()])
-        );
-        assert_eq!(
-            lookup_string_array(&["torii", "api_allow_cidrs"]),
-            Some(vec!["127.0.0.0/8".to_string(), "::1/128".to_string()])
-        );
-        assert_eq!(
-            lookup(&["torii", "preauth_rate_per_ip_per_sec"]),
-            Some(IZANAMI_TORII_PREAUTH_RATE_PER_IP_PER_SEC)
-        );
-        assert_eq!(
-            lookup(&["torii", "preauth_burst_per_ip"]),
-            Some(IZANAMI_TORII_PREAUTH_BURST_PER_IP)
-        );
-        assert_eq!(
-            lookup(&["torii", "query_rate_per_authority_per_sec"]),
-            Some(IZANAMI_TORII_DISABLED_RATE_LIMIT)
-        );
-        assert_eq!(
-            lookup(&["torii", "query_burst_per_authority"]),
-            Some(IZANAMI_TORII_DISABLED_RATE_LIMIT)
-        );
-        assert_eq!(
-            lookup(&["torii", "tx_rate_per_authority_per_sec"]),
-            Some(IZANAMI_TORII_DISABLED_RATE_LIMIT)
-        );
-        assert_eq!(
-            lookup(&["torii", "tx_burst_per_authority"]),
-            Some(IZANAMI_TORII_DISABLED_RATE_LIMIT)
-        );
-        assert_eq!(
-            lookup(&["torii", "api_high_load_tx_threshold"]),
-            Some(IZANAMI_QUEUE_CAPACITY)
-        );
-        assert_eq!(
-            lookup(&["network", "transaction_gossip_period_ms"]),
-            Some(IZANAMI_TRANSACTION_GOSSIP_PERIOD_MS)
-        );
-        assert_eq!(
-            lookup(&["network", "transaction_gossip_size"]),
-            Some(IZANAMI_TRANSACTION_GOSSIP_SIZE)
-        );
-        assert_eq!(
-            lookup(&["network", "transaction_gossip_resend_ticks"]),
-            Some(IZANAMI_TRANSACTION_GOSSIP_RESEND_TICKS)
-        );
-        assert_eq!(
-            lookup(&["network", "transaction_gossip_public_target_cap"]),
-            Some(IZANAMI_TRANSACTION_GOSSIP_PUBLIC_TARGET_CAP)
-        );
-        assert_eq!(
-            lookup(&["sumeragi", "block", "max_transactions"]),
+            lookup(&["sumeragi", "block", "max_transactions"]).and_then(TomlValue::as_integer),
             Some(
                 i64::try_from(config.sumeragi_block_max_transactions)
-                    .expect("test block cap fits i64")
+                    .expect("transaction limit fits i64")
             )
         );
         assert_eq!(
-            lookup(&["sumeragi", "block", "proposal_queue_scan_multiplier"]),
+            lookup(&["sumeragi", "block", "proposal_queue_scan_multiplier"])
+                .and_then(TomlValue::as_integer),
             Some(
                 i64::try_from(config.sumeragi_proposal_queue_scan_multiplier)
-                    .expect("test scan multiplier fits i64")
+                    .expect("scan multiplier fits i64")
             )
         );
         assert_eq!(
-            lookup(&["nexus", "fusion", "floor_teu"]),
-            Some(IZANAMI_NEXUS_FUSION_FLOOR_TEU)
+            lookup(&["sumeragi", "queues", "commands"]).and_then(TomlValue::as_integer),
+            Some(IZANAMI_SUMERAGI_QUEUE_COMMANDS)
         );
         assert_eq!(
-            lookup(&["nexus", "fusion", "exit_teu"]),
-            Some(IZANAMI_NEXUS_FUSION_EXIT_TEU)
+            lookup(&["sumeragi", "queues", "bodies"]).and_then(TomlValue::as_integer),
+            Some(IZANAMI_SUMERAGI_QUEUE_BODIES)
         );
         assert_eq!(
-            lookup(&["sumeragi", "advanced", "queues", "block_payload"]),
-            Some(IZANAMI_BLOCK_PAYLOAD_QUEUE)
+            lookup(&["sumeragi", "queues", "chunks"]).and_then(TomlValue::as_integer),
+            Some(IZANAMI_SUMERAGI_QUEUE_CHUNKS)
         );
         assert_eq!(
-            lookup(&[
-                "sumeragi",
-                "advanced",
-                "worker",
-                "validation_worker_threads"
-            ]),
-            Some(IZANAMI_VALIDATION_WORKER_THREADS)
+            lookup(&["sumeragi", "queues", "ready_bodies"]).and_then(TomlValue::as_integer),
+            Some(IZANAMI_SUMERAGI_QUEUE_READY_BODIES)
         );
         assert_eq!(
-            lookup(&[
-                "sumeragi",
-                "advanced",
-                "worker",
-                "validation_work_queue_cap"
-            ]),
-            Some(IZANAMI_VALIDATION_WORK_QUEUE_CAP)
+            lookup(&["sumeragi", "keys", "allowed_algorithms"])
+                .and_then(TomlValue::as_array)
+                .and_then(|algorithms| algorithms.first())
+                .and_then(TomlValue::as_str),
+            Some("bls_normal")
         );
-        assert_eq!(
-            lookup(&[
-                "sumeragi",
-                "advanced",
-                "worker",
-                "validation_result_queue_cap"
-            ]),
-            Some(IZANAMI_VALIDATION_RESULT_QUEUE_CAP)
-        );
-        assert_eq!(
-            lookup(&["sumeragi", "advanced", "worker", "validation_pending_cap"]),
-            Some(IZANAMI_VALIDATION_PENDING_CAP)
-        );
-        assert_eq!(
-            lookup(&["sumeragi", "advanced", "worker", "iteration_budget_cap_ms"]),
-            Some(IZANAMI_WORKER_ITERATION_BUDGET_CAP_MS)
-        );
-        assert_eq!(
-            lookup(&[
-                "sumeragi",
-                "advanced",
-                "worker",
-                "iteration_drain_budget_cap_ms"
-            ]),
-            Some(IZANAMI_WORKER_ITERATION_DRAIN_BUDGET_CAP_MS)
-        );
-        assert_eq!(
-            lookup(&[
-                "sumeragi",
-                "advanced",
-                "pacemaker",
-                "pending_stall_grace_ms"
-            ]),
-            Some(pending_stall_ms)
-        );
-        assert_eq!(
-            lookup_bool(&["sumeragi", "advanced", "pacemaker", "da_fast_reschedule"]),
-            Some(is_shared_host_balanced_latency_profile(&config))
-        );
-        assert_eq!(
-            lookup(&[
-                "sumeragi",
-                "advanced",
-                "pacemaker",
-                "active_pending_soft_limit"
-            ]),
-            Some(IZANAMI_PACEMAKER_ACTIVE_PENDING_SOFT_LIMIT)
-        );
-        assert_eq!(
-            lookup(&[
-                "sumeragi",
-                "advanced",
-                "pacemaker",
-                "rbc_backlog_session_soft_limit",
-            ]),
-            Some(IZANAMI_PACEMAKER_RBC_BACKLOG_SESSION_SOFT_LIMIT)
-        );
-        assert_eq!(
-            lookup(&[
-                "sumeragi",
-                "advanced",
-                "pacemaker",
-                "rbc_backlog_chunk_soft_limit",
-            ]),
-            Some(IZANAMI_PACEMAKER_RBC_BACKLOG_CHUNK_SOFT_LIMIT)
-        );
-        assert_eq!(
-            lookup(&["sumeragi", "advanced", "rbc", "pending_max_chunks"]),
-            Some(IZANAMI_RBC_PENDING_MAX_CHUNKS)
-        );
-        assert_eq!(
-            lookup(&["sumeragi", "advanced", "rbc", "pending_max_bytes"]),
-            Some(IZANAMI_RBC_PENDING_MAX_BYTES)
-        );
-        assert_eq!(
-            lookup(&["sumeragi", "advanced", "rbc", "pending_session_limit"]),
-            Some(IZANAMI_RBC_PENDING_SESSION_LIMIT)
-        );
-        assert_eq!(
-            lookup(&["sumeragi", "advanced", "rbc", "pending_ttl_ms"]),
-            Some(IZANAMI_RBC_PENDING_TTL_MS)
-        );
-        assert_eq!(
-            lookup(&["sumeragi", "advanced", "rbc", "session_ttl_ms"]),
-            Some(IZANAMI_RBC_SESSION_TTL_MS)
-        );
-        assert_eq!(
-            lookup(&["sumeragi", "advanced", "rbc", "disk_store_ttl_ms"]),
-            Some(IZANAMI_RBC_SESSION_TTL_MS)
-        );
-        let expected_store_max_sessions = if is_shared_host_balanced_latency_profile(&config) {
-            IZANAMI_SHARED_HOST_SOAK_RBC_STORE_MAX_SESSIONS
-        } else {
-            IZANAMI_TEST_NETWORK_RBC_STORE_MAX_SESSIONS
-        };
-        let expected_store_soft_sessions = if is_shared_host_balanced_latency_profile(&config) {
-            IZANAMI_SHARED_HOST_SOAK_RBC_STORE_SOFT_SESSIONS
-        } else {
-            IZANAMI_TEST_NETWORK_RBC_STORE_SOFT_SESSIONS
-        };
-        assert_eq!(
-            lookup(&["sumeragi", "advanced", "rbc", "store_max_sessions"]),
-            Some(expected_store_max_sessions)
-        );
-        assert_eq!(
-            lookup(&["sumeragi", "advanced", "rbc", "store_soft_sessions"]),
-            Some(expected_store_soft_sessions)
-        );
-        assert_eq!(
-            lookup(&[
-                "sumeragi",
-                "advanced",
-                "rbc",
-                "rebroadcast_sessions_per_tick"
-            ]),
-            Some(IZANAMI_RBC_REBROADCAST_SESSIONS_PER_TICK)
-        );
-        assert_eq!(
-            lookup(&["sumeragi", "advanced", "rbc", "payload_chunks_per_tick"]),
-            Some(IZANAMI_RBC_PAYLOAD_CHUNKS_PER_TICK)
-        );
-        assert_eq!(
-            lookup(&["sumeragi", "recovery", "height_attempt_cap"]),
-            Some(IZANAMI_RECOVERY_HEIGHT_ATTEMPT_CAP)
-        );
-        assert_eq!(
-            lookup(&["sumeragi", "recovery", "height_window_ms"]),
-            Some(IZANAMI_RECOVERY_HEIGHT_WINDOW_MS)
-        );
-        assert_eq!(
-            lookup(&["sumeragi", "recovery", "missing_qc_reacquire_window_ms"]),
-            Some(IZANAMI_RECOVERY_MISSING_QC_REACQUIRE_WINDOW_MS)
-        );
-        assert_eq!(
-            lookup(&["sumeragi", "recovery", "deferred_qc_ttl_ms"]),
-            Some(IZANAMI_RECOVERY_DEFERRED_QC_TTL_MS)
-        );
-        assert_eq!(
-            lookup(&["sumeragi", "recovery", "missing_block_height_ttl_ms"]),
-            Some(IZANAMI_RECOVERY_MISSING_BLOCK_HEIGHT_TTL_MS)
-        );
-        assert_eq!(
-            lookup(&["sumeragi", "recovery", "hash_miss_cap_before_range_pull"]),
-            Some(IZANAMI_RECOVERY_HASH_MISS_CAP_BEFORE_RANGE_PULL)
-        );
-        assert_eq!(
-            lookup(&[
-                "sumeragi",
-                "recovery",
-                "missing_block_signer_fallback_attempts",
-            ]),
-            Some(IZANAMI_RECOVERY_MISSING_BLOCK_SIGNER_FALLBACK_ATTEMPTS)
-        );
-        assert_eq!(
-            lookup(&[
-                "sumeragi",
-                "recovery",
-                "missing_block_retry_backoff_multiplier",
-            ]),
-            Some(IZANAMI_RECOVERY_MISSING_BLOCK_RETRY_BACKOFF_MULTIPLIER)
-        );
-        assert_eq!(
-            lookup(&["sumeragi", "recovery", "missing_block_retry_backoff_cap_ms",]),
-            Some(IZANAMI_RECOVERY_MISSING_BLOCK_RETRY_BACKOFF_CAP_MS)
-        );
-        assert_eq!(
-            lookup(&[
-                "sumeragi",
-                "recovery",
-                "range_pull_escalation_after_hash_misses",
-            ]),
-            Some(IZANAMI_RECOVERY_RANGE_PULL_ESCALATION_AFTER_HASH_MISSES)
-        );
-        assert_eq!(
-            lookup(&["sumeragi", "advanced", "da", "quorum_timeout_multiplier"]),
-            Some(IZANAMI_DA_QUORUM_TIMEOUT_MULTIPLIER)
-        );
-        assert_eq!(
-            lookup(&[
-                "sumeragi",
-                "advanced",
+
+        for layer in &layers {
+            let Some(sumeragi) = layer.get("sumeragi").and_then(TomlValue::as_table) else {
+                continue;
+            };
+            for retired in [
+                "consensus_mode",
+                "protocol_version",
                 "da",
-                "availability_timeout_multiplier"
-            ]),
-            Some(IZANAMI_DA_AVAILABILITY_TIMEOUT_MULTIPLIER)
-        );
-        assert_eq!(
-            lookup(&[
-                "sumeragi",
                 "advanced",
-                "da",
-                "availability_timeout_floor_ms"
-            ]),
-            Some(IZANAMI_DA_AVAILABILITY_TIMEOUT_FLOOR_MS)
-        );
-        assert_eq!(
-            lookup(&["sumeragi", "gating", "future_height_window"]),
-            Some(IZANAMI_FUTURE_HEIGHT_WINDOW)
-        );
-        assert_eq!(
-            lookup(&["sumeragi", "gating", "future_view_window"]),
-            Some(IZANAMI_FUTURE_VIEW_WINDOW)
-        );
-        assert_eq!(
-            lookup(&["sumeragi", "advanced", "npos", "timeouts", "propose_ms"]),
-            Some(npos_propose_ms)
-        );
-        assert_eq!(
-            lookup(&["sumeragi", "advanced", "npos", "timeouts", "prevote_ms"]),
-            Some(npos_prevote_ms)
-        );
-        assert_eq!(
-            lookup(&["sumeragi", "advanced", "npos", "timeouts", "precommit_ms"]),
-            Some(npos_precommit_ms)
-        );
-        assert_eq!(
-            lookup(&["sumeragi", "advanced", "npos", "timeouts", "commit_ms"]),
-            Some(npos_commit_ms)
-        );
-        assert_eq!(
-            lookup(&["sumeragi", "advanced", "npos", "timeouts", "da_ms"]),
-            Some(npos_da_ms)
-        );
-        assert_eq!(
-            lookup(&["sumeragi", "advanced", "npos", "timeouts", "aggregator_ms"]),
-            Some(npos_aggregator_ms)
-        );
+                "recovery",
+                "gating",
+                "collectors",
+                "persistence",
+            ] {
+                assert!(
+                    !sumeragi.contains_key(retired),
+                    "retired sumeragi.{retired} must not be generated"
+                );
+            }
+        }
         Ok(())
     }
 
@@ -14785,10 +12434,6 @@ mod tests {
             sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
             sumeragi_proposal_queue_scan_multiplier:
                 DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
-            sumeragi_collectors_k: DEFAULT_SUMERAGI_COLLECTORS_K,
-            sumeragi_collectors_redundant_send_r: DEFAULT_SUMERAGI_REDUNDANT_SEND_R,
-            sumeragi_inline_block_created_backup_rbc:
-                DEFAULT_SUMERAGI_INLINE_BLOCK_CREATED_BACKUP_RBC,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
@@ -14877,10 +12522,6 @@ mod tests {
             sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
             sumeragi_proposal_queue_scan_multiplier:
                 DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
-            sumeragi_collectors_k: DEFAULT_SUMERAGI_COLLECTORS_K,
-            sumeragi_collectors_redundant_send_r: DEFAULT_SUMERAGI_REDUNDANT_SEND_R,
-            sumeragi_inline_block_created_backup_rbc:
-                DEFAULT_SUMERAGI_INLINE_BLOCK_CREATED_BACKUP_RBC,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
@@ -14929,10 +12570,6 @@ mod tests {
             sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
             sumeragi_proposal_queue_scan_multiplier:
                 DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
-            sumeragi_collectors_k: DEFAULT_SUMERAGI_COLLECTORS_K,
-            sumeragi_collectors_redundant_send_r: DEFAULT_SUMERAGI_REDUNDANT_SEND_R,
-            sumeragi_inline_block_created_backup_rbc:
-                DEFAULT_SUMERAGI_INLINE_BLOCK_CREATED_BACKUP_RBC,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
@@ -14979,14 +12616,11 @@ mod tests {
             }
         }
 
-        let expected = derive_npos_timing(&config);
         assert_eq!(
             network.pipeline_time(),
             default_nexus_pipeline_time(),
             "nexus runs without explicit pipeline_time should use Izanami fast pipeline defaults"
         );
-        assert_eq!(params.sumeragi().block_time_ms(), expected.block_ms);
-        assert_eq!(params.sumeragi().commit_time_ms(), expected.commit_time_ms);
         let injected_npos_params = params
             .custom()
             .get(&SumeragiNposParameters::parameter_id())
@@ -15053,10 +12687,6 @@ mod tests {
             sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
             sumeragi_proposal_queue_scan_multiplier:
                 DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
-            sumeragi_collectors_k: DEFAULT_SUMERAGI_COLLECTORS_K,
-            sumeragi_collectors_redundant_send_r: DEFAULT_SUMERAGI_REDUNDANT_SEND_R,
-            sumeragi_inline_block_created_backup_rbc:
-                DEFAULT_SUMERAGI_INLINE_BLOCK_CREATED_BACKUP_RBC,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
@@ -15126,10 +12756,6 @@ mod tests {
             sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
             sumeragi_proposal_queue_scan_multiplier:
                 DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
-            sumeragi_collectors_k: DEFAULT_SUMERAGI_COLLECTORS_K,
-            sumeragi_collectors_redundant_send_r: DEFAULT_SUMERAGI_REDUNDANT_SEND_R,
-            sumeragi_inline_block_created_backup_rbc:
-                DEFAULT_SUMERAGI_INLINE_BLOCK_CREATED_BACKUP_RBC,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
@@ -15168,97 +12794,6 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn shared_host_stable_soak_pipeline_timing_keeps_block_at_or_above_min_finality() -> Result<()>
-    {
-        init_instruction_registry();
-        let mut config = ChaosConfig {
-            allow_net: true,
-            peer_count: 4,
-            faulty_peers: 0,
-            duration: Duration::from_secs(3_600),
-            pipeline_time: None,
-            target_blocks: Some(2_000),
-            progress_interval: Duration::from_secs(10),
-            progress_timeout: Duration::from_secs(600),
-            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
-            latency_p95_threshold: None,
-            fault_window_start: None,
-            fault_window_end: None,
-            seed: Some(47),
-            tps: 5.0,
-            max_inflight: 8,
-            submitters: 1,
-            prebuild_tx_buffer: 0,
-            prebuild_tx_workers: 0,
-            sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
-            sumeragi_proposal_queue_scan_multiplier:
-                DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
-            sumeragi_collectors_k: DEFAULT_SUMERAGI_COLLECTORS_K,
-            sumeragi_collectors_redundant_send_r: DEFAULT_SUMERAGI_REDUNDANT_SEND_R,
-            sumeragi_inline_block_created_backup_rbc:
-                DEFAULT_SUMERAGI_INLINE_BLOCK_CREATED_BACKUP_RBC,
-            workload_profile: WorkloadProfile::Stable,
-            allow_contract_deploy_in_stable: false,
-            fault_interval: Duration::from_secs(5)..=Duration::from_secs(20),
-            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
-            log_filter: "warn".to_string(),
-            faults: FaultToggles::from_array([true, true, true, true]),
-            nexus: None,
-            diagnostic_dir: None,
-        };
-        apply_shared_host_stable_soak_profile(&mut config);
-
-        let account_qty = config.peer_count.saturating_mul(3).max(6);
-        let PreparedChaos { genesis, .. } = instructions::prepare_state(
-            account_qty,
-            Some(config.peer_count),
-            config.nexus.as_ref(),
-            config.workload_profile,
-            config.allow_contract_deploy_in_stable,
-        )?;
-        let builder = make_network_builder(&config, genesis)?;
-        let network = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            builder.build()
-        })) {
-            Ok(network) => network,
-            Err(payload) => {
-                let msg = payload
-                    .downcast_ref::<String>()
-                    .cloned()
-                    .or_else(|| payload.downcast_ref::<&str>().map(ToString::to_string))
-                    .unwrap_or_default();
-                if msg.contains("Operation not permitted") || msg.contains("permission denied") {
-                    return Ok(());
-                }
-                std::panic::resume_unwind(payload);
-            }
-        };
-
-        let mut params = Parameters::default();
-        for tx in network.genesis_isi() {
-            for isi in tx {
-                let Some(set_param) = isi.as_any().downcast_ref::<SetParameter>() else {
-                    continue;
-                };
-                params.set_parameter(set_param.inner().clone());
-            }
-        }
-
-        let pipeline_time = config
-            .pipeline_time
-            .expect("shared-host soak profile should materialize pipeline time");
-        let (pipeline_block_ms, pipeline_commit_ms) = split_pipeline_time(pipeline_time);
-        assert_eq!(params.sumeragi().block_time_ms(), pipeline_block_ms);
-        assert_eq!(params.sumeragi().commit_time_ms(), pipeline_commit_ms);
-        assert_eq!(params.sumeragi().min_finality_ms(), pipeline_block_ms);
-        assert!(
-            params.sumeragi().block_time_ms() >= params.sumeragi().min_finality_ms(),
-            "shared-host soak block_time must satisfy min_finality invariant"
-        );
-        Ok(())
-    }
-
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn runner_respects_deadline_and_shuts_down() -> Result<()> {
         if !allow_net_for_tests() {
@@ -15289,10 +12824,6 @@ mod tests {
             sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
             sumeragi_proposal_queue_scan_multiplier:
                 DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
-            sumeragi_collectors_k: DEFAULT_SUMERAGI_COLLECTORS_K,
-            sumeragi_collectors_redundant_send_r: DEFAULT_SUMERAGI_REDUNDANT_SEND_R,
-            sumeragi_inline_block_created_backup_rbc:
-                DEFAULT_SUMERAGI_INLINE_BLOCK_CREATED_BACKUP_RBC,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(5)..=Duration::from_secs(5),
@@ -15324,12 +12855,12 @@ mod tests {
     }
 
     #[test]
-    fn nexus_profile_wires_rbc_da_and_config_layer() -> Result<()> {
+    fn nexus_profile_keeps_da_out_of_node_local_sumeragi_config() -> Result<()> {
         init_instruction_registry();
         let nexus = NexusProfile::sora_defaults()?;
         let config = ChaosConfig {
             allow_net: true,
-            peer_count: 3,
+            peer_count: 4,
             faulty_peers: 0,
             duration: Duration::from_secs(1),
             pipeline_time: None,
@@ -15349,10 +12880,6 @@ mod tests {
             sumeragi_block_max_transactions: DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS,
             sumeragi_proposal_queue_scan_multiplier:
                 DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER,
-            sumeragi_collectors_k: DEFAULT_SUMERAGI_COLLECTORS_K,
-            sumeragi_collectors_redundant_send_r: DEFAULT_SUMERAGI_REDUNDANT_SEND_R,
-            sumeragi_inline_block_created_backup_rbc:
-                DEFAULT_SUMERAGI_INLINE_BLOCK_CREATED_BACKUP_RBC,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
@@ -15389,22 +12916,6 @@ mod tests {
             }
         };
 
-        let mut saw_da_enabled = false;
-        for tx in network.genesis_isi() {
-            for isi in tx {
-                if let Some(set_param) = isi.as_any().downcast_ref::<SetParameter>()
-                    && let Parameter::Sumeragi(SumeragiParameter::DaEnabled(value)) =
-                        set_param.inner()
-                {
-                    saw_da_enabled = saw_da_enabled || *value == nexus.da_enabled;
-                }
-            }
-        }
-        assert!(
-            saw_da_enabled,
-            "DA parameter should be threaded from nexus profile"
-        );
-
         let layers: Vec<_> = network.config_layers().collect();
         assert!(
             layers.len() >= 2,
@@ -15420,6 +12931,21 @@ mod tests {
                 .unwrap_or(false)
         });
         assert!(has_nexus_layer, "nexus config layer must be attached");
+        assert!(
+            layers.iter().all(|layer| {
+                layer
+                    .as_ref()
+                    .get("sumeragi")
+                    .and_then(toml::Value::as_table)
+                    .is_none_or(|sumeragi| {
+                        !sumeragi.contains_key("da")
+                            && !sumeragi.contains_key("consensus_mode")
+                            && !sumeragi.contains_key("advanced")
+                            && !sumeragi.contains_key("recovery")
+                    })
+            }),
+            "DA and consensus mode must come from signed genesis, not local Sumeragi config"
+        );
         let lane_catalog = layers.iter().find_map(|layer| {
             layer
                 .as_ref()

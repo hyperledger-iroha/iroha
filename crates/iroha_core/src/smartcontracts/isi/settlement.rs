@@ -19,7 +19,7 @@ use iroha_executor_data_model::permission::settlement::{
 };
 use iroha_primitives::{
     json::Json,
-    numeric::{Numeric, NumericSpec},
+    numeric::{Numeric, NumericSpec, Quantity},
 };
 
 use super::*;
@@ -313,12 +313,7 @@ fn resolve_settlement_leg_source_asset_id(
     if let Some(scoped_asset_id) = stx.world.assets.iter().find_map(|(asset_id, balance)| {
         (asset_id.definition() == leg.asset_definition_id()
             && asset_id.account() == leg.from()
-            && balance
-                .as_ref()
-                .as_numeric()
-                .clone()
-                .checked_sub(leg.quantity().clone())
-                .is_some_and(|remaining| !remaining.mantissa().is_negative()))
+            && balance.as_ref().checked_sub(leg.quantity()).is_ok())
         .then(|| asset_id.clone())
     }) {
         return Ok(scoped_asset_id);
@@ -349,14 +344,8 @@ fn ensure_leg_funding(stx: &StateTransaction<'_, '_>, leg: &SettlementLeg) -> Re
         .world
         .assets
         .get(&asset_id)
-        .map_or_else(Numeric::zero, |balance| {
-            balance.as_ref().as_numeric().clone()
-        });
-    let remaining = available
-        .clone()
-        .checked_sub(leg.quantity().clone())
-        .filter(|residual| !residual.mantissa().is_negative());
-    if remaining.is_none() {
+        .map_or_else(Quantity::zero, |balance| balance.as_ref().clone());
+    if available.checked_sub(leg.quantity()).is_err() {
         return Err(InstructionExecutionError::InvariantViolation(
             format!(
                 "settlement leg requires {} but only {} is available for {}",
@@ -371,9 +360,6 @@ fn ensure_leg_funding(stx: &StateTransaction<'_, '_>, leg: &SettlementLeg) -> Re
 }
 
 fn ensure_leg_quantity(leg: &SettlementLeg) -> Result<(), Error> {
-    if leg.quantity().mantissa().is_negative() {
-        return Err(MathError::NegativeValue.into());
-    }
     if leg.quantity().is_zero() {
         return Err(InstructionExecutionError::InvariantViolation(
             "settlement legs must specify non-zero quantities".into(),
@@ -395,7 +381,7 @@ fn apply_settlement_leg(
     leg: &SettlementLeg,
     spec: NumericSpec,
 ) -> Result<(), Error> {
-    assert_numeric_spec_with(leg.quantity(), spec)?;
+    assert_numeric_spec_with(leg.quantity().as_numeric(), spec)?;
     let (withdraw, deposit) = resolve_settlement_leg_asset_ids(stx, leg)?;
     withdraw_numeric_asset_exact(stx, &withdraw, leg.quantity())?;
     deposit_numeric_asset_exact(stx, &deposit, leg.quantity())?;
@@ -415,10 +401,8 @@ fn rollback_settlement_leg(
 fn withdraw_numeric_asset_exact(
     stx: &mut StateTransaction<'_, '_>,
     id: &AssetId,
-    amount: &Numeric,
+    amount: &Quantity,
 ) -> Result<(), Error> {
-    let amount = Quantity::from_canonical_numeric(amount.clone())
-        .map_err(|_| MathError::NegativeValue)?;
     let asset = stx
         .world
         .assets
@@ -426,7 +410,7 @@ fn withdraw_numeric_asset_exact(
         .ok_or_else(|| FindError::Asset(id.clone().into()))?;
     let quantity: &mut Quantity = &mut *asset;
     let candidate = quantity
-        .checked_sub(&amount)
+        .checked_sub(amount)
         .map_err(|_| MathError::NotEnoughQuantity)?;
     *quantity = candidate;
     if (**asset).is_zero() {
@@ -438,15 +422,13 @@ fn withdraw_numeric_asset_exact(
 fn deposit_numeric_asset_exact(
     stx: &mut StateTransaction<'_, '_>,
     id: &AssetId,
-    amount: &Numeric,
+    amount: &Quantity,
 ) -> Result<(), Error> {
-    let amount = Quantity::from_canonical_numeric(amount.clone())
-        .map_err(|_| MathError::NegativeValue)?;
     let is_nonzero = {
         let dst = stx.world.asset_or_insert_exact(id, Quantity::zero())?;
         let quantity: &mut Quantity = &mut *dst;
         *quantity = quantity
-            .checked_add(&amount)
+            .checked_add(amount)
             .map_err(|_| MathError::Overflow)?;
         !quantity.is_zero()
     };
@@ -574,11 +556,12 @@ fn execute_settlement_pair(
 }
 
 fn exact_fx_destination_amount(
-    source_amount: &Numeric,
+    source_amount: &Quantity,
     destination_spec: NumericSpec,
     policy: &FxCorridorPolicy,
-) -> Result<Numeric, Error> {
+) -> Result<Quantity, Error> {
     let numerator = source_amount
+        .as_numeric()
         .clone()
         .checked_mul(
             Numeric::from(policy.rate_numerator),
@@ -605,7 +588,8 @@ fn exact_fx_destination_amount(
             "FX corridor destination quantity must be non-zero",
         ));
     }
-    Ok(destination_amount)
+    Quantity::from_canonical_numeric(destination_amount)
+        .map_err(|err| invalid_fx_parameter(format!("invalid FX destination quantity: {err}")))
 }
 
 fn validate_dvp_preconditions(
@@ -632,7 +616,7 @@ fn validate_dvp_preconditions(
     ensure_leg_accounts(stx, payment_leg)?;
     let delivery_spec = numeric_spec_for_leg(stx, delivery_leg)?;
     let payment_spec = numeric_spec_for_leg(stx, payment_leg)?;
-    assert_numeric_spec_with(delivery_leg.quantity(), delivery_spec)?;
+    assert_numeric_spec_with(delivery_leg.quantity().as_numeric(), delivery_spec)?;
     ensure_leg_funding(stx, delivery_leg)?;
     ensure_leg_funding(stx, payment_leg)?;
     enforce_atomicity(plan);
@@ -664,8 +648,8 @@ fn validate_pvp_preconditions(
     ensure_leg_accounts(stx, counter_leg)?;
     let primary_spec = numeric_spec_for_leg(stx, primary_leg)?;
     let counter_spec = numeric_spec_for_leg(stx, counter_leg)?;
-    assert_numeric_spec_with(primary_leg.quantity(), primary_spec)?;
-    assert_numeric_spec_with(counter_leg.quantity(), counter_spec)?;
+    assert_numeric_spec_with(primary_leg.quantity().as_numeric(), primary_spec)?;
+    assert_numeric_spec_with(counter_leg.quantity().as_numeric(), counter_spec)?;
     ensure_leg_funding(stx, primary_leg)?;
     ensure_leg_funding(stx, counter_leg)?;
     enforce_atomicity(plan);
@@ -733,7 +717,7 @@ fn validate_fx_settlement_preconditions(
         ));
     }
     ensure_account_exists(stx, &instruction.recipient)?;
-    if instruction.source_amount.is_zero() || instruction.source_amount.mantissa().is_negative() {
+    if instruction.source_amount.is_zero() {
         return Err(invalid_fx_parameter(
             "FX corridor source quantity must be positive",
         ));
@@ -745,7 +729,7 @@ fn validate_fx_settlement_preconditions(
     let destination_spec = stx
         .numeric_spec_for(&policy.destination_asset_definition_id)
         .map_err(Error::from)?;
-    assert_numeric_spec_with(&instruction.source_amount, source_spec)?;
+    assert_numeric_spec_with(instruction.source_amount.as_numeric(), source_spec)?;
     let destination_amount =
         exact_fx_destination_amount(&instruction.source_amount, destination_spec, &policy)?;
 
@@ -770,10 +754,10 @@ fn validate_fx_settlement_preconditions(
         authority,
         source_id,
         source_destination_id,
-        source_leg.quantity().clone(),
+        source_leg.quantity().as_numeric().clone(),
         destination_source_id,
         destination_id,
-        destination_leg.quantity().clone(),
+        destination_leg.quantity().as_numeric().clone(),
     )?;
 
     Ok((policy, source_leg, destination_leg))
@@ -853,10 +837,10 @@ impl Execute for SettleFxCorridor {
             authority,
             source_id,
             source_destination_id,
-            source_leg.quantity().clone(),
+            source_leg.quantity().as_numeric().clone(),
             destination_source_id,
             destination_id,
-            destination_leg.quantity().clone(),
+            destination_leg.quantity().as_numeric().clone(),
         )?;
         let outcome = SettlementPairOutcome {
             first_committed: true,

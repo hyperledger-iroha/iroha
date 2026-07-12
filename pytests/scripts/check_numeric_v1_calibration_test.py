@@ -285,6 +285,15 @@ class NumericV1CalibrationTests(unittest.TestCase):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, workflow)
 
+    def test_envelope_benchmarks_measure_snapshot_and_publication_work(self) -> None:
+        """Calibration must cover the transport work named by its denominators."""
+
+        benchmark = (ROOT / "crates/ivm/benches/gas_calibration.rs").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("let snapshot = envelope.to_vec();", benchmark)
+        self.assertIn(".alloc_host_tlv(&envelope)", benchmark)
+
 
 if __name__ == "__main__":
     unittest.main()

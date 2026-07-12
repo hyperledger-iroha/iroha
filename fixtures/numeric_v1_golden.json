@@ -215,6 +215,12 @@
     },
     {
       "expected": "invalid_text",
+      "id": "int_json_boolean",
+      "input": true,
+      "kind": "int"
+    },
+    {
+      "expected": "invalid_text",
       "id": "int_leading_zero",
       "input": "01",
       "kind": "int"
@@ -223,6 +229,18 @@
       "expected": "invalid_text",
       "id": "int_plus_sign",
       "input": "+1",
+      "kind": "int"
+    },
+    {
+      "expected": "invalid_text",
+      "id": "int_whitespace",
+      "input": " 1",
+      "kind": "int"
+    },
+    {
+      "expected": "invalid_text",
+      "id": "int_exponent",
+      "input": "1e0",
       "kind": "int"
     },
     {
@@ -247,6 +265,36 @@
       "expected": "invalid_text",
       "id": "decimal_json_number",
       "input": 1,
+      "kind": "decimal"
+    },
+    {
+      "expected": "invalid_text",
+      "id": "decimal_json_boolean",
+      "input": true,
+      "kind": "decimal"
+    },
+    {
+      "expected": "invalid_text",
+      "id": "decimal_leading_zero",
+      "input": "01",
+      "kind": "decimal"
+    },
+    {
+      "expected": "invalid_text",
+      "id": "decimal_plus_sign",
+      "input": "+1",
+      "kind": "decimal"
+    },
+    {
+      "expected": "invalid_text",
+      "id": "decimal_negative_zero",
+      "input": "-0",
+      "kind": "decimal"
+    },
+    {
+      "expected": "invalid_text",
+      "id": "decimal_missing_fraction",
+      "input": "1.",
       "kind": "decimal"
     },
     {
@@ -286,6 +334,12 @@
       "kind": "decimal"
     },
     {
+      "expected": "mantissa_overflow",
+      "id": "decimal_negative_mantissa_overflow",
+      "input": "-6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042049",
+      "kind": "decimal"
+    },
+    {
       "expected": "invalid_text",
       "id": "quantity_json_number",
       "input": 1,
@@ -293,8 +347,32 @@
     },
     {
       "expected": "invalid_text",
+      "id": "quantity_json_boolean",
+      "input": true,
+      "kind": "quantity"
+    },
+    {
+      "expected": "invalid_text",
       "id": "quantity_leading_zero",
       "input": "01",
+      "kind": "quantity"
+    },
+    {
+      "expected": "invalid_text",
+      "id": "quantity_plus_sign",
+      "input": "+1",
+      "kind": "quantity"
+    },
+    {
+      "expected": "invalid_text",
+      "id": "quantity_whitespace",
+      "input": " 1",
+      "kind": "quantity"
+    },
+    {
+      "expected": "invalid_text",
+      "id": "quantity_negative_zero",
+      "input": "-0",
       "kind": "quantity"
     },
     {
@@ -348,6 +426,12 @@
       "id": "decimal_removable_scale_29",
       "input": "1.00000000000000000000000000000",
       "kind": "decimal"
+    },
+    {
+      "canonical": "1",
+      "id": "quantity_removable_scale_29",
+      "input": "1.00000000000000000000000000000",
+      "kind": "quantity"
     }
   ],
   "valid": [

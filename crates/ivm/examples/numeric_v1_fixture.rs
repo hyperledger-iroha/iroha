@@ -302,8 +302,7 @@ pub fn render_fixture() -> String {
             .try_into()
             .expect("frame body length field"),
     );
-    frame_length_mismatch[23..31]
-        .copy_from_slice(&(declared_body_length + 1).to_le_bytes());
+    frame_length_mismatch[23..31].copy_from_slice(&(declared_body_length + 1).to_le_bytes());
     let mut malformed_body = body(&[1], None);
     malformed_body[..4].copy_from_slice(&2_u32.to_le_bytes());
     let body_length_mismatch = frame(INT_SCHEMA_HASH_V1, &malformed_body);
@@ -323,8 +322,7 @@ pub fn render_fixture() -> String {
             .try_into()
             .expect("envelope frame length field"),
     );
-    envelope_length_mismatch[3..7]
-        .copy_from_slice(&(declared_frame_length - 1).to_be_bytes());
+    envelope_length_mismatch[3..7].copy_from_slice(&(declared_frame_length - 1).to_be_bytes());
 
     let invalid_values = vec![
         invalid(
@@ -536,17 +534,39 @@ pub fn render_fixture() -> String {
     let removable_scale_value = removable_scale_input
         .parse::<Numeric>()
         .expect("normalization precedes scale validation");
-    let text_values = vec![object([
-        ("id", Value::from("decimal_removable_scale_29")),
-        ("kind", Value::from("decimal")),
-        ("input", Value::from(removable_scale_input)),
-        ("canonical", Value::from(removable_scale_value.to_string())),
-    ])];
+    let removable_quantity_value = removable_scale_input
+        .parse::<Quantity>()
+        .expect("quantity normalization precedes scale validation");
+    let text_values = vec![
+        object([
+            ("id", Value::from("decimal_removable_scale_29")),
+            ("kind", Value::from("decimal")),
+            ("input", Value::from(removable_scale_input.clone())),
+            ("canonical", Value::from(removable_scale_value.to_string())),
+        ]),
+        object([
+            ("id", Value::from("quantity_removable_scale_29")),
+            ("kind", Value::from("quantity")),
+            ("input", Value::from(removable_scale_input)),
+            (
+                "canonical",
+                Value::from(removable_quantity_value.to_string()),
+            ),
+        ]),
+    ];
     let invalid_text_values = vec![
         invalid_text("int_json_number", "int", Value::from(1_u64), "invalid_text"),
+        invalid_text("int_json_boolean", "int", Value::from(true), "invalid_text"),
         invalid_text("int_leading_zero", "int", Value::from("01"), "invalid_text"),
         invalid_text("int_plus_sign", "int", Value::from("+1"), "invalid_text"),
-        invalid_text("int_negative_zero", "int", Value::from("-0"), "invalid_text"),
+        invalid_text("int_whitespace", "int", Value::from(" 1"), "invalid_text"),
+        invalid_text("int_exponent", "int", Value::from("1e0"), "invalid_text"),
+        invalid_text(
+            "int_negative_zero",
+            "int",
+            Value::from("-0"),
+            "invalid_text",
+        ),
         invalid_text(
             "int_positive_overflow",
             "int",
@@ -556,13 +576,43 @@ pub fn render_fixture() -> String {
         invalid_text(
             "int_negative_overflow",
             "int",
-            Value::from(negative_overflow_text),
+            Value::from(negative_overflow_text.clone()),
             "mantissa_overflow",
         ),
         invalid_text(
             "decimal_json_number",
             "decimal",
             Value::from(1_u64),
+            "invalid_text",
+        ),
+        invalid_text(
+            "decimal_json_boolean",
+            "decimal",
+            Value::from(true),
+            "invalid_text",
+        ),
+        invalid_text(
+            "decimal_leading_zero",
+            "decimal",
+            Value::from("01"),
+            "invalid_text",
+        ),
+        invalid_text(
+            "decimal_plus_sign",
+            "decimal",
+            Value::from("+1"),
+            "invalid_text",
+        ),
+        invalid_text(
+            "decimal_negative_zero",
+            "decimal",
+            Value::from("-0"),
+            "invalid_text",
+        ),
+        invalid_text(
+            "decimal_missing_fraction",
+            "decimal",
+            Value::from("1."),
             "invalid_text",
         ),
         invalid_text(
@@ -602,15 +652,45 @@ pub fn render_fixture() -> String {
             "mantissa_overflow",
         ),
         invalid_text(
+            "decimal_negative_mantissa_overflow",
+            "decimal",
+            Value::from(negative_overflow_text),
+            "mantissa_overflow",
+        ),
+        invalid_text(
             "quantity_json_number",
             "quantity",
             Value::from(1_u64),
             "invalid_text",
         ),
         invalid_text(
+            "quantity_json_boolean",
+            "quantity",
+            Value::from(true),
+            "invalid_text",
+        ),
+        invalid_text(
             "quantity_leading_zero",
             "quantity",
             Value::from("01"),
+            "invalid_text",
+        ),
+        invalid_text(
+            "quantity_plus_sign",
+            "quantity",
+            Value::from("+1"),
+            "invalid_text",
+        ),
+        invalid_text(
+            "quantity_whitespace",
+            "quantity",
+            Value::from(" 1"),
+            "invalid_text",
+        ),
+        invalid_text(
+            "quantity_negative_zero",
+            "quantity",
+            Value::from("-0"),
             "invalid_text",
         ),
         invalid_text(

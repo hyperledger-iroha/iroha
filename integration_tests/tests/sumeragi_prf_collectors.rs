@@ -28,9 +28,9 @@ async fn npos_prf_collectors_track_endpoint() -> eyre::Result<()> {
         .with_peers(4)
         .with_auto_populated_trusted_peers()
         .with_sync_timeout(Duration::from_secs(420))
+        .with_npos_consensus()
         .with_config_layer(|layer| {
             layer
-                .write(["sumeragi", "consensus_mode"], "npos")
                 .write(["sumeragi", "da", "enabled"], true)
                 .write(["sumeragi", "collectors", "k"], 2_i64)
                 .write(["sumeragi", "collectors", "redundant_send_r"], 1_i64);

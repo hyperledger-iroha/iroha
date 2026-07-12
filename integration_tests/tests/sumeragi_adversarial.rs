@@ -14,7 +14,7 @@ use iroha::{
     data_model::{
         Level,
         isi::{Log, SetParameter},
-        parameter::{Parameter, Parameters, SumeragiParameter},
+        parameter::{Parameter, SumeragiParameter},
     },
 };
 use iroha_core::sumeragi::network_topology::commit_quorum_from_len;
@@ -121,7 +121,6 @@ async fn run_chunk_drop_scenario() -> Result<()> {
 
     let client = network.client();
     let cluster_clients: Vec<Client> = network.peers().iter().map(|peer| peer.client()).collect();
-    configure_runtime_rbc(&client).await?;
 
     let status_before = blocking_status(&client)?;
     let expected_height = status_before.blocks + 1;
@@ -263,7 +262,6 @@ async fn run_chunk_reorder_scenario() -> Result<()> {
 
     let client = network.client();
     let cluster_clients: Vec<Client> = network.peers().iter().map(|peer| peer.client()).collect();
-    configure_runtime_rbc(&client).await?;
 
     let status_before = blocking_status(&client)?;
     let expected_height = status_before.blocks + 1;
@@ -376,7 +374,6 @@ async fn run_witness_corruption_scenario() -> Result<()> {
     };
 
     let client = network.client();
-    configure_runtime_rbc(&client).await?;
 
     let status_before = blocking_status(&client)?;
     let expected_height = status_before.blocks + 1;
@@ -461,7 +458,6 @@ async fn run_duplicate_inits_scenario() -> Result<()> {
 
     let client = network.client();
     let cluster_clients: Vec<Client> = network.peers().iter().map(|peer| peer.client()).collect();
-    configure_runtime_rbc(&client).await?;
 
     let status_before = blocking_status(&client)?;
     let expected_height = status_before.blocks + 1;
@@ -613,7 +609,6 @@ async fn run_chunk_drop_recovery_scenario() -> Result<()> {
     };
 
     let drop_client = drop_network.client();
-    configure_runtime_rbc(&drop_client).await?;
 
     let status_before_drop = blocking_status(&drop_client)?;
     let expected_height = status_before_drop.blocks + 1;
@@ -663,7 +658,6 @@ async fn run_chunk_drop_recovery_scenario() -> Result<()> {
         .map(|peer| peer.client())
         .collect();
     let recovery_quorum = commit_quorum_from_len(recovery_clients.len()).max(1);
-    configure_runtime_rbc(&recovery_client).await?;
     let status_before_recovery = blocking_status(&recovery_client)?;
     let recovery_height = status_before_recovery.blocks + 1;
 
@@ -781,7 +775,6 @@ async fn run_validator_selective_drop_scenario() -> Result<()> {
     };
 
     let base_client = network.client();
-    configure_runtime_rbc(&base_client).await?;
 
     let status_before = blocking_status(&base_client)?;
     let expected_height = status_before.blocks + 1;
@@ -910,7 +903,6 @@ async fn run_chunk_equivocation_scenario() -> Result<()> {
         .get(TARGET_VALIDATOR_IDX)
         .ok_or_else(|| eyre!("targeted validator index {TARGET_VALIDATOR_IDX} missing"))?;
     let targeted_client = targeted_peer.client();
-    configure_runtime_rbc(&targeted_client).await?;
 
     let status_before = blocking_status(&targeted_client)?;
     let status_json_before = fetch_sumeragi_status(&targeted_client).await?;
@@ -1073,7 +1065,6 @@ async fn run_all_chunks_corrupted_scenario() -> Result<()> {
         status_before.push(blocking_status(&peer.client())?);
     }
     let base_client = network.client();
-    configure_runtime_rbc(&base_client).await?;
 
     let expected_height = status_before.first().map_or(1, |status| status.blocks + 1);
 
@@ -1268,7 +1259,6 @@ async fn run_conflicting_ready_scenario() -> Result<()> {
         .ok_or_else(|| eyre!("targeted validator index {TARGET_VALIDATOR_IDX} missing"))?;
     let targeted_client = targeted_peer.client();
     let cluster_clients: Vec<Client> = network.peers().iter().map(|peer| peer.client()).collect();
-    configure_runtime_rbc(&targeted_client).await?;
 
     let status_before = blocking_status(&targeted_client)?;
     let mut debug_layer = Table::new();
@@ -1467,7 +1457,6 @@ async fn run_locked_qc_gate_drop_scenario() -> Result<()> {
     };
 
     let client = network.client();
-    configure_runtime_rbc(&client).await?;
 
     let status_before = blocking_status(&client)?;
     let mut drop_before = 0_u64;
@@ -1635,7 +1624,6 @@ async fn run_partial_erasure_scenario() -> Result<()> {
 
     let base_client = network.client();
     let cluster_clients: Vec<Client> = network.peers().iter().map(|peer| peer.client()).collect();
-    configure_runtime_rbc(&base_client).await?;
 
     let status_before = blocking_status(&base_client)?;
     let expected_height = status_before.blocks + 1;
@@ -1770,32 +1758,6 @@ async fn fetch_sumeragi_status(client: &Client) -> Result<Value> {
         .wrap_err("fetch sumeragi status JSON")?
 }
 
-async fn configure_runtime_rbc(client: &Client) -> Result<()> {
-    let parameters = {
-        let client = client.clone();
-        tokio::task::spawn_blocking(move || client.get_parameters())
-            .await
-            .wrap_err("join get_parameters task")?
-            .wrap_err("fetch runtime parameters")?
-    };
-    if !runtime_rbc_configuration_required(&parameters) {
-        return Ok(());
-    }
-    set_sumeragi_parameter(client, SumeragiParameter::DaEnabled(true)).await?;
-    Ok(())
-}
-
-async fn set_sumeragi_parameter(client: &Client, parameter: SumeragiParameter) -> Result<()> {
-    let client = client.clone();
-    tokio::task::spawn_blocking(move || {
-        client.submit_blocking(SetParameter::new(Parameter::Sumeragi(parameter)))
-    })
-    .await
-    .wrap_err("join SetParameter task")?
-    .map(|_| ())
-    .wrap_err("submit SetParameter")
-}
-
 async fn submit_heavy_log(client: &Client, bytes: usize) -> Result<()> {
     let payload = "X".repeat(bytes);
     let client_clone = client.clone();
@@ -1809,10 +1771,6 @@ async fn submit_heavy_log(client: &Client, bytes: usize) -> Result<()> {
 fn blocking_status(client: &Client) -> Result<Status> {
     let client_clone = client.clone();
     tokio::task::block_in_place(|| client_clone.get_status()).wrap_err("fetch status")
-}
-
-fn runtime_rbc_configuration_required(parameters: &Parameters) -> bool {
-    !parameters.sumeragi().da_enabled
 }
 
 fn is_transient_status_fetch_error(err: &Report) -> bool {
@@ -2047,22 +2005,6 @@ fn transient_rbc_sessions_fetch_errors_include_connect_failures() {
 
     assert!(is_transient_rbc_sessions_fetch_error(&connect_err));
     assert!(!is_transient_rbc_sessions_fetch_error(&permanent_err));
-}
-
-#[test]
-fn runtime_rbc_configuration_required_only_when_da_is_disabled() {
-    let default_parameters = Parameters::default();
-    assert!(
-        !runtime_rbc_configuration_required(&default_parameters),
-        "default test-network parameters already seed DA/RBC enabled"
-    );
-
-    let mut disabled_parameters = Parameters::default();
-    disabled_parameters.set_parameter(Parameter::Sumeragi(SumeragiParameter::DaEnabled(false)));
-    assert!(
-        runtime_rbc_configuration_required(&disabled_parameters),
-        "runtime reconfiguration should only be needed when DA/RBC is disabled"
-    );
 }
 
 #[test]

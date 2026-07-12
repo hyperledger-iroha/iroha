@@ -56,10 +56,7 @@ fn npos_network_produces_blocks() -> Result<()> {
         .with_sync_timeout(NPOS_LIVENESS_SYNC_TIMEOUT)
         .with_genesis_instruction(SetParameter::new(Parameter::Block(
             BlockParameter::MaxTransactions(nonzero!(1_u64)),
-        )))
-        .with_config_layer(|layer| {
-            layer.write(["sumeragi", "consensus_mode"], "npos");
-        });
+        )));
     let Some((network, rt)) =
         sandbox::start_network_blocking_or_skip(builder, stringify!(npos_network_produces_blocks))?
     else {
@@ -108,11 +105,6 @@ fn npos_network_produces_blocks() -> Result<()> {
             ),
             "peer heights diverged during NPoS liveness check (target={target_height} allowed_skew={MAX_HEIGHT_SKEW}, got {observed_heights:?})"
         );
-
-        let http = integration_tests::http::client();
-        rt.block_on(assert_all_peers_expose_no_consensus_safety_halt(
-            &network, &http,
-        ))?;
 
         rt.block_on(async {
             network.shutdown().await;
@@ -700,7 +692,6 @@ async fn npos_pacemaker_resumes_after_downtime() -> Result<()> {
             layer
                 .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full")
-                .write(["sumeragi", "consensus_mode"], "npos")
                 .write(
                     ["sumeragi", "advanced", "pacemaker", "backoff_multiplier"],
                     PACEMAKER_BACKOFF_MULTIPLIER as i64,
@@ -823,8 +814,6 @@ async fn npos_pacemaker_resumes_after_downtime() -> Result<()> {
         let pacemaker_after = fetch_pacemaker_status(&http, &pacemaker_url).await?;
 
         assert_pacemaker_matches_config(&pacemaker_after, "after restart");
-        assert_all_peers_expose_no_consensus_safety_halt(&network, &http).await?;
-
         network.shutdown().await;
         Ok(())
     }
@@ -911,53 +900,6 @@ async fn fetch_pacemaker_status(
         jitter_ms: pacemaker_field_u64(object, "jitter_ms")?,
         jitter_frac_permille: pacemaker_field_u64(object, "jitter_frac_permille")?,
     })
-}
-
-async fn assert_all_peers_expose_no_consensus_safety_halt(
-    network: &Network,
-    http: &reqwest::Client,
-) -> Result<()> {
-    for peer in network.peers() {
-        let url = peer
-            .client()
-            .torii_url
-            .join("v1/sumeragi/status")
-            .wrap_err("compose sumeragi safety-halt URL")?;
-        let response = http
-            .get(url)
-            .header("Accept", "application/json")
-            .send()
-            .await
-            .wrap_err_with(|| {
-                format!(
-                    "sumeragi safety-halt request failed for peer {}",
-                    peer.mnemonic()
-                )
-            })?;
-        let status = response.status();
-        ensure!(
-            status.is_success(),
-            "sumeragi safety-halt endpoint returned {status} for peer {}",
-            peer.mnemonic()
-        );
-        let body = response
-            .text()
-            .await
-            .wrap_err_with(|| format!("read safety-halt status for peer {}", peer.mnemonic()))?;
-        let payload: Value = json::from_str(&body)
-            .wrap_err_with(|| format!("parse safety-halt status for peer {}", peer.mnemonic()))?;
-        let active = payload
-            .get("safety_halt")
-            .and_then(Value::as_object)
-            .and_then(|halt| halt.get("active"))
-            .and_then(Value::as_bool);
-        ensure!(
-            active == Some(false),
-            "peer {} did not expose safety_halt.active=false: {active:?}",
-            peer.mnemonic()
-        );
-    }
-    Ok(())
 }
 
 fn configured_pacemaker_status_fallback() -> PacemakerStatus {

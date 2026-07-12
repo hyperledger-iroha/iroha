@@ -51,9 +51,6 @@ pub trait LaneRelayTx: Clone + Send + Sync + 'static {
 
 impl LaneRelayTx for IrohaNetwork {
     fn broadcast_relay(&self, envelope: LaneRelayEnvelope) {
-        if status::consensus_safety_halt_active() {
-            return;
-        }
         self.broadcast(Broadcast {
             data: NetworkMessage::LaneRelay(Box::new(envelope)),
             priority: Priority::High,
@@ -81,10 +78,6 @@ impl<N: LaneRelayTx> LaneRelayBroadcaster<N> {
     /// Validate, de-duplicate, record, and broadcast the provided envelopes.
     pub fn broadcast(&mut self, envelopes: impl IntoIterator<Item = LaneRelayEnvelope>) {
         for envelope in envelopes {
-            if status::consensus_safety_halt_active() {
-                iroha_logger::debug!("dropping lane relay envelope: consensus safety halt active");
-                break;
-            }
             if let Err(err) = envelope.verify().and_then(|()| {
                 if envelope.fastpq_proof.is_some() {
                     envelope.verify_fastpq_proof_material()
@@ -264,31 +257,6 @@ mod tests {
 
         assert!(network.sent().is_empty());
         assert!(crate::sumeragi::status::lane_relay_envelopes_snapshot().is_empty());
-    }
-
-    #[test]
-    fn broadcaster_suppresses_relay_output_while_consensus_is_halted() {
-        let _commit_guard = crate::sumeragi::status::commit_history_test_guard();
-        let _lane_guard = crate::sumeragi::status::lane_relay_test_guard();
-        crate::sumeragi::status::reset_commit_certs_for_tests();
-        crate::sumeragi::status::set_lane_relay_envelopes(Vec::new());
-        crate::sumeragi::status::activate_consensus_safety_halt(
-            "test_safety_halt",
-            3,
-            0,
-            None,
-            None,
-        );
-        let network = MockNetwork::default();
-        let mut broadcaster = LaneRelayBroadcaster::new(network.clone());
-        let mut envelope = sample_envelope(3, 5);
-        attach_qc(&mut envelope);
-
-        broadcaster.broadcast([envelope]);
-
-        assert!(network.sent().is_empty());
-        assert!(crate::sumeragi::status::lane_relay_envelopes_snapshot().is_empty());
-        crate::sumeragi::status::reset_commit_certs_for_tests();
     }
 
     #[test]

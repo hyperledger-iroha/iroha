@@ -45,8 +45,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let asset_definition = AssetDefinition::numeric(asset_definition_id.clone()).build(&alice_id);
     let alice_asset_id = AssetId::new(asset_definition_id.clone(), alice_id.clone());
     let bob_asset_id = AssetId::new(asset_definition_id, bob_id.clone());
-    let alice_asset = Asset::new(alice_asset_id.clone(), Numeric::from(1_000_u32));
-    let bob_asset = Asset::new(bob_asset_id, Numeric::from(75_u32));
+    let alice_asset = Asset::new(alice_asset_id.clone(), Quantity::from(1_000_u32));
+    let bob_asset = Asset::new(bob_asset_id, Quantity::from(75_u32));
     let world = World::with_assets(
         [domain],
         [alice_account, bob_account],

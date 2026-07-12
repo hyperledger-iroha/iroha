@@ -26,13 +26,17 @@ use iroha_data_model::{
     transaction::signed::TransactionEntrypoint,
 };
 use norito::codec::{Decode, DecodeAll, Encode};
+#[cfg(all(unix, not(any(target_os = "espidf", target_os = "redox"))))]
+use rustix::fs::{
+    AtFlags, Dir, FileType as RustixFileType, Mode, OFlags, openat, statat, unlinkat,
+};
 #[cfg(any(
     target_vendor = "apple",
     target_os = "linux",
     target_os = "android",
     target_os = "redox"
 ))]
-use rustix::fs::{CWD, RenameFlags, renameat_with};
+use rustix::fs::{RenameFlags, renameat_with};
 
 use super::{
     AUTONOMOUS_LANE_BLOCKS_DATA_FILE, AUTONOMOUS_LANE_BLOCKS_INDEX_FILE,
@@ -172,16 +176,6 @@ impl GeometryEvidencePolicy {
     target_os = "android",
     target_os = "redox"
 ))]
-fn rename_geometry_path_noreplace(source: &Path, target: &Path) -> std::io::Result<()> {
-    renameat_with(CWD, source, CWD, target, RenameFlags::NOREPLACE).map_err(std::io::Error::from)
-}
-
-#[cfg(any(
-    target_vendor = "apple",
-    target_os = "linux",
-    target_os = "android",
-    target_os = "redox"
-))]
 fn rename_geometry_path_noreplace_at(
     source_parent: &File,
     source_name: &std::ffi::OsStr,
@@ -198,15 +192,12 @@ fn rename_geometry_path_noreplace_at(
     .map_err(std::io::Error::from)
 }
 
-#[cfg(windows)]
-fn rename_geometry_path_noreplace(_source: &Path, _target: &Path) -> std::io::Result<()> {
-    // `std::fs::rename` uses `MOVEFILE_REPLACE_EXISTING` on Windows, so it cannot uphold the
-    // authenticated no-clobber invariant for merge files. Fail closed until the Windows backend
-    // provides a true atomic no-replace primitive.
-    Err(std::io::Error::new(
-        ErrorKind::Unsupported,
-        "atomic no-clobber lane geometry rename is unsupported on Windows",
-    ))
+#[cfg(all(unix, not(any(target_os = "espidf", target_os = "redox"))))]
+fn geometry_stat_identity(stat: &rustix::fs::Stat) -> GeometryFileIdentity {
+    GeometryFileIdentity {
+        device: stat.st_dev as u64,
+        inode: stat.st_ino as u64,
+    }
 }
 
 #[cfg(windows)]
@@ -280,20 +271,6 @@ fn inject_geometry_move_parent_substitution_for_test(target_parent: &Path) -> Re
 #[cfg(not(all(test, unix)))]
 fn inject_geometry_move_parent_substitution_for_test(_target_parent: &Path) -> Result<()> {
     Ok(())
-}
-
-#[cfg(not(any(
-    target_vendor = "apple",
-    target_os = "linux",
-    target_os = "android",
-    target_os = "redox",
-    windows
-)))]
-fn rename_geometry_path_noreplace(_source: &Path, _target: &Path) -> std::io::Result<()> {
-    Err(std::io::Error::new(
-        ErrorKind::Unsupported,
-        "atomic no-clobber lane geometry rename is unsupported on this platform",
-    ))
 }
 
 #[cfg(not(any(
@@ -6396,6 +6373,233 @@ impl Kura {
         Ok(())
     }
 
+    #[cfg(all(unix, not(any(target_os = "espidf", target_os = "redox"))))]
+    fn remove_geometry_directory_contents_at(
+        directory: &File,
+        display_path: &Path,
+        depth: usize,
+        entries_seen: &mut usize,
+    ) -> Result<()> {
+        use std::{ffi::OsStr, os::unix::ffi::OsStrExt};
+
+        if depth > MAX_GEOMETRY_ARCHIVE_DEPTH {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "lane geometry GC tree exceeds the maximum directory depth",
+                ),
+                display_path.to_path_buf(),
+            ));
+        }
+        loop {
+            // Re-open the directory stream after each unlink. POSIX does not promise that a
+            // stream continues without skipping entries when its directory is mutated in place.
+            let mut entries = Dir::read_from(directory)
+                .map_err(std::io::Error::from)
+                .map_err(|error| Error::IO(error, display_path.to_path_buf()))?;
+            let mut next_name = None;
+            for entry in &mut entries {
+                let entry = entry
+                    .map_err(std::io::Error::from)
+                    .map_err(|error| Error::IO(error, display_path.to_path_buf()))?;
+                if !matches!(entry.file_name().to_bytes(), b"." | b"..") {
+                    next_name = Some(entry.file_name().to_owned());
+                    break;
+                }
+            }
+            let Some(name) = next_name else { break };
+            let name = name.as_c_str();
+            *entries_seen = entries_seen.checked_add(1).ok_or_else(|| {
+                Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        "lane geometry GC tree entry count overflow",
+                    ),
+                    display_path.to_path_buf(),
+                )
+            })?;
+            if *entries_seen > MAX_GEOMETRY_ARCHIVE_ENTRIES {
+                return Err(Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        "lane geometry GC tree exceeds the maximum entry count",
+                    ),
+                    display_path.to_path_buf(),
+                ));
+            }
+
+            let child_path = display_path.join(OsStr::from_bytes(name.to_bytes()));
+            let before = statat(directory, name, AtFlags::SYMLINK_NOFOLLOW)
+                .map_err(std::io::Error::from)
+                .map_err(|error| Error::IO(error, child_path.clone()))?;
+            let before_identity = geometry_stat_identity(&before);
+            match RustixFileType::from_raw_mode(before.st_mode) {
+                RustixFileType::Directory => {
+                    let child_depth = depth.checked_add(1).ok_or_else(|| {
+                        Error::IO(
+                            std::io::Error::new(
+                                ErrorKind::InvalidData,
+                                "lane geometry GC tree depth overflow",
+                            ),
+                            child_path.clone(),
+                        )
+                    })?;
+                    let child = File::from(
+                        openat(
+                            directory,
+                            name,
+                            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                            Mode::empty(),
+                        )
+                        .map_err(std::io::Error::from)
+                        .map_err(|error| Error::IO(error, child_path.clone()))?,
+                    );
+                    let opened = child
+                        .metadata()
+                        .map_err(|error| Error::IO(error, child_path.clone()))?;
+                    if !opened.is_dir()
+                        || checked_geometry_file_identity(&opened, &child_path)? != before_identity
+                    {
+                        return Err(Error::IO(
+                            std::io::Error::new(
+                                ErrorKind::InvalidData,
+                                "lane geometry GC directory changed while being opened",
+                            ),
+                            child_path,
+                        ));
+                    }
+                    Self::remove_geometry_directory_contents_at(
+                        &child,
+                        &child_path,
+                        child_depth,
+                        entries_seen,
+                    )?;
+                    let after = statat(directory, name, AtFlags::SYMLINK_NOFOLLOW)
+                        .map_err(std::io::Error::from)
+                        .map_err(|error| Error::IO(error, child_path.clone()))?;
+                    if RustixFileType::from_raw_mode(after.st_mode) != RustixFileType::Directory
+                        || geometry_stat_identity(&after) != before_identity
+                    {
+                        return Err(Error::IO(
+                            std::io::Error::new(
+                                ErrorKind::InvalidData,
+                                "lane geometry GC directory entry changed before removal",
+                            ),
+                            child_path,
+                        ));
+                    }
+                    drop(child);
+                    unlinkat(directory, name, AtFlags::REMOVEDIR)
+                        .map_err(std::io::Error::from)
+                        .map_err(|error| Error::IO(error, child_path))?;
+                }
+                RustixFileType::RegularFile => {
+                    let after = statat(directory, name, AtFlags::SYMLINK_NOFOLLOW)
+                        .map_err(std::io::Error::from)
+                        .map_err(|error| Error::IO(error, child_path.clone()))?;
+                    if RustixFileType::from_raw_mode(after.st_mode) != RustixFileType::RegularFile
+                        || geometry_stat_identity(&after) != before_identity
+                    {
+                        return Err(Error::IO(
+                            std::io::Error::new(
+                                ErrorKind::InvalidData,
+                                "lane geometry GC file entry changed before removal",
+                            ),
+                            child_path,
+                        ));
+                    }
+                    unlinkat(directory, name, AtFlags::empty())
+                        .map_err(std::io::Error::from)
+                        .map_err(|error| Error::IO(error, child_path))?;
+                }
+                _ => {
+                    return Err(Error::IO(
+                        std::io::Error::new(
+                            ErrorKind::InvalidData,
+                            "lane geometry GC tree contains a non-regular entry",
+                        ),
+                        child_path,
+                    ));
+                }
+            }
+        }
+        directory
+            .sync_all()
+            .map_err(|error| Error::IO(error, display_path.to_path_buf()))
+    }
+
+    #[cfg(all(unix, not(any(target_os = "espidf", target_os = "redox"))))]
+    fn remove_authenticated_geometry_tree_at(
+        parent: &File,
+        name: &std::ffi::OsStr,
+        expected_identity: GeometryFileIdentity,
+        display_path: &Path,
+    ) -> Result<()> {
+        let root = File::from(
+            openat(
+                parent,
+                name,
+                OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                Mode::empty(),
+            )
+            .map_err(std::io::Error::from)
+            .map_err(|error| Error::IO(error, display_path.to_path_buf()))?,
+        );
+        let opened = root
+            .metadata()
+            .map_err(|error| Error::IO(error, display_path.to_path_buf()))?;
+        if !opened.is_dir()
+            || checked_geometry_file_identity(&opened, display_path)? != expected_identity
+        {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "lane geometry GC root changed while being opened",
+                ),
+                display_path.to_path_buf(),
+            ));
+        }
+        let mut entries_seen = 0_usize;
+        Self::remove_geometry_directory_contents_at(&root, display_path, 0, &mut entries_seen)?;
+        let final_entry = statat(parent, name, AtFlags::SYMLINK_NOFOLLOW)
+            .map_err(std::io::Error::from)
+            .map_err(|error| Error::IO(error, display_path.to_path_buf()))?;
+        if RustixFileType::from_raw_mode(final_entry.st_mode) != RustixFileType::Directory
+            || geometry_stat_identity(&final_entry) != expected_identity
+        {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "lane geometry GC root entry changed before removal",
+                ),
+                display_path.to_path_buf(),
+            ));
+        }
+        drop(root);
+        unlinkat(parent, name, AtFlags::REMOVEDIR)
+            .map_err(std::io::Error::from)
+            .map_err(|error| Error::IO(error, display_path.to_path_buf()))?;
+        parent
+            .sync_all()
+            .map_err(|error| Error::IO(error, display_path.to_path_buf()))
+    }
+
+    #[cfg(not(all(unix, not(any(target_os = "espidf", target_os = "redox")))))]
+    fn remove_authenticated_geometry_tree_at(
+        _parent: &File,
+        _name: &std::ffi::OsStr,
+        _expected_identity: GeometryFileIdentity,
+        display_path: &Path,
+    ) -> Result<()> {
+        Err(Error::IO(
+            std::io::Error::new(
+                ErrorKind::Unsupported,
+                "descriptor-relative lane geometry GC is unsupported on this platform",
+            ),
+            display_path.to_path_buf(),
+        ))
+    }
+
     fn remove_authenticated_geometry_archive(
         &self,
         pending: &LaneGeometryPendingArchiveGc,
@@ -6416,6 +6620,24 @@ impl Kura {
         if !root_exists && !quarantine_exists {
             return Ok((0, false));
         }
+        let root_name = root.file_name().map(ToOwned::to_owned).ok_or_else(|| {
+            self.geometry_error(
+                ErrorKind::InvalidInput,
+                "lane geometry archive root has no name",
+            )
+        })?;
+        let quarantine_name = quarantine
+            .file_name()
+            .map(ToOwned::to_owned)
+            .ok_or_else(|| {
+                self.geometry_error(
+                    ErrorKind::InvalidInput,
+                    "lane geometry GC quarantine has no name",
+                )
+            })?;
+        let (archive_parent_handle, archive_parent_identity) =
+            self.open_geometry_parent(&archive_parent)?;
+        self.require_geometry_path_identity(&archive_parent, true, archive_parent_identity)?;
 
         // The archive root and its quarantine name are both below the counted retired-geometry
         // tree. Register the entire rename/deletion window so a concurrent usage scan cannot
@@ -6426,9 +6648,20 @@ impl Kura {
                 self.authenticate_geometry_archive(&root, pending, merge_releases)?;
             self.require_geometry_path_identity(&root, true, identity)?;
             self.inject_geometry_move_target_collision_for_test(&quarantine, true)?;
-            rename_geometry_path_noreplace(&root, &quarantine)
-                .map_err(|error| Error::IO(error, root.clone()))?;
-            self.sync_geometry_parent(root.parent())?;
+            self.require_geometry_path_identity(&root, true, identity)?;
+            self.require_geometry_path_identity(&archive_parent, true, archive_parent_identity)?;
+            self.inject_geometry_move_parent_substitution_for_test(&archive_parent)?;
+            rename_geometry_path_noreplace_at(
+                &archive_parent_handle,
+                &root_name,
+                &archive_parent_handle,
+                &quarantine_name,
+            )
+            .map_err(|error| Error::IO(error, root.clone()))?;
+            archive_parent_handle
+                .sync_all()
+                .map_err(|error| Error::IO(error, archive_parent.clone()))?;
+            self.require_geometry_path_identity(&archive_parent, true, archive_parent_identity)?;
             self.require_geometry_path_identity(&quarantine, true, identity)?;
             self.fail_lane_geometry_gc_stage_for_test(GC_FAIL_AFTER_ARCHIVE_QUARANTINE)?;
             quarantine
@@ -6438,12 +6671,19 @@ impl Kura {
 
         // Revalidate after quarantine promotion. The root identity check prevents a path swap
         // between authentication and rename from turning this into an arbitrary tree deletion.
+        // Descent and unlinking remain relative to the already-authenticated parent/root handles,
+        // so an ancestor substitution after this check cannot redirect removal through a symlink.
+        self.require_geometry_path_identity(&archive_parent, true, archive_parent_identity)?;
         let (bytes, identity) =
             self.authenticate_geometry_archive(&deletion_root, pending, merge_releases)?;
         self.require_geometry_path_identity(&deletion_root, true, identity)?;
-        fs::remove_dir_all(&deletion_root)
-            .map_err(|error| Error::IO(error, deletion_root.clone()))?;
-        self.sync_geometry_parent(deletion_root.parent())?;
+        self.require_geometry_path_identity(&archive_parent, true, archive_parent_identity)?;
+        Self::remove_authenticated_geometry_tree_at(
+            &archive_parent_handle,
+            &quarantine_name,
+            identity,
+            &deletion_root,
+        )?;
         self.update_disk_usage_delta(bytes, 0);
         accounting_mutation.finish();
         Ok((bytes, true))
@@ -14804,6 +15044,122 @@ mod tests {
         assert_eq!(
             fs::read(quarantine.join("operator-data")).expect("collision retained"),
             b"retain"
+        );
+    }
+
+    #[cfg(any(
+        target_vendor = "apple",
+        target_os = "linux",
+        target_os = "android",
+        target_os = "redox"
+    ))]
+    #[test]
+    fn geometry_gc_quarantine_cannot_escape_a_substituted_parent() {
+        let temp = TempDir::new().expect("temporary directory");
+        let root = temp.path().join("kura");
+        let kura = open_kura(&root, &initial_and_extended_configs().0);
+        let fixture = prepare_retired_geometry_archive(&kura, &root);
+        kura.fail_next_lane_geometry_gc_at_stage_for_test(GC_FAIL_AFTER_COMPACTION_INTENT);
+        checkpoint_retired_geometry(&kura, &fixture, 20).expect_err("leave pending deletion");
+
+        let archive_parent = fixture.archive_root.parent().expect("archive parent");
+        let root_name = fixture.archive_root.file_name().expect("transition id");
+        let quarantine_name = format!("{GC_QUARANTINE_PREFIX}{}", root_name.to_string_lossy());
+        let displaced_parent = root.join("authenticated-retired-parent");
+        let outside_parent = temp.path().join("outside-retired-parent");
+        fs::create_dir(&outside_parent).expect("create outside replacement parent");
+        *GEOMETRY_MOVE_PARENT_SUBSTITUTION
+            .lock()
+            .expect("geometry parent-substitution hook lock") = Some((
+            archive_parent.to_path_buf(),
+            displaced_parent.clone(),
+            outside_parent.clone(),
+        ));
+
+        kura.resume_proven_lane_geometry_archive_gc()
+            .expect_err("a substituted archive parent must fail GC closed");
+        assert!(
+            GEOMETRY_MOVE_PARENT_SUBSTITUTION
+                .lock()
+                .expect("geometry parent-substitution hook lock")
+                .is_none(),
+            "the parent substitution must occur at the pre-rename barrier"
+        );
+        assert!(
+            fs::symlink_metadata(archive_parent)
+                .expect("substituted archive parent metadata")
+                .file_type()
+                .is_symlink()
+        );
+        for name in [root_name, std::ffi::OsStr::new(&quarantine_name)] {
+            assert!(
+                !outside_parent.join(name).exists(),
+                "descriptor-relative GC must not publish through the replacement symlink"
+            );
+        }
+        assert!(
+            displaced_parent.join(&quarantine_name).is_dir(),
+            "the authenticated parent handle must receive the quarantine"
+        );
+        assert!(
+            !displaced_parent.join(root_name).exists(),
+            "the descriptor-relative rename must consume its authenticated source"
+        );
+        assert!(
+            !kura
+                .read_lane_geometry_journal()
+                .expect("pending geometry journal")
+                .pending_archive_gc
+                .is_empty(),
+            "failed parent revalidation must retain the durable GC intent"
+        );
+    }
+
+    #[cfg(all(unix, not(any(target_os = "espidf", target_os = "redox"))))]
+    #[test]
+    fn geometry_gc_descriptor_deletion_cannot_follow_a_substituted_parent() {
+        use std::os::unix::fs::symlink;
+
+        let temp = TempDir::new().expect("temporary directory");
+        let root = temp.path().join("kura");
+        let kura = open_kura(&root, &initial_and_extended_configs().0);
+        let archive_parent = root.join("descriptor-gc-parent");
+        let deletion_root = archive_parent.join(".gc-authenticated");
+        let nested = deletion_root.join("nested/leaf");
+        fs::create_dir_all(&nested).expect("create authenticated deletion tree");
+        fs::write(nested.join("payload.norito"), b"authenticated")
+            .expect("seed authenticated deletion tree");
+        let deletion_identity = kura
+            .geometry_path_identity(&deletion_root, true)
+            .expect("authenticated deletion identity");
+        let (parent_handle, _) = kura
+            .open_geometry_parent(&archive_parent)
+            .expect("authenticated deletion parent");
+
+        let displaced_parent = root.join("descriptor-gc-parent.displaced");
+        let outside_parent = temp.path().join("outside-descriptor-gc-parent");
+        let outside_collision = outside_parent.join(".gc-authenticated");
+        fs::create_dir_all(&outside_collision).expect("create outside collision");
+        fs::write(outside_collision.join("operator-data"), b"retain")
+            .expect("outside collision sentinel");
+        fs::rename(&archive_parent, &displaced_parent).expect("displace authenticated parent");
+        symlink(&outside_parent, &archive_parent).expect("substitute archive parent");
+
+        Kura::remove_authenticated_geometry_tree_at(
+            &parent_handle,
+            std::ffi::OsStr::new(".gc-authenticated"),
+            deletion_identity,
+            &deletion_root,
+        )
+        .expect("descriptor-relative deletion stays under the authenticated parent handle");
+        assert!(
+            !displaced_parent.join(".gc-authenticated").exists(),
+            "the authenticated quarantine must be removed"
+        );
+        assert_eq!(
+            fs::read(outside_collision.join("operator-data")).expect("outside sentinel retained"),
+            b"retain",
+            "the substituted path namespace must remain untouched"
         );
     }
 

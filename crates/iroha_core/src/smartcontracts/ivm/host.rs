@@ -2967,9 +2967,11 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     /// syscall profile; absence of a contract context alone is not a safe
     /// discriminator because hosts are also assembled before contract binding.
     pub(crate) fn set_generic_execution(&mut self) {
-        debug_assert!(self.current_contract_runtime_context.is_none());
-        self.execution_class = HostExecutionClass::Generic;
-        self.current_entrypoint_authorization = None;
+        // A host may be pooled or reused after a contract/view run. Generic
+        // execution must not inherit the prior contract subject as its effect
+        // authority, even in release builds where a debug assertion would not
+        // protect the boundary.
+        self.clear_contract_runtime_binding();
     }
 
     /// Scope SCCP recording to an authenticated top-level `IvmProved` contract execution.
@@ -4864,10 +4866,28 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         Ok(())
     }
 
+    fn ensure_view_execution_has_no_effect_artifacts(&self) -> Result<(), ValidationFail> {
+        if matches!(self.execution_class, HostExecutionClass::View)
+            && (!self.queued.is_empty()
+                || self.fastpq_batch_entries.is_some()
+                || !self.durable_state_overlay.is_empty()
+                || !self.durable_state_authorizations.is_empty()
+                || self.axt_state.is_some()
+                || !self.completed_axt.is_empty()
+                || self.instruction_queue_violation.is_some())
+        {
+            return Err(ValidationFail::NotPermitted(
+                "read-only view execution retained mutable host artifacts".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+
     pub(crate) fn into_execution_artifacts(
         mut self,
         contract_runtime_context: Option<ContractRuntimeExecutionContext>,
     ) -> Result<HostExecutionArtifacts, ValidationFail> {
+        self.ensure_view_execution_has_no_effect_artifacts()?;
         let queued = self.drain_queued_instructions_with_fallback(contract_runtime_context);
         self.validate_queued_for_zk(
             &queued
@@ -4912,6 +4932,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         authority: &AccountId,
         contract_runtime_context: Option<&ContractRuntimeExecutionContext>,
     ) -> Result<Vec<InstructionBox>, ValidationFail> {
+        self.ensure_view_execution_has_no_effect_artifacts()?;
         let queued =
             self.drain_queued_instructions_with_fallback(contract_runtime_context.cloned());
         self.validate_queued_for_zk(
@@ -12276,12 +12297,23 @@ seiyaku ReadOnlyBinding {
         )
         .expect("bind authorized view entrypoint");
 
-        for syscall in [
-            ivm_sys::SYSCALL_STATE_SET,
-            ivm_sys::SYSCALL_REGISTER_DOMAIN,
-            ivm_sys::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION,
-            ivm_sys::SYSCALL_CALL_CONTRACT,
-        ] {
+        let effect_syscalls = ivm_sys::abi_syscall_list()
+            .iter()
+            .copied()
+            .filter(|syscall| {
+                matches!(
+                    ivm_sys::syscall_access(*syscall),
+                    ivm_sys::SyscallAccess::StateWrite
+                        | ivm_sys::SyscallAccess::LedgerWrite
+                        | ivm_sys::SyscallAccess::Dynamic
+                )
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            effect_syscalls.len() > 4,
+            "the ABI fixture must exercise the complete effect surface"
+        );
+        for syscall in effect_syscalls {
             let vm = IVM::new(1_000_000);
             assert_eq!(
                 host.prepare_syscall(syscall, &vm),
@@ -12308,6 +12340,126 @@ seiyaku ReadOnlyBinding {
         assert_eq!(vm.register(10), 0, "missing state returns a null pointer");
         assert!(host.queued.is_empty());
         assert!(host.durable_state_overlay.is_empty());
+    }
+
+    #[test]
+    fn reused_host_resets_view_and_contract_provenance_before_generic_execution() {
+        let authority = ALICE_ID.clone();
+        let contract_address = ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &authority,
+            47,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("derive contract address");
+        let authorization = ContractEntrypointAuthorizationSnapshot::new(
+            authority.clone(),
+            "execute".to_owned(),
+            None,
+            &crate::smartcontracts::code::BoundContractIdentity {
+                contract_address: contract_address.clone(),
+                contract_alias: None,
+                contract_alias_binding: None,
+                code_hash: Hash::new(b"reused host execution class"),
+            },
+        );
+        let mut host = CoreHost::new(authority.clone());
+        host.bind_contract_runtime_context(contract_address.subject_id(), authorization.clone());
+        assert_eq!(host.effect_authority(), contract_address.subject_id());
+        assert_eq!(
+            host.execution_class
+                .ensure_syscall_allowed(ivm_sys::SYSCALL_REGISTER_DOMAIN),
+            Ok(())
+        );
+
+        host.execution_class = HostExecutionClass::View;
+        host.set_generic_execution();
+        assert_eq!(host.execution_class, HostExecutionClass::Generic);
+        assert!(host.current_contract_runtime_context.is_none());
+        assert!(host.current_entrypoint_authorization.is_none());
+        assert_eq!(host.effect_authority(), authority);
+        assert_eq!(
+            host.execution_class
+                .ensure_syscall_allowed(ivm_sys::SYSCALL_REGISTER_DOMAIN),
+            Err(ivm::VMError::GenericSyscallNotAllowed {
+                syscall: ivm_sys::SYSCALL_REGISTER_DOMAIN,
+            })
+        );
+
+        host.bind_contract_runtime_context(contract_address.subject_id(), authorization);
+        assert_eq!(host.execution_class, HostExecutionClass::Contract);
+        assert_eq!(
+            host.execution_class
+                .ensure_syscall_allowed(ivm_sys::SYSCALL_REGISTER_DOMAIN),
+            Ok(()),
+            "a prior view binding must not leave the host over-restricted"
+        );
+    }
+
+    #[test]
+    fn view_effect_artifacts_fail_closed_before_application_or_extraction() {
+        let authority = ALICE_ID.clone();
+        let contract_address = ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &authority,
+            48,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("derive contract address");
+        let authorization = ContractEntrypointAuthorizationSnapshot::new(
+            authority.clone(),
+            "inspect".to_owned(),
+            None,
+            &crate::smartcontracts::code::BoundContractIdentity {
+                contract_address: contract_address.clone(),
+                contract_alias: None,
+                contract_alias_binding: None,
+                code_hash: Hash::new(b"view application guard"),
+            },
+        );
+        let mut host = CoreHost::new(authority.clone());
+        host.bind_contract_runtime_context(contract_address.subject_id(), authorization);
+        host.execution_class = HostExecutionClass::View;
+
+        let attempted_domain =
+            DomainId::try_new("view_effect_guard", "universal").expect("valid domain id");
+        let attempted = InstructionBox::from(RegisterBox::from(Register::domain(Domain::new(
+            attempted_domain.clone(),
+        ))));
+        host.queue_instruction(attempted.clone());
+
+        let world = World::new();
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(world, kura, query);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut stx = block.transaction();
+        let error = host
+            .apply_queued(&mut stx, &authority)
+            .expect_err("a view must never apply a retained effect");
+        assert!(matches!(
+            error,
+            ValidationFail::NotPermitted(message)
+                if message == "read-only view execution retained mutable host artifacts"
+        ));
+        assert!(stx.world.domain(&attempted_domain).is_err());
+        assert!(
+            stx.tx_call_hash.is_none(),
+            "the view guard must run before execution identity is seeded"
+        );
+        assert_eq!(host.queued.len(), 1, "the guard must run before draining");
+        assert_eq!(host.queued[0].instruction, attempted);
+
+        let error = match host.into_execution_artifacts(None) {
+            Err(error) => error,
+            Ok(_) => panic!("a view must never export a retained effect"),
+        };
+        assert!(matches!(
+            error,
+            ValidationFail::NotPermitted(message)
+                if message == "read-only view execution retained mutable host artifacts"
+        ));
     }
 
     #[test]
@@ -17025,7 +17177,7 @@ seiyaku OuterCaller {
         );
         let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
         let asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
-        let asset = Asset::new(asset_id, Numeric::new(42_u32, 0));
+        let asset = Asset::new(asset_id, Quantity::from(42_u32));
         let world = World::with_assets([domain], [account], [asset_def], [asset], []);
 
         let kura = Kura::blank_kura_for_testing();
@@ -17090,7 +17242,7 @@ seiyaku OuterCaller {
             "typed projection must be smaller than the full asset definition"
         );
         let asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
-        let asset = Asset::new(asset_id.clone(), Numeric::new(7_u32, 0));
+        let asset = Asset::new(asset_id.clone(), Quantity::from(7_u32));
         let nft_id: NftId = "ticket$wonderland.universal".parse().expect("nft id");
         let nft = Nft::new(nft_id.clone(), Metadata::default()).build(&authority);
         let world = World::with_assets([domain], [account], [asset_def], [asset], [nft]);
@@ -17327,7 +17479,7 @@ seiyaku OuterCaller {
         let asset_definition =
             AssetDefinition::numeric(asset_definition_id.clone()).build(&authority);
         let asset_id = AssetId::of(asset_definition_id.clone(), authority.clone());
-        let asset = Asset::new(asset_id.clone(), Numeric::new(7_u32, 0));
+        let asset = Asset::new(asset_id.clone(), Quantity::from(7_u32));
         let nft_id: NftId = "ticket$wonderland.universal".parse().expect("NFT id");
         let nft = Nft::new(nft_id.clone(), Metadata::default()).build(&authority);
         let missing_account = fixture_account("bob");
@@ -17649,7 +17801,7 @@ seiyaku OuterCaller {
                 let amount = u32::try_from(index)
                     .expect("two-asset fixture index")
                     .saturating_add(1);
-                Asset::new(id, Numeric::new(amount, 0))
+                Asset::new(id, Quantity::from(amount))
             })
             .collect::<Vec<_>>();
         let nft_ids = [
@@ -18154,7 +18306,7 @@ seiyaku OuterCaller {
         let charge_def =
             AssetDefinition::new(charge_asset_id.clone(), NumericSpec::integer()).build(&provider);
         let asset_id = AssetId::of(charge_asset_id.clone(), subscriber.clone());
-        let asset = Asset::new(asset_id.clone(), Numeric::new(500_u32, 0));
+        let asset = Asset::new(asset_id.clone(), Quantity::from(500_u32));
 
         let subscription_state = SubscriptionState {
             plan_id: plan_id.clone(),
@@ -18504,7 +18656,7 @@ seiyaku OuterCaller {
         let charge_def =
             AssetDefinition::new(charge_asset_id.clone(), NumericSpec::integer()).build(&provider);
         let asset_id = AssetId::of(charge_asset_id.clone(), subscriber.clone());
-        let asset = Asset::new(asset_id.clone(), Numeric::new(50_u32, 0));
+        let asset = Asset::new(asset_id.clone(), Quantity::from(50_u32));
 
         let subscription_state = SubscriptionState {
             plan_id: plan_id.clone(),
@@ -22091,7 +22243,7 @@ seiyaku Callee {
     }
 
     #[test]
-    fn nested_view_returns_value_but_discards_attempted_state_mutation() {
+    fn registered_manifest_cannot_relabel_effectful_entrypoint_as_view() {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let state = contract_test_state(&authority);
@@ -22136,10 +22288,10 @@ seiyaku EffectfulView {
             &mut ivm_cache,
         );
 
-        // The compiler rejects durable mutation in a declared view. Bypass that
-        // first-line guarantee here by corrupting the registered manifest after
-        // deployment, so this test exercises the host's independent rollback
-        // boundary for an entrypoint whose bytecode can still mutate state.
+        // The embedded, verified contract interface is the execution authority.
+        // Corrupt the separately registered manifest after deployment and prove
+        // that it cannot relabel effectful bytecode as a view whose effects the
+        // nested-call boundary would silently roll back.
         let record =
             crate::smartcontracts::code::fetch_bound_contract_record(&state.view(), &callee)
                 .expect("installed effectful contract record");
@@ -22180,16 +22332,15 @@ seiyaku EffectfulView {
                 "increment_then_return",
                 Json::new(()),
             );
-            result.expect("nested view should return its computed value");
+            result.expect("the embedded kotoage entrypoint remains transaction-capable");
             let returned = vm
                 .memory
                 .validate_tlv(vm.register(10))
-                .expect("view result NoritoBytes");
-            let value = decode_nested_int(returned.payload);
-            assert_eq!(value, 6, "each view must begin from the persisted value");
+                .expect("entrypoint result NoritoBytes");
+            assert_eq!(decode_nested_int(returned.payload), 6);
             assert!(
-                durable_state_overlay.is_empty(),
-                "a nested view must discard attempted durable-state mutation",
+                !durable_state_overlay.is_empty(),
+                "a forged external view label must not roll back an embedded kotoage effect",
             );
         }
     }
@@ -22744,7 +22895,7 @@ seiyaku Callee {
         let account = build_fixture_account(&authority, &authority);
         let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
         let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
-        let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(5_u32, 0));
+        let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let world = World::with_assets([domain], [account], [asset_def], [source_asset], []);
@@ -22911,7 +23062,7 @@ seiyaku Callee {
         let replacement_fixture = build_fixture_account(&replacement_account, &authority);
         let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
         let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
-        let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(5_u32, 0));
+        let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let world = World::with_assets(
@@ -23077,7 +23228,7 @@ seiyaku AliasPayout {
         let replacement_fixture = build_fixture_account(&replacement_account, &authority);
         let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
         let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
-        let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(5_u32, 0));
+        let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let world = World::with_assets(
@@ -23256,7 +23407,7 @@ seiyaku AliasPayout {
             .with_name("xor".to_owned())
             .build(&authority);
         let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
-        let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(5_u32, 0));
+        let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let payment_asset = Asset::new(
             AssetId::of(payment_asset_definition_id, authority.clone()),
             Numeric::new(1_000_u32, 0),
@@ -23435,7 +23586,7 @@ seiyaku AliasPayout {
         let merchant_fixture = build_fixture_account(&merchant_account, &authority);
         let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
         let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
-        let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(5_u32, 0));
+        let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let world = World::with_assets(
@@ -23552,7 +23703,7 @@ seiyaku AliasPayout {
         let merchant_fixture = build_fixture_account(&merchant_account, &authority);
         let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
         let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
-        let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(5_u32, 0));
+        let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let world = World::with_assets(
@@ -23637,7 +23788,7 @@ seiyaku AliasPayout {
         let authority_account = build_fixture_account(&authority, &authority);
         let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
         let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
-        let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(5_u32, 0));
+        let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let world = World::with_assets(
@@ -23725,7 +23876,7 @@ seiyaku AliasPayout {
             .with_name("xor".to_owned())
             .build(&authority);
         let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
-        let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(5_u32, 0));
+        let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let payment_asset = Asset::new(
             AssetId::of(payment_asset_definition_id, authority.clone()),
             Numeric::new(1_000_u32, 0),
@@ -23857,7 +24008,7 @@ seiyaku AliasPayout {
         let merchant_fixture = build_fixture_account(&merchant_account, &authority);
         let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
         let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
-        let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(5_u32, 0));
+        let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let world = World::with_assets(
@@ -23942,7 +24093,7 @@ seiyaku AliasPayout {
         let authority_account = build_fixture_account(&authority, &authority);
         let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
         let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
-        let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(5_u32, 0));
+        let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let world = World::with_assets(
@@ -24030,7 +24181,7 @@ seiyaku AliasPayout {
             .with_name("xor".to_owned())
             .build(&authority);
         let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
-        let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(5_u32, 0));
+        let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let payment_asset = Asset::new(
             AssetId::of(payment_asset_definition_id, authority.clone()),
             Numeric::new(1_000_u32, 0),
@@ -24174,7 +24325,7 @@ seiyaku AliasPayout {
             .with_name("xor".to_owned())
             .build(&authority);
         let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
-        let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(5_u32, 0));
+        let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let payment_asset = Asset::new(
             AssetId::of(payment_asset_definition_id, authority.clone()),
             Numeric::new(1_000_u32, 0),
@@ -24318,7 +24469,7 @@ seiyaku AliasPayout {
             .with_name("xor".to_owned())
             .build(&authority);
         let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
-        let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(5_u32, 0));
+        let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let payment_asset = Asset::new(
             AssetId::of(payment_asset_definition_id, authority.clone()),
             Numeric::new(1_000_u32, 0),
@@ -24446,7 +24597,7 @@ seiyaku AliasPayout {
             .with_name("xor".to_owned())
             .build(&authority);
         let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
-        let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(5_u32, 0));
+        let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let payment_asset = Asset::new(
             AssetId::of(payment_asset_definition_id, authority.clone()),
             Numeric::new(1_000_u32, 0),
@@ -24574,7 +24725,7 @@ seiyaku AliasPayout {
             .with_name("xor".to_owned())
             .build(&authority);
         let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
-        let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(5_u32, 0));
+        let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let payment_asset = Asset::new(
             AssetId::of(payment_asset_definition_id, authority.clone()),
             Numeric::new(1_000_u32, 0),
@@ -24705,7 +24856,7 @@ seiyaku AliasPayout {
         let authority_account = build_fixture_account(&authority, &authority);
         let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
         let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
-        let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(5_u32, 0));
+        let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let world = World::with_assets(
@@ -24780,7 +24931,7 @@ seiyaku AliasPayout {
         let authority_account = build_fixture_account(&authority, &authority);
         let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
         let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
-        let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(5_u32, 0));
+        let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let world = World::with_assets(
@@ -24870,7 +25021,7 @@ seiyaku AliasPayout {
             .with_name("xor".to_owned())
             .build(&authority);
         let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
-        let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(5_u32, 0));
+        let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let payment_asset = Asset::new(
             AssetId::of(payment_asset_definition_id, authority.clone()),
             Numeric::new(1_000_u32, 0),
@@ -25069,7 +25220,7 @@ seiyaku AliasPayout {
             AssetDefinitionId::new(fixture_domain_id(), "rose".parse().expect("asset name"));
         let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&outer_authority);
         let source_asset_id = AssetId::of(asset_def_id.clone(), nested_authority.clone());
-        let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(5_u32, 0));
+        let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(5_u32));
         let world = World::with_assets(
             [domain],
             [outer_account, nested_account, recipient_account],
@@ -25293,7 +25444,7 @@ seiyaku DurableOwner {
             commitment,
             [0x42; 32],
             "halo2/ipa",
-            "offline-note-recursive",
+            "kagemusha-recursive-spend-state-ep-v1",
             "core",
             Vec::new(),
         );
@@ -25301,7 +25452,7 @@ seiyaku DurableOwner {
 
         let mut map = BTreeMap::new();
         map.insert(
-            VerifyingKeyId::new("halo2/ipa", "offline-note-recursive"),
+            VerifyingKeyId::new("halo2/ipa", "kagemusha-recursive-spend-state-ep-v1"),
             rec,
         );
 
@@ -25318,14 +25469,17 @@ seiyaku DurableOwner {
             commitment,
             [0x42; 32],
             "halo2/ipa",
-            "kagemusha-folded-v1",
+            "kagemusha-recursive-spend-transition-eq-v1",
             "core",
             Vec::new(),
         );
         rec.key = None;
 
         let mut map = BTreeMap::new();
-        map.insert(VerifyingKeyId::new("halo2/ipa", "kagemusha-folded-v1"), rec);
+        map.insert(
+            VerifyingKeyId::new("halo2/ipa", "kagemusha-recursive-spend-transition-eq-v1"),
+            rec,
+        );
         host.set_verifying_keys(map)
             .expect("keyless record should be accepted");
 

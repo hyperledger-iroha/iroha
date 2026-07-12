@@ -49,9 +49,9 @@ REQUIRED_KAGEMUSHA_SLOT_ARTIFACT_PATHS: tuple[str, ...] = (
 )
 KAGEMUSHA_SIGNED_EVIDENCE_ARTIFACT_PATH = "evidence/signed-evidence.json"
 MAX_KAGEMUSHA_REQUIRED_SLOT_ARTIFACT_BYTES = 16 * 1024 * 1024
-MAX_KAGEMUSHA_OFFLINE_WALLET_APK_BYTES = 64 * 1024 * 1024
+MAX_KAGEMUSHA_WALLET_APK_BYTES = 64 * 1024 * 1024
 MAX_ANDROID_DEVICE_LAB_JSON_BYTES = 16 * 1024 * 1024
-KAGEMUSHA_OFFLINE_WALLET_APK_PATH = "evidence/offline-wallet-release.apk"
+KAGEMUSHA_WALLET_APK_PATH = "evidence/kagemusha-wallet-release.apk"
 MAX_ANDROID_DEVICE_LAB_SHA256_MANIFEST_BYTES = 1024 * 1024
 MAX_ANDROID_DEVICE_LAB_SIGNING_KEY_BYTES = 64 * 1024
 KAGEMUSHA_RUNTIME_LOG_COMPLETE_MARKER = "kagemusha device-lab run complete"
@@ -81,8 +81,8 @@ STATUS_EVENT_FIELDS: frozenset[str] = frozenset(
 
 
 def _slot_artifact_max_bytes(relative: str) -> int:
-    if relative == KAGEMUSHA_OFFLINE_WALLET_APK_PATH:
-        return MAX_KAGEMUSHA_OFFLINE_WALLET_APK_BYTES
+    if relative == KAGEMUSHA_WALLET_APK_PATH:
+        return MAX_KAGEMUSHA_WALLET_APK_BYTES
     return MAX_KAGEMUSHA_REQUIRED_SLOT_ARTIFACT_BYTES
 DEVICE_LAB_ROOT_SUMMARY_LABEL = "<local-device-lab-root>"
 SUMMARY_REDACTION_KEY_COLLISION_FIELD = "summary_redaction_key_collision"
@@ -161,46 +161,38 @@ KAGEMUSHA_DEVICE_FAMILY_MODEL_RULES: tuple[
     ),
 )
 RAW_TEST_COMMAND_REQUIRED_MARKERS: tuple[str, ...] = (
+    ":core-jvm:test",
     ":client-android:assembleRelease",
-    ":offline-wallet-android:assembleRelease",
-    ":offline-wallet-android:connectedDebugAndroidTest",
-    ":offline-wallet-lab-app:assembleRelease",
-    ":offline-wallet-lab-app:installRelease",
-    ":offline-wallet-lab-app:installReleaseAndroidTest",
     "adb shell am instrument",
-    "org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProverTest",
-    "org.hyperledger.iroha.android.offline.OfflineNoteTransferHandoffTest",
-    "org.hyperledger.iroha.android.offline.KagemushaDeviceLabArtifactExportTest",
+    "org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendProverTest",
+    "org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendLifecycleTest",
+    "org.hyperledger.iroha.sdk.offline.KagemushaDeviceLabArtifactExportTest",
 )
 KAGEMUSHA_ANDROID_PRODUCTION_RAW_HARNESS_COMMAND = (
-    "ANDROID_HARNESS_MAINS="
-    "org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProverTest "
-    "./gradlew :client-android:assembleRelease "
-    ":offline-wallet-android:assembleRelease "
-    ":offline-wallet-android:connectedDebugAndroidTest "
-    "-Pandroid.testInstrumentationRunnerArguments.class="
-    "org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProverTest,"
-    "org.hyperledger.iroha.android.offline.OfflineNoteTransferHandoffTest"
+    "./gradlew :core-jvm:test --tests "
+    "org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendProverTest "
+    ":client-android:assembleRelease"
+)
+KAGEMUSHA_ANDROID_PRODUCTION_RAW_LIFECYCLE_COMMAND = (
+    "adb shell am instrument -w -e class "
+    "org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendLifecycleTest "
+    "org.hyperledger.iroha.sdk.kagemusha.lab.test/"
+    "androidx.test.runner.AndroidJUnitRunner"
 )
 KAGEMUSHA_ANDROID_PRODUCTION_RAW_EXPORT_COMMAND = (
-    "./gradlew :offline-wallet-lab-app:assembleRelease "
-    ":offline-wallet-lab-app:installRelease "
-    ":offline-wallet-lab-app:installReleaseAndroidTest"
-)
-KAGEMUSHA_ANDROID_PRODUCTION_RAW_EXPORT_INSTRUMENT_COMMAND = (
     "adb shell am instrument -w -e class "
-    "org.hyperledger.iroha.android.offline.KagemushaDeviceLabArtifactExportTest "
-    "org.hyperledger.iroha.sdk.offline.wallet.lab.test/"
+    "org.hyperledger.iroha.sdk.offline.KagemushaDeviceLabArtifactExportTest "
+    "org.hyperledger.iroha.sdk.kagemusha.lab.test/"
     "androidx.test.runner.AndroidJUnitRunner"
 )
 KAGEMUSHA_ANDROID_PRODUCTION_RAW_TEST_COMMANDS: tuple[str, ...] = (
     KAGEMUSHA_ANDROID_PRODUCTION_RAW_HARNESS_COMMAND,
+    KAGEMUSHA_ANDROID_PRODUCTION_RAW_LIFECYCLE_COMMAND,
     KAGEMUSHA_ANDROID_PRODUCTION_RAW_EXPORT_COMMAND,
-    KAGEMUSHA_ANDROID_PRODUCTION_RAW_EXPORT_INSTRUMENT_COMMAND,
 )
 SIGNED_EVIDENCE_SCHEMA = "iroha.android.device_lab.kagemusha.signed_evidence.v1"
 D2D_PAYMENT_TRANSCRIPT_SCHEMA = "iroha.android.device_lab.kagemusha.d2d_payment.v1"
-D2D_PAYMENT_PAYLOAD_SCHEMA = "kagemusha.recursive_spend.reserved_lineage.d2d.v1"
+D2D_PAYMENT_PAYLOAD_SCHEMA = "kagemusha.recursive_spend.d2d.v1"
 WALLET_INTEGRITY_TRANSCRIPT_SCHEMA = (
     "iroha.android.device_lab.kagemusha.wallet_integrity.v1"
 )
@@ -212,9 +204,9 @@ ATTESTATION_CERTIFICATE_CHAIN_SUFFIXES = (".der", ".pem")
 MAX_ATTESTATION_CERTIFICATE_CHAIN_BYTES = 64 * 1024
 SIGNED_EVIDENCE_SIGNATURE_ALGORITHMS = {"ed25519"}
 ED25519_SIGNATURE_BYTES = 64
-REQUIRED_KAGEMUSHA_NATIVE_BRIDGE_ABI_VERSION = 7
-ABI7_RECURSIVE_COMPACT_ONE_HOP_JNI_PROBE_STATES = {"one_hop_verified"}
-ABI7_RECURSIVE_COMPACT_MULTI_HOP_PROVER_STATES = {"multi_hop_proof_composed"}
+REQUIRED_KAGEMUSHA_NATIVE_BRIDGE_ABI_VERSION = 19
+KAGEMUSHA_RECURSIVE_SPEND_JNI_PROBE_STATES = {"recursive_spend_verified"}
+KAGEMUSHA_RECURSIVE_SPEND_PROVER_STATES = {"multi_hop_proof_composed"}
 SIGNED_EVIDENCE_SLOT_STRING_FIELDS: tuple[str, ...] = (
     "slot_id",
     "device_family",
@@ -225,17 +217,17 @@ SIGNED_EVIDENCE_SLOT_STRING_FIELDS: tuple[str, ...] = (
     "minimum_os",
     "app_package_name",
     "attestation_certificate_chain_path",
-    "offline_wallet_apk_path",
+    "kagemusha_wallet_apk_path",
     "d2d_payment_transcript_path",
     "wallet_integrity_transcript_path",
     "keymint_security_level",
-    "abi6_recursive_spend_jni_probe",
-    "abi7_recursive_compact_jni_probe",
-    "abi7_recursive_compact_prover_state",
+    "kagemusha_recursive_spend_ffi_surface",
+    "kagemusha_recursive_spend_jni_probe",
+    "kagemusha_recursive_spend_prover_state",
 )
 SIGNED_EVIDENCE_SLOT_ARTIFACT_PATH_FIELDS: tuple[str, ...] = (
     "attestation_certificate_chain_path",
-    "offline_wallet_apk_path",
+    "kagemusha_wallet_apk_path",
     "d2d_payment_transcript_path",
     "wallet_integrity_transcript_path",
 )
@@ -243,8 +235,8 @@ SIGNED_EVIDENCE_SLOT_SHA256_FIELDS: tuple[str, ...] = (
     "app_signing_certificate_sha256",
     "attestation_challenge_sha256",
     "attestation_certificate_chain_sha256",
-    "offline_wallet_policy_sha256",
-    "offline_wallet_apk_sha256",
+    "kagemusha_wallet_policy_sha256",
+    "kagemusha_wallet_apk_sha256",
     "d2d_payment_transcript_sha256",
     "wallet_integrity_transcript_sha256",
 )
@@ -303,14 +295,14 @@ SIGNED_EVIDENCE_FIELDS: frozenset[str] = frozenset(
         "minimum_os",
         "app_package_name",
         "attestation_certificate_chain_path",
-        "offline_wallet_apk_path",
+        "kagemusha_wallet_apk_path",
         "d2d_payment_transcript_path",
         "wallet_integrity_transcript_path",
         "app_signing_certificate_sha256",
         "attestation_challenge_sha256",
         "attestation_certificate_chain_sha256",
-        "offline_wallet_policy_sha256",
-        "offline_wallet_apk_sha256",
+        "kagemusha_wallet_policy_sha256",
+        "kagemusha_wallet_apk_sha256",
         "d2d_payment_transcript_sha256",
         "wallet_integrity_transcript_sha256",
         "native_bridge_abi_version",
@@ -319,9 +311,9 @@ SIGNED_EVIDENCE_FIELDS: frozenset[str] = frozenset(
         "keymint_security_level",
         "one_use_key_rotation_passed",
         "rollback_rejection_passed",
-        "abi6_recursive_spend_jni_probe",
-        "abi7_recursive_compact_jni_probe",
-        "abi7_recursive_compact_prover_state",
+        "kagemusha_recursive_spend_ffi_surface",
+        "kagemusha_recursive_spend_jni_probe",
+        "kagemusha_recursive_spend_prover_state",
         D2D_PAYMENT_TRANSCRIPTS_FIELD,
         "raw_test_commands",
         "signed_at_utc",
@@ -341,7 +333,7 @@ ATTESTATION_RESULT_SLOT_BINDING_FIELDS: tuple[str, ...] = (
     "attestation_challenge_sha256",
     "attestation_certificate_chain_path",
     "attestation_certificate_chain_sha256",
-    "offline_wallet_policy_sha256",
+    "kagemusha_wallet_policy_sha256",
 )
 ATTESTATION_RESULT_FIELDS: frozenset[str] = frozenset(
     {
@@ -404,8 +396,8 @@ D2D_PAYMENT_TRANSCRIPT_SLOT_STRING_BINDINGS: tuple[str, ...] = (
 D2D_PAYMENT_TRANSCRIPT_SLOT_SHA256_BINDINGS: tuple[str, ...] = (
     "app_signing_certificate_sha256",
     "attestation_challenge_sha256",
-    "offline_wallet_policy_sha256",
-    "offline_wallet_apk_sha256",
+    "kagemusha_wallet_policy_sha256",
+    "kagemusha_wallet_apk_sha256",
 )
 D2D_PAYMENT_TRANSCRIPT_SHA256_FIELDS: tuple[str, ...] = (
     *D2D_PAYMENT_TRANSCRIPT_SLOT_SHA256_BINDINGS,
@@ -452,8 +444,8 @@ WALLET_INTEGRITY_TRANSCRIPT_SLOT_SHA256_BINDINGS: tuple[str, ...] = (
     "app_signing_certificate_sha256",
     "attestation_challenge_sha256",
     "attestation_certificate_chain_sha256",
-    "offline_wallet_policy_sha256",
-    "offline_wallet_apk_sha256",
+    "kagemusha_wallet_policy_sha256",
+    "kagemusha_wallet_apk_sha256",
 )
 WALLET_INTEGRITY_TRANSCRIPT_SHA256_FIELDS: tuple[str, ...] = (
     *WALLET_INTEGRITY_TRANSCRIPT_SLOT_SHA256_BINDINGS,
@@ -1023,13 +1015,13 @@ KAGEMUSHA_SUMMARY_RELEASE_ARTIFACTS: tuple[tuple[str, str], ...] = (
         "attestation_certificate_chain_path",
         "attestation_certificate_chain_sha256",
     ),
-    ("offline_wallet_apk_path", "offline_wallet_apk_sha256"),
+    ("kagemusha_wallet_apk_path", "kagemusha_wallet_apk_sha256"),
     ("d2d_payment_transcript_path", "d2d_payment_transcript_sha256"),
     ("wallet_integrity_transcript_path", "wallet_integrity_transcript_sha256"),
 )
 KAGEMUSHA_SUMMARY_RELEASE_ARTIFACT_ROOTS: dict[str, str] = {
     "attestation_certificate_chain_path": "attestation",
-    "offline_wallet_apk_path": "evidence",
+    "kagemusha_wallet_apk_path": "evidence",
     "d2d_payment_transcript_path": "handoff",
     "wallet_integrity_transcript_path": "wallet",
 }
@@ -4803,32 +4795,32 @@ def validate_kagemusha_production_metadata(
                         details["attestation_certificate_chain_sha256"] = chain_digest
     _require_lowercase_sha256_hex(
         metadata,
-        "offline_wallet_policy_sha256",
+        "kagemusha_wallet_policy_sha256",
         "slot.json",
         errors,
     )
     apk_digest = _require_lowercase_sha256_hex(
         metadata,
-        "offline_wallet_apk_sha256",
+        "kagemusha_wallet_apk_sha256",
         "slot.json",
         errors,
     )
-    apk_relative = _require_non_empty_string(metadata, "offline_wallet_apk_path", errors)
+    apk_relative = _require_non_empty_string(metadata, "kagemusha_wallet_apk_path", errors)
     if apk_relative is not None:
         apk_relative = _normalise_safe_relative_path(
             apk_relative,
             errors,
-            "slot.json offline_wallet_apk_path",
+            "slot.json kagemusha_wallet_apk_path",
         )
     if apk_relative is not None:
         if not _safe_relative_path_is_child_of(apk_relative, "evidence"):
-            errors.append("slot.json offline_wallet_apk_path must stay under evidence/")
+            errors.append("slot.json kagemusha_wallet_apk_path must stay under evidence/")
         else:
             _, actual_apk_digest, digest_errors = _metadata_artifact_bytes_and_sha256(
                 slot_path,
                 apk_relative,
-                "slot.json offline_wallet_apk_path",
-                "slot.json offline_wallet_apk_path must point to an existing file",
+                "slot.json kagemusha_wallet_apk_path",
+                "slot.json kagemusha_wallet_apk_path must point to an existing file",
                 _slot_artifact_max_bytes(apk_relative),
             )
             if digest_errors:
@@ -4836,11 +4828,11 @@ def validate_kagemusha_production_metadata(
             elif apk_digest is not None and actual_apk_digest is not None:
                 if actual_apk_digest != apk_digest:
                     errors.append(
-                        "slot.json offline_wallet_apk_sha256 does not match offline_wallet_apk_path"
+                        "slot.json kagemusha_wallet_apk_sha256 does not match kagemusha_wallet_apk_path"
                     )
                 else:
-                    details["offline_wallet_apk_path"] = apk_relative
-                    details["offline_wallet_apk_sha256"] = apk_digest
+                    details["kagemusha_wallet_apk_path"] = apk_relative
+                    details["kagemusha_wallet_apk_sha256"] = apk_digest
 
     d2d_relative, d2d_digest, d2d_transport = validate_d2d_payment_transcript_binding(
         slot_path,
@@ -4897,17 +4889,17 @@ def validate_kagemusha_production_metadata(
     _require_true(metadata, "physical_device_attestation", errors)
     _require_true(metadata, "one_use_key_rotation_passed", errors)
     _require_true(metadata, "rollback_rejection_passed", errors)
-    _require_status(metadata, "abi6_recursive_spend_jni_probe", {"passed"}, errors)
+    _require_status(metadata, "kagemusha_recursive_spend_ffi_surface", {"passed"}, errors)
     _require_status(
         metadata,
-        "abi7_recursive_compact_jni_probe",
-        ABI7_RECURSIVE_COMPACT_ONE_HOP_JNI_PROBE_STATES,
+        "kagemusha_recursive_spend_jni_probe",
+        KAGEMUSHA_RECURSIVE_SPEND_JNI_PROBE_STATES,
         errors,
     )
     _require_status(
         metadata,
-        "abi7_recursive_compact_prover_state",
-        ABI7_RECURSIVE_COMPACT_MULTI_HOP_PROVER_STATES,
+        "kagemusha_recursive_spend_prover_state",
+        KAGEMUSHA_RECURSIVE_SPEND_PROVER_STATES,
         errors,
     )
     if family is not None and minimum_os is not None:

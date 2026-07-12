@@ -90,7 +90,7 @@ fn tags_section() -> Value {
     offline.insert(
         "description".into(),
         Value::String(
-            "Kagemusha readiness and asynchronous top-up/redemption operations. Requests use the same typed DTO in JSON and canonical Norito."
+            "Kagemusha readiness and asynchronous top-up/redemption operations. Commands accept only the canonical typed application/x-norito representation."
                 .to_owned(),
         ),
     );
@@ -802,21 +802,19 @@ fn offline_paths() -> Map {
         "/v1/offline/readiness".to_owned(),
         Value::Object(offline_readiness_operation()),
     );
-    for (path, operation_id, summary, description, request_schema, norito_schema) in [
+    for (path, operation_id, summary, description, norito_schema) in [
         (
             "/v1/offline/top-up",
             "offlineTopUp",
             "Submit an offline top-up.",
-            "Submit one typed Kagemusha OfflineTopUpRequest. JSON contains the structured request and application/x-norito contains the canonical Norito value. Acceptance is asynchronous and returns the operation resource in Location.",
-            "#/components/schemas/OfflineTopUpRequest",
+            "Submit one canonical Norito-encoded Kagemusha OfflineTopUpRequest using application/x-norito. Acceptance is asynchronous and returns the operation resource in Location.",
             iroha_torii_shared::offline_api::OFFLINE_TOP_UP_REQUEST_SCHEMA_NAME,
         ),
         (
             "/v1/offline/redeem",
             "offlineRedeem",
             "Submit an offline redemption.",
-            "Submit one typed Kagemusha OfflineRedeemRequest. JSON contains the structured request and application/x-norito contains the canonical Norito value. Acceptance is asynchronous and returns the operation resource in Location.",
-            "#/components/schemas/OfflineRedeemRequest",
+            "Submit one canonical Norito-encoded Kagemusha OfflineRedeemRequest using application/x-norito. Acceptance is asynchronous and returns the operation resource in Location.",
             iroha_torii_shared::offline_api::OFFLINE_REDEEM_REQUEST_SCHEMA_NAME,
         ),
     ] {
@@ -826,7 +824,6 @@ fn offline_paths() -> Map {
                 operation_id,
                 summary,
                 description,
-                request_schema,
                 norito_schema,
             )),
         );
@@ -850,12 +847,12 @@ fn offline_readiness_operation() -> Map {
     );
     operation.insert(
         "summary".into(),
-        Value::String("Report offline-payment readiness.".to_owned()),
+        Value::String("Report Kagemusha readiness.".to_owned()),
     );
     operation.insert(
         "description".into(),
         Value::String(
-            "Evaluate offline-payment readiness for one asset definition at a specific committed block. The response binds the live asset scale and active confidential-transfer verifier record to that same height and block hash so clients can cross-check capabilities and release manifests. A successfully evaluated but unavailable capability returns 200 with ready=false and typed blockers. A 503 readiness_unavailable response means Torii could not evaluate readiness."
+            "Evaluate Kagemusha readiness for one asset definition at a specific committed block. The response binds the live asset scale and active verifier records to that same height and block hash so clients can cross-check capabilities and release manifests. A successfully evaluated but unavailable capability returns 200 with ready=false and typed blockers. A 503 readiness_unavailable response means Torii could not evaluate readiness."
                 .to_owned(),
         ),
     );
@@ -948,7 +945,6 @@ fn offline_async_operation(
     operation_id: &str,
     summary: &str,
     description: &str,
-    request_schema_ref: &str,
     norito_schema: &str,
 ) -> Map {
     let mut operation = Map::new();
@@ -971,10 +967,7 @@ fn offline_async_operation(
     );
     operation.insert(
         "requestBody".into(),
-        Value::Object(offline_typed_request_body(
-            request_schema_ref,
-            norito_schema,
-        )),
+        Value::Object(offline_typed_request_body(norito_schema)),
     );
     let mut responses = Map::new();
     let mut accepted = dual_format_response(
@@ -1102,15 +1095,12 @@ fn offline_operation_status_operation() -> Map {
     methods
 }
 
-fn offline_typed_request_body(schema_ref: &str, norito_schema: &str) -> Map {
+fn offline_typed_request_body(norito_schema: &str) -> Map {
     let mut body = Map::new();
     body.insert("required".into(), Value::Bool(true));
     body.insert(
         "content".into(),
         norito::json!({
-            "application/json": {
-                "schema": { "$ref": schema_ref }
-            },
             "application/x-norito": {
                 "schema": {
                     "type": "string",
@@ -2593,6 +2583,17 @@ fn contracts_paths() -> Map {
         )),
     );
     paths.insert(
+        "/v1/assets/transfer".to_owned(),
+        Value::Object(json_post_operation(
+            "Assets",
+            "Prepare or submit one numeric asset transfer.",
+            "Prepare a strictly bound, versioned detached-signature scaffold when signing fields are omitted, or verify and queue that exact single-transfer transaction when public_key_hex and signature_base64 are both supplied.",
+            "#/components/schemas/AssetTransferRequest",
+            "#/components/schemas/AssetTransferResponse",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
         "/v1/contracts/call".to_owned(),
         Value::Object(json_post_operation(
             "Contracts",
@@ -2908,67 +2909,23 @@ fn multisig_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/multisig/proposals/query".to_owned(),
+        "/v1/multisig/proposals/list".to_owned(),
         Value::Object(multisig_post_operation(
-            "Query multisig proposals.",
-            "Resolve a multisig selector and query lifecycle-filtered active or terminal proposals for the active concrete multisig authority.",
-            "#/components/schemas/MultisigProposalsQueryRequest",
-            "#/components/schemas/MultisigProposalsQueryResponse",
+            "List multisig proposals.",
+            "Resolve a multisig selector and list lifecycle-filtered active or terminal proposals for the active concrete multisig authority.",
+            "#/components/schemas/MultisigProposalsListRequest",
+            "#/components/schemas/MultisigProposalsListResponse",
             "Multisig alias not found.",
         )),
     );
     paths.insert(
-        "/v1/multisig/proposals/lookup".to_owned(),
+        "/v1/multisig/proposals/get".to_owned(),
         Value::Object(multisig_post_operation(
-            "Look up a multisig proposal.",
-            "Resolve a multisig selector and look up a proposal by `proposal_id` or `instructions_hash`.",
-            "#/components/schemas/MultisigProposalLookupRequest",
-            "#/components/schemas/MultisigProposalLookupResponse",
+            "Get a multisig proposal.",
+            "Resolve a multisig selector and fetch a proposal by `proposal_id` or `instructions_hash`.",
+            "#/components/schemas/MultisigProposalsGetRequest",
+            "#/components/schemas/MultisigProposalGetResponse",
             "Multisig alias or proposal not found.",
-        )),
-    );
-    paths.insert(
-        "/v1/multisig/approvals/query".to_owned(),
-        Value::Object(multisig_jwt_read_operation(
-            "Query JWT-viewer-scoped multisig approvals.",
-            "Use the authenticated JWT viewer scope to query active or terminal proposals across the exact multisig authorities in which the viewer is a signatory.",
-            "#/components/schemas/MultisigApprovalsQueryRequest",
-            "#/components/schemas/MultisigApprovalsQueryResponse",
-            "No viewer-visible multisig approval was found.",
-            false,
-        )),
-    );
-    paths.insert(
-        "/v1/multisig/approvals/lookup".to_owned(),
-        Value::Object(multisig_jwt_read_operation(
-            "Look up a JWT-viewer-scoped multisig approval.",
-            "Use the authenticated JWT viewer scope to look up one proposal for the exact fixed-size `multisig_account_ref` by `proposal_id` or `instructions_hash`.",
-            "#/components/schemas/MultisigApprovalLookupRequest",
-            "#/components/schemas/MultisigApprovalLookupResponse",
-            "The exact multisig authority or viewer-visible approval was not found.",
-            true,
-        )),
-    );
-    paths.insert(
-        "/v1/multisig/approvals/query-for-authority".to_owned(),
-        Value::Object(multisig_signed_read_operation(
-            "Query signed caller-authority multisig approvals.",
-            "Verify the exact HTTP request signature and query active or terminal proposals visible to that caller authority through the signatory index.",
-            "#/components/schemas/MultisigApprovalsQueryRequest",
-            "#/components/schemas/MultisigApprovalsQueryResponse",
-            "Caller authority is not allowed to view the requested approvals.",
-            false,
-        )),
-    );
-    paths.insert(
-        "/v1/multisig/approvals/lookup-for-authority".to_owned(),
-        Value::Object(multisig_signed_read_operation(
-            "Look up a signed caller-authority multisig approval.",
-            "Verify the exact HTTP request signature and look up one caller-authority-visible proposal for the exact fixed-size `multisig_account_ref` by `proposal_id` or `instructions_hash`.",
-            "#/components/schemas/MultisigApprovalLookupRequest",
-            "#/components/schemas/MultisigApprovalLookupResponse",
-            "Caller authority is not allowed to view the requested approval.",
-            true,
         )),
     );
     paths
@@ -6725,8 +6682,8 @@ fn sumeragi_paths() -> Map {
         "/v1/sumeragi/status".to_owned(),
         Value::Object(json_get_operation(
             "Sumeragi",
-            "Fetch Sumeragi status.",
-            "Return Sumeragi status snapshot.",
+            "Fetch authoritative Sumeragi v2 status.",
+            "Return the exact reducer-owned Sumeragi v2 status snapshot.",
             "#/components/schemas/SumeragiStatusResponse",
             Vec::new(),
         )),
@@ -6792,29 +6749,6 @@ fn sumeragi_paths() -> Map {
     paths.insert(
         "/v1/sumeragi/commit-certificates".to_owned(),
         Value::Object(sumeragi_commit_qcs_operation()),
-    );
-    paths.insert(
-        "/v1/sumeragi/rbc".to_owned(),
-        Value::Object(json_get_operation(
-            "Sumeragi",
-            "Fetch RBC status.",
-            "Return RBC status snapshot.",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
-    );
-    paths.insert(
-        "/v1/sumeragi/rbc/delivered/{height}/{view}".to_owned(),
-        Value::Object(json_get_operation(
-            "Sumeragi",
-            "Fetch RBC delivered status.",
-            "Return complete-delivery RBC status for a block height and view; delivered=true requires a non-invalid positive complete chunk summary.",
-            "#/components/schemas/JsonValue",
-            vec![
-                Value::Object(block_height_parameter()),
-                integer_path_param("view", "View change index.", Some("uint64")),
-            ],
-        )),
     );
     paths.insert(
         "/v1/sumeragi/pacemaker".to_owned(),
@@ -6915,16 +6849,6 @@ fn sumeragi_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/sumeragi/rbc/sessions".to_owned(),
-        Value::Object(json_get_operation(
-            "Sumeragi",
-            "List RBC sessions.",
-            "Return RBC session snapshots, including raw DELIVER and complete-delivery status.",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
-    );
-    paths.insert(
         "/v1/sumeragi/commit-qcs/{block_hash}".to_owned(),
         Value::Object(json_get_operation(
             "Sumeragi",
@@ -6932,16 +6856,6 @@ fn sumeragi_paths() -> Map {
             "Fetch commit QC by block hash.",
             "#/components/schemas/JsonValue",
             vec![string_path_param("block_hash", "Block hash (hex).")],
-        )),
-    );
-    paths.insert(
-        "/v1/sumeragi/collectors".to_owned(),
-        Value::Object(json_get_operation(
-            "Sumeragi",
-            "Fetch collector status.",
-            "Return collector status snapshot.",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
         )),
     );
     paths.insert(
@@ -6990,17 +6904,6 @@ fn sumeragi_paths() -> Map {
             "Submit VRF reveal.",
             "Submit an authenticated VRF reveal payload.",
             "#/components/schemas/SumeragiVrfRevealRequest",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
-    );
-    paths.insert(
-        "/v1/sumeragi/rbc/sample".to_owned(),
-        Value::Object(json_post_operation(
-            "Sumeragi",
-            "Sample RBC sessions.",
-            "Request an RBC sampling payload.",
-            "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
             Vec::new(),
         )),
@@ -8822,7 +8725,6 @@ fn is_operator_operation(method: &str, path: &str) -> bool {
                 | "/v1/sumeragi/evidence"
                 | "/v1/sumeragi/vrf/commit"
                 | "/v1/sumeragi/vrf/reveal"
-                | "/v1/sumeragi/rbc/sample"
                 | "/v1/gov/protected-namespaces"
         )
 }
@@ -10404,7 +10306,7 @@ fn insert_offline_typed_schemas(schemas: &mut Map) {
             }),
         ),
         (
-            "OfflineVerifiedFoldStep",
+            "OfflineTransitionProofStep",
             norito::json!({
                 "type": "object",
                 "required": [
@@ -10432,7 +10334,7 @@ fn insert_offline_typed_schemas(schemas: &mut Map) {
             }),
         ),
         (
-            "OfflineVerifiedFoldBundle",
+            "OfflineTransitionProofBundle",
             norito::json!({
                 "type": "object",
                 "required": ["chain_id", "asset", "steps"],
@@ -10441,13 +10343,13 @@ fn insert_offline_typed_schemas(schemas: &mut Map) {
                     "asset": { "type": "string" },
                     "steps": {
                         "type": "array",
-                        "items": { "$ref": "#/components/schemas/OfflineVerifiedFoldStep" }
+                        "items": { "$ref": "#/components/schemas/OfflineTransitionProofStep" }
                     }
                 }
             }),
         ),
         (
-            "OfflineVerifiedFoldVerifierRecord",
+            "OfflineTransitionVerifierRecord",
             norito::json!({
                 "type": "object",
                 "required": ["id", "record"],
@@ -10458,15 +10360,15 @@ fn insert_offline_typed_schemas(schemas: &mut Map) {
             }),
         ),
         (
-            "OfflineVerifiedFoldRecordBundle",
+            "OfflineTransitionProofRecordBundle",
             norito::json!({
                 "type": "object",
                 "required": ["bundle", "verifier_records"],
                 "properties": {
-                    "bundle": { "$ref": "#/components/schemas/OfflineVerifiedFoldBundle" },
+                    "bundle": { "$ref": "#/components/schemas/OfflineTransitionProofBundle" },
                     "verifier_records": {
                         "type": "array",
-                        "items": { "$ref": "#/components/schemas/OfflineVerifiedFoldVerifierRecord" }
+                        "items": { "$ref": "#/components/schemas/OfflineTransitionVerifierRecord" }
                     }
                 }
             }),
@@ -10524,6 +10426,19 @@ fn insert_offline_typed_schemas(schemas: &mut Map) {
             }),
         ),
         (
+            "OfflineArtifactBinding",
+            norito::json!({
+                "type": "object",
+                "required": ["generation", "manifest_sha256"],
+                "additionalProperties": false,
+                "properties": {
+                    "generation": { "type": "string", "minLength": 1, "maxLength": 128 },
+                    "manifest_sha256": { "$ref": "#/components/schemas/OfflineFixed32Bytes" }
+                },
+                "description": "Installed authenticated V3 artifact release. Native code resolves the operation-specific key from this manifest identity."
+            }),
+        ),
+        (
             "OfflineTopUpShieldEvidence",
             norito::json!({
                 "type": "object",
@@ -10557,7 +10472,7 @@ fn insert_offline_typed_schemas(schemas: &mut Map) {
                     "topup_operation_id",
                     "shield_verifier_id",
                     "shield_verifier_commitment",
-                    "artifact_generation",
+                    "artifact_binding",
                     "finalized_height",
                     "finalized_tx_hash",
                     "anchor_digest"
@@ -10576,7 +10491,7 @@ fn insert_offline_typed_schemas(schemas: &mut Map) {
                     "topup_operation_id": { "$ref": "#/components/schemas/OfflineOperationIdBytes" },
                     "shield_verifier_id": { "$ref": "#/components/schemas/OfflineVerifyingKeyId" },
                     "shield_verifier_commitment": { "$ref": "#/components/schemas/OfflineFixed32Bytes" },
-                    "artifact_generation": { "type": "string", "minLength": 1, "maxLength": 128 },
+                    "artifact_binding": { "$ref": "#/components/schemas/OfflineArtifactBinding" },
                     "finalized_height": { "type": "integer", "format": "uint64", "minimum": 1 },
                     "finalized_tx_hash": { "$ref": "#/components/schemas/OfflineFixed32Bytes" },
                     "anchor_digest": { "$ref": "#/components/schemas/OfflineFixed32Bytes" }
@@ -10717,18 +10632,6 @@ fn insert_offline_typed_schemas(schemas: &mut Map) {
             }),
         ),
         (
-            "OfflineLineageMode",
-            norito::json!({
-                "type": "object",
-                "required": ["mode"],
-                "properties": {
-                    "mode": { "type": "string", "enum": ["reserved", "semantic"] },
-                    "value": { "type": "null" }
-                },
-                "description": "Tagged unit enum selecting witnessless or record-backed lineage. Canonical output includes value=null; decoders also accept an omitted value member."
-            }),
-        ),
-        (
             "OfflinePeerSplitTransition",
             norito::json!({
                 "type": "object",
@@ -10808,8 +10711,7 @@ fn insert_offline_typed_schemas(schemas: &mut Map) {
                     "peer_hop_count",
                     "current_note",
                     "branch_claims",
-                    "artifact_generation",
-                    "lineage_mode",
+                    "artifact_binding",
                     "verifier_key_id"
                 ],
                 "properties": {
@@ -10834,8 +10736,7 @@ fn insert_offline_typed_schemas(schemas: &mut Map) {
                             { "type": "null" }
                         ]
                     },
-                    "artifact_generation": { "type": "string", "minLength": 1 },
-                    "lineage_mode": { "$ref": "#/components/schemas/OfflineLineageMode" },
+                    "artifact_binding": { "$ref": "#/components/schemas/OfflineArtifactBinding" },
                     "verifier_key_id": { "$ref": "#/components/schemas/OfflineVerifyingKeyId" }
                 }
             }),
@@ -10935,47 +10836,15 @@ fn insert_offline_typed_schemas(schemas: &mut Map) {
                             { "type": "null" }
                         ]
                     },
-                    "change_artifact_generation": { "type": ["string", "null"] },
+                    "change_artifact_binding": {
+                        "oneOf": [
+                            { "$ref": "#/components/schemas/OfflineArtifactBinding" },
+                            { "type": "null" }
+                        ]
+                    },
                     "unshield_public_inputs": { "$ref": "#/components/schemas/OfflineUnshieldPublicInputs" },
                     "unshield_public_inputs_digest": { "$ref": "#/components/schemas/OfflineFixed32Bytes" },
                     "operation_id": { "$ref": "#/components/schemas/OfflineOperationIdBytes" }
-                }
-            }),
-        ),
-        (
-            "OfflineLineageNode",
-            norito::json!({
-                "type": "object",
-                "required": [
-                    "result_bundle_digest",
-                    "parent_bundle_digests",
-                    "proof_step_count",
-                    "verified_at_block_height",
-                    "transition_archive"
-                ],
-                "properties": {
-                    "result_bundle_digest": { "$ref": "#/components/schemas/OfflineFixed32Bytes" },
-                    "parent_bundle_digests": {
-                        "type": "array",
-                        "items": { "$ref": "#/components/schemas/OfflineFixed32Bytes" }
-                    },
-                    "proof_step_count": { "type": "integer", "format": "uint32", "minimum": 0 },
-                    "verified_at_block_height": { "type": "integer", "format": "uint64", "minimum": 0 },
-                    "transition_archive": { "$ref": "#/components/schemas/OfflineByteArray" }
-                }
-            }),
-        ),
-        (
-            "OfflineLineageWitness",
-            norito::json!({
-                "type": "object",
-                "required": ["nodes", "final_bundle_digest"],
-                "properties": {
-                    "nodes": {
-                        "type": "array",
-                        "items": { "$ref": "#/components/schemas/OfflineLineageNode" }
-                    },
-                    "final_bundle_digest": { "$ref": "#/components/schemas/OfflineFixed32Bytes" }
                 }
             }),
         ),
@@ -11087,6 +10956,7 @@ fn sccp_schemas() -> Map {
         "SccpTairaNetworkV1".to_owned(),
         norito::json!({
             "type": "object",
+            "additionalProperties": false,
             "required": ["network", "profile"],
             "additionalProperties": false,
             "properties": {
@@ -13881,9 +13751,7 @@ fn openapi_schemas() -> Map {
                 "phase",
                 "leader",
                 "body_state",
-                "last_committed_height",
-                "lane_settlement_commitments",
-                "lane_relay_envelopes"
+                "last_committed_height"
             ],
             "additionalProperties": false,
             "properties": {
@@ -13908,17 +13776,7 @@ fn openapi_schemas() -> Map {
                 "body_state": { "$ref": "#/components/schemas/JsonValue" },
                 "pending_persistence_id": { "type": "integer", "minimum": 0, "nullable": true },
                 "last_committed_height": { "type": "integer", "minimum": 0 },
-                "last_committed_subject": { "$ref": "#/components/schemas/JsonValue", "nullable": true },
-                "lane_settlement_commitments": {
-                    "type": "array",
-                    "items": { "$ref": "#/components/schemas/LaneSettlementCommitment" },
-                    "description": "Per-lane/dataspace settlement commitments surfaced for Nexus fee and native AMX audit consumers."
-                },
-                "lane_relay_envelopes": {
-                    "type": "array",
-                    "items": { "$ref": "#/components/schemas/LaneRelayEnvelope" },
-                    "description": "Relay envelopes that preserve and hash the exact settlement commitment."
-                }
+                "last_committed_subject": { "$ref": "#/components/schemas/JsonValue", "nullable": true }
             }
         }),
     );
@@ -14096,10 +13954,10 @@ fn openapi_schemas() -> Map {
         "OfflineTopUpRequest".to_owned(),
         norito::json!({
             "type": "object",
-            "description": "Direct structured JSON representation of OfflineTopUpRequest. application/x-norito carries the corresponding typed value directly, not a wrapper containing encoded bytes. Unknown and duplicate members are rejected.",
+            "description": "Schema documentation for the typed OfflineTopUpRequest carried directly as application/x-norito. The command route has no JSON request representation and accepts no encoded-byte wrapper.",
             "x-iroha-norito-schema": offline_top_up_norito_schema,
             "additionalProperties": false,
-            "required": ["asset", "amount", "current_note", "shield_evidence", "artifact_generation", "operation_id", "authorization"],
+            "required": ["asset", "amount", "current_note", "shield_evidence", "artifact_binding", "operation_id", "authorization"],
             "properties": {
                 "asset": {
                     "type": "string",
@@ -14114,7 +13972,7 @@ fn openapi_schemas() -> Map {
                     "$ref": "#/components/schemas/OfflineTopUpShieldEvidence",
                     "description": "Typed public-to-confidential proof that appends exactly the first spendable note without consuming a confidential input."
                 },
-                "artifact_generation": { "type": "string", "minLength": 1 },
+                "artifact_binding": { "$ref": "#/components/schemas/OfflineArtifactBinding" },
                 "operation_id": { "$ref": "#/components/schemas/OfflineOperationIdBytes" },
                 "authorization": {
                     "$ref": "#/components/schemas/OfflineRequestAuthorization",
@@ -14127,10 +13985,10 @@ fn openapi_schemas() -> Map {
         "OfflineRedeemRequest".to_owned(),
         norito::json!({
             "type": "object",
-            "description": "Direct structured JSON representation of OfflineRedeemRequest. application/x-norito carries the corresponding typed value directly, not a wrapper containing encoded bytes. Unknown and duplicate members are rejected.",
+            "description": "Schema documentation for the typed OfflineRedeemRequest carried directly as application/x-norito. The command route has no JSON request representation and accepts no encoded-byte wrapper.",
             "x-iroha-norito-schema": offline_redeem_norito_schema,
             "additionalProperties": false,
-            "required": ["bundle", "recipient", "amount", "redeem_proof", "redemption", "lineage_verifier_record", "block_height", "operation_id", "authorization"],
+            "required": ["bundle", "recipient", "amount", "redeem_proof", "redemption", "block_height", "operation_id", "authorization"],
             "properties": {
                 "bundle": {
                     "$ref": "#/components/schemas/OfflineSpendBundle",
@@ -14143,13 +14001,6 @@ fn openapi_schemas() -> Map {
                 "amount": { "$ref": "#/components/schemas/OfflineScaledAmount" },
                 "redeem_proof": { "$ref": "#/components/schemas/OfflineProofAttachment" },
                 "redemption": { "$ref": "#/components/schemas/OfflineRedemptionIntent" },
-                "lineage_witness": {
-                    "oneOf": [
-                        { "$ref": "#/components/schemas/OfflineLineageWitness" },
-                        { "type": "null" }
-                    ]
-                },
-                "lineage_verifier_record": { "$ref": "#/components/schemas/OfflineVerifyingKeyRecord" },
                 "offline_change": {
                     "oneOf": [
                         { "$ref": "#/components/schemas/OfflineRedeemChangeBranch" },
@@ -14242,6 +14093,7 @@ fn openapi_schemas() -> Map {
         norito::json!({
             "type": "object",
             "required": ["code", "message"],
+            "additionalProperties": false,
             "properties": {
                 "code": {
                     "type": "string",
@@ -14269,6 +14121,7 @@ fn openapi_schemas() -> Map {
                 "public_inputs_schema_hash", "max_proof_bytes", "activation_height",
                 "withdrawal_height"
             ],
+            "additionalProperties": false,
             "properties": {
                 "id": { "$ref": "#/components/schemas/OfflineVerifyingKeyId" },
                 "version": {
@@ -14280,7 +14133,7 @@ fn openapi_schemas() -> Map {
                 "circuit_id": {
                     "type": "string",
                     "minLength": 1,
-                    "description": "Exact confidential-transfer circuit selected at the evaluated block."
+                    "description": "Exact verifier circuit selected at the evaluated block."
                 },
                 "commitment": {
                     "type": "string",
@@ -14296,7 +14149,7 @@ fn openapi_schemas() -> Map {
                     "type": "integer",
                     "format": "uint32",
                     "minimum": 1,
-                    "description": "Maximum transfer-proof payload accepted by the active registry record."
+                    "description": "Maximum proof payload accepted by the active registry record."
                 },
                 "activation_height": {
                     "type": "integer",
@@ -14332,11 +14185,28 @@ fn openapi_schemas() -> Map {
         norito::json!({
             "type": "object",
             "required": [
+                "required_bridge_abi_version", "max_hops",
                 "asset_definition_id", "asset_scale", "evaluated_block_height",
                 "evaluated_block_hash", "active_transfer_verifier",
-                "active_topup_shield_verifier", "ready", "blockers"
+                "active_topup_shield_verifier", "active_unshield_verifier",
+                "active_recursive_transition_verifier", "active_recursive_state_verifier",
+                "proof_backend_available", "recursive_lineage_supported",
+                "ready", "blockers"
             ],
+            "additionalProperties": false,
             "properties": {
+                "required_bridge_abi_version": {
+                    "type": "integer",
+                    "format": "uint32",
+                    "minimum": 19,
+                    "maximum": 19
+                },
+                "max_hops": {
+                    "type": "integer",
+                    "format": "uint32",
+                    "minimum": 1,
+                    "maximum": 64
+                },
                 "asset_definition_id": {
                     "type": "string",
                     "pattern": "^[1-9A-HJ-NP-Za-km-z]{28}$",
@@ -14377,6 +14247,35 @@ fn openapi_schemas() -> Map {
                         { "type": "null" }
                     ],
                     "description": "Authoritative active public-to-confidential top-up shield verifier at the evaluated height, or null with a topup_shield_verifier_unavailable blocker."
+                },
+                "active_unshield_verifier": {
+                    "anyOf": [
+                        { "$ref": "#/components/schemas/OfflineActiveTransferVerifier" },
+                        { "type": "null" }
+                    ],
+                    "description": "Authoritative active confidential-unshield verifier at the evaluated height."
+                },
+                "active_recursive_transition_verifier": {
+                    "anyOf": [
+                        { "$ref": "#/components/schemas/OfflineActiveTransferVerifier" },
+                        { "type": "null" }
+                    ],
+                    "description": "Authoritative active V3 recursive transition verifier at the evaluated height."
+                },
+                "active_recursive_state_verifier": {
+                    "anyOf": [
+                        { "$ref": "#/components/schemas/OfflineActiveTransferVerifier" },
+                        { "type": "null" }
+                    ],
+                    "description": "Authoritative active V3 recursive state verifier at the evaluated height."
+                },
+                "proof_backend_available": {
+                    "type": "boolean",
+                    "description": "Whether this Torii/Core build contains the sound V3 recursive backend."
+                },
+                "recursive_lineage_supported": {
+                    "type": "boolean",
+                    "description": "Whether recursive branches can be verified and redeemed through the production lineage proof path."
                 },
                 "ready": {
                     "type": "boolean",
@@ -17635,6 +17534,230 @@ fn openapi_schemas() -> Map {
         }),
     );
     schemas.insert(
+        "AssetTransferRequest".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "authority",
+                "asset_definition_id",
+                "asset_balance_scope",
+                "amount",
+                "destination",
+                "creation_time_ms",
+                "transaction_ttl_ms"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "authority": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 512,
+                    "description": "Exact canonical I105 single-key Ed25519 authority."
+                },
+                "asset_definition_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 64,
+                    "description": "Exact canonical unprefixed Base58 asset-definition identifier."
+                },
+                "asset_balance_scope": {
+                    "type": "string",
+                    "maxLength": 30,
+                    "pattern": "^(global|dataspace:(0|[1-9][0-9]{0,19}))$",
+                    "description": "Explicit exact balance bucket; Torii additionally enforces the u64 range."
+                },
+                "amount": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 192,
+                    "description": "Exact canonical strictly positive Iroha Numeric text."
+                },
+                "destination": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 512,
+                    "description": "Exact canonical I105 destination account."
+                },
+                "memo": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 256,
+                    "description": "At most 256 UTF-8 bytes and free of Unicode control characters."
+                },
+                "fee_sponsor": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 512,
+                    "description": "Exact canonical I105 fee-sponsor account."
+                },
+                "creation_time_ms": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 1,
+                    "description": "Explicit epoch milliseconds; at most five minutes old or thirty seconds in the future."
+                },
+                "transaction_ttl_ms": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 1,
+                    "maximum": 600000
+                },
+                "public_key_hex": {
+                    "type": "string",
+                    "minLength": 64,
+                    "maxLength": 64,
+                    "pattern": "^[0-9a-f]{64}$"
+                },
+                "signature_base64": {
+                    "type": "string",
+                    "minLength": 88,
+                    "maxLength": 88,
+                    "description": "Canonical padded base64 for an exact 64-byte Ed25519 signature."
+                }
+            },
+            "oneOf": [
+                {
+                    "not": {
+                        "anyOf": [
+                            { "required": ["public_key_hex"] },
+                            { "required": ["signature_base64"] }
+                        ]
+                    }
+                },
+                { "required": ["public_key_hex", "signature_base64"] }
+            ]
+        }),
+    );
+    schemas.insert(
+        "AssetTransferIntent".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "chain_id",
+                "authority",
+                "asset_definition_id",
+                "asset_balance_scope",
+                "amount",
+                "destination",
+                "creation_time_ms",
+                "transaction_ttl_ms"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "chain_id": { "type": "string", "minLength": 1 },
+                "authority": { "type": "string", "minLength": 1, "maxLength": 512 },
+                "asset_definition_id": { "type": "string", "minLength": 1, "maxLength": 64 },
+                "asset_balance_scope": { "type": "string", "maxLength": 30 },
+                "amount": { "type": "string", "minLength": 1, "maxLength": 192 },
+                "destination": { "type": "string", "minLength": 1, "maxLength": 512 },
+                "memo": { "type": "string", "minLength": 1, "maxLength": 256 },
+                "fee_sponsor": { "type": "string", "minLength": 1, "maxLength": 512 },
+                "creation_time_ms": { "type": "integer", "format": "uint64", "minimum": 1 },
+                "transaction_ttl_ms": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 1,
+                    "maximum": 600000
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "AssetTransferSigningPayload".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["payload_base64", "algorithm"],
+            "additionalProperties": false,
+            "properties": {
+                "payload_base64": {
+                    "type": "string",
+                    "minLength": 44,
+                    "maxLength": 44,
+                    "description": "Canonical padded base64 for the exact 32-byte payload signing hash."
+                },
+                "algorithm": { "type": "string", "enum": ["ed25519"] }
+            }
+        }),
+    );
+    schemas.insert(
+        "AssetTransferReceipt".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "operation_kind",
+                "status",
+                "transport",
+                "intent",
+                "payload_signing_hash_hex"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "operation_kind": { "type": "string", "enum": ["asset_transfer"] },
+                "status": { "type": "string", "enum": ["pending_signature", "submitted"] },
+                "transport": { "type": "string", "enum": ["torii"] },
+                "intent": { "$ref": "#/components/schemas/AssetTransferIntent" },
+                "payload_signing_hash_hex": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                },
+                "placeholder_transaction_hash_hex": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                },
+                "placeholder_entrypoint_hash_hex": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                },
+                "transaction_hash_hex": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                },
+                "entrypoint_hash_hex": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "AssetTransferResponse".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["ok", "submitted", "intent", "receipt"],
+            "additionalProperties": false,
+            "properties": {
+                "ok": { "type": "boolean" },
+                "submitted": { "type": "boolean" },
+                "intent": { "$ref": "#/components/schemas/AssetTransferIntent" },
+                "signing_payload": { "$ref": "#/components/schemas/AssetTransferSigningPayload" },
+                "transaction_scaffold_base64": {
+                    "type": "string",
+                    "description": "Canonical padded base64 for a versioned SignedTransaction scaffold."
+                },
+                "placeholder_transaction_hash_hex": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                },
+                "placeholder_entrypoint_hash_hex": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                },
+                "transaction_hash_hex": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                },
+                "entrypoint_hash_hex": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                },
+                "pipeline_status": {
+                    "$ref": "#/components/schemas/PipelineTransactionStatusResponse"
+                },
+                "receipt": { "$ref": "#/components/schemas/AssetTransferReceipt" }
+            }
+        }),
+    );
+    schemas.insert(
         "MultisigAccountSelector".to_owned(),
         norito::json!({
             "type": "object",
@@ -18640,12 +18763,22 @@ mod tests {
     }
 
     fn nullable_property_ref<'a>(schemas: &'a Map, owner: &str, property: &str) -> &'a str {
-        let variants = component_properties(schemas, owner)
+        let schema = component_properties(schemas, owner)
             .get(property)
             .and_then(Value::as_object)
-            .and_then(|schema| schema.get("oneOf"))
-            .and_then(Value::as_array)
-            .unwrap_or_else(|| panic!("{owner}.{property} nullable oneOf"));
+            .unwrap_or_else(|| panic!("{owner}.{property} property schema"));
+        let one_of = schema.get("oneOf").and_then(Value::as_array);
+        let any_of = schema.get("anyOf").and_then(Value::as_array);
+        assert!(
+            one_of.is_some() ^ any_of.is_some(),
+            "{owner}.{property} must use exactly one nullable union keyword"
+        );
+        let variants = one_of.or(any_of).expect("checked nullable union");
+        assert_eq!(
+            variants.len(),
+            2,
+            "{owner}.{property} nullable union must have exactly two variants"
+        );
         assert_eq!(
             variants
                 .get(1)
@@ -20430,27 +20563,18 @@ mod tests {
         assert!(!paths.contains_key("/v1/sccp/proofs/burn/{message_id}"));
         assert!(paths.contains_key("/v1/sumeragi/validator-sets"));
         assert!(paths.contains_key("/v1/sumeragi/validator-sets/{height}"));
-        assert!(paths.contains_key("/v1/sumeragi/rbc/sessions"));
-        let sumeragi_rbc_sessions_description = paths
-            .get("/v1/sumeragi/rbc/sessions")
-            .and_then(Value::as_object)
-            .and_then(|path| path.get("get"))
-            .and_then(Value::as_object)
-            .and_then(|get| get.get("description"))
-            .and_then(Value::as_str)
-            .expect("Sumeragi RBC sessions description");
-        assert!(sumeragi_rbc_sessions_description.contains("raw DELIVER"));
-        assert!(sumeragi_rbc_sessions_description.contains("complete-delivery"));
-        let sumeragi_rbc_delivered_description = paths
-            .get("/v1/sumeragi/rbc/delivered/{height}/{view}")
-            .and_then(Value::as_object)
-            .and_then(|path| path.get("get"))
-            .and_then(Value::as_object)
-            .and_then(|get| get.get("description"))
-            .and_then(Value::as_str)
-            .expect("Sumeragi RBC delivered description");
-        assert!(sumeragi_rbc_delivered_description.contains("complete-delivery"));
-        assert!(sumeragi_rbc_delivered_description.contains("non-invalid"));
+        for retired in [
+            "/v1/sumeragi/rbc",
+            "/v1/sumeragi/rbc/delivered/{height}/{view}",
+            "/v1/sumeragi/rbc/sessions",
+            "/v1/sumeragi/rbc/sample",
+            "/v1/sumeragi/collectors",
+        ] {
+            assert!(
+                !paths.contains_key(retired),
+                "retired path {retired} leaked"
+            );
+        }
         assert!(paths.contains_key("/v1/contracts/view/batch"));
         assert!(paths.contains_key("/v1/contracts/rollups/swaps/fills"));
         assert!(paths.contains_key("/v1/contracts/rollups/swaps/candles"));
@@ -20731,7 +20855,7 @@ mod tests {
             .get("description")
             .and_then(Value::as_str)
             .expect("offline top-up description");
-        assert!(topup_description.contains("typed Kagemusha OfflineTopUpRequest"));
+        assert!(topup_description.contains("Norito-encoded Kagemusha OfflineTopUpRequest"));
         let redeem_post = paths
             .get("/v1/offline/redeem")
             .and_then(Value::as_object)
@@ -20742,29 +20866,22 @@ mod tests {
             .get("description")
             .and_then(Value::as_str)
             .expect("offline redeem description");
-        assert!(redeem_description.contains("typed Kagemusha OfflineRedeemRequest"));
-        let topup_request_schema = topup_post
+        assert!(redeem_description.contains("Norito-encoded Kagemusha OfflineRedeemRequest"));
+        let topup_request_content = topup_post
             .get("requestBody")
             .and_then(Value::as_object)
             .and_then(|body| body.get("content"))
             .and_then(Value::as_object)
-            .and_then(|content| content.get("application/json"))
-            .and_then(Value::as_object)
-            .and_then(|media| media.get("schema"))
-            .and_then(Value::as_object)
-            .and_then(|schema| schema.get("$ref"))
-            .and_then(Value::as_str)
-            .expect("Kagemusha top-up request schema");
+            .expect("Kagemusha top-up request content");
         assert_eq!(
-            topup_request_schema,
-            "#/components/schemas/OfflineTopUpRequest"
+            topup_request_content
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            vec!["application/x-norito"]
         );
-        let topup_norito_schema = topup_post
-            .get("requestBody")
-            .and_then(Value::as_object)
-            .and_then(|body| body.get("content"))
-            .and_then(Value::as_object)
-            .and_then(|content| content.get("application/x-norito"))
+        let topup_norito_schema = topup_request_content
+            .get("application/x-norito")
             .and_then(Value::as_object)
             .and_then(|media| media.get("schema"))
             .and_then(Value::as_object)
@@ -20774,6 +20891,19 @@ mod tests {
         assert_eq!(
             topup_norito_schema,
             iroha_torii_shared::offline_api::OFFLINE_TOP_UP_REQUEST_SCHEMA_NAME
+        );
+        let redeem_request_content = redeem_post
+            .get("requestBody")
+            .and_then(Value::as_object)
+            .and_then(|body| body.get("content"))
+            .and_then(Value::as_object)
+            .expect("Kagemusha redeem request content");
+        assert_eq!(
+            redeem_request_content
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            vec!["application/x-norito"]
         );
         let accepted = topup_post
             .get("responses")
@@ -20790,7 +20920,7 @@ mod tests {
     }
 
     #[test]
-    fn generated_spec_documents_direct_offline_dtos_and_operation_states() {
+    fn generated_spec_documents_strict_typed_offline_request_schemas_and_states() {
         let doc = generate_spec();
         let schemas = doc
             .get("components")
@@ -20798,14 +20928,34 @@ mod tests {
             .and_then(|components| components.get("schemas"))
             .and_then(Value::as_object)
             .expect("component schemas");
-        for (schema_name, norito_schema_name) in [
+        for (schema_name, norito_schema_name, expected_properties) in [
             (
                 "OfflineTopUpRequest",
                 iroha_torii_shared::offline_api::OFFLINE_TOP_UP_REQUEST_SCHEMA_NAME,
+                BTreeSet::from([
+                    "amount",
+                    "artifact_binding",
+                    "asset",
+                    "authorization",
+                    "current_note",
+                    "operation_id",
+                    "shield_evidence",
+                ]),
             ),
             (
                 "OfflineRedeemRequest",
                 iroha_torii_shared::offline_api::OFFLINE_REDEEM_REQUEST_SCHEMA_NAME,
+                BTreeSet::from([
+                    "amount",
+                    "authorization",
+                    "block_height",
+                    "bundle",
+                    "offline_change",
+                    "operation_id",
+                    "recipient",
+                    "redeem_proof",
+                    "redemption",
+                ]),
             ),
         ] {
             let schema = schemas
@@ -20817,36 +20967,87 @@ mod tests {
                 Some(false),
                 "typed request JSON must reject unknown fields"
             );
+            assert_eq!(schema.get("type").and_then(Value::as_str), Some("object"));
+            assert!(
+                !schema.contains_key("oneOf") && !schema.contains_key("anyOf"),
+                "a direct typed request must not become an alternate union"
+            );
             assert!(!schema.contains_key("x-iroha-norito-type"));
             assert_eq!(
                 schema.get("x-iroha-norito-schema").and_then(Value::as_str),
                 Some(norito_schema_name)
             );
-            assert!(
-                schema
-                    .get("properties")
-                    .and_then(Value::as_object)
-                    .is_some(),
-                "typed offline request must publish its fields"
+            let properties = schema
+                .get("properties")
+                .and_then(Value::as_object)
+                .expect("typed offline request properties");
+            assert_eq!(
+                properties
+                    .keys()
+                    .map(String::as_str)
+                    .collect::<BTreeSet<_>>(),
+                expected_properties,
+                "typed request properties must match the exact first-release inventory"
             );
         }
+        assert_eq!(
+            component_required(schemas, "OfflineTopUpRequest"),
+            [
+                "asset",
+                "amount",
+                "current_note",
+                "shield_evidence",
+                "artifact_binding",
+                "operation_id",
+                "authorization",
+            ],
+            "top-up transport fields must exactly match the current typed V2 request"
+        );
+        assert_eq!(
+            component_required(schemas, "OfflineRedeemRequest"),
+            [
+                "bundle",
+                "recipient",
+                "amount",
+                "redeem_proof",
+                "redemption",
+                "block_height",
+                "operation_id",
+                "authorization",
+            ],
+            "redeem transport fields must exactly match the current typed V2 request"
+        );
+        assert_eq!(
+            nullable_property_ref(schemas, "OfflineRedeemRequest", "offline_change"),
+            "#/components/schemas/OfflineRedeemChangeBranch"
+        );
         let readiness = schemas
             .get("OfflineReadiness")
             .and_then(Value::as_object)
             .expect("offline readiness schema");
-        assert!(
-            !readiness.contains_key("additionalProperties"),
-            "readiness decoders tolerate and strip unknown future fields"
+        assert_eq!(
+            readiness
+                .get("additionalProperties")
+                .and_then(Value::as_bool),
+            Some(false),
+            "first-release readiness rejects unknown members"
         );
         assert_eq!(
             component_required(schemas, "OfflineReadiness"),
             [
+                "required_bridge_abi_version",
+                "max_hops",
                 "asset_definition_id",
                 "asset_scale",
                 "evaluated_block_height",
                 "evaluated_block_hash",
                 "active_transfer_verifier",
                 "active_topup_shield_verifier",
+                "active_unshield_verifier",
+                "active_recursive_transition_verifier",
+                "active_recursive_state_verifier",
+                "proof_backend_available",
+                "recursive_lineage_supported",
                 "ready",
                 "blockers",
             ]
@@ -20859,6 +21060,16 @@ mod tests {
             nullable_property_ref(schemas, "OfflineReadiness", "active_topup_shield_verifier"),
             "#/components/schemas/OfflineActiveTopUpShieldVerifier"
         );
+        for field in [
+            "active_unshield_verifier",
+            "active_recursive_transition_verifier",
+            "active_recursive_state_verifier",
+        ] {
+            assert_eq!(
+                nullable_property_ref(schemas, "OfflineReadiness", field),
+                "#/components/schemas/OfflineActiveTransferVerifier"
+            );
+        }
         let readiness_scale = readiness
             .get("properties")
             .and_then(Value::as_object)
@@ -20967,7 +21178,7 @@ mod tests {
             "OfflineSpendBundle",
             "OfflineProofAttachment",
             "OfflineRedemptionIntent",
-            "OfflineLineageWitness",
+            "OfflineArtifactBinding",
             "OfflineVerifyingKeyRecord",
             "OfflineRedeemChangeBranch",
             "OfflineTopUpAnchor",
@@ -21009,7 +21220,7 @@ mod tests {
                 "amount",
                 "current_note",
                 "shield_evidence",
-                "artifact_generation",
+                "artifact_binding",
                 "operation_id",
                 "authorization",
             ]
@@ -21021,6 +21232,10 @@ mod tests {
         assert_eq!(
             property_ref(schemas, "OfflineTopUpRequest", "shield_evidence"),
             "#/components/schemas/OfflineTopUpShieldEvidence"
+        );
+        assert_eq!(
+            property_ref(schemas, "OfflineTopUpRequest", "artifact_binding"),
+            "#/components/schemas/OfflineArtifactBinding"
         );
         assert_eq!(
             property_ref(schemas, "OfflineTopUpRequest", "authorization"),
@@ -21035,7 +21250,6 @@ mod tests {
                 "amount",
                 "redeem_proof",
                 "redemption",
-                "lineage_verifier_record",
                 "block_height",
                 "operation_id",
                 "authorization",
@@ -21045,7 +21259,6 @@ mod tests {
             ("bundle", "OfflineSpendBundle"),
             ("redeem_proof", "OfflineProofAttachment"),
             ("redemption", "OfflineRedemptionIntent"),
-            ("lineage_verifier_record", "OfflineVerifyingKeyRecord"),
             ("authorization", "OfflineRequestAuthorization"),
         ] {
             let expected = format!("#/components/schemas/{component}");
@@ -21054,10 +21267,6 @@ mod tests {
                 expected.as_str()
             );
         }
-        assert_eq!(
-            nullable_property_ref(schemas, "OfflineRedeemRequest", "lineage_witness"),
-            "#/components/schemas/OfflineLineageWitness"
-        );
         assert_eq!(
             nullable_property_ref(schemas, "OfflineRedeemRequest", "offline_change"),
             "#/components/schemas/OfflineRedeemChangeBranch"
@@ -21117,12 +21326,8 @@ mod tests {
             Some(2)
         );
         assert_eq!(
-            top_up_anchor
-                .get("artifact_generation")
-                .and_then(Value::as_object)
-                .and_then(|schema| schema.get("maxLength"))
-                .and_then(Value::as_u64),
-            Some(128)
+            property_ref(schemas, "OfflineTopUpAnchor", "artifact_binding"),
+            "#/components/schemas/OfflineArtifactBinding"
         );
         assert_eq!(
             top_up_anchor
@@ -21139,6 +21344,33 @@ mod tests {
                 .and_then(|schema| schema.get("maximum"))
                 .and_then(Value::as_u64),
             Some(28)
+        );
+        assert_eq!(
+            component_required(schemas, "OfflineTopUpAnchor"),
+            [
+                "version",
+                "chain_id",
+                "payer",
+                "asset",
+                "asset_scale",
+                "amount",
+                "initial_root",
+                "finalized_root",
+                "shield_leaf_index",
+                "current_note",
+                "topup_operation_id",
+                "shield_verifier_id",
+                "shield_verifier_commitment",
+                "artifact_generation",
+                "finalized_height",
+                "finalized_tx_hash",
+                "anchor_digest",
+            ],
+            "top-up anchor must expose the current shield-bound V2 shape"
+        );
+        assert!(
+            !top_up_anchor.contains_key("topup_anchor_nullifiers"),
+            "the retired aggregate nullifier list must not reappear beside the typed current note"
         );
         assert_eq!(
             top_up_anchor
@@ -21227,10 +21459,9 @@ mod tests {
             "one-field tuple IDs must remain one-element JSON arrays"
         );
 
-        for (component, tag, variants) in [
-            ("OfflineSpendBranch", "branch", vec!["recipient", "change"]),
-            ("OfflineLineageMode", "mode", vec!["reserved", "semantic"]),
-        ] {
+        for (component, tag, variants) in
+            [("OfflineSpendBranch", "branch", vec!["recipient", "change"])]
+        {
             assert_eq!(component_required(schemas, component), [tag]);
             let properties = component_properties(schemas, component);
             assert_eq!(
@@ -21321,7 +21552,7 @@ mod tests {
             nexus::{LanePrivacySnarkWitness, LanePrivacyWitness},
             offline::{
                 KagemushaRecursiveSpendBranchClaimV2, KagemushaRecursiveSpendBranchPathV2,
-                KagemushaRecursiveSpendBranchV2, KagemushaRecursiveSpendLineageModeV2,
+                KagemushaRecursiveSpendBranchV2,
             },
             proof::{ProofAttachment, ProofBox, VerifyingKeyId},
         };
@@ -21330,11 +21561,6 @@ mod tests {
             norito::json::to_value(&KagemushaRecursiveSpendBranchV2::Recipient)
                 .expect("serialize spend branch"),
             norito::json!({ "branch": "recipient", "value": null })
-        );
-        assert_eq!(
-            norito::json::to_value(&KagemushaRecursiveSpendLineageModeV2::Semantic)
-                .expect("serialize lineage mode"),
-            norito::json!({ "mode": "semantic", "value": null })
         );
         assert_eq!(
             norito::json::to_value(&LaneCommitmentId::new(7))
@@ -22624,7 +22850,7 @@ mod tests {
         let lookup_request = schemas
             .get("MultisigProposalLookupRequest")
             .and_then(Value::as_object)
-            .expect("multisig proposal lookup request schema");
+            .expect("multisig proposal get request schema");
         assert_eq!(
             lookup_request
                 .get("allOf")
@@ -22639,7 +22865,7 @@ mod tests {
             .and_then(Value::as_object)
             .and_then(|schema| schema.get("properties"))
             .and_then(Value::as_object)
-            .expect("multisig proposal query response properties");
+            .expect("multisig proposal list response properties");
         assert_eq!(
             query_response
                 .get("proposals")
@@ -24380,7 +24606,7 @@ mod tests {
     }
 
     #[test]
-    fn generated_spec_documents_sumeragi_status_lane_settlement_receipts() {
+    fn generated_spec_documents_exact_authoritative_sumeragi_v2_status() {
         let doc = generate_spec();
         let paths = doc
             .get("paths")
@@ -24435,20 +24661,13 @@ mod tests {
                 .and_then(Value::as_u64),
             Some(2)
         );
-        assert_eq!(
-            status_properties
-                .get("lane_relay_envelopes")
-                .and_then(Value::as_object)
-                .and_then(|schema| schema.get("items"))
-                .and_then(Value::as_object)
-                .and_then(|items| items.get("$ref"))
-                .and_then(Value::as_str),
-            Some("#/components/schemas/LaneRelayEnvelope")
-        );
         assert!(status_properties.contains_key("height_context_id"));
         assert!(status_properties.contains_key("pending_persistence_id"));
         assert!(status_properties.contains_key("last_committed_subject"));
-        assert!(status_properties.contains_key("lane_settlement_commitments"));
+        assert!(!status_properties.contains_key("lane_settlement_commitments"));
+        assert!(!status_properties.contains_key("lane_relay_envelopes"));
+        assert!(!status_properties.contains_key("rbc_status"));
+        assert!(!status_properties.contains_key("missing_qc_total"));
         for field in [
             "node_fingerprint",
             "build_fingerprint",
@@ -24925,6 +25144,100 @@ mod tests {
         assert!(has_push, "tags should include Push");
         assert!(has_soracloud, "tags should include Soracloud");
         assert!(has_vpn, "tags should include VPN");
+    }
+
+    #[test]
+    fn detached_asset_transfer_openapi_is_strict_and_two_phase() {
+        let doc = generate_spec();
+        let operation = doc
+            .get("paths")
+            .and_then(Value::as_object)
+            .and_then(|paths| paths.get("/v1/assets/transfer"))
+            .and_then(Value::as_object)
+            .and_then(|path| path.get("post"))
+            .and_then(Value::as_object)
+            .expect("detached asset transfer POST operation");
+        let request_ref = operation
+            .get("requestBody")
+            .and_then(Value::as_object)
+            .and_then(|body| body.get("content"))
+            .and_then(Value::as_object)
+            .and_then(|content| content.get("application/json"))
+            .and_then(Value::as_object)
+            .and_then(|media| media.get("schema"))
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("$ref"))
+            .and_then(Value::as_str);
+        assert_eq!(
+            request_ref,
+            Some("#/components/schemas/AssetTransferRequest")
+        );
+        let response_ref = operation
+            .get("responses")
+            .and_then(Value::as_object)
+            .and_then(|responses| responses.get("200"))
+            .and_then(Value::as_object)
+            .and_then(|response| response.get("content"))
+            .and_then(Value::as_object)
+            .and_then(|content| content.get("application/json"))
+            .and_then(Value::as_object)
+            .and_then(|media| media.get("schema"))
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("$ref"))
+            .and_then(Value::as_str);
+        assert_eq!(
+            response_ref,
+            Some("#/components/schemas/AssetTransferResponse")
+        );
+
+        let schemas = doc
+            .get("components")
+            .and_then(Value::as_object)
+            .and_then(|components| components.get("schemas"))
+            .and_then(Value::as_object)
+            .expect("schemas");
+        let request = schemas
+            .get("AssetTransferRequest")
+            .and_then(Value::as_object)
+            .expect("asset transfer request schema");
+        assert_eq!(
+            request.get("additionalProperties"),
+            Some(&Value::Bool(false))
+        );
+        assert_eq!(
+            request.get("oneOf").and_then(Value::as_array).map(Vec::len),
+            Some(2)
+        );
+        let properties = request
+            .get("properties")
+            .and_then(Value::as_object)
+            .expect("asset transfer request properties");
+        for field in [
+            "authority",
+            "asset_definition_id",
+            "asset_balance_scope",
+            "amount",
+            "destination",
+            "creation_time_ms",
+            "transaction_ttl_ms",
+            "public_key_hex",
+            "signature_base64",
+        ] {
+            assert!(properties.contains_key(field), "missing `{field}`");
+        }
+        for forbidden in ["private_key", "nonce", "metadata", "signature_b64"] {
+            assert!(
+                !properties.contains_key(forbidden),
+                "legacy signing field `{forbidden}` must not be documented"
+            );
+        }
+        assert_eq!(
+            schemas
+                .get("AssetTransferResponse")
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("additionalProperties")),
+            Some(&Value::Bool(false))
+        );
     }
 
     #[test]

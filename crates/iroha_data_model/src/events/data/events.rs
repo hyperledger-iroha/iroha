@@ -4,10 +4,7 @@ use std::{string::String, vec::Vec};
 
 use getset::Getters;
 use iroha_data_model_derive::{EventSet, HasOrigin, model};
-use iroha_primitives::{
-    json::Json,
-    numeric::{Numeric, Quantity},
-};
+use iroha_primitives::{json::Json, numeric::Quantity};
 #[allow(unused_imports)]
 #[cfg(feature = "json")]
 use norito::json::{self, JsonDeserialize, JsonSerialize};
@@ -91,8 +88,6 @@ mod model {
         Soradns(super::soradns::SoradnsDirectoryEvent),
         /// `SoraFS` gateway compliance events
         Sorafs(super::sorafs::SorafsGatewayEvent),
-        /// Offline settlement lifecycle events
-        Offline(super::offline::OfflineNoteEvent),
         /// Space Directory manifest lifecycle events
         SpaceDirectory(super::space_directory::SpaceDirectoryEvent),
         /// Native asset escrow lifecycle events
@@ -659,7 +654,7 @@ mod rwa {
             /// New child lot receiving the transferred quantity.
             pub child: RwaId,
             /// Quantity moved into the child lot.
-            pub quantity: Numeric,
+            pub quantity: Quantity,
             /// Owner of the child lot.
             pub new_owner: AccountId,
         }
@@ -685,7 +680,7 @@ mod rwa {
             /// Lot whose quantity changed.
             pub rwa: RwaId,
             /// Quantity affected by the operation.
-            pub quantity: Numeric,
+            pub quantity: Quantity,
         }
 
         /// Event emitted when held quantity changes.
@@ -697,7 +692,7 @@ mod rwa {
             /// Lot whose held quantity changed.
             pub rwa: RwaId,
             /// Quantity affected by the hold or release.
-            pub quantity: Numeric,
+            pub quantity: Quantity,
         }
 
         /// Event emitted when a lot's control policy changes.

@@ -27,6 +27,31 @@ fn every_valid_and_adversarial_vector_has_the_pinned_rust_outcome() {
     let document = norito::json::parse_value(&text).expect("parse shared numeric fixture");
 
     for vector in document
+        .get("text")
+        .and_then(norito::json::Value::as_array)
+        .expect("canonical text vectors")
+    {
+        let input = string(vector, "input");
+        let canonical = match string(vector, "kind") {
+            "decimal" => input
+                .parse::<Numeric>()
+                .expect("valid decimal text")
+                .to_string(),
+            "quantity" => input
+                .parse::<iroha_primitives::numeric::Quantity>()
+                .expect("valid quantity text")
+                .to_string(),
+            other => panic!("unknown canonical text kind {other}"),
+        };
+        assert_eq!(
+            canonical,
+            string(vector, "canonical"),
+            "{}",
+            string(vector, "id")
+        );
+    }
+
+    for vector in document
         .get("valid")
         .and_then(norito::json::Value::as_array)
         .expect("valid vectors")
@@ -120,7 +145,12 @@ fn every_valid_and_adversarial_vector_has_the_pinned_rust_outcome() {
         let input = vector.get("input").expect("invalid text input");
         let actual = numeric_text_error_category(string(vector, "kind"), input)
             .expect_err("invalid text vector must fail");
-        assert_eq!(actual, string(vector, "expected"), "{}", string(vector, "id"));
+        assert_eq!(
+            actual,
+            string(vector, "expected"),
+            "{}",
+            string(vector, "id")
+        );
     }
 }
 

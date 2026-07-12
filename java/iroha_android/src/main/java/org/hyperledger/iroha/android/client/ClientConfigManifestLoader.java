@@ -19,7 +19,6 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.function.BiConsumer;
-import org.hyperledger.iroha.android.offline.OfflineJournalKey;
 import org.hyperledger.iroha.android.telemetry.TelemetryOptions;
 
 /**
@@ -165,18 +164,6 @@ public final class ClientConfigManifestLoader {
       builder.setPendingQueue(null);
       return;
     }
-    if ("offline_journal".equalsIgnoreCase(kind)) {
-      final String pathRaw = requireString(pending, "path");
-      final Path resolved =
-          resolveRelative(manifestPath, pathRaw);
-      final Optional<OfflineJournalKey> key = deriveJournalKey(pending);
-      if (key.isEmpty()) {
-        throw new IllegalStateException(
-            "pending_queue.kind=offline_journal requires either key_seed_b64 or passphrase");
-      }
-      builder.enableOfflineJournalQueue(resolved, key.get());
-      return;
-    }
     if ("file".equalsIgnoreCase(kind)) {
       final String pathRaw = requireString(pending, "path");
       final Path resolved = resolveRelative(manifestPath, pathRaw);
@@ -184,27 +171,6 @@ public final class ClientConfigManifestLoader {
       return;
     }
     throw new IllegalStateException("Unsupported pending queue kind: " + kind);
-  }
-
-  private static Optional<OfflineJournalKey> deriveJournalKey(final Map<String, Object> pending) {
-    final String seedB64 = optionalString(pending.get("key_seed_b64"));
-    if (seedB64 != null && !seedB64.isEmpty()) {
-      final byte[] seed = Base64.getDecoder().decode(seedB64);
-      if (seed.length == 0) {
-        throw new IllegalStateException("pending_queue.key_seed_b64 cannot decode to an empty seed");
-      }
-      return Optional.of(OfflineJournalKey.derive(seed));
-    }
-    final String seedHex = optionalString(pending.get("key_seed_hex"));
-    if (seedHex != null && !seedHex.trim().isEmpty()) {
-      final byte[] seed = hexToBytes(seedHex.trim());
-      return Optional.of(OfflineJournalKey.derive(seed));
-    }
-    final String passphrase = optionalString(pending.get("passphrase"));
-    if (passphrase != null && !passphrase.isEmpty()) {
-      return Optional.of(OfflineJournalKey.deriveFromPassphrase(passphrase.toCharArray()));
-    }
-    return Optional.empty();
   }
 
   private static void applyTelemetry(

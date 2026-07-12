@@ -15,6 +15,66 @@ public struct ConnectBalanceAsset: Codable, Equatable, Sendable {
         self.quantity = quantity
         self.precision = precision
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case assetId = "asset_id"
+        case assetDefinitionId = "asset_definition_id"
+        case quantity
+        case precision
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        assetId = try container.decode(String.self, forKey: .assetId)
+        assetDefinitionId = try container.decodeIfPresent(String.self, forKey: .assetDefinitionId)
+        let rawQuantity = try container.decode(String.self, forKey: .quantity)
+        do {
+            quantity = try KotodamaNumericV1Codec.decodeQuantityJSON(rawQuantity).canonicalString
+        } catch {
+            throw DecodingError.dataCorruptedError(
+                forKey: .quantity,
+                in: container,
+                debugDescription: "quantity must be a canonical non-negative Kotodama V1 quantity"
+            )
+        }
+        precision = try container.decodeIfPresent(Int.self, forKey: .precision)
+        if let precision, precision < 0 {
+            throw DecodingError.dataCorruptedError(
+                forKey: .precision,
+                in: container,
+                debugDescription: "precision must be non-negative"
+            )
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        let canonicalQuantity: String
+        do {
+            canonicalQuantity = try KotodamaNumericV1Codec.decodeQuantityJSON(quantity).canonicalString
+        } catch {
+            throw EncodingError.invalidValue(
+                quantity,
+                EncodingError.Context(
+                    codingPath: encoder.codingPath + [CodingKeys.quantity],
+                    debugDescription: "quantity must be a canonical non-negative Kotodama V1 quantity"
+                )
+            )
+        }
+        if let precision, precision < 0 {
+            throw EncodingError.invalidValue(
+                precision,
+                EncodingError.Context(
+                    codingPath: encoder.codingPath + [CodingKeys.precision],
+                    debugDescription: "precision must be non-negative"
+                )
+            )
+        }
+        try container.encode(assetId, forKey: .assetId)
+        try container.encodeIfPresent(assetDefinitionId, forKey: .assetDefinitionId)
+        try container.encode(canonicalQuantity, forKey: .quantity)
+        try container.encodeIfPresent(precision, forKey: .precision)
+    }
 }
 
 public struct ConnectBalanceSnapshot: Equatable, Sendable {

@@ -615,9 +615,9 @@ async fn npos_election_filters_stake_and_applies_after_margin() -> eyre::Result<
     let builder = NetworkBuilder::new()
         .with_min_peers(4)
         .with_auto_populated_trusted_peers()
+        .with_npos_consensus()
         .with_config_layer(|layer| {
             layer
-                .write(["sumeragi", "consensus_mode"], "npos")
                 .write(["nexus", "enabled"], true)
                 .write(
                     ["nexus", "fees", "fee_asset_id"],
@@ -803,9 +803,9 @@ async fn npos_entity_correlation_limits_validator_set() -> eyre::Result<()> {
     let builder = NetworkBuilder::new()
         .with_min_peers(4)
         .with_auto_populated_trusted_peers()
+        .with_npos_consensus()
         .with_config_layer(|layer| {
             layer
-                .write(["sumeragi", "consensus_mode"], "npos")
                 .write(["nexus", "enabled"], true)
                 .write(
                     ["nexus", "fees", "fee_asset_id"],

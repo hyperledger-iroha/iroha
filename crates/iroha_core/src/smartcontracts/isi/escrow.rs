@@ -43,7 +43,7 @@ use iroha_data_model::{
     },
     zk::{BackendTag, OpenVerifyEnvelope},
 };
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::{Numeric, Quantity};
 use mv::storage::StorageReadOnly;
 use norito::json::Value;
 
@@ -73,15 +73,7 @@ fn validation_err(message: impl Into<String>) -> Error {
     )
 }
 
-fn ensure_non_negative(value: &Numeric) -> Result<(), Error> {
-    if value.mantissa().is_negative() {
-        return Err(validation_err("escrow amount must not be negative"));
-    }
-    Ok(())
-}
-
-fn ensure_positive(value: &Numeric) -> Result<(), Error> {
-    ensure_non_negative(value)?;
+fn ensure_positive(value: &Quantity) -> Result<(), Error> {
     if value.is_zero() {
         return Err(validation_err("escrow amount must be non-zero"));
     }
@@ -89,16 +81,13 @@ fn ensure_positive(value: &Numeric) -> Result<(), Error> {
 }
 
 fn ensure_resolution_split(
-    total_amount: &Numeric,
-    buyer_amount: &Numeric,
-    seller_amount: &Numeric,
+    total_amount: &Quantity,
+    buyer_amount: &Quantity,
+    seller_amount: &Quantity,
 ) -> Result<(), Error> {
-    ensure_non_negative(buyer_amount)?;
-    ensure_non_negative(seller_amount)?;
     let split_total = buyer_amount
-        .clone()
-        .checked_add(seller_amount.clone())
-        .ok_or_else(|| validation_err("escrow resolution amount overflow"))?;
+        .checked_add(seller_amount)
+        .map_err(|_| validation_err("escrow resolution amount overflow"))?;
     if split_total != *total_amount {
         return Err(validation_err("court split must equal escrow amount"));
     }
@@ -196,23 +185,27 @@ fn transfer_numeric_asset_for_escrow(
     state_transaction: &mut StateTransaction<'_, '_>,
     source_id: &AssetId,
     destination_id: &AssetId,
-    amount: &Numeric,
+    amount: &Quantity,
     source_policy: NumericAssetTransferSourcePolicy,
 ) -> Result<TransferDeltaTranscript, Error> {
     let (source_id, destination_id) = ensure_numeric_asset_transfer_policies(
         state_transaction,
         source_id,
         destination_id,
-        amount,
+        amount.as_numeric(),
         source_policy,
     )?;
     let control_update =
-        prepare_outbound_asset_transfer_control_update(state_transaction, &source_id, amount)?;
+        prepare_outbound_asset_transfer_control_update(
+            state_transaction,
+            &source_id,
+            amount.as_numeric(),
+        )?;
     let delta = apply_resolved_numeric_asset_transfer_delta(
         state_transaction,
         &source_id,
         &destination_id,
-        amount,
+        amount.as_numeric(),
     )?;
     if let Some(record) = control_update {
         update_control_record(state_transaction, source_id.account(), record)?;
@@ -222,18 +215,16 @@ fn transfer_numeric_asset_for_escrow(
     #[cfg(feature = "telemetry")]
     state_transaction
         .telemetry
-        .observe_tx_amount(amount.clone().to_f64());
+        .observe_tx_amount(amount.as_numeric().to_f64());
 
-    let quantity = Quantity::from_canonical_numeric(amount.clone())
-        .map_err(|_| MathError::NegativeValue)?;
     state_transaction.world.emit_events([
         AssetEvent::Removed(AssetChanged {
             asset: source_id,
-            amount: quantity.clone(),
+            amount: amount.clone(),
         }),
         AssetEvent::Added(AssetChanged {
             asset: destination_id,
-            amount: quantity,
+            amount: amount.clone(),
         }),
     ]);
 
@@ -528,7 +519,7 @@ impl Execute for OpenAssetEscrow {
         let spec = state_transaction
             .numeric_spec_for(&self.asset_definition)
             .map_err(Error::from)?;
-        assert_numeric_spec_with(&self.amount, spec)?;
+        assert_numeric_spec_with(self.amount.as_numeric(), spec)?;
         state_transaction.world.account(authority)?;
         state_transaction
             .world
@@ -687,7 +678,7 @@ impl Execute for ReleaseAssetEscrow {
         )?;
         state_transaction.record_transfer_transcript(authority, delta)?;
         record.status = AssetEscrowStatus::Released;
-        record.remaining_amount = Numeric::zero();
+        record.remaining_amount = Quantity::zero();
         record.closed_at_ms = Some(state_transaction.block_unix_timestamp_ms());
         state_transaction
             .world
@@ -735,7 +726,7 @@ impl Execute for CancelAssetEscrow {
         )?;
         state_transaction.record_transfer_transcript(authority, delta)?;
         record.status = AssetEscrowStatus::Cancelled;
-        record.remaining_amount = Numeric::zero();
+        record.remaining_amount = Quantity::zero();
         record.closed_at_ms = Some(state_transaction.block_unix_timestamp_ms());
         state_transaction
             .world
@@ -847,7 +838,7 @@ impl Execute for ResolveEscrowDispute {
         state_transaction.record_transfer_transcripts(authority, deltas)?;
         let resolved_at_ms = state_transaction.block_unix_timestamp_ms();
         record.status = AssetEscrowStatus::Resolved;
-        record.remaining_amount = Numeric::zero();
+        record.remaining_amount = Quantity::zero();
         record.closed_at_ms = Some(resolved_at_ms);
         record.resolution = Some(AssetEscrowResolution {
             resolver: authority.clone(),
@@ -895,7 +886,7 @@ impl Execute for OpenAssetLock {
         let spec = state_transaction
             .numeric_spec_for(&self.asset_definition)
             .map_err(Error::from)?;
-        assert_numeric_spec_with(&self.amount, spec)?;
+        assert_numeric_spec_with(self.amount.as_numeric(), spec)?;
         state_transaction.world.account(authority)?;
         state_transaction.world.account(&self.destination)?;
         if let Some(release_authority) = self.release_authority.as_ref() {
@@ -985,7 +976,7 @@ impl Execute for DrawdownAssetLock {
         let spec = state_transaction
             .numeric_spec_for(&record.asset_definition)
             .map_err(Error::from)?;
-        assert_numeric_spec_with(&self.amount, spec)?;
+        assert_numeric_spec_with(self.amount.as_numeric(), spec)?;
         if self.amount > record.remaining_amount {
             return Err(validation_err("lock drawdown exceeds remaining amount"));
         }
@@ -1006,8 +997,8 @@ impl Execute for DrawdownAssetLock {
         state_transaction.record_transfer_transcript(authority, delta)?;
         record.remaining_amount = record
             .remaining_amount
-            .checked_sub(self.amount)
-            .ok_or_else(|| validation_err("lock remaining amount underflow"))?;
+            .checked_sub(&self.amount)
+            .map_err(|_| validation_err("lock remaining amount underflow"))?;
         if record.remaining_amount.is_zero() {
             record.status = AssetEscrowStatus::DrawnDown;
             record.closed_at_ms = Some(state_transaction.block_unix_timestamp_ms());
@@ -1054,7 +1045,7 @@ impl Execute for CancelAssetLock {
         )?;
         state_transaction.record_transfer_transcript(authority, delta)?;
         record.status = AssetEscrowStatus::Cancelled;
-        record.remaining_amount = Numeric::zero();
+        record.remaining_amount = Quantity::zero();
         record.closed_at_ms = Some(state_transaction.block_unix_timestamp_ms());
         state_transaction
             .world
@@ -1101,7 +1092,7 @@ impl Execute for ExpireAssetLock {
         )?;
         state_transaction.record_transfer_transcript(authority, delta)?;
         record.status = AssetEscrowStatus::Expired;
-        record.remaining_amount = Numeric::zero();
+        record.remaining_amount = Quantity::zero();
         record.closed_at_ms = Some(state_transaction.block_unix_timestamp_ms());
         state_transaction
             .world
@@ -2961,7 +2952,7 @@ mod tests {
             source.clone(),
             iroha_data_model::asset::AssetBalanceScope::Dataspace(home_dataspace),
         );
-        let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(100_u32, 0));
+        let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(100_u32));
         let mut world = crate::state::World::with_assets(
             [Domain::new(asset_definition.domain().clone()).build(&source)],
             [

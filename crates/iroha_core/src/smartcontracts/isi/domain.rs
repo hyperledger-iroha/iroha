@@ -5995,7 +5995,7 @@ mod tests {
         .execute(&authority, &mut tx)
         .expect("register asset definition");
         let asset_id = AssetId::new(asset_def_id.clone(), account_id.clone());
-        let asset = Asset::new(asset_id.clone(), Numeric::new(5, 0));
+        let asset = Asset::new(asset_id.clone(), Quantity::from(5));
         let (asset_id, asset_value) = asset.into_key_value();
         tx.world.assets.insert(asset_id.clone(), asset_value);
         tx.world.track_asset_holder(&asset_id);

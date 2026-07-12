@@ -648,7 +648,7 @@ fn should_charge_pipeline_gas_asset(
 ) -> bool {
     !skip_nexus_fee
         && gas_asset_opt.is_some()
-        && (!nexus_enabled || nexus_fees.per_gas_unit_fee <= Numeric::zero())
+        && (!nexus_enabled || nexus_fees.per_gas_unit_fee.is_zero())
 }
 
 fn is_sora_v2_tx_hash_literal(value: &str) -> bool {
@@ -775,9 +775,6 @@ fn nexus_protocol_fee_exempt_instruction(instruction: &InstructionBox) -> bool {
 
 fn nexus_fee_exempt_instruction(instruction: &InstructionBox) -> bool {
     nexus_protocol_fee_exempt_instruction(instruction)
-        || instruction
-            .as_any()
-            .is::<iroha_data_model::isi::offline::KagemushaTransfer>()
 }
 
 fn nexus_fee_exempt_instructions(instructions: &[InstructionBox]) -> bool {
@@ -821,37 +818,6 @@ fn redeem_funded_nexus_fee_capacity(
     let mut candidate_redeems: Vec<(AssetDefinitionId, Numeric)> = Vec::new();
     for instruction in instructions {
         let any = instruction.as_any();
-        if any
-            .downcast_ref::<iroha_data_model::isi::offline::AuditOfflineNote>()
-            .is_some()
-        {
-            continue;
-        }
-        if let Some(redeem) =
-            any.downcast_ref::<iroha_data_model::isi::offline::RedeemOfflineNote>()
-        {
-            let redemption = &redeem.redemption;
-            if &redemption.recipient != payer || redemption.asset.account() != payer {
-                return Ok(None);
-            }
-            candidate_redeems.push((
-                redemption.asset.definition().clone(),
-                redemption.amount.clone(),
-            ));
-            continue;
-        }
-        if let Some(redeem) =
-            any.downcast_ref::<iroha_data_model::isi::offline::RedeemKagemushaRecursive>()
-        {
-            if &redeem.recipient != payer {
-                return Ok(None);
-            }
-            candidate_redeems.push((
-                redeem.bundle.accumulator.asset.clone(),
-                Numeric::new(redeem.public_amount, 0),
-            ));
-            continue;
-        }
         if let Some(redeem) =
             any.downcast_ref::<iroha_data_model::isi::offline::RedeemKagemushaRecursiveV2>()
         {
@@ -863,7 +829,7 @@ fn redeem_funded_nexus_fee_capacity(
             // unsupported instruction.
             // TODO: Remove this gate only when the V2 proof backend and complete
             // Core execution path ship atomically.
-            if !iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_V2_PROOF_BACKEND_AVAILABLE {
+            if !iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PROOF_BACKEND_AVAILABLE {
                 return Ok(None);
             }
             if &redeem.request.recipient != payer {
@@ -1100,13 +1066,11 @@ fn unsettled_verified_nexus_fee_amount(
             if world.smart_contract_state().get(&marker).is_some() {
                 continue;
             }
-            if receipt.fee_amount.mantissa().is_negative() {
-                return Err(NexusFeeAdmissionError::ConfigInvalid(format!(
-                    "verified lane relay contains negative Nexus fee receipt {}",
-                    hex::encode(receipt.source_id)
-                )));
-            }
-            total = checked_nexus_fee_add(total, receipt.fee_amount.clone(), "unsettled receipts")?;
+            total = checked_nexus_fee_add(
+                total,
+                receipt.fee_amount.as_numeric().clone(),
+                "unsettled receipts",
+            )?;
         }
     }
     Ok(total)
@@ -1151,7 +1115,9 @@ fn check_lane_relay_burn_fee_budget(
     let required = checked_nexus_fee_add(required, in_flight_fees, "in-flight receipts")?;
     let required = checked_nexus_fee_add(
         required,
-        cfg.sponsor_verified_balance_safety_floor.clone(),
+        cfg.sponsor_verified_balance_safety_floor
+            .as_numeric()
+            .clone(),
         "safety floor",
     )?;
     if record.verified_balance < required {
@@ -1478,7 +1444,7 @@ fn authorize_fee_sponsor_policy_from_ids(
             continue;
         }
         if let Some(max_fee) = &policy.max_fee
-            && fee > max_fee
+            && fee > max_fee.as_numeric()
         {
             continue;
         }
@@ -2703,47 +2669,47 @@ pub(crate) fn compute_nexus_fee_amount(
     tx_bytes_len: usize,
     instruction_count: usize,
     gas_used: u64,
-) -> Result<Numeric, ValidationFail> {
-    for (label, value) in [
-        ("base_fee", &cfg.base_fee),
-        ("per_byte_fee", &cfg.per_byte_fee),
-        ("per_instruction_fee", &cfg.per_instruction_fee),
-        ("per_gas_unit_fee", &cfg.per_gas_unit_fee),
-        ("sponsor_max_fee", &cfg.sponsor_max_fee),
-        (
-            "sponsor_verified_balance_safety_floor",
-            &cfg.sponsor_verified_balance_safety_floor,
-        ),
-    ] {
-        if value.mantissa().is_negative() {
-            return Err(ValidationFail::InternalError(format!(
-                "nexus.fees.{label} must be non-negative"
-            )));
-        }
-    }
+) -> Result<Quantity, ValidationFail> {
     let tx_bytes_u64 = u64::try_from(tx_bytes_len).map_err(|_| {
         ValidationFail::InternalError("transaction too large for fee accounting".to_owned())
     })?;
     let instr_u64 = u64::try_from(instruction_count).map_err(|_| {
         ValidationFail::InternalError("instruction count too large for fee accounting".to_owned())
     })?;
-    let mut fee = cfg.base_fee.clone();
+    let mut fee = cfg.base_fee.as_numeric().clone();
     fee = Executor::checked_numeric_add(
         fee,
-        Executor::checked_numeric_mul_u64(&cfg.per_byte_fee, tx_bytes_u64, "fee amount")?,
+        Executor::checked_numeric_mul_u64(
+            cfg.per_byte_fee.as_numeric(),
+            tx_bytes_u64,
+            "fee amount",
+        )?,
         "fee amount",
     )?;
     fee = Executor::checked_numeric_add(
         fee,
-        Executor::checked_numeric_mul_u64(&cfg.per_instruction_fee, instr_u64, "fee amount")?,
+        Executor::checked_numeric_mul_u64(
+            cfg.per_instruction_fee.as_numeric(),
+            instr_u64,
+            "fee amount",
+        )?,
         "fee amount",
     )?;
-    Executor::checked_numeric_add(
+    let fee = Executor::checked_numeric_add(
         fee,
-        Executor::checked_numeric_mul_u64(&cfg.per_gas_unit_fee, gas_used, "fee amount")?,
+        Executor::checked_numeric_mul_u64(
+            cfg.per_gas_unit_fee.as_numeric(),
+            gas_used,
+            "fee amount",
+        )?,
         "fee amount",
-    )
-    .map(Numeric::trim_trailing_zeros)
+    )?
+    .trim_trailing_zeros();
+    Quantity::from_canonical_numeric(fee).map_err(|error| {
+        ValidationFail::InternalError(format!(
+            "computed nexus fee left the quantity domain: {error}"
+        ))
+    })
 }
 
 fn fee_bound_for_admission(
@@ -2822,7 +2788,7 @@ pub(crate) fn check_external_nexus_fee_admission(
     let fee = compute_nexus_fee_amount(&nexus.fees, tx_bytes_len, instruction_count, gas_used)
         .map_err(validation_fail_to_nexus_fee_admission_error)?;
 
-    if fee <= Numeric::zero() {
+    if fee.is_zero() {
         return Ok(());
     }
 
@@ -2832,7 +2798,7 @@ pub(crate) fn check_external_nexus_fee_admission(
                 "fee sponsorship is disabled".to_owned(),
             ));
         }
-        if nexus.fees.sponsor_max_fee > Numeric::zero() && fee > nexus.fees.sponsor_max_fee {
+        if !nexus.fees.sponsor_max_fee.is_zero() && fee > nexus.fees.sponsor_max_fee {
             return Err(NexusFeeAdmissionError::Rejected(
                 "fee exceeds sponsor_max_fee".to_owned(),
             ));
@@ -2850,7 +2816,7 @@ pub(crate) fn check_external_nexus_fee_admission(
             &sponsor,
             policy_ids,
             transaction,
-            &fee,
+            fee.as_numeric(),
             route_dataspace_id,
         )?;
         sponsor
@@ -2865,7 +2831,7 @@ pub(crate) fn check_external_nexus_fee_admission(
         observation_time_ms,
         next_block_height,
         has_fee_sponsor,
-        &fee,
+        fee.as_numeric(),
         Numeric::zero(),
     )?;
     if redeem_funded_nexus_fee {
@@ -2877,7 +2843,13 @@ pub(crate) fn check_external_nexus_fee_admission(
         .lane_relay_burn_receipts_active_at(next_block_height)
     {
         check_lane_relay_burn_canonical_sponsor(world, &nexus.fees, &payer)?;
-        return check_lane_relay_burn_fee_budget(world, &nexus.fees, &payer, &fee, Numeric::zero());
+        return check_lane_relay_burn_fee_budget(
+            world,
+            &nexus.fees,
+            &payer,
+            fee.as_numeric(),
+            Numeric::zero(),
+        );
     }
 
     if externally_settled_sponsored_fee {
@@ -2905,7 +2877,7 @@ pub(crate) fn check_external_nexus_fee_admission(
     };
 
     let available = balance.as_ref().as_numeric().clone();
-    if available < fee {
+    if available < fee.as_numeric().clone() {
         return Err(NexusFeeAdmissionError::Rejected(format!(
             "fee balance for payer `{payer}` is insufficient: requires {fee}, available {available}"
         )));
@@ -3127,7 +3099,7 @@ pub(crate) fn charge_fees_for_applied_overlay_with_encoded_len(
             state_transaction.block_unix_timestamp_ms(),
             state_transaction.block_height(),
             fee_sponsor.is_some(),
-            &fee,
+            fee.as_numeric(),
             in_flight_fees,
         )
         .map_err(nexus_fee_admission_error_to_validation_fail)?;
@@ -3433,7 +3405,7 @@ impl Executor {
         let cfg = state_transaction.nexus.fees.clone();
         let fee = compute_nexus_fee_amount(&cfg, tx_bytes_len, instruction_count, gas_used)?;
 
-        if fee <= Numeric::zero() {
+        if fee.is_zero() {
             return Ok(());
         }
         let payer_kind = if sponsor.is_some() {
@@ -3457,7 +3429,7 @@ impl Executor {
                     "fee sponsorship is disabled".to_owned(),
                 ));
             }
-            if cfg.sponsor_max_fee > Numeric::zero() && fee > cfg.sponsor_max_fee {
+            if !cfg.sponsor_max_fee.is_zero() && fee > cfg.sponsor_max_fee {
                 let payer_id = sponsor.to_string();
                 sumeragi_status::record_nexus_fee_event(NexusFeeEvent::SponsorCapExceeded {
                     payer_id: payer_id.clone(),
@@ -3480,7 +3452,7 @@ impl Executor {
                 authority,
                 &sponsor,
                 transaction,
-                &fee,
+                fee.as_numeric(),
             ) {
                 let sponsor_id = sponsor.to_string();
                 let authority_id = authority.to_string();
@@ -3524,7 +3496,7 @@ impl Executor {
                     &cfg,
                     &payer,
                     state_transaction.block_unix_timestamp_ms(),
-                    &fee,
+                    fee.as_numeric(),
                     in_flight_fees,
                 )
                 .map_err(|err| match err {
@@ -3545,7 +3517,7 @@ impl Executor {
                     &state_transaction.world,
                     &cfg,
                     &payer,
-                    &fee,
+                    fee.as_numeric(),
                     in_flight_fees,
                 )
                 .map_err(|err| match err {
@@ -3613,12 +3585,7 @@ impl Executor {
             return Ok(());
         }
 
-        let fee_quantity = Quantity::try_from_numeric(fee.clone()).map_err(|error| {
-            ValidationFail::InternalError(format!(
-                "validated nexus fee left the asset quantity domain: {error}"
-            ))
-        })?;
-        let burn = Burn::asset_quantity(fee_quantity, payer_asset);
+        let burn = Burn::asset_quantity(fee.clone(), payer_asset);
         let instr: DMInstructionBox = burn.into();
         let previous_tx_dataspace_id = state_transaction.current_dataspace_id;
         let previous_world_dataspace_id = state_transaction.world.current_dataspace_id;
@@ -4092,9 +4059,9 @@ impl Executor {
                     gas_used,
                 )?
             } else {
-                Numeric::zero()
+                Quantity::zero()
             };
-            if state_transaction.nexus.fees.sponsor_max_fee > Numeric::zero()
+            if !state_transaction.nexus.fees.sponsor_max_fee.is_zero()
                 && sponsorship_fee > state_transaction.nexus.fees.sponsor_max_fee
             {
                 return Err(ValidationFail::NotPermitted(
@@ -4106,7 +4073,7 @@ impl Executor {
                 authority,
                 sponsor,
                 &transaction,
-                &sponsorship_fee,
+                sponsorship_fee.as_numeric(),
             ) {
                 sumeragi_status::record_nexus_fee_event(NexusFeeEvent::SponsorUnauthorized {
                     sponsor_id: sponsor.to_string(),
@@ -4163,7 +4130,7 @@ impl Executor {
                 state_transaction.block_unix_timestamp_ms(),
                 state_transaction.block_height(),
                 fee_sponsor.is_some(),
-                &nexus_fee,
+                nexus_fee.as_numeric(),
                 in_flight_fees,
             )
             .map_err(nexus_fee_admission_error_to_validation_fail)?
@@ -8522,7 +8489,7 @@ mod tests {
         let mut nexus_fees = NexusFees::default();
         let gas_asset = Some("xor#universal".to_owned());
 
-        nexus_fees.per_gas_unit_fee = Numeric::zero();
+        nexus_fees.per_gas_unit_fee = Quantity::zero();
         assert!(should_charge_pipeline_gas_asset(
             false,
             true,
@@ -8530,7 +8497,7 @@ mod tests {
             &gas_asset
         ));
 
-        nexus_fees.per_gas_unit_fee = Numeric::new(1, 3);
+        nexus_fees.per_gas_unit_fee = "0.001".parse().expect("valid gas fee");
         assert!(!should_charge_pipeline_gas_asset(
             false,
             true,
@@ -8613,7 +8580,7 @@ mod tests {
         state: &State,
         payer: &AccountId,
         fee_asset_id: &str,
-        fee_amount: Numeric,
+        fee_amount: Quantity,
         source_id: [u8; 32],
     ) {
         let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
@@ -8631,9 +8598,9 @@ mod tests {
                 instruction_count: 0,
                 gas_used: 0,
                 base_fee: fee_amount,
-                per_byte_fee: Numeric::zero(),
-                per_instruction_fee: Numeric::zero(),
-                per_gas_unit_fee: Numeric::zero(),
+                per_byte_fee: Quantity::zero(),
+                per_instruction_fee: Quantity::zero(),
+                per_gas_unit_fee: Quantity::zero(),
             },
         };
         let settlement = iroha_data_model::block::consensus::LaneBlockCommitment {
@@ -8884,18 +8851,6 @@ mod tests {
     fn detached_asset_instructions_cannot_be_constructed_with_negative_quantities() {
         let negative = Numeric::new(-1_i32, 0);
         assert!(Quantity::try_from_numeric(negative).is_err());
-    }
-
-    #[test]
-    fn nexus_fee_computation_rejects_negative_runtime_schedule() {
-        let mut fees = iroha_config::parameters::actual::NexusFees::default();
-        fees.base_fee = Numeric::new(-1_i32, 0);
-        let error = compute_nexus_fee_amount(&fees, 1, 1, 1)
-            .expect_err("negative runtime fee schedule must fail closed");
-        assert!(matches!(
-            error,
-            ValidationFail::InternalError(message) if message.contains("must be non-negative")
-        ));
     }
 
     #[test]
@@ -9445,7 +9400,7 @@ mod tests {
             .with_name("XOR".to_owned())
             .build(&seller);
         let seller_asset_id = AssetId::of(asset_definition_id.clone(), seller.clone());
-        let seller_asset = Asset::new(seller_asset_id.clone(), Numeric::from(100_u64));
+        let seller_asset = Asset::new(seller_asset_id.clone(), Quantity::from(100_u64));
         let world = World::with_assets(
             [domain],
             [seller_account],
@@ -9782,7 +9737,7 @@ mod tests {
             .with_name("coin".to_owned())
             .build(&user1);
         let transfer_asset_id = AssetId::new(asset_definition_id.clone(), user1.clone());
-        let source_balance = Asset::new(transfer_asset_id.clone(), Numeric::new(10, 0));
+        let source_balance = Asset::new(transfer_asset_id.clone(), Quantity::from(10));
 
         let world = World::with_assets(
             [alice_domain, users_domain, defs_domain],
@@ -9864,7 +9819,7 @@ mod tests {
             .with_name("coin".to_owned())
             .build(&user1);
         let transfer_asset_id = AssetId::new(asset_definition_id.clone(), user1.clone());
-        let source_balance = Asset::new(transfer_asset_id.clone(), Numeric::new(10, 0));
+        let source_balance = Asset::new(transfer_asset_id.clone(), Quantity::from(10));
 
         let world = World::with_assets(
             [alice_domain, users_domain, defs_domain],
@@ -10606,10 +10561,10 @@ mod tests {
         {
             let nexus = state.nexus.get_mut();
             nexus.enabled = true;
-            nexus.fees.base_fee = Numeric::from(1_u32);
-            nexus.fees.per_byte_fee = Numeric::zero();
-            nexus.fees.per_instruction_fee = Numeric::zero();
-            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.fees.base_fee = Quantity::from(1_u32);
+            nexus.fees.per_byte_fee = Quantity::zero();
+            nexus.fees.per_instruction_fee = Quantity::zero();
+            nexus.fees.per_gas_unit_fee = Quantity::zero();
             nexus.fees.sponsorship_enabled = true;
             nexus.fees.external_settlement_enabled = true;
             nexus.fees.fee_asset_id = asset_def_id.to_string();
@@ -10765,10 +10720,10 @@ mod tests {
         {
             let nexus = state.nexus.get_mut();
             nexus.enabled = true;
-            nexus.fees.base_fee = Numeric::from(1_u32);
-            nexus.fees.per_byte_fee = Numeric::zero();
-            nexus.fees.per_instruction_fee = Numeric::zero();
-            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.fees.base_fee = Quantity::from(1_u32);
+            nexus.fees.per_byte_fee = Quantity::zero();
+            nexus.fees.per_instruction_fee = Quantity::zero();
+            nexus.fees.per_gas_unit_fee = Quantity::zero();
             nexus.fees.fee_asset_id = "xor#universal".to_owned();
             nexus.fees.burn_from_unix_timestamp_ms = 0;
             nexus.fees.settlement_mode =
@@ -10794,73 +10749,6 @@ mod tests {
         )
     }
 
-    fn kagemusha_fee_test_recursive_bundle(
-        asset: AssetDefinitionId,
-    ) -> iroha_data_model::offline::KagemushaRecursiveSpendBundleV1 {
-        use iroha_data_model::offline::{
-            KagemushaRecursiveAggregationProof, KagemushaRecursiveAggregationProofPublicInputs,
-            KagemushaRecursiveSpendAccumulatorV1, KagemushaRecursiveSpendBundleV1,
-            KagemushaSpendableNoteDescriptorV1,
-        };
-        use iroha_data_model::proof::{ProofBox, VerifyingKeyId};
-
-        KagemushaRecursiveSpendBundleV1 {
-            accumulator: KagemushaRecursiveSpendAccumulatorV1 {
-                domain: "iroha:kagemusha:v1:recursive-spend-accumulator".to_owned(),
-                chain_id: ChainId::from("fee-policy-chain"),
-                asset,
-                initial_root: [0x10; 32],
-                final_root: [0x11; 32],
-                topup_anchor_nullifiers: vec![[0x12; 32]],
-                hop_count: 1,
-                lineage_digest: [0x13; 32],
-                aggregation_transcript_digest: [0x14; 32],
-                nullifier_digest: Hash::new("fee-policy:nullifiers"),
-                output_commitment_digest: Hash::new("fee-policy:outputs"),
-                fold_digest: Hash::new("fee-policy:fold"),
-                recursive_proof_chain_digest: [0x15; 32],
-                transition_profile_binding_digest: [0x16; 32],
-                append_opening_preflight_digest: [0x17; 32],
-                append_boundary_digest: [0x18; 32],
-                verifier_params_fingerprint: [0x19; 32],
-                fixed_window_table_schedule_digest: [0x1A; 32],
-                fixed_window_shared_table_manifest_digest: [0x1B; 32],
-                fixed_window_table_base_digest: [0x1C; 32],
-                verifier_witness_batch_digest: [0x1D; 32],
-                verifier_opening_len: 4,
-                current_note: KagemushaSpendableNoteDescriptorV1 {
-                    note_commitment: [0x20; 32],
-                    spend_nullifier: [0x21; 32],
-                    amount: Numeric::new(1, 0),
-                },
-            },
-            recursive_proof: KagemushaRecursiveAggregationProof {
-                verifier_key_id: VerifyingKeyId::new("halo2/ipa", "fee-policy-recursive"),
-                public_inputs: KagemushaRecursiveAggregationProofPublicInputs {
-                    domain: "fee-policy-recursive".to_owned(),
-                    evidence_digest: [0x30; 32],
-                    folded_public_inputs_hash: [0x31; 32],
-                    aggregation_transcript_digest: [0x32; 32],
-                    verifier_params_fingerprint: [0x33; 32],
-                    fixed_window_table_schedule_digest: [0x34; 32],
-                    fixed_window_shared_table_manifest_digest: [0x35; 32],
-                    fixed_window_table_base_digest: [0x36; 32],
-                    verifier_witness_batch_digest: [0x37; 32],
-                    recursive_proof_chain_digest: [0x38; 32],
-                    transition_profile_binding_digest: [0x39; 32],
-                    append_opening_preflight_digest: [0x3A; 32],
-                    append_boundary_digest: [0x3B; 32],
-                    recursive_verifier_scalar_projection_digest: [0x3C; 32],
-                    verifier_opening_len: 4,
-                    verifier_witness_count: 1,
-                    hop_count: 1,
-                },
-                public_inputs_hash: Hash::new("fee-policy:recursive-inputs"),
-                proof: ProofBox::new("halo2/ipa".parse().expect("backend ident"), vec![0x5A; 32]),
-            },
-        }
-    }
-
     fn kagemusha_fee_test_recursive_redeem_v2(
         asset: AssetDefinitionId,
         recipient: AccountId,
@@ -10869,10 +10757,11 @@ mod tests {
         use iroha_data_model::{
             confidential::ConfidentialStatus,
             offline::{
-                KAGEMUSHA_RECURSIVE_SPEND_RESERVED_INIT_PROOF_CIRCUIT_ID_V2,
+                KAGEMUSHA_RECURSIVE_SPEND_STATE_EP_CIRCUIT_ID_V1,
+                KagemushaRecursiveSpendArtifactBindingV3,
                 KagemushaRecursiveSpendBranchClaimV2, KagemushaRecursiveSpendBundleV2,
-                KagemushaRecursiveSpendLineageModeV2, KagemushaRecursiveSpendProofV2,
-                KagemushaRecursiveSpendPublicStatementV2, KagemushaRecursiveSpendRedeemRequestV2,
+                KagemushaRecursiveSpendProofV2, KagemushaRecursiveSpendPublicStatementV2,
+                KagemushaRecursiveSpendRedeemRequestV2,
                 KagemushaRecursiveSpendRedemptionIntentBuildRequestV2,
                 KagemushaRecursiveSpendTopUpAnchorV2, KagemushaRequestAuthorizationV2,
                 KagemushaScaledAmountV2, KagemushaSpendableNoteDescriptorV2,
@@ -10894,7 +10783,10 @@ mod tests {
             spend_nullifier: [0x42; 32],
             amount,
         };
-        let artifact_generation = "fee-policy-v2";
+        let artifact_binding = KagemushaRecursiveSpendArtifactBindingV3 {
+            generation: "fee-policy-v3".to_owned(),
+            manifest_sha256: [0x43; 32],
+        };
         let topup_operation_id = [0x47; 32];
         let topup_anchor = KagemushaRecursiveSpendTopUpAnchorV2 {
             version: 2,
@@ -10913,7 +10805,7 @@ mod tests {
                 "fee-policy-kagemusha-topup-shield-v2",
             ),
             shield_verifier_commitment: [0x53; 32],
-            artifact_generation: artifact_generation.to_owned(),
+            artifact_binding: artifact_binding.clone(),
             finalized_height: 1,
             finalized_tx_hash: [0x54; 32],
             anchor_digest: [0; 32],
@@ -10930,7 +10822,7 @@ mod tests {
             .expect("canonical fee-policy V2 root claim");
         let verifier_key_id = VerifyingKeyId::new(
             "halo2/ipa",
-            KAGEMUSHA_RECURSIVE_SPEND_RESERVED_INIT_PROOF_CIRCUIT_ID_V2,
+            KAGEMUSHA_RECURSIVE_SPEND_STATE_EP_CIRCUIT_ID_V1,
         );
         let statement = KagemushaRecursiveSpendPublicStatementV2 {
             chain_id: chain_id.clone(),
@@ -10943,8 +10835,7 @@ mod tests {
             current_note: note.clone(),
             branch_claims: vec![branch_claim],
             transition: None,
-            artifact_generation: artifact_generation.to_owned(),
-            lineage_mode: KagemushaRecursiveSpendLineageModeV2::Reserved,
+            artifact_binding,
             verifier_key_id: verifier_key_id.clone(),
         };
         let public_statement_digest = statement
@@ -10977,7 +10868,7 @@ mod tests {
             recipient: recipient.clone(),
             public_amount: amount,
             change_output: None,
-            change_artifact_generation: None,
+            change_artifact_binding: None,
             unshield_public_inputs,
             unshield_public_inputs_digest: unshield_public_inputs
                 .digest()
@@ -10986,15 +10877,6 @@ mod tests {
         }
         .into_intent()
         .expect("canonical fee-policy V2 redemption intent");
-        let mut lineage_verifier_record = VerifyingKeyRecord::new(
-            1,
-            KAGEMUSHA_RECURSIVE_SPEND_RESERVED_INIT_PROOF_CIRCUIT_ID_V2,
-            BackendTag::Halo2IpaPasta,
-            "pallas",
-            [0x4F; 32],
-            [0x50; 32],
-        );
-        lineage_verifier_record.status = ConfidentialStatus::Active;
         let authorization = KagemushaRequestAuthorizationV2 {
             authority: recipient.clone(),
             device_id: "fee-policy-v2-device".to_owned(),
@@ -11017,8 +10899,6 @@ mod tests {
             amount,
             redeem_proof: kagemusha_fee_test_proof_attachment("fee-policy-kagemusha-redeem-v2"),
             redemption,
-            lineage_witness: None,
-            lineage_verifier_record,
             offline_change: None,
             block_height: 1,
             operation_id,
@@ -11395,9 +11275,9 @@ mod tests {
     #[test]
     fn nexus_fee_sponsor_policy_local_max_fee_rejects_even_when_global_cap_allows() {
         let mut fixture = sponsored_fee_admission_fixture(true);
-        fixture.state.nexus.get_mut().fees.sponsor_max_fee = Numeric::zero();
+        fixture.state.nexus.get_mut().fees.sponsor_max_fee = Quantity::zero();
         let mut policy = default_fee_sponsor_policy(&fixture.sponsor_id);
-        policy.max_fee = Some(Numeric::new(1, 1));
+        policy.max_fee = Some("0.1".parse().expect("valid sponsor fee cap"));
         fixture
             .state
             .world
@@ -11633,7 +11513,8 @@ mod tests {
     #[test]
     fn nexus_fee_sponsor_max_fee_applies_after_fee_metering() {
         let mut fixture = sponsored_fee_admission_fixture(true);
-        fixture.state.nexus.get_mut().fees.sponsor_max_fee = Numeric::new(1, 1);
+        fixture.state.nexus.get_mut().fees.sponsor_max_fee =
+            "0.1".parse().expect("valid sponsor fee cap");
         let (executable, metadata) = dpn_contract_call_executable_and_metadata(
             &fixture.authority_id,
             "transfer_dpn",
@@ -11709,7 +11590,7 @@ mod tests {
         let mut state = State::new(world, kura, query_handle);
         let nexus = state.nexus.get_mut();
         nexus.enabled = true;
-        nexus.fees.base_fee = Numeric::from(1_u32);
+        nexus.fees.base_fee = Quantity::from(1_u32);
         nexus.fees.sponsorship_enabled = false;
         nexus.fees.fee_asset_id = "4cuvDVPuLBKJyN6dPbRQhmLh68sU".to_string();
         nexus.fees.fee_sink_account_id = sink_id.to_string();
@@ -11757,7 +11638,7 @@ mod tests {
         let mut state = State::new(world, kura, query_handle);
         let nexus = state.nexus.get_mut();
         nexus.enabled = true;
-        nexus.fees.base_fee = Numeric::from(1_u32);
+        nexus.fees.base_fee = Quantity::from(1_u32);
         nexus.fees.sponsorship_enabled = true;
         nexus.fees.fee_asset_id = "4cuvDVPuLBKJyN6dPbRQhmLh68sU".to_string();
         nexus.fees.fee_sink_account_id = sink_id.to_string();
@@ -11843,10 +11724,10 @@ mod tests {
         {
             let nexus = state.nexus.get_mut();
             nexus.enabled = true;
-            nexus.fees.base_fee = Numeric::from(1_u32);
-            nexus.fees.per_byte_fee = Numeric::zero();
-            nexus.fees.per_instruction_fee = Numeric::zero();
-            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.fees.base_fee = Quantity::from(1_u32);
+            nexus.fees.per_byte_fee = Quantity::zero();
+            nexus.fees.per_instruction_fee = Quantity::zero();
+            nexus.fees.per_gas_unit_fee = Quantity::zero();
             nexus.fees.sponsorship_enabled = true;
             nexus.fees.fee_asset_id = asset_def_id.to_string();
             nexus.fees.fee_sink_account_id = sink_id.to_string();
@@ -11961,10 +11842,10 @@ mod tests {
         {
             let nexus = state.nexus.get_mut();
             nexus.enabled = true;
-            nexus.fees.base_fee = Numeric::from(1_u32);
-            nexus.fees.per_byte_fee = Numeric::zero();
-            nexus.fees.per_instruction_fee = Numeric::zero();
-            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.fees.base_fee = Quantity::from(1_u32);
+            nexus.fees.per_byte_fee = Quantity::zero();
+            nexus.fees.per_instruction_fee = Quantity::zero();
+            nexus.fees.per_gas_unit_fee = Quantity::zero();
             nexus.fees.sponsorship_enabled = true;
             nexus.fees.fee_asset_id = asset_def_id.to_string();
             nexus.fees.fee_sink_account_id = sink_id.to_string();
@@ -12063,10 +11944,10 @@ mod tests {
         {
             let nexus = state.nexus.get_mut();
             nexus.enabled = true;
-            nexus.fees.base_fee = Numeric::from(1_u32);
-            nexus.fees.per_byte_fee = Numeric::zero();
-            nexus.fees.per_instruction_fee = Numeric::zero();
-            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.fees.base_fee = Quantity::from(1_u32);
+            nexus.fees.per_byte_fee = Quantity::zero();
+            nexus.fees.per_instruction_fee = Quantity::zero();
+            nexus.fees.per_gas_unit_fee = Quantity::zero();
             nexus.fees.sponsorship_enabled = true;
             nexus.fees.external_settlement_enabled = true;
             nexus.fees.fee_asset_id = asset_def_id.to_string();
@@ -12160,10 +12041,10 @@ mod tests {
         {
             let nexus = state.nexus.get_mut();
             nexus.enabled = true;
-            nexus.fees.base_fee = Numeric::from(1_u32);
-            nexus.fees.per_byte_fee = Numeric::zero();
-            nexus.fees.per_instruction_fee = Numeric::zero();
-            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.fees.base_fee = Quantity::from(1_u32);
+            nexus.fees.per_byte_fee = Quantity::zero();
+            nexus.fees.per_instruction_fee = Quantity::zero();
+            nexus.fees.per_gas_unit_fee = Quantity::zero();
             nexus.fees.sponsorship_enabled = true;
             nexus.fees.fee_asset_id = asset_def_id.to_string();
             nexus.fees.fee_sink_account_id = sponsor_id.to_string();
@@ -12243,10 +12124,10 @@ mod tests {
         {
             let nexus = state.nexus.get_mut();
             nexus.enabled = true;
-            nexus.fees.base_fee = Numeric::from(1_u32);
-            nexus.fees.per_byte_fee = Numeric::zero();
-            nexus.fees.per_instruction_fee = Numeric::zero();
-            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.fees.base_fee = Quantity::from(1_u32);
+            nexus.fees.per_byte_fee = Quantity::zero();
+            nexus.fees.per_instruction_fee = Quantity::zero();
+            nexus.fees.per_gas_unit_fee = Quantity::zero();
             nexus.fees.fee_asset_id = fee_asset_id.to_owned();
             nexus.fees.fee_sink_account_id = sink_id.to_string();
             nexus.fees.burn_from_unix_timestamp_ms = 0;
@@ -12307,10 +12188,10 @@ mod tests {
         {
             let nexus = state.nexus.get_mut();
             nexus.enabled = true;
-            nexus.fees.base_fee = Numeric::from(1_u32);
-            nexus.fees.per_byte_fee = Numeric::zero();
-            nexus.fees.per_instruction_fee = Numeric::zero();
-            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.fees.base_fee = Quantity::from(1_u32);
+            nexus.fees.per_byte_fee = Quantity::zero();
+            nexus.fees.per_instruction_fee = Quantity::zero();
+            nexus.fees.per_gas_unit_fee = Quantity::zero();
             nexus.fees.fee_asset_id = "xor#universal".to_owned();
             nexus.fees.burn_from_unix_timestamp_ms = 0;
             nexus.fees.settlement_mode =
@@ -12347,10 +12228,10 @@ mod tests {
         {
             let nexus = state.nexus.get_mut();
             nexus.enabled = true;
-            nexus.fees.base_fee = Numeric::from(1_u32);
-            nexus.fees.per_byte_fee = Numeric::zero();
-            nexus.fees.per_instruction_fee = Numeric::zero();
-            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.fees.base_fee = Quantity::from(1_u32);
+            nexus.fees.per_byte_fee = Quantity::zero();
+            nexus.fees.per_instruction_fee = Quantity::zero();
+            nexus.fees.per_gas_unit_fee = Quantity::zero();
             nexus.fees.fee_asset_id = "xor#universal".to_owned();
             nexus.fees.burn_from_unix_timestamp_ms = 0;
             nexus.fees.settlement_mode =
@@ -12380,56 +12261,6 @@ mod tests {
             .expect("protocol proof registration must not require a fee receipt");
     }
 
-    #[test]
-    fn nexus_fee_kagemusha_transfer_is_fee_exempt_offline_offline() {
-        let (state, authority_id, authority_kp, asset_def_id) =
-            nexus_fee_lane_relay_burn_admission_fixture();
-        let transfer = iroha_data_model::isi::offline::KagemushaTransfer::new(
-            asset_def_id,
-            vec![[0x11; 32]],
-            vec![[0x22; 32]],
-            kagemusha_fee_test_proof_attachment("fee-policy-kagemusha-transfer"),
-            Some([0x33; 32]),
-        );
-        let tx = signed_fee_policy_transaction(
-            authority_id,
-            &authority_kp,
-            InstructionBox::from(transfer),
-        );
-        let view = state.view();
-        check_external_nexus_fee_admission(&view.world, &view.nexus, &tx, 0, 2, None)
-            .expect("offline-offline Kagemusha transfer must not require a fee budget");
-    }
-
-    #[test]
-    fn nexus_fee_kagemusha_transfer_batch_is_fee_exempt_offline_offline() {
-        let (state, authority_id, authority_kp, asset_def_id) =
-            nexus_fee_lane_relay_burn_admission_fixture();
-        let first = iroha_data_model::isi::offline::KagemushaTransfer::new(
-            asset_def_id.clone(),
-            vec![[0x11; 32]],
-            vec![[0x22; 32]],
-            kagemusha_fee_test_proof_attachment("fee-policy-kagemusha-transfer-first"),
-            Some([0x33; 32]),
-        );
-        let second = iroha_data_model::isi::offline::KagemushaTransfer::new(
-            asset_def_id,
-            vec![[0x44; 32]],
-            vec![[0x55; 32]],
-            kagemusha_fee_test_proof_attachment("fee-policy-kagemusha-transfer-second"),
-            Some([0x66; 32]),
-        );
-        let tx = signed_fee_policy_batch_transaction(
-            authority_id,
-            &authority_kp,
-            vec![InstructionBox::from(first), InstructionBox::from(second)],
-        );
-        let view = state.view();
-        check_external_nexus_fee_admission(&view.world, &view.nexus, &tx, 0, 2, None)
-            .expect("pure offline-offline Kagemusha transfer batch must not require a fee budget");
-    }
-
-    #[test]
     fn nexus_fee_online_to_offline_shield_requires_fee_budget() {
         let (state, authority_id, authority_kp, asset_def_id) =
             nexus_fee_lane_relay_burn_admission_fixture();
@@ -12444,67 +12275,9 @@ mod tests {
         assert_lane_relay_burn_requires_fee_budget(&state, &tx);
     }
 
-    #[test]
-    fn nexus_fee_kagemusha_mixed_with_online_topup_requires_fee_budget() {
-        let (state, authority_id, authority_kp, asset_def_id) =
-            nexus_fee_lane_relay_burn_admission_fixture();
-        let transfer = iroha_data_model::isi::offline::KagemushaTransfer::new(
-            asset_def_id.clone(),
-            vec![[0x11; 32]],
-            vec![[0x22; 32]],
-            kagemusha_fee_test_proof_attachment("fee-policy-kagemusha-transfer-mixed"),
-            Some([0x33; 32]),
-        );
-        let shield = iroha_data_model::isi::zk::Shield::new(
-            asset_def_id,
-            authority_id.clone(),
-            1,
-            [0x44; 32],
-            iroha_data_model::confidential::ConfidentialEncryptedPayload::default(),
-        );
-        let tx = signed_fee_policy_batch_transaction(
-            authority_id,
-            &authority_kp,
-            vec![InstructionBox::from(transfer), shield.into()],
-        );
-        assert_lane_relay_burn_requires_fee_budget(&state, &tx);
-    }
-
-    #[test]
-    fn nexus_fee_kagemusha_recursive_redeem_requires_fee_budget() {
-        let (state, authority_id, authority_kp, asset_def_id) =
-            nexus_fee_lane_relay_burn_admission_fixture();
-        let redeem = iroha_data_model::isi::offline::RedeemKagemushaRecursive::new(
-            kagemusha_fee_test_recursive_bundle(asset_def_id),
-            authority_id.clone(),
-            1,
-            kagemusha_fee_test_proof_attachment("fee-policy-kagemusha-redeem"),
-        );
-        let tx = signed_fee_policy_transaction(authority_id, &authority_kp, redeem.into());
-        assert_lane_relay_burn_requires_fee_budget(&state, &tx);
-    }
-
-    #[test]
-    fn nexus_fee_offline_to_online_kagemusha_redeem_can_fund_fee_from_redeemed_amount() {
-        let (mut state, authority_id, authority_kp, asset_def_id) =
-            nexus_fee_lane_relay_burn_admission_fixture();
-        state.nexus.get_mut().fees.fee_asset_id = asset_def_id.to_string();
-        let redeem = iroha_data_model::isi::offline::RedeemKagemushaRecursive::new(
-            kagemusha_fee_test_recursive_bundle(asset_def_id),
-            authority_id.clone(),
-            1,
-            kagemusha_fee_test_proof_attachment("fee-policy-kagemusha-redeem-funded"),
-        );
-        let tx = signed_fee_policy_transaction(authority_id, &authority_kp, redeem.into());
-        let view = state.view();
-        check_external_nexus_fee_admission(&view.world, &view.nexus, &tx, 0, 2, None)
-            .expect("same-asset offline-to-online redeem can fund its Nexus fee");
-    }
-
-    #[test]
     fn unavailable_kagemusha_v2_redeem_cannot_self_fund_nexus_fee() {
         assert!(
-            !iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_V2_PROOF_BACKEND_AVAILABLE,
+            !iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PROOF_BACKEND_AVAILABLE,
             "this regression test must be replaced by end-to-end V2 execution coverage when the backend ships"
         );
         let (mut state, authority_id, authority_kp, asset_def_id) =
@@ -12529,43 +12302,6 @@ mod tests {
         assert_lane_relay_burn_requires_fee_budget(&state, &tx);
     }
 
-    #[test]
-    fn nexus_fee_offline_to_online_kagemusha_redeem_below_fee_is_rejected() {
-        let (mut state, authority_id, authority_kp, asset_def_id) =
-            nexus_fee_lane_relay_burn_admission_fixture();
-        let nexus = state.nexus.get_mut();
-        nexus.fees.fee_asset_id = asset_def_id.to_string();
-        nexus.fees.base_fee = Numeric::from(2_u32);
-        let redeem = iroha_data_model::isi::offline::RedeemKagemushaRecursive::new(
-            kagemusha_fee_test_recursive_bundle(asset_def_id),
-            authority_id.clone(),
-            1,
-            kagemusha_fee_test_proof_attachment("fee-policy-kagemusha-redeem-underfunded"),
-        );
-        let tx = signed_fee_policy_transaction(authority_id, &authority_kp, redeem.into());
-        let view = state.view();
-        let err = check_external_nexus_fee_admission(&view.world, &view.nexus, &tx, 0, 2, None)
-            .expect_err("offline-to-online redeem below the fee must be rejected");
-        assert!(matches!(err, NexusFeeAdmissionError::Rejected(_)));
-    }
-
-    #[test]
-    fn nexus_fee_kagemusha_redeem_to_third_party_does_not_self_fund_fee() {
-        let (mut state, authority_id, authority_kp, asset_def_id) =
-            nexus_fee_lane_relay_burn_admission_fixture();
-        state.nexus.get_mut().fees.fee_asset_id = asset_def_id.to_string();
-        let (recipient_id, _recipient_kp) = gen_account_in("wonderland");
-        let redeem = iroha_data_model::isi::offline::RedeemKagemushaRecursive::new(
-            kagemusha_fee_test_recursive_bundle(asset_def_id),
-            recipient_id,
-            1,
-            kagemusha_fee_test_proof_attachment("fee-policy-kagemusha-redeem-third-party"),
-        );
-        let tx = signed_fee_policy_transaction(authority_id, &authority_kp, redeem.into());
-        assert_lane_relay_burn_requires_fee_budget(&state, &tx);
-    }
-
-    #[test]
     fn nexus_fee_lane_relay_burn_redeem_funded_balance_records_receipt_without_budget() {
         let _guard = crate::sumeragi::status::nexus_fee_test_lock()
             .lock()
@@ -12592,10 +12328,10 @@ mod tests {
         {
             let nexus = state.nexus.get_mut();
             nexus.enabled = true;
-            nexus.fees.base_fee = Numeric::from(1_u32);
-            nexus.fees.per_byte_fee = Numeric::zero();
-            nexus.fees.per_instruction_fee = Numeric::zero();
-            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.fees.base_fee = Quantity::from(1_u32);
+            nexus.fees.per_byte_fee = Quantity::zero();
+            nexus.fees.per_instruction_fee = Quantity::zero();
+            nexus.fees.per_gas_unit_fee = Quantity::zero();
             nexus.fees.fee_asset_id = asset_def_id.to_string();
             nexus.fees.burn_from_unix_timestamp_ms = 0;
             nexus.fees.settlement_mode =
@@ -12692,10 +12428,10 @@ mod tests {
         {
             let nexus = state.nexus.get_mut();
             nexus.enabled = true;
-            nexus.fees.base_fee = Numeric::from(1_u32);
-            nexus.fees.per_byte_fee = Numeric::zero();
-            nexus.fees.per_instruction_fee = Numeric::zero();
-            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.fees.base_fee = Quantity::from(1_u32);
+            nexus.fees.per_byte_fee = Quantity::zero();
+            nexus.fees.per_instruction_fee = Quantity::zero();
+            nexus.fees.per_gas_unit_fee = Quantity::zero();
             nexus.fees.fee_asset_id = asset_def_id.to_string();
             nexus.fees.fee_sink_account_id = sink_id.to_string();
             nexus.fees.burn_from_unix_timestamp_ms = 0;
@@ -12770,10 +12506,10 @@ mod tests {
         {
             let nexus = state.nexus.get_mut();
             nexus.enabled = true;
-            nexus.fees.base_fee = Numeric::from(1_u32);
-            nexus.fees.per_byte_fee = Numeric::zero();
-            nexus.fees.per_instruction_fee = Numeric::zero();
-            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.fees.base_fee = Quantity::from(1_u32);
+            nexus.fees.per_byte_fee = Quantity::zero();
+            nexus.fees.per_instruction_fee = Quantity::zero();
+            nexus.fees.per_gas_unit_fee = Quantity::zero();
             nexus.fees.fee_asset_id = asset_def_id.to_string();
             nexus.fees.fee_sink_account_id = sink_id.to_string();
             nexus.fees.settlement_mode =
@@ -12819,10 +12555,10 @@ mod tests {
         {
             let nexus = state.nexus.get_mut();
             nexus.enabled = true;
-            nexus.fees.base_fee = Numeric::from(1_u32);
-            nexus.fees.per_byte_fee = Numeric::zero();
-            nexus.fees.per_instruction_fee = Numeric::zero();
-            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.fees.base_fee = Quantity::from(1_u32);
+            nexus.fees.per_byte_fee = Quantity::zero();
+            nexus.fees.per_instruction_fee = Quantity::zero();
+            nexus.fees.per_gas_unit_fee = Quantity::zero();
             nexus.fees.fee_asset_id = asset_def_id.to_string();
             nexus.fees.fee_sink_account_id = sink_id.to_string();
             nexus.fees.settlement_mode =
@@ -12897,10 +12633,10 @@ mod tests {
         {
             let nexus = state.nexus.get_mut();
             nexus.enabled = true;
-            nexus.fees.base_fee = Numeric::from(1_u32);
-            nexus.fees.per_byte_fee = Numeric::zero();
-            nexus.fees.per_instruction_fee = Numeric::zero();
-            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.fees.base_fee = Quantity::from(1_u32);
+            nexus.fees.per_byte_fee = Quantity::zero();
+            nexus.fees.per_instruction_fee = Quantity::zero();
+            nexus.fees.per_gas_unit_fee = Quantity::zero();
             nexus.fees.fee_asset_id = asset_def_id.to_string();
             nexus.fees.fee_sink_account_id = sink_id.to_string();
             nexus.fees.burn_from_unix_timestamp_ms = 0;
@@ -12964,10 +12700,10 @@ mod tests {
         {
             let nexus = state.nexus.get_mut();
             nexus.enabled = true;
-            nexus.fees.base_fee = Numeric::from(1_u32);
-            nexus.fees.per_byte_fee = Numeric::zero();
-            nexus.fees.per_instruction_fee = Numeric::zero();
-            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.fees.base_fee = Quantity::from(1_u32);
+            nexus.fees.per_byte_fee = Quantity::zero();
+            nexus.fees.per_instruction_fee = Quantity::zero();
+            nexus.fees.per_gas_unit_fee = Quantity::zero();
             nexus.fees.fee_asset_id = asset_def_id.to_string();
             nexus.fees.fee_sink_account_id = sink_id.to_string();
             nexus.fees.burn_from_unix_timestamp_ms = 0;
@@ -13038,7 +12774,7 @@ mod tests {
         {
             let nexus = state.nexus.get_mut();
             nexus.enabled = true;
-            nexus.fees.per_instruction_fee = Numeric::from(1_u32);
+            nexus.fees.per_instruction_fee = Quantity::from(1_u32);
             nexus.fees.fee_asset_id = asset_def_id.to_string();
             nexus.fees.fee_sink_account_id = sink_id.to_string();
             nexus.fees.burn_from_unix_timestamp_ms = 0;
@@ -13100,7 +12836,7 @@ mod tests {
         {
             let nexus = state.nexus.get_mut();
             nexus.enabled = true;
-            nexus.fees.per_instruction_fee = Numeric::from(1_u32);
+            nexus.fees.per_instruction_fee = Quantity::from(1_u32);
             nexus.fees.fee_asset_id = asset_def_id.to_string();
             nexus.fees.fee_sink_account_id = sink_id.to_string();
             nexus.fees.burn_from_unix_timestamp_ms = 0;
@@ -13153,7 +12889,7 @@ mod tests {
         }
         .build(&alice_id);
         let payer_asset = AssetId::of(asset_def_id.clone(), alice_id.clone());
-        let payer_balance = Asset::new(payer_asset, Numeric::new(10_000, 0));
+        let payer_balance = Asset::new(payer_asset, Quantity::from(10_000));
         let world = World::with_assets([dom], [alice, sink], [ad], [payer_balance], []);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();
@@ -13162,7 +12898,7 @@ mod tests {
         {
             let nexus = state.nexus.get_mut();
             nexus.enabled = true;
-            nexus.fees.base_fee = Numeric::from(1_u32);
+            nexus.fees.base_fee = Quantity::from(1_u32);
             nexus.fees.fee_asset_id = asset_def_id.to_string();
             nexus.fees.fee_sink_account_id = sink_id.to_string();
             nexus.fees.burn_from_unix_timestamp_ms = 0;
@@ -13252,10 +12988,10 @@ mod tests {
         {
             let nexus = state.nexus.get_mut();
             nexus.enabled = true;
-            nexus.fees.base_fee = Numeric::zero();
-            nexus.fees.per_byte_fee = Numeric::zero();
-            nexus.fees.per_instruction_fee = Numeric::new(1, 3);
-            nexus.fees.per_gas_unit_fee = Numeric::new(5, 5);
+            nexus.fees.base_fee = Quantity::zero();
+            nexus.fees.per_byte_fee = Quantity::zero();
+            nexus.fees.per_instruction_fee = "0.001".parse().expect("valid instruction fee");
+            nexus.fees.per_gas_unit_fee = "0.00005".parse().expect("valid gas fee");
             nexus.fees.sponsorship_enabled = false;
             nexus.fees.fee_asset_id = asset_def_id.to_string();
             nexus.fees.fee_sink_account_id = sink_id.to_string();
@@ -13350,10 +13086,10 @@ mod tests {
         {
             let nexus = state.nexus.get_mut();
             nexus.enabled = true;
-            nexus.fees.base_fee = Numeric::zero();
-            nexus.fees.per_byte_fee = Numeric::zero();
-            nexus.fees.per_instruction_fee = Numeric::new(1, 3);
-            nexus.fees.per_gas_unit_fee = Numeric::new(5, 5);
+            nexus.fees.base_fee = Quantity::zero();
+            nexus.fees.per_byte_fee = Quantity::zero();
+            nexus.fees.per_instruction_fee = "0.001".parse().expect("valid instruction fee");
+            nexus.fees.per_gas_unit_fee = "0.00005".parse().expect("valid gas fee");
             nexus.fees.sponsorship_enabled = false;
             nexus.fees.fee_asset_id = asset_def_id.to_string();
             nexus.fees.fee_sink_account_id = sink_id.to_string();
@@ -13424,7 +13160,7 @@ mod tests {
         }
         .build(&payer_id);
         let payer_asset = AssetId::of(asset_def_id.clone(), payer_id.clone());
-        let payer_balance = Asset::new(payer_asset, Numeric::new(10_000, 0));
+        let payer_balance = Asset::new(payer_asset, Quantity::from(10_000));
         let world = World::with_assets([dom], [payer, tech], [ad], [payer_balance], []);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();

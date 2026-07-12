@@ -1,0 +1,10 @@
+extends = ["minimal_with_trusted_peers.toml"]
+
+[sumeragi.collectors]
+k = 1
+
+[sumeragi.advanced.rbc]
+chunk_max_bytes = 262144
+
+[sumeragi.recovery]
+missing_qc_reacquire_window_ms = 1200

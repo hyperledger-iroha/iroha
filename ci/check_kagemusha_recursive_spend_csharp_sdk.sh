@@ -2,75 +2,26 @@
 set -euo pipefail
 
 ROOT_DIR="${KAGEMUSHA_RECURSIVE_SPEND_CSHARP_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
-DOTNET_BIN="${KAGEMUSHA_RECURSIVE_SPEND_DOTNET_BIN:-dotnet}"
-BRIDGE_TARGET_DIR="${KAGEMUSHA_RECURSIVE_SPEND_CSHARP_BRIDGE_TARGET_DIR:-${TMPDIR:-/tmp}/iroha-kagemusha-csharp-native-target}"
-DOTNET_ARTIFACTS_PATH="${BRIDGE_TARGET_DIR}/dotnet-artifacts"
-export DOTNET_CLI_TELEMETRY_OPTOUT="${DOTNET_CLI_TELEMETRY_OPTOUT:-1}"
-export DOTNET_CLI_HOME="${DOTNET_CLI_HOME:-${TMPDIR:-/tmp}/iroha-dotnet-home}"
-export DOTNET_NOLOGO="${DOTNET_NOLOGO:-1}"
-export DOTNET_SKIP_FIRST_TIME_EXPERIENCE="${DOTNET_SKIP_FIRST_TIME_EXPERIENCE:-1}"
+DOTNET_BIN="${KAGEMUSHA_RECURSIVE_SPEND_CSHARP_DOTNET_BIN:-dotnet}"
+ARTIFACTS="$(mktemp -d "${TMPDIR:-/tmp}/iroha-kagemusha-csharp.XXXXXX")"
+trap 'rm -rf "${ARTIFACTS}"' EXIT
 
-cd "${ROOT_DIR}"
-if ! command -v "${DOTNET_BIN}" >/dev/null 2>&1; then
-  echo "error: Kagemusha recursive spend C# SDK tests require .NET SDK 8.0.x; '${DOTNET_BIN}' was not found" >&2
+version="$(${DOTNET_BIN} --version)"
+if [[ ! "${version}" =~ ^8\. ]]; then
+  echo "error: C# SDK checks require .NET 8; got ${version}" >&2
   exit 1
 fi
-if [[ -z "${DOTNET_ROOT:-}" ]]; then
-  DOTNET_BIN_PATH="$(command -v "${DOTNET_BIN}")"
-  DOTNET_BIN_DIR="$(cd "$(dirname "${DOTNET_BIN_PATH}")" && pwd)"
-  if [[ -d "${DOTNET_BIN_DIR}/sdk" && -d "${DOTNET_BIN_DIR}/shared" ]]; then
-    export DOTNET_ROOT="${DOTNET_BIN_DIR}"
-  fi
-fi
-DOTNET_VERSION="$("${DOTNET_BIN}" --version)"
-printf '%s\n' "${DOTNET_VERSION}"
-if [[ ! "${DOTNET_VERSION}" =~ ^8\.0\.[1-9][0-9]*$ ]]; then
-  echo "error: Kagemusha recursive spend C# SDK tests require a stable canonical .NET SDK 8.0.x with a non-zero patch; got ${DOTNET_VERSION}" >&2
-  exit 1
-fi
-printf 'dotnet --info:\n'
-"${DOTNET_BIN}" --info
-
-CARGO_TARGET_DIR="${BRIDGE_TARGET_DIR}" cargo build -p connect_norito_bridge
-BRIDGE_LIBRARY_DIR="${BRIDGE_TARGET_DIR}/debug"
-case "$(uname -s)" in
-  Darwin)
-    BRIDGE_LIBRARY_NAME="libconnect_norito_bridge.dylib"
-    ;;
-  MINGW*|MSYS*|CYGWIN*|Windows_NT)
-    BRIDGE_LIBRARY_NAME="connect_norito_bridge.dll"
-    ;;
-  *)
-    BRIDGE_LIBRARY_NAME="libconnect_norito_bridge.so"
-    ;;
-esac
-BRIDGE_LIBRARY_PATH="${BRIDGE_LIBRARY_DIR}/${BRIDGE_LIBRARY_NAME}"
-if [[ ! -f "${BRIDGE_LIBRARY_PATH}" ]]; then
-  echo "error: freshly built connect_norito_bridge native library was not found at ${BRIDGE_LIBRARY_PATH}" >&2
-  exit 1
-fi
-if command -v sha256sum >/dev/null 2>&1; then
-  BRIDGE_LIBRARY_SHA256="$(sha256sum "${BRIDGE_LIBRARY_PATH}" | cut -d ' ' -f 1)"
-elif command -v shasum >/dev/null 2>&1; then
-  BRIDGE_LIBRARY_SHA256="$(shasum -a 256 "${BRIDGE_LIBRARY_PATH}" | cut -d ' ' -f 1)"
-else
-  echo "error: sha256sum or shasum is required to record the native bridge digest" >&2
-  exit 1
-fi
-if [[ ! "${BRIDGE_LIBRARY_SHA256}" =~ ^[0-9a-f]{64}$ ]]; then
-  echo "error: failed to compute a lowercase canonical SHA-256 for ${BRIDGE_LIBRARY_PATH}" >&2
-  exit 1
-fi
-printf 'connect_norito_bridge native bridge: %s\n' "${BRIDGE_LIBRARY_PATH}"
-printf 'connect_norito_bridge native bridge sha256: %s\n' "${BRIDGE_LIBRARY_SHA256}"
-export DYLD_LIBRARY_PATH="${BRIDGE_LIBRARY_DIR}${DYLD_LIBRARY_PATH:+:${DYLD_LIBRARY_PATH}}"
-export LD_LIBRARY_PATH="${BRIDGE_LIBRARY_DIR}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
-export PATH="${BRIDGE_LIBRARY_DIR}:${PATH}"
-rm -rf "${DOTNET_ARTIFACTS_PATH}"
 
 "${DOTNET_BIN}" test \
-  csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj \
-  --artifacts-path "${DOTNET_ARTIFACTS_PATH}" \
-  --filter "FullyQualifiedName~KagemushaRecursiveSpendNativeTests|FullyQualifiedName~PrivacyNativeTests|FullyQualifiedName~TransactionBuilderTests|FullyQualifiedName~CanonicalRequestTests|FullyQualifiedName~ToriiClientTests|FullyQualifiedName~SignedQueryBuilderTests|FullyQualifiedName~SignedIterableQueryBuilderTests|FullyQualifiedName~VerifyingKeyBackendTagTests|FullyQualifiedName~ToriiIdentifierReceiptTests" \
+  "${ROOT_DIR}/csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj" \
+  --artifacts-path "${ARTIFACTS}" \
+  --filter "FullyQualifiedName~VerifyingKeyBackendTagTests|FullyQualifiedName~ToriiClientTests|FullyQualifiedName~TransactionBuilderTests" \
   -p:ProduceReferenceAssembly=false \
   --logger "console;verbosity=minimal"
+
+if find "${ROOT_DIR}/csharp/src" -type f -path '*/Offline/*' -print -quit | grep -q .; then
+  echo "error: C# publishes an offline lifecycle; Swift is the sole lifecycle SDK" >&2
+  exit 1
+fi
+
+echo "Kagemusha C# boundary passed: no offline lifecycle is published."

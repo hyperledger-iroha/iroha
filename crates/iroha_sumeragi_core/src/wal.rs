@@ -803,10 +803,26 @@ impl WalRetirementAuthorization {
     #[must_use]
     pub fn matches_finalized_height(self, finalized: &FinalizedHeight) -> bool {
         let decision = finalized.decision();
-        let receipt_context = finalized.context().id();
-        let receipt_height = finalized.context().height();
-        let receipt_subject = decision.subject();
-        let receipt_certificate = decision.reference();
+        self.matches_durable_decision(
+            finalized.context().id(),
+            finalized.context().height(),
+            decision.subject(),
+            decision.reference(),
+        )
+    }
+
+    /// Check this token against an exact durable decision identity.
+    ///
+    /// This exposes the same production/Verus predicate for negative adapter
+    /// tests without exposing any constructor for retirement authority.
+    #[must_use]
+    pub fn matches_durable_decision(
+        self,
+        receipt_context: ContextId,
+        receipt_height: u64,
+        receipt_subject: Subject,
+        receipt_certificate: CertificateRef,
+    ) -> bool {
         wal_retirement_authorized_body!(
             true,
             true,

@@ -75,6 +75,36 @@ final class ZkAssetMerklePathTests: XCTestCase {
         } catch ZkAssetMerklePathError.verificationFailed("rootHistory") {}
     }
 
+    func testNextZeroPathAfterInsertionMatchesCompleteFrontier() throws {
+        let before = [scalar(1), scalar(2), scalar(3)]
+        let inserted = scalar(4)
+        let beforeProvider = try LocalZkAssetMerklePathProvider(
+            rootHistory: [],
+            commitmentHistory: before
+        )
+        let insertionPath = try beforeProvider.nextZeroPath(asset: "usd#bank")
+        let postInsertionRoot = try insertionPath.root(replacingLeafWith: inserted)
+        let derived = try insertionPath.nextZeroPathAfterInsertion(
+            commitment: inserted,
+            expectedRoot: postInsertionRoot
+        )
+
+        let afterProvider = try LocalZkAssetMerklePathProvider(
+            rootHistory: [postInsertionRoot],
+            commitmentHistory: before + [inserted]
+        )
+        let complete = try afterProvider.nextZeroPath(asset: "usd#bank")
+        XCTAssertEqual(derived, complete)
+        XCTAssertTrue(try derived.verify(
+            commitment: Data(repeating: 0, count: 32),
+            expectedRoot: postInsertionRoot
+        ))
+        XCTAssertThrowsError(try insertionPath.nextZeroPathAfterInsertion(
+            commitment: inserted,
+            expectedRoot: scalar(99)
+        ))
+    }
+
     func testToriiClientFetchesAndValidatesMerklePath() async throws {
         let commitment = scalar(7)
         let sibling = scalar(11)

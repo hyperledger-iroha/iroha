@@ -65,3 +65,22 @@ impl IntoKeyValue for Asset {
         (self.id, Owned::new(self.value))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use iroha_primitives::numeric::Numeric;
+    use norito::codec::{Decode, Encode};
+
+    use super::*;
+
+    #[test]
+    fn negative_numeric_payload_cannot_decode_as_stored_asset_value() {
+        let forged = Owned::new(Numeric::new(-1_i32, 0));
+        let encoded = forged.encode();
+
+        assert!(
+            AssetValue::decode(&mut encoded.as_slice()).is_err(),
+            "a signed negative payload must not cross the nominal stored-balance boundary"
+        );
+    }
+}

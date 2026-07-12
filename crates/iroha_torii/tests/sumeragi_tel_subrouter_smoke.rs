@@ -70,12 +70,7 @@ async fn sumeragi_tel_subrouter_exposes_endpoints() {
     );
     let app = torii.api_router_for_tests();
 
-    for uri in [
-        "/v1/sumeragi/pacemaker",
-        "/v1/sumeragi/rbc",
-        "/v1/sumeragi/rbc/delivered/0/0",
-        "/v1/sumeragi/phases",
-    ] {
+    for uri in ["/v1/sumeragi/pacemaker", "/v1/sumeragi/phases"] {
         let resp = app
             .clone()
             .oneshot(signed_loopback_get(&cfg, uri))
@@ -85,5 +80,20 @@ async fn sumeragi_tel_subrouter_exposes_endpoints() {
             resp.status(),
             StatusCode::OK | StatusCode::TOO_MANY_REQUESTS
         ));
+    }
+
+    for retired in [
+        "/v1/sumeragi/rbc",
+        "/v1/sumeragi/rbc/delivered/0/0",
+        "/v1/sumeragi/rbc/sessions",
+        "/v1/sumeragi/rbc/sample",
+        "/v1/sumeragi/collectors",
+    ] {
+        let response = app
+            .clone()
+            .oneshot(signed_loopback_get(&cfg, retired))
+            .await
+            .expect("retired route response");
+        assert_eq!(response.status(), StatusCode::NOT_FOUND, "{retired}");
     }
 }

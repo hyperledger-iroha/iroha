@@ -667,7 +667,8 @@ Release calibration uses `cargo bench -p ivm --bench gas_calibration`. The
 `ivm-numeric-limb-cal` benchmark pins the formula's work denominator in every
 benchmark ID for one through eight input limbs, products through sixteen
 limbs, division/remainder, scale-28 rounded division, and minimum/maximum
-input/output envelope authentication, framing, and canonical decode. A failing
+input snapshot/authentication/canonical-decode and output
+framing/authentication/publication pipelines. A failing
 numeric syscall with an invalid zero pointer separately measures the entry,
 dispatch/control, and seven-byte pointer-header boundary without performing
 payload work. Its calibration denominator is the staged `384 + 7` gas; the

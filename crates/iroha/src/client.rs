@@ -1910,8 +1910,8 @@ fn decode_sccp_bridge_submit_response(
     norito::derive::NoritoSerialize,
     norito::derive::NoritoDeserialize,
 )]
-/// Selector-explicit request for the Torii multisig proposals query API.
-pub struct MultisigProposalsQueryRequest {
+/// Selector-explicit request for the Torii multisig proposals listing API.
+pub struct MultisigProposalsListRequest {
     /// Active concrete multisig account id.
     #[norito(default)]
     pub multisig_account_id: Option<iroha_data_model::account::AccountId>,
@@ -1969,8 +1969,8 @@ pub struct MultisigProposalEntry {
     norito::derive::NoritoSerialize,
     norito::derive::NoritoDeserialize,
 )]
-/// Response payload returned by the Torii multisig proposals query API.
-pub struct MultisigProposalsQueryResponse {
+/// Response payload returned by the Torii multisig proposals listing API.
+pub struct MultisigProposalsListResponse {
     /// Canonical multisig account id resolved by the server.
     pub resolved_multisig_account_id: iroha_data_model::account::AccountId,
     /// Matching proposal entries.
@@ -1991,7 +1991,7 @@ pub struct MultisigProposalsQueryResponse {
     norito::derive::NoritoDeserialize,
 )]
 /// Selector-explicit request for one multisig proposal.
-pub struct MultisigProposalsLookupRequest {
+pub struct MultisigProposalsGetRequest {
     /// Active concrete multisig account id.
     #[norito(default)]
     pub multisig_account_id: Option<iroha_data_model::account::AccountId>,
@@ -2016,8 +2016,8 @@ pub struct MultisigProposalsLookupRequest {
     norito::derive::NoritoSerialize,
     norito::derive::NoritoDeserialize,
 )]
-/// Response payload returned by the Torii multisig proposal lookup API.
-pub struct MultisigProposalLookupResponse {
+/// Response payload returned by the Torii multisig proposal get API.
+pub struct MultisigProposalGetResponse {
     /// Canonical multisig account id resolved by the server.
     pub resolved_multisig_account_id: iroha_data_model::account::AccountId,
     /// Stable proposal identifier.
@@ -2712,13 +2712,9 @@ const ZK_PRODUCTION_NATIVE_HALO2_PASTA_BACKENDS: &[&str] = &[
     "halo2/pasta/kaigi-usage-v1",
     "halo2/pasta/ivm-overlay-bind",
     "halo2/pasta/ivm-execution-v1",
-    "halo2/pasta/offline-note-recursive",
-    "halo2/pasta/kagemusha-folded-v1",
-    "halo2/pasta/kagemusha-recursive-aggregation-v1",
-    "halo2/pasta/kagemusha-recursive-compact-v1",
-    "halo2/pasta/kagemusha-recursive-spend-lineage-v1",
-    "halo2/pasta/kagemusha-recursive-spend-lineage-onehop-v1",
-    "halo2/pasta/kagemusha-recursive-spend-lineage-append-v1",
+    "halo2/pasta/kagemusha-topup-shield-merkle16-poseidon-diversified-v2",
+    "halo2/pasta/kagemusha-recursive-spend-transition-eq-v1",
+    "halo2/pasta/kagemusha-recursive-spend-state-ep-v1",
     "halo2/pasta/anon-transfer-2x2-merkle16-poseidon-diversified",
     "halo2/pasta/anon-unshield-merkle16-poseidon-diversified",
     "halo2/pasta/anon-unshield-2in-1change-merkle16-poseidon-diversified",
@@ -6332,7 +6328,7 @@ impl Client {
         ))
     }
 
-    fn require_lower_hex_32(value: &str, field: &'static str) -> Result<()> {
+    fn require_lower_hex_32(value: &str, field: &str) -> Result<()> {
         if value.len() == Hash::LENGTH * 2
             && value
                 .bytes()
@@ -6456,6 +6452,89 @@ impl Client {
         Self::require_lower_hex_32(transaction_hash, "transaction_hash")
     }
 
+    fn validate_offline_readiness_verifier(
+        readiness: &OfflineReadiness,
+        verifier: Option<&iroha_torii_shared::offline_api::OfflineActiveTransferVerifier>,
+        field: &str,
+        unavailable_blocker: &str,
+        expected_role: &str,
+        expected_circuit_id: &str,
+        expected_schema_hash: Option<[u8; 32]>,
+        max_allowed_proof_bytes: u32,
+    ) -> Result<()> {
+        let has_unavailable_blocker = readiness
+            .blockers
+            .iter()
+            .any(|blocker| blocker.code == unavailable_blocker);
+        let Some(verifier) = verifier else {
+            if !has_unavailable_blocker {
+                return Err(eyre!(
+                    "offline readiness response omitted {field} without a {unavailable_blocker} blocker"
+                ));
+            }
+            return Ok(());
+        };
+        if has_unavailable_blocker {
+            return Err(eyre!(
+                "offline readiness response contains both {field} and a {unavailable_blocker} blocker"
+            ));
+        }
+        if verifier.id.backend != ZK_PRODUCTION_BACKEND_HALO2_IPA
+            || verifier.id.name != expected_role
+            || verifier.circuit_id != expected_circuit_id
+        {
+            return Err(eyre!(
+                "offline readiness response contains substituted {field} metadata"
+            ));
+        }
+        if verifier.version == 0 {
+            return Err(eyre!(
+                "offline readiness response selected {field} with version zero"
+            ));
+        }
+        Self::require_lower_hex_32(&verifier.commitment, &format!("{field}.commitment"))?;
+        Self::require_lower_hex_32(
+            &verifier.public_inputs_schema_hash,
+            &format!("{field}.public_inputs_schema_hash"),
+        )?;
+        if verifier.commitment.bytes().all(|byte| byte == b'0')
+            || verifier
+                .public_inputs_schema_hash
+                .bytes()
+                .all(|byte| byte == b'0')
+        {
+            return Err(eyre!(
+                "offline readiness response contains zero {field} metadata"
+            ));
+        }
+        if let Some(expected_schema_hash) = expected_schema_hash
+            && verifier.public_inputs_schema_hash != hex::encode(expected_schema_hash)
+        {
+            return Err(eyre!(
+                "offline readiness response contains a substituted {field} public-input schema"
+            ));
+        }
+        if verifier.max_proof_bytes == 0 || verifier.max_proof_bytes > max_allowed_proof_bytes {
+            return Err(eyre!(
+                "offline readiness response selected {field} with an invalid proof limit"
+            ));
+        }
+        if verifier.activation_height > readiness.evaluated_block_height {
+            return Err(eyre!(
+                "offline readiness response selected {field} before activation"
+            ));
+        }
+        if verifier.withdrawal_height.is_some_and(|withdrawal_height| {
+            withdrawal_height <= verifier.activation_height
+                || readiness.evaluated_block_height >= withdrawal_height
+        }) {
+            return Err(eyre!(
+                "offline readiness response selected {field} outside its activation window"
+            ));
+        }
+        Ok(())
+    }
+
     /// Evaluate whether one asset definition is ready for offline payments.
     ///
     /// A normal not-ready domain state is returned as `Ok` with `ready == false`.
@@ -6486,6 +6565,17 @@ impl Client {
             ));
         }
         Self::require_lower_hex_32(&readiness.evaluated_block_hash, "evaluated_block_hash")?;
+        if readiness.required_bridge_abi_version
+            != iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3
+            || readiness.max_hops
+                != u32::from(
+                    iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_BRANCH_DEPTH_V2,
+                )
+        {
+            return Err(eyre!(
+                "offline readiness response does not describe the first-release Kagemusha contract"
+            ));
+        }
         if readiness.ready != readiness.blockers.is_empty() {
             return Err(eyre!(
                 "offline readiness response has an inconsistent ready/blockers state"
@@ -6497,6 +6587,20 @@ impl Client {
                 .iter()
                 .any(|blocker| blocker.code == code)
         };
+        let mut blocker_codes = std::collections::BTreeSet::new();
+        for blocker in &readiness.blockers {
+            let code = blocker.code.as_str();
+            if code.is_empty()
+                || !code
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+                || !blocker_codes.insert(code)
+            {
+                return Err(eyre!(
+                    "offline readiness response contains an invalid or duplicate blocker code"
+                ));
+            }
+        }
         match readiness.asset_scale {
             None if !has_blocker("asset_scale_unavailable") => {
                 return Err(eyre!(
@@ -6522,70 +6626,99 @@ impl Client {
             }
             _ => {}
         }
-        match readiness.active_transfer_verifier.as_ref() {
-            None if !has_blocker("transfer_verifier_unavailable") => {
+        let confidential_proof_limit =
+            u32::try_from(iroha_data_model::offline::KAGEMUSHA_TOPUP_SHIELD_MAX_PROOF_BYTES_V2)
+                .expect("Kagemusha proof limit fits u32");
+        Self::validate_offline_readiness_verifier(
+            &readiness,
+            readiness.active_transfer_verifier.as_ref(),
+            "active_transfer_verifier",
+            "transfer_verifier_unavailable",
+            iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_TRANSFER_V2,
+            "halo2/pasta/ipa/anon-transfer-2x2-merkle16-poseidon-diversified",
+            None,
+            confidential_proof_limit,
+        )?;
+        Self::validate_offline_readiness_verifier(
+            &readiness,
+            readiness.active_topup_shield_verifier.as_ref(),
+            "active_topup_shield_verifier",
+            "topup_shield_verifier_unavailable",
+            iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_TOPUP_SHIELD_V2,
+            "halo2/pasta/ipa/kagemusha-topup-shield-merkle16-poseidon-diversified-v2",
+            None,
+            confidential_proof_limit,
+        )?;
+        Self::validate_offline_readiness_verifier(
+            &readiness,
+            readiness.active_unshield_verifier.as_ref(),
+            "active_unshield_verifier",
+            "unshield_verifier_unavailable",
+            iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_UNSHIELD_V2,
+            "halo2/pasta/ipa/anon-unshield-2in-1change-merkle16-poseidon-diversified",
+            None,
+            confidential_proof_limit,
+        )?;
+        Self::validate_offline_readiness_verifier(
+            &readiness,
+            readiness.active_recursive_transition_verifier.as_ref(),
+            "active_recursive_transition_verifier",
+            "recursive_transition_verifier_unavailable",
+            iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_TRANSITION_V3,
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_EQ_CIRCUIT_ID_V1,
+            Some(
+                iroha_data_model::offline::kagemusha_recursive_spend_transition_public_inputs_schema_hash_v3(),
+            ),
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROOF_BYTES_V3,
+        )?;
+        Self::validate_offline_readiness_verifier(
+            &readiness,
+            readiness.active_recursive_state_verifier.as_ref(),
+            "active_recursive_state_verifier",
+            "recursive_state_verifier_unavailable",
+            iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_STATE_V3,
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_EP_CIRCUIT_ID_V1,
+            Some(
+                iroha_data_model::offline::kagemusha_recursive_spend_state_public_inputs_schema_hash_v3(),
+            ),
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROOF_BYTES_V3,
+        )?;
+        let mut verifier_ids = std::collections::BTreeSet::new();
+        let mut verifier_commitments = std::collections::BTreeSet::new();
+        let mut verifier_schema_hashes = std::collections::BTreeSet::new();
+        for verifier in [
+            readiness.active_transfer_verifier.as_ref(),
+            readiness.active_topup_shield_verifier.as_ref(),
+            readiness.active_unshield_verifier.as_ref(),
+            readiness.active_recursive_transition_verifier.as_ref(),
+            readiness.active_recursive_state_verifier.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if !verifier_ids.insert((verifier.id.backend.as_str(), verifier.id.name.as_str()))
+                || !verifier_commitments.insert(verifier.commitment.as_str())
+                || !verifier_schema_hashes.insert(verifier.public_inputs_schema_hash.as_str())
+            {
                 return Err(eyre!(
-                    "offline readiness response omitted the active transfer verifier without a transfer_verifier_unavailable blocker"
+                    "offline readiness response reuses verifier identity material across roles"
                 ));
             }
-            Some(verifier) => {
-                if has_blocker("transfer_verifier_unavailable") {
-                    return Err(eyre!(
-                        "offline readiness response contains both an active transfer verifier and an unavailable blocker"
-                    ));
-                }
-                if !iroha_data_model::proof::verifying_key_id_field_is_portable(
-                    &verifier.id.backend,
-                ) || !iroha_data_model::proof::verifying_key_id_field_is_portable(
-                    &verifier.id.name,
-                ) {
-                    return Err(eyre!(
-                        "offline readiness response contains a non-portable transfer verifier id"
-                    ));
-                }
-                if !iroha_data_model::zk::open_verify_circuit_id_is_portable(&verifier.circuit_id) {
-                    return Err(eyre!(
-                        "offline readiness response contains a non-portable confidential-transfer circuit id"
-                    ));
-                }
-                Self::require_lower_hex_32(
-                    &verifier.commitment,
-                    "active_transfer_verifier.commitment",
-                )?;
-                Self::require_lower_hex_32(
-                    &verifier.public_inputs_schema_hash,
-                    "active_transfer_verifier.public_inputs_schema_hash",
-                )?;
-                if verifier.commitment.bytes().all(|byte| byte == b'0')
-                    || verifier
-                        .public_inputs_schema_hash
-                        .bytes()
-                        .all(|byte| byte == b'0')
-                {
-                    return Err(eyre!(
-                        "offline readiness response contains zero transfer-verifier metadata"
-                    ));
-                }
-                if verifier.max_proof_bytes == 0 {
-                    return Err(eyre!(
-                        "offline readiness response selected a transfer verifier with a zero proof limit"
-                    ));
-                }
-                if verifier.activation_height > readiness.evaluated_block_height {
-                    return Err(eyre!(
-                        "offline readiness response selected a transfer verifier before activation"
-                    ));
-                }
-                if verifier.withdrawal_height.is_some_and(|withdrawal_height| {
-                    withdrawal_height <= verifier.activation_height
-                        || readiness.evaluated_block_height >= withdrawal_height
-                }) {
-                    return Err(eyre!(
-                        "offline readiness response selected a transfer verifier outside its activation window"
-                    ));
-                }
-            }
-            None => {}
+        }
+        if readiness.proof_backend_available == has_blocker("proof_backend_unavailable") {
+            return Err(eyre!(
+                "offline readiness response has an inconsistent proof backend blocker"
+            ));
+        }
+        let expected_recursive_lineage = readiness.proof_backend_available
+            && readiness.active_recursive_transition_verifier.is_some()
+            && readiness.active_recursive_state_verifier.is_some();
+        if readiness.recursive_lineage_supported != expected_recursive_lineage
+            || readiness.recursive_lineage_supported == has_blocker("recursive_lineage_unavailable")
+        {
+            return Err(eyre!(
+                "offline readiness response has an inconsistent recursive lineage state"
+            ));
         }
         Ok(readiness)
     }
@@ -7294,57 +7427,119 @@ mod offline_client_tests {
             .expect("response")
     }
 
-    fn active_transfer_verifier() -> iroha_torii_shared::offline_api::OfflineActiveTransferVerifier
-    {
+    fn active_verifier(
+        role: &str,
+        circuit_id: &str,
+        schema_hash: String,
+        commitment_byte: &str,
+        max_proof_bytes: u32,
+    ) -> iroha_torii_shared::offline_api::OfflineActiveTransferVerifier {
         iroha_torii_shared::offline_api::OfflineActiveTransferVerifier {
             id: iroha_torii_shared::offline_api::OfflineVerifierId {
                 backend: "halo2/ipa".to_owned(),
-                name: "confidential-transfer-v2".to_owned(),
+                name: role.to_owned(),
             },
             version: 1,
-            circuit_id: "halo2/pasta/ipa/anon-transfer-2x2-merkle16-poseidon-diversified"
-                .to_owned(),
-            commitment: "11".repeat(32),
-            public_inputs_schema_hash: "22".repeat(32),
-            max_proof_bytes: 65_536,
+            circuit_id: circuit_id.to_owned(),
+            commitment: commitment_byte.repeat(32),
+            public_inputs_schema_hash: schema_hash,
+            max_proof_bytes,
             activation_height: 1,
             withdrawal_height: None,
         }
+    }
+
+    fn active_transfer_verifier() -> iroha_torii_shared::offline_api::OfflineActiveTransferVerifier
+    {
+        active_verifier(
+            iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_TRANSFER_V2,
+            "halo2/pasta/ipa/anon-transfer-2x2-merkle16-poseidon-diversified",
+            "22".repeat(32),
+            "11",
+            65_536,
+        )
     }
 
     fn active_topup_shield_verifier()
     -> iroha_torii_shared::offline_api::OfflineActiveTopUpShieldVerifier {
-        iroha_torii_shared::offline_api::OfflineActiveTopUpShieldVerifier {
-            id: iroha_torii_shared::offline_api::OfflineVerifierId {
-                backend: "halo2/ipa".to_owned(),
-                name: "kagemusha-topup-shield-v2".to_owned(),
-            },
-            version: 3,
-            circuit_id: "kagemusha-topup-shield-v2".to_owned(),
-            commitment: "33".repeat(32),
-            public_inputs_schema_hash: "44".repeat(32),
-            max_proof_bytes: 196_608,
-            activation_height: 1,
-            withdrawal_height: None,
-        }
+        active_verifier(
+            iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_TOPUP_SHIELD_V2,
+            "halo2/pasta/ipa/kagemusha-topup-shield-merkle16-poseidon-diversified-v2",
+            "44".repeat(32),
+            "33",
+            196_608,
+        )
     }
 
-    #[test]
-    fn readiness_request_is_typed_negotiated_and_asset_bound() {
-        let asset_definition_id = asset_definition_id("xor");
-        let readiness = OfflineReadiness {
+    fn active_unshield_verifier() -> iroha_torii_shared::offline_api::OfflineActiveUnshieldVerifier
+    {
+        active_verifier(
+            iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_UNSHIELD_V2,
+            "halo2/pasta/ipa/anon-unshield-2in-1change-merkle16-poseidon-diversified",
+            "66".repeat(32),
+            "55",
+            196_608,
+        )
+    }
+
+    fn active_recursive_transition_verifier()
+    -> iroha_torii_shared::offline_api::OfflineActiveRecursiveTransitionVerifier {
+        active_verifier(
+            iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_TRANSITION_V3,
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_EQ_CIRCUIT_ID_V1,
+            hex::encode(
+                iroha_data_model::offline::kagemusha_recursive_spend_transition_public_inputs_schema_hash_v3(),
+            ),
+            "77",
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROOF_BYTES_V3,
+        )
+    }
+
+    fn active_recursive_state_verifier()
+    -> iroha_torii_shared::offline_api::OfflineActiveRecursiveStateVerifier {
+        active_verifier(
+            iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_STATE_V3,
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_EP_CIRCUIT_ID_V1,
+            hex::encode(
+                iroha_data_model::offline::kagemusha_recursive_spend_state_public_inputs_schema_hash_v3(),
+            ),
+            "88",
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROOF_BYTES_V3,
+        )
+    }
+
+    fn ready_readiness(asset_definition_id: &AssetDefinitionId) -> OfflineReadiness {
+        OfflineReadiness {
+            required_bridge_abi_version:
+                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3,
+            max_hops: u32::from(
+                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_BRANCH_DEPTH_V2,
+            ),
             asset_definition_id: asset_definition_id.to_string(),
             asset_scale: Some(9),
             evaluated_block_height: 19,
             evaluated_block_hash: "ab".repeat(32),
             active_transfer_verifier: Some(active_transfer_verifier()),
             active_topup_shield_verifier: Some(active_topup_shield_verifier()),
-            ready: false,
-            blockers: vec![iroha_torii_shared::offline_api::OfflineReadinessBlocker {
-                code: "issuer_key_missing".to_owned(),
-                message: "issuer key is unavailable".to_owned(),
-            }],
-        };
+            active_unshield_verifier: Some(active_unshield_verifier()),
+            active_recursive_transition_verifier: Some(active_recursive_transition_verifier()),
+            active_recursive_state_verifier: Some(active_recursive_state_verifier()),
+            proof_backend_available: true,
+            recursive_lineage_supported: true,
+            ready: true,
+            blockers: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn readiness_request_is_typed_negotiated_and_asset_bound() {
+        let asset_definition_id = asset_definition_id("xor");
+        let mut readiness = ready_readiness(&asset_definition_id);
+        readiness.ready = false;
+        readiness.blockers = vec![iroha_torii_shared::offline_api::OfflineReadinessBlocker {
+            code: "issuer_unavailable".to_owned(),
+            message: "issuer is unavailable".to_owned(),
+        }];
         let response = HttpResponse::builder()
             .status(StatusCode::OK)
             .header("content-type", "application/json; charset=utf-8")
@@ -7377,41 +7572,15 @@ mod offline_client_tests {
     fn readiness_rejects_cross_asset_and_inconsistent_states() {
         let requested = asset_definition_id("xor");
         let other_asset = asset_definition_id("rose");
-        for readiness in [
-            OfflineReadiness {
-                asset_definition_id: other_asset.to_string(),
-                asset_scale: Some(9),
-                evaluated_block_height: 1,
-                evaluated_block_hash: "ab".repeat(32),
-                active_transfer_verifier: Some(active_transfer_verifier()),
-                active_topup_shield_verifier: Some(active_topup_shield_verifier()),
-                ready: true,
-                blockers: Vec::new(),
-            },
-            OfflineReadiness {
-                asset_definition_id: requested.to_string(),
-                asset_scale: Some(9),
-                evaluated_block_height: 1,
-                evaluated_block_hash: "ab".repeat(32),
-                active_transfer_verifier: Some(active_transfer_verifier()),
-                active_topup_shield_verifier: Some(active_topup_shield_verifier()),
-                ready: true,
-                blockers: vec![iroha_torii_shared::offline_api::OfflineReadinessBlocker {
-                    code: "forged".to_owned(),
-                    message: "forged".to_owned(),
-                }],
-            },
-            OfflineReadiness {
-                asset_definition_id: requested.to_string(),
-                asset_scale: Some(9),
-                evaluated_block_height: 1,
-                evaluated_block_hash: "AB".repeat(32),
-                active_transfer_verifier: Some(active_transfer_verifier()),
-                active_topup_shield_verifier: Some(active_topup_shield_verifier()),
-                ready: true,
-                blockers: Vec::new(),
-            },
-        ] {
+        let cross_asset = ready_readiness(&other_asset);
+        let mut inconsistent = ready_readiness(&requested);
+        inconsistent.blockers = vec![iroha_torii_shared::offline_api::OfflineReadinessBlocker {
+            code: "forged".to_owned(),
+            message: "forged".to_owned(),
+        }];
+        let mut uppercase_hash = ready_readiness(&requested);
+        uppercase_hash.evaluated_block_hash = "AB".repeat(32);
+        for readiness in [cross_asset, inconsistent, uppercase_hash] {
             let response = HttpResponse::builder()
                 .status(StatusCode::OK)
                 .header("content-type", APPLICATION_NORITO)
@@ -7434,42 +7603,27 @@ mod offline_client_tests {
     fn readiness_rejects_unbound_scale_and_verifier_snapshots() {
         let requested = asset_definition_id("xor");
         let unrelated_blocker = || iroha_torii_shared::offline_api::OfflineReadinessBlocker {
-            code: "proof_backend_unavailable".to_owned(),
-            message: "proof backend is unavailable".to_owned(),
+            code: "issuer_unavailable".to_owned(),
+            message: "issuer is unavailable".to_owned(),
         };
         let mut future_verifier = active_transfer_verifier();
-        future_verifier.activation_height = 2;
+        future_verifier.activation_height = 20;
+        let mut missing_scale_blocker = ready_readiness(&requested);
+        missing_scale_blocker.asset_scale = None;
+        missing_scale_blocker.ready = false;
+        missing_scale_blocker.blockers = vec![unrelated_blocker()];
+        let mut missing_transfer_blocker = ready_readiness(&requested);
+        missing_transfer_blocker.active_transfer_verifier = None;
+        missing_transfer_blocker.ready = false;
+        missing_transfer_blocker.blockers = vec![unrelated_blocker()];
+        let mut future_transfer = ready_readiness(&requested);
+        future_transfer.active_transfer_verifier = Some(future_verifier);
+        future_transfer.ready = false;
+        future_transfer.blockers = vec![unrelated_blocker()];
         for readiness in [
-            OfflineReadiness {
-                asset_definition_id: requested.to_string(),
-                asset_scale: None,
-                evaluated_block_height: 1,
-                evaluated_block_hash: "ab".repeat(32),
-                active_transfer_verifier: Some(active_transfer_verifier()),
-                active_topup_shield_verifier: Some(active_topup_shield_verifier()),
-                ready: false,
-                blockers: vec![unrelated_blocker()],
-            },
-            OfflineReadiness {
-                asset_definition_id: requested.to_string(),
-                asset_scale: Some(9),
-                evaluated_block_height: 1,
-                evaluated_block_hash: "ab".repeat(32),
-                active_transfer_verifier: None,
-                active_topup_shield_verifier: Some(active_topup_shield_verifier()),
-                ready: false,
-                blockers: vec![unrelated_blocker()],
-            },
-            OfflineReadiness {
-                asset_definition_id: requested.to_string(),
-                asset_scale: Some(9),
-                evaluated_block_height: 1,
-                evaluated_block_hash: "ab".repeat(32),
-                active_transfer_verifier: Some(future_verifier),
-                active_topup_shield_verifier: Some(active_topup_shield_verifier()),
-                ready: false,
-                blockers: vec![unrelated_blocker()],
-            },
+            missing_scale_blocker,
+            missing_transfer_blocker,
+            future_transfer,
         ] {
             let response = HttpResponse::builder()
                 .status(StatusCode::OK)
@@ -7483,9 +7637,107 @@ mod offline_client_tests {
             .expect_err("unbound readiness metadata must fail closed");
             assert!(
                 error.to_string().contains("asset scale")
-                    || error.to_string().contains("transfer verifier"),
+                    || error.to_string().contains("active_transfer_verifier"),
                 "unexpected error: {error:#}"
             );
+        }
+    }
+
+    #[test]
+    fn readiness_rejects_contract_verifier_and_lineage_substitution() {
+        let requested = asset_definition_id("xor");
+        let mut wrong_abi = ready_readiness(&requested);
+        wrong_abi.required_bridge_abi_version -= 1;
+        let mut wrong_hops = ready_readiness(&requested);
+        wrong_hops.max_hops -= 1;
+        let mut substituted_topup = ready_readiness(&requested);
+        substituted_topup
+            .active_topup_shield_verifier
+            .as_mut()
+            .expect("fixture top-up verifier")
+            .id
+            .name = iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_TRANSFER_V2.to_owned();
+        let mut substituted_unshield = ready_readiness(&requested);
+        substituted_unshield
+            .active_unshield_verifier
+            .as_mut()
+            .expect("fixture unshield verifier")
+            .circuit_id =
+            "halo2/pasta/ipa/anon-transfer-2x2-merkle16-poseidon-diversified".to_owned();
+        let mut substituted_transition_schema = ready_readiness(&requested);
+        substituted_transition_schema
+            .active_recursive_transition_verifier
+            .as_mut()
+            .expect("fixture transition verifier")
+            .public_inputs_schema_hash = "99".repeat(32);
+        let mut oversized_state_proof = ready_readiness(&requested);
+        oversized_state_proof
+            .active_recursive_state_verifier
+            .as_mut()
+            .expect("fixture state verifier")
+            .max_proof_bytes =
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROOF_BYTES_V3 + 1;
+        let mut reused_commitment = ready_readiness(&requested);
+        let transfer_commitment = reused_commitment
+            .active_transfer_verifier
+            .as_ref()
+            .expect("fixture transfer verifier")
+            .commitment
+            .clone();
+        reused_commitment
+            .active_topup_shield_verifier
+            .as_mut()
+            .expect("fixture top-up verifier")
+            .commitment = transfer_commitment;
+        let mut reused_schema = ready_readiness(&requested);
+        let transfer_schema = reused_schema
+            .active_transfer_verifier
+            .as_ref()
+            .expect("fixture transfer verifier")
+            .public_inputs_schema_hash
+            .clone();
+        reused_schema
+            .active_topup_shield_verifier
+            .as_mut()
+            .expect("fixture top-up verifier")
+            .public_inputs_schema_hash = transfer_schema;
+        let mut forged_lineage = ready_readiness(&requested);
+        forged_lineage.recursive_lineage_supported = false;
+        let mut duplicate_blockers = ready_readiness(&requested);
+        duplicate_blockers.ready = false;
+        duplicate_blockers.blockers = vec![
+            iroha_torii_shared::offline_api::OfflineReadinessBlocker {
+                code: "issuer_unavailable".to_owned(),
+                message: "first".to_owned(),
+            },
+            iroha_torii_shared::offline_api::OfflineReadinessBlocker {
+                code: "issuer_unavailable".to_owned(),
+                message: "second".to_owned(),
+            },
+        ];
+
+        for readiness in [
+            wrong_abi,
+            wrong_hops,
+            substituted_topup,
+            substituted_unshield,
+            substituted_transition_schema,
+            oversized_state_proof,
+            reused_commitment,
+            reused_schema,
+            forged_lineage,
+            duplicate_blockers,
+        ] {
+            let response = HttpResponse::builder()
+                .status(StatusCode::OK)
+                .header("content-type", APPLICATION_NORITO)
+                .body(norito::to_bytes(&readiness).expect("encode readiness"))
+                .expect("response");
+            with_mock_http(
+                respond_with(&Arc::new(Mutex::new(Vec::new())), response),
+                || client_with_base_url(base_url()).get_offline_readiness(&requested),
+            )
+            .expect_err("substituted Kagemusha readiness must fail closed");
         }
     }
 
@@ -7626,16 +7878,7 @@ mod offline_client_tests {
 
     #[test]
     fn negotiated_decoder_rejects_retired_and_missing_media_types() {
-        let readiness = OfflineReadiness {
-            asset_definition_id: asset_definition_id("xor").to_string(),
-            asset_scale: Some(9),
-            evaluated_block_height: 1,
-            evaluated_block_hash: "ab".repeat(32),
-            active_transfer_verifier: Some(active_transfer_verifier()),
-            active_topup_shield_verifier: Some(active_topup_shield_verifier()),
-            ready: true,
-            blockers: Vec::new(),
-        };
+        let readiness = ready_readiness(&asset_definition_id("xor"));
         let body = norito::json::to_vec(&readiness).expect("encode readiness");
         for content_type in [Some("text/json"), Some("application/octet-stream"), None] {
             let response = mk_response(StatusCode::OK, body.clone(), content_type);
@@ -8321,7 +8564,7 @@ mod evidence_http_tests {
     }
 
     #[test]
-    fn post_multisig_proposals_query_builds_request() {
+    fn post_multisig_proposals_list_builds_request() {
         let client = client_with_base_url(base_url());
         let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let account_id = AccountId::new(checked_random_keypair().public_key().clone());
@@ -8344,7 +8587,7 @@ mod evidence_http_tests {
         );
 
         with_mock_http(respond_with(&snapshots, response), || {
-            let request = MultisigProposalsQueryRequest {
+            let request = MultisigProposalsListRequest {
                 multisig_account_id: Some(account_id.clone()),
                 multisig_account_alias: None,
                 status: vec!["COLLECTING_SIGNATURES".to_owned()],
@@ -8352,8 +8595,8 @@ mod evidence_http_tests {
                 limit: None,
             };
             let resp = client
-                .post_multisig_proposals_query(&request)
-                .expect("post multisig proposals query");
+                .post_multisig_proposals_list(&request)
+                .expect("post multisig proposals list");
             assert_eq!(resp.resolved_multisig_account_id, account_id);
             assert_eq!(resp.proposals.len(), 1);
             assert_eq!(resp.proposals[0].proposal_id, proposal_id);
@@ -8369,7 +8612,7 @@ mod evidence_http_tests {
         assert_eq!(snapshot.method, HttpMethod::POST);
         assert_eq!(
             snapshot.url.as_str(),
-            "http://mock.local/v1/multisig/proposals/query"
+            "http://mock.local/v1/multisig/proposals/list"
         );
         let body: Value = norito::json::from_slice(&snapshot.body).expect("decode request body");
         assert_eq!(
@@ -8397,14 +8640,14 @@ mod evidence_http_tests {
 
         with_mock_http(respond_with(&snapshots, response), || {
             for request in [
-                MultisigProposalsQueryRequest {
+                MultisigProposalsListRequest {
                     multisig_account_id: None,
                     multisig_account_alias: None,
                     status: Vec::new(),
                     cursor: None,
                     limit: None,
                 },
-                MultisigProposalsQueryRequest {
+                MultisigProposalsListRequest {
                     multisig_account_id: Some(account_id.clone()),
                     multisig_account_alias: Some("cbdc@hbl.sbp".to_owned()),
                     status: Vec::new(),
@@ -8413,31 +8656,31 @@ mod evidence_http_tests {
                 },
             ] {
                 let error = client
-                    .post_multisig_proposals_query(&request)
+                    .post_multisig_proposals_list(&request)
                     .expect_err("authority selector must be exact");
                 assert!(error.to_string().contains("exactly one"));
             }
 
-            let request = MultisigProposalsLookupRequest {
+            let request = MultisigProposalsGetRequest {
                 multisig_account_id: Some(account_id.clone()),
                 multisig_account_alias: None,
                 proposal_id: None,
                 instructions_hash: None,
             };
             let error = client
-                .post_multisig_proposals_lookup(&request)
+                .post_multisig_proposals_get(&request)
                 .expect_err("proposal selector is required");
             assert!(error.to_string().contains("exactly one"));
 
             let hash = "a".repeat(64);
-            let request = MultisigProposalsLookupRequest {
+            let request = MultisigProposalsGetRequest {
                 multisig_account_id: Some(account_id),
                 multisig_account_alias: None,
                 proposal_id: Some(hash.clone()),
                 instructions_hash: Some(hash),
             };
             let error = client
-                .post_multisig_proposals_lookup(&request)
+                .post_multisig_proposals_get(&request)
                 .expect_err("dual proposal selectors must fail");
             assert!(error.to_string().contains("exactly one"));
         });
@@ -8449,7 +8692,7 @@ mod evidence_http_tests {
     }
 
     #[test]
-    fn post_multisig_proposals_lookup_builds_selector_explicit_request() {
+    fn post_multisig_proposals_get_builds_selector_explicit_request() {
         let client = client_with_base_url(base_url());
         let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let account_id = AccountId::new(checked_random_keypair().public_key().clone());
@@ -8470,7 +8713,7 @@ mod evidence_http_tests {
                 proposal_id = proposal_id,
             ),
         );
-        let request = MultisigProposalsLookupRequest {
+        let request = MultisigProposalsGetRequest {
             multisig_account_id: Some(account_id.clone()),
             multisig_account_alias: None,
             proposal_id: Some(proposal_id.clone()),
@@ -8479,8 +8722,8 @@ mod evidence_http_tests {
 
         with_mock_http(respond_with(&snapshots, response), || {
             let decoded = client
-                .post_multisig_proposals_lookup(&request)
-                .expect("post multisig proposal lookup");
+                .post_multisig_proposals_get(&request)
+                .expect("post multisig proposal get");
             assert_eq!(decoded.resolved_multisig_account_id, account_id);
             assert_eq!(decoded.proposal_id, proposal_id);
         });
@@ -8491,7 +8734,7 @@ mod evidence_http_tests {
         assert_eq!(snapshot.method, HttpMethod::POST);
         assert_eq!(
             snapshot.url.as_str(),
-            "http://mock.local/v1/multisig/proposals/lookup"
+            "http://mock.local/v1/multisig/proposals/get"
         );
         assert!(snapshot.headers.iter().any(|(name, value)| {
             name.eq_ignore_ascii_case("accept") && value == APPLICATION_JSON
@@ -14140,20 +14383,20 @@ impl Client {
             .send()
     }
 
-    /// Convenience: selector-explicit POST `/v1/multisig/proposals/query`.
+    /// Convenience: selector-explicit POST `/v1/multisig/proposals/list`.
     ///
     /// # Errors
     /// Returns an error if request construction, JSON serialization, the HTTP call,
     /// or response decoding fails.
-    pub fn post_multisig_proposals_query(
+    pub fn post_multisig_proposals_list(
         &self,
-        request: &MultisigProposalsQueryRequest,
-    ) -> Result<MultisigProposalsQueryResponse> {
+        request: &MultisigProposalsListRequest,
+    ) -> Result<MultisigProposalsListResponse> {
         validate_multisig_read_selector(
             request.multisig_account_id.as_ref(),
             request.multisig_account_alias.as_deref(),
         )?;
-        let url = join_torii_url(&self.torii_url, "v1/multisig/proposals/query");
+        let url = join_torii_url(&self.torii_url, "v1/multisig/proposals/list");
         let body = norito::json::to_vec(request)?;
         let resp = self
             .default_request(HttpMethod::POST, url)
@@ -14164,25 +14407,25 @@ impl Client {
             .send()?;
         if resp.status() != StatusCode::OK {
             return Err(eyre!(
-                "Failed to query multisig proposals with HTTP status: {}. {}",
+                "Failed to list multisig proposals with HTTP status: {}. {}",
                 resp.status(),
                 std::str::from_utf8(resp.body()).unwrap_or("")
             ));
         }
         norito::json::from_slice(resp.body())
-            .map_err(|err| eyre!("failed to decode multisig proposals query response: {err}"))
+            .map_err(|err| eyre!("failed to decode multisig proposals list response: {err}"))
     }
 
-    /// Convenience: selector-explicit POST `/v1/multisig/proposals/lookup`.
+    /// Convenience: selector-explicit POST `/v1/multisig/proposals/get`.
     ///
     /// # Errors
     /// Returns an error if the authority or proposal selector is not exact, request
     /// construction or JSON serialization fails, the HTTP call fails, or the response
     /// cannot be decoded.
-    pub fn post_multisig_proposals_lookup(
+    pub fn post_multisig_proposals_get(
         &self,
-        request: &MultisigProposalsLookupRequest,
-    ) -> Result<MultisigProposalLookupResponse> {
+        request: &MultisigProposalsGetRequest,
+    ) -> Result<MultisigProposalGetResponse> {
         validate_multisig_read_selector(
             request.multisig_account_id.as_ref(),
             request.multisig_account_alias.as_deref(),
@@ -14191,7 +14434,7 @@ impl Client {
             request.proposal_id.as_deref(),
             request.instructions_hash.as_deref(),
         )?;
-        let url = join_torii_url(&self.torii_url, "v1/multisig/proposals/lookup");
+        let url = join_torii_url(&self.torii_url, "v1/multisig/proposals/get");
         let body = norito::json::to_vec(request)?;
         let resp = self
             .default_request(HttpMethod::POST, url)
@@ -14202,13 +14445,13 @@ impl Client {
             .send()?;
         if resp.status() != StatusCode::OK {
             return Err(eyre!(
-                "Failed to lookup multisig proposal with HTTP status: {}. {}",
+                "Failed to get multisig proposal with HTTP status: {}. {}",
                 resp.status(),
                 std::str::from_utf8(resp.body()).unwrap_or("")
             ));
         }
         norito::json::from_slice(resp.body())
-            .map_err(|err| eyre!("failed to decode multisig proposal lookup response: {err}"))
+            .map_err(|err| eyre!("failed to decode multisig proposal get response: {err}"))
     }
 
     /// Convenience: POST `/v1/multisig/propose` with a typed instruction batch.

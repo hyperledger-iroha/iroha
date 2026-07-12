@@ -90,10 +90,10 @@ fn npos_commit_quorum_network_builder() -> NetworkBuilder {
     NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()
+        .with_npos_consensus()
         .with_config_layer(|layer| {
             let gas_account_str = ALICE_ID.to_string();
             layer
-                .write(["sumeragi", "consensus_mode"], "npos")
                 .write(["nexus", "enabled"], true)
                 .write(
                     ["nexus", "fees", "fee_asset_id"],
@@ -134,9 +134,9 @@ async fn permissioned_commit_certificates_reach_quorum() -> Result<()> {
     let builder = NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()
+        .with_permissioned_consensus()
         .with_config_layer(|layer| {
             layer
-                .write(["sumeragi", "consensus_mode"], "permissioned")
                 .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full");
         });
@@ -196,9 +196,7 @@ async fn commit_certificate_block_sync_restores_restart_peer() -> Result<()> {
     let builder = NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()
-        .with_config_layer(|layer| {
-            layer.write(["sumeragi", "consensus_mode"], "permissioned");
-        });
+        .with_permissioned_consensus();
 
     let Some(network) = sandbox::start_network_async_or_skip(
         builder,

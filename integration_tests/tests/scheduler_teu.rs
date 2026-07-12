@@ -42,10 +42,10 @@ use tokio::sync::broadcast;
 const TEST_CHAIN_ID: &str = "00000000-0000-0000-0000-000000000000";
 
 fn disable_nexus_fee_admission(nexus: &mut Nexus) {
-    nexus.fees.base_fee = Numeric::zero();
-    nexus.fees.per_byte_fee = Numeric::zero();
-    nexus.fees.per_instruction_fee = Numeric::zero();
-    nexus.fees.per_gas_unit_fee = Numeric::zero();
+    nexus.fees.base_fee = Quantity::zero();
+    nexus.fees.per_byte_fee = Quantity::zero();
+    nexus.fees.per_instruction_fee = Quantity::zero();
+    nexus.fees.per_gas_unit_fee = Quantity::zero();
 }
 
 fn build_world(authority: &AccountId, domain_id: &DomainId) -> World {

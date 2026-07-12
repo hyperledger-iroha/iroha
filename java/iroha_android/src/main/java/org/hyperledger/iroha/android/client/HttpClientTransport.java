@@ -37,7 +37,6 @@ import org.hyperledger.iroha.android.nexus.UaidManifestsResponse;
 import org.hyperledger.iroha.android.nexus.UaidPortfolioQuery;
 import org.hyperledger.iroha.android.nexus.UaidPortfolioResponse;
 import org.hyperledger.iroha.android.model.zk.VerifyingKeyBackendTag;
-import org.hyperledger.iroha.android.offline.OfflineJournalKey;
 import org.hyperledger.iroha.android.sorafs.GatewayFetchRequest;
 import org.hyperledger.iroha.android.sorafs.GatewayFetchSummary;
 import org.hyperledger.iroha.android.sorafs.SorafsGatewayClient;
@@ -841,24 +840,6 @@ public final class HttpClientTransport implements IrohaClient {
     return new HttpClientTransport(PlatformHttpTransportExecutor.createDefault(), config);
   }
 
-  public static ClientConfig withOfflineJournalQueue(
-      final ClientConfig config, final Path journalPath, final OfflineJournalKey key) {
-    Objects.requireNonNull(config, "config");
-    return config.toBuilder().enableOfflineJournalQueue(journalPath, key).build();
-  }
-
-  public static ClientConfig withOfflineJournalQueue(
-      final ClientConfig config, final Path journalPath, final byte[] seed) {
-    Objects.requireNonNull(config, "config");
-    return config.toBuilder().enableOfflineJournalQueue(journalPath, seed).build();
-  }
-
-  public static ClientConfig withOfflineJournalQueue(
-      final ClientConfig config, final Path journalPath, final char[] passphrase) {
-    Objects.requireNonNull(config, "config");
-    return config.toBuilder().enableOfflineJournalQueue(journalPath, passphrase).build();
-  }
-
   /**
    * Returns a copy of {@code config} with a directory-backed pending queue rooted at {@code
    * queueDir}. Each queued transaction is persisted as its own envelope file to satisfy OEM or
@@ -875,14 +856,6 @@ public final class HttpClientTransport implements IrohaClient {
       final ClientConfig config, final Path queueFile) {
     Objects.requireNonNull(config, "config");
     return config.toBuilder().enableFilePendingQueue(queueFile).build();
-  }
-
-  /**
-   * Creates an {@link OfflineToriiClient} that reuses this transport's HTTP executor, base URI,
-   * headers, and observers.
-   */
-  public OfflineToriiClient offlineToriiClient() {
-    return config.toOfflineToriiClient(executor);
   }
 
   /**

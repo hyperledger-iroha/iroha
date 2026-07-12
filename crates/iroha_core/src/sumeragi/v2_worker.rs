@@ -25,6 +25,7 @@ use iroha_sumeragi_core::{EquivocationKind, EventTag};
 
 use super::{
     message::{BlockMessage, BlockMessageWire},
+    output_guard::{ConsensusOutputGuard, ConsensusOutputPermit},
     v2_apply::V2ApplyService,
     v2_body_store::{BodyStoreCompletion, BodyValidationCompletion, V2BodyStore},
     v2_chunks::{EncodedV2Payload, V2ChunkSession},
@@ -72,6 +73,7 @@ enum V2IoCompletion {
     CandidateLoaded(LoadedCandidateBody),
     Retired,
     RetirementFailed(String),
+    RecoveryRequired(String),
     Failed(String),
 }
 
@@ -168,6 +170,7 @@ impl V2IoHandle {
         key_pair: KeyPair,
         local_validator: Option<wire::ValidatorIndex>,
         queue_capacity: usize,
+        output_guard: Arc<ConsensusOutputGuard>,
     ) -> Result<Self, String> {
         let capacity = queue_capacity.max(1);
         let (command_tx, command_rx) = mpsc::sync_channel(capacity);
@@ -175,6 +178,9 @@ impl V2IoHandle {
         let join = super::sumeragi_thread_builder("sumeragi-v2-io")
             .spawn(move || {
                 while let Ok(command) = command_rx.recv() {
+                    let Some(output_permit) = output_guard.acquire() else {
+                        break;
+                    };
                     let completion = match command {
                         V2IoCommand::Sign(task) => sign_consensus_task(&key_pair, task),
                         V2IoCommand::Store(task) => body_store
@@ -198,6 +204,9 @@ impl V2IoHandle {
                                     work_id: task.id(),
                                     reference,
                                 }),
+                                Err(error) if error.requires_restart_recovery() => Ok(
+                                    V2IoCompletion::RecoveryRequired(error.to_string()),
+                                ),
                                 Err(error) => Err(error.to_string()),
                             }
                         }
@@ -212,12 +221,23 @@ impl V2IoHandle {
                                 Ok(()) => V2IoCompletion::Retired,
                                 Err(error) => V2IoCompletion::RetirementFailed(error.to_string()),
                             };
+                            drop(output_permit);
                             let _ = completion_tx.send(completion);
                             break;
                         }
-                        V2IoCommand::Shutdown => break,
+                        V2IoCommand::Shutdown => {
+                            drop(output_permit);
+                            break;
+                        }
                     };
-                    send_completion(&completion_tx, completion);
+                    drop(output_permit);
+                    match completion {
+                        Ok(V2IoCompletion::RecoveryRequired(reason)) | Err(reason) => {
+                            publish_recovery_required(&output_guard, &completion_tx, reason);
+                            break;
+                        }
+                        Ok(completion) => send_completion(&completion_tx, Ok(completion)),
+                    }
                 }
             })
             .map_err(|error| error.to_string())?;
@@ -270,6 +290,15 @@ fn send_completion(
 ) {
     let completion = completion.unwrap_or_else(V2IoCompletion::Failed);
     let _ = sender.send(completion);
+}
+
+fn publish_recovery_required(
+    output_guard: &ConsensusOutputGuard,
+    sender: &mpsc::SyncSender<V2IoCompletion>,
+    reason: String,
+) {
+    output_guard.activate_restart_required();
+    let _ = sender.try_send(V2IoCompletion::RecoveryRequired(reason));
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -532,6 +561,8 @@ pub(crate) struct ProductionV2Services {
     entered_view: Option<EventTag>,
     last_status: Option<EffectExecutorStatus>,
     fatal_reason: Option<String>,
+    output_guard: Arc<ConsensusOutputGuard>,
+    clean_teardown: bool,
 }
 
 impl ProductionV2Services {
@@ -554,6 +585,7 @@ impl ProductionV2Services {
         events_sender: EventsSender,
         io_queue_capacity: usize,
         orphan_chunk_capacity: usize,
+        output_guard: Arc<ConsensusOutputGuard>,
     ) -> Result<Self, String> {
         if io_queue_capacity == 0 || orphan_chunk_capacity == 0 {
             return Err("Sumeragi v2 service queue capacities must be non-zero".to_owned());
@@ -581,6 +613,7 @@ impl ProductionV2Services {
             key_pair.clone(),
             local_validator,
             io_queue_capacity,
+            Arc::clone(&output_guard),
         )?;
         Ok(Self {
             context,
@@ -608,6 +641,8 @@ impl ProductionV2Services {
             entered_view: None,
             last_status: None,
             fatal_reason: None,
+            output_guard,
+            clean_teardown: false,
         })
     }
 
@@ -616,6 +651,10 @@ impl ProductionV2Services {
         &mut self,
         payload: EncodedV2Payload,
     ) -> Result<wire::PayloadManifest, String> {
+        let output_guard = Arc::clone(&self.output_guard);
+        let _permit = output_guard.acquire().ok_or_else(|| {
+            "Sumeragi v2 canonical persistence requires restart recovery".to_owned()
+        })?;
         let sender = self
             .local_validator
             .ok_or_else(|| "observer cannot disperse a Sumeragi v2 proposal".to_owned())?;
@@ -668,7 +707,7 @@ impl ProductionV2Services {
         &mut self,
         request: AuthenticatedCertifiedBodyRequest,
     ) -> Result<(), String> {
-        self.io()?.enqueue(V2IoCommand::Serve(request))
+        self.enqueue_io(V2IoCommand::Serve(request))
     }
 
     /// Load the exact durable body required by a lock-constrained proposal.
@@ -681,9 +720,7 @@ impl ProductionV2Services {
         if !self.pending_candidate_loads.insert(tag) {
             return Ok(());
         }
-        if let Err(error) = self
-            .io()?
-            .enqueue(V2IoCommand::LoadCandidate { tag, subject })
+        if let Err(error) = self.enqueue_io(V2IoCommand::LoadCandidate { tag, subject })
         {
             self.pending_candidate_loads.remove(&tag);
             return Err(error);
@@ -693,16 +730,25 @@ impl ProductionV2Services {
 
     /// Take the next locked-subject body loaded by the ordered I/O worker.
     pub(crate) fn take_loaded_candidate(&mut self) -> Option<LoadedCandidateBody> {
+        if self.output_guard.restart_required() {
+            return None;
+        }
         self.loaded_candidates.pop_front()
     }
 
     /// Take the next deterministic body rejection observed by the worker.
     pub(crate) fn take_validation_rejection(&mut self) -> Option<RejectedCandidateBody> {
+        if self.output_guard.restart_required() {
+            return None;
+        }
         self.validation_rejections.pop_front()
     }
 
     /// Take the next exact validation deferral for bounded sidecar recovery.
     pub(crate) fn take_merge_sidecar_deferral(&mut self) -> Option<DeferredMergeSidecarWork> {
+        if self.output_guard.restart_required() {
+            return None;
+        }
         self.merge_sidecar_deferrals.pop_front()
     }
 
@@ -712,6 +758,10 @@ impl ProductionV2Services {
         &mut self,
         deferred: DeferredMergeSidecarWork,
     ) -> Result<(), String> {
+        let output_guard = Arc::clone(&self.output_guard);
+        let _permit = output_guard
+            .acquire()
+            .ok_or_else(|| "Sumeragi v2 consensus requires process restart".to_owned())?;
         if let Some(existing) = self
             .merge_sidecar_deferrals
             .iter()
@@ -735,6 +785,9 @@ impl ProductionV2Services {
 
     /// Take the next reducer-authorized local Prepare intent.
     pub(crate) fn take_prepared_candidate(&mut self) -> Option<PreparedCandidateBody> {
+        if self.output_guard.restart_required() {
+            return None;
+        }
         self.prepared_candidates.pop_front()
     }
 
@@ -814,6 +867,9 @@ impl ProductionV2Services {
         &mut self,
         executor: &mut V2EffectExecutor,
     ) -> Result<usize, String> {
+        if self.output_guard.restart_required() {
+            return Err("Sumeragi v2 consensus requires process restart".to_owned());
+        }
         let ready = self
             .orphan_chunks
             .keys()
@@ -849,6 +905,12 @@ impl ProductionV2Services {
         &mut self,
         executor: &mut V2EffectExecutor,
     ) -> Result<usize, EffectExecutorError> {
+        if self.output_guard.restart_required() {
+            return Err(executor.external_service_failed(
+                "Sumeragi v2 consensus requires process restart",
+                self,
+            ));
+        }
         let mut completions = Vec::new();
         if let Some(io) = self.io.as_ref() {
             while let Ok(completion) = io.completion_rx.try_recv() {
@@ -906,6 +968,12 @@ impl ProductionV2Services {
                         self,
                     ));
                 }
+                V2IoCompletion::RecoveryRequired(reason) => {
+                    return Err(executor.external_service_failed(
+                        format!("canonical persistence requires restart recovery: {reason}"),
+                        self,
+                    ));
+                }
             }
         }
         while let Some(completion) = self.local_completions.pop_front() {
@@ -939,6 +1007,7 @@ impl ProductionV2Services {
         cleanup_timeout: Duration,
         supervisor: &mut V2CleanupSupervisor,
     ) -> PostFinalityCleanupOutcome {
+        self.clean_teardown = true;
         let mut outcome = PostFinalityCleanupOutcome::default();
         let identity = CleanupWorkerIdentity::from_receipt(&receipt);
         let deadline = Instant::now()
@@ -1084,6 +1153,25 @@ impl ProductionV2Services {
             .ok_or_else(|| "Sumeragi v2 I/O worker is unavailable".to_owned())
     }
 
+    fn output_permit(&self) -> Result<ConsensusOutputPermit<'_>, String> {
+        self.output_guard.acquire().ok_or_else(|| {
+            "Sumeragi v2 canonical persistence requires restart recovery".to_owned()
+        })
+    }
+
+    fn enqueue_io(&self, command: V2IoCommand) -> Result<(), String> {
+        let output_guard = Arc::clone(&self.output_guard);
+        let _permit = output_guard
+            .acquire()
+            .ok_or_else(|| "Sumeragi v2 consensus requires process restart".to_owned())?;
+        self.io()?.enqueue(command)
+    }
+
+    /// Mark an operator-requested shutdown as non-fatal before dropping services.
+    pub(crate) fn allow_clean_shutdown(&mut self) {
+        self.clean_teardown = true;
+    }
+
     fn deliver_payload_chunk(
         &mut self,
         executor: &mut V2EffectExecutor,
@@ -1103,7 +1191,10 @@ impl ProductionV2Services {
 
     /// Send one already-versioned v2 transport envelope to a specific peer.
     pub(crate) fn post_to_peer(&self, peer: PeerId, message: wire::ConsensusMessageV2) {
-        self.post_block_message(peer, BlockMessage::V2(message));
+        let Ok(permit) = self.output_permit() else {
+            return;
+        };
+        self.post_block_message_while_guarded(peer, BlockMessage::V2(message), &permit);
     }
 
     /// Send one retained lane-local proposal, vote, or QC to a committee peer.
@@ -1120,7 +1211,8 @@ impl ProductionV2Services {
         ) {
             return Err("v2 lane transport rejected a legacy global block message".to_owned());
         }
-        self.post_block_message(peer, message);
+        let permit = self.output_permit()?;
+        self.post_block_message_while_guarded(peer, message, &permit);
         Ok(())
     }
 
@@ -1131,7 +1223,7 @@ impl ProductionV2Services {
         peer: PeerId,
         message: CertifiedMergeSidecarMessage,
     ) {
-        let Some(_consensus_output_guard) = super::consensus_output_guard() else {
+        let Ok(_permit) = self.output_permit() else {
             return;
         };
         self.network.post(Post {
@@ -1147,7 +1239,7 @@ impl ProductionV2Services {
         peer: PeerId,
         message: crate::native_amx::NativeAmxMessage,
     ) {
-        let Some(_consensus_output_guard) = super::consensus_output_guard() else {
+        let Ok(_permit) = self.output_permit() else {
             return;
         };
         self.network.post(Post {
@@ -1159,7 +1251,7 @@ impl ProductionV2Services {
 
     /// Broadcast one merge signature share to every other frozen voter.
     pub(crate) fn broadcast_merge_to_voters(&self, signature: MergeCommitteeSignature) {
-        let Some(_consensus_output_guard) = super::consensus_output_guard() else {
+        let Ok(_permit) = self.output_permit() else {
             return;
         };
         for entry in &self.context.roster {
@@ -1174,16 +1266,25 @@ impl ProductionV2Services {
         }
     }
 
-    fn post_block_message(&self, peer: PeerId, message: BlockMessage) {
-        let Some(_consensus_output_guard) = super::consensus_output_guard() else {
-            return;
-        };
+    fn post_block_message_while_guarded(
+        &self,
+        peer: PeerId,
+        message: BlockMessage,
+        _permit: &ConsensusOutputPermit<'_>,
+    ) {
         let block_message = Arc::new(message);
-        let encoded = Arc::new(BlockMessageWire::encode_message(block_message.as_ref()));
-        let data = NetworkMessage::SumeragiBlock(Box::new(BlockMessageWire::with_encoded(
-            block_message,
-            encoded,
-        )));
+        let wire = match BlockMessageWire::try_preencoded(block_message) {
+            Ok(wire) => wire,
+            Err(error) => {
+                iroha_logger::error!(
+                    ?error,
+                    %peer,
+                    "refusing to send a non-canonical Sumeragi v2 block message"
+                );
+                return;
+            }
+        };
+        let data = NetworkMessage::SumeragiBlock(Box::new(wire));
         self.network.post(Post {
             data,
             peer_id: peer,
@@ -1193,17 +1294,35 @@ impl ProductionV2Services {
 
     /// Retransmit one v2 transport envelope to every other frozen voter.
     pub(crate) fn broadcast_to_voters(&self, message: wire::ConsensusMessageV2) {
+        let Ok(permit) = self.output_permit() else {
+            return;
+        };
+        self.broadcast_to_voters_while_guarded(message, &permit);
+    }
+
+    fn broadcast_to_voters_while_guarded(
+        &self,
+        message: wire::ConsensusMessageV2,
+        permit: &ConsensusOutputPermit<'_>,
+    ) {
         for entry in &self.context.roster {
             if entry.validator == self.local_peer {
                 continue;
             }
-            self.post_to_peer(entry.validator.clone(), message.clone());
+            self.post_block_message_while_guarded(
+                entry.validator.clone(),
+                BlockMessage::V2(message.clone()),
+                permit,
+            );
         }
     }
 }
 
 impl Drop for ProductionV2Services {
     fn drop(&mut self) {
+        if !self.clean_teardown {
+            self.output_guard.activate_restart_required();
+        }
         let Some(io) = self.io.take() else {
             return;
         };
@@ -1228,7 +1347,7 @@ impl V2EffectServices for ProductionV2Services {
             | super::v2::SignRequest::Vote(_)
             | super::v2::SignRequest::TimeoutVote(_) => None,
         };
-        self.io()?.enqueue(V2IoCommand::Sign(task))?;
+        self.enqueue_io(V2IoCommand::Sign(task))?;
         if let Some(prepared) = prepared
             && self.prepared_candidates.len() < self.max_orphan_chunks
         {
@@ -1250,7 +1369,8 @@ impl V2EffectServices for ProductionV2Services {
         message
             .validate_version()
             .map_err(|error| error.to_string())?;
-        self.broadcast_to_voters(message.clone());
+        let permit = self.output_permit()?;
+        self.broadcast_to_voters_while_guarded(message.clone(), &permit);
         if let wire::ConsensusMessageV2Payload::Proposal(proposal) = &message.payload {
             let manifest_hash = HashOf::new(&proposal.manifest);
             let chunks = self
@@ -1258,19 +1378,27 @@ impl V2EffectServices for ProductionV2Services {
                 .get(&manifest_hash)
                 .ok_or_else(|| "local proposal has no retained Sumeragi v2 chunks".to_owned())?;
             for chunk in chunks {
-                self.broadcast_to_voters(chunk.clone());
+                self.broadcast_to_voters_while_guarded(chunk.clone(), &permit);
             }
         }
         Ok(())
     }
 
     fn sign_body_request(&mut self, preimage: &[u8]) -> Result<Vec<u8>, Self::Error> {
+        let output_guard = Arc::clone(&self.output_guard);
+        let _permit = output_guard
+            .acquire()
+            .ok_or_else(|| "Sumeragi v2 consensus requires process restart".to_owned())?;
         Signature::try_new(self.key_pair.private_key(), preimage)
             .map(|signature| signature.payload().to_vec())
             .map_err(|error| error.to_string())
     }
 
     fn enqueue_body_fetch(&mut self, task: BodyFetchTask) -> Result<(), Self::Error> {
+        let output_guard = Arc::clone(&self.output_guard);
+        let permit = output_guard.acquire().ok_or_else(|| {
+            "Sumeragi v2 canonical persistence requires restart recovery".to_owned()
+        })?;
         if let Some(existing) = self.fetches.get(&task.id()) {
             if existing.task != task {
                 return Err("conflicting Sumeragi v2 body-fetch task".to_owned());
@@ -1281,7 +1409,11 @@ impl V2EffectServices for ProductionV2Services {
                 );
                 for peer in task.sources() {
                     if peer != &self.local_peer {
-                        self.post_to_peer(peer.clone(), message.clone());
+                        self.post_block_message_while_guarded(
+                            peer.clone(),
+                            BlockMessage::V2(message.clone()),
+                            &permit,
+                        );
                     }
                 }
             }
@@ -1310,7 +1442,11 @@ impl V2EffectServices for ProductionV2Services {
             );
             for peer in task.sources() {
                 if peer != &self.local_peer {
-                    self.post_to_peer(peer.clone(), message.clone());
+                    self.post_block_message_while_guarded(
+                        peer.clone(),
+                        BlockMessage::V2(message.clone()),
+                        &permit,
+                    );
                 }
             }
         }
@@ -1320,6 +1456,10 @@ impl V2EffectServices for ProductionV2Services {
     }
 
     fn cancel_body_fetch(&mut self, work_id: EffectWorkId) -> Result<(), Self::Error> {
+        let output_guard = Arc::clone(&self.output_guard);
+        let _permit = output_guard
+            .acquire()
+            .ok_or_else(|| "Sumeragi v2 consensus requires process restart".to_owned())?;
         if let Some(fetch) = self.fetches.remove(&work_id)
             && let Some(manifest) = fetch.task.manifest()
         {
@@ -1333,6 +1473,10 @@ impl V2EffectServices for ProductionV2Services {
         work_id: EffectWorkId,
         chunk: AuthenticatedPayloadChunk,
     ) -> Result<(), Self::Error> {
+        let output_guard = Arc::clone(&self.output_guard);
+        let _permit = output_guard
+            .acquire()
+            .ok_or_else(|| "Sumeragi v2 consensus requires process restart".to_owned())?;
         let fetch = self
             .fetches
             .get_mut(&work_id)
@@ -1360,7 +1504,7 @@ impl V2EffectServices for ProductionV2Services {
     }
 
     fn enqueue_body_store(&mut self, task: BodyStoreTask) -> Result<(), Self::Error> {
-        self.io()?.enqueue(V2IoCommand::Store(task))
+        self.enqueue_io(V2IoCommand::Store(task))
     }
 
     fn cancel_body_store(&mut self, _work_id: EffectWorkId) -> Result<(), Self::Error> {
@@ -1368,7 +1512,7 @@ impl V2EffectServices for ProductionV2Services {
     }
 
     fn enqueue_body_validation(&mut self, task: BodyValidationTask) -> Result<(), Self::Error> {
-        self.io()?.enqueue(V2IoCommand::Validate(task))
+        self.enqueue_io(V2IoCommand::Validate(task))
     }
 
     fn work_deferred_for_merge_sidecar(
@@ -1387,7 +1531,7 @@ impl V2EffectServices for ProductionV2Services {
     }
 
     fn enqueue_apply(&mut self, task: ApplyTask) -> Result<(), Self::Error> {
-        self.io()?.enqueue(V2IoCommand::Apply(task))
+        self.enqueue_io(V2IoCommand::Apply(task))
     }
 
     fn entered_view(
@@ -1395,6 +1539,10 @@ impl V2EffectServices for ProductionV2Services {
         tag: EventTag,
         _certificate: wire::TimeoutCertificate,
     ) -> Result<(), Self::Error> {
+        let output_guard = Arc::clone(&self.output_guard);
+        let _permit = output_guard
+            .acquire()
+            .ok_or_else(|| "Sumeragi v2 consensus requires process restart".to_owned())?;
         self.entered_view = Some(tag);
         Ok(())
     }
@@ -1428,6 +1576,10 @@ impl V2EffectServices for ProductionV2Services {
         subject: wire::BlockSubject,
         reason: &str,
     ) {
+        let output_guard = Arc::clone(&self.output_guard);
+        let Some(_permit) = output_guard.acquire() else {
+            return;
+        };
         if self.validation_rejections.len() < self.max_orphan_chunks {
             self.validation_rejections.push_back(RejectedCandidateBody {
                 round,
@@ -1444,11 +1596,16 @@ impl V2EffectServices for ProductionV2Services {
     }
 
     fn publish_effect_status(&mut self, status: &EffectExecutorStatus) -> Result<(), Self::Error> {
+        let output_guard = Arc::clone(&self.output_guard);
+        let _permit = output_guard
+            .acquire()
+            .ok_or_else(|| "Sumeragi v2 consensus requires process restart".to_owned())?;
         self.last_status = Some(status.clone());
         Ok(())
     }
 
     fn fail_closed(&mut self, reason: &str) {
+        self.output_guard.activate_restart_required();
         self.fatal_reason = Some(reason.to_owned());
         iroha_logger::error!(reason, "Sumeragi v2 effect services failed closed");
     }
@@ -1456,6 +1613,8 @@ impl V2EffectServices for ProductionV2Services {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
         ChainId,
@@ -1532,8 +1691,90 @@ mod tests {
             entered_view: None,
             last_status: None,
             fatal_reason: None,
+            output_guard: ConsensusOutputGuard::isolated(),
+            clean_teardown: true,
         };
         (service, keys)
+    }
+
+    #[test]
+    fn recovery_gate_is_cross_thread_and_precedes_fatal_completion() {
+        let gate = ConsensusOutputGuard::isolated();
+        let admitted_output = gate.acquire().expect("initial output permit");
+        let worker_gate = Arc::clone(&gate);
+        let (completion_tx, completion_rx) = mpsc::sync_channel(1);
+        let later_candidate_published = Arc::new(AtomicBool::new(false));
+        let worker_candidate_published = Arc::clone(&later_candidate_published);
+        let worker = thread::spawn(move || {
+            publish_recovery_required(
+                &worker_gate,
+                &completion_tx,
+                "committed marker requires restart".to_owned(),
+            );
+            assert!(worker_gate.restart_required());
+            if worker_gate.acquire().is_some() {
+                worker_candidate_published.store(true, Ordering::Release);
+            }
+        });
+
+        assert!(
+            completion_rx
+                .recv_timeout(Duration::from_millis(25))
+                .is_err(),
+            "recovery activation must wait for an already-admitted output"
+        );
+        drop(admitted_output);
+        let completion = completion_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("fatal completion must follow recovery activation");
+        assert!(matches!(
+            completion,
+            V2IoCompletion::RecoveryRequired(reason)
+                if reason == "committed marker requires restart"
+        ));
+        worker.join().expect("join recovery worker");
+        assert!(gate.restart_required());
+        assert!(gate.acquire().is_none());
+        assert!(
+            !later_candidate_published.load(Ordering::Acquire),
+            "no candidate may be published after the fatal durability transition"
+        );
+    }
+
+    #[test]
+    fn recovery_gate_rejects_service_outputs_and_candidate_delivery() {
+        let (mut service, _) = fixture();
+        let encoded = encode_payload(
+            &service.context,
+            wire::ConsensusRound {
+                context_id: service.context.id(),
+                height: service.context.height,
+                view: 0,
+            },
+            wire::BlockSubject {
+                parent_block_hash: None,
+                block_hash: HashOf::from_untyped_unchecked(Hash::new(b"blocked block")),
+                payload_hash: Hash::new(b"blocked body"),
+            },
+            b"blocked body",
+        )
+        .expect("encode bounded payload");
+        service.prepared_candidates.push_back(PreparedCandidateBody {
+            tag: EventTag::new(1, 0, iroha_sumeragi_core::Generation::new(1)),
+            subject: wire::BlockSubject {
+                parent_block_hash: None,
+                block_hash: HashOf::from_untyped_unchecked(Hash::new(b"blocked candidate")),
+                payload_hash: Hash::new(b"blocked payload"),
+            },
+        });
+        service.output_guard.activate_restart_required();
+
+        assert!(service.take_prepared_candidate().is_none());
+        assert!(
+            service.register_outbound_payload(encoded).is_err(),
+            "recovery must reject new proposal material before publication"
+        );
+        assert!(service.output_permit().is_err());
     }
 
     fn manifest_hash(label: &[u8]) -> HashOf<wire::PayloadManifest> {

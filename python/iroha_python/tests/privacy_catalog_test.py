@@ -148,15 +148,15 @@ def _privacy_production_test_artifact(label: str) -> dict[str, str]:
 
 
 def test_privacy_catalog_internal_review_evidence_test_artifact_helper_uses_sha256() -> None:
-    label = "kagemusha-test-artifact"
+    label = "pasta-cycle-test-artifact"
     assert _privacy_production_test_artifact(label) == {
         "label": label,
         "uri": f"sha256:{hashlib.sha256(label.encode('utf-8')).hexdigest()}",
     }
     assert _privacy_production_test_artifact(
-        "localnet-lifecycle-recursive-init-transparent-transfer"
+        "localnet-lifecycle-proof-build"
     )["uri"] != _privacy_production_test_artifact(
-        "localnet-lifecycle-recursive-append-transparent-transfer"
+        "localnet-lifecycle-proof-verify"
     )["uri"]
 
 

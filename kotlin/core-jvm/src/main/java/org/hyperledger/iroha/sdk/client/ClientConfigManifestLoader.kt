@@ -14,7 +14,6 @@ import java.util.LinkedHashMap
 import java.util.function.BiConsumer
 import kotlin.io.encoding.Base64
 import kotlin.io.encoding.ExperimentalEncodingApi
-import org.hyperledger.iroha.sdk.offline.OfflineJournalKey
 import org.hyperledger.iroha.sdk.telemetry.Redaction
 import org.hyperledger.iroha.sdk.telemetry.TelemetryOptions
 
@@ -83,32 +82,11 @@ object ClientConfigManifestLoader {
         val pending = optionalObject(root["pending_queue"], "pending_queue") ?: return
         val kind = optionalString(pending["kind"])
         if (kind == null || "memory".equals(kind, ignoreCase = true)) { builder.setPendingQueue(null); return }
-        if ("offline_journal".equals(kind, ignoreCase = true)) {
-            val pathRaw = requireString(pending, "path")
-            val resolved = resolveRelative(manifestPath, pathRaw)
-            val key = deriveJournalKey(pending)
-            check(key != null) { "pending_queue.kind=offline_journal requires either key_seed_b64 or passphrase" }
-            builder.enableOfflineJournalQueue(resolved, key); return
-        }
         if ("file".equals(kind, ignoreCase = true)) {
             val pathRaw = requireString(pending, "path")
             builder.enableFilePendingQueue(resolveRelative(manifestPath, pathRaw)); return
         }
         throw IllegalStateException("Unsupported pending queue kind: $kind")
-    }
-
-    private fun deriveJournalKey(pending: Map<String, Any?>): OfflineJournalKey? {
-        val seedB64 = optionalString(pending["key_seed_b64"])
-        if (!seedB64.isNullOrEmpty()) {
-            val seed = Base64.decode(seedB64)
-            check(seed.isNotEmpty()) { "pending_queue.key_seed_b64 cannot decode to an empty seed" }
-            return OfflineJournalKey.derive(seed)
-        }
-        val seedHex = optionalString(pending["key_seed_hex"])
-        if (!seedHex.isNullOrBlank()) return OfflineJournalKey.derive(hexToBytes(seedHex.trim()))
-        val passphrase = optionalString(pending["passphrase"])
-        if (!passphrase.isNullOrEmpty()) return OfflineJournalKey.deriveFromPassphrase(passphrase.toCharArray())
-        return null
     }
 
     private fun applyTelemetry(builder: ClientConfig.Builder, root: Map<String, Any?>) {

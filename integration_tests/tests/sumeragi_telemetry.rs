@@ -74,11 +74,11 @@ async fn npos_telemetry_soak_matches_metrics_under_adversarial_collectors() -> R
     let builder = NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()
+        .with_npos_consensus()
         .with_config_layer(|layer| {
             layer
                 .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full")
-                .write(["sumeragi", "consensus_mode"], "npos")
                 .write(["sumeragi", "collectors", "k"], i64::from(COLLECTORS_K))
                 .write(
                     ["sumeragi", "collectors", "redundant_send_r"],

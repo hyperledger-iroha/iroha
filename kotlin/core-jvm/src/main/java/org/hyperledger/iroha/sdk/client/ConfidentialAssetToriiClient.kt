@@ -7,7 +7,6 @@ import java.util.LinkedHashMap
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletionException
 import org.hyperledger.iroha.sdk.client.transport.TransportRequest
-import org.hyperledger.iroha.sdk.offline.OfflineToriiException
 
 /** Lightweight Torii client for confidential-asset query endpoints. */
 class ConfidentialAssetToriiClient private constructor(builder: Builder) {
@@ -78,7 +77,7 @@ class ConfidentialAssetToriiClient private constructor(builder: Builder) {
         executor.execute(request).whenComplete { response, throwable ->
             if (throwable != null) {
                 val cause = if (throwable is CompletionException) throwable.cause else throwable
-                val error = OfflineToriiException("Confidential asset request failed: ${summarizeCauseMessage(cause)}", cause, null, null, null)
+                val error = ConfidentialAssetToriiException("Confidential asset request failed: ${summarizeCauseMessage(cause)}", cause, null, null, null)
                 notifyFailure(request, error)
                 future.completeExceptionally(error)
                 return@whenComplete
@@ -87,7 +86,7 @@ class ConfidentialAssetToriiClient private constructor(builder: Builder) {
             val bodyPreview = HttpErrorMessageExtractor.extractMessage(response.body)
             val clientResponse = ClientResponse(response.statusCode, response.body, response.message, null, rejectCode)
             if (response.statusCode < 200 || response.statusCode >= 300) {
-                val error = OfflineToriiException(buildHttpFailureMessage(request, response.statusCode, response.message, rejectCode, bodyPreview), response.statusCode, rejectCode, bodyPreview)
+                val error = ConfidentialAssetToriiException(buildHttpFailureMessage(request, response.statusCode, response.message, rejectCode, bodyPreview), response.statusCode, rejectCode, bodyPreview)
                 notifyFailure(request, error)
                 future.completeExceptionally(error)
                 return@whenComplete
@@ -97,7 +96,7 @@ class ConfidentialAssetToriiClient private constructor(builder: Builder) {
                 notifyResponse(request, clientResponse)
                 future.complete(parsed)
             } catch (ex: RuntimeException) {
-                val error = OfflineToriiException(buildParseFailureMessage(request, response.statusCode, bodyPreview), ex, response.statusCode, rejectCode, bodyPreview)
+                val error = ConfidentialAssetToriiException(buildParseFailureMessage(request, response.statusCode, bodyPreview), ex, response.statusCode, rejectCode, bodyPreview)
                 notifyFailure(request, error)
                 future.completeExceptionally(error)
             }

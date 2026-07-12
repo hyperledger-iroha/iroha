@@ -1139,9 +1139,9 @@ async fn contract_state_survives_across_calls_in_sora_profile_network() -> Resul
     let builder = NetworkBuilder::new()
         .with_min_peers(4)
         .with_pipeline_time(Duration::from_secs(4))
+        .with_npos_consensus()
         .with_config_layer(|layer| {
             layer
-                .write(["sumeragi", "consensus_mode"], "npos")
                 .write(["nexus", "enabled"], true)
                 .write(["nexus", "lane_count"], 1i64);
         })

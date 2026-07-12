@@ -16196,17 +16196,6 @@ pub mod isi {
     fn validate_fee_sponsor_policy(
         policy: &iroha_data_model::nexus::FeeSponsorPolicy,
     ) -> Result<(), Error> {
-        if let Some(max_fee) = &policy.max_fee
-            && max_fee < &Numeric::zero()
-        {
-            return Err(InstructionExecutionError::InvalidParameter(
-                InvalidParameterError::SmartContract(
-                    "fee sponsor policy max_fee must be non-negative".into(),
-                ),
-            )
-            .into());
-        }
-
         if policy.enabled
             && !policy
                 .rules
@@ -17066,97 +17055,49 @@ pub mod isi {
                     }
                 }
             }
-            // Handle scheduling parameters specially since they are optional in WSV
-            // and are not listed by `Parameters::parameters()` iterator.
-            match self.inner().clone() {
-                Parameter::Sumeragi(iroha_data_model::parameter::SumeragiParameter::NextMode(
-                    next_mode,
-                )) => {
-                    if state_transaction.nexus.enabled {
-                        return Err(InstructionExecutionError::InvalidParameter(
-                            InvalidParameterError::SmartContract(
-                                "Nexus networks do not support staged consensus cutovers; remove sumeragi.next_mode/mode_activation_height"
-                                    .to_owned(),
-                            ),
-                        ));
-                    }
-                    let params_view = state_transaction.world.parameters.get();
-                    // Avoid redundant updates when the requested mode is already staged.
-                    if params_view.sumeragi().next_mode() == Some(next_mode) {
-                        return Ok(());
-                    }
-
-                    let params = state_transaction.world.parameters.get_mut();
-                    params.set_parameter(Parameter::Sumeragi(
-                        iroha_data_model::parameter::SumeragiParameter::NextMode(next_mode),
-                    ));
-                    state_transaction.mark_mode_cutover_next_set();
-                    state_transaction
-                        .world
-                        .emit_events(Some(ConfigurationEvent::Changed(ParameterChanged {
-                            old_value: Parameter::Sumeragi(
-                                iroha_data_model::parameter::SumeragiParameter::NextMode(next_mode),
-                            ),
-                            new_value: Parameter::Sumeragi(
-                                iroha_data_model::parameter::SumeragiParameter::NextMode(next_mode),
-                            ),
-                        })));
-                    return Ok(());
-                }
+            if matches!(
+                self.inner(),
                 Parameter::Sumeragi(
-                    iroha_data_model::parameter::SumeragiParameter::ModeActivationHeight(height),
-                ) => {
-                    if state_transaction.nexus.enabled {
-                        return Err(InstructionExecutionError::InvalidParameter(
-                            InvalidParameterError::SmartContract(
-                                "Nexus networks do not support staged consensus cutovers; remove sumeragi.next_mode/mode_activation_height"
-                                    .to_owned(),
-                            ),
-                        ));
-                    }
-                    let params_view = state_transaction.world.parameters.get();
-                    if params_view.sumeragi().next_mode().is_none() {
-                        return Err(InstructionExecutionError::InvalidParameter(
-                            InvalidParameterError::SmartContract(
-                                "mode_activation_height requires next_mode to be set in the same block"
-                                    .to_owned(),
-                            ),
-                        ));
-                    }
-
-                    let current_height = state_transaction._curr_block.height().get();
-                    if height <= current_height {
-                        return Err(InstructionExecutionError::InvalidParameter(
-                            InvalidParameterError::SmartContract(format!(
-                                "mode_activation_height {height} must be greater than current block height {current_height} to enforce joint-consensus activation"
-                            )),
-                        ));
-                    }
-
-                    let params = state_transaction.world.parameters.get_mut();
-                    params.set_parameter(Parameter::Sumeragi(
-                        iroha_data_model::parameter::SumeragiParameter::ModeActivationHeight(
-                            height,
-                        ),
-                    ));
-                    state_transaction.mark_mode_cutover_activation_set();
-                    state_transaction
-                        .world
-                        .emit_events(Some(ConfigurationEvent::Changed(ParameterChanged {
-                        old_value: Parameter::Sumeragi(
-                            iroha_data_model::parameter::SumeragiParameter::ModeActivationHeight(
-                                height,
-                            ),
-                        ),
-                        new_value: Parameter::Sumeragi(
-                            iroha_data_model::parameter::SumeragiParameter::ModeActivationHeight(
-                                height,
-                            ),
-                        ),
-                    })));
-                    return Ok(());
-                }
-                _ => {}
+                    iroha_data_model::parameter::SumeragiParameter::NextMode(_)
+                        | iroha_data_model::parameter::SumeragiParameter::ModeActivationHeight(_)
+                )
+            ) {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "Sumeragi v2 does not support runtime consensus-mode staging".to_owned(),
+                    ),
+                ));
+            }
+            if matches!(
+                self.inner(),
+                Parameter::Sumeragi(SumeragiParameter::DaEnabled(false))
+            ) {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "Sumeragi v2 requires data availability at every height".to_owned(),
+                    ),
+                ));
+            }
+            if state_transaction._curr_block.height().get() > 1
+                && matches!(
+                    self.inner(),
+                    Parameter::Sumeragi(
+                        SumeragiParameter::MinFinalityMs(_)
+                            | SumeragiParameter::BlockTimeMs(_)
+                            | SumeragiParameter::CommitTimeMs(_)
+                            | SumeragiParameter::PacingFactorBps(_)
+                            | SumeragiParameter::CollectorsK(_)
+                            | SumeragiParameter::RedundantSendR(_)
+                            | SumeragiParameter::DaEnabled(_)
+                    )
+                )
+            {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "Sumeragi v2 consensus timing, DA, and quorum-routing parameters are genesis-frozen"
+                            .to_owned(),
+                    ),
+                ));
             }
             let validate_timing = |min_finality_ms: u64,
                                    block_time_ms: u64,
@@ -18172,7 +18113,7 @@ pub mod isi {
             nexus::space_directory::{SpaceDirectoryManifestRecord, SpaceDirectoryManifestSet},
             query::store::LiveQueryStore,
             state::{
-                State, StateTransaction, SumeragiPolicyConfig, SumeragiPolicyFlags, World,
+                State, StateTransaction, SumeragiPolicyConfig, World,
                 storage_transactions::TransactionsBlockError,
             },
             zk::hash_vk,
@@ -20841,11 +20782,6 @@ seiyaku GovernanceLifecycle {
                 "halo2/pasta/ipa/zk-vote",
                 "halo2/ipa:other"
             ));
-            assert!(circuit_id_matches(
-                "halo2/pasta/kagemusha-recursive-compact-v1",
-                "halo2/pasta/ipa/kagemusha-recursive-compact-v1",
-                "halo2/ipa:kagemusha-recursive-compact-v1"
-            ));
             assert!(!circuit_id_matches(
                 "halo2/pasta/tiny-add",
                 "halo2/pasta/ipa/zk-vote",
@@ -20933,9 +20869,6 @@ seiyaku GovernanceLifecycle {
                 );
             }
             assert!(is_no_trusted_setup_halo2_backend_id("halo2/ipa"));
-            assert!(is_no_trusted_setup_halo2_backend_id(
-                "halo2/pasta/kagemusha-recursive-compact-v1"
-            ));
             assert!(voting_circuit_matches(
                 "stark/fri/sha256-goldilocks",
                 "stark/fri/sha256-goldilocks:vote-ballot",
@@ -21430,9 +21363,6 @@ seiyaku GovernanceLifecycle {
                 BackendTag::Halo2IpaPasta
             ));
             assert!(backend_requires_open_verify_envelope("halo2/ipa"));
-            assert!(backend_requires_open_verify_envelope(
-                "halo2/pasta/kagemusha-recursive-compact-v1"
-            ));
             assert!(!open_verify_backend_tag_matches(
                 "halo2/ipa",
                 BackendTag::Halo2Bn254
@@ -22445,7 +22375,7 @@ seiyaku GovernanceLifecycle {
                 .iter()
                 .zip(balances.iter())
                 .map(|(asset_id, (_, amount))| {
-                    Asset::new(asset_id.clone(), Numeric::new(*amount, 0))
+                    Asset::new(asset_id.clone(), Quantity::from(*amount))
                 })
                 .collect();
             let mut world = World::with_assets([domain], [account], [asset_definition], assets, []);
@@ -22568,7 +22498,7 @@ seiyaku GovernanceLifecycle {
                 .with_name(asset_def_id.name().to_string())
                 .build(&ALICE_ID);
             let alice_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
-            let alice_asset = Asset::new(alice_asset_id, Numeric::new(100, 0));
+            let alice_asset = Asset::new(alice_asset_id, Quantity::from(100));
             let world = World::with_assets(
                 [domain],
                 [alice, receiver_account],
@@ -22986,7 +22916,7 @@ seiyaku GovernanceLifecycle {
                 AssetBalanceScope::Dataspace(home_dataspace),
             );
             let (home_source_asset_id, home_source_asset_value) =
-                Asset::new(home_source_asset.clone(), Numeric::new(100, 0)).into_key_value();
+                Asset::new(home_source_asset.clone(), Quantity::from(100)).into_key_value();
             stx.world
                 .assets
                 .insert(home_source_asset_id.clone(), home_source_asset_value);
@@ -24503,7 +24433,7 @@ seiyaku GovernanceLifecycle {
                 .confidential_policy(AssetConfidentialPolicy::convertible())
                 .build(&ALICE_ID);
             let asset_id = AssetId::of(asset_def_id.clone(), ALICE_ID.clone());
-            let asset = Asset::new(asset_id.clone(), Numeric::new(10, 0));
+            let asset = Asset::new(asset_id.clone(), Quantity::from(10));
             let mut world =
                 World::with_assets([domain], [account], [asset_definition], [asset], []);
             world.zk_assets.insert(asset_def_id.clone(), {
@@ -24673,7 +24603,7 @@ seiyaku GovernanceLifecycle {
             .execute(&ALICE_ID, &mut stx)
             .expect("register asset definition");
             let asset_id = AssetId::new(asset_def_id.clone(), account_id.clone());
-            let asset = Asset::new(asset_id.clone(), Numeric::new(1, 0));
+            let asset = Asset::new(asset_id.clone(), Quantity::from(1));
             let (asset_id, asset_value) = asset.into_key_value();
             stx.world.assets.insert(asset_id.clone(), asset_value);
             stx.world.track_asset_holder(&asset_id);
@@ -24887,7 +24817,7 @@ seiyaku GovernanceLifecycle {
             .expect("register asset definition");
 
             let asset_id = AssetId::new(asset_def_id.clone(), holder_id.clone());
-            let asset = Asset::new(asset_id.clone(), Numeric::new(1, 0));
+            let asset = Asset::new(asset_id.clone(), Quantity::from(1));
             let (asset_id, asset_value) = asset.into_key_value();
             stx.world.assets.insert(asset_id.clone(), asset_value);
             stx.world.track_asset_holder(&asset_id);
@@ -26866,10 +26796,6 @@ seiyaku GovernanceLifecycle {
                 .rules
                 .push(FeeSponsorRule::new(FeeSponsorRuleEffect::Deny));
 
-            let mut negative_max_fee =
-                allow_all_fee_sponsor_policy(&sponsor_id, "negative_max_fee");
-            negative_max_fee.max_fee = Some(Numeric::new(-1_i32, 0));
-
             let mut empty_wire_id = allow_all_fee_sponsor_policy(&sponsor_id, "empty_wire_id");
             empty_wire_id.rules[0]
                 .instruction_wire_ids
@@ -26887,7 +26813,6 @@ seiyaku GovernanceLifecycle {
 
             for (policy, expected) in [
                 (no_allow, "must contain at least one allow rule"),
-                (negative_max_fee, "max_fee must be non-negative"),
                 (empty_wire_id, "empty instruction wire id"),
                 (empty_entrypoint, "empty entrypoint"),
                 (unknown_sponsor_policy, "unknown fee sponsor policy sponsor"),
@@ -27461,6 +27386,7 @@ seiyaku GovernanceLifecycle {
             let custody_asset = AssetId::new(asset.clone(), custody);
             let recipient_asset = AssetId::new(asset, ALICE_ID.clone());
             let custody_before = sccp_asset_balance(&stx, &custody_asset);
+            seed_sccp_test_tx_call_hash(&mut stx, 0x8E);
 
             SubmitBridgeProof::new(proof.clone())
                 .execute(&ALICE_ID, &mut stx)
@@ -27686,6 +27612,7 @@ seiyaku GovernanceLifecycle {
             );
             let custody_asset = AssetId::new(asset.clone(), custody);
             let recipient_asset = AssetId::new(asset, ALICE_ID.clone());
+            seed_sccp_test_tx_call_hash(&mut pre_cutoff, 0x8F);
             SubmitBridgeProof::new(proof.clone())
                 .execute(&ALICE_ID, &mut pre_cutoff)
                 .expect("event finalized at the governed retirement cutoff must remain claimable");
@@ -27734,6 +27661,7 @@ seiyaku GovernanceLifecycle {
             stx.chain_id =
                 iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1);
             stx.zk.max_proof_size_bytes = 32 * 1024 * 1024;
+            seed_sccp_test_tx_call_hash(&mut stx, 0x90);
 
             let unknown = replace_native_proof_trust_anchor_for_test(
                 proof.clone(),
@@ -27796,6 +27724,7 @@ seiyaku GovernanceLifecycle {
             )
             .expect("validated native replay key");
             let proof_count_before = stx.world.proofs.iter().count();
+            seed_sccp_test_tx_call_hash(&mut stx, 0x91);
 
             SubmitBridgeProof::new(proof)
                 .execute(&ALICE_ID, &mut stx)
@@ -27841,6 +27770,7 @@ seiyaku GovernanceLifecycle {
                 native.message_key.message_id,
             )
             .expect("validated native replay key");
+            seed_sccp_test_tx_call_hash(&mut stx, 0x92);
 
             SubmitBridgeProof::new(proof)
                 .execute(&ALICE_ID, &mut stx)
@@ -27885,6 +27815,7 @@ seiyaku GovernanceLifecycle {
                 native.message_key.message_id,
             )
             .expect("validated native replay key");
+            seed_sccp_test_tx_call_hash(&mut stx, 0x93);
 
             let error = SubmitBridgeProof::new(proof)
                 .execute(&ALICE_ID, &mut stx)
@@ -27914,6 +27845,7 @@ seiyaku GovernanceLifecycle {
                 iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1);
             stx.zk.max_proof_size_bytes = 32 * 1024 * 1024;
             let proof_commitment = bridge_proof_hash_for_test(&proof);
+            seed_sccp_test_tx_call_hash(&mut stx, 0x94);
 
             SubmitBridgeProof::new(proof)
                 .execute(&ALICE_ID, &mut stx)
@@ -27972,6 +27904,7 @@ seiyaku GovernanceLifecycle {
                 iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1);
             stx.zk.max_proof_size_bytes = 32 * 1024 * 1024;
             let proof_commitment = bridge_proof_hash_for_test(&proof);
+            seed_sccp_test_tx_call_hash(&mut stx, 0x95);
 
             SubmitBridgeProof::new(proof.clone())
                 .execute(&ALICE_ID, &mut stx)
@@ -28051,6 +27984,7 @@ seiyaku GovernanceLifecycle {
             stx.chain_id =
                 iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1);
             stx.zk.max_proof_size_bytes = 32 * 1024 * 1024;
+            seed_sccp_test_tx_call_hash(&mut stx, 0x96);
 
             let other_key = iroha_data_model::bridge::SccpInboundMessageKeyV1::new(
                 iroha_data_model::bridge::SccpLaneIdV1 {
@@ -28117,6 +28051,7 @@ seiyaku GovernanceLifecycle {
                 abandoned.chain_id =
                     iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1);
                 abandoned.zk.max_proof_size_bytes = 32 * 1024 * 1024;
+                seed_sccp_test_tx_call_hash(&mut abandoned, 0x97);
                 SubmitBridgeProof::new(proof.clone())
                     .execute(&ALICE_ID, &mut abandoned)
                     .expect("native proof must be valid inside abandoned overlay");
@@ -28128,6 +28063,7 @@ seiyaku GovernanceLifecycle {
             retry.chain_id =
                 iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1);
             retry.zk.max_proof_size_bytes = 32 * 1024 * 1024;
+            seed_sccp_test_tx_call_hash(&mut retry, 0x97);
             assert!(retry.world.sccp_inbound_messages.get(&key).is_none());
             assert!(retry.world.proofs.iter().all(|(_, record)| {
                 record
@@ -28452,36 +28388,30 @@ seiyaku GovernanceLifecycle {
                 set_current_lane_for_test(&mut stx, LaneId::SINGLE);
                 let mut receipt = sccp_bridge_receipt_for_receipt_test(proof_hash, &artifact);
                 let baseline = receipt.clone();
-                let expected_error = match mismatch {
+                match mismatch {
                     ReceiptMismatch::Direction => {
                         receipt.direction = if receipt.direction == b"release" {
                             b"mint".to_vec()
                         } else {
                             b"release".to_vec()
                         };
-                        "direction does not match transfer payload"
                     }
                     ReceiptMismatch::SourceTx => {
                         receipt.source_tx[0] ^= 0xFF;
-                        "complete proof-derived projection"
                     }
                     ReceiptMismatch::DestTx => {
                         receipt.dest_tx = Some([0xD5; 32]);
-                        "complete proof-derived projection"
                     }
                     ReceiptMismatch::Amount => {
                         receipt.amount += 1;
-                        "complete proof-derived projection"
                     }
                     ReceiptMismatch::AssetId => {
                         receipt.asset_id.push(b'!');
-                        "complete proof-derived projection"
                     }
                     ReceiptMismatch::Recipient => {
                         receipt.recipient.push(b'!');
-                        "complete proof-derived projection"
                     }
-                };
+                }
                 assert_ne!(
                     receipt, baseline,
                     "mismatch case {index} must change the signed receipt projection"
@@ -28491,7 +28421,7 @@ seiyaku GovernanceLifecycle {
                     .execute(&ALICE_ID, &mut stx)
                     .expect_err("forged SCCP receipt field must reject");
                 assert!(
-                    format!("{err:?}").contains(expected_error),
+                    format!("{err:?}").contains("complete proof-derived projection"),
                     "unexpected error for mismatch {index}: {err:?}"
                 );
                 assert!(
@@ -28502,6 +28432,25 @@ seiyaku GovernanceLifecycle {
                 assert!(stx.world.internal_event_buf.iter().all(|event| {
                     !matches!(event.as_ref(), DataEvent::Bridge(BridgeEvent::Emitted(_)))
                 }));
+
+                RecordBridgeReceipt::new(baseline.clone())
+                    .execute(&ALICE_ID, &mut stx)
+                    .expect("the exact destination proof projection must remain retryable");
+                assert!(
+                    !stx.bridge_receipt_proofs_available_in_tx
+                        .contains(&proof_hash),
+                    "the corrected destination receipt must consume its marker exactly once"
+                );
+                let emitted: Vec<_> = stx
+                    .world
+                    .internal_event_buf
+                    .iter()
+                    .filter_map(|event| match event.as_ref() {
+                        DataEvent::Bridge(BridgeEvent::Emitted(emitted)) => Some(emitted),
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(emitted, vec![&baseline]);
             }
         }
 
@@ -28530,7 +28479,7 @@ seiyaku GovernanceLifecycle {
                 .execute(&ALICE_ID, &mut stx)
                 .expect_err("forged SCCP receipt must reject");
             assert!(
-                format!("{err:?}").contains("amount does not match transfer payload"),
+                format!("{err:?}").contains("complete proof-derived projection"),
                 "unexpected error: {err:?}"
             );
             assert!(
@@ -28561,6 +28510,95 @@ seiyaku GovernanceLifecycle {
                 })
                 .collect();
             assert_eq!(emitted, vec![&receipt]);
+        }
+
+        #[test]
+        fn native_bridge_receipt_binds_every_field_and_allows_exact_correction() {
+            #[derive(Clone, Copy)]
+            enum ReceiptMismatch {
+                Direction,
+                SourceTx,
+                DestTx,
+                Amount,
+                AssetId,
+                Recipient,
+            }
+
+            let (proof, _, _) = native_ethereum_bridge_proof_for_payload_for_test(
+                sccp_native_inbound_transfer_payload_for_test(160, 20),
+            );
+            for (index, mismatch) in [
+                ReceiptMismatch::Direction,
+                ReceiptMismatch::SourceTx,
+                ReceiptMismatch::DestTx,
+                ReceiptMismatch::Amount,
+                ReceiptMismatch::AssetId,
+                ReceiptMismatch::Recipient,
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let state = State::new(
+                    World::default(),
+                    Kura::blank_kura_for_testing(),
+                    LiveQueryStore::start_test(),
+                );
+                let block = new_dummy_block();
+                let mut state_block = state.block(block.as_ref().header());
+                let mut stx = state_block.transaction();
+                let proof_hash =
+                    insert_bridge_proof_record_for_receipt_test(&mut stx, proof.clone());
+                set_current_lane_for_test(&mut stx, LaneId::SINGLE);
+                stx.world.internal_event_buf.clear();
+                let receipt = sccp_bridge_receipt_for_proof_test(proof_hash, &proof);
+                assert!(
+                    receipt.dest_tx.is_none(),
+                    "SCCP V1 authenticates no dest_tx"
+                );
+                let mut forged = receipt.clone();
+                match mismatch {
+                    ReceiptMismatch::Direction => forged.direction.push(b'!'),
+                    ReceiptMismatch::SourceTx => forged.source_tx[0] ^= 0xFF,
+                    ReceiptMismatch::DestTx => forged.dest_tx = Some([0xD6; 32]),
+                    ReceiptMismatch::Amount => forged.amount += 1,
+                    ReceiptMismatch::AssetId => forged.asset_id.push(b'!'),
+                    ReceiptMismatch::Recipient => forged.recipient.push(b'!'),
+                }
+                assert_ne!(forged, receipt, "mismatch case {index} must alter receipt");
+
+                let error = RecordBridgeReceipt::new(forged)
+                    .execute(&ALICE_ID, &mut stx)
+                    .expect_err("a forged native SCCP receipt field must fail closed");
+                assert!(
+                    format!("{error:?}").contains("complete proof-derived projection"),
+                    "unexpected native mismatch {index} error: {error:?}"
+                );
+                assert!(
+                    stx.bridge_receipt_proofs_available_in_tx
+                        .contains(&proof_hash),
+                    "failed native receipt validation must preserve the proof marker"
+                );
+                assert!(stx.world.internal_event_buf.is_empty());
+
+                RecordBridgeReceipt::new(receipt.clone())
+                    .execute(&ALICE_ID, &mut stx)
+                    .expect("the exact native proof projection must remain retryable");
+                assert!(
+                    !stx.bridge_receipt_proofs_available_in_tx
+                        .contains(&proof_hash),
+                    "the corrected receipt must consume the proof marker exactly once"
+                );
+                let emitted: Vec<_> = stx
+                    .world
+                    .internal_event_buf
+                    .iter()
+                    .filter_map(|event| match event.as_ref() {
+                        DataEvent::Bridge(BridgeEvent::Emitted(emitted)) => Some(emitted),
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(emitted, vec![&receipt]);
+            }
         }
 
         #[test]
@@ -32396,15 +32434,7 @@ seiyaku GovernanceLifecycle {
             let mut state = State::new(World::default(), kura, query_handle);
 
             let sumeragi_cfg = SumeragiPolicyConfig {
-                collectors_k: iroha_config::parameters::defaults::sumeragi::COLLECTORS_K,
-                collectors_redundant_send_r:
-                    iroha_config::parameters::defaults::sumeragi::COLLECTORS_REDUNDANT_SEND_R,
-                policy_flags: SumeragiPolicyFlags::new(
-                    iroha_config::parameters::defaults::sumeragi::DA_ENABLED,
-                    false,
-                ),
-                da_quorum_timeout_multiplier:
-                    iroha_config::parameters::defaults::sumeragi::DA_QUORUM_TIMEOUT_MULTIPLIER,
+                key_require_hsm: false,
                 key_activation_lead_blocks:
                     iroha_config::parameters::defaults::sumeragi::KEY_ACTIVATION_LEAD_BLOCKS,
                 key_overlap_grace_blocks:
@@ -32640,15 +32670,7 @@ seiyaku GovernanceLifecycle {
             let mut state = State::new(World::default(), kura, query_handle);
 
             let sumeragi_cfg = SumeragiPolicyConfig {
-                collectors_k: iroha_config::parameters::defaults::sumeragi::COLLECTORS_K,
-                collectors_redundant_send_r:
-                    iroha_config::parameters::defaults::sumeragi::COLLECTORS_REDUNDANT_SEND_R,
-                policy_flags: SumeragiPolicyFlags::new(
-                    iroha_config::parameters::defaults::sumeragi::DA_ENABLED,
-                    false,
-                ),
-                da_quorum_timeout_multiplier:
-                    iroha_config::parameters::defaults::sumeragi::DA_QUORUM_TIMEOUT_MULTIPLIER,
+                key_require_hsm: false,
                 key_activation_lead_blocks:
                     iroha_config::parameters::defaults::sumeragi::KEY_ACTIVATION_LEAD_BLOCKS,
                 key_overlap_grace_blocks:
@@ -32758,15 +32780,7 @@ seiyaku GovernanceLifecycle {
             let mut state = State::new(World::default(), kura, query_handle);
 
             let mut sumeragi_cfg = SumeragiPolicyConfig {
-                collectors_k: iroha_config::parameters::defaults::sumeragi::COLLECTORS_K,
-                collectors_redundant_send_r:
-                    iroha_config::parameters::defaults::sumeragi::COLLECTORS_REDUNDANT_SEND_R,
-                policy_flags: SumeragiPolicyFlags::new(
-                    iroha_config::parameters::defaults::sumeragi::DA_ENABLED,
-                    true,
-                ),
-                da_quorum_timeout_multiplier:
-                    iroha_config::parameters::defaults::sumeragi::DA_QUORUM_TIMEOUT_MULTIPLIER,
+                key_require_hsm: true,
                 key_activation_lead_blocks:
                     iroha_config::parameters::defaults::sumeragi::KEY_ACTIVATION_LEAD_BLOCKS,
                 key_overlap_grace_blocks:
@@ -32893,7 +32907,7 @@ seiyaku GovernanceLifecycle {
 
             // Optional HSM policy still enforces the provider allowlist when a binding is supplied.
             {
-                sumeragi_cfg.policy_flags.set_key_require_hsm(false);
+                sumeragi_cfg.key_require_hsm = false;
                 sumeragi_cfg.key_allowed_algorithms =
                     [Algorithm::Ed25519].into_iter().collect::<BTreeSet<_>>();
                 sumeragi_cfg.key_allowed_hsm_providers.clear();
@@ -33048,7 +33062,7 @@ seiyaku GovernanceLifecycle {
         }
 
         #[test]
-        fn mode_activation_height_requires_next_mode_in_same_block() {
+        fn runtime_consensus_mode_staging_is_always_rejected() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
             let mut state = State::new(World::default(), kura, query_handle);
@@ -33058,45 +33072,44 @@ seiyaku GovernanceLifecycle {
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
 
-            let activation = SetParameter(Parameter::Sumeragi(
+            for parameter in [
+                SumeragiParameter::NextMode(SumeragiConsensusMode::Npos),
                 SumeragiParameter::ModeActivationHeight(5),
-            ));
-            let err = activation
-                .execute(&ALICE_ID, &mut stx)
-                .expect_err("mode_activation_height without next_mode must fail");
-            drop(stx);
-
-            match err {
-                Error::InvalidParameter(InvalidParameterError::SmartContract(msg)) => assert!(
-                    msg.contains("mode_activation_height requires next_mode"),
-                    "unexpected error message: {msg}"
-                ),
-                other => panic!("unexpected error type: {other:?}"),
+            ] {
+                let error = SetParameter(Parameter::Sumeragi(parameter))
+                    .execute(&ALICE_ID, &mut stx)
+                    .expect_err("first-release v2 must reject runtime mode staging");
+                match error {
+                    Error::InvalidParameter(InvalidParameterError::SmartContract(message)) => {
+                        assert_eq!(
+                            message,
+                            "Sumeragi v2 does not support runtime consensus-mode staging"
+                        );
+                    }
+                    other => panic!("unexpected error type: {other:?}"),
+                }
             }
         }
 
         #[test]
-        fn next_mode_rejected_when_nexus_enabled() {
+        fn set_parameter_rejects_disabling_mandatory_da_at_genesis() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
-            let mut state = State::new(World::default(), kura, query_handle);
-            state.nexus.get_mut().enabled = true;
-
+            let state = State::new(World::default(), kura, query_handle);
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
+            let mut transaction = state_block.transaction();
 
-            let next_mode = SetParameter(Parameter::Sumeragi(SumeragiParameter::NextMode(
-                SumeragiConsensusMode::Npos,
-            )));
-            let err = next_mode
-                .execute(&ALICE_ID, &mut stx)
-                .expect_err("nexus should reject staged consensus cutovers");
-            match err {
-                Error::InvalidParameter(InvalidParameterError::SmartContract(msg)) => assert!(
-                    msg.contains("Nexus networks do not support staged consensus cutovers"),
-                    "unexpected error message: {msg}"
-                ),
+            let error = SetParameter(Parameter::Sumeragi(SumeragiParameter::DaEnabled(false)))
+                .execute(&ALICE_ID, &mut transaction)
+                .expect_err("Sumeragi v2 must never disable DA");
+            match error {
+                Error::InvalidParameter(InvalidParameterError::SmartContract(message)) => {
+                    assert_eq!(
+                        message,
+                        "Sumeragi v2 requires data availability at every height"
+                    );
+                }
                 other => panic!("unexpected error type: {other:?}"),
             }
         }
@@ -33321,141 +33334,6 @@ seiyaku GovernanceLifecycle {
                     other => panic!("unexpected error type: {other:?}"),
                 }
             }
-        }
-
-        #[test]
-        fn next_mode_without_activation_height_rejected_at_commit() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let mut state = State::new(World::default(), kura, query_handle);
-            state.nexus.get_mut().enabled = false;
-
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
-
-            let next_mode = SetParameter(Parameter::Sumeragi(SumeragiParameter::NextMode(
-                SumeragiConsensusMode::Npos,
-            )));
-            next_mode
-                .execute(&ALICE_ID, &mut stx)
-                .expect("set next_mode should succeed");
-            stx.apply();
-
-            let err = state_block
-                .commit()
-                .expect_err("commit must fail when activation height is missing");
-            assert!(
-                matches!(err, TransactionsBlockError::ModeStagingInvariant),
-                "unexpected commit error: {err:?}"
-            );
-        }
-
-        #[test]
-        fn next_mode_and_activation_height_commit_in_same_block() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let mut state = State::new(World::default(), kura, query_handle);
-            state.nexus.get_mut().enabled = false;
-
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-
-            {
-                let mut stx = state_block.transaction();
-                let next_mode = SetParameter(Parameter::Sumeragi(SumeragiParameter::NextMode(
-                    SumeragiConsensusMode::Npos,
-                )));
-                next_mode
-                    .execute(&ALICE_ID, &mut stx)
-                    .expect("set next_mode should succeed");
-                stx.apply();
-            }
-
-            {
-                let mut stx = state_block.transaction();
-                let activation = SetParameter(Parameter::Sumeragi(
-                    SumeragiParameter::ModeActivationHeight(5),
-                ));
-                activation
-                    .execute(&ALICE_ID, &mut stx)
-                    .expect("activation height should be accepted");
-                stx.apply();
-            }
-
-            state_block
-                .commit()
-                .expect("commit should succeed when both staging parameters are present");
-        }
-
-        #[test]
-        fn mode_activation_height_requires_future_block() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let mut state = State::new(World::default(), kura, query_handle);
-            state.nexus.get_mut().enabled = false;
-
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-
-            // Schedule a mode transition to NPoS.
-            let mut stx = state_block.transaction();
-            let next_mode = SetParameter(Parameter::Sumeragi(SumeragiParameter::NextMode(
-                SumeragiConsensusMode::Npos,
-            )));
-            next_mode
-                .execute(&ALICE_ID, &mut stx)
-                .expect("set next_mode should succeed");
-            stx.apply();
-
-            {
-                // Activation height equal to the current block height must be rejected.
-                let mut stx = state_block.transaction();
-                let invalid_activation = SetParameter(Parameter::Sumeragi(
-                    SumeragiParameter::ModeActivationHeight(1),
-                ));
-                let err = invalid_activation
-                    .execute(&ALICE_ID, &mut stx)
-                    .expect_err("mode_activation_height equal to current height must fail");
-                drop(stx);
-                match err {
-                    Error::InvalidParameter(InvalidParameterError::SmartContract(msg)) => assert!(
-                        msg.contains("mode_activation_height")
-                            && msg.contains("must be greater than current block height"),
-                        "unexpected error message: {msg}"
-                    ),
-                    other => panic!("unexpected error type: {other:?}"),
-                }
-            }
-
-            {
-                // Activation height behind the current block must also be rejected.
-                let mut stx = state_block.transaction();
-                let invalid_activation = SetParameter(Parameter::Sumeragi(
-                    SumeragiParameter::ModeActivationHeight(0),
-                ));
-                let err = invalid_activation
-                    .execute(&ALICE_ID, &mut stx)
-                    .expect_err("mode_activation_height below current height must fail");
-                drop(stx);
-                match err {
-                    Error::InvalidParameter(InvalidParameterError::SmartContract(msg)) => assert!(
-                        msg.contains("mode_activation_height")
-                            && msg.contains("must be greater than current block height"),
-                        "unexpected error message: {msg}"
-                    ),
-                    other => panic!("unexpected error type: {other:?}"),
-                }
-            }
-
-            // Activation height one block ahead is accepted.
-            let mut stx = state_block.transaction();
-            let valid_activation = SetParameter(Parameter::Sumeragi(
-                SumeragiParameter::ModeActivationHeight(2),
-            ));
-            valid_activation
-                .execute(&ALICE_ID, &mut stx)
-                .expect("mode_activation_height greater than current height must succeed");
         }
 
         #[test]

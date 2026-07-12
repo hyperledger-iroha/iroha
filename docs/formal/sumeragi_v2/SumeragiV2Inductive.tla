@@ -332,7 +332,7 @@ LineageVars ==
     prepareQCs, commitQCs, lockRank, lockSubject>>
 
 ProvenanceVars ==
-  <<context, nodeView, durableBodies, receivedVotes, receivedQCs,
+  <<height, context, nodeView, durableBodies, receivedVotes, receivedQCs,
     receivedTimeoutVotes, receivedTCs, prepareIntents, commitIntents,
     timeoutIntents, prepareQCs, commitQCs, formedTCs, installedTCs,
     lockRank, lockSubject, highestRank, highestSubject, pendingPrepare,
@@ -341,7 +341,8 @@ ProvenanceVars ==
     timeoutNetwork, tcNetwork>>
 
 ProvenanceWithoutVoteTransportVars ==
-  <<context, nodeView, durableBodies, receivedQCs, receivedTimeoutVotes,
+  <<height, context, nodeView, durableBodies, receivedQCs,
+    receivedTimeoutVotes,
     receivedTCs, prepareIntents, commitIntents, timeoutIntents, prepareQCs,
     commitQCs, formedTCs, installedTCs, lockRank, lockSubject, highestRank,
     highestSubject, pendingPrepare, pendingObservePrepare,
@@ -349,7 +350,7 @@ ProvenanceWithoutVoteTransportVars ==
     qcNetwork, timeoutNetwork, tcNetwork>>
 
 ProvenanceWithoutTimeoutTransportVars ==
-  <<context, nodeView, durableBodies, receivedVotes, receivedQCs,
+  <<height, context, nodeView, durableBodies, receivedVotes, receivedQCs,
     receivedTCs, prepareIntents, commitIntents, timeoutIntents, prepareQCs,
     commitQCs, formedTCs, installedTCs, lockRank, lockSubject, highestRank,
     highestSubject, pendingPrepare, pendingObservePrepare,

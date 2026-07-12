@@ -668,7 +668,7 @@ mod tests {
         permission::{Permission, Permissions},
         role::{Role, RoleId},
     };
-    use iroha_primitives::numeric::Numeric;
+    use iroha_primitives::numeric::{Numeric, Quantity};
     use iroha_test_samples::{ALICE_ID, BOB_ID};
     use nonzero_ext::nonzero;
 
@@ -751,8 +751,8 @@ mod tests {
         asset_definition_record
             .metadata_mut()
             .insert("issuer".parse::<Name>().expect("metadata key"), "alice");
-        asset_definition_record.total_quantity = Numeric::from(37u32);
-        let asset_record = Asset::new(asset.clone(), Numeric::from(11u32));
+        asset_definition_record.total_quantity = Quantity::from(37_u32);
+        let asset_record = Asset::new(asset.clone(), 11_u32);
         let nft_record = Nft::new(nft.clone(), metadata_entry("artist", "carroll")).build(&account);
         let role_record = Role::new(role.clone(), account.clone())
             .add_permission(Permission::new(role_perm.into(), Json::new(true)))

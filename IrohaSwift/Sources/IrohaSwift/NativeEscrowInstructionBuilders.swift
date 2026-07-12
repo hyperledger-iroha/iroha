@@ -3,12 +3,15 @@ import Foundation
 /// Errors emitted by native escrow instruction helpers.
 public enum NativeEscrowInstructionBuilderError: LocalizedError, Equatable {
     case invalidValue(field: String)
+    case invalidQuantity(field: String)
     case invalidEvidenceHash(index: Int)
 
     public var errorDescription: String? {
         switch self {
         case let .invalidValue(field):
             return "\(field) must be a non-empty string"
+        case let .invalidQuantity(field):
+            return "\(field) must be a canonical non-negative Kotodama V1 quantity"
         case let .invalidEvidenceHash(index):
             return "evidenceHashes[\(index)] must be a non-empty string"
         }
@@ -28,6 +31,14 @@ private enum NativeEscrowInstructionPayloadBuilder {
             throw NativeEscrowInstructionBuilderError.invalidValue(field: field)
         }
         return trimmed
+    }
+
+    static func normalizedQuantity(_ value: String, field: String) throws -> String {
+        do {
+            return try KotodamaNumericV1Codec.decodeQuantityJSON(value).canonicalString
+        } catch {
+            throw NativeEscrowInstructionBuilderError.invalidQuantity(field: field)
+        }
     }
 
     static func normalizedEvidence(_ values: [String]) throws -> [String] {
@@ -134,13 +145,24 @@ public enum NativeEscrowInstructionBuilders {
             "escrow_id": try NativeEscrowInstructionPayloadBuilder.normalized(escrowId, field: "escrowId"),
             "asset_definition": try NativeEscrowInstructionPayloadBuilder.normalized(assetDefinition,
                                                                                      field: "assetDefinition"),
-            "amount": try NativeEscrowInstructionPayloadBuilder.normalized(amount, field: "amount"),
+            "amount": try NativeEscrowInstructionPayloadBuilder.normalizedQuantity(amount, field: "amount"),
         ]
         let evidence = try NativeEscrowInstructionPayloadBuilder.normalizedEvidence(evidenceHashes)
         if !evidence.isEmpty {
             payload["evidence_hashes"] = evidence
         }
         return try NativeEscrowInstructionPayloadBuilder.instruction(named: "OpenAssetEscrow", payload: payload)
+    }
+
+    /// Build an `OpenAssetEscrow` instruction from a validated lossless quantity value.
+    public static func openAssetEscrow(escrowId: String,
+                                       assetDefinition: String,
+                                       amount: KotodamaQuantity,
+                                       evidenceHashes: [String] = []) throws -> NoritoJSON {
+        try openAssetEscrow(escrowId: escrowId,
+                            assetDefinition: assetDefinition,
+                            amount: amount.canonicalString,
+                            evidenceHashes: evidenceHashes)
     }
 
     /// Build an `AcceptAssetEscrow` instruction payload.
@@ -185,14 +207,25 @@ public enum NativeEscrowInstructionBuilders {
                                             evidenceHashes: [String] = []) throws -> NoritoJSON {
         var payload: [String: Any] = [
             "escrow_id": try NativeEscrowInstructionPayloadBuilder.normalized(escrowId, field: "escrowId"),
-            "buyer_amount": try NativeEscrowInstructionPayloadBuilder.normalized(buyerAmount,
-                                                                                 field: "buyerAmount"),
-            "seller_amount": try NativeEscrowInstructionPayloadBuilder.normalized(sellerAmount,
-                                                                                  field: "sellerAmount"),
+            "buyer_amount": try NativeEscrowInstructionPayloadBuilder.normalizedQuantity(buyerAmount,
+                                                                                         field: "buyerAmount"),
+            "seller_amount": try NativeEscrowInstructionPayloadBuilder.normalizedQuantity(sellerAmount,
+                                                                                          field: "sellerAmount"),
         ]
         try NativeEscrowInstructionPayloadBuilder.putEvidence(&payload, evidenceHashes: evidenceHashes)
         return try NativeEscrowInstructionPayloadBuilder.instruction(named: "ResolveEscrowDispute",
                                                                     payload: payload)
+    }
+
+    /// Build a `ResolveEscrowDispute` instruction from validated lossless quantity values.
+    public static func resolveEscrowDispute(escrowId: String,
+                                            buyerAmount: KotodamaQuantity,
+                                            sellerAmount: KotodamaQuantity,
+                                            evidenceHashes: [String] = []) throws -> NoritoJSON {
+        try resolveEscrowDispute(escrowId: escrowId,
+                                 buyerAmount: buyerAmount.canonicalString,
+                                 sellerAmount: sellerAmount.canonicalString,
+                                 evidenceHashes: evidenceHashes)
     }
 
     /// Build an `OpenAnonymousAssetEscrow` instruction payload.
@@ -337,6 +370,17 @@ public extension IrohaSDK {
                                                             evidenceHashes: evidenceHashes)
     }
 
+    /// Build an `OpenAssetEscrow` instruction from a validated lossless quantity value.
+    func buildOpenAssetEscrow(escrowId: String,
+                              assetDefinition: String,
+                              amount: KotodamaQuantity,
+                              evidenceHashes: [String] = []) throws -> NoritoJSON {
+        try NativeEscrowInstructionBuilders.openAssetEscrow(escrowId: escrowId,
+                                                            assetDefinition: assetDefinition,
+                                                            amount: amount,
+                                                            evidenceHashes: evidenceHashes)
+    }
+
     /// Build an `AcceptAssetEscrow` instruction payload (Norito JSON).
     func buildAcceptAssetEscrow(escrowId: String) throws -> NoritoJSON {
         try NativeEscrowInstructionBuilders.acceptAssetEscrow(escrowId: escrowId)
@@ -368,6 +412,17 @@ public extension IrohaSDK {
     func buildResolveEscrowDispute(escrowId: String,
                                    buyerAmount: String,
                                    sellerAmount: String,
+                                   evidenceHashes: [String] = []) throws -> NoritoJSON {
+        try NativeEscrowInstructionBuilders.resolveEscrowDispute(escrowId: escrowId,
+                                                                 buyerAmount: buyerAmount,
+                                                                 sellerAmount: sellerAmount,
+                                                                 evidenceHashes: evidenceHashes)
+    }
+
+    /// Build a `ResolveEscrowDispute` instruction from validated lossless quantity values.
+    func buildResolveEscrowDispute(escrowId: String,
+                                   buyerAmount: KotodamaQuantity,
+                                   sellerAmount: KotodamaQuantity,
                                    evidenceHashes: [String] = []) throws -> NoritoJSON {
         try NativeEscrowInstructionBuilders.resolveEscrowDispute(escrowId: escrowId,
                                                                  buyerAmount: buyerAmount,

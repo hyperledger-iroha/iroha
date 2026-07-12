@@ -1,4 +1,3 @@
-using Hyperledger.Iroha.Offline;
 using Hyperledger.Iroha.Norito;
 using Hyperledger.Iroha.Numeric;
 
@@ -199,22 +198,4 @@ public abstract record class TransactionInstruction
         return new ExecuteTriggerInstruction(triggerId, args);
     }
 
-    public static KagemushaInstructionArchiveInstruction KagemushaInstructionArchive(
-        KagemushaInstructionType instructionType,
-        byte[] instructionArchive)
-    {
-        return new KagemushaInstructionArchiveInstruction(instructionType, instructionArchive);
-    }
-
-    public static KagemushaInstructionArchiveInstruction KagemushaRecursiveRedeem(
-        KagemushaRecursiveSpendRedeemInstructionArchive instructionArchive)
-    {
-        return KagemushaInstructionArchiveInstruction.RedeemRecursive(instructionArchive);
-    }
-
-    public static KagemushaInstructionArchiveInstruction KagemushaRecursiveTopUp(
-        KagemushaRecursiveSpendTopUpInstructionArchive instructionArchive)
-    {
-        return KagemushaInstructionArchiveInstruction.TopUp(instructionArchive);
-    }
 }

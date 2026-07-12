@@ -7577,9 +7577,23 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
         ),
         semantic::ExprKind::IntLiteral(n) => {
             let t = ctx.new_temp();
+            let kind = pointer_kind_for_type(&expr.ty)
+                .filter(|kind| {
+                    matches!(
+                        kind,
+                        DataRefKind::Int | DataRefKind::Decimal | DataRefKind::Quantity
+                    )
+                })
+                .unwrap_or_else(|| {
+                    ctx.record_error(format!(
+                        "integer literal reached lowering with non-numeric type {}",
+                        semantic::type_name(&expr.ty)
+                    ));
+                    DataRefKind::Int
+                });
             ctx.current_instr(Instr::DataRef {
                 dest: t,
-                kind: DataRefKind::Int,
+                kind,
                 value: n.to_string(),
             });
             t
@@ -11634,6 +11648,45 @@ fn either(bool value) -> bool { return value || rhs(); }
         assert!(
             saw_get_numeric,
             "expected quantity JsonGetNumeric instruction in lowered IR"
+        );
+    }
+
+    #[test]
+    fn lower_quantity_typed_integer_literal_to_quantity_dataref() {
+        let src = r#"
+            fn main(AccountId account, AssetDefinitionId asset) {
+                ledger::asset::mint(
+                    account: account,
+                    asset_definition: asset,
+                    amount: 1,
+                );
+            }
+        "#;
+        let program = lower(&analyze(&parse(src).unwrap()).unwrap()).expect("lower");
+        let amount = program
+            .functions
+            .iter()
+            .flat_map(|function| &function.blocks)
+            .flat_map(|block| &block.instrs)
+            .find_map(|instruction| match instruction {
+                Instr::MintAsset { amount, .. } => Some(*amount),
+                _ => None,
+            })
+            .expect("mint amount temp");
+        assert!(
+            program
+                .functions
+                .iter()
+                .flat_map(|function| &function.blocks)
+                .flat_map(|block| &block.instrs)
+                .any(|instruction| matches!(
+                    instruction,
+                    Instr::DataRef {
+                        dest,
+                        kind: DataRefKind::Quantity,
+                        value,
+                    } if *dest == amount && value == "1"
+                ))
         );
     }
 

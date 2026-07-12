@@ -840,7 +840,7 @@ def _validate_metadata_exactness_for_signing(
             errors.append(
                 "slot.json attestation_certificate_chain_path must not contain control characters"
             )
-    apk_relative = metadata.get("offline_wallet_apk_path")
+    apk_relative = metadata.get("kagemusha_wallet_apk_path")
     if (
         isinstance(apk_relative, str)
         and apk_relative
@@ -851,7 +851,7 @@ def _validate_metadata_exactness_for_signing(
         normalised_apk_relative = device_lab._normalise_safe_relative_path(
             apk_relative,
             errors,
-            "slot.json offline_wallet_apk_path",
+            "slot.json kagemusha_wallet_apk_path",
         )
         apk_path_is_under_evidence = (
             normalised_apk_relative is not None
@@ -861,7 +861,7 @@ def _validate_metadata_exactness_for_signing(
             )
         )
         if normalised_apk_relative is not None and not apk_path_is_under_evidence:
-            errors.append("slot.json offline_wallet_apk_path must stay under evidence/")
+            errors.append("slot.json kagemusha_wallet_apk_path must stay under evidence/")
 
 
 def _signer_public_key_sha256(public_key_path: Path, errors: list[str]) -> str | None:

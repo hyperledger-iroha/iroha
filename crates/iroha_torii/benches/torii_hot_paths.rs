@@ -300,7 +300,7 @@ fn build_query_load_fixture(profile: QueryLoadProfile) -> QueryLoadFixture {
             let asset_id = AssetId::new(definition_id.clone(), account_id.clone());
             let quantity = u32::try_from((account_index % 97) + definition_index + 1)
                 .expect("quantity fits u32");
-            assets.push(Asset::new(asset_id, Numeric::from(quantity)));
+            assets.push(Asset::new(asset_id, Quantity::from(quantity)));
         }
     }
 

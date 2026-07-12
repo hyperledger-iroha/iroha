@@ -282,9 +282,30 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RepoInstructionBox {
 mod tests {
     use super::*;
     use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_primitives::numeric::Numeric;
+    use norito::codec::Encode;
     use norito::core::DecodeFromSlice;
 
     use crate::repo::RepoGovernance;
+
+    #[derive(Encode)]
+    struct ForgedRepoCashLeg {
+        asset_definition_id: AssetDefinitionId,
+        quantity: Numeric,
+    }
+
+    #[derive(Encode)]
+    struct ForgedRepoIsi {
+        agreement_id: RepoAgreementId,
+        initiator: AccountId,
+        counterparty: AccountId,
+        custodian: Option<AccountId>,
+        cash_leg: ForgedRepoCashLeg,
+        collateral_leg: RepoCollateralLeg,
+        rate_bps: u16,
+        maturity_timestamp_ms: u64,
+        governance: RepoGovernance,
+    }
 
     const INITIATOR: &str = "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE";
     const COUNTERPARTY: &str = "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D";
@@ -320,7 +341,7 @@ mod tests {
                 DomainId::try_new("wonderland", "universal").unwrap(),
                 "bond".parse().unwrap(),
             ),
-            1_100u32.into(),
+            1_100u32,
         )
     }
 
@@ -397,7 +418,7 @@ mod tests {
                 DomainId::try_new("wonderland", "universal").unwrap(),
                 "bond".parse().unwrap(),
             ),
-            1_100u32.into(),
+            1_100u32,
         );
         let governance = RepoGovernance::with_defaults(1_500, 86_400);
 
@@ -436,7 +457,7 @@ mod tests {
                 DomainId::try_new("wonderland", "universal").unwrap(),
                 "bond".parse().unwrap(),
             ),
-            1_100u32.into(),
+            1_100u32,
         );
         let governance = RepoGovernance::with_defaults(1_500, 86_400);
 
@@ -475,7 +496,7 @@ mod tests {
                 DomainId::try_new("wonderland", "universal").unwrap(),
                 "bond".parse().unwrap(),
             ),
-            1_100u32.into(),
+            1_100u32,
         );
         let governance = RepoGovernance::with_defaults(1_500, 86_400);
 
@@ -523,7 +544,7 @@ mod tests {
                 DomainId::try_new("wonderland", "universal").unwrap(),
                 "bond".parse().unwrap(),
             ),
-            1_100u32.into(),
+            1_100u32,
         );
 
         let instruction = ReverseRepoIsi::new(
@@ -554,6 +575,30 @@ mod tests {
         assert_slice_roundtrip(RepoInstructionBox::MarginCall(RepoMarginCallIsi::new(
             agreement_id(),
         )));
+    }
+
+    #[test]
+    fn negative_numeric_payload_cannot_decode_as_repo_instruction_quantity() {
+        let positive_cash = cash_leg();
+        let forged = ForgedRepoIsi {
+            agreement_id: agreement_id(),
+            initiator: parse_account(INITIATOR),
+            counterparty: parse_account(COUNTERPARTY),
+            custodian: None,
+            cash_leg: ForgedRepoCashLeg {
+                asset_definition_id: positive_cash.asset_definition_id,
+                quantity: Numeric::new(-1_i32, 0),
+            },
+            collateral_leg: collateral_leg(),
+            rate_bps: 250,
+            maturity_timestamp_ms: 1_704_000_000_000,
+            governance: RepoGovernance::with_defaults(1_500, 86_400),
+        };
+
+        assert!(
+            RepoIsi::decode_from_slice(&forged.encode()).is_err(),
+            "a negative signed payload must not decode as a repo instruction"
+        );
     }
 
     #[test]

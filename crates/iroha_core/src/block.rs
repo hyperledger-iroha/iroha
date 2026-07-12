@@ -60,7 +60,7 @@ use std::{
     time::Duration,
 };
 
-use iroha_config::parameters::actual::{ConsensusMode, SumeragiNpos};
+use iroha_config::parameters::actual::SumeragiNpos;
 use iroha_crypto::{Hash, HashOf, KeyPair, MerkleTree, PublicKey};
 #[cfg(test)]
 use iroha_data_model::block::consensus::NativeAmxAttestationBodyV2;
@@ -7062,19 +7062,10 @@ pub(crate) mod valid {
                 }
             }
 
-            let consensus_mode = {
-                let world = state.world_view();
-                crate::sumeragi::effective_consensus_mode_for_height_from_world(
-                    &world,
-                    block_height,
-                    ConsensusMode::Permissioned,
-                )
-            };
             let fallback_npos = SumeragiNpos::default();
             let applier = crate::sumeragi::penalties::PenaltyApplier::from_parts(
                 state,
                 &fallback_npos,
-                consensus_mode,
                 #[cfg(feature = "telemetry")]
                 Some(state.metrics()),
                 #[cfg(not(feature = "telemetry"))]
@@ -9476,15 +9467,6 @@ pub(crate) mod valid {
                     routed_transactions.push((tx.hash(), *decision));
                 }
             }
-            let chunk_size =
-                (iroha_config::parameters::defaults::sumeragi::RBC_CHUNK_MAX_BYTES.max(1)) as u64;
-            for summary in lane_summaries.values_mut() {
-                summary.rbc_chunks = if summary.rbc_bytes_total == 0 {
-                    0
-                } else {
-                    summary.rbc_bytes_total.div_ceil(chunk_size)
-                };
-            }
             Self::finalize_lane_settlement_evidence(
                 block,
                 state_block,
@@ -11359,9 +11341,6 @@ pub(crate) mod valid {
             // Telemetry: update DAG, component, lane, and dataspace metrics for this block
             #[allow(unused_variables)]
             {
-                let chunk_size = (iroha_config::parameters::defaults::sumeragi::RBC_CHUNK_MAX_BYTES
-                    .max(1)) as u64;
-
                 for (idx, decision) in routing_decisions.iter().enumerate() {
                     let summary = lane_summaries.entry(decision.lane_id).or_default();
                     summary.tx_vertices = summary.tx_vertices.saturating_add(1);
@@ -11409,14 +11388,6 @@ pub(crate) mod valid {
                                 .saturating_add(overlay.byte_size() as u64);
                         }
                     }
-                }
-
-                for summary in lane_summaries.values_mut() {
-                    summary.rbc_chunks = if summary.rbc_bytes_total == 0 {
-                        0
-                    } else {
-                        summary.rbc_bytes_total.div_ceil(chunk_size)
-                    };
                 }
 
                 let vertices_total: u64 = lane_summaries
@@ -27860,10 +27831,10 @@ seiyaku DynamicTarget {
         {
             let nexus = state.nexus.get_mut();
             nexus.enabled = true;
-            nexus.fees.base_fee = Numeric::from(1_u32);
-            nexus.fees.per_byte_fee = Numeric::zero();
-            nexus.fees.per_instruction_fee = Numeric::zero();
-            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.fees.base_fee = Quantity::from(1_u32);
+            nexus.fees.per_byte_fee = Quantity::zero();
+            nexus.fees.per_instruction_fee = Quantity::zero();
+            nexus.fees.per_gas_unit_fee = Quantity::zero();
             nexus.fees.fee_asset_id = asset_definition_id.to_string();
             nexus.fees.fee_sink_account_id = sink_id.to_string();
             nexus.fees.burn_from_unix_timestamp_ms = 0;
@@ -27975,9 +27946,9 @@ seiyaku DynamicTarget {
             [payer, recipient, sink],
             [transfer_asset_definition, fee_asset_definition],
             [
-                Asset::new(payer_transfer_asset.clone(), Numeric::from(5_u32)),
-                Asset::new(recipient_transfer_asset.clone(), Numeric::zero()),
-                Asset::new(payer_fee_asset.clone(), Numeric::from(10_u32)),
+                Asset::new(payer_transfer_asset.clone(), Quantity::from(5_u32)),
+                Asset::new(recipient_transfer_asset.clone(), Quantity::zero()),
+                Asset::new(payer_fee_asset.clone(), Quantity::from(10_u32)),
             ],
             [],
         );
@@ -27988,10 +27959,10 @@ seiyaku DynamicTarget {
         {
             let nexus = state.nexus.get_mut();
             nexus.enabled = true;
-            nexus.fees.base_fee = Numeric::from(1_u32);
-            nexus.fees.per_byte_fee = Numeric::zero();
-            nexus.fees.per_instruction_fee = Numeric::zero();
-            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.fees.base_fee = Quantity::from(1_u32);
+            nexus.fees.per_byte_fee = Quantity::zero();
+            nexus.fees.per_instruction_fee = Quantity::zero();
+            nexus.fees.per_gas_unit_fee = Quantity::zero();
             nexus.fees.fee_asset_id = fee_asset_definition_id.to_string();
             nexus.fees.fee_sink_account_id = sink_id.to_string();
             nexus.fees.burn_from_unix_timestamp_ms = 0;
@@ -28094,7 +28065,7 @@ seiyaku DynamicTarget {
             [domain],
             [payer, sink],
             [fee_asset_definition],
-            [Asset::new(payer_fee_asset.clone(), Numeric::from(10_u32))],
+            [Asset::new(payer_fee_asset.clone(), Quantity::from(10_u32))],
             [],
         );
         let kura = Arc::new(Kura::blank_kura_for_testing());
@@ -28104,10 +28075,10 @@ seiyaku DynamicTarget {
         {
             let nexus = state.nexus.get_mut();
             nexus.enabled = true;
-            nexus.fees.base_fee = Numeric::from(1_u32);
-            nexus.fees.per_byte_fee = Numeric::zero();
-            nexus.fees.per_instruction_fee = Numeric::zero();
-            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.fees.base_fee = Quantity::from(1_u32);
+            nexus.fees.per_byte_fee = Quantity::zero();
+            nexus.fees.per_instruction_fee = Quantity::zero();
+            nexus.fees.per_gas_unit_fee = Quantity::zero();
             nexus.fees.fee_asset_id = fee_asset_definition_id.to_string();
             nexus.fees.fee_sink_account_id = sink_id.to_string();
             nexus.fees.burn_from_unix_timestamp_ms = 0;
@@ -28220,9 +28191,9 @@ seiyaku DynamicTarget {
             [payer, recipient, sink],
             [transfer_asset_definition, fee_asset_definition],
             [
-                Asset::new(payer_transfer_asset.clone(), Numeric::from(5_u32)),
-                Asset::new(recipient_transfer_asset.clone(), Numeric::zero()),
-                Asset::new(payer_fee_asset.clone(), Numeric::zero()),
+                Asset::new(payer_transfer_asset.clone(), Quantity::from(5_u32)),
+                Asset::new(recipient_transfer_asset.clone(), Quantity::zero()),
+                Asset::new(payer_fee_asset.clone(), Quantity::zero()),
             ],
             [],
         );
@@ -28233,10 +28204,10 @@ seiyaku DynamicTarget {
         {
             let nexus = state.nexus.get_mut();
             nexus.enabled = true;
-            nexus.fees.base_fee = Numeric::from(1_u32);
-            nexus.fees.per_byte_fee = Numeric::zero();
-            nexus.fees.per_instruction_fee = Numeric::zero();
-            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.fees.base_fee = Quantity::from(1_u32);
+            nexus.fees.per_byte_fee = Quantity::zero();
+            nexus.fees.per_instruction_fee = Quantity::zero();
+            nexus.fees.per_gas_unit_fee = Quantity::zero();
             nexus.fees.fee_asset_id = fee_asset_definition_id.to_string();
             nexus.fees.fee_sink_account_id = sink_id.to_string();
             nexus.fees.burn_from_unix_timestamp_ms = 0;
@@ -28347,9 +28318,9 @@ seiyaku DynamicTarget {
             [payer, recipient, sink],
             [transfer_asset_definition, fee_asset_definition],
             [
-                Asset::new(payer_transfer_asset.clone(), Numeric::from(5_u32)),
-                Asset::new(recipient_transfer_asset.clone(), Numeric::zero()),
-                Asset::new(payer_fee_asset.clone(), Numeric::from(10_u32)),
+                Asset::new(payer_transfer_asset.clone(), Quantity::from(5_u32)),
+                Asset::new(recipient_transfer_asset.clone(), Quantity::zero()),
+                Asset::new(payer_fee_asset.clone(), Quantity::from(10_u32)),
             ],
             [],
         );
@@ -28360,10 +28331,10 @@ seiyaku DynamicTarget {
         {
             let nexus = state.nexus.get_mut();
             nexus.enabled = true;
-            nexus.fees.base_fee = Numeric::from(1_u32);
-            nexus.fees.per_byte_fee = Numeric::zero();
-            nexus.fees.per_instruction_fee = Numeric::zero();
-            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.fees.base_fee = Quantity::from(1_u32);
+            nexus.fees.per_byte_fee = Quantity::zero();
+            nexus.fees.per_instruction_fee = Quantity::zero();
+            nexus.fees.per_gas_unit_fee = Quantity::zero();
             nexus.fees.fee_asset_id = fee_asset_definition_id.to_string();
             nexus.fees.fee_sink_account_id = sink_id.to_string();
             nexus.fees.burn_from_unix_timestamp_ms = 0;
@@ -28512,8 +28483,8 @@ seiyaku DynamicTarget {
             [payer, recipient, sink],
             [transfer_asset_definition, fee_asset_definition],
             [
-                Asset::new(payer_transfer_asset.clone(), Numeric::from(5_u32)),
-                Asset::new(recipient_transfer_asset.clone(), Numeric::zero()),
+                Asset::new(payer_transfer_asset.clone(), Quantity::from(5_u32)),
+                Asset::new(recipient_transfer_asset.clone(), Quantity::zero()),
             ],
             [],
         );
@@ -28524,10 +28495,10 @@ seiyaku DynamicTarget {
         {
             let nexus = state.nexus.get_mut();
             nexus.enabled = true;
-            nexus.fees.base_fee = Numeric::from(1_u32);
-            nexus.fees.per_byte_fee = Numeric::zero();
-            nexus.fees.per_instruction_fee = Numeric::zero();
-            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.fees.base_fee = Quantity::from(1_u32);
+            nexus.fees.per_byte_fee = Quantity::zero();
+            nexus.fees.per_instruction_fee = Quantity::zero();
+            nexus.fees.per_gas_unit_fee = Quantity::zero();
             nexus.fees.fee_asset_id = fee_asset_definition_id.to_string();
             nexus.fees.fee_sink_account_id = sink_id.to_string();
             nexus.fees.burn_from_unix_timestamp_ms = 0;
@@ -28628,8 +28599,8 @@ seiyaku DynamicTarget {
             [payer, recipient, sink],
             [asset_definition],
             [
-                Asset::new(payer_asset.clone(), Numeric::from(1_u32)),
-                Asset::new(recipient_asset.clone(), Numeric::zero()),
+                Asset::new(payer_asset.clone(), Quantity::from(1_u32)),
+                Asset::new(recipient_asset.clone(), Quantity::zero()),
             ],
             [],
         );
@@ -28640,10 +28611,10 @@ seiyaku DynamicTarget {
         {
             let nexus = state.nexus.get_mut();
             nexus.enabled = true;
-            nexus.fees.base_fee = Numeric::from(1_u32);
-            nexus.fees.per_byte_fee = Numeric::zero();
-            nexus.fees.per_instruction_fee = Numeric::zero();
-            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.fees.base_fee = Quantity::from(1_u32);
+            nexus.fees.per_byte_fee = Quantity::zero();
+            nexus.fees.per_instruction_fee = Quantity::zero();
+            nexus.fees.per_gas_unit_fee = Quantity::zero();
             nexus.fees.fee_asset_id = asset_definition_id.to_string();
             nexus.fees.fee_sink_account_id = sink_id.to_string();
             nexus.fees.burn_from_unix_timestamp_ms = 0;
@@ -28749,9 +28720,9 @@ seiyaku DynamicTarget {
             [payer, recipient, sink],
             [transfer_asset_definition, fee_asset_definition],
             [
-                Asset::new(payer_transfer_asset.clone(), Numeric::from(5_u32)),
-                Asset::new(recipient_transfer_asset.clone(), Numeric::zero()),
-                Asset::new(payer_fee_asset.clone(), Numeric::from(1_u32)),
+                Asset::new(payer_transfer_asset.clone(), Quantity::from(5_u32)),
+                Asset::new(recipient_transfer_asset.clone(), Quantity::zero()),
+                Asset::new(payer_fee_asset.clone(), Quantity::from(1_u32)),
             ],
             [],
         );
@@ -28762,10 +28733,10 @@ seiyaku DynamicTarget {
         {
             let nexus = state.nexus.get_mut();
             nexus.enabled = true;
-            nexus.fees.base_fee = Numeric::from(1_u32);
-            nexus.fees.per_byte_fee = Numeric::zero();
-            nexus.fees.per_instruction_fee = Numeric::zero();
-            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.fees.base_fee = Quantity::from(1_u32);
+            nexus.fees.per_byte_fee = Quantity::zero();
+            nexus.fees.per_instruction_fee = Quantity::zero();
+            nexus.fees.per_gas_unit_fee = Quantity::zero();
             nexus.fees.fee_asset_id = fee_asset_definition_id.to_string();
             nexus.fees.fee_sink_account_id = sink_id.to_string();
             nexus.fees.burn_from_unix_timestamp_ms = 0;
@@ -28910,9 +28881,9 @@ seiyaku DynamicTarget {
             [payer, recipient, sink],
             [transfer_asset_definition, fee_asset_definition],
             [
-                Asset::new(payer_transfer_asset.clone(), Numeric::from(5_u32)),
-                Asset::new(recipient_transfer_asset.clone(), Numeric::zero()),
-                Asset::new(payer_fee_asset.clone(), Numeric::from(10_u32)),
+                Asset::new(payer_transfer_asset.clone(), Quantity::from(5_u32)),
+                Asset::new(recipient_transfer_asset.clone(), Quantity::zero()),
+                Asset::new(payer_fee_asset.clone(), Quantity::from(10_u32)),
             ],
             [],
         );
@@ -28923,10 +28894,10 @@ seiyaku DynamicTarget {
         {
             let nexus = state.nexus.get_mut();
             nexus.enabled = true;
-            nexus.fees.base_fee = Numeric::from(1_u32);
-            nexus.fees.per_byte_fee = Numeric::zero();
-            nexus.fees.per_instruction_fee = Numeric::zero();
-            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.fees.base_fee = Quantity::from(1_u32);
+            nexus.fees.per_byte_fee = Quantity::zero();
+            nexus.fees.per_instruction_fee = Quantity::zero();
+            nexus.fees.per_gas_unit_fee = Quantity::zero();
             nexus.fees.fee_asset_id = fee_asset_definition_id.to_string();
             nexus.fees.fee_sink_account_id = sink_id.to_string();
             nexus.fees.burn_from_unix_timestamp_ms = 0;
@@ -29053,9 +29024,9 @@ seiyaku DynamicTarget {
             [payer, recipient, sink],
             [transfer_asset_definition, fee_asset_definition],
             [
-                Asset::new(payer_transfer_asset.clone(), Numeric::from(5_u32)),
-                Asset::new(recipient_transfer_asset.clone(), Numeric::zero()),
-                Asset::new(payer_fee_asset.clone(), Numeric::from(10_u32)),
+                Asset::new(payer_transfer_asset.clone(), Quantity::from(5_u32)),
+                Asset::new(recipient_transfer_asset.clone(), Quantity::zero()),
+                Asset::new(payer_fee_asset.clone(), Quantity::from(10_u32)),
             ],
             [],
         );
@@ -29071,10 +29042,10 @@ seiyaku DynamicTarget {
         {
             let nexus = state.nexus.get_mut();
             nexus.enabled = true;
-            nexus.fees.base_fee = Numeric::from(1_u32);
-            nexus.fees.per_byte_fee = Numeric::zero();
-            nexus.fees.per_instruction_fee = Numeric::zero();
-            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.fees.base_fee = Quantity::from(1_u32);
+            nexus.fees.per_byte_fee = Quantity::zero();
+            nexus.fees.per_instruction_fee = Quantity::zero();
+            nexus.fees.per_gas_unit_fee = Quantity::zero();
             nexus.fees.fee_asset_id = fee_asset_definition_id.to_string();
             nexus.fees.fee_sink_account_id = sink_id.to_string();
             nexus.fees.burn_from_unix_timestamp_ms = 0;
@@ -29205,9 +29176,9 @@ seiyaku DynamicTarget {
             [payer, sponsor, recipient, sink],
             [transfer_asset_definition, fee_asset_definition],
             [
-                Asset::new(payer_transfer_asset.clone(), Numeric::from(5_u32)),
-                Asset::new(recipient_transfer_asset.clone(), Numeric::zero()),
-                Asset::new(sponsor_fee_asset.clone(), Numeric::from(10_u32)),
+                Asset::new(payer_transfer_asset.clone(), Quantity::from(5_u32)),
+                Asset::new(recipient_transfer_asset.clone(), Quantity::zero()),
+                Asset::new(sponsor_fee_asset.clone(), Quantity::from(10_u32)),
             ],
             [],
         );
@@ -29218,10 +29189,10 @@ seiyaku DynamicTarget {
         {
             let nexus = state.nexus.get_mut();
             nexus.enabled = true;
-            nexus.fees.base_fee = Numeric::from(1_u32);
-            nexus.fees.per_byte_fee = Numeric::zero();
-            nexus.fees.per_instruction_fee = Numeric::zero();
-            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.fees.base_fee = Quantity::from(1_u32);
+            nexus.fees.per_byte_fee = Quantity::zero();
+            nexus.fees.per_instruction_fee = Quantity::zero();
+            nexus.fees.per_gas_unit_fee = Quantity::zero();
             nexus.fees.sponsorship_enabled = true;
             nexus.fees.fee_asset_id = fee_asset_definition_id.to_string();
             nexus.fees.fee_sink_account_id = sink_id.to_string();
@@ -29348,9 +29319,9 @@ seiyaku DynamicTarget {
             [payer, sponsor, recipient, sink],
             [transfer_asset_definition, fee_asset_definition],
             [
-                Asset::new(payer_transfer_asset.clone(), Numeric::from(5_u32)),
-                Asset::new(recipient_transfer_asset.clone(), Numeric::zero()),
-                Asset::new(sponsor_fee_asset.clone(), Numeric::from(10_u32)),
+                Asset::new(payer_transfer_asset.clone(), Quantity::from(5_u32)),
+                Asset::new(recipient_transfer_asset.clone(), Quantity::zero()),
+                Asset::new(sponsor_fee_asset.clone(), Quantity::from(10_u32)),
             ],
             [],
         );
@@ -29361,10 +29332,10 @@ seiyaku DynamicTarget {
         {
             let nexus = state.nexus.get_mut();
             nexus.enabled = true;
-            nexus.fees.base_fee = Numeric::from(1_u32);
-            nexus.fees.per_byte_fee = Numeric::zero();
-            nexus.fees.per_instruction_fee = Numeric::zero();
-            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.fees.base_fee = Quantity::from(1_u32);
+            nexus.fees.per_byte_fee = Quantity::zero();
+            nexus.fees.per_instruction_fee = Quantity::zero();
+            nexus.fees.per_gas_unit_fee = Quantity::zero();
             nexus.fees.sponsorship_enabled = false;
             nexus.fees.fee_asset_id = fee_asset_definition_id.to_string();
             nexus.fees.fee_sink_account_id = sink_id.to_string();
@@ -29491,9 +29462,9 @@ seiyaku DynamicTarget {
             [payer, sponsor, recipient, sink],
             [transfer_asset_definition, fee_asset_definition],
             [
-                Asset::new(payer_transfer_asset.clone(), Numeric::from(5_u32)),
-                Asset::new(recipient_transfer_asset.clone(), Numeric::zero()),
-                Asset::new(sponsor_fee_asset.clone(), Numeric::from(10_u32)),
+                Asset::new(payer_transfer_asset.clone(), Quantity::from(5_u32)),
+                Asset::new(recipient_transfer_asset.clone(), Quantity::zero()),
+                Asset::new(sponsor_fee_asset.clone(), Quantity::from(10_u32)),
             ],
             [],
         );
@@ -29516,12 +29487,12 @@ seiyaku DynamicTarget {
         {
             let nexus = state.nexus.get_mut();
             nexus.enabled = true;
-            nexus.fees.base_fee = Numeric::from(2_u32);
-            nexus.fees.per_byte_fee = Numeric::zero();
-            nexus.fees.per_instruction_fee = Numeric::zero();
-            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.fees.base_fee = Quantity::from(2_u32);
+            nexus.fees.per_byte_fee = Quantity::zero();
+            nexus.fees.per_instruction_fee = Quantity::zero();
+            nexus.fees.per_gas_unit_fee = Quantity::zero();
             nexus.fees.sponsorship_enabled = true;
-            nexus.fees.sponsor_max_fee = Numeric::from(1_u32);
+            nexus.fees.sponsor_max_fee = Quantity::from(1_u32);
             nexus.fees.fee_asset_id = fee_asset_definition_id.to_string();
             nexus.fees.fee_sink_account_id = sink_id.to_string();
             nexus.fees.burn_from_unix_timestamp_ms = 0;
@@ -29639,8 +29610,8 @@ seiyaku DynamicTarget {
             [payer, recipient, sink],
             [transfer_asset_definition],
             [
-                Asset::new(payer_transfer_asset.clone(), Numeric::from(5_u32)),
-                Asset::new(recipient_transfer_asset.clone(), Numeric::zero()),
+                Asset::new(payer_transfer_asset.clone(), Quantity::from(5_u32)),
+                Asset::new(recipient_transfer_asset.clone(), Quantity::zero()),
             ],
             [],
         );
@@ -29651,10 +29622,10 @@ seiyaku DynamicTarget {
         {
             let nexus = state.nexus.get_mut();
             nexus.enabled = true;
-            nexus.fees.base_fee = Numeric::from(1_u32);
-            nexus.fees.per_byte_fee = Numeric::zero();
-            nexus.fees.per_instruction_fee = Numeric::zero();
-            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.fees.base_fee = Quantity::from(1_u32);
+            nexus.fees.per_byte_fee = Quantity::zero();
+            nexus.fees.per_instruction_fee = Quantity::zero();
+            nexus.fees.per_gas_unit_fee = Quantity::zero();
             nexus.fees.fee_asset_id = "not-an-asset-literal".to_owned();
             nexus.fees.fee_sink_account_id = sink_id.to_string();
             nexus.fees.burn_from_unix_timestamp_ms = 0;
@@ -29764,9 +29735,9 @@ seiyaku DynamicTarget {
             [payer, recipient, sink],
             [transfer_asset_definition, fee_asset_definition],
             [
-                Asset::new(payer_transfer_asset.clone(), Numeric::from(5_u32)),
-                Asset::new(recipient_transfer_asset.clone(), Numeric::zero()),
-                Asset::new(payer_fee_asset.clone(), Numeric::from(10_u32)),
+                Asset::new(payer_transfer_asset.clone(), Quantity::from(5_u32)),
+                Asset::new(recipient_transfer_asset.clone(), Quantity::zero()),
+                Asset::new(payer_fee_asset.clone(), Quantity::from(10_u32)),
             ],
             [],
         );
@@ -29777,10 +29748,10 @@ seiyaku DynamicTarget {
         {
             let nexus = state.nexus.get_mut();
             nexus.enabled = true;
-            nexus.fees.base_fee = Numeric::from(1_u32);
-            nexus.fees.per_byte_fee = Numeric::zero();
-            nexus.fees.per_instruction_fee = Numeric::zero();
-            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.fees.base_fee = Quantity::from(1_u32);
+            nexus.fees.per_byte_fee = Quantity::zero();
+            nexus.fees.per_instruction_fee = Quantity::zero();
+            nexus.fees.per_gas_unit_fee = Quantity::zero();
             nexus.fees.sponsorship_enabled = true;
             nexus.fees.fee_asset_id = fee_asset_definition_id.to_string();
             nexus.fees.fee_sink_account_id = sink_id.to_string();
@@ -29903,9 +29874,9 @@ seiyaku DynamicTarget {
             [payer, recipient],
             [transfer_asset_definition, gas_asset_definition],
             [
-                Asset::new(payer_transfer_asset.clone(), Numeric::from(5_u32)),
-                Asset::new(recipient_transfer_asset.clone(), Numeric::zero()),
-                Asset::new(payer_gas_asset.clone(), Numeric::from(10_u32)),
+                Asset::new(payer_transfer_asset.clone(), Quantity::from(5_u32)),
+                Asset::new(recipient_transfer_asset.clone(), Quantity::zero()),
+                Asset::new(payer_gas_asset.clone(), Quantity::from(10_u32)),
             ],
             [],
         );
@@ -30024,9 +29995,9 @@ seiyaku DynamicTarget {
             [payer, recipient],
             [transfer_asset_definition, gas_asset_definition],
             [
-                Asset::new(payer_transfer_asset.clone(), Numeric::from(5_u32)),
-                Asset::new(recipient_transfer_asset.clone(), Numeric::zero()),
-                Asset::new(payer_gas_asset.clone(), Numeric::from(10_u32)),
+                Asset::new(payer_transfer_asset.clone(), Quantity::from(5_u32)),
+                Asset::new(recipient_transfer_asset.clone(), Quantity::zero()),
+                Asset::new(payer_gas_asset.clone(), Quantity::from(10_u32)),
             ],
             [],
         );
@@ -30136,7 +30107,7 @@ seiyaku DynamicTarget {
             .with_name("xor".to_owned())
             .build(&authority_id);
         let sponsor_asset_id = AssetId::of(asset_definition_id.clone(), sponsor_id.clone());
-        let sponsor_asset = Asset::new(sponsor_asset_id.clone(), Numeric::from(10_u32));
+        let sponsor_asset = Asset::new(sponsor_asset_id.clone(), Quantity::from(10_u32));
         let world = World::with_assets(
             [domain],
             [authority, sponsor],
@@ -30151,10 +30122,10 @@ seiyaku DynamicTarget {
         {
             let nexus = state.nexus.get_mut();
             nexus.enabled = true;
-            nexus.fees.base_fee = Numeric::from(1_u32);
-            nexus.fees.per_byte_fee = Numeric::zero();
-            nexus.fees.per_instruction_fee = Numeric::zero();
-            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.fees.base_fee = Quantity::from(1_u32);
+            nexus.fees.per_byte_fee = Quantity::zero();
+            nexus.fees.per_instruction_fee = Quantity::zero();
+            nexus.fees.per_gas_unit_fee = Quantity::zero();
             nexus.fees.sponsorship_enabled = true;
             nexus.fees.fee_asset_id = asset_definition_id.to_string();
             nexus.fees.fee_sink_account_id = sponsor_id.to_string();
@@ -30263,7 +30234,7 @@ seiyaku DynamicTarget {
             .with_name("xor".to_owned())
             .build(&authority_id);
         let sponsor_asset_id = AssetId::of(asset_definition_id.clone(), sponsor_id.clone());
-        let sponsor_asset = Asset::new(sponsor_asset_id.clone(), Numeric::from(10_u32));
+        let sponsor_asset = Asset::new(sponsor_asset_id.clone(), Quantity::from(10_u32));
         let world = World::with_assets(
             [domain],
             [authority, sponsor],
@@ -30280,10 +30251,10 @@ seiyaku DynamicTarget {
         {
             let nexus = state.nexus.get_mut();
             nexus.enabled = true;
-            nexus.fees.base_fee = Numeric::from(1_u32);
-            nexus.fees.per_byte_fee = Numeric::zero();
-            nexus.fees.per_instruction_fee = Numeric::zero();
-            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.fees.base_fee = Quantity::from(1_u32);
+            nexus.fees.per_byte_fee = Quantity::zero();
+            nexus.fees.per_instruction_fee = Quantity::zero();
+            nexus.fees.per_gas_unit_fee = Quantity::zero();
             nexus.fees.sponsorship_enabled = true;
             nexus.fees.fee_asset_id = asset_definition_id.to_string();
             nexus.fees.fee_sink_account_id = sponsor_id.to_string();
@@ -30440,10 +30411,10 @@ seiyaku DynamicTarget {
         {
             let nexus = state.nexus.get_mut();
             nexus.enabled = true;
-            nexus.fees.base_fee = Numeric::from(1_u32);
-            nexus.fees.per_byte_fee = Numeric::zero();
-            nexus.fees.per_instruction_fee = Numeric::zero();
-            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.fees.base_fee = Quantity::from(1_u32);
+            nexus.fees.per_byte_fee = Quantity::zero();
+            nexus.fees.per_instruction_fee = Quantity::zero();
+            nexus.fees.per_gas_unit_fee = Quantity::zero();
             nexus.fees.fee_asset_id = asset_definition_id.to_string();
             nexus.fees.fee_sink_account_id = sink_id.to_string();
             nexus.fees.burn_from_unix_timestamp_ms = 0;

@@ -97,10 +97,43 @@ pub enum BlockMessage {
 }
 
 impl BlockMessage {
-    /// Local no-op sentinel used only when an infallible legacy decode/encode path must return a
-    /// valid message after a wire-codec failure.
+    /// Local no-op sentinel used only when an infallible legacy decode path must return a valid
+    /// message after a wire-codec failure.
     pub(super) fn invalid_wire_sentinel() -> Self {
         Self::ConsensusParams(ConsensusParamsAdvert::invalid_wire_sentinel())
+    }
+
+    /// Whether this belongs to the independent lane-local consensus protocol.
+    pub(crate) const fn is_lane_local(&self) -> bool {
+        matches!(
+            self,
+            Self::LaneBlockProposal(_)
+                | Self::LaneExecutablePayload(_)
+                | Self::LaneExecutablePayloadHandoff(_)
+                | Self::LaneBlockNewViewVote(_)
+                | Self::LaneBlockNewViewCertificate(_)
+                | Self::LaneBlockVote(_)
+                | Self::LaneBlockQc(_)
+        )
+    }
+
+    /// Reject retired global Sumeragi v1 messages at the live wire boundary.
+    ///
+    /// The variants remain part of the enum so historical frames can be
+    /// decoded. Only canonical protocol-v2 traffic and the independent
+    /// lane-local protocol are eligible for production transmission.
+    pub(crate) fn ensure_live_outbound(&self) -> Result<(), ncore::Error> {
+        match self {
+            Self::V2(message) => message.validate_version().map_err(|error| {
+                ncore::Error::Message(format!(
+                    "refusing to emit non-canonical Sumeragi v2 message: {error}"
+                ))
+            }),
+            message if message.is_lane_local() => Ok(()),
+            _ => Err(ncore::Error::Message(
+                "refusing to emit decode-only global Sumeragi v1 block message".to_owned(),
+            )),
+        }
     }
 
     /// Normalize compact message variants into their full forms.
@@ -111,28 +144,20 @@ impl BlockMessage {
         }
     }
 
-    /// Return whether this message belongs to the authoritative live v2 ingress.
+    /// Return whether this message belongs to an admitted live protocol.
     ///
-    /// The first release admits only explicitly versioned global v2 traffic and
-    /// the three lane-local artifacts consumed by the v2 lane adapter. Legacy
-    /// global messages remain decodable for archival data, but must never claim
-    /// live queue capacity. A wrong-version v2 envelope also fails closed here,
-    /// before an asynchronous relay can allocate a blocking ingress task.
+    /// Global v1 variants remain decodable for archives but cannot claim live
+    /// ingress capacity. Lane-local traffic remains independent from global
+    /// v2 finality and is admitted by the lane adapter.
     #[must_use]
     pub fn is_authoritative_v2_ingress(&self) -> bool {
         match self {
             Self::V2(message) => message.validate_version().is_ok(),
-            Self::LaneBlockProposal(_) | Self::LaneBlockVote(_) | Self::LaneBlockQc(_) => true,
-            _ => false,
+            message => message.is_lane_local(),
         }
     }
 
-    /// Return whether queue saturation must never drop this live v2 message.
-    ///
-    /// Callers on asynchronous network workers should offload blocking enqueue
-    /// operations only for the authoritative v2 ingress. Retired variants use
-    /// non-blocking delivery and are rejected by [`crate::sumeragi::SumeragiHandle`]
-    /// before they allocate a consensus queue slot.
+    /// Return whether asynchronous ingress must preserve this live message.
     #[must_use]
     pub fn requires_blocking_ingress(&self) -> bool {
         self.is_authoritative_v2_ingress()
@@ -224,20 +249,18 @@ impl BlockMessageWire {
         }
     }
 
-    /// Wrap an `Arc`-backed message with cached full-frame bytes.
-    pub fn with_encoded(message: Arc<BlockMessage>, encoded: Arc<Vec<u8>>) -> Self {
-        Self {
+    /// Wrap an `Arc`-backed live message and cache its canonical full-frame bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a retired global v1 message or a non-canonical v2
+    /// protocol version.
+    pub(crate) fn try_preencoded(message: Arc<BlockMessage>) -> Result<Self, ncore::Error> {
+        let encoded = Arc::new(Self::try_encode_live_message(message.as_ref())?);
+        Ok(Self {
             message,
             encoded: Some(encoded),
-        }
-    }
-
-    /// Wrap an owned message with cached full-frame bytes.
-    pub fn with_encoded_owned(message: BlockMessage, encoded: Arc<Vec<u8>>) -> Self {
-        Self {
-            message: Arc::new(message),
-            encoded: Some(encoded),
-        }
+        })
     }
 
     /// Borrow the underlying consensus message.
@@ -321,34 +344,14 @@ impl BlockMessageWire {
             .ok_or(ncore::Error::LengthMismatch)
     }
 
-    pub(crate) fn try_encode_message(message: &BlockMessage) -> Result<Vec<u8>, ncore::Error> {
+    pub(crate) fn try_encode_live_message(message: &BlockMessage) -> Result<Vec<u8>, ncore::Error> {
+        message.ensure_live_outbound()?;
         ncore::to_bytes(message)
     }
 
-    pub(crate) fn encode_message(message: &BlockMessage) -> Vec<u8> {
-        match Self::try_encode_message(message) {
-            Ok(bytes) => bytes,
-            Err(error) => {
-                error!(
-                    %error,
-                    "failed to pre-encode Sumeragi block message; substituting invalid-wire sentinel"
-                );
-                Self::encode_invalid_wire_sentinel()
-            }
-        }
-    }
-
-    fn encode_invalid_wire_sentinel() -> Vec<u8> {
-        match ncore::to_bytes(&BlockMessage::invalid_wire_sentinel()) {
-            Ok(bytes) => bytes,
-            Err(error) => {
-                error!(
-                    %error,
-                    "failed to encode Sumeragi invalid-wire sentinel"
-                );
-                Vec::new()
-            }
-        }
+    #[cfg(test)]
+    fn encode_archival_message(message: &BlockMessage) -> Vec<u8> {
+        ncore::to_bytes(message).expect("encode archival Sumeragi block message fixture")
     }
 }
 
@@ -374,11 +377,12 @@ impl From<BlockMessage> for BlockMessageWire {
 
 impl NoritoSerialize for BlockMessageWire {
     fn serialize<W: Write>(&self, mut writer: W) -> Result<(), ncore::Error> {
+        self.message.ensure_live_outbound()?;
         if let Some(encoded) = self.encoded.as_ref() {
             writer.write_all(encoded)?;
             return Ok(());
         }
-        let encoded = Self::try_encode_message(self.message.as_ref())?;
+        let encoded = Self::try_encode_live_message(self.message.as_ref())?;
         writer.write_all(&encoded)?;
         Ok(())
     }
@@ -474,10 +478,18 @@ impl RbcChunkCompact {
 }
 
 /// Control-flow signals exchanged between peers (pacemaker frames).
-#[derive(Debug, Clone, Decode, Encode, FromVariant)]
+#[derive(Debug, Clone, Decode, FromVariant)]
 pub enum ControlFlow {
     /// Evidence propagation for slashing/governance actions.
     Evidence(super::consensus::Evidence),
+}
+
+impl NoritoSerialize for ControlFlow {
+    fn serialize<W: Write>(&self, _writer: W) -> Result<(), ncore::Error> {
+        Err(ncore::Error::Message(
+            "refusing to emit decode-only global Sumeragi v1 control-flow message".to_owned(),
+        ))
+    }
 }
 
 /// Minimal proposal header hint broadcast alongside `BlockCreated` by the leader.
@@ -947,7 +959,6 @@ mod tests {
     use iroha_crypto::{Algorithm, Hash, KeyPair, Signature};
     use iroha_data_model::{
         AccountId, ChainId, Level,
-        block::consensus_v2::{ConsensusMessageV2Payload, PayloadChunk},
         consensus::{
             PreviousRosterEvidence, VALIDATOR_SET_HASH_VERSION_V1, ValidatorSetCheckpoint,
         },
@@ -1233,14 +1244,29 @@ mod tests {
         }
     }
 
-    fn roundtrip_cached_block_message_over_network_message(
+    fn decode_archival_block_message_into_network_envelope(
         message: BlockMessage,
     ) -> crate::NetworkMessage {
-        let encoded = Arc::new(BlockMessageWire::encode_message(&message));
-        let wire = BlockMessageWire::with_encoded(Arc::new(message), encoded);
+        let encoded = Arc::new(BlockMessageWire::encode_archival_message(&message));
+        let wire = BlockMessageWire::decode_from_slice(encoded.as_slice())
+            .expect("decode archival block message fixture")
+            .0;
         let network = crate::NetworkMessage::SumeragiBlock(Box::new(wire));
-        let bytes = network.encode();
-        Decode::decode(&mut bytes.as_slice()).expect("decode network message")
+        assert!(
+            norito_core::to_bytes(&network).is_err(),
+            "decode-only global v1 message must not cross the live network encoder"
+        );
+        network
+    }
+
+    fn roundtrip_live_block_message_over_network_message(
+        message: BlockMessage,
+    ) -> crate::NetworkMessage {
+        let wire = BlockMessageWire::try_preencoded(Arc::new(message))
+            .expect("live block message must pre-encode canonically");
+        let network = crate::NetworkMessage::SumeragiBlock(Box::new(wire));
+        let bytes = norito_core::to_bytes(&network).expect("encode live network message");
+        decode_from_bytes(&bytes).expect("decode live network message")
     }
 
     #[test]
@@ -1446,12 +1472,12 @@ mod tests {
     }
 
     #[test]
-    fn rbc_repair_requests_roundtrip_over_network_wrapper() {
+    fn rbc_repair_requests_decode_but_do_not_reemit() {
         let init_request = BlockMessage::RbcInitRequest(sample_rbc_init_request(7));
         let chunk_request = BlockMessage::RbcChunkRequest(sample_rbc_chunk_request(11));
 
-        let init_roundtrip = roundtrip_cached_block_message_over_network_message(init_request);
-        let chunk_roundtrip = roundtrip_cached_block_message_over_network_message(chunk_request);
+        let init_roundtrip = decode_archival_block_message_into_network_envelope(init_request);
+        let chunk_roundtrip = decode_archival_block_message_into_network_envelope(chunk_request);
 
         assert!(matches!(
             init_roundtrip,
@@ -1466,8 +1492,15 @@ mod tests {
     }
 
     #[test]
-    fn control_flow_evidence_roundtrip() {
+    fn control_flow_evidence_is_archival_decode_only() {
         use super::super::consensus;
+        use iroha_p2p::ClassifyTopic;
+
+        #[derive(Encode)]
+        enum ArchivedControlFlow {
+            Evidence(consensus::Evidence),
+        }
+
         // Construct minimal double-vote evidence
         let dummy_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([1u8; 32]));
         let v1 = consensus::Vote {
@@ -1502,10 +1535,17 @@ mod tests {
             kind: consensus::EvidenceKind::DoublePrepare,
             payload: consensus::EvidencePayload::DoubleVote { v1, v2 },
         };
-        let cf = ControlFlow::Evidence(ev);
-        let bytes = cf.encode();
-        // Only check that encoding succeeds and yields non-empty bytes.
-        assert!(!bytes.is_empty());
+        let bytes = ArchivedControlFlow::Evidence(ev).encode();
+        let decoded = ControlFlow::decode(&mut bytes.as_slice())
+            .expect("historical control-flow fixture must remain decodable");
+        assert!(matches!(decoded, ControlFlow::Evidence(_)));
+
+        let network = crate::NetworkMessage::SumeragiControlFlow(Box::new(decoded));
+        assert!(!network.is_outbound_allowed());
+        assert!(
+            norito_core::to_bytes(&network).is_err(),
+            "decoded v1 control flow must not be serializable for live networking"
+        );
     }
 
     #[test]
@@ -1540,76 +1580,6 @@ mod tests {
             commit_qc_only: None,
         });
         assert_eq!(fetch.priority(), iroha_p2p::Priority::High);
-    }
-
-    #[test]
-    fn blocking_ingress_policy_rejects_retired_recovery_and_admits_v2() {
-        let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x7A; 32]));
-        let requester = checked_random_peer_id();
-        let background = FetchPendingBlock {
-            requester: requester.clone(),
-            block_hash,
-            height: 7,
-            view: 2,
-            priority: None,
-            requester_roster_proof_known: Some(false),
-            commit_qc_only: Some(false),
-        };
-        assert!(
-            !BlockMessage::FetchPendingBlock(background.clone()).requires_blocking_ingress(),
-            "ordinary repair traffic may use the bounded non-blocking queue"
-        );
-
-        let mut consensus_priority = background.clone();
-        consensus_priority.priority = Some(FetchPendingBlockPriority::Consensus);
-        assert!(
-            !BlockMessage::FetchPendingBlock(consensus_priority).requires_blocking_ingress(),
-            "retired v1 recovery must not allocate a blocking live-v2 ingress task"
-        );
-
-        let mut commit_qc_only = background;
-        commit_qc_only.commit_qc_only = Some(true);
-        assert!(
-            !BlockMessage::FetchPendingBlock(commit_qc_only).requires_blocking_ingress(),
-            "retired commit-QC recovery must not allocate a live-v2 queue slot"
-        );
-
-        assert!(
-            !BlockMessage::RbcInitRequest(sample_rbc_init_request(0x7B))
-                .requires_blocking_ingress(),
-            "retired RBC repair must not allocate a live-v2 queue slot"
-        );
-
-        let malformed_v2 = BlockMessage::V2(ConsensusMessageV2::new(
-            ConsensusMessageV2Payload::PayloadChunk(PayloadChunk {
-                manifest_hash: HashOf::from_untyped_unchecked(Hash::new(b"malformed-v2-manifest")),
-                index: u32::MAX,
-                bytes: Vec::new(),
-                sender: u32::MAX,
-                signature: Vec::new(),
-            }),
-        ));
-        assert!(
-            malformed_v2.requires_blocking_ingress(),
-            "a correctly versioned v2 envelope remains liveness-critical; payload validation occurs in the bounded v2 executor"
-        );
-        let BlockMessage::V2(mut wrong_version) = malformed_v2 else {
-            unreachable!("fixture is a v2 envelope")
-        };
-        wrong_version.protocol_version = wrong_version.protocol_version.saturating_add(1);
-        assert!(
-            !BlockMessage::V2(wrong_version).requires_blocking_ingress(),
-            "wrong-version envelopes must be rejected before blocking relay allocation"
-        );
-
-        assert!(
-            !BlockMessage::ConsensusParams(ConsensusParamsAdvert {
-                collectors_k: 1,
-                redundant_send_r: 1,
-                membership: None,
-            })
-            .requires_blocking_ingress()
-        );
     }
 
     #[test]
@@ -2085,7 +2055,7 @@ mod tests {
     }
 
     #[test]
-    fn certified_block_fetch_roundtrips_over_network_wrapper() {
+    fn certified_block_fetch_decodes_but_does_not_reemit() {
         let requester = checked_random_peer_id();
         let response = sample_certified_block_fetch_response(27);
         let request = BlockMessage::CertifiedBlockFetch(CertifiedBlockFetch::Request(
@@ -2104,10 +2074,10 @@ mod tests {
             sample_certified_block_fetch_body(31),
         ));
 
-        let request_roundtrip = roundtrip_cached_block_message_over_network_message(request);
-        let response_roundtrip = roundtrip_cached_block_message_over_network_message(response);
-        let proof_roundtrip = roundtrip_cached_block_message_over_network_message(proof);
-        let body_roundtrip = roundtrip_cached_block_message_over_network_message(body);
+        let request_roundtrip = decode_archival_block_message_into_network_envelope(request);
+        let response_roundtrip = decode_archival_block_message_into_network_envelope(response);
+        let proof_roundtrip = decode_archival_block_message_into_network_envelope(proof);
+        let body_roundtrip = decode_archival_block_message_into_network_envelope(body);
 
         assert!(matches!(
             request_roundtrip,
@@ -2144,59 +2114,52 @@ mod tests {
     }
 
     #[test]
-    fn block_message_wire_prefers_preencoded_payload() {
+    fn block_message_wire_decodes_cached_archival_payload_without_reemitting_it() {
         let advert = ConsensusParamsAdvert {
             collectors_k: 1,
             redundant_send_r: 1,
             membership: None,
         };
         let msg = BlockMessage::ConsensusParams(advert);
-        let encoded = BlockMessageWire::encode_message(&msg);
-        let wire = BlockMessageWire::with_encoded(Arc::new(msg), Arc::new(encoded.clone()));
+        let encoded = BlockMessageWire::encode_archival_message(&msg);
+        let wire = BlockMessageWire::decode_from_slice(&encoded)
+            .expect("decode archival block message fixture")
+            .0;
 
         assert!(encoded.starts_with(&norito_core::MAGIC));
         assert_eq!(wire.encoded_len(), Some(encoded.len()));
-        let bytes = wire.encode();
-        assert_eq!(bytes, encoded);
-        let decoded: BlockMessageWire =
-            Decode::decode(&mut bytes.as_slice()).expect("decode block message wire");
-        assert!(matches!(decoded.as_ref(), BlockMessage::ConsensusParams(_)));
-        assert_eq!(decoded.encoded_len(), Some(encoded.len()));
-        assert_eq!(decoded.encode(), encoded);
+        assert!(matches!(wire.as_ref(), BlockMessage::ConsensusParams(_)));
+        assert!(norito_core::to_bytes(&wire).is_err());
     }
 
     #[test]
-    fn block_message_wire_roundtrip_with_cached_payload() {
-        let advert = ConsensusParamsAdvert {
-            collectors_k: 2,
-            redundant_send_r: 3,
-            membership: None,
+    fn noncanonical_v2_protocol_version_is_not_live_encodable() {
+        use iroha_data_model::block::consensus_v2::{
+            ConsensusMessageV2Payload, PayloadChunk, PayloadManifest,
         };
-        let msg = BlockMessage::ConsensusParams(advert);
-        let encoded = BlockMessageWire::encode_message(&msg);
-        let wire = BlockMessageWire::with_encoded(Arc::new(msg), Arc::new(encoded));
 
-        let bytes = wire.encode();
-        let decoded: BlockMessageWire =
-            Decode::decode(&mut bytes.as_slice()).expect("decode block message wire");
+        let mut message =
+            ConsensusMessageV2::new(ConsensusMessageV2Payload::PayloadChunk(PayloadChunk {
+                manifest_hash: HashOf::<PayloadManifest>::from_untyped_unchecked(Hash::new(
+                    b"wrong-version-manifest",
+                )),
+                index: 0,
+                bytes: vec![1, 2, 3],
+                sender: 0,
+                signature: vec![4],
+            }));
+        message.protocol_version = message.protocol_version.saturating_sub(1);
+        let message = Arc::new(BlockMessage::V2(message));
 
-        match decoded.as_ref() {
-            BlockMessage::ConsensusParams(decoded_advert) => {
-                assert_eq!(decoded_advert.collectors_k, 2);
-                assert_eq!(decoded_advert.redundant_send_r, 3);
-                assert!(decoded_advert.membership.is_none());
-            }
-            other => panic!("expected consensus params, got {other:?}"),
-        }
-        assert_eq!(decoded.encoded_len(), Some(bytes.len()));
-        assert_eq!(decoded.encode(), bytes);
+        assert!(BlockMessageWire::try_preencoded(Arc::clone(&message)).is_err());
+        assert!(norito_core::to_bytes(&BlockMessageWire::new((*message).clone())).is_err());
     }
 
     #[test]
-    fn block_message_wire_cached_payload_is_self_describing() {
+    fn archival_block_message_payload_is_self_describing() {
         let vote = sample_qc_vote(0x41);
         let msg = BlockMessage::QcVote(vote.clone());
-        let encoded = BlockMessageWire::encode_message(&msg);
+        let encoded = BlockMessageWire::encode_archival_message(&msg);
 
         assert!(encoded.starts_with(&norito_core::MAGIC));
 
@@ -2213,10 +2176,9 @@ mod tests {
         assert!(advert.is_invalid_wire_sentinel());
         let msg = BlockMessage::invalid_wire_sentinel();
         assert_invalid_wire_sentinel(&msg);
+        assert!(BlockMessageWire::try_encode_live_message(&msg).is_err());
 
-        let encoded =
-            BlockMessageWire::try_encode_message(&msg).expect("encode invalid-wire sentinel");
-        assert_eq!(BlockMessageWire::encode_message(&msg), encoded);
+        let encoded = BlockMessageWire::encode_archival_message(&msg);
 
         let decoded = decode_from_bytes::<BlockMessage>(&encoded).expect("decode sentinel frame");
         assert_invalid_wire_sentinel(&decoded);
@@ -2224,18 +2186,19 @@ mod tests {
 
     #[test]
     fn block_message_wire_into_message_clones_shared_arc() {
-        let msg = Arc::new(BlockMessage::invalid_wire_sentinel());
-        let encoded = Arc::new(BlockMessageWire::encode_message(msg.as_ref()));
-        let wire = BlockMessageWire::with_encoded(Arc::clone(&msg), encoded);
+        let (proposal, _, _) = sample_lane_block_messages(0x43);
+        let msg = Arc::new(BlockMessage::LaneBlockProposal(proposal));
+        let wire = BlockMessageWire::try_preencoded(Arc::clone(&msg))
+            .expect("lane-local fixture is live traffic");
 
         let message = wire.into_message();
 
-        assert_invalid_wire_sentinel(&message);
+        assert!(matches!(message, BlockMessage::LaneBlockProposal(_)));
         assert_eq!(Arc::strong_count(&msg), 1);
     }
 
     #[test]
-    fn block_message_wire_matches_formal_gate() {
+    fn block_message_wire_archival_decode_gate_is_strict_and_one_way() {
         fn consensus_params(collectors_k: u16, redundant_send_r: u8) -> BlockMessage {
             BlockMessage::ConsensusParams(ConsensusParamsAdvert {
                 collectors_k,
@@ -2273,9 +2236,7 @@ mod tests {
         const LEN_OFF: usize = 4 + 1 + 1 + 16 + 1;
 
         let wrapped = consensus_params(1, 2);
-        let alternate = consensus_params(3, 4);
-        let wrapped_encoded = BlockMessageWire::encode_message(&wrapped);
-        let alternate_encoded = BlockMessageWire::encode_message(&alternate);
+        let wrapped_encoded = BlockMessageWire::encode_archival_message(&wrapped);
 
         assert!(wrapped_encoded.starts_with(&norito_core::MAGIC));
         assert_eq!(wrapped_encoded[4], norito_core::VERSION_MAJOR);
@@ -2286,46 +2247,6 @@ mod tests {
         );
         assert_eq!(wrapped_encoded[22], norito_core::Compression::None as u8);
         assert!(LEN_OFF + 8 <= norito_core::Header::SIZE);
-
-        let uncached = BlockMessageWire::new(wrapped.clone());
-        assert_eq!(uncached.encoded_len(), None);
-        assert_eq!(uncached.encode(), wrapped_encoded);
-        assert_eq!(
-            uncached.encoded_len(),
-            None,
-            "serializing an uncached wrapper must not install stale cache bytes"
-        );
-
-        let cached = BlockMessageWire::with_encoded(
-            Arc::new(wrapped.clone()),
-            Arc::new(alternate_encoded.clone()),
-        );
-        assert_eq!(cached.encoded_len(), Some(alternate_encoded.len()));
-        assert_eq!(
-            cached.encode(),
-            alternate_encoded,
-            "cached serialization must use the cached full frame"
-        );
-        assert_consensus_params("cached wrapper message", cached.as_message(), 1, 2);
-
-        let cached_owned = BlockMessageWire::with_encoded_owned(
-            wrapped.clone(),
-            Arc::new(wrapped_encoded.clone()),
-        );
-        assert_eq!(cached_owned.encoded_len(), Some(wrapped_encoded.len()));
-
-        let into_message = cached.clone().into_message();
-        assert_consensus_params("into_message", &into_message, 1, 2);
-
-        let mut mutated = cached_owned.clone();
-        *mutated.make_mut() = alternate.clone();
-        assert_eq!(
-            mutated.encoded_len(),
-            None,
-            "make_mut must clear cached full-frame bytes"
-        );
-        assert_consensus_params("mutated wrapper", mutated.as_message(), 3, 4);
-        assert_eq!(mutated.encode(), alternate_encoded);
 
         let mut framed_with_trailing = wrapped_encoded.clone();
         framed_with_trailing.extend_from_slice(&[0xAA; 7]);
@@ -2345,10 +2266,9 @@ mod tests {
         );
         assert_consensus_params("decode_from_slice message", decoded.as_message(), 1, 2);
         assert_eq!(decoded.encoded_len(), Some(wrapped_encoded.len()));
-        assert_eq!(
-            decoded.encode(),
-            wrapped_encoded,
-            "decoded cache must preserve exactly the consumed frame"
+        assert!(
+            norito_core::to_bytes(&decoded).is_err(),
+            "a decoded archival frame must remain decode-only"
         );
 
         let decoded_via_decode: BlockMessageWire =
@@ -2363,7 +2283,7 @@ mod tests {
             decoded_via_decode.encoded_len(),
             Some(wrapped_encoded.len())
         );
-        assert_eq!(decoded_via_decode.encode(), wrapped_encoded);
+        assert!(norito_core::to_bytes(&decoded_via_decode).is_err());
 
         let decoded_payload =
             decode_from_bytes::<BlockMessage>(&wrapped_encoded).expect("decode cached payload");
@@ -2404,8 +2324,26 @@ mod tests {
     }
 
     #[test]
-    fn block_message_wire_network_roundtrip_cached_qc_vote() {
-        let decoded = roundtrip_cached_block_message_over_network_message(BlockMessage::QcVote(
+    fn live_block_message_cache_is_canonical_and_mutation_clears_it() {
+        let (proposal, _, _) = sample_lane_block_messages(0x44);
+        let message = BlockMessage::LaneBlockProposal(proposal);
+        let canonical = BlockMessageWire::try_encode_live_message(&message)
+            .expect("lane-local proposal is live traffic");
+        let wire = BlockMessageWire::try_preencoded(Arc::new(message))
+            .expect("live preencoder must bind canonical bytes to the message");
+        assert_eq!(wire.encode(), canonical);
+
+        let (alternate, _, _) = sample_lane_block_messages(0x45);
+        let alternate = BlockMessage::LaneBlockProposal(alternate);
+        let mut mutated = wire;
+        *mutated.make_mut() = alternate;
+        assert_eq!(mutated.encoded_len(), None);
+        assert!(mutated.encode().starts_with(&norito_core::MAGIC));
+    }
+
+    #[test]
+    fn block_message_wire_decodes_but_does_not_reemit_archived_qc_vote() {
+        let decoded = decode_archival_block_message_into_network_envelope(BlockMessage::QcVote(
             sample_qc_vote(0x52),
         ));
         match decoded {
@@ -2425,9 +2363,9 @@ mod tests {
     }
 
     #[test]
-    fn block_message_wire_network_roundtrip_cached_qc() {
+    fn block_message_wire_decodes_but_does_not_reemit_archived_qc() {
         let decoded =
-            roundtrip_cached_block_message_over_network_message(BlockMessage::Qc(sample_qc(0x63)));
+            decode_archival_block_message_into_network_envelope(BlockMessage::Qc(sample_qc(0x63)));
         match decoded {
             crate::NetworkMessage::SumeragiBlock(wire) => {
                 assert!(matches!(wire.as_ref().as_message(), BlockMessage::Qc(_)));
@@ -2451,7 +2389,7 @@ mod tests {
         ];
 
         for (label, message) in cases {
-            let decoded = roundtrip_cached_block_message_over_network_message(message);
+            let decoded = roundtrip_live_block_message_over_network_message(message);
             match decoded {
                 crate::NetworkMessage::SumeragiBlock(wire) => {
                     let matches_variant = match (label, wire.as_ref().as_message()) {
@@ -2473,8 +2411,8 @@ mod tests {
     }
 
     #[test]
-    fn block_message_wire_network_roundtrip_cached_exec_witness() {
-        let decoded = roundtrip_cached_block_message_over_network_message(
+    fn block_message_wire_decodes_but_does_not_reemit_archived_exec_witness() {
+        let decoded = decode_archival_block_message_into_network_envelope(
             BlockMessage::ExecWitness(sample_exec_witness_msg(0x74)),
         );
         match decoded {

@@ -3460,7 +3460,7 @@ pub mod query {
             }
             .build(&ALICE_ID);
             let asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
-            let asset = Asset::new(asset_id.clone(), Numeric::new(13, 0));
+            let asset = Asset::new(asset_id.clone(), Quantity::from(13));
 
             let world = World::with_assets([domain], [account], [asset_def], [asset], []);
             let kura = Kura::blank_kura_for_testing();
@@ -3498,8 +3498,8 @@ pub mod query {
             .build(&ALICE_ID);
             let alice_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
             let bob_asset_id = AssetId::new(asset_def_id.clone(), bob_id.clone());
-            let alice_asset = Asset::new(alice_asset_id.clone(), Numeric::new(13, 0));
-            let bob_asset = Asset::new(bob_asset_id, Numeric::new(7, 0));
+            let alice_asset = Asset::new(alice_asset_id.clone(), Quantity::from(13));
+            let bob_asset = Asset::new(bob_asset_id, Quantity::from(7));
 
             let world = World::with_assets(
                 [domain],
@@ -3543,8 +3543,8 @@ pub mod query {
             .build(&ALICE_ID);
             let alice_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
             let bob_asset_id = AssetId::new(asset_def_id.clone(), bob_id.clone());
-            let alice_asset = Asset::new(alice_asset_id.clone(), Numeric::new(13, 0));
-            let bob_asset = Asset::new(bob_asset_id, Numeric::new(7, 0));
+            let alice_asset = Asset::new(alice_asset_id.clone(), Quantity::from(13));
+            let bob_asset = Asset::new(bob_asset_id, Quantity::from(7));
 
             let world = World::with_assets(
                 [domain],
@@ -3648,8 +3648,8 @@ pub mod query {
             .build(&ALICE_ID);
             let alice_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
             let bob_asset_id = AssetId::new(asset_def_id.clone(), bob_id.clone());
-            let alice_asset = Asset::new(alice_asset_id.clone(), Numeric::new(13, 0));
-            let bob_asset = Asset::new(bob_asset_id, Numeric::new(7, 0));
+            let alice_asset = Asset::new(alice_asset_id.clone(), Quantity::from(13));
+            let bob_asset = Asset::new(bob_asset_id, Quantity::from(7));
 
             let world = World::with_assets(
                 [domain],
@@ -3694,8 +3694,8 @@ pub mod query {
             .build(&ALICE_ID);
             let alice_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
             let bob_asset_id = AssetId::new(asset_def_id, bob_id.clone());
-            let alice_asset = Asset::new(alice_asset_id.clone(), Numeric::new(13, 0));
-            let bob_asset = Asset::new(bob_asset_id, Numeric::new(7, 0));
+            let alice_asset = Asset::new(alice_asset_id.clone(), Quantity::from(13));
+            let bob_asset = Asset::new(bob_asset_id, Quantity::from(7));
 
             let world = World::with_assets(
                 [domain],
@@ -3764,9 +3764,9 @@ pub mod query {
                 AssetId::new(secondary_asset_def_id.clone(), ALICE_ID.clone());
             let bob_primary_asset_id = AssetId::new(primary_asset_def_id, bob_id.clone());
             let alice_primary_asset =
-                Asset::new(alice_primary_asset_id.clone(), Numeric::new(13, 0));
-            let alice_secondary_asset = Asset::new(alice_secondary_asset_id, Numeric::new(7, 0));
-            let bob_primary_asset = Asset::new(bob_primary_asset_id, Numeric::new(5, 0));
+                Asset::new(alice_primary_asset_id.clone(), Quantity::from(13));
+            let alice_secondary_asset = Asset::new(alice_secondary_asset_id, Quantity::from(7));
+            let bob_primary_asset = Asset::new(bob_primary_asset_id, Quantity::from(5));
 
             let world = World::with_assets(
                 [primary_domain, secondary_domain],
@@ -3824,7 +3824,7 @@ pub mod query {
             }
             .build(&ALICE_ID);
             let alice_asset_id = AssetId::new(asset_def_id, ALICE_ID.clone());
-            let alice_asset = Asset::new(alice_asset_id.clone(), Numeric::new(1, 0));
+            let alice_asset = Asset::new(alice_asset_id.clone(), Quantity::from(1));
 
             let world = World::with_assets(
                 [domain],
@@ -4223,7 +4223,7 @@ pub mod query {
             }
             .build(&ALICE_ID);
             let alice_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
-            let alice_asset = Asset::new(alice_asset_id.clone(), Numeric::new(10, 0));
+            let alice_asset = Asset::new(alice_asset_id.clone(), Quantity::from(10));
 
             let world = World::with_assets(
                 [domain],
@@ -4297,7 +4297,7 @@ pub mod query {
                 Json::from(norito::json!(true)),
             );
             let escrow_asset_id = AssetId::new(asset_def_id.clone(), escrow_account.clone());
-            let escrow_asset = Asset::new(escrow_asset_id.clone(), Numeric::new(10, 0));
+            let escrow_asset = Asset::new(escrow_asset_id.clone(), Quantity::from(10));
             let world = World::with_assets(
                 [domain],
                 [escrow_account_model, bob_account],
@@ -5164,7 +5164,7 @@ pub mod query {
             .with_balance_scope_policy(iroha_data_model::asset::AssetBalancePolicy::Global)
             .build(&ALICE_ID);
             let source_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
-            let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(10, 0));
+            let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(10));
 
             let world = World::with_assets(
                 [domain],
@@ -5226,7 +5226,7 @@ pub mod query {
             .with_balance_scope_policy(iroha_data_model::asset::AssetBalancePolicy::Global)
             .build(&ALICE_ID);
             let source_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
-            let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(10, 0));
+            let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(10));
 
             let world =
                 World::with_assets([domain], [alice_account], [asset_def], [source_asset], []);
@@ -5287,7 +5287,7 @@ pub mod query {
             .with_balance_scope_policy(iroha_data_model::asset::AssetBalancePolicy::Global)
             .build(&ALICE_ID);
             let source_asset_id = AssetId::new(asset_def_id, ALICE_ID.clone());
-            let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(10, 0));
+            let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(10));
 
             let world = World::with_assets([domain], [account], [asset_def], [source_asset], []);
             let kura = Kura::blank_kura_for_testing();
@@ -5482,7 +5482,7 @@ pub mod query {
                 ALICE_ID.clone(),
                 iroha_data_model::asset::AssetBalanceScope::Dataspace(source_dataspace),
             );
-            let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(10, 0));
+            let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(10));
 
             let mut world = World::with_assets(
                 [domain],
@@ -5571,7 +5571,7 @@ pub mod query {
                 ALICE_ID.clone(),
                 iroha_data_model::asset::AssetBalanceScope::Dataspace(source_dataspace),
             );
-            let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(10, 0));
+            let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(10));
 
             let mut world = World::with_assets(
                 [domain],
@@ -5683,7 +5683,7 @@ pub mod query {
                 ALICE_ID.clone(),
                 iroha_data_model::asset::AssetBalanceScope::Dataspace(source_dataspace),
             );
-            let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(10, 0));
+            let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(10));
 
             let world = World::with_assets(
                 [domain],
@@ -5798,7 +5798,7 @@ pub mod query {
                 ALICE_ID.clone(),
                 iroha_data_model::asset::AssetBalanceScope::Dataspace(source_dataspace),
             );
-            let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(10, 0));
+            let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(10));
 
             let mut world = World::with_assets(
                 [domain],
@@ -5958,7 +5958,7 @@ pub mod query {
                 ALICE_ID.clone(),
                 iroha_data_model::asset::AssetBalanceScope::Dataspace(home_dataspace),
             );
-            let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(10, 0));
+            let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(10));
 
             let mut world = World::with_assets(
                 [domain],
@@ -6081,7 +6081,7 @@ pub mod query {
                 ALICE_ID.clone(),
                 iroha_data_model::asset::AssetBalanceScope::Dataspace(DataSpaceId::UNIVERSAL),
             );
-            let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(10, 0));
+            let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(10));
 
             let mut world = World::with_assets(
                 [domain],
@@ -6185,7 +6185,7 @@ pub mod query {
                 ALICE_ID.clone(),
                 iroha_data_model::asset::AssetBalanceScope::Dataspace(source_dataspace),
             );
-            let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(10, 0));
+            let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(10));
 
             let mut world = World::with_assets(
                 [domain],
@@ -6303,7 +6303,7 @@ pub mod query {
                 ALICE_ID.clone(),
                 iroha_data_model::asset::AssetBalanceScope::Dataspace(first_source_dataspace),
             );
-            let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(10, 0));
+            let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(10));
 
             let mut world = World::with_assets(
                 [domain],
@@ -6404,7 +6404,7 @@ pub mod query {
                 Json::new(issuer_policy),
             );
             let source_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
-            let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(10, 0));
+            let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(10));
 
             let world = World::with_assets(
                 [domain],
@@ -6501,7 +6501,7 @@ pub mod query {
             );
 
             let source_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
-            let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(10, 0));
+            let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(10));
             let world = World::with_assets(
                 [denied_domain, allowed_domain],
                 [alice_account, bob_account],
@@ -6596,7 +6596,7 @@ pub mod query {
             );
 
             let source_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
-            let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(10, 0));
+            let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(10));
             let world = World::with_assets(
                 [domain],
                 [alice_account, bob_account],
@@ -6675,7 +6675,7 @@ pub mod query {
                 ALICE_ID.clone(),
                 iroha_data_model::asset::AssetBalanceScope::Dataspace(dsid),
             );
-            let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(10, 0));
+            let source_asset = Asset::new(source_asset_id.clone(), Quantity::from(10));
             let world = World::with_assets(
                 [domain],
                 [alice_account, bob_account],

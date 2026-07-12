@@ -208,7 +208,7 @@ Exact numeric helpers
   enumerate every cell they perform. `cargo bench -p ivm --bench
   gas_calibration` pins work denominators for 1..=8 input limbs, 10-limb scale
   alignment, 16-limb products, and minimum/maximum authenticated envelope
-  pipelines. Release calibration requires a 25% safety
+  snapshot/publication pipelines. Release calibration requires a 25% safety
   margin on every supported baseline tier; failure changes the gas formula
   version/hash rather than selecting hardware-dependent semantics.
 

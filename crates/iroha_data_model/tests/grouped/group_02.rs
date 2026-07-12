@@ -2,10 +2,6 @@
 
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 
-#[path = "../kagemusha_topup_kotlin_fixture.rs"]
-mod kagemusha_topup_kotlin_fixture;
-#[path = "../kagemusha_v2_semantic_dag_golden.rs"]
-mod kagemusha_v2_semantic_dag_golden;
 #[path = "../model_parser.rs"]
 mod model_parser;
 #[path = "../mutators.rs"]

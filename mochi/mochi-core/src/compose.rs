@@ -2001,7 +2001,7 @@ mod tests {
                 asset_definition_id: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
                     .parse()
                     .expect("asset definition"),
-                amount: Numeric::from(1_u32),
+                amount: Quantity::from(1_u32),
                 destination: ImplicitAccountFeeDestination::Burn,
             }),
             min_initial_amounts: BTreeMap::new(),

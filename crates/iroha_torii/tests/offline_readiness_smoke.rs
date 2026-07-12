@@ -297,7 +297,7 @@ async fn offline_router_exposes_only_the_final_first_release_contract() {
             let mut request = Request::builder()
                 .method(Method::POST)
                 .uri(path)
-                .header(CONTENT_TYPE, "application/json")
+                .header(CONTENT_TYPE, "application/x-norito")
                 .header(ACCEPT, "application/json")
                 .extension(connect_info())
                 .body(body)
@@ -364,10 +364,19 @@ async fn offline_router_exposes_only_the_final_first_release_contract() {
             )
             .await
             .expect("typed JSON response");
+        assert_eq!(json.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+        let body = json
+            .into_body()
+            .collect()
+            .await
+            .expect("collect JSON media rejection")
+            .to_bytes();
+        let error: iroha_torii_shared::ErrorEnvelope =
+            norito::json::from_slice(&body).expect("decode JSON media rejection");
         assert_eq!(
-            json.status(),
-            StatusCode::BAD_REQUEST,
-            "{path} must decode the body directly as its typed request"
+            error.code(),
+            "request_content_type_unsupported",
+            "path={path}"
         );
 
         let norito = app
@@ -411,6 +420,11 @@ async fn offline_router_exposes_only_the_final_first_release_contract() {
         for (content_type, expected_status, expected_code) in [
             (
                 "application/problem+json",
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                "request_content_type_unsupported",
+            ),
+            (
+                "application/json",
                 StatusCode::UNSUPPORTED_MEDIA_TYPE,
                 "request_content_type_unsupported",
             ),
@@ -466,7 +480,10 @@ async fn offline_router_exposes_only_the_final_first_release_contract() {
             )
             .await
             .expect("supported charset response");
-        assert_eq!(json_with_charset.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            json_with_charset.status(),
+            StatusCode::UNSUPPORTED_MEDIA_TYPE
+        );
         let body = json_with_charset
             .into_body()
             .collect()
@@ -475,12 +492,13 @@ async fn offline_router_exposes_only_the_final_first_release_contract() {
             .to_bytes();
         let error: iroha_torii_shared::ErrorEnvelope =
             norito::json::from_slice(&body).expect("decode supported-charset error");
-        assert_eq!(error.code(), "request_json_invalid", "path={path}");
+        assert_eq!(
+            error.code(),
+            "request_content_type_unsupported",
+            "path={path}"
+        );
 
-        for (content_type, expected_code) in [
-            ("application/json", "request_json_invalid"),
-            ("application/x-norito", "request_norito_invalid"),
-        ] {
+        for (content_type, expected_code) in [("application/x-norito", "request_norito_invalid")] {
             let empty = app
                 .clone()
                 .oneshot(
@@ -557,7 +575,7 @@ async fn offline_router_exposes_only_the_final_first_release_contract() {
                 Request::builder()
                     .method(Method::POST)
                     .uri(path)
-                    .header(CONTENT_TYPE, "application/json")
+                    .header(CONTENT_TYPE, "application/x-norito")
                     .header(ACCEPT, "application/json")
                     .header("idempotency-key", "11".repeat(32))
                     .extension(connect_info())
@@ -583,7 +601,7 @@ async fn offline_router_exposes_only_the_final_first_release_contract() {
             .to_bytes();
         let error: iroha_torii_shared::ErrorEnvelope =
             norito::json::from_slice(&body).expect("decode large in-limit error");
-        assert_eq!(error.code(), "request_json_invalid", "path={path}");
+        assert_eq!(error.code(), "request_norito_invalid", "path={path}");
 
         let body_chunks = futures::stream::iter([
             Ok::<_, Infallible>(Bytes::from(vec![
@@ -599,7 +617,7 @@ async fn offline_router_exposes_only_the_final_first_release_contract() {
                 Request::builder()
                     .method(Method::POST)
                     .uri(path)
-                    .header(CONTENT_TYPE, "application/json")
+                    .header(CONTENT_TYPE, "application/x-norito")
                     .header(ACCEPT, "application/json")
                     .header("idempotency-key", "11".repeat(32))
                     .extension(connect_info())

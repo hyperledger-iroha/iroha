@@ -586,6 +586,69 @@ pub(crate) fn typed_request_content_format(
     })
 }
 
+/// Validate the first-release Kagemusha command media type.
+///
+/// Offline top-up and redemption accept one canonical Norito representation;
+/// JSON is deliberately not a second request protocol.
+#[allow(clippy::result_large_err)]
+pub(crate) fn norito_request_content_type(headers: &axum::http::HeaderMap) -> Result<(), Response> {
+    let mut content_types = headers.get_all(CONTENT_TYPE).iter();
+    let Some(value) = content_types.next() else {
+        return Err(typed_request_media_rejection(
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "request_content_type_missing",
+            format!("missing Content-Type; use {NORITO_MIME_TYPE}"),
+        ));
+    };
+    if content_types.next().is_some() {
+        return Err(typed_request_media_rejection(
+            StatusCode::BAD_REQUEST,
+            "request_content_type_invalid",
+            "Content-Type must appear exactly once.",
+        ));
+    }
+    let declared = value.to_str().map_err(|_| {
+        typed_request_media_rejection(
+            StatusCode::BAD_REQUEST,
+            "request_content_type_invalid",
+            "Content-Type is not valid ASCII.",
+        )
+    })?;
+    let declared = trim_optional_whitespace(declared);
+    if declared.is_empty() {
+        return Err(typed_request_media_rejection(
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "request_content_type_missing",
+            format!("missing Content-Type; use {NORITO_MIME_TYPE}"),
+        ));
+    }
+    let media_type = parse_media_type(declared).map_err(|_| {
+        typed_request_media_rejection(
+            StatusCode::BAD_REQUEST,
+            "request_content_type_invalid",
+            "Content-Type has invalid media-type syntax.",
+        )
+    })?;
+    if !media_type.has_concrete_type() {
+        return Err(typed_request_media_rejection(
+            StatusCode::BAD_REQUEST,
+            "request_content_type_invalid",
+            "Content-Type must declare one concrete media type.",
+        ));
+    }
+    if media_type.type_name == "application"
+        && media_type.subtype == "x-norito"
+        && media_type.parameters.is_empty()
+    {
+        return Ok(());
+    }
+    Err(typed_request_media_rejection(
+        StatusCode::UNSUPPORTED_MEDIA_TYPE,
+        "request_content_type_unsupported",
+        format!("unsupported Content-Type `{declared}`; use {NORITO_MIME_TYPE}"),
+    ))
+}
+
 fn not_acceptable(message: impl Into<String>) -> Response {
     // When no requested representation can be selected there is no negotiated
     // format to honor. The first-release contract uses a typed JSON envelope as
@@ -1910,6 +1973,27 @@ pub mod extractors {
         }
     }
 
+    /// Extractor for a canonical native-Norito request body.
+    #[derive(Clone, Copy, Debug)]
+    pub struct NoritoOnly<T>(pub T);
+
+    impl<S, T> FromRequest<S> for NoritoOnly<T>
+    where
+        Bytes: FromRequest<S, Rejection = axum::extract::rejection::BytesRejection>,
+        S: Send + Sync,
+        T: SupportsNoritoDecode + Send + 'static,
+    {
+        type Rejection = Response;
+
+        async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
+            super::norito_request_content_type(req.headers())?;
+            let body = Bytes::from_request(req, state)
+                .await
+                .map_err(typed_body_rejection)?;
+            decode_as_norito::<T>(&body).map(NoritoOnly)
+        }
+    }
+
     /// Extractor that returns both the decoded payload and the raw request body.
     #[derive(Clone, Debug)]
     pub struct NoritoJsonWithBytes<T> {
@@ -3114,6 +3198,36 @@ pub mod extractors {
                 assert_eq!(
                     super::super::typed_request_content_format(&headers)
                         .expect_err("unsupported request media parameters")
+                        .status(),
+                    StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                    "content_type={raw}"
+                );
+            }
+        }
+
+        #[test]
+        fn kagemusha_command_content_type_is_canonical_norito_only() {
+            let mut headers = axum::http::HeaderMap::new();
+            headers.insert(
+                CONTENT_TYPE,
+                HeaderValue::from_static(super::super::NORITO_MIME_TYPE),
+            );
+            super::super::norito_request_content_type(&headers)
+                .expect("canonical Norito command media type");
+
+            for raw in [
+                "application/json",
+                "application/json;charset=utf-8",
+                "application/x-norito;charset=utf-8",
+                "application/octet-stream",
+            ] {
+                headers.insert(
+                    CONTENT_TYPE,
+                    HeaderValue::from_str(raw).expect("Content-Type"),
+                );
+                assert_eq!(
+                    super::super::norito_request_content_type(&headers)
+                        .expect_err("Kagemusha commands have one wire representation")
                         .status(),
                     StatusCode::UNSUPPORTED_MEDIA_TYPE,
                     "content_type={raw}"

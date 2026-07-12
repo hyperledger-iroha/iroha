@@ -26,7 +26,6 @@ import org.hyperledger.iroha.sdk.crypto.IrohaHash
 import org.hyperledger.iroha.sdk.core.model.JsonValue
 import org.hyperledger.iroha.sdk.core.model.TransactionPayload
 import org.hyperledger.iroha.sdk.nexus.UaidPortfolioQuery
-import org.hyperledger.iroha.sdk.offline.OfflineListParams
 import org.hyperledger.iroha.sdk.norito.NoritoAdapters
 import org.hyperledger.iroha.sdk.norito.NoritoCodec
 import org.hyperledger.iroha.sdk.tx.SignedTransaction
@@ -144,38 +143,6 @@ class HttpClientTransportTest {
             }
             assertTrue(error.message?.contains("uaid portfolio must not contain surrounding whitespace") == true)
             assertEquals(requestCount, executor.requestCount)
-        }
-    }
-
-    @Test
-    fun offlineListParamsRejectsPaddedAssetIdBeforeDispatch() {
-        val params = OfflineListParams(assetId = "pkr#paynet")
-        assertEquals("pkr#paynet", params.toQueryParameters()["asset_id"])
-
-        val leading = assertFailsWith<IllegalArgumentException> {
-            OfflineListParams(assetId = " pkr#paynet").toQueryParameters()
-        }
-        assertTrue(leading.message?.contains("assetId must not contain surrounding whitespace") == true)
-        val trailing = assertFailsWith<IllegalArgumentException> {
-            OfflineListParams(assetId = "pkr#paynet ").toQueryParameters()
-        }
-        assertTrue(trailing.message?.contains("assetId must not contain surrounding whitespace") == true)
-        val blank = assertFailsWith<IllegalArgumentException> {
-            OfflineListParams(assetId = " ").toQueryParameters()
-        }
-        assertTrue(blank.message?.contains("assetId must not be blank") == true)
-    }
-
-    @Test
-    fun offlineListParamsRejectsNormalizedVerdictIdHexBeforeDispatch() {
-        val verdictId = "ab".repeat(32)
-        assertEquals(verdictId, OfflineListParams(verdictIdHex = verdictId).toQueryParameters()["verdict_id_hex"])
-
-        for (invalid in listOf(" $verdictId", "$verdictId ", verdictId.uppercase(), "0x$verdictId", "abc", "", "zz")) {
-            val error = assertFailsWith<IllegalArgumentException> {
-                OfflineListParams(verdictIdHex = invalid).toQueryParameters()
-            }
-            assertTrue(error.message?.contains("verdictIdHex") == true)
         }
     }
 

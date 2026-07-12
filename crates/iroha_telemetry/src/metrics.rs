@@ -2738,17 +2738,6 @@ mod tests {
     }
 
     #[test]
-    fn records_offline_note_rejections() {
-        let metrics = Metrics::default();
-        metrics.record_offline_note_rejection("ios-appattest", "proof_invalid");
-        let value = metrics
-            .offline_note_rejections_total
-            .with_label_values(&["ios-appattest", "proof_invalid"])
-            .get();
-        assert_eq!(value, 1);
-    }
-
-    #[test]
     fn records_fastpq_metal_queue_metrics() {
         let metrics = Metrics::default();
         let lanes = [
@@ -6789,18 +6778,6 @@ pub struct Metrics {
     pub subscription_billing_attempts_total: IntCounterVec,
     /// Subscription billing outcomes grouped by pricing kind and result.
     pub subscription_billing_outcomes_total: IntCounterVec,
-    /// Offline note lifecycle events grouped by event kind.
-    pub offline_note_events_total: IntCounterVec,
-    /// Aggregate Offline receipt-ack counters grouped by event kind.
-    pub offline_note_receipts_total: IntCounterVec,
-    /// Distribution of redeemed Offline note amounts.
-    pub offline_note_settled_amount: Histogram,
-    /// Offline note validation rejections grouped by platform and reason.
-    pub offline_note_rejections_total: IntCounterVec,
-    /// Offline note records pruned from hot storage.
-    pub offline_note_pruned_total: IntCounter,
-    /// Offline attestation tokens processed grouped by integrity policy.
-    pub offline_attestation_policy_total: IntCounterVec,
     /// Viral incentive lifecycle events grouped by event kind.
     pub social_events_total: IntCounterVec,
     /// Latest viral reward budget spend for the active day.
@@ -8977,38 +8954,6 @@ impl Default for Metrics {
                 let _ = subscription_billing_outcomes_total.with_label_values(&[pricing, result]);
             }
         }
-        let offline_note_events_total = IntCounterVec::new(
-            Opts::new(
-                "iroha_offline_note_events_total",
-                "Offline note lifecycle events grouped by event kind",
-            ),
-            &["event"],
-        )
-        .expect("Infallible");
-        for event in ["settled", "archived", "pruned"] {
-            let _ = offline_note_events_total.with_label_values(&[event]);
-        }
-        let offline_note_receipts_total = IntCounterVec::new(
-            Opts::new(
-                "iroha_offline_note_receipts_total",
-                "Offline note receipt aggregates grouped by event kind",
-            ),
-            &["event"],
-        )
-        .expect("Infallible");
-        let offline_note_pruned_total = IntCounter::new(
-            "iroha_offline_note_pruned_total",
-            "Offline note bundles pruned from hot storage",
-        )
-        .expect("Infallible");
-        let offline_attestation_policy_total = IntCounterVec::new(
-            Opts::new(
-                "iroha_offline_attestation_policy_total",
-                "Offline attestation tokens processed grouped by Android integrity policy",
-            ),
-            &["policy"],
-        )
-        .expect("Infallible");
         let social_events_total = IntCounterVec::new(
             Opts::new(
                 "iroha_social_events_total",
@@ -9090,29 +9035,6 @@ impl Default for Metrics {
         let social_open_escrows = GenericGauge::new(
             "iroha_social_open_escrows",
             "Open viral escrows currently tracked on-ledger",
-        )
-        .expect("Infallible");
-        for label in ["ios-appattest", "android-keymint"] {
-            let _ = offline_attestation_policy_total.with_label_values(&[label]);
-        }
-        let _ = offline_note_receipts_total.with_label_values(&["settled"]);
-        let offline_note_settled_amount = Histogram::with_opts(
-            HistogramOpts::new(
-                "iroha_offline_note_settled_amount",
-                "Distribution of offline settlement bundle amounts (asset units)",
-            )
-            .buckets(
-                prometheus::exponential_buckets(0.01, 2.0, 18)
-                    .expect("bucket inputs are valid for offline settlement histogram"),
-            ),
-        )
-        .expect("Infallible");
-        let offline_note_rejections_total = IntCounterVec::new(
-            Opts::new(
-                "iroha_offline_note_rejections_total",
-                "Offline note validation rejections grouped by platform and reason",
-            ),
-            &["platform", "reason"],
         )
         .expect("Infallible");
         let connected_peers = GenericGauge::new(
@@ -14247,12 +14169,6 @@ impl Default for Metrics {
             registry,
             subscription_billing_attempts_total,
             subscription_billing_outcomes_total,
-            offline_note_events_total,
-            offline_note_receipts_total,
-            offline_note_settled_amount,
-            offline_note_rejections_total,
-            offline_note_pruned_total,
-            offline_attestation_policy_total,
             social_events_total,
             social_budget_spent,
             social_campaign_spent,
@@ -15438,12 +15354,6 @@ impl Default for Metrics {
             settlement_haircut_total,
             subscription_billing_attempts_total,
             subscription_billing_outcomes_total,
-            offline_note_events_total,
-            offline_note_receipts_total,
-            offline_note_settled_amount,
-            offline_note_rejections_total,
-            offline_note_pruned_total,
-            offline_attestation_policy_total,
             social_events_total,
             social_budget_spent,
             social_campaign_spent,
@@ -17083,51 +16993,6 @@ impl Metrics {
         self.settlement_haircut_total
             .with_label_values(&[lane, dataspace])
             .inc_by(u128_to_f64(haircut_micro) / 1_000_000.0);
-    }
-
-    /// Record a settled offline note bundle.
-    pub fn record_offline_note_settlement(&self, amount: f64, receipt_count: u32) {
-        self.offline_note_events_total
-            .with_label_values(&["settled"])
-            .inc();
-        self.offline_note_receipts_total
-            .with_label_values(&["settled"])
-            .inc_by(u64::from(receipt_count));
-        let observed = if amount.is_finite() {
-            amount.max(0.0)
-        } else {
-            0.0
-        };
-        self.offline_note_settled_amount.observe(observed);
-    }
-
-    /// Record an offline note archival transition.
-    pub fn inc_offline_note_archived(&self) {
-        self.offline_note_events_total
-            .with_label_values(&["archived"])
-            .inc();
-    }
-
-    /// Record an Offline note record being pruned from hot storage.
-    pub fn inc_offline_note_pruned(&self) {
-        self.offline_note_events_total
-            .with_label_values(&["pruned"])
-            .inc();
-        self.offline_note_pruned_total.inc();
-    }
-
-    /// Record a validation rejection for an Offline note operation.
-    pub fn record_offline_note_rejection(&self, platform: &str, reason: &str) {
-        self.offline_note_rejections_total
-            .with_label_values(&[platform, reason])
-            .inc();
-    }
-
-    /// Record which Android integrity policy produced the attestation token.
-    pub fn record_offline_attestation_policy(&self, policy: &str) {
-        self.offline_attestation_policy_total
-            .with_label_values(&[policy])
-            .inc();
     }
 
     /// Update queue/backlog telemetry for the SoraNet privacy aggregator.

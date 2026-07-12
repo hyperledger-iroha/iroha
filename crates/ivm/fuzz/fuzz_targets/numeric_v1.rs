@@ -65,14 +65,19 @@ fn fuzz_envelope(envelope: &[u8]) {
 
 fn fuzz_int_frame(frame: &[u8]) {
     if let Ok(value) = IntValueV1::decode_frame(frame) {
-        assert_eq!(value.encode_frame().expect("decoded int must re-encode"), frame);
+        assert_eq!(
+            value.encode_frame().expect("decoded int must re-encode"),
+            frame
+        );
     }
 }
 
 fn fuzz_decimal_frame(frame: &[u8]) {
     if let Ok(value) = DecimalValueV1::decode_frame(frame) {
         assert_eq!(
-            value.encode_frame().expect("decoded decimal must re-encode"),
+            value
+                .encode_frame()
+                .expect("decoded decimal must re-encode"),
             frame
         );
     }
@@ -81,7 +86,9 @@ fn fuzz_decimal_frame(frame: &[u8]) {
 fn fuzz_quantity_frame(frame: &[u8]) {
     if let Ok(value) = QuantityValueV1::decode_frame(frame) {
         assert_eq!(
-            value.encode_frame().expect("decoded quantity must re-encode"),
+            value
+                .encode_frame()
+                .expect("decoded quantity must re-encode"),
             frame
         );
     }
@@ -100,7 +107,10 @@ fn fuzz_valid_int(payload: &[u8]) {
         .expect("bounded mantissa is a V1 int")
         .encode_frame()
         .expect("valid int frame encodes");
-    assert_eq!(IntValueV1::decode_frame(&frame).map(IntValueV1::into_int), Ok(value.clone()));
+    assert_eq!(
+        IntValueV1::decode_frame(&frame).map(IntValueV1::into_int),
+        Ok(value.clone())
+    );
 
     let envelope = numeric_tlv::encode_int(&value).expect("valid int envelope encodes");
     assert_eq!(numeric_tlv::decode_int_bytes(&envelope), Ok(value));
@@ -108,10 +118,13 @@ fn fuzz_valid_int(payload: &[u8]) {
 
 fn valid_decimal(payload: &[u8]) -> Numeric {
     let scale = payload.first().map_or(0, |byte| u32::from(*byte % 29));
-    Numeric::try_new(bounded_mantissa(payload.get(1..).unwrap_or_default()), scale)
-        .expect("bounded mantissa and scale form a decimal")
-        .canonicalize_decimal()
-        .expect("bounded decimal canonicalizes")
+    Numeric::try_new(
+        bounded_mantissa(payload.get(1..).unwrap_or_default()),
+        scale,
+    )
+    .expect("bounded mantissa and scale form a decimal")
+    .canonicalize_decimal()
+    .expect("bounded decimal canonicalizes")
 }
 
 fn fuzz_valid_decimal(payload: &[u8]) {

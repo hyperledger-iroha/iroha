@@ -308,42 +308,6 @@ class TransactionDraft:
     # ------------------------------------------------------------------
     # High-level helpers for common instruction families
     # ------------------------------------------------------------------
-    def kagemusha_instruction_archive(
-        self,
-        instruction_type: str,
-        instruction_archive: FixedBytesLike,
-    ) -> TransactionDraft:
-        """Append a typed Kagemusha instruction archive."""
-
-        from .kagemusha import kagemusha_instruction_archive_instruction
-
-        self.add_instruction(
-            kagemusha_instruction_archive_instruction(instruction_type, instruction_archive)
-        )
-        return self
-
-    def kagemusha_recursive_redeem(
-        self,
-        redeem_request_archive: FixedBytesLike,
-    ) -> TransactionDraft:
-        """Derive and append a recursive Kagemusha redeem instruction."""
-
-        from .kagemusha import kagemusha_recursive_redeem_instruction
-
-        self.add_instruction(kagemusha_recursive_redeem_instruction(redeem_request_archive))
-        return self
-
-    def kagemusha_recursive_topup(
-        self,
-        topup_request_archive: FixedBytesLike,
-    ) -> TransactionDraft:
-        """Derive and append a recursive Kagemusha top-up instruction."""
-
-        from .kagemusha import kagemusha_recursive_topup_instruction
-
-        self.add_instruction(kagemusha_recursive_topup_instruction(topup_request_archive))
-        return self
-
     def register_domain(
         self,
         domain_id: str,

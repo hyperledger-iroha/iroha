@@ -22,6 +22,68 @@ final class NativeEscrowInstructionBuildersTests: XCTestCase {
         XCTAssertEqual(inner["evidence_hashes"] as? [String], ["hash-a", "hash-b"])
     }
 
+    func testNativeEscrowAcceptsValidatedQuantityValues() throws {
+        let open = try object(from: NativeEscrowInstructionBuilders.openAssetEscrow(
+            escrowId: "escrow-hash",
+            assetDefinition: "xor#wonderland",
+            amount: KotodamaQuantity("42.5")
+        ))
+        let resolve = try object(from: NativeEscrowInstructionBuilders.resolveEscrowDispute(
+            escrowId: "escrow-hash",
+            buyerAmount: KotodamaQuantity("30.25"),
+            sellerAmount: KotodamaQuantity("12.75")
+        ))
+
+        XCTAssertEqual((open["OpenAssetEscrow"] as? [String: Any])?["amount"] as? String, "42.5")
+        XCTAssertEqual(
+            (resolve["ResolveEscrowDispute"] as? [String: Any])?["buyer_amount"] as? String,
+            "30.25"
+        )
+        XCTAssertEqual(
+            (resolve["ResolveEscrowDispute"] as? [String: Any])?["seller_amount"] as? String,
+            "12.75"
+        )
+    }
+
+    func testNativeEscrowRejectsNoncanonicalOrOutOfDomainQuantityText() {
+        let scaleTwentyNine = "0." + String(repeating: "0", count: 28) + "1"
+        let overflow = String(repeating: "9", count: 155)
+        for amount in [
+            "", " ", "\t1", "1 ", "+1", "01", "1.", ".5", "1e0", "NaN",
+            "-1", "-0", "-0.0", "0.0", "1.0", "1.2300", scaleTwentyNine, overflow,
+        ] {
+            XCTAssertThrowsError(try NativeEscrowInstructionBuilders.openAssetEscrow(
+                escrowId: "escrow-hash",
+                assetDefinition: "xor#wonderland",
+                amount: amount
+            )) { error in
+                XCTAssertEqual(
+                    error as? NativeEscrowInstructionBuilderError,
+                    .invalidQuantity(field: "amount"),
+                    "accepted invalid quantity \(amount)"
+                )
+            }
+        }
+    }
+
+    func testNativeEscrowDisputeRejectsInvalidBuyerAndSellerQuantities() {
+        for (buyerAmount, sellerAmount, field) in [
+            ("1.0", "2", "buyerAmount"),
+            ("1", "-1", "sellerAmount"),
+        ] {
+            XCTAssertThrowsError(try NativeEscrowInstructionBuilders.resolveEscrowDispute(
+                escrowId: "escrow-hash",
+                buyerAmount: buyerAmount,
+                sellerAmount: sellerAmount
+            )) { error in
+                XCTAssertEqual(
+                    error as? NativeEscrowInstructionBuilderError,
+                    .invalidQuantity(field: field)
+                )
+            }
+        }
+    }
+
     func testLifecyclePayloadShapes() throws {
         let accept = try object(from: NativeEscrowInstructionBuilders.acceptAssetEscrow(escrowId: "escrow-hash"))
         let markPaid = try object(from: NativeEscrowInstructionBuilders.markEscrowPaymentSent(escrowId: "escrow-hash"))

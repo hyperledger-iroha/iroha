@@ -51,8 +51,8 @@ fn parallel_apply_matches_sequential_for_log_and_mint() {
         let acc_b = Account::new(bob_id.clone()).build(&alice_id);
         let a_coin = AssetId::of(ad.id().clone(), alice_id.clone());
         let b_coin = AssetId::of(ad.id().clone(), bob_id.clone());
-        let a0 = Asset::new(a_coin, Numeric::new(0, 0));
-        let b0 = Asset::new(b_coin, Numeric::new(0, 0));
+        let a0 = Asset::new(a_coin, Quantity::from(0));
+        let b0 = Asset::new(b_coin, Quantity::from(0));
         iroha_core::state::World::with_assets([domain], [acc_a, acc_b], [ad], [a0, b0], [])
     };
     // Kura + query handles
@@ -336,7 +336,7 @@ fn run_block_and_events(
         // Ensure the first bootstrap account has a larger balance so that
         // ordering differences in the scheduler don't affect validity.
         let balance = if acc_id == &first_auth { 60 } else { 10 };
-        assets.push(Asset::new(asset_id, Numeric::new(balance, 0)));
+        assets.push(Asset::new(asset_id, Quantity::from(balance)));
     }
     let world = iroha_core::state::World::with_assets([domain], world_accounts, [ad], assets, []);
     let kura = iroha_core::kura::Kura::blank_kura_for_testing();

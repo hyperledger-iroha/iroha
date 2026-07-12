@@ -455,7 +455,6 @@ fn randomness_network_builder_with_params(params: SumeragiNposParameters) -> Net
             layer
                 .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full")
-                .write(["sumeragi", "consensus_mode"], "npos")
                 .write(["sumeragi", "collectors", "k"], 1_i64)
                 .write(["sumeragi", "collectors", "redundant_send_r"], 1_i64)
                 .write(["sumeragi", "da", "enabled"], true)

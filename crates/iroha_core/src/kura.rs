@@ -682,6 +682,9 @@ pub struct Kura {
     /// Test hook for forcing redundant committed-pending cleanup to fail.
     #[cfg(test)]
     fail_next_pending_merge_cleanup: AtomicBool,
+    /// Test hook for failing association recovery after a canonical stage exists.
+    #[cfg(test)]
+    fail_next_canonical_association_recovery: AtomicBool,
     /// Test hook for forcing the next lane-geometry catalog publication to fail.
     #[cfg(test)]
     fail_next_lane_geometry_publication: AtomicBool,
@@ -2911,6 +2914,8 @@ impl Kura {
             #[cfg(test)]
             fail_next_pending_merge_cleanup: AtomicBool::new(false),
             #[cfg(test)]
+            fail_next_canonical_association_recovery: AtomicBool::new(false),
+            #[cfg(test)]
             fail_next_lane_geometry_publication: AtomicBool::new(false),
             #[cfg(test)]
             fail_next_lane_geometry_publication_after_write: AtomicBool::new(false),
@@ -3096,6 +3101,8 @@ impl Kura {
             fail_next_commit_manifest_write: AtomicBool::new(false),
             #[cfg(test)]
             fail_next_pending_merge_cleanup: AtomicBool::new(false),
+            #[cfg(test)]
+            fail_next_canonical_association_recovery: AtomicBool::new(false),
             #[cfg(test)]
             fail_next_lane_geometry_publication: AtomicBool::new(false),
             #[cfg(test)]
@@ -3630,10 +3637,12 @@ impl Kura {
         self.record_writer_fault(context, error);
     }
 
-    fn committed_recovery_error(context: &'static str, error: &Error) -> Error {
-        Error::CanonicalBlockCommittedRecoveryRequired {
+    fn committed_recovery_failure(&self, context: &'static str, error: &Error) -> Error {
+        let recovery_error = Error::CanonicalBlockCommittedRecoveryRequired {
             detail: format!("{context}: {error}"),
-        }
+        };
+        self.poison_canonical_storage(context, &recovery_error);
+        recovery_error
     }
 
     fn record_or_poison_fsync_fault(&self, context: &'static str, error: &Error) {
@@ -3684,17 +3693,24 @@ impl Kura {
             self.poison_canonical_storage("unresolved canonical storage stage", &error);
             return Err(Error::CanonicalStoragePoisoned);
         }
-        if let Some(message) = store.take_deferred_da_recovery_fault() {
-            let recovered = Error::IO(
-                std::io::Error::other(message),
-                store.da_block_rewrite_stage_path(),
-            );
-            self.record_writer_fault("recovered committed DA block rewrite", &recovered);
-        }
+        let deferred_da_recovery_fault = store.take_deferred_da_recovery_fault();
+        let da_rewrite_stage_path = store.da_block_rewrite_stage_path();
         drop(store);
         drop(write_guard);
+        if let Some(message) = deferred_da_recovery_fault {
+            let recovered = Error::IO(
+                std::io::Error::other(message),
+                da_rewrite_stage_path,
+            );
+            return Err(self.committed_recovery_failure(
+                "recovered committed DA block rewrite",
+                &recovered,
+            ));
+        }
+        // A stale association stage may describe an append whose marker never committed. Its
+        // cleanup is an exact-retry precondition, not evidence that this invocation crossed a
+        // canonical commit point.
         self.recover_canonical_association_stage()
-            .map_err(|error| Self::committed_recovery_error("canonical association recovery", &error))
     }
 
     fn canonical_association_stage_path(&self) -> PathBuf {
@@ -3856,6 +3872,16 @@ impl Kura {
         let Some(stage) = self.read_canonical_association_stage()? else {
             return Ok(());
         };
+        #[cfg(test)]
+        if self
+            .fail_next_canonical_association_recovery
+            .swap(false, Ordering::AcqRel)
+        {
+            return Err(Error::IO(
+                std::io::Error::other("injected canonical association recovery failure"),
+                self.canonical_association_stage_path(),
+            ));
+        }
         let block = self.validate_canonical_association_stage(&stage)?;
         if self.durable_hash_ignoring_poison(stage.height)? != Some(stage.block_hash) {
             return self.remove_canonical_association_stage();
@@ -11296,29 +11322,12 @@ impl Kura {
                 self.ensure_existing_block_wire_matches(block, actual_height, block_hash)?;
                 if let Some(entry) = merge_entry {
                     self.preflight_committed_merge_entry_for_block(block, entry)?;
-                    let associated = self.associated_merge_entry_for_block(block).map_err(|error| {
-                        Self::committed_recovery_error(
-                            "read existing canonical merge-ledger association",
-                            &error,
-                        )
-                    })?;
+                    let associated = self.associated_merge_entry_for_block(block)?;
                     if associated.as_ref() != Some(entry) {
-                        self.persist_pending_certified_merge_entry(entry)
-                            .map_err(|error| {
-                                Self::committed_recovery_error(
-                                    "stage existing canonical merge-ledger association",
-                                    &error,
-                                )
-                            })?;
+                        self.persist_pending_certified_merge_entry(entry)?;
                     }
                 }
-                self.persist_lane_payload_ownership_artifacts_for_block(block)
-                    .map_err(|error| {
-                        Self::committed_recovery_error(
-                            "repair existing canonical lane association",
-                            &error,
-                        )
-                    })?;
+                self.persist_lane_payload_ownership_artifacts_for_block(block)?;
                 self.set_block_height_index_entry(actual_height_usize, block_hash);
                 if let Some(entry) = merge_entry {
                     self.set_transaction_entrypoint_index_entry_with_merge(
@@ -11328,13 +11337,7 @@ impl Kura {
                         chain_len,
                         false,
                     );
-                    self.append_committed_merge_entry_for_block_if_missing(block, entry)
-                        .map_err(|error| {
-                            Self::committed_recovery_error(
-                                "repair existing canonical merge-ledger association",
-                                &error,
-                            )
-                        })?;
+                    self.append_committed_merge_entry_for_block_if_missing(block, entry)?;
                     self.set_transaction_entrypoint_index_entry_with_merge(
                         actual_height_usize,
                         block,
@@ -11404,13 +11407,7 @@ impl Kura {
                     chain_len,
                     false,
                 );
-                self.append_committed_merge_entry_for_block_if_missing(block, entry)
-                    .map_err(|error| {
-                        Self::committed_recovery_error(
-                            "repair existing canonical merge-ledger association",
-                            &error,
-                        )
-                    })?;
+                self.append_committed_merge_entry_for_block_if_missing(block, entry)?;
                 self.set_transaction_entrypoint_index_entry_with_merge(
                     actual_height_usize,
                     block,
@@ -11488,7 +11485,7 @@ impl Kura {
         // Apply associations only after block_data and the durable marker agree. The durable
         // stage remains authoritative across any post-commit association failure.
         if let Err(association_error) = self.recover_canonical_association_stage() {
-            return Err(Self::committed_recovery_error(
+            return Err(self.committed_recovery_failure(
                 "committed canonical association recovery",
                 &association_error,
             ));
@@ -11506,7 +11503,7 @@ impl Kura {
                     entry_epoch = entry.epoch_id,
                     "Failed to publish merge-ledger association after canonical block commit"
                 );
-                return Err(Self::committed_recovery_error(
+                return Err(self.committed_recovery_failure(
                     "committed merge-ledger association publication",
                     &err,
                 ));
@@ -12778,8 +12775,9 @@ impl Kura {
     ///
     /// # Errors
     /// Returns an error if the block violates canonical height ordering or the block/merge entry
-    /// cannot be persisted. Once the canonical block fsync succeeds, later association errors are
-    /// monotonic and retryable rather than rolling the block back.
+    /// cannot be persisted. Pre-marker failures remain exact-retry errors. Once the canonical
+    /// marker succeeds, an incomplete association is monotonic but fail-stop: the live Kura is
+    /// poisoned and startup recovery must complete it instead of rolling the block back.
     pub fn store_block_with_merge_entry(
         &self,
         block: impl Into<Arc<SignedBlock>>,
@@ -12887,7 +12885,7 @@ impl Kura {
         drop(data);
         drop(write_guard);
         if let Err(association_error) = self.recover_canonical_association_stage() {
-            return Err(Self::committed_recovery_error(
+            return Err(self.committed_recovery_failure(
                 "committed replacement association recovery",
                 &association_error,
             ));
@@ -13127,9 +13125,6 @@ impl Kura {
     /// checkpoint, or manifest truncation cannot complete. An error is a fail-closed rollback
     /// result; callers must not resume from the partially transitioned artifact set.
     pub fn prune_to_height(&self, height: u64) -> Result<()> {
-        // Serialize rollback with authenticated finality registration and commit. This keeps the
-        // shared roster journal from changing between exact readback and the Kura/WSV transition.
-        let _transition_guard = crate::sumeragi::status::consensus_transition_guard();
         let _canonical_chain_guard = self.canonical_chain_lock.lock();
         self.resolve_canonical_storage_before_mutation()?;
         let requested_keep = usize::try_from(height)?;
@@ -13943,6 +13938,9 @@ pub struct BlockStore {
     /// Test hook for failing after a DA rewrite marker is durable but before body promotion.
     #[cfg(test)]
     fail_next_da_rewrite_after_marker: AtomicBool,
+    /// Test hook for failing the immediate staged recovery attempted after marker publication.
+    #[cfg(test)]
+    fail_next_da_rewrite_recovery: AtomicBool,
     /// Test-only abrupt-stop boundary after journal writes and before marker publication.
     #[cfg(test)]
     crash_next_da_rewrite_before_marker: AtomicBool,
@@ -23058,6 +23056,8 @@ impl BlockStore {
             #[cfg(test)]
             fail_next_da_rewrite_after_marker: AtomicBool::new(false),
             #[cfg(test)]
+            fail_next_da_rewrite_recovery: AtomicBool::new(false),
+            #[cfg(test)]
             crash_next_da_rewrite_before_marker: AtomicBool::new(false),
             #[cfg(test)]
             crash_next_da_rewrite_after_marker: AtomicBool::new(false),
@@ -24524,6 +24524,16 @@ impl BlockStore {
         let Some(stage) = self.read_da_block_rewrite_stage()? else {
             return Ok(());
         };
+        #[cfg(test)]
+        if self
+            .fail_next_da_rewrite_recovery
+            .swap(false, Ordering::AcqRel)
+        {
+            return Err(Error::IO(
+                std::io::Error::other("injected DA rewrite recovery failure"),
+                self.da_block_rewrite_stage_path(),
+            ));
+        }
         let marker = self.read_commit_marker()?.ok_or_else(|| {
             self.invalid_da_block_rewrite_stage(
                 "cannot recover a DA block rewrite without a commit marker",
@@ -27121,6 +27131,20 @@ pub enum Error {
     MergeCarrierConflict(String),
 }
 
+impl Error {
+    /// Return whether this error proves that the canonical publication boundary cannot be
+    /// retried safely by the live consensus process.
+    #[must_use]
+    pub(crate) const fn requires_restart_recovery(&self) -> bool {
+        matches!(
+            self,
+            Self::DaBlockRewriteCommitStateUnknown { .. }
+                | Self::CanonicalBlockCommittedRecoveryRequired { .. }
+                | Self::CanonicalStoragePoisoned
+        )
+    }
+}
+
 trait AddErrContextExt<T> {
     type Context;
 
@@ -27189,9 +27213,9 @@ mod tests {
             LaneVisibility,
         },
         offline::{
-            KagemushaRecursiveSpendTopUpRequestV2, KagemushaRequestAuthorizationV2,
-            KagemushaScaledAmountV2, KagemushaSpendableNoteDescriptorV2,
-            KagemushaTopUpShieldEvidenceV2,
+            KagemushaRecursiveSpendArtifactBindingV3, KagemushaRecursiveSpendTopUpRequestV2,
+            KagemushaRequestAuthorizationV2, KagemushaScaledAmountV2,
+            KagemushaSpendableNoteDescriptorV2, KagemushaTopUpShieldEvidenceV2,
         },
         peer::PeerId,
         prelude::{Executor, IvmBytecode},
@@ -27454,7 +27478,10 @@ mod tests {
                     attachment
                 },
             },
-            artifact_generation: "kura-operation-index-fixture".to_owned(),
+            artifact_binding: KagemushaRecursiveSpendArtifactBindingV3 {
+                generation: "kura-operation-index-fixture".to_owned(),
+                manifest_sha256: [0x39; 32],
+            },
             operation_id: request_operation_id,
             authorization: KagemushaRequestAuthorizationV2 {
                 authority: SAMPLE_GENESIS_ACCOUNT_ID.clone(),
@@ -29196,6 +29223,84 @@ mod tests {
             )
             .exists()
         );
+    }
+
+    #[test]
+    fn persistent_retained_cleanup_failure_poison_gates_committed_rewrite() {
+        let temp_dir = TempDir::new().expect("create Kura root");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let replacement = {
+            let (kura, _) =
+                Kura::new(&config, &RuntimeLaneConfig::default()).expect("open Kura");
+            let original = DummyBlocks::new().next();
+            let original_hash = original.hash();
+            kura.store_block(Arc::clone(&original))
+                .expect("store original block");
+            let blocks_dir = kura.active_blocks_dir.lock().clone();
+            kura.persist_retained_block_record(&blocks_dir, original_hash, original.as_ref())
+                .expect("persist retained original record");
+            let replacement: Arc<SignedBlock> = Arc::new(
+                ValidBlock::new_dummy_and_modify_header(
+                    checked_keypair().private_key(),
+                    |header| {
+                        header.set_height(nonzero!(1_u64));
+                        header.set_prev_block_hash(None);
+                        header.set_view_change_index(
+                            header.view_change_index().saturating_add(1),
+                        );
+                    },
+                )
+                .into(),
+            );
+            let replacement_hash = replacement.hash();
+            kura.fail_retained_rewrite_discard_after_for_tests(0);
+            kura.fail_next_retained_rewrite_recovery_for_tests();
+
+            let error = kura
+                .replace_top_block(Arc::clone(&replacement))
+                .expect_err("unresolved committed cleanup must never report success");
+            assert!(matches!(
+                error,
+                Error::CanonicalBlockCommittedRecoveryRequired { .. }
+            ));
+            assert!(error.requires_restart_recovery());
+            assert!(kura.canonical_storage_poisoned.load(Ordering::Acquire));
+            assert_eq!(
+                kura.block_data.lock().first().map(|(hash, _)| *hash),
+                Some(original_hash),
+                "the live in-memory image must remain at its pre-publication state"
+            );
+            assert_eq!(
+                Kura::read_durable_hash_at_height(&mut kura.block_store.lock(), 1)
+                    .expect("read durable replacement while poisoned"),
+                Some(replacement_hash)
+            );
+            assert!(
+                Kura::retained_block_rewrite_staging_dir_for(&blocks_dir).exists(),
+                "the durable cleanup stage must remain for startup recovery"
+            );
+            assert!(matches!(
+                kura.replace_top_block(Arc::clone(&replacement)),
+                Err(Error::CanonicalStoragePoisoned)
+            ));
+            replacement
+        };
+
+        let (reopened, count) = Kura::new(&config, &RuntimeLaneConfig::default())
+            .expect("restart must finish the marker-selected retained cleanup");
+        assert_eq!(count.0, 1);
+        assert_eq!(
+            reopened.get_block(nonzero!(1_usize)).as_deref(),
+            Some(replacement.as_ref())
+        );
+        assert!(!reopened.retained_block_record_path(1).exists());
+        assert!(
+            !Kura::retained_block_rewrite_staging_dir_for(
+                &reopened.active_blocks_dir.lock().clone()
+            )
+            .exists()
+        );
+        assert!(!reopened.canonical_storage_poisoned.load(Ordering::Acquire));
     }
 
     #[test]
@@ -35091,6 +35196,161 @@ mod tests {
     }
 
     #[test]
+    fn pre_marker_rewrite_failure_preserves_exact_retry_without_poison() {
+        let temp_dir = TempDir::new().expect("create Kura root");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("open Kura");
+        let original = DummyBlocks::new().next();
+        let original_hash = original.hash();
+        kura.store_block(Arc::clone(&original))
+            .expect("store original block");
+        let replacement: Arc<SignedBlock> = Arc::new(
+            ValidBlock::new_dummy_and_modify_header(
+                checked_keypair().private_key(),
+                |header| {
+                    header.set_height(nonzero!(1_u64));
+                    header.set_prev_block_hash(None);
+                    header.set_view_change_index(header.view_change_index().saturating_add(1));
+                },
+            )
+            .into(),
+        );
+        let replacement_hash = replacement.hash();
+        assert_ne!(replacement_hash, original_hash);
+        kura.block_store
+            .lock()
+            .fail_next_da_rewrite_before_marker
+            .store(true, Ordering::Release);
+
+        let error = kura
+            .replace_top_block(Arc::clone(&replacement))
+            .expect_err("pre-marker rewrite fault must reject the replacement");
+        assert!(matches!(error, Error::IO(_, _)));
+        assert!(!error.requires_restart_recovery());
+        assert!(!kura.canonical_storage_poisoned.load(Ordering::Acquire));
+        assert_eq!(kura.get_block_hash(nonzero!(1_usize)), Some(original_hash));
+        assert_eq!(
+            kura.get_durable_block_hash(nonzero!(1_usize)),
+            Some(original_hash)
+        );
+
+        kura.replace_top_block(Arc::clone(&replacement))
+            .expect("the exact replacement must remain retryable");
+        assert_eq!(
+            kura.get_durable_block_hash(nonzero!(1_usize)),
+            Some(replacement_hash)
+        );
+        assert_eq!(
+            kura.get_block(nonzero!(1_usize)).as_deref(),
+            Some(replacement.as_ref())
+        );
+    }
+
+    #[test]
+    fn pre_marker_association_recovery_failure_remains_exactly_retryable() {
+        let temp_dir = TempDir::new().expect("create Kura root");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("open Kura");
+        let stage_path = kura.canonical_association_stage_path();
+        fs::create_dir(&stage_path).expect("plant invalid pre-marker association stage");
+        let block = DummyBlocks::new().next();
+
+        let error = kura
+            .store_block(Arc::clone(&block))
+            .expect_err("invalid pre-marker stage must reject mutation");
+        assert!(matches!(error, Error::IO(_, _)));
+        assert!(!error.requires_restart_recovery());
+        assert!(!kura.canonical_storage_poisoned.load(Ordering::Acquire));
+        assert_eq!(kura.blocks_count(), 0);
+        assert_eq!(kura.durable_blocks_count(), 0);
+
+        fs::remove_dir(&stage_path).expect("remove invalid pre-marker stage");
+        kura.store_block(Arc::clone(&block))
+            .expect("same block must remain exactly retryable");
+        assert_eq!(kura.blocks_count(), 1);
+        assert_eq!(
+            kura.get_durable_block_hash(nonzero!(1_usize)),
+            Some(block.hash())
+        );
+    }
+
+    #[test]
+    fn post_marker_rewrite_recovery_failure_poison_gates_until_restart() {
+        let temp_dir = TempDir::new().expect("create Kura root");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let replacement = {
+            let (kura, _) =
+                Kura::new(&config, &RuntimeLaneConfig::default()).expect("open Kura");
+            let original = DummyBlocks::new().next();
+            let original_hash = original.hash();
+            kura.store_block(Arc::clone(&original))
+                .expect("store original block");
+            let replacement: Arc<SignedBlock> = Arc::new(
+                ValidBlock::new_dummy_and_modify_header(
+                    checked_keypair().private_key(),
+                    |header| {
+                        header.set_height(nonzero!(1_u64));
+                        header.set_prev_block_hash(None);
+                        header.set_view_change_index(
+                            header.view_change_index().saturating_add(1),
+                        );
+                    },
+                )
+                .into(),
+            );
+            let replacement_hash = replacement.hash();
+            {
+                let store = kura.block_store.lock();
+                store
+                    .fail_next_da_rewrite_after_marker
+                    .store(true, Ordering::Release);
+                store
+                    .fail_next_da_rewrite_recovery
+                    .store(true, Ordering::Release);
+            }
+
+            let error = kura
+                .replace_top_block(Arc::clone(&replacement))
+                .expect_err("committed rewrite with failed promotion must require restart");
+            assert!(matches!(
+                error,
+                Error::CanonicalBlockCommittedRecoveryRequired { .. }
+            ));
+            assert!(error.requires_restart_recovery());
+            assert!(kura.canonical_storage_poisoned.load(Ordering::Acquire));
+            assert_eq!(
+                kura.block_data.lock().first().map(|(hash, _)| *hash),
+                Some(original_hash),
+                "the live in-memory image must not pretend the replacement was published"
+            );
+            assert_eq!(
+                Kura::read_durable_hash_at_height(&mut kura.block_store.lock(), 1)
+                    .expect("read committed replacement hash while poisoned"),
+                Some(replacement_hash),
+                "the new marker must remain the durable recovery authority"
+            );
+            assert!(matches!(
+                kura.replace_top_block(Arc::clone(&replacement)),
+                Err(Error::CanonicalStoragePoisoned)
+            ));
+            replacement
+        };
+
+        let (reopened, count) = Kura::new(&config, &RuntimeLaneConfig::default())
+            .expect("restart must complete the marker-selected replacement");
+        assert_eq!(count.0, 1);
+        assert_eq!(
+            reopened.get_durable_block_hash(nonzero!(1_usize)),
+            Some(replacement.hash())
+        );
+        assert_eq!(
+            reopened.get_block(nonzero!(1_usize)).as_deref(),
+            Some(replacement.as_ref())
+        );
+        assert!(!reopened.canonical_storage_poisoned.load(Ordering::Acquire));
+    }
+
+    #[test]
     fn unreadable_append_marker_state_poison_gates_live_kura_and_restart_rolls_back() {
         let temp_dir = TempDir::new().expect("create Kura root");
         let mut config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
@@ -35153,6 +35413,30 @@ mod tests {
                     kura.store_block(block),
                     Err(Error::DaBlockRewriteCommitStateUnknown { .. })
                 ));
+                assert!(kura.canonical_storage_poisoned.load(Ordering::Acquire));
+                assert!(kura.block_data.lock().is_empty());
+                assert!(kura.block_height_index.lock().is_empty());
+                let transaction_index = kura.transaction_entrypoint_index.lock();
+                assert!(transaction_index.indexed_heights.is_empty());
+                assert!(transaction_index.incomplete_merge_heights.is_empty());
+                assert!(transaction_index.heights_by_entrypoint.is_empty());
+                assert!(transaction_index.heights_by_transaction.is_empty());
+                drop(transaction_index);
+                assert_eq!(
+                    kura.durable_budget_persisted_count.load(Ordering::Acquire),
+                    0,
+                    "fatal publication must not advance process-local budget metadata"
+                );
+                assert_eq!(
+                    kura.block_store
+                        .lock()
+                        .read_commit_marker()
+                        .expect("read selected marker")
+                        .expect("marker exists")
+                        .count,
+                    u64::from(new_marker_won),
+                    "the durable marker, not process-local metadata, selects restart recovery"
+                );
                 assert!(kura.canonical_association_stage_path().is_file());
                 assert!(
                     kura.read_lane_block_artifact(lane_id, lane_block_height)
@@ -35172,6 +35456,68 @@ mod tests {
             );
             assert!(!reopened.canonical_association_stage_path().exists());
         }
+    }
+
+    #[test]
+    fn post_marker_association_failure_poison_gates_and_restart_completes_stage() {
+        let lane_id = LaneId::SINGLE;
+        let lane_block_height = 1;
+        let temp_dir = TempDir::new().expect("create Kura root");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let block_hash = {
+            let (kura, _) =
+                Kura::new(&config, &RuntimeLaneConfig::default()).expect("open Kura");
+            let block = dummy_block_with_lane_payload_ownership(
+                lane_id,
+                DataSpaceId::UNIVERSAL,
+                lane_block_height,
+            );
+            let block_hash = block.hash();
+            kura.fail_next_canonical_association_recovery
+                .store(true, Ordering::Release);
+
+            let error = kura
+                .store_block(block)
+                .expect_err("post-marker association fault must require restart");
+            assert!(matches!(
+                error,
+                Error::CanonicalBlockCommittedRecoveryRequired { .. }
+            ));
+            assert!(error.requires_restart_recovery());
+            assert!(kura.canonical_storage_poisoned.load(Ordering::Acquire));
+            assert_eq!(kura.block_data.lock().len(), 1);
+            assert_eq!(
+                Kura::read_durable_hash_at_height(&mut kura.block_store.lock(), 1)
+                    .expect("read committed block while poisoned"),
+                Some(block_hash)
+            );
+            assert!(kura.canonical_association_stage_path().is_file());
+            assert!(
+                kura.read_lane_block_artifact(lane_id, lane_block_height)
+                    .is_none(),
+                "failed association must not fabricate a completed lane binding"
+            );
+            assert!(matches!(
+                kura.store_block(DummyBlocks::new().next()),
+                Err(Error::CanonicalStoragePoisoned)
+            ));
+            block_hash
+        };
+
+        let (reopened, count) = Kura::new(&config, &RuntimeLaneConfig::default())
+            .expect("restart must finish the committed association stage");
+        assert_eq!(count.0, 1);
+        assert_eq!(
+            reopened.get_durable_block_hash(nonzero!(1_usize)),
+            Some(block_hash)
+        );
+        assert!(
+            reopened
+                .read_lane_block_artifact(lane_id, lane_block_height)
+                .is_some()
+        );
+        assert!(!reopened.canonical_association_stage_path().exists());
+        assert!(!reopened.canonical_storage_poisoned.load(Ordering::Acquire));
     }
 
     #[test]

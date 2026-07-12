@@ -8,7 +8,7 @@ isi! {
         /// Asset definition to lock.
         pub asset_definition: crate::asset::AssetDefinitionId,
         /// Amount to lock.
-        pub amount: iroha_primitives::numeric::Numeric,
+        pub amount: iroha_primitives::numeric::Quantity,
         /// Evidence hashes attached when opening the escrow.
         #[cfg_attr(feature = "json", norito(default))]
         pub evidence_hashes: Vec<iroha_crypto::Hash>,
@@ -21,12 +21,12 @@ impl OpenAssetEscrow {
     pub fn new(
         escrow_id: crate::escrow::EscrowId,
         asset_definition: crate::asset::AssetDefinitionId,
-        amount: iroha_primitives::numeric::Numeric,
+        amount: impl Into<iroha_primitives::numeric::Quantity>,
     ) -> Self {
         Self {
             escrow_id,
             asset_definition,
-            amount,
+            amount: amount.into(),
             evidence_hashes: Vec::new(),
         }
     }
@@ -36,13 +36,13 @@ impl OpenAssetEscrow {
     pub fn with_evidence_hashes(
         escrow_id: crate::escrow::EscrowId,
         asset_definition: crate::asset::AssetDefinitionId,
-        amount: iroha_primitives::numeric::Numeric,
+        amount: impl Into<iroha_primitives::numeric::Quantity>,
         evidence_hashes: Vec<iroha_crypto::Hash>,
     ) -> Self {
         Self {
             escrow_id,
             asset_definition,
-            amount,
+            amount: amount.into(),
             evidence_hashes,
         }
     }
@@ -152,9 +152,9 @@ isi! {
         /// Escrow to resolve.
         pub escrow_id: crate::escrow::EscrowId,
         /// Amount released to the accepted buyer.
-        pub buyer_amount: iroha_primitives::numeric::Numeric,
+        pub buyer_amount: iroha_primitives::numeric::Quantity,
         /// Amount refunded to the seller.
-        pub seller_amount: iroha_primitives::numeric::Numeric,
+        pub seller_amount: iroha_primitives::numeric::Quantity,
         /// Evidence or judgement hashes attached by the resolver.
         #[cfg_attr(feature = "json", norito(default))]
         pub evidence_hashes: Vec<iroha_crypto::Hash>,
@@ -166,13 +166,13 @@ impl ResolveEscrowDispute {
     #[must_use]
     pub fn new(
         escrow_id: crate::escrow::EscrowId,
-        buyer_amount: iroha_primitives::numeric::Numeric,
-        seller_amount: iroha_primitives::numeric::Numeric,
+        buyer_amount: impl Into<iroha_primitives::numeric::Quantity>,
+        seller_amount: impl Into<iroha_primitives::numeric::Quantity>,
     ) -> Self {
         Self {
             escrow_id,
-            buyer_amount,
-            seller_amount,
+            buyer_amount: buyer_amount.into(),
+            seller_amount: seller_amount.into(),
             evidence_hashes: Vec::new(),
         }
     }
@@ -181,14 +181,14 @@ impl ResolveEscrowDispute {
     #[must_use]
     pub fn with_evidence_hashes(
         escrow_id: crate::escrow::EscrowId,
-        buyer_amount: iroha_primitives::numeric::Numeric,
-        seller_amount: iroha_primitives::numeric::Numeric,
+        buyer_amount: impl Into<iroha_primitives::numeric::Quantity>,
+        seller_amount: impl Into<iroha_primitives::numeric::Quantity>,
         evidence_hashes: Vec<iroha_crypto::Hash>,
     ) -> Self {
         Self {
             escrow_id,
-            buyer_amount,
-            seller_amount,
+            buyer_amount: buyer_amount.into(),
+            seller_amount: seller_amount.into(),
             evidence_hashes,
         }
     }
@@ -204,7 +204,7 @@ isi! {
         /// Account that receives drawdowns from the lock.
         pub destination: crate::account::AccountId,
         /// Amount to lock.
-        pub amount: iroha_primitives::numeric::Numeric,
+        pub amount: iroha_primitives::numeric::Quantity,
         /// Optional account required to draw down this lock.
         #[cfg_attr(feature = "json", norito(skip_serializing_if = "Option::is_none"))]
         pub release_authority: Option<crate::account::AccountId>,
@@ -224,13 +224,13 @@ impl OpenAssetLock {
         escrow_id: crate::escrow::EscrowId,
         asset_definition: crate::asset::AssetDefinitionId,
         destination: crate::account::AccountId,
-        amount: iroha_primitives::numeric::Numeric,
+        amount: impl Into<iroha_primitives::numeric::Quantity>,
     ) -> Self {
         Self {
             escrow_id,
             asset_definition,
             destination,
-            amount,
+            amount: amount.into(),
             release_authority: None,
             expires_at_ms: None,
             evidence_hashes: Vec::new(),
@@ -243,7 +243,7 @@ impl OpenAssetLock {
         escrow_id: crate::escrow::EscrowId,
         asset_definition: crate::asset::AssetDefinitionId,
         destination: crate::account::AccountId,
-        amount: iroha_primitives::numeric::Numeric,
+        amount: impl Into<iroha_primitives::numeric::Quantity>,
         release_authority: Option<crate::account::AccountId>,
         expires_at_ms: Option<u64>,
         evidence_hashes: Vec<iroha_crypto::Hash>,
@@ -252,7 +252,7 @@ impl OpenAssetLock {
             escrow_id,
             asset_definition,
             destination,
-            amount,
+            amount: amount.into(),
             release_authority,
             expires_at_ms,
             evidence_hashes,
@@ -266,18 +266,21 @@ isi! {
         /// Lock to draw down.
         pub escrow_id: crate::escrow::EscrowId,
         /// Amount to release to the lock destination.
-        pub amount: iroha_primitives::numeric::Numeric,
+        pub amount: iroha_primitives::numeric::Quantity,
     }
 }
 
 impl DrawdownAssetLock {
     /// Construct a generic asset lock drawdown instruction.
     #[must_use]
-    pub const fn new(
+    pub fn new(
         escrow_id: crate::escrow::EscrowId,
-        amount: iroha_primitives::numeric::Numeric,
+        amount: impl Into<iroha_primitives::numeric::Quantity>,
     ) -> Self {
-        Self { escrow_id, amount }
+        Self {
+            escrow_id,
+            amount: amount.into(),
+        }
     }
 }
 
@@ -648,7 +651,7 @@ macro_rules! impl_escrow_decode_from_slice {
 impl_escrow_decode_from_slice!(OpenAssetEscrow {
     escrow_id: crate::escrow::EscrowId,
     asset_definition: crate::asset::AssetDefinitionId,
-    amount: iroha_primitives::numeric::Numeric,
+    amount: iroha_primitives::numeric::Quantity,
     evidence_hashes: Vec<iroha_crypto::Hash>,
 });
 
@@ -675,8 +678,8 @@ impl_escrow_decode_from_slice!(OpenEscrowDispute {
 
 impl_escrow_decode_from_slice!(ResolveEscrowDispute {
     escrow_id: crate::escrow::EscrowId,
-    buyer_amount: iroha_primitives::numeric::Numeric,
-    seller_amount: iroha_primitives::numeric::Numeric,
+    buyer_amount: iroha_primitives::numeric::Quantity,
+    seller_amount: iroha_primitives::numeric::Quantity,
     evidence_hashes: Vec<iroha_crypto::Hash>,
 });
 
@@ -684,7 +687,7 @@ impl_escrow_decode_from_slice!(OpenAssetLock {
     escrow_id: crate::escrow::EscrowId,
     asset_definition: crate::asset::AssetDefinitionId,
     destination: crate::account::AccountId,
-    amount: iroha_primitives::numeric::Numeric,
+    amount: iroha_primitives::numeric::Quantity,
     release_authority: Option<crate::account::AccountId>,
     expires_at_ms: Option<u64>,
     evidence_hashes: Vec<iroha_crypto::Hash>,
@@ -692,7 +695,7 @@ impl_escrow_decode_from_slice!(OpenAssetLock {
 
 impl_escrow_decode_from_slice!(DrawdownAssetLock {
     escrow_id: crate::escrow::EscrowId,
-    amount: iroha_primitives::numeric::Numeric,
+    amount: iroha_primitives::numeric::Quantity,
 });
 
 impl_escrow_decode_from_slice!(CancelAssetLock {
@@ -755,7 +758,8 @@ impl_escrow_decode_from_slice!(ResolveAnonymousEscrowDispute {
 #[cfg(test)]
 mod tests {
     use iroha_crypto::{Algorithm, Hash, KeyPair};
-    use iroha_primitives::numeric::Numeric;
+    use iroha_primitives::numeric::{Numeric, Quantity};
+    use norito::codec::Encode;
     use norito::core::DecodeFromSlice;
 
     use super::*;
@@ -764,6 +768,14 @@ mod tests {
         name::Name,
         proof::{ProofAttachment, ProofBox, VerifyingKeyId},
     };
+
+    #[derive(Encode)]
+    struct ForgedOpenAssetEscrow {
+        escrow_id: crate::escrow::EscrowId,
+        asset_definition: crate::asset::AssetDefinitionId,
+        amount: Numeric,
+        evidence_hashes: Vec<iroha_crypto::Hash>,
+    }
 
     fn proof_attachment() -> ProofAttachment {
         let backend: iroha_schema::Ident = "halo2/ipa/poly-open".into();
@@ -837,11 +849,11 @@ mod tests {
         let release_authority = account(0xA2);
 
         assert_eq!(
-            OpenAssetEscrow::new(escrow_id, asset_definition.clone(), Numeric::from(10_u64)),
+            OpenAssetEscrow::new(escrow_id, asset_definition.clone(), Quantity::from(10_u64)),
             OpenAssetEscrow {
                 escrow_id,
                 asset_definition: asset_definition.clone(),
-                amount: Numeric::from(10_u64),
+                amount: Quantity::from(10_u64),
                 evidence_hashes: Vec::new(),
             }
         );
@@ -849,7 +861,7 @@ mod tests {
             OpenAssetEscrow::with_evidence_hashes(
                 escrow_id,
                 asset_definition.clone(),
-                Numeric::from(10_u64),
+                Quantity::from(10_u64),
                 evidence.clone(),
             )
             .evidence_hashes,
@@ -868,15 +880,15 @@ mod tests {
             evidence
         );
         assert_eq!(
-            ResolveEscrowDispute::new(escrow_id, Numeric::from(7_u64), Numeric::from(3_u64))
+            ResolveEscrowDispute::new(escrow_id, Quantity::from(7_u64), Quantity::from(3_u64))
                 .seller_amount,
-            Numeric::from(3_u64)
+            Quantity::from(3_u64)
         );
         assert_eq!(
             ResolveEscrowDispute::with_evidence_hashes(
                 escrow_id,
-                Numeric::from(7_u64),
-                Numeric::from(3_u64),
+                Quantity::from(7_u64),
+                Quantity::from(3_u64),
                 evidence.clone(),
             )
             .evidence_hashes,
@@ -887,13 +899,13 @@ mod tests {
                 escrow_id,
                 asset_definition.clone(),
                 destination.clone(),
-                Numeric::from(20_u64),
+                Quantity::from(20_u64),
             ),
             OpenAssetLock {
                 escrow_id,
                 asset_definition: asset_definition.clone(),
                 destination: destination.clone(),
-                amount: Numeric::from(20_u64),
+                amount: Quantity::from(20_u64),
                 release_authority: None,
                 expires_at_ms: None,
                 evidence_hashes: Vec::new(),
@@ -903,7 +915,7 @@ mod tests {
             escrow_id,
             asset_definition.clone(),
             destination.clone(),
-            Numeric::from(20_u64),
+            Quantity::from(20_u64),
             Some(release_authority.clone()),
             Some(12_345),
             evidence.clone(),
@@ -912,8 +924,8 @@ mod tests {
         assert_eq!(lock_with_options.expires_at_ms, Some(12_345));
         assert_eq!(lock_with_options.evidence_hashes, evidence.clone());
         assert_eq!(
-            DrawdownAssetLock::new(escrow_id, Numeric::from(5_u64)).amount,
-            Numeric::from(5_u64)
+            DrawdownAssetLock::new(escrow_id, Quantity::from(5_u64)).amount,
+            Quantity::from(5_u64)
         );
         assert_eq!(CancelAssetLock::new(escrow_id).escrow_id, escrow_id);
         assert_eq!(ExpireAssetLock::new(escrow_id).escrow_id, escrow_id);
@@ -1005,7 +1017,7 @@ mod tests {
         assert_slice_roundtrip(OpenAssetEscrow::with_evidence_hashes(
             escrow_id,
             asset_definition.clone(),
-            Numeric::from(10_u64),
+            Quantity::from(10_u64),
             evidence.clone(),
         ));
         assert_slice_roundtrip(AcceptAssetEscrow::new(escrow_id));
@@ -1018,20 +1030,20 @@ mod tests {
         ));
         assert_slice_roundtrip(ResolveEscrowDispute::with_evidence_hashes(
             escrow_id,
-            Numeric::from(7_u64),
-            Numeric::from(3_u64),
+            Quantity::from(7_u64),
+            Quantity::from(3_u64),
             evidence.clone(),
         ));
         assert_slice_roundtrip(OpenAssetLock::with_options(
             escrow_id,
             asset_definition.clone(),
             destination.clone(),
-            Numeric::from(20_u64),
+            Quantity::from(20_u64),
             Some(release_authority.clone()),
             Some(12_345),
             evidence.clone(),
         ));
-        assert_slice_roundtrip(DrawdownAssetLock::new(escrow_id, Numeric::from(5_u64)));
+        assert_slice_roundtrip(DrawdownAssetLock::new(escrow_id, Quantity::from(5_u64)));
         assert_slice_roundtrip(CancelAssetLock::new(escrow_id));
         assert_slice_roundtrip(ExpireAssetLock::new(escrow_id));
         assert_slice_roundtrip(OpenAnonymousAssetEscrow::with_evidence_hashes(
@@ -1075,6 +1087,21 @@ mod tests {
     }
 
     #[test]
+    fn negative_numeric_payload_cannot_decode_as_native_escrow_instruction_quantity() {
+        let forged = ForgedOpenAssetEscrow {
+            escrow_id: escrow_id(),
+            asset_definition: asset_definition_id(),
+            amount: Numeric::new(-1_i32, 0),
+            evidence_hashes: Vec::new(),
+        };
+
+        assert!(
+            OpenAssetEscrow::decode_from_slice(&forged.encode()).is_err(),
+            "a negative signed payload must not decode as a native escrow instruction"
+        );
+    }
+
+    #[test]
     #[allow(clippy::too_many_lines)]
     fn escrow_default_registry_decodes_type_names() {
         let registry = crate::isi::registry::default();
@@ -1090,7 +1117,7 @@ mod tests {
             OpenAssetEscrow::with_evidence_hashes(
                 escrow_id,
                 asset_definition.clone(),
-                Numeric::from(10_u64),
+                Quantity::from(10_u64),
                 evidence.clone(),
             ),
         );
@@ -1106,8 +1133,8 @@ mod tests {
             &registry,
             ResolveEscrowDispute::with_evidence_hashes(
                 escrow_id,
-                Numeric::from(7_u64),
-                Numeric::from(3_u64),
+                Quantity::from(7_u64),
+                Quantity::from(3_u64),
                 evidence.clone(),
             ),
         );
@@ -1117,7 +1144,7 @@ mod tests {
                 escrow_id,
                 asset_definition.clone(),
                 destination,
-                Numeric::from(20_u64),
+                Quantity::from(20_u64),
                 Some(release_authority),
                 Some(12_345),
                 evidence.clone(),
@@ -1125,7 +1152,7 @@ mod tests {
         );
         assert_registry_decodes(
             &registry,
-            DrawdownAssetLock::new(escrow_id, Numeric::from(5_u64)),
+            DrawdownAssetLock::new(escrow_id, Quantity::from(5_u64)),
         );
         assert_registry_decodes(&registry, CancelAssetLock::new(escrow_id));
         assert_registry_decodes(&registry, ExpireAssetLock::new(escrow_id));

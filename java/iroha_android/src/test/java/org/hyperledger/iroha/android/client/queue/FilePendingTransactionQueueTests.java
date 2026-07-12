@@ -4,6 +4,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.SecureRandom;
 import java.util.List;
+import org.hyperledger.iroha.android.tx.MultisigSignature;
+import org.hyperledger.iroha.android.tx.MultisigSignatures;
 import org.hyperledger.iroha.android.tx.SignedTransaction;
 
 public final class FilePendingTransactionQueueTests {
@@ -15,7 +17,8 @@ public final class FilePendingTransactionQueueTests {
   public static void main(final String[] args) throws Exception {
     shouldPersistAndDrainInOrder();
     shouldComputeSizeWithoutDrain();
-    shouldPersistExportedKeyBundle();
+    shouldPersistSigningMetadata();
+    shouldRejectMultisigTransactions();
     System.out.println("[IrohaAndroid] Pending transaction queue tests passed.");
   }
 
@@ -47,20 +50,23 @@ public final class FilePendingTransactionQueueTests {
     assert queue.size() == 0 : "Size should be zero after draining";
   }
 
-  private static void shouldPersistExportedKeyBundle() throws Exception {
+  private static void shouldPersistSigningMetadata() throws Exception {
     final Path tempDir = Files.createTempDirectory("iroha-queue-export-");
     final Path queueFile = tempDir.resolve("pending.queue");
     final FilePendingTransactionQueue queue = new FilePendingTransactionQueue(queueFile);
 
     final byte[] bundle = randomBytes(48);
+    final byte[] blsPublicKey = randomBytes(48);
     final SignedTransaction original =
-        new SignedTransaction(
-            randomBytes(32),
-            randomBytes(64),
-            randomBytes(32),
-            "schema.v1",
-            "alias-export",
-            bundle);
+        SignedTransaction.builder()
+            .setEncodedPayload(randomBytes(32))
+            .setSignature(randomBytes(64))
+            .setPublicKey(randomBytes(32))
+            .setSchemaName("schema.v1")
+            .setKeyAlias("alias-export")
+            .setExportedKeyBundle(bundle)
+            .setBlsPublicKey(blsPublicKey)
+            .build();
     queue.enqueue(original);
 
     final List<SignedTransaction> drained = queue.drain();
@@ -71,6 +77,32 @@ public final class FilePendingTransactionQueueTests {
     assert restored.exportedKeyBundle().isPresent() : "Export bundle must be preserved";
     assert java.util.Arrays.equals(bundle, restored.exportedKeyBundle().get())
         : "Export bundle bytes must match";
+    assert restored.blsPublicKey().isPresent() : "BLS public key must be preserved";
+    assert java.util.Arrays.equals(blsPublicKey, restored.blsPublicKey().get())
+        : "BLS public key bytes must match";
+  }
+
+  private static void shouldRejectMultisigTransactions() throws Exception {
+    final Path tempDir = Files.createTempDirectory("iroha-queue-multisig-");
+    final FilePendingTransactionQueue queue =
+        new FilePendingTransactionQueue(tempDir.resolve("pending.queue"));
+    final SignedTransaction transaction =
+        SignedTransaction.builder()
+            .setEncodedPayload(randomBytes(32))
+            .setSignature(randomBytes(64))
+            .setPublicKey(randomBytes(32))
+            .setSchemaName("schema.v1")
+            .setMultisigSignatures(
+                MultisigSignatures.of(
+                    MultisigSignature.fromCurveId(0x01, randomBytes(32), randomBytes(64))))
+            .build();
+    try {
+      queue.enqueue(transaction);
+      throw new AssertionError("Multisig transaction must be rejected");
+    } catch (final java.io.IOException expected) {
+      assert expected.getMessage().contains("pending transaction record")
+          : "Failure must identify pending transaction encoding";
+    }
   }
 
   private static SignedTransaction randomTransaction() {
