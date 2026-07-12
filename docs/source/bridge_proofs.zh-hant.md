@@ -4,9 +4,9 @@ direction: ltr
 source: docs/source/bridge_proofs.md
 status: needs-review
 generator: scripts/sync_docs_i18n.py
-source_hash: 69c9a740261d0c367d52870fc1f48775ae48307056ba9b79d2f811e0c0849f20
-source_last_modified: "2026-07-11T15:09:39+04:00"
-translation_last_reviewed: 2026-07-11
+source_hash: 74e29801129deccb6d5640d414289c47cf13fa9e0229fb55212b6c7710d7c5f7
+source_last_modified: "2026-07-12T07:38:49.568351+00:00"
+translation_last_reviewed: 2026-07-12
 translator: machine-assisted
 ---
 
@@ -37,6 +37,13 @@ translator: machine-assisted
   不得低於它。Snapshot hydration 會完整重算索引，並拒絕缺失、陳舊或多餘
   的值。重複使用 message id 或 replay 同樣會被拒絕。
 
+TRON 來源路由使用精確的
+`transferToTaira(bytes,uint256,uint64 expectedNonce)` ABI。只有在
+`expectedNonce == transferNonce` 時執行才會成功，之後系統會在遞增 storage
+前將同一值寫入 canonical payload。Native 准入依 payload recipient、縮放後的
+金額和 nonce 重建完整 ABI 呼叫。因此，已停用的雙參數 selector、過期或超前的
+nonce，以及已耗盡的 `uint64` nonce 都會以 fail-closed 方式拒絕。
+
 ## 單次驗證與確定性限額
 
 - 每份 native 或 destination 證明只做一次規範解碼和一次昂貴的密碼學驗證。
@@ -45,6 +52,22 @@ translator: machine-assisted
   updates、header bytes、secp256k1 recoveries、BLS 聚合檢查/簽名貢獻以及
   BN254 pairing-product checks 設定強制非零的 per-proof、per-transaction
   和 per-block 限額。這些准入限額綁定共識，所有驗證者必須一致。
+
+## 出站承諾、留存與探索
+
+每則成功的 outbound message 都依區塊執行順序取得連續的 `commitment_index`
+（`0..=511`）。V1 的固定上限是每區塊 512 則訊息、每則訊息 4,096 bytes 的 canonical
+payload。`[zk.sccp]` 同時以 `max_pending_outbound_messages`（預設 `65536`）和
+`max_pending_outbound_payload_bytes`（預設 `268435456`）限制待處理 payload 狀態。
+
+Kura 在發布 finality 或淘汰 block body 之前，以 immutable 方式保存精確的 canonical
+header 和由 root 認證的 SCCP archive。重建 proof、bundle、proof request 和 recent
+history 不讀取歷史 block body，也不把 mutable WSV payload copy 當作證明材料。
+destination proof 被接受後，待處理 payload 及其計費會 atomically 移除，並替換為保留
+locator/index 的 fixed terminal descriptor。待處理狀態有硬上限；terminal records 和
+immutable Kura history 為永久 replay protection 而有意持續增長。
+`GET /v1/sccp/messages/recent` 使用 compound cursor `{ from, after_index }`。
+Immutable evidence 計入 total/operator disk usage，但不計入 evictable-body budget。
 
 ## Torii 邊界
 

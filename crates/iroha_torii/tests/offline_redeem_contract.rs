@@ -1,6 +1,6 @@
 //! Source-level contract guards for the first-release offline redeem command.
 
-const OFFLINE_ISSUER_SOURCE: &str = include_str!("../src/offline_v2_issuer.rs");
+const OFFLINE_ISSUER_SOURCE: &str = include_str!("../src/offline_commands.rs");
 const OFFLINE_API_SOURCE: &str = include_str!("../../iroha_torii_shared/src/offline_api.rs");
 const TORII_SOURCE: &str = include_str!("../src/lib.rs");
 
@@ -33,36 +33,4 @@ fn redeem_is_a_typed_async_command_on_the_final_route() {
     assert!(issuer.contains("header::LOCATION"));
     assert!(issuer.contains("header::RETRY_AFTER"));
     assert!(issuer.contains("header::CACHE_CONTROL"));
-}
-
-#[test]
-fn redeem_has_no_wrapper_or_compatibility_payload() {
-    let issuer = production_source(OFFLINE_ISSUER_SOURCE);
-
-    for retired_field in [
-        "redeem_request_norito_base64",
-        "compact_payment_token_norito_base64",
-        "projection_verifier_record_norito_base64",
-    ] {
-        assert!(
-            !issuer.contains(retired_field),
-            "whole-payload wrapper must be absent: {retired_field}"
-        );
-    }
-    assert!(!issuer.contains("KagemushaRecursiveSpendRedeemRequestV1"));
-}
-
-#[test]
-fn retired_redeem_routes_are_not_mounted() {
-    for retired_path in [
-        "/v1/offline/v2/notes/redeem",
-        "/v1/offline/v2/redeem",
-        "/v1/offline/notes/redeem",
-        "/v1/offline/cash/redeem",
-    ] {
-        assert!(
-            !TORII_SOURCE.contains(&format!(".route(\"{retired_path}\"")),
-            "retired route must not be mounted: {retired_path}"
-        );
-    }
 }

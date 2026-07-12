@@ -129,7 +129,9 @@ fn seeded_zk_roots_state(
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let mut state = State::new_for_testing(World::new(), kura, query);
-    state.set_zk(zk_config_with_root_history_cap(root_history_cap));
+    state
+        .set_zk(zk_config_with_root_history_cap(root_history_cap))
+        .expect("empty SCCP outbox accepts roots test configuration");
 
     let domain_id: DomainId = DomainId::try_new("zkd", "universal").unwrap();
     let asset_def_id = AssetDefinitionId::new(

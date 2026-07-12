@@ -3,6 +3,61 @@ import XCTest
 @testable import IrohaSwift
 
 final class KagemushaRecursiveSpendTests: XCTestCase {
+    func testKagemushaDeviceAttestationIsCanonicalAndRejectsAdversarialInputs() throws {
+        let registration = try kagemushaDeviceAttestation()
+        XCTAssertEqual(
+            try registration.canonicalChallengeHash(),
+            registration.challengeHash
+        )
+        XCTAssertFalse(registration.attestationReport.isEmpty)
+        XCTAssertEqual(
+            Data(registration.evidence.prefix(
+                KagemushaDeviceAttestation.deviceAttestationEvidencePrefix.utf8.count
+            )),
+            Data(KagemushaDeviceAttestation.deviceAttestationEvidencePrefix.utf8)
+        )
+        XCTAssertFalse(try registration.noritoEncoded().isEmpty)
+
+        XCTAssertThrowsError(try kagemushaDeviceAttestation(version: 2)) { error in
+            XCTAssertEqual(
+                error as? KagemushaDeviceAttestationError,
+                .invalidRegistrationVersion(2)
+            )
+        }
+        XCTAssertThrowsError(try kagemushaDeviceAttestation(oneUse: false)) { error in
+            XCTAssertEqual(
+                error as? KagemushaDeviceAttestationError,
+                .authorityMustBeOneUse
+            )
+        }
+        XCTAssertThrowsError(try kagemushaDeviceAttestation(
+            authorityPublicKey: Data(repeating: 0x41, count: 31)
+        ))
+        XCTAssertThrowsError(try kagemushaDeviceAttestation(platform: "ios"))
+        XCTAssertThrowsError(try kagemushaDeviceAttestation(keyID: " credential "))
+        XCTAssertThrowsError(try kagemushaDeviceAttestation(deviceID: "device-1\n"))
+        XCTAssertThrowsError(try kagemushaDeviceAttestation(assertionUsageCountLimit: 1))
+        XCTAssertThrowsError(try kagemushaDeviceAttestation(
+            assertionPublicKey: Data(repeating: 0, count: 65)
+        ))
+        XCTAssertThrowsError(try kagemushaDeviceAttestation(attestationReport: Data()))
+        XCTAssertThrowsError(try kagemushaDeviceAttestation(recentBlockHeight: 0))
+        XCTAssertThrowsError(try kagemushaDeviceAttestation(expiresAtMilliseconds: 0))
+        XCTAssertThrowsError(try kagemushaDeviceAttestation(
+            recentBlockHash: Data(repeating: 1, count: 31)
+        ))
+        XCTAssertThrowsError(try kagemushaDeviceAttestation(
+            challengeHash: fixed32(0xA1)
+        ))
+        XCTAssertThrowsError(try kagemushaDeviceAttestation(
+            attestationReportHash: fixed32(0xA1)
+        ))
+        XCTAssertThrowsError(try kagemushaDeviceAttestation(evidence: Data([0x00])))
+        XCTAssertThrowsError(try kagemushaDeviceAttestation(
+            evidenceHash: fixed32(0xA1)
+        ))
+    }
+
     func testNoteOpeningCodecRoundTripsOnlyCanonicalNonzeroArchives() throws {
         let opening = try KagemushaNoteOpening(
             spendKey: fixed32(0x31),
@@ -765,9 +820,7 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
         XCTAssertEqual(KagemushaOfflineSpendMode.recursiveSpend.rawValue, "recursive_spend_v1")
         XCTAssertTrue(KagemushaRecursiveSpend.isSpendAgainMode("recursive_spend_v1"))
         XCTAssertFalse(KagemushaRecursiveSpend.isSpendAgainMode("recursive_spend_v2"))
-        XCTAssertFalse(KagemushaRecursiveSpend.isSpendAgainMode("recursive_compact_v1"))
         XCTAssertNil(KagemushaOfflineSpendMode(rawValue: "recursive_spend_v2"))
-        XCTAssertNil(KagemushaOfflineSpendMode(rawValue: "recursive_compact_v1"))
         XCTAssertFalse(KagemushaRecursiveSpend.isProductionAvailable)
         XCTAssertNil(KagemushaRecursiveSpend.preferredProductionMode)
         XCTAssertEqual(
@@ -1159,7 +1212,7 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
             issuedAtMilliseconds: 1,
             expiresAtMilliseconds: 2,
             recipientOutput: output,
-            recipientOutputProverMaterial: Data([0xE4])
+            senderOutputProverMaterial: Data([0xE4])
         )
 
         let archive = try KagemushaRecursiveSpendCodecs
@@ -1355,6 +1408,62 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
             inputRoot: fixed32(seed &+ 4),
             proofStepCount: 1,
             peerHopCount: UInt32(path.depth)
+        )
+    }
+
+    private func kagemushaDeviceAttestation(
+        version: UInt16 = KagemushaDeviceAttestation.registrationVersion,
+        platform: String = KagemushaDeviceAttestation.iosAppAttestPlatform,
+        keyID: String? = nil,
+        deviceID: String = "ios-device-1",
+        authorityPublicKey: Data? = nil,
+        assertionPublicKey: Data? = nil,
+        assertionUsageCountLimit: UInt32? = nil,
+        oneUse: Bool = true,
+        challengeHash: Data? = nil,
+        attestationReportHash: Data? = nil,
+        attestationReport: Data = Data("app-attest-object".utf8),
+        evidenceHash: Data? = nil,
+        evidence: Data? = nil,
+        recentBlockHeight: UInt64 = 42,
+        recentBlockHash: Data? = nil,
+        expiresAtMilliseconds: UInt64 = 10_000
+    ) throws -> OfflineDeviceAttestationRegistration {
+        let authorityKey = authorityPublicKey ?? fixed32(0xA5)
+        let accountID = try AccountAddress
+            .fromAccount(publicKey: authorityKey)
+            .toI105(networkPrefix: 0x02F1)
+        let assertionKey = try assertionPublicKey
+            ?? P256.Signing.PrivateKey(
+                rawRepresentation: Data(repeating: 1, count: 32)
+            ).publicKey.x963Representation
+        let resolvedKeyID = keyID ?? Data("app-attest-credential".utf8).base64EncodedString()
+        let reportHash = IrohaHash.hash(attestationReport)
+        let resolvedEvidence = evidence ?? (
+            Data(KagemushaDeviceAttestation.deviceAttestationEvidencePrefix.utf8)
+                + reportHash
+        )
+        return try OfflineDeviceAttestationRegistration(
+            version: version,
+            platform: platform,
+            keyId: resolvedKeyID,
+            deviceId: deviceID,
+            accountId: accountID,
+            publicKey: authorityKey,
+            assertionScheme: KagemushaDeviceAttestation.iosAppAttestAssertionScheme,
+            assertionKeyAlgorithm:
+                KagemushaDeviceAttestation.iosAppAttestAssertionKeyAlgorithm,
+            assertionPublicKey: assertionKey,
+            assertionUsageCountLimit: assertionUsageCountLimit,
+            oneUse: oneUse,
+            challengeHash: challengeHash,
+            attestationReportHash: attestationReportHash,
+            attestationReport: attestationReport,
+            evidenceHash: evidenceHash,
+            evidence: resolvedEvidence,
+            recentBlockHeight: recentBlockHeight,
+            recentBlockHash: recentBlockHash ?? IrohaHash.hash(Data("block-42".utf8)),
+            expiresAtMs: expiresAtMilliseconds
         )
     }
 

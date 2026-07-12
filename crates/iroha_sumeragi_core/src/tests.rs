@@ -2120,6 +2120,12 @@ fn height_closes_only_after_apply_and_a_matching_durable_receipt() {
         .expect("matching receipt closes height");
     assert_eq!(finalized.context(), &context);
     assert_eq!(finalized.decision(), &decision);
+    let retirement = WalRetirementAuthorization::from_finalized_height(&finalized);
+    assert!(retirement.matches_finalized_height(&finalized));
+    assert_eq!(retirement.context_id(), context.id());
+    assert_eq!(retirement.height(), context.height());
+    assert_eq!(retirement.subject(), subject);
+    assert_eq!(retirement.certificate(), decision.reference());
 }
 
 #[test]

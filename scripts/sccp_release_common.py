@@ -138,7 +138,9 @@ REQUIRED_PHASES = (
     "java-android",
     "dotnet-sdk",
     "contract-smoke",
+    "tvm-contract-smoke",
     "core-admission",
+    "runtime-api",
 )
 
 PROFILE_ORDER = (
@@ -201,6 +203,24 @@ FORBIDDEN_FIXTURE_PUBLIC_KEYS = frozenset(
         # Post-merge ephemeral in-memory release-role seal.
         "fe2b875714f38b99fdfc116fa3f86baba2377602c08f91818f115042afa9360b",
         "28606717bbb2ad7b0540afc392dda40c1df589161243f06b3ab84455d3ceae52",
+        # Complete-corridor ephemeral in-memory release-role seal.
+        "c3515b02fa51a33640b346dcf9d2cb60b16c362b7e95b4dbd38711923635dfb3",
+        "f32dc052551832ded5f27d9ca3234ec984b1c07bb540368beb8163c3f2c1c480",
+        # Nonce-bound TRON validator ephemeral in-memory release-role seal.
+        "15eaf0882db809a33a3fb533353b4afe43af0ffde1e86c5fd13f91e943b6ee00",
+        "453ed15553be21331012655ee17d1dfaca6b86a87df7d0e6c040e87a23396c9e",
+        # Aborted transport generation, retained in the production denylist.
+        "7ddb0a311b568eb3875864f641b0993ab5303c952278166a40d8e7e658fb9908",
+        "a7e7cbae831e6b2cce0a80f072608a8d441ffcd78e519163cbf604f02abc6eb7",
+        # Archive-finalized ephemeral in-memory release-role seal.
+        "5896c7ec6a3c44685efec5c23bea9e0c79026e8c844de5df3e9f723abc53dadd",
+        "04f866e68e71310baba066fd1d0005d08885c04e5557c356a0a8a7e1270a3937",
+        # Archive-finalized ephemeral release-role seal after validator refresh.
+        "111fa14f8f6a46dc184a584610d78372ffabc532a40c5bcea6a6812546b8cf38",
+        "a38817b53f5d49f0c95057ac0f0ac0896c9b31a60dada241a3e68c9f0e6a7f01",
+        # Current archive-finalized ephemeral release-role seal.
+        "428cbad36d48107627a178faf4678967ed56a453698a8c41a102ed8176dbc316",
+        "a916597e070ce70ae69a4a3bbb564714a9b95559ed941eb3b2edfb6568fb6bf3",
     )
 )
 

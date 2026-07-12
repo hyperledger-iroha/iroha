@@ -253,6 +253,9 @@ const MAX_SIGNED_INT32 = 0x7fffffff;
 const MAX_SIGNED_INT32_BIGINT = BigInt(MAX_SIGNED_INT32);
 const MAX_NUMERIC_SCALE = 28;
 const MAX_NUMERIC_BITS = 512;
+const MAX_NUMERIC_TEXT_LENGTH = 185;
+const MIN_NUMERIC_MANTISSA = -(1n << BigInt(MAX_NUMERIC_BITS - 1));
+const MAX_NUMERIC_MANTISSA = (1n << BigInt(MAX_NUMERIC_BITS - 1)) - 1n;
 const UINT64_MASK = 0xffff_ffff_ffff_ffffn;
 const RAW_UTF8_HEADERS_INIT_KEY = "__irohaRawUtf8Headers";
 const RAW_UTF8_HEADER_SUPPORT_FLAG = "__irohaSupportsRawUtf8Headers";
@@ -20560,6 +20563,9 @@ function normalizeNumericLiteral(value, name, { allowNegative = false } = {}) {
   if (!raw) {
     throw new TypeError(`${name} must be a valid Numeric literal`);
   }
+  if (raw.length > MAX_NUMERIC_TEXT_LENGTH) {
+    throw new TypeError(`${name} exceeds the bounded Numeric text length`);
+  }
 
   let digits = raw;
   const sign = digits[0];
@@ -20603,9 +20609,13 @@ function normalizeNumericLiteral(value, name, { allowNegative = false } = {}) {
   if (sign === "-") {
     mantissaValue = -mantissaValue;
   }
-  const absValue = mantissaValue < 0n ? -mantissaValue : mantissaValue;
-  if (absValue !== 0n && absValue.toString(2).length > MAX_NUMERIC_BITS) {
-    throw new TypeError(`${name} mantissa exceeds ${MAX_NUMERIC_BITS} bits`);
+  if (
+    mantissaValue < MIN_NUMERIC_MANTISSA ||
+    mantissaValue > MAX_NUMERIC_MANTISSA
+  ) {
+    throw new TypeError(
+      `${name} mantissa exceeds the signed ${MAX_NUMERIC_BITS}-bit range`,
+    );
   }
 
   return raw;
@@ -24562,7 +24572,9 @@ function normalizeIdentifierPolicyListResponse(
       allowZero: true,
     }),
     items: itemsValue.map((item, index) =>
-      normalizeIdentifierPolicySummary(item, `${context}.items[${index}]`),
+      normalizeIdentifierPolicySummary(item, `${context}.items[${index}]`, {
+        requireRoutingFields: true,
+      }),
     ),
   };
 }
@@ -24615,6 +24627,10 @@ function normalizeRamLfeProgramPolicySummary(payload, context) {
       record.resolver_public_key,
       `${context}.resolver_public_key`,
     ),
+    output_opening_public_key: requireExactNonEmptyString(
+      record.output_opening_public_key,
+      `${context}.output_opening_public_key`,
+    ),
     backend,
     verification_mode: verificationMode,
   };
@@ -24649,6 +24665,12 @@ function normalizeRamLfeProgramPolicySummary(payload, context) {
       `${context}.proof_verifier`,
     );
   }
+  if (record.ram_fhe_profile !== undefined && record.ram_fhe_profile !== null) {
+    result.ram_fhe_profile = normalizeRamLfeProgramProfile(
+      record.ram_fhe_profile,
+      `${context}.ram_fhe_profile`,
+    );
+  }
   if (record.note !== undefined && record.note !== null) {
     result.note = requireNonEmptyString(record.note, `${context}.note`);
   }
@@ -24671,7 +24693,54 @@ function normalizeRamLfeProofVerifierMetadata(payload, context) {
   };
 }
 
-function normalizeIdentifierPolicySummary(payload, context) {
+function normalizeRamLfeProgramProfile(payload, context) {
+  const record = ensureRecord(payload ?? {}, context);
+  const encryptedInputMode = requireExactNonEmptyString(
+    record.encrypted_input_mode,
+    `${context}.encrypted_input_mode`,
+  );
+  if (encryptedInputMode !== "encrypted_envelope_v1") {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_STRING,
+      `${context}.encrypted_input_mode must be encrypted_envelope_v1`,
+      `${context}.encrypted_input_mode`,
+    );
+  }
+  return {
+    profile_version: normalizeIdentifierBfvUint(
+      record.profile_version,
+      `${context}.profile_version`,
+      { allowZero: false, safe: true },
+    ),
+    register_count: normalizeIdentifierBfvUint(
+      record.register_count,
+      `${context}.register_count`,
+      { allowZero: false, safe: true },
+    ),
+    memory_lane_count: normalizeIdentifierBfvUint(
+      record.memory_lane_count,
+      `${context}.memory_lane_count`,
+      { allowZero: false, safe: true },
+    ),
+    ciphertext_mul_per_step: normalizeIdentifierBfvUint(
+      record.ciphertext_mul_per_step,
+      `${context}.ciphertext_mul_per_step`,
+      { allowZero: false, safe: true },
+    ),
+    encrypted_input_mode: encryptedInputMode,
+    min_ciphertext_modulus: normalizeIdentifierBfvUint(
+      record.min_ciphertext_modulus,
+      `${context}.min_ciphertext_modulus`,
+      { allowZero: false },
+    ),
+  };
+}
+
+function normalizeIdentifierPolicySummary(
+  payload,
+  context,
+  { requireRoutingFields = false } = {},
+) {
   const record = ensureRecord(payload ?? {}, context);
   const normalization = requireExactNonEmptyString(
     record.normalization,
@@ -24703,6 +24772,25 @@ function normalizeIdentifierPolicySummary(payload, context) {
     ),
     backend,
   };
+  if (
+    requireRoutingFields ||
+    (record.program_id !== undefined && record.program_id !== null)
+  ) {
+    result.program_id = requireExactNonEmptyString(
+      record.program_id,
+      `${context}.program_id`,
+    );
+  }
+  if (
+    requireRoutingFields ||
+    (record.output_opening_public_key !== undefined &&
+      record.output_opening_public_key !== null)
+  ) {
+    result.output_opening_public_key = requireExactNonEmptyString(
+      record.output_opening_public_key,
+      `${context}.output_opening_public_key`,
+    );
+  }
   if (record.input_encryption !== undefined && record.input_encryption !== null) {
     const inputEncryption = requireExactNonEmptyString(
       record.input_encryption,
@@ -24740,6 +24828,12 @@ function normalizeIdentifierPolicySummary(payload, context) {
     result.proof_verifier = normalizeRamLfeProofVerifierMetadata(
       record.proof_verifier,
       `${context}.proof_verifier`,
+    );
+  }
+  if (record.ram_fhe_profile !== undefined && record.ram_fhe_profile !== null) {
+    result.ram_fhe_profile = normalizeRamLfeProgramProfile(
+      record.ram_fhe_profile,
+      `${context}.ram_fhe_profile`,
     );
   }
   if (record.note !== undefined && record.note !== null) {
@@ -25077,6 +25171,10 @@ function normalizeRamLfeExecuteResponse(
     backend,
     verification_mode: verificationMode,
     receipt: ensureRecord(record.receipt ?? {}, `${context}.receipt`),
+    output_opening: normalizeRamLfeOutputOpening(
+      record.output_opening,
+      `${context}.output_opening`,
+    ),
   };
 }
 

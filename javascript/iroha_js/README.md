@@ -17,6 +17,12 @@ npm install
 npm run build:native
 ```
 
+When upgrading a source checkout from a revision that tracked the checksum
+manifest but ignored the generated binary, Git can remove the manifest while
+leaving an old `native/iroha_js_host.node`. The publisher intentionally rejects
+that binary-only state. Remove that unverified leftover and rerun
+`npm run build:native`; never manufacture a replacement checksum by hand.
+
 The registry tarball intentionally contains no platform-specific `.node`
 binary, Cargo workspace, install hook, or implicit downloader. Consequently,
 `npm run build:native` is a source-checkout command, not a supported operation
@@ -467,6 +473,20 @@ services must use HTTPS; loopback HTTP is accepted for local development. The
 service receives the complete source, so use only an endpoint you trust. Node
 and browser adapters reject source larger than the canonical 1 MiB UTF-8 limit
 before invoking the native binding or making a network request.
+Validated service URLs and Fetch implementations are kept in immutable private
+client state, so later property mutation cannot redirect source. Responses must
+be HTTP 200 with exact `application/json`, absent/identity content encoding, and
+consistent byte framing. Successful artifacts are bounded to the ledger's exact
+1 MiB post-header IVM code-memory limit and must carry canonical IVM 1.1/ABI-1
+metadata, a checksummed CNTR Norito interface whose identity/capabilities and
+collection counts match the manifest, fully framed ABI-1 indexed literals, and
+a non-empty word-aligned instruction stream. These JavaScript framing checks do
+not replace Rust instruction decoding or its control-flow, syscall, entrypoint,
+access-claim, and other semantic admission checks. The service must therefore be
+a trusted canonical Rust compiler endpoint; the ledger remains the final
+authority on whether an artifact is deployable.
+The first release accepts only `provenance: null`; signed provenance remains
+disabled until its exact message and public-key algorithm can be verified.
 The native binding and service receive the same canonical JSON-shaped request,
 `{ source, sourceName?, zk }`. `sourceName` is limited to 4096 UTF-8 bytes and
 must not contain control characters. Unknown options—including ABI, vector,

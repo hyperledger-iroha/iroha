@@ -221,7 +221,8 @@ BY Isa
    DEF Init, LineageInvariant, PrepareLineageSound,
        LocksCoverOwnCommits, CurrentIntentViewsBound,
        HonestCommitIntentPrepared, CommitIntentsPreparedBy,
-       CertificatePhasesCorrect
+       CertificatePhasesCorrect, DurableIntentsDoNotAnticipateHeight,
+       ContextRecord
 
 THEOREM InitEstablishesStrongInductiveInvariant ==
   Init => StrongInductiveInvariant
@@ -237,7 +238,7 @@ BY Isa
    DEF LineageInvariant, LineageVars, PrepareLineageSound,
        PrepareCarriesHigherSafeQc, LocksCoverOwnCommits,
        CurrentIntentViewsBound, HonestCommitIntentPrepared,
-       CertificatePhasesCorrect
+       CertificatePhasesCorrect, DurableIntentsDoNotAnticipateHeight
 
 THEOREM UnchangedProvenanceVarsPreservesReducerProvenance ==
   ReducerProvenanceInvariant /\ UNCHANGED ProvenanceVars
@@ -334,12 +335,32 @@ PROOF
           /\ FormedTimeoutCertificatesSound'
           /\ DurableTimeoutsProtectCommits'
           /\ HighestAndLockAreCertified'
-      BY <1>1, IsaM("blast")
-         DEF ReducerProvenanceWithoutVoteTransport,
-             ProvenanceWithoutVoteTransportVars,
-             CertificatesBackedByIntents, HonestDurableIntentsSound,
-             FormedTimeoutCertificatesSound,
-             DurableTimeoutsProtectCommits, HighestAndLockAreCertified
+      <3>1. CertificatesBackedByIntents'
+        BY <1>1, Isa
+           DEF ReducerProvenanceWithoutVoteTransport,
+               ProvenanceWithoutVoteTransportVars,
+               CertificatesBackedByIntents
+      <3>2. HonestDurableIntentsSound'
+        BY <1>1, Isa
+           DEF ReducerProvenanceWithoutVoteTransport,
+               ProvenanceWithoutVoteTransportVars,
+               HonestDurableIntentsSound
+      <3>3. FormedTimeoutCertificatesSound'
+        BY <1>1, Isa
+           DEF ReducerProvenanceWithoutVoteTransport,
+               ProvenanceWithoutVoteTransportVars,
+               FormedTimeoutCertificatesSound
+      <3>4. DurableTimeoutsProtectCommits'
+        BY <1>1, Isa
+           DEF ReducerProvenanceWithoutVoteTransport,
+               ProvenanceWithoutVoteTransportVars,
+               DurableTimeoutsProtectCommits
+      <3>5. HighestAndLockAreCertified'
+        BY <1>1, Isa
+           DEF ReducerProvenanceWithoutVoteTransport,
+               ProvenanceWithoutVoteTransportVars,
+               HighestAndLockAreCertified
+      <3> QED BY <3>1, <3>2, <3>3, <3>4, <3>5
     <2> QED BY <2>1, <2>2, <2>3
        DEF ReducerProvenanceWithoutVoteTransport
   <1> QED BY <1>1
@@ -454,7 +475,11 @@ PROOF
     <2>10. CertificatePhasesCorrect'
       BY <1>1, <2>3, Isa
          DEF LineageInvariant, CertificatePhasesCorrect
-    <2> QED BY <2>4, <2>5, <2>8, <2>9, <2>10
+    <2>11. DurableIntentsDoNotAnticipateHeight'
+      BY <1>1, <2>2, <2>3, Isa
+         DEF LineageInvariant, DurableIntentsDoNotAnticipateHeight,
+             PersistPrepare
+    <2> QED BY <2>4, <2>5, <2>8, <2>9, <2>10, <2>11
        DEF LineageInvariant
   <1> QED BY <1>1
 
@@ -526,7 +551,12 @@ PROOF
     <2>5. CertificatePhasesCorrect'
       BY <1>1, <2>1, SMT
          DEF LineageInvariant, CertificatePhasesCorrect
-    <2> QED BY <2>2, <2>3, <2>4, <2>5 DEF LineageInvariant
+    <2>6. DurableIntentsDoNotAnticipateHeight'
+      BY <1>1, <2>1, Isa
+         DEF LineageInvariant, DurableIntentsDoNotAnticipateHeight,
+             FormPrepareQC
+    <2> QED BY <2>2, <2>3, <2>4, <2>5, <2>6
+       DEF LineageInvariant
   <1> QED BY <1>1
 
 THEOREM SetGSTPreservesStrongInductiveInvariant ==
@@ -2454,11 +2484,15 @@ PROOF
         BY <1>1, <3>1, <3>2, Isa DEF Restart
       <3> QED BY <1>1, <3>3, Isa
          DEF StrongInductiveInvariant, Safety, TypeInvariant, Restart
-    <2>2. /\ OnePendingPersistencePerNode'
-          /\ ProposalSigningRequiresIntent'
+    <2>2. /\ ProposalSigningRequiresIntent'
           /\ PrepareSigningRequiresIntent'
           /\ CommitSigningRequiresIntent'
           /\ TimeoutSigningRequiresIntent'
+      BY <1>1, Isa
+         DEF StrongInductiveInvariant, Safety, Restart,
+             ProposalSigningRequiresIntent, PrepareSigningRequiresIntent,
+             CommitSigningRequiresIntent, TimeoutSigningRequiresIntent
+    <2>3. /\ OnePendingPersistencePerNode'
           /\ HonestPrepareUniqueness'
           /\ HonestCommitUniqueness'
           /\ HonestTimeoutUniqueness'
@@ -2473,9 +2507,9 @@ PROOF
              TimeoutSigningRequiresIntent, HonestPrepareUniqueness,
              HonestCommitUniqueness, HonestTimeoutUniqueness,
              LockBelowHighest, DecisionAgreement, AppliedRequiresDecision
-    <2>3. Safety'
-      BY <2>1, <2>2 DEF Safety
-    <2>4. /\ ContextIdentityBindsFrozenEpoch'
+    <2>4. Safety'
+      BY <2>1, <2>2, <2>3 DEF Safety
+    <2>5. /\ ContextIdentityBindsFrozenEpoch'
           /\ OldContextCertificateRejected'
           /\ ContextParentWasApplied'
           /\ ReducerProvenanceInvariant'
@@ -2485,7 +2519,7 @@ PROOF
              ContextIdentityBindsFrozenEpoch,
              OldContextCertificateRejected, ContextParentWasApplied,
              QcValid, CurrentEpoch
-    <2> QED BY <1>1, <2>3, <2>4,
+    <2> QED BY <1>1, <2>4, <2>5,
                   UnchangedLineageVarsPreservesLineageInvariant
        DEF StrongInductiveInvariant, Restart, LineageVars
   <1> QED BY <1>1
@@ -3112,9 +3146,13 @@ PROOF
          DEF StrongInductiveInvariant, LineageInvariant,
              LocksCoverOwnCommits, HonestCommitIntentPrepared,
              CommitIntentsPreparedBy, CertificatePhasesCorrect
-    <2>22. LineageInvariant'
-      BY <2>18, <2>20, <2>21 DEF LineageInvariant
-    <2> QED BY <2>9, <2>10, <2>17, <2>22
+    <2>22. DurableIntentsDoNotAnticipateHeight'
+      BY <1>1, <2>1, Isa
+         DEF StrongInductiveInvariant, LineageInvariant,
+             DurableIntentsDoNotAnticipateHeight, PersistTimeout
+    <2>23. LineageInvariant'
+      BY <2>18, <2>20, <2>21, <2>22 DEF LineageInvariant
+    <2> QED BY <2>9, <2>10, <2>17, <2>23
        DEF StrongInductiveInvariant
   <1> QED BY <1>1
 
@@ -3177,37 +3215,57 @@ PROOF
               StrongInductiveInvariant,
               CompleteTimeoutSignature(request)
          PROVE StrongInductiveInvariant'
-    <2>1. /\ Safety'
-          /\ ContextIdentityBindsFrozenEpoch'
+    <2>1. TypeInvariant'
+      BY <1>1, Isa
+         DEF StrongInductiveInvariant, Safety, TypeInvariant,
+             CompleteTimeoutSignature
+    <2>2. /\ ProposalSigningRequiresIntent'
+          /\ PrepareSigningRequiresIntent'
+          /\ CommitSigningRequiresIntent'
+          /\ TimeoutSigningRequiresIntent'
+      BY <1>1, Isa
+         DEF StrongInductiveInvariant, Safety, CompleteTimeoutSignature,
+             ProposalSigningRequiresIntent, PrepareSigningRequiresIntent,
+             CommitSigningRequiresIntent, TimeoutSigningRequiresIntent
+    <2>3. /\ OnePendingPersistencePerNode'
+          /\ HonestPrepareUniqueness'
+          /\ HonestCommitUniqueness'
+          /\ HonestTimeoutUniqueness'
+          /\ LockBelowHighest'
+          /\ DecisionAgreement'
+          /\ AppliedRequiresDecision'
+      BY <1>1, Isa
+         DEF StrongInductiveInvariant, Safety, CompleteTimeoutSignature,
+             OnePendingPersistencePerNode, AllPendingRequests,
+             RequestsUniqueByNode, HonestPrepareUniqueness,
+             HonestCommitUniqueness, HonestTimeoutUniqueness,
+             LockBelowHighest, DecisionAgreement, AppliedRequiresDecision
+    <2>4. Safety'
+      BY <2>1, <2>2, <2>3 DEF Safety
+    <2>5. /\ ContextIdentityBindsFrozenEpoch'
           /\ OldContextCertificateRejected'
           /\ ContextParentWasApplied'
       BY <1>1, Isa
-         DEF StrongInductiveInvariant, Safety, TypeInvariant,
-             OnePendingPersistencePerNode, AllPendingRequests,
-             RequestsUniqueByNode, ProposalSigningRequiresIntent,
-             PrepareSigningRequiresIntent, CommitSigningRequiresIntent,
-             TimeoutSigningRequiresIntent, HonestPrepareUniqueness,
-             HonestCommitUniqueness, HonestTimeoutUniqueness,
-             LockBelowHighest, DecisionAgreement, AppliedRequiresDecision,
-             CompleteTimeoutSignature, ContextIdentityBindsFrozenEpoch,
+         DEF StrongInductiveInvariant, CompleteTimeoutSignature,
+             ContextIdentityBindsFrozenEpoch,
              OldContextCertificateRejected, ContextParentWasApplied,
              QcValid, CurrentEpoch
-    <2>2. HonestTimeoutTransportBacked'
+    <2>6. HonestTimeoutTransportBacked'
       BY <1>1, SMT
          DEF StrongInductiveInvariant, ReducerProvenanceInvariant,
              CompleteTimeoutSignature, HonestTimeoutTransportBacked,
              BroadcastTimeouts, TimeoutEnvelope
-    <2>3. ReducerProvenanceWithoutTimeoutTransport'
+    <2>7. ReducerProvenanceWithoutTimeoutTransport'
       BY <1>1, UnchangedTimeoutIndependentProvenancePreserves
          DEF StrongInductiveInvariant, ReducerProvenanceInvariant,
              ReducerProvenanceWithoutTimeoutTransport,
              CompleteTimeoutSignature,
              ProvenanceWithoutTimeoutTransportVars
-    <2>4. ReducerProvenanceInvariant'
-      BY <2>2, <2>3
+    <2>8. ReducerProvenanceInvariant'
+      BY <2>6, <2>7
          DEF ReducerProvenanceInvariant,
              ReducerProvenanceWithoutTimeoutTransport
-    <2> QED BY <1>1, <2>1, <2>4,
+    <2> QED BY <1>1, <2>4, <2>5, <2>8,
                   UnchangedLineageVarsPreservesLineageInvariant
        DEF StrongInductiveInvariant, CompleteTimeoutSignature, LineageVars
   <1> QED BY <1>1
@@ -3487,6 +3545,7 @@ PROOF
          PROVE StrongInductiveInvariant'
     <2>1. /\ request.node \in ValidatorIds
           /\ request.qc \in prepareQCs
+          /\ request.qc.context = context
           /\ request.qc.view > highestRank[request.node]
           /\ request.qc.view \in Views
           /\ request.qc.subject \in SubjectOrNone
@@ -4077,8 +4136,32 @@ PROOF
           <5>1. pending \in pendingLockCommit \/ pending = Request
             BY <3>2, <4>1
           <5>2. CASE pending \in pendingLockCommit
-            BY <1>1, <3>1, <5>2, Isa
-               DEF BeginLockCommit, PendingVoteWritesAuthorized
+            <6>1. /\ pending.node \in Honest
+                  /\ pending.vote.phase = "Commit"
+                  /\ pending.vote.signer = pending.node
+                  /\ pending.vote.context = context
+                  /\ pending.vote.context = pending.qc.context
+                  /\ pending.vote.view = pending.qc.view
+                  /\ pending.vote.subject = pending.qc.subject
+                  /\ pending.qc.phase = "Prepare"
+                  /\ pending.vote.view = nodeView[pending.node]
+                  /\ pending.vote.subject \in ValidSubjects
+                  /\ BodyHeldBy(durableBodies, pending.node,
+                                pending.vote.context,
+                                pending.vote.subject)
+                  /\ pending.qc.view >= lockRank[pending.node]
+                  /\ (pending.qc.view = lockRank[pending.node]
+                        => pending.qc.subject = lockSubject[pending.node])
+                  /\ CanAppendVote(commitIntents, pending.vote)
+              BY <3>1, <5>2 DEF PendingVoteWritesAuthorized
+            <6>2. /\ context' = context
+                  /\ nodeView' = nodeView
+                  /\ durableBodies' = durableBodies
+                  /\ lockRank' = lockRank
+                  /\ lockSubject' = lockSubject
+                  /\ commitIntents' = commitIntents
+              BY <1>1 DEF BeginLockCommit
+            <6> QED BY <6>1, <6>2
           <5>3. CASE pending = Request
             BY <1>1, <2>3, <5>3, Isa DEF BeginLockCommit
           <5> QED BY <5>1, <5>2, <5>3
@@ -4173,6 +4256,652 @@ PROOF
        DEF StrongInductiveInvariant, BeginLockCommit, LineageVars
   <1> QED BY <1>1
 
+(***************************************************************************
+The remaining certificate and WAL acknowledgements are proved here instead
+of being hidden behind the top-level Next disjunction.  In particular, the
+pending-request invariant retains every admission guard needed after an
+arbitrary number of unrelated asynchronous transitions.
+***************************************************************************)
+
+THEOREM PersistLockCommitPreservesStrongInvariant ==
+  \A request:
+    StrongInductiveInvariant /\ PersistLockCommit(request)
+      => StrongInductiveInvariant'
+PROOF
+  <1>1. ASSUME NEW request,
+              StrongInductiveInvariant,
+              PersistLockCommit(request)
+         PROVE StrongInductiveInvariant'
+    <2>1. /\ request \in pendingLockCommit
+          /\ request.node \in Honest
+          /\ request.qc \in prepareQCs
+          /\ request.qc.phase = "Prepare"
+          /\ request.vote.phase = "Commit"
+          /\ request.vote.signer = request.node
+          /\ request.vote.context = context
+          /\ request.vote.context = request.qc.context
+          /\ request.vote.view = request.qc.view
+          /\ request.vote.subject = request.qc.subject
+          /\ request.vote.view = nodeView[request.node]
+          /\ ~NodeTimedOut(request.node, request.vote.view)
+          /\ request.vote.subject \in ValidSubjects
+          /\ BodyHeldBy(durableBodies, request.node,
+                        request.vote.context, request.vote.subject)
+          /\ request.qc.view >= lockRank[request.node]
+          /\ (request.qc.view = lockRank[request.node]
+                => request.qc.subject = lockSubject[request.node])
+          /\ CanAppendVote(commitIntents, request.vote)
+      BY <1>1
+         DEF StrongInductiveInvariant, ReducerProvenanceInvariant,
+             PendingVoteWritesAuthorized, PersistLockCommit
+    <2>2. HonestVoteUnique(commitIntents')
+      BY <1>1, <2>1, DurableVoteAppendPreservesUniqueness
+         DEF StrongInductiveInvariant, ReducerProvenanceInvariant,
+             PersistLockCommit
+    <2>3. OnePendingPersistencePerNode'
+      BY <1>1, RemovingRequestsPreservesNodeUniqueness, Isa
+         DEF StrongInductiveInvariant, Safety,
+             OnePendingPersistencePerNode, AllPendingRequests,
+             PersistLockCommit
+    <2>4. TypeInvariant'
+      BY <1>1, <2>1, IsaT(120)
+         DEF StrongInductiveInvariant, Safety, TypeInvariant,
+             PersistLockCommit, ModelConfiguration, Ranks, Views,
+             VoteSign, VoteSignSet
+    <2>5. LockBelowHighest'
+      BY <1>1, <2>1, SMT
+         DEF StrongInductiveInvariant, Safety, TypeInvariant,
+             LockBelowHighest, PersistLockCommit, Ranks, Views
+    <2>6. Safety'
+      BY <1>1, <2>1, <2>2, <2>3, <2>4, <2>5, IsaT(120)
+         DEF StrongInductiveInvariant, Safety, PersistLockCommit,
+             ProposalSigningRequiresIntent, PrepareSigningRequiresIntent,
+             CommitSigningRequiresIntent, TimeoutSigningRequiresIntent,
+             HonestPrepareUniqueness, HonestCommitUniqueness,
+             HonestTimeoutUniqueness, DecisionAgreement,
+             AppliedRequiresDecision, HonestVoteUnique, SameVoteSlot
+    <2>7. ReducerProvenanceInvariant'
+      BY <1>1, <2>1, <2>2, IsaT(240)
+         DEF StrongInductiveInvariant, ReducerProvenanceInvariant,
+             PersistLockCommit, HonestVoteUnique, HonestTimeoutUnique,
+             IntentPhasesCorrect, PendingVoteWritesAuthorized,
+             PendingCertificateWritesAuthorized,
+             HonestVoteTransportBacked, QcTransportBacked,
+             HonestTimeoutTransportBacked, TcTransportBacked,
+             CertificatesBackedByIntents, HonestDurableIntentsSound,
+             HonestIntentSound, FormedTimeoutCertificatesSound,
+             DurableTimeoutsProtectCommits, HighestAndLockAreCertified,
+             TimeoutIntentProtectsCommits, TimeoutVoteProtectsCommitSet,
+             CurrentIntentViewsBound, NodeTimedOut, VoteIntentFor,
+             PrepareCarriesHigherSafeQc, RequestsUniqueByNode,
+             AllPendingRequests
+    <2>8. LineageInvariant'
+      BY <1>1, <2>1, IsaT(240)
+         DEF StrongInductiveInvariant, LineageInvariant,
+             PersistLockCommit, PrepareLineageSound,
+             PrepareCarriesHigherSafeQc, LocksCoverOwnCommits,
+             CurrentIntentViewsBound, HonestCommitIntentPrepared,
+             CommitIntentsPreparedBy, CertificatePhasesCorrect,
+             DurableIntentsDoNotAnticipateHeight,
+             RequestsUniqueByNode, AllPendingRequests
+    <2>9. /\ ContextIdentityBindsFrozenEpoch'
+          /\ OldContextCertificateRejected'
+          /\ ContextParentWasApplied'
+      BY <1>1, Isa
+         DEF StrongInductiveInvariant, PersistLockCommit,
+             ContextIdentityBindsFrozenEpoch,
+             OldContextCertificateRejected, ContextParentWasApplied,
+             QcValid, CurrentEpoch
+    <2> QED BY <2>6, <2>7, <2>8, <2>9
+       DEF StrongInductiveInvariant
+  <1> QED BY <1>1
+
+THEOREM FormCommitQCPreservesStrongInvariant ==
+  \A node, roundView, subject:
+    StrongInductiveInvariant /\ FormCommitQC(node, roundView, subject)
+      => StrongInductiveInvariant'
+PROOF
+  <1>1. ASSUME NEW node, NEW roundView, NEW subject,
+              StrongInductiveInvariant,
+              FormCommitQC(node, roundView, subject)
+         PROVE StrongInductiveInvariant'
+    <2> DEFINE Signers ==
+           VoteSignersAt(node, roundView, "Commit", subject)
+    <2> DEFINE Certificate ==
+           QC(context, roundView, "Commit", subject, Signers)
+    <2> DEFINE Request == DecisionWal(node, Certificate, TRUE)
+    <2>1. /\ Certificate \in QcRecordSet
+          /\ QcValid(Certificate)
+          /\ CertificateHonestIntentBacked(Certificate, commitIntents)
+          /\ Certificate.phase = "Commit"
+          /\ commitQCs' = commitQCs \cup {Certificate}
+          /\ pendingDecision' = pendingDecision \cup {Request}
+      BY <1>1
+         DEF FormCommitQC, Certificate, Signers, Request, QC
+    <2>2. OnePendingPersistencePerNode'
+      BY <1>1, PendingNodesAreAllRequestNodes,
+         NewRequestPreservesNodeUniqueness, Isa
+         DEF StrongInductiveInvariant, Safety,
+             OnePendingPersistencePerNode, FormCommitQC,
+             AllPendingRequests, NodeIdle, Request, DecisionWal
+    <2>3. /\ TypeInvariant'
+          /\ PendingCertificateWritesAuthorized'
+          /\ CertificatesBackedByIntents'
+      BY <1>1, <2>1, IsaT(180)
+         DEF StrongInductiveInvariant, Safety, TypeInvariant,
+             ReducerProvenanceInvariant,
+             PendingCertificateWritesAuthorized,
+             CertificatesBackedByIntents, HistoricalQcValid,
+             CertificateBackedBy, FormCommitQC,
+             Certificate, Signers, Request, DecisionWal, QC,
+             QcValid, CurrentEpoch
+    <2>4. /\ Safety'
+          /\ ReducerProvenanceInvariant'
+          /\ LineageInvariant'
+      BY <1>1, <2>1, <2>2, <2>3, IsaT(180)
+         DEF StrongInductiveInvariant, Safety,
+             ReducerProvenanceInvariant, LineageInvariant,
+             FormCommitQC, HonestVoteUnique, HonestTimeoutUnique,
+             IntentPhasesCorrect, PendingVoteWritesAuthorized,
+             PendingCertificateWritesAuthorized,
+             HonestVoteTransportBacked, QcTransportBacked,
+             HonestTimeoutTransportBacked, TcTransportBacked,
+             CertificatesBackedByIntents, HonestDurableIntentsSound,
+             FormedTimeoutCertificatesSound,
+             DurableTimeoutsProtectCommits, HighestAndLockAreCertified,
+             CertificatePhasesCorrect, DurableIntentsDoNotAnticipateHeight,
+             DecisionAgreement, AllPendingRequests, Request, Certificate
+    <2>5. /\ ContextIdentityBindsFrozenEpoch'
+          /\ OldContextCertificateRejected'
+          /\ ContextParentWasApplied'
+      BY <1>1, Isa
+         DEF StrongInductiveInvariant, FormCommitQC,
+             ContextIdentityBindsFrozenEpoch,
+             OldContextCertificateRejected, ContextParentWasApplied,
+             QcValid, CurrentEpoch
+    <2> QED BY <2>4, <2>5 DEF StrongInductiveInvariant
+  <1> QED BY <1>1
+
+THEOREM BeginDecisionPreservesStrongInvariant ==
+  \A node, qc:
+    StrongInductiveInvariant /\ BeginDecision(node, qc)
+      => StrongInductiveInvariant'
+PROOF
+  <1>1. ASSUME NEW node, NEW qc,
+              StrongInductiveInvariant,
+              BeginDecision(node, qc)
+         PROVE StrongInductiveInvariant'
+    <2> DEFINE Request == DecisionWal(node, qc, FALSE)
+    <2>1. /\ qc \in commitQCs
+          /\ qc.phase = "Commit"
+          /\ qc.context = context
+          /\ Request \in DecisionWalSet
+      BY <1>1, Isa
+         DEF StrongInductiveInvariant, Safety, TypeInvariant,
+             ReducerProvenanceInvariant, QcTransportBacked,
+             LineageInvariant, CertificatePhasesCorrect,
+             BeginDecision, QcAt, Request, DecisionWal,
+             DecisionWalSet
+    <2>2. OnePendingPersistencePerNode'
+      BY <1>1, PendingNodesAreAllRequestNodes,
+         NewRequestPreservesNodeUniqueness, Isa
+         DEF StrongInductiveInvariant, Safety,
+             OnePendingPersistencePerNode, BeginDecision,
+             AllPendingRequests, NodeIdle, Request, DecisionWal
+    <2>3. /\ TypeInvariant'
+          /\ PendingCertificateWritesAuthorized'
+      BY <1>1, <2>1, Isa
+         DEF StrongInductiveInvariant, Safety, TypeInvariant,
+             ReducerProvenanceInvariant,
+             PendingCertificateWritesAuthorized,
+             BeginDecision, Request, HistoricalQcValid,
+             CertificatesBackedByIntents
+    <2>4. /\ Safety'
+          /\ ReducerProvenanceInvariant'
+          /\ LineageInvariant'
+          /\ ContextIdentityBindsFrozenEpoch'
+          /\ OldContextCertificateRejected'
+          /\ ContextParentWasApplied'
+      BY <1>1, <2>1, <2>2, <2>3, IsaT(120)
+         DEF StrongInductiveInvariant, Safety,
+             ReducerProvenanceInvariant, LineageInvariant,
+             BeginDecision, PendingCertificateWritesAuthorized,
+             ContextIdentityBindsFrozenEpoch,
+             OldContextCertificateRejected, ContextParentWasApplied,
+             DecisionAgreement, AllPendingRequests, QcValid, CurrentEpoch
+    <2> QED BY <2>4 DEF StrongInductiveInvariant
+  <1> QED BY <1>1
+
+THEOREM PersistDecisionPreservesStrongInvariant ==
+  \A request:
+    StrongInductiveInvariant /\ PersistDecision(request)
+      => StrongInductiveInvariant'
+PROOF
+  <1>1. ASSUME NEW request,
+              StrongInductiveInvariant,
+              PersistDecision(request)
+         PROVE StrongInductiveInvariant'
+    <2> DEFINE Decision == [node |-> request.node, qc |-> request.qc]
+    <2>1. /\ request \in pendingDecision
+          /\ request.qc \in commitQCs
+          /\ request.qc.phase = "Commit"
+          /\ decisions' = decisions \cup {Decision}
+      BY <1>1
+         DEF StrongInductiveInvariant, ReducerProvenanceInvariant,
+             PendingCertificateWritesAuthorized,
+             PersistDecision, Decision
+    <2>2. \A left, right \in commitQCs:
+             left.context = right.context
+               => left.subject = right.subject
+      BY <1>1, CommitCertificateAgreement
+         DEF StrongInductiveInvariant, Safety,
+             ReducerProvenanceInvariant, LineageInvariant
+    <2>3. DecisionAgreement'
+      BY <1>1, <2>1, <2>2, Isa
+         DEF StrongInductiveInvariant, Safety, DecisionAgreement,
+             PersistDecision, Decision
+    <2>4. OnePendingPersistencePerNode'
+      BY <1>1, RemovingRequestsPreservesNodeUniqueness, Isa
+         DEF StrongInductiveInvariant, Safety,
+             OnePendingPersistencePerNode, AllPendingRequests,
+             PersistDecision
+    <2>5. /\ Safety'
+          /\ ReducerProvenanceInvariant'
+          /\ LineageInvariant'
+          /\ ContextIdentityBindsFrozenEpoch'
+          /\ OldContextCertificateRejected'
+          /\ ContextParentWasApplied'
+      BY <1>1, <2>1, <2>3, <2>4, IsaT(180)
+         DEF StrongInductiveInvariant, Safety,
+             ReducerProvenanceInvariant, LineageInvariant,
+             PersistDecision, PendingCertificateWritesAuthorized,
+             QcTransportBacked, TcTransportBacked,
+             ContextIdentityBindsFrozenEpoch,
+             OldContextCertificateRejected, ContextParentWasApplied,
+             AppliedRequiresDecision, AllPendingRequests,
+             QcValid, CurrentEpoch, Decision
+    <2> QED BY <2>5 DEF StrongInductiveInvariant
+  <1> QED BY <1>1
+
+THEOREM ValidTimeoutCertificateSelectsReportedMaximum ==
+  \A tc:
+    TCValid(tc) => TCMaximumProtectsReports(tc)
+BY Isa
+   DEF TCValid, TCMaximumProtectsReports, TcHighRank, TcHighSubject,
+       HighestTimeoutVote, TimeoutHighsConflictFree, HighRefValid
+
+THEOREM FormTCPreservesStrongInvariant ==
+  \A node, roundView:
+    StrongInductiveInvariant /\ FormTC(node, roundView)
+      => StrongInductiveInvariant'
+PROOF
+  <1>1. ASSUME NEW node, NEW roundView,
+              StrongInductiveInvariant,
+              FormTC(node, roundView)
+         PROVE StrongInductiveInvariant'
+    <2> DEFINE Votes == TimeoutVotesAt(node, roundView)
+    <2> DEFINE Certificate == TC(context, roundView, Votes)
+    <2> DEFINE Request == InstallTcWal(node, Certificate, TRUE)
+    <2>1. /\ TCValid(Certificate)
+          /\ Certificate.votes # {}
+          /\ Certificate.view < MaxView
+          /\ Certificate.view >= nodeView[node]
+          /\ formedTCs' = formedTCs \cup {Certificate}
+          /\ pendingInstallTC' = pendingInstallTC \cup {Request}
+      BY <1>1
+         DEF FormTC, Certificate, Votes, Request, TC
+    <2>2. OnePendingPersistencePerNode'
+      BY <1>1, PendingNodesAreAllRequestNodes,
+         NewRequestPreservesNodeUniqueness, Isa
+         DEF StrongInductiveInvariant, Safety,
+             OnePendingPersistencePerNode, FormTC,
+             AllPendingRequests, NodeIdle, Request, InstallTcWal
+    <2>3. /\ TcWellTyped(Certificate)
+          /\ Request.node \in ValidatorIds
+          /\ Request.kind = "InstallTC"
+          /\ TcWellTyped(Request.tc)
+          /\ Request.rebroadcast \in BOOLEAN
+      BY <1>1, <2>1, IsaT(120)
+         DEF StrongInductiveInvariant, Safety, TypeInvariant,
+             TCValid, TcWellTyped, TimeoutVotesAt,
+             Certificate, Votes, Request, TC, InstallTcWal,
+             ContextRecords, Heights, Views, Ranks, HighRefValid,
+             CurrentVoters, ModelConfiguration
+    <2>4. TypeInvariant'
+      BY <1>1, <2>1, <2>3, Isa
+         DEF StrongInductiveInvariant, Safety, TypeInvariant, FormTC,
+             Certificate, Request
+    <2>5. OnePendingPersistencePerNode
+      BY <1>1 DEF StrongInductiveInvariant, Safety
+    <2>6. FormedTimeoutCertificatesSound'
+      BY <1>1, <2>1, <2>5,
+         ValidTimeoutCertificateSelectsReportedMaximum, IsaT(240)
+         DEF StrongInductiveInvariant, ReducerProvenanceInvariant,
+             FormedTimeoutCertificatesSound, FormTC,
+             Certificate, Votes, Request, TC, TCValid,
+             TimeoutVotesAt, TimeoutVoteAt,
+             HonestTimeoutTransportBacked,
+             TimeoutVotesBindCertificate, HistoricalQcValid,
+             RequestsUniqueByNode, AllPendingRequests,
+             CurrentEpoch, CurrentVoters, HighRefValid
+    <2>7. /\ PendingCertificateWritesAuthorized'
+          /\ TcTransportBacked'
+      BY <1>1, <2>1, <2>2, IsaT(120)
+         DEF StrongInductiveInvariant, ReducerProvenanceInvariant,
+             PendingCertificateWritesAuthorized, TcTransportBacked,
+             FormTC, Certificate, Request
+    <2>8. /\ Safety'
+          /\ ReducerProvenanceInvariant'
+          /\ LineageInvariant'
+          /\ ContextIdentityBindsFrozenEpoch'
+          /\ OldContextCertificateRejected'
+          /\ ContextParentWasApplied'
+      BY <1>1, <2>1, <2>2, <2>4, <2>6, <2>7, IsaT(180)
+         DEF StrongInductiveInvariant, Safety,
+             ReducerProvenanceInvariant, LineageInvariant,
+             FormTC, PendingCertificateWritesAuthorized,
+             FormedTimeoutCertificatesSound, TcTransportBacked,
+             ContextIdentityBindsFrozenEpoch,
+             OldContextCertificateRejected, ContextParentWasApplied,
+             AllPendingRequests, DecisionAgreement,
+             QcValid, CurrentEpoch, Certificate, Request
+    <2> QED BY <2>8 DEF StrongInductiveInvariant
+  <1> QED BY <1>1
+
+THEOREM DeliverTCPreservesStrongInvariant ==
+  \A envelope:
+    StrongInductiveInvariant /\ DeliverTC(envelope)
+      => StrongInductiveInvariant'
+PROOF
+  <1>1. ASSUME NEW envelope,
+              StrongInductiveInvariant,
+              DeliverTC(envelope)
+         PROVE StrongInductiveInvariant'
+    <2>1. /\ envelope.tc \in formedTCs
+          /\ TCValid(envelope.tc)
+          /\ TcWellTyped(envelope.tc)
+      BY <1>1, Isa
+         DEF StrongInductiveInvariant, Safety, TypeInvariant,
+             ReducerProvenanceInvariant, TcTransportBacked,
+             DeliverTC
+    <2>2. /\ TypeInvariant'
+          /\ TcTransportBacked'
+      BY <1>1, <2>1, Isa
+         DEF StrongInductiveInvariant, Safety, TypeInvariant,
+             ReducerProvenanceInvariant, TcTransportBacked,
+             DeliverTC, TcAt
+    <2>3. /\ Safety'
+          /\ ReducerProvenanceInvariant'
+          /\ LineageInvariant'
+          /\ ContextIdentityBindsFrozenEpoch'
+          /\ OldContextCertificateRejected'
+          /\ ContextParentWasApplied'
+      BY <1>1, <2>2, IsaT(120)
+         DEF StrongInductiveInvariant, Safety,
+             ReducerProvenanceInvariant, LineageInvariant,
+             DeliverTC, TcTransportBacked,
+             ContextIdentityBindsFrozenEpoch,
+             OldContextCertificateRejected, ContextParentWasApplied,
+             QcValid, CurrentEpoch
+    <2> QED BY <2>3 DEF StrongInductiveInvariant
+  <1> QED BY <1>1
+
+THEOREM BeginInstallTCPreservesStrongInvariant ==
+  \A node, tc:
+    StrongInductiveInvariant /\ BeginInstallTC(node, tc)
+      => StrongInductiveInvariant'
+PROOF
+  <1>1. ASSUME NEW node, NEW tc,
+              StrongInductiveInvariant,
+              BeginInstallTC(node, tc)
+         PROVE StrongInductiveInvariant'
+    <2> DEFINE Request == InstallTcWal(node, tc, FALSE)
+    <2>1. /\ tc \in formedTCs
+          /\ TCValid(tc)
+          /\ tc.votes # {}
+          /\ tc.view < MaxView
+          /\ tc.view >= nodeView[node]
+          /\ TcWellTyped(tc)
+      BY <1>1, Isa
+         DEF StrongInductiveInvariant, Safety, TypeInvariant,
+             ReducerProvenanceInvariant, TcTransportBacked,
+             FormedTimeoutCertificatesSound, BeginInstallTC,
+             TcAt, TCValid
+    <2>2. OnePendingPersistencePerNode'
+      BY <1>1, PendingNodesAreAllRequestNodes,
+         NewRequestPreservesNodeUniqueness, Isa
+         DEF StrongInductiveInvariant, Safety,
+             OnePendingPersistencePerNode, BeginInstallTC,
+             AllPendingRequests, NodeIdle, Request, InstallTcWal
+    <2>3. /\ TypeInvariant'
+          /\ PendingCertificateWritesAuthorized'
+      BY <1>1, <2>1, Isa
+         DEF StrongInductiveInvariant, Safety, TypeInvariant,
+             ReducerProvenanceInvariant,
+             PendingCertificateWritesAuthorized,
+             BeginInstallTC, Request, InstallTcWal
+    <2>4. /\ Safety'
+          /\ ReducerProvenanceInvariant'
+          /\ LineageInvariant'
+          /\ ContextIdentityBindsFrozenEpoch'
+          /\ OldContextCertificateRejected'
+          /\ ContextParentWasApplied'
+      BY <1>1, <2>1, <2>2, <2>3, IsaT(120)
+         DEF StrongInductiveInvariant, Safety,
+             ReducerProvenanceInvariant, LineageInvariant,
+             BeginInstallTC, PendingCertificateWritesAuthorized,
+             ContextIdentityBindsFrozenEpoch,
+             OldContextCertificateRejected, ContextParentWasApplied,
+             AllPendingRequests, QcValid, CurrentEpoch
+    <2> QED BY <2>4 DEF StrongInductiveInvariant
+  <1> QED BY <1>1
+
+THEOREM PersistInstallTCPreservesStrongInvariant ==
+  \A request:
+    StrongInductiveInvariant /\ PersistInstallTC(request)
+      => StrongInductiveInvariant'
+PROOF
+  <1>1. ASSUME NEW request,
+              StrongInductiveInvariant,
+              PersistInstallTC(request)
+         PROVE StrongInductiveInvariant'
+    <2> DEFINE Node == request.node
+    <2> DEFINE Certificate == request.tc
+    <2> DEFINE SelectedRank == TcHighRank(Certificate)
+    <2> DEFINE SelectedSubject == TcHighSubject(Certificate)
+    <2>1. /\ request \in pendingInstallTC
+          /\ Certificate \in formedTCs
+          /\ TCValid(Certificate)
+          /\ Certificate.votes # {}
+          /\ Certificate.view < MaxView
+          /\ Certificate.view >= nodeView[Node]
+      BY <1>1
+         DEF StrongInductiveInvariant, ReducerProvenanceInvariant,
+             PendingCertificateWritesAuthorized, PersistInstallTC,
+             Certificate, Node
+    <2>2. /\ SelectedRank \in Ranks
+          /\ (SelectedRank = NoRank => SelectedSubject = NoSubject)
+          /\ (SelectedRank # NoRank
+                => \E qc \in prepareQCs:
+                     /\ qc.context = context
+                     /\ qc.view = SelectedRank
+                     /\ qc.subject = SelectedSubject)
+      BY <2>1, IsaT(120)
+         DEF TCValid, HighRefValid, TcHighRank, TcHighSubject,
+             HighestTimeoutVote, SelectedRank, SelectedSubject,
+             Certificate, Ranks
+    <2>3. OnePendingPersistencePerNode'
+      BY <1>1, RemovingRequestsPreservesNodeUniqueness, Isa
+         DEF StrongInductiveInvariant, Safety,
+             OnePendingPersistencePerNode, AllPendingRequests,
+             PersistInstallTC
+    <2>4. /\ TypeInvariant'
+          /\ LockBelowHighest'
+      BY <1>1, <2>1, <2>2, IsaT(180)
+         DEF StrongInductiveInvariant, Safety, TypeInvariant,
+             LockBelowHighest, PersistInstallTC,
+             Node, Certificate, SelectedRank, SelectedSubject,
+             Views, Generations, Ranks, ModelConfiguration
+    <2>5. HighestAndLockAreCertified'
+      BY <1>1, <2>1, <2>2, IsaT(180)
+         DEF StrongInductiveInvariant, ReducerProvenanceInvariant,
+             HighestAndLockAreCertified, PersistInstallTC,
+             Node, Certificate, SelectedRank, SelectedSubject
+    <2>6. /\ PendingVoteWritesAuthorized'
+          /\ PendingCertificateWritesAuthorized'
+      BY <1>1, <2>1, <2>2, IsaT(240)
+         DEF StrongInductiveInvariant, Safety,
+             OnePendingPersistencePerNode, RequestsUniqueByNode,
+             AllPendingRequests, ReducerProvenanceInvariant,
+             PendingVoteWritesAuthorized,
+             PendingCertificateWritesAuthorized,
+             PersistInstallTC, NodeTimedOut,
+             PrepareCarriesHigherSafeQc,
+             Node, Certificate, SelectedRank, SelectedSubject
+    <2>7. /\ TcTransportBacked'
+          /\ FormedTimeoutCertificatesSound'
+      BY <1>1, <2>1, Isa
+         DEF StrongInductiveInvariant, ReducerProvenanceInvariant,
+             TcTransportBacked, FormedTimeoutCertificatesSound,
+             PersistInstallTC, Node, Certificate,
+             BroadcastTCs, TcEnvelope
+    <2>8. /\ Safety'
+          /\ ReducerProvenanceInvariant'
+          /\ LineageInvariant'
+          /\ ContextIdentityBindsFrozenEpoch'
+          /\ OldContextCertificateRejected'
+          /\ ContextParentWasApplied'
+      BY <1>1, <2>1, <2>2, <2>3, <2>4, <2>5, <2>6, <2>7,
+         IsaT(300)
+         DEF StrongInductiveInvariant, Safety,
+             ReducerProvenanceInvariant, LineageInvariant,
+             PersistInstallTC, PendingVoteWritesAuthorized,
+             PendingCertificateWritesAuthorized, TcTransportBacked,
+             FormedTimeoutCertificatesSound,
+             PrepareLineageSound, LocksCoverOwnCommits,
+             CurrentIntentViewsBound, HonestCommitIntentPrepared,
+             DurableIntentsDoNotAnticipateHeight,
+             ContextIdentityBindsFrozenEpoch,
+             OldContextCertificateRejected, ContextParentWasApplied,
+             AllPendingRequests, DecisionAgreement,
+             QcValid, CurrentEpoch,
+             Node, Certificate, SelectedRank, SelectedSubject
+    <2> QED BY <2>8 DEF StrongInductiveInvariant
+  <1> QED BY <1>1
+
+THEOREM AdvanceContextPreservesStrongInvariant ==
+  \A subject:
+    StrongInductiveInvariant /\ AdvanceContext(subject)
+      => StrongInductiveInvariant'
+PROOF
+  <1>1. ASSUME NEW subject,
+              StrongInductiveInvariant,
+              AdvanceContext(subject)
+         PROVE StrongInductiveInvariant'
+    <2> DEFINE NextHeight == height + 1
+    <2> DEFINE NextLineage == Append(context.lineage, subject)
+    <2> DEFINE NextContext == ContextRecord(NextHeight, NextLineage)
+    <2>1. /\ height \in Heights
+          /\ height < MaxHeight
+          /\ subject \in Subjects
+          /\ context \in ContextRecords
+          /\ context.height = height
+          /\ NextHeight \in Heights
+          /\ NextLineage \in LineagesAt(NextHeight)
+          /\ NextContext \in ContextRecords
+          /\ NextContext.height = NextHeight
+          /\ height' = NextHeight
+          /\ context' = NextContext
+      BY <1>1, IsaT(180)
+         DEF StrongInductiveInvariant, Safety, TypeInvariant,
+             AdvanceContext, CommonAppliedSubject,
+             NextHeight, NextLineage, NextContext,
+             ContextRecords, ContextRecord, LineagesAt, Heights
+    <2>2. /\ \A vote \in prepareIntents:
+               vote.context # NextContext
+          /\ \A vote \in commitIntents:
+               vote.context # NextContext
+          /\ \A vote \in timeoutIntents:
+               vote.context # NextContext
+      BY <1>1, <2>1, SMT
+         DEF StrongInductiveInvariant, LineageInvariant,
+             DurableIntentsDoNotAnticipateHeight,
+             NextContext, NextHeight, Heights, ContextRecord
+    <2>3. (Responsive \cap CurrentVoters) # {}
+      <3>1. DualQuorumIntersectionHasHonest
+        BY <1>1, DualQuorumHonestIntersection
+           DEF StrongInductiveInvariant, Safety, TypeInvariant,
+               ModelConfiguration
+      <3>2. DualQuorum(CurrentEpoch,
+                       Responsive \cap VotingRoster(CurrentEpoch))
+        BY <1>1
+           DEF StrongInductiveInvariant, Safety, TypeInvariant,
+               ModelConfiguration
+      <3> QED BY <1>1, <3>1, <3>2, Isa
+         DEF DualQuorumIntersectionHasHonest, CurrentVoters,
+             CurrentEpoch, ModelConfiguration
+    <2>4. PICK witness \in Responsive \cap CurrentVoters: TRUE
+      BY <2>3
+    <2>5. PICK parentDecision \in decisions:
+             /\ parentDecision.node = witness
+             /\ parentDecision.qc.context = context
+             /\ parentDecision.qc.subject = subject
+             /\ [node |-> witness, qc |-> parentDecision.qc] \in applied
+      BY <1>1, <2>4
+         DEF AdvanceContext, CommonAppliedSubject
+    <2>6. TypeInvariant'
+      BY <1>1, <2>1, IsaT(300)
+         DEF StrongInductiveInvariant, Safety, TypeInvariant,
+             AdvanceContext, NextHeight, NextLineage, NextContext,
+             ContextRecords, ContextRecord, Heights, Views, Generations,
+             Ranks, ModelConfiguration
+    <2>7. Safety'
+      BY <1>1, <2>6, IsaT(240)
+         DEF StrongInductiveInvariant, Safety, AdvanceContext,
+             OnePendingPersistencePerNode, RequestsUniqueByNode,
+             AllPendingRequests, ProposalSigningRequiresIntent,
+             PrepareSigningRequiresIntent, CommitSigningRequiresIntent,
+             TimeoutSigningRequiresIntent, HonestPrepareUniqueness,
+             HonestCommitUniqueness, HonestTimeoutUniqueness,
+             LockBelowHighest, DecisionAgreement, AppliedRequiresDecision,
+             NoRank
+    <2>8. ContextIdentityBindsFrozenEpoch'
+      BY <1>1
+         DEF ContextIdentityBindsFrozenEpoch
+    <2>9. OldContextCertificateRejected'
+      BY <1>1, Isa
+         DEF AdvanceContext, OldContextCertificateRejected,
+             QcValid, CurrentEpoch
+    <2>10. ContextParentWasApplied'
+      BY <1>1, <2>1, <2>5, IsaT(180)
+         DEF StrongInductiveInvariant, ContextParentWasApplied,
+             AdvanceContext, NextContext, NextHeight, NextLineage,
+             ContextRecord
+    <2>11. ReducerProvenanceInvariant'
+      BY <1>1, <2>1, IsaT(300)
+         DEF StrongInductiveInvariant, ReducerProvenanceInvariant,
+             AdvanceContext, HonestVoteUnique, HonestTimeoutUnique,
+             IntentPhasesCorrect, PendingVoteWritesAuthorized,
+             PendingCertificateWritesAuthorized,
+             HonestVoteTransportBacked, QcTransportBacked,
+             HonestTimeoutTransportBacked, TcTransportBacked,
+             CertificatesBackedByIntents, HonestDurableIntentsSound,
+             FormedTimeoutCertificatesSound,
+             DurableTimeoutsProtectCommits, HighestAndLockAreCertified,
+             VoteIntentFor, NoRank, NoSubject
+    <2>12. LineageInvariant'
+      BY <1>1, <2>1, <2>2, IsaT(300)
+         DEF StrongInductiveInvariant, LineageInvariant,
+             AdvanceContext, PrepareLineageSound,
+             PrepareCarriesHigherSafeQc, LocksCoverOwnCommits,
+             CurrentIntentViewsBound, HonestCommitIntentPrepared,
+             CommitIntentsPreparedBy, CertificatePhasesCorrect,
+             DurableIntentsDoNotAnticipateHeight,
+             NextContext, NextHeight, NoRank
+    <2> QED BY <2>7, <2>8, <2>9, <2>10, <2>11, <2>12
+       DEF StrongInductiveInvariant
+  <1> QED BY <1>1
+
 THEOREM ApplyDecisionPreservesStrongInvariant ==
   \A node \in ValidatorIds:
     \A qc:
@@ -4207,6 +4936,77 @@ PROOF
     <2> QED BY <1>1, <2>1, <2>2, <2>3,
                   UnchangedLineageVarsPreservesLineageInvariant
        DEF StrongInductiveInvariant, ApplyDecision, LineageVars
+  <1> QED BY <1>1
+
+THEOREM NextPreservesStrongInductiveInvariant ==
+  StrongInductiveInvariant /\ Next
+    => StrongInductiveInvariant'
+BY IsaM("blast"),
+   SetGSTPreservesStrongInductiveInvariant,
+   AssembleLocalBodyPreservesStrongInvariant,
+   BeginLocalProposalPreservesStrongInvariant,
+   PersistProposalPreservesStrongInvariant,
+   CompleteProposalSignaturePreservesStrongInvariant,
+   DeliverProposalPreservesStrongInvariant,
+   FetchBodyPreservesStrongInvariant,
+   StoreBodyPreservesStrongInvariant,
+   ValidateBodyPreservesStrongInvariant,
+   RejectBodyPreservesStrongInvariant,
+   BeginPreparePreservesStrongInvariant,
+   PersistPreparePreservesStrongInvariant,
+   CompleteVoteSignaturePreservesStrongInvariant,
+   ByzantineBroadcastVotePreservesStrongInvariant,
+   DeliverVotePreservesStrongInvariant,
+   FormPrepareQCPreservesStrongInvariant,
+   DeliverQCPreservesStrongInvariant,
+   BeginObservePreparePreservesStrongInvariant,
+   PersistObservePreparePreservesStrongInvariant,
+   BeginLockCommitPreservesStrongInvariant,
+   PersistLockCommitPreservesStrongInvariant,
+   FormCommitQCPreservesStrongInvariant,
+   BeginDecisionPreservesStrongInvariant,
+   PersistDecisionPreservesStrongInvariant,
+   BeginTimeoutPreservesStrongInvariant,
+   PersistTimeoutPreservesStrongInvariant,
+   CompleteTimeoutSignaturePreservesStrongInvariant,
+   ByzantineBroadcastTimeoutPreservesStrongInvariant,
+   DeliverTimeoutPreservesStrongInvariant,
+   FormTCPreservesStrongInvariant,
+   DeliverTCPreservesStrongInvariant,
+   BeginInstallTCPreservesStrongInvariant,
+   PersistInstallTCPreservesStrongInvariant,
+   FetchCertifiedBodyPreservesStrongInvariant,
+   ApplyDecisionPreservesStrongInvariant,
+   CrashPreservesStrongInvariant,
+   RestartPreservesStrongInvariant,
+   ResumeProposalPreservesStrongInvariant,
+   ResumeVotePreservesStrongInvariant,
+   ResumeTimeoutPreservesStrongInvariant,
+   DropProposalPreservesStrongInvariant
+   DEF Next
+
+THEOREM NextV2PreservesStrongInductiveInvariant ==
+  StrongInductiveInvariant /\ NextV2
+    => StrongInductiveInvariant'
+BY IsaM("blast"), NextPreservesStrongInductiveInvariant,
+   AdvanceContextPreservesStrongInvariant
+   DEF NextV2
+
+THEOREM StrongInductiveActionPreservation ==
+  StrongInductiveInvariant /\ [NextV2]_vars
+    => StrongInductiveInvariant'
+PROOF
+  <1>1. ASSUME StrongInductiveInvariant,
+              [NextV2]_vars
+         PROVE StrongInductiveInvariant'
+    <2>1. CASE NextV2
+      BY <1>1, <2>1, NextV2PreservesStrongInductiveInvariant
+    <2>2. CASE UNCHANGED vars
+      BY <1>1, <2>2, ProofRelevantStutterPreservesStrongInvariant
+         DEF vars, ProofRelevantVars
+    <2>3. NextV2 \/ UNCHANGED vars
+      BY <1>1
+    <2> QED BY <2>1, <2>2, <2>3
   <1> QED BY <1>1
 
 =============================================================================

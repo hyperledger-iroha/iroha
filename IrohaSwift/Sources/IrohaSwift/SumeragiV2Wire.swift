@@ -165,11 +165,102 @@ public struct SumeragiV2BlockSubject: Equatable, Sendable {
     }
 }
 
+/// Deterministic state-transition commitment authenticated by consensus votes.
+public struct SumeragiV2ExecutionCommitment: Equatable, Sendable {
+    /// Maximum number of Kagemusha top-up anchors committed by one block.
+    public static let maximumTopUpAnchorCount: UInt32 = 16
+
+    public let parentStateRoot: SumeragiV2Hash
+    public let postStateRoot: SumeragiV2Hash
+    public let ordinaryWritesRoot: SumeragiV2Hash
+    public let topUpAnchorRoot: SumeragiV2Hash?
+    public let topUpAnchorCount: UInt32
+
+    public init(
+        parentStateRoot: SumeragiV2Hash,
+        postStateRoot: SumeragiV2Hash,
+        ordinaryWritesRoot: SumeragiV2Hash,
+        topUpAnchorRoot: SumeragiV2Hash?,
+        topUpAnchorCount: UInt32
+    ) throws {
+        guard (topUpAnchorCount == 0) == (topUpAnchorRoot == nil) else {
+            throw SumeragiV2WireError.invalid(
+                "execution commitment top-up count and root presence disagree"
+            )
+        }
+        guard topUpAnchorCount <= Self.maximumTopUpAnchorCount else {
+            throw SumeragiV2WireError.invalid("execution commitment has too many top-up anchors")
+        }
+        if let topUpAnchorRoot {
+            let expectedPostStateRoot = Self.topUpPostStateRoot(
+                count: topUpAnchorCount,
+                ordinaryWritesRoot: ordinaryWritesRoot,
+                topUpAnchorRoot: topUpAnchorRoot
+            )
+            guard postStateRoot.bytes == expectedPostStateRoot else {
+                throw SumeragiV2WireError.invalid(
+                    "execution commitment post-state root does not match its top-up projection"
+                )
+            }
+        }
+
+        self.parentStateRoot = parentStateRoot
+        self.postStateRoot = postStateRoot
+        self.ordinaryWritesRoot = ordinaryWritesRoot
+        self.topUpAnchorRoot = topUpAnchorRoot
+        self.topUpAnchorCount = topUpAnchorCount
+    }
+
+    public func encode() -> Data {
+        sumeragiV2Struct(
+            parentStateRoot.bytes,
+            postStateRoot.bytes,
+            ordinaryWritesRoot.bytes,
+            sumeragiV2Option(topUpAnchorRoot?.bytes),
+            sumeragiV2U32(topUpAnchorCount)
+        )
+    }
+
+    fileprivate static func decode(_ data: Data) throws -> Self {
+        var reader = SumeragiV2Reader(data)
+        let value = try Self(
+            parentStateRoot: SumeragiV2Hash(reader.field("execution commitment parent state")),
+            postStateRoot: SumeragiV2Hash(reader.field("execution commitment post state")),
+            ordinaryWritesRoot: SumeragiV2Hash(
+                reader.field("execution commitment ordinary writes")
+            ),
+            topUpAnchorRoot: sumeragiV2DecodeOption(
+                reader.field("execution commitment top-up root"),
+                decode: SumeragiV2Hash.init
+            ),
+            topUpAnchorCount: sumeragiV2DecodeU32(
+                reader.field("execution commitment top-up count")
+            )
+        )
+        try reader.finish("execution commitment")
+        return value
+    }
+
+    private static func topUpPostStateRoot(
+        count: UInt32,
+        ordinaryWritesRoot: SumeragiV2Hash,
+        topUpAnchorRoot: SumeragiV2Hash
+    ) -> Data {
+        var preimage = Data("iroha:kagemusha:v2:post-state-root".utf8)
+        preimage.append(0)
+        preimage.append(sumeragiV2U32(count))
+        preimage.append(ordinaryWritesRoot.bytes)
+        preimage.append(topUpAnchorRoot.bytes)
+        return IrohaHash.hash(preimage)
+    }
+}
+
 /// Prepare or Commit vote.
 public struct SumeragiV2Vote: Equatable, Sendable {
     public let round: SumeragiV2ConsensusRound
     public let phase: SumeragiV2GlobalPhase
     public let subject: SumeragiV2BlockSubject
+    public let executionCommitment: SumeragiV2ExecutionCommitment
     public let signer: UInt32
     public let signature: Data
 
@@ -177,20 +268,22 @@ public struct SumeragiV2Vote: Equatable, Sendable {
         round: SumeragiV2ConsensusRound,
         phase: SumeragiV2GlobalPhase,
         subject: SumeragiV2BlockSubject,
+        executionCommitment: SumeragiV2ExecutionCommitment,
         signer: UInt32,
         signature: Data
     ) {
         self.round = round
         self.phase = phase
         self.subject = subject
+        self.executionCommitment = executionCommitment
         self.signer = signer
         self.signature = signature
     }
 
     public func encode() -> Data {
         sumeragiV2Struct(
-            round.encode(), phase.encode(), subject.encode(), sumeragiV2U32(signer),
-            sumeragiV2ByteVector(signature)
+            round.encode(), phase.encode(), subject.encode(), executionCommitment.encode(),
+            sumeragiV2U32(signer), sumeragiV2ByteVector(signature)
         )
     }
 
@@ -200,6 +293,9 @@ public struct SumeragiV2Vote: Equatable, Sendable {
             round: SumeragiV2ConsensusRound.decode(reader.field("vote round")),
             phase: SumeragiV2GlobalPhase.decode(reader.field("vote phase")),
             subject: SumeragiV2BlockSubject.decode(reader.field("vote subject")),
+            executionCommitment: SumeragiV2ExecutionCommitment.decode(
+                reader.field("vote execution commitment")
+            ),
             signer: sumeragiV2DecodeU32(reader.field("vote signer")),
             signature: sumeragiV2DecodeByteVector(reader.field("vote signature"))
         )
@@ -213,19 +309,24 @@ public struct SumeragiV2QuorumCertificateRef: Equatable, Sendable {
     public let round: SumeragiV2ConsensusRound
     public let phase: SumeragiV2GlobalPhase
     public let subject: SumeragiV2BlockSubject
+    public let executionCommitment: SumeragiV2ExecutionCommitment
 
     public init(
         round: SumeragiV2ConsensusRound,
         phase: SumeragiV2GlobalPhase,
-        subject: SumeragiV2BlockSubject
+        subject: SumeragiV2BlockSubject,
+        executionCommitment: SumeragiV2ExecutionCommitment
     ) {
         self.round = round
         self.phase = phase
         self.subject = subject
+        self.executionCommitment = executionCommitment
     }
 
     public func encode() -> Data {
-        sumeragiV2Struct(round.encode(), phase.encode(), subject.encode())
+        sumeragiV2Struct(
+            round.encode(), phase.encode(), subject.encode(), executionCommitment.encode()
+        )
     }
 
     fileprivate static func decode(_ data: Data) throws -> Self {
@@ -233,7 +334,10 @@ public struct SumeragiV2QuorumCertificateRef: Equatable, Sendable {
         let value = try Self(
             round: SumeragiV2ConsensusRound.decode(reader.field("qc ref round")),
             phase: SumeragiV2GlobalPhase.decode(reader.field("qc ref phase")),
-            subject: SumeragiV2BlockSubject.decode(reader.field("qc ref subject"))
+            subject: SumeragiV2BlockSubject.decode(reader.field("qc ref subject")),
+            executionCommitment: SumeragiV2ExecutionCommitment.decode(
+                reader.field("qc ref execution commitment")
+            )
         )
         try reader.finish("quorum certificate ref")
         return value
@@ -245,6 +349,7 @@ public struct SumeragiV2QuorumCertificate: Equatable, Sendable {
     public let round: SumeragiV2ConsensusRound
     public let phase: SumeragiV2GlobalPhase
     public let subject: SumeragiV2BlockSubject
+    public let executionCommitment: SumeragiV2ExecutionCommitment
     public let signers: [UInt32]
     public let aggregateSignature: Data
 
@@ -252,6 +357,7 @@ public struct SumeragiV2QuorumCertificate: Equatable, Sendable {
         round: SumeragiV2ConsensusRound,
         phase: SumeragiV2GlobalPhase,
         subject: SumeragiV2BlockSubject,
+        executionCommitment: SumeragiV2ExecutionCommitment,
         signers: [UInt32],
         aggregateSignature: Data
     ) throws {
@@ -259,20 +365,26 @@ public struct SumeragiV2QuorumCertificate: Equatable, Sendable {
         self.round = round
         self.phase = phase
         self.subject = subject
+        self.executionCommitment = executionCommitment
         self.signers = signers
         self.aggregateSignature = aggregateSignature
     }
 
     public func encode() -> Data {
         sumeragiV2Struct(
-            round.encode(), phase.encode(), subject.encode(),
+            round.encode(), phase.encode(), subject.encode(), executionCommitment.encode(),
             sumeragiV2Vector(signers, encode: sumeragiV2U32),
             sumeragiV2ByteVector(aggregateSignature)
         )
     }
 
     public var reference: SumeragiV2QuorumCertificateRef {
-        SumeragiV2QuorumCertificateRef(round: round, phase: phase, subject: subject)
+        SumeragiV2QuorumCertificateRef(
+            round: round,
+            phase: phase,
+            subject: subject,
+            executionCommitment: executionCommitment
+        )
     }
 
     fileprivate static func decode(_ data: Data) throws -> Self {
@@ -281,6 +393,9 @@ public struct SumeragiV2QuorumCertificate: Equatable, Sendable {
             round: SumeragiV2ConsensusRound.decode(reader.field("qc round")),
             phase: SumeragiV2GlobalPhase.decode(reader.field("qc phase")),
             subject: SumeragiV2BlockSubject.decode(reader.field("qc subject")),
+            executionCommitment: SumeragiV2ExecutionCommitment.decode(
+                reader.field("qc execution commitment")
+            ),
             signers: sumeragiV2DecodeVector(reader.field("qc signers"), decode: sumeragiV2DecodeU32),
             aggregateSignature: sumeragiV2DecodeByteVector(reader.field("qc signature"))
         )

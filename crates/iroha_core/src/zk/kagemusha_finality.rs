@@ -457,9 +457,6 @@ fn canonical_hash(bytes: [u8; Hash::LENGTH]) -> Result<Hash, KagemushaTopUpFinal
 #[cfg(test)]
 mod tests {
     // Adversarial coverage is kept in this module because it needs direct
-    // access to the verifier's bounded-cache counters.
-    use core::str::FromStr as _;
-
     use iroha_crypto::{Algorithm, KeyPair, Signature};
     use iroha_data_model::{
         AccountId, ChainId,
@@ -470,6 +467,7 @@ mod tests {
             QuorumCertificate, ValidatorPower,
             finality::{FinalizedNextEpochSnapshot, V2FinalityArtifact},
         },
+        domain::DomainId,
         offline::{
             KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V3,
             KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_VERSION_V3,
@@ -584,7 +582,10 @@ mod tests {
             .map(|pop| <[u8; 96]>::try_from(pop.as_slice()).expect("96-byte PoP"))
             .collect::<Vec<_>>();
         let chain_id = ChainId::from("kagemusha-finality-chain");
-        let asset = AssetDefinitionId::from_str("rose#wonderland").expect("asset id");
+        let asset = AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").expect("asset domain"),
+            "rose".parse().expect("asset name"),
+        );
         let payer_key =
             KeyPair::try_from_seed(vec![0x51; 32], Algorithm::Ed25519).expect("payer key");
         let payer = AccountId::new(payer_key.public_key().clone());
@@ -1011,7 +1012,10 @@ mod tests {
         );
 
         let mut manifest = fixture.manifest.clone();
-        manifest.asset = AssetDefinitionId::from_str("other#wonderland").unwrap();
+        manifest.asset = AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").expect("asset domain"),
+            "other".parse().expect("asset name"),
+        );
         let digest = canonical_sha256(&manifest).expect("digest");
         assert_eq!(
             verifier

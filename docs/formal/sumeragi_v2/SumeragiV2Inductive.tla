@@ -68,6 +68,14 @@ HonestCommitIntentPrepared ==
        (vote.signer \in Honest /\ vote.context = context)
          => vote.view <= nodeView[vote.signer]
 
+DurableIntentsDoNotAnticipateHeight ==
+  /\ \A vote \in prepareIntents:
+       vote.context.height <= height
+  /\ \A vote \in commitIntents:
+       vote.context.height <= height
+  /\ \A vote \in timeoutIntents:
+       vote.context.height <= height
+
 PendingVoteWritesAuthorized ==
   /\ \A request \in pendingPrepare:
        /\ request.node \in Honest
@@ -89,7 +97,9 @@ PendingVoteWritesAuthorized ==
        /\ request.vote.view = request.qc.view
        /\ request.vote.subject = request.qc.subject
        /\ request.qc.phase = "Prepare"
+       /\ request.qc \in prepareQCs
        /\ request.vote.view = nodeView[request.node]
+       /\ ~NodeTimedOut(request.node, request.vote.view)
        /\ request.vote.subject \in ValidSubjects
        /\ BodyHeldBy(durableBodies, request.node,
                      request.vote.context, request.vote.subject)
@@ -121,12 +131,15 @@ PendingCertificateWritesAuthorized ==
   /\ \A request \in pendingInstallTC:
        /\ request.tc \in formedTCs
        /\ request.tc.context = context
+       /\ TCValid(request.tc)
        /\ request.tc.votes # {}
+       /\ request.tc.view < MaxView
        /\ request.tc.view >= nodeView[request.node]
   /\ \A request \in pendingDecision:
        /\ request.qc \in commitQCs
        /\ request.qc.context = context
        /\ request.qc.phase = "Commit"
+       /\ request.qc.height = height
 
 HonestVoteTransportBacked ==
   /\ \A envelope \in voteNetwork:
@@ -149,8 +162,12 @@ HonestTimeoutTransportBacked ==
          => received.vote \in timeoutIntents
 
 TcTransportBacked ==
-  /\ \A envelope \in tcNetwork: envelope.tc \in formedTCs
-  /\ \A received \in receivedTCs: received.tc \in formedTCs
+  /\ \A envelope \in tcNetwork:
+       /\ envelope.tc \in formedTCs
+       /\ TCValid(envelope.tc)
+  /\ \A received \in receivedTCs:
+       /\ received.tc \in formedTCs
+       /\ TCValid(received.tc)
   /\ \A installed \in installedTCs: installed.tc \in formedTCs
 
 HistoricalQcValid(qc) ==
@@ -266,6 +283,7 @@ LineageInvariant ==
   /\ CurrentIntentViewsBound
   /\ HonestCommitIntentPrepared
   /\ CertificatePhasesCorrect
+  /\ DurableIntentsDoNotAnticipateHeight
 
 StrongInductiveInvariant ==
   /\ Safety
@@ -309,7 +327,8 @@ ProofRelevantWithoutPendingProposalVars ==
     timeoutNetwork, tcNetwork, decisions, applied>>
 
 LineageVars ==
-  <<context, nodeView, prepareIntents, commitIntents, timeoutIntents,
+  <<height, context, nodeView,
+    prepareIntents, commitIntents, timeoutIntents,
     prepareQCs, commitQCs, lockRank, lockSubject>>
 
 ProvenanceVars ==

@@ -1870,7 +1870,7 @@ mod tests {
         let requests = finish_mock(server);
         let rendered = compact_json(&report);
 
-        assert_eq!(report_status(&report), Some("ok"));
+        assert_eq!(report_status(&report), Some("ok"), "{rendered}");
         assert!(rendered.contains(&"cd".repeat(32)));
         assert!(rendered.contains(DEFAULT_CHAIN_ID));
         assert!(rendered.contains(DEFAULT_GAS_ASSET_ID));

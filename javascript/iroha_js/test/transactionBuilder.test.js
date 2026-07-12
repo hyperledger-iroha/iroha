@@ -75,6 +75,7 @@ import {
   validationFeePolicyFixture,
 } from "./fixtures/validationFeePolicyV1.js";
 import {
+  NONCANONICAL_VALIDATION_FEE_OVERLAY_BASE64,
   VALIDATION_FEE_BATCH_OVERLAY_BASE64,
   VALIDATION_FEE_DIRECT_OVERLAY_BASE64,
 } from "./fixtures/validationFeeOverlayV1.js";
@@ -2320,6 +2321,17 @@ test("submitValidationFeeIvmProvedContractCall decodes a real base64 batch overl
   assert.equal(result.validationFeePolicy.feeInstructionIndex, 0);
   assert.equal(result.validationFeePolicy.feeTransferEntryIndex, 2);
   assert.deepEqual(signedProved.overlay, VALIDATION_FEE_BATCH_OVERLAY_BASE64);
+});
+
+test("validation-fee submission rejects a legacy archive with noncanonical Numeric scale", async () => {
+  await assert.rejects(
+    () =>
+      submitBase64ValidationFeeOverlayFixture({
+        overlay: NONCANONICAL_VALIDATION_FEE_OVERLAY_BASE64,
+        feeInstructionIndex: 0,
+      }),
+    /noncanonical numeric|unique canonical representation/u,
+  );
 });
 
 test("submitIvmProvedContractCall rejects a missing required transfer before proving or signing", async () => {

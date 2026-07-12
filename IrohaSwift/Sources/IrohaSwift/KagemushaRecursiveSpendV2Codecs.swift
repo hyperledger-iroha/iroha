@@ -245,7 +245,7 @@ public enum KagemushaRecursiveSpendCodecs {
         writer.writeField(uint64(payload.issuedAtMilliseconds))
         writer.writeField(uint64(payload.expiresAtMilliseconds))
         writer.writeField(try note(payload.recipientOutput))
-        writer.writeField(bytes(payload.recipientOutputProverMaterial))
+        writer.writeField(bytes(payload.senderOutputProverMaterial))
         return frame(
             KagemushaRecursiveSpend.recipientRequestPayloadWireName,
             payload: writer.data
@@ -315,12 +315,12 @@ public enum KagemushaRecursiveSpendCodecs {
         let output = try decodeNote(reader.field())
         let proverMaterial = try decodeBytes(
             reader.field(),
-            field: "recipientOutputProverMaterial"
+            field: "senderOutputProverMaterial"
         )
         try reader.finish("recipientOutputDerivationResult")
         return try KagemushaRecipientOutputDerivationResult(
             recipientOutput: output,
-            recipientOutputProverMaterial: proverMaterial,
+            senderOutputProverMaterial: proverMaterial,
             request: request,
             opening: opening
         )
@@ -1275,7 +1275,7 @@ public enum KagemushaRecursiveSpendCodecs {
         let issued = try scalarUInt64(reader.field(), field: "issuedAtMilliseconds")
         let expires = try scalarUInt64(reader.field(), field: "expiresAtMilliseconds")
         let output = try decodeNote(reader.field())
-        let material = try decodeBytes(reader.field(), field: "recipientOutputProverMaterial")
+        let material = try decodeBytes(reader.field(), field: "senderOutputProverMaterial")
         return try KagemushaRecipientPaymentRequestSigningPayload(
             chainID: chain,
             assetDefinitionID: asset,
@@ -1288,7 +1288,7 @@ public enum KagemushaRecursiveSpendCodecs {
             issuedAtMilliseconds: issued,
             expiresAtMilliseconds: expires,
             recipientOutput: output,
-            recipientOutputProverMaterial: material
+            senderOutputProverMaterial: material
         )
     }
 

@@ -10667,11 +10667,11 @@ test("recursive Kagemusha active marker scan covers workflow-backed and C# test 
     "crates/iroha_core/src/smartcontracts/isi/offline.rs",
     "crates/iroha_data_model/src/isi/offline.rs",
     "crates/iroha_js_host/src/lib.rs",
-    "crates/iroha_torii/src/offline_v2_issuer.rs",
+    "crates/iroha_torii/src/offline_commands.rs",
     "crates/iroha_torii/src/openapi.rs",
     "crates/iroha_torii/src/zk_prover.rs",
-    "crates/iroha_torii/tests/offline_kagemusha_only_smoke.rs",
-    "crates/iroha_torii/tests/offline_v2_kagemusha_redeem_smoke.rs",
+    "crates/iroha_torii/tests/offline_operation_contract.rs",
+    "crates/iroha_torii/tests/offline_redeem_contract.rs",
     "kotlin/offline-wallet-android/src/androidTest/java/org/hyperledger/iroha/android/offline/KagemushaDeviceLabArtifactExportTest.java",
     "kotlin/offline-wallet-android/src/androidTest/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
     "crates/iroha_data_model/benches/kagemusha_recursive_spend_payload.rs",
@@ -12473,7 +12473,7 @@ test("recursive Kagemusha policy negative controls pin lineage accumulator cover
   assertContainsAll(
     toriiKagemushaSmokeBranch,
     [
-      'target = "crates/iroha_torii/tests/offline_v2_kagemusha_redeem_smoke.rs"',
+      'target = "crates/iroha_torii/tests/offline_redeem_contract.rs"',
       "redeem_is_a_typed_async_command_on_the_final_route",
       'TORII_SOURCE.contains("NoritoJson(request)")',
       "redeem_has_no_wrapper_or_compatibility_payload",

@@ -22,20 +22,19 @@ fn offline_catalog_exposes_only_the_first_release_routes() {
         CatalogProjection::Mounted,
         EnabledFeatures::new(&["app_api"]),
     );
-    assert_eq!(mounted.len(), 4);
-    assert_eq!(mounted[0].method(), HttpMethod::Get);
-    assert_eq!(mounted[1].method(), HttpMethod::Post);
-    assert_eq!(mounted[2].method(), HttpMethod::Post);
-    assert_eq!(mounted[3].method(), HttpMethod::Get);
-
-    for route in mounted {
-        assert!(route.path().starts_with("/v1/offline/"));
-        assert!(
-            !route.path().contains("/v2/"),
-            "the first release must not expose nested route versions: {}",
-            route.path()
-        );
-    }
+    let actual = mounted
+        .iter()
+        .map(|route| (route.method(), route.path()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        actual,
+        vec![
+            (HttpMethod::Get, uri::OFFLINE_READINESS),
+            (HttpMethod::Post, uri::OFFLINE_TOP_UP),
+            (HttpMethod::Post, uri::OFFLINE_REDEEM),
+            (HttpMethod::Get, uri::OFFLINE_OPERATION),
+        ]
+    );
 }
 
 #[test]

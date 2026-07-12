@@ -20,11 +20,15 @@ use ivm::{
 
 // Assemble header + code (mode=0, max_cycles=0, abi=1) — copied from tests/common.rs
 fn assemble(code: &[u8]) -> Vec<u8> {
-    let mut v = Vec::new();
-    v.extend_from_slice(b"IVM\0");
-    v.extend_from_slice(&[1, 0, 0, 0]); // version_major=1, minor=0, mode=0, vector=0(auto)
-    v.extend_from_slice(&0u64.to_le_bytes()); // max_cycles = 0 (unspecified)
-    v.push(1); // abi_version = 1 (baseline)
+    let mut v = ProgramMetadata {
+        version_major: 1,
+        version_minor: 0,
+        mode: 0,
+        vector_length: 0,
+        max_cycles: 0,
+        abi_version: 1,
+    }
+    .encode();
     v.extend_from_slice(code);
     v
 }

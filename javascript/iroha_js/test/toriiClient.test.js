@@ -12979,6 +12979,49 @@ test("governanceSubmitPlainBallot accepts decimal Numeric amounts", async () => 
   assert.equal(capturedBody.amount, "12.500");
 });
 
+test("governanceSubmitPlainBallot enforces the signed Numeric and text bounds", async () => {
+  let fetchCalls = 0;
+  let capturedBody;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async (_url, init) => {
+      fetchCalls += 1;
+      capturedBody = JSON.parse(init.body);
+      return createResponse({
+        status: 200,
+        jsonData: cloneFixture(toriiFixtures.governance.plainBallotResponse),
+        headers: { "content-type": "application/json" },
+      });
+    },
+  });
+  const maximumAmount = (1n << 511n) - 1n;
+  const payload = {
+    authority: FIXTURE_ALICE_ID,
+    chainId: "chain-0",
+    referendumId: "ref-plain-bounds",
+    owner: FIXTURE_ALICE_ID,
+    durationBlocks: 1,
+    direction: "aye",
+  };
+
+  await client.governanceSubmitPlainBallot({ ...payload, amount: maximumAmount });
+  assert.equal(capturedBody.amount, maximumAmount.toString());
+  assert.equal(fetchCalls, 1);
+
+  await assert.rejects(
+    () => client.governanceSubmitPlainBallot({ ...payload, amount: 1n << 511n }),
+    /signed 512-bit range/u,
+  );
+  await assert.rejects(
+    () =>
+      client.governanceSubmitPlainBallot({
+        ...payload,
+        amount: "1".repeat(100_000),
+      }),
+    /bounded Numeric text length/u,
+  );
+  assert.equal(fetchCalls, 1);
+});
+
 test("governanceSubmitPlainBallot forwards AbortSignal to fetch", async () => {
   let observedSignal;
   const client = new ToriiClient(BASE_URL, {

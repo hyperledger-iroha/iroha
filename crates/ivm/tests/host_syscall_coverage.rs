@@ -2,7 +2,7 @@
 
 use std::{collections::HashMap, str::FromStr};
 
-use iroha_crypto::PublicKey;
+use iroha_crypto::{Hash, PublicKey};
 use ivm::{
     CoreHost, IVM, IVMHost, VMError, gas,
     host::{
@@ -11,6 +11,7 @@ use ivm::{
         registered_host_syscall_gas_formula,
     },
     mock_wsv::{AccountId, MockWorldStateView, WsvHost},
+    pointer_abi::PointerType,
     syscall_metering::SyscallMetering,
     syscalls,
 };
@@ -91,6 +92,107 @@ where
         .expect_err("empty FastPQ batch is rejected after fixed scope gas");
     assert_eq!(error.metered_gas(), Some(gas::G_FASTPQ_BATCH));
     assert!(matches!(error.as_unmetered(), VMError::DecodeError));
+}
+
+fn bytes_tlv(pointer_type: PointerType, payload: &[u8]) -> Vec<u8> {
+    let mut envelope = Vec::with_capacity(7 + payload.len() + Hash::LENGTH);
+    envelope.extend_from_slice(&(pointer_type as u16).to_be_bytes());
+    envelope.push(1);
+    envelope.extend_from_slice(
+        &u32::try_from(payload.len())
+            .expect("test payload fits u32")
+            .to_be_bytes(),
+    );
+    envelope.extend_from_slice(payload);
+    envelope.extend_from_slice(Hash::new(payload).as_ref());
+    envelope
+}
+
+fn assert_normalize_norito_bytes_conformance<H>(mut make_host: impl FnMut() -> H)
+where
+    H: IVMHost,
+{
+    const PAYLOAD: &[u8] = b"same bytes, canonical carrier";
+    for source_type in [PointerType::Blob, PointerType::NoritoBytes] {
+        let mut vm = IVM::new(u64::MAX);
+        let source = vm
+            .alloc_input_tlv(&bytes_tlv(source_type, PAYLOAD))
+            .expect("install valid source TLV");
+        vm.set_register(10, source);
+        let mut host = make_host();
+        let quote = host
+            .prepare_syscall(syscalls::SYSCALL_NORMALIZE_NORITO_BYTES, &vm)
+            .expect("normalization quote");
+        let gas = host
+            .syscall(syscalls::SYSCALL_NORMALIZE_NORITO_BYTES, &mut vm)
+            .expect("normalize valid byte carrier");
+        assert_eq!(gas, quote);
+
+        let normalized = vm.register(10);
+        assert_ne!(
+            normalized, source,
+            "normalization must allocate a fresh TLV"
+        );
+        let tlv = vm
+            .validate_tlv(normalized)
+            .expect("validate normalized TLV");
+        assert_eq!(tlv.type_id, PointerType::NoritoBytes);
+        assert_eq!(tlv.version, 1);
+        assert_eq!(tlv.payload, PAYLOAD);
+    }
+
+    for invalid in [None, Some(PointerType::Name)] {
+        let mut vm = IVM::new(u64::MAX);
+        if let Some(pointer_type) = invalid {
+            let pointer = vm
+                .alloc_input_tlv(&bytes_tlv(pointer_type, b"wrong carrier"))
+                .expect("install wrong-type TLV");
+            vm.set_register(10, pointer);
+        }
+        let mut host = make_host();
+        assert!(matches!(
+            host.prepare_syscall(syscalls::SYSCALL_NORMALIZE_NORITO_BYTES, &vm),
+            Err(VMError::NoritoInvalid)
+        ));
+        assert!(matches!(
+            host.syscall(syscalls::SYSCALL_NORMALIZE_NORITO_BYTES, &mut vm),
+            Err(VMError::NoritoInvalid)
+        ));
+    }
+
+    let mut vm = IVM::new(u64::MAX);
+    let mut malformed = bytes_tlv(PointerType::Blob, b"corrupt digest");
+    *malformed.last_mut().expect("digest byte") ^= 1;
+    let malformed = vm
+        .alloc_input_tlv(&malformed)
+        .expect("install malformed TLV bytes");
+    vm.set_register(10, malformed);
+    let mut host = make_host();
+    assert_eq!(
+        host.prepare_syscall(syscalls::SYSCALL_NORMALIZE_NORITO_BYTES, &vm),
+        Ok(gas::HOST_BYTE_GAS_BASE.saturating_add(
+            gas::SYSCALL_GAS_PER_BYTE.saturating_mul(b"corrupt digest".len() as u64)
+        ))
+    );
+    assert!(
+        host.syscall(syscalls::SYSCALL_NORMALIZE_NORITO_BYTES, &mut vm)
+            .is_err()
+    );
+
+    let mut vm = IVM::new(u64::MAX);
+    let unowned_stack = bytes_tlv(PointerType::Blob, b"unowned stack bytes");
+    vm.store_bytes(ivm::Memory::STACK_START, &unowned_stack)
+        .expect("store unowned stack TLV bytes");
+    vm.set_register(10, ivm::Memory::STACK_START);
+    let mut host = make_host();
+    assert!(matches!(
+        host.prepare_syscall(syscalls::SYSCALL_NORMALIZE_NORITO_BYTES, &vm),
+        Err(VMError::NoritoInvalid)
+    ));
+    assert!(matches!(
+        host.syscall(syscalls::SYSCALL_NORMALIZE_NORITO_BYTES, &mut vm),
+        Err(VMError::NoritoInvalid)
+    ));
 }
 
 #[test]
@@ -178,4 +280,30 @@ fn fastpq_batch_scope_syscalls_charge_fixed_gas_in_all_hosts() {
     assert_fastpq_scope_gas(DefaultHost::new());
     assert_fastpq_scope_gas(CoreHost::new());
     assert_fastpq_scope_gas(wsv_host());
+}
+
+#[test]
+fn normalize_norito_bytes_is_identical_across_lightweight_hosts() {
+    assert_normalize_norito_bytes_conformance(DefaultHost::new);
+    assert_normalize_norito_bytes_conformance(CoreHost::new);
+    assert_normalize_norito_bytes_conformance(wsv_host);
+
+    assert!(syscalls::is_syscall_allowed(
+        ivm::SyscallPolicy::AbiV1,
+        syscalls::SYSCALL_NORMALIZE_NORITO_BYTES
+    ));
+    assert_eq!(
+        syscalls::registered_syscall_access(syscalls::SYSCALL_NORMALIZE_NORITO_BYTES),
+        Some(syscalls::SyscallAccess::None)
+    );
+    let spec = host_syscall_metering_spec(
+        ivm::SyscallPolicy::AbiV1,
+        syscalls::SYSCALL_NORMALIZE_NORITO_BYTES,
+    )
+    .expect("normalization metering spec");
+    assert_eq!(spec.formula, HostSyscallGasFormula::ByteLinear);
+    assert_eq!(
+        spec.quote_strategy,
+        HostSyscallQuoteStrategy::InputOutputBounded
+    );
 }

@@ -3413,6 +3413,41 @@ test("package dist Torii contract query helpers reject padded selector filters b
   assert.equal(fetchCalled, false);
 });
 
+test("package dist governance deploy normalizes only the supported voting-mode aliases", async () => {
+  const capturedModes = [];
+  const client = new ToriiClient("https://localhost:8080", {
+    fetchImpl: async (_url, init) => {
+      capturedModes.push(JSON.parse(init.body).mode);
+      return new Response(
+        JSON.stringify({
+          ok: true,
+          proposal_id: "cd".repeat(32),
+          tx_instructions: [{ wire_id: "ProposeDeployContract" }],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    },
+  });
+  const base = {
+    contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+    codeHash: `0x${"1a".repeat(32)}`,
+    abiHash: Buffer.alloc(32, 0xbb),
+  };
+
+  for (const mode of ["Zk", "zk", "ZKBALLOT", "zk_vote", " Plain ", "plainballot"]) {
+    await client.governanceProposeDeployContract({ ...base, mode });
+  }
+  assert.deepEqual(capturedModes, ["Zk", "Zk", "Zk", "Zk", "Plain", "Plain"]);
+
+  for (const mode of ["zero-knowledge", "zkp", "plaintext", "plain_text", 1]) {
+    await assert.rejects(
+      () => client.governanceProposeDeployContract({ ...base, mode }),
+      /must be either 'Zk' or 'Plain'/u,
+    );
+  }
+  assert.equal(capturedModes.length, 6, "invalid modes must fail before fetch");
+});
+
 test("package dist UAID path helpers reject padded literals before dispatch", async () => {
   let fetchCalled = false;
   const client = new ToriiClient("https://localhost:8080", {

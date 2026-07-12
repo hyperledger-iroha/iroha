@@ -56,6 +56,24 @@ pub struct ConfidentialMerklePathV2 {
     pub root: [u8; 32],
 }
 
+impl ConfidentialMerklePathV2 {
+    /// Consume the path without bypassing its zeroizing `Drop` implementation.
+    ///
+    /// Moving individual fields out of a type that implements `Drop` is not
+    /// permitted.  Callers that need to translate the path into another typed
+    /// wire representation use this method, which replaces every retained
+    /// field with its zero/empty value before the original allocation drops.
+    #[must_use]
+    pub fn into_parts(mut self) -> (Vec<[u8; 32]>, Vec<u8>, Vec<[u8; 32]>, [u8; 32]) {
+        (
+            std::mem::take(&mut self.siblings),
+            std::mem::take(&mut self.directions),
+            std::mem::take(&mut self.witness_nodes),
+            std::mem::take(&mut self.root),
+        )
+    }
+}
+
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 #[derive(Debug, Clone)]
 pub struct ConfidentialTransferInputV2 {

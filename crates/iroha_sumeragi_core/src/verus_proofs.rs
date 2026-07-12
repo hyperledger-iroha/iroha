@@ -232,6 +232,484 @@ pub proof fn strict_count_quorums_cannot_be_disjoint(
 }
 
 // ---------------------------------------------------------------------------
+// Exact physical WAL lifecycle projection
+// ---------------------------------------------------------------------------
+
+/// Fixed-width projection of the canonical WAL file header.
+pub struct WalHeaderProjection {
+    /// Whether all canonical header bytes are present.
+    pub complete: bool,
+    /// Exact file magic comparison.
+    pub magic_matches: bool,
+    /// Exact layout-version comparison.
+    pub format_matches: bool,
+    /// Persisted protocol identity.
+    pub protocol: int,
+    /// Persisted chain identity.
+    pub chain: int,
+    /// Persisted local consensus-key identity.
+    pub consensus_key: int,
+    /// Recomputed checksum equals the stored checksum.
+    pub checksum_matches: bool,
+}
+
+/// Header identity expected by the running validator.
+pub struct WalExpectedIdentityProjection {
+    /// Configured consensus protocol version.
+    pub protocol: int,
+    /// Configured chain hash.
+    pub chain: int,
+    /// Configured local consensus-key hash.
+    pub consensus_key: int,
+}
+
+/// The executable parser accepts a header only after every structural,
+/// identity, and checksum comparison succeeds.
+pub open spec fn wal_header_accepted(
+    header: WalHeaderProjection,
+    expected: WalExpectedIdentityProjection,
+) -> bool {
+    wal_header_accepted_body!(
+        header.complete,
+        header.magic_matches,
+        header.format_matches,
+        header.protocol,
+        expected.protocol,
+        header.chain,
+        expected.chain,
+        header.consensus_key,
+        expected.consensus_key,
+        header.checksum_matches,
+    )
+}
+
+/// Accepted header bytes are bound to the exact protocol, chain, and local
+/// consensus key; a mismatch cannot be interpreted as an empty WAL.
+pub proof fn accepted_wal_header_has_exact_identity(
+    header: WalHeaderProjection,
+    expected: WalExpectedIdentityProjection,
+)
+    requires
+        wal_header_accepted(header, expected),
+    ensures
+        header.complete,
+        header.magic_matches,
+        header.format_matches,
+        header.protocol == expected.protocol,
+        header.chain == expected.chain,
+        header.consensus_key == expected.consensus_key,
+        header.checksum_matches,
+{
+}
+
+/// A malformed header or any protocol/chain/key/checksum mismatch cannot be
+/// accepted as an empty log.
+pub proof fn invalid_or_foreign_wal_header_is_rejected(
+    header: WalHeaderProjection,
+    expected: WalExpectedIdentityProjection,
+)
+    requires
+        !header.complete
+            || !header.magic_matches
+            || !header.format_matches
+            || header.protocol != expected.protocol
+            || header.chain != expected.chain
+            || header.consensus_key != expected.consensus_key
+            || !header.checksum_matches,
+    ensures
+        !wal_header_accepted(header, expected),
+{
+}
+
+/// Verified complete-prefix state used by physical WAL recovery.
+pub struct PhysicalWalStateProjection {
+    /// Required physical sequence of the next complete frame.
+    pub next_sequence: int,
+    /// Hash of the preceding complete frame, or zero initially.
+    pub last_hash: int,
+    /// Number of complete records exposed to decoded replay.
+    pub recovered_records: int,
+    /// Whether recovery has failed closed.
+    pub failed_closed: bool,
+}
+
+/// One observed frame boundary in canonical file order.
+pub struct PhysicalWalFrameProjection {
+    /// Whether the complete header, payload, and checksum are present.
+    pub complete: bool,
+    /// Whether this observation consumes the physical end of file.
+    pub final_frame: bool,
+    /// Physical frame sequence.
+    pub sequence: int,
+    /// Declared payload length.
+    pub payload_len: int,
+    /// Stored previous-frame hash.
+    pub previous_hash: int,
+    /// Stored checksum/hash of this frame.
+    pub stored_hash: int,
+    /// Hash recomputed over canonical frame bytes.
+    pub calculated_hash: int,
+    /// Whether the append call returned a durability acknowledgement.
+    pub acknowledged: bool,
+}
+
+/// Fixed proof value of the production 16 MiB frame-payload limit.
+pub open spec fn wal_max_record_bytes() -> int {
+    16_777_216
+}
+
+/// A complete frame extends the verified prefix exactly when every production
+/// sequence, length, hash-chain, and checksum check succeeds.
+pub open spec fn complete_physical_frame_valid(
+    before: PhysicalWalStateProjection,
+    frame: PhysicalWalFrameProjection,
+) -> bool {
+    0 <= before.next_sequence
+        && 0 <= frame.payload_len
+        && wal_complete_frame_valid_body!(
+            before.failed_closed,
+            frame.complete,
+            before.next_sequence,
+            machine_u64_max(),
+            frame.sequence,
+            frame.payload_len,
+            wal_max_record_bytes(),
+            frame.previous_hash,
+            before.last_hash,
+            frame.stored_hash,
+            frame.calculated_hash,
+        )
+}
+
+/// Physical recovery has exactly three outcomes at one observed boundary.
+pub enum PhysicalWalRecoveryPath {
+    /// One complete valid frame extends the recovered prefix.
+    Complete,
+    /// An incomplete final frame is discarded as unacknowledged.
+    IncompleteFinal,
+    /// Complete corruption, or a non-final incomplete frame, fails closed.
+    Reject,
+}
+
+/// One executable physical-recovery step.
+pub open spec fn physical_wal_recovery_step(
+    before: PhysicalWalStateProjection,
+    frame: PhysicalWalFrameProjection,
+    path: PhysicalWalRecoveryPath,
+    after: PhysicalWalStateProjection,
+) -> bool {
+    match path {
+        PhysicalWalRecoveryPath::Complete => {
+            complete_physical_frame_valid(before, frame)
+                && after.next_sequence == before.next_sequence + 1
+                && after.last_hash == frame.stored_hash
+                && after.recovered_records == before.recovered_records + 1
+                && !after.failed_closed
+        }
+        PhysicalWalRecoveryPath::IncompleteFinal => {
+            !before.failed_closed
+                && !frame.complete
+                && frame.final_frame
+                && !frame.acknowledged
+                && after.next_sequence == before.next_sequence
+                && after.last_hash == before.last_hash
+                && after.recovered_records == before.recovered_records
+                && !after.failed_closed
+        }
+        PhysicalWalRecoveryPath::Reject => {
+            !before.failed_closed
+                && (if frame.complete {
+                    !complete_physical_frame_valid(before, frame)
+                } else {
+                    !frame.final_frame
+                })
+                && after.next_sequence == before.next_sequence
+                && after.last_hash == before.last_hash
+                && after.recovered_records == before.recovered_records
+                && after.failed_closed
+        }
+    }
+}
+
+/// A complete accepted frame advances one sequence and one hash-chain link.
+pub proof fn complete_physical_frame_extends_verified_prefix(
+    before: PhysicalWalStateProjection,
+    frame: PhysicalWalFrameProjection,
+    after: PhysicalWalStateProjection,
+)
+    requires
+        physical_wal_recovery_step(
+            before,
+            frame,
+            PhysicalWalRecoveryPath::Complete,
+            after,
+        ),
+    ensures
+        after.next_sequence == before.next_sequence + 1,
+        after.last_hash == frame.stored_hash,
+        after.recovered_records == before.recovered_records + 1,
+        !after.failed_closed,
+{
+}
+
+/// A complete frame may have reached disk before `sync_data` returned. Replay
+/// accepts it only through the same full checksum/hash-chain corridor and
+/// installs it atomically, which is conservative for safety.
+pub proof fn complete_unacknowledged_frame_replays_atomically(
+    before: PhysicalWalStateProjection,
+    frame: PhysicalWalFrameProjection,
+    after: PhysicalWalStateProjection,
+)
+    requires
+        !frame.acknowledged,
+        physical_wal_recovery_step(
+            before,
+            frame,
+            PhysicalWalRecoveryPath::Complete,
+            after,
+        ),
+    ensures
+        complete_physical_frame_valid(before, frame),
+        after.next_sequence == before.next_sequence + 1,
+        after.last_hash == frame.stored_hash,
+        after.recovered_records == before.recovered_records + 1,
+        !after.failed_closed,
+{
+}
+
+/// An incomplete final frame is never acknowledged or exposed to decoded
+/// replay and leaves the complete-prefix sequence/hash unchanged.
+pub proof fn incomplete_final_frame_is_unacknowledged_stutter(
+    before: PhysicalWalStateProjection,
+    frame: PhysicalWalFrameProjection,
+    after: PhysicalWalStateProjection,
+)
+    requires
+        physical_wal_recovery_step(
+            before,
+            frame,
+            PhysicalWalRecoveryPath::IncompleteFinal,
+            after,
+        ),
+    ensures
+        !frame.complete,
+        frame.final_frame,
+        !frame.acknowledged,
+        after.next_sequence == before.next_sequence,
+        after.last_hash == before.last_hash,
+        after.recovered_records == before.recovered_records,
+        !after.failed_closed,
+{
+}
+
+/// A complete sequence, length, previous-hash, or checksum failure cannot be
+/// truncated as an unacknowledged tail; it preserves the prefix and closes.
+pub proof fn corrupt_complete_frame_fails_closed(
+    before: PhysicalWalStateProjection,
+    frame: PhysicalWalFrameProjection,
+    after: PhysicalWalStateProjection,
+)
+    requires
+        frame.complete,
+        physical_wal_recovery_step(
+            before,
+            frame,
+            PhysicalWalRecoveryPath::Reject,
+            after,
+        ),
+    ensures
+        !complete_physical_frame_valid(before, frame),
+        after.next_sequence == before.next_sequence,
+        after.last_hash == before.last_hash,
+        after.recovered_records == before.recovered_records,
+        after.failed_closed,
+{
+}
+
+/// Ordered adapter completions for one physical append attempt.
+pub struct WalAppendLifecycleProjection {
+    /// `write_all` returned success.
+    pub write_complete: bool,
+    /// `flush` returned success.
+    pub flush_complete: bool,
+    /// `sync_data` returned success.
+    pub sync_complete: bool,
+    /// Monotonic operation index of `write_all`, or zero when absent.
+    pub write_order: int,
+    /// Monotonic operation index of `flush`, or zero when absent.
+    pub flush_order: int,
+    /// Monotonic operation index of `sync_data`, or zero when absent.
+    pub sync_order: int,
+    /// Whether the append state advanced to the successor hash/sequence.
+    pub state_advanced: bool,
+    /// Whether a durable append receipt was returned to the reducer adapter.
+    pub receipt_minted: bool,
+    /// Whether an I/O failure poisoned this append instance.
+    pub failed_closed: bool,
+}
+
+/// Exact append lifecycle implemented by `WalAppendState::append`.
+pub open spec fn wal_append_lifecycle_valid(step: WalAppendLifecycleProjection) -> bool {
+    (!step.write_complete || 0 < step.write_order)
+        && (!step.flush_complete
+            || (step.write_complete
+                && step.write_order < step.flush_order))
+        && (!step.sync_complete
+            || (step.flush_complete
+                && step.flush_order < step.sync_order))
+        && step.receipt_minted
+            == wal_append_acknowledged_body!(
+                step.write_complete,
+                step.flush_complete,
+                step.sync_complete,
+            )
+        && step.state_advanced == step.receipt_minted
+        && step.failed_closed == (!step.write_complete
+            || (step.write_complete && !step.receipt_minted))
+}
+
+/// A returned append receipt implies the complete ordered
+/// write/flush/sync-data corridor and atomic hash-chain-state advance.
+pub proof fn append_receipt_requires_ordered_durability(
+    step: WalAppendLifecycleProjection,
+)
+    requires
+        wal_append_lifecycle_valid(step),
+        step.receipt_minted,
+    ensures
+        step.write_complete,
+        step.flush_complete,
+        step.sync_complete,
+        0 < step.write_order < step.flush_order < step.sync_order,
+        step.state_advanced,
+        !step.failed_closed,
+{
+}
+
+/// Any incomplete append corridor mints no receipt and does not advance the
+/// in-memory sequence/hash state.
+pub proof fn incomplete_append_corridor_has_no_acknowledgement(
+    step: WalAppendLifecycleProjection,
+)
+    requires
+        wal_append_lifecycle_valid(step),
+        !step.write_complete || !step.flush_complete || !step.sync_complete,
+    ensures
+        !step.receipt_minted,
+        !step.state_advanced,
+        step.failed_closed,
+{
+}
+
+/// Fixed-width projection of the typed WAL retirement corridor.
+pub struct WalRetirementProjection {
+    /// A `FinalizedHeight` was produced by consuming the reducer.
+    pub height_closed: bool,
+    /// The exact block bytes are durable in Kura.
+    pub block_durable: bool,
+    /// The exact CommitQC/finality artifact is durable in Kura.
+    pub certificate_durable: bool,
+    /// Durable reducer decision context.
+    pub decision_context: int,
+    /// Durable reducer decision height.
+    pub decision_height: int,
+    /// Durable reducer decision subject.
+    pub decision_subject: int,
+    /// CommitQC context carried by the reducer decision.
+    pub decision_certificate_context: int,
+    /// CommitQC height carried by the reducer decision.
+    pub decision_certificate_height: int,
+    /// CommitQC view carried by the reducer decision.
+    pub decision_certificate_view: int,
+    /// Commit phase discriminator carried by the reducer decision.
+    pub decision_certificate_phase: int,
+    /// CommitQC subject carried by the reducer decision.
+    pub decision_certificate_subject: int,
+    /// Trusted Kura receipt context.
+    pub receipt_context: int,
+    /// Trusted Kura receipt height.
+    pub receipt_height: int,
+    /// Trusted Kura receipt subject.
+    pub receipt_subject: int,
+    /// Trusted Kura certificate context.
+    pub receipt_certificate_context: int,
+    /// Trusted Kura certificate height.
+    pub receipt_certificate_height: int,
+    /// Trusted Kura certificate view.
+    pub receipt_certificate_view: int,
+    /// Trusted Kura certificate phase.
+    pub receipt_certificate_phase: int,
+    /// Trusted Kura certificate subject.
+    pub receipt_certificate_subject: int,
+}
+
+/// Fixed proof discriminator for the production Commit phase.
+pub open spec fn wal_commit_phase_code() -> int {
+    0
+}
+
+/// Exact production rule for minting WAL retirement authority.
+pub open spec fn wal_retirement_authorized(step: WalRetirementProjection) -> bool {
+    wal_retirement_authorized_body!(
+        step.height_closed,
+        step.block_durable,
+        step.certificate_durable,
+        step.decision_context,
+        step.decision_height,
+        step.decision_subject,
+        step.decision_certificate_context,
+        step.decision_certificate_height,
+        step.decision_certificate_view,
+        step.decision_certificate_phase,
+        wal_commit_phase_code(),
+        step.decision_certificate_subject,
+        step.receipt_context,
+        step.receipt_height,
+        step.receipt_subject,
+        step.receipt_certificate_context,
+        step.receipt_certificate_height,
+        step.receipt_certificate_view,
+        step.receipt_certificate_phase,
+        step.receipt_certificate_subject,
+    )
+}
+
+/// Retirement authority proves both Kura durability facts and exact identity
+/// equality with the reducer's durable CommitQC decision.
+pub proof fn wal_retirement_requires_exact_durable_kura_receipt(
+    step: WalRetirementProjection,
+)
+    requires
+        wal_retirement_authorized(step),
+    ensures
+        step.height_closed,
+        step.block_durable,
+        step.certificate_durable,
+        step.decision_context == step.receipt_context,
+        step.decision_height == step.receipt_height,
+        step.decision_subject == step.receipt_subject,
+        step.decision_certificate_context == step.receipt_certificate_context,
+        step.decision_certificate_height == step.receipt_certificate_height,
+        step.decision_certificate_view == step.receipt_certificate_view,
+        step.decision_certificate_phase == wal_commit_phase_code(),
+        step.decision_certificate_phase == step.receipt_certificate_phase,
+        step.decision_certificate_subject == step.receipt_certificate_subject,
+{
+}
+
+/// Missing block durability, missing certificate durability, or an unclosed
+/// reducer height cannot authorize pruning regardless of matching identities.
+pub proof fn incomplete_kura_durability_cannot_authorize_wal_retirement(
+    step: WalRetirementProjection,
+)
+    requires
+        !step.height_closed || !step.block_durable || !step.certificate_durable,
+    ensures
+        !wal_retirement_authorized(step),
+{
+}
+
+// ---------------------------------------------------------------------------
 // Exact WAL safety projection
 // ---------------------------------------------------------------------------
 

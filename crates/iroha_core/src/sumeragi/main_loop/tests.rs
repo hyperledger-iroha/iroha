@@ -229621,6 +229621,220 @@ async fn commit_result_after_catchup_retirement_consumes_retired_id() {
     harness.shutdown.send();
 }
 
+fn recovery_test_qc(inflight: &CommitInFlight) -> Qc {
+    let validator_set = inflight.commit_topology.clone();
+    Qc {
+        phase: Phase::Commit,
+        subject_block_hash: inflight.block_hash,
+        parent_state_root: Hash::prehashed([0xA1; Hash::LENGTH]),
+        post_state_root: Hash::prehashed([0xA2; Hash::LENGTH]),
+        height: inflight.pending.height,
+        view: inflight.pending.view,
+        epoch: inflight.lock.epoch,
+        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+        rechain_seq: 0,
+        mode_tag: PERMISSIONED_TAG.to_string(),
+        highest_qc: None,
+        validator_set_hash: HashOf::new(&validator_set),
+        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+        validator_set,
+        aggregate: QcAggregate {
+            signers_bitmap: vec![1],
+            bls_aggregate_signature: vec![0xA3],
+        },
+    }
+}
+
+async fn assert_fatal_kura_outcome_latches_recovery(
+    error: crate::kura::Error,
+    expected_reason: KuraRecoveryRequiredReason,
+) {
+    let mut harness = test_actor_harness(1).await;
+    let key_pairs = harness.key_pairs.clone();
+    let actor = &mut harness.actor;
+    let (block_hash, height, block, mut inflight, _work) =
+        start_commit_job_fixture(actor, &key_pairs, 0xDADA);
+    let view = inflight.pending.view;
+    let lock = inflight.lock;
+    let commit_qc = recovery_test_qc(&inflight);
+    let post_commit_qc = QcHeaderRef {
+        phase: Phase::Commit,
+        subject_block_hash: block_hash,
+        height,
+        view: view.saturating_add(1),
+        epoch: lock.epoch,
+    };
+    inflight.commit_qc = Some(commit_qc.clone());
+    inflight.post_commit_qc = Some(post_commit_qc);
+
+    let exact_block_bytes = block.encode();
+    let committed_block = crate::block::ValidBlock::new_unverified_for_tests(block)
+        .commit_unchecked()
+        .unpack(|_| {});
+    let queue_len_before = actor.queue.queued_len();
+    actor.config.persistence.kura_retry_max_attempts = 1;
+    actor.locked_qc = Some(lock);
+    actor.highest_qc = Some(post_commit_qc);
+    actor
+        .phase_tracker
+        .on_view_change(height, view, Instant::now());
+    let qc_key = Actor::qc_tally_key(&commit_qc);
+    actor.qc_cache.insert(qc_key, commit_qc.clone());
+    actor.pending.pending_processing.set(Some(block_hash));
+    actor
+        .pending
+        .pending_processing_parent
+        .set(inflight.pending.block.header().prev_block_hash());
+    let pending_parent_before = actor.pending.pending_processing_parent.get();
+    actor.subsystems.commit.inflight = Some(inflight);
+
+    let (result_tx, result_rx) = mpsc::sync_channel(1);
+    actor.subsystems.commit.result_rx = Some(result_rx);
+    result_tx
+        .send(commit::CommitResult {
+            id: 0xDADA,
+            outcome: commit::CommitOutcome::KuraStoreFailed {
+                committed_block,
+                error,
+            },
+            timings: commit::CommitStageTimings::default(),
+        })
+        .expect("send fatal Kura result");
+
+    assert!(
+        actor.poll_commit_results(),
+        "the fatal worker result should be consumed before fail-stop gating"
+    );
+    let recovery = actor
+        .kura_recovery_required
+        .as_ref()
+        .expect("fatal Kura outcome must latch restart recovery");
+    assert_eq!(recovery.reason, expected_reason);
+    assert_eq!(recovery.block_hash, block_hash);
+    assert_eq!(recovery.height, height);
+    assert_eq!(recovery.view, view);
+    assert_eq!(recovery.lock, lock);
+    assert_eq!(recovery.commit_qc.as_ref(), Some(&commit_qc));
+    assert_eq!(recovery.post_commit_qc, Some(post_commit_qc));
+
+    let retained = actor
+        .pending
+        .pending_blocks
+        .get(&block_hash)
+        .expect("certified block must remain pending for restart recovery");
+    assert_eq!(retained.block.encode(), exact_block_bytes);
+    assert_eq!(retained.kura_retry_attempts, 0);
+    assert!(!retained.kura_aborted);
+    assert!(!retained.aborted);
+    assert!(!retained.requeue_pending);
+    assert_eq!(actor.queue.queued_len(), queue_len_before);
+    assert_eq!(actor.locked_qc, Some(lock));
+    assert_eq!(actor.highest_qc, Some(post_commit_qc));
+    assert_eq!(actor.qc_cache.get(&qc_key), Some(&commit_qc));
+    assert_eq!(actor.phase_tracker.current_view(height), Some(view));
+    assert_eq!(actor.pending.pending_processing.get(), Some(block_hash));
+    assert_eq!(
+        actor.pending.pending_processing_parent.get(),
+        pending_parent_before
+    );
+
+    assert!(!actor.should_tick());
+    assert!(actor.next_tick_deadline(Instant::now()).is_none());
+    assert!(!actor.commit_pipeline_wakeup_pending());
+    assert!(!actor.tick(), "ticks must stay gated after storage poison");
+    assert!(!actor.poll_commit_results());
+    assert!(!actor.poll_validation_results());
+    assert!(!actor.poll_qc_verify_results());
+    assert!(!actor.poll_vote_verify_results());
+    assert!(!actor.poll_committed_blocks());
+    let mut blocked_qc = commit_qc.clone();
+    blocked_qc.view = blocked_qc.view.saturating_add(2);
+    let blocked_qc_key = Actor::qc_tally_key(&blocked_qc);
+    let blocked_qc_message =
+        crate::sumeragi::InboundBlockMessage::new(BlockMessage::Qc(blocked_qc), None);
+    assert!(actor.should_drop_worker_block_message(&blocked_qc_message));
+    actor
+        .on_block_message(blocked_qc_message)
+        .expect("recovery gate should discard direct QC ingress cleanly");
+    assert!(!actor.qc_cache.contains_key(&blocked_qc_key));
+    assert!(
+        !actor
+            .process_commit_candidates_with_trigger(CommitPipelineTrigger::Event, None)
+            .ran,
+        "commit apply and vote production must stay gated until restart recovery"
+    );
+    assert!(
+        !actor.on_pacemaker_propose_ready(Instant::now()),
+        "proposal production must stay gated until restart recovery"
+    );
+    assert_eq!(actor.queue.queued_len(), queue_len_before);
+    assert_eq!(actor.pending.pending_processing.get(), Some(block_hash));
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn da_rewrite_unknown_is_fatal_and_preserves_certified_commit() {
+    assert_fatal_kura_outcome_latches_recovery(
+        crate::kura::Error::DaBlockRewriteCommitStateUnknown {
+            detail: "injected ambiguous marker publication".to_string(),
+        },
+        KuraRecoveryRequiredReason::DaBlockRewriteCommitStateUnknown,
+    )
+    .await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn canonical_storage_poison_is_fatal_and_preserves_certified_commit() {
+    assert_fatal_kura_outcome_latches_recovery(
+        crate::kura::Error::CanonicalStoragePoisoned,
+        KuraRecoveryRequiredReason::CanonicalStoragePoisoned,
+    )
+    .await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn ordinary_kura_store_error_keeps_retry_behavior() {
+    let mut harness = test_actor_harness(1).await;
+    let key_pairs = harness.key_pairs.clone();
+    let actor = &mut harness.actor;
+    let (block_hash, _height, block, inflight, _work) =
+        start_commit_job_fixture(actor, &key_pairs, 0xB10C);
+    let exact_block_bytes = block.encode();
+    let committed_block = crate::block::ValidBlock::new_unverified_for_tests(block)
+        .commit_unchecked()
+        .unpack(|_| {});
+    let queue_len_before = actor.queue.queued_len();
+    actor.subsystems.commit.inflight = Some(inflight);
+
+    let (result_tx, result_rx) = mpsc::sync_channel(1);
+    actor.subsystems.commit.result_rx = Some(result_rx);
+    result_tx
+        .send(commit::CommitResult {
+            id: 0xB10C,
+            outcome: commit::CommitOutcome::KuraStoreFailed {
+                committed_block,
+                error: crate::kura::Error::BlockWriterUnavailable,
+            },
+            timings: commit::CommitStageTimings::default(),
+        })
+        .expect("send ordinary Kura result");
+
+    assert!(actor.poll_commit_results());
+    assert!(actor.kura_recovery_required.is_none());
+    let retained = actor
+        .pending
+        .pending_blocks
+        .get(&block_hash)
+        .expect("ordinary Kura failure should remain pending for bounded retry");
+    assert_eq!(retained.block.encode(), exact_block_bytes);
+    assert_eq!(retained.kura_retry_attempts, 1);
+    assert!(!retained.kura_aborted);
+    assert_eq!(actor.queue.queued_len(), queue_len_before);
+
+    harness.shutdown.send();
+}
+
 #[test]
 fn handle_kura_store_failure_retries_and_preserves_state() {
     let _qc_guard = super::status::qc_status_test_guard();

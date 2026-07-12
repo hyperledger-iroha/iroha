@@ -45,14 +45,14 @@ const ADMITTED_OPERATION_ACCOUNTED_BYTES: usize =
     iroha_config::parameters::defaults::torii::offline_issuer::OPERATION_REGISTRY_ACCOUNTED_BYTES_PER_ENTRY;
 
 #[derive(Debug, Clone)]
-pub(crate) struct OfflineV2IssuerRuntime {
+pub(crate) struct OfflineCommandRuntime {
     authority: AccountId,
     key_pair: KeyPair,
     max_tx_value: Numeric,
     admission: Arc<Mutex<OfflineOperationRegistry>>,
 }
 
-impl OfflineV2IssuerRuntime {
+impl OfflineCommandRuntime {
     pub(crate) fn from_config(config: actual::ToriiOfflineIssuer) -> Self {
         Self {
             authority: config.authority,
@@ -72,7 +72,7 @@ impl OfflineV2IssuerRuntime {
     ) -> Result<SignedTransaction, Error> {
         transaction
             .try_sign(self.key_pair.private_key())
-            .map_err(|source| offline_v2_transaction_signing_error(context, source))
+            .map_err(|source| offline_transaction_signing_error(context, source))
     }
 }
 
@@ -97,7 +97,7 @@ enum SubmissionClaim {
 }
 
 struct SubmissionLeader {
-    issuer: Arc<OfflineV2IssuerRuntime>,
+    issuer: Arc<OfflineCommandRuntime>,
     operation_id: [u8; 32],
     token: Arc<()>,
     binding: OfflineOperationRequestBinding,
@@ -708,7 +708,7 @@ fn validated_idempotency_key(headers: &HeaderMap) -> Result<&str, Error> {
     Ok(actual)
 }
 
-impl OfflineV2IssuerRuntime {
+impl OfflineCommandRuntime {
     fn claim_submission(
         self: &Arc<Self>,
         binding: OfflineOperationRequestBinding,
@@ -872,7 +872,7 @@ fn offline_operation_is_retained(expires_at_ms: u64, now_ms: u64) -> bool {
 }
 
 fn find_admitted_offline_operation(
-    issuer: &OfflineV2IssuerRuntime,
+    issuer: &OfflineCommandRuntime,
     requested_binding: &OfflineOperationRequestBinding,
 ) -> Result<Option<AdmittedOfflineOperationRecord>, Error> {
     let mut admission = issuer.admission.lock().map_err(|_| {
@@ -1064,7 +1064,7 @@ fn find_pending_offline_operation_by_id(
 
 fn find_existing_offline_operation(
     app: &SharedAppState,
-    issuer: &OfflineV2IssuerRuntime,
+    issuer: &OfflineCommandRuntime,
     requested: OfflineOperationRequestRef<'_>,
     requested_binding: &OfflineOperationRequestBinding,
 ) -> Result<Option<AxResponse>, Error> {
@@ -1111,7 +1111,7 @@ fn is_duplicate_queue_admission_error(error: &Error) -> bool {
 
 fn reconcile_duplicate_queue_admission(
     app: &SharedAppState,
-    issuer: &OfflineV2IssuerRuntime,
+    issuer: &OfflineCommandRuntime,
     requested: OfflineOperationRequestRef<'_>,
     requested_binding: &OfflineOperationRequestBinding,
     admission_error: Error,
@@ -1282,7 +1282,7 @@ fn respond_with_offline_operation_status(status: OfflineOperationStatus) -> AxRe
 
 fn offline_operation_status_response(
     app: &SharedAppState,
-    issuer: &OfflineV2IssuerRuntime,
+    issuer: &OfflineCommandRuntime,
     record: &OfflineOperationRecord,
     committed: Option<&KagemushaV2CommittedFinality>,
     known_pending_in_queue: bool,
@@ -1422,7 +1422,7 @@ fn offline_operation_status_response(
 
 fn admitted_offline_operation_status_response(
     app: &SharedAppState,
-    issuer: &OfflineV2IssuerRuntime,
+    issuer: &OfflineCommandRuntime,
     admitted: &AdmittedOfflineOperationRecord,
 ) -> Result<AxResponse, Error> {
     let operation_id = admitted.binding.operation_id;
@@ -1625,7 +1625,7 @@ fn ensure_kagemusha_v2_terminal_finality_matches_record(
 
 fn find_committed_kagemusha_v2_operation(
     app: &SharedAppState,
-    issuer: &OfflineV2IssuerRuntime,
+    issuer: &OfflineCommandRuntime,
     requested: OfflineOperationRequestRef<'_>,
 ) -> Result<Option<KagemushaV2CommittedFinality>, Error> {
     let authorization = requested.authorization();
@@ -1751,8 +1751,8 @@ fn offline_topup_finality_proof_unavailable() -> Error {
     }
 }
 
-fn require_issuer(app: &AppState) -> Result<Arc<OfflineV2IssuerRuntime>, Error> {
-    app.offline_v2_issuer
+fn require_issuer(app: &AppState) -> Result<Arc<OfflineCommandRuntime>, Error> {
+    app.offline_commands
         .clone()
         .ok_or_else(|| Error::AppServiceUnavailable {
             code: "offline_service_unavailable",
@@ -1760,7 +1760,7 @@ fn require_issuer(app: &AppState) -> Result<Arc<OfflineV2IssuerRuntime>, Error> 
         })
 }
 
-fn offline_v2_transaction_signing_error(
+fn offline_transaction_signing_error(
     context: &'static str,
     source: impl std::fmt::Display,
 ) -> Error {
@@ -1828,17 +1828,17 @@ mod tests {
 
     use super::*;
 
-    fn submission_test_issuer() -> Arc<OfflineV2IssuerRuntime> {
+    fn submission_test_issuer() -> Arc<OfflineCommandRuntime> {
         submission_test_issuer_with_limits(64, 64 * ADMITTED_OPERATION_ACCOUNTED_BYTES)
     }
 
     fn submission_test_issuer_with_limits(
         max_entries: usize,
         max_accounted_bytes: usize,
-    ) -> Arc<OfflineV2IssuerRuntime> {
+    ) -> Arc<OfflineCommandRuntime> {
         let key_pair = KeyPair::try_from_seed(vec![0x51; 32], Algorithm::Ed25519)
             .expect("derive offline submission coordinator fixture key");
-        Arc::new(OfflineV2IssuerRuntime {
+        Arc::new(OfflineCommandRuntime {
             authority: AccountId::new(key_pair.public_key().clone()),
             key_pair,
             max_tx_value: Numeric::new(1_000, 0),
@@ -1909,7 +1909,7 @@ mod tests {
     }
 
     fn claim_test_leader(
-        issuer: &Arc<OfflineV2IssuerRuntime>,
+        issuer: &Arc<OfflineCommandRuntime>,
         request: &OfflineTopUpRequest,
     ) -> SubmissionLeader {
         match issuer

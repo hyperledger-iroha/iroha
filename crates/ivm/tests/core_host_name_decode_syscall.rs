@@ -1,3 +1,5 @@
+//! CoreHost canonical `Name` frame decoding and rejection coverage.
+
 use ivm::{CoreHost, IVM, PointerType, encoding, syscalls};
 
 mod common;
@@ -45,7 +47,7 @@ fn name_decode_rejects_invalid_utf8() {
     vm.set_register(10, p_nb);
     vm.load_program(&prog).unwrap();
     let err = vm.run().expect_err("expected invalid UTF-8 to be rejected");
-    assert!(matches!(err, ivm::VMError::NoritoInvalid));
+    assert!(matches!(err, ivm::VMError::DecodeError));
 }
 
 #[test]
@@ -76,7 +78,7 @@ fn name_decode_rejects_invalid_name_utf8_valid() {
     vm.set_register(10, p_nb);
     vm.load_program(&prog).unwrap();
     let err = vm.run().expect_err("expected invalid Name to be rejected");
-    assert!(matches!(err, ivm::VMError::NoritoInvalid));
+    assert!(matches!(err, ivm::VMError::DecodeError));
 }
 
 #[test]
@@ -109,7 +111,7 @@ fn name_decode_rejects_reserved_chars() {
     let err = vm
         .run()
         .expect_err("expected reserved chars to be rejected");
-    assert!(matches!(err, ivm::VMError::NoritoInvalid));
+    assert!(matches!(err, ivm::VMError::DecodeError));
 }
 
 #[test]

@@ -4,8 +4,8 @@ direction: ltr
 source: docs/source/bridge_finality.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 5e28e5c38283ad6be40a0fc48e0312797f490542a143f4cefdd209aaf8099ac5
-source_last_modified: "2026-07-11T20:38:35.470900+00:00"
+source_hash: 1cbd248fe14e63d00f002f09e1663181f3ab9bd99124ffeb89c56763b784046b
+source_last_modified: "2026-07-12"
 translation_last_reviewed: 2026-07-12
 ---
 
@@ -49,13 +49,15 @@ chain, hash, roster ou certificado.
 
 ## Fonte durável e verificação
 
-Após aplicar o bloco, Sumeragi v2 valida e grava o artefato como sidecar Kura
-imutável. A gravação é idempotente e Kura rejeita artefatos conflitantes na
-mesma altura. A recuperação pode completar um sidecar ausente sem executar o
-bloco novamente. O construtor lê bloco e sidecar por altura, verifica a
-associação e executa o verificador canônico. Os PoPs históricos vêm do sidecar
-e nunca são substituídos pelos do estado mundial mutável. Ele não usa uma
-janela recente de certificados.
+Antes de publicar a finalidade ou remover o corpo, Kura grava o header canônico exato
+e o arquivo SCCP autenticado pela raiz em um registro retained-block imutável; depois
+mantém o artefato V2 exato em outro registro de finalidade imutável. As duas gravações
+são idempotentes e rejeitam conflitos na mesma altura. `build_finality_proof` lê apenas
+o header retido e o registro de finalidade verificado: nunca lê um corpo histórico nem
+substitui PoPs pelo estado mundial mutável. O inventário de reinício revalida a
+associação header/archive/artifact/hash. Remover o corpo não torna uma prova válida
+indisponível; um registro ausente, corrompido, conflitante ou não verificável falha de
+forma fechada.
 
 `verify_bridge_finality_proof` exige:
 
@@ -116,6 +118,7 @@ Merkle tipado e sua âncora governada.
 - `GET /v1/bridge/finality/{height}` retorna `BridgeFinalityProof`.
 - `GET /v1/bridge/finality/bundle/{height}` retorna `BridgeFinalityBundle`.
 
-As duas rotas falham de forma fechada se o bloco ou sidecar v2 exato estiver
-ausente ou inválido. Consumidores da primeira versão devem rejeitar formatos ou
-versões desconhecidos; não há fallback de compatibilidade.
+As duas rotas falham de forma fechada se o header canônico retido ou o artefato v2 exato
+estiver ausente ou inválido. Remover o corpo histórico não torna uma prova válida
+indisponível. Consumidores da primeira versão devem rejeitar formatos ou versões
+desconhecidos; não há fallback de compatibilidade.

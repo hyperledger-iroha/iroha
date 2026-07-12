@@ -4,8 +4,8 @@ direction: ltr
 source: docs/source/bridge_finality.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 5e28e5c38283ad6be40a0fc48e0312797f490542a143f4cefdd209aaf8099ac5
-source_last_modified: "2026-07-11T20:38:35.470900+00:00"
+source_hash: 1cbd248fe14e63d00f002f09e1663181f3ab9bd99124ffeb89c56763b784046b
+source_last_modified: "2026-07-12"
 translation_last_reviewed: 2026-07-12
 translator: machine-google-reviewed
 ---
@@ -47,11 +47,15 @@ Finalized snapshot-ը հաջորդ epoch-ի պարամետրերի հետ վավ
 
 ## Տևական պահպանում և ստուգում
 
-Sumeragi v2 apply path-ը ստուգում է artifact-ը և պահում որպես անփոփոխ Kura sidecar։
-Proof builder-ը կարդում է կանոնական block-ը և նրա sidecar-ը, ու պատմական PoP կամ
-certificate չի վերականգնում փոփոխական ընթացիկ world state-ից։ Բացակայող, վնասված,
-հակասական կամ չստուգվող sidecar-ը մերժվում է fail-closed կերպով, իսկ հասանելիությունը
-չի սահմանափակվում վերջին in-memory history window-ով։
+Մինչ finality-ի հրապարակումը կամ block body-ի հեռացումը Kura-ն ճշգրիտ canonical
+header-ը և root-authenticated SCCP archive-ը գրում է immutable retained-block
+record-ում, ապա exact V2 artifact-ը պահում է առանձին immutable finality record-ում։
+Երկու գրառումներն էլ idempotent են և նույն height-ի հակասությունը մերժում են։
+`build_finality_proof`-ը կարդում է միայն retained header-ը և verified finality record-ը՝
+երբեք չկարդալով historical block body կամ PoP-ը mutable world state-ով չփոխարինելով։
+Restart-ի ժամանակ header/archive/artifact/hash կապը կրկին ստուգվում է։ Body eviction-ը
+ճիշտ proof-ը անհասանելի չի դարձնում, իսկ բացակայող, վնասված, հակասական կամ չստուգվող
+record-ը fail closed է։
 
 Stateless verifier-ը ճշգրտորեն համադրում է version, chain, height, header hash, header-ի
 canonical predecessor և view, context, subject և CommitQC դաշտերը և ստուգում artifact-ի բոլոր PoP-երը։
@@ -84,6 +88,7 @@ successor-ը։
 - `GET /v1/bridge/finality/{height}`-ը վերադարձնում է `BridgeFinalityProof`;
 - `GET /v1/bridge/finality/bundle/{height}`-ը վերադարձնում է `BridgeFinalityBundle`։
 
-Եթե block-ը կամ ճշգրիտ տևական v2 artifact-ը բացակայում է կամ անվավեր է, երկու endpoint-ն
-էլ fail closed են։ Անհայտ դաշտերը, չաջակցվող version-ները և հնացած proof shape-երը
-պետք է մերժվեն։
+Եթե retained canonical header-ը կամ ճշգրիտ տևական v2 artifact-ը բացակայում է կամ
+անվավեր է, երկու endpoint-ն էլ fail closed են։ Historical block body eviction-ը ճիշտ
+proof-ը անհասանելի չի դարձնում։ Անհայտ դաշտերը, չաջակցվող version-ները և հնացած proof
+shape-երը պետք է մերժվեն։

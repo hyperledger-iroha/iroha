@@ -189,8 +189,8 @@ fn dump_block(path: &Path, block: &SignedBlock, ctx: &mut DumpContext) {
             Executable::ContractCall(call) => {
                 if ctx.verbose {
                     println!(
-                        "    contract call: address={} entrypoint={} payload={:?}",
-                        call.contract_address, call.entrypoint, call.payload
+                        "    contract call: address={} entrypoint={} arguments={:?}",
+                        call.contract_address, call.entrypoint, call.arguments
                     );
                 }
             }

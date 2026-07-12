@@ -20687,7 +20687,7 @@
     },
     "/v1/offline/redeem": {
       "post": {
-        "description": "Submit one directly encoded OfflineRedeemRequest. JSON contains the structured request itself and application/x-norito contains the canonical typed Norito value; whole-payload base64 wrappers are rejected. Acceptance is asynchronous and returns the operation resource in Location.",
+        "description": "Submit one typed Kagemusha OfflineRedeemRequest. JSON contains the structured request and application/x-norito contains the canonical Norito value. Acceptance is asynchronous and returns the operation resource in Location.",
         "operationId": "offlineRedeem",
         "parameters": [
           {
@@ -20984,7 +20984,7 @@
     },
     "/v1/offline/top-up": {
       "post": {
-        "description": "Submit one directly encoded OfflineTopUpRequest. JSON contains the structured request itself and application/x-norito contains the canonical typed Norito value; whole-payload base64 wrappers are rejected. Acceptance is asynchronous and returns the operation resource in Location.",
+        "description": "Submit one typed Kagemusha OfflineTopUpRequest. JSON contains the structured request and application/x-norito contains the canonical Norito value. Acceptance is asynchronous and returns the operation resource in Location.",
         "operationId": "offlineTopUp",
         "parameters": [
           {
@@ -29643,7 +29643,7 @@
       "name": "Sumeragi"
     },
     {
-      "description": "Offline readiness and asynchronous top-up/redemption operations. Requests use the same typed DTO in JSON and Norito; whole-payload base64 wrapper objects are not part of the public API.",
+      "description": "Kagemusha readiness and asynchronous top-up/redemption operations. Requests use the same typed DTO in JSON and canonical Norito.",
       "name": "Offline"
     },
     {

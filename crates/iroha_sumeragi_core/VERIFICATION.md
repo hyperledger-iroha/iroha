@@ -28,21 +28,21 @@ arm64 release:
 ```text
 $ scripts/verify_sumeragi_v2.sh  # official pinned release already in PATH
 verification results:: 1690 verified, 0 errors  # pinned vstd dependency
-verification results:: 62 verified, 0 errors    # iroha_sumeragi_core root obligations
+verification results:: 72 verified, 0 errors    # iroha_sumeragi_core root obligations
 ```
 
 Evidence for the source-link edit itself:
 
 ```text
-CARGO_TARGET_DIR=/tmp/codex-sumeragi-timeout-proof-target \
+CARGO_TARGET_DIR=/tmp/codex-wal-exact-target \
   cargo test -p iroha_sumeragi_core -- --nocapture
-  50 unit tests and 6 deterministic network simulations passed
-CARGO_TARGET_DIR=/tmp/codex-sumeragi-timeout-proof-target \
-  cargo clippy -p iroha_sumeragi_core --all-targets -- -D warnings
+  58 unit tests, 7 model-trace replays, and 6 deterministic network simulations passed
+CARGO_TARGET_DIR=/tmp/codex-wal-exact-target \
+  cargo clippy -p iroha_sumeragi_core --lib -- -D warnings
   passed
-PATH=<pinned-verus> CARGO_TARGET_DIR=/tmp/codex-sumeragi-timeout-proof-verus \
+PATH=<pinned-verus> CARGO_TARGET_DIR=/tmp/codex-wal-exact-verus-target \
   scripts/verify_sumeragi_v2.sh
-  1690 dependency obligations and 62 root obligations verified, 0 errors
+  1690 dependency obligations and 72 root obligations verified, 0 errors
 ```
 
 The successful run discharges the abstract reducer/WAL obligations, the
@@ -51,10 +51,87 @@ It does not turn unverified `std` collection code, cryptography, or adapter
 contracts into verified code; the remaining boundary is listed explicitly
 below.
 
+## TLC trace replay against production
+
+`tests/model_trace_replay.rs` replays a normalized 101-action TLC witness
+against this crate's exact public `Reducer::step` API. The witness comes from
+`SumeragiV2TraceWitness.tla` and the `LivenessSpec` corridor with a
+nonresponsive view-zero leader. Three timeout votes form and durably install a
+TC, all four reducers enter view one, the rotated leader proposes subject A,
+and distinct three-validator Prepare and Commit quorums produce a durable
+decision. The replay drives actual Persist, Sign, Broadcast, FetchBody,
+StoreBody, ValidateBody, EnterView, and Apply effects; it does not call a test
+reference reducer.
+
+TLC 1.8.0 is checksum pinned because earlier TLC releases cannot emit JSON
+traces. Reproduce and compare the witness with:
+
+```text
+TLA2TOOLS_JAR=<pinned-1.8.0-jar> \
+  scripts/formal/check_sumeragi_v2_replay_trace.sh
+TLC replay witness matches 101 checked-in production actions
+
+CARGO_TARGET_DIR=/tmp/codex-sumeragi-model-trace-target \
+  cargo test --locked -p iroha_sumeragi_core --test model_trace_replay
+7 passed; 0 failed
+```
+
+The normalizer rejects unknown `ReliableNext` state deltas and non-contiguous
+TLC states. The Rust trace parser additionally rejects unknown actions,
+malformed fields, stale/wrong leaders, missing durable intent boundaries, and
+Prepare/Commit certificate formation without three distinct delivered voters.
+Adversarial production tests recover every prefix of the witness WALs and
+confirm that the combined trace crosses all seven record classes. They also
+cover crash after acknowledged intent, exact WAL resume, stale-generation
+completion, duplicate and overlapping certificate signers, Prepare-vote and
+full-high-QC timeout equivocation, and invalid body validation withholding
+Prepare.
+
+This is executable refinement evidence, not deductive proof. The checked-in
+witness uses one four-validator permissioned/count context; unequal-stake
+traces remain in `network_simulation.rs`, not in this TLC fixture. The model's
+genesis height zero maps to production height one, model validator integers map
+to deterministic 32-byte IDs, and model subject atoms map to deterministic
+hash fixtures. The TLA model exposes ObservePrepare then LockCommit while the
+production WAL atomically persists highest PrepareQC, lock, and Commit intent;
+the harness explicitly accepts only that stronger `LockAndCommit` mapping.
+The raw TLC witness has no crash action, so crash/stale-completion coverage is a
+derived adversarial replay. Signature verification, Norito decoding, physical
+WAL framing/fsync, and the asynchronous runtime adapter remain outside this
+pure-reducer harness.
+
 ## Current refinement model
 
 `src/verus_proofs.rs` now contains one safety projection for the production WAL
 and reducer rather than independent protocol examples.
+
+`src/wal.rs` also owns a dependency-free executable mapping contract for the
+physical WAL. The adapter supplies only the 32-byte hash function (BLAKE3 in
+production) and the three ordered I/O operations. The core implementation:
+
+- encodes the exact `SUMV2WAL` header and `S2FR` frames used by production;
+- binds the header to format revision, protocol version, chain hash, and local
+  consensus-key hash;
+- validates the monotonic physical sequence, 16 MiB record bound,
+  previous-frame link, and complete-frame checksum;
+- returns the sole safe truncation boundary for an incomplete final append,
+  without exposing that tail as a recovered record;
+- fails closed on complete corruption before or at the final frame;
+- calls `write_all`, `flush`, and `sync_data` in that order, advances the
+  sequence/hash state only after all three succeed, and poisons the append
+  instance after any I/O error; and
+- mints `WalRetirementAuthorization` only from `FinalizedHeight`, which is
+  available only after application and verification of the exact durable Kura
+  block-and-`CommitQC` receipt.
+
+The Verus projection covers exact header identity, complete-prefix extension,
+incomplete-tail stuttering, complete-corruption fail closure, append receipt
+ordering, and retirement prerequisites. The byte loop, supplied hash function,
+and adapter filesystem implementation remain outside Verus; the uncompleted
+production call-site mapping is stated precisely in gap 5 below. Header and
+complete-frame acceptance, append acknowledgement, and retirement authority
+use the same macro-expanded predicates in ordinary Rust and Verus, so an
+accepted core frame cannot bypass a separately transcribed proof guard.
 
 The WAL projection enumerates all seven production `WalRecord` variants:
 
@@ -166,6 +243,11 @@ control classes remain retained.
 The module contains transition-by-transition proof functions for:
 
 - strict count and voting-power quorum arithmetic;
+- exact physical-WAL header identity;
+- complete-frame sequence/hash-chain extension and fail-closed corruption;
+- incomplete final-frame recovery as an unacknowledged state-preserving tail;
+- write/flush/sync ordering before append receipt and hash-state advance;
+- exact Kura block-and-certificate evidence before WAL retirement;
 - accepted-WAL invariant preservation;
 - transactional rejection of malformed, non-contiguous, overflowed, or
   otherwise inadmissible WAL frames;
@@ -203,7 +285,7 @@ The module contains transition-by-transition proof functions for:
 | Exact one-shot state/effect relation | Encoded in the production gate | `ACTION_RESUME_AFTER_REPLAY` checks false-to-true, unchanged durable state, and the exact Sign/Fetch/empty effect class |
 | Abstract reducer refinement | Encoded | `ReducerPathProjection::ResumeAfterReplay` preserves WAL, application, and effect fences |
 | Named TLA+ action map | Encoded and spelling-gated | Proposal/vote/timeout resumption maps to the existing `ResumeProposal`, `ResumeVote`, and `ResumeTimeout` actions; decided replay maps to `FetchBody` |
-| Pinned Verus discharge of the changed obligations | **Verified** | Official pinned workflow reports 1690 dependency and 62 root obligations verified with zero errors |
+| Pinned Verus discharge of the changed obligations | **Verified** | Official pinned workflow reports 1690 dependency and 72 root obligations verified with zero errors |
 
 ## Exact production commit gate
 
@@ -268,7 +350,7 @@ ordinary Rust collection lookups that produce those concrete primitives are
 not themselves verified, which remains gap 1 below, but no authorization or
 action-exactness boolean crosses the verified kernel boundary.
 
-The pinned verifier discharged all 62 root obligations with zero errors on a
+The pinned verifier discharged all 72 root obligations with zero errors on a
 clean target. The verification script rejects `assume`,
 `admit`, unreviewed trusted bodies, and external function specifications in
 this crate. It also rejects reintroduction of compressed `TimeoutIntent`
@@ -326,10 +408,27 @@ production reducer can be described as deductively verified:
    path can create each token. Cryptographic soundness, hash collision
    resistance, executor determinism, and fsync truth remain documented proof
    assumptions.
-5. **WAL byte implementation.** The relation covers accepted decoded frames and
-   fail-closed rejection. Norito framing, checksum/hash-chain validation,
-   incomplete-tail recovery, key binding, file synchronization, and pruning
-   still require executable refinement to those abstract outcomes.
+5. **Production WAL adapter hook.** The core now contains the executable
+   canonical header/frame codec, complete-prefix recovery, ordered append
+   lifecycle, private durable-receipt constructor, typed retirement authority,
+   adversarial crash/corruption tests, and ten newly discharged physical-WAL
+   obligations. Production `iroha_core::sumeragi::safety_wal` still duplicates
+   the older byte parser and append sequence instead of delegating to this core
+   contract, and its `retire` method does not yet require
+   `WalRetirementAuthorization`. Closing this gap requires the production
+   adapter to (a) pass BLAKE3 through `WalFileHasher` and create a missing file
+   with `encode_wal_file_header` followed by file and parent-directory sync,
+   (b) call `recover_wal_file`, truncate only to `valid_prefix_len`, and
+   synchronize that truncation before append, (c) implement `WalAppendIo` for
+   its single open file and route every append through
+   `WalAppendState::append`, and (d) require the token derived from the exact
+   `FinalizedHeight` before file removal and directory sync. The duplicate
+   constants/parser must then be deleted and the existing real-filesystem tests
+   rerun against the shared implementation.
+   Canonical Norito payload decoding remains the adapter-to-`WalEntry` mapping;
+   BLAKE3 collision resistance and truthful OS `sync_data`/directory-sync
+   results remain trusted contracts. Until this hook lands, byte refinement is
+   implemented and verified in the core but is not an exact production claim.
 6. **TLA+ action-body equivalence.** Verus now has an explicit named macro-step
    map (source, optional certificate formation, durable boundary), and the
    verification script prevents action-name drift. The boundary delta is
@@ -345,4 +444,4 @@ production reducer can be described as deductively verified:
 Until all seven items are discharged, the successful current run proves the
 listed abstract obligations and the exact production commit-gate relation. It
 does not prove every line of the inner reducer, the fact-extraction functions,
-WAL bytes, or the protocol liveness theorem.
+the still-duplicated production WAL adapter, or the protocol liveness theorem.

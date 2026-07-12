@@ -777,23 +777,19 @@ fn execute_suite(
     trace_mode: TraceMode,
     jobs: usize,
 ) -> Result<Vec<TestRunResult>, String> {
-    let parsed = ProgramMetadata::parse(&compiled.code)
-        .map_err(|err| format!("failed to parse compiled suite metadata: {err:?}"))?;
-    let suite_return_pc = (compiled.code.len().saturating_sub(parsed.header_len)) as u64;
-    let suite_program = with_return_halt(&compiled.code);
+    let suite_return_pc = compiled_suite_return_pc(&compiled.code, compiled.report.artifact_hash)?;
     let worker_count = jobs.min(compiled.tests.len().max(1));
     if worker_count == 1 {
         return compiled
             .tests
             .iter()
-            .map(|test| execute_test(compiled, test, trace_mode, &suite_program, suite_return_pc))
+            .map(|test| execute_test(compiled, test, trace_mode, &compiled.code, suite_return_pc))
             .collect();
     }
 
     let joined = std::thread::scope(|scope| {
         let mut workers = Vec::with_capacity(worker_count);
         for worker in 0..worker_count {
-            let suite_program = &suite_program;
             workers.push(scope.spawn(move || {
                 compiled
                     .tests
@@ -801,7 +797,7 @@ fn execute_suite(
                     .enumerate()
                     .filter(|(index, _)| index % worker_count == worker)
                     .map(|(index, test)| {
-                        execute_test(compiled, test, trace_mode, suite_program, suite_return_pc)
+                        execute_test(compiled, test, trace_mode, &compiled.code, suite_return_pc)
                             .map(|result| (index, result))
                     })
                     .collect::<Result<Vec<_>, String>>()
@@ -819,6 +815,43 @@ fn execute_suite(
     let mut indexed = joined.into_iter().flatten().collect::<Vec<_>>();
     indexed.sort_by_key(|(index, _)| *index);
     Ok(indexed.into_iter().map(|(_, result)| result).collect())
+}
+
+fn compiled_suite_return_pc(
+    program: &[u8],
+    expected_artifact_hash: iroha_crypto::Hash,
+) -> Result<u64, String> {
+    let actual_artifact_hash = crate::metadata::contract_code_hash(program);
+    if actual_artifact_hash != expected_artifact_hash {
+        return Err(format!(
+            "compiled suite artifact hash mismatch: expected {expected_artifact_hash}, got {actual_artifact_hash}"
+        ));
+    }
+    let parsed = ProgramMetadata::parse(program)
+        .map_err(|err| format!("failed to parse compiled suite metadata: {err:?}"))?;
+    let code_region_len = program
+        .len()
+        .checked_sub(parsed.header_len)
+        .ok_or_else(|| "compiled suite header exceeds artifact length".to_owned())?;
+    let return_pc = code_region_len
+        .checked_sub(core::mem::size_of::<u32>())
+        .ok_or_else(|| "compiled suite is missing its terminal return target".to_owned())?;
+    let return_offset = parsed
+        .header_len
+        .checked_add(return_pc)
+        .ok_or_else(|| "compiled suite return target offset overflow".to_owned())?;
+    let return_end = return_offset
+        .checked_add(core::mem::size_of::<u32>())
+        .ok_or_else(|| "compiled suite return target end overflow".to_owned())?;
+    let return_word = program
+        .get(return_offset..return_end)
+        .and_then(|bytes| bytes.try_into().ok())
+        .map(u32::from_le_bytes)
+        .ok_or_else(|| "compiled suite return target is truncated".to_owned())?;
+    if return_word != crate::encoding::wide::encode_halt() {
+        return Err("compiled suite is missing its compiler-owned return HALT".to_owned());
+    }
+    u64::try_from(return_pc).map_err(|_| "compiled suite return target exceeds u64".to_owned())
 }
 
 fn execute_test(
@@ -858,12 +891,6 @@ fn execute_test(
         trace_pcs,
         delta_trace,
     })
-}
-
-fn with_return_halt(program: &[u8]) -> Vec<u8> {
-    let mut with_halt = program.to_vec();
-    with_halt.extend_from_slice(&crate::encoding::wide::encode_halt().to_le_bytes());
-    with_halt
 }
 
 fn build_host_for_fixture(
@@ -1286,7 +1313,7 @@ impl KotoTestHost {
         payload: &[u8],
     ) -> Result<u64, crate::VMError> {
         let tlv = make_tlv(pointer_type, payload);
-        vm.alloc_input_tlv(&tlv)
+        vm.alloc_host_tlv(&tlv)
     }
 
     fn record_nested_trace(&mut self, nested_vm: &IVM) {
@@ -1391,12 +1418,10 @@ impl KotoTestHost {
             .memory
             .preload_input(0, &clear)
             .map_err(|_| crate::VMError::DecodeError)?;
-        let runtime_program = with_return_halt(program);
         nested_vm
-            .load_program(&runtime_program)
+            .load_program(program)
             .map_err(|_| crate::VMError::DecodeError)?;
         nested_vm.set_program_counter(runtime_entrypoint.pc)?;
-        nested_vm.set_register(1, nested_vm.memory.code_len().saturating_sub(4));
         nested_vm.set_trace_mode(vm.trace_mode());
         nested_vm.set_max_cycles(0);
 
@@ -1432,7 +1457,7 @@ impl KotoTestHost {
                     let out_reg = 10 + idx;
                     if ((return_pointer_mask >> idx) & 1) != 0 && value != 0 {
                         let tlv = nested_vm.clone_tlv(value)?;
-                        let ptr = vm.alloc_input_tlv(&tlv)?;
+                        let ptr = vm.alloc_host_tlv(&tlv)?;
                         vm.set_register(out_reg, ptr);
                     } else {
                         vm.set_register(out_reg, value);
@@ -2640,6 +2665,33 @@ mod tests {
     }
 
     #[test]
+    fn compiler_owned_test_return_sentinel_preserves_artifact_verification() {
+        let compiled = compiled_suite_with_fixtures(Vec::new());
+        let return_pc = compiled_suite_return_pc(&compiled.code, compiled.report.artifact_hash)
+            .expect("compiler-owned suite return sentinel");
+        let parsed = ProgramMetadata::parse(&compiled.code).expect("parse compiled suite");
+        assert_eq!(
+            return_pc,
+            u64::try_from(compiled.code.len() - parsed.header_len - 4)
+                .expect("suite return PC fits u64")
+        );
+
+        let mut vm = IVM::new(u64::MAX);
+        vm.load_program(&compiled.code)
+            .expect("unmodified compiler-produced test artifact must load");
+
+        let mut post_compile_mutation = compiled.code.clone();
+        post_compile_mutation
+            .extend_from_slice(&crate::encoding::wide::encode_halt().to_le_bytes());
+        let error = compiled_suite_return_pc(&post_compile_mutation, compiled.report.artifact_hash)
+            .expect_err("post-compile executable mutation must remain rejected");
+        assert!(
+            error.contains("artifact hash mismatch"),
+            "unexpected mutation failure: {error}"
+        );
+    }
+
+    #[test]
     fn parse_args_accepts_supported_subcommands() {
         let options = parse_args(vec![
             "coverage".to_string(),
@@ -3161,9 +3213,9 @@ mod tests {
                     test::invoke_entrypoint_as(actor: "issuer", entrypoint: "remember_caller", arguments: Json::parse("{{}}"));
                     test::assert(last_actor == AccountId::parse("{actor_account}"));
 
-                    let pair = test::invoke_entrypoint_as(actor: "issuer", entrypoint: "pair", arguments: Json::parse("{{}}"));
-                    test::assert_eq(actual: pair.0, expected: 2);
-                    test::assert_eq(actual: pair.1, expected: 3);
+                    let pair_result = test::invoke_entrypoint_as(actor: "issuer", entrypoint: "pair", arguments: Json::parse("{{}}"));
+                    test::assert_eq(actual: pair_result.0, expected: 2);
+                    test::assert_eq(actual: pair_result.1, expected: 3);
                 }}
 
                 #[test(fixture="actors")]
@@ -3263,7 +3315,10 @@ mod tests {
 
                 #[test]
                 fn smoke() {
-                    let next = invoke_entrypoint("run", Json::parse("{\"count\":\"7\"}"));
+                    let next = test::invoke_entrypoint(
+                        entrypoint: "run",
+                        arguments: Json::parse("{\"count\":\"7\"}")
+                    );
                     test::assert_eq(actual: next, expected: 8);
                 }
             }

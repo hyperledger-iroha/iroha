@@ -7976,6 +7976,9 @@ impl Actor {
         now: Instant,
         allow_dependency_gated_reproposal: bool,
     ) -> bool {
+        if self.kura_recovery_required() {
+            return false;
+        }
         trace!(?now, "pacemaker evaluating NEW_VIEW gating");
         if !self.retry_quarantined_proposal_guards() {
             return false;

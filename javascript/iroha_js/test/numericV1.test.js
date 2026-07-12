@@ -55,6 +55,8 @@ test("numeric V1 canonical construction and endpoint rejection", () => {
   assert.throws(() => NumericV1.decodeQuantityJson("1.0"), { code: "invalid_text" });
   assert.throws(() => NumericV1.decodeQuantityJson("-1"), { code: "negative_quantity" });
   assert.throws(() => NumericV1.decodeIntJson(1), TypeError);
+  assert.throws(() => NumericV1.decodeIntJson(1n), TypeError);
+  assert.throws(() => NumericV1.decodeIntJson(Object("1")), TypeError);
 });
 
 test("numeric V1 revalidates SDK value subclasses before encoding", () => {

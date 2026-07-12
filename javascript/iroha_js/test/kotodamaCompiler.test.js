@@ -16,7 +16,193 @@ import {
   KOTODAMA_V1_KEYWORDS,
 } from "../src/kotodamaIdentifiers.js";
 
-const SERVICE_ARTIFACT = Uint8Array.from([1, 2, 3]);
+const CRC64_MASK = 0xffff_ffff_ffff_ffffn;
+const CRC64_POLYNOMIAL = 0xc96c5795d7870f42n;
+const CRC64_TABLE = Array.from({ length: 256 }, (_, index) => {
+  let crc = BigInt(index);
+  for (let bit = 0; bit < 8; bit += 1) {
+    crc = (crc & 1n) === 0n ? crc >> 1n : (crc >> 1n) ^ CRC64_POLYNOMIAL;
+  }
+  return crc;
+});
+
+function u32Le(value) {
+  return Uint8Array.from([
+    value & 0xff,
+    (value >>> 8) & 0xff,
+    (value >>> 16) & 0xff,
+    (value >>> 24) & 0xff,
+  ]);
+}
+
+function u32Be(value) {
+  return Uint8Array.from([
+    (value >>> 24) & 0xff,
+    (value >>> 16) & 0xff,
+    (value >>> 8) & 0xff,
+    value & 0xff,
+  ]);
+}
+
+function readU32LeForTest(bytes, offset) {
+  return (
+    bytes[offset] |
+    (bytes[offset + 1] << 8) |
+    (bytes[offset + 2] << 16) |
+    (bytes[offset + 3] * 0x1000000)
+  ) >>> 0;
+}
+
+function u64Le(value) {
+  let remaining = BigInt(value);
+  return Uint8Array.from({ length: 8 }, () => {
+    const byte = Number(remaining & 0xffn);
+    remaining >>= 8n;
+    return byte;
+  });
+}
+
+function compactLength(value) {
+  let remaining = BigInt(value);
+  const bytes = [];
+  do {
+    const byte = Number(remaining & 0x7fn);
+    remaining >>= 7n;
+    bytes.push(remaining === 0n ? byte : byte | 0x80);
+  } while (remaining !== 0n);
+  return Uint8Array.from(bytes);
+}
+
+function concatBytes(...parts) {
+  const output = new Uint8Array(parts.reduce((sum, part) => sum + part.length, 0));
+  let offset = 0;
+  for (const part of parts) {
+    output.set(part, offset);
+    offset += part.length;
+  }
+  return output;
+}
+
+function field(payload) {
+  return concatBytes(compactLength(payload.length), payload);
+}
+
+function stringField(value) {
+  return field(new TextEncoder().encode(value));
+}
+
+function crc64(payload) {
+  let crc = CRC64_MASK;
+  for (const byte of payload) {
+    crc = CRC64_TABLE[Number((crc ^ BigInt(byte)) & 0xffn)] ^ (crc >> 8n);
+  }
+  return BigInt.asUintN(64, crc ^ CRC64_MASK);
+}
+
+function compilerArtifactFixture({
+  name = "Demo",
+  fingerprint = "kotodama_lang/test",
+  features = 0,
+  accessHints = false,
+  kotoba = 0,
+  entrypoints = 1,
+  states = 0,
+  errorCodes = 0,
+} = {}) {
+  const vector = (count) => concatBytes(
+    u64Le(count),
+    ...Array.from({ length: count }, () => field(Uint8Array.from([0]))),
+  );
+  const interfacePayload = concatBytes(
+    field(stringField(name)),
+    field(stringField(fingerprint)),
+    field(u64Le(features)),
+    field(accessHints ? Uint8Array.from([1, 1, 0]) : Uint8Array.from([0])),
+    field(vector(kotoba)),
+    field(vector(entrypoints)),
+    field(vector(states)),
+    field(vector(errorCodes)),
+  );
+  const frame = concatBytes(
+    new TextEncoder().encode("NRT0"),
+    Uint8Array.from([0, 0]),
+    Uint8Array.from([
+      0x9c, 0x45, 0x61, 0x32, 0xdf, 0xb6, 0x17, 0x1e,
+      0x73, 0x4d, 0x4d, 0x30, 0x52, 0x7b, 0xdd, 0xcc,
+    ]),
+    Uint8Array.from([0]),
+    u64Le(interfacePayload.length),
+    u64Le(crc64(interfacePayload)),
+    Uint8Array.from([0x02]),
+    interfacePayload,
+  );
+  const header = concatBytes(
+    Uint8Array.from([0x49, 0x56, 0x4d, 0x00, 1, 1, features & 0x03, 0]),
+    u64Le(1_000_000),
+    Uint8Array.from([1]),
+  );
+  return concatBytes(
+    header,
+    new TextEncoder().encode("CNTR"),
+    u32Le(frame.length),
+    frame,
+    Uint8Array.from([0, 0, 0, 0]),
+  );
+}
+
+function pointerLiteralFixture({
+  typeId = 0x0006,
+  version = 1,
+  payload = Uint8Array.from([1, 2, 3]),
+  declaredLength = payload.length,
+} = {}) {
+  const hash = blake2b256(payload);
+  hash[hash.length - 1] |= 1;
+  return concatBytes(
+    Uint8Array.from([(typeId >>> 8) & 0xff, typeId & 0xff, version]),
+    u32Be(declaredLength),
+    payload,
+    hash,
+  );
+}
+
+function literalSectionStart(artifact) {
+  return 25 + readU32LeForTest(artifact, 21);
+}
+
+function literalArtifactFixture(literals, { unindexedData = new Uint8Array() } = {}) {
+  const artifact = compilerArtifactFixture();
+  const start = literalSectionStart(artifact);
+  const entriesLength = literals.length * 8;
+  const descriptors = [];
+  const payloads = [];
+  let relativeOffset = 16 + entriesLength;
+  for (const literal of literals) {
+    descriptors.push(u64Le((BigInt(literal.kind) << 56n) | BigInt(relativeOffset)));
+    payloads.push(literal.bytes);
+    relativeOffset += literal.bytes.length;
+  }
+  const data = concatBytes(...payloads, unindexedData);
+  const unpaddedLengthFromHeader =
+    start - 17 + 16 + entriesLength + data.length;
+  const padding = (4 - (unpaddedLengthFromHeader % 4)) % 4;
+  const section = concatBytes(
+    new TextEncoder().encode("LTLB"),
+    u32Le(literals.length),
+    u32Le(padding),
+    u32Le(data.length),
+    ...descriptors,
+    data,
+    new Uint8Array(padding),
+  );
+  return concatBytes(
+    artifact.subarray(0, start),
+    section,
+    artifact.subarray(start),
+  );
+}
+
+const SERVICE_ARTIFACT = compilerArtifactFixture();
 const CONTRACT_HASH_DOMAIN = new TextEncoder().encode("iroha:ivm:contract-artifact:v1\0");
 const SERVICE_HASH_INPUT = new Uint8Array(
   CONTRACT_HASH_DOMAIN.length + SERVICE_ARTIFACT.length,
@@ -30,6 +216,23 @@ const SERVICE_CODE_HASH = Array.from(
   (byte) => byte.toString(16).padStart(2, "0"),
 ).join("");
 const SERVICE_ABI_HASH = "23".repeat(32);
+
+function compilerEntrypoint(name, kind, permission = null) {
+  return {
+    name,
+    kind: { kind, value: null },
+    params: [],
+    argument_schema: null,
+    return_type: null,
+    return_schema: null,
+    permission,
+    read_keys: [],
+    write_keys: [],
+    access_hints_complete: true,
+    access_hints_skipped: [],
+    triggers: [],
+  };
+}
 
 function canonicalHashLiteral(hex) {
   const body = hex.toUpperCase();
@@ -53,16 +256,18 @@ const SERVICE_OUTPUT = {
   artifactBytes: [...SERVICE_ARTIFACT],
   manifestJson: JSON.stringify({
     seiyaku_name: "Demo",
-    compiler_fingerprint: "kotodama_lang/test",
     code_hash: canonicalHashLiteral(SERVICE_CODE_HASH),
     abi_hash: canonicalHashLiteral(SERVICE_ABI_HASH),
+    compiler_fingerprint: "kotodama_lang/test",
+    features_bitmap: 0,
+    access_set_hints: null,
     entrypoints: [
-      {
-        name: "ping",
-        kind: { kind: "View", value: null },
-        permission: null,
-      },
+      compilerEntrypoint("ping", "View"),
     ],
+    states: [],
+    error_codes: null,
+    kotoba: null,
+    provenance: null,
   }),
   codeHash: SERVICE_CODE_HASH,
   abiHash: SERVICE_ABI_HASH,
@@ -70,13 +275,43 @@ const SERVICE_OUTPUT = {
     sidecar_version: 1,
     kind: "source-map",
     artifact_hash: SERVICE_CODE_HASH,
-    entries: [{ function_name: "ping", pc_start: 0, pc_end: 4 }],
+    entries: [{
+      function_name: "ping",
+      pc_start: 0,
+      pc_end: 4,
+      source_path: null,
+      source_id: 0,
+      byte_start: 0,
+      byte_end: 4,
+      line: 1,
+      column: 1,
+    }],
   }),
   budgetReportJson: JSON.stringify({
     sidecar_version: 1,
     kind: "budget",
     artifact_hash: SERVICE_CODE_HASH,
-    entries: [{ function_name: "ping", bytecode_words: 1 }],
+    entries: [{
+      function_name: "ping",
+      pc_start: 0,
+      pc_end: 4,
+      bytecode_bytes: 4,
+      bytecode_words: 1,
+      frame_bytes: 0,
+      jump_span_words: 1,
+      jump_range_risk: false,
+      source_path: null,
+      source_id: 0,
+      byte_start: 0,
+      byte_end: 4,
+      line: 1,
+      column: 1,
+    }],
+    access_hint_diagnostics: {
+      state_wildcards: 0,
+      isi_wildcards: 0,
+      literal_trigger_spec_decode_failures: 0,
+    },
   }),
 };
 
@@ -201,6 +436,53 @@ function successfulFetch(calls, value = SERVICE_SUCCESS) {
   };
 }
 
+async function captureRejection(promise) {
+  try {
+    await promise;
+  } catch (error) {
+    return error;
+  }
+  assert.fail("expected promise to reject");
+}
+
+function compileMutatedServiceResponse(mutate) {
+  const response = structuredClone(SERVICE_SUCCESS);
+  const manifest = JSON.parse(response.output.manifestJson);
+  const sourceMap = JSON.parse(response.output.sourceMapJson);
+  const budget = JSON.parse(response.output.budgetReportJson);
+  mutate({ response, manifest, sourceMap, budget });
+  response.output.manifestJson = JSON.stringify(manifest);
+  response.output.sourceMapJson = JSON.stringify(sourceMap);
+  response.output.budgetReportJson = JSON.stringify(budget);
+  return compileKotodamaWithNativeBinding(
+    { async compileKotodama() { return response; } },
+    "seiyaku Demo {}",
+  );
+}
+
+function serviceSuccessWithArtifact(artifact, mutateManifest = () => {}) {
+  const response = structuredClone(SERVICE_SUCCESS);
+  const bytes = Uint8Array.from(artifact);
+  const hashInput = new Uint8Array(CONTRACT_HASH_DOMAIN.length + bytes.length);
+  hashInput.set(CONTRACT_HASH_DOMAIN);
+  hashInput.set(bytes, CONTRACT_HASH_DOMAIN.length);
+  const hash = blake2b256(hashInput);
+  hash[hash.length - 1] |= 1;
+  const codeHash = Array.from(hash, (byte) => byte.toString(16).padStart(2, "0")).join("");
+  const manifest = JSON.parse(response.output.manifestJson);
+  mutateManifest(manifest);
+  manifest.code_hash = canonicalHashLiteral(codeHash);
+  response.output.artifactBytes = [...bytes];
+  response.output.codeHash = codeHash;
+  response.output.manifestJson = JSON.stringify(manifest);
+  for (const key of ["sourceMapJson", "budgetReportJson"]) {
+    const sidecar = JSON.parse(response.output[key]);
+    sidecar.artifact_hash = codeHash;
+    response.output[key] = JSON.stringify(sidecar);
+  }
+  return response;
+}
+
 test("JavaScript ships only adapters to the canonical Rust compiler", () => {
   const expectedFiles = [
     "browser.js",
@@ -231,7 +513,7 @@ test("JavaScript ships only adapters to the canonical Rust compiler", () => {
   }
 });
 
-test("TypeScript exposes only the bounded source-name and ZK request policy", () => {
+test("TypeScript separates bounded request policy from remote transport controls", () => {
   const declarations = readFileSync(
     new URL("../kotodama-compiler.d.ts", import.meta.url),
     "utf8",
@@ -247,6 +529,8 @@ test("TypeScript exposes only the bounded source-name and ZK request policy", ()
   const requestDeclarations = declarations.slice(requestStart, requestEnd);
   assert.match(requestDeclarations, /sourceName\?: string;/u);
   assert.match(requestDeclarations, /zk\?: boolean;/u);
+  assert.match(requestDeclarations, /signal\?: AbortSignal;/u);
+  assert.match(requestDeclarations, /timeoutMs\?: number;/u);
   assert.match(requestDeclarations, /source: string;[\s\S]*zk: boolean;/u);
   assert.doesNotMatch(
     requestDeclarations,
@@ -254,7 +538,7 @@ test("TypeScript exposes only the bounded source-name and ZK request policy", ()
   );
   assert.match(
     declarations,
-    /compile\(\s*source: string,\s*options\?: KotodamaCompilerRequestOptions,/u,
+    /compile\(\s*source: string,\s*options\?: KotodamaCompilerCallOptions,/u,
   );
   assert.match(
     declarations,
@@ -265,6 +549,19 @@ test("TypeScript exposes only the bounded source-name and ZK request policy", ()
     /kind: "Public" \| "View" \| "Init" \| "Upgrade";/u,
   );
   assert.doesNotMatch(declarations, /kind:\s*\n\s*\| "public"/u);
+  assert.match(
+    declarations,
+    /KotodamaCompiledEntrypointValueKindName\s*=\s*\| "Int"\s*\| "Decimal"\s*\| "Quantity"/u,
+  );
+  assert.doesNotMatch(declarations, /\| "(?:Amount|U128)"/u);
+  const rootDeclarations = readFileSync(new URL("../index.d.ts", import.meta.url), "utf8");
+  assert.match(
+    rootDeclarations,
+    /ContractEntrypointValueKindName\s*=\s*\| "Int"\s*\| "Decimal"\s*\| "Quantity"/u,
+  );
+  const rootKindStart = rootDeclarations.indexOf("export type ContractEntrypointValueKindName");
+  const rootKindEnd = rootDeclarations.indexOf("export interface", rootKindStart);
+  assert.doesNotMatch(rootDeclarations.slice(rootKindStart, rootKindEnd), /"(?:Amount|U128)"/u);
 });
 
 test("Node delegates asynchronously to iroha_js_host exactly once", async () => {
@@ -295,7 +592,7 @@ test("Node delegates asynchronously to iroha_js_host exactly once", async () => 
   finishCompilation(SERVICE_SUCCESS);
   const result = await resultPromise;
   assert.equal(result.ok, true);
-  assert.deepEqual([...result.output.artifactBytes], [1, 2, 3]);
+  assert.deepEqual([...result.output.artifactBytes], [...SERVICE_ARTIFACT]);
   assert.equal(result.output.manifest.entrypoints[0].kind.kind, "View");
   assert.deepEqual(
     calls,
@@ -332,30 +629,31 @@ test("compiler adapters preserve branded selectors and reject forged manifest de
     const response = structuredClone(SERVICE_SUCCESS);
     const manifest = JSON.parse(response.output.manifestJson);
     mutateManifest(manifest);
-    response.output.manifestJson = JSON.stringify(manifest);
+    const artifact = compilerArtifactFixture({
+      name: manifest.seiyaku_name,
+      fingerprint: manifest.compiler_fingerprint,
+      features: manifest.features_bitmap,
+      accessHints: manifest.access_set_hints !== null,
+      kotoba: manifest.kotoba?.length ?? 0,
+      entrypoints: manifest.entrypoints?.length ?? 0,
+      states: manifest.states?.length ?? 0,
+      errorCodes: manifest.error_codes?.length ?? 0,
+    });
+    const matched = serviceSuccessWithArtifact(artifact, (target) => {
+      for (const key of Object.keys(target)) delete target[key];
+      Object.assign(target, manifest);
+    });
     return compileKotodamaWithNativeBinding(
-      { async compileKotodama() { return response; } },
+      { async compileKotodama() { return matched; } },
       "seiyaku Demo {}",
     );
   };
 
   const branded = await compileResponse((manifest) => {
     manifest.entrypoints = [
-      {
-        name: "始まり",
-        kind: { kind: "Hajimari", value: null },
-        permission: null,
-      },
-      {
-        name: "kaizen",
-        kind: { kind: "Kaizen", value: null },
-        permission: null,
-      },
-      {
-        name: "mutate",
-        kind: { kind: "Kotoage", value: null },
-        permission: "Mutate",
-      },
+      compilerEntrypoint("始まり", "Hajimari"),
+      compilerEntrypoint("kaizen", "Kaizen"),
+      compilerEntrypoint("mutate", "Kotoage", "Mutate"),
     ];
   });
   assert.deepEqual(
@@ -388,7 +686,7 @@ test("compiler adapters preserve branded selectors and reject forged manifest de
   await assert.rejects(
     compileResponse((manifest) => {
       manifest.entrypoints = [
-        { name: "init", kind: { kind: "Hajimari", value: null }, permission: null },
+        compilerEntrypoint("init", "Hajimari"),
       ];
     }),
     /kind does not match its branded lifecycle selector/u,
@@ -396,7 +694,7 @@ test("compiler adapters preserve branded selectors and reject forged manifest de
   await assert.rejects(
     compileResponse((manifest) => {
       manifest.entrypoints = [
-        { name: "run", kind: { kind: "Kotoage", value: null }, permission: null },
+        compilerEntrypoint("run", "Kotoage"),
       ];
     }),
     /kotoage\/言挙げ.*missing caller authorization/u,
@@ -418,6 +716,457 @@ test("compiler adapters preserve branded selectors and reject forged manifest de
     }),
     /duplicate error path or code/u,
   );
+});
+
+test("compiler manifest numeric entrypoint schemas match the canonical V1 leaf set", async () => {
+  const result = await compileMutatedServiceResponse(({ manifest }) => {
+    const entrypoint = compilerEntrypoint("calculate", "View");
+    entrypoint.params = [
+      { name: "rate", type_name: "decimal" },
+      { name: "amount", type_name: "quantity" },
+    ];
+    entrypoint.argument_schema = {
+      fields: [
+        {
+          name: "rate",
+          ty: { nodes: [{ kind: "Leaf", value: { kind: "Decimal", value: null } }] },
+        },
+        {
+          name: "amount",
+          ty: { nodes: [{ kind: "Leaf", value: { kind: "Quantity", value: null } }] },
+        },
+      ],
+    };
+    entrypoint.return_type = "decimal";
+    entrypoint.return_schema = {
+      nodes: [{ kind: "Leaf", value: { kind: "Decimal", value: null } }],
+    };
+    manifest.entrypoints = [entrypoint];
+  });
+  assert.equal(result.ok, true);
+  assert.deepEqual(
+    result.output.manifest.entrypoints[0].argument_schema.fields.map(
+      (field) => field.ty.nodes[0].value.kind,
+    ),
+    ["Decimal", "Quantity"],
+  );
+
+  for (const retired of ["Amount", "U128"]) {
+    await assert.rejects(
+      compileMutatedServiceResponse(({ manifest }) => {
+        const entrypoint = compilerEntrypoint("legacy", "View");
+        entrypoint.params = [{ name: "value", type_name: retired }];
+        entrypoint.argument_schema = {
+          fields: [{
+            name: "value",
+            ty: { nodes: [{ kind: "Leaf", value: { kind: retired, value: null } }] },
+          }],
+        };
+        manifest.entrypoints = [entrypoint];
+      }),
+      /not a canonical V1 entrypoint value kind/u,
+    );
+  }
+});
+
+test("compiler manifest boundary rejects unknown, inconsistent, and unbounded data", async () => {
+  const cases = [
+    ["unknown manifest field", ({ manifest }) => { manifest.unknown = true; }, /invalid field set/u],
+    ["missing manifest field", ({ manifest }) => { delete manifest.features_bitmap; }, /invalid field set/u],
+    ["unsafe features bitmap", ({ manifest }) => {
+      manifest.features_bitmap = Number.MAX_SAFE_INTEGER + 1;
+    }, /features_bitmap.*unsigned safe integer/u],
+    ["unknown entrypoint field", ({ manifest }) => {
+      manifest.entrypoints[0].unknown = true;
+    }, /entrypoint 0 has an invalid field set/u],
+    ["missing argument schema", ({ manifest }) => {
+      manifest.entrypoints[0].params = [{ name: "value", type_name: "int" }];
+    }, /argument_schema is required/u],
+    ["parameter/schema mismatch", ({ manifest }) => {
+      const entrypoint = manifest.entrypoints[0];
+      entrypoint.params = [{ name: "value", type_name: "int" }];
+      entrypoint.argument_schema = {
+        fields: [{
+          name: "other",
+          ty: { nodes: [{ kind: "Leaf", value: { kind: "Int", value: null } }] },
+        }],
+      };
+    }, /does not match its declared parameter/u],
+    ["too many parameters", ({ manifest }) => {
+      const entrypoint = manifest.entrypoints[0];
+      entrypoint.params = Array.from({ length: 14 }, (_, index) => ({
+        name: `value${index}`,
+        type_name: "int",
+      }));
+      entrypoint.argument_schema = { fields: [] };
+    }, /at most 13 items/u],
+    ["return schema mismatch", ({ manifest }) => {
+      const entrypoint = manifest.entrypoints[0];
+      entrypoint.return_type = "decimal";
+      entrypoint.return_schema = {
+        nodes: [{ kind: "Leaf", value: { kind: "Int", value: null } }],
+      };
+    }, /return_type does not match return_schema/u],
+    ["invalid dynamic bound", ({ manifest }) => {
+      manifest.access_set_hints = {
+        read_keys: [],
+        write_keys: [],
+        dynamic_reads: [{
+          base_key: "state:Balances",
+          key_type: "AccountId",
+          bound_kind: "take",
+          max_keys: -1,
+        }],
+        dynamic_writes: [],
+      };
+    }, /max_keys.*unsigned safe integer/u],
+    ["duplicate kotoba language", ({ manifest }) => {
+      manifest.kotoba = [{
+        msg_id: "demo.message",
+        translations: [{ lang: "en", text: "one" }, { lang: "en", text: "two" }],
+      }];
+    }, /duplicate language en/u],
+    ["unverifiable provenance", ({ manifest }) => {
+      manifest.provenance = { signer: "ed0120", signature: "00" };
+    }, /provenance must be null until signed provenance is verifiable/u],
+  ];
+  for (const [label, mutate, expected] of cases) {
+    await assert.rejects(compileMutatedServiceResponse(mutate), expected, label);
+  }
+});
+
+test("compiler output requires a framed self-describing IVM artifact bound to manifest identity", async () => {
+  const malformedArtifacts = [
+    ["one byte", Uint8Array.from([1])],
+    ["bad magic", (() => {
+      const bytes = SERVICE_ARTIFACT.slice();
+      bytes[0] ^= 0xff;
+      return bytes;
+    })()],
+    ["wrong ABI", (() => {
+      const bytes = SERVICE_ARTIFACT.slice();
+      bytes[16] = 2;
+      return bytes;
+    })()],
+    ["contract HTM mode", (() => {
+      const bytes = SERVICE_ARTIFACT.slice();
+      bytes[6] = 0x04;
+      return bytes;
+    })()],
+    ["post-header image beyond IVM code memory", (() => {
+      const postHeaderBytes = SERVICE_ARTIFACT.length - 17;
+      const minimumExtra = 0x0010_0000 - postHeaderBytes + 1;
+      const alignedExtra = Math.ceil(minimumExtra / 4) * 4;
+      return concatBytes(SERVICE_ARTIFACT, new Uint8Array(alignedExtra));
+    })()],
+    ["bad CNTR marker", (() => {
+      const bytes = SERVICE_ARTIFACT.slice();
+      bytes[17] ^= 1;
+      return bytes;
+    })()],
+    ["bad CNTR frame CRC", (() => {
+      const bytes = SERVICE_ARTIFACT.slice();
+      bytes[25 + 31] ^= 1;
+      return bytes;
+    })()],
+    ["noncanonical CNTR frame padding", (() => {
+      const frameLength = readU32LeForTest(SERVICE_ARTIFACT, 21);
+      const payloadOffset = 25 + 40;
+      const bytes = new Uint8Array(SERVICE_ARTIFACT.length + 1);
+      bytes.set(SERVICE_ARTIFACT.subarray(0, payloadOffset), 0);
+      bytes[payloadOffset] = 0;
+      bytes.set(SERVICE_ARTIFACT.subarray(payloadOffset), payloadOffset + 1);
+      bytes.set(u32Le(frameLength + 1), 21);
+      return bytes;
+    })()],
+    ["unaligned instruction stream", SERVICE_ARTIFACT.slice(0, -1)],
+  ];
+  for (const [label, artifact] of malformedArtifacts) {
+    await assert.rejects(
+      compileKotodamaWithNativeBinding(
+        { async compileKotodama() { return serviceSuccessWithArtifact(artifact); } },
+        "seiyaku Demo {}",
+      ),
+      /artifact|interface|CRC64|instruction stream/u,
+      label,
+    );
+  }
+
+  for (const [label, artifact] of [
+    ["seiyaku identity", compilerArtifactFixture({ name: "Substituted" })],
+    ["compiler fingerprint", compilerArtifactFixture({ fingerprint: "evil/compiler" })],
+    ["entrypoint count", compilerArtifactFixture({ entrypoints: 0 })],
+  ]) {
+    await assert.rejects(
+      compileKotodamaWithNativeBinding(
+        { async compileKotodama() { return serviceSuccessWithArtifact(artifact); } },
+        "seiyaku Demo {}",
+      ),
+      /match the embedded (?:contract )?interface/u,
+      label,
+    );
+  }
+
+  const featureArtifact = compilerArtifactFixture({ features: 1 });
+  await assert.rejects(
+    compileKotodamaWithNativeBinding(
+      {
+        async compileKotodama() {
+          return serviceSuccessWithArtifact(featureArtifact, (manifest) => {
+            manifest.features_bitmap = 0;
+          });
+        },
+      },
+      "seiyaku Demo {}",
+    ),
+    /identity\/capabilities do not match/u,
+  );
+});
+
+test("compiler literal-table validation matches Rust ABI-v1 framing", async () => {
+  const validPointer = pointerLiteralFixture();
+  const validArtifact = literalArtifactFixture([
+    { kind: 0, bytes: validPointer },
+    { kind: 1, bytes: u64Le(42) },
+  ]);
+  const validResult = await compileKotodamaWithNativeBinding(
+    { async compileKotodama() { return serviceSuccessWithArtifact(validArtifact); } },
+    "seiyaku Demo {}",
+  );
+  assert.equal(validResult.ok, true);
+
+  const emptyArtifact = literalArtifactFixture([]);
+  const emptyResult = await compileKotodamaWithNativeBinding(
+    { async compileKotodama() { return serviceSuccessWithArtifact(emptyArtifact); } },
+    "seiyaku Demo {}",
+  );
+  assert.equal(emptyResult.ok, true);
+
+  const duplicateTargets = literalArtifactFixture([
+    { kind: 0, bytes: validPointer },
+    { kind: 1, bytes: u64Le(7) },
+  ]);
+  const duplicateStart = literalSectionStart(duplicateTargets);
+  duplicateTargets.set(
+    duplicateTargets.subarray(duplicateStart + 16, duplicateStart + 24),
+    duplicateStart + 24,
+  );
+
+  const skippedFirstByte = literalArtifactFixture([
+    { kind: 0, bytes: validPointer },
+  ]);
+  const skippedStart = literalSectionStart(skippedFirstByte);
+  skippedFirstByte.set(u64Le(16 + 8 + 1), skippedStart + 16);
+
+  const badPointerHash = pointerLiteralFixture();
+  badPointerHash[badPointerHash.length - 1] ^= 1;
+
+  for (const [label, artifact, expected] of [
+    [
+      "unindexed data",
+      literalArtifactFixture([], { unindexedData: Uint8Array.from([1]) }),
+      /unindexed literal data/u,
+    ],
+    ["duplicate targets", duplicateTargets, /strictly increasing/u],
+    ["first target gap", skippedFirstByte, /first descriptor/u],
+    [
+      "short i64",
+      literalArtifactFixture([{ kind: 1, bytes: new Uint8Array(7) }]),
+      /exactly 8 bytes/u,
+    ],
+    [
+      "retired pointer type",
+      literalArtifactFixture([{ kind: 0, bytes: pointerLiteralFixture({ typeId: 0x0010 }) }]),
+      /not allowed by ABI v1/u,
+    ],
+    [
+      "pointer version",
+      literalArtifactFixture([{ kind: 0, bytes: pointerLiteralFixture({ version: 2 }) }]),
+      /must use version 1/u,
+    ],
+    [
+      "pointer declared length",
+      literalArtifactFixture([{
+        kind: 0,
+        bytes: pointerLiteralFixture({ declaredLength: 4 }),
+      }]),
+      /length does not match/u,
+    ],
+    [
+      "pointer payload hash",
+      literalArtifactFixture([{ kind: 0, bytes: badPointerHash }]),
+      /payload hash is invalid/u,
+    ],
+  ]) {
+    await assert.rejects(
+      compileKotodamaWithNativeBinding(
+        { async compileKotodama() { return serviceSuccessWithArtifact(artifact); } },
+        "seiyaku Demo {}",
+      ),
+      expected,
+      label,
+    );
+  }
+});
+
+test("compiler trigger metadata is exact, bounded, and non-recursive beyond policy", async () => {
+  const filter = JSON.parse(
+    readFileSync(new URL("./fixtures/contract_manifest_v1.json", import.meta.url), "utf8"),
+  ).event_filter_box.norito_frame_hex;
+  const canonicalFilter = Buffer.from(filter, "hex").toString("base64");
+  const trigger = () => ({
+    id: "wake",
+    repeats: { Indefinitely: null },
+    filter: canonicalFilter,
+    authority: null,
+    metadata: {},
+    callback: { namespace: null, entrypoint: "ping" },
+  });
+
+  await assert.doesNotReject(
+    compileMutatedServiceResponse(({ manifest }) => {
+      manifest.entrypoints[0].triggers = [trigger()];
+    }),
+  );
+  await assert.rejects(
+    compileMutatedServiceResponse(({ manifest }) => {
+      const value = trigger();
+      value.repeats = { Indefinitely: null, Exactly: 1 };
+      manifest.entrypoints[0].triggers = [value];
+    }),
+    /exactly one canonical repeat policy/u,
+  );
+  await assert.rejects(
+    compileMutatedServiceResponse(({ manifest }) => {
+      const value = trigger();
+      value.filter = `${canonicalFilter.slice(0, -2)}B=`;
+      manifest.entrypoints[0].triggers = [value];
+    }),
+    /canonical base64 padding bits|exact standard-base64/u,
+  );
+  await assert.rejects(
+    compileMutatedServiceResponse(({ manifest }) => {
+      const value = trigger();
+      value.callback.entrypoint = "other";
+      manifest.entrypoints[0].triggers = [value];
+    }),
+    /callback must target its declaring entrypoint/u,
+  );
+  await assert.rejects(
+    compileMutatedServiceResponse(({ manifest }) => {
+      const value = trigger();
+      let cursor = value.metadata;
+      for (let depth = 0; depth < 66; depth += 1) {
+        cursor.next = {};
+        cursor = cursor.next;
+      }
+      manifest.entrypoints[0].triggers = [value];
+    }),
+    /JSON depth limit/u,
+  );
+});
+
+test("compiler sidecar schemas reject malformed fields and cross-sidecar identities", async () => {
+  const cases = [
+    ["source-map unknown field", ({ sourceMap }) => {
+      sourceMap.entries[0].unknown = true;
+    }, /source-map sidecar entry 0 has an invalid field set/u],
+    ["source-map reversed range", ({ sourceMap }) => {
+      sourceMap.entries[0].pc_start = 5;
+    }, /forward PC range/u],
+    ["source-map unsafe source id", ({ sourceMap }) => {
+      sourceMap.entries[0].source_id = 0x1_0000_0000;
+    }, /source_id.*unsigned safe integer/u],
+    ["budget missing diagnostics", ({ budget }) => {
+      delete budget.access_hint_diagnostics;
+    }, /budget sidecar has an invalid field set/u],
+    ["budget malformed diagnostics", ({ budget }) => {
+      budget.access_hint_diagnostics.state_wildcards = -1;
+    }, /state_wildcards.*unsigned safe integer/u],
+    ["cross-sidecar mismatch", ({ budget }) => {
+      budget.entries[0].function_name = "other";
+    }, /function identity does not match/u],
+  ];
+  for (const [label, mutate, expected] of cases) {
+    await assert.rejects(compileMutatedServiceResponse(mutate), expected, label);
+  }
+});
+
+test("compiler result snapshots data descriptors without invoking hostile getters", async () => {
+  let getCalls = 0;
+  const outputProxy = new Proxy(structuredClone(SERVICE_SUCCESS.output), {
+    get() {
+      getCalls += 1;
+      throw new Error("output get trap must not run");
+    },
+  });
+  const result = await compileKotodamaWithNativeBinding(
+    {
+      async compileKotodama() {
+        return { ok: true, output: outputProxy, diagnosticsJson: null };
+      },
+    },
+    "seiyaku Demo {}",
+  );
+  assert.equal(result.ok, true);
+  assert.equal(getCalls, 0);
+
+  let accessorCalls = 0;
+  const accessorResult = { output: SERVICE_SUCCESS.output, diagnosticsJson: null };
+  Object.defineProperty(accessorResult, "ok", {
+    enumerable: true,
+    get() {
+      accessorCalls += 1;
+      return true;
+    },
+  });
+  await assert.rejects(
+    compileKotodamaWithNativeBinding(
+      { async compileKotodama() { return accessorResult; } },
+      "seiyaku Demo {}",
+    ),
+    /enumerable data property/u,
+  );
+  assert.equal(accessorCalls, 0);
+});
+
+test("compiler result envelope requires every field and exact null sentinels", async () => {
+  for (const response of [
+    { ok: true, output: SERVICE_OUTPUT },
+    { ok: true, output: SERVICE_OUTPUT, diagnosticsJson: undefined },
+    { ok: false, diagnosticsJson: SERVICE_FAILURE.diagnosticsJson },
+    { ok: false, output: undefined, diagnosticsJson: SERVICE_FAILURE.diagnosticsJson },
+  ]) {
+    await assert.rejects(
+      compileKotodamaWithNativeBinding(
+        { async compileKotodama() { return response; } },
+        "seiyaku Demo {}",
+      ),
+      /invalid field set|exact null/u,
+    );
+  }
+});
+
+test("compiler result rejects sparse and extra-property artifact arrays before hashing", async () => {
+  for (const artifactBytes of [
+    Object.assign([1, 2, 3], { extra: true }),
+    [1, , 3],
+  ]) {
+    await assert.rejects(
+      compileKotodamaWithNativeBinding(
+        {
+          async compileKotodama() {
+            return {
+              ...structuredClone(SERVICE_SUCCESS),
+              output: { ...structuredClone(SERVICE_SUCCESS.output), artifactBytes },
+            };
+          },
+        },
+        "seiyaku Demo {}",
+      ),
+      /dense array without extra fields|stable dense data-only array/u,
+    );
+  }
 });
 
 test("compiler adapters require checksummed canonical manifest hash literals", async () => {
@@ -517,7 +1266,7 @@ test("browser compiler client uses the explicit Rust service and normalizes outp
   );
 
   assert.equal(result.ok, true);
-  assert.deepEqual([...result.output.artifactBytes], [1, 2, 3]);
+  assert.deepEqual([...result.output.artifactBytes], [...SERVICE_ARTIFACT]);
   assert.equal(result.output.codeHashHex, SERVICE_OUTPUT.codeHash);
   assert.equal(result.output.abiHashHex, SERVICE_OUTPUT.abiHash);
   assert.equal(result.output.compilerFingerprint, "kotodama_lang/test");
@@ -527,11 +1276,41 @@ test("browser compiler client uses the explicit Rust service and normalizes outp
   assert.equal(calls[0].url, "https://compiler.example/v1/kotodama/compile");
   assert.equal(calls[0].init.method, "POST");
   assert.equal(calls[0].init.headers.accept, "application/json");
+  assert.equal(calls[0].init.cache, "no-store");
+  assert.equal(calls[0].init.credentials, "omit");
+  assert.equal(calls[0].init.redirect, "error");
+  assert.equal(calls[0].init.referrerPolicy, "no-referrer");
+  assert.ok(calls[0].init.signal instanceof AbortSignal);
   assert.deepEqual(JSON.parse(calls[0].init.body), {
     source: "seiyaku Demo { view fn ping() -> int { return 1; } }",
     sourceName: "contracts/demo.ko",
     zk: true,
   });
+});
+
+test("compiler client transport policy cannot be redirected after construction", async () => {
+  const calls = [];
+  const trustedFetch = successfulFetch(calls);
+  const client = new KotodamaCompilerClient("https://trusted.example/base", {
+    fetchImpl: trustedFetch,
+  });
+
+  client.baseUrl = "http://non-loopback.example";
+  client.fetchImpl = () => {
+    throw new Error("mutable public fetch override must not run");
+  };
+  Object.defineProperty(client, "baseUrl", {
+    value: "https://other.example",
+    configurable: true,
+  });
+
+  const result = await client.compile("seiyaku Demo {}", { timeoutMs: 100 });
+  assert.equal(result.ok, true);
+  assert.equal(calls.length, 1);
+  assert.equal(
+    calls[0].url,
+    "https://trusted.example/base/v1/kotodama/compile",
+  );
 });
 
 test("compiler adapters reject oversized UTF-8 source before native or network dispatch", async () => {
@@ -589,6 +1368,328 @@ test("compiler requests bound sourceName and expose only the canonical ZK select
     await assert.rejects(client.compile("seiyaku Demo {}", options));
   }
   assert.equal(calls.length, 1, "invalid compiler policy must fail before network dispatch");
+});
+
+test("compiler transport options are exact data and fail before dispatch", async () => {
+  const calls = [];
+  const fetchImpl = successfulFetch(calls);
+
+  let constructorGetterCalls = 0;
+  const constructorAccessor = {};
+  Object.defineProperty(constructorAccessor, "fetchImpl", {
+    enumerable: true,
+    get() {
+      constructorGetterCalls += 1;
+      return fetchImpl;
+    },
+  });
+  assert.throws(
+    () => new KotodamaCompilerClient("https://compiler.example", constructorAccessor),
+    /enumerable data property/u,
+  );
+  assert.equal(constructorGetterCalls, 0);
+  for (const constructorOptions of [
+    { fetchImpl: null },
+    { fetchImpl: undefined },
+    { fetchImpl, unknown: true },
+    Object.defineProperty({}, "fetchImpl", { value: fetchImpl }),
+    { [Symbol("fetch")]: fetchImpl },
+  ]) {
+    assert.throws(
+      () => new KotodamaCompilerClient("https://compiler.example", constructorOptions),
+      TypeError,
+    );
+  }
+
+  let proxyGets = 0;
+  const proxiedConstructorOptions = new Proxy(
+    { fetchImpl },
+    {
+      get() {
+        proxyGets += 1;
+        throw new Error("constructor option get trap must not run");
+      },
+    },
+  );
+  const client = new KotodamaCompilerClient(
+    "https://compiler.example",
+    proxiedConstructorOptions,
+  );
+  assert.equal(proxyGets, 0);
+
+  for (const timeoutMs of [
+    0,
+    -1,
+    1.5,
+    120_001,
+    Number.NaN,
+    Number.POSITIVE_INFINITY,
+    "1000",
+    null,
+    undefined,
+  ]) {
+    await assert.rejects(
+      client.compile("seiyaku Demo {}", { timeoutMs }),
+      /timeoutMs must be an integer from 1 through 120000/u,
+    );
+  }
+
+  let timeoutGetterCalls = 0;
+  const timeoutAccessor = {};
+  Object.defineProperty(timeoutAccessor, "timeoutMs", {
+    enumerable: true,
+    get() {
+      timeoutGetterCalls += 1;
+      return 100;
+    },
+  });
+  await assert.rejects(
+    client.compile("seiyaku Demo {}", timeoutAccessor),
+    /enumerable data property/u,
+  );
+  assert.equal(timeoutGetterCalls, 0);
+
+  let signalGetterCalls = 0;
+  const forgedSignal = {};
+  Object.defineProperty(forgedSignal, "aborted", {
+    enumerable: true,
+    get() {
+      signalGetterCalls += 1;
+      return false;
+    },
+  });
+  await assert.rejects(
+    client.compile("seiyaku Demo {}", { signal: forgedSignal }),
+    /must be an AbortSignal/u,
+  );
+  assert.equal(signalGetterCalls, 0);
+
+  const proxiedCallOptions = new Proxy(
+    { timeoutMs: 100 },
+    {
+      get() {
+        proxyGets += 1;
+        throw new Error("compile option get trap must not run");
+      },
+    },
+  );
+  await client.compile("seiyaku Demo {}", proxiedCallOptions);
+  assert.equal(proxyGets, 0);
+  assert.equal(calls.length, 1, "only valid options may reach Fetch");
+
+  await assert.rejects(
+    compileKotodamaProgram("seiyaku Demo {}", { timeoutMs: 100 }),
+    /signal and timeoutMs require compilerUrl/u,
+  );
+});
+
+test("compiler cancellation preserves falsey and intrinsic AbortSignal reasons", async () => {
+  for (const reason of [0, false, "", null]) {
+    let fetchCalls = 0;
+    const controller = new AbortController();
+    controller.abort(reason);
+    const client = new KotodamaCompilerClient("https://compiler.example", {
+      fetchImpl() {
+        fetchCalls += 1;
+        return new Promise(() => {});
+      },
+    });
+    assert.equal(
+      await captureRejection(
+        client.compile("seiyaku Demo {}", {
+          signal: controller.signal,
+          timeoutMs: 100,
+        }),
+      ),
+      reason,
+    );
+    assert.equal(fetchCalls, 0, "pre-aborted calls must not dispatch Fetch");
+  }
+
+  const reason = new Error("intrinsic caller cancellation");
+  const controller = new AbortController();
+  let reasonGetterCalls = 0;
+  Object.defineProperty(controller.signal, "reason", {
+    configurable: true,
+    get() {
+      reasonGetterCalls += 1;
+      throw new Error("own reason getter must not run");
+    },
+  });
+  controller.abort(reason);
+  const client = new KotodamaCompilerClient("https://compiler.example", {
+    fetchImpl() {
+      assert.fail("pre-aborted intrinsic signal reached Fetch");
+    },
+  });
+  assert.equal(
+    await captureRejection(
+      client.compile("seiyaku Demo {}", {
+        signal: controller.signal,
+        timeoutMs: 100,
+      }),
+    ),
+    reason,
+  );
+  assert.equal(reasonGetterCalls, 0);
+});
+
+test("compiler abort and deadline terminate an uncooperative Fetch", async () => {
+  let fetchInit;
+  const client = new KotodamaCompilerClient("https://compiler.example", {
+    fetchImpl(_url, init) {
+      fetchInit = init;
+      return new Promise(() => {});
+    },
+  });
+  const controller = new AbortController();
+  const reason = new Error("stop ignored Fetch");
+  const pending = client.compile("seiyaku Demo {}", {
+    signal: controller.signal,
+    timeoutMs: 1_000,
+  });
+  await Promise.resolve();
+  assert.ok(fetchInit, "Fetch must begin before the mid-flight abort");
+  assert.notEqual(fetchInit.signal, controller.signal);
+  controller.abort(reason);
+  assert.equal(await captureRejection(pending), reason);
+  assert.equal(fetchInit.signal.aborted, true);
+  assert.equal(fetchInit.signal.reason, reason);
+
+  const conflictingError = new Error("transport replaced the abort reason");
+  const cooperativeClient = new KotodamaCompilerClient("https://compiler.example", {
+    fetchImpl(_url, init) {
+      return new Promise((resolve, reject) => {
+        init.signal.addEventListener("abort", () => reject(conflictingError), {
+          once: true,
+        });
+      });
+    },
+  });
+  const cooperativeController = new AbortController();
+  const falseyPending = cooperativeClient.compile("seiyaku Demo {}", {
+    signal: cooperativeController.signal,
+    timeoutMs: 1_000,
+  });
+  await Promise.resolve();
+  cooperativeController.abort(false);
+  assert.equal(
+    await captureRejection(falseyPending),
+    false,
+    "the caller reason must win a conflicting transport rejection",
+  );
+
+  let deadlineSignal;
+  const deadlineClient = new KotodamaCompilerClient("https://compiler.example", {
+    fetchImpl(_url, init) {
+      deadlineSignal = init.signal;
+      return new Promise(() => {});
+    },
+  });
+  const startedAt = Date.now();
+  const deadlineError = await captureRejection(
+    deadlineClient.compile("seiyaku Demo {}", { timeoutMs: 10 }),
+  );
+  assert.equal(deadlineError.name, "TimeoutError");
+  assert.match(deadlineError.message, /timed out after 10ms/u);
+  assert.ok(Date.now() - startedAt < 1_000, "deadline must not await ignored Fetch");
+  assert.equal(deadlineSignal.aborted, true);
+  assert.equal(deadlineSignal.reason, deadlineError);
+
+  const cooperativeDeadlineError = await captureRejection(
+    cooperativeClient.compile("seiyaku Demo {}", { timeoutMs: 10 }),
+  );
+  assert.equal(
+    cooperativeDeadlineError.name,
+    "TimeoutError",
+    "the deadline must win a conflicting transport rejection",
+  );
+
+  let resolveLateFetch;
+  let lateCancelCalls = 0;
+  const lateClient = new KotodamaCompilerClient("https://compiler.example", {
+    fetchImpl() {
+      return new Promise((resolve) => {
+        resolveLateFetch = resolve;
+      });
+    },
+  });
+  const lateController = new AbortController();
+  const lateReason = new Error("abandon late compiler response");
+  const latePending = lateClient.compile("seiyaku Demo {}", {
+    signal: lateController.signal,
+    timeoutMs: 1_000,
+  });
+  await Promise.resolve();
+  lateController.abort(lateReason);
+  assert.equal(await captureRejection(latePending), lateReason);
+  resolveLateFetch(
+    new Response(
+      new ReadableStream({
+        cancel() {
+          lateCancelCalls += 1;
+        },
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    ),
+  );
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.equal(lateCancelCalls, 1, "late response bodies must be cancelled");
+});
+
+test("compiler transport cleans listeners and terminates stalled hostile bodies", async () => {
+  const successController = new AbortController();
+  let successTransportSignal;
+  const successClient = new KotodamaCompilerClient("https://compiler.example", {
+    fetchImpl(_url, init) {
+      successTransportSignal = init.signal;
+      return jsonResponse(SERVICE_SUCCESS);
+    },
+  });
+  await successClient.compile("seiyaku Demo {}", {
+    signal: successController.signal,
+    timeoutMs: 100,
+  });
+  successController.abort(new Error("after successful cleanup"));
+  await Promise.resolve();
+  assert.equal(
+    successTransportSignal.aborted,
+    false,
+    "successful cleanup must detach the caller abort listener",
+  );
+
+  let cancelCalls = 0;
+  const stalledClient = new KotodamaCompilerClient("https://compiler.example", {
+    fetchImpl: async () =>
+      new Response(
+        new ReadableStream({
+          pull() {
+            return new Promise(() => {});
+          },
+          cancel() {
+            cancelCalls += 1;
+            return new Promise(() => {});
+          },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+  });
+  const stalledError = await captureRejection(
+    stalledClient.compile("seiyaku Demo {}", { timeoutMs: 10 }),
+  );
+  assert.equal(stalledError.name, "TimeoutError");
+  assert.equal(cancelCalls, 1, "stalled body must be cancelled without awaiting cancel");
+
+  const bodyController = new AbortController();
+  const bodyReason = new Error("cancel stalled compiler body");
+  const abortedBody = stalledClient.compile("seiyaku Demo {}", {
+    signal: bodyController.signal,
+    timeoutMs: 1_000,
+  });
+  await Promise.resolve();
+  bodyController.abort(bodyReason);
+  assert.equal(await captureRejection(abortedBody), bodyReason);
 });
 
 test("compiler failures preserve every canonical semantic diagnostic field", async () => {
@@ -649,15 +1750,19 @@ test("compiler wire output cannot substitute bytes behind a claimed hash", async
 
 test("compile helper accepts an explicit browser compiler service", async () => {
   const calls = [];
+  const controller = new AbortController();
   const result = await compileKotodamaProgram("seiyaku Demo {}", {
     compilerUrl: "https://compiler.example",
     fetchImpl: successfulFetch(calls),
     sourceName: "contracts/node-service.ko",
     zk: true,
+    signal: controller.signal,
+    timeoutMs: 100,
   });
   assert.equal(result.ok, true);
-  assert.deepEqual([...result.output.artifactBytes], [1, 2, 3]);
+  assert.deepEqual([...result.output.artifactBytes], [...SERVICE_ARTIFACT]);
   assert.equal(calls.length, 1);
+  assert.notEqual(calls[0].init.signal, controller.signal);
   assert.deepEqual(JSON.parse(calls[0].init.body), {
     source: "seiyaku Demo {}",
     sourceName: "contracts/node-service.ko",
@@ -683,7 +1788,11 @@ test("browser entrypoint forwards the bounded request to its compiler service", 
 
 test("malformed service JSON and malformed envelopes fail closed", async () => {
   const malformedJson = new KotodamaCompilerClient("https://compiler.example", {
-    fetchImpl: async () => new Response("{", { status: 200 }),
+    fetchImpl: async () =>
+      new Response("{", {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
   });
   await assert.rejects(
     malformedJson.compile("seiyaku Demo {}"),
@@ -695,7 +1804,7 @@ test("malformed service JSON and malformed envelopes fail closed", async () => {
   });
   await assert.rejects(
     legacyOutput.compile("seiyaku Demo {}"),
-    /result contains an unknown field/,
+    /result has an invalid field set/,
   );
 
   const malformedDiagnostic = structuredClone(SERVICE_FAILURE);
@@ -711,12 +1820,162 @@ test("malformed service JSON and malformed envelopes fail closed", async () => {
   );
 });
 
+test("compiler response metadata, framing, and byte streams fail closed", async () => {
+  let responseGetterCalls = 0;
+  const forgedResponse = {};
+  for (const field of ["ok", "status", "headers", "body"]) {
+    Object.defineProperty(forgedResponse, field, {
+      enumerable: true,
+      get() {
+        responseGetterCalls += 1;
+        throw new Error(`forged ${field} getter must not run`);
+      },
+    });
+  }
+  const forgedClient = new KotodamaCompilerClient("https://compiler.example", {
+    fetchImpl: async () => forgedResponse,
+  });
+  await assert.rejects(
+    forgedClient.compile("seiyaku Demo {}", { timeoutMs: 100 }),
+    /invalid Response/u,
+  );
+  assert.equal(responseGetterCalls, 0);
+
+  let proxyGets = 0;
+  const proxiedResponse = new Proxy(jsonResponse(SERVICE_SUCCESS), {
+    get(target, property, receiver) {
+      // Promise resolution performs the unavoidable thenable check. The
+      // transport itself must not read any response instance property.
+      if (property === "then") return Reflect.get(target, property, receiver);
+      proxyGets += 1;
+      throw new Error("response get trap must not run");
+    },
+  });
+  const proxiedClient = new KotodamaCompilerClient("https://compiler.example", {
+    fetchImpl: () => proxiedResponse,
+  });
+  await assert.rejects(
+    proxiedClient.compile("seiyaku Demo {}", { timeoutMs: 100 }),
+    /invalid Response/u,
+  );
+  assert.equal(proxyGets, 0);
+
+  for (const response of [
+    new Response(JSON.stringify(SERVICE_SUCCESS), {
+      status: 201,
+      headers: { "content-type": "application/json" },
+    }),
+    new Response(JSON.stringify(SERVICE_SUCCESS), {
+      status: 200,
+      headers: { "content-type": "application/json; charset=utf-8" },
+    }),
+  ]) {
+    const client = new KotodamaCompilerClient("https://compiler.example", {
+      fetchImpl: async () => response,
+    });
+    await assert.rejects(client.compile("seiyaku Demo {}", { timeoutMs: 100 }));
+  }
+
+  for (const encoding of ["gzip", "br", "deflate", "identity, gzip"]) {
+    let cancelCalls = 0;
+    const client = new KotodamaCompilerClient("https://compiler.example", {
+      fetchImpl: async () =>
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode(JSON.stringify(SERVICE_SUCCESS)));
+            },
+            cancel() {
+              cancelCalls += 1;
+            },
+          }),
+          {
+            status: 200,
+            headers: {
+              "content-encoding": encoding,
+              "content-type": "application/json",
+            },
+          },
+        ),
+    });
+    await assert.rejects(
+      client.compile("seiyaku Demo {}", { timeoutMs: 100 }),
+      /Content-Encoding must be absent or exactly identity/u,
+    );
+    assert.equal(cancelCalls, 1, `encoded ${encoding} body was not cancelled`);
+  }
+
+  const identityClient = new KotodamaCompilerClient("https://compiler.example", {
+    fetchImpl: async () => jsonResponse(SERVICE_SUCCESS, {
+      headers: { "content-encoding": "identity" },
+    }),
+  });
+  assert.equal(
+    (await identityClient.compile("seiyaku Demo {}", { timeoutMs: 100 })).ok,
+    true,
+  );
+
+  for (const [body, declared] of [["{}", 1], ["{}", 3], [null, 1]]) {
+    const client = new KotodamaCompilerClient("https://compiler.example", {
+      fetchImpl: async () =>
+        new Response(body, {
+          status: 200,
+          headers: {
+            "content-length": String(declared),
+            "content-type": "application/json",
+          },
+        }),
+    });
+    await assert.rejects(
+      client.compile("seiyaku Demo {}", { timeoutMs: 100 }),
+      /body length does not match its Content-Length header/u,
+    );
+  }
+
+  const hostileChunks = [
+    new Uint8Array(),
+    { byteLength: 1 },
+    new Proxy(new Uint8Array([1]), {
+      get() {
+        proxyGets += 1;
+        throw new Error("chunk get trap must not run");
+      },
+    }),
+  ];
+  if (typeof SharedArrayBuffer === "function") {
+    hostileChunks.push(new Uint8Array(new SharedArrayBuffer(1)));
+  }
+  for (const chunk of hostileChunks) {
+    let cancelCalls = 0;
+    const client = new KotodamaCompilerClient("https://compiler.example", {
+      fetchImpl: async () =>
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.enqueue(chunk);
+            },
+            cancel() {
+              cancelCalls += 1;
+            },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+    });
+    await assert.rejects(client.compile("seiyaku Demo {}", { timeoutMs: 100 }));
+    assert.equal(cancelCalls, 1, "hostile byte streams must be cancelled");
+  }
+  assert.equal(proxyGets, 0);
+});
+
 test("compiler response and HTTP error bodies are bounded before reading", async () => {
   const oversizedResult = new KotodamaCompilerClient("https://compiler.example", {
     fetchImpl: async () =>
       new Response("{}", {
         status: 200,
-        headers: { "content-length": String(16 * 1024 * 1024 + 1) },
+        headers: {
+          "content-length": String(16 * 1024 * 1024 + 1),
+          "content-type": "application/json",
+        },
       }),
   });
   await assert.rejects(
@@ -739,7 +1998,7 @@ test("compiler response and HTTP error bodies are bounded before reading", async
             streamCancelled = true;
           },
         }),
-        { status: 200 },
+        { status: 200, headers: { "content-type": "application/json" } },
       ),
   });
   await assert.rejects(

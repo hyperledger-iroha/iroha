@@ -1,18 +1,21 @@
 {
   "seiyaku_name": "SmokeTransfer",
-  "code_hash": "hash:D22BD9FD303462696705885A2276DE36EFA7691FA18828B89B8E3FF810EEE821#DE37",
-  "abi_hash": "hash:05E6F898ECC5C88B11E2DD7F784F2C90E730B5D8A0825901FD2F35502AD8AD09#B33A",
+  "code_hash": "hash:304D41787E1E372AA46CC12B8BC6C28658D60D2D2A625FD2BFEEEACCF4664B75#E60F",
+  "abi_hash": "hash:1E4ACDF5A13DA87857A721C7A259562EC63E0295DE1EA7E76793A2CA2FB0C6EF#8861",
   "compiler_fingerprint": "kotodama_lang/2.0.0-rc.2.0",
   "features_bitmap": 0,
   "access_set_hints": {
     "read_keys": [
       "account:sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76",
       "account:sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+      "asset:*",
       "asset:61CtjvNd9T3THAR65GsMVHr82Bjc#sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76#dataspace:0",
       "asset:61CtjvNd9T3THAR65GsMVHr82Bjc#sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB#dataspace:0",
+      "asset_def:*",
       "asset_def:61CtjvNd9T3THAR65GsMVHr82Bjc"
     ],
     "write_keys": [
+      "asset:*",
       "asset:61CtjvNd9T3THAR65GsMVHr82Bjc#sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76#dataspace:0",
       "asset:61CtjvNd9T3THAR65GsMVHr82Bjc#sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB#dataspace:0"
     ],
@@ -32,13 +35,16 @@
       "return_schema": null,
       "permission": "Admin",
       "read_keys": [
+        "asset:*",
         "asset:61CtjvNd9T3THAR65GsMVHr82Bjc#sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB#dataspace:0",
         "account:sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+        "asset_def:*",
         "asset_def:61CtjvNd9T3THAR65GsMVHr82Bjc",
         "asset:61CtjvNd9T3THAR65GsMVHr82Bjc#sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76#dataspace:0",
         "account:sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"
       ],
       "write_keys": [
+        "asset:*",
         "asset:61CtjvNd9T3THAR65GsMVHr82Bjc#sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB#dataspace:0",
         "asset:61CtjvNd9T3THAR65GsMVHr82Bjc#sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76#dataspace:0"
       ],

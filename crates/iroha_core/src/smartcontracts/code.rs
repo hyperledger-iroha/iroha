@@ -390,6 +390,9 @@ pub enum RegistryError {
     /// Contract manifest must declare `code_hash`.
     #[error("manifest.code_hash missing")]
     MissingCodeHash,
+    /// Contract manifest must declare `abi_hash`.
+    #[error("manifest.abi_hash missing")]
+    MissingAbiHash,
     /// Bytecode image is not a valid self-describing IVM contract artifact.
     #[error("invalid contract bytecode: {0}")]
     InvalidCode(String),
@@ -705,13 +708,13 @@ pub struct ContractCodeRecord {
 ///
 /// The authority must hold `CanRegisterSmartContractCode`. Networks can add
 /// `CanEnactGovernance` for specific namespaces via `gov_protected_namespaces`.
-/// The manifest must include `code_hash`, and the corresponding bytecode must
-/// already be stored as a verified self-describing artifact.
+/// The manifest must include `code_hash` and `abi_hash`, and the corresponding
+/// bytecode must already be stored as a verified self-describing artifact.
 ///
 /// # Errors
 ///
-/// Returns [`RegistryError`] when the manifest is missing a `code_hash` or the
-/// underlying `RegisterSmartContractCode` instruction fails during execution.
+/// Returns [`RegistryError`] when the manifest is missing a required hash or
+/// the underlying `RegisterSmartContractCode` instruction fails during execution.
 pub fn register_manifest(
     authority: &AccountId,
     manifest: ContractManifest,
@@ -719,6 +722,9 @@ pub fn register_manifest(
 ) -> Result<(), RegistryError> {
     if manifest.code_hash.is_none() {
         return Err(RegistryError::MissingCodeHash);
+    }
+    if manifest.abi_hash.is_none() {
+        return Err(RegistryError::MissingAbiHash);
     }
     RegisterSmartContractCode { manifest }.execute(authority, state_transaction)?;
     Ok(())
@@ -812,6 +818,8 @@ pub struct BoundContractRecord {
     pub contract_subject: AccountId,
     /// Optional stable alias currently bound to the instance.
     pub contract_alias: Option<ContractAlias>,
+    /// Complete alias binding record captured with the instance, including lease provenance.
+    pub contract_alias_binding: Option<crate::state::ContractAliasBindingRecord>,
     /// Code hash currently bound to the instance.
     pub code_hash: Hash,
     /// Stored manifest for the bound code hash.
@@ -827,6 +835,8 @@ pub struct BoundContractIdentity {
     pub contract_address: ContractAddress,
     /// Optional stable alias currently bound to the instance.
     pub contract_alias: Option<ContractAlias>,
+    /// Complete alias binding record captured with the instance, including lease provenance.
+    pub contract_alias_binding: Option<crate::state::ContractAliasBindingRecord>,
     /// Code hash currently bound to the instance.
     pub code_hash: Hash,
 }
@@ -896,10 +906,13 @@ pub fn fetch_bound_contract_identity(
 ) -> Option<BoundContractIdentity> {
     let code_hash = fetch_instance_binding(state, contract_address)?;
     fetch_bound_contract_subject(state, contract_address)?;
-    let contract_alias = state
+    let contract_alias_binding = state
         .world()
         .contract_alias_bindings()
         .get(contract_address)
+        .cloned();
+    let contract_alias = contract_alias_binding
+        .as_ref()
         .map(|binding| binding.alias.clone());
     if let Some(alias) = contract_alias.as_ref()
         && state.world().contract_aliases().get(alias) != Some(contract_address)
@@ -909,6 +922,7 @@ pub fn fetch_bound_contract_identity(
     Some(BoundContractIdentity {
         contract_address: contract_address.clone(),
         contract_alias,
+        contract_alias_binding,
         code_hash,
     })
 }
@@ -943,16 +957,25 @@ pub fn fetch_bound_contract_record(
     subject_binding.validate_for(contract_address).ok()?;
     let manifest = fetch_manifest(state, &code_hash)?;
     let code_bytes = fetch_code_bytes(state, &code_hash)?;
-    let contract_alias = state
+    let contract_alias_binding = state
         .world()
         .contract_alias_bindings()
         .get(contract_address)
+        .cloned();
+    let contract_alias = contract_alias_binding
+        .as_ref()
         .map(|binding| binding.alias.clone());
+    if let Some(alias) = contract_alias.as_ref()
+        && state.world().contract_aliases().get(alias) != Some(contract_address)
+    {
+        return None;
+    }
 
     Some(BoundContractRecord {
         contract_address: contract_address.clone(),
         contract_subject: subject_binding.subject.clone(),
         contract_alias,
+        contract_alias_binding,
         code_hash,
         manifest,
         code_bytes,
@@ -1049,6 +1072,7 @@ mod tests {
         let interface = ivm::EmbeddedContractInterfaceV1 {
             seiyaku_name: "TestContract".to_owned(),
             compiler_fingerprint: "iroha-core-test".to_owned(),
+            abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
             features_bitmap: 0,
             access_set_hints: None,
             kotoba: Vec::new(),
@@ -1105,10 +1129,12 @@ mod tests {
         let account = Account::new(auth.clone()).build(&auth);
         let mut world = World::with([domain], [account], std::iter::empty::<AssetDefinition>());
         let mut permissions = permission::Permissions::new();
-        assert!(permissions.insert(permission::Permission::new(
-            iroha_data_model::smart_contract::CONTRACT_HAJIMARI_PERMISSION_NAME.to_owned(),
-            Json::new(()),
-        )));
+        assert!(
+            permissions.insert(
+                iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode
+                    .into(),
+            )
+        );
         world
             .account_permissions_mut_for_testing()
             .insert(auth.clone(), permissions);
@@ -1745,7 +1771,30 @@ seiyaku LifecycleAba {
             provenance: None,
         };
         let err = register_manifest(&authority, manifest, &mut stx).unwrap_err();
-        matches!(err, RegistryError::MissingCodeHash);
+        assert!(matches!(err, RegistryError::MissingCodeHash));
+    }
+
+    #[test]
+    fn register_manifest_requires_abi_hash() {
+        let (state, authority, _kp) = test_state();
+        let mut block = state.block(default_header(1));
+        let mut stx = block.transaction();
+
+        let manifest = ContractManifest {
+            seiyaku_name: None,
+            code_hash: Some(Hash::new(b"manifest-without-abi-hash")),
+            abi_hash: None,
+            compiler_fingerprint: None,
+            features_bitmap: None,
+            access_set_hints: None,
+            entrypoints: None,
+            states: None,
+            kotoba: None,
+            error_codes: None,
+            provenance: None,
+        };
+        let err = register_manifest(&authority, manifest, &mut stx).unwrap_err();
+        assert!(matches!(err, RegistryError::MissingAbiHash));
     }
 
     #[test]

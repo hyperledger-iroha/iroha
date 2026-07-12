@@ -154,7 +154,8 @@ JSON-to-argument-record conversion remains confined to Torii/CLI/SDK
 construction boundaries. Inside a seiyaku, native `json { ... }`
 and `json [ ... ]` expressions lower to the schema-bound `JSON_BUILD` syscall;
 the host canonicalizes object keys, recursively converts supported typed
-values, and exposes active-only `Option<T>` getters including `Amount`.
+values, and exposes active-only `Option<T>` getters including `decimal` and
+`quantity`.
 
 Validated bytecode is cached as an immutable `PreparedContract` containing the
 interface, metadata, predecode, and CFG. Warm execution reuses prepared state
@@ -245,7 +246,8 @@ hosts. CI requires every pre-reset comparable workload on the checked-out base
 and the complete V1 workload inventory on the candidate; it never manufactures
 a candidate self-baseline. Stable parse, semantic, lowering, code-generation,
 and runtime identities receive the five-percent regression ceiling. New List,
-Amount, pipeline-phase, and all-five typed-query samples fail closed when
+exact-decimal/quantity, pipeline-phase, and all-five typed-query samples fail
+closed when
 missing, and the typed-query benchmarks assert one host query, one decode, and
 a projection smaller than the raw query envelope on every iteration. The List
 comprehension runtime has a separate zero-slowdown gate against its manual-loop

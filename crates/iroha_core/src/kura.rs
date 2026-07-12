@@ -37,7 +37,7 @@ use iroha_config::{
 };
 #[cfg(test)]
 use iroha_crypto::Algorithm;
-#[cfg(any(test, feature = "bench"))]
+#[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
 use iroha_crypto::KeyPair;
 use iroha_crypto::{Hash, HashOf, PublicKey};
 #[cfg(test)]
@@ -88,7 +88,7 @@ use norito::{
     codec::{Decode, DecodeAll, Encode},
     json::Value as JsonValue,
 };
-use parking_lot::Mutex;
+use parking_lot::{Condvar, Mutex};
 
 #[cfg(test)]
 use crate::merge::reduce_merge_hint_roots;
@@ -119,9 +119,21 @@ const STORE_ROOT_LOCK_FILE_NAME: &str = ".kura.lock";
 const VERIFIED_SNAPSHOT_TAIL_DIGEST_DOMAIN: &[u8] = b"iroha:kura:verified-snapshot-tail:v1\0";
 const PIPELINE_DIR_NAME: &str = "pipeline";
 const DA_BLOCKS_DIR_NAME: &str = "da_blocks";
+const DA_BLOCK_REWRITE_STAGE_FILE_NAME: &str = "da_block_rewrite_stage.norito";
+const DA_BLOCK_REWRITE_STAGE_VERSION: u16 = 1;
+const EVICTION_COMPACTION_STAGE_FILE_NAME: &str = "eviction_compaction_stage.norito";
+const EVICTION_COMPACTION_STAGE_VERSION: u16 = 1;
+const EVICTION_COMPACTION_DATA_FILE_NAME: &str = "blocks.data.eviction-v1";
+const EVICTION_COMPACTION_INDEX_FILE_NAME: &str = "blocks.index.eviction-v1";
+const MAX_EVICTION_COMPACTION_STAGE_BYTES: u64 = 1024 * 1024;
+const MAX_EVICTION_COMPACTION_ENTRIES: usize = 4096;
+const EVICTION_FILE_DIGEST_DOMAIN: &[u8] = b"iroha:kura:eviction-file:v1\0";
+const CANONICAL_ASSOCIATION_STAGE_FILE_NAME: &str = "canonical_association_stage.norito";
+const CANONICAL_ASSOCIATION_STAGE_VERSION: u16 = 1;
 const WSV_CHECKPOINTS_DIR_NAME: &str = "wsv_checkpoints";
 const COMMIT_MANIFESTS_DIR_NAME: &str = "commit_manifests";
 const RETAINED_BLOCKS_DIR_NAME: &str = "retained_blocks";
+const RETAINED_BLOCK_REWRITE_STAGING_DIR_NAME: &str = "retained_blocks_rewrite_staging";
 const V2_FINALITY_ARTIFACTS_DIR_NAME: &str = "v2_finality";
 const KAGEMUSHA_TOPUP_FINALITY_STAGING_DIR_NAME: &str = "kagemusha_topup_finality_staging";
 const KAGEMUSHA_TOPUP_FINALITY_SIDECARS_DIR_NAME: &str = "kagemusha_topup_finality";
@@ -189,23 +201,128 @@ struct KuraRetainedBlockRecord {
     block_hash: HashOf<BlockHeader>,
     /// Exact canonical header needed by later finality association.
     block_header: BlockHeader,
+    /// Hash of the complete canonical `SignedBlock::encode_wire()` bytes.
+    canonical_wire_hash: Hash,
     /// Successful outbound SCCP messages in exact commitment-index order.
     sccp_archive: Vec<KuraRetainedSccpMessage>,
 }
 
 impl KuraRetainedBlockRecord {
-    fn new(block_header: BlockHeader, sccp_archive: Vec<KuraRetainedSccpMessage>) -> Self {
+    fn new(
+        block_header: BlockHeader,
+        canonical_wire_hash: Hash,
+        sccp_archive: Vec<KuraRetainedSccpMessage>,
+    ) -> Self {
         Self {
             format_version: RETAINED_BLOCK_RECORD_VERSION,
             height: block_header.height().get(),
             block_hash: block_header.hash(),
             block_header,
+            canonical_wire_hash,
             sccp_archive,
         }
     }
 }
 
-/// Private durable envelope retaining the exact canonical header after body eviction.
+/// Fixed-size inventory entry for one nonempty retained SCCP archive.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct RetainedSccpArchiveSummary {
+    /// Canonical block height containing the outbound messages.
+    pub(crate) height: u64,
+    /// Exact canonical block hash that authenticates the retained archive root.
+    pub(crate) block_hash: HashOf<BlockHeader>,
+    /// Number of dense commitment positions in the retained archive.
+    pub(crate) message_count: u32,
+}
+
+/// Raw and independently scanned Kura disk-usage state exposed only to crate tests.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct DiskUsageAccountingSnapshotForTesting {
+    /// Whether the enforced-usage cache is currently valid.
+    pub(crate) enforced_initialized: bool,
+    /// Whether the total-usage cache is currently valid.
+    pub(crate) total_initialized: bool,
+    /// Raw cached enforced bytes without triggering a refresh.
+    pub(crate) cached_enforced_bytes: u64,
+    /// Raw cached total bytes without triggering a refresh.
+    pub(crate) cached_total_bytes: u64,
+    /// Exact enforced bytes from a read-only filesystem scan.
+    pub(crate) exact_enforced_bytes: u64,
+    /// Exact total bytes from a read-only filesystem scan.
+    pub(crate) exact_total_bytes: u64,
+}
+
+#[derive(Debug)]
+struct StagedRetainedBlockRewriteEntry {
+    height: u64,
+    block_hash: HashOf<BlockHeader>,
+    bytes_hash: Hash,
+    bytes_len: u64,
+}
+
+#[derive(Debug)]
+struct StagedRetainedBlockRewrite {
+    blocks_dir: PathBuf,
+    entries: Vec<StagedRetainedBlockRewriteEntry>,
+    removed_total_bytes: u64,
+}
+
+enum RetainedBlockRewritePublication<T> {
+    Complete(T),
+    CommittedWithDeferredCleanup { output: T, cleanup_error: Error },
+}
+
+impl<T> RetainedBlockRewritePublication<T> {
+    fn into_output(self, kura: &Kura) -> T {
+        match self {
+            Self::Complete(output) => output,
+            Self::CommittedWithDeferredCleanup {
+                output,
+                cleanup_error,
+            } => {
+                error!(
+                    ?cleanup_error,
+                    "canonical rewrite committed with retained-record cleanup deferred"
+                );
+                kura.record_writer_fault("retained-block rewrite cleanup", &cleanup_error);
+                output
+            }
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+struct TotalDiskUsageAccountingState {
+    generation: u64,
+    mutations_in_flight: usize,
+}
+
+/// In-flight filesystem mutation registered with Kura's total-usage seqlock.
+#[must_use]
+pub(crate) struct TotalDiskUsageMutation<'a> {
+    kura: &'a Kura,
+    published: bool,
+}
+
+impl TotalDiskUsageMutation<'_> {
+    /// Mark the mutation's cache delta as completely published.
+    pub(crate) fn finish(mut self) {
+        self.published = true;
+    }
+}
+
+impl Drop for TotalDiskUsageMutation<'_> {
+    fn drop(&mut self) {
+        self.kura.finish_total_disk_usage_mutation(self.published);
+    }
+}
+
+/// Private durable finality envelope paired by height with a retained block record.
+///
+/// The companion retained record stores the exact canonical `SignedBlock` wire
+/// hash. Readers require `artifact.subject.payload_hash` to match it in
+/// addition to this envelope's canonical-header association.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 #[norito(deny_unknown_fields)]
 struct KuraV2FinalityRecord {
@@ -259,6 +376,10 @@ const BLOCK_NOTIFY_CHANNEL_CAPACITY: usize = 1;
 
 const SIZE_OF_BLOCK_HASH: u64 = Hash::LENGTH as u64;
 pub(crate) const STRICT_INIT_MAX_BLOCK_BYTES: u64 = 256 * 1024 * 1024;
+const MAX_DA_BLOCK_REWRITE_STAGE_BYTES: u64 = STRICT_INIT_MAX_BLOCK_BYTES * 2 + 1024 * 1024;
+const MAX_DA_BLOCK_REWRITE_STAGE_ENTRIES: usize = 4_096;
+const MAX_CANONICAL_ASSOCIATION_STAGE_BYTES: u64 =
+    STRICT_INIT_MAX_BLOCK_BYTES + MAX_MERGE_LEDGER_ENTRY_BYTES as u64 + 1024 * 1024;
 const EVICTED_BLOCK_START: u64 = u64::MAX;
 const PENDING_MERGE_ENTRIES_DIR: &str = "pending_merge_entries";
 const MAX_PENDING_CERTIFIED_MERGE_ENTRIES: usize = 1_024;
@@ -273,7 +394,7 @@ const fn pending_merge_bytes_within_limit(bytes: usize) -> bool {
     bytes <= MAX_PENDING_CERTIFIED_MERGE_BYTES
 }
 
-#[cfg(any(test, feature = "bench"))]
+#[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
 fn checked_keypair() -> KeyPair {
     KeyPair::try_random().expect("kura fixture key generation should succeed")
 }
@@ -284,7 +405,7 @@ fn checked_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {
         .expect("kura algorithm-specific fixture key generation should succeed")
 }
 
-#[cfg(any(test, feature = "bench"))]
+#[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
 fn checked_peer_id() -> PeerId {
     PeerId::new(checked_keypair().public_key().clone())
 }
@@ -429,6 +550,10 @@ pub struct Kura {
     disk_usage: AtomicU64,
     /// Cached total disk usage.
     disk_usage_total: AtomicU64,
+    /// Serializes total-usage scans with filesystem mutations that publish total-cache deltas.
+    disk_usage_total_accounting: Mutex<TotalDiskUsageAccountingState>,
+    /// Wakes total-usage scanners after the last in-flight filesystem mutation completes.
+    disk_usage_total_accounting_changed: Condvar,
     /// Cached sum of budgeted bytes for in-memory blocks not yet durably indexed.
     pending_budget_bytes: AtomicU64,
     /// Marks whether `pending_budget_bytes` currently reflects in-memory block state.
@@ -466,6 +591,8 @@ pub struct Kura {
     telemetry: OnceLock<StateTelemetry>,
     /// Last fatal writer fault observed by the background persistence loop.
     writer_fault: Mutex<Option<String>>,
+    /// Fail-stop latch for an ambiguous canonical-journal publication boundary.
+    canonical_storage_poisoned: AtomicBool,
     /// Test hook for forcing the next synchronous block write to fail after pre-write work.
     #[cfg(test)]
     fail_next_block_write: AtomicBool,
@@ -487,12 +614,21 @@ pub struct Kura {
     /// Test hook selecting a crash boundary in lane-geometry archive garbage collection.
     #[cfg(test)]
     fail_lane_geometry_gc_stage: AtomicUsize,
+    /// Test hook failing a direct relabel after its block-directory move.
+    #[cfg(test)]
+    fail_next_relabel_after_block_move: AtomicBool,
     /// Test hook for forcing the next Sumeragi v2 finality sidecar write to fail.
     #[cfg(test)]
     fail_next_v2_finality_write: AtomicBool,
     /// Counts actual v2 finality BLS verification passes for cache tests.
     #[cfg(test)]
     v2_finality_crypto_verifications: AtomicUsize,
+    /// Test hook failing retained-rewrite stage discard after a selected removal.
+    #[cfg(test)]
+    fail_retained_rewrite_discard_after: AtomicUsize,
+    /// Test hook failing a retired-tree purge after one deterministic file removal.
+    #[cfg(test)]
+    fail_next_retired_tree_purge_after_one_removal: AtomicBool,
     /// Counts raw durable-budget metadata reads for focused cache tests.
     #[cfg(test)]
     durable_budget_metadata_reads: AtomicUsize,
@@ -502,6 +638,12 @@ pub struct Kura {
     /// Test hook indicating eviction is paused after releasing the block-store lock.
     #[cfg(test)]
     eviction_paused_after_snapshot: AtomicBool,
+    /// Test hook that pauses a total-usage refresh after its filesystem scan.
+    #[cfg(test)]
+    pause_total_disk_usage_scan_after_scan: AtomicBool,
+    /// Test hook indicating a total-usage refresh is paused before publication.
+    #[cfg(test)]
+    total_disk_usage_scan_paused: AtomicBool,
     /// Retains the temporary storage directory used by test-only Kura instances.
     _temp_store_dir: Option<tempfile::TempDir>,
     /// Exclusive OS lock dropped only after every other Kura resource.
@@ -1780,6 +1922,9 @@ impl Kura {
     /// Return `true` when the block payload is available locally (in memory, `blocks.data`, or the
     /// local sidecar cache).
     pub(crate) fn block_payload_available_by_hash(&self, hash: HashOf<BlockHeader>) -> bool {
+        if self.canonical_storage_poisoned.load(Ordering::Acquire) {
+            return false;
+        }
         let Some(height) = self.get_block_height_by_hash(hash) else {
             return false;
         };
@@ -1821,11 +1966,17 @@ impl Kura {
         &self,
         hash: HashOf<BlockHeader>,
     ) -> Option<BlockBodyStatus> {
+        if self.canonical_storage_poisoned.load(Ordering::Acquire) {
+            return None;
+        }
         let height = self.get_block_height_by_hash(hash)?;
         self.block_body_status_by_height(height)
     }
 
     fn block_body_status_by_height(&self, block_height: NonZeroUsize) -> Option<BlockBodyStatus> {
+        if self.canonical_storage_poisoned.load(Ordering::Acquire) {
+            return None;
+        }
         let (block_index, has_cached) = {
             let data = self.block_data.lock();
             let idx = block_height.get().saturating_sub(1);
@@ -2090,6 +2241,7 @@ impl Kura {
         let blocks_root = Self::select_block_store_root(&store_dir, primary_lane);
         let mut block_store =
             BlockStore::with_fsync(&blocks_root, config.fsync_mode, config.fsync_interval);
+        block_store.recover_canonical_storage_stages()?;
         let v2_finality_floor =
             Self::highest_v2_finality_artifact_height_for(&store_root, &blocks_root)?;
         if let Some(finalized_height) = v2_finality_floor {
@@ -2110,7 +2262,6 @@ impl Kura {
             &blocks_root,
             &mut chain_validation.hashes,
         )?;
-        let chain_was_truncated = chain_validation.truncated;
         if manifest_reconciliation.manifests_present
             || manifest_reconciliation.pruned_manifests
             || manifest_reconciliation.pruned_checkpoints
@@ -2223,6 +2374,8 @@ impl Kura {
             replica_registry: Mutex::new(BTreeMap::new()),
             disk_usage: AtomicU64::new(0),
             disk_usage_total: AtomicU64::new(0),
+            disk_usage_total_accounting: Mutex::new(TotalDiskUsageAccountingState::default()),
+            disk_usage_total_accounting_changed: Condvar::new(),
             pending_budget_bytes: AtomicU64::new(0),
             pending_budget_bytes_valid: AtomicBool::new(false),
             #[cfg(test)]
@@ -2241,6 +2394,7 @@ impl Kura {
             roster_log: Mutex::new(roster_log),
             telemetry: OnceLock::new(),
             writer_fault: Mutex::new(None),
+            canonical_storage_poisoned: AtomicBool::new(false),
             #[cfg(test)]
             fail_next_block_write: AtomicBool::new(false),
             #[cfg(test)]
@@ -2256,26 +2410,36 @@ impl Kura {
             #[cfg(test)]
             fail_lane_geometry_gc_stage: AtomicUsize::new(0),
             #[cfg(test)]
+            fail_next_relabel_after_block_move: AtomicBool::new(false),
+            #[cfg(test)]
             fail_next_v2_finality_write: AtomicBool::new(false),
             #[cfg(test)]
             v2_finality_crypto_verifications: AtomicUsize::new(0),
+            #[cfg(test)]
+            fail_retained_rewrite_discard_after: AtomicUsize::new(usize::MAX),
+            #[cfg(test)]
+            fail_next_retired_tree_purge_after_one_removal: AtomicBool::new(false),
             #[cfg(test)]
             durable_budget_metadata_reads: AtomicUsize::new(0),
             #[cfg(test)]
             pause_eviction_after_snapshot: AtomicBool::new(false),
             #[cfg(test)]
             eviction_paused_after_snapshot: AtomicBool::new(false),
+            #[cfg(test)]
+            pause_total_disk_usage_scan_after_scan: AtomicBool::new(false),
+            #[cfg(test)]
+            total_disk_usage_scan_paused: AtomicBool::new(false),
             _temp_store_dir: None,
         });
 
-        if chain_was_truncated {
-            kura.prune_retained_block_records_from(
-                &blocks_root,
-                u64::try_from(block_count)?.saturating_add(1),
-            )?;
-        }
+        kura.recover_retained_block_rewrite_stage_on_startup(&blocks_root)?;
         kura.validate_v2_finality_inventory_on_startup()?;
+        kura.prune_retained_block_records_from(
+            &blocks_root,
+            u64::try_from(block_count)?.saturating_add(1),
+        )?;
         kura.validate_retained_block_inventory_on_startup()?;
+        kura.recover_canonical_association_stage()?;
         kura.reconcile_merge_carriers_from_durable_blocks()?;
 
         if block_count > 0 {
@@ -2293,14 +2457,8 @@ impl Kura {
                 "failed to measure initial Kura disk usage"
             ),
         }
-        match kura.kura_total_disk_usage_bytes() {
-            Ok(bytes) => {
-                kura.disk_usage_total.store(bytes, Ordering::Relaxed);
-                kura.disk_usage_total_initialized
-                    .store(true, Ordering::Relaxed);
-                kura.disk_usage_total_last_refresh
-                    .store(Self::now_unix_secs(), Ordering::Relaxed);
-            }
+        match kura.refresh_total_disk_usage_bytes() {
+            Ok(_) => {}
             Err(err) => warn!(
                 ?err,
                 path = %kura.store_root.display(),
@@ -2316,6 +2474,22 @@ impl Kura {
     /// The instance keeps blocks in memory for normal test access, while any background writer
     /// activity is redirected into a per-instance temporary directory instead of the crate root.
     pub fn blank_kura_for_testing() -> Arc<Kura> {
+        Self::blank_kura_for_testing_with_retention(BLOCKS_IN_MEMORY)
+    }
+
+    /// Create an isolated Kura with a caller-selected body-retention bound.
+    ///
+    /// This is exposed only to crate tests and downstream users of the
+    /// existing `iroha-core-tests` feature so eviction regressions can exercise
+    /// the real compaction path without changing production configuration.
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    pub fn blank_kura_for_testing_with_blocks_in_memory(
+        blocks_in_memory: NonZeroUsize,
+    ) -> Arc<Kura> {
+        Self::blank_kura_for_testing_with_retention(blocks_in_memory)
+    }
+
+    fn blank_kura_for_testing_with_retention(blocks_in_memory: NonZeroUsize) -> Arc<Kura> {
         let (block_notify_tx, block_notify_rx) = mpsc::sync_channel(BLOCK_NOTIFY_CHANNEL_CAPACITY);
         let temp_store_dir = tempfile::Builder::new()
             .prefix("iroha-blank-kura-")
@@ -2369,6 +2543,8 @@ impl Kura {
             replica_registry: Mutex::new(BTreeMap::new()),
             disk_usage: AtomicU64::new(0),
             disk_usage_total: AtomicU64::new(0),
+            disk_usage_total_accounting: Mutex::new(TotalDiskUsageAccountingState::default()),
+            disk_usage_total_accounting_changed: Condvar::new(),
             pending_budget_bytes: AtomicU64::new(0),
             pending_budget_bytes_valid: AtomicBool::new(false),
             #[cfg(test)]
@@ -2380,7 +2556,7 @@ impl Kura {
             disk_usage_initialized: AtomicBool::new(true),
             disk_usage_total_initialized: AtomicBool::new(true),
             disk_usage_total_last_refresh: AtomicU64::new(0),
-            blocks_in_memory: BLOCKS_IN_MEMORY,
+            blocks_in_memory,
             block_sync_roster_retention: BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention: ROSTER_SIDECAR_RETENTION,
             merge_log: Mutex::new(MergeLedgerLog::in_memory(MERGE_LEDGER_CACHE_CAPACITY)),
@@ -2390,6 +2566,7 @@ impl Kura {
             )),
             telemetry: OnceLock::new(),
             writer_fault: Mutex::new(None),
+            canonical_storage_poisoned: AtomicBool::new(false),
             #[cfg(test)]
             fail_next_block_write: AtomicBool::new(false),
             #[cfg(test)]
@@ -2405,15 +2582,25 @@ impl Kura {
             #[cfg(test)]
             fail_lane_geometry_gc_stage: AtomicUsize::new(0),
             #[cfg(test)]
+            fail_next_relabel_after_block_move: AtomicBool::new(false),
+            #[cfg(test)]
             fail_next_v2_finality_write: AtomicBool::new(false),
             #[cfg(test)]
             v2_finality_crypto_verifications: AtomicUsize::new(0),
+            #[cfg(test)]
+            fail_retained_rewrite_discard_after: AtomicUsize::new(usize::MAX),
+            #[cfg(test)]
+            fail_next_retired_tree_purge_after_one_removal: AtomicBool::new(false),
             #[cfg(test)]
             durable_budget_metadata_reads: AtomicUsize::new(0),
             #[cfg(test)]
             pause_eviction_after_snapshot: AtomicBool::new(false),
             #[cfg(test)]
             eviction_paused_after_snapshot: AtomicBool::new(false),
+            #[cfg(test)]
+            pause_total_disk_usage_scan_after_scan: AtomicBool::new(false),
+            #[cfg(test)]
+            total_disk_usage_scan_paused: AtomicBool::new(false),
             _temp_store_dir: Some(temp_store_dir),
         })
     }
@@ -2485,37 +2672,171 @@ impl Kura {
     /// rejecting safety evidence could prevent finality or prevent the eviction needed to satisfy
     /// that same budget. Use [`Self::refresh_disk_usage_bytes`] to resync both counters.
     pub(crate) fn disk_usage_bytes(&self) -> Result<u64> {
-        self.maybe_refresh_total_disk_usage_bytes()?;
-        Ok(self.disk_usage_total.load(Ordering::Relaxed))
+        loop {
+            let generation = {
+                let mut accounting = self.disk_usage_total_accounting.lock();
+                while accounting.mutations_in_flight != 0 {
+                    self.disk_usage_total_accounting_changed
+                        .wait(&mut accounting);
+                }
+                accounting.generation
+            };
+            self.maybe_refresh_total_disk_usage_bytes()?;
+            let accounting = self.disk_usage_total_accounting.lock();
+            if accounting.mutations_in_flight != 0 || accounting.generation != generation {
+                drop(accounting);
+                continue;
+            }
+            if !self.disk_usage_total_initialized.load(Ordering::Acquire) {
+                drop(accounting);
+                continue;
+            }
+            return Ok(self.disk_usage_total.load(Ordering::Relaxed));
+        }
     }
 
     /// Recompute on-disk bytes used by Kura and refresh the cached value.
     pub(crate) fn refresh_disk_usage_bytes(&self) -> Result<u64> {
-        let usage = self.kura_disk_usage_bytes()?;
-        self.disk_usage.store(usage, Ordering::Relaxed);
-        self.disk_usage_initialized.store(true, Ordering::Relaxed);
-        match self.persisted_count_and_unindexed_bytes_raw() {
-            Ok((persisted_count, unindexed_bytes)) => {
-                self.publish_durable_budget_snapshot(persisted_count, unindexed_bytes);
+        loop {
+            let generation = {
+                let mut accounting = self.disk_usage_total_accounting.lock();
+                while accounting.mutations_in_flight != 0 {
+                    self.disk_usage_total_accounting_changed
+                        .wait(&mut accounting);
+                }
+                accounting.generation
+            };
+            let enforced = self.kura_disk_usage_bytes();
+            let durable_budget = self.persisted_count_and_unindexed_bytes_raw();
+            let total = self.kura_total_disk_usage_bytes();
+            #[cfg(test)]
+            self.maybe_pause_total_disk_usage_scan_after_scan_for_tests();
+            let accounting = self.disk_usage_total_accounting.lock();
+            if accounting.mutations_in_flight != 0 || accounting.generation != generation {
+                drop(accounting);
+                continue;
             }
-            Err(err) => {
-                warn!(?err, "failed to refresh Kura durable budget metadata");
-                self.invalidate_durable_budget_snapshot();
+            let usage = match enforced {
+                Ok(usage) => usage,
+                Err(error) => {
+                    self.disk_usage_initialized.store(false, Ordering::Relaxed);
+                    self.disk_usage_total_initialized
+                        .store(false, Ordering::Relaxed);
+                    self.invalidate_durable_budget_snapshot();
+                    return Err(error);
+                }
+            };
+            let total = match total {
+                Ok(total) => total,
+                Err(error) => {
+                    self.disk_usage_initialized.store(false, Ordering::Relaxed);
+                    self.disk_usage_total_initialized
+                        .store(false, Ordering::Relaxed);
+                    self.invalidate_durable_budget_snapshot();
+                    return Err(error);
+                }
+            };
+            self.disk_usage.store(usage, Ordering::Relaxed);
+            self.disk_usage_initialized.store(true, Ordering::Relaxed);
+            match durable_budget {
+                Ok((persisted_count, unindexed_bytes)) => {
+                    self.publish_durable_budget_snapshot(persisted_count, unindexed_bytes);
+                }
+                Err(err) => {
+                    warn!(?err, "failed to refresh Kura durable budget metadata");
+                    self.invalidate_durable_budget_snapshot();
+                }
             }
+            self.disk_usage_total.store(total, Ordering::Relaxed);
+            self.disk_usage_total_initialized
+                .store(true, Ordering::Relaxed);
+            self.disk_usage_total_last_refresh
+                .store(Self::now_unix_secs(), Ordering::Relaxed);
+            return Ok(usage);
         }
-        let _ = self.refresh_total_disk_usage_bytes();
-        Ok(usage)
     }
 
     /// Recompute total on-disk bytes and refresh the cached value.
     pub(crate) fn refresh_total_disk_usage_bytes(&self) -> Result<u64> {
-        let usage = self.kura_total_disk_usage_bytes()?;
-        self.disk_usage_total.store(usage, Ordering::Relaxed);
-        self.disk_usage_total_initialized
-            .store(true, Ordering::Relaxed);
-        self.disk_usage_total_last_refresh
-            .store(Self::now_unix_secs(), Ordering::Relaxed);
-        Ok(usage)
+        loop {
+            let generation = {
+                let mut accounting = self.disk_usage_total_accounting.lock();
+                while accounting.mutations_in_flight != 0 {
+                    self.disk_usage_total_accounting_changed
+                        .wait(&mut accounting);
+                }
+                accounting.generation
+            };
+            let scanned = self.kura_total_disk_usage_bytes();
+            #[cfg(test)]
+            self.maybe_pause_total_disk_usage_scan_after_scan_for_tests();
+            let accounting = self.disk_usage_total_accounting.lock();
+            if accounting.mutations_in_flight != 0 || accounting.generation != generation {
+                drop(accounting);
+                continue;
+            }
+            let usage = match scanned {
+                Ok(usage) => usage,
+                Err(error) => {
+                    self.disk_usage_total_initialized
+                        .store(false, Ordering::Release);
+                    return Err(error);
+                }
+            };
+            self.disk_usage_total.store(usage, Ordering::Relaxed);
+            self.disk_usage_total_initialized
+                .store(true, Ordering::Relaxed);
+            self.disk_usage_total_last_refresh
+                .store(Self::now_unix_secs(), Ordering::Relaxed);
+            return Ok(usage);
+        }
+    }
+
+    /// Register a filesystem mutation before its first write, rename, or removal.
+    pub(crate) fn begin_total_disk_usage_mutation(&self) -> TotalDiskUsageMutation<'_> {
+        let mut accounting = self.disk_usage_total_accounting.lock();
+        accounting.mutations_in_flight = accounting
+            .mutations_in_flight
+            .checked_add(1)
+            .expect("total disk-usage mutation count must not overflow");
+        accounting.generation = accounting.generation.wrapping_add(1);
+        drop(accounting);
+        TotalDiskUsageMutation {
+            kura: self,
+            published: false,
+        }
+    }
+
+    fn finish_total_disk_usage_mutation(&self, published: bool) {
+        let mut accounting = self.disk_usage_total_accounting.lock();
+        if !published {
+            self.disk_usage_initialized.store(false, Ordering::Relaxed);
+            self.disk_usage_total_initialized
+                .store(false, Ordering::Relaxed);
+            self.invalidate_durable_budget_snapshot();
+        }
+        accounting.mutations_in_flight = accounting
+            .mutations_in_flight
+            .checked_sub(1)
+            .expect("total disk-usage mutation guard must be balanced");
+        accounting.generation = accounting.generation.wrapping_add(1);
+        if accounting.mutations_in_flight == 0 {
+            self.disk_usage_total_accounting_changed.notify_all();
+        }
+    }
+
+    #[cfg(test)]
+    fn maybe_pause_total_disk_usage_scan_after_scan_for_tests(&self) {
+        if self
+            .pause_total_disk_usage_scan_after_scan
+            .swap(false, Ordering::AcqRel)
+        {
+            self.total_disk_usage_scan_paused
+                .store(true, Ordering::Release);
+            while self.total_disk_usage_scan_paused.load(Ordering::Acquire) {
+                std::thread::yield_now();
+            }
+        }
     }
 
     fn maybe_refresh_total_disk_usage_bytes(&self) -> Result<()> {
@@ -2566,27 +2887,42 @@ impl Kura {
         if delta == 0 {
             return;
         }
+        let _accounting_guard = self.disk_usage_total_accounting.lock();
+        self.add_disk_usage_bytes_locked(delta);
+    }
+
+    fn add_disk_usage_bytes_locked(&self, delta: u64) {
         let _ = self
             .disk_usage
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
                 Some(current.saturating_add(delta))
             });
-        self.add_total_disk_usage_bytes(delta);
+        self.add_total_disk_usage_bytes_locked(delta);
     }
 
     fn sub_disk_usage_bytes(&self, delta: u64) {
         if delta == 0 {
             return;
         }
+        let _accounting_guard = self.disk_usage_total_accounting.lock();
+        self.sub_disk_usage_bytes_locked(delta);
+    }
+
+    fn sub_disk_usage_bytes_locked(&self, delta: u64) {
         let _ = self
             .disk_usage
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
                 Some(current.saturating_sub(delta))
             });
-        self.sub_total_disk_usage_bytes(delta);
+        self.sub_total_disk_usage_bytes_locked(delta);
     }
 
     fn add_total_disk_usage_bytes(&self, delta: u64) {
+        let _accounting_guard = self.disk_usage_total_accounting.lock();
+        self.add_total_disk_usage_bytes_locked(delta);
+    }
+
+    fn add_total_disk_usage_bytes_locked(&self, delta: u64) {
         if delta == 0 || !self.disk_usage_total_initialized.load(Ordering::Relaxed) {
             return;
         }
@@ -2598,6 +2934,11 @@ impl Kura {
     }
 
     fn sub_total_disk_usage_bytes(&self, delta: u64) {
+        let _accounting_guard = self.disk_usage_total_accounting.lock();
+        self.sub_total_disk_usage_bytes_locked(delta);
+    }
+
+    fn sub_total_disk_usage_bytes_locked(&self, delta: u64) {
         if delta == 0 || !self.disk_usage_total_initialized.load(Ordering::Relaxed) {
             return;
         }
@@ -2720,6 +3061,243 @@ impl Kura {
         }
     }
 
+    fn poison_canonical_storage(&self, context: &'static str, error: &Error) {
+        self.canonical_storage_poisoned
+            .store(true, Ordering::Release);
+        self.record_writer_fault(context, error);
+    }
+
+    fn record_or_poison_fsync_fault(&self, context: &'static str, error: &Error) {
+        if self.store_root.as_os_str().is_empty() {
+            self.record_writer_fault(context, error);
+            return;
+        }
+        let unresolved_stage = {
+            let store = self.block_store.lock();
+            [
+                store.da_block_rewrite_stage_path(),
+                store.eviction_compaction_stage_path(),
+            ]
+            .into_iter()
+            .any(|path| match std::fs::symlink_metadata(path) {
+                Ok(_) => true,
+                Err(error) => error.kind() != ErrorKind::NotFound,
+            })
+        };
+        if unresolved_stage
+            || matches!(
+                error,
+                Error::DaBlockRewriteCommitStateUnknown { .. } | Error::CanonicalStoragePoisoned
+            )
+        {
+            self.poison_canonical_storage(context, error);
+        } else {
+            self.record_writer_fault(context, error);
+        }
+    }
+
+    fn ensure_canonical_storage_not_poisoned(&self) -> Result<()> {
+        if self.canonical_storage_poisoned.load(Ordering::Acquire) {
+            return Err(Error::CanonicalStoragePoisoned);
+        }
+        Ok(())
+    }
+
+    fn resolve_canonical_storage_before_mutation(&self) -> Result<()> {
+        self.ensure_canonical_storage_not_poisoned()?;
+        if self.store_root.as_os_str().is_empty() {
+            return Ok(());
+        }
+        let write_guard = self.block_store_write_lock.lock();
+        let mut store = self.block_store.lock();
+        if let Err(error) = store.recover_canonical_storage_stages() {
+            drop(store);
+            self.poison_canonical_storage("unresolved canonical storage stage", &error);
+            return Err(Error::CanonicalStoragePoisoned);
+        }
+        if let Some(message) = store.take_deferred_da_recovery_fault() {
+            let recovered = Error::IO(
+                std::io::Error::other(message),
+                store.da_block_rewrite_stage_path(),
+            );
+            self.record_writer_fault("recovered committed DA block rewrite", &recovered);
+        }
+        drop(store);
+        drop(write_guard);
+        self.recover_canonical_association_stage()
+    }
+
+    fn canonical_association_stage_path(&self) -> PathBuf {
+        self.active_blocks_dir
+            .lock()
+            .join(CANONICAL_ASSOCIATION_STAGE_FILE_NAME)
+    }
+
+    fn validate_canonical_association_stage(
+        &self,
+        stage: &CanonicalAssociationStageV1,
+    ) -> Result<SignedBlock> {
+        if stage.format_version != CANONICAL_ASSOCIATION_STAGE_VERSION
+            || stage.height == 0
+            || u64::try_from(stage.block_wire.len())? > STRICT_INIT_MAX_BLOCK_BYTES
+            || Hash::new(&stage.block_wire) != stage.canonical_wire_hash
+        {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "canonical association stage envelope is invalid",
+                ),
+                self.canonical_association_stage_path(),
+            ));
+        }
+        let block = decode_framed_signed_block(&stage.block_wire)?;
+        if block.header().height().get() != stage.height || block.hash() != stage.block_hash {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "canonical association stage block mismatches its height or hash",
+                ),
+                self.canonical_association_stage_path(),
+            ));
+        }
+        match (
+            Self::block_merge_reference(&block),
+            stage.merge_entry.as_ref(),
+        ) {
+            (Some(reference), Some(entry)) if reference.matches_entry(entry) => {}
+            (None, None) => {}
+            _ => {
+                return Err(Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        "canonical association stage merge entry mismatches the block",
+                    ),
+                    self.canonical_association_stage_path(),
+                ));
+            }
+        }
+        Ok(block)
+    }
+
+    fn read_canonical_association_stage(&self) -> Result<Option<CanonicalAssociationStageV1>> {
+        let path = self.canonical_association_stage_path();
+        let metadata = match std::fs::symlink_metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(Error::IO(error, path)),
+        };
+        if metadata.file_type().is_symlink()
+            || !metadata.is_file()
+            || metadata.len() > MAX_CANONICAL_ASSOCIATION_STAGE_BYTES
+        {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "canonical association stage is not a bounded regular file",
+                ),
+                path,
+            ));
+        }
+        let bytes = std::fs::read(&path).map_err(|error| Error::IO(error, path.clone()))?;
+        let stage = norito::decode_from_bytes::<CanonicalAssociationStageV1>(&bytes)
+            .map_err(|error| Error::NoritoFrame(error.into()))?;
+        let _ = self.validate_canonical_association_stage(&stage)?;
+        Ok(Some(stage))
+    }
+
+    fn write_canonical_association_stage(
+        &self,
+        block: &SignedBlock,
+        merge_entry: Option<&MergeLedgerEntry>,
+    ) -> Result<()> {
+        let block_wire = block.encode_wire()?;
+        let stage = CanonicalAssociationStageV1 {
+            format_version: CANONICAL_ASSOCIATION_STAGE_VERSION,
+            height: block.header().height().get(),
+            block_hash: block.hash(),
+            canonical_wire_hash: Hash::new(&block_wire),
+            block_wire,
+            merge_entry: merge_entry.cloned(),
+        };
+        let _ = self.validate_canonical_association_stage(&stage)?;
+        let bytes = norito::to_bytes(&stage).map_err(Error::NoritoFrame)?;
+        if u64::try_from(bytes.len())? > MAX_CANONICAL_ASSOCIATION_STAGE_BYTES {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "canonical association stage exceeds its hard size limit",
+                ),
+                self.canonical_association_stage_path(),
+            ));
+        }
+        let path = self.canonical_association_stage_path();
+        if let Some(existing) = self.read_canonical_association_stage()? {
+            if existing == stage {
+                return Ok(());
+            }
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::AlreadyExists,
+                    "a conflicting canonical association stage already exists",
+                ),
+                path,
+            ));
+        }
+        let accounting_mutation = self.begin_total_disk_usage_mutation();
+        let before = Self::file_len_or_zero(&path)?;
+        if !self.write_atomic_synced_noclobber(&path, &bytes)? {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::AlreadyExists,
+                    "canonical association stage publication raced",
+                ),
+                path,
+            ));
+        }
+        let after = Self::file_len_or_zero(&path)?;
+        self.update_disk_usage_delta(before, after);
+        self.update_total_disk_usage_delta(before, after);
+        accounting_mutation.finish();
+        Ok(())
+    }
+
+    fn remove_canonical_association_stage(&self) -> Result<()> {
+        let path = self.canonical_association_stage_path();
+        let before = Self::file_len_or_zero(&path)?;
+        if before == 0 {
+            return Ok(());
+        }
+        let accounting_mutation = self.begin_total_disk_usage_mutation();
+        std::fs::remove_file(&path).map_err(|error| Error::IO(error, path.clone()))?;
+        if let Some(parent) = path.parent() {
+            sync_dir(parent).map_err(|error| Error::IO(error, parent.to_path_buf()))?;
+        }
+        self.update_disk_usage_delta(before, 0);
+        self.update_total_disk_usage_delta(before, 0);
+        accounting_mutation.finish();
+        Ok(())
+    }
+
+    fn durable_hash_ignoring_poison(&self, height: u64) -> Result<Option<HashOf<BlockHeader>>> {
+        Self::read_durable_hash_at_height(&mut self.block_store.lock(), height)
+    }
+
+    fn recover_canonical_association_stage(&self) -> Result<()> {
+        let Some(stage) = self.read_canonical_association_stage()? else {
+            return Ok(());
+        };
+        let block = self.validate_canonical_association_stage(&stage)?;
+        if self.durable_hash_ignoring_poison(stage.height)? != Some(stage.block_hash) {
+            return self.remove_canonical_association_stage();
+        }
+        self.persist_lane_payload_ownership_artifacts_for_block(&block)?;
+        if let Some(entry) = stage.merge_entry.as_ref() {
+            let _ = self.append_committed_merge_entry_for_block_if_missing(&block, entry)?;
+            self.remove_committed_pending_merge_entry_best_effort(entry.canonical_hash());
+        }
+        self.remove_canonical_association_stage()
+    }
+
     /// Evict persisted block bodies after enough remote replicas advertise the same height/hash.
     #[allow(clippy::too_many_lines)]
     pub(crate) fn evict_block_bodies(&self, bytes_needed: u64) -> Result<u64> {
@@ -2728,6 +3306,7 @@ impl Kura {
         }
 
         let _canonical_chain_guard = self.canonical_chain_lock.lock();
+        self.resolve_canonical_storage_before_mutation()?;
         let _write_guard = self.block_store_write_lock.lock();
         let blocks_dir = self.active_blocks_dir.lock().clone();
         let (
@@ -2738,20 +3317,40 @@ impl Kura {
             evict_mask,
             freed,
             before_bytes,
+            marker,
+            marker_len,
+            marker_digest,
+            hashes_len,
+            hashes_digest,
             data_path,
             data_tmp,
-            index_path,
             index_tmp,
             da_blocks_dir,
         ) = {
             let mut block_store = self.block_store.lock();
-            if let Err(err) = block_store.flush_pending_fsync(true) {
-                warn!(?err, "failed to flush pending Kura writes before eviction");
-            }
+            block_store.flush_pending_fsync(true)?;
 
             let persisted = usize::try_from(block_store.read_durable_index_count()?)?;
             if persisted <= 1 {
                 return Ok(0);
+            }
+            let marker = block_store.read_commit_marker()?.ok_or_else(|| {
+                Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        "body eviction requires an exact durable commit marker",
+                    ),
+                    block_store.commit_marker_path(),
+                )
+            })?;
+            if marker.count != u64::try_from(persisted)? {
+                return Err(Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        "body eviction marker count differs from the durable index",
+                    ),
+                    block_store.commit_marker_path(),
+                ));
             }
             let retain_tail = self.blocks_in_memory.get().max(1);
             let evict_limit = persisted.saturating_sub(retain_tail);
@@ -2765,6 +3364,7 @@ impl Kura {
 
             let mut evict_mask = vec![false; persisted];
             let mut freed = 0u64;
+            let mut selected = 0usize;
             for idx in 1..evict_limit {
                 let entry = indices[idx];
                 if entry.is_evicted() {
@@ -2784,7 +3384,8 @@ impl Kura {
                 }
                 freed = freed.saturating_add(entry.length);
                 evict_mask[idx] = true;
-                if freed >= bytes_needed {
+                selected = selected.saturating_add(1);
+                if freed >= bytes_needed || selected >= MAX_EVICTION_COMPACTION_ENTRIES {
                     break;
                 }
             }
@@ -2796,14 +3397,13 @@ impl Kura {
             let before_bytes = Self::block_store_tracked_bytes(&mut block_store)?;
             block_store.ensure_da_blocks_dir()?;
             let data_path = block_store.path_to_blockchain.join(DATA_FILE_NAME);
-            let data_tmp = block_store
-                .path_to_blockchain
-                .join(format!("{DATA_FILE_NAME}.tmp"));
-            let index_path = block_store.path_to_blockchain.join(INDEX_FILE_NAME);
-            let index_tmp = block_store
-                .path_to_blockchain
-                .join(format!("{INDEX_FILE_NAME}.tmp"));
+            let data_tmp = block_store.eviction_compaction_data_path();
+            let index_tmp = block_store.eviction_compaction_index_path();
             let da_blocks_dir = block_store.da_blocks_dir.clone();
+            let marker_path = block_store.commit_marker_path();
+            let (marker_len, marker_digest) = BlockStore::eviction_file_digest(&marker_path)?;
+            let hashes_path = block_store.path_to_blockchain.join(HASHES_FILE_NAME);
+            let (hashes_len, hashes_digest) = BlockStore::eviction_file_digest(&hashes_path)?;
 
             (
                 persisted,
@@ -2813,9 +3413,13 @@ impl Kura {
                 evict_mask,
                 freed,
                 before_bytes,
+                marker,
+                marker_len,
+                marker_digest,
+                hashes_len,
+                hashes_digest,
                 data_path,
                 data_tmp,
-                index_path,
                 index_tmp,
                 da_blocks_dir,
             )
@@ -2824,7 +3428,10 @@ impl Kura {
         #[cfg(test)]
         self.maybe_pause_eviction_after_snapshot_for_tests();
 
+        let accounting_mutation = self.begin_total_disk_usage_mutation();
         let mut da_added = 0u64;
+        let mut evicted =
+            Vec::with_capacity(evict_mask.iter().filter(|selected| **selected).count());
         let mut data_source = FileWrap::open_with(data_path.clone(), |opts| {
             opts.read(true);
         })?;
@@ -2864,18 +3471,32 @@ impl Kura {
             self.persist_retained_block_record(&blocks_dir, canonical_hash, &block)?;
 
             let da_before = Self::file_len_or_zero(&path)?;
-            if da_before == entry.length {
-                continue;
-            }
             self.write_atomic_synced_replace(&path, &buffer)?;
+            let durable_wire =
+                std::fs::read(&path).map_err(|error| Error::IO(error, path.clone()))?;
+            if durable_wire != buffer {
+                return Err(Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        "eviction DA-sidecar readback differs from the canonical block wire",
+                    ),
+                    path,
+                ));
+            }
             let da_after = Self::file_len_or_zero(&path)?;
             da_added = da_added.saturating_add(da_after.saturating_sub(da_before));
+            evicted.push(EvictionCompactionEntryV1 {
+                height,
+                block_hash: canonical_hash,
+                canonical_wire_hash: Hash::new(&buffer),
+                wire_len: entry.length,
+            });
         }
 
         let mut new_indices = indices.clone();
         let mut cursor = 0u64;
         let mut data_tmp_file = FileWrap::open_with(data_tmp.clone(), |opts| {
-            opts.write(true).create(true).truncate(true);
+            opts.write(true).create_new(true);
         })?;
         for (idx, entry) in indices.iter().enumerate() {
             if entry.is_evicted() || evict_mask[idx] {
@@ -2885,6 +3506,17 @@ impl Kura {
             let length: usize = entry.length.try_into()?;
             buffer.resize(length, 0);
             Self::read_block_data_from_file(&mut data_source, entry.start, &mut buffer)?;
+            let block = decode_framed_signed_block(&buffer)?;
+            let height = u64::try_from(idx.saturating_add(1))?;
+            if block.header().height().get() != height || block.hash() != hashes[idx] {
+                return Err(Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        "inline block selected for compaction mismatches its durable height or hash",
+                    ),
+                    data_path.clone(),
+                ));
+            }
             data_tmp_file.try_io(|file| {
                 file.seek(SeekFrom::Start(cursor))?;
                 file.write_all(&buffer)
@@ -2895,13 +3527,23 @@ impl Kura {
         data_tmp_file.try_io(|file| {
             file.flush()?;
             file.set_len(cursor)?;
-            file.sync_data()
+            file.sync_all()
         })?;
 
         let mut index_tmp_file = FileWrap::open_with(index_tmp.clone(), |opts| {
-            opts.write(true).create(true).truncate(true);
+            opts.write(true).create_new(true);
         })?;
-        let index_len = u64::try_from(persisted)?.saturating_mul(BlockIndex::SIZE);
+        let index_len = u64::try_from(persisted)?
+            .checked_mul(BlockIndex::SIZE)
+            .ok_or_else(|| {
+                Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        "eviction replacement index length overflowed",
+                    ),
+                    index_tmp.clone(),
+                )
+            })?;
         index_tmp_file.try_io(|file| {
             for entry in &new_indices {
                 let bytes = (*entry).encode();
@@ -2909,34 +3551,90 @@ impl Kura {
             }
             file.flush()?;
             file.set_len(index_len)?;
-            file.sync_data()
+            file.sync_all()
         })?;
         drop(index_tmp_file);
         drop(data_tmp_file);
         drop(data_source);
 
+        let (data_len, data_digest) = BlockStore::eviction_file_digest(&data_tmp)?;
+        let (actual_index_len, index_digest) = BlockStore::eviction_file_digest(&index_tmp)?;
+        if actual_index_len != index_len {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "synced eviction replacement index has an unexpected length",
+                ),
+                index_tmp,
+            ));
+        }
+
         {
             let mut block_store = self.block_store.lock();
             let current_persisted = usize::try_from(block_store.read_durable_index_count()?)?;
-            if current_persisted != persisted {
+            let current_marker = block_store.read_commit_marker()?;
+            let marker_path = block_store.commit_marker_path();
+            let current_marker_digest = BlockStore::eviction_file_digest(&marker_path)?;
+            let hashes_path = block_store.path_to_blockchain.join(HASHES_FILE_NAME);
+            let current_hashes_digest = BlockStore::eviction_file_digest(&hashes_path)?;
+            if current_persisted != persisted
+                || current_marker.as_ref() != Some(&marker)
+                || current_marker_digest != (marker_len, marker_digest)
+                || current_hashes_digest != (hashes_len, hashes_digest)
+            {
                 warn!(
                     current_persisted,
                     persisted,
                     "Kura block store changed during eviction compaction; discarding temp files"
                 );
-                let _ = std::fs::remove_file(&data_tmp);
-                let _ = std::fs::remove_file(&index_tmp);
+                block_store.cleanup_unpublished_eviction_compaction_files()?;
                 self.invalidate_durable_budget_snapshot();
                 return Ok(0);
             }
 
-            block_store.drop_cached_handles();
-            std::fs::rename(&data_tmp, &data_path)
-                .map_err(|err| Error::IO(err, data_path.clone()))?;
-            std::fs::rename(&index_tmp, &index_path)
-                .map_err(|err| Error::IO(err, index_path.clone()))?;
-            if let Some(parent) = data_path.parent() {
-                sync_dir(parent).map_err(|err| Error::IO(err, parent.to_path_buf()))?;
+            let stage = EvictionCompactionStageV1 {
+                format_version: EVICTION_COMPACTION_STAGE_VERSION,
+                marker,
+                marker_len,
+                marker_digest,
+                hashes_len,
+                hashes_digest,
+                data_temp_name: EVICTION_COMPACTION_DATA_FILE_NAME.to_owned(),
+                data_len,
+                data_digest,
+                index_temp_name: EVICTION_COMPACTION_INDEX_FILE_NAME.to_owned(),
+                index_len,
+                index_digest,
+                evicted,
+            };
+            if let Err(publication_error) = block_store.write_eviction_compaction_stage(&stage) {
+                match block_store.read_eviction_compaction_stage() {
+                    Ok(Some(published)) if published == stage => {
+                        warn!(
+                            ?publication_error,
+                            "eviction compaction stage is durable despite publication acknowledgement failure"
+                        );
+                    }
+                    Ok(None) => {
+                        block_store.cleanup_unpublished_eviction_compaction_files()?;
+                        return Err(publication_error);
+                    }
+                    Ok(Some(_)) | Err(_) => {
+                        drop(block_store);
+                        self.invalidate_durable_budget_snapshot();
+                        self.poison_canonical_storage(
+                            "ambiguous eviction compaction stage publication",
+                            &publication_error,
+                        );
+                        return Err(Error::CanonicalStoragePoisoned);
+                    }
+                }
+            }
+            if let Err(error) = block_store.recover_eviction_compaction_stage() {
+                drop(block_store);
+                self.invalidate_durable_budget_snapshot();
+                self.poison_canonical_storage("eviction compaction roll-forward", &error);
+                return Err(Error::CanonicalStoragePoisoned);
             }
 
             block_store.fsync.clear();
@@ -2953,6 +3651,7 @@ impl Kura {
             }
         }
 
+        accounting_mutation.finish();
         Ok(freed)
     }
 
@@ -3067,6 +3766,8 @@ impl Kura {
         if self.store_root.as_os_str().is_empty() {
             return Ok(());
         }
+        let _canonical_chain_guard = self.canonical_chain_lock.lock();
+        self.resolve_canonical_storage_before_mutation()?;
         let mut changed = false;
 
         for (previous, _) in replacements {
@@ -3075,12 +3776,12 @@ impl Kura {
             changed = true;
         }
         for entry in added {
-            self.prepare_lane_storage(entry)?;
+            self.prepare_lane_storage_resolved(entry)?;
             self.set_lane_storage_entry(entry);
             changed = true;
         }
         for (_, current) in replacements {
-            self.prepare_lane_storage(current)?;
+            self.prepare_lane_storage_resolved(current)?;
             self.set_lane_storage_entry(current);
             changed = true;
         }
@@ -3120,6 +3821,8 @@ impl Kura {
             *self.lane_storage_entries.lock() = restored_entries;
             return Ok(());
         }
+        let _canonical_chain_guard = self.canonical_chain_lock.lock();
+        self.resolve_canonical_storage_before_mutation()?;
 
         let primary = lane_config.primary();
         let primary_blocks_dir = primary.blocks_dir(&self.store_root);
@@ -3149,7 +3852,7 @@ impl Kura {
             self.preflight_prepare_lane_storage(entry)?;
         }
         for entry in lane_config.entries() {
-            self.prepare_lane_storage(entry)?;
+            self.prepare_lane_storage_resolved(entry)?;
         }
         *self.lane_storage_entries.lock() = restored_entries;
         if let Err(err) = self.refresh_disk_usage_bytes() {
@@ -3308,20 +4011,16 @@ impl Kura {
         self.preflight_prepare_lane_storage(current)
     }
 
-    /// Rename lane storage directories when lane aliases change.
-    ///
-    /// The migrations slice pairs the previous and current lane entries; each
-    /// pair triggers a best-effort `std::fs::rename` so block data continues to
-    /// live under the new alias without re-syncing from peers. Missing or
-    /// conflicting directories are logged and skipped so existing data is not
-    /// destroyed. Callers that bind the result to catalog state must call
-    /// [`Self::preflight_lane_segments`] first so occupied targets abort before
-    /// higher-level state changes are committed.
     /// Move per-lane block directories when a lane's configuration alias changes.
     ///
     /// Each tuple in `migrations` pairs the previous configuration entry with the
-    /// new one. When the underlying storage path differs we rename the directory,
-    /// creating the new parent path if needed.
+    /// new one. Every deterministic conflict is rejected before the first rename.
+    /// Once a canonical path has moved, a later filesystem failure is rolled back
+    /// to the exact prior paths before the error is returned. Kura is fail-stop
+    /// poisoned when that restoration cannot be proven, so no reader can observe a
+    /// half-retargeted live store. Normal production transitions additionally retain
+    /// the lane-geometry journal, which completes or rolls back these idempotent
+    /// moves after restart.
     ///
     /// # Errors
     /// Returns an error if preparing lane storage, creating directories, renaming,
@@ -3334,65 +4033,176 @@ impl Kura {
             return Ok(());
         }
         let _canonical_chain_guard = self.canonical_chain_lock.lock();
+        self.resolve_canonical_storage_before_mutation()?;
         for (previous, current) in migrations {
-            if previous.kura_segment == current.kura_segment {
-                self.set_lane_storage_entry(current);
-                continue;
-            }
+            self.preflight_relabel_lane_storage(previous, current)?;
+        }
+
+        // Provisioning an entirely absent prior path is not a rename and can be
+        // completed before taking the block-store writer lock. A lone prior merge
+        // log is inconsistent and must not be silently orphaned.
+        let mut moves = Vec::new();
+        for (previous, current) in migrations {
             let old_dir = previous.blocks_dir(&self.store_root);
             let new_dir = current.blocks_dir(&self.store_root);
-            if old_dir == new_dir {
+            let old_merge = previous.merge_log_path(&self.store_root);
+            let new_merge = current.merge_log_path(&self.store_root);
+            if old_dir == new_dir && old_merge == new_merge {
                 self.set_lane_storage_entry(current);
                 continue;
             }
             if !old_dir.exists() {
-                self.prepare_lane_storage(current)?;
+                if old_merge.exists() {
+                    return Err(Error::IO(
+                        std::io::Error::new(
+                            ErrorKind::InvalidData,
+                            "lane relabel found a merge log without its prior block directory",
+                        ),
+                        old_merge,
+                    ));
+                }
+                self.prepare_lane_storage_resolved(current)?;
                 self.set_lane_storage_entry(current);
                 continue;
             }
+            moves.push((*previous, *current));
+        }
+
+        let _write_guard = self.block_store_write_lock.lock();
+        let mut merge_log = self.merge_log.lock();
+        let accounting_mutation = self.begin_total_disk_usage_mutation();
+        for (previous, current) in moves {
+            let old_dir = previous.blocks_dir(&self.store_root);
+            let new_dir = current.blocks_dir(&self.store_root);
+            let old_merge = previous.merge_log_path(&self.store_root);
+            let new_merge = current.merge_log_path(&self.store_root);
             if let Some(parent) = new_dir.parent() {
                 create_dir_all_with_context(parent)?;
             }
-            if new_dir.exists() {
-                iroha_logger::warn!(
-                    old = %old_dir.display(),
-                    new = %new_dir.display(),
-                    "lane storage relabel skipped because target directory already exists"
-                );
-                continue;
-            }
-            std::fs::rename(&old_dir, &new_dir).map_err(|err| Error::IO(err, old_dir.clone()))?;
-            let new_parent = new_dir.parent();
-            let old_parent = old_dir.parent();
-            if let Some(parent) = new_parent {
-                sync_dir(parent).map_err(|err| Error::IO(err, parent.to_path_buf()))?;
-            }
-            if let Some(parent) = old_parent {
-                if Some(parent) != new_parent {
-                    sync_dir(parent).map_err(|err| Error::IO(err, parent.to_path_buf()))?;
-                }
+            let active_blocks = *self.active_blocks_dir.lock() == old_dir;
+            let active_merge = *self.active_merge_path.lock() == old_merge;
+            let mut block_store = active_blocks.then(|| self.block_store.lock());
+            if let Some(store) = block_store.as_mut() {
+                store.drop_cached_handles();
             }
 
-            {
-                let mut plain_text = self.block_plain_text_path.lock();
-                if let Some(path) = plain_text.as_mut() {
-                    if let Ok(suffix) = path.strip_prefix(&old_dir) {
-                        *path = new_dir.join(suffix);
+            let mut canonical_path_moved = false;
+            let move_result: Result<()> = (|| {
+                if old_dir != new_dir {
+                    std::fs::rename(&old_dir, &new_dir)
+                        .map_err(|err| Error::IO(err, old_dir.clone()))?;
+                    canonical_path_moved = true;
+                    let new_parent = new_dir.parent();
+                    let old_parent = old_dir.parent();
+                    if let Some(parent) = new_parent {
+                        sync_dir(parent).map_err(|err| Error::IO(err, parent.to_path_buf()))?;
+                    }
+                    if let Some(parent) = old_parent
+                        && Some(parent) != new_parent
+                    {
+                        sync_dir(parent).map_err(|err| Error::IO(err, parent.to_path_buf()))?;
+                    }
+                    #[cfg(test)]
+                    if self
+                        .fail_next_relabel_after_block_move
+                        .swap(false, Ordering::AcqRel)
+                    {
+                        return Err(Error::IO(
+                            std::io::Error::other(
+                                "injected direct lane-relabel failure after block move",
+                            ),
+                            new_dir.clone(),
+                        ));
                     }
                 }
+                if old_merge != new_merge {
+                    canonical_path_moved |= old_merge.exists();
+                    self.relabel_merge_log(previous, current)?;
+                }
+                Ok(())
+            })();
+            if let Err(error) = move_result {
+                if canonical_path_moved {
+                    let restoration = (|| {
+                        if old_merge != new_merge {
+                            match (old_merge.exists(), new_merge.exists()) {
+                                (false, true) => std::fs::rename(&new_merge, &old_merge)
+                                    .map_err(|restore| Error::IO(restore, new_merge.clone()))?,
+                                (true, false) => {}
+                                _ => {
+                                    return Err(Error::IO(
+                                        std::io::Error::new(
+                                            ErrorKind::InvalidData,
+                                            "lane merge-log rollback has an ambiguous path state",
+                                        ),
+                                        old_merge.clone(),
+                                    ));
+                                }
+                            }
+                        }
+                        if old_dir != new_dir {
+                            match (old_dir.exists(), new_dir.exists()) {
+                                (false, true) => std::fs::rename(&new_dir, &old_dir)
+                                    .map_err(|restore| Error::IO(restore, new_dir.clone()))?,
+                                (true, false) => {}
+                                _ => {
+                                    return Err(Error::IO(
+                                        std::io::Error::new(
+                                            ErrorKind::InvalidData,
+                                            "lane block-directory rollback has an ambiguous path state",
+                                        ),
+                                        old_dir.clone(),
+                                    ));
+                                }
+                            }
+                        }
+                        for parent in [
+                            old_dir.parent(),
+                            new_dir.parent(),
+                            old_merge.parent(),
+                            new_merge.parent(),
+                        ]
+                        .into_iter()
+                        .flatten()
+                        {
+                            sync_dir(parent)
+                                .map_err(|restore| Error::IO(restore, parent.to_path_buf()))?;
+                        }
+                        Ok(())
+                    })();
+                    if let Err(restoration) = restoration {
+                        let poison = Error::LaneGeometryPublicationRestoreFailed {
+                            publication: error.to_string(),
+                            restoration: restoration.to_string(),
+                        };
+                        drop(block_store);
+                        drop(merge_log);
+                        self.poison_canonical_storage("lane storage relabel rollback", &poison);
+                        return Err(Error::CanonicalStoragePoisoned);
+                    }
+                }
+                return Err(error);
             }
 
-            {
-                let mut active_dir = self.active_blocks_dir.lock();
-                if *active_dir == old_dir {
-                    active_dir.clone_from(&new_dir);
-                    let _write_guard = self.block_store_write_lock.lock();
-                    self.block_store.lock().retarget_path(new_dir.clone())?;
-                    self.invalidate_durable_budget_snapshot();
+            if let Some(store) = block_store.as_mut() {
+                store.retarget_existing_path(new_dir.clone());
+                *self.active_blocks_dir.lock() = new_dir.clone();
+                self.invalidate_durable_budget_snapshot();
+            }
+            if active_merge {
+                if let Some(file) = merge_log.file.as_mut() {
+                    file.path.clone_from(&new_merge);
+                }
+                *self.active_merge_path.lock() = new_merge.clone();
+            }
+            if old_dir != new_dir {
+                let mut plain_text = self.block_plain_text_path.lock();
+                if let Some(path) = plain_text.as_mut()
+                    && let Ok(suffix) = path.strip_prefix(&old_dir)
+                {
+                    *path = new_dir.join(suffix);
                 }
             }
-
-            self.relabel_merge_log(previous, current)?;
             self.set_lane_storage_entry(current);
 
             iroha_logger::info!(
@@ -3405,6 +4215,7 @@ impl Kura {
             );
         }
 
+        accounting_mutation.finish();
         Ok(())
     }
 
@@ -3435,27 +4246,13 @@ impl Kura {
             create_dir_all_with_context(parent)?;
         }
         if new_path.exists() {
-            let retired_root = self.store_root.join("retired").join("merge_ledger");
-            create_dir_all_with_context(&retired_root)?;
-            let dest = unique_retired_path(&retired_root, &current.merge_segment, Some("log"));
-            std::fs::rename(&new_path, &dest).map_err(|err| Error::IO(err, new_path.clone()))?;
-            let dest_parent = dest.parent();
-            let new_parent = new_path.parent();
-            if let Some(parent) = dest_parent {
-                sync_dir(parent).map_err(|err| Error::IO(err, parent.to_path_buf()))?;
-            }
-            if let Some(parent) = new_parent {
-                if Some(parent) != dest_parent {
-                    sync_dir(parent).map_err(|err| Error::IO(err, parent.to_path_buf()))?;
-                }
-            }
-            iroha_logger::info!(
-                lane = %current.lane_id.as_u32(),
-                alias = current.alias,
-                source = %new_path.display(),
-                target = %dest.display(),
-                "archived conflicting merge-ledger log before relabel"
-            );
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::AlreadyExists,
+                    "lane merge-ledger relabel target already exists",
+                ),
+                new_path,
+            ));
         }
 
         std::fs::rename(&old_path, &new_path).map_err(|err| Error::IO(err, old_path.clone()))?;
@@ -3467,13 +4264,6 @@ impl Kura {
         if let Some(parent) = old_parent {
             if Some(parent) != new_parent {
                 sync_dir(parent).map_err(|err| Error::IO(err, parent.to_path_buf()))?;
-            }
-        }
-
-        {
-            let mut active_merge = self.active_merge_path.lock();
-            if *active_merge == old_path {
-                active_merge.clone_from(&new_path);
             }
         }
 
@@ -3489,7 +4279,8 @@ impl Kura {
         Ok(())
     }
 
-    fn prepare_lane_storage(&self, entry: &LaneConfigEntry) -> Result<()> {
+    fn prepare_lane_storage_resolved(&self, entry: &LaneConfigEntry) -> Result<()> {
+        let accounting_mutation = self.begin_total_disk_usage_mutation();
         let blocks_dir = entry.blocks_dir(&self.store_root);
         let active = {
             let active_dir = self.active_blocks_dir.lock();
@@ -3522,6 +4313,7 @@ impl Kura {
             merge = %merge_path.display(),
             "lane storage provisioned"
         );
+        accounting_mutation.finish();
         Ok(())
     }
 
@@ -3561,17 +4353,26 @@ impl Kura {
         previous: &LaneConfigEntry,
         current: &LaneConfigEntry,
     ) -> Result<()> {
-        if previous.kura_segment == current.kura_segment {
-            return Ok(());
-        }
-
         let old_dir = previous.blocks_dir(&self.store_root);
+        let new_dir = current.blocks_dir(&self.store_root);
+        let old_merge = previous.merge_log_path(&self.store_root);
+        if old_dir == new_dir {
+            return self.preflight_relabel_merge_log(previous, current);
+        }
         if !old_dir.exists() {
+            if old_merge.exists() {
+                return Err(Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        "lane relabel found a merge log without its prior block directory",
+                    ),
+                    old_merge,
+                ));
+            }
             self.preflight_prepare_lane_storage(current)?;
             return Ok(());
         }
 
-        let new_dir = current.blocks_dir(&self.store_root);
         if let Some(parent) = new_dir.parent() {
             Self::preflight_dir_path(parent)?;
         }
@@ -3605,7 +4406,13 @@ impl Kura {
             return Ok(());
         }
         if new_path.exists() {
-            Self::preflight_dir_path(&self.store_root.join("retired").join("merge_ledger"))?;
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::AlreadyExists,
+                    "lane merge-ledger relabel target already exists",
+                ),
+                new_path,
+            ));
         }
         Ok(())
     }
@@ -3658,6 +4465,7 @@ impl Kura {
         let retired_merge_root = retired_root.join("merge_ledger");
         create_dir_all_with_context(&retired_blocks_root)?;
         create_dir_all_with_context(&retired_merge_root)?;
+        let accounting_mutation = self.begin_total_disk_usage_mutation();
 
         if blocks_dir.exists() {
             let dest = unique_retired_path(&retired_blocks_root, &entry.kura_segment, None::<&str>);
@@ -3705,6 +4513,7 @@ impl Kura {
             );
         }
 
+        accounting_mutation.finish();
         Ok(())
     }
 
@@ -3713,11 +4522,19 @@ impl Kura {
     /// # Errors
     /// Returns an error if the merge-ledger entry cannot be persisted.
     pub fn append_merge_entry(&self, entry: &MergeLedgerEntry) -> Result<()> {
+        let _canonical_chain_guard = self.canonical_chain_lock.lock();
+        self.resolve_canonical_storage_before_mutation()?;
+        self.append_merge_entry_after_storage_resolution(entry)
+    }
+
+    fn append_merge_entry_after_storage_resolution(&self, entry: &MergeLedgerEntry) -> Result<()> {
+        let accounting_mutation = self.begin_total_disk_usage_mutation();
         self.merge_log.lock().append(entry)?;
         if !self.store_root.as_os_str().is_empty() {
             let bytes = Self::merge_entry_bytes(entry)?;
             self.add_disk_usage_bytes(bytes);
         }
+        accounting_mutation.finish();
         Ok(())
     }
 
@@ -4181,6 +4998,7 @@ impl Kura {
         &self,
         record: MergeLedgerCarrierRecord,
     ) -> Result<bool> {
+        let accounting_mutation = self.begin_total_disk_usage_mutation();
         let directory = self.merge_carrier_dir();
         std::fs::create_dir_all(&directory).map_err(|err| Error::MkDir(err, directory.clone()))?;
         let records = self.merge_carrier_records_unlocked()?;
@@ -4236,6 +5054,7 @@ impl Kura {
         index.by_height.insert(record.block_height, record);
         index.by_entry.insert(record.entry_hash, record);
         index.initialized = true;
+        accounting_mutation.finish();
         Ok(true)
     }
 
@@ -4249,6 +5068,7 @@ impl Kura {
                 "refusing to remove a different merge carrier record".to_owned(),
             ));
         }
+        let accounting_mutation = self.begin_total_disk_usage_mutation();
         let bytes = std::fs::metadata(&path).map_or(0, |metadata| metadata.len());
         std::fs::remove_file(&path).map_err(|err| Error::IO(err, path))?;
         sync_dir(&self.merge_carrier_dir())
@@ -4257,6 +5077,7 @@ impl Kura {
         let mut index = self.merge_carrier_index.lock();
         index.by_height.remove(&record.block_height);
         index.by_entry.remove(&record.entry_hash);
+        accounting_mutation.finish();
         Ok(())
     }
 
@@ -4802,6 +5623,7 @@ impl Kura {
         &self,
         mut retain: impl FnMut(&MergeLedgerEntry) -> bool,
     ) -> Result<usize> {
+        let accounting_mutation = self.begin_total_disk_usage_mutation();
         let directory = self.pending_merge_entry_dir();
         let (paths, _) = self.pending_merge_entry_paths_unlocked()?;
         let mut removed = 0usize;
@@ -4822,6 +5644,7 @@ impl Kura {
             sync_dir(&directory).map_err(|err| Error::IO(err, directory))?;
             self.sub_disk_usage_bytes(removed_bytes);
         }
+        accounting_mutation.finish();
         Ok(removed)
     }
 
@@ -4910,6 +5733,7 @@ impl Kura {
         let directory = self.pending_merge_entry_dir();
         let _guard = self.sidecar_lock.lock();
         std::fs::create_dir_all(&directory).map_err(|err| Error::MkDir(err, directory.clone()))?;
+        let accounting_mutation = self.begin_total_disk_usage_mutation();
         self.reconcile_pending_merge_temp_files_unlocked()?;
         let temp_path = path.with_extension("norito.tmp");
         if let Err(err) = std::fs::remove_file(&temp_path)
@@ -4956,6 +5780,7 @@ impl Kura {
         std::fs::rename(&temp_path, &path).map_err(|err| Error::IO(err, path.clone()))?;
         sync_dir(&directory).map_err(|err| Error::IO(err, directory))?;
         self.add_disk_usage_bytes(u64::try_from(bytes.len())?);
+        accounting_mutation.finish();
         Ok(hash)
     }
 
@@ -5053,8 +5878,9 @@ impl Kura {
         let path = self.pending_merge_entry_path(hash);
         let directory = self.pending_merge_entry_dir();
         let _guard = self.sidecar_lock.lock();
+        let accounting_mutation = self.begin_total_disk_usage_mutation();
         let bytes = std::fs::metadata(&path).map_or(0, |metadata| metadata.len());
-        match std::fs::remove_file(&path) {
+        let result = match std::fs::remove_file(&path) {
             Ok(()) => {
                 sync_dir(&directory).map_err(|err| Error::IO(err, directory))?;
                 self.sub_disk_usage_bytes(bytes);
@@ -5062,7 +5888,11 @@ impl Kura {
             }
             Err(err) if err.kind() == ErrorKind::NotFound => Ok(()),
             Err(err) => Err(Error::IO(err, path)),
+        };
+        if result.is_ok() {
+            accounting_mutation.finish();
         }
+        result
     }
 
     fn remove_committed_pending_merge_entry_best_effort(&self, hash: HashOf<MergeLedgerEntry>) {
@@ -5092,7 +5922,9 @@ impl Kura {
                 ));
             }
         } else {
-            self.append_merge_entry(entry)?;
+            // Canonical association recovery and block commit both already hold
+            // `canonical_chain_lock` and have resolved every storage stage.
+            self.append_merge_entry_after_storage_resolution(entry)?;
         }
 
         let carrier_written = {
@@ -5134,9 +5966,11 @@ impl Kura {
 
     pub(crate) fn truncate_merge_log_to_len(&self, keep: usize) -> Result<()> {
         let before = self.merge_log_tracked_bytes()?;
+        let accounting_mutation = self.begin_total_disk_usage_mutation();
         self.merge_log.lock().truncate_to_len(keep)?;
         let after = self.merge_log_tracked_bytes()?;
         self.update_disk_usage_delta(before, after);
+        accounting_mutation.finish();
         Ok(())
     }
 
@@ -5747,9 +6581,13 @@ impl Kura {
             kura.flush_pending_budget_eviction();
 
             if should_exit {
-                if let Err(error) = kura.block_store.lock().flush_pending_fsync(true) {
+                let flush_result = {
+                    let mut store = kura.block_store.lock();
+                    store.flush_pending_fsync(true)
+                };
+                if let Err(error) = flush_result {
                     error!(?error, "Failed to fsync pending blocks on shutdown");
-                    kura.record_writer_fault("shutdown fsync", &error);
+                    kura.record_or_poison_fsync_fault("shutdown fsync", &error);
                     return;
                 }
                 info!("Kura has flushed sidecars and pending fsync state and is shutting down.");
@@ -5776,7 +6614,8 @@ impl Kura {
                         let mut store = kura.block_store.lock();
                         if let Err(error) = store.flush_pending_fsync(false) {
                             error!(?error, "Failed to fsync pending batch");
-                            kura.record_writer_fault("periodic fsync", &error);
+                            drop(store);
+                            kura.record_or_poison_fsync_fault("periodic fsync", &error);
                             return;
                         }
                     }
@@ -5807,6 +6646,9 @@ impl Kura {
 
     /// Get the hash of the block at the provided height.
     pub fn get_block_hash(&self, block_height: NonZeroUsize) -> Option<HashOf<BlockHeader>> {
+        if self.canonical_storage_poisoned.load(Ordering::Acquire) {
+            return None;
+        }
         let hash_data_guard = self.block_data.lock();
 
         let block_height = block_height.get();
@@ -5823,6 +6665,9 @@ impl Kura {
         &self,
         block_height: NonZeroUsize,
     ) -> Option<HashOf<BlockHeader>> {
+        if self.canonical_storage_poisoned.load(Ordering::Acquire) {
+            return None;
+        }
         let height = u64::try_from(block_height.get()).ok()?;
         let mut block_store = self.block_store.lock();
         Self::read_durable_hash_at_height(&mut block_store, height)
@@ -5832,6 +6677,9 @@ impl Kura {
 
     /// Resolve the height of the block with the given hash.
     pub fn get_block_height_by_hash(&self, hash: HashOf<BlockHeader>) -> Option<NonZeroUsize> {
+        if self.canonical_storage_poisoned.load(Ordering::Acquire) {
+            return None;
+        }
         self.block_height_index.lock().get(&hash).copied()
     }
 
@@ -5843,6 +6691,9 @@ impl Kura {
         &self,
         hash: HashOf<TransactionEntrypoint>,
     ) -> Option<BTreeSet<NonZeroUsize>> {
+        if self.canonical_storage_poisoned.load(Ordering::Acquire) {
+            return None;
+        }
         let index = self.transaction_entrypoint_index.lock();
         index.complete.then(|| {
             index
@@ -5861,6 +6712,9 @@ impl Kura {
         &self,
         hash: HashOf<SignedTransaction>,
     ) -> Option<BTreeSet<NonZeroUsize>> {
+        if self.canonical_storage_poisoned.load(Ordering::Acquire) {
+            return None;
+        }
         let index = self.transaction_entrypoint_index.lock();
         index.complete.then(|| {
             index
@@ -5884,6 +6738,9 @@ impl Kura {
         issuer: &AccountId,
         operation_id: [u8; 32],
     ) -> Option<Option<NonZeroUsize>> {
+        if self.canonical_storage_poisoned.load(Ordering::Acquire) {
+            return None;
+        }
         let index = self.transaction_entrypoint_index.lock();
         index.complete.then(|| {
             index
@@ -5900,6 +6757,9 @@ impl Kura {
         &self,
         authority: &AccountId,
     ) -> Option<BTreeSet<NonZeroUsize>> {
+        if self.canonical_storage_poisoned.load(Ordering::Acquire) {
+            return None;
+        }
         let index = self.transaction_entrypoint_index.lock();
         index.complete.then(|| {
             index
@@ -5917,6 +6777,9 @@ impl Kura {
         &self,
         timestamp_ms: u64,
     ) -> Option<BTreeSet<NonZeroUsize>> {
+        if self.canonical_storage_poisoned.load(Ordering::Acquire) {
+            return None;
+        }
         let index = self.transaction_entrypoint_index.lock();
         index.complete.then(|| {
             index
@@ -5935,6 +6798,9 @@ impl Kura {
         lower_bound: Option<u64>,
         upper_bound: Option<u64>,
     ) -> Option<BTreeSet<NonZeroUsize>> {
+        if self.canonical_storage_poisoned.load(Ordering::Acquire) {
+            return None;
+        }
         if let (Some(lower), Some(upper)) = (lower_bound, upper_bound)
             && lower > upper
         {
@@ -5960,6 +6826,9 @@ impl Kura {
         &self,
         is_ok: bool,
     ) -> Option<BTreeSet<NonZeroUsize>> {
+        if self.canonical_storage_poisoned.load(Ordering::Acquire) {
+            return None;
+        }
         let index = self.transaction_entrypoint_index.lock();
         index.complete.then(|| {
             index
@@ -5975,6 +6844,9 @@ impl Kura {
         &self,
         hash: HashOf<BlockHeader>,
     ) -> Option<(u64, u64)> {
+        if self.canonical_storage_poisoned.load(Ordering::Acquire) {
+            return None;
+        }
         let height = self.get_block_height_by_hash(hash)?;
         let height_u64 = u64::try_from(height.get()).ok()?;
         let mut store = self.block_store.lock();
@@ -5991,12 +6863,16 @@ impl Kura {
     /// The body must match Kura's durable height/hash metadata. Inline blocks are already local and
     /// are left untouched.
     pub(crate) fn cache_block_body(&self, block: &SignedBlock) -> Result<()> {
+        let _canonical_chain_guard = self.canonical_chain_lock.lock();
+        self.resolve_canonical_storage_before_mutation()?;
         let _write_guard = self.block_store_write_lock.lock();
         let height = block.header().height().get();
         let hash = block.hash();
         self.ensure_durable_block_at_height(height, hash)?;
-        let mut store = self.block_store.lock();
-        let index = store.read_block_index(height.saturating_sub(1))?;
+        let index = self
+            .block_store
+            .lock()
+            .read_block_index(height.saturating_sub(1))?;
         if !index.is_evicted() {
             return Ok(());
         }
@@ -6010,17 +6886,28 @@ impl Kura {
                 data_len: index.length,
             });
         }
+        self.ensure_existing_block_wire_matches(block, height, hash)?;
+        let store = self.block_store.lock();
         let path = store.da_block_path(height);
         let before = Self::file_len_or_zero(&path)?;
+        let accounting_mutation = self.begin_total_disk_usage_mutation();
         store.write_da_block_bytes(height, &frame)?;
         let after = Self::file_len_or_zero(&path)?;
         drop(store);
         self.update_total_disk_usage_delta(before, after);
+        accounting_mutation.finish();
         Ok(())
     }
 
     /// Get a reference to block by height, loading it from disk if needed.
     pub fn get_block(&self, block_height: NonZeroUsize) -> Option<Arc<SignedBlock>> {
+        if self.canonical_storage_poisoned.load(Ordering::Acquire) {
+            error!(
+                height = block_height.get(),
+                "refusing canonical block read while Kura storage is fail-stop poisoned"
+            );
+            return None;
+        }
         let (block_index, expected_hash, should_cache, chain_len) = {
             let data = self.block_data.lock();
             if data.len() < block_height.get() {
@@ -6299,6 +7186,15 @@ impl Kura {
         Self::retained_block_record_dir_for(blocks_dir).join(format!("{height:020}.norito"))
     }
 
+    fn retained_block_rewrite_staging_dir_for(blocks_dir: &Path) -> PathBuf {
+        blocks_dir.join(RETAINED_BLOCK_REWRITE_STAGING_DIR_NAME)
+    }
+
+    fn retained_block_rewrite_staging_path_for(blocks_dir: &Path, height: u64) -> PathBuf {
+        Self::retained_block_rewrite_staging_dir_for(blocks_dir)
+            .join(format!("{height:020}.norito"))
+    }
+
     #[cfg(test)]
     fn retained_block_record_dir(&self) -> PathBuf {
         Self::retained_block_record_dir_for(&self.active_blocks_dir.lock())
@@ -6406,6 +7302,48 @@ impl Kura {
             height,
             reason: reason.into(),
         }
+    }
+
+    fn canonical_block_wire_hash(block: &SignedBlock) -> Result<Hash> {
+        Ok(Hash::new(&block.encode_wire()?))
+    }
+
+    fn ensure_existing_block_wire_matches(
+        &self,
+        block: &SignedBlock,
+        height: u64,
+        canonical_hash: HashOf<BlockHeader>,
+    ) -> Result<()> {
+        self.ensure_durable_block_at_height(height, canonical_hash)?;
+        let incoming_wire_hash = Self::canonical_block_wire_hash(block)?;
+        let blocks_dir = self.active_blocks_dir.lock().clone();
+        if let Some((retained_header, retained_wire_hash, _)) =
+            self.retained_block_record_at(&blocks_dir, height, canonical_hash)?
+        {
+            if retained_header != block.header() || retained_wire_hash != incoming_wire_hash {
+                return Err(Error::CanonicalBlockWireMismatch { height });
+            }
+            return Ok(());
+        }
+
+        let block_height = NonZeroUsize::new(usize::try_from(height)?)
+            .ok_or(Error::CanonicalBlockWireMismatch { height })?;
+        let durable_index = self
+            .block_store
+            .lock()
+            .read_block_index(height.saturating_sub(1))?;
+        if durable_index.is_evicted() {
+            return Err(Error::MissingRetainedBlockRecord { height });
+        }
+        let canonical_block = self
+            .get_block(block_height)
+            .ok_or(Error::CanonicalBlockWireMismatch { height })?;
+        if canonical_block.header() != block.header()
+            || Self::canonical_block_wire_hash(canonical_block.as_ref())? != incoming_wire_hash
+        {
+            return Err(Error::CanonicalBlockWireMismatch { height });
+        }
+        Ok(())
     }
 
     fn retained_sccp_archive_from_block(
@@ -6623,9 +7561,13 @@ impl Kura {
     ) -> Result<
         Option<(
             BlockHeader,
+            Hash,
             Vec<crate::bridge::ValidatedSccpOutboundMessageProjectionV1>,
         )>,
     > {
+        // Callers that expose this result outside rewrite/recovery internals hold
+        // `canonical_chain_lock`, so a recoverable rewrite stage can never appear as a transient
+        // missing canonical record to proof-serving or state-validation readers.
         let directory = Self::retained_block_record_dir_for(blocks_dir);
         let path = Self::retained_block_record_path_for(blocks_dir, height);
         let Some(record) = self.decode_retained_block_record_at(&path, &directory)? else {
@@ -6633,15 +7575,27 @@ impl Kura {
         };
         let archive =
             Self::validate_retained_block_record_at(&path, height, canonical_hash, &record)?;
-        Ok(Some((record.block_header, archive)))
+        if let Some(block_height) = NonZeroUsize::new(usize::try_from(height)?)
+            && let Some(block) = self.get_block(block_height)
+        {
+            if block.header() != record.block_header
+                || Self::canonical_block_wire_hash(block.as_ref())? != record.canonical_wire_hash
+            {
+                return Err(Error::ConflictingRetainedBlockRecord { height });
+            }
+        }
+        Ok(Some((
+            record.block_header,
+            record.canonical_wire_hash,
+            archive,
+        )))
     }
 
-    fn persist_retained_block_record(
-        &self,
+    fn prepare_retained_block_record(
         blocks_dir: &Path,
         canonical_hash: HashOf<BlockHeader>,
         block: &SignedBlock,
-    ) -> Result<()> {
+    ) -> Result<KuraRetainedBlockRecord> {
         let height = block.header().height().get();
         if block.hash() != canonical_hash {
             return Err(Error::BlockHeightConflict {
@@ -6650,13 +7604,33 @@ impl Kura {
                 actual: block.hash(),
             });
         }
-        let directory = Self::retained_block_record_dir_for(blocks_dir);
         let path = Self::retained_block_record_path_for(blocks_dir, height);
         let record = KuraRetainedBlockRecord::new(
             block.header(),
+            Self::canonical_block_wire_hash(block)?,
             Self::retained_sccp_archive_from_block(block)?,
         );
         let _ = Self::validate_retained_block_record_at(&path, height, canonical_hash, &record)?;
+        let bytes = record.encode();
+        if bytes.len() > MAX_RETAINED_BLOCK_RECORD_BYTES {
+            return Err(Error::RetainedBlockRecordTooLarge {
+                actual: bytes.len(),
+                max: MAX_RETAINED_BLOCK_RECORD_BYTES,
+            });
+        }
+        Ok(record)
+    }
+
+    fn persist_prepared_retained_block_record(
+        &self,
+        blocks_dir: &Path,
+        canonical_hash: HashOf<BlockHeader>,
+        record: &KuraRetainedBlockRecord,
+    ) -> Result<()> {
+        let height = record.height;
+        let directory = Self::retained_block_record_dir_for(blocks_dir);
+        let path = Self::retained_block_record_path_for(blocks_dir, height);
+        let _ = Self::validate_retained_block_record_at(&path, height, canonical_hash, record)?;
         let bytes = record.encode();
         if bytes.len() > MAX_RETAINED_BLOCK_RECORD_BYTES {
             return Err(Error::RetainedBlockRecordTooLarge {
@@ -6668,7 +7642,7 @@ impl Kura {
         if let Some(existing) = self.decode_retained_block_record_at(&path, &directory)? {
             let _ =
                 Self::validate_retained_block_record_at(&path, height, canonical_hash, &existing)?;
-            return if existing == record {
+            return if existing == *record {
                 Ok(())
             } else {
                 Err(Error::ConflictingRetainedBlockRecord { height })
@@ -6679,13 +7653,14 @@ impl Kura {
         if let Some(parent) = directory.parent() {
             sync_dir(parent).map_err(|error| Error::IO(error, parent.to_path_buf()))?;
         }
+        let accounting_mutation = self.begin_total_disk_usage_mutation();
         if !self.write_atomic_synced_noclobber(&path, &bytes)? {
             let Some(existing) = self.decode_retained_block_record_at(&path, &directory)? else {
                 return Err(Error::ConflictingRetainedBlockRecord { height });
             };
             let _ =
                 Self::validate_retained_block_record_at(&path, height, canonical_hash, &existing)?;
-            return if existing == record {
+            return if existing == *record {
                 Ok(())
             } else {
                 Err(Error::ConflictingRetainedBlockRecord { height })
@@ -6703,10 +7678,21 @@ impl Kura {
             ));
         };
         let _ = Self::validate_retained_block_record_at(&path, height, canonical_hash, &persisted)?;
-        if persisted != record {
+        if persisted != *record {
             return Err(Error::ConflictingRetainedBlockRecord { height });
         }
+        accounting_mutation.finish();
         Ok(())
+    }
+
+    fn persist_retained_block_record(
+        &self,
+        blocks_dir: &Path,
+        canonical_hash: HashOf<BlockHeader>,
+        block: &SignedBlock,
+    ) -> Result<()> {
+        let record = Self::prepare_retained_block_record(blocks_dir, canonical_hash, block)?;
+        self.persist_prepared_retained_block_record(blocks_dir, canonical_hash, &record)
     }
 
     /// Read a bounded, root-authenticated SCCP archive retained independently of the block body.
@@ -6720,6 +7706,7 @@ impl Kura {
             Vec<crate::bridge::ValidatedSccpOutboundMessageProjectionV1>,
         )>,
     > {
+        self.ensure_canonical_storage_not_poisoned()?;
         let _canonical_chain_guard = self.canonical_chain_lock.lock();
         let Some(block_height) = NonZeroUsize::new(usize::try_from(height)?) else {
             return Err(Error::MissingRetainedBlockRecord { height });
@@ -6728,8 +7715,10 @@ impl Kura {
             .get_durable_block_hash(block_height)
             .ok_or(Error::MissingRetainedBlockRecord { height })?;
         let blocks_dir = self.active_blocks_dir.lock().clone();
-        if let Some(archive) = self.retained_block_record_at(&blocks_dir, height, canonical_hash)? {
-            return Ok(Some(archive));
+        if let Some((header, _, archive)) =
+            self.retained_block_record_at(&blocks_dir, height, canonical_hash)?
+        {
+            return Ok(Some((header, archive)));
         }
 
         if let Some(block) = self.get_block(block_height) {
@@ -6754,6 +7743,49 @@ impl Kura {
             }
         }
         Err(Error::MissingRetainedBlockRecord { height })
+    }
+
+    /// Inventory nonempty retained SCCP archives through an exact committed-height boundary.
+    ///
+    /// Selected records are decoded one at a time, bound to Kura's canonical hash journal, and
+    /// fully archive-validated. The result retains only fixed-size summaries, so canonical SCCP
+    /// payloads are never accumulated or duplicated across heights. Valid rootless/empty retained
+    /// records are deliberately omitted. Retained suffix records above `committed_height` are not
+    /// decoded and cannot leak a Kura-ahead-of-WSV suffix into snapshot validation.
+    pub(crate) fn retained_nonempty_sccp_archive_inventory_at_or_below(
+        &self,
+        committed_height: u64,
+    ) -> Result<Vec<RetainedSccpArchiveSummary>> {
+        self.ensure_canonical_storage_not_poisoned()?;
+        if committed_height == 0 {
+            return Ok(Vec::new());
+        }
+        let _canonical_chain_guard = self.canonical_chain_lock.lock();
+        let blocks_dir = self.active_blocks_dir.lock().clone();
+        let heights = Self::retained_block_record_heights_for(&self.store_root, &blocks_dir)?;
+        let mut summaries = Vec::new();
+        for height in heights
+            .into_iter()
+            .take_while(|height| *height <= committed_height)
+        {
+            let block_height = NonZeroUsize::new(usize::try_from(height)?)
+                .ok_or(Error::MissingRetainedBlockRecord { height })?;
+            let canonical_hash = self
+                .get_durable_block_hash(block_height)
+                .ok_or(Error::MissingRetainedBlockRecord { height })?;
+            let (header, _, archive) = self
+                .retained_block_record_at(&blocks_dir, height, canonical_hash)?
+                .ok_or(Error::MissingRetainedBlockRecord { height })?;
+            if archive.is_empty() {
+                continue;
+            }
+            summaries.push(RetainedSccpArchiveSummary {
+                height,
+                block_hash: header.hash(),
+                message_count: u32::try_from(archive.len())?,
+            });
+        }
+        Ok(summaries)
     }
 
     fn validate_retained_block_inventory_on_startup(&self) -> Result<()> {
@@ -6807,6 +7839,7 @@ impl Kura {
     ) -> Result<()> {
         let directory = Self::retained_block_record_dir_for(blocks_dir);
         let heights = Self::retained_block_record_heights_for(&self.store_root, blocks_dir)?;
+        let accounting_mutation = self.begin_total_disk_usage_mutation();
         let mut removed = false;
         let mut removed_bytes = 0_u64;
         for height in heights
@@ -6831,6 +7864,408 @@ impl Kura {
         if removed {
             sync_dir(&directory).map_err(|error| Error::IO(error, directory))?;
             self.sub_total_disk_usage_bytes(removed_bytes);
+        }
+        accounting_mutation.finish();
+        Ok(())
+    }
+
+    fn staged_retained_block_record(
+        &self,
+        stage: &StagedRetainedBlockRewrite,
+        entry: &StagedRetainedBlockRewriteEntry,
+    ) -> Result<KuraRetainedBlockRecord> {
+        let directory = Self::retained_block_rewrite_staging_dir_for(&stage.blocks_dir);
+        let path = Self::retained_block_rewrite_staging_path_for(&stage.blocks_dir, entry.height);
+        let Some(snapshot) =
+            self.read_regular_sidecar_snapshot(&path, &directory, MAX_RETAINED_BLOCK_RECORD_BYTES)?
+        else {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::NotFound,
+                    "staged retained block record disappeared during canonical rewrite",
+                ),
+                path,
+            ));
+        };
+        if snapshot.bytes_hash != entry.bytes_hash
+            || u64::try_from(snapshot.bytes.len())? != entry.bytes_len
+        {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "staged retained block record changed during canonical rewrite",
+                ),
+                path,
+            ));
+        }
+        let mut input = snapshot.bytes.as_slice();
+        let record = KuraRetainedBlockRecord::decode_all(&mut input).map_err(Error::NoritoFrame)?;
+        if record.encode() != snapshot.bytes {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "staged retained block record is not canonically encoded",
+                ),
+                path,
+            ));
+        }
+        let _ = Self::validate_retained_block_record_at(
+            &path,
+            entry.height,
+            entry.block_hash,
+            &record,
+        )?;
+        Ok(record)
+    }
+
+    fn stage_retained_block_records_for_rewrite(
+        &self,
+        blocks_dir: &Path,
+        first_rewritten_height: u64,
+    ) -> Result<Option<StagedRetainedBlockRewrite>> {
+        let retained_directory = Self::retained_block_record_dir_for(blocks_dir);
+        let staging_directory = Self::retained_block_rewrite_staging_dir_for(blocks_dir);
+        if std::fs::symlink_metadata(&staging_directory).is_ok() {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::AlreadyExists,
+                    "an unresolved retained-block rewrite stage already exists",
+                ),
+                staging_directory,
+            ));
+        }
+
+        let heights = Self::retained_block_record_heights_for(&self.store_root, blocks_dir)?;
+        let mut entries = Vec::new();
+        let mut removed_total_bytes = 0_u64;
+        for height in heights
+            .into_iter()
+            .filter(|height| *height >= first_rewritten_height)
+        {
+            let block_height = NonZeroUsize::new(usize::try_from(height)?)
+                .ok_or(Error::MissingRetainedBlockRecord { height })?;
+            let canonical_hash = self
+                .get_durable_block_hash(block_height)
+                .ok_or(Error::MissingRetainedBlockRecord { height })?;
+            let path = Self::retained_block_record_path_for(blocks_dir, height);
+            let Some(record) = self.decode_retained_block_record_at(&path, &retained_directory)?
+            else {
+                return Err(Error::MissingRetainedBlockRecord { height });
+            };
+            let _ =
+                Self::validate_retained_block_record_at(&path, height, canonical_hash, &record)?;
+            let bytes = record.encode();
+            let bytes_len = u64::try_from(bytes.len())?;
+            removed_total_bytes = removed_total_bytes.saturating_add(bytes_len);
+            entries.push(StagedRetainedBlockRewriteEntry {
+                height,
+                block_hash: canonical_hash,
+                bytes_hash: Hash::new(&bytes),
+                bytes_len,
+            });
+        }
+        if entries.is_empty() {
+            return Ok(None);
+        }
+
+        create_dir_all_with_context(&staging_directory)?;
+        if let Some(parent) = staging_directory.parent() {
+            sync_dir(parent).map_err(|error| Error::IO(error, parent.to_path_buf()))?;
+        }
+        let _ = self
+            .canonical_sidecar_directory(&staging_directory)?
+            .ok_or_else(|| {
+                Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::NotFound,
+                        "retained-block rewrite staging directory disappeared",
+                    ),
+                    staging_directory.clone(),
+                )
+            })?;
+
+        let accounting_mutation = self.begin_total_disk_usage_mutation();
+        let mut moved = 0_usize;
+        let move_result = (|| -> Result<()> {
+            for entry in &entries {
+                let source = Self::retained_block_record_path_for(blocks_dir, entry.height);
+                let target =
+                    Self::retained_block_rewrite_staging_path_for(blocks_dir, entry.height);
+                if std::fs::symlink_metadata(&target).is_ok() {
+                    return Err(Error::IO(
+                        std::io::Error::new(
+                            ErrorKind::AlreadyExists,
+                            "retained-block rewrite staging destination already exists",
+                        ),
+                        target,
+                    ));
+                }
+                std::fs::rename(&source, &target)
+                    .map_err(|error| Error::IO(error, source.clone()))?;
+                moved = moved.saturating_add(1);
+            }
+            sync_dir(&retained_directory)
+                .map_err(|error| Error::IO(error, retained_directory.clone()))?;
+            sync_dir(&staging_directory)
+                .map_err(|error| Error::IO(error, staging_directory.clone()))?;
+            Ok(())
+        })();
+        if let Err(error) = move_result {
+            for entry in entries.iter().take(moved).rev() {
+                let source =
+                    Self::retained_block_rewrite_staging_path_for(blocks_dir, entry.height);
+                let target = Self::retained_block_record_path_for(blocks_dir, entry.height);
+                if let Err(restore_error) = std::fs::rename(&source, &target) {
+                    return Err(Error::IO(restore_error, source));
+                }
+            }
+            let _ = sync_dir(&retained_directory);
+            let _ = sync_dir(&staging_directory);
+            let _ = std::fs::remove_dir(&staging_directory);
+            accounting_mutation.finish();
+            return Err(error);
+        }
+        accounting_mutation.finish();
+        Ok(Some(StagedRetainedBlockRewrite {
+            blocks_dir: blocks_dir.to_path_buf(),
+            entries,
+            removed_total_bytes,
+        }))
+    }
+
+    fn reconcile_staged_retained_block_rewrite_after_error(
+        &self,
+        stage: &StagedRetainedBlockRewrite,
+    ) -> Result<()> {
+        let retained_directory = Self::retained_block_record_dir_for(&stage.blocks_dir);
+        let staging_directory = Self::retained_block_rewrite_staging_dir_for(&stage.blocks_dir);
+        let mut restore = Vec::with_capacity(stage.entries.len());
+        let mut removed_total_bytes = 0_u64;
+        for entry in &stage.entries {
+            let record = self.staged_retained_block_record(stage, entry)?;
+            let canonical_hash = NonZeroUsize::new(usize::try_from(entry.height)?)
+                .and_then(|height| self.get_durable_block_hash(height));
+            let destination = Self::retained_block_record_path_for(&stage.blocks_dir, entry.height);
+            if canonical_hash == Some(entry.block_hash) {
+                if let Some(existing) =
+                    self.decode_retained_block_record_at(&destination, &retained_directory)?
+                {
+                    let _ = Self::validate_retained_block_record_at(
+                        &destination,
+                        entry.height,
+                        entry.block_hash,
+                        &existing,
+                    )?;
+                    if existing != record {
+                        return Err(Error::ConflictingRetainedBlockRecord {
+                            height: entry.height,
+                        });
+                    }
+                    restore.push(false);
+                    removed_total_bytes = removed_total_bytes.saturating_add(entry.bytes_len);
+                } else {
+                    restore.push(true);
+                }
+            } else {
+                restore.push(false);
+                removed_total_bytes = removed_total_bytes.saturating_add(entry.bytes_len);
+            }
+        }
+
+        let accounting_mutation = self.begin_total_disk_usage_mutation();
+        for (entry, restore) in stage.entries.iter().zip(restore) {
+            let source =
+                Self::retained_block_rewrite_staging_path_for(&stage.blocks_dir, entry.height);
+            if restore {
+                let destination =
+                    Self::retained_block_record_path_for(&stage.blocks_dir, entry.height);
+                std::fs::rename(&source, &destination)
+                    .map_err(|error| Error::IO(error, source.clone()))?;
+            } else {
+                std::fs::remove_file(&source).map_err(|error| Error::IO(error, source.clone()))?;
+            }
+        }
+        sync_dir(&retained_directory)
+            .map_err(|error| Error::IO(error, retained_directory.clone()))?;
+        sync_dir(&staging_directory)
+            .map_err(|error| Error::IO(error, staging_directory.clone()))?;
+        std::fs::remove_dir(&staging_directory)
+            .map_err(|error| Error::IO(error, staging_directory.clone()))?;
+        if let Some(parent) = staging_directory.parent() {
+            sync_dir(parent).map_err(|error| Error::IO(error, parent.to_path_buf()))?;
+        }
+        self.sub_total_disk_usage_bytes(removed_total_bytes);
+        accounting_mutation.finish();
+        Ok(())
+    }
+
+    fn discard_staged_retained_block_rewrite(
+        &self,
+        stage: &StagedRetainedBlockRewrite,
+    ) -> Result<()> {
+        let staging_directory = Self::retained_block_rewrite_staging_dir_for(&stage.blocks_dir);
+        for entry in &stage.entries {
+            let _ = self.staged_retained_block_record(stage, entry)?;
+        }
+        let accounting_mutation = self.begin_total_disk_usage_mutation();
+        #[cfg(test)]
+        let fail_after = self
+            .fail_retained_rewrite_discard_after
+            .swap(usize::MAX, Ordering::AcqRel);
+        for (_index, entry) in stage.entries.iter().enumerate() {
+            let path =
+                Self::retained_block_rewrite_staging_path_for(&stage.blocks_dir, entry.height);
+            std::fs::remove_file(&path).map_err(|error| Error::IO(error, path))?;
+            #[cfg(test)]
+            if _index == fail_after {
+                return Err(Error::IO(
+                    std::io::Error::other("injected retained-rewrite discard failure"),
+                    staging_directory,
+                ));
+            }
+        }
+        sync_dir(&staging_directory)
+            .map_err(|error| Error::IO(error, staging_directory.clone()))?;
+        std::fs::remove_dir(&staging_directory)
+            .map_err(|error| Error::IO(error, staging_directory.clone()))?;
+        if let Some(parent) = staging_directory.parent() {
+            sync_dir(parent).map_err(|error| Error::IO(error, parent.to_path_buf()))?;
+        }
+        self.sub_total_disk_usage_bytes(stage.removed_total_bytes);
+        accounting_mutation.finish();
+        Ok(())
+    }
+
+    fn with_retained_block_records_staged_for_rewrite<T>(
+        &self,
+        blocks_dir: &Path,
+        first_rewritten_height: u64,
+        mutation: impl FnOnce() -> Result<T>,
+    ) -> Result<RetainedBlockRewritePublication<T>> {
+        let Some(stage) =
+            self.stage_retained_block_records_for_rewrite(blocks_dir, first_rewritten_height)?
+        else {
+            return mutation().map(RetainedBlockRewritePublication::Complete);
+        };
+        match mutation() {
+            Ok(output) => match self.discard_staged_retained_block_rewrite(&stage) {
+                Ok(()) => Ok(RetainedBlockRewritePublication::Complete(output)),
+                Err(discard_error) => {
+                    warn!(
+                        ?discard_error,
+                        "retained-record cleanup failed after canonical rewrite publication; attempting immediate recovery"
+                    );
+                    match self.recover_retained_block_rewrite_stage_on_startup(blocks_dir) {
+                        Ok(()) => {
+                            warn!(
+                                ?discard_error,
+                                "recovered retained-record cleanup after canonical rewrite publication"
+                            );
+                            Ok(RetainedBlockRewritePublication::Complete(output))
+                        }
+                        Err(cleanup_error) => {
+                            error!(
+                                ?discard_error,
+                                ?cleanup_error,
+                                "canonical rewrite is committed but retained-record cleanup remains deferred"
+                            );
+                            Ok(
+                                RetainedBlockRewritePublication::CommittedWithDeferredCleanup {
+                                    output,
+                                    cleanup_error,
+                                },
+                            )
+                        }
+                    }
+                }
+            },
+            Err(error @ Error::DaBlockRewriteCommitStateUnknown { .. }) => {
+                // The DA write-ahead stage is the only authority that can decide whether the old
+                // or replacement canonical suffix won. Keep the retained-record stage intact so
+                // startup can resolve DA first and only then restore/discard retained evidence.
+                Err(error)
+            }
+            Err(error) => {
+                self.reconcile_staged_retained_block_rewrite_after_error(&stage)?;
+                Err(error)
+            }
+        }
+    }
+
+    fn resolve_retained_block_rewrite_stage_before_canonical_mutation(
+        &self,
+        blocks_dir: &Path,
+    ) -> Result<()> {
+        let staging_directory = Self::retained_block_rewrite_staging_dir_for(blocks_dir);
+        match std::fs::symlink_metadata(&staging_directory) {
+            Ok(_) => self.recover_retained_block_rewrite_stage_on_startup(blocks_dir),
+            Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(Error::IO(error, staging_directory)),
+        }
+    }
+
+    fn recover_retained_block_rewrite_stage_on_startup(&self, blocks_dir: &Path) -> Result<()> {
+        let staging_directory = Self::retained_block_rewrite_staging_dir_for(blocks_dir);
+        let heights = Self::canonical_height_sidecar_heights_for(
+            &self.store_root,
+            &staging_directory,
+            "retained block rewrite staging sidecar",
+        )?;
+        if heights.is_empty() {
+            if staging_directory.exists() {
+                let _accounting_mutation = self.begin_total_disk_usage_mutation();
+                std::fs::remove_dir(&staging_directory)
+                    .map_err(|error| Error::IO(error, staging_directory.clone()))?;
+                if let Some(parent) = staging_directory.parent() {
+                    sync_dir(parent).map_err(|error| Error::IO(error, parent.to_path_buf()))?;
+                }
+            }
+            return Ok(());
+        }
+        let _accounting_mutation = self.begin_total_disk_usage_mutation();
+        let retained_directory = Self::retained_block_record_dir_for(blocks_dir);
+        create_dir_all_with_context(&retained_directory)?;
+        for height in heights {
+            let path = Self::retained_block_rewrite_staging_path_for(blocks_dir, height);
+            let Some(record) = self.decode_retained_block_record_at(&path, &staging_directory)?
+            else {
+                return Err(Error::MissingRetainedBlockRecord { height });
+            };
+            let _ =
+                Self::validate_retained_block_record_at(&path, height, record.block_hash, &record)?;
+            let canonical_hash = NonZeroUsize::new(usize::try_from(height)?)
+                .and_then(|height| self.get_durable_block_hash(height));
+            let destination = Self::retained_block_record_path_for(blocks_dir, height);
+            if canonical_hash == Some(record.block_hash) {
+                if let Some(existing) =
+                    self.decode_retained_block_record_at(&destination, &retained_directory)?
+                {
+                    let _ = Self::validate_retained_block_record_at(
+                        &destination,
+                        height,
+                        record.block_hash,
+                        &existing,
+                    )?;
+                    if existing != record {
+                        return Err(Error::ConflictingRetainedBlockRecord { height });
+                    }
+                    std::fs::remove_file(&path).map_err(|error| Error::IO(error, path.clone()))?;
+                } else {
+                    std::fs::rename(&path, &destination)
+                        .map_err(|error| Error::IO(error, path.clone()))?;
+                }
+            } else {
+                std::fs::remove_file(&path).map_err(|error| Error::IO(error, path.clone()))?;
+            }
+        }
+        sync_dir(&retained_directory)
+            .map_err(|error| Error::IO(error, retained_directory.clone()))?;
+        sync_dir(&staging_directory)
+            .map_err(|error| Error::IO(error, staging_directory.clone()))?;
+        std::fs::remove_dir(&staging_directory)
+            .map_err(|error| Error::IO(error, staging_directory.clone()))?;
+        if let Some(parent) = staging_directory.parent() {
+            sync_dir(parent).map_err(|error| Error::IO(error, parent.to_path_buf()))?;
         }
         Ok(())
     }
@@ -6887,6 +8322,8 @@ impl Kura {
         Ok(())
     }
 
+    /// Validate every durable finality envelope against its canonical header,
+    /// retained complete-block wire hash, live body when present, and CommitQC.
     fn validate_v2_finality_inventory_on_startup(&self) -> Result<()> {
         let _canonical_chain_guard = self.canonical_chain_lock.lock();
         let blocks_dir = self.active_blocks_dir.lock().clone();
@@ -6922,6 +8359,12 @@ impl Kura {
                     )
                 })?;
             Self::validate_v2_finality_record_at(&path, height, canonical_hash, &record)?;
+            let (_, canonical_wire_hash, _) = self
+                .retained_block_record_at(&blocks_dir, height, canonical_hash)?
+                .ok_or(Error::MissingRetainedBlockRecord { height })?;
+            if record.artifact.subject.payload_hash != canonical_wire_hash {
+                return Err(Error::V2FinalityPayloadHashMismatch { height });
+            }
             self.verify_v2_finality_artifact_at(
                 &path,
                 &directory,
@@ -7164,17 +8607,20 @@ impl Kura {
     /// Persist a cryptographically valid v2 finality artifact for an already durable block.
     ///
     /// The returned [`KuraV2CommitReceipt`] is created only after the artifact
-    /// contents, atomic rename, artifact directory, and a newly created
-    /// artifact-directory entry have been synchronously persisted.
+    /// contents, canonical header, separately retained complete-block wire
+    /// hash, atomic rename, artifact directory, and a newly created artifact
+    /// directory entry have been synchronously persisted.
     ///
     /// # Errors
     ///
     /// Returns an error if the artifact is malformed, its height or block hash
-    /// differs from Kura's canonical durable block, or persistence fails.
+    /// or signed payload hash differs from Kura's canonical durable block, or
+    /// persistence fails.
     pub fn store_v2_finality_artifact(
         &self,
         artifact: &V2FinalityArtifact,
     ) -> Result<KuraV2CommitReceipt> {
+        self.ensure_canonical_storage_not_poisoned()?;
         artifact.validate()?;
         let height = artifact.height;
         let block_hash = artifact.block_hash;
@@ -7191,6 +8637,7 @@ impl Kura {
         // block-store writer lock is deliberately not retained across BLS work
         // or sidecar I/O.
         let _canonical_chain_guard = self.canonical_chain_lock.lock();
+        self.resolve_canonical_storage_before_mutation()?;
         let block_height = NonZeroUsize::new(usize::try_from(height)?)
             .ok_or(Error::V2FinalityCanonicalHeaderUnavailable { height })?;
         let blocks_dir = self.active_blocks_dir.lock().clone();
@@ -7200,9 +8647,14 @@ impl Kura {
         let canonical_hash = self
             .get_durable_block_hash(block_height)
             .ok_or(Error::V2FinalityCanonicalHeaderUnavailable { height })?;
-        let retained_header =
+        let (retained_header, prepared_retained_record) =
             match self.retained_block_record_at(&blocks_dir, height, canonical_hash)? {
-                Some((header, _)) => header,
+                Some((header, canonical_wire_hash, _)) => {
+                    if artifact.subject.payload_hash != canonical_wire_hash {
+                        return Err(Error::V2FinalityPayloadHashMismatch { height });
+                    }
+                    (header, None)
+                }
                 None => {
                     let canonical_block = self
                         .get_block(block_height)
@@ -7215,13 +8667,18 @@ impl Kura {
                             actual: header.hash(),
                         });
                     }
-                    artifact.validate_for_header(&header)?;
-                    self.persist_retained_block_record(
+                    let prepared = Self::prepare_retained_block_record(
                         &blocks_dir,
                         canonical_hash,
                         canonical_block.as_ref(),
                     )?;
-                    header
+                    if prepared.block_header != header {
+                        return Err(Error::ConflictingRetainedBlockRecord { height });
+                    }
+                    if artifact.subject.payload_hash != prepared.canonical_wire_hash {
+                        return Err(Error::V2FinalityPayloadHashMismatch { height });
+                    }
+                    (header, Some(prepared))
                 }
             };
         let canonical_header = self.canonical_header_for_v2_finality(
@@ -7240,6 +8697,9 @@ impl Kura {
                 return Err(Error::ConflictingV2FinalityArtifact { height });
             }
             self.verify_v2_finality_artifact_at(&path, &dir, &existing.artifact, &read_identity)?;
+            if let Some(prepared) = prepared_retained_record.as_ref() {
+                self.persist_prepared_retained_block_record(&blocks_dir, canonical_hash, prepared)?;
+            }
             return Ok(v2_commit_receipt(&existing.artifact));
         }
 
@@ -7253,6 +8713,9 @@ impl Kura {
             });
         }
         self.verify_v2_finality_crypto(artifact)?;
+        if let Some(prepared) = prepared_retained_record.as_ref() {
+            self.persist_prepared_retained_block_record(&blocks_dir, canonical_hash, prepared)?;
+        }
         #[cfg(test)]
         if self
             .fail_next_v2_finality_write
@@ -7268,6 +8731,7 @@ impl Kura {
         if let Some(parent) = dir.parent() {
             sync_dir(parent).map_err(|error| Error::IO(error, parent.to_path_buf()))?;
         }
+        let accounting_mutation = self.begin_total_disk_usage_mutation();
         if !self.write_atomic_synced_noclobber(&path, &bytes)? {
             let Some((existing, read_identity)) = self.decode_v2_finality_record_at(&path, &dir)?
             else {
@@ -7282,6 +8746,7 @@ impl Kura {
         }
         self.add_total_disk_usage_bytes(u64::try_from(bytes.len())?);
         self.cache_newly_verified_v2_finality(&path, &dir, &record)?;
+        accounting_mutation.finish();
         Ok(v2_commit_receipt(artifact))
     }
 
@@ -7358,13 +8823,14 @@ impl Kura {
     ///
     /// A missing final path returns `Ok(None)`. Incomplete temporary files left
     /// before the atomic rename are ignored. A malformed final path or an
-    /// artifact that does not match Kura's canonical durable block fails closed.
+    /// artifact that does not match Kura's canonical header and separately
+    /// retained complete-block wire hash fails closed.
     ///
     /// # Errors
     ///
     /// Returns an error if decoding, header association, proof-of-possession,
     /// or CommitQC verification fails, the height is zero or absent from the
-    /// durable chain, or the canonical header differs.
+    /// durable chain, or the canonical header/wire association differs.
     pub fn v2_finality_artifact(&self, height: u64) -> Result<Option<V2FinalityArtifact>> {
         Ok(self
             .v2_finality_artifact_with_header(height)?
@@ -7373,12 +8839,14 @@ impl Kura {
 
     /// Read a verified finality artifact together with its retained canonical header.
     ///
-    /// This remains available after the block body is evicted to remote-only storage.
+    /// The signed payload is also matched to the separately retained canonical
+    /// `SignedBlock` wire hash. This remains available after the block body is
+    /// evicted to remote-only storage.
     ///
     /// # Errors
     ///
-    /// Returns an error if the durable record, canonical hash binding, artifact
-    /// structure, or finality cryptography is invalid.
+    /// Returns an error if the durable record, canonical header/wire binding,
+    /// artifact structure, or finality cryptography is invalid.
     pub(crate) fn v2_finality_artifact_with_header(
         &self,
         height: u64,
@@ -7391,12 +8859,13 @@ impl Kura {
     /// Read verified finality and the root-authenticated SCCP archive in one bounded pass.
     ///
     /// Rootless finalized blocks return an empty archive. Combining these reads prevents
-    /// proof-serving callers from decoding and validating the retained record twice.
+    /// proof-serving callers from decoding and validating the retained record twice. The
+    /// finality subject must equal that record's canonical complete-block wire hash.
     ///
     /// # Errors
     ///
-    /// Returns an error if the finality record, retained block record, canonical hash binding,
-    /// SCCP archive, or finality cryptography is invalid.
+    /// Returns an error if the finality record, retained block record, canonical header/wire
+    /// binding, SCCP archive, or finality cryptography is invalid.
     pub(crate) fn v2_finality_artifact_with_archive(
         &self,
         height: u64,
@@ -7407,6 +8876,7 @@ impl Kura {
             Vec<crate::bridge::ValidatedSccpOutboundMessageProjectionV1>,
         )>,
     > {
+        self.ensure_canonical_storage_not_poisoned()?;
         let _canonical_chain_guard = self.canonical_chain_lock.lock();
         let blocks_dir = self.active_blocks_dir.lock().clone();
         let directory = Self::v2_finality_artifact_dir_for(&blocks_dir);
@@ -7428,11 +8898,14 @@ impl Kura {
             });
         };
         Self::validate_v2_finality_record_at(&path, height, block_hash, &record)?;
-        let (retained_header, archive) = self
+        let (retained_header, canonical_wire_hash, archive) = self
             .retained_block_record_at(&blocks_dir, height, block_hash)?
             .ok_or(Error::MissingRetainedBlockRecord { height })?;
         if retained_header != record.block_header {
             return Err(Error::ConflictingRetainedBlockRecord { height });
+        }
+        if record.artifact.subject.payload_hash != canonical_wire_hash {
+            return Err(Error::V2FinalityPayloadHashMismatch { height });
         }
         self.verify_v2_finality_artifact_at(&path, &directory, &record.artifact, &read_identity)?;
         Ok(Some((record.block_header, record.artifact, archive)))
@@ -8580,6 +10053,7 @@ impl Kura {
         let Some(path) = self.block_plain_text_path.lock().clone() else {
             return;
         };
+        let accounting_mutation = self.begin_total_disk_usage_mutation();
         let debug_before = match Self::file_len_or_zero(&path) {
             Ok(bytes) => Some(bytes),
             Err(err) => {
@@ -8600,7 +10074,10 @@ impl Kura {
         }
         if let Some(debug_before) = debug_before {
             match Self::file_len_or_zero(&path) {
-                Ok(debug_after) => self.update_disk_usage_delta(debug_before, debug_after),
+                Ok(debug_after) => {
+                    self.update_disk_usage_delta(debug_before, debug_after);
+                    accounting_mutation.finish();
+                }
                 Err(err) => warn!(
                     ?err,
                     path = %path.display(),
@@ -8611,6 +10088,7 @@ impl Kura {
     }
 
     fn persist_block_at_height(&self, block: &Arc<SignedBlock>, height: u64) -> Result<()> {
+        self.ensure_canonical_storage_not_poisoned()?;
         #[cfg(test)]
         if self.fail_next_block_write.swap(false, Ordering::Relaxed) {
             return Err(Error::IO(
@@ -8629,7 +10107,8 @@ impl Kura {
                 None
             }
         };
-        let da_before = if self.disk_usage_total_initialized.load(Ordering::Relaxed) {
+        let total_initialized = self.disk_usage_total_initialized.load(Ordering::Relaxed);
+        let da_before = if total_initialized {
             match Self::da_payload_bytes_for_range(&block_store, start_height, 1) {
                 Ok(bytes) => Some(bytes),
                 Err(err) => {
@@ -8640,23 +10119,54 @@ impl Kura {
         } else {
             None
         };
-        block_store.append_block_batch_at(
+        let accounting_mutation = self.begin_total_disk_usage_mutation();
+        let mut accounting_complete =
+            block_store_before.is_some() && (!total_initialized || da_before.is_some());
+        if let Err(error) = block_store.append_block_batch_at(
             start_height,
             std::slice::from_ref(block),
             self.max_disk_usage_bytes,
-        )?;
+        ) {
+            if matches!(error, Error::DaBlockRewriteCommitStateUnknown { .. }) {
+                self.poison_canonical_storage("ambiguous DA block rewrite publication", &error);
+            }
+            return Err(error);
+        }
+        if let Some(message) = block_store.take_deferred_da_recovery_fault() {
+            let recovery_error = Error::IO(
+                std::io::Error::other(message),
+                block_store.da_block_rewrite_stage_path(),
+            );
+            self.poison_canonical_storage("committed DA block rewrite recovery", &recovery_error);
+        }
         block_store.flush_pending_fsync(true)?;
+        let rewritten_index = block_store.read_block_index(start_height)?;
+        if !rewritten_index.is_evicted()
+            && let Err(error) = block_store.remove_da_block_file(height)
+        {
+            warn!(
+                ?error,
+                height, "canonical inline rewrite is durable but stale DA-sidecar cleanup failed"
+            );
+            self.record_writer_fault("stale DA-sidecar cleanup", &error);
+        }
 
         if let Some(block_store_before) = block_store_before {
             match Self::block_store_tracked_bytes(&mut block_store) {
                 Ok(after_bytes) => self.update_disk_usage_delta(block_store_before, after_bytes),
-                Err(err) => warn!(?err, "failed to measure block store bytes after append"),
+                Err(err) => {
+                    accounting_complete = false;
+                    warn!(?err, "failed to measure block store bytes after append");
+                }
             }
         }
         if let Some(da_before) = da_before {
             match Self::da_payload_bytes_for_range(&block_store, start_height, 1) {
                 Ok(da_after) => self.update_total_disk_usage_delta(da_before, da_after),
-                Err(err) => warn!(?err, "failed to measure DA payload bytes after append"),
+                Err(err) => {
+                    accounting_complete = false;
+                    warn!(?err, "failed to measure DA payload bytes after append");
+                }
             }
         }
         match usize::try_from(height) {
@@ -8665,6 +10175,9 @@ impl Kura {
                 warn!(?err, height, "failed to cache Kura durable budget metadata");
                 self.invalidate_durable_budget_snapshot();
             }
+        }
+        if accounting_complete {
+            accounting_mutation.finish();
         }
         Ok(())
     }
@@ -8675,6 +10188,9 @@ impl Kura {
         merge_entry: Option<&MergeLedgerEntry>,
     ) -> Result<()> {
         let _canonical_chain_guard = self.canonical_chain_lock.lock();
+        self.resolve_canonical_storage_before_mutation()?;
+        let blocks_dir = self.active_blocks_dir.lock().clone();
+        self.resolve_retained_block_rewrite_stage_before_canonical_mutation(&blocks_dir)?;
         let block_hash = block.hash();
         let actual_height = block.header().height().get();
         let actual_height_usize = usize::try_from(actual_height)?;
@@ -8712,7 +10228,7 @@ impl Kura {
             if actual_height <= u64::try_from(block_data.len())? {
                 let chain_len = block_data.len();
                 drop(block_data);
-                self.ensure_durable_block_at_height(actual_height, block_hash)?;
+                self.ensure_existing_block_wire_matches(block, actual_height, block_hash)?;
                 self.persist_lane_payload_ownership_artifacts_for_block(block)?;
                 self.set_block_height_index_entry(actual_height_usize, block_hash);
                 if let Some(entry) = merge_entry {
@@ -8735,7 +10251,7 @@ impl Kura {
         }
 
         self.check_storage_budget(block, merge_entry)?;
-        let mut lane_artifacts = self.stage_lane_payload_ownership_artifacts_for_block(
+        self.validate_lane_payload_ownership_artifacts_for_block(
             block,
             LaneBlockArtifactConflictPolicy::PreserveCanonical,
         )?;
@@ -8750,10 +10266,8 @@ impl Kura {
         if actual_height <= u64::try_from(block_data.len())? {
             let chain_len = block_data.len();
             drop(block_data);
-            self.ensure_durable_block_at_height(actual_height, block_hash)?;
-            if let Some(batch) = lane_artifacts.take() {
-                batch.commit();
-            }
+            self.ensure_existing_block_wire_matches(block, actual_height, block_hash)?;
+            self.persist_lane_payload_ownership_artifacts_for_block(block)?;
             self.set_block_height_index_entry(actual_height_usize, block_hash);
             if let Some(entry) = merge_entry {
                 self.append_committed_merge_entry_for_block_if_missing(block, entry)?;
@@ -8773,70 +10287,18 @@ impl Kura {
             return Ok(());
         }
 
-        let mut merge_rollback = None;
-        if let Some(entry) = merge_entry {
-            match self.append_committed_merge_entry_for_block_if_missing(block, entry) {
-                Ok(rollback) => merge_rollback = Some((entry.canonical_hash(), rollback)),
-                Err(err) => {
-                    error!(
-                        ?err,
-                        ?block_hash,
-                        entry_epoch = entry.epoch_id,
-                        "Failed to append merge-ledger entry/carrier while storing block"
-                    );
-                    if let Some(mut batch) = lane_artifacts.take()
-                        && let Err(rollback_err) = batch.rollback()
-                    {
-                        error!(
-                            ?rollback_err,
-                            ?block_hash,
-                            "Failed to rollback lane artifacts after merge-ledger append failure"
-                        );
-                    }
-                    return Err(err);
-                }
-            }
-        }
+        self.write_canonical_association_stage(block, merge_entry)?;
 
         if let Err(err) = self.persist_block_at_height(block, actual_height) {
-            if let Some((_, (merge_log_len_before, carrier_written))) = merge_rollback {
-                if let Err(rollback_err) = self.truncate_merge_log_to_len(merge_log_len_before) {
-                    error!(
-                        ?rollback_err,
-                        ?block_hash,
-                        "Failed to rollback merge-ledger entry after block write failure"
-                    );
-                }
-                if carrier_written {
-                    let record = merge_entry
-                        .map(|entry| MergeLedgerCarrierRecord::new(entry, block))
-                        .expect("merge rollback record has an entry");
-                    let _guard = self.merge_carrier_lock.lock();
-                    if let Err(rollback_err) = self.remove_merge_carrier_record_unlocked(record) {
-                        error!(
-                            ?rollback_err,
-                            ?block_hash,
-                            "Failed to rollback merge carrier after block write failure"
-                        );
-                    }
-                }
+            if matches!(err, Error::DaBlockRewriteCommitStateUnknown { .. }) {
+                // Startup resolves the marker first, then applies or discards the durable
+                // association stage against the selected canonical block hash.
+                return Err(err);
             }
-            if let Some(mut batch) = lane_artifacts.take()
-                && let Err(rollback_err) = batch.rollback()
-            {
-                error!(
-                    ?rollback_err,
-                    ?block_hash,
-                    "Failed to rollback lane artifacts after block write failure"
-                );
-            }
+            self.remove_canonical_association_stage()?;
             return Err(err);
         }
 
-        if let Some(batch) = lane_artifacts.take() {
-            batch.commit();
-        }
-        let committed_pending_entry = merge_rollback.map(|(entry_hash, _)| entry_hash);
         block_data.push((block_hash, Some(Arc::clone(block))));
         Self::drop_persisted_blocks(
             &mut block_data,
@@ -8852,11 +10314,13 @@ impl Kura {
             merge_entry,
         );
         drop(block_data);
-        // Pending sidecars are redundant after the merge log and carrier are
-        // durable. Release canonical block state before taking `sidecar_lock`
-        // so lane-artifact readers cannot form a sidecar/block-data lock cycle.
-        if let Some(entry_hash) = committed_pending_entry {
-            self.remove_committed_pending_merge_entry_best_effort(entry_hash);
+        // Apply associations only after block_data and the durable marker agree. The durable
+        // stage remains authoritative across any post-commit association failure.
+        if let Err(association_error) = self.recover_canonical_association_stage() {
+            self.poison_canonical_storage(
+                "committed canonical association recovery",
+                &association_error,
+            );
         }
         self.append_debug_block_dump(block);
 
@@ -9288,7 +10752,11 @@ impl Kura {
         let mut total = Self::block_store_bytes(blocks_dir)?;
         let da_dir = blocks_dir.join(DA_BLOCKS_DIR_NAME);
         total = total.saturating_add(Self::dir_file_bytes(&da_dir)?);
-        for directory in [RETAINED_BLOCKS_DIR_NAME, V2_FINALITY_ARTIFACTS_DIR_NAME] {
+        for directory in [
+            RETAINED_BLOCKS_DIR_NAME,
+            RETAINED_BLOCK_REWRITE_STAGING_DIR_NAME,
+            V2_FINALITY_ARTIFACTS_DIR_NAME,
+        ] {
             total = total.saturating_add(Self::dir_file_bytes(&blocks_dir.join(directory))?);
         }
         Ok(total)
@@ -9444,11 +10912,27 @@ impl Kura {
         used = used.saturating_add(Self::blocks_root_bytes(&retired_blocks_root)?);
         used = used.saturating_add(Self::merge_root_bytes(&retired_merge_root)?);
         used = used.saturating_add(Self::directory_tree_file_bytes(&retired_geometry_root)?);
+        used = used.saturating_add(Self::directory_tree_file_bytes(
+            &self.store_root.join(MERGE_CARRIERS_DIR),
+        )?);
+        used = used.saturating_add(Self::directory_tree_file_bytes(
+            &self.store_root.join(PENDING_MERGE_ENTRIES_DIR),
+        )?);
         let roster_journal = CommitRosterJournal::journal_path(&self.store_root);
         used = used.saturating_add(Self::file_len_or_zero(&roster_journal)?);
         used = used.saturating_add(Self::file_len_or_zero(
             &roster_journal.with_extension("norito.tmp"),
         )?);
+        for journal_name in [
+            crate::query::index_status::QueryIndexJournal::JOURNAL_FILE,
+            crate::query::projection_checkpoint_journal::QueryProjectionCheckpointJournal::JOURNAL_FILE,
+        ] {
+            let path = self.store_root.join(journal_name);
+            used = used.saturating_add(Self::file_len_or_zero(&path)?);
+            used = used.saturating_add(Self::file_len_or_zero(
+                &path.with_extension("norito.tmp"),
+            )?);
+        }
         used = used.saturating_add(Self::file_len_or_zero(&self.lane_geometry_journal_path())?);
         used = used.saturating_add(Self::file_len_or_zero(
             &self
@@ -9475,11 +10959,27 @@ impl Kura {
         used = used.saturating_add(Self::blocks_root_total_bytes(&retired_blocks_root)?);
         used = used.saturating_add(Self::merge_root_bytes(&retired_merge_root)?);
         used = used.saturating_add(Self::directory_tree_file_bytes(&retired_geometry_root)?);
+        used = used.saturating_add(Self::directory_tree_file_bytes(
+            &self.store_root.join(MERGE_CARRIERS_DIR),
+        )?);
+        used = used.saturating_add(Self::directory_tree_file_bytes(
+            &self.store_root.join(PENDING_MERGE_ENTRIES_DIR),
+        )?);
         let roster_journal = CommitRosterJournal::journal_path(&self.store_root);
         used = used.saturating_add(Self::file_len_or_zero(&roster_journal)?);
         used = used.saturating_add(Self::file_len_or_zero(
             &roster_journal.with_extension("norito.tmp"),
         )?);
+        for journal_name in [
+            crate::query::index_status::QueryIndexJournal::JOURNAL_FILE,
+            crate::query::projection_checkpoint_journal::QueryProjectionCheckpointJournal::JOURNAL_FILE,
+        ] {
+            let path = self.store_root.join(journal_name);
+            used = used.saturating_add(Self::file_len_or_zero(&path)?);
+            used = used.saturating_add(Self::file_len_or_zero(
+                &path.with_extension("norito.tmp"),
+            )?);
+        }
         used = used.saturating_add(Self::file_len_or_zero(&self.lane_geometry_journal_path())?);
         used = used.saturating_add(Self::file_len_or_zero(
             &self
@@ -9487,6 +10987,46 @@ impl Kura {
                 .with_extension("norito.tmp"),
         )?);
         Ok(used)
+    }
+
+    #[cfg(test)]
+    fn remove_one_regular_file_below_for_tests(root: &Path) -> std::io::Result<bool> {
+        let mut pending = vec![root.to_path_buf()];
+        while let Some(directory) = pending.pop() {
+            let mut entries =
+                std::fs::read_dir(&directory)?.collect::<std::io::Result<Vec<_>>>()?;
+            entries.sort_by_key(std::fs::DirEntry::file_name);
+            let mut child_directories = Vec::new();
+            for entry in entries {
+                let file_type = entry.file_type()?;
+                if file_type.is_file() || file_type.is_symlink() {
+                    std::fs::remove_file(entry.path())?;
+                    return Ok(true);
+                }
+                if file_type.is_dir() {
+                    child_directories.push(entry.path());
+                }
+            }
+            child_directories.reverse();
+            pending.extend(child_directories);
+        }
+        Ok(false)
+    }
+
+    fn remove_disposable_retired_tree(&self, root: &Path) -> std::io::Result<()> {
+        #[cfg(test)]
+        if self
+            .fail_next_retired_tree_purge_after_one_removal
+            .swap(false, Ordering::AcqRel)
+        {
+            let removed = Self::remove_one_regular_file_below_for_tests(root)?;
+            return Err(std::io::Error::other(if removed {
+                "injected retired-tree purge failure after one file removal"
+            } else {
+                "injected retired-tree purge failure before any file removal"
+            }));
+        }
+        std::fs::remove_dir_all(root)
     }
 
     fn purge_retired_storage(&self) -> bool {
@@ -9522,23 +11062,30 @@ impl Kura {
         // Only these two legacy trees are disposable.  In particular, never
         // broadly remove `retired/lane_geometry`: only exact transition roots already moved into
         // the journal's snapshot-proven pending-GC set above are disposable.
+        let accounting_mutation = self.begin_total_disk_usage_mutation();
+        let mut accounting_complete = true;
         if retired_blocks_root.exists() {
             let sizes = Self::blocks_root_bytes(&retired_blocks_root).and_then(|budget| {
                 Self::blocks_root_total_bytes(&retired_blocks_root).map(|total| (budget, total))
             });
             match sizes {
-                Ok((budget, total)) => match std::fs::remove_dir_all(&retired_blocks_root) {
-                    Ok(()) => {
-                        removed_any = true;
-                        removed_budget_bytes = removed_budget_bytes.saturating_add(budget);
-                        removed_total_bytes = removed_total_bytes.saturating_add(total);
+                Ok((budget, total)) => {
+                    match self.remove_disposable_retired_tree(&retired_blocks_root) {
+                        Ok(()) => {
+                            removed_any = true;
+                            removed_budget_bytes = removed_budget_bytes.saturating_add(budget);
+                            removed_total_bytes = removed_total_bytes.saturating_add(total);
+                        }
+                        Err(err) => {
+                            accounting_complete = false;
+                            warn!(
+                                ?err,
+                                path = %retired_blocks_root.display(),
+                                "failed to purge retired block segments while reclaiming disk budget"
+                            );
+                        }
                     }
-                    Err(err) => warn!(
-                        ?err,
-                        path = %retired_blocks_root.display(),
-                        "failed to purge retired block segments while reclaiming disk budget"
-                    ),
-                },
+                }
                 Err(err) => warn!(
                     ?err,
                     path = %retired_blocks_root.display(),
@@ -9548,17 +11095,20 @@ impl Kura {
         }
         if retired_merge_root.exists() {
             match Self::merge_root_bytes(&retired_merge_root) {
-                Ok(bytes) => match std::fs::remove_dir_all(&retired_merge_root) {
+                Ok(bytes) => match self.remove_disposable_retired_tree(&retired_merge_root) {
                     Ok(()) => {
                         removed_any = true;
                         removed_budget_bytes = removed_budget_bytes.saturating_add(bytes);
                         removed_total_bytes = removed_total_bytes.saturating_add(bytes);
                     }
-                    Err(err) => warn!(
-                        ?err,
-                        path = %retired_merge_root.display(),
-                        "failed to purge retired merge-ledger segments while reclaiming disk budget"
-                    ),
+                    Err(err) => {
+                        accounting_complete = false;
+                        warn!(
+                            ?err,
+                            path = %retired_merge_root.display(),
+                            "failed to purge retired merge-ledger segments while reclaiming disk budget"
+                        );
+                    }
                 },
                 Err(err) => warn!(
                     ?err,
@@ -9571,8 +11121,11 @@ impl Kura {
         if !removed_any {
             return false;
         }
+        // `sub_disk_usage_bytes` maintains both the enforced and total counters. Only the
+        // retained/finality bytes excluded from the enforced budget need a second, total-only
+        // subtraction.
         self.sub_disk_usage_bytes(removed_budget_bytes);
-        self.sub_total_disk_usage_bytes(removed_total_bytes);
+        self.sub_total_disk_usage_bytes(removed_total_bytes.saturating_sub(removed_budget_bytes));
         // Preserve non-legacy children such as `lane_geometry`; remove the
         // container itself only when the two purged trees were its last entries.
         let _ = std::fs::remove_dir(&retired_root);
@@ -9580,6 +11133,9 @@ impl Kura {
             path = %retired_root.display(),
             "purged disposable retired Kura segments to reclaim disk budget"
         );
+        if accounting_complete {
+            accounting_mutation.finish();
+        }
         true
     }
 
@@ -9880,7 +11436,10 @@ impl Kura {
     /// storage budget.
     pub fn replace_top_block(&self, block: impl Into<Arc<SignedBlock>>) -> Result<()> {
         let _canonical_chain_guard = self.canonical_chain_lock.lock();
+        self.resolve_canonical_storage_before_mutation()?;
         self.invalidate_pending_budget_cache();
+        let blocks_dir = self.active_blocks_dir.lock().clone();
+        self.resolve_retained_block_rewrite_stage_before_canonical_mutation(&blocks_dir)?;
         let block = block.into();
         let height = block.header().height().get();
         let height_usize = usize::try_from(height)?;
@@ -9911,7 +11470,7 @@ impl Kura {
             if Self::validate_top_replacement(data.as_slice(), height, height_usize, block_hash)? {
                 let chain_len = data.len();
                 drop(data);
-                self.ensure_durable_block_at_height(height, block_hash)?;
+                self.ensure_existing_block_wire_matches(&block, height, block_hash)?;
                 self.persist_lane_payload_ownership_artifacts_for_block(&block)?;
                 self.set_block_height_index_entry(height_usize, block_hash);
                 self.set_transaction_entrypoint_index_entry(height_usize, &block, chain_len, None);
@@ -9919,7 +11478,6 @@ impl Kura {
             }
         }
 
-        let blocks_dir = self.active_blocks_dir.lock().clone();
         self.ensure_v2_finality_allows_rewrite_from(&blocks_dir, height)?;
 
         self.check_replace_storage_budget(block.as_ref())?;
@@ -9932,15 +11490,24 @@ impl Kura {
         if Self::validate_top_replacement(data.as_slice(), height, height_usize, block_hash)? {
             let chain_len = data.len();
             drop(data);
-            self.ensure_durable_block_at_height(height, block_hash)?;
+            self.ensure_existing_block_wire_matches(&block, height, block_hash)?;
             self.persist_lane_payload_ownership_artifacts_for_block(&block)?;
             self.set_block_height_index_entry(height_usize, block_hash);
             self.set_transaction_entrypoint_index_entry(height_usize, &block, chain_len, None);
             return Ok(());
         }
 
-        self.persist_block_at_height(&block, height)?;
-        self.prune_retained_block_records_from(&blocks_dir, height)?;
+        self.write_canonical_association_stage(&block, None)?;
+        match self.with_retained_block_records_staged_for_rewrite(&blocks_dir, height, || {
+            self.persist_block_at_height(&block, height)
+        }) {
+            Ok(publication) => publication.into_output(self),
+            Err(error @ Error::DaBlockRewriteCommitStateUnknown { .. }) => return Err(error),
+            Err(error) => {
+                self.remove_canonical_association_stage()?;
+                return Err(error);
+            }
+        }
 
         if let Some(top) = data.last_mut() {
             *top = (block_hash, Some(Arc::clone(&block)));
@@ -9950,7 +11517,12 @@ impl Kura {
         self.set_block_height_index_entry(height_usize, block_hash);
         self.set_transaction_entrypoint_index_entry(height_usize, &block, chain_len, None);
         drop(data);
-        self.persist_lane_payload_ownership_artifacts_for_block(&block)?;
+        if let Err(association_error) = self.recover_canonical_association_stage() {
+            self.poison_canonical_storage(
+                "committed replacement association recovery",
+                &association_error,
+            );
+        }
         self.prune_wsv_checkpoints_above(height.saturating_sub(1))?;
         self.prune_commit_manifests_above(height.saturating_sub(1))?;
         self.append_debug_block_dump(&block);
@@ -10006,11 +11578,13 @@ impl Kura {
     /// finality, persisted block storage pruning fails, or truncating the merge log fails.
     pub fn prune_to_height(&self, height: u64) -> Result<()> {
         let _canonical_chain_guard = self.canonical_chain_lock.lock();
+        self.resolve_canonical_storage_before_mutation()?;
         let keep = usize::try_from(height)?;
         if keep >= self.blocks_count() {
             return Ok(());
         }
         let blocks_dir = self.active_blocks_dir.lock().clone();
+        self.resolve_retained_block_rewrite_stage_before_canonical_mutation(&blocks_dir)?;
         self.ensure_v2_finality_allows_rewrite_from(&blocks_dir, height.saturating_add(1))?;
         let carrier_records = self.merge_carrier_records()?;
         let merge_entries = self.merge_log.lock().all_entries()?;
@@ -10037,37 +11611,53 @@ impl Kura {
             .take_while(|record| record.block_height <= height)
             .count();
         let retained_merge_entries = retained_legacy.saturating_add(retained_carriers);
-        {
-            let mut data = self.block_data.lock();
-            if keep >= data.len() {
-                return Ok(());
-            }
-            data.truncate(keep);
-        }
-        self.truncate_block_height_index(keep);
-        self.truncate_transaction_entrypoint_index(keep);
-        self.invalidate_pending_budget_cache();
-
-        if !self.store_root.as_os_str().is_empty() {
-            let _write_guard = self.block_store_write_lock.lock();
-            let mut store = self.block_store.lock();
-            let before_bytes = match Self::block_store_tracked_bytes(&mut store) {
-                Ok(bytes) => Some(bytes),
-                Err(err) => {
-                    warn!(?err, "failed to measure block store bytes before prune");
-                    None
+        self.with_retained_block_records_staged_for_rewrite(
+            &blocks_dir,
+            height.saturating_add(1),
+            || {
+                if !self.store_root.as_os_str().is_empty() {
+                    let _write_guard = self.block_store_write_lock.lock();
+                    let mut store = self.block_store.lock();
+                    let before_bytes = match Self::block_store_tracked_bytes(&mut store) {
+                        Ok(bytes) => Some(bytes),
+                        Err(err) => {
+                            warn!(?err, "failed to measure block store bytes before prune");
+                            None
+                        }
+                    };
+                    let accounting_mutation = self.begin_total_disk_usage_mutation();
+                    store.prune(height)?;
+                    let mut accounting_complete = before_bytes.is_some();
+                    if let Some(before_bytes) = before_bytes {
+                        match Self::block_store_tracked_bytes(&mut store) {
+                            Ok(after_bytes) => {
+                                self.update_disk_usage_delta(before_bytes, after_bytes)
+                            }
+                            Err(err) => {
+                                accounting_complete = false;
+                                warn!(?err, "failed to measure block store bytes after prune");
+                            }
+                        }
+                    }
+                    if accounting_complete {
+                        accounting_mutation.finish();
+                    }
+                    self.publish_durable_budget_snapshot(keep, 0);
                 }
-            };
-            store.prune(height)?;
-            if let Some(before_bytes) = before_bytes {
-                match Self::block_store_tracked_bytes(&mut store) {
-                    Ok(after_bytes) => self.update_disk_usage_delta(before_bytes, after_bytes),
-                    Err(err) => warn!(?err, "failed to measure block store bytes after prune"),
+                {
+                    let mut data = self.block_data.lock();
+                    if keep >= data.len() {
+                        return Ok(());
+                    }
+                    data.truncate(keep);
                 }
-            }
-            self.publish_durable_budget_snapshot(keep, 0);
-        }
-        self.prune_retained_block_records_from(&blocks_dir, height.saturating_add(1))?;
+                self.truncate_block_height_index(keep);
+                self.truncate_transaction_entrypoint_index(keep);
+                self.invalidate_pending_budget_cache();
+                Ok(())
+            },
+        )?
+        .into_output(self);
 
         self.truncate_merge_log_to_len(retained_merge_entries)?;
         {
@@ -10088,7 +11678,10 @@ impl Kura {
                 None
             }
         };
+        let roster_accounting_mutation = self.begin_total_disk_usage_mutation();
+        let mut roster_accounting_complete = roster_before.is_some();
         if let Err(err) = self.roster_log.lock().truncate_to_height(height) {
+            roster_accounting_complete = false;
             warn!(
                 ?err,
                 height, "failed to truncate commit roster journal after Kura prune"
@@ -10097,8 +11690,14 @@ impl Kura {
         if let Some(roster_before) = roster_before {
             match self.roster_journal_tracked_bytes() {
                 Ok(after_bytes) => self.update_disk_usage_delta(roster_before, after_bytes),
-                Err(err) => warn!(?err, "failed to measure commit roster journal after prune"),
+                Err(err) => {
+                    roster_accounting_complete = false;
+                    warn!(?err, "failed to measure commit roster journal after prune");
+                }
             }
+        }
+        if roster_accounting_complete {
+            roster_accounting_mutation.finish();
         }
 
         self.prune_wsv_checkpoints_above(height)?;
@@ -10127,11 +11726,17 @@ impl Kura {
 
     /// Returns count of blocks Kura currently holds
     pub fn blocks_count(&self) -> usize {
+        if self.canonical_storage_poisoned.load(Ordering::Acquire) {
+            return 0;
+        }
         self.block_data.lock().len()
     }
 
     /// Returns count of blocks Kura has durably committed to disk.
     pub fn durable_blocks_count(&self) -> usize {
+        if self.canonical_storage_poisoned.load(Ordering::Acquire) {
+            return 0;
+        }
         let mut block_store = self.block_store.lock();
         block_store
             .read_durable_index_count()
@@ -10142,6 +11747,9 @@ impl Kura {
 
     /// Return the canonical block hash recorded at `height` without decoding the block body.
     pub fn block_hash_at_height(&self, height: NonZeroUsize) -> Option<HashOf<BlockHeader>> {
+        if self.canonical_storage_poisoned.load(Ordering::Acquire) {
+            return None;
+        }
         self.block_data
             .lock()
             .get(height.get().saturating_sub(1))
@@ -10227,6 +11835,9 @@ impl Kura {
         }
 
         let _canonical_chain_guard = self.canonical_chain_lock.lock();
+        self.resolve_canonical_storage_before_mutation()?;
+        let blocks_dir = self.active_blocks_dir.lock().clone();
+        self.resolve_retained_block_rewrite_stage_before_canonical_mutation(&blocks_dir)?;
         let mut block_data = self.block_data.lock();
         let current = block_data.len();
         let target = snapshot_hashes.len();
@@ -10282,62 +11893,68 @@ impl Kura {
         rewrite_from = rewrite_from.min(shared);
 
         if rewrite_from < current {
-            let blocks_dir = self.active_blocks_dir.lock().clone();
             self.ensure_v2_finality_allows_rewrite_from(
                 &blocks_dir,
                 u64::try_from(rewrite_from)?.saturating_add(1),
             )?;
         }
 
-        let _write_guard = self.block_store_write_lock.lock();
-        let mut block_store = self.block_store.lock();
         let start = u64::try_from(rewrite_from)?;
         let target_u64 = u64::try_from(target)?;
+        self.with_retained_block_records_staged_for_rewrite(
+            &blocks_dir,
+            u64::try_from(rewrite_from)?.saturating_add(1),
+            || {
+                let _write_guard = self.block_store_write_lock.lock();
+                let mut block_store = self.block_store.lock();
+                let before_bytes = Self::block_store_tracked_bytes(&mut block_store).ok();
+                let accounting_mutation = self.begin_total_disk_usage_mutation();
 
-        let hashes_file = block_store.ensure_hashes_file()?;
-        hashes_file.try_io(|file| {
-            file.set_len(target_u64.saturating_mul(SIZE_OF_BLOCK_HASH))?;
-            file.seek(SeekFrom::Start(start.saturating_mul(SIZE_OF_BLOCK_HASH)))?;
-            for hash in &snapshot_hashes[rewrite_from..] {
-                file.write_all(hash.as_ref())?;
-            }
-            file.flush()
-        })?;
+                let hashes_file = block_store.ensure_hashes_file()?;
+                hashes_file.try_io(|file| {
+                    file.set_len(target_u64.saturating_mul(SIZE_OF_BLOCK_HASH))?;
+                    file.seek(SeekFrom::Start(start.saturating_mul(SIZE_OF_BLOCK_HASH)))?;
+                    for hash in &snapshot_hashes[rewrite_from..] {
+                        file.write_all(hash.as_ref())?;
+                    }
+                    file.flush()
+                })?;
 
-        let index_file = block_store.ensure_index_file()?;
-        index_file.try_io(|file| {
-            file.set_len(target_u64.saturating_mul(BlockIndex::SIZE))?;
-            file.seek(SeekFrom::Start(start.saturating_mul(BlockIndex::SIZE)))?;
-            let entry = BlockIndex {
-                start: EVICTED_BLOCK_START,
-                length: 0,
-            }
-            .encode();
-            for _ in rewrite_from..target {
-                file.write_all(&entry)?;
-            }
-            file.flush()
-        })?;
+                let index_file = block_store.ensure_index_file()?;
+                index_file.try_io(|file| {
+                    file.set_len(target_u64.saturating_mul(BlockIndex::SIZE))?;
+                    file.seek(SeekFrom::Start(start.saturating_mul(BlockIndex::SIZE)))?;
+                    let entry = BlockIndex {
+                        start: EVICTED_BLOCK_START,
+                        length: 0,
+                    }
+                    .encode();
+                    for _ in rewrite_from..target {
+                        file.write_all(&entry)?;
+                    }
+                    file.flush()
+                })?;
 
-        if matches!(mode, HashOnlySnapshotExtensionMode::VerifiedLocalSnapshot) {
-            // The marker is the durable proof that these zero-length entries came from a fully
-            // verified local snapshot. Sync its hash/index inputs first even when normal Kura
-            // fsync is disabled, then publish the ordinary count marker last.
-            block_store.sync_target(FsyncTarget::Hashes, BlockStore::ensure_hashes_file)?;
-            block_store.sync_target(FsyncTarget::Index, BlockStore::ensure_index_file)?;
-            block_store.write_verified_snapshot_tail_marker(start, snapshot_hashes)?;
-        }
+                if matches!(mode, HashOnlySnapshotExtensionMode::VerifiedLocalSnapshot) {
+                    // The marker is the durable proof that these zero-length entries came from a
+                    // fully verified local snapshot. Sync its hash/index inputs first even when
+                    // normal Kura fsync is disabled, then publish the ordinary count marker last.
+                    block_store.sync_target(FsyncTarget::Hashes, BlockStore::ensure_hashes_file)?;
+                    block_store.sync_target(FsyncTarget::Index, BlockStore::ensure_index_file)?;
+                    block_store.write_verified_snapshot_tail_marker(start, snapshot_hashes)?;
+                }
 
-        block_store.publish_commit_marker(target_u64)?;
-        drop(block_store);
-
-        if rewrite_from < current {
-            let blocks_dir = self.active_blocks_dir.lock().clone();
-            self.prune_retained_block_records_from(
-                &blocks_dir,
-                u64::try_from(rewrite_from)?.saturating_add(1),
-            )?;
-        }
+                block_store.publish_commit_marker(target_u64)?;
+                if let Some(before_bytes) = before_bytes
+                    && let Ok(after_bytes) = Self::block_store_tracked_bytes(&mut block_store)
+                {
+                    self.update_disk_usage_delta(before_bytes, after_bytes);
+                    accounting_mutation.finish();
+                }
+                Ok(())
+            },
+        )?
+        .into_output(self);
 
         block_data.truncate(rewrite_from);
         block_data.extend(
@@ -10372,7 +11989,7 @@ impl Kura {
     }
 }
 
-#[cfg(any(test, feature = "bench"))]
+#[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
 impl Kura {
     /// Persist a benchmark block directly into the canonical block store.
     ///
@@ -10383,11 +12000,13 @@ impl Kura {
         let _write_guard = self.block_store_write_lock.lock();
         let mut store = self.block_store.lock();
         let before_bytes = Self::block_store_tracked_bytes(&mut store)?;
+        let accounting_mutation = self.begin_total_disk_usage_mutation();
         store.append_block_to_chain(block.as_ref())?;
         let after_bytes = Self::block_store_tracked_bytes(&mut store)?;
         self.update_disk_usage_delta(before_bytes, after_bytes);
         let persisted_count = usize::try_from(block.header().height().get())?;
         self.publish_durable_budget_snapshot(persisted_count, 0);
+        accounting_mutation.finish();
         Ok(())
     }
 
@@ -10438,6 +12057,46 @@ impl Kura {
     }
 }
 
+#[cfg(any(test, feature = "iroha-core-tests"))]
+impl Kura {
+    /// Remove the local DA cache only after a canonical body was genuinely evicted.
+    ///
+    /// This test-only hook models a remote-only historical block so downstream
+    /// proof-serving regressions cannot accidentally succeed by re-decoding the
+    /// complete local body instead of the immutable retained record.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `height` is absent, still inline, or its local
+    /// sidecar cannot be removed.
+    pub fn remove_evicted_block_sidecar_for_testing(&self, height: NonZeroUsize) -> Result<()> {
+        let index = u64::try_from(height.get().saturating_sub(1))?;
+        {
+            let mut store = self.block_store.lock();
+            let block_index = store.read_block_index(index)?;
+            if !block_index.is_evicted() {
+                let path = store.da_block_path(u64::try_from(height.get())?);
+                return Err(Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::InvalidInput,
+                        "cannot remove a DA sidecar for a block whose canonical body is still inline",
+                    ),
+                    path,
+                ));
+            }
+            store.remove_da_block_file(u64::try_from(height.get())?)?;
+        }
+        if let Some((_, cached)) = self
+            .block_data
+            .lock()
+            .get_mut(height.get().saturating_sub(1))
+        {
+            *cached = None;
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 impl Kura {
     /// Persist one canonical test block and its exact retained SCCP archive.
@@ -10459,6 +12118,7 @@ impl Kura {
         let mut store = self.block_store.lock();
         let before_bytes = Self::block_store_tracked_bytes(&mut store)
             .expect("measure block store bytes before test append");
+        let accounting_mutation = self.begin_total_disk_usage_mutation();
         store
             .append_block_to_chain(block.as_ref())
             .expect("persist block for tests");
@@ -10469,6 +12129,7 @@ impl Kura {
             Ok(persisted_count) => self.publish_durable_budget_snapshot(persisted_count, 0),
             Err(_) => self.invalidate_durable_budget_snapshot(),
         }
+        accounting_mutation.finish();
     }
 
     fn pause_next_eviction_after_snapshot_for_tests(&self) {
@@ -10485,6 +12146,46 @@ impl Kura {
     fn resume_eviction_after_snapshot_for_tests(&self) {
         self.eviction_paused_after_snapshot
             .store(false, Ordering::Release);
+    }
+
+    fn pause_next_total_disk_usage_scan_after_scan_for_tests(&self) {
+        self.total_disk_usage_scan_paused
+            .store(false, Ordering::Release);
+        self.pause_total_disk_usage_scan_after_scan
+            .store(true, Ordering::Release);
+    }
+
+    fn total_disk_usage_scan_paused_for_tests(&self) -> bool {
+        self.total_disk_usage_scan_paused.load(Ordering::Acquire)
+    }
+
+    fn resume_total_disk_usage_scan_for_tests(&self) {
+        self.total_disk_usage_scan_paused
+            .store(false, Ordering::Release);
+    }
+
+    fn fail_retained_rewrite_discard_after_for_tests(&self, removed_index: usize) {
+        self.fail_retained_rewrite_discard_after
+            .store(removed_index, Ordering::Release);
+    }
+
+    /// Return raw cache state together with independent exact scans without refreshing caches.
+    pub(crate) fn disk_usage_accounting_snapshot_for_tests(
+        &self,
+    ) -> Result<DiskUsageAccountingSnapshotForTesting> {
+        Ok(DiskUsageAccountingSnapshotForTesting {
+            enforced_initialized: self.disk_usage_initialized.load(Ordering::Acquire),
+            total_initialized: self.disk_usage_total_initialized.load(Ordering::Acquire),
+            cached_enforced_bytes: self.disk_usage.load(Ordering::Relaxed),
+            cached_total_bytes: self.disk_usage_total.load(Ordering::Relaxed),
+            exact_enforced_bytes: self.kura_disk_usage_bytes()?,
+            exact_total_bytes: self.kura_total_disk_usage_bytes()?,
+        })
+    }
+
+    fn fail_next_retired_tree_purge_after_one_removal_for_tests(&self) {
+        self.fail_next_retired_tree_purge_after_one_removal
+            .store(true, Ordering::Release);
     }
 
     pub(crate) fn fail_next_store_for_tests(&self) {
@@ -10540,6 +12241,45 @@ pub struct BlockStore {
     data_mmap_len: u64,
     commit_marker_count: u64,
     commit_marker_pending: Option<u64>,
+    /// Committed DA rewrite whose body promotion must be retried before the next mutation.
+    deferred_da_recovery_fault: Option<String>,
+    /// Test hook for failing after a DA rewrite is staged and journal files are written, but before
+    /// its commit marker is published.
+    #[cfg(test)]
+    fail_next_da_rewrite_before_marker: AtomicBool,
+    /// Test hook for failing after a DA rewrite marker is durable but before body promotion.
+    #[cfg(test)]
+    fail_next_da_rewrite_after_marker: AtomicBool,
+    /// Test-only abrupt-stop boundary after journal writes and before marker publication.
+    #[cfg(test)]
+    crash_next_da_rewrite_before_marker: AtomicBool,
+    /// Test-only abrupt-stop boundary after marker publication and before body promotion.
+    #[cfg(test)]
+    crash_next_da_rewrite_after_marker: AtomicBool,
+    /// Test hook for failing before the next atomic commit-marker write.
+    #[cfg(test)]
+    fail_next_commit_marker_write: AtomicBool,
+    /// Test hook for failing the next commit-marker readback.
+    #[cfg(test)]
+    fail_next_commit_marker_read: AtomicBool,
+    /// Test hook for failing acknowledgement after a marker was atomically persisted and synced.
+    #[cfg(test)]
+    fail_next_commit_marker_ack_after_persist: AtomicBool,
+    /// Test hook for a pre-persist marker failure followed by an unreadable marker state.
+    #[cfg(test)]
+    fail_next_commit_marker_write_and_readback: AtomicBool,
+    /// Test hook for a persisted new marker followed by acknowledgement/readback failure.
+    #[cfg(test)]
+    fail_next_commit_marker_ack_and_readback: AtomicBool,
+    /// Test-only abrupt-stop boundary after an eviction compaction stage is durable.
+    #[cfg(test)]
+    crash_next_eviction_after_stage: AtomicBool,
+    /// Test-only abrupt-stop boundary after replacement data is promoted.
+    #[cfg(test)]
+    crash_next_eviction_after_data_promotion: AtomicBool,
+    /// Test-only abrupt-stop boundary after both replacement files are promoted.
+    #[cfg(test)]
+    crash_next_eviction_after_index_promotion: AtomicBool,
 }
 
 impl Debug for BlockStore {
@@ -10686,12 +12426,126 @@ impl BlockIndex {
     }
 }
 
-#[derive(Debug, Clone, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+#[norito(deny_unknown_fields)]
 struct BlockStoreCommitMarker {
     /// Marker format version (v1).
     version: u32,
     /// Count of blocks that are fully durable on disk.
     count: u64,
+    /// Canonical header hash at `count`, or `None` for the empty chain.
+    tip_hash: Option<HashOf<BlockHeader>>,
+}
+
+/// Exact old or replacement image for one height in a staged canonical rewrite.
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+#[norito(deny_unknown_fields)]
+struct DaBlockRewriteImageV1 {
+    /// One-based canonical block height.
+    height: u64,
+    /// Canonical block-header hash journal value.
+    block_hash: HashOf<BlockHeader>,
+    /// Raw block-index start value.
+    index_start: u64,
+    /// Raw framed-block length committed by the index.
+    index_length: u64,
+    /// Exact framed block bytes, absent only for an authenticated hash-only entry.
+    body: Option<Vec<u8>>,
+}
+
+impl DaBlockRewriteImageV1 {
+    fn index(&self) -> BlockIndex {
+        BlockIndex {
+            start: self.index_start,
+            length: self.index_length,
+        }
+    }
+}
+
+/// Write-ahead record making DA-sidecar and canonical-journal rewrites recoverable.
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+#[norito(deny_unknown_fields)]
+struct DaBlockRewriteStageV1 {
+    /// Stage format version.
+    format_version: u16,
+    /// Durable marker before the rewrite began.
+    old_marker: BlockStoreCommitMarker,
+    /// Marker published only after all replacement journal files are durable.
+    new_marker: BlockStoreCommitMarker,
+    /// Exact old data-file length.
+    old_data_len: u64,
+    /// Exact old index-journal entry count.
+    old_index_count: u64,
+    /// Exact old hash-journal entry count.
+    old_hash_count: u64,
+    /// Complete old suffix beginning at the first rewritten height.
+    old_suffix: Vec<DaBlockRewriteImageV1>,
+    /// Complete replacement suffix supplied by the caller.
+    replacement: Vec<DaBlockRewriteImageV1>,
+}
+
+/// Exact canonical identity of one body moved to DA storage by compaction.
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+#[norito(deny_unknown_fields)]
+struct EvictionCompactionEntryV1 {
+    /// One-based canonical block height.
+    height: u64,
+    /// Canonical header hash at `height`.
+    block_hash: HashOf<BlockHeader>,
+    /// Hash of the complete framed signed-block wire image.
+    canonical_wire_hash: Hash,
+    /// Exact framed signed-block byte length retained in the evicted index entry.
+    wire_len: u64,
+}
+
+/// Roll-forward manifest for the two-file body-eviction compaction publication.
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+#[norito(deny_unknown_fields)]
+struct EvictionCompactionStageV1 {
+    /// Stage format version.
+    format_version: u16,
+    /// Exact durable commit marker that must remain unchanged by compaction.
+    marker: BlockStoreCommitMarker,
+    /// Byte length of the exact canonical marker file.
+    marker_len: u64,
+    /// Digest of the exact canonical marker file.
+    marker_digest: Hash,
+    /// Byte length of the exact canonical hash journal.
+    hashes_len: u64,
+    /// Digest of the exact canonical hash journal.
+    hashes_digest: Hash,
+    /// Fixed basename of the synced replacement data file.
+    data_temp_name: String,
+    /// Exact replacement data-file length.
+    data_len: u64,
+    /// Digest of the exact replacement data file.
+    data_digest: Hash,
+    /// Fixed basename of the synced replacement index file.
+    index_temp_name: String,
+    /// Exact replacement index-file length.
+    index_len: u64,
+    /// Digest of the exact replacement index file.
+    index_digest: Hash,
+    /// Dense canonical identities of all bodies newly moved to DA storage.
+    evicted: Vec<EvictionCompactionEntryV1>,
+}
+
+/// Durable lane/merge association decision resolved only after the canonical marker is known.
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+#[norito(deny_unknown_fields)]
+struct CanonicalAssociationStageV1 {
+    /// Stage format version.
+    format_version: u16,
+    /// One-based block height.
+    height: u64,
+    /// Canonical block-header hash.
+    block_hash: HashOf<BlockHeader>,
+    /// Hash of the complete framed signed-block wire image.
+    canonical_wire_hash: Hash,
+    /// Complete framed signed-block wire image needed for deterministic recovery.
+    block_wire: Vec<u8>,
+    /// Optional complete certified merge entry carried by this block.
+    merge_entry: Option<MergeLedgerEntry>,
 }
 
 /// Authenticated metadata for a body-less Kura suffix recovered from a verified local snapshot.
@@ -10733,10 +12587,12 @@ fn verified_snapshot_hash_journal_digest(snapshot_hashes: &[HashOf<BlockHeader>]
 impl BlockStoreCommitMarker {
     const VERSION: u32 = 1;
 
-    fn new(count: u64) -> Self {
+    fn new(count: u64, tip_hash: Option<HashOf<BlockHeader>>) -> Self {
+        debug_assert_eq!(count == 0, tip_hash.is_none());
         Self {
             version: Self::VERSION,
             count,
+            tip_hash,
         }
     }
 }
@@ -12968,6 +14824,13 @@ impl Kura {
                 "lane artifact block height must be non-zero",
             ));
         }
+        let _accounting_mutation = [
+            data_path.with_extension("norito.tmp"),
+            index_path.with_extension("index.tmp"),
+        ]
+        .into_iter()
+        .any(|path| path.exists())
+        .then(|| self.begin_total_disk_usage_mutation());
         Self::recover_indexed_sidecar_artifacts(&data_path, &index_path, "lane block artifact");
 
         if let Some(existing) = Self::read_indexed_sidecar_from_paths_with_recovery(
@@ -13019,6 +14882,7 @@ impl Kura {
                 "lane artifact block height must be non-zero",
             ));
         }
+        let accounting_mutation = self.begin_total_disk_usage_mutation();
         std::fs::create_dir_all(&dir).map_err(|err| Error::MkDir(err, dir.clone()))?;
         Self::recover_indexed_sidecar_artifacts(&data_path, &index_path, "lane block artifact");
 
@@ -13080,16 +14944,23 @@ impl Kura {
                 data_path,
             ));
         }
+        let mut accounting_complete = checkpoint.tracked_bytes_before.is_some();
         if let Some(before_bytes) = checkpoint.tracked_bytes_before {
             match Self::sidecar_tracked_bytes(&data_path, &index_path, None) {
                 Ok(after_bytes) => self.update_disk_usage_delta(before_bytes, after_bytes),
-                Err(err) => iroha_logger::warn!(
-                    ?err,
-                    lane = %lane_id.as_u32(),
-                    lane_block_height,
-                    "failed to measure lane artifact bytes after write"
-                ),
+                Err(err) => {
+                    accounting_complete = false;
+                    iroha_logger::warn!(
+                        ?err,
+                        lane = %lane_id.as_u32(),
+                        lane_block_height,
+                        "failed to measure lane artifact bytes after write"
+                    );
+                }
             }
+        }
+        if accounting_complete {
+            accounting_mutation.finish();
         }
         Ok(Some(checkpoint))
     }
@@ -13161,6 +15032,7 @@ impl Kura {
         &self,
         checkpoint: &LaneBlockArtifactWriteCheckpoint,
     ) -> Result<()> {
+        let accounting_mutation = self.begin_total_disk_usage_mutation();
         let tracked_bytes_after_write =
             Self::sidecar_tracked_bytes(&checkpoint.data_path, &checkpoint.index_path, None).ok();
 
@@ -13339,6 +15211,7 @@ impl Kura {
                     after_rollback, "lane artifact rollback restored different tracked byte count"
                 );
             }
+            accounting_mutation.finish();
         }
 
         Ok(())
@@ -13420,6 +15293,7 @@ impl Kura {
             }
         };
         let payload = artifact.encode_framed()?;
+        let accounting_mutation = self.begin_total_disk_usage_mutation();
         let wrote = Self::append_indexed_sidecar(
             &data_path,
             &index_path,
@@ -13436,16 +15310,23 @@ impl Kura {
                 data_path,
             ));
         }
+        let mut accounting_complete = before_bytes.is_some();
         if let Some(before_bytes) = before_bytes {
             match Self::sidecar_tracked_bytes(&data_path, &index_path, None) {
                 Ok(after_bytes) => self.update_disk_usage_delta(before_bytes, after_bytes),
-                Err(err) => iroha_logger::warn!(
-                    ?err,
-                    lane = %lane_id.as_u32(),
-                    lane_block_height,
-                    "failed to measure certified lane block bytes after write"
-                ),
+                Err(err) => {
+                    accounting_complete = false;
+                    iroha_logger::warn!(
+                        ?err,
+                        lane = %lane_id.as_u32(),
+                        lane_block_height,
+                        "failed to measure certified lane block bytes after write"
+                    );
+                }
             }
+        }
+        if accounting_complete {
+            accounting_mutation.finish();
         }
         Ok(())
     }
@@ -13781,6 +15662,7 @@ impl Kura {
             .flatten()
             .and_then(&validate_state);
 
+        let accounting_mutation = self.begin_total_disk_usage_mutation();
         let tracked_before = Self::file_len_or_zero(path)
             .unwrap_or(0)
             .saturating_add(Self::file_len_or_zero(&temp_path).unwrap_or(0));
@@ -13831,6 +15713,7 @@ impl Kura {
             .unwrap_or(0)
             .saturating_add(Self::file_len_or_zero(&temp_path).unwrap_or(0));
         self.update_disk_usage_delta(tracked_before, tracked_after);
+        accounting_mutation.finish();
         result
     }
 
@@ -13865,6 +15748,7 @@ impl Kura {
         let temp_path = Self::autonomous_lane_block_view_state_temp_path(path);
         let before_bytes =
             Self::file_len_or_zero(path)?.saturating_add(Self::file_len_or_zero(&temp_path)?);
+        let accounting_mutation = self.begin_total_disk_usage_mutation();
         if let Err(err) = std::fs::remove_file(&temp_path)
             && err.kind() != ErrorKind::NotFound
         {
@@ -13896,6 +15780,7 @@ impl Kura {
         let after_bytes =
             Self::file_len_or_zero(path)?.saturating_add(Self::file_len_or_zero(&temp_path)?);
         self.update_disk_usage_delta(before_bytes, after_bytes);
+        accounting_mutation.finish();
         Ok(())
     }
 
@@ -14001,11 +15886,13 @@ impl Kura {
 
     fn remove_autonomous_lane_entrypoint_claim_file(&self, path: &Path) -> Result<()> {
         let bytes = Self::file_len_or_zero(path)?;
+        let accounting_mutation = self.begin_total_disk_usage_mutation();
         match std::fs::remove_file(path) {
             Ok(()) => self.sub_disk_usage_bytes(bytes),
             Err(err) if err.kind() == ErrorKind::NotFound => {}
             Err(err) => return Err(Error::IO(err, path.to_path_buf())),
         }
+        accounting_mutation.finish();
         Ok(())
     }
 
@@ -14013,6 +15900,7 @@ impl Kura {
         &self,
         payload: &LaneExecutablePayloadV1,
     ) -> Result<Vec<(PathBuf, AutonomousLaneEntrypointClaimV1)>> {
+        let accounting_mutation = self.begin_total_disk_usage_mutation();
         let mut staged = Vec::with_capacity(payload.entrypoint_hashes.len());
         let mut staged_dirs = BTreeSet::new();
         let fsync_mode = self.sidecar_fsync_mode();
@@ -14114,6 +16002,7 @@ impl Kura {
                 sync_dir(&dir).map_err(|err| Error::IO(err, dir))?;
             }
         }
+        accounting_mutation.finish();
         Ok(staged)
     }
 
@@ -14121,6 +16010,7 @@ impl Kura {
         &self,
         staged: &[(PathBuf, AutonomousLaneEntrypointClaimV1)],
     ) -> Result<()> {
+        let accounting_mutation = self.begin_total_disk_usage_mutation();
         for (path, expected) in staged {
             let temp_path = Self::autonomous_lane_entrypoint_claim_temp_path(path);
             if path.exists() {
@@ -14155,6 +16045,7 @@ impl Kura {
                 ));
             }
         }
+        accounting_mutation.finish();
         Ok(())
     }
 
@@ -14251,6 +16142,7 @@ impl Kura {
             Self::autonomous_lane_block_view_state_temp_path(&view_state_path);
         let stale_view_bytes = Self::file_len_or_zero(&view_state_path)?
             .saturating_add(Self::file_len_or_zero(&view_state_temp_path)?);
+        let accounting_mutation = self.begin_total_disk_usage_mutation();
         for stale_path in [view_state_path.clone(), view_state_temp_path] {
             if let Err(err) = std::fs::remove_file(&stale_path)
                 && err.kind() != ErrorKind::NotFound
@@ -14261,6 +16153,7 @@ impl Kura {
         if stale_view_bytes > 0 {
             self.sub_disk_usage_bytes(stale_view_bytes);
         }
+        accounting_mutation.finish();
         Ok(())
     }
 
@@ -14786,6 +16679,7 @@ impl Kura {
         let lane_block_height = current.descriptor.lane_block_height;
         let before_bytes = Self::sidecar_tracked_bytes(data_path, index_path, None).ok();
         let payload = artifact.encode_framed()?;
+        let accounting_mutation = self.begin_total_disk_usage_mutation();
         if !Self::append_indexed_sidecar(
             data_path,
             index_path,
@@ -14805,6 +16699,7 @@ impl Kura {
             && let Ok(after_bytes) = Self::sidecar_tracked_bytes(data_path, index_path, None)
         {
             self.update_disk_usage_delta(before_bytes, after_bytes);
+            accounting_mutation.finish();
         }
         Ok(())
     }
@@ -14870,6 +16765,7 @@ impl Kura {
                 "lane execution input height must be non-zero",
             ));
         }
+        let accounting_mutation = self.begin_total_disk_usage_mutation();
         std::fs::create_dir_all(&dir).map_err(|err| Error::MkDir(err, dir.clone()))?;
 
         if let Some(existing) = self.read_lane_block_execution_input(lane_id, lane_block_height) {
@@ -14933,16 +16829,23 @@ impl Kura {
                 data_path,
             ));
         }
+        let mut accounting_complete = before_bytes.is_some();
         if let Some(before_bytes) = before_bytes {
             match Self::sidecar_tracked_bytes(&data_path, &index_path, None) {
                 Ok(after_bytes) => self.update_disk_usage_delta(before_bytes, after_bytes),
-                Err(err) => iroha_logger::warn!(
-                    ?err,
-                    lane = %lane_id.as_u32(),
-                    lane_block_height,
-                    "failed to measure lane execution input bytes after write"
-                ),
+                Err(err) => {
+                    accounting_complete = false;
+                    iroha_logger::warn!(
+                        ?err,
+                        lane = %lane_id.as_u32(),
+                        lane_block_height,
+                        "failed to measure lane execution input bytes after write"
+                    );
+                }
             }
+        }
+        if accounting_complete {
+            accounting_mutation.finish();
         }
         Ok(())
     }
@@ -15139,6 +17042,7 @@ impl Kura {
                 "lane execution preflight height must be non-zero",
             ));
         }
+        let accounting_mutation = self.begin_total_disk_usage_mutation();
         std::fs::create_dir_all(&dir).map_err(|err| Error::MkDir(err, dir.clone()))?;
 
         if let Some(existing) = self.read_lane_block_execution_preflight(lane_id, lane_block_height)
@@ -15210,16 +17114,23 @@ impl Kura {
                 data_path,
             ));
         }
+        let mut accounting_complete = before_bytes.is_some();
         if let Some(before_bytes) = before_bytes {
             match Self::sidecar_tracked_bytes(&data_path, &index_path, None) {
                 Ok(after_bytes) => self.update_disk_usage_delta(before_bytes, after_bytes),
-                Err(err) => iroha_logger::warn!(
-                    ?err,
-                    lane = %lane_id.as_u32(),
-                    lane_block_height,
-                    "failed to measure lane execution preflight bytes after write"
-                ),
+                Err(err) => {
+                    accounting_complete = false;
+                    iroha_logger::warn!(
+                        ?err,
+                        lane = %lane_id.as_u32(),
+                        lane_block_height,
+                        "failed to measure lane execution preflight bytes after write"
+                    );
+                }
             }
+        }
+        if accounting_complete {
+            accounting_mutation.finish();
         }
         Ok(())
     }
@@ -15721,6 +17632,7 @@ impl Kura {
             }
         };
         let payload = artifact.encode_framed()?;
+        let accounting_mutation = self.begin_total_disk_usage_mutation();
         let wrote = Self::append_indexed_sidecar(
             &data_path,
             &index_path,
@@ -15737,16 +17649,23 @@ impl Kura {
                 data_path,
             ));
         }
+        let mut accounting_complete = before_bytes.is_some();
         if let Some(before_bytes) = before_bytes {
             match Self::sidecar_tracked_bytes(&data_path, &index_path, None) {
                 Ok(after_bytes) => self.update_disk_usage_delta(before_bytes, after_bytes),
-                Err(err) => iroha_logger::warn!(
-                    ?err,
-                    lane = %lane_id.as_u32(),
-                    lane_block_height,
-                    "failed to measure lane application receipt bytes after write"
-                ),
+                Err(err) => {
+                    accounting_complete = false;
+                    iroha_logger::warn!(
+                        ?err,
+                        lane = %lane_id.as_u32(),
+                        lane_block_height,
+                        "failed to measure lane application receipt bytes after write"
+                    );
+                }
             }
+        }
+        if accounting_complete {
+            accounting_mutation.finish();
         }
         Ok(())
     }
@@ -16865,6 +18784,7 @@ impl Kura {
                 }
             };
             let fsync_mode = self.sidecar_fsync_mode();
+            let accounting_mutation = self.begin_total_disk_usage_mutation();
             let wrote_norito = match sidecar.encode_framed() {
                 Ok(buf) => Self::append_indexed_sidecar(
                     &data_path,
@@ -16897,16 +18817,23 @@ impl Kura {
                     );
                 }
             }
+            let mut accounting_complete = before_bytes.is_some();
             if let Some(before_bytes) = before_bytes {
                 match Self::sidecar_tracked_bytes(&data_path, &index_path, Some(&json_sidecar_path))
                 {
                     Ok(after_bytes) => self.update_disk_usage_delta(before_bytes, after_bytes),
-                    Err(err) => iroha_logger::warn!(
-                        ?err,
-                        ?dir,
-                        "failed to measure pipeline sidecar bytes after write"
-                    ),
+                    Err(err) => {
+                        accounting_complete = false;
+                        iroha_logger::warn!(
+                            ?err,
+                            ?dir,
+                            "failed to measure pipeline sidecar bytes after write"
+                        );
+                    }
                 }
+            }
+            if accounting_complete {
+                accounting_mutation.finish();
             }
         }
     }
@@ -16937,6 +18864,7 @@ impl Kura {
         let data_path = dir.join(PIPELINE_SIDECARS_DATA_FILE);
         let index_path = dir.join(PIPELINE_SIDECARS_INDEX_FILE);
         let json_sidecar_path = dir.join(format!("block_{height}.json"));
+        let accounting_mutation = self.begin_total_disk_usage_mutation();
         let Some(mut sidecar) = self.read_indexed_sidecar(
             height,
             PIPELINE_SIDECARS_DATA_FILE,
@@ -17023,16 +18951,23 @@ impl Kura {
                     "failed to remove JSON pipeline sidecar after FASTPQ proof update"
                 );
             }
+            let mut accounting_complete = before_bytes.is_some();
             if let Some(before_bytes) = before_bytes {
                 match Self::sidecar_tracked_bytes(&data_path, &index_path, Some(&json_sidecar_path))
                 {
                     Ok(after_bytes) => self.update_disk_usage_delta(before_bytes, after_bytes),
-                    Err(err) => iroha_logger::warn!(
-                        ?err,
-                        ?dir,
-                        "failed to measure pipeline sidecar bytes after FASTPQ proof write"
-                    ),
+                    Err(err) => {
+                        accounting_complete = false;
+                        iroha_logger::warn!(
+                            ?err,
+                            ?dir,
+                            "failed to measure pipeline sidecar bytes after FASTPQ proof write"
+                        );
+                    }
                 }
+            }
+            if accounting_complete {
+                accounting_mutation.finish();
             }
             FastpqProofWriteResult::Written
         } else {
@@ -17068,6 +19003,7 @@ impl Kura {
                 }
             };
             let fsync_mode = self.sidecar_fsync_mode();
+            let accounting_mutation = self.begin_total_disk_usage_mutation();
             let wrote_norito = match sidecar.encode_framed() {
                 Ok(buf) => Self::append_indexed_sidecar(
                     &data_path,
@@ -17094,15 +19030,22 @@ impl Kura {
                     "failed to persist roster metadata sidecar"
                 );
             }
+            let mut accounting_complete = before_bytes.is_some();
             if let Some(before_bytes) = before_bytes {
                 match Self::sidecar_tracked_bytes(&data_path, &index_path, None) {
                     Ok(after_bytes) => self.update_disk_usage_delta(before_bytes, after_bytes),
-                    Err(err) => iroha_logger::warn!(
-                        ?err,
-                        ?dir,
-                        "failed to measure roster sidecar bytes after write"
-                    ),
+                    Err(err) => {
+                        accounting_complete = false;
+                        iroha_logger::warn!(
+                            ?err,
+                            ?dir,
+                            "failed to measure roster sidecar bytes after write"
+                        );
+                    }
                 }
+            }
+            if accounting_complete {
+                accounting_mutation.finish();
             }
         }
     }
@@ -18945,12 +20888,11 @@ impl Kura {
 }
 
 impl BlockStore {
-    fn retarget_path(&mut self, path: PathBuf) -> Result<()> {
+    fn retarget_existing_path(&mut self, path: PathBuf) {
         self.drop_cached_handles();
         self.path_to_blockchain = path;
         self.da_blocks_dir = self.path_to_blockchain.join(DA_BLOCKS_DIR_NAME);
         self.fsync.clear();
-        self.create_files_if_they_do_not_exist()
     }
 
     /// Create a new block store in `path`.
@@ -18979,6 +20921,31 @@ impl BlockStore {
             data_mmap_len: 0,
             commit_marker_count: 0,
             commit_marker_pending: None,
+            deferred_da_recovery_fault: None,
+            #[cfg(test)]
+            fail_next_da_rewrite_before_marker: AtomicBool::new(false),
+            #[cfg(test)]
+            fail_next_da_rewrite_after_marker: AtomicBool::new(false),
+            #[cfg(test)]
+            crash_next_da_rewrite_before_marker: AtomicBool::new(false),
+            #[cfg(test)]
+            crash_next_da_rewrite_after_marker: AtomicBool::new(false),
+            #[cfg(test)]
+            fail_next_commit_marker_write: AtomicBool::new(false),
+            #[cfg(test)]
+            fail_next_commit_marker_read: AtomicBool::new(false),
+            #[cfg(test)]
+            fail_next_commit_marker_ack_after_persist: AtomicBool::new(false),
+            #[cfg(test)]
+            fail_next_commit_marker_write_and_readback: AtomicBool::new(false),
+            #[cfg(test)]
+            fail_next_commit_marker_ack_and_readback: AtomicBool::new(false),
+            #[cfg(test)]
+            crash_next_eviction_after_stage: AtomicBool::new(false),
+            #[cfg(test)]
+            crash_next_eviction_after_data_promotion: AtomicBool::new(false),
+            #[cfg(test)]
+            crash_next_eviction_after_index_promotion: AtomicBool::new(false),
         }
     }
 
@@ -18992,6 +20959,495 @@ impl BlockStore {
         }
         std::fs::create_dir_all(&self.da_blocks_dir)
             .map_err(|err| Error::MkDir(err, self.da_blocks_dir.clone()))
+    }
+
+    fn eviction_compaction_stage_path(&self) -> PathBuf {
+        self.path_to_blockchain
+            .join(EVICTION_COMPACTION_STAGE_FILE_NAME)
+    }
+
+    fn eviction_compaction_data_path(&self) -> PathBuf {
+        self.path_to_blockchain
+            .join(EVICTION_COMPACTION_DATA_FILE_NAME)
+    }
+
+    fn eviction_compaction_index_path(&self) -> PathBuf {
+        self.path_to_blockchain
+            .join(EVICTION_COMPACTION_INDEX_FILE_NAME)
+    }
+
+    fn invalid_eviction_compaction_stage(&self, message: impl Into<String>) -> Error {
+        Error::IO(
+            std::io::Error::new(ErrorKind::InvalidData, message.into()),
+            self.eviction_compaction_stage_path(),
+        )
+    }
+
+    fn eviction_file_digest(path: &Path) -> Result<(u64, Hash)> {
+        let before = std::fs::symlink_metadata(path)
+            .map_err(|error| Error::IO(error, path.to_path_buf()))?;
+        if before.file_type().is_symlink() || !before.is_file() {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "eviction file digest target is not a regular file",
+                ),
+                path.to_path_buf(),
+            ));
+        }
+        let mut file = std::fs::OpenOptions::new()
+            .read(true)
+            .open(path)
+            .map_err(|error| Error::IO(error, path.to_path_buf()))?;
+        let opened = file
+            .metadata()
+            .map_err(|error| Error::IO(error, path.to_path_buf()))?;
+        if !opened.is_file() || !Kura::sidecar_file_metadata_unchanged(&before, &opened) {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "eviction file changed while it was opened for hashing",
+                ),
+                path.to_path_buf(),
+            ));
+        }
+
+        let mut digest = Hash::new(EVICTION_FILE_DIGEST_DOMAIN);
+        let mut total = 0_u64;
+        let mut buffer = [0_u8; 64 * 1024];
+        loop {
+            let read = file
+                .read(&mut buffer)
+                .map_err(|error| Error::IO(error, path.to_path_buf()))?;
+            if read == 0 {
+                break;
+            }
+            let read_u64 = u64::try_from(read)?;
+            total = total.checked_add(read_u64).ok_or_else(|| {
+                Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        "eviction file length overflowed while hashing",
+                    ),
+                    path.to_path_buf(),
+                )
+            })?;
+            let read_bytes = read_u64.to_le_bytes();
+            digest = Hash::new_from_chunks(&[
+                EVICTION_FILE_DIGEST_DOMAIN,
+                digest.as_ref(),
+                read_bytes.as_slice(),
+                &buffer[..read],
+            ]);
+        }
+        let total_bytes = total.to_le_bytes();
+        digest = Hash::new_from_chunks(&[
+            EVICTION_FILE_DIGEST_DOMAIN,
+            digest.as_ref(),
+            total_bytes.as_slice(),
+        ]);
+
+        let after_handle = file
+            .metadata()
+            .map_err(|error| Error::IO(error, path.to_path_buf()))?;
+        let after_path = std::fs::symlink_metadata(path)
+            .map_err(|error| Error::IO(error, path.to_path_buf()))?;
+        if total != before.len()
+            || !Kura::sidecar_file_metadata_unchanged(&before, &after_handle)
+            || !Kura::sidecar_file_metadata_unchanged(&before, &after_path)
+        {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "eviction file changed while it was being hashed",
+                ),
+                path.to_path_buf(),
+            ));
+        }
+        Ok((total, digest))
+    }
+
+    fn eviction_file_matches(
+        path: &Path,
+        expected_len: u64,
+        expected_digest: Hash,
+    ) -> Result<bool> {
+        match std::fs::symlink_metadata(path) {
+            Ok(metadata) => {
+                if metadata.file_type().is_symlink() || !metadata.is_file() {
+                    return Err(Error::IO(
+                        std::io::Error::new(
+                            ErrorKind::InvalidData,
+                            "eviction compaction file is not a regular file",
+                        ),
+                        path.to_path_buf(),
+                    ));
+                }
+                if metadata.len() != expected_len {
+                    return Ok(false);
+                }
+            }
+            Err(error) if error.kind() == ErrorKind::NotFound => return Ok(false),
+            Err(error) => return Err(Error::IO(error, path.to_path_buf())),
+        }
+        let (actual_len, actual_digest) = Self::eviction_file_digest(path)?;
+        Ok(actual_len == expected_len && actual_digest == expected_digest)
+    }
+
+    fn validate_eviction_compaction_stage(&self, stage: &EvictionCompactionStageV1) -> Result<()> {
+        let expected_index_len = stage
+            .marker
+            .count
+            .checked_mul(BlockIndex::SIZE)
+            .ok_or_else(|| {
+                self.invalid_eviction_compaction_stage("eviction index length overflowed")
+            })?;
+        let expected_hashes_len = stage
+            .marker
+            .count
+            .checked_mul(u64::try_from(Hash::LENGTH)?)
+            .ok_or_else(|| {
+                self.invalid_eviction_compaction_stage("eviction hash length overflowed")
+            })?;
+        if stage.format_version != EVICTION_COMPACTION_STAGE_VERSION
+            || stage.marker.version != BlockStoreCommitMarker::VERSION
+            || stage.marker.count < 2
+            || stage.marker.tip_hash.is_none()
+            || stage.marker_len == 0
+            || stage.hashes_len != expected_hashes_len
+            || stage.data_temp_name != EVICTION_COMPACTION_DATA_FILE_NAME
+            || stage.index_temp_name != EVICTION_COMPACTION_INDEX_FILE_NAME
+            || stage.index_len != expected_index_len
+            || stage.evicted.is_empty()
+            || stage.evicted.len() > MAX_EVICTION_COMPACTION_ENTRIES
+        {
+            return Err(self.invalid_eviction_compaction_stage(
+                "eviction compaction stage envelope is inconsistent",
+            ));
+        }
+        let mut previous_height = 0_u64;
+        for entry in &stage.evicted {
+            if entry.height <= 1
+                || entry.height > stage.marker.count
+                || entry.height <= previous_height
+                || entry.wire_len == 0
+                || entry.wire_len > STRICT_INIT_MAX_BLOCK_BYTES
+            {
+                return Err(self.invalid_eviction_compaction_stage(
+                    "eviction compaction entry is out of bounds or not strictly ordered",
+                ));
+            }
+            previous_height = entry.height;
+        }
+        Ok(())
+    }
+
+    fn read_eviction_compaction_stage(&self) -> Result<Option<EvictionCompactionStageV1>> {
+        let path = self.eviction_compaction_stage_path();
+        let metadata = match std::fs::symlink_metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(Error::IO(error, path)),
+        };
+        if metadata.file_type().is_symlink()
+            || !metadata.is_file()
+            || !Kura::sidecar_is_single_link(&metadata)
+            || metadata.len() > MAX_EVICTION_COMPACTION_STAGE_BYTES
+        {
+            return Err(self.invalid_eviction_compaction_stage(
+                "eviction compaction stage is not a bounded regular file",
+            ));
+        }
+        let bytes = std::fs::read(&path).map_err(|error| Error::IO(error, path.clone()))?;
+        let stage = norito::decode_from_bytes::<EvictionCompactionStageV1>(&bytes)
+            .map_err(|error| Error::NoritoFrame(error.into()))?;
+        self.validate_eviction_compaction_stage(&stage)?;
+        Ok(Some(stage))
+    }
+
+    fn write_eviction_compaction_stage(&self, stage: &EvictionCompactionStageV1) -> Result<()> {
+        self.validate_eviction_compaction_stage(stage)?;
+        let path = self.eviction_compaction_stage_path();
+        if self.read_eviction_compaction_stage()?.is_some() {
+            return Err(self.invalid_eviction_compaction_stage(
+                "a prior eviction compaction stage is still present",
+            ));
+        }
+        let parent = path.parent().ok_or_else(|| {
+            Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidInput,
+                    "eviction compaction stage has no parent",
+                ),
+                path.clone(),
+            )
+        })?;
+        let bytes = norito::to_bytes(stage).map_err(Error::NoritoFrame)?;
+        if u64::try_from(bytes.len())? > MAX_EVICTION_COMPACTION_STAGE_BYTES {
+            return Err(self.invalid_eviction_compaction_stage(
+                "eviction compaction stage exceeds its hard size limit",
+            ));
+        }
+        let mut temporary = tempfile::Builder::new()
+            .prefix(".kura-eviction-stage-")
+            .tempfile_in(parent)
+            .map_err(|error| Error::IO(error, parent.to_path_buf()))?;
+        temporary
+            .as_file_mut()
+            .write_all(&bytes)
+            .and_then(|()| temporary.as_file_mut().flush())
+            .and_then(|()| temporary.as_file().sync_all())
+            .map_err(|error| Error::IO(error, path.clone()))?;
+        let persisted = temporary
+            .persist_noclobber(&path)
+            .map_err(|error| Error::IO(error.error, path.clone()))?;
+        persisted
+            .sync_all()
+            .map_err(|error| Error::IO(error, path.clone()))?;
+        sync_dir(parent).map_err(|error| Error::IO(error, parent.to_path_buf()))?;
+        Ok(())
+    }
+
+    fn remove_eviction_compaction_path(&self, path: &Path) -> Result<bool> {
+        match std::fs::remove_file(path) {
+            Ok(()) => Ok(true),
+            Err(error) if error.kind() == ErrorKind::NotFound => Ok(false),
+            Err(error) => Err(Error::IO(error, path.to_path_buf())),
+        }
+    }
+
+    fn cleanup_unpublished_eviction_compaction_files(&self) -> Result<()> {
+        let data = self.eviction_compaction_data_path();
+        let index = self.eviction_compaction_index_path();
+        let removed = self.remove_eviction_compaction_path(&data)?
+            | self.remove_eviction_compaction_path(&index)?;
+        if removed {
+            sync_dir(&self.path_to_blockchain)
+                .map_err(|error| Error::IO(error, self.path_to_blockchain.clone()))?;
+        }
+        Ok(())
+    }
+
+    fn validate_eviction_compaction_result(
+        &mut self,
+        stage: &EvictionCompactionStageV1,
+    ) -> Result<()> {
+        let data_path = self.path_to_blockchain.join(DATA_FILE_NAME);
+        let index_path = self.path_to_blockchain.join(INDEX_FILE_NAME);
+        if !Self::eviction_file_matches(&data_path, stage.data_len, stage.data_digest)?
+            || !Self::eviction_file_matches(&index_path, stage.index_len, stage.index_digest)?
+        {
+            return Err(self.invalid_eviction_compaction_stage(
+                "promoted eviction data/index files do not match their manifest",
+            ));
+        }
+        self.drop_cached_handles();
+        let mut staged = stage
+            .evicted
+            .iter()
+            .map(|entry| (entry.height, entry))
+            .collect::<BTreeMap<_, _>>();
+        let mut inline_cursor = 0_u64;
+        for index_position in 0..stage.marker.count {
+            let height = index_position.saturating_add(1);
+            let index = self.read_block_index(index_position)?;
+            if index.length == 0 || index.length > STRICT_INIT_MAX_BLOCK_BYTES {
+                return Err(self.invalid_eviction_compaction_stage(
+                    "promoted eviction index contains an invalid block length",
+                ));
+            }
+            let durable_hash = self
+                .read_block_hashes(index_position, 1)?
+                .first()
+                .copied()
+                .ok_or_else(|| {
+                    self.invalid_eviction_compaction_stage(
+                        "promoted index has no durable hash-journal identity",
+                    )
+                })?;
+            let bytes = if index.is_evicted() {
+                self.read_da_block_bytes(height, index.length)?
+            } else {
+                if index.start != inline_cursor {
+                    return Err(self.invalid_eviction_compaction_stage(
+                        "promoted inline indices are not densely compacted",
+                    ));
+                }
+                let mut bytes = vec![0_u8; usize::try_from(index.length)?];
+                self.read_block_data(index.start, &mut bytes)?;
+                inline_cursor = inline_cursor.checked_add(index.length).ok_or_else(|| {
+                    self.invalid_eviction_compaction_stage("promoted inline data cursor overflowed")
+                })?;
+                bytes
+            };
+            if u64::try_from(bytes.len())? != index.length {
+                return Err(self.invalid_eviction_compaction_stage(
+                    "promoted block body length differs from its index",
+                ));
+            }
+            let block = decode_framed_signed_block(&bytes)?;
+            if block.header().height().get() != height || block.hash() != durable_hash {
+                return Err(self.invalid_eviction_compaction_stage(
+                    "promoted block body mismatches its durable height or header hash",
+                ));
+            }
+            if let Some(entry) = staged.remove(&height)
+                && (!index.is_evicted()
+                    || index.length != entry.wire_len
+                    || durable_hash != entry.block_hash
+                    || Hash::new(&bytes) != entry.canonical_wire_hash)
+            {
+                return Err(self.invalid_eviction_compaction_stage(
+                    "newly evicted body mismatches its staged complete-wire binding",
+                ));
+            }
+        }
+        if inline_cursor != stage.data_len || !staged.is_empty() {
+            return Err(self.invalid_eviction_compaction_stage(
+                "promoted eviction files do not consume the exact staged data or entry set",
+            ));
+        }
+        Ok(())
+    }
+
+    fn promote_eviction_compaction_file(
+        &self,
+        live_path: &Path,
+        temp_path: &Path,
+        expected_len: u64,
+        expected_digest: Hash,
+    ) -> Result<()> {
+        if Self::eviction_file_matches(live_path, expected_len, expected_digest)? {
+            let _ = self.remove_eviction_compaction_path(temp_path)?;
+            return Ok(());
+        }
+        if !Self::eviction_file_matches(temp_path, expected_len, expected_digest)? {
+            return Err(self.invalid_eviction_compaction_stage(
+                "neither live nor temporary eviction file matches the manifest",
+            ));
+        }
+        #[cfg(windows)]
+        {
+            // Windows does not replace an open destination with `rename`. The durable
+            // stage makes remove-then-rename safe: a crash between them leaves the exact
+            // replacement under its authenticated temporary name for startup recovery.
+            match std::fs::remove_file(live_path) {
+                Ok(()) => {}
+                Err(error) if error.kind() == ErrorKind::NotFound => {}
+                Err(error) => return Err(Error::IO(error, live_path.to_path_buf())),
+            }
+            std::fs::rename(temp_path, live_path)
+                .map_err(|error| Error::IO(error, live_path.to_path_buf()))
+        }
+        #[cfg(not(windows))]
+        {
+            std::fs::rename(temp_path, live_path)
+                .map_err(|error| Error::IO(error, live_path.to_path_buf()))
+        }
+    }
+
+    fn recover_eviction_compaction_stage(&mut self) -> Result<()> {
+        let Some(stage) = self.read_eviction_compaction_stage()? else {
+            return self.cleanup_unpublished_eviction_compaction_files();
+        };
+        let current_marker = self.read_commit_marker()?;
+        if current_marker.as_ref() != Some(&stage.marker) {
+            return Err(self.invalid_eviction_compaction_stage(
+                "durable commit marker changed while eviction compaction was staged",
+            ));
+        }
+        let marker_path = self.commit_marker_path();
+        let (marker_len, marker_digest) = Self::eviction_file_digest(&marker_path)?;
+        let hashes_path = self.path_to_blockchain.join(HASHES_FILE_NAME);
+        let (hashes_len, hashes_digest) = Self::eviction_file_digest(&hashes_path)?;
+        if marker_len != stage.marker_len
+            || marker_digest != stage.marker_digest
+            || hashes_len != stage.hashes_len
+            || hashes_digest != stage.hashes_digest
+        {
+            return Err(self.invalid_eviction_compaction_stage(
+                "durable marker or hash journal changed while eviction compaction was staged",
+            ));
+        }
+
+        #[cfg(test)]
+        if self
+            .crash_next_eviction_after_stage
+            .swap(false, Ordering::AcqRel)
+        {
+            return Err(Error::IO(
+                std::io::Error::other(
+                    "injected abrupt stop after eviction compaction stage publication",
+                ),
+                self.eviction_compaction_stage_path(),
+            ));
+        }
+
+        self.drop_cached_handles();
+        let data_path = self.path_to_blockchain.join(DATA_FILE_NAME);
+        let index_path = self.path_to_blockchain.join(INDEX_FILE_NAME);
+        let data_temp = self.eviction_compaction_data_path();
+        let index_temp = self.eviction_compaction_index_path();
+        self.promote_eviction_compaction_file(
+            &data_path,
+            &data_temp,
+            stage.data_len,
+            stage.data_digest,
+        )?;
+        #[cfg(test)]
+        if self
+            .crash_next_eviction_after_data_promotion
+            .swap(false, Ordering::AcqRel)
+        {
+            return Err(Error::IO(
+                std::io::Error::other("injected abrupt stop after eviction data-file promotion"),
+                self.eviction_compaction_stage_path(),
+            ));
+        }
+        self.promote_eviction_compaction_file(
+            &index_path,
+            &index_temp,
+            stage.index_len,
+            stage.index_digest,
+        )?;
+        #[cfg(test)]
+        if self
+            .crash_next_eviction_after_index_promotion
+            .swap(false, Ordering::AcqRel)
+        {
+            return Err(Error::IO(
+                std::io::Error::other("injected abrupt stop after eviction index-file promotion"),
+                self.eviction_compaction_stage_path(),
+            ));
+        }
+        sync_dir(&self.path_to_blockchain)
+            .map_err(|error| Error::IO(error, self.path_to_blockchain.clone()))?;
+        self.validate_eviction_compaction_result(&stage)?;
+        let stage_path = self.eviction_compaction_stage_path();
+        let removed = self.remove_eviction_compaction_path(&data_temp)?
+            | self.remove_eviction_compaction_path(&index_temp)?
+            | self.remove_eviction_compaction_path(&stage_path)?;
+        if removed {
+            sync_dir(&self.path_to_blockchain)
+                .map_err(|error| Error::IO(error, self.path_to_blockchain.clone()))?;
+        }
+        self.fsync.clear();
+        self.drop_cached_handles();
+        Ok(())
+    }
+
+    /// Resolve every durable canonical-storage transaction before another mutation.
+    ///
+    /// Eviction compaction is recovered first because it keeps the commit marker and
+    /// hash journal fixed while atomically replacing the data/index pair. A DA rewrite
+    /// may change that marker, so the two stages must never be observed in the opposite
+    /// order after a crash.
+    fn recover_canonical_storage_stages(&mut self) -> Result<()> {
+        if self.path_to_blockchain.as_os_str().is_empty() {
+            return Ok(());
+        }
+        self.recover_eviction_compaction_stage()?;
+        self.recover_da_block_rewrite_stage()
     }
 
     fn read_da_block_bytes(&self, height: u64, expected_len: u64) -> Result<Vec<u8>> {
@@ -19013,19 +21469,38 @@ impl BlockStore {
     fn write_da_block_bytes(&self, height: u64, bytes: &[u8]) -> Result<()> {
         self.ensure_da_blocks_dir()?;
         let path = self.da_block_path(height);
-        let tmp_path = path.with_extension("norito.tmp");
-        let mut tmp_file = FileWrap::open_with(tmp_path.clone(), |opts| {
-            opts.write(true).create(true).truncate(true);
+        let parent = path.parent().ok_or_else(|| {
+            Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidInput,
+                    "DA sidecar path has no parent directory",
+                ),
+                path.clone(),
+            )
         })?;
-        tmp_file.try_io(|file| {
-            file.write_all(bytes)?;
-            file.flush()?;
-            file.sync_data()
-        })?;
-        std::fs::rename(&tmp_path, &path).map_err(|err| Error::IO(err, path.clone()))?;
-        if let Some(parent) = path.parent() {
-            sync_dir(parent).map_err(|err| Error::IO(err, parent.to_path_buf()))?;
-        }
+        let mut temporary = tempfile::Builder::new()
+            .prefix(".kura-da-")
+            .tempfile_in(parent)
+            .map_err(|error| Error::IO(error, parent.to_path_buf()))?;
+        temporary
+            .as_file_mut()
+            .write_all(bytes)
+            .map_err(|error| Error::IO(error, path.clone()))?;
+        temporary
+            .as_file_mut()
+            .flush()
+            .map_err(|error| Error::IO(error, path.clone()))?;
+        temporary
+            .as_file()
+            .sync_all()
+            .map_err(|error| Error::IO(error, path.clone()))?;
+        let persisted = temporary
+            .persist(&path)
+            .map_err(|error| Error::IO(error.error, path.clone()))?;
+        persisted
+            .sync_all()
+            .map_err(|error| Error::IO(error, path.clone()))?;
+        sync_dir(parent).map_err(|err| Error::IO(err, parent.to_path_buf()))?;
         Ok(())
     }
 
@@ -19042,6 +21517,536 @@ impl BlockStore {
             Err(err) if err.kind() == ErrorKind::NotFound => Ok(()),
             Err(err) => Err(Error::IO(err, path)),
         }
+    }
+
+    fn da_block_rewrite_stage_path(&self) -> PathBuf {
+        self.path_to_blockchain
+            .join(DA_BLOCK_REWRITE_STAGE_FILE_NAME)
+    }
+
+    fn defer_da_block_rewrite_recovery(&mut self, error: &Error) {
+        let message = error.to_string();
+        error!(
+            ?error,
+            "canonical DA rewrite marker is durable; deferring body promotion recovery"
+        );
+        self.deferred_da_recovery_fault = Some(message);
+    }
+
+    fn take_deferred_da_recovery_fault(&mut self) -> Option<String> {
+        self.deferred_da_recovery_fault.take()
+    }
+
+    fn unknown_da_rewrite_state(&self, context: &str, error: &Error) -> Error {
+        Error::DaBlockRewriteCommitStateUnknown {
+            detail: format!("{context}: {error}"),
+        }
+    }
+
+    fn rollback_da_rewrite_before_returning(&mut self, original_error: Error) -> Error {
+        // The replacement marker is not published on this path. Prevent periodic/shutdown fsync
+        // from advancing it while rollback is being attempted.
+        self.commit_marker_pending = None;
+        self.fsync.clear();
+        match self.recover_da_block_rewrite_stage() {
+            Ok(()) => original_error,
+            Err(recovery_error) => {
+                self.unknown_da_rewrite_state("pre-marker rollback failed", &recovery_error)
+            }
+        }
+    }
+
+    fn invalid_da_block_rewrite_stage(&self, message: impl Into<String>) -> Error {
+        Error::IO(
+            std::io::Error::new(ErrorKind::InvalidData, message.into()),
+            self.da_block_rewrite_stage_path(),
+        )
+    }
+
+    fn read_da_block_rewrite_stage(&self) -> Result<Option<DaBlockRewriteStageV1>> {
+        let path = self.da_block_rewrite_stage_path();
+        let metadata = match std::fs::symlink_metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(Error::IO(error, path)),
+        };
+        if metadata.file_type().is_symlink()
+            || !metadata.is_file()
+            || metadata.len() > MAX_DA_BLOCK_REWRITE_STAGE_BYTES
+        {
+            return Err(self.invalid_da_block_rewrite_stage(
+                "DA block rewrite stage is not a bounded regular file",
+            ));
+        }
+        let bytes = std::fs::read(&path).map_err(|error| Error::IO(error, path.clone()))?;
+        let stage = norito::decode_from_bytes::<DaBlockRewriteStageV1>(&bytes)
+            .map_err(|error| Error::NoritoFrame(error.into()))?;
+        self.validate_da_block_rewrite_stage(&stage)?;
+        Ok(Some(stage))
+    }
+
+    fn validate_da_block_rewrite_image(&self, image: &DaBlockRewriteImageV1) -> Result<()> {
+        if image.height == 0 || image.index_length > STRICT_INIT_MAX_BLOCK_BYTES {
+            return Err(self.invalid_da_block_rewrite_stage(
+                "DA block rewrite image has an invalid height or length",
+            ));
+        }
+        match image.body.as_deref() {
+            Some(body) => {
+                if u64::try_from(body.len())? != image.index_length {
+                    return Err(self.invalid_da_block_rewrite_stage(
+                        "DA block rewrite image body length mismatches its index",
+                    ));
+                }
+                let decoded = decode_framed_signed_block(body)?;
+                if decoded.header().height().get() != image.height
+                    || decoded.hash() != image.block_hash
+                {
+                    return Err(self.invalid_da_block_rewrite_stage(
+                        "DA block rewrite image body mismatches its height or hash",
+                    ));
+                }
+            }
+            None if image.index_length == 0 && image.index_start == EVICTED_BLOCK_START => {}
+            None => {
+                return Err(self.invalid_da_block_rewrite_stage(
+                    "DA block rewrite image omits a nonempty body",
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_da_block_rewrite_stage(&self, stage: &DaBlockRewriteStageV1) -> Result<()> {
+        if stage.format_version != DA_BLOCK_REWRITE_STAGE_VERSION
+            || stage.replacement.is_empty()
+            || stage.old_marker.version != BlockStoreCommitMarker::VERSION
+            || stage.new_marker.version != BlockStoreCommitMarker::VERSION
+            || (stage.old_marker.count == 0) != stage.old_marker.tip_hash.is_none()
+            || (stage.new_marker.count == 0) != stage.new_marker.tip_hash.is_none()
+            || stage.old_index_count != stage.old_marker.count
+            || stage.old_hash_count != stage.old_marker.count
+        {
+            return Err(self.invalid_da_block_rewrite_stage(
+                "DA block rewrite stage envelope is inconsistent",
+            ));
+        }
+        if stage
+            .old_suffix
+            .len()
+            .checked_add(stage.replacement.len())
+            .is_none_or(|count| count > MAX_DA_BLOCK_REWRITE_STAGE_ENTRIES)
+        {
+            return Err(self.invalid_da_block_rewrite_stage(
+                "DA block rewrite stage exceeds its hard entry-count limit",
+            ));
+        }
+        let replacement_start = stage.replacement[0].height;
+        for (offset, image) in stage.replacement.iter().enumerate() {
+            self.validate_da_block_rewrite_image(image)?;
+            if image.height != replacement_start.saturating_add(u64::try_from(offset)?) {
+                return Err(self.invalid_da_block_rewrite_stage(
+                    "DA block rewrite replacement heights are not dense",
+                ));
+            }
+        }
+        let replacement_tip = stage
+            .replacement
+            .last()
+            .expect("replacement was checked nonempty");
+        if stage.new_marker.count != replacement_tip.height
+            || stage.new_marker.tip_hash != Some(replacement_tip.block_hash)
+        {
+            return Err(self.invalid_da_block_rewrite_stage(
+                "DA block rewrite replacement mismatches its new marker",
+            ));
+        }
+        if stage.old_suffix.is_empty() {
+            if replacement_start <= stage.old_marker.count {
+                return Err(self.invalid_da_block_rewrite_stage(
+                    "DA block rewrite stage omits an existing old suffix",
+                ));
+            }
+        } else {
+            if stage.old_suffix[0].height != replacement_start {
+                return Err(self.invalid_da_block_rewrite_stage(
+                    "DA block rewrite old and replacement suffixes start at different heights",
+                ));
+            }
+            for (offset, image) in stage.old_suffix.iter().enumerate() {
+                self.validate_da_block_rewrite_image(image)?;
+                if image.height != replacement_start.saturating_add(u64::try_from(offset)?) {
+                    return Err(self.invalid_da_block_rewrite_stage(
+                        "DA block rewrite old suffix heights are not dense",
+                    ));
+                }
+            }
+            let old_tip = stage.old_suffix.last().expect("old suffix is nonempty");
+            if old_tip.height != stage.old_marker.count
+                || stage.old_marker.tip_hash != Some(old_tip.block_hash)
+            {
+                return Err(self.invalid_da_block_rewrite_stage(
+                    "DA block rewrite old suffix mismatches its old marker",
+                ));
+            }
+        }
+        if stage.old_marker == stage.new_marker && stage.old_suffix != stage.replacement {
+            return Err(self.invalid_da_block_rewrite_stage(
+                "DA block rewrite has ambiguous identical publication markers",
+            ));
+        }
+        Ok(())
+    }
+
+    fn write_da_block_rewrite_stage(&self, stage: &DaBlockRewriteStageV1) -> Result<()> {
+        self.validate_da_block_rewrite_stage(stage)?;
+        let path = self.da_block_rewrite_stage_path();
+        let parent = path.parent().ok_or_else(|| {
+            Error::IO(
+                std::io::Error::new(ErrorKind::InvalidInput, "rewrite stage has no parent"),
+                path.clone(),
+            )
+        })?;
+        std::fs::create_dir_all(parent).map_err(|error| Error::IO(error, parent.to_path_buf()))?;
+        let bytes = norito::to_bytes(stage).map_err(Error::NoritoFrame)?;
+        if u64::try_from(bytes.len())? > MAX_DA_BLOCK_REWRITE_STAGE_BYTES {
+            return Err(self.invalid_da_block_rewrite_stage(
+                "DA block rewrite stage exceeds its hard size limit",
+            ));
+        }
+        let mut temporary = tempfile::Builder::new()
+            .prefix(".kura-da-rewrite-")
+            .tempfile_in(parent)
+            .map_err(|error| Error::IO(error, parent.to_path_buf()))?;
+        temporary
+            .as_file_mut()
+            .write_all(&bytes)
+            .and_then(|()| temporary.as_file_mut().flush())
+            .and_then(|()| temporary.as_file().sync_all())
+            .map_err(|error| Error::IO(error, path.clone()))?;
+        let persisted = temporary
+            .persist(&path)
+            .map_err(|error| Error::IO(error.error, path.clone()))?;
+        persisted
+            .sync_all()
+            .map_err(|error| Error::IO(error, path.clone()))?;
+        sync_dir(parent).map_err(|error| Error::IO(error, parent.to_path_buf()))?;
+        Ok(())
+    }
+
+    fn remove_da_block_rewrite_stage(&self) -> Result<()> {
+        let path = self.da_block_rewrite_stage_path();
+        match std::fs::remove_file(&path) {
+            Ok(()) => {
+                if let Some(parent) = path.parent() {
+                    sync_dir(parent).map_err(|error| Error::IO(error, parent.to_path_buf()))?;
+                }
+                Ok(())
+            }
+            Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(Error::IO(error, path)),
+        }
+    }
+
+    fn read_block_rewrite_image(&mut self, height: u64) -> Result<DaBlockRewriteImageV1> {
+        let index_position = height.saturating_sub(1);
+        let index = self.read_block_index(index_position)?;
+        let block_hash = self
+            .read_block_hashes(index_position, 1)?
+            .first()
+            .copied()
+            .ok_or(Error::OutOfBoundsBlockRead {
+                start_block_height: index_position,
+                block_count: 1,
+            })?;
+        let body = if index.length == 0 {
+            None
+        } else if index.is_evicted() {
+            Some(self.read_da_block_bytes(height, index.length)?)
+        } else {
+            let length = usize::try_from(index.length)?;
+            let mut body = vec![0_u8; length];
+            self.read_block_data(index.start, &mut body)?;
+            Some(body)
+        };
+        let image = DaBlockRewriteImageV1 {
+            height,
+            block_hash,
+            index_start: index.start,
+            index_length: index.length,
+            body,
+        };
+        self.validate_da_block_rewrite_image(&image)?;
+        Ok(image)
+    }
+
+    fn durable_marker_before_rewrite(&mut self) -> Result<BlockStoreCommitMarker> {
+        if matches!(self.fsync.mode, FsyncMode::Off) {
+            self.sync_target(FsyncTarget::Data, Self::ensure_data_file)?;
+            self.sync_target(FsyncTarget::Hashes, Self::ensure_hashes_file)?;
+            self.sync_target(FsyncTarget::Index, Self::ensure_index_file)?;
+            let count = self.read_index_count()?;
+            self.write_commit_marker(count)?;
+            self.commit_marker_count = count;
+            self.commit_marker_pending = None;
+        } else {
+            self.flush_pending_fsync(true)?;
+        }
+        self.read_commit_marker()?.ok_or_else(|| {
+            self.invalid_da_block_rewrite_stage("durable commit marker is unavailable")
+        })
+    }
+
+    fn prepare_da_block_rewrite_stage(
+        &mut self,
+        start_height: u64,
+        frames: &[Vec<u8>],
+        offsets: &[u64],
+        lengths: &[u64],
+        hashes: &[HashOf<BlockHeader>],
+    ) -> Result<Option<DaBlockRewriteStageV1>> {
+        let logical_count = self.read_index_count()?;
+        let needs_stage = start_height < logical_count
+            || offsets.iter().any(|start| *start == EVICTED_BLOCK_START);
+        if !needs_stage {
+            return Ok(None);
+        }
+        let old_marker = self.durable_marker_before_rewrite()?;
+        if old_marker.count != logical_count || self.read_hashes_count()? != logical_count {
+            return Err(self.invalid_da_block_rewrite_stage(
+                "canonical journals are not at their durable marker before rewrite",
+            ));
+        }
+        let old_data_len = self.data_file_len()?;
+        let replacement_start = start_height.saturating_add(1);
+        let old_suffix_count = if replacement_start <= old_marker.count {
+            old_marker
+                .count
+                .saturating_sub(replacement_start)
+                .saturating_add(1)
+        } else {
+            0
+        };
+        let staged_entry_count = usize::try_from(old_suffix_count)?
+            .checked_add(frames.len())
+            .ok_or_else(|| {
+                self.invalid_da_block_rewrite_stage("DA block rewrite stage entry count overflowed")
+            })?;
+        if staged_entry_count > MAX_DA_BLOCK_REWRITE_STAGE_ENTRIES {
+            return Err(self.invalid_da_block_rewrite_stage(
+                "DA block rewrite stage exceeds its hard entry-count limit",
+            ));
+        }
+        const IMAGE_ENVELOPE_BUDGET: u64 = 256;
+        let mut staged_bytes = IMAGE_ENVELOPE_BUDGET;
+        for height in replacement_start..=old_marker.count {
+            let index = self.read_block_index(height.saturating_sub(1))?;
+            staged_bytes = staged_bytes
+                .checked_add(index.length)
+                .and_then(|bytes| bytes.checked_add(IMAGE_ENVELOPE_BUDGET))
+                .ok_or_else(|| {
+                    self.invalid_da_block_rewrite_stage(
+                        "DA block rewrite stage size preflight overflowed",
+                    )
+                })?;
+            if staged_bytes > MAX_DA_BLOCK_REWRITE_STAGE_BYTES {
+                return Err(self.invalid_da_block_rewrite_stage(
+                    "DA block rewrite old suffix exceeds its hard stage limit",
+                ));
+            }
+        }
+        for frame in frames {
+            staged_bytes = staged_bytes
+                .checked_add(u64::try_from(frame.len())?)
+                .and_then(|bytes| bytes.checked_add(IMAGE_ENVELOPE_BUDGET))
+                .ok_or_else(|| {
+                    self.invalid_da_block_rewrite_stage(
+                        "DA block rewrite stage size preflight overflowed",
+                    )
+                })?;
+            if staged_bytes > MAX_DA_BLOCK_REWRITE_STAGE_BYTES {
+                return Err(self.invalid_da_block_rewrite_stage(
+                    "DA block rewrite replacement exceeds its hard stage limit",
+                ));
+            }
+        }
+        let mut old_suffix = Vec::new();
+        for height in replacement_start..=old_marker.count {
+            old_suffix.push(self.read_block_rewrite_image(height)?);
+        }
+        let mut replacement = Vec::with_capacity(frames.len());
+        for (offset, (((body, index_start), index_length), block_hash)) in frames
+            .iter()
+            .zip(offsets)
+            .zip(lengths)
+            .zip(hashes)
+            .enumerate()
+        {
+            let image = DaBlockRewriteImageV1 {
+                height: replacement_start.saturating_add(u64::try_from(offset)?),
+                block_hash: *block_hash,
+                index_start: *index_start,
+                index_length: *index_length,
+                body: Some(body.clone()),
+            };
+            self.validate_da_block_rewrite_image(&image)?;
+            replacement.push(image);
+        }
+        let replacement_tip = replacement.last().ok_or_else(|| {
+            self.invalid_da_block_rewrite_stage("empty DA block rewrite replacement")
+        })?;
+        let stage = DaBlockRewriteStageV1 {
+            format_version: DA_BLOCK_REWRITE_STAGE_VERSION,
+            old_marker,
+            new_marker: BlockStoreCommitMarker::new(
+                replacement_tip.height,
+                Some(replacement_tip.block_hash),
+            ),
+            old_data_len,
+            old_index_count: logical_count,
+            old_hash_count: logical_count,
+            old_suffix,
+            replacement,
+        };
+        if stage.old_marker == stage.new_marker && stage.old_suffix == stage.replacement {
+            return Ok(None);
+        }
+        self.write_da_block_rewrite_stage(&stage)?;
+        Ok(Some(stage))
+    }
+
+    fn restore_old_da_block_rewrite_stage(&mut self, stage: &DaBlockRewriteStageV1) -> Result<()> {
+        self.drop_cached_handles();
+        {
+            let data_file = self.ensure_data_file()?;
+            data_file.try_io(|file| {
+                file.set_len(stage.old_data_len)?;
+                for image in &stage.old_suffix {
+                    if image.index_start == EVICTED_BLOCK_START {
+                        continue;
+                    }
+                    if let Some(body) = image.body.as_deref() {
+                        file.seek(SeekFrom::Start(image.index_start))?;
+                        file.write_all(body)?;
+                    }
+                }
+                file.flush()?;
+                file.sync_all()
+            })?;
+        }
+        for image in &stage.old_suffix {
+            if image.index_start == EVICTED_BLOCK_START {
+                if let Some(body) = image.body.as_deref() {
+                    self.write_da_block_bytes(image.height, body)?;
+                }
+            } else {
+                self.remove_da_block_file(image.height)?;
+            }
+        }
+        for image in &stage.replacement {
+            if image.height > stage.old_marker.count {
+                self.remove_da_block_file(image.height)?;
+            }
+        }
+        {
+            let hashes_file = self.ensure_hashes_file()?;
+            hashes_file.try_io(|file| {
+                file.set_len(stage.old_hash_count.saturating_mul(SIZE_OF_BLOCK_HASH))?;
+                for image in &stage.old_suffix {
+                    file.seek(SeekFrom::Start(
+                        image.height.saturating_sub(1) * SIZE_OF_BLOCK_HASH,
+                    ))?;
+                    file.write_all(image.block_hash.as_ref())?;
+                }
+                file.flush()?;
+                file.sync_all()
+            })?;
+        }
+        {
+            let index_file = self.ensure_index_file()?;
+            index_file.try_io(|file| {
+                file.set_len(stage.old_index_count.saturating_mul(BlockIndex::SIZE))?;
+                for image in &stage.old_suffix {
+                    file.seek(SeekFrom::Start(
+                        image.height.saturating_sub(1) * BlockIndex::SIZE,
+                    ))?;
+                    file.write_all(&image.index().encode())?;
+                }
+                file.flush()?;
+                file.sync_all()
+            })?;
+        }
+        self.write_commit_marker_value(&stage.old_marker)?;
+        self.commit_marker_count = stage.old_marker.count;
+        self.commit_marker_pending = None;
+        self.fsync.clear();
+        self.drop_cached_handles();
+        Ok(())
+    }
+
+    fn promote_new_da_block_rewrite_stage(&mut self, stage: &DaBlockRewriteStageV1) -> Result<()> {
+        if self.read_index_count()? != stage.new_marker.count
+            || self.read_hashes_count()? != stage.new_marker.count
+        {
+            return Err(self.invalid_da_block_rewrite_stage(
+                "published DA block rewrite journal length mismatches its marker",
+            ));
+        }
+        for image in &stage.replacement {
+            let index_position = image.height.saturating_sub(1);
+            let index = self.read_block_index(index_position)?;
+            let block_hash = self.read_block_hashes(index_position, 1)?.first().copied();
+            if index.start != image.index_start
+                || index.length != image.index_length
+                || block_hash != Some(image.block_hash)
+            {
+                return Err(self.invalid_da_block_rewrite_stage(
+                    "published DA block rewrite metadata mismatches its stage",
+                ));
+            }
+            let body = image.body.as_deref().ok_or_else(|| {
+                self.invalid_da_block_rewrite_stage(
+                    "published DA block rewrite replacement body is unavailable",
+                )
+            })?;
+            if index.is_evicted() {
+                self.write_da_block_bytes(image.height, body)?;
+            } else {
+                let mut persisted = vec![0_u8; usize::try_from(index.length)?];
+                self.read_block_data(index.start, &mut persisted)?;
+                if persisted != body {
+                    return Err(self.invalid_da_block_rewrite_stage(
+                        "published inline block bytes mismatch their rewrite stage",
+                    ));
+                }
+                self.remove_da_block_file(image.height)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn recover_da_block_rewrite_stage(&mut self) -> Result<()> {
+        let Some(stage) = self.read_da_block_rewrite_stage()? else {
+            return Ok(());
+        };
+        let marker = self.read_commit_marker()?.ok_or_else(|| {
+            self.invalid_da_block_rewrite_stage(
+                "cannot recover a DA block rewrite without a commit marker",
+            )
+        })?;
+        if marker == stage.old_marker {
+            self.restore_old_da_block_rewrite_stage(&stage)?;
+        } else if marker == stage.new_marker {
+            self.promote_new_da_block_rewrite_stage(&stage)?;
+            self.commit_marker_count = stage.new_marker.count;
+            self.commit_marker_pending = None;
+            self.fsync.clear();
+        } else {
+            return Err(self.invalid_da_block_rewrite_stage(
+                "DA block rewrite marker matches neither staged publication state",
+            ));
+        }
+        self.remove_da_block_rewrite_stage()
     }
 
     fn prune_da_block_files_above(&self, height: u64) -> Result<()> {
@@ -19266,13 +22271,32 @@ impl BlockStore {
         if path.as_os_str().is_empty() {
             return Ok(None);
         }
+        #[cfg(test)]
+        if self
+            .fail_next_commit_marker_read
+            .swap(false, Ordering::AcqRel)
+        {
+            return Err(Error::IO(
+                std::io::Error::other("injected commit-marker readback failure"),
+                path,
+            ));
+        }
         let tmp_path = path.with_extension("norito.tmp");
         let mut main_invalid = false;
         match std::fs::read(&path) {
             Ok(bytes) => match norito::decode_from_bytes::<BlockStoreCommitMarker>(&bytes) {
                 Ok(marker) => {
                     if marker.version == BlockStoreCommitMarker::VERSION {
-                        return Ok(Some(marker));
+                        if (marker.count == 0) == marker.tip_hash.is_none() {
+                            return Ok(Some(marker));
+                        }
+                        return Err(Error::IO(
+                            std::io::Error::new(
+                                ErrorKind::InvalidData,
+                                "block commit marker has an invalid empty/tip invariant",
+                            ),
+                            path,
+                        ));
                     }
                     warn!(
                         version = marker.version,
@@ -19312,11 +22336,20 @@ impl BlockStore {
                         );
                         return Ok(None);
                     }
+                    if (marker.count == 0) != marker.tip_hash.is_none() {
+                        return Err(Error::IO(
+                            std::io::Error::new(
+                                ErrorKind::InvalidData,
+                                "temporary block commit marker has an invalid empty/tip invariant",
+                            ),
+                            tmp_path,
+                        ));
+                    }
                     warn!(
                         path = %tmp_path.display(),
                         "recovered block store marker from temp file"
                     );
-                    self.write_commit_marker(marker.count)?;
+                    self.write_commit_marker_value(&marker)?;
                     Ok(Some(marker))
                 }
                 Err(err) => {
@@ -19334,41 +22367,148 @@ impl BlockStore {
         }
     }
 
+    fn commit_marker_for_count(&mut self, count: u64) -> Result<BlockStoreCommitMarker> {
+        let tip_hash = if count == 0 {
+            None
+        } else {
+            self.read_block_hashes(count.saturating_sub(1), 1)?
+                .first()
+                .copied()
+        };
+        if count > 0 && tip_hash.is_none() {
+            return Err(Error::OutOfBoundsBlockRead {
+                start_block_height: count.saturating_sub(1),
+                block_count: 1,
+            });
+        }
+        Ok(BlockStoreCommitMarker::new(count, tip_hash))
+    }
+
     fn write_commit_marker(&mut self, count: u64) -> Result<()> {
+        let marker = self.commit_marker_for_count(count)?;
+        self.write_commit_marker_value(&marker)
+    }
+
+    fn write_commit_marker_value(&mut self, marker: &BlockStoreCommitMarker) -> Result<()> {
         let path = self.commit_marker_path();
         if path.as_os_str().is_empty() {
             return Ok(());
         }
-        let marker = BlockStoreCommitMarker::new(count);
-        let bytes = norito::to_bytes(&marker).map_err(Error::NoritoFrame)?;
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|err| Error::IO(err, parent.to_path_buf()))?;
-        }
-        let tmp_path = path.with_extension("norito.tmp");
+        #[cfg(test)]
+        if self
+            .fail_next_commit_marker_write_and_readback
+            .swap(false, Ordering::AcqRel)
         {
-            let mut file = std::fs::OpenOptions::new()
-                .create(true)
-                .write(true)
-                .truncate(true)
-                .open(&tmp_path)
-                .map_err(|err| Error::IO(err, tmp_path.clone()))?;
-            file.write_all(&bytes)
-                .and_then(|()| file.flush())
-                .and_then(|()| file.sync_data())
-                .map_err(|err| Error::IO(err, tmp_path.clone()))?;
+            self.fail_next_commit_marker_read
+                .store(true, Ordering::Release);
+            return Err(Error::IO(
+                std::io::Error::other(
+                    "injected commit-marker write and subsequent readback failure",
+                ),
+                path,
+            ));
         }
-        if let Err(err) = std::fs::rename(&tmp_path, &path) {
-            if err.kind() == std::io::ErrorKind::AlreadyExists {
-                std::fs::remove_file(&path).map_err(|err| Error::IO(err, path.clone()))?;
-                std::fs::rename(&tmp_path, &path).map_err(|err| Error::IO(err, path.clone()))?;
-            } else {
-                return Err(Error::IO(err, path.clone()));
-            }
+        #[cfg(test)]
+        if self
+            .fail_next_commit_marker_write
+            .swap(false, Ordering::AcqRel)
+        {
+            return Err(Error::IO(
+                std::io::Error::other("injected commit-marker write failure"),
+                path,
+            ));
         }
-        if let Some(parent) = path.parent() {
-            sync_dir(parent).map_err(|err| Error::IO(err, parent.to_path_buf()))?;
+        if marker.version != BlockStoreCommitMarker::VERSION
+            || (marker.count == 0) != marker.tip_hash.is_none()
+        {
+            return Err(Error::IO(
+                std::io::Error::new(ErrorKind::InvalidInput, "invalid block commit marker"),
+                path,
+            ));
+        }
+        let bytes = norito::to_bytes(marker).map_err(Error::NoritoFrame)?;
+        let parent = path.parent().ok_or_else(|| {
+            Error::IO(
+                std::io::Error::new(ErrorKind::InvalidInput, "commit marker has no parent"),
+                path.clone(),
+            )
+        })?;
+        std::fs::create_dir_all(parent).map_err(|err| Error::IO(err, parent.to_path_buf()))?;
+        let mut temporary = tempfile::Builder::new()
+            .prefix(".kura-count-")
+            .tempfile_in(parent)
+            .map_err(|error| Error::IO(error, parent.to_path_buf()))?;
+        temporary
+            .as_file_mut()
+            .write_all(&bytes)
+            .and_then(|()| temporary.as_file_mut().flush())
+            .and_then(|()| temporary.as_file().sync_all())
+            .map_err(|error| Error::IO(error, path.clone()))?;
+        let persisted = temporary
+            .persist(&path)
+            .map_err(|error| Error::IO(error.error, path.clone()))?;
+        persisted
+            .sync_all()
+            .map_err(|error| Error::IO(error, path.clone()))?;
+        sync_dir(parent).map_err(|err| Error::IO(err, parent.to_path_buf()))?;
+        #[cfg(test)]
+        if self
+            .fail_next_commit_marker_ack_and_readback
+            .swap(false, Ordering::AcqRel)
+        {
+            self.fail_next_commit_marker_read
+                .store(true, Ordering::Release);
+            return Err(Error::IO(
+                std::io::Error::other(
+                    "injected persisted marker acknowledgement and readback failure",
+                ),
+                path,
+            ));
+        }
+        #[cfg(test)]
+        if self
+            .fail_next_commit_marker_ack_after_persist
+            .swap(false, Ordering::AcqRel)
+        {
+            return Err(Error::IO(
+                std::io::Error::other(
+                    "injected post-persist commit-marker acknowledgement failure",
+                ),
+                path,
+            ));
         }
         Ok(())
+    }
+
+    fn validate_commit_marker_tip(
+        &mut self,
+        marker: &BlockStoreCommitMarker,
+        hashes_count: u64,
+    ) -> Result<()> {
+        if marker.count == 0 {
+            if marker.tip_hash.is_none() {
+                return Ok(());
+            }
+        } else if marker.count <= hashes_count {
+            let journal_tip = self
+                .read_block_hashes(marker.count.saturating_sub(1), 1)?
+                .first()
+                .copied();
+            if journal_tip == marker.tip_hash {
+                return Ok(());
+            }
+        } else {
+            // `init_commit_marker` explicitly reconciles a marker beyond the available hash
+            // journal to the data-backed prefix below.
+            return Ok(());
+        }
+        Err(Error::IO(
+            std::io::Error::new(
+                ErrorKind::InvalidData,
+                "block commit marker tip hash mismatches the canonical hash journal",
+            ),
+            self.commit_marker_path(),
+        ))
     }
 
     fn align_hashes_len(&mut self) -> Result<u64> {
@@ -19498,7 +22638,10 @@ impl BlockStore {
         let marker = norito::decode_from_bytes::<BlockStoreCommitMarker>(&marker_bytes)
             .map_err(|_| mutation(1))?;
         let canonical_marker = norito::to_bytes(&marker).map_err(Error::NoritoFrame)?;
-        if marker.version != BlockStoreCommitMarker::VERSION || canonical_marker != marker_bytes {
+        if marker.version != BlockStoreCommitMarker::VERSION
+            || (marker.count == 0) != marker.tip_hash.is_none()
+            || canonical_marker != marker_bytes
+        {
             return Err(mutation(1));
         }
         if marker.count < finalized_height {
@@ -19535,6 +22678,31 @@ impl BlockStore {
                     .unwrap_or(0)
                     .saturating_add(1),
             ));
+        }
+        let marker_hashes_len = marker
+            .count
+            .checked_mul(SIZE_OF_BLOCK_HASH)
+            .ok_or_else(|| mutation(1))?;
+        if hashes_len < marker_hashes_len {
+            return Err(mutation(marker.count.max(1)));
+        }
+        if marker.count > 0 {
+            let mut hashes_file = std::fs::File::open(&hashes_path)
+                .map_err(|error| Error::IO(error, hashes_path.clone()))?;
+            hashes_file
+                .seek(SeekFrom::Start(
+                    marker.count.saturating_sub(1) * SIZE_OF_BLOCK_HASH,
+                ))
+                .map_err(|error| Error::IO(error, hashes_path.clone()))?;
+            let mut tip_bytes = [0_u8; Hash::LENGTH];
+            hashes_file
+                .read_exact(&mut tip_bytes)
+                .map_err(|error| Error::IO(error, hashes_path.clone()))?;
+            let journal_tip =
+                HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(tip_bytes));
+            if marker.tip_hash != Some(journal_tip) {
+                return Err(mutation(marker.count));
+            }
         }
 
         let data_path = self.path_to_blockchain.join(DATA_FILE_NAME);
@@ -19579,6 +22747,10 @@ impl BlockStore {
             aligned / BlockIndex::SIZE
         };
         let hashes_count = self.align_hashes_len()?;
+        let existing_marker = self.read_commit_marker()?;
+        if let Some(marker) = existing_marker.as_ref() {
+            self.validate_commit_marker_tip(marker, hashes_count)?;
+        }
         let verified_snapshot_tail =
             self.validated_verified_snapshot_tail(logical_count, hashes_count)?;
         let trusted_hash_only_tail = if hard_fork_snapshot_bootstrap_enabled() {
@@ -19605,7 +22777,7 @@ impl BlockStore {
             return Ok(());
         }
 
-        let mut durable_count = if let Some(marker) = self.read_commit_marker()? {
+        let mut durable_count = if let Some(marker) = existing_marker {
             marker.count
         } else {
             self.write_commit_marker(data_backed_count)?;
@@ -19681,6 +22853,12 @@ impl BlockStore {
     }
 
     fn flush_pending_fsync(&mut self, force: bool) -> Result<()> {
+        if !self.path_to_blockchain.as_os_str().is_empty()
+            && (self.da_block_rewrite_stage_path().exists()
+                || self.eviction_compaction_stage_path().exists())
+        {
+            self.recover_canonical_storage_stages()?;
+        }
         self.fsync_telemetry.update_mode(self.fsync.mode);
         let now = Instant::now();
         if !self.fsync.is_due(now, force) {
@@ -19701,10 +22879,80 @@ impl BlockStore {
         let Some(count) = self.commit_marker_pending else {
             return Ok(());
         };
-        self.write_commit_marker(count)?;
-        self.commit_marker_count = count;
-        self.commit_marker_pending = None;
-        Ok(())
+        let old_marker = match self.read_commit_marker() {
+            Ok(marker) => marker,
+            Err(read_error) => {
+                self.commit_marker_pending = None;
+                self.fsync.clear();
+                return Err(self.unknown_da_rewrite_state(
+                    "failed to read the pre-publication commit marker",
+                    &read_error,
+                ));
+            }
+        };
+        let expected_marker = match self.commit_marker_for_count(count) {
+            Ok(marker) => marker,
+            Err(marker_error) => {
+                self.commit_marker_pending = None;
+                self.fsync.clear();
+                if old_marker
+                    .as_ref()
+                    .is_some_and(|marker| marker.count < count)
+                    && let Err(rollback_error) = self.init_commit_marker()
+                {
+                    return Err(self.unknown_da_rewrite_state(
+                        "failed to roll back after deriving the pending marker failed",
+                        &rollback_error,
+                    ));
+                }
+                return Err(marker_error);
+            }
+        };
+        match self.write_commit_marker_value(&expected_marker) {
+            Ok(()) => {
+                self.commit_marker_count = count;
+                self.commit_marker_pending = None;
+                Ok(())
+            }
+            Err(publication_error) => {
+                let readback = match self.read_commit_marker() {
+                    Ok(readback) => readback,
+                    Err(readback_error) => {
+                        self.commit_marker_pending = None;
+                        self.fsync.clear();
+                        return Err(self.unknown_da_rewrite_state(
+                            "commit-marker publication and readback both failed",
+                            &readback_error,
+                        ));
+                    }
+                };
+                if readback.as_ref() == Some(&expected_marker) {
+                    self.commit_marker_count = count;
+                    self.commit_marker_pending = None;
+                    return Ok(());
+                }
+                if let Some(old_marker) = old_marker
+                    && readback.as_ref() == Some(&old_marker)
+                    && old_marker.count < count
+                {
+                    self.commit_marker_pending = None;
+                    self.fsync.clear();
+                    if let Err(rollback_error) = self.init_commit_marker() {
+                        return Err(self.unknown_da_rewrite_state(
+                            "failed to roll back an unpublished append journal",
+                            &rollback_error,
+                        ));
+                    }
+                    return Err(publication_error);
+                }
+                self.commit_marker_pending = None;
+                self.fsync.clear();
+                Err(self.unknown_da_rewrite_state(
+                    "commit marker matches neither the pre-write nor published append state",
+                    &publication_error,
+                ))
+            }
+        }
     }
 
     fn publish_commit_marker(&mut self, count: u64) -> Result<()> {
@@ -20285,6 +23533,7 @@ impl BlockStore {
             })?;
         }
         self.drop_cached_handles();
+        self.recover_canonical_storage_stages()?;
         self.init_commit_marker()?;
         self.drop_cached_handles();
         Ok(())
@@ -20324,6 +23573,8 @@ impl BlockStore {
         if blocks.is_empty() {
             return Ok(());
         }
+
+        self.recover_canonical_storage_stages()?;
 
         self.invalidate_data_mmap();
         debug!(
@@ -20426,101 +23677,90 @@ impl BlockStore {
             frames = frames.len(),
             "append_block_batch preparing to write data"
         );
+        let rewrite_stage = self.prepare_da_block_rewrite_stage(
+            start_height,
+            &frames,
+            &offsets,
+            &lengths,
+            &hashes,
+        )?;
 
-        if evicted.iter().any(|evict| *evict) {
-            self.ensure_da_blocks_dir()?;
-            for (idx, (frame, evict)) in frames.iter().zip(evicted.iter()).enumerate() {
-                if !*evict {
-                    continue;
-                }
-                let height = start_height.saturating_add(idx as u64).saturating_add(1);
-                let path = self.da_block_path(height);
-                let tmp_path = path.with_extension("norito.tmp");
-                if path.exists() {
-                    std::fs::remove_file(&path).map_err(|err| Error::IO(err, path.clone()))?;
-                }
-                let mut tmp_file = FileWrap::open_with(tmp_path.clone(), |opts| {
-                    opts.write(true).create(true).truncate(true);
-                })?;
-                tmp_file.try_io(|file| {
+        let journal_result = (|| -> Result<()> {
+            let data_file = self.ensure_data_file()?;
+            data_file.try_io(|file| {
+                debug!(
+                    start_height,
+                    "append_block_batch writing frames to data file"
+                );
+                file.seek(SeekFrom::Start(start_location_in_data_file))?;
+                for (frame, evict) in frames.iter().zip(evicted.iter()) {
+                    if *evict {
+                        continue;
+                    }
                     file.write_all(frame)?;
-                    file.flush()?;
-                    file.sync_data()
-                })?;
-                std::fs::rename(&tmp_path, &path).map_err(|err| Error::IO(err, path.clone()))?;
-                if let Some(parent) = path.parent() {
-                    sync_dir(parent).map_err(|err| Error::IO(err, parent.to_path_buf()))?;
                 }
-            }
-        }
-
-        let data_file = self.ensure_data_file()?;
-        data_file.try_io(|file| {
+                debug!(start_height, "append_block_batch flushing data file");
+                file.flush()?;
+                Ok(())
+            })?;
             debug!(
                 start_height,
-                "append_block_batch writing frames to data file"
+                start_location = start_location_in_data_file,
+                end_pos,
+                frames = frames.len(),
+                "append_block_batch wrote data"
             );
-            file.seek(SeekFrom::Start(start_location_in_data_file))?;
-            for (frame, evict) in frames.iter().zip(evicted.iter()) {
-                if *evict {
-                    continue;
-                }
-                file.write_all(frame)?;
-            }
-            debug!(start_height, "append_block_batch flushing data file");
-            file.flush()?;
-            Ok(())
-        })?;
-        debug!(
-            start_height,
-            start_location = start_location_in_data_file,
-            end_pos,
-            frames = frames.len(),
-            "append_block_batch wrote data"
-        );
-        data_file.try_io(|file| {
-            file.seek(SeekFrom::Start(end_pos))?;
-            file.set_len(end_pos)
-        })?;
+            data_file.try_io(|file| {
+                file.seek(SeekFrom::Start(end_pos))?;
+                file.set_len(end_pos)
+            })?;
 
-        let hashes_file = self.ensure_hashes_file()?;
-        let start_location = start_height * SIZE_OF_BLOCK_HASH;
-        let new_hashes_len = start_location + SIZE_OF_BLOCK_HASH * u64::try_from(blocks.len())?;
-        hashes_file.try_io(|file| file.set_len(new_hashes_len))?;
-        hashes_file.try_io(|file| {
-            file.seek(SeekFrom::Start(start_location))?;
-            for hash in &hashes {
-                file.write_all(hash.as_ref())?;
-            }
-            file.flush()?;
-            Ok(())
-        })?;
-        debug!(
-            start_height,
-            new_hashes_len, "append_block_batch wrote hashes"
-        );
-
-        // Write the index after data + hashes so the commit marker can safely advance.
-        let index_file = self.ensure_index_file()?;
-        let new_index_len = (start_height + blocks.len() as u64) * BlockIndex::SIZE;
-        index_file.try_io(|file| {
-            file.seek(SeekFrom::Start(start_height * BlockIndex::SIZE))?;
-            for (start, len) in offsets.iter().zip(lengths.iter()) {
-                let bytes = BlockIndex {
-                    start: *start,
-                    length: *len,
+            let hashes_file = self.ensure_hashes_file()?;
+            let start_location = start_height * SIZE_OF_BLOCK_HASH;
+            let new_hashes_len = start_location + SIZE_OF_BLOCK_HASH * u64::try_from(blocks.len())?;
+            hashes_file.try_io(|file| file.set_len(new_hashes_len))?;
+            hashes_file.try_io(|file| {
+                file.seek(SeekFrom::Start(start_location))?;
+                for hash in &hashes {
+                    file.write_all(hash.as_ref())?;
                 }
-                .encode();
-                file.write_all(&bytes)?;
-            }
-            file.flush()?;
-            file.set_len(new_index_len)?;
+                file.flush()?;
+                Ok(())
+            })?;
+            debug!(
+                start_height,
+                new_hashes_len, "append_block_batch wrote hashes"
+            );
+
+            // Write the index after data + hashes so the commit marker can safely advance.
+            let index_file = self.ensure_index_file()?;
+            let new_index_len = (start_height + blocks.len() as u64) * BlockIndex::SIZE;
+            index_file.try_io(|file| {
+                file.seek(SeekFrom::Start(start_height * BlockIndex::SIZE))?;
+                for (start, len) in offsets.iter().zip(lengths.iter()) {
+                    let bytes = BlockIndex {
+                        start: *start,
+                        length: *len,
+                    }
+                    .encode();
+                    file.write_all(&bytes)?;
+                }
+                file.flush()?;
+                file.set_len(new_index_len)?;
+                Ok(())
+            })?;
+            debug!(
+                start_height,
+                new_index_len, "append_block_batch wrote index entries"
+            );
             Ok(())
-        })?;
-        debug!(
-            start_height,
-            new_index_len, "append_block_batch wrote index entries"
-        );
+        })();
+        if let Err(error) = journal_result {
+            if rewrite_stage.is_some() {
+                return Err(self.rollback_da_rewrite_before_returning(error));
+            }
+            return Err(error);
+        }
 
         let end_height = start_height + blocks.len() as u64;
         self.commit_marker_pending = Some(
@@ -20528,7 +23768,115 @@ impl BlockStore {
                 .map_or(end_height, |pending| pending.max(end_height)),
         );
         self.mark_fsync_pending();
-        if matches!(self.fsync.mode, FsyncMode::On)
+        if let Some(stage) = rewrite_stage.as_ref() {
+            #[cfg(test)]
+            if self
+                .crash_next_da_rewrite_before_marker
+                .swap(false, Ordering::AcqRel)
+            {
+                return Err(Error::IO(
+                    std::io::Error::other(
+                        "simulated crash after DA journal writes and before marker publication",
+                    ),
+                    self.da_block_rewrite_stage_path(),
+                ));
+            }
+            let publication_result = (|| -> Result<()> {
+                #[cfg(test)]
+                if self
+                    .fail_next_da_rewrite_before_marker
+                    .swap(false, Ordering::AcqRel)
+                {
+                    return Err(Error::IO(
+                        std::io::Error::other(
+                            "injected DA rewrite failure after staging and before commit marker",
+                        ),
+                        self.da_block_rewrite_stage_path(),
+                    ));
+                }
+                self.sync_target(FsyncTarget::Data, Self::ensure_data_file)?;
+                self.sync_target(FsyncTarget::Hashes, Self::ensure_hashes_file)?;
+                self.sync_target(FsyncTarget::Index, Self::ensure_index_file)?;
+                self.write_commit_marker_value(&stage.new_marker)
+            })();
+            if let Err(publication_error) = publication_result {
+                let marker = match self.read_commit_marker() {
+                    Ok(marker) => marker,
+                    Err(marker_error) => {
+                        self.commit_marker_pending = None;
+                        self.fsync.clear();
+                        return Err(self.unknown_da_rewrite_state(
+                            "commit-marker acknowledgement and readback both failed",
+                            &marker_error,
+                        ));
+                    }
+                };
+                if marker.as_ref() == Some(&stage.new_marker) {
+                    if let Err(recovery_error) = self.recover_da_block_rewrite_stage() {
+                        self.defer_da_block_rewrite_recovery(&recovery_error);
+                    }
+                    debug!(
+                        start_height,
+                        end_height,
+                        "append_block_batch committed despite publication acknowledgement error"
+                    );
+                    return Ok(());
+                }
+                if marker.as_ref() == Some(&stage.old_marker) {
+                    return Err(self.rollback_da_rewrite_before_returning(publication_error));
+                }
+                self.commit_marker_pending = None;
+                self.fsync.clear();
+                return Err(self.unknown_da_rewrite_state(
+                    "commit marker matches neither staged state after publication failure",
+                    &publication_error,
+                ));
+            }
+            self.commit_marker_count = stage.new_marker.count;
+            self.commit_marker_pending = None;
+            self.fsync.clear();
+            #[cfg(test)]
+            if self
+                .crash_next_da_rewrite_after_marker
+                .swap(false, Ordering::AcqRel)
+            {
+                return Err(Error::IO(
+                    std::io::Error::other(
+                        "simulated crash after DA marker publication and before body promotion",
+                    ),
+                    self.da_block_rewrite_stage_path(),
+                ));
+            }
+            #[cfg(test)]
+            if self
+                .fail_next_da_rewrite_after_marker
+                .swap(false, Ordering::AcqRel)
+            {
+                let injected_error = Error::IO(
+                    std::io::Error::other(
+                        "injected DA rewrite failure after commit marker publication",
+                    ),
+                    self.da_block_rewrite_stage_path(),
+                );
+                warn!(
+                    ?injected_error,
+                    "DA rewrite marker is durable; recovering staged body promotion in-call"
+                );
+                if let Err(recovery_error) = self.recover_da_block_rewrite_stage() {
+                    self.defer_da_block_rewrite_recovery(&recovery_error);
+                }
+            } else if let Err(promotion_error) = self.promote_new_da_block_rewrite_stage(stage) {
+                warn!(
+                    ?promotion_error,
+                    "DA rewrite marker is durable; retrying staged body promotion"
+                );
+                if let Err(recovery_error) = self.recover_da_block_rewrite_stage() {
+                    self.defer_da_block_rewrite_recovery(&recovery_error);
+                }
+            } else if let Err(cleanup_error) = self.remove_da_block_rewrite_stage() {
+                self.defer_da_block_rewrite_recovery(&cleanup_error);
+            }
+        } else if matches!(self.fsync.mode, FsyncMode::On)
             || (matches!(self.fsync.mode, FsyncMode::Batched)
                 && self.fsync.interval == Duration::ZERO)
         {
@@ -20555,6 +23903,7 @@ impl BlockStore {
     /// - If files do not exist (call [`Self::create_files_if_they_do_not_exist`])
     /// - Other IO errors
     pub fn prune(&mut self, height: u64) -> Result<()> {
+        self.recover_canonical_storage_stages()?;
         self.invalidate_data_mmap();
         let pruned_index_count;
 
@@ -20725,6 +24074,23 @@ pub enum Error {
         /// Height whose retained-block path contains different canonical data.
         height: u64,
     },
+    /// Sumeragi-v2 finality at height `{height}` authenticates a different canonical block wire image
+    V2FinalityPayloadHashMismatch {
+        /// Height whose signed subject differs from the retained complete-block hash.
+        height: u64,
+    },
+    /// Submitted block wire at existing canonical height `{height}` differs from durable canonical bytes
+    CanonicalBlockWireMismatch {
+        /// Existing height whose header matched but complete block bytes differed.
+        height: u64,
+    },
+    /// DA block rewrite commit state is unknown after an I/O failure: {detail}
+    DaBlockRewriteCommitStateUnknown {
+        /// Failure details retained for fail-stop diagnostics.
+        detail: String,
+    },
+    /// Canonical Kura storage is fail-stop poisoned after an ambiguous rewrite publication
+    CanonicalStoragePoisoned,
     /// Canonical block at height `{height}` is missing its required durable retained record
     MissingRetainedBlockRecord {
         /// Height whose eviction/finality evidence lacks the required record.
@@ -20893,14 +24259,16 @@ mod tests {
             },
         },
     };
-    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature, bls_normal_pop_prove};
+    use iroha_crypto::{
+        Algorithm, Hash, HashOf, KeyPair, Signature, SignatureOf, bls_normal_pop_prove,
+    };
     use iroha_data_model::{
         ChainId, Level,
         account::Account,
         asset::{AssetDefinitionId, AssetId},
         block::{
-            BlockExecutionContextBundle, BlockHeader, CertifiedMergeLedgerReference,
-            ExternalExecutionContext,
+            BlockExecutionContextBundle, BlockHeader, BlockSignature,
+            CertifiedMergeLedgerReference, ExternalExecutionContext,
             consensus::{
                 CertPhase, ExecKv, LaneBlockCommitment, LaneBlockDescriptorV1, LaneBlockProposalV1,
                 LaneBlockQcV1, SumeragiLanePayloadOwnership,
@@ -21368,7 +24736,7 @@ mod tests {
         payloads: &[iroha_sccp::SccpPayloadV1],
     ) -> Arc<SignedBlock> {
         let mut commitments = Vec::new();
-        let accepted = payloads
+        let records = payloads
             .iter()
             .map(|payload| {
                 let payload_bytes = iroha_sccp::canonical_sccp_payload_bytes(payload)
@@ -21380,15 +24748,16 @@ mod tests {
                 )
                 .expect("retained archive SCCP fixture validates");
                 commitments.push(validated.commitment);
-                let transaction = TransactionBuilder::new(
-                    ChainId::from("kura-retained-sccp-archive"),
-                    SAMPLE_GENESIS_ACCOUNT_ID.clone(),
-                )
-                .with_instructions([record])
-                .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
-                AcceptedTransaction::new_unchecked(Cow::Owned(transaction))
+                record
             })
             .collect::<Vec<_>>();
+        let transaction = TransactionBuilder::new(
+            ChainId::from("kura-retained-sccp-archive"),
+            SAMPLE_GENESIS_ACCOUNT_ID.clone(),
+        )
+        .with_instructions(records)
+        .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
+        let accepted = vec![AcceptedTransaction::new_unchecked(Cow::Owned(transaction))];
         let root = iroha_sccp::commitment_merkle_root(&commitments);
         let mut block: SignedBlock = BlockBuilder::new(accepted)
             .chain(0, Some(previous))
@@ -21946,7 +25315,8 @@ mod tests {
         kura.store_block(Arc::clone(&block))
             .expect("store canonical block");
         let artifact = v2_finality_artifact_for_block(&block);
-        kura.store_v2_finality_artifact(&artifact)
+        let _ = kura
+            .store_v2_finality_artifact(&artifact)
             .expect("persist and verify finality artifact");
         assert_eq!(
             kura.v2_finality_crypto_verifications
@@ -22061,7 +25431,8 @@ mod tests {
         kura.store_block(Arc::clone(&block))
             .expect("store canonical block");
         let artifact = v2_finality_artifact_for_block(&block);
-        kura.store_v2_finality_artifact(&artifact)
+        let _ = kura
+            .store_v2_finality_artifact(&artifact)
             .expect("persist finality artifact");
         let path = kura.v2_finality_artifact_path(1);
         let bytes = std::fs::read(&path).expect("read Kura finality record");
@@ -22103,7 +25474,8 @@ mod tests {
         let expected_header = blocks[1].header();
         let artifacts = v2_finality_artifacts_for_chain(&blocks[..2]);
         let artifact = artifacts[1].clone();
-        kura.store_v2_finality_artifact(&artifact)
+        let _ = kura
+            .store_v2_finality_artifact(&artifact)
             .expect("persist finality with retained header");
 
         let (_, payload_len) = advertise_required_replicas(&kura, height);
@@ -22131,7 +25503,7 @@ mod tests {
             .expect("finality record exists");
         assert_eq!(retained_header, expected_header);
         assert_eq!(recovered, artifact);
-        reopened
+        let _ = reopened
             .store_v2_finality_artifact(&artifact)
             .expect("idempotent persistence must not require the evicted body");
     }
@@ -22193,6 +25565,533 @@ mod tests {
     }
 
     #[test]
+    fn failed_top_replacement_restores_staged_retained_record_and_exact_accounting() {
+        let temp_dir = TempDir::new().expect("create Kura root");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("open Kura");
+        let original = DummyBlocks::new().next();
+        kura.store_block(Arc::clone(&original))
+            .expect("store original top block");
+        let blocks_dir = kura.active_blocks_dir.lock().clone();
+        kura.persist_retained_block_record(&blocks_dir, original.hash(), original.as_ref())
+            .expect("persist original retained record");
+        let retained_path = kura.retained_block_record_path(1);
+        let retained_before = std::fs::read(&retained_path).expect("read retained record");
+        let total_before = kura
+            .refresh_total_disk_usage_bytes()
+            .expect("measure total usage before failed replacement");
+        let replacement: Arc<SignedBlock> = Arc::new(
+            ValidBlock::new_dummy_and_modify_header(checked_keypair().private_key(), |header| {
+                header.set_height(nonzero!(1_u64));
+                header.set_prev_block_hash(None);
+                header.set_view_change_index(header.view_change_index().saturating_add(1));
+            })
+            .into(),
+        );
+        assert_ne!(replacement.hash(), original.hash());
+        kura.fail_next_block_write_for_tests();
+
+        assert!(kura.replace_top_block(Arc::clone(&replacement)).is_err());
+        assert_eq!(
+            kura.get_durable_block_hash(nonzero!(1_usize)),
+            Some(original.hash())
+        );
+        assert_eq!(
+            std::fs::read(&retained_path).expect("retained record restored after failed rewrite"),
+            retained_before
+        );
+        assert!(
+            !Kura::retained_block_rewrite_staging_dir_for(&blocks_dir).exists(),
+            "ordinary failure must resolve its rewrite stage"
+        );
+        assert_eq!(
+            kura.disk_usage_bytes()
+                .expect("cached total usage after failed replacement"),
+            total_before
+        );
+        assert_eq!(
+            kura.kura_total_disk_usage_bytes()
+                .expect("rescan total usage after failed replacement"),
+            total_before
+        );
+    }
+
+    #[test]
+    fn successful_top_replacement_discards_staged_record_with_exact_accounting() {
+        let temp_dir = TempDir::new().expect("create Kura root");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("open Kura");
+        let original = DummyBlocks::new().next();
+        kura.store_block(Arc::clone(&original))
+            .expect("store original top block");
+        let blocks_dir = kura.active_blocks_dir.lock().clone();
+        kura.persist_retained_block_record(&blocks_dir, original.hash(), original.as_ref())
+            .expect("persist original retained record");
+        let replacement: Arc<SignedBlock> = Arc::new(
+            ValidBlock::new_dummy_and_modify_header(checked_keypair().private_key(), |header| {
+                header.set_height(nonzero!(1_u64));
+                header.set_prev_block_hash(None);
+                header.set_view_change_index(header.view_change_index().saturating_add(1));
+            })
+            .into(),
+        );
+
+        kura.replace_top_block(Arc::clone(&replacement))
+            .expect("replace unfinalized canonical top");
+        assert_eq!(
+            kura.get_durable_block_hash(nonzero!(1_usize)),
+            Some(replacement.hash())
+        );
+        assert!(!kura.retained_block_record_path(1).exists());
+        assert!(!Kura::retained_block_rewrite_staging_dir_for(&blocks_dir).exists());
+        assert_eq!(
+            kura.disk_usage_bytes()
+                .expect("cached total usage after successful replacement"),
+            kura.kura_total_disk_usage_bytes()
+                .expect("exact total usage after successful replacement")
+        );
+    }
+
+    #[test]
+    fn retained_rewrite_stage_restores_old_canonical_record_after_restart() {
+        let temp_dir = TempDir::new().expect("create Kura root");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let retained_before = {
+            let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("open Kura");
+            let block = DummyBlocks::new().next();
+            kura.store_block(Arc::clone(&block))
+                .expect("store canonical block");
+            let blocks_dir = kura.active_blocks_dir.lock().clone();
+            kura.persist_retained_block_record(&blocks_dir, block.hash(), block.as_ref())
+                .expect("persist retained record");
+            let retained_before =
+                std::fs::read(kura.retained_block_record_path(1)).expect("read retained record");
+            let _canonical_guard = kura.canonical_chain_lock.lock();
+            let stage = kura
+                .stage_retained_block_records_for_rewrite(&blocks_dir, 1)
+                .expect("stage retained record")
+                .expect("staged record exists");
+            assert!(!kura.retained_block_record_path(1).exists());
+            assert!(Kura::retained_block_rewrite_staging_dir_for(&blocks_dir).is_dir());
+            drop(stage);
+            retained_before
+        };
+
+        let (reopened, _) =
+            Kura::new(&config, &RuntimeLaneConfig::default()).expect("recover staged rewrite");
+        assert_eq!(
+            std::fs::read(reopened.retained_block_record_path(1))
+                .expect("startup restored retained record for unchanged canonical hash"),
+            retained_before
+        );
+        assert!(
+            !Kura::retained_block_rewrite_staging_dir_for(
+                &reopened.active_blocks_dir.lock().clone()
+            )
+            .exists()
+        );
+        assert_eq!(
+            reopened
+                .disk_usage_bytes()
+                .expect("cached usage after staged-restore restart"),
+            reopened
+                .kura_total_disk_usage_bytes()
+                .expect("exact usage after staged-restore restart")
+        );
+    }
+
+    #[test]
+    fn ambiguous_old_marker_keeps_retained_and_finality_evidence_for_startup() {
+        let temp_dir = TempDir::new().expect("create Kura root");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let (retained_before, finality_before, original_hash, artifact) = {
+            let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("open Kura");
+            let original = DummyBlocks::new().next();
+            kura.store_block(Arc::clone(&original))
+                .expect("store original block");
+            let blocks_dir = kura.active_blocks_dir.lock().clone();
+            kura.persist_retained_block_record(&blocks_dir, original.hash(), original.as_ref())
+                .expect("persist original retained record");
+            let artifact = v2_finality_artifact_for_block(&original);
+            let _ = kura
+                .store_v2_finality_artifact(&artifact)
+                .expect("persist original finality record");
+            let retained_path = kura.retained_block_record_path(1);
+            let finality_path = kura.v2_finality_artifact_path(1);
+            let retained_before = std::fs::read(&retained_path).expect("read retained record");
+            let finality_before = std::fs::read(&finality_path).expect("read finality record");
+            let replacement: Arc<SignedBlock> = Arc::new(
+                ValidBlock::new_dummy_and_modify_header(
+                    checked_keypair().private_key(),
+                    |header| {
+                        header.set_height(nonzero!(1_u64));
+                        header.set_prev_block_hash(None);
+                        header.set_view_change_index(header.view_change_index().saturating_add(1));
+                    },
+                )
+                .into(),
+            );
+
+            let _canonical_guard = kura.canonical_chain_lock.lock();
+            let retained_stage = kura
+                .stage_retained_block_records_for_rewrite(&blocks_dir, 1)
+                .expect("stage retained record")
+                .expect("retained record exists");
+            {
+                let store = kura.block_store.lock();
+                store
+                    .fail_next_commit_marker_write_and_readback
+                    .store(true, Ordering::Release);
+            }
+            assert!(matches!(
+                kura.persist_block_at_height(&replacement, 1),
+                Err(Error::DaBlockRewriteCommitStateUnknown { .. })
+            ));
+            assert!(kura.canonical_storage_poisoned.load(Ordering::Acquire));
+            assert!(Kura::retained_block_rewrite_staging_dir_for(&blocks_dir).is_dir());
+            assert!(
+                kura.block_store
+                    .lock()
+                    .da_block_rewrite_stage_path()
+                    .is_file()
+            );
+            assert_eq!(
+                std::fs::read(&finality_path).expect("finality survives ambiguity"),
+                finality_before
+            );
+            drop(retained_stage);
+            (retained_before, finality_before, original.hash(), artifact)
+        };
+
+        let (reopened, _) = Kura::new(&config, &RuntimeLaneConfig::default())
+            .expect("startup resolves DA before retained and finality evidence");
+        assert_eq!(
+            reopened.get_durable_block_hash(nonzero!(1_usize)),
+            Some(original_hash)
+        );
+        assert_eq!(
+            std::fs::read(reopened.retained_block_record_path(1))
+                .expect("retained record restored after old-marker recovery"),
+            retained_before
+        );
+        assert_eq!(
+            std::fs::read(reopened.v2_finality_artifact_path(1))
+                .expect("finality record preserved after old-marker recovery"),
+            finality_before
+        );
+        assert_eq!(
+            reopened.v2_finality_artifact(1).expect("read finality"),
+            Some(artifact)
+        );
+    }
+
+    #[test]
+    fn retained_rewrite_stage_discards_old_record_after_published_crash() {
+        let temp_dir = TempDir::new().expect("create Kura root");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let replacement_hash = {
+            let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("open Kura");
+            let original = DummyBlocks::new().next();
+            kura.store_block(Arc::clone(&original))
+                .expect("store original block");
+            let blocks_dir = kura.active_blocks_dir.lock().clone();
+            kura.persist_retained_block_record(&blocks_dir, original.hash(), original.as_ref())
+                .expect("persist original retained record");
+            let replacement: Arc<SignedBlock> = Arc::new(
+                ValidBlock::new_dummy_and_modify_header(
+                    checked_keypair().private_key(),
+                    |header| {
+                        header.set_height(nonzero!(1_u64));
+                        header.set_prev_block_hash(None);
+                        header.set_view_change_index(header.view_change_index().saturating_add(1));
+                    },
+                )
+                .into(),
+            );
+            let replacement_hash = replacement.hash();
+            let _canonical_guard = kura.canonical_chain_lock.lock();
+            let stage = kura
+                .stage_retained_block_records_for_rewrite(&blocks_dir, 1)
+                .expect("stage original retained record")
+                .expect("staged record exists");
+            kura.persist_block_at_height(&replacement, 1)
+                .expect("publish replacement before simulated crash");
+            assert!(Kura::retained_block_rewrite_staging_dir_for(&blocks_dir).is_dir());
+            drop(stage);
+            replacement_hash
+        };
+
+        let (reopened, _) = Kura::new(&config, &RuntimeLaneConfig::default())
+            .expect("restart after replacement publication crash");
+        assert_eq!(
+            reopened.get_durable_block_hash(nonzero!(1_usize)),
+            Some(replacement_hash)
+        );
+        assert!(
+            !reopened.retained_block_record_path(1).exists(),
+            "startup must discard retained evidence for the replaced canonical hash"
+        );
+        assert!(
+            !Kura::retained_block_rewrite_staging_dir_for(
+                &reopened.active_blocks_dir.lock().clone()
+            )
+            .exists()
+        );
+        assert_eq!(
+            reopened
+                .disk_usage_bytes()
+                .expect("cached usage after staged-discard restart"),
+            reopened
+                .kura_total_disk_usage_bytes()
+                .expect("exact usage after staged-discard restart")
+        );
+    }
+
+    #[test]
+    fn post_publication_rewrite_error_discards_old_evidence_and_restarts_cleanly() {
+        let temp_dir = TempDir::new().expect("create Kura root");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let replacement_hash = {
+            let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("open Kura");
+            let original = DummyBlocks::new().next();
+            kura.store_block(Arc::clone(&original))
+                .expect("store original block");
+            let blocks_dir = kura.active_blocks_dir.lock().clone();
+            kura.persist_retained_block_record(&blocks_dir, original.hash(), original.as_ref())
+                .expect("persist original retained record");
+            let replacement: Arc<SignedBlock> = Arc::new(
+                ValidBlock::new_dummy_and_modify_header(
+                    checked_keypair().private_key(),
+                    |header| {
+                        header.set_height(nonzero!(1_u64));
+                        header.set_prev_block_hash(None);
+                        header.set_view_change_index(header.view_change_index().saturating_add(1));
+                    },
+                )
+                .into(),
+            );
+            let replacement_hash = replacement.hash();
+            let result = {
+                let _canonical_guard = kura.canonical_chain_lock.lock();
+                kura.with_retained_block_records_staged_for_rewrite(&blocks_dir, 1, || {
+                    kura.persist_block_at_height(&replacement, 1)?;
+                    Err::<(), _>(Error::IO(
+                        std::io::Error::other("injected post-publication failure"),
+                        PathBuf::from("post_publication_rewrite_test"),
+                    ))
+                })
+            };
+            assert!(matches!(
+                result,
+                Err(Error::IO(error, _)) if error.to_string().contains("post-publication")
+            ));
+            assert_eq!(
+                kura.get_durable_block_hash(nonzero!(1_usize)),
+                Some(replacement_hash)
+            );
+            assert!(
+                !kura.retained_block_record_path(1).exists(),
+                "old retained evidence must not be restored over a published replacement"
+            );
+            assert!(
+                !Kura::retained_block_rewrite_staging_dir_for(&blocks_dir).exists(),
+                "post-publication error reconciliation must resolve the stage"
+            );
+            assert_eq!(
+                kura.disk_usage_bytes()
+                    .expect("cached usage after post-publication reconciliation"),
+                kura.kura_total_disk_usage_bytes()
+                    .expect("exact usage after post-publication reconciliation")
+            );
+            replacement_hash
+        };
+
+        let (reopened, _) = Kura::new(&config, &RuntimeLaneConfig::default())
+            .expect("restart after post-publication rewrite error");
+        assert_eq!(
+            reopened.get_durable_block_hash(nonzero!(1_usize)),
+            Some(replacement_hash)
+        );
+        assert!(!reopened.retained_block_record_path(1).exists());
+    }
+
+    #[test]
+    fn partial_stage_discard_recovers_committed_replacement_before_returning() {
+        let temp_dir = TempDir::new().expect("create Kura root");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let replacement_hash = {
+            let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("open Kura");
+            let original = DummyBlocks::new().next();
+            kura.store_block(Arc::clone(&original))
+                .expect("store original block");
+            let blocks_dir = kura.active_blocks_dir.lock().clone();
+            kura.persist_retained_block_record(&blocks_dir, original.hash(), original.as_ref())
+                .expect("persist original retained record");
+            let replacement: Arc<SignedBlock> = Arc::new(
+                ValidBlock::new_dummy_and_modify_header(
+                    checked_keypair().private_key(),
+                    |header| {
+                        header.set_height(nonzero!(1_u64));
+                        header.set_prev_block_hash(None);
+                        header.set_view_change_index(header.view_change_index().saturating_add(1));
+                    },
+                )
+                .into(),
+            );
+            let replacement_hash = replacement.hash();
+            kura.fail_retained_rewrite_discard_after_for_tests(0);
+            kura.replace_top_block(Arc::clone(&replacement)).expect(
+                "published replacement must report committed success after cleanup recovery",
+            );
+            assert_eq!(
+                kura.get_durable_block_hash(nonzero!(1_usize)),
+                Some(replacement_hash),
+                "replacement must be durable when the public call returns"
+            );
+            assert_eq!(
+                kura.get_block_hash(nonzero!(1_usize)),
+                Some(replacement_hash)
+            );
+            assert_eq!(
+                kura.get_block(nonzero!(1_usize)).as_deref(),
+                Some(replacement.as_ref()),
+                "in-memory body must match the published durable replacement"
+            );
+            let durable_replacement = {
+                let mut store = kura.block_store.lock();
+                read_block(&mut store, 0).expect("decode durable replacement body")
+            };
+            assert_eq!(durable_replacement, *replacement);
+            let staging_directory = Kura::retained_block_rewrite_staging_dir_for(&blocks_dir);
+            assert!(
+                !staging_directory.exists(),
+                "one-shot cleanup failure must be recovered before returning"
+            );
+            kura.replace_top_block(Arc::clone(&replacement))
+                .expect("idempotent retry after recovered cleanup");
+
+            let successor: Arc<SignedBlock> = Arc::new(
+                ValidBlock::new_dummy_and_modify_header(
+                    checked_keypair().private_key(),
+                    |header| {
+                        header.set_height(nonzero!(2_u64));
+                        header.set_prev_block_hash(Some(replacement_hash));
+                    },
+                )
+                .into(),
+            );
+            kura.store_block(Arc::clone(&successor))
+                .expect("append after recovered replacement cleanup");
+            assert_eq!(
+                kura.get_block_hash(nonzero!(2_usize)),
+                Some(successor.hash())
+            );
+            assert_eq!(
+                kura.get_durable_block_hash(nonzero!(2_usize)),
+                Some(successor.hash())
+            );
+            assert_eq!(
+                kura.disk_usage_bytes()
+                    .expect("invalidated accounting rescans after partial discard"),
+                kura.kura_total_disk_usage_bytes()
+                    .expect("exact usage after partial discard")
+            );
+            replacement_hash
+        };
+
+        let (reopened, _) = Kura::new(&config, &RuntimeLaneConfig::default())
+            .expect("restart resolves partially discarded rewrite stage");
+        assert_eq!(
+            reopened.get_durable_block_hash(nonzero!(1_usize)),
+            Some(replacement_hash)
+        );
+        assert_eq!(reopened.blocks_count(), 2);
+        assert!(!reopened.retained_block_record_path(1).exists());
+        assert!(
+            !Kura::retained_block_rewrite_staging_dir_for(
+                &reopened.active_blocks_dir.lock().clone()
+            )
+            .exists()
+        );
+    }
+
+    #[test]
+    fn partial_multi_height_stage_discard_keeps_public_prune_coherent_and_appendable() {
+        let temp_dir = TempDir::new().expect("create Kura root");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("open Kura");
+        let blocks = store_dummy_block_arcs(&kura, 4);
+        let blocks_dir = kura.active_blocks_dir.lock().clone();
+        for block in blocks.iter().skip(1) {
+            kura.persist_retained_block_record(&blocks_dir, block.hash(), block.as_ref())
+                .expect("persist retained rewrite fixture");
+        }
+        assert!(
+            (2..=4).all(|height| kura.retained_block_record_path(height).is_file()),
+            "fixture must stage multiple retained heights"
+        );
+
+        kura.fail_retained_rewrite_discard_after_for_tests(0);
+        kura.prune_to_height(1)
+            .expect("published prune must recover partial retained cleanup and report success");
+
+        assert_eq!(kura.blocks_count(), 1);
+        assert_eq!(kura.durable_blocks_count(), 1);
+        assert_eq!(
+            kura.get_block_hash(nonzero!(1_usize)),
+            Some(blocks[0].hash())
+        );
+        assert_eq!(
+            kura.get_durable_block_hash(nonzero!(1_usize)),
+            Some(blocks[0].hash())
+        );
+        assert_eq!(
+            kura.get_block(nonzero!(1_usize)).as_deref(),
+            Some(blocks[0].as_ref())
+        );
+        assert!(kura.get_block(nonzero!(2_usize)).is_none());
+        assert!(kura.get_durable_block_hash(nonzero!(2_usize)).is_none());
+        assert!((2..=4).all(|height| !kura.retained_block_record_path(height).exists()));
+        assert!(
+            !Kura::retained_block_rewrite_staging_dir_for(&blocks_dir).exists(),
+            "in-process recovery must fully resolve a partially discarded multi-height stage"
+        );
+        let durable_genesis = {
+            let mut store = kura.block_store.lock();
+            read_block(&mut store, 0).expect("decode durable retained prefix")
+        };
+        assert_eq!(durable_genesis, *blocks[0]);
+
+        kura.store_block(Arc::clone(&blocks[1]))
+            .expect("append canonical successor after recovered public prune");
+        assert_eq!(kura.blocks_count(), 2);
+        assert_eq!(kura.durable_blocks_count(), 2);
+        assert_eq!(
+            kura.get_block_hash(nonzero!(2_usize)),
+            Some(blocks[1].hash())
+        );
+        assert_eq!(
+            kura.get_durable_block_hash(nonzero!(2_usize)),
+            Some(blocks[1].hash())
+        );
+        assert_eq!(
+            kura.get_block(nonzero!(2_usize)).as_deref(),
+            Some(blocks[1].as_ref())
+        );
+        let durable_successor = {
+            let mut store = kura.block_store.lock();
+            read_block(&mut store, 1).expect("decode durable successor")
+        };
+        assert_eq!(durable_successor, *blocks[1]);
+        assert_eq!(
+            kura.disk_usage_bytes()
+                .expect("refresh total usage after recovered prune and append"),
+            kura.kura_total_disk_usage_bytes()
+                .expect("scan exact total usage after recovered prune and append")
+        );
+    }
+
+    #[test]
     fn v2_finality_durably_archives_sccp_before_body_eviction_and_restart() {
         let temp_dir = TempDir::new().expect("create Kura root");
         let config = kura_config_for_dir(&temp_dir, nonzero!(1_usize));
@@ -22205,7 +26104,8 @@ mod tests {
                 !kura.retained_block_record_path(2).exists(),
                 "inline non-finalized bodies need no eager archive"
             );
-            kura.store_v2_finality_artifact(&artifact)
+            let _ = kura
+                .store_v2_finality_artifact(&artifact)
                 .expect("persist finality and its SCCP archive");
             assert!(
                 kura.retained_block_record_path(2).is_file(),
@@ -22252,6 +26152,198 @@ mod tests {
     }
 
     #[test]
+    fn v2_finality_store_rejects_header_matching_canonical_wire_substitution() {
+        let kura = Kura::blank_kura_for_testing();
+        let canonical = store_dummy_block_arcs(&kura, 1)
+            .pop()
+            .expect("canonical block");
+        let mut substituted = canonical.as_ref().clone();
+        let substitute_key = KeyPair::try_random().expect("substitute block key");
+        let substitute_signature = BlockSignature::new(
+            0,
+            SignatureOf::try_from_hash(substitute_key.private_key(), substituted.hash())
+                .expect("sign substituted canonical header"),
+        );
+        substituted
+            .replace_signatures([substitute_signature].into_iter().collect())
+            .expect("replace substituted block signature");
+        assert_eq!(substituted.header(), canonical.header());
+        assert_ne!(
+            Kura::canonical_block_wire_hash(&substituted).expect("substituted wire hash"),
+            Kura::canonical_block_wire_hash(&canonical).expect("canonical wire hash")
+        );
+        let substituted_artifact = v2_finality_artifact_for_block(&substituted);
+
+        assert!(matches!(
+            kura.store_v2_finality_artifact(&substituted_artifact),
+            Err(Error::V2FinalityPayloadHashMismatch { height: 1 })
+        ));
+        assert!(
+            !kura.retained_block_record_path(1).exists(),
+            "a body-substituted artifact must reject before retained-record publication"
+        );
+        assert!(!kura.v2_finality_artifact_path(1).exists());
+    }
+
+    #[test]
+    fn retained_wire_hash_tamper_rejects_live_body_bodyless_read_and_restart() {
+        let temp_dir = TempDir::new().expect("create Kura root");
+        let config = kura_config_for_dir(&temp_dir, nonzero!(1_usize));
+        {
+            let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("open Kura");
+            let blocks = store_dummy_block_arcs(&kura, 4);
+            let artifact = v2_finality_artifacts_for_chain(&blocks[..2])[1].clone();
+            let _ = kura
+                .store_v2_finality_artifact(&artifact)
+                .expect("store exact finality and retained block record");
+            let retained_path = kura.retained_block_record_path(2);
+            let canonical_bytes = std::fs::read(&retained_path).expect("read retained record");
+            let mut input = canonical_bytes.as_slice();
+            let mut tampered = KuraRetainedBlockRecord::decode_all(&mut input)
+                .expect("decode retained record for wire-hash tamper");
+            tampered.canonical_wire_hash = Hash::new(b"attacker substituted canonical wire");
+            let tampered_bytes = tampered.encode();
+            std::fs::write(&retained_path, &tampered_bytes)
+                .expect("tamper retained canonical-wire hash");
+
+            assert!(matches!(
+                kura.v2_finality_artifact_with_archive(2),
+                Err(Error::ConflictingRetainedBlockRecord { height: 2 })
+            ));
+            std::fs::write(&retained_path, &canonical_bytes)
+                .expect("restore exact retained record before eviction");
+
+            let height = nonzero!(2_usize);
+            let (_, payload_len) = advertise_required_replicas(&kura, height);
+            assert!(
+                kura.evict_block_bodies(payload_len)
+                    .expect("evict exact canonical body")
+                    >= payload_len
+            );
+            kura.remove_evicted_block_sidecar_for_testing(height)
+                .expect("make exact historical body remote-only");
+            assert!(kura.get_block(height).is_none());
+            std::fs::write(&retained_path, tampered_bytes)
+                .expect("tamper bodyless retained canonical-wire hash");
+            assert!(matches!(
+                kura.v2_finality_artifact_with_archive(2),
+                Err(Error::V2FinalityPayloadHashMismatch { height: 2 })
+            ));
+        }
+
+        assert!(matches!(
+            Kura::new(&config, &RuntimeLaneConfig::default()),
+            Err(Error::V2FinalityPayloadHashMismatch { height: 2 })
+        ));
+    }
+
+    #[test]
+    fn coordinated_retained_and_finality_payload_hash_tamper_fails_crypto_and_restart() {
+        let temp_dir = TempDir::new().expect("create Kura root");
+        let config = kura_config_for_dir(&temp_dir, nonzero!(1_usize));
+        {
+            let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("open Kura");
+            let blocks = store_dummy_block_arcs(&kura, 4);
+            let artifact = v2_finality_artifacts_for_chain(&blocks[..2])[1].clone();
+            let _ = kura
+                .store_v2_finality_artifact(&artifact)
+                .expect("store exact finality and retained record");
+            let height = nonzero!(2_usize);
+            let (_, payload_len) = advertise_required_replicas(&kura, height);
+            assert!(
+                kura.evict_block_bodies(payload_len)
+                    .expect("evict exact canonical body")
+                    >= payload_len
+            );
+            kura.remove_evicted_block_sidecar_for_testing(height)
+                .expect("make exact historical body remote-only");
+
+            let forged_wire_hash = Hash::new(b"coordinated attacker wire hash");
+            let retained_path = kura.retained_block_record_path(2);
+            let retained_bytes = std::fs::read(&retained_path).expect("read retained record");
+            let mut retained_input = retained_bytes.as_slice();
+            let mut retained = KuraRetainedBlockRecord::decode_all(&mut retained_input)
+                .expect("decode retained record");
+            retained.canonical_wire_hash = forged_wire_hash;
+            std::fs::write(&retained_path, retained.encode())
+                .expect("coordinate retained payload hash tamper");
+
+            let finality_path = kura.v2_finality_artifact_path(2);
+            let finality_bytes = std::fs::read(&finality_path).expect("read finality record");
+            let mut finality_input = finality_bytes.as_slice();
+            let mut finality = KuraV2FinalityRecord::decode_all(&mut finality_input)
+                .expect("decode finality record");
+            finality.artifact.subject.payload_hash = forged_wire_hash;
+            finality.artifact.commit_qc.subject.payload_hash = forged_wire_hash;
+            std::fs::write(&finality_path, finality.encode())
+                .expect("coordinate finality payload hash tamper");
+
+            assert!(matches!(
+                kura.v2_finality_artifact_with_archive(2),
+                Err(Error::V2FinalityCryptography(_))
+            ));
+        }
+
+        assert!(matches!(
+            Kura::new(&config, &RuntimeLaneConfig::default()),
+            Err(Error::V2FinalityCryptography(_))
+        ));
+    }
+
+    #[test]
+    fn retained_sccp_inventory_is_bounded_nonempty_and_fails_closed_on_selected_tamper() {
+        let kura = Kura::blank_kura_for_testing();
+        let (blocks, _) = store_retained_archive_chain(&kura);
+        let blocks_dir = kura.active_blocks_dir.lock().clone();
+        for block in &blocks {
+            kura.persist_retained_block_record(&blocks_dir, block.hash(), block.as_ref())
+                .expect("persist canonical retained inventory fixture");
+        }
+
+        assert!(
+            kura.retained_nonempty_sccp_archive_inventory_at_or_below(0)
+                .expect("zero boundary inventory")
+                .is_empty()
+        );
+        assert!(
+            kura.retained_nonempty_sccp_archive_inventory_at_or_below(1)
+                .expect("rootless retained record is accepted")
+                .is_empty(),
+            "valid rootless/empty records must not manufacture inventory entries"
+        );
+        let through_two = kura
+            .retained_nonempty_sccp_archive_inventory_at_or_below(2)
+            .expect("inventory through SCCP height");
+        assert_eq!(
+            through_two,
+            vec![RetainedSccpArchiveSummary {
+                height: 2,
+                block_hash: blocks[1].hash(),
+                message_count: 2,
+            }]
+        );
+        assert_eq!(
+            kura.retained_nonempty_sccp_archive_inventory_at_or_below(3)
+                .expect("rootless suffix remains omitted"),
+            through_two
+        );
+
+        let suffix_path = kura.retained_block_record_path(4);
+        std::fs::write(&suffix_path, b"tampered retained suffix")
+            .expect("tamper retained record above WSV boundary");
+        assert_eq!(
+            kura.retained_nonempty_sccp_archive_inventory_at_or_below(2)
+                .expect("Kura suffix above committed boundary must not be decoded"),
+            through_two
+        );
+        assert!(
+            kura.retained_nonempty_sccp_archive_inventory_at_or_below(4)
+                .is_err(),
+            "a tampered retained record inside the selected boundary must fail closed"
+        );
+    }
+
+    #[test]
     fn failed_finality_publication_keeps_valid_archive_for_exact_retry() {
         let temp_dir = TempDir::new().expect("create Kura root");
         let config = kura_config_for_dir(&temp_dir, nonzero!(1_usize));
@@ -22292,7 +26384,8 @@ mod tests {
             .expect("retained archive exists");
         assert_eq!(archive.len(), 2);
 
-        kura.store_v2_finality_artifact(&artifact)
+        let _ = kura
+            .store_v2_finality_artifact(&artifact)
             .expect("retry finality with exact retained archive");
         let finality_len = std::fs::metadata(kura.v2_finality_artifact_path(2))
             .expect("finality metadata")
@@ -22310,7 +26403,8 @@ mod tests {
                 .expect("cached total usage after finality retry"),
             total_after_retry
         );
-        kura.store_v2_finality_artifact(&artifact)
+        let _ = kura
+            .store_v2_finality_artifact(&artifact)
             .expect("exact finality repeat remains idempotent");
         assert_eq!(
             kura.disk_usage_bytes()
@@ -22334,7 +26428,11 @@ mod tests {
         assert_eq!(archive.len(), 2);
         let path = kura.retained_block_record_path(2);
 
-        let canonical = KuraRetainedBlockRecord::new(blocks[1].header(), archive.clone());
+        let canonical = KuraRetainedBlockRecord::new(
+            blocks[1].header(),
+            Kura::canonical_block_wire_hash(&blocks[1]).expect("canonical block wire hash"),
+            archive.clone(),
+        );
         Kura::validate_retained_block_record_at(&path, 2, canonical_hash, &canonical)
             .expect("canonical retained archive validates");
 
@@ -22348,7 +26446,7 @@ mod tests {
         let mut context_tamper = canonical.clone();
         context_tamper.sccp_archive[0]
             .context
-            .destination_binding_hash[0] ^= 0x80;
+            .destination_binding_hash = [0; 32];
         assert!(matches!(
             Kura::validate_retained_block_record_at(
                 &path,
@@ -22412,7 +26510,11 @@ mod tests {
         ));
 
         let rootless_header = blocks[0].header();
-        let rootless_extra = KuraRetainedBlockRecord::new(rootless_header, archive);
+        let rootless_extra = KuraRetainedBlockRecord::new(
+            rootless_header,
+            Kura::canonical_block_wire_hash(&blocks[0]).expect("rootless block wire hash"),
+            archive,
+        );
         assert!(matches!(
             Kura::validate_retained_block_record_at(
                 &kura.retained_block_record_path(1),
@@ -22432,7 +26534,8 @@ mod tests {
             let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("open Kura");
             let (blocks, _) = store_retained_archive_chain(&kura);
             let artifact = v2_finality_artifacts_for_chain(&blocks[..2])[1].clone();
-            kura.store_v2_finality_artifact(&artifact)
+            let _ = kura
+                .store_v2_finality_artifact(&artifact)
                 .expect("persist archive-backed finality");
             let path = kura.retained_block_record_path(2);
             let bytes = std::fs::read(&path).expect("read retained SCCP record");
@@ -22462,7 +26565,8 @@ mod tests {
             let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("open Kura");
             let (blocks, _) = store_retained_archive_chain(&kura);
             let artifact = v2_finality_artifacts_for_chain(&blocks[..2])[1].clone();
-            kura.store_v2_finality_artifact(&artifact)
+            let _ = kura
+                .store_v2_finality_artifact(&artifact)
                 .expect("persist archive-backed finality");
             std::fs::remove_file(kura.retained_block_record_path(2))
                 .expect("delete rooted archive");
@@ -22503,7 +26607,7 @@ mod tests {
         let (reopened, _) =
             Kura::new(&config, &RuntimeLaneConfig::default()).expect("restart bodyless Kura");
         assert!(reopened.get_block(nonzero!(2_usize)).is_none());
-        reopened
+        let _ = reopened
             .store_v2_finality_artifact(&artifact)
             .expect("attach finality from the durable retained header");
         let (header, recovered) = reopened
@@ -22540,7 +26644,11 @@ mod tests {
                 header.set_view_change_index(header.view_change_index().saturating_add(1));
             })
             .into();
-        let forged = KuraRetainedBlockRecord::new(substitute.header(), Vec::new());
+        let forged = KuraRetainedBlockRecord::new(
+            substitute.header(),
+            Kura::canonical_block_wire_hash(&substitute).expect("substitute block wire hash"),
+            Vec::new(),
+        );
         std::fs::write(&path, forged.encode()).expect("replace retained header with a conflict");
 
         assert!(matches!(
@@ -22581,7 +26689,12 @@ mod tests {
         std::fs::create_dir_all(&directory).expect("create retained-header directory");
         std::fs::write(
             kura.retained_block_record_path(2),
-            KuraRetainedBlockRecord::new(substitute.header(), Vec::new()).encode(),
+            KuraRetainedBlockRecord::new(
+                substitute.header(),
+                Kura::canonical_block_wire_hash(&substitute).expect("substitute block wire hash"),
+                Vec::new(),
+            )
+            .encode(),
         )
         .expect("preplant conflicting retained header");
 
@@ -22637,7 +26750,12 @@ mod tests {
             std::fs::create_dir_all(&directory).expect("create retained-header directory");
             std::fs::write(
                 directory.join("1.norito"),
-                KuraRetainedBlockRecord::new(block.header(), Vec::new()).encode(),
+                KuraRetainedBlockRecord::new(
+                    block.header(),
+                    Kura::canonical_block_wire_hash(&block).expect("canonical block wire hash"),
+                    Vec::new(),
+                )
+                .encode(),
             )
             .expect("write noncanonical retained-header name");
         }
@@ -22646,6 +26764,54 @@ mod tests {
             Kura::new(&config, &RuntimeLaneConfig::default()),
             Err(Error::IO(error, _)) if error.kind() == ErrorKind::InvalidData
         ));
+    }
+
+    fn assert_restart_reconciles_retained_suffix_after_published_truncate(
+        remove_one_before_restart: bool,
+    ) {
+        let temp_dir = TempDir::new().expect("create Kura root");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        {
+            let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("open Kura");
+            let blocks = store_dummy_block_arcs(&kura, 4);
+            let blocks_dir = kura.active_blocks_dir.lock().clone();
+            for block in blocks.iter().skip(1) {
+                kura.persist_retained_block_record(&blocks_dir, block.hash(), block.as_ref())
+                    .expect("persist retained suffix fixture");
+            }
+            kura.block_store
+                .lock()
+                .prune(1)
+                .expect("publish canonical truncate before retained cleanup");
+            if remove_one_before_restart {
+                std::fs::remove_file(kura.retained_block_record_path(2))
+                    .expect("simulate crash after one retained suffix removal");
+            }
+        }
+
+        let (reopened, count) = Kura::new(&config, &RuntimeLaneConfig::default())
+            .expect("first restart reconciles stale retained suffix");
+        assert_eq!(count.0, 1);
+        assert!(
+            (2..=4).all(|height| !reopened.retained_block_record_path(height).exists()),
+            "startup reconciliation must remove every retained record above the durable tip"
+        );
+        drop(reopened);
+
+        let (reopened_again, count) = Kura::new(&config, &RuntimeLaneConfig::default())
+            .expect("second restart remains converged after retained suffix reconciliation");
+        assert_eq!(count.0, 1);
+        assert!((2..=4).all(|height| !reopened_again.retained_block_record_path(height).exists()));
+    }
+
+    #[test]
+    fn restart_reconciles_retained_suffix_when_crash_precedes_cleanup() {
+        assert_restart_reconciles_retained_suffix_after_published_truncate(false);
+    }
+
+    #[test]
+    fn restart_reconciles_retained_suffix_when_crash_interrupts_cleanup() {
+        assert_restart_reconciles_retained_suffix_after_published_truncate(true);
     }
 
     #[cfg(unix)]
@@ -22663,7 +26829,12 @@ mod tests {
         let external = temp_dir.path().join("attacker-retained-header.norito");
         std::fs::write(
             &external,
-            KuraRetainedBlockRecord::new(blocks[1].header(), Vec::new()).encode(),
+            KuraRetainedBlockRecord::new(
+                blocks[1].header(),
+                Kura::canonical_block_wire_hash(&blocks[1]).expect("canonical block wire hash"),
+                Vec::new(),
+            )
+            .encode(),
         )
         .expect("write external retained-header bytes");
         symlink(&external, kura.retained_block_record_path(2))
@@ -22722,7 +26893,11 @@ mod tests {
         let directory = kura.retained_block_record_dir();
         let path = kura.retained_block_record_path(1);
         std::fs::create_dir_all(&directory).expect("create retained-block directory");
-        let canonical = KuraRetainedBlockRecord::new(block.header(), Vec::new());
+        let canonical = KuraRetainedBlockRecord::new(
+            block.header(),
+            Kura::canonical_block_wire_hash(&block).expect("canonical block wire hash"),
+            Vec::new(),
+        );
         let canonical_bytes = canonical.encode();
 
         let mut trailing = canonical_bytes.clone();
@@ -22808,7 +26983,7 @@ mod tests {
             evict.join().expect("join eviction").expect("evict body"),
             payload_len
         );
-        finality_rx
+        let _ = finality_rx
             .recv_timeout(Duration::from_secs(10))
             .expect("finality worker timed out")
             .expect("persist concurrent finality");
@@ -22834,7 +27009,8 @@ mod tests {
         kura.store_block(Arc::clone(&block))
             .expect("store canonical block");
         let artifact = v2_finality_artifact_for_block(&block);
-        kura.store_v2_finality_artifact(&artifact)
+        let _ = kura
+            .store_v2_finality_artifact(&artifact)
             .expect("finalize canonical block");
 
         kura.replace_top_block(Arc::clone(&block))
@@ -22876,7 +27052,8 @@ mod tests {
         kura.store_block(Arc::clone(&block))
             .expect("store canonical block");
         let artifact = v2_finality_artifact_for_block(&block);
-        kura.store_v2_finality_artifact(&artifact)
+        let _ = kura
+            .store_v2_finality_artifact(&artifact)
             .expect("finalize canonical block");
 
         assert!(matches!(
@@ -22907,7 +27084,8 @@ mod tests {
         kura.store_block(Arc::clone(&block))
             .expect("store canonical block");
         let artifact = v2_finality_artifact_for_block(&block);
-        kura.store_v2_finality_artifact(&artifact)
+        let _ = kura
+            .store_v2_finality_artifact(&artifact)
             .expect("persist canonical finality");
         let blocks_dir = kura.active_blocks_dir.lock().clone();
         let canonical_path = Kura::v2_finality_artifact_path_for(&blocks_dir, 1);
@@ -22938,7 +27116,8 @@ mod tests {
         }
         let artifacts = v2_finality_artifacts_for_chain(&blocks);
         for artifact in &artifacts {
-            kura.store_v2_finality_artifact(artifact)
+            let _ = kura
+                .store_v2_finality_artifact(artifact)
                 .expect("persist canonical finality");
         }
         let lower_path = kura.v2_finality_artifact_path(1);
@@ -22968,7 +27147,8 @@ mod tests {
                 .expect("store canonical block");
         }
         let artifacts = v2_finality_artifacts_for_chain(&blocks);
-        kura.store_v2_finality_artifact(&artifacts[1])
+        let _ = kura
+            .store_v2_finality_artifact(&artifacts[1])
             .expect("finalize the canonical suffix block");
         let blocks_dir = kura.active_blocks_dir.lock().clone();
         drop(kura);
@@ -23062,6 +27242,14 @@ mod tests {
         forged
             .validate()
             .expect("aggregate substitution remains structurally well formed");
+        let enforced_before = kura
+            .refresh_disk_usage_bytes()
+            .expect("measure enforced usage before forged finality");
+        let total_before = kura
+            .refresh_total_disk_usage_bytes()
+            .expect("measure total usage before forged finality");
+        let retained_path = kura.retained_block_record_path(artifact.height);
+        assert!(!retained_path.exists());
 
         assert!(matches!(
             kura.store_v2_finality_artifact(&forged),
@@ -23072,11 +27260,35 @@ mod tests {
             !path.exists(),
             "cryptographically invalid bytes must not reach the durable path"
         );
+        assert!(
+            !retained_path.exists(),
+            "cryptographically invalid finality must not publish retained evidence"
+        );
+        assert_eq!(
+            kura.kura_disk_usage_bytes()
+                .expect("rescan enforced usage after forged finality"),
+            enforced_before
+        );
+        assert_eq!(
+            kura.kura_total_disk_usage_bytes()
+                .expect("rescan total usage after forged finality"),
+            total_before
+        );
+        assert_eq!(
+            kura.disk_usage_bytes()
+                .expect("cached total usage after forged finality"),
+            total_before,
+            "forged finality must leave no cached disk-accounting delta"
+        );
 
         let receipt = kura
             .store_v2_finality_artifact(&artifact)
             .expect("persist valid finality artifact");
         assert_v2_commit_receipt_matches_artifact(&receipt, &artifact);
+        assert!(
+            retained_path.is_file(),
+            "an exact valid retry must publish the canonical retained record"
+        );
         replace_v2_finality_record_artifact(&path, forged);
         assert!(matches!(
             kura.v2_finality_artifact(artifact.height),
@@ -23693,6 +27905,41 @@ mod tests {
             new_merge,
             "active merge log path should be updated"
         );
+
+        let rejected_catalog = LaneCatalog::new(
+            nonzero!(1_u32),
+            vec![ModelLaneConfig {
+                alias: "Treasury Lane".to_string(),
+                ..ModelLaneConfig::default()
+            }],
+        )
+        .expect("rejected catalog");
+        let rejected_lane_config = RuntimeLaneConfig::from_catalog(&rejected_catalog);
+        let rejected_entry = rejected_lane_config
+            .entry(LaneId::SINGLE)
+            .expect("rejected lane entry");
+        kura.fail_next_relabel_after_block_move
+            .store(true, Ordering::Release);
+        assert!(matches!(
+            kura.relabel_lane_segments(&[(updated_entry, rejected_entry)]),
+            Err(Error::IO(_, _))
+        ));
+        let rejected_dir = rejected_entry.blocks_dir(&kura.store_root);
+        let rejected_merge = rejected_entry.merge_log_path(&kura.store_root);
+        assert!(
+            new_dir.exists(),
+            "failed relabel must restore the prior block path"
+        );
+        assert!(
+            new_merge.exists(),
+            "failed relabel must retain the prior merge path"
+        );
+        assert!(!rejected_dir.exists());
+        assert!(!rejected_merge.exists());
+        assert_eq!(*kura.active_blocks_dir.lock(), new_dir);
+        assert_eq!(kura.block_store.lock().path_to_blockchain, new_dir);
+        assert_eq!(*kura.active_merge_path.lock(), new_merge);
+        assert!(!kura.canonical_storage_poisoned.load(Ordering::Acquire));
     }
 
     #[test]
@@ -25914,9 +30161,42 @@ mod tests {
         let (kura, _) =
             Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("initialize kura");
 
-        let retired_dir = temp_dir.path().join("retired").join("blocks");
-        std::fs::create_dir_all(&retired_dir).expect("create retired dir");
-        std::fs::write(retired_dir.join("dummy.norito"), [0u8; 4]).expect("write retired file");
+        let active_merge_dir = temp_dir.path().join("merge_ledger");
+        std::fs::create_dir_all(&active_merge_dir).expect("create active merge directory");
+        std::fs::write(active_merge_dir.join("accounting-baseline.log"), [0u8; 64])
+            .expect("write surviving accounting baseline");
+        let enforced_before = kura
+            .refresh_disk_usage_bytes()
+            .expect("measure enforced baseline");
+        let total_before = kura
+            .refresh_total_disk_usage_bytes()
+            .expect("measure total baseline");
+
+        let retired_root = temp_dir.path().join("retired");
+        let retired_dir = RuntimeLaneConfig::default()
+            .primary()
+            .blocks_dir(&retired_root);
+        std::fs::create_dir_all(&retired_dir).expect("create retired block store");
+        std::fs::write(retired_dir.join(DATA_FILE_NAME), [0u8; 11])
+            .expect("write budgeted retired bytes");
+        let retained_dir = retired_dir.join(RETAINED_BLOCKS_DIR_NAME);
+        std::fs::create_dir_all(&retained_dir).expect("create retired retained-record directory");
+        std::fs::write(retained_dir.join("accounting.norito"), [0u8; 7])
+            .expect("write total-only retired bytes");
+        let retired_merge_dir = retired_root.join("merge_ledger");
+        std::fs::create_dir_all(&retired_merge_dir).expect("create retired merge directory");
+        std::fs::write(retired_merge_dir.join("accounting.log"), [0u8; 5])
+            .expect("write retired merge bytes");
+        assert_eq!(
+            kura.refresh_disk_usage_bytes()
+                .expect("measure seeded retired budget usage"),
+            enforced_before.saturating_add(16)
+        );
+        assert_eq!(
+            kura.refresh_total_disk_usage_bytes()
+                .expect("measure seeded retired total usage"),
+            total_before.saturating_add(23)
+        );
 
         assert!(
             kura.purge_retired_segments(),
@@ -25926,6 +30206,344 @@ mod tests {
             !temp_dir.path().join("retired").exists(),
             "retired dir should be removed"
         );
+        assert_eq!(
+            kura.disk_usage.load(Ordering::Relaxed),
+            enforced_before,
+            "retired purge must subtract the enforced bytes exactly once"
+        );
+        assert_eq!(
+            kura.disk_usage_total.load(Ordering::Relaxed),
+            total_before,
+            "retired purge must not subtract enforced bytes twice from total usage"
+        );
+        assert_eq!(
+            kura.kura_disk_usage_bytes()
+                .expect("rescan enforced usage after retired purge"),
+            enforced_before
+        );
+        assert_eq!(
+            kura.kura_total_disk_usage_bytes()
+                .expect("rescan total usage after retired purge"),
+            total_before
+        );
+    }
+
+    #[test]
+    fn total_disk_usage_scan_retries_across_replacement_and_unfinished_mutation() {
+        let temp_dir = TempDir::new().expect("create Kura root");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("open Kura");
+        let merge_dir = temp_dir.path().join("merge_ledger");
+        std::fs::create_dir_all(&merge_dir).expect("create accounted merge directory");
+        let path = merge_dir.join("accounting-race.log");
+        std::fs::write(&path, [0_u8; 4]).expect("seed existing accounted file");
+        let enforced_baseline = kura
+            .refresh_disk_usage_bytes()
+            .expect("establish enforced-usage baseline");
+        let baseline = kura
+            .refresh_total_disk_usage_bytes()
+            .expect("establish total-usage baseline");
+
+        kura.pause_next_total_disk_usage_scan_after_scan_for_tests();
+        let scan_kura = Arc::clone(&kura);
+        let (scan_tx, scan_rx) = mpsc::channel();
+        let scan = thread::spawn(move || {
+            scan_tx
+                .send(scan_kura.refresh_total_disk_usage_bytes())
+                .expect("report total-usage scan result");
+        });
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !kura.total_disk_usage_scan_paused_for_tests() {
+            assert!(
+                Instant::now() < deadline,
+                "total-usage scan did not reach its publication barrier"
+            );
+            thread::yield_now();
+        }
+
+        let accounting_mutation = kura.begin_total_disk_usage_mutation();
+        std::fs::write(&path, [0_u8; 9]).expect("replace existing accounted file");
+        kura.update_disk_usage_delta(4, 9);
+        accounting_mutation.finish();
+        assert!(
+            matches!(
+                scan_rx.recv_timeout(Duration::from_millis(50)),
+                Err(RecvTimeoutError::Timeout)
+            ),
+            "a stale scan must not publish before its deterministic barrier is released"
+        );
+        kura.resume_total_disk_usage_scan_for_tests();
+        let refreshed = scan_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("total-usage scan must retry")
+            .expect("retried total-usage scan succeeds");
+        scan.join().expect("join total-usage scan");
+        let exact_after_replacement = kura
+            .kura_total_disk_usage_bytes()
+            .expect("rescan after replacement");
+        assert_eq!(exact_after_replacement, baseline.saturating_add(5));
+        assert_eq!(refreshed, exact_after_replacement);
+        assert_eq!(
+            kura.disk_usage_total.load(Ordering::Relaxed),
+            exact_after_replacement,
+            "generation change must force the stale scan to retry before publication"
+        );
+        assert_eq!(
+            kura.disk_usage.load(Ordering::Relaxed),
+            enforced_baseline.saturating_add(5)
+        );
+
+        kura.pause_next_total_disk_usage_scan_after_scan_for_tests();
+        let budget_scan_kura = Arc::clone(&kura);
+        let (budget_tx, budget_rx) = mpsc::channel();
+        let budget_scan = thread::spawn(move || {
+            budget_tx
+                .send(budget_scan_kura.refresh_disk_usage_bytes())
+                .expect("report enforced-usage scan result");
+        });
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !kura.total_disk_usage_scan_paused_for_tests() {
+            assert!(
+                Instant::now() < deadline,
+                "enforced-usage scan did not reach its publication barrier"
+            );
+            thread::yield_now();
+        }
+        let budget_mutation = kura.begin_total_disk_usage_mutation();
+        std::fs::write(&path, [0_u8; 11]).expect("replace existing budgeted file");
+        kura.update_disk_usage_delta(9, 11);
+        budget_mutation.finish();
+        assert!(matches!(
+            budget_rx.recv_timeout(Duration::from_millis(50)),
+            Err(RecvTimeoutError::Timeout)
+        ));
+        kura.resume_total_disk_usage_scan_for_tests();
+        let refreshed_enforced = budget_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("enforced-usage scan must retry")
+            .expect("retried enforced-usage scan succeeds");
+        budget_scan.join().expect("join enforced-usage scan");
+        let exact_enforced = kura
+            .kura_disk_usage_bytes()
+            .expect("rescan enforced usage after replacement");
+        let exact_total = kura
+            .kura_total_disk_usage_bytes()
+            .expect("rescan total usage after budget replacement");
+        assert_eq!(refreshed_enforced, exact_enforced);
+        assert_eq!(
+            kura.disk_usage.load(Ordering::Relaxed),
+            exact_enforced,
+            "stale enforced scan must retry before publication"
+        );
+        assert_eq!(
+            kura.disk_usage_total.load(Ordering::Relaxed),
+            exact_total,
+            "combined refresh must publish total usage from the same stable generation"
+        );
+
+        let unfinished = kura.begin_total_disk_usage_mutation();
+        std::fs::write(&path, [0_u8; 13]).expect("simulate a partially accounted replacement");
+        drop(unfinished);
+        assert!(
+            !kura.disk_usage_total_initialized.load(Ordering::Relaxed),
+            "an unfinished mutation must invalidate the total cache"
+        );
+        assert!(
+            !kura.disk_usage_initialized.load(Ordering::Relaxed),
+            "an unfinished mutation must invalidate the enforced cache"
+        );
+        let exact_after_unfinished = kura
+            .kura_total_disk_usage_bytes()
+            .expect("rescan unfinished replacement");
+        let exact_enforced_after_unfinished = kura
+            .kura_disk_usage_bytes()
+            .expect("rescan enforced usage after unfinished replacement");
+        assert_eq!(exact_after_unfinished, exact_total.saturating_add(2));
+        assert_eq!(
+            kura.refresh_disk_usage_bytes()
+                .expect("invalidated enforced cache must refresh on demand"),
+            exact_enforced_after_unfinished
+        );
+        assert_eq!(
+            kura.disk_usage_bytes()
+                .expect("combined refresh must restore the total cache"),
+            exact_after_unfinished
+        );
+        assert!(kura.disk_usage_initialized.load(Ordering::Relaxed));
+        assert!(kura.disk_usage_total_initialized.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn cached_total_usage_read_waits_for_in_flight_mutation_publication() {
+        let temp_dir = TempDir::new().expect("create Kura root");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("open Kura");
+        kura.refresh_disk_usage_bytes()
+            .expect("establish exact disk-usage baseline");
+        let baseline_total = kura
+            .disk_usage_bytes()
+            .expect("read exact total-usage baseline");
+        let journal_path = kura
+            .store_root()
+            .join(crate::query::index_status::QueryIndexJournal::JOURNAL_FILE);
+        assert!(!journal_path.exists());
+
+        let accounting_mutation = kura.begin_total_disk_usage_mutation();
+        std::fs::write(&journal_path, [0xA5_u8; 17]).expect("write an in-flight counted journal");
+        let reader_kura = Arc::clone(&kura);
+        let (reader_tx, reader_rx) = mpsc::channel();
+        let reader = thread::spawn(move || {
+            reader_tx
+                .send(reader_kura.disk_usage_bytes())
+                .expect("report cached total-usage read");
+        });
+        assert!(
+            matches!(
+                reader_rx.recv_timeout(Duration::from_millis(50)),
+                Err(RecvTimeoutError::Timeout)
+            ),
+            "a cached total read must not observe an in-flight filesystem mutation"
+        );
+
+        kura.update_disk_usage_delta(0, 17);
+        accounting_mutation.finish();
+        let observed = reader_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("cached reader must resume after publication")
+            .expect("cached total-usage read succeeds");
+        reader.join().expect("join cached total-usage reader");
+        assert_eq!(observed, baseline_total.saturating_add(17));
+        assert_eq!(
+            observed,
+            kura.kura_total_disk_usage_bytes()
+                .expect("scan exact usage after publication")
+        );
+    }
+
+    #[test]
+    fn total_only_refresh_invalidates_cached_total_on_scan_error() {
+        let temp_dir = TempDir::new().expect("create Kura root");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("open Kura");
+        kura.refresh_disk_usage_bytes()
+            .expect("establish exact disk-usage baseline");
+        let cached_total = kura.disk_usage_total.load(Ordering::Relaxed);
+        let cached_enforced = kura.disk_usage.load(Ordering::Relaxed);
+        let blocks_dir = kura.active_blocks_dir.lock().clone();
+        let invalid_total_only_directory =
+            Kura::retained_block_rewrite_staging_dir_for(&blocks_dir);
+        std::fs::write(&invalid_total_only_directory, b"not a directory")
+            .expect("plant invalid total-only directory path");
+
+        assert!(kura.refresh_total_disk_usage_bytes().is_err());
+        assert!(
+            !kura.disk_usage_total_initialized.load(Ordering::Relaxed),
+            "a failed total-only scan must invalidate the old total cache"
+        );
+        assert!(
+            kura.disk_usage_initialized.load(Ordering::Relaxed),
+            "a total-only scan failure must not discard an unchanged enforced cache"
+        );
+        assert_eq!(kura.disk_usage_total.load(Ordering::Relaxed), cached_total);
+        assert_eq!(kura.disk_usage.load(Ordering::Relaxed), cached_enforced);
+
+        std::fs::remove_file(&invalid_total_only_directory)
+            .expect("remove invalid total-only path");
+        assert_eq!(
+            kura.disk_usage_bytes()
+                .expect("invalidated total cache refreshes on demand"),
+            kura.kura_total_disk_usage_bytes()
+                .expect("scan exact total usage after recovery")
+        );
+        assert!(kura.disk_usage_total_initialized.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn partial_retired_tree_deletion_invalidates_caches_before_returning() {
+        let temp_dir = TempDir::new().expect("create Kura root");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("open Kura");
+        let retired_merge = temp_dir.path().join("retired/merge_ledger");
+        std::fs::create_dir_all(&retired_merge).expect("create retired merge tree");
+        std::fs::write(retired_merge.join("a.merge"), [0x11_u8; 5])
+            .expect("write first retired segment");
+        std::fs::write(retired_merge.join("b.merge"), [0x22_u8; 7])
+            .expect("write second retired segment");
+        let enforced_before = kura
+            .refresh_disk_usage_bytes()
+            .expect("establish exact pre-purge usage");
+        let total_before = kura
+            .disk_usage_bytes()
+            .expect("read exact pre-purge total usage");
+
+        kura.fail_next_retired_tree_purge_after_one_removal_for_tests();
+        assert!(
+            !kura.purge_retired_segments(),
+            "a partially failed purge must not claim a completed retired-tree removal"
+        );
+        assert_eq!(
+            std::fs::read_dir(&retired_merge)
+                .expect("read partially purged tree")
+                .count(),
+            1,
+            "the failure injection must remove exactly one file"
+        );
+        let usage = kura
+            .disk_usage_accounting_snapshot_for_tests()
+            .expect("inspect raw caches after partial deletion");
+        assert!(!usage.enforced_initialized);
+        assert!(!usage.total_initialized);
+        assert!(usage.exact_enforced_bytes < enforced_before);
+        assert!(usage.exact_total_bytes < total_before);
+
+        assert_eq!(
+            kura.refresh_disk_usage_bytes()
+                .expect("invalidated caches must rescan the partial deletion"),
+            usage.exact_enforced_bytes
+        );
+        assert_eq!(
+            kura.disk_usage_bytes()
+                .expect("total cache must match the partial-deletion rescan"),
+            usage.exact_total_bytes
+        );
+    }
+
+    #[test]
+    fn combined_disk_usage_refresh_invalidates_both_caches_on_total_scan_error() {
+        let temp_dir = TempDir::new().expect("create Kura root");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("open Kura");
+        let enforced_before = kura
+            .refresh_disk_usage_bytes()
+            .expect("establish enforced baseline");
+        assert!(kura.durable_budget_snapshot().is_some());
+        let total_before = kura.disk_usage_total.load(Ordering::Relaxed);
+        let blocks_dir = kura.active_blocks_dir.lock().clone();
+        let invalid_total_only_directory =
+            Kura::retained_block_rewrite_staging_dir_for(&blocks_dir);
+        std::fs::write(&invalid_total_only_directory, b"not a directory")
+            .expect("plant invalid total-only directory path");
+
+        assert!(kura.refresh_disk_usage_bytes().is_err());
+        assert!(!kura.disk_usage_initialized.load(Ordering::Relaxed));
+        assert!(!kura.disk_usage_total_initialized.load(Ordering::Relaxed));
+        assert!(
+            kura.durable_budget_snapshot().is_none(),
+            "a failed combined scan must invalidate the durable-budget snapshot"
+        );
+        assert_eq!(kura.disk_usage.load(Ordering::Relaxed), enforced_before);
+        assert_eq!(
+            kura.disk_usage_total.load(Ordering::Relaxed),
+            total_before,
+            "a failed combined scan must not partially publish either counter"
+        );
+
+        std::fs::remove_file(&invalid_total_only_directory)
+            .expect("remove invalid total-only path");
+        kura.refresh_disk_usage_bytes()
+            .expect("combined refresh recovers after invalid path removal");
+        assert!(kura.disk_usage_initialized.load(Ordering::Relaxed));
+        assert!(kura.disk_usage_total_initialized.load(Ordering::Relaxed));
     }
 
     #[test]
@@ -26315,6 +30933,22 @@ mod tests {
     }
 
     #[test]
+    fn merge_log_append_rejects_canonical_storage_poison_without_effects() {
+        let kura = Kura::blank_kura_for_testing();
+        kura.canonical_storage_poisoned
+            .store(true, Ordering::Release);
+
+        assert!(matches!(
+            kura.append_merge_entry(&sample_merge_entry(1)),
+            Err(Error::CanonicalStoragePoisoned)
+        ));
+        assert!(
+            kura.merge_ledger_snapshot().is_empty(),
+            "fail-stop rejection must not append an in-memory merge entry"
+        );
+    }
+
+    #[test]
     fn store_block_does_not_depend_on_writer_channel() {
         let kura = Kura::blank_kura_for_testing();
         kura.block_notify_rx.lock().take();
@@ -26332,6 +30966,166 @@ mod tests {
         let block = DummyBlocks::new().next();
         kura.store_block(block).expect("store block");
         assert_eq!(kura.blocks_count(), 1);
+    }
+
+    #[test]
+    fn store_block_treats_readable_new_marker_after_ack_failure_as_committed() {
+        let temp_dir = TempDir::new().expect("create Kura root");
+        let mut config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        config.fsync_mode = FsyncMode::Batched;
+        config.fsync_interval = Duration::from_secs(60);
+        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("open Kura");
+        kura.block_store
+            .lock()
+            .fail_next_commit_marker_ack_after_persist
+            .store(true, Ordering::Release);
+        let block = DummyBlocks::new().next();
+
+        kura.store_block(Arc::clone(&block))
+            .expect("readable new marker is committed success");
+        assert_eq!(kura.blocks_count(), 1);
+        assert_eq!(
+            kura.get_durable_block_hash(nonzero!(1_usize)),
+            Some(block.hash())
+        );
+        assert_eq!(
+            kura.get_block(nonzero!(1_usize)).as_deref(),
+            Some(block.as_ref())
+        );
+        assert!(!kura.canonical_storage_poisoned.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn unreadable_append_marker_state_poison_gates_live_kura_and_restart_rolls_back() {
+        let temp_dir = TempDir::new().expect("create Kura root");
+        let mut config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        config.fsync_mode = FsyncMode::Batched;
+        config.fsync_interval = Duration::from_secs(60);
+        {
+            let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("open Kura");
+            kura.block_store
+                .lock()
+                .fail_next_commit_marker_write_and_readback
+                .store(true, Ordering::Release);
+            let block = DummyBlocks::new().next();
+            assert!(matches!(
+                kura.store_block(block),
+                Err(Error::DaBlockRewriteCommitStateUnknown { .. })
+            ));
+            assert!(kura.canonical_storage_poisoned.load(Ordering::Acquire));
+            assert!(kura.get_block(nonzero!(1_usize)).is_none());
+            assert!(matches!(
+                kura.store_block(DummyBlocks::new().next()),
+                Err(Error::CanonicalStoragePoisoned)
+            ));
+        }
+
+        let (reopened, count) = Kura::new(&config, &RuntimeLaneConfig::default())
+            .expect("old marker prunes the ambiguous unpublished append on restart");
+        assert_eq!(count.0, 0);
+        assert_eq!(reopened.blocks_count(), 0);
+    }
+
+    #[test]
+    fn unknown_marker_resolution_applies_or_discards_lane_association_stage() {
+        let lane_id = LaneId::SINGLE;
+        let lane_block_height = 1;
+        for new_marker_won in [false, true] {
+            let temp_dir = TempDir::new().expect("create Kura root");
+            let mut config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+            config.fsync_mode = FsyncMode::Batched;
+            config.fsync_interval = Duration::from_secs(60);
+            {
+                let (kura, _) =
+                    Kura::new(&config, &RuntimeLaneConfig::default()).expect("open Kura");
+                let block = dummy_block_with_lane_payload_ownership(
+                    lane_id,
+                    DataSpaceId::UNIVERSAL,
+                    lane_block_height,
+                );
+                let store = kura.block_store.lock();
+                if new_marker_won {
+                    store
+                        .fail_next_commit_marker_ack_and_readback
+                        .store(true, Ordering::Release);
+                } else {
+                    store
+                        .fail_next_commit_marker_write_and_readback
+                        .store(true, Ordering::Release);
+                }
+                drop(store);
+                assert!(matches!(
+                    kura.store_block(block),
+                    Err(Error::DaBlockRewriteCommitStateUnknown { .. })
+                ));
+                assert!(kura.canonical_association_stage_path().is_file());
+                assert!(
+                    kura.read_lane_block_artifact(lane_id, lane_block_height)
+                        .is_none(),
+                    "lane association must wait for marker resolution"
+                );
+            }
+
+            let (reopened, count) = Kura::new(&config, &RuntimeLaneConfig::default())
+                .expect("startup resolves lane association stage by marker");
+            assert_eq!(count.0, usize::from(new_marker_won));
+            assert_eq!(
+                reopened
+                    .read_lane_block_artifact(lane_id, lane_block_height)
+                    .is_some(),
+                new_marker_won
+            );
+            assert!(!reopened.canonical_association_stage_path().exists());
+        }
+    }
+
+    #[test]
+    fn unknown_marker_resolution_applies_or_discards_merge_association_stage() {
+        for new_marker_won in [false, true] {
+            let temp_dir = TempDir::new().expect("create Kura root");
+            let mut config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+            config.fsync_mode = FsyncMode::Batched;
+            config.fsync_interval = Duration::from_secs(60);
+            let expected_entry = {
+                let (kura, _) =
+                    Kura::new(&config, &RuntimeLaneConfig::default()).expect("open Kura");
+                let mut blocks = DummyBlocks::new();
+                kura.store_block(blocks.next()).expect("store merge parent");
+                let mut entry = sample_merge_entry(1);
+                let carrier = next_merge_carrier(&mut blocks, &mut entry);
+                let store = kura.block_store.lock();
+                if new_marker_won {
+                    store
+                        .fail_next_commit_marker_ack_and_readback
+                        .store(true, Ordering::Release);
+                } else {
+                    store
+                        .fail_next_commit_marker_write_and_readback
+                        .store(true, Ordering::Release);
+                }
+                drop(store);
+                assert!(matches!(
+                    kura.store_block_with_merge_entry(carrier, &entry),
+                    Err(Error::DaBlockRewriteCommitStateUnknown { .. })
+                ));
+                assert!(kura.canonical_association_stage_path().is_file());
+                assert!(kura.merge_ledger_snapshot().is_empty());
+                entry
+            };
+
+            let (reopened, count) = Kura::new(&config, &RuntimeLaneConfig::default())
+                .expect("startup resolves merge association stage by marker");
+            assert_eq!(count.0, if new_marker_won { 2 } else { 1 });
+            assert_eq!(
+                reopened.merge_ledger_snapshot(),
+                if new_marker_won {
+                    vec![expected_entry]
+                } else {
+                    Vec::new()
+                }
+            );
+            assert!(!reopened.canonical_association_stage_path().exists());
+        }
     }
 
     #[test]
@@ -26633,6 +31427,251 @@ mod tests {
         assert_eq!(
             block_store.read_block_hashes(1, 1).unwrap(),
             vec![block2.hash()]
+        );
+    }
+
+    #[test]
+    fn restart_resolves_staged_evicted_rewrite_by_durable_marker() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut block_store = BlockStore::new(dir.path());
+        block_store.create_files_if_they_do_not_exist().unwrap();
+
+        let leader = checked_keypair();
+        let block1: Arc<SignedBlock> = Arc::new(ValidBlock::new_dummy(leader.private_key()).into());
+        let block2: Arc<SignedBlock> = Arc::new(
+            ValidBlock::new_dummy_and_modify_header(leader.private_key(), |header| {
+                header.set_prev_block_hash(Some(block1.hash()));
+            })
+            .into(),
+        );
+        let replacement: Arc<SignedBlock> = Arc::new(
+            ValidBlock::new_dummy_and_modify_header(leader.private_key(), |header| {
+                header.set_prev_block_hash(Some(block1.hash()));
+                header.set_view_change_index(header.view_change_index().saturating_add(1));
+            })
+            .into(),
+        );
+        assert_ne!(replacement.hash(), block2.hash());
+
+        let (block1_frame, _) = block1
+            .canonical_wire()
+            .expect("block one wire")
+            .into_parts();
+        let inline_budget = u64::try_from(block1_frame.len())
+            .expect("block one length")
+            .saturating_add(2 * (BlockIndex::SIZE + SIZE_OF_BLOCK_HASH));
+        block_store
+            .append_block_batch_at(0, std::slice::from_ref(&block1), 0)
+            .expect("append first block");
+        block_store
+            .append_block_batch_at(1, std::slice::from_ref(&block2), inline_budget)
+            .expect("append original evicted block");
+        let sidecar_path = block_store.da_block_path(2);
+        let original_sidecar = std::fs::read(&sidecar_path).expect("read original sidecar");
+        assert_eq!(
+            decode_framed_signed_block(&original_sidecar)
+                .expect("decode original sidecar")
+                .hash(),
+            block2.hash()
+        );
+
+        block_store
+            .fail_next_da_rewrite_before_marker
+            .store(true, Ordering::Release);
+        let error = block_store
+            .append_block_batch_at(1, std::slice::from_ref(&replacement), inline_budget)
+            .expect_err("injected pre-marker failure must roll back before returning");
+        assert!(matches!(error, Error::IO(_, _)));
+        assert_eq!(
+            std::fs::read(&sidecar_path).expect("old sidecar survives failed replacement"),
+            original_sidecar
+        );
+        assert!(
+            !block_store.da_block_rewrite_stage_path().exists(),
+            "in-call rollback must remove the rewrite stage"
+        );
+        assert_eq!(
+            block_store.read_block_hashes(1, 1).unwrap(),
+            vec![block2.hash()],
+            "live readers must retain the old hash journal after a pre-marker error"
+        );
+        drop(block_store);
+
+        let mut block_store = BlockStore::new(dir.path());
+        block_store
+            .create_files_if_they_do_not_exist()
+            .expect("restart reconciles the pre-marker rewrite stage");
+        assert!(
+            !block_store.da_block_rewrite_stage_path().exists(),
+            "successful rollback must remove its stage"
+        );
+        assert_eq!(
+            block_store.read_block_hashes(1, 1).unwrap(),
+            vec![block2.hash()],
+            "the old marker must restore the exact original hash journal"
+        );
+        assert!(block_store.read_block_index(1).unwrap().is_evicted());
+        assert_eq!(
+            std::fs::read(&sidecar_path).expect("old sidecar survives restart rollback"),
+            original_sidecar,
+            "restart must preserve the exact original evicted body"
+        );
+
+        block_store
+            .fail_next_da_rewrite_after_marker
+            .store(true, Ordering::Release);
+        block_store
+            .append_block_batch_at(1, std::slice::from_ref(&replacement), inline_budget)
+            .expect("a durable replacement marker is a committed success");
+        assert!(
+            !block_store.da_block_rewrite_stage_path().exists(),
+            "in-call post-marker recovery must finish body promotion"
+        );
+        assert!(block_store.take_deferred_da_recovery_fault().is_none());
+        let live_replacement_sidecar =
+            std::fs::read(&sidecar_path).expect("read live replacement sidecar");
+        assert_eq!(
+            decode_framed_signed_block(&live_replacement_sidecar)
+                .expect("decode live replacement sidecar")
+                .hash(),
+            replacement.hash(),
+            "live readers must observe the committed replacement before return"
+        );
+        assert_eq!(
+            block_store.read_block_hashes(1, 1).unwrap(),
+            vec![replacement.hash()]
+        );
+        drop(block_store);
+
+        let mut block_store = BlockStore::new(dir.path());
+        block_store
+            .create_files_if_they_do_not_exist()
+            .expect("restart promotes a rewrite whose new marker is durable");
+        assert!(!block_store.da_block_rewrite_stage_path().exists());
+        let replacement_sidecar =
+            std::fs::read(&sidecar_path).expect("read atomically replaced sidecar");
+        assert_ne!(replacement_sidecar, original_sidecar);
+        assert_eq!(
+            decode_framed_signed_block(&replacement_sidecar)
+                .expect("decode replacement sidecar")
+                .hash(),
+            replacement.hash()
+        );
+        assert_eq!(
+            block_store.read_block_hashes(1, 1).unwrap(),
+            vec![replacement.hash()]
+        );
+    }
+
+    #[test]
+    fn startup_recovers_both_abrupt_da_rewrite_boundaries() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut block_store = BlockStore::new(dir.path());
+        block_store.create_files_if_they_do_not_exist().unwrap();
+
+        let leader = checked_keypair();
+        let block1: Arc<SignedBlock> = Arc::new(ValidBlock::new_dummy(leader.private_key()).into());
+        let block2: Arc<SignedBlock> = Arc::new(
+            ValidBlock::new_dummy_and_modify_header(leader.private_key(), |header| {
+                header.set_prev_block_hash(Some(block1.hash()));
+            })
+            .into(),
+        );
+        let replacement: Arc<SignedBlock> = Arc::new(
+            ValidBlock::new_dummy_and_modify_header(leader.private_key(), |header| {
+                header.set_prev_block_hash(Some(block1.hash()));
+                header.set_view_change_index(header.view_change_index().saturating_add(1));
+            })
+            .into(),
+        );
+        let (block1_frame, _) = block1
+            .canonical_wire()
+            .expect("block one wire")
+            .into_parts();
+        let inline_budget = u64::try_from(block1_frame.len())
+            .expect("block one length")
+            .saturating_add(2 * (BlockIndex::SIZE + SIZE_OF_BLOCK_HASH));
+        block_store
+            .append_block_batch_at(0, std::slice::from_ref(&block1), 0)
+            .expect("append first block");
+        block_store
+            .append_block_batch_at(1, std::slice::from_ref(&block2), inline_budget)
+            .expect("append original evicted block");
+        let sidecar_path = block_store.da_block_path(2);
+        let original_sidecar = std::fs::read(&sidecar_path).expect("read original sidecar");
+
+        block_store
+            .crash_next_da_rewrite_before_marker
+            .store(true, Ordering::Release);
+        block_store
+            .append_block_batch_at(1, std::slice::from_ref(&replacement), inline_budget)
+            .expect_err("simulate abrupt stop before marker publication");
+        assert!(block_store.da_block_rewrite_stage_path().is_file());
+        assert_eq!(
+            block_store.read_block_hashes(1, 1).unwrap(),
+            vec![replacement.hash()],
+            "the simulated crash must occur after replacement journal writes"
+        );
+        assert_eq!(
+            block_store
+                .read_commit_marker()
+                .unwrap()
+                .expect("old marker")
+                .tip_hash,
+            Some(block2.hash())
+        );
+        drop(block_store);
+
+        let mut block_store = BlockStore::new(dir.path());
+        block_store
+            .create_files_if_they_do_not_exist()
+            .expect("old marker restores the original rewrite suffix");
+        assert!(!block_store.da_block_rewrite_stage_path().exists());
+        assert_eq!(
+            block_store.read_block_hashes(1, 1).unwrap(),
+            vec![block2.hash()]
+        );
+        assert_eq!(
+            std::fs::read(&sidecar_path).expect("old sidecar after startup rollback"),
+            original_sidecar
+        );
+
+        block_store
+            .crash_next_da_rewrite_after_marker
+            .store(true, Ordering::Release);
+        block_store
+            .append_block_batch_at(1, std::slice::from_ref(&replacement), inline_budget)
+            .expect_err("simulate abrupt stop after marker publication");
+        assert!(block_store.da_block_rewrite_stage_path().is_file());
+        assert_eq!(
+            block_store
+                .read_commit_marker()
+                .unwrap()
+                .expect("new marker")
+                .tip_hash,
+            Some(replacement.hash())
+        );
+        assert_eq!(
+            std::fs::read(&sidecar_path).expect("old sidecar before startup promotion"),
+            original_sidecar
+        );
+        drop(block_store);
+
+        let mut block_store = BlockStore::new(dir.path());
+        block_store
+            .create_files_if_they_do_not_exist()
+            .expect("new marker promotes the staged replacement body");
+        assert!(!block_store.da_block_rewrite_stage_path().exists());
+        let promoted = std::fs::read(&sidecar_path).expect("promoted replacement sidecar");
+        assert_eq!(
+            decode_framed_signed_block(&promoted)
+                .expect("decode promoted replacement")
+                .hash(),
+            replacement.hash()
+        );
+        assert_eq!(
+            block_store.read_block_hashes(1, 1).unwrap(),
+            vec![replacement.hash()]
         );
     }
 
@@ -27207,6 +32246,239 @@ mod tests {
         );
     }
 
+    fn assert_eviction_compaction_restart_rolls_forward(boundary: u8) {
+        let temp_dir = TempDir::new().expect("create temp Kura directory");
+        populate_store(&temp_dir, 4);
+        let config = kura_config_for_dir(&temp_dir, NonZeroUsize::new(1).expect("non-zero"));
+        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("open Kura");
+        let blocks = (1..=4)
+            .map(|height| {
+                kura.get_block(NonZeroUsize::new(height).expect("non-zero height"))
+                    .expect("load canonical block")
+            })
+            .collect::<Vec<_>>();
+        let expected = Arc::clone(&blocks[1]);
+        for artifact in v2_finality_artifacts_for_chain(&blocks) {
+            let _ = kura
+                .store_v2_finality_artifact(&artifact)
+                .expect("persist exact finality before eviction");
+        }
+        let (_, payload_len) = advertise_required_replicas(&kura, nonzero!(2_usize));
+        {
+            let store = kura.block_store.lock();
+            match boundary {
+                0 => store
+                    .crash_next_eviction_after_stage
+                    .store(true, Ordering::Release),
+                1 => store
+                    .crash_next_eviction_after_data_promotion
+                    .store(true, Ordering::Release),
+                2 => store
+                    .crash_next_eviction_after_index_promotion
+                    .store(true, Ordering::Release),
+                _ => panic!("unsupported eviction crash boundary"),
+            }
+        }
+
+        assert!(matches!(
+            kura.evict_block_bodies(payload_len),
+            Err(Error::CanonicalStoragePoisoned)
+        ));
+        let blocks_dir = primary_blocks_dir(&temp_dir);
+        assert!(
+            blocks_dir
+                .join(EVICTION_COMPACTION_STAGE_FILE_NAME)
+                .exists(),
+            "the durable roll-forward stage must survive the injected stop"
+        );
+        assert!(kura.canonical_storage_poisoned.load(Ordering::Acquire));
+        drop(kura);
+
+        let (reopened, _) =
+            Kura::new(&config, &RuntimeLaneConfig::default()).expect("recover staged compaction");
+        assert!(
+            !blocks_dir
+                .join(EVICTION_COMPACTION_STAGE_FILE_NAME)
+                .exists()
+        );
+        assert!(!blocks_dir.join(EVICTION_COMPACTION_DATA_FILE_NAME).exists());
+        assert!(
+            !blocks_dir
+                .join(EVICTION_COMPACTION_INDEX_FILE_NAME)
+                .exists()
+        );
+        let index = reopened
+            .block_store
+            .lock()
+            .read_block_index(1)
+            .expect("read recovered eviction index");
+        assert!(index.is_evicted());
+        let recovered = reopened
+            .get_block(nonzero!(2_usize))
+            .expect("rehydrate recovered evicted block");
+        let recovered_wire = recovered
+            .canonical_wire()
+            .expect("encode recovered canonical block wire");
+        let expected_wire = expected
+            .canonical_wire()
+            .expect("encode expected canonical block wire");
+        assert_eq!(
+            recovered_wire.as_framed(),
+            expected_wire.as_framed(),
+            "recovered block wire must match the pre-compaction canonical bytes"
+        );
+        assert!(
+            reopened
+                .v2_finality_artifact(2)
+                .expect("read preserved finality")
+                .is_some(),
+            "compaction recovery must preserve finalized history"
+        );
+    }
+
+    #[test]
+    fn eviction_compaction_restart_rolls_forward_after_stage_publication() {
+        assert_eviction_compaction_restart_rolls_forward(0);
+    }
+
+    #[test]
+    fn eviction_compaction_restart_rolls_forward_after_data_promotion() {
+        assert_eviction_compaction_restart_rolls_forward(1);
+    }
+
+    #[test]
+    fn eviction_compaction_restart_rolls_forward_after_pair_promotion() {
+        assert_eviction_compaction_restart_rolls_forward(2);
+    }
+
+    #[test]
+    fn eviction_compaction_restart_rejects_missing_staged_replacement() {
+        let temp_dir = TempDir::new().expect("create temp Kura directory");
+        populate_store(&temp_dir, 4);
+        let config = kura_config_for_dir(&temp_dir, NonZeroUsize::new(1).expect("non-zero"));
+        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("open Kura");
+        let (_, payload_len) = advertise_required_replicas(&kura, nonzero!(2_usize));
+        kura.block_store
+            .lock()
+            .crash_next_eviction_after_stage
+            .store(true, Ordering::Release);
+        assert!(matches!(
+            kura.evict_block_bodies(payload_len),
+            Err(Error::CanonicalStoragePoisoned)
+        ));
+        let blocks_dir = primary_blocks_dir(&temp_dir);
+        std::fs::remove_file(blocks_dir.join(EVICTION_COMPACTION_DATA_FILE_NAME))
+            .expect("remove staged replacement data");
+        drop(kura);
+
+        let error = Kura::new(&config, &RuntimeLaneConfig::default())
+            .expect_err("missing staged compaction data must fail closed");
+        assert!(
+            error
+                .to_string()
+                .contains("neither live nor temporary eviction file"),
+            "unexpected recovery error: {error}"
+        );
+        assert!(
+            blocks_dir
+                .join(EVICTION_COMPACTION_STAGE_FILE_NAME)
+                .exists(),
+            "failed recovery must retain its durable decision record"
+        );
+    }
+
+    #[test]
+    fn eviction_compaction_restart_rejects_tampered_staged_replacement() {
+        let temp_dir = TempDir::new().expect("create temp Kura directory");
+        populate_store(&temp_dir, 4);
+        let config = kura_config_for_dir(&temp_dir, NonZeroUsize::new(1).expect("non-zero"));
+        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("open Kura");
+        let (_, payload_len) = advertise_required_replicas(&kura, nonzero!(2_usize));
+        kura.block_store
+            .lock()
+            .crash_next_eviction_after_stage
+            .store(true, Ordering::Release);
+        assert!(matches!(
+            kura.evict_block_bodies(payload_len),
+            Err(Error::CanonicalStoragePoisoned)
+        ));
+        let blocks_dir = primary_blocks_dir(&temp_dir);
+        let replacement = blocks_dir.join(EVICTION_COMPACTION_DATA_FILE_NAME);
+        let mut bytes = std::fs::read(&replacement).expect("read staged replacement data");
+        let first = bytes
+            .first_mut()
+            .expect("four-block compaction replacement is non-empty");
+        *first ^= 0x80;
+        std::fs::write(&replacement, bytes).expect("tamper staged replacement data");
+        drop(kura);
+
+        let error = Kura::new(&config, &RuntimeLaneConfig::default())
+            .expect_err("tampered staged compaction data must fail closed");
+        assert!(
+            error
+                .to_string()
+                .contains("neither live nor temporary eviction file"),
+            "unexpected recovery error: {error}"
+        );
+        assert!(
+            blocks_dir
+                .join(EVICTION_COMPACTION_STAGE_FILE_NAME)
+                .exists(),
+            "failed authentication must retain its durable decision record"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn eviction_compaction_restart_rejects_hardlinked_stage_record() {
+        let temp_dir = TempDir::new().expect("create temp Kura directory");
+        populate_store(&temp_dir, 4);
+        let config = kura_config_for_dir(&temp_dir, NonZeroUsize::new(1).expect("non-zero"));
+        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("open Kura");
+        let (_, payload_len) = advertise_required_replicas(&kura, nonzero!(2_usize));
+        kura.block_store
+            .lock()
+            .crash_next_eviction_after_stage
+            .store(true, Ordering::Release);
+        assert!(matches!(
+            kura.evict_block_bodies(payload_len),
+            Err(Error::CanonicalStoragePoisoned)
+        ));
+        let blocks_dir = primary_blocks_dir(&temp_dir);
+        let stage = blocks_dir.join(EVICTION_COMPACTION_STAGE_FILE_NAME);
+        let alias = blocks_dir.join("eviction-compaction-stage.attacker-link");
+        std::fs::hard_link(&stage, &alias).expect("create attacker-controlled stage hardlink");
+        drop(kura);
+
+        let error = Kura::new(&config, &RuntimeLaneConfig::default())
+            .expect_err("hard-linked compaction stage must fail closed");
+        assert!(
+            error.to_string().contains("not a bounded regular file"),
+            "unexpected recovery error: {error}"
+        );
+        assert!(stage.exists(), "rejected stage record must remain in place");
+    }
+
+    #[test]
+    fn eviction_compaction_restart_removes_unpublished_orphan_replacements() {
+        let temp_dir = TempDir::new().expect("create temp Kura directory");
+        populate_store(&temp_dir, 2);
+        let blocks_dir = primary_blocks_dir(&temp_dir);
+        let data_orphan = blocks_dir.join(EVICTION_COMPACTION_DATA_FILE_NAME);
+        let index_orphan = blocks_dir.join(EVICTION_COMPACTION_INDEX_FILE_NAME);
+        std::fs::write(&data_orphan, b"unpublished replacement data")
+            .expect("write orphan data replacement");
+        std::fs::write(&index_orphan, b"unpublished replacement index")
+            .expect("write orphan index replacement");
+
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let (_kura, count) =
+            Kura::new(&config, &RuntimeLaneConfig::default()).expect("open and clean Kura");
+        assert_eq!(count.0, 2);
+        assert!(!data_orphan.exists());
+        assert!(!index_orphan.exists());
+    }
+
     #[test]
     fn eviction_requires_distinct_matching_replica_adverts() {
         let temp_dir = TempDir::new().unwrap();
@@ -27601,6 +32873,81 @@ mod tests {
             .expect("evict benchmark block body");
 
         assert_eq!(freed, payload_len);
+    }
+
+    #[test]
+    fn canonical_rewrite_purges_equal_length_stale_sidecar_before_reeviction() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = kura_config_for_dir(&temp_dir, nonzero!(1_usize));
+        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+        let blocks = store_dummy_block_arcs(&kura, 3);
+        let height = nonzero!(2_usize);
+        let (_, original_len) = advertise_required_replicas(&kura, height);
+        assert!(
+            kura.evict_block_bodies(original_len)
+                .expect("evict original height-two body")
+                >= original_len
+        );
+        let da_path = kura.block_store.lock().da_block_path(2);
+        let original_sidecar = std::fs::read(&da_path).expect("read original DA sidecar");
+        assert_eq!(u64::try_from(original_sidecar.len()).unwrap(), original_len);
+
+        kura.prune_to_height(2)
+            .expect("remove the tail before replacing height two");
+        let replacement: Arc<SignedBlock> = Arc::new(
+            ValidBlock::new_dummy_and_modify_header(checked_keypair().private_key(), |header| {
+                header.set_height(nonzero!(2_u64));
+                header.set_prev_block_hash(Some(blocks[0].hash()));
+                header.set_view_change_index(
+                    blocks[1].header().view_change_index().saturating_add(1),
+                );
+            })
+            .into(),
+        );
+        let replacement_wire = replacement.encode_wire().expect("replacement wire");
+        assert_eq!(
+            replacement_wire.len(),
+            original_sidecar.len(),
+            "fixture must exercise the same-length stale-sidecar hazard"
+        );
+        assert_ne!(replacement_wire, original_sidecar);
+        kura.replace_top_block(Arc::clone(&replacement))
+            .expect("replace evicted canonical top inline");
+        assert!(
+            !da_path.exists(),
+            "an inline canonical rewrite must purge the old height sidecar"
+        );
+
+        let tail: Arc<SignedBlock> = Arc::new(
+            ValidBlock::new_dummy_and_modify_header(checked_keypair().private_key(), |header| {
+                header.set_height(nonzero!(3_u64));
+                header.set_prev_block_hash(Some(replacement.hash()));
+            })
+            .into(),
+        );
+        kura.store_block(tail)
+            .expect("append replacement successor");
+        let advertised_len = kura
+            .advertise_required_replicas_for_bench(height)
+            .expect("advertise replacement body");
+        assert_eq!(
+            advertised_len,
+            u64::try_from(replacement_wire.len()).unwrap()
+        );
+        assert!(
+            kura.evict_block_bodies_for_bench(advertised_len)
+                .expect("re-evict replacement body")
+                >= advertised_len
+        );
+        assert_eq!(
+            std::fs::read(&da_path).expect("read replacement DA sidecar"),
+            replacement_wire,
+            "re-eviction must publish the current canonical wire even at equal length"
+        );
+        assert_eq!(
+            kura.get_block(height).as_deref(),
+            Some(replacement.as_ref())
+        );
     }
 
     #[test]
@@ -28037,6 +33384,119 @@ mod tests {
             Some(BlockBodyStatus::Cached)
         );
         assert!(kura.block_payload_available_by_hash(block_hash));
+    }
+
+    #[test]
+    fn cache_block_body_rejects_same_header_equal_length_wire_substitution_before_write() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = kura_config_for_dir(&temp_dir, nonzero!(1_usize));
+        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
+        let blocks = store_dummy_block_arcs(&kura, 4);
+        let height = nonzero!(2_usize);
+        let canonical = Arc::clone(&blocks[1]);
+        let (_, payload_len) = advertise_required_replicas(&kura, height);
+        assert!(
+            kura.evict_block_bodies(payload_len)
+                .expect("evict canonical block body")
+                >= payload_len
+        );
+        kura.remove_evicted_block_sidecar_for_testing(height)
+            .expect("make canonical body remote-only");
+        let da_path = kura.block_store.lock().da_block_path(2);
+        assert!(!da_path.exists());
+        assert!(kura.get_block(height).is_none());
+
+        let mut substituted = canonical.as_ref().clone();
+        let substitute_key =
+            KeyPair::try_random_with_algorithm(Algorithm::Ed25519).expect("substitute block key");
+        let substitute_signature = BlockSignature::new(
+            0,
+            SignatureOf::try_from_hash(substitute_key.private_key(), substituted.hash())
+                .expect("sign substituted canonical header"),
+        );
+        substituted
+            .replace_signatures([substitute_signature].into_iter().collect())
+            .expect("replace substituted signature");
+        assert_eq!(substituted.header(), canonical.header());
+        let canonical_wire = canonical.encode_wire().expect("canonical block wire");
+        let substituted_wire = substituted.encode_wire().expect("substituted block wire");
+        assert_eq!(substituted_wire.len(), canonical_wire.len());
+        assert_ne!(Hash::new(&substituted_wire), Hash::new(&canonical_wire));
+        let total_before = kura
+            .refresh_total_disk_usage_bytes()
+            .expect("exact total usage before rejected cache");
+
+        assert!(matches!(
+            kura.cache_block_body(&substituted),
+            Err(Error::CanonicalBlockWireMismatch { height: 2 })
+        ));
+        assert!(!da_path.exists(), "rejection must precede the DA write");
+        assert!(kura.get_block(height).is_none());
+        assert_eq!(
+            kura.refresh_total_disk_usage_bytes()
+                .expect("exact total usage after rejected cache"),
+            total_before,
+            "rejected wire substitution must not mutate accounting"
+        );
+
+        kura.cache_block_body(canonical.as_ref())
+            .expect("the exact canonical body can be cached");
+        assert_eq!(
+            std::fs::read(&da_path).expect("read canonical DA sidecar"),
+            canonical_wire
+        );
+        assert_eq!(kura.get_block(height).as_deref(), Some(canonical.as_ref()));
+    }
+
+    #[test]
+    fn store_existing_block_rejects_same_header_wire_substitution_without_index_effects() {
+        let kura = Kura::blank_kura_for_testing();
+        let canonical = store_dummy_block_arcs(&kura, 1)
+            .pop()
+            .expect("canonical block");
+        let mut substituted = canonical.as_ref().clone();
+        let substitute_key =
+            KeyPair::try_random_with_algorithm(Algorithm::Ed25519).expect("substitute block key");
+        substituted
+            .replace_signatures(
+                [BlockSignature::new(
+                    0,
+                    SignatureOf::try_from_hash(substitute_key.private_key(), substituted.hash())
+                        .expect("sign substituted canonical header"),
+                )]
+                .into_iter()
+                .collect(),
+            )
+            .expect("replace substituted signature");
+        assert_eq!(substituted.header(), canonical.header());
+        assert_ne!(
+            Kura::canonical_block_wire_hash(&substituted).expect("substituted wire hash"),
+            Kura::canonical_block_wire_hash(&canonical).expect("canonical wire hash")
+        );
+        let index_before = format!("{:?}", *kura.transaction_entrypoint_index.lock());
+        let merge_len_before = kura.merge_log.lock().total_entries;
+        let total_before = kura
+            .refresh_total_disk_usage_bytes()
+            .expect("exact total usage before existing-body rejection");
+
+        assert!(matches!(
+            kura.store_block(Arc::new(substituted)),
+            Err(Error::CanonicalBlockWireMismatch { height: 1 })
+        ));
+        assert_eq!(
+            kura.get_block(nonzero!(1_usize)).as_deref(),
+            Some(canonical.as_ref())
+        );
+        assert_eq!(
+            format!("{:?}", *kura.transaction_entrypoint_index.lock()),
+            index_before
+        );
+        assert_eq!(kura.merge_log.lock().total_entries, merge_len_before);
+        assert_eq!(
+            kura.refresh_total_disk_usage_bytes()
+                .expect("exact total usage after existing-body rejection"),
+            total_before
+        );
     }
 
     #[test]
@@ -36426,12 +41886,87 @@ mod tests {
         let mut store = BlockStore::new(&blocks_dir);
         store.create_files_if_they_do_not_exist().unwrap();
 
+        let mut blocks = DummyBlocks::new();
+        store.append_block_to_chain(&blocks.next()).unwrap();
+        store.append_block_to_chain(&blocks.next()).unwrap();
+
         store.write_commit_marker(1).unwrap();
         store.write_commit_marker(2).unwrap();
 
         let marker = store.read_commit_marker().unwrap().expect("marker");
         assert_eq!(marker.count, 2);
         assert!(blocks_dir.join(COUNT_FILE_NAME).exists());
+    }
+
+    #[test]
+    fn init_rejects_commit_marker_tip_hash_mismatch() {
+        let temp_dir = TempDir::new().unwrap();
+        let blocks_dir = primary_blocks_dir(&temp_dir);
+        let mut store = BlockStore::new(&blocks_dir);
+        store.create_files_if_they_do_not_exist().unwrap();
+        let mut blocks = DummyBlocks::new();
+        store.append_block_to_chain(&blocks.next()).unwrap();
+        let mut marker = store.read_commit_marker().unwrap().expect("marker");
+        marker.tip_hash = Some(HashOf::from_untyped_unchecked(Hash::prehashed([0xA6; 32])));
+        let marker_bytes = norito::to_bytes(&marker).expect("encode tampered marker");
+        std::fs::write(store.commit_marker_path(), marker_bytes).expect("write tampered marker");
+        drop(store);
+
+        let mut reopened = BlockStore::new(&blocks_dir);
+        assert!(matches!(
+            reopened.create_files_if_they_do_not_exist(),
+            Err(Error::IO(error, _)) if error.kind() == ErrorKind::InvalidData
+        ));
+    }
+
+    #[test]
+    fn init_rejects_nonempty_tip_on_empty_commit_marker() {
+        let temp_dir = TempDir::new().unwrap();
+        let blocks_dir = primary_blocks_dir(&temp_dir);
+        let mut store = BlockStore::new(&blocks_dir);
+        store.create_files_if_they_do_not_exist().unwrap();
+        let marker = BlockStoreCommitMarker {
+            version: BlockStoreCommitMarker::VERSION,
+            count: 0,
+            tip_hash: Some(HashOf::from_untyped_unchecked(Hash::prehashed([0xA7; 32]))),
+        };
+        std::fs::write(
+            store.commit_marker_path(),
+            norito::to_bytes(&marker).expect("encode invalid empty marker"),
+        )
+        .expect("write invalid empty marker");
+        drop(store);
+
+        let mut reopened = BlockStore::new(&blocks_dir);
+        assert!(matches!(
+            reopened.create_files_if_they_do_not_exist(),
+            Err(Error::IO(error, _)) if error.kind() == ErrorKind::InvalidData
+        ));
+    }
+
+    #[test]
+    fn finalized_prefix_preflight_rejects_commit_marker_tip_hash_mismatch() {
+        let temp_dir = TempDir::new().unwrap();
+        let blocks_dir = primary_blocks_dir(&temp_dir);
+        let mut store = BlockStore::new(&blocks_dir);
+        store.create_files_if_they_do_not_exist().unwrap();
+        let mut blocks = DummyBlocks::new();
+        store.append_block_to_chain(&blocks.next()).unwrap();
+        let mut marker = store.read_commit_marker().unwrap().expect("marker");
+        marker.tip_hash = Some(HashOf::from_untyped_unchecked(Hash::prehashed([0xA8; 32])));
+        std::fs::write(
+            store.commit_marker_path(),
+            norito::to_bytes(&marker).expect("encode tampered marker"),
+        )
+        .expect("write tampered marker");
+
+        assert!(matches!(
+            store.preflight_v2_finalized_prefix(1),
+            Err(Error::FinalizedV2BlockMutation {
+                rewrite_from_height: 1,
+                finalized_height: 1,
+            })
+        ));
     }
 
     #[test]
@@ -36624,7 +42159,7 @@ mod tests {
     }
 
     #[test]
-    fn commit_marker_write_failure_keeps_pending() {
+    fn commit_marker_write_failure_rolls_back_unpublished_append() {
         let temp_dir = TempDir::new().expect("temp dir");
         let blocks_dir = primary_blocks_dir(&temp_dir);
         let mut store =
@@ -36645,22 +42180,54 @@ mod tests {
             "fsync should be pending before flush"
         );
 
-        let tmp_marker = blocks_dir
-            .join(COUNT_FILE_NAME)
-            .with_extension("norito.tmp");
-        std::fs::create_dir_all(&tmp_marker).expect("create tmp marker directory");
+        store
+            .fail_next_commit_marker_write
+            .store(true, Ordering::Release);
 
         store
             .flush_pending_fsync(true)
             .expect_err("flush should fail when commit marker temp is a directory");
 
         assert!(
-            store.commit_marker_pending.is_some(),
-            "commit marker should remain pending after failure"
+            store.commit_marker_pending.is_none(),
+            "failed marker publication must clear the pending replacement"
         );
         assert!(
-            store.fsync_pending_for_tests(),
-            "fsync should remain pending after commit marker failure"
+            !store.fsync_pending_for_tests(),
+            "rolled-back journal work must not be published by a later fsync"
+        );
+        assert_eq!(store.read_index_count().unwrap(), 0);
+        assert_eq!(store.read_hashes_count().unwrap(), 0);
+    }
+
+    #[test]
+    fn commit_marker_ack_failure_with_new_readback_commits_append() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let blocks_dir = primary_blocks_dir(&temp_dir);
+        let mut store =
+            BlockStore::with_fsync(&blocks_dir, FsyncMode::Batched, Duration::from_secs(60));
+        store.create_files_if_they_do_not_exist().unwrap();
+        let block = DummyBlocks::new().next();
+        store
+            .append_block_to_chain(block.as_ref())
+            .expect("append pending block");
+        store
+            .fail_next_commit_marker_ack_after_persist
+            .store(true, Ordering::Release);
+
+        store
+            .flush_pending_fsync(true)
+            .expect("readable new marker turns acknowledgement failure into committed success");
+        assert!(store.commit_marker_pending.is_none());
+        assert!(!store.fsync_pending_for_tests());
+        assert_eq!(store.read_durable_index_count().unwrap(), 1);
+        assert_eq!(
+            store
+                .read_commit_marker()
+                .unwrap()
+                .expect("committed marker")
+                .tip_hash,
+            Some(block.hash())
         );
     }
 
@@ -36683,11 +42250,10 @@ mod tests {
             );
         }
 
-        let blocks_dir = primary_blocks_dir(&temp_dir);
-        let tmp_marker = blocks_dir
-            .join(COUNT_FILE_NAME)
-            .with_extension("norito.tmp");
-        std::fs::create_dir_all(&tmp_marker).expect("create tmp marker directory");
+        kura.block_store
+            .lock()
+            .fail_next_commit_marker_write
+            .store(true, Ordering::Release);
 
         let shutdown_signal = ShutdownSignal::new();
         let writer_kura = Arc::clone(&kura);
@@ -36704,8 +42270,8 @@ mod tests {
             "writer should record periodic fsync failure, got {fault:?}"
         );
         assert!(
-            kura.block_store.lock().fsync_pending_for_tests(),
-            "failed writer fsync should leave pending work for retry/restart"
+            !kura.block_store.lock().fsync_pending_for_tests(),
+            "failed writer fsync must roll back instead of publishing after the caller unwinds"
         );
     }
 }

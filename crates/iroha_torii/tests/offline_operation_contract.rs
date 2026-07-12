@@ -4,7 +4,7 @@ use iroha_torii_shared::offline_api::{
     OfflineOperationKind, OfflineOperationReference, OfflineOperationState,
 };
 
-const OFFLINE_ISSUER_SOURCE: &str = include_str!("../src/offline_v2_issuer.rs");
+const OFFLINE_ISSUER_SOURCE: &str = include_str!("../src/offline_commands.rs");
 const TORII_SOURCE: &str = include_str!("../src/lib.rs");
 
 fn operation_reference() -> OfflineOperationReference {

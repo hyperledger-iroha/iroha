@@ -1,16 +1,92 @@
 import { normalizeCompilerResult } from "./normalize.js";
 
 const DEFAULT_COMPILE_PATH = "/v1/kotodama/compile";
+const DEFAULT_COMPILER_TIMEOUT_MS = 30_000;
+const MAX_COMPILER_TIMEOUT_MS = 120_000;
 const COMPILER_REQUEST_OPTION_NAMES = new Set(["sourceName", "zk"]);
+const COMPILER_CALL_OPTION_NAMES = new Set([
+  ...COMPILER_REQUEST_OPTION_NAMES,
+  "signal",
+  "timeoutMs",
+]);
 const COMPILER_OPTION_NAMES = new Set([
   "compilerUrl",
   "fetchImpl",
-  ...COMPILER_REQUEST_OPTION_NAMES,
+  ...COMPILER_CALL_OPTION_NAMES,
 ]);
+const COMPILER_CLIENT_OPTION_NAMES = new Set(["fetchImpl"]);
 const MAX_COMPILER_SOURCE_BYTES = 1024 * 1024;
 const MAX_COMPILER_SOURCE_NAME_BYTES = 4096;
 const MAX_COMPILER_RESPONSE_BYTES = 16 * 1024 * 1024;
 const MAX_COMPILER_ERROR_BYTES = 64 * 1024;
+const MAX_COMPILER_RESPONSE_CHUNKS = 65_536;
+
+const DefaultFetch = globalThis.fetch;
+const AbortControllerIntrinsic = globalThis.AbortController;
+const abortControllerAbort = AbortControllerIntrinsic?.prototype?.abort ?? null;
+const abortControllerSignalGetter = AbortControllerIntrinsic
+  ? (Object.getOwnPropertyDescriptor(AbortControllerIntrinsic.prototype, "signal")
+      ?.get ?? null)
+  : null;
+const abortSignalAbortedGetter = globalThis.AbortSignal
+  ? (Object.getOwnPropertyDescriptor(AbortSignal.prototype, "aborted")?.get ?? null)
+  : null;
+const abortSignalReasonGetter = globalThis.AbortSignal
+  ? (Object.getOwnPropertyDescriptor(AbortSignal.prototype, "reason")?.get ?? null)
+  : null;
+const eventTargetAddEventListener = globalThis.EventTarget?.prototype?.addEventListener ?? null;
+const eventTargetRemoveEventListener =
+  globalThis.EventTarget?.prototype?.removeEventListener ?? null;
+const responseOkGetter = globalThis.Response
+  ? (Object.getOwnPropertyDescriptor(Response.prototype, "ok")?.get ?? null)
+  : null;
+const responseStatusGetter = globalThis.Response
+  ? (Object.getOwnPropertyDescriptor(Response.prototype, "status")?.get ?? null)
+  : null;
+const responseRedirectedGetter = globalThis.Response
+  ? (Object.getOwnPropertyDescriptor(Response.prototype, "redirected")?.get ?? null)
+  : null;
+const responseHeadersGetter = globalThis.Response
+  ? (Object.getOwnPropertyDescriptor(Response.prototype, "headers")?.get ?? null)
+  : null;
+const responseBodyGetter = globalThis.Response
+  ? (Object.getOwnPropertyDescriptor(Response.prototype, "body")?.get ?? null)
+  : null;
+const headersGet = globalThis.Headers?.prototype?.get ?? null;
+const readableStreamGetReader = globalThis.ReadableStream?.prototype?.getReader ?? null;
+const readerRead = globalThis.ReadableStreamDefaultReader?.prototype?.read ?? null;
+const readerCancel = globalThis.ReadableStreamDefaultReader?.prototype?.cancel ?? null;
+const readerReleaseLock =
+  globalThis.ReadableStreamDefaultReader?.prototype?.releaseLock ?? null;
+const typedArrayPrototype = Object.getPrototypeOf(Uint8Array.prototype);
+const typedArrayBufferGetter = Object.getOwnPropertyDescriptor(
+  typedArrayPrototype,
+  "buffer",
+)?.get;
+const typedArrayByteOffsetGetter = Object.getOwnPropertyDescriptor(
+  typedArrayPrototype,
+  "byteOffset",
+)?.get;
+const typedArrayByteLengthGetter = Object.getOwnPropertyDescriptor(
+  typedArrayPrototype,
+  "byteLength",
+)?.get;
+const typedArrayTagGetter = Object.getOwnPropertyDescriptor(
+  typedArrayPrototype,
+  Symbol.toStringTag,
+)?.get;
+const sharedArrayBufferByteLengthGetter = globalThis.SharedArrayBuffer
+  ? (Object.getOwnPropertyDescriptor(SharedArrayBuffer.prototype, "byteLength")?.get ??
+    null)
+  : null;
+const Uint8ArrayIntrinsic = Uint8Array;
+const uint8ArraySet = Uint8Array.prototype.set;
+const TextEncoderIntrinsic = TextEncoder;
+const textEncoderEncode = TextEncoder.prototype.encode;
+const TextDecoderIntrinsic = TextDecoder;
+const textDecoderDecode = TextDecoder.prototype.decode;
+const setTimeoutIntrinsic = globalThis.setTimeout;
+const clearTimeoutIntrinsic = globalThis.clearTimeout;
 
 function validateUnicodeScalarString(value) {
   for (let index = 0; index < value.length; index += 1) {
@@ -45,7 +121,9 @@ export function validateCompilerSource(source) {
   if (!validateUnicodeScalarString(source)) {
     throw new TypeError("Kotodama source must contain valid Unicode scalar values");
   }
-  const sourceBytes = new TextEncoder().encode(source).length;
+  const sourceBytes = Reflect.apply(textEncoderEncode, new TextEncoderIntrinsic(), [
+    source,
+  ]).length;
   if (sourceBytes > MAX_COMPILER_SOURCE_BYTES) {
     throw new RangeError(
       `Kotodama source exceeds the ${MAX_COMPILER_SOURCE_BYTES}-byte V1 limit`,
@@ -55,17 +133,36 @@ export function validateCompilerSource(source) {
 
 function canonicalizeCompilerOptions(options, allowedNames) {
   if (options === undefined) {
-    return {};
+    return Object.create(null);
   }
   if (options === null || typeof options !== "object" || Array.isArray(options)) {
     throw new TypeError("Kotodama compiler options must be an object");
   }
-  for (const name of Object.keys(options)) {
+  const prototype = Object.getPrototypeOf(options);
+  if (prototype !== Object.prototype && prototype !== null) {
+    throw new TypeError("Kotodama compiler options must be a plain data object");
+  }
+  const canonical = Object.create(null);
+  for (const name of Reflect.ownKeys(options)) {
+    if (typeof name !== "string") {
+      throw new TypeError("Kotodama compiler options must not contain symbol fields");
+    }
     if (!allowedNames.has(name)) {
       throw new TypeError(`unknown Kotodama compiler option '${name}'`);
     }
+    const descriptor = Object.getOwnPropertyDescriptor(options, name);
+    if (
+      descriptor === undefined ||
+      !descriptor.enumerable ||
+      !("value" in descriptor)
+    ) {
+      throw new TypeError(
+        `Kotodama compiler option '${name}' must be an enumerable data property`,
+      );
+    }
+    canonical[name] = descriptor.value;
   }
-  return Object.fromEntries(Object.keys(options).map((name) => [name, options[name]]));
+  return canonical;
 }
 
 function validateCompilerRequestFields(options) {
@@ -82,7 +179,11 @@ function validateCompilerRequestFields(options) {
     if (hasControlCharacter) {
       throw new TypeError("sourceName must not contain control characters");
     }
-    const sourceNameBytes = new TextEncoder().encode(options.sourceName).length;
+    const sourceNameBytes = Reflect.apply(
+      textEncoderEncode,
+      new TextEncoderIntrinsic(),
+      [options.sourceName],
+    ).length;
     if (sourceNameBytes > MAX_COMPILER_SOURCE_NAME_BYTES) {
       throw new RangeError(
         `sourceName exceeds the ${MAX_COMPILER_SOURCE_NAME_BYTES}-byte limit`,
@@ -101,9 +202,48 @@ function validateCompilerRequestOptions(options) {
   );
 }
 
+function validateAbortSignal(signal) {
+  if (abortSignalAbortedGetter === null) {
+    throw new TypeError("Kotodama compiler options.signal requires AbortSignal support");
+  }
+  try {
+    Reflect.apply(abortSignalAbortedGetter, signal, []);
+  } catch {
+    throw new TypeError("Kotodama compiler options.signal must be an AbortSignal");
+  }
+}
+
+function validateCompilerTransportFields(options) {
+  if (Object.hasOwn(options, "signal")) {
+    validateAbortSignal(options.signal);
+  }
+  if (Object.hasOwn(options, "timeoutMs")) {
+    if (
+      !Number.isInteger(options.timeoutMs) ||
+      options.timeoutMs <= 0 ||
+      options.timeoutMs > MAX_COMPILER_TIMEOUT_MS
+    ) {
+      throw new RangeError(
+        `timeoutMs must be an integer from 1 through ${MAX_COMPILER_TIMEOUT_MS}`,
+      );
+    }
+  }
+  return options;
+}
+
+function validateCompilerCallOptions(options) {
+  return validateCompilerTransportFields(
+    validateCompilerRequestFields(
+      canonicalizeCompilerOptions(options, COMPILER_CALL_OPTION_NAMES),
+    ),
+  );
+}
+
 export function validateCompilerOptions(options) {
-  options = validateCompilerRequestFields(
-    canonicalizeCompilerOptions(options, COMPILER_OPTION_NAMES),
+  options = validateCompilerTransportFields(
+    validateCompilerRequestFields(
+      canonicalizeCompilerOptions(options, COMPILER_OPTION_NAMES),
+    ),
   );
   if (
     Object.hasOwn(options, "compilerUrl") &&
@@ -139,8 +279,191 @@ export function selectCompilerRequestOptions(options) {
   return selected;
 }
 
-function contentLength(response, label) {
-  const raw = response.headers?.get?.("content-length");
+/** Select request and transport policy for a remote compiler invocation. */
+export function selectCompilerCallOptions(options) {
+  const selected = {};
+  for (const name of COMPILER_CALL_OPTION_NAMES) {
+    if (Object.hasOwn(options, name)) {
+      selected[name] = options[name];
+    }
+  }
+  return selected;
+}
+
+function signalIsAborted(signal) {
+  return Reflect.apply(abortSignalAbortedGetter, signal, []);
+}
+
+function signalAbortReason(signal) {
+  if (abortSignalReasonGetter !== null) {
+    return Reflect.apply(abortSignalReasonGetter, signal, []);
+  }
+  const error = new Error("Kotodama compiler request was aborted");
+  error.name = "AbortError";
+  return error;
+}
+
+function createCompilerOperation(signal, timeoutMs) {
+  if (
+    typeof AbortControllerIntrinsic !== "function" ||
+    abortControllerAbort === null ||
+    abortControllerSignalGetter === null ||
+    eventTargetAddEventListener === null ||
+    eventTargetRemoveEventListener === null
+  ) {
+    throw new Error("Kotodama compiler service requires AbortController support");
+  }
+
+  const controller = new AbortControllerIntrinsic();
+  const transportSignal = Reflect.apply(abortControllerSignalGetter, controller, []);
+  let cancelled = false;
+  let cancellationReason;
+  let rejectCancellation;
+  const cancellation = new Promise((_, reject) => {
+    rejectCancellation = reject;
+  });
+  // The cancellation may win a synchronous preflight race. Keep the losing
+  // promise handled after every operation path has cleaned up.
+  cancellation.catch(() => {});
+
+  const cancel = (reason) => {
+    if (cancelled) return;
+    cancelled = true;
+    cancellationReason = reason;
+    // Publish the authoritative caller/deadline rejection before notifying
+    // transport listeners, which may synchronously reject with another value.
+    rejectCancellation(reason);
+    try {
+      Reflect.apply(abortControllerAbort, controller, [reason]);
+    } catch {
+      // The local rejection remains authoritative if transport abort fails.
+    }
+  };
+  const onCallerAbort = () => cancel(signalAbortReason(signal));
+
+  let callerListenerInstalled = false;
+  if (signal !== undefined) {
+    if (signalIsAborted(signal)) {
+      onCallerAbort();
+    } else {
+      Reflect.apply(eventTargetAddEventListener, signal, [
+        "abort",
+        onCallerAbort,
+        { once: true },
+      ]);
+      callerListenerInstalled = true;
+      // Close the check/listen race without trusting any instance property.
+      if (signalIsAborted(signal)) onCallerAbort();
+    }
+  }
+
+  let timerId;
+  if (!cancelled) {
+    timerId = Reflect.apply(setTimeoutIntrinsic, globalThis, [
+      () => {
+        const error = new Error(
+          `Kotodama compiler request timed out after ${timeoutMs}ms`,
+        );
+        error.name = "TimeoutError";
+        cancel(error);
+      },
+      timeoutMs,
+    ]);
+  }
+
+  return {
+    signal: transportSignal,
+    race(promise) {
+      return Promise.race([promise, cancellation]).then(
+        (value) => {
+          if (cancelled) throw cancellationReason;
+          return value;
+        },
+        (error) => {
+          if (cancelled) throw cancellationReason;
+          throw error;
+        },
+      );
+    },
+    throwIfCancelled() {
+      if (cancelled) throw cancellationReason;
+    },
+    isCancelled() {
+      return cancelled;
+    },
+    cancellationReason() {
+      return cancellationReason;
+    },
+    cleanup() {
+      if (timerId !== undefined) {
+        Reflect.apply(clearTimeoutIntrinsic, globalThis, [timerId]);
+        timerId = undefined;
+      }
+      if (callerListenerInstalled) {
+        try {
+          Reflect.apply(eventTargetRemoveEventListener, signal, [
+            "abort",
+            onCallerAbort,
+          ]);
+        } catch {
+          // Listener removal is cleanup and must not replace the result.
+        }
+        callerListenerInstalled = false;
+      }
+    },
+  };
+}
+
+function responseMetadata(response) {
+  if (
+    response === null ||
+    typeof response !== "object" ||
+    responseOkGetter === null ||
+    responseStatusGetter === null ||
+    responseRedirectedGetter === null ||
+    responseHeadersGetter === null ||
+    responseBodyGetter === null
+  ) {
+    throw new TypeError("Kotodama compiler fetch returned an invalid Response");
+  }
+  try {
+    const ok = Reflect.apply(responseOkGetter, response, []);
+    const status = Reflect.apply(responseStatusGetter, response, []);
+    const redirected = Reflect.apply(responseRedirectedGetter, response, []);
+    const headers = Reflect.apply(responseHeadersGetter, response, []);
+    const body = Reflect.apply(responseBodyGetter, response, []);
+    if (
+      typeof ok !== "boolean" ||
+      !Number.isInteger(status) ||
+      status < 100 ||
+      status > 599 ||
+      typeof redirected !== "boolean"
+    ) {
+      throw new TypeError("invalid Response metadata");
+    }
+    return { ok, status, redirected, headers, body };
+  } catch (error) {
+    throw new TypeError("Kotodama compiler fetch returned an invalid Response", {
+      cause: error,
+    });
+  }
+}
+
+function headerValue(headers, name, label) {
+  if (headersGet === null) {
+    throw new TypeError(`${label} does not expose standards-compliant headers`);
+  }
+  try {
+    return Reflect.apply(headersGet, headers, [name]);
+  } catch (error) {
+    throw new TypeError(`${label} does not expose standards-compliant headers`, {
+      cause: error,
+    });
+  }
+}
+
+function contentLength(headers, label) {
+  const raw = headerValue(headers, "content-length", label);
   if (raw === null || raw === undefined) {
     return null;
   }
@@ -154,64 +477,184 @@ function contentLength(response, label) {
   return parsed;
 }
 
-async function readBoundedResponseBytes(response, limit, label) {
-  const declaredLength = contentLength(response, label);
+function validateIdentityContentEncoding(headers, label) {
+  const encoding = headerValue(headers, "content-encoding", label);
+  if (encoding !== null && encoding !== undefined && encoding.toLowerCase() !== "identity") {
+    throw new TypeError(
+      `${label} Content-Encoding must be absent or exactly identity`,
+    );
+  }
+}
+
+function cancelReaderBestEffort(reader, reason) {
+  if (readerCancel === null) return;
+  try {
+    const cancellation = Reflect.apply(readerCancel, reader, [reason]);
+    Promise.resolve(cancellation).catch(() => {});
+  } catch {
+    // Cancellation is cleanup and must not replace the authoritative error.
+  }
+}
+
+function releaseReaderBestEffort(reader) {
+  if (readerReleaseLock === null) return;
+  try {
+    Reflect.apply(readerReleaseLock, reader, []);
+  } catch {
+    // Lock release is cleanup and must not replace the authoritative result.
+  }
+}
+
+function cancelResponseBestEffort(response, reason) {
+  try {
+    const body = Reflect.apply(responseBodyGetter, response, []);
+    if (body === null || readableStreamGetReader === null) return;
+    const reader = Reflect.apply(readableStreamGetReader, body, []);
+    cancelReaderBestEffort(reader, reason);
+    releaseReaderBestEffort(reader);
+  } catch {
+    // A late or malformed response cannot replace the authoritative result.
+  }
+}
+
+function snapshotByteChunk(value, label, remainingBytes, limit) {
+  let buffer;
+  let byteOffset;
+  let byteLength;
+  try {
+    if (Reflect.apply(typedArrayTagGetter, value, []) !== "Uint8Array") {
+      throw new TypeError("not Uint8Array");
+    }
+    buffer = Reflect.apply(typedArrayBufferGetter, value, []);
+    byteOffset = Reflect.apply(typedArrayByteOffsetGetter, value, []);
+    byteLength = Reflect.apply(typedArrayByteLengthGetter, value, []);
+  } catch {
+    throw new TypeError(`${label} yielded a non-byte response chunk`);
+  }
+  if (sharedArrayBufferByteLengthGetter !== null) {
+    let isShared = false;
+    try {
+      Reflect.apply(sharedArrayBufferByteLengthGetter, buffer, []);
+      isShared = true;
+    } catch {
+      // Normal ArrayBuffers fail the SharedArrayBuffer brand check.
+    }
+    if (isShared) {
+      throw new TypeError(`${label} yielded a SharedArrayBuffer-backed chunk`);
+    }
+  }
+  if (byteLength === 0) {
+    throw new TypeError(`${label} yielded an empty non-progress response chunk`);
+  }
+  if (byteLength > remainingBytes) {
+    throw new RangeError(`${label} exceeds the ${limit}-byte response limit`);
+  }
+  const snapshot = new Uint8ArrayIntrinsic(byteLength);
+  try {
+    const view = new Uint8ArrayIntrinsic(buffer, byteOffset, byteLength);
+    Reflect.apply(uint8ArraySet, snapshot, [view]);
+  } catch (error) {
+    throw new TypeError(`${label} yielded an unstable response chunk`, {
+      cause: error,
+    });
+  }
+  return snapshot;
+}
+
+async function readBoundedResponseBytes(metadata, limit, label, operation) {
+  const declaredLength = contentLength(metadata.headers, label);
   if (declaredLength !== null && declaredLength > limit) {
     throw new RangeError(`${label} exceeds the ${limit}-byte response limit`);
   }
-  if (response.body === null) {
-    return new Uint8Array();
+  if (metadata.body === null) {
+    if (declaredLength !== null && declaredLength !== 0) {
+      throw new TypeError(
+        `${label} body length does not match its Content-Length header`,
+      );
+    }
+    return new Uint8ArrayIntrinsic();
   }
-  if (typeof response.body?.getReader !== "function") {
+  if (readableStreamGetReader === null || readerRead === null) {
     throw new TypeError(`${label} does not expose a standards-compliant readable body`);
   }
 
-  const reader = response.body.getReader();
+  let reader;
+  try {
+    reader = Reflect.apply(readableStreamGetReader, metadata.body, []);
+  } catch (error) {
+    throw new TypeError(
+      `${label} does not expose a standards-compliant readable body`,
+      { cause: error },
+    );
+  }
   const chunks = [];
   let total = 0;
   try {
     for (;;) {
-      const { done, value } = await reader.read();
+      operation.throwIfCancelled();
+      const read = Promise.resolve().then(() =>
+        Reflect.apply(readerRead, reader, []),
+      );
+      const { done, value } = await operation.race(read);
+      if (typeof done !== "boolean") {
+        throw new TypeError(`${label} returned an invalid stream read result`);
+      }
       if (done) {
+        if (value !== undefined) {
+          throw new TypeError(`${label} returned data after the stream ended`);
+        }
         break;
       }
-      if (!(value instanceof Uint8Array)) {
-        await reader.cancel("non-byte compiler response chunk");
-        throw new TypeError(`${label} yielded a non-byte response chunk`);
+      if (chunks.length >= MAX_COMPILER_RESPONSE_CHUNKS) {
+        throw new RangeError(`${label} yielded too many fragmented response chunks`);
       }
-      total += value.length;
+      const chunk = snapshotByteChunk(value, label, limit - total, limit);
+      total += chunk.length;
       if (total > limit) {
-        await reader.cancel("compiler response size limit exceeded");
         throw new RangeError(`${label} exceeds the ${limit}-byte response limit`);
       }
-      chunks.push(value);
+      chunks.push(chunk);
     }
+  } catch (error) {
+    cancelReaderBestEffort(reader, error);
+    throw error;
   } finally {
-    reader.releaseLock?.();
+    releaseReaderBestEffort(reader);
   }
-  const bytes = new Uint8Array(total);
+  operation.throwIfCancelled();
+  if (declaredLength !== null && total !== declaredLength) {
+    throw new TypeError(
+      `${label} body length does not match its Content-Length header`,
+    );
+  }
+  const bytes = new Uint8ArrayIntrinsic(total);
   let offset = 0;
   for (const chunk of chunks) {
-    bytes.set(chunk, offset);
+    Reflect.apply(uint8ArraySet, bytes, [chunk, offset]);
     offset += chunk.length;
   }
   return bytes;
 }
 
-async function readBoundedResponseText(response, limit, label) {
-  const bytes = await readBoundedResponseBytes(response, limit, label);
+async function readBoundedResponseText(metadata, limit, label, operation) {
+  const bytes = await readBoundedResponseBytes(metadata, limit, label, operation);
   try {
-    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    return Reflect.apply(
+      textDecoderDecode,
+      new TextDecoderIntrinsic("utf-8", { fatal: true }),
+      [bytes],
+    );
   } catch {
     throw new TypeError(`${label} is not valid UTF-8`);
   }
 }
 
-async function readCompilerResult(response) {
+async function readCompilerResult(metadata, operation) {
   const text = await readBoundedResponseText(
-    response,
+    metadata,
     MAX_COMPILER_RESPONSE_BYTES,
     "Kotodama compiler response",
+    operation,
   );
   let result;
   try {
@@ -224,10 +667,18 @@ async function readCompilerResult(response) {
 
 /** Browser/Node client for an explicitly configured canonical Rust compiler service. */
 export class KotodamaCompilerClient {
-  constructor(baseUrl, { fetchImpl = globalThis.fetch } = {}) {
+  #baseUrl;
+
+  #fetchImpl;
+
+  constructor(baseUrl, options = {}) {
     if (typeof baseUrl !== "string" || baseUrl.length === 0) {
       throw new TypeError("Kotodama compiler baseUrl must be a non-empty string");
     }
+    options = canonicalizeCompilerOptions(options, COMPILER_CLIENT_OPTION_NAMES);
+    const fetchImpl = Object.hasOwn(options, "fetchImpl")
+      ? options.fetchImpl
+      : DefaultFetch;
     let parsed;
     try {
       parsed = new URL(baseUrl);
@@ -251,41 +702,105 @@ export class KotodamaCompilerClient {
     if (typeof fetchImpl !== "function") {
       throw new TypeError("Kotodama compiler client requires fetch");
     }
-    this.baseUrl = parsed.href.replace(/\/$/, "");
-    this.fetchImpl = fetchImpl;
+    // Keep the validated transport policy in private slots. Public properties
+    // can be added by callers for compatibility, but cannot redirect a later
+    // compilation around the constructor's HTTPS/loopback boundary.
+    this.#baseUrl = parsed.href.replace(/\/$/, "");
+    this.#fetchImpl = fetchImpl;
   }
 
   async compile(source, options = {}) {
-    const request = buildCompilerRequest(source, options);
-    const response = await this.fetchImpl(`${this.baseUrl}${DEFAULT_COMPILE_PATH}`, {
-      method: "POST",
-      headers: {
-        accept: "application/json",
-        "content-type": "application/json",
-      },
-      cache: "no-store",
-      credentials: "omit",
-      redirect: "error",
-      referrerPolicy: "no-referrer",
-      body: JSON.stringify(request),
-    });
-    if (
-      response === null ||
-      typeof response !== "object" ||
-      typeof response.ok !== "boolean" ||
-      !Number.isInteger(response.status)
-    ) {
-      throw new TypeError("Kotodama compiler fetch returned an invalid Response");
-    }
-    if (!response.ok) {
-      const detail = await readBoundedResponseText(
-        response,
-        MAX_COMPILER_ERROR_BYTES,
-        "Kotodama compiler error response",
+    options = validateCompilerCallOptions(options);
+    const request = buildCompilerRequest(
+      source,
+      selectCompilerRequestOptions(options),
+    );
+    const timeoutMs = options.timeoutMs ?? DEFAULT_COMPILER_TIMEOUT_MS;
+    const operation = createCompilerOperation(options.signal, timeoutMs);
+    let response;
+    try {
+      operation.throwIfCancelled();
+      const fetchPromise = Promise.resolve().then(() =>
+        Reflect.apply(this.#fetchImpl, undefined, [
+          `${this.#baseUrl}${DEFAULT_COMPILE_PATH}`,
+          {
+            method: "POST",
+            headers: {
+              accept: "application/json",
+              "content-type": "application/json",
+            },
+            cache: "no-store",
+            credentials: "omit",
+            redirect: "error",
+            referrerPolicy: "no-referrer",
+            signal: operation.signal,
+            body: JSON.stringify(request),
+          },
+        ]),
       );
-      const suffix = detail.length === 0 ? "" : `: ${detail}`;
-      throw new Error(`Kotodama compiler service failed (${response.status})${suffix}`);
+      // If an injected Fetch ignores abort and resolves after our boundary has
+      // rejected, drain/cancel its body without reviving the operation.
+      fetchPromise.then(
+        (lateResponse) => {
+          if (operation.isCancelled()) {
+            cancelResponseBestEffort(
+              lateResponse,
+              operation.cancellationReason(),
+            );
+          }
+        },
+        () => {},
+      );
+      response = await operation.race(fetchPromise);
+      operation.throwIfCancelled();
+      const metadata = responseMetadata(response);
+      try {
+        validateIdentityContentEncoding(
+          metadata.headers,
+          "Kotodama compiler response",
+        );
+      } catch (error) {
+        cancelResponseBestEffort(response, error);
+        throw error;
+      }
+      if (metadata.redirected) {
+        cancelResponseBestEffort(response, "redirected compiler response rejected");
+        throw new TypeError("Kotodama compiler service redirects are forbidden");
+      }
+      if (!metadata.ok) {
+        const detail = await readBoundedResponseText(
+          metadata,
+          MAX_COMPILER_ERROR_BYTES,
+          "Kotodama compiler error response",
+          operation,
+        );
+        const suffix = detail.length === 0 ? "" : `: ${detail}`;
+        throw new Error(
+          `Kotodama compiler service failed (${metadata.status})${suffix}`,
+        );
+      }
+      if (metadata.status !== 200) {
+        cancelResponseBestEffort(response, "unexpected compiler success status");
+        throw new TypeError(
+          `Kotodama compiler service returned unexpected success status ${metadata.status}`,
+        );
+      }
+      if (headerValue(metadata.headers, "content-type", "Kotodama compiler response") !== "application/json") {
+        cancelResponseBestEffort(response, "invalid compiler response media type");
+        throw new TypeError(
+          "Kotodama compiler response Content-Type must be exactly application/json",
+        );
+      }
+      const result = await readCompilerResult(metadata, operation);
+      operation.throwIfCancelled();
+      return result;
+    } catch (error) {
+      if (response !== undefined) {
+        cancelResponseBestEffort(response, error);
+      }
+      throw error;
+    } finally {
+      operation.cleanup();
     }
-    return readCompilerResult(response);
   }
 }

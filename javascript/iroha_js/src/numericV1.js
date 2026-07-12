@@ -477,7 +477,10 @@ export const NumericV1 = Object.freeze({
   encodeIntJson: (value) => canonicalIntValue(value).toString(),
   encodeDecimalJson: (value) => canonicalDecimalValue(value).toString(),
   encodeQuantityJson: (value) => canonicalQuantityValue(value).toString(),
-  decodeIntJson: (value) => new KotodamaInt(value),
+  decodeIntJson: (value) => {
+    if (typeof value !== "string") throw new TypeError("int JSON must be a string");
+    return new KotodamaInt(value);
+  },
   decodeDecimalJson: (value) => {
     const decoded = new KotodamaDecimal(value);
     if (decoded.toString() !== value) fail("invalid_text", "decimal JSON must use canonical spelling");

@@ -34,6 +34,8 @@ mod kotodama_tuple_codegen_neg;
 mod kotodama_tuple_lowering;
 #[path = "../kotodama_v1_runtime_acceptance.rs"]
 mod kotodama_v1_runtime_acceptance;
+#[path = "../kotodama_vrf_transport_runtime.rs"]
+mod kotodama_vrf_transport_runtime;
 #[path = "../kotodama_wrappers.rs"]
 mod kotodama_wrappers;
 #[path = "../kotodama_zk_syscalls.rs"]

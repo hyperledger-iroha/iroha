@@ -2252,12 +2252,12 @@ ACTIVE_KAGEMUSHA_TODO_SCAN_PATHS = (
     "crates/connect_norito_bridge/src/lib.rs",
     "crates/iroha_js_host/src/lib.rs",
     "integration_tests/tests/zk_confidential_localnet.rs",
-    "crates/iroha_torii/src/offline_v2_issuer.rs",
+    "crates/iroha_torii/src/offline_commands.rs",
     "crates/iroha_torii/src/openapi.rs",
     "crates/iroha_torii/src/zk_prover.rs",
-    "crates/iroha_torii/tests/offline_kagemusha_only_smoke.rs",
-    "crates/iroha_torii/tests/offline_v2_kagemusha_redeem_smoke.rs",
-    "crates/iroha_torii/tests/offline_v2_kagemusha_topup_smoke.rs",
+    "crates/iroha_torii/tests/offline_operation_contract.rs",
+    "crates/iroha_torii/tests/offline_redeem_contract.rs",
+    "crates/iroha_torii/tests/offline_top_up_contract.rs",
     "ci/check_kagemusha_production_readiness.sh",
     "ci/check_kagemusha_recursive_spend_jvm_sdk.sh",
     "ci/check_kagemusha_recursive_spend_js_sdk.sh",
@@ -2578,10 +2578,10 @@ PAYLOAD_BENCH_SOURCE_COVERAGE = {
         '"reserved-lineage recursive Kagemusha append transition profile grew at hop {}"',
     ),
 }
-TORII_OFFLINE_V2_KAGEMUSHA_REDEEM_COVERAGE = {
+TORII_KAGEMUSHA_REDEEM_COVERAGE = {
     "crates/iroha_torii/Cargo.toml": (
-        'name = "offline_v2_kagemusha_redeem_smoke"',
-        'path = "tests/offline_v2_kagemusha_redeem_smoke.rs"',
+        'name = "torii_nexus_sorafs"',
+        'path = "tests/grouped/nexus_sorafs.rs"',
     ),
     "crates/iroha_torii_shared/src/route_catalog.rs": (
         'pub const REDEEM_PATH: &str = "/v1/offline/redeem";',
@@ -2600,12 +2600,12 @@ TORII_OFFLINE_V2_KAGEMUSHA_REDEEM_COVERAGE = {
         "async fn enforce_offline_command_prebody_admission(",
         'Some("v1/offline/redeem")',
         "if let Err(error) = check_access(&app, &headers, remote, route_hint).await {",
-        "offline_v2_issuer::validate_command_headers_before_body(&headers)",
-        "offline_v2_issuer::handle_redeem(app, &headers, request).await",
+        "offline_commands::validate_command_headers_before_body(&headers)",
+        "offline_commands::handle_redeem(app, &headers, request).await",
         "&route_catalog::offline::REDEEM,",
         "catalog_post(handler_offline_redeem)",
     ),
-    "crates/iroha_torii/src/offline_v2_issuer.rs": (
+    "crates/iroha_torii/src/offline_commands.rs": (
         "pub(crate) async fn handle_redeem(",
         "redeem_request: OfflineRedeemRequest,",
         "redeem_request.validate_public_binding()",
@@ -2626,25 +2626,22 @@ TORII_OFFLINE_V2_KAGEMUSHA_REDEEM_COVERAGE = {
     ),
     "crates/iroha_torii/src/openapi.rs": (
         '"/v1/offline/redeem",',
-        '"Submit one directly encoded OfflineRedeemRequest.',
+        '"Submit one typed Kagemusha OfflineRedeemRequest.',
         '"#/components/schemas/OfflineRedeemRequest",',
         "OFFLINE_REDEEM_REQUEST_SCHEMA_NAME",
-        'assert!(redeem_description.contains("directly encoded OfflineRedeemRequest"));',
-        'assert!(redeem_description.contains("whole-payload base64 wrappers are rejected"));',
-        'assert!(!properties.contains_key("redeem_request_norito_base64"));',
+        'assert!(redeem_description.contains("typed Kagemusha OfflineRedeemRequest"));',
+        '"typed request JSON must reject unknown fields"',
     ),
     "docs/portal/static/openapi/torii.json": (
         '"/v1/offline/redeem": {',
-        "Submit one directly encoded OfflineRedeemRequest.",
-        "application/x-norito contains the canonical typed Norito value",
-        "whole-payload base64 wrappers are rejected",
+        "Submit one typed Kagemusha OfflineRedeemRequest.",
+        "application/x-norito contains the canonical Norito value",
         '"$ref": "#/components/schemas/OfflineRedeemRequest"',
     ),
     "docs/portal/static/openapi/versions/current/torii.json": (
         '"/v1/offline/redeem": {',
-        "Submit one directly encoded OfflineRedeemRequest.",
-        "application/x-norito contains the canonical typed Norito value",
-        "whole-payload base64 wrappers are rejected",
+        "Submit one typed Kagemusha OfflineRedeemRequest.",
+        "application/x-norito contains the canonical Norito value",
         '"$ref": "#/components/schemas/OfflineRedeemRequest"',
     ),
     "docs/source/offline_kagemusha.md": (
@@ -2652,13 +2649,12 @@ TORII_OFFLINE_V2_KAGEMUSHA_REDEEM_COVERAGE = {
         "The request body is the direct",
         "typed `OfflineRedeemRequest`",
         "`iroha.torii.v1.offline.redeem.request` for `application/x-norito`",
-        "Whole-payload base64 wrappers, compact-token",
-        "second structured-note parser are not part of the first-release contract",
+        "validates the chain, asset, exact scaled amount, current note, proof, optional",
     ),
     "crates/iroha_torii/tests/grouped/nexus_sorafs.rs": (
-        "mod offline_v2_kagemusha_redeem_smoke;",
+        "mod offline_redeem_contract;",
     ),
-    "crates/iroha_torii/tests/offline_v2_kagemusha_redeem_smoke.rs": (
+    "crates/iroha_torii/tests/offline_redeem_contract.rs": (
         "redeem_is_a_typed_async_command_on_the_final_route",
         'TORII_SOURCE.contains("&route_catalog::offline::REDEEM")',
         'TORII_SOURCE.contains("catalog_post(handler_offline_redeem)")',
@@ -2670,10 +2666,6 @@ TORII_OFFLINE_V2_KAGEMUSHA_REDEEM_COVERAGE = {
         'issuer.contains("require_idempotency_key")',
         'issuer.contains("StatusCode::ACCEPTED")',
         'issuer.contains("header::LOCATION")',
-        "redeem_has_no_wrapper_or_compatibility_payload",
-        "whole-payload wrapper must be absent",
-        "retired_redeem_routes_are_not_mounted",
-        '"/v1/offline/v2/notes/redeem"',
     ),
 }
 OFFLINE_V2_VECTOR_ATTESTATION_PROFILE_COVERAGE = {
@@ -2835,7 +2827,7 @@ WORKFLOW_REQUIRED_PATHS = (
     *PAYLOAD_BENCH_REQUIRED_PATHS,
     *DOC_PATHS,
     *VERIFY_RESULT_FAIL_CLOSED_COVERAGE.keys(),
-    *TORII_OFFLINE_V2_KAGEMUSHA_REDEEM_COVERAGE.keys(),
+    *TORII_KAGEMUSHA_REDEEM_COVERAGE.keys(),
     *OFFLINE_V2_VECTOR_ATTESTATION_PROFILE_COVERAGE.keys(),
     *OFFLINE_VECTOR_ATTESTATION_PROFILE_COVERAGE.keys(),
     *READINESS_SECTION_CONSISTENCY_COVERAGE.keys(),
@@ -3077,15 +3069,15 @@ POLICY_NEGATIVE_CONTROL_COMMANDS = (
     ),
     (
         "typed first-release Torii offline redeem ingress negative control",
-        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-torii-offline-v2-kagemusha-redeem",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-torii-kagemusha-redeem",
     ),
     (
         "typed first-release Torii offline redeem OpenAPI negative control",
-        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-torii-offline-v2-kagemusha-openapi",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-torii-kagemusha-openapi",
     ),
     (
         "typed first-release Torii offline redeem smoke negative control",
-        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-torii-offline-v2-kagemusha-smoke",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-torii-kagemusha-smoke",
     ),
     (
         "active Kagemusha TODO scan negative control",
@@ -5360,23 +5352,9 @@ def extract_rust_const_str_array_body(source, name, label):
     return match.group("body")
 
 
-def check_torii_offline_v2_kagemusha_redeem_coverage():
-    issuer_relative = "crates/iroha_torii/src/offline_v2_issuer.rs"
-    issuer = read(issuer_relative).split("\n#[cfg(test)]", 1)[0]
-    for retired in (
-        "redeem_request_norito_base64",
-        "compact_payment_token_norito_base64",
-        "projection_verifier_record_norito_base64",
-        "KagemushaRecursiveSpendRedeemRequestV1",
-        "ParsedOfflineRequest",
-    ):
-        if retired in issuer:
-            fail(
-                f"{issuer_relative} contains retired offline redemption wrapper/parser marker: "
-                + retired
-            )
+def check_torii_kagemusha_redeem_coverage():
     require_needles(
-        TORII_OFFLINE_V2_KAGEMUSHA_REDEEM_COVERAGE,
+        TORII_KAGEMUSHA_REDEEM_COVERAGE,
         "is missing typed first-release Torii offline redeem ingress coverage",
     )
 
@@ -6355,7 +6333,7 @@ def run_checks():
     check_current_roadmap_semantic_init_is_fresh()
     check_verify_result_fail_closed_coverage()
     check_payload_benchmark_source_coverage()
-    check_torii_offline_v2_kagemusha_redeem_coverage()
+    check_torii_kagemusha_redeem_coverage()
     check_offline_v2_vector_attestation_profile_coverage()
     check_offline_vector_attestation_profile_coverage()
     check_readiness_section_consistency_coverage()
@@ -8824,40 +8802,40 @@ if mode == "--negative-control-offline-vector-platform-aliases":
         print(detected_message)
     raise SystemExit(0)
 
-if mode == "--negative-control-torii-offline-v2-kagemusha-redeem":
+if mode == "--negative-control-torii-kagemusha-redeem":
     cases = (
         (
             "crates/iroha_torii_shared/src/route_catalog.rs",
             'pub const REDEEM_PATH: &str = "/v1/offline/redeem";',
-            'pub const REDEEM_PATH: &str = "/v1/offline/v2/notes/redeem";',
+            'pub const REDEEM_PATH: &str = "/v1/offline/alternate";',
         ),
         (
             "crates/iroha_torii_shared/src/offline_api.rs",
             "KagemushaRecursiveSpendRedeemRequestV2 as OfflineRedeemRequest",
-            "KagemushaRecursiveSpendRedeemRequestV2 as WrappedOfflineRedeemRequest",
+            "KagemushaRecursiveSpendRedeemRequestV2 as IncorrectOfflineRedeemRequest",
         ),
         (
             "crates/iroha_torii/src/lib.rs",
             "iroha_torii_shared::offline_api::OfflineRedeemRequest,",
-            "iroha_torii_shared::offline_api::WrappedOfflineRedeemRequest,",
+            "iroha_torii_shared::offline_api::IncorrectOfflineRedeemRequest,",
         ),
         (
             "crates/iroha_torii/src/lib.rs",
             'Some("v1/offline/redeem")',
-            'Some("v1/offline/v2/notes/redeem")',
+            'Some("v1/offline/alternate")',
         ),
         (
             "crates/iroha_torii/src/lib.rs",
             "&route_catalog::offline::REDEEM,",
-            "&route_catalog::offline::RETIRED_REDEEM,",
+            "&route_catalog::offline::BROKEN_REDEEM,",
         ),
         (
-            "crates/iroha_torii/src/offline_v2_issuer.rs",
+            "crates/iroha_torii/src/offline_commands.rs",
             "validate_kagemusha_v2_redeem_snapshot(&app, &redeem_request)?;",
             "// skipped typed redeem snapshot validation",
         ),
         (
-            "crates/iroha_torii/src/offline_v2_issuer.rs",
+            "crates/iroha_torii/src/offline_commands.rs",
             "fn validate_kagemusha_v2_redeem_snapshot(\n"
             "    app: &SharedAppState,\n"
             "    request: &OfflineRedeemRequest,\n"
@@ -8914,22 +8892,17 @@ if mode == "--negative-control-torii-offline-v2-kagemusha-redeem":
     print(first_message.splitlines()[0])
     raise SystemExit(0)
 
-if mode == "--negative-control-torii-offline-v2-kagemusha-openapi":
+if mode == "--negative-control-torii-kagemusha-openapi":
     cases = (
         (
             "crates/iroha_torii/src/openapi.rs",
-            'assert!(redeem_description.contains("directly encoded OfflineRedeemRequest"));',
+            'assert!(redeem_description.contains("typed Kagemusha OfflineRedeemRequest"));',
             'assert!(redeem_description.contains("encoded redeem payload"));',
-        ),
-        (
-            "crates/iroha_torii/src/openapi.rs",
-            'assert!(redeem_description.contains("whole-payload base64 wrappers are rejected"));',
-            'assert!(redeem_description.contains("whole-payload base64 wrappers are accepted"));',
         ),
         (
             "docs/portal/static/openapi/torii.json",
             '"/v1/offline/redeem": {',
-            '"/v1/offline/v2/notes/redeem": {',
+            '"/v1/offline/alternate": {',
         ),
         (
             "docs/portal/static/openapi/torii.json",
@@ -8939,7 +8912,7 @@ if mode == "--negative-control-torii-offline-v2-kagemusha-openapi":
         (
             "docs/portal/static/openapi/versions/current/torii.json",
             '"/v1/offline/redeem": {',
-            '"/v1/offline/v2/notes/redeem": {',
+            '"/v1/offline/alternate": {',
         ),
     )
     first_message = None
@@ -8986,24 +8959,16 @@ if mode == "--negative-control-torii-offline-v2-kagemusha-openapi":
     print(first_message.splitlines()[0])
     raise SystemExit(0)
 
-if mode == "--negative-control-torii-offline-v2-kagemusha-smoke":
-    target = "crates/iroha_torii/tests/offline_v2_kagemusha_redeem_smoke.rs"
+if mode == "--negative-control-torii-kagemusha-smoke":
+    target = "crates/iroha_torii/tests/offline_redeem_contract.rs"
     cases = (
         (
             "redeem_is_a_typed_async_command_on_the_final_route",
-            "redeem_accepts_a_compatibility_wrapper_on_a_retired_route",
+            "redeem_contract_is_broken",
         ),
         (
             'TORII_SOURCE.contains("NoritoJson(request)")',
             'TORII_SOURCE.contains("Json(request)")',
-        ),
-        (
-            "redeem_has_no_wrapper_or_compatibility_payload",
-            "redeem_accepts_wrapper_or_compatibility_payload",
-        ),
-        (
-            "retired_redeem_routes_are_not_mounted",
-            "retired_redeem_routes_are_mounted",
         ),
     )
     first_message = None
@@ -9077,7 +9042,7 @@ if mode == "--negative-control-active-kagemusha-todo":
             "JS host active marker",
         ),
         (
-            "crates/iroha_torii/src/offline_v2_issuer.rs",
+            "crates/iroha_torii/src/offline_commands.rs",
             "use std::{",
             f"// {todo_prefix} bypass Kagemusha Torii offline-v2 issuer review\n"
             "use std::{",
@@ -9147,14 +9112,14 @@ if mode == "--negative-control-active-kagemusha-todo":
             "staged resource guard script active marker",
         ),
         (
-            "crates/iroha_torii/tests/offline_kagemusha_only_smoke.rs",
+            "crates/iroha_torii/tests/offline_operation_contract.rs",
             "//! Wire-contract guards for the first-release offline operation resource.",
             f"// {todo_prefix} bypass Kagemusha-only offline smoke\n"
             "//! Wire-contract guards for the first-release offline operation resource.",
             "Torii Kagemusha-only smoke active marker",
         ),
         (
-            "crates/iroha_torii/tests/offline_v2_kagemusha_redeem_smoke.rs",
+            "crates/iroha_torii/tests/offline_redeem_contract.rs",
             "//! Source-level contract guards for the first-release offline redeem command.",
             f"// {todo_prefix} bypass offline-v2 Kagemusha redeem smoke\n"
             "//! Source-level contract guards for the first-release offline redeem command.",

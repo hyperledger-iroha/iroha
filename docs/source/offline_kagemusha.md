@@ -30,36 +30,25 @@ records the rejected KZG measurements, the exact Axiom 0.5 IPA wire mismatch,
 the required folded-generator accumulator/decider, and the branch-bound split
 proofs for recipient and change.
 
-Kagemusha is the only active chain implementation for offline payments. Nodes
-expose offline-offline payments through `settlement.offline.kagemusha_enabled`,
-which defaults to `true`; runtime bearer-audit dispatch is not available.
+Kagemusha is the sole chain implementation for offline payments. Nodes expose
+it through `settlement.offline.kagemusha_enabled`, which defaults to `true`.
 Mobile artifact archives are served and gated by Core API, so Torii readiness
 returns a typed `prover_artifacts_unavailable` blocker until production
 artifacts exist.
-Retired `IssueOfflineNote`, `AuditOfflineNote`, and `RedeemOfflineNote` payloads,
-plus SDK/bridge defund composites, are retained only as historical data-model
-fixture types and are not registered or dispatched by the node's default
-instruction surface.
-
-There is no legacy HTTP adapter in the first release. Earlier note-issuer,
-audit, V1 Kagemusha wrapper, and defund routes are unregistered rather than
-mounted as rejection shims. Production payment admission uses typed Kagemusha
-online-to-offline top-ups, `KagemushaTransfer`, and typed recursive redemption.
+Production payment admission uses typed Kagemusha online-to-offline top-ups,
+locally verified recursive peer transfers, and typed recursive redemption.
 The SDK producer builds `OfflineTopUpRequest` directly and checks its asset,
 exact scaled amount, proof, current-note, artifact-generation, operation, and
-signed authorization bindings before submission. It does not accept an older
-request archive or construct a whole-payload base64 wrapper.
+signed authorization bindings before submission.
 Submission uses the signed transaction pipeline or `POST /v1/offline/top-up`.
 The Torii request is a direct typed `OfflineTopUpRequest`: JSON clients send the
 structured request, and Norito clients send the canonical typed value with
 schema name `iroha.torii.v1.offline.top_up.request` as
-`application/x-norito`. The public request never wraps the full payload in a
-`*_norito_base64` field.
+`application/x-norito`.
 Acceptance is asynchronous and returns `202 Accepted`, a typed operation
 reference, and a `Location` header for
 `/v1/offline/operations/{operation_id}`. The applied top-up result carries the
-finalized anchor as a typed value. There is no parallel note-issue or
-version-nested HTTP route in the first-release surface.
+finalized anchor as a typed value.
 
 The typed V2 top-up instruction is also fail-closed at Core execution, not only
 at the Torii route. While
@@ -2261,9 +2250,7 @@ typed `OfflineRedeemRequest`: its structured representation for
 `iroha.torii.v1.offline.redeem.request` for `application/x-norito`. Torii
 validates the chain, asset, exact scaled amount, current note, proof, optional
 proof-bound offline change, operation id, and recipient/device authorization
-before admitting the command. Whole-payload base64 wrappers, compact-token
-dispatch markers, projection-verifier dispatch markers, field aliases, and a
-second structured-note parser are not part of the first-release contract.
+before admitting the command.
 Top-up and redemption bodies use Torii's configured `max_content_len`; they do
 not inherit Axum's 2 MiB default. A request above that configured ceiling is
 rejected with typed `413 request_payload_too_large` before admission.

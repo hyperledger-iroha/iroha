@@ -4,8 +4,8 @@ direction: ltr
 source: docs/source/bridge_finality.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 5e28e5c38283ad6be40a0fc48e0312797f490542a143f4cefdd209aaf8099ac5
-source_last_modified: "2026-07-11T20:38:35.470900+00:00"
+source_hash: 1cbd248fe14e63d00f002f09e1663181f3ab9bd99124ffeb89c56763b784046b
+source_last_modified: "2026-07-12"
 translation_last_reviewed: 2026-07-12
 ---
 
@@ -50,13 +50,15 @@ admite copias duplicadas de altura, cadena, hash, roster o certificado.
 
 ## Fuente duradera y verificación
 
-Después de aplicar el bloque, Sumeragi v2 valida y guarda el artefacto como
-sidecar inmutable de Kura. La escritura es idempotente y Kura rechaza un
-artefacto conflictivo a la misma altura. La recuperación puede completar un
-sidecar ausente sin volver a ejecutar el bloque. El constructor lee el bloque y
-el sidecar por altura, verifica su asociación y ejecuta el verificador
-canónico. Los PoP históricos se leen del sidecar; nunca se sustituyen por el
-estado mundial mutable ni se usa una ventana reciente de certificados.
+Antes de publicar la finalidad o expulsar el cuerpo, Kura escribe el header canónico
+exacto y el archivo SCCP autenticado por la raíz en un registro retained-block
+inmutable; después conserva el artefacto V2 exacto en otro registro de finalidad
+inmutable. Ambas escrituras son idempotentes y rechazan cualquier conflicto a la misma
+altura. `build_finality_proof` solo lee el header retenido y el registro de finalidad ya
+verificado: nunca lee un cuerpo histórico ni sustituye los PoP por estado mundial
+mutable. El inventario de reinicio vuelve a validar la asociación
+header/archive/artifact/hash. Expulsar el cuerpo no vuelve indisponible una prueba válida;
+un registro ausente, corrupto, conflictivo o no verificable falla de forma cerrada.
 
 `verify_bridge_finality_proof` exige:
 
@@ -117,6 +119,7 @@ Merkle tipada y su ancla gobernada.
 - `GET /v1/bridge/finality/{height}` devuelve `BridgeFinalityProof`.
 - `GET /v1/bridge/finality/bundle/{height}` devuelve `BridgeFinalityBundle`.
 
-Ambas rutas fallan de forma cerrada si falta o es inválido el bloque o el
-sidecar v2 exacto. Los consumidores de la primera versión deben rechazar toda
-forma o versión desconocida; no hay compatibilidad alternativa.
+Ambas rutas fallan de forma cerrada si falta o es inválido el header canónico retenido
+o el artefacto v2 exacto. Expulsar el cuerpo histórico no vuelve indisponible una prueba
+válida. Los consumidores de la primera versión deben rechazar toda forma o versión
+desconocida; no hay compatibilidad alternativa.

@@ -17,6 +17,7 @@ use iroha::{
         query::{
             account::prelude::FindAccounts, block::prelude::FindBlocks, prelude::QueryBuilderExt,
         },
+        Identifiable,
     },
 };
 use iroha_test_network::{NetworkBuilder, NetworkPeer, init_instruction_registry};
@@ -147,7 +148,6 @@ async fn authoritative_v2_finalizes_through_validator_restart() -> Result<()> {
 
         let config_layers = network
             .config_layers()
-            .map(std::borrow::Cow::into_owned)
             .collect::<Vec<_>>();
         let restart_index = VALIDATOR_COUNT - 1;
         let restart_peer = network.peers()[restart_index].clone();

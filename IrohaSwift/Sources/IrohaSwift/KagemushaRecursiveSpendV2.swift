@@ -696,26 +696,28 @@ public struct KagemushaRecipientOutputDerivationRequest: Equatable, Sendable {
 
 public struct KagemushaRecipientOutputDerivationResult: Equatable, Sendable {
     public let recipientOutput: KagemushaSpendableNoteDescriptor
-    public let recipientOutputProverMaterial: Data
+    /// Opaque sender-prover archive containing only amount, rho, and owner tag.
+    /// Carry this unchanged in the signed peer request; never interpret it in wallet code.
+    public let senderOutputProverMaterial: Data
     public let opening: KagemushaNoteOpening
 
     init(
         recipientOutput: KagemushaSpendableNoteDescriptor,
-        recipientOutputProverMaterial: Data,
+        senderOutputProverMaterial: Data,
         request: KagemushaRecipientOutputDerivationRequest,
         opening: KagemushaNoteOpening
     ) throws {
         guard recipientOutput.chainID == request.chainID,
               recipientOutput.assetDefinitionID == request.assetDefinitionID,
               recipientOutput.amount == request.amount,
-              !recipientOutputProverMaterial.isEmpty,
-              recipientOutputProverMaterial.count <= 4 * 1_024 else {
+              !senderOutputProverMaterial.isEmpty,
+              senderOutputProverMaterial.count <= 4 * 1_024 else {
             throw KagemushaRecursiveSpendError.invalidField(
-                "recipientOutputProverMaterial"
+                "senderOutputProverMaterial"
             )
         }
         self.recipientOutput = recipientOutput
-        self.recipientOutputProverMaterial = Data(recipientOutputProverMaterial)
+        self.senderOutputProverMaterial = Data(senderOutputProverMaterial)
         self.opening = opening
     }
 }
@@ -926,7 +928,9 @@ public struct KagemushaRecipientPaymentRequestSigningPayload: Equatable, Sendabl
     public let issuedAtMilliseconds: UInt64
     public let expiresAtMilliseconds: UInt64
     public let recipientOutput: KagemushaSpendableNoteDescriptor
-    public let recipientOutputProverMaterial: Data
+    /// Signed, peer-carried archive consumed only by the sender proof builder.
+    /// It must never contain the receiver spend key or output diversifier.
+    public let senderOutputProverMaterial: Data
 
     public init(
         chainID: String,
@@ -940,7 +944,7 @@ public struct KagemushaRecipientPaymentRequestSigningPayload: Equatable, Sendabl
         issuedAtMilliseconds: UInt64,
         expiresAtMilliseconds: UInt64,
         recipientOutput: KagemushaSpendableNoteDescriptor,
-        recipientOutputProverMaterial: Data
+        senderOutputProverMaterial: Data
     ) throws {
         try KagemushaRecursiveSpend.requirePortableText(chainID, field: "chainID")
         guard AssetDefinitionAddress.decode(assetDefinitionID) != nil else {
@@ -963,8 +967,8 @@ public struct KagemushaRecipientPaymentRequestSigningPayload: Equatable, Sendabl
               recipientOutput.chainID == chainID,
               recipientOutput.assetDefinitionID == assetDefinitionID,
               recipientOutput.amount == amount,
-              !recipientOutputProverMaterial.isEmpty,
-              recipientOutputProverMaterial.count <= 4 * 1024 else {
+              !senderOutputProverMaterial.isEmpty,
+              senderOutputProverMaterial.count <= 4 * 1024 else {
             throw KagemushaRecursiveSpendError.invalidField("recipientRequest")
         }
         self.chainID = chainID
@@ -978,7 +982,7 @@ public struct KagemushaRecipientPaymentRequestSigningPayload: Equatable, Sendabl
         self.issuedAtMilliseconds = issuedAtMilliseconds
         self.expiresAtMilliseconds = expiresAtMilliseconds
         self.recipientOutput = recipientOutput
-        self.recipientOutputProverMaterial = Data(recipientOutputProverMaterial)
+        self.senderOutputProverMaterial = Data(senderOutputProverMaterial)
     }
 
     public func signingBytes() throws -> Data {

@@ -7501,7 +7501,7 @@ fn kagemusha_recipient_output_derive_v2(
                 spend_nullifier: nullifier,
                 amount: request.amount,
             },
-            recipient_output_prover_material: prover_material,
+            sender_output_prover_material: prover_material,
         };
         result
             .validate_for_request(&request)
@@ -9061,6 +9061,8 @@ mod kagemusha_bridge_tests {
         let commitments: Vec<[u8; 32]> = Vec::new();
         let zero_path = confidential_v2::compute_confidential_merkle_path_v2(&commitments, 0)
             .expect("authoritative next-zero path fixture");
+        let (zero_siblings, zero_directions, _zero_witness_nodes, zero_root) =
+            zero_path.into_parts();
         let vk_box = confidential_v2::kagemusha_topup_shield_v2_vk_box()
             .expect("canonical top-up shield verifier");
         KagemushaTopUpShieldBuildRequestV2 {
@@ -9081,9 +9083,9 @@ mod kagemusha_bridge_tests {
             },
             leaf_index: 0,
             zero_path: KagemushaTopUpZeroPathV2 {
-                siblings: zero_path.siblings,
-                directions: zero_path.directions,
-                root: zero_path.root,
+                siblings: zero_siblings,
+                directions: zero_directions,
+                root: zero_root,
             },
             shield_verifier_id: VerifyingKeyId::new(
                 ZK_BACKEND_HALO2_IPA,
@@ -10843,7 +10845,7 @@ mod kagemusha_bridge_tests {
             .validate_for_request(&request)
             .expect("result binds request");
         let material: KagemushaRecipientOutputProverMaterialV2 =
-            norito::decode_from_bytes(&first.recipient_output_prover_material)
+            norito::decode_from_bytes(&first.sender_output_prover_material)
                 .expect("typed prover material");
         assert_eq!(material.amount, request.amount.atomic_units);
         assert_eq!(material.rho, opening.rho);
@@ -10857,13 +10859,13 @@ mod kagemusha_bridge_tests {
         );
         assert!(
             !first
-                .recipient_output_prover_material
+                .sender_output_prover_material
                 .windows(opening.spend_key.len())
                 .any(|window| window == opening.spend_key)
         );
         assert!(
             !first
-                .recipient_output_prover_material
+                .sender_output_prover_material
                 .windows(opening.diversifier.len())
                 .any(|window| window == opening.diversifier)
         );

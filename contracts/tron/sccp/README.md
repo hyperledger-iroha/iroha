@@ -20,11 +20,14 @@ accepts an arbitrary SCCP digest.
 
 ## Exact source event
 
-`transferToTaira(bytes,uint256)` accepts a canonical Taira account payload and
-constructs the complete SCCP Transfer payload in the contract. Wrapped XOR has
-18 decimals while the Taira payload uses 9, so raw token amounts must be
-divisible by `10^9` and the payload commits the quotient. It burns before
-emitting:
+`transferToTaira(bytes,uint256,uint64)` accepts a canonical Taira account
+payload, a raw token amount, and the caller's exact expected transfer nonce,
+then constructs the complete SCCP Transfer payload in the contract. The call
+requires `expectedNonce == transferNonce`, so the successful native TRON
+transaction authenticates the same nonce used by the emitted payload and
+message id. Wrapped XOR has 18 decimals while the Taira payload uses 9, so raw
+token amounts must be divisible by `10^9` and the payload commits the quotient.
+It burns before emitting:
 
 ```text
 SccpTransfer(
@@ -40,8 +43,9 @@ SccpTransfer(
 The event digest is
 `keccak256("sccp:source:event:v1" || 0x01 || laneHash || messageId || payloadHash)`.
 The event cannot be produced without a successful token burn, and the route
-rejects zero amounts, nonce exhaustion, malformed recipients, changed token
-code, and replayed message ids. Every payload commits the constructor-bound,
+rejects zero amounts, stale or future expected nonces, nonce exhaustion,
+malformed recipients, changed token code, and replayed message ids. Every
+payload commits the constructor-bound,
 nonzero governed route revision immediately after the nonce, preventing a new
 route whose nonce restarts at zero from colliding with an earlier revision.
 The irreversible recipient is specifically the exact discriminant-`369`
@@ -115,8 +119,10 @@ Before activating a route, independently verify all of the following:
    reproducibly generated circuit and witness generator that prove canonical
    payload semantics, message inclusion, block commitment, commit-QC finality,
    and validator continuity from the governed Taira anchor. The checked-in
-   labeled-signal fixture, a syntactically valid key, or a pairing test is not
-   evidence of those semantics.
+   labeled-signal fixture is diagnostic-only: production validators reject its
+   identifier, classification, and exact published digest. Neither that
+   fixture, a syntactically valid key, nor a pairing test is evidence of those
+   semantics.
 6. A finalized adversarial canary proves route-specific binding, correct
    mint/burn accounting, and replay rejection.
 7. The optimized route runtime remains within the deployment-size ceiling and

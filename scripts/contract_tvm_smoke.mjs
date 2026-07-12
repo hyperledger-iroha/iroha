@@ -984,7 +984,11 @@ await expectConfirmedTvmFailure(
   () =>
     sendAndConfirmTvm(
       bridgeClient,
-      bridge.transferToTaira(Buffer.from(NUMERIC_TAIRA_ALIAS, "utf8"), String(SCALE)),
+      bridge.transferToTaira(
+        Buffer.from(NUMERIC_TAIRA_ALIAS, "utf8"),
+        String(SCALE),
+        String(nonceBeforeFailedBurns),
+      ),
       { feeLimit: METHOD_FEE_LIMIT },
       "noncanonical Taira recipient burn",
     ),
@@ -994,11 +998,29 @@ await expectConfirmedTvmFailure(
   () =>
     sendAndConfirmTvm(
       bridgeClient,
-      bridge.transferToTaira(Buffer.from(CANONICAL_TAIRA_I105, "utf8"), "1"),
+      bridge.transferToTaira(
+        Buffer.from(CANONICAL_TAIRA_I105, "utf8"),
+        "1",
+        String(nonceBeforeFailedBurns),
+      ),
       { feeLimit: METHOD_FEE_LIMIT },
       "unaligned Taira burn amount",
     ),
   "unaligned Taira burn amount",
+);
+await expectConfirmedTvmFailure(
+  () =>
+    sendAndConfirmTvm(
+      bridgeClient,
+      bridge.transferToTaira(
+        Buffer.from(CANONICAL_TAIRA_I105, "utf8"),
+        String(SCALE),
+        String(nonceBeforeFailedBurns + 1n),
+      ),
+      { feeLimit: METHOD_FEE_LIMIT },
+      "mismatched source transfer nonce",
+    ),
+  "mismatched source transfer nonce",
 );
 await expectConfirmedTvmFailure(
   () =>
@@ -1015,7 +1037,11 @@ assert.equal(asInteger(await token.balanceOf(ownerAddress).call()), balanceBefor
 
 const sourceReceipt = await sendAndConfirmTvm(
   bridgeClient,
-  bridge.transferToTaira(Buffer.from(CANONICAL_TAIRA_I105, "utf8"), String(SCALE)),
+  bridge.transferToTaira(
+    Buffer.from(CANONICAL_TAIRA_I105, "utf8"),
+    String(SCALE),
+    String(nonceBeforeFailedBurns),
+  ),
   { feeLimit: METHOD_FEE_LIMIT },
   "valid source transfer",
 );

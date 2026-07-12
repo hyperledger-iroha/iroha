@@ -1,5 +1,5 @@
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     collections::{BTreeMap, HashMap, HashSet},
     sync::Arc,
 };
@@ -824,6 +824,7 @@ pub struct SemanticContext {
     typed_hir_nodes: RefCell<BTreeMap<HirId, Type>>,
     pending_diagnostic: RefCell<Option<crate::semantic_diagnostics::SemanticDiagnostic>>,
     required_list_capacity: RefCell<Option<u8>>,
+    next_synthetic_binding: Cell<usize>,
 }
 
 impl SemanticContext {
@@ -1612,6 +1613,18 @@ impl SemanticContext {
         self.pending_diagnostic.borrow_mut().take();
     }
 
+    fn fresh_aggregate_capture(&self) -> String {
+        let index = self.next_synthetic_binding.get();
+        self.next_synthetic_binding.set(
+            index
+                .checked_add(1)
+                .expect("aggregate capture counter must not overflow"),
+        );
+        // NUL cannot occur in a source identifier, so this compiler-owned
+        // binding cannot collide with a user local in any nested scope.
+        format!("\0aggregate_capture#{index}")
+    }
+
     /// Check whether one expression can initialize `expected` without letting
     /// a speculative error replace the diagnostic for the enclosing invalid
     /// construct. Typed expression analysis is otherwise side-effect free; a
@@ -1656,6 +1669,7 @@ impl SemanticContext {
         self.typed_hir_nodes.borrow_mut().clear();
         self.pending_diagnostic.borrow_mut().take();
         self.required_list_capacity.borrow_mut().take();
+        self.next_synthetic_binding.set(0);
     }
 }
 
@@ -4952,9 +4966,16 @@ fn bind_struct_fields_rec(
     let resolved_ty = resolve_struct_type(ty);
     if let Type::Struct { fields, .. } = resolved_ty {
         for (i, (_fname, fty)) in fields.iter().enumerate() {
+            // `base_expr` has already been captured by the synthetic binding
+            // named `base_name`. Project from that binding so an effectful
+            // aggregate expression is never evaluated once per field.
+            let captured = TypedExpr {
+                expr: ExprKind::Ident(base_name.to_owned()),
+                ty: base_expr.ty.clone(),
+            };
             let member = TypedExpr {
                 expr: ExprKind::Member {
-                    object: Box::new(base_expr.clone()),
+                    object: Box::new(captured),
                     field: i.to_string(),
                 },
                 ty: resolve_struct_type(fty),
@@ -4984,26 +5005,19 @@ fn bind_tuple_fields_rec(
     if let Type::Tuple(elements) = resolve_struct_type(ty) {
         for (idx, elem_ty) in elements.iter().enumerate() {
             let resolved_elem_ty = resolve_struct_type(elem_ty);
-            let element_expr = if let ExprKind::Tuple(items) = base_expr.kind() {
-                if let Some(item) = items.get(idx) {
-                    item.clone()
-                } else {
-                    TypedExpr {
-                        expr: ExprKind::Member {
-                            object: Box::new(base_expr.clone()),
-                            field: idx.to_string(),
-                        },
-                        ty: resolved_elem_ty.clone(),
-                    }
-                }
-            } else {
-                TypedExpr {
-                    expr: ExprKind::Member {
-                        object: Box::new(base_expr.clone()),
-                        field: idx.to_string(),
-                    },
-                    ty: resolved_elem_ty.clone(),
-                }
+            // Tuple literals and calls are both evaluated by the parent
+            // binding. Synthetic flattened names only project that captured
+            // value; cloning a literal item here would also duplicate calls
+            // nested inside the literal.
+            let element_expr = TypedExpr {
+                expr: ExprKind::Member {
+                    object: Box::new(TypedExpr {
+                        expr: ExprKind::Ident(base_name.to_owned()),
+                        ty: base_expr.ty.clone(),
+                    }),
+                    field: idx.to_string(),
+                },
+                ty: resolved_elem_ty.clone(),
             };
             let child_name = format!("{base_name}#{idx}");
             vars.insert(child_name.clone(), resolved_elem_ty.clone());
@@ -5316,32 +5330,7 @@ fn analyze_invoke_entrypoint_call(
         });
     }
 
-    let Some(modifiers) = context
-        .function_modifiers
-        .borrow()
-        .get(&target_name)
-        .cloned()
-    else {
-        return Err(SemanticError {
-            code: "K2002",
-            message: format!("invoke_entrypoint targets unknown function `{target_name}`"),
-        });
-    };
-    if !function_is_runtime_entrypoint(&modifiers) {
-        return Err(SemanticError {
-            code: "E_TEST_ENTRYPOINT_KIND",
-            message: format!(
-                "invoke_entrypoint may only target kotoage/view/hajimari/kaizen entrypoints, got `{target_name}`"
-            ),
-        });
-    }
-
-    let ret_ty = context
-        .function_returns
-        .borrow()
-        .get(&target_name)
-        .cloned()
-        .unwrap_or(Type::Unit);
+    let ret_ty = runtime_entrypoint_return_type(context, &target_name)?;
 
     Ok(TypedExpr {
         expr: ExprKind::Call {
@@ -5356,31 +5345,49 @@ fn runtime_entrypoint_return_type(
     context: &SemanticContext,
     target_name: &str,
 ) -> Result<Type, SemanticError> {
-    let Some(modifiers) = context
+    if let Some(modifiers) = context
         .function_modifiers
         .borrow()
         .get(target_name)
         .cloned()
-    else {
-        return Err(SemanticError {
-            code: "K2002",
-            message: format!("unknown runtime entrypoint `{target_name}`"),
-        });
-    };
-    if !function_is_runtime_entrypoint(&modifiers) {
-        return Err(SemanticError {
-            code: "E_TEST_ENTRYPOINT_KIND",
-            message: format!(
-                "runtime test helpers may only target kotoage/view/hajimari/kaizen entrypoints, got `{target_name}`"
-            ),
-        });
+    {
+        if !function_is_runtime_entrypoint(&modifiers) {
+            return Err(SemanticError {
+                code: "E_TEST_ENTRYPOINT_KIND",
+                message: format!(
+                    "runtime test helpers may only target kotoage/view/hajimari/kaizen entrypoints, got `{target_name}`"
+                ),
+            });
+        }
+        return Ok(context
+            .function_returns
+            .borrow()
+            .get(target_name)
+            .cloned()
+            .unwrap_or(Type::Unit));
     }
-    Ok(context
-        .function_returns
+
+    if let Some(signature) = context
+        .external_functions
         .borrow()
         .get(target_name)
         .cloned()
-        .unwrap_or(Type::Unit))
+    {
+        if !function_is_runtime_entrypoint(&signature.modifiers) {
+            return Err(SemanticError {
+                code: "E_TEST_ENTRYPOINT_KIND",
+                message: format!(
+                    "runtime test helpers may only target kotoage/view/hajimari/kaizen entrypoints, got `{target_name}`"
+                ),
+            });
+        }
+        return Ok(signature.return_type);
+    }
+
+    Err(SemanticError {
+        code: "K2002",
+        message: format!("unknown runtime entrypoint `{target_name}`"),
+    })
 }
 
 fn analyze_invoke_entrypoint_as_call(
@@ -5851,20 +5858,16 @@ fn analyze_statement_inner(
                         }
                         Type::Struct { fields, .. } => {
                             for (i, (_fname, fty)) in fields.iter().enumerate() {
-                                let direct = match expr.kind() {
-                                    ExprKind::Tuple(values) => values.get(i),
-                                    ExprKind::StructLiteral { fields, .. } => {
-                                        fields.get(i).map(|(_, value)| value)
-                                    }
-                                    _ => None,
-                                };
-                                let val_expr = direct.cloned().unwrap_or_else(|| TypedExpr {
+                                let val_expr = TypedExpr {
                                     expr: ExprKind::Member {
-                                        object: Box::new(expr.clone()),
+                                        object: Box::new(TypedExpr {
+                                            expr: ExprKind::Ident(name.clone()),
+                                            ty: expr.ty.clone(),
+                                        }),
                                         field: i.to_string(),
                                     },
                                     ty: fty.clone(),
-                                });
+                                };
                                 let sname = format!("{name}#{i}");
                                 let field_ty = resolve_struct_type(fty);
                                 vars.insert(sname.clone(), field_ty.clone());
@@ -5911,12 +5914,22 @@ fn analyze_statement_inner(
                                     ),
                                 });
                             }
+                            let capture_name = context.fresh_aggregate_capture();
+                            let captured = TypedExpr {
+                                expr: ExprKind::Ident(capture_name.clone()),
+                                ty: expr.ty.clone(),
+                            };
+                            vars.insert(capture_name.clone(), expr.ty.clone());
+                            out.push(TypedStatement::Let {
+                                name: capture_name,
+                                value: expr.clone(),
+                            });
                             // Destructure by emitting member-access typed expressions for each field.
                             for (i, name) in names.iter().enumerate() {
                                 let ti = ts.get(i).cloned().expect("tuple arity already validated");
                                 let member = TypedExpr {
                                     expr: ExprKind::Member {
-                                        object: Box::new(expr.clone()),
+                                        object: Box::new(captured.clone()),
                                         field: i.to_string(),
                                     },
                                     ty: ti.clone(),
@@ -5948,25 +5961,28 @@ fn analyze_statement_inner(
                                     ),
                                 });
                             }
+                            let capture_name = context.fresh_aggregate_capture();
+                            let captured = TypedExpr {
+                                expr: ExprKind::Ident(capture_name.clone()),
+                                ty: expr.ty.clone(),
+                            };
+                            vars.insert(capture_name.clone(), expr.ty.clone());
+                            out.push(TypedStatement::Let {
+                                name: capture_name,
+                                value: expr.clone(),
+                            });
                             for (i, name) in names.iter().enumerate() {
                                 let (_fname, ti) = fields
                                     .get(i)
                                     .cloned()
                                     .expect("struct arity already validated");
-                                let direct = match expr.kind() {
-                                    ExprKind::Tuple(values) => values.get(i),
-                                    ExprKind::StructLiteral { fields, .. } => {
-                                        fields.get(i).map(|(_, value)| value)
-                                    }
-                                    _ => None,
-                                };
-                                let val_expr = direct.cloned().unwrap_or_else(|| TypedExpr {
+                                let val_expr = TypedExpr {
                                     expr: ExprKind::Member {
-                                        object: Box::new(expr.clone()),
+                                        object: Box::new(captured.clone()),
                                         field: i.to_string(),
                                     },
                                     ty: resolve_struct_type(&ti),
-                                });
+                                };
                                 let field_ty = resolve_struct_type(&ti);
                                 if name != "_" {
                                     vars.insert(name.clone(), field_ty.clone());
@@ -12193,9 +12209,19 @@ fn analyze_expr_expected_inner(
                     })
                 }
                 _ => {
-                    if let Some(modifiers) = context.function_modifiers.borrow().get(&name)
-                        && modifiers.kind != FunctionKind::Private
-                    {
+                    let local_runtime_entrypoint = context
+                        .function_modifiers
+                        .borrow()
+                        .get(&name)
+                        .is_some_and(|modifiers| modifiers.kind != FunctionKind::Private);
+                    let external_runtime_entrypoint = context
+                        .external_functions
+                        .borrow()
+                        .get(&name)
+                        .is_some_and(|signature| {
+                            function_is_runtime_entrypoint(&signature.modifiers)
+                        });
+                    if local_runtime_entrypoint || external_runtime_entrypoint {
                         return Err(SemanticError {
                             code: "K2004",
                             message: format!(
@@ -16333,6 +16359,55 @@ mod tests {
     }
 
     #[test]
+    fn struct_destructuring_uses_declaration_order_for_out_of_order_literals() {
+        let program = parse(
+            "struct Pair { int first, string second } \
+             fn f() { \
+                 let pair = Pair { second: \"two\", first: 1 }; \
+                 let (left, right) = Pair { second: \"four\", first: 3 }; \
+             }",
+        )
+        .expect("parse named struct literals");
+        let typed = analyze(&program).expect("analyze named struct literals");
+        let TypedItem::Function(function) = &typed.items[0];
+
+        let binding = |suffix: &str| {
+            function
+                .body
+                .statements
+                .iter()
+                .find_map(|statement| match statement {
+                    TypedStatement::Let { name, value }
+                        if name.rsplit("::").next() == Some(suffix) =>
+                    {
+                        Some(value)
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("missing binding `{suffix}`"))
+        };
+
+        let is_projection = |value: &TypedExpr, base: Option<&str>, index: &str| {
+            matches!(
+                &value.expr,
+                ExprKind::Member { object, field }
+                    if field == index
+                        && matches!(
+                            object.kind(),
+                            ExprKind::Ident(name)
+                                if base.is_none_or(|base| {
+                                    name.rsplit("::").next() == Some(base)
+                                })
+                        )
+            )
+        };
+        assert!(is_projection(binding("pair#0"), Some("pair"), "0"));
+        assert!(is_projection(binding("pair#1"), Some("pair"), "1"));
+        assert!(is_projection(binding("left"), None, "0"));
+        assert!(is_projection(binding("right"), None, "1"));
+    }
+
+    #[test]
     fn state_map_iteration_accepts_pointer_keys() {
         let program = parse(
             "state StateMap<Name, int> Items; \
@@ -17207,6 +17282,78 @@ mod tests {
         )
         .expect("parse tuple invoke_entrypoint_as");
         analyze_test(&program).expect("tuple-returning target should type-check");
+    }
+
+    #[test]
+    fn standalone_test_helpers_preserve_external_entrypoint_kind() {
+        let target = parse(
+            r#"
+            seiyaku Demo {
+                hajimari() {}
+                kotoage fn run() authorize("Run") {}
+                fn helper() {}
+            }
+            "#,
+        )
+        .expect("parse target contract");
+        let signatures = SemanticContext::with_capabilities(false, true)
+            .resolve_function_signatures(&target)
+            .expect("resolve target signatures");
+
+        let accepted = parse(
+            r#"
+            module Tests {
+                #[test]
+                fn invokes_lifecycle() {
+                    test::invoke_entrypoint_as(
+                        actor: "issuer",
+                        entrypoint: "hajimari",
+                        arguments: Json::parse("{}"),
+                    );
+                }
+            }
+            "#,
+        )
+        .expect("parse standalone test module");
+        SemanticContext::with_capabilities(false, true)
+            .analyze_with_external_functions(&accepted, &signatures)
+            .expect("external lifecycle entrypoint should retain its kind");
+
+        let rejected = parse(
+            r#"
+            module Tests {
+                #[test]
+                fn invokes_private_helper() {
+                    test::invoke_entrypoint_as(
+                        actor: "issuer",
+                        entrypoint: "helper",
+                        arguments: Json::parse("{}"),
+                    );
+                }
+            }
+            "#,
+        )
+        .expect("parse private-helper test module");
+        let error = SemanticContext::with_capabilities(false, true)
+            .analyze_with_external_functions(&rejected, &signatures)
+            .expect_err("private target helper must not become an entrypoint");
+        assert_eq!(error.code(), "E_TEST_ENTRYPOINT_KIND");
+
+        let direct_call = parse(
+            r#"
+            module Tests {
+                #[test]
+                fn bypasses_contract_boundary() {
+                    run();
+                }
+            }
+            "#,
+        )
+        .expect("parse direct external-entrypoint call");
+        let error = SemanticContext::with_capabilities(false, true)
+            .analyze_with_external_functions(&direct_call, &signatures)
+            .expect_err("external entrypoints must retain the contract-call boundary");
+        assert_eq!(error.code(), "K2004");
     }
 
     #[test]

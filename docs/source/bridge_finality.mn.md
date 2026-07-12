@@ -4,8 +4,8 @@ direction: ltr
 source: docs/source/bridge_finality.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 5e28e5c38283ad6be40a0fc48e0312797f490542a143f4cefdd209aaf8099ac5
-source_last_modified: "2026-07-11T20:38:35.470900+00:00"
+source_hash: 1cbd248fe14e63d00f002f09e1663181f3ab9bd99124ffeb89c56763b784046b
+source_last_modified: "2026-07-12"
 translation_last_reviewed: 2026-07-12
 translator: machine-google-reviewed
 ---
@@ -45,11 +45,14 @@ CommitQC түүнийг баталгаажуулна. Finalized snapshot нь д
 
 ## Тогтвортой хадгалалт ба шалгалт
 
-Sumeragi v2 apply path artifact-ийг шалгаад өөрчлөгдөшгүй Kura sidecar болгон хадгална.
-Proof builder canonical block болон sidecar-ийг уншиж, түүхэн PoP эсвэл certificate-ийг
-өөрчлөгдөж болох одоогийн world state-ээс дахин бүтээдэггүй. Байхгүй, эвдэрсэн,
-зөрчилтэй эсвэл баталгаажихгүй sidecar-ийг fail closed байдлаар татгалзана; хүртээмж нь
-сүүлийн үеийн in-memory history window-оор хязгаарлагдахгүй.
+Finality нийтлэх эсвэл block body-г eviction хийхээс өмнө Kura яг canonical header болон
+root-authenticated SCCP archive-ийг immutable retained-block record-д бичээд, exact V2
+artifact-ийг тусдаа immutable finality record-д хадгална. Хоёр бичлэг idempotent бөгөөд
+ижил height-ийн зөрчлийг татгалзана. `build_finality_proof` зөвхөн retained header ба
+verified finality record-ийг уншина; historical block body эсвэл mutable world state-ийн
+PoP-г хэзээ ч ашиглахгүй. Restart үед header/archive/artifact/hash association-ийг дахин
+шалгана. Body eviction нь зөв proof-ийг алга болгохгүй; байхгүй, эвдэрсэн, зөрчилтэй
+эсвэл баталгаажихгүй record fail closed болно.
 
 Stateless verifier нь version, chain, height, header hash, header-ийн canonical predecessor
 ба view, context, subject, CommitQC-г яг тааруулж, artifact доторх бүх PoP-ийг шалгана.
@@ -80,6 +83,7 @@ message artifact хүртэлх шууд successor бүрийг шалгана.
 - `GET /v1/bridge/finality/{height}` нь `BridgeFinalityProof` буцаана;
 - `GET /v1/bridge/finality/bundle/{height}` нь `BridgeFinalityBundle` буцаана.
 
-Block эсвэл яг таг тогтвортой v2 artifact байхгүй буюу хүчингүй бол хоёр endpoint хоёулаа
-fail closed болно. Үл мэдэгдэх талбар, дэмжигдээгүй version, хуучирсан proof shape-ийг
+Retained canonical header эсвэл яг таг тогтвортой v2 artifact байхгүй буюу хүчингүй бол
+хоёр endpoint хоёулаа fail closed болно. Historical block body eviction нь зөв proof-ийг
+алга болгохгүй. Үл мэдэгдэх талбар, дэмжигдээгүй version, хуучирсан proof shape-ийг
 татгалзах ёстой.

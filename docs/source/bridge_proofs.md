@@ -182,6 +182,14 @@ encodes the revision immediately after the nonce. Its route-config asset tuple
 is exactly `(keccak256(assetKey), keccak256(routeId), uint32 revision,
 amountMultiplier)`.
 
+The TRON source route uses the exact
+`transferToTaira(bytes,uint256,uint64 expectedNonce)` ABI. Successful execution
+requires `expectedNonce == transferNonce`, then writes that same value into the
+canonical payload before incrementing storage. Native admission reconstructs
+the complete ABI call from the payload recipient, scaled amount, and nonce, so
+the retired two-argument selector, a stale or future nonce, and an exhausted
+`uint64` nonce all fail closed.
+
 Deployment tooling precomputes the route address, deploys the wrapped token
 with that exact immutable bridge, then deploys the route at the precomputed
 address with the exact external `tokenAddress`. The route constructor requires
@@ -195,7 +203,7 @@ differently. The production smoke enforces the 24,576-byte runtime limit for
 every deployed contract role.
 
 The checked-in artifact lock pins corridor manifest digest
-`d2d595bc62e39eabc604a94c0c0b91660c80a8bfdb7d6d67ce04fcd3069303b0`
+`82315c500d019c3dbcd730b73a5b9812ec0fb842b6ad012311e8103ec8a4c6ea`
 and canonical compiler-lock digest
 `4e47b010e2c6475a3711d79f22ba58355534a5b519c99609094bf9b97d968c99`.
 Any compiler identity, setting, source input, creation bytecode, deployed

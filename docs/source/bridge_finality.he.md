@@ -4,8 +4,8 @@ direction: rtl
 source: docs/source/bridge_finality.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 5e28e5c38283ad6be40a0fc48e0312797f490542a143f4cefdd209aaf8099ac5
-source_last_modified: "2026-07-11T20:38:35.470900+00:00"
+source_hash: 1cbd248fe14e63d00f002f09e1663181f3ab9bd99124ffeb89c56763b784046b
+source_last_modified: "2026-07-12"
 translation_last_reviewed: 2026-07-12
 ---
 
@@ -46,10 +46,13 @@ id, ה-CommitQC של האב מאמת אותו לפני שיוכל לאשר את 
 
 ## התמדה ואימות
 
-מסלול ה-apply של Sumeragi v2 מאמת את ה-artifact ושומר אותו כ-Kura sidecar בלתי משתנה.
-בונה ההוכחה קורא את הבלוק הקנוני ואת ה-sidecar שלו, ואינו בונה מחדש PoP או תעודות
-היסטוריות מתוך ה-world state הנוכחי והמשתנה. sidecar חסר, פגום, סותר או בלתי ניתן
-לאימות גורם לכשל סגור; הזמינות אינה מוגבלת לחלון היסטוריה עדכני בזיכרון.
+לפני פרסום finality או פינוי גוף הבלוק, Kura כותב את ה־canonical header המדויק ואת
+ארכיון SCCP המאומת בשורש אל immutable retained-block record, ולאחר מכן שומר את exact
+V2 artifact ברשומת finality בלתי־משתנה נפרדת. שתי הכתיבות idempotent ודוחות כל
+קונפליקט באותו גובה. `build_finality_proof` קורא רק retained header ורשומת finality
+מאומתת; הוא לעולם אינו קורא historical block body או מחליף PoP ב־world state משתנה.
+בעת restart מאומת מחדש הקשר header/archive/artifact/hash. פינוי הגוף אינו מעלים proof
+תקין; רשומה חסרה, פגומה, סותרת או בלתי ניתנת לאימות גורמת לכשל סגור.
 
 המאמת חסר-המצב מתאים במדויק גרסה, שרשרת, גובה, hash של header,
 ה-predecessor הקנוני ו-view, הקשר, subject ו-CommitQC,
@@ -79,7 +82,8 @@ SCCP משתמש באותו `BridgeFinalityProof`. אין להסתפק בחתימ
 - `GET /v1/bridge/finality/{height}` מחזיר `BridgeFinalityProof`;
 - `GET /v1/bridge/finality/bundle/{height}` מחזיר `BridgeFinalityBundle`.
 
-שני הנתיבים נכשלים באופן סגור אם הבלוק או ה-artifact המדויק והמתמיד של v2 חסרים או
-אינם תקפים. יש לדחות שדות, גרסאות וצורות הוכחה שיצאו משימוש ואינם מוכרים.
+שני הנתיבים נכשלים באופן סגור אם ה־canonical header השמור או ה־v2 artifact המדויק
+חסרים או אינם תקפים. פינוי גוף בלוק היסטורי אינו הופך proof תקין לבלתי זמין. יש לדחות
+שדות, גרסאות וצורות הוכחה שיצאו משימוש ואינם מוכרים.
 
 </div>

@@ -1674,8 +1674,10 @@ LockBelowHighest ==
   \A node \in ValidatorIds: lockRank[node] <= highestRank[node]
 
 DecisionAgreement ==
-  \A left, right \in decisions:
-    left.qc.context = right.qc.context => left.qc.subject = right.qc.subject
+  /\ \A decision \in decisions: decision.qc \in commitQCs
+  /\ \A left, right \in decisions:
+       left.qc.context = right.qc.context
+         => left.qc.subject = right.qc.subject
 
 OldViewCommitQCAccepted ==
   \A request \in pendingDecision:
