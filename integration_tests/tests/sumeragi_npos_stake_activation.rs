@@ -341,7 +341,7 @@ fn stake_genesis_post_topology_transactions(
         Register::domain(Domain::new(nexus_domain.clone())).into(),
         Register::asset_definition(definition).into(),
         Register::asset_definition(fee_definition).into(),
-        Mint::asset_numeric(
+        Mint::asset_quantity(
             NEXUS_FEE_SEED_AMOUNT,
             AssetId::new(fee_asset_id.clone(), ALICE_ID.clone()),
         )
@@ -349,7 +349,7 @@ fn stake_genesis_post_topology_transactions(
     ];
     if genesis_account_id != ALICE_ID.clone() {
         bootstrap_tx.push(
-            Mint::asset_numeric(
+            Mint::asset_quantity(
                 NEXUS_FEE_SEED_AMOUNT,
                 AssetId::new(fee_asset_id.clone(), genesis_account_id.clone()),
             )
@@ -363,10 +363,10 @@ fn stake_genesis_post_topology_transactions(
             bootstrap_tx.push(Register::account(Account::new(validator_id.clone())).into());
         }
         bootstrap_tx.push(
-            Mint::asset_numeric(stake, AssetId::new(stake_asset_id.clone(), validator_id)).into(),
+            Mint::asset_quantity(stake, AssetId::new(stake_asset_id.clone(), validator_id)).into(),
         );
         bootstrap_tx.push(
-            Mint::asset_numeric(
+            Mint::asset_quantity(
                 NEXUS_FEE_SEED_AMOUNT,
                 AssetId::new(fee_asset_id.clone(), validator_account_id_for_index(index)),
             )

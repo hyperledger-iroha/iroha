@@ -64,3 +64,5 @@ mod kotodama_state_helper_params;
 mod kotodama_state_host_calls;
 #[path = "../kotodama_state_map_dynamic_lowering.rs"]
 mod kotodama_state_map_dynamic_lowering;
+#[path = "../repository_ivm_artifacts.rs"]
+mod repository_ivm_artifacts;

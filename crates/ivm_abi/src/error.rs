@@ -48,7 +48,12 @@ pub enum VmTrapKind {
     AssertionFailed,
     ExceededMaxCycles,
     InvalidMetadata,
+    UnsupportedProgramVersion,
+    UnsupportedProgramFeatureBits,
+    UnsupportedProgramAbiVersion,
+    ProgramVectorLengthTooLarge,
     ArtifactAbiHashMismatch,
+    GenericSyscallNotAllowed,
     InvalidVectorLength,
     MissingHalt,
     PermissionDenied,
@@ -172,12 +177,41 @@ pub enum VMError {
     AssertionFailed,
     ExceededMaxCycles,
     InvalidMetadata,
+    /// The fixed header declares a version outside the first-release 1.0/1.1 surface.
+    UnsupportedProgramVersion {
+        /// Declared major version.
+        major: u8,
+        /// Declared minor version.
+        minor: u8,
+    },
+    /// The fixed header contains mode bits unknown to ABI V1.
+    UnsupportedProgramFeatureBits {
+        /// Unknown feature bits only, excluding recognized bits.
+        bits: u8,
+    },
+    /// The fixed header selects an ABI version unavailable in this release.
+    UnsupportedProgramAbiVersion {
+        /// Declared ABI version.
+        version: u8,
+    },
+    /// The fixed header requests more logical vector lanes than ABI V1 permits.
+    ProgramVectorLengthTooLarge {
+        /// Declared vector length.
+        vector_length: u8,
+        /// Maximum accepted vector length.
+        max_allowed: u8,
+    },
     /// A self-describing artifact targets a different canonical ABI descriptor.
     ArtifactAbiHashMismatch {
         /// ABI descriptor hash required by the runtime.
         expected: [u8; 32],
         /// Authenticated ABI descriptor hash carried by the artifact.
         actual: [u8; 32],
+    },
+    /// A contract-bound syscall appeared in an ABI-authenticated generic program.
+    GenericSyscallNotAllowed {
+        /// Rejected syscall number.
+        syscall: u32,
     },
     InvalidVectorLength {
         vector_length: usize,
@@ -326,11 +360,31 @@ impl fmt::Display for VMError {
             VMError::AssertionFailed => write!(f, "assertion failed (constraint violation)"),
             VMError::ExceededMaxCycles => write!(f, "execution exceeded max cycles"),
             VMError::InvalidMetadata => write!(f, "invalid program metadata"),
+            VMError::UnsupportedProgramVersion { major, minor } => {
+                write!(f, "unsupported IVM program version {major}.{minor}")
+            }
+            VMError::UnsupportedProgramFeatureBits { bits } => {
+                write!(f, "unsupported IVM program feature bits 0x{bits:02x}")
+            }
+            VMError::UnsupportedProgramAbiVersion { version } => {
+                write!(f, "unsupported IVM program ABI version {version}")
+            }
+            VMError::ProgramVectorLengthTooLarge {
+                vector_length,
+                max_allowed,
+            } => write!(
+                f,
+                "IVM program vector length {vector_length} exceeds maximum {max_allowed}"
+            ),
             VMError::ArtifactAbiHashMismatch { expected, actual } => write!(
                 f,
                 "contract artifact ABI hash mismatch (expected={}, actual={})",
                 HexBytes(expected),
                 HexBytes(actual)
+            ),
+            VMError::GenericSyscallNotAllowed { syscall } => write!(
+                f,
+                "syscall 0x{syscall:02x} is not allowed in a generic IVM program"
             ),
             VMError::InvalidVectorLength { vector_length } => {
                 write!(f, "invalid vector length {vector_length}")

@@ -33,7 +33,7 @@ fn client_sends_transaction_with_invalid_instruction_should_not_see_any_changes(
         AssetDefinition::numeric(__asset_definition_id.clone())
             .with_name(__asset_definition_id.name().to_string())
     });
-    let mint_asset = Mint::asset_numeric(
+    let mint_asset = Mint::asset_quantity(
         200u32,
         AssetId::new(wrong_asset_definition_id.clone(), account_id.clone()),
     );

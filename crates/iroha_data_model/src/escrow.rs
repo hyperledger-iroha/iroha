@@ -1,7 +1,7 @@
 //! Generic asset escrow records and identifiers.
 
 use iroha_crypto::Hash;
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::Quantity;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 
@@ -97,9 +97,9 @@ pub struct AssetEscrowResolution {
     /// Account that resolved the dispute.
     pub resolver: AccountId,
     /// Amount released to the buyer.
-    pub buyer_amount: Numeric,
+    pub buyer_amount: Quantity,
     /// Amount refunded to the seller.
-    pub seller_amount: Numeric,
+    pub seller_amount: Quantity,
     /// Evidence or judgement hashes attached to the resolution.
     pub evidence_hashes: Vec<Hash>,
     /// Unix timestamp (milliseconds) when the resolution was recorded.
@@ -123,7 +123,7 @@ pub struct AssetEscrowRecord {
     /// Escrowed asset definition.
     pub asset_definition: AssetDefinitionId,
     /// Total amount held by the escrow.
-    pub amount: Numeric,
+    pub amount: Quantity,
     /// Deterministic protocol custody account holding the locked balance.
     pub custody: AccountId,
     /// Current lifecycle status.
@@ -131,7 +131,7 @@ pub struct AssetEscrowRecord {
     /// Escrow behavior family.
     pub kind: AssetEscrowKind,
     /// Remaining amount still held in custody.
-    pub remaining_amount: Numeric,
+    pub remaining_amount: Quantity,
     /// Optional account required to draw down a generic lock.
     #[cfg_attr(feature = "json", norito(skip_serializing_if = "Option::is_none"))]
     pub release_authority: Option<AccountId>,
@@ -289,6 +289,30 @@ pub mod prelude {
 mod tests {
     use super::*;
     use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_primitives::numeric::Numeric;
+    use norito::codec::{Decode, Encode};
+
+    #[derive(Encode)]
+    struct ForgedAssetEscrowRecord {
+        id: EscrowId,
+        seller: AccountId,
+        buyer: Option<AccountId>,
+        asset_definition: AssetDefinitionId,
+        amount: Numeric,
+        custody: AccountId,
+        status: AssetEscrowStatus,
+        kind: AssetEscrowKind,
+        remaining_amount: Numeric,
+        release_authority: Option<AccountId>,
+        expires_at_ms: Option<u64>,
+        evidence_hashes: Vec<Hash>,
+        created_at_ms: u64,
+        accepted_at_ms: Option<u64>,
+        payment_sent_at_ms: Option<u64>,
+        disputed_at_ms: Option<u64>,
+        closed_at_ms: Option<u64>,
+        resolution: Option<AssetEscrowResolution>,
+    }
 
     fn checked_seed_keypair(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
@@ -309,11 +333,11 @@ mod tests {
             seller: seller.clone(),
             buyer: Some(buyer.clone()),
             asset_definition,
-            amount: Numeric::new(42_u32, 0),
+            amount: Quantity::from(42_u32),
             custody: seller,
             status: AssetEscrowStatus::PaymentSent,
             kind: AssetEscrowKind::Marketplace,
-            remaining_amount: Numeric::new(42_u32, 0),
+            remaining_amount: Quantity::from(42_u32),
             release_authority: None,
             expires_at_ms: None,
             evidence_hashes: vec![Hash::new("evidence")],
@@ -329,6 +353,39 @@ mod tests {
         let decoded: AssetEscrowRecord = norito::decode_from_bytes(&bytes).expect("decode");
         assert_eq!(decoded, record);
         assert_eq!(decoded.buyer, Some(buyer));
+    }
+
+    #[test]
+    fn negative_numeric_payload_cannot_decode_as_durable_asset_escrow_quantity() {
+        let seller = AccountId::new(checked_seed_keypair(0x53).public_key().clone());
+        let asset_definition: AssetDefinitionId =
+            "61CtjvNd9T3THAR65GsMVHr82Bjc".parse().expect("asset id");
+        let forged = ForgedAssetEscrowRecord {
+            id: EscrowId::new(Hash::new("negative-escrow")),
+            seller: seller.clone(),
+            buyer: None,
+            asset_definition,
+            amount: Numeric::new(-1_i32, 0),
+            custody: seller,
+            status: AssetEscrowStatus::Open,
+            kind: AssetEscrowKind::Marketplace,
+            remaining_amount: Numeric::zero(),
+            release_authority: None,
+            expires_at_ms: None,
+            evidence_hashes: Vec::new(),
+            created_at_ms: 1,
+            accepted_at_ms: None,
+            payment_sent_at_ms: None,
+            disputed_at_ms: None,
+            closed_at_ms: None,
+            resolution: None,
+        };
+        let encoded = forged.encode();
+
+        assert!(
+            AssetEscrowRecord::decode(&mut encoded.as_slice()).is_err(),
+            "a negative signed payload must not decode as a durable escrow quantity"
+        );
     }
 
     #[test]

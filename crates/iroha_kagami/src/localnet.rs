@@ -2345,7 +2345,7 @@ fn extend_genesis(
             ));
         }
         if asset.quantity > 0 {
-            builder = builder.append_instruction(Mint::asset_numeric(
+            builder = builder.append_instruction(Mint::asset_quantity(
                 asset.quantity,
                 AssetId::new(asset_def.clone(), asset.mint_to.clone()),
             ));
@@ -2809,11 +2809,11 @@ fn append_localnet_npos_bootstrap(
                 builder.append_instruction(Register::account(Account::new(validator_id.clone())));
             registrations.accounts.insert(validator_id.clone());
         }
-        builder = builder.append_instruction(Mint::asset_numeric(
+        builder = builder.append_instruction(Mint::asset_quantity(
             stake_mint_amount,
             AssetId::new(stake_asset_id.clone(), validator_id.clone()),
         ));
-        builder = builder.append_instruction(Mint::asset_numeric(
+        builder = builder.append_instruction(Mint::asset_quantity(
             stake_amount,
             AssetId::new(fee_asset_id.clone(), validator_id.clone()),
         ));
@@ -2823,7 +2823,7 @@ fn append_localnet_npos_bootstrap(
             builder.append_instruction(Register::account(Account::new(client_account_id.clone())));
         registrations.accounts.insert(client_account_id.clone());
     }
-    builder = builder.append_instruction(Mint::asset_numeric(
+    builder = builder.append_instruction(Mint::asset_quantity(
         LOCALNET_FAUCET_AUTHORITY_BALANCE,
         AssetId::new(fee_asset_id, client_account_id),
     ));

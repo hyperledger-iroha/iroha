@@ -42,10 +42,10 @@ use tokio::sync::broadcast;
 const TEST_CHAIN_ID: &str = "00000000-0000-0000-0000-000000000000";
 
 fn disable_nexus_fee_admission(nexus: &mut Nexus) {
-    nexus.fees.base_fee = Numeric::zero();
-    nexus.fees.per_byte_fee = Numeric::zero();
-    nexus.fees.per_instruction_fee = Numeric::zero();
-    nexus.fees.per_gas_unit_fee = Numeric::zero();
+    nexus.fees.base_fee = Quantity::zero();
+    nexus.fees.per_byte_fee = Quantity::zero();
+    nexus.fees.per_instruction_fee = Quantity::zero();
+    nexus.fees.per_gas_unit_fee = Quantity::zero();
 }
 
 fn build_world(authority: &AccountId, domain_id: &DomainId) -> World {
@@ -126,8 +126,8 @@ fn queue_teu_backlog_matches_metering() -> Result<()> {
         AssetDefinitionId::new(wonderland_domain.clone(), "xor".parse().unwrap());
     let asset_id = AssetId::of(asset_definition_id, account_id.clone());
 
-    let mint = Mint::asset_numeric(10_u32, asset_id.clone());
-    let transfer = Transfer::asset_numeric(asset_id.clone(), 5_u32, account_id.clone());
+    let mint = Mint::asset_quantity(10_u32, asset_id.clone());
+    let transfer = Transfer::asset_quantity(asset_id.clone(), 5_u32, account_id.clone());
     let metadata_instruction = SetKeyValue::account(
         account_id.clone(),
         "teu_key".parse().unwrap(),

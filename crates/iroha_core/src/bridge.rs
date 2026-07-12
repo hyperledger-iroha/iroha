@@ -10,13 +10,16 @@ use iroha_data_model::{
     },
     bridge::{
         BRIDGE_FINALITY_PROOF_VERSION_V1, BridgeCommitment, BridgeFinalityBundle,
-        BridgeFinalityProof, SccpOutboundMessageKeyV1,
+        BridgeFinalityProof, SccpGovernedRouteV1, SccpOutboundMessageKeyV1,
     },
     isi::InstructionBox,
     name::Name,
     transaction::{Executable, TransactionEntrypoint},
 };
-use iroha_sccp::{SccpHubCommitmentV1, SccpPayloadV1, TairaBridgeFinalityProofV1};
+use iroha_sccp::{
+    SccpGroth16Bn254ProofRequestV1, SccpHubCommitmentV1, SccpPayloadV1, TairaBridgeFinalityProofV1,
+    TairaSccpMessageProofV1,
+};
 use mv::storage::StorageReadOnly;
 use thiserror::Error;
 
@@ -312,7 +315,7 @@ pub(crate) fn decode_recorded_sccp_payload_bytes(payload_bytes: &[u8]) -> Option
     {
         return None;
     }
-    iroha_sccp::verify_sccp_payload_structure(&payload).then_some(payload)
+    Some(payload)
 }
 
 #[cfg(test)]
@@ -407,6 +410,9 @@ fn validate_recorded_sccp_payload(
     }
     validate_sora_outbound_sccp_payload_route(&payload)
         .map_err(|error| RecordedSccpMessageValidationError::RouteBinding { error })?;
+    if !iroha_sccp::verify_sccp_payload_structure(&payload) {
+        return Err(RecordedSccpMessageValidationError::InvalidPayload);
+    }
     let key = sccp_outbound_message_key(context.lane, &payload)
         .ok_or(RecordedSccpMessageValidationError::InvalidContext)?;
     let commitment = iroha_sccp::hub_commitment_from_sccp_payload(context, &payload)
@@ -1309,16 +1315,16 @@ pub fn build_finality_proof(
         .bridge_verified_v2_finality_artifact(height)
         .map_err(|reason| BridgeFinalityError::FinalityArtifactRead { height, reason })?
         .ok_or(BridgeFinalityError::FinalityArtifactNotFound(height))?;
-    build_finality_proof_from_verified(state.bridge_chain_id(), height, verified_finality)
+    build_finality_proof_from_verified(state.bridge_chain_id(), height, &verified_finality)
 }
 
 fn build_finality_proof_from_verified(
     chain_id: &ChainId,
     height: u64,
-    verified_finality: VerifiedV2FinalityArtifact,
+    verified_finality: &VerifiedV2FinalityArtifact,
 ) -> Result<BridgeFinalityProof, BridgeFinalityError> {
     let block_header = verified_finality.retained_header().clone();
-    let finality_artifact = verified_finality.into_artifact();
+    let finality_artifact = verified_finality.artifact().clone();
     if finality_artifact.height != height
         || block_header.height().get() != height
         || finality_artifact.height_context.chain_id != *chain_id
@@ -1336,15 +1342,49 @@ fn build_finality_proof_from_verified(
     })
 }
 
+/// Build an SCCP Groth16 request from a bundle bound to one already verified local artifact.
+///
+/// The marker is the trust boundary: Kura mints it after cache-backed verification, while
+/// untrusted [`BridgeStateReadOnly`] providers must mint it with
+/// [`VerifiedV2FinalityArtifact::verify_for_header`]. This function requires the bundle's
+/// canonical finality proof to equal the marker's exact retained header and artifact before
+/// delegating to SCCP's structural request assembler, so it never repeats BLS verification.
+#[must_use]
+pub fn build_sccp_groth16_bn254_proof_request_from_verified_finality_v1(
+    verified_finality: &VerifiedV2FinalityArtifact,
+    bundle: &TairaSccpMessageProofV1,
+    governed_route: &SccpGovernedRouteV1,
+) -> Option<SccpGroth16Bn254ProofRequestV1> {
+    let finality = TairaBridgeFinalityProofV1 {
+        version: BRIDGE_FINALITY_PROOF_VERSION_V1,
+        block_header: verified_finality.retained_header().clone(),
+        finality_artifact: verified_finality.artifact().clone(),
+    };
+    iroha_sccp::build_sccp_groth16_bn254_proof_request_from_structurally_bound_finality_v1(
+        bundle,
+        governed_route,
+        &finality,
+    )
+}
+
 /// Fully authenticated finalized SCCP outbox projection for one exact block height.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ValidatedSccpFinalizedMessagesV1 {
+    verified_finality: VerifiedV2FinalityArtifact,
     /// Exact retained-header finality proof used to authenticate the projection.
     pub finality_proof: BridgeFinalityProof,
     /// Merkle root committed by the retained block header.
     pub commitment_root: [u8; 32],
     /// Canonical messages in zero-based commitment-index order.
     pub messages: Vec<ValidatedSccpOutboundMessageProjectionV1>,
+}
+
+impl ValidatedSccpFinalizedMessagesV1 {
+    /// Borrow the exact cache-backed finality marker used to authenticate this projection.
+    #[must_use]
+    pub const fn verified_finality(&self) -> &VerifiedV2FinalityArtifact {
+        &self.verified_finality
+    }
 }
 
 /// Reconstruct and authenticate all finalized SCCP messages at one exact height.
@@ -1370,7 +1410,7 @@ pub fn validated_sccp_finalized_messages_at_height(
         .bridge_verified_v2_finality_with_sccp_archive(height)?
         .ok_or_else(|| BridgeFinalityError::FinalityArtifactNotFound(height).to_string())?;
     let finality_proof =
-        build_finality_proof_from_verified(state.bridge_chain_id(), height, verified_finality)
+        build_finality_proof_from_verified(state.bridge_chain_id(), height, &verified_finality)
             .map_err(|error| error.to_string())?;
     let Some((commitment_root, messages)) = validate_sccp_outbound_projection_against_root(
         height,
@@ -1381,6 +1421,7 @@ pub fn validated_sccp_finalized_messages_at_height(
         return Ok(None);
     };
     Ok(Some(ValidatedSccpFinalizedMessagesV1 {
+        verified_finality,
         finality_proof,
         commitment_root,
         messages,
@@ -3398,6 +3439,110 @@ mod tests {
                     error: SccpOutboundRouteValidationError::EmptyRouteId,
                 }
             )
+        );
+    }
+
+    #[test]
+    fn recorded_sccp_route_validation_preserves_typed_errors_before_generic_structure() {
+        #[derive(Clone, Copy)]
+        enum Case {
+            NonTextRoute,
+            InvalidRouteUtf8,
+            EmptyRoute,
+            NonTextAsset,
+            InvalidAssetUtf8,
+            EmptyAsset,
+            InvalidAsset,
+            EmptyScope,
+            AmbiguousScope,
+            ScopedAlias,
+            ForeignAssetHome,
+        }
+
+        let valid = sample_transfer_payload(170, [0x22; 20]);
+        let valid_bytes = canonical_test_sccp_payload_bytes(&valid);
+        let context = test_sccp_outbound_context_for_payload_bytes(&valid_bytes);
+        for case in [
+            Case::NonTextRoute,
+            Case::InvalidRouteUtf8,
+            Case::EmptyRoute,
+            Case::NonTextAsset,
+            Case::InvalidAssetUtf8,
+            Case::EmptyAsset,
+            Case::InvalidAsset,
+            Case::EmptyScope,
+            Case::AmbiguousScope,
+            Case::ScopedAlias,
+            Case::ForeignAssetHome,
+        ] {
+            let mut payload = valid.clone();
+            let SccpPayloadV1::Transfer(transfer) = &mut payload;
+            let expected = match case {
+                Case::NonTextRoute => {
+                    transfer.route_id_codec = iroha_sccp::SCCP_CODEC_EVM_ADDRESS20;
+                    SccpOutboundRouteValidationError::NonTextRouteId
+                }
+                Case::InvalidRouteUtf8 => {
+                    transfer.route_id = vec![0xFF];
+                    SccpOutboundRouteValidationError::InvalidRouteIdUtf8
+                }
+                Case::EmptyRoute => {
+                    transfer.route_id.clear();
+                    SccpOutboundRouteValidationError::EmptyRouteId
+                }
+                Case::NonTextAsset => {
+                    transfer.asset_id_codec = iroha_sccp::SCCP_CODEC_EVM_ADDRESS20;
+                    SccpOutboundRouteValidationError::NonTextAssetId
+                }
+                Case::InvalidAssetUtf8 => {
+                    transfer.asset_id = vec![0xFF];
+                    SccpOutboundRouteValidationError::InvalidAssetIdUtf8
+                }
+                Case::EmptyAsset => {
+                    transfer.asset_id.clear();
+                    SccpOutboundRouteValidationError::EmptyAssetKey
+                }
+                Case::InvalidAsset => {
+                    transfer.asset_id = b"bad name".to_vec();
+                    SccpOutboundRouteValidationError::InvalidAssetKey
+                }
+                Case::EmptyScope => {
+                    transfer.asset_id = b"xor#".to_vec();
+                    SccpOutboundRouteValidationError::EmptyAssetScope
+                }
+                Case::AmbiguousScope => {
+                    transfer.asset_id = b"xor#universal#shadow".to_vec();
+                    SccpOutboundRouteValidationError::AmbiguousAssetScope
+                }
+                Case::ScopedAlias => {
+                    transfer.asset_id = b"xor#universal".to_vec();
+                    SccpOutboundRouteValidationError::AssetScopeAlias {
+                        asset_key: "xor".to_owned(),
+                        scope: "universal".to_owned(),
+                    }
+                }
+                Case::ForeignAssetHome => {
+                    transfer.asset_home_domain = iroha_sccp::SCCP_DOMAIN_ETH;
+                    SccpOutboundRouteValidationError::InvalidAssetHomeDomain {
+                        asset_home_domain: iroha_sccp::SCCP_DOMAIN_ETH,
+                        dest_domain: transfer.dest_domain,
+                    }
+                }
+            };
+            let payload_bytes = canonical_test_sccp_payload_bytes(&payload);
+            assert_eq!(
+                validate_recorded_sccp_message_payload_bytes(context, &payload_bytes),
+                Err(RecordedSccpMessageValidationError::RouteBinding { error: expected })
+            );
+        }
+
+        let mut structurally_invalid = valid;
+        let SccpPayloadV1::Transfer(transfer) = &mut structurally_invalid;
+        transfer.amount = 0;
+        let payload_bytes = canonical_test_sccp_payload_bytes(&structurally_invalid);
+        assert_eq!(
+            validate_recorded_sccp_message_payload_bytes(context, &payload_bytes),
+            Err(RecordedSccpMessageValidationError::InvalidPayload)
         );
     }
 

@@ -40,7 +40,7 @@ use iroha_data_model::{
     nexus::{DataSpaceId, LaneId, LaneRelayEnvelope, LaneRelayError},
     peer::PeerId,
 };
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::{Numeric, Quantity};
 use iroha_telemetry::metrics;
 use norito::codec::{Decode, Encode};
 
@@ -725,7 +725,7 @@ pub struct NexusFeeSnapshot {
     /// Failures while executing the fee debit.
     pub transfer_failures_total: u64,
     /// Last attempted fee amount if available.
-    pub last_amount: Option<Numeric>,
+    pub last_amount: Option<Quantity>,
     /// Asset definition id used for the last attempt.
     pub last_asset_id: Option<String>,
     /// Payer classification for the last attempt.
@@ -746,7 +746,7 @@ pub enum NexusFeeEvent {
         /// Account id that paid.
         payer_id: String,
         /// Amount charged.
-        amount: Numeric,
+        amount: Quantity,
         /// Asset definition id string.
         asset_id: String,
     },
@@ -767,9 +767,9 @@ pub enum NexusFeeEvent {
         /// Account that attempted to sponsor.
         payer_id: String,
         /// Maximum allowed fee.
-        max_fee: Numeric,
+        max_fee: Quantity,
         /// Attempted fee.
-        attempted_fee: Numeric,
+        attempted_fee: Quantity,
     },
     /// Fee debit failed to apply.
     TransferFailed {
@@ -778,7 +778,7 @@ pub enum NexusFeeEvent {
         /// Account that attempted to pay.
         payer_id: String,
         /// Amount attempted.
-        amount: Numeric,
+        amount: Quantity,
         /// Asset definition id string.
         asset_id: String,
         /// Human-readable reason.

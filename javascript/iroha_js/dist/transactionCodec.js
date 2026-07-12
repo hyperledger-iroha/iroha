@@ -3,6 +3,11 @@ import { blake3 } from "@noble/hashes/blake3";
 import { AccountAddress } from "./address.js";
 import { blake2b256 } from "./blake2b.js";
 import { verifyEd25519 } from "./crypto.browser.js";
+import {
+  KotodamaQuantity,
+  NumericV1,
+  NumericV1Error,
+} from "./numericV1.js";
 
 const COMPACT_LEN_FLAG = 0x02;
 const UINT16_MAX = 0xffffn;
@@ -23,7 +28,6 @@ const MAX_NUMERIC_BITS = 511;
 const MAX_NUMERIC_MANTISSA_BYTES = 64;
 const MAX_NUMERIC_DECIMAL_DIGITS = 154;
 const MAX_QUANTITY_LITERAL_CODE_UNITS = MAX_NUMERIC_DECIMAL_DIGITS + 1;
-const MAX_NUMERIC_MANTISSA = (1n << BigInt(MAX_NUMERIC_BITS)) - 1n;
 const ASSET_DEFINITION_ADDRESS_VERSION = 1;
 const BASE58_ALPHABET =
   "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
@@ -354,49 +358,36 @@ function normalizeOptionalUnsigned(value, maximum, context, { nonZero = false } 
 }
 
 function normalizeQuantity(value) {
-  let literal;
-  if (typeof value === "bigint") {
-    if (value < 0n || value > MAX_NUMERIC_MANTISSA) {
-      fail("bounds_exceeded", `quantity mantissa exceeds ${MAX_NUMERIC_BITS} bits`);
-    }
-    literal = value.toString();
-  } else if (typeof value === "number") {
-    if (!Number.isFinite(value) || !Number.isSafeInteger(value)) {
+  let quantity;
+  try {
+    if (value instanceof KotodamaQuantity) {
+      quantity = new KotodamaQuantity(value.mantissa, value.scale);
+    } else if (typeof value === "string") {
+      if (value.length > MAX_QUANTITY_LITERAL_CODE_UNITS) {
+        fail("bounds_exceeded", "quantity exceeds the canonical 511-bit positive bound");
+      }
+      quantity = NumericV1.decodeQuantityJson(value);
+    } else if (typeof value === "bigint") {
+      quantity = new KotodamaQuantity(value, 0);
+    } else {
       fail(
         "invalid_quantity",
-        "quantity numbers must be positive safe integers; use a canonical decimal string for fractions",
+        "quantity must be a KotodamaQuantity, canonical quantity string, or bigint; JavaScript numbers are rejected",
       );
     }
-    literal = String(value);
-  } else if (typeof value === "string") {
-    if (value.length > MAX_QUANTITY_LITERAL_CODE_UNITS) {
-      fail("bounds_exceeded", "quantity exceeds the canonical 511-bit positive bound");
+  } catch (error) {
+    if (!(error instanceof NumericV1Error)) throw error;
+    if (error.code === "mantissa_overflow" || error.code === "invalid_scale") {
+      fail("bounds_exceeded", `quantity is outside the bounded Kotodama V1 domain (${error.code})`);
     }
-    literal = value;
-  } else {
-    fail("invalid_quantity", "quantity must be a bigint, safe integer, or decimal string");
+    fail("invalid_quantity", `quantity must be canonical and non-negative (${error.code})`);
   }
-  if (!/^(?:0|[1-9]\d*)(?:\.\d*[1-9])?$/u.test(literal)) {
-    fail(
-      "invalid_quantity",
-      "quantity must use canonical positive plain-decimal syntax without signs, exponent notation, leading zeros, or trailing fractional zeros",
-    );
-  }
-  const [integer, fraction = ""] = literal.split(".");
-  if (fraction.length > MAX_NUMERIC_SCALE) {
-    fail("bounds_exceeded", `quantity scale exceeds ${MAX_NUMERIC_SCALE}`);
-  }
-  if (integer.length + fraction.length > MAX_NUMERIC_DECIMAL_DIGITS) {
-    fail("bounds_exceeded", "quantity exceeds the canonical 511-bit positive bound");
-  }
-  const mantissa = BigInt(`${integer}${fraction}`);
+  const literal = quantity.toString();
+  const mantissa = quantity.mantissa;
   if (mantissa === 0n) {
     fail("invalid_quantity", "quantity must be greater than zero");
   }
-  if (mantissa > MAX_NUMERIC_MANTISSA) {
-    fail("bounds_exceeded", `quantity mantissa exceeds ${MAX_NUMERIC_BITS} bits`);
-  }
-  return { literal, mantissa, scale: fraction.length };
+  return { literal, mantissa, scale: quantity.scale };
 }
 
 function normalizeMetadata(input) {

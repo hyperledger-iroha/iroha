@@ -162,7 +162,7 @@ use iroha_logger::prelude::*;
 use iroha_primitives::{
     const_vec::ConstVec,
     json::Json,
-    numeric::{Numeric, NumericSpec},
+    numeric::{Numeric, NumericSpec, Quantity},
     time::TimeSource,
 };
 use iroha_schema::Ident;
@@ -10272,7 +10272,7 @@ impl<'block, 'state> StateTransaction<'block, 'state> {
             .chain(self.pending_nexus_fee_records.values())
         {
             if &record.payer_account_id == payer && record.fee_asset_id == fee_asset_id {
-                total = total.checked_add(record.fee_amount.clone())?;
+                total = total.checked_add(record.fee_amount.as_numeric().clone())?;
             }
         }
         Some(total)
@@ -14825,15 +14825,18 @@ impl DetachedStateTransactionDelta {
         let Some((source_id, destination, amount)) = self.single_transfer_delta() else {
             return false;
         };
+        let Ok(quantity) = Quantity::from_canonical_numeric(amount.clone()) else {
+            return false;
+        };
         let destination_id = AssetId::new(source_id.definition().clone(), destination.clone());
         let transfer_events = [
             data_pre::DataEvent::from(data_pre::AssetEvent::Removed(data_pre::AssetChanged {
                 asset: source_id.clone(),
-                amount: amount.clone(),
+                amount: quantity.clone(),
             })),
             data_pre::DataEvent::from(data_pre::AssetEvent::Added(data_pre::AssetChanged {
                 asset: destination_id.clone(),
-                amount: amount.clone(),
+                amount: quantity,
             })),
         ];
 
@@ -15671,20 +15674,20 @@ impl DetachedStateTransactionDelta {
             for (id, qty) in &asset_adds {
                 let def = stx.world.asset_definition(id.definition())?;
                 let spec = def.spec();
-                ensure_asset_numeric_value(qty, spec)
+                ensure_asset_quantity_value(qty, spec)
                     .map_err(iroha_data_model::ValidationFail::InstructionFailed)?;
                 if let Some(value) = stx.world.assets.get(id) {
-                    ensure_asset_numeric_value(value.as_ref(), spec)
+                    ensure_asset_quantity_value(value.as_ref().as_numeric(), spec)
                         .map_err(iroha_data_model::ValidationFail::InstructionFailed)?;
                 }
             }
             for (id, qty) in &asset_subs {
                 let def = stx.world.asset_definition(id.definition())?;
                 let spec = def.spec();
-                ensure_asset_numeric_value(qty, spec)
+                ensure_asset_quantity_value(qty, spec)
                     .map_err(iroha_data_model::ValidationFail::InstructionFailed)?;
                 if let Some(value) = stx.world.assets.get(id) {
-                    ensure_asset_numeric_value(value.as_ref(), spec)
+                    ensure_asset_quantity_value(value.as_ref().as_numeric(), spec)
                         .map_err(iroha_data_model::ValidationFail::InstructionFailed)?;
                 }
             }
@@ -15740,6 +15743,11 @@ impl DetachedStateTransactionDelta {
 
             // Apply asset subtractions (aggregated per id)
             for (id, qty) in &asset_subs {
+                let quantity = Quantity::from_canonical_numeric(qty.clone()).map_err(|_| {
+                    iroha_data_model::ValidationFail::InstructionFailed(Error::Math(
+                        MathError::NegativeValue,
+                    ))
+                })?;
                 // Mutate value and record pre/post within a limited scope to drop the mutable borrow
                 // before possibly removing the entry from the map.
                 let remove_it = {
@@ -15748,28 +15756,18 @@ impl DetachedStateTransactionDelta {
                             "asset not found: {id}"
                         ))
                     })?;
-                    let qref: &mut iroha_primitives::numeric::Numeric = &mut *cur;
-                    if qref.mantissa().is_negative() {
-                        return Err(iroha_data_model::ValidationFail::InstructionFailed(
-                            Error::Math(MathError::NegativeValue),
-                        ));
-                    }
+                    let qref: &mut Quantity = &mut *cur;
                     // Witness: record pre-value
-                    crate::sumeragi::witness::record_read_asset(id, Some(qref));
-                    let updated = qref.clone().checked_sub(qty.clone()).ok_or_else(|| {
+                    crate::sumeragi::witness::record_read_asset(id, Some(qref.as_numeric()));
+                    let updated = qref.checked_sub(&quantity).map_err(|_| {
                         iroha_data_model::ValidationFail::NotPermitted(
                             "not enough quantity".to_owned(),
                         )
                     })?;
-                    if updated.mantissa().is_negative() {
-                        return Err(iroha_data_model::ValidationFail::InstructionFailed(
-                            Error::Math(MathError::NotEnoughQuantity),
-                        ));
-                    }
                     *qref = updated;
-                    let is_zero = (**cur).is_zero();
+                    let is_zero = qref.is_zero();
                     // Witness: record post-value (after mutation)
-                    crate::sumeragi::witness::record_write_asset(id, cur);
+                    crate::sumeragi::witness::record_write_asset(id, qref.as_numeric());
                     is_zero
                 };
                 if remove_it {
@@ -15778,32 +15776,25 @@ impl DetachedStateTransactionDelta {
             }
             // Apply asset additions (aggregated per id) and defer event emission until totals update.
             for (id, qty) in &asset_adds {
+                let quantity = Quantity::from_canonical_numeric(qty.clone()).map_err(|_| {
+                    iroha_data_model::ValidationFail::InstructionFailed(Error::Math(
+                        MathError::NegativeValue,
+                    ))
+                })?;
                 let is_nonzero = {
-                    let dst = stx
-                        .world
-                        .asset_or_insert(id, iroha_primitives::numeric::Numeric::zero())?;
-                    let qref: &mut iroha_primitives::numeric::Numeric = &mut *dst;
-                    if qref.mantissa().is_negative() {
-                        return Err(iroha_data_model::ValidationFail::InstructionFailed(
-                            Error::Math(MathError::NegativeValue),
-                        ));
-                    }
+                    let dst = stx.world.asset_or_insert(id, Quantity::zero())?;
+                    let qref: &mut Quantity = &mut *dst;
                     // Witness: record pre-value
-                    crate::sumeragi::witness::record_read_asset(id, Some(qref));
-                    let updated = qref.clone().checked_add(qty.clone()).ok_or_else(|| {
+                    crate::sumeragi::witness::record_read_asset(id, Some(qref.as_numeric()));
+                    let updated = qref.checked_add(&quantity).map_err(|_| {
                         iroha_data_model::ValidationFail::NotPermitted(
                             "numeric overflow".to_owned(),
                         )
                     })?;
-                    if updated.mantissa().is_negative() {
-                        return Err(iroha_data_model::ValidationFail::InstructionFailed(
-                            Error::Math(MathError::NegativeValue),
-                        ));
-                    }
                     *qref = updated;
                     let is_nonzero = !qref.is_zero();
                     // Witness: record post-value
-                    crate::sumeragi::witness::record_write_asset(id, qref);
+                    crate::sumeragi::witness::record_write_asset(id, qref.as_numeric());
                     is_nonzero
                 };
                 if is_nonzero {
@@ -15812,38 +15803,48 @@ impl DetachedStateTransactionDelta {
             }
             // Update asset definition totals
             for (def, qty) in &asset_def_adds {
+                let quantity = Quantity::from_canonical_numeric(qty.clone()).map_err(|_| {
+                    iroha_data_model::ValidationFail::InstructionFailed(Error::Math(
+                        MathError::NegativeValue,
+                    ))
+                })?;
                 // Witness: record pre total
                 if let Ok(def_ro) = stx.world.asset_definition(def) {
                     crate::sumeragi::witness::record_read_asset_def_total(
                         def,
-                        Some(def_ro.total_quantity()),
+                        Some(def_ro.total_quantity().as_numeric()),
                     );
                 } else {
                     crate::sumeragi::witness::record_read_asset_def_total(def, None);
                 }
-                stx.world.increase_asset_total_amount(def, qty)?;
+                stx.world.increase_asset_total_amount(def, &quantity)?;
                 // Witness: record post total
                 if let Ok(def_ro) = stx.world.asset_definition(def) {
                     crate::sumeragi::witness::record_write_asset_def_total(
                         def,
-                        def_ro.total_quantity(),
+                        def_ro.total_quantity().as_numeric(),
                     );
                 }
             }
             for (def, qty) in &asset_def_subs {
+                let quantity = Quantity::from_canonical_numeric(qty.clone()).map_err(|_| {
+                    iroha_data_model::ValidationFail::InstructionFailed(Error::Math(
+                        MathError::NegativeValue,
+                    ))
+                })?;
                 if let Ok(def_ro) = stx.world.asset_definition(def) {
                     crate::sumeragi::witness::record_read_asset_def_total(
                         def,
-                        Some(def_ro.total_quantity()),
+                        Some(def_ro.total_quantity().as_numeric()),
                     );
                 } else {
                     crate::sumeragi::witness::record_read_asset_def_total(def, None);
                 }
-                stx.world.decrease_asset_total_amount(def, qty)?;
+                stx.world.decrease_asset_total_amount(def, &quantity)?;
                 if let Ok(def_ro) = stx.world.asset_definition(def) {
                     crate::sumeragi::witness::record_write_asset_def_total(
                         def,
-                        def_ro.total_quantity(),
+                        def_ro.total_quantity().as_numeric(),
                     );
                 }
             }
@@ -15865,7 +15866,11 @@ impl DetachedStateTransactionDelta {
                         stx.world
                             .emit_events(Some(AssetEvent::Removed(AssetChanged {
                                 asset: asset.clone(),
-                                amount: qty,
+                                amount: Quantity::from_canonical_numeric(qty).map_err(|_| {
+                                    iroha_data_model::ValidationFail::InstructionFailed(
+                                        Error::Math(MathError::NegativeValue),
+                                    )
+                                })?,
                             })));
                     }
                     AssetEventScriptEntry::Added(index) => {
@@ -15882,7 +15887,11 @@ impl DetachedStateTransactionDelta {
                             .expect("asset event references missing addition qty");
                         stx.world.emit_events(Some(AssetEvent::Added(AssetChanged {
                             asset: asset.clone(),
-                            amount: qty,
+                            amount: Quantity::from_canonical_numeric(qty).map_err(|_| {
+                                iroha_data_model::ValidationFail::InstructionFailed(Error::Math(
+                                    MathError::NegativeValue,
+                                ))
+                            })?,
                         })));
                     }
                 }
@@ -16373,7 +16382,7 @@ impl DetachedStateTransactionDelta {
     }
 }
 
-fn ensure_asset_numeric_value(value: &Numeric, spec: NumericSpec) -> Result<(), Error> {
+fn ensure_asset_quantity_value(value: &Numeric, spec: NumericSpec) -> Result<(), Error> {
     if value.mantissa().is_negative() {
         return Err(MathError::NegativeValue.into());
     }
@@ -16403,12 +16412,7 @@ impl World {
         let definitions = self.asset_definitions.view();
         for (definition_id, definition) in definitions.iter() {
             let total = definition.total_quantity();
-            if total.mantissa().is_negative() {
-                return Err(format!(
-                    "asset definition {definition_id} has negative total quantity {total}"
-                ));
-            }
-            if definition.spec().check(total).is_err() {
+            if definition.spec().check(total.as_numeric()).is_err() {
                 return Err(format!(
                     "asset definition {definition_id} total quantity {total} violates numeric spec {}",
                     definition.spec()
@@ -16419,9 +16423,6 @@ impl World {
         let accounts = self.accounts.view();
         for (asset_id, asset_value) in self.assets.view().iter() {
             let balance = asset_value.as_ref();
-            if balance.mantissa().is_negative() {
-                return Err(format!("asset {asset_id} has negative balance {balance}"));
-            }
             let definition = definitions.get(asset_id.definition()).ok_or_else(|| {
                 format!(
                     "asset {asset_id} references missing definition {}",
@@ -16434,7 +16435,7 @@ impl World {
                     asset_id.account()
                 ));
             }
-            if definition.spec().check(balance).is_err() {
+            if definition.spec().check(balance.as_numeric()).is_err() {
                 return Err(format!(
                     "asset {asset_id} balance {balance} violates numeric spec {}",
                     definition.spec()
@@ -19192,7 +19193,7 @@ pub trait WorldReadOnly {
     ///
     /// # Errors
     /// - Asset definition not found
-    fn asset_total_amount(&self, definition_id: &AssetDefinitionId) -> Result<Numeric, FindError> {
+    fn asset_total_amount(&self, definition_id: &AssetDefinitionId) -> Result<Quantity, FindError> {
         Ok(self
             .asset_definition(definition_id)?
             .total_quantity()
@@ -22205,7 +22206,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
     pub fn asset_or_insert(
         &mut self,
         asset_id: &AssetId,
-        default_asset_value: impl Into<Numeric>,
+        default_asset_value: impl Into<Quantity>,
     ) -> Result<&mut AssetValue, Error> {
         let resolved_id = self.resolve_asset_id_for_current_scope(asset_id)?;
         self.asset_or_insert_exact(&resolved_id, default_asset_value)
@@ -22224,16 +22225,16 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
     pub fn asset_or_insert_exact(
         &mut self,
         asset_id: &AssetId,
-        default_asset_value: impl Into<Numeric>,
+        default_asset_value: impl Into<Quantity>,
     ) -> Result<&mut AssetValue, Error> {
         let resolved_id = asset_id.clone();
         let spec = self.asset_definition(resolved_id.definition())?.spec();
         self.account(resolved_id.account())?;
         let default_asset_value = default_asset_value.into();
-        ensure_asset_numeric_value(&default_asset_value, spec)?;
+        ensure_asset_quantity_value(default_asset_value.as_numeric(), spec)?;
 
         if let Some(value) = self.assets.get(&resolved_id) {
-            ensure_asset_numeric_value(value.as_ref(), spec)?;
+            ensure_asset_quantity_value(value.as_ref().as_numeric(), spec)?;
         }
 
         if self.assets.get(&resolved_id).is_none() {
@@ -22280,23 +22281,22 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
     pub fn increase_asset_total_amount(
         &mut self,
         definition_id: &AssetDefinitionId,
-        increment: &Numeric,
+        increment: &Quantity,
     ) -> Result<(), Error> {
         let spec = self.asset_definition(definition_id)?.spec();
-        ensure_asset_numeric_value(increment, spec)?;
+        ensure_asset_quantity_value(increment.as_numeric(), spec)?;
         // Update the aggregate based on the stored value rather than recomputing
         // from the current storage view (which would already include the change)
         // to avoid double-counting.
         // Compute and persist the new total first, then emit events.
         let new_total = {
             let def = self.asset_definition_mut(definition_id)?;
-            ensure_asset_numeric_value(&def.total_quantity, spec)?;
+            ensure_asset_quantity_value(def.total_quantity.as_numeric(), spec)?;
             let new_total = def
                 .total_quantity
-                .clone()
-                .checked_add(increment.clone())
-                .ok_or(MathError::Overflow)?;
-            ensure_asset_numeric_value(&new_total, spec)?;
+                .checked_add(increment)
+                .map_err(|_| MathError::Overflow)?;
+            ensure_asset_quantity_value(new_total.as_numeric(), spec)?;
             def.total_quantity = new_total.clone();
             new_total
         };
@@ -22334,25 +22334,24 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
     pub fn decrease_asset_total_amount(
         &mut self,
         definition_id: &AssetDefinitionId,
-        decrement: &Numeric,
+        decrement: &Quantity,
     ) -> Result<(), Error> {
         let spec = self.asset_definition(definition_id)?.spec();
-        ensure_asset_numeric_value(decrement, spec)?;
+        ensure_asset_quantity_value(decrement.as_numeric(), spec)?;
         // Update the aggregate directly to avoid double-counting when storage
         // has already been mutated by the caller.
         // Compute and persist the new total first, then emit events.
         let new_total = {
             let def = self.asset_definition_mut(definition_id)?;
-            ensure_asset_numeric_value(&def.total_quantity, spec)?;
+            ensure_asset_quantity_value(def.total_quantity.as_numeric(), spec)?;
             if &def.total_quantity < decrement {
                 return Err(MathError::NotEnoughQuantity.into());
             }
             let new_total = def
                 .total_quantity
-                .clone()
-                .checked_sub(decrement.clone())
-                .ok_or(MathError::NotEnoughQuantity)?;
-            ensure_asset_numeric_value(&new_total, spec)?;
+                .checked_sub(decrement)
+                .map_err(|_| MathError::NotEnoughQuantity)?;
+            ensure_asset_quantity_value(new_total.as_numeric(), spec)?;
             def.total_quantity = new_total.clone();
             new_total
         };
@@ -22629,10 +22628,10 @@ impl LaneConsensusLifecycleSnapshot {
 impl State {
     fn disable_nexus_fees_for_testing(&mut self) {
         let nexus = self.nexus.get_mut();
-        nexus.fees.base_fee = Numeric::zero();
-        nexus.fees.per_byte_fee = Numeric::zero();
-        nexus.fees.per_instruction_fee = Numeric::zero();
-        nexus.fees.per_gas_unit_fee = Numeric::zero();
+        nexus.fees.base_fee = Quantity::zero();
+        nexus.fees.per_byte_fee = Quantity::zero();
+        nexus.fees.per_instruction_fee = Quantity::zero();
+        nexus.fees.per_gas_unit_fee = Quantity::zero();
     }
 
     /// Snapshot the current Nexus configuration.
@@ -24966,6 +24965,12 @@ impl State {
         world
             .validate_non_negative_ledger_invariants()
             .expect("initial world contains invalid non-negative ledger state");
+        crate::smartcontracts::ivm::active_runtime_abi_hash(&world.view(), u64::MAX)
+            .unwrap_or_else(|error| {
+                panic!(
+                    "persisted active runtime ABI is incompatible with this node during state initialization: {error:?}"
+                )
+            });
         crate::smartcontracts::code::initialize_current_contract_subject_bindings(&mut world)
             .expect("new v2 world must contain valid contract subject bindings");
         crate::sns::seed_default_namespace_policies(&mut world);
@@ -25765,8 +25770,27 @@ impl State {
     /// Create structure to execute a block
     #[allow(clippy::too_many_lines)]
     pub fn block(&self, curr_block: BlockHeader) -> StateBlock<'_> {
-        self.block_with_pristine_stage(curr_block, |_| Ok::<(), core::convert::Infallible>(()))
-            .expect("infallible pristine block stage")
+        self.try_block(curr_block).unwrap_or_else(|error| {
+            panic!("persisted active runtime ABI is incompatible with this node: {error:?}")
+        })
+    }
+
+    /// Create a block after validating the persisted active runtime ABI.
+    ///
+    /// # Errors
+    /// Returns the stable admission reason when persisted governance state
+    /// selects an ABI surface different from this binary.
+    pub fn try_block(
+        &self,
+        curr_block: BlockHeader,
+    ) -> Result<StateBlock<'_>, iroha_data_model::executor::IvmAdmissionError> {
+        crate::smartcontracts::ivm::active_runtime_abi_hash(
+            &self.world.view(),
+            curr_block.height().get(),
+        )?;
+        Ok(self
+            .block_with_pristine_stage(curr_block, |_| Ok::<(), core::convert::Infallible>(()))
+            .expect("infallible pristine block stage"))
     }
 
     #[allow(clippy::too_many_lines)]
@@ -25889,6 +25913,16 @@ impl State {
             trust_committed_execution_results: false,
         };
         stage(&mut sb)?;
+        crate::smartcontracts::ivm::active_runtime_abi_hash(
+            &sb.world,
+            sb._curr_block.height().get(),
+        )
+        .unwrap_or_else(|error| {
+            panic!(
+                "persisted active runtime ABI is incompatible with this node at block height {}: {error:?}",
+                sb._curr_block.height().get()
+            )
+        });
         // Activate any pending public-lane validators whose scheduled epoch has begun.
         let epoch_length = sb
             .world
@@ -25953,6 +25987,14 @@ impl State {
                     && rec.manifest.start_height == now_h
                     && now_h < rec.manifest.end_height
                 {
+                    crate::smartcontracts::ivm::validate_runtime_upgrade_manifest_abi(
+                        &rec.manifest,
+                    )
+                    .unwrap_or_else(|error| {
+                        panic!(
+                            "scheduled runtime upgrade {id:?} is incompatible with this node at activation height {now_h}: {error:?}"
+                        )
+                    });
                     rec.status =
                         iroha_data_model::runtime::RuntimeUpgradeStatus::ActivatedAt(now_h);
                     wtx.runtime_upgrades.insert(id, rec);
@@ -26272,6 +26314,13 @@ impl State {
             }
             update_governance_pipeline_slas(&mut wtx, now_h, &sb.gov);
             update_oracle_change_pipeline(&mut wtx, now_h, &sb.oracle.governance);
+            crate::smartcontracts::ivm::active_runtime_abi_hash(&wtx, now_h).unwrap_or_else(
+                |error| {
+                    panic!(
+                        "runtime-upgrade registry became invalid after activation at height {now_h}: {error:?}"
+                    )
+                },
+            );
             wtx.apply();
         }
         {
@@ -26809,15 +26858,6 @@ impl State {
         *self.latest_block_header.write() = Some(header);
     }
 
-    /// Revert block metadata after snapshot reconciliation discards the current tip.
-    pub(crate) fn revert_latest_block_metadata_for_snapshot_reconcile(
-        &self,
-        latest_block_header: Option<BlockHeader>,
-    ) {
-        self.block_hashes.block_and_revert().commit();
-        *self.latest_block_header.write() = latest_block_header;
-    }
-
     #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Override the latest committed block-header cache in tests.
     pub fn update_latest_block_header_cache_for_tests(&self, header: BlockHeader) {
@@ -27224,6 +27264,23 @@ impl State {
     #[must_use]
     pub fn pipeline_snapshot(&self) -> iroha_config::parameters::actual::Pipeline {
         self.pipeline.clone()
+    }
+
+    /// Snapshot the effective cycle ceiling for newly admitted IVM programs.
+    ///
+    /// Both node execution policy and the governance-controlled smart-contract
+    /// fuel parameter are consensus-visible admission limits, so producers must
+    /// embed the lower value in generated program headers.
+    #[must_use]
+    pub fn ivm_admission_cycle_limit(&self) -> NonZeroU64 {
+        let fuel = self.world.parameters.view().smart_contract().fuel();
+        NonZeroU64::new(
+            self.pipeline
+                .ivm_max_cycles_upper_bound
+                .get()
+                .min(fuel.get()),
+        )
+        .expect("both IVM cycle limits are non-zero")
     }
 
     /// Snapshot the current governance configuration.
@@ -31555,9 +31612,9 @@ impl State {
 
     fn recompute_nexus_fee_amount(
         receipt: &NexusFeeReceipt,
-    ) -> Result<Numeric, MergeLedgerCommitError> {
+    ) -> Result<Quantity, MergeLedgerCommitError> {
         let schedule = &receipt.schedule;
-        let mut fee = schedule.base_fee.clone();
+        let mut fee = schedule.base_fee.as_numeric().clone();
         for (unit, count, label) in [
             (
                 &schedule.per_byte_fee,
@@ -31576,6 +31633,7 @@ impl State {
             ),
         ] {
             let delta = unit
+                .as_numeric()
                 .clone()
                 .checked_mul(Numeric::from(count), NumericSpec::unconstrained())
                 .ok_or_else(|| {
@@ -31591,7 +31649,12 @@ impl State {
                 ))
             })?;
         }
-        Ok(fee.trim_trailing_zeros())
+        Quantity::from_canonical_numeric(fee.trim_trailing_zeros()).map_err(|error| {
+            MergeLedgerCommitError::InvalidNexusFeeReceipt(format!(
+                "computed fee left the quantity domain for receipt {}: {error}",
+                hex::encode(receipt.source_id)
+            ))
+        })
     }
 
     fn validate_nexus_fee_receipt(
@@ -31621,22 +31684,8 @@ impl State {
                 receipt.fee_asset_id
             )));
         }
-        for (label, value) in [
-            ("fee_amount", &receipt.fee_amount),
-            ("base_fee", &receipt.schedule.base_fee),
-            ("per_byte_fee", &receipt.schedule.per_byte_fee),
-            ("per_instruction_fee", &receipt.schedule.per_instruction_fee),
-            ("per_gas_unit_fee", &receipt.schedule.per_gas_unit_fee),
-        ] {
-            if value.mantissa().is_negative() {
-                return Err(MergeLedgerCommitError::InvalidNexusFeeReceipt(format!(
-                    "{label} must be non-negative for receipt {}",
-                    hex::encode(receipt.source_id)
-                )));
-            }
-        }
         let expected = Self::recompute_nexus_fee_amount(receipt)?;
-        if expected != receipt.fee_amount.clone().trim_trailing_zeros() {
+        if expected != receipt.fee_amount {
             return Err(MergeLedgerCommitError::InvalidNexusFeeReceipt(format!(
                 "fee amount mismatch for receipt {}: expected {}, got {}",
                 hex::encode(receipt.source_id),
@@ -31766,7 +31815,7 @@ impl State {
                 let asset_id = AssetId::new(asset_def.clone(), receipt.payer_account_id.clone());
                 let current = aggregate.remove(&asset_id).unwrap_or_else(Numeric::zero);
                 let next = current
-                    .checked_add(receipt.fee_amount.clone())
+                    .checked_add(receipt.fee_amount.as_numeric().clone())
                     .ok_or_else(|| {
                         MergeLedgerCommitError::InvalidNexusFeeReceipt(format!(
                             "aggregate fee overflow for payer {}",
@@ -31779,7 +31828,7 @@ impl State {
                 let available = world
                     .assets()
                     .get(asset_id)
-                    .map_or_else(Numeric::zero, |value| (**value).clone());
+                    .map_or_else(Numeric::zero, |value| value.as_ref().as_numeric().clone());
                 if available < *required {
                     return Err(MergeLedgerCommitError::InsufficientNexusFeeBalance {
                         payer: asset_id.account().clone(),
@@ -31870,15 +31919,17 @@ impl State {
             );
             tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
             for (asset_id, amount) in &aggregate_burns {
+                let quantity = Quantity::from_canonical_numeric(amount.clone())
+                    .map_err(|err| MergeLedgerCommitError::NexusFeeSettlement(err.to_string()))?;
                 tx.withdraw_numeric_asset(asset_id, amount)
                     .map_err(|err| MergeLedgerCommitError::NexusFeeSettlement(err.to_string()))?;
-                tx.decrease_asset_total_amount(asset_id.definition(), amount)
+                tx.decrease_asset_total_amount(asset_id.definition(), &quantity)
                     .map_err(|err| MergeLedgerCommitError::NexusFeeSettlement(err.to_string()))?;
                 tx.emit_events(Some(
                     iroha_data_model::events::data::prelude::AssetEvent::Removed(
                         iroha_data_model::events::data::prelude::AssetChanged {
                             asset: asset_id.clone(),
-                            amount: amount.clone(),
+                            amount: quantity,
                         },
                     ),
                 ));
@@ -32797,6 +32848,15 @@ impl State {
         carrier_header: BlockHeader,
         entry: &MergeLedgerEntry,
     ) -> Result<StateBlock<'_>, MergeLedgerCommitError> {
+        crate::smartcontracts::ivm::active_runtime_abi_hash(
+            &self.world.view(),
+            carrier_header.height().get(),
+        )
+        .map_err(|error| {
+            MergeLedgerCommitError::ExecutionStatePublication(format!(
+                "persisted active runtime ABI is incompatible with this node: {error:?}"
+            ))
+        })?;
         self.block_with_pristine_stage(carrier_header, |state_block| {
             state_block.stage_certified_merge_entry(entry)
         })
@@ -32809,6 +32869,15 @@ impl State {
         carrier_header: BlockHeader,
         reference: &iroha_data_model::block::CertifiedMergeLedgerReference,
     ) -> Result<StateBlock<'_>, MergeLedgerCommitError> {
+        crate::smartcontracts::ivm::active_runtime_abi_hash(
+            &self.world.view(),
+            carrier_header.height().get(),
+        )
+        .map_err(|error| {
+            MergeLedgerCommitError::ExecutionStatePublication(format!(
+                "persisted active runtime ABI is incompatible with this node: {error:?}"
+            ))
+        })?;
         self.block_with_pristine_stage(carrier_header, |state_block| {
             state_block.stage_certified_merge_reference(reference)
         })
@@ -38147,11 +38216,11 @@ fn validate_sccp_outbound_payload_for_retained_route(
 }
 
 fn validate_sccp_inbound_anchor_high_water_index(
-    messages: &Storage<SccpInboundMessageKeyV1, SccpInboundMessageRecordV1>,
-    high_water: &Storage<SccpInboundAnchorHighWaterKeyV1, u64>,
+    messages: &impl StorageReadOnly<SccpInboundMessageKeyV1, SccpInboundMessageRecordV1>,
+    high_water: &impl StorageReadOnly<SccpInboundAnchorHighWaterKeyV1, u64>,
 ) -> core::result::Result<(), String> {
     let mut expected = BTreeMap::<SccpInboundAnchorHighWaterKeyV1, u64>::new();
-    for (message_key, record) in messages.view().iter() {
+    for (message_key, record) in messages.iter() {
         let key =
             SccpInboundAnchorHighWaterKeyV1::new(message_key.lane, record.trust_anchor.anchor_hash)
                 .ok_or_else(|| {
@@ -38164,8 +38233,7 @@ fn validate_sccp_inbound_anchor_high_water_index(
             .or_insert(record.anchor_interval_height);
     }
 
-    let persisted = high_water.view();
-    for (key, height) in persisted.iter() {
+    for (key, height) in high_water.iter() {
         if !key.is_well_formed() || *height == 0 {
             return Err(
                 "SCCP inbound anchor high-water index contains a malformed key or zero coordinate"
@@ -38187,7 +38255,7 @@ fn validate_sccp_inbound_anchor_high_water_index(
             Some(_) => {}
         }
     }
-    if expected.keys().any(|key| persisted.get(key).is_none()) {
+    if expected.keys().any(|key| high_water.get(key).is_none()) {
         return Err(
             "SCCP inbound anchor high-water index is missing an admitted anchor entry".to_owned(),
         );
@@ -38253,76 +38321,60 @@ fn recompute_sccp_pending_usage<'a>(
     )
 }
 
-/// Validate chain-profile ownership of hydrated SCCP governance and replay state.
-pub(crate) fn validate_sccp_state_local_profile(state: &State) -> core::result::Result<(), String> {
-    let committed_height = u64::try_from(state.committed_height())
+fn validate_sccp_state_view(
+    world: &impl WorldReadOnly,
+    registry: &ValidatedSccpRegistryV1,
+    chain_id: &iroha_data_model::ChainId,
+    committed_height: usize,
+    kura: &Kura,
+    config: Option<&iroha_config::parameters::actual::Sccp>,
+) -> core::result::Result<(), String> {
+    let committed_height = u64::try_from(committed_height)
         .map_err(|_| "committed WSV height does not fit the SCCP height domain".to_owned())?;
-    let retained_archive_inventory = state
-        .kura()
+    let retained_archive_inventory = kura
         .retained_nonempty_sccp_archive_inventory_at_or_below(committed_height)
         .map_err(|error| {
             format!(
                 "failed to inventory immutable Kura SCCP archives through committed WSV height {committed_height}: {error}"
             )
         })?;
-    let registry = state.sccp_registry_snapshot();
-    let pending_usage = *state.world.sccp_outbound_pending_usage.view().get();
+    let pending_usage = world.sccp_outbound_pending_usage();
     let has_sccp_state = !retained_archive_inventory.is_empty()
         || !registry.lanes().is_empty()
         || pending_usage != SccpOutboundPendingUsageV1::default()
-        || state
-            .world
-            .sccp_outbound_pending_messages
-            .view()
+        || world
+            .sccp_outbound_pending_messages()
             .iter()
             .next()
             .is_some()
-        || state
-            .world
-            .sccp_outbound_proofs
-            .view()
+        || world.sccp_outbound_proofs().iter().next().is_some()
+        || world
+            .sccp_outbound_message_locator()
             .iter()
             .next()
             .is_some()
-        || state
-            .world
-            .sccp_outbound_message_locator
-            .view()
-            .iter()
-            .next()
-            .is_some()
-        || state
-            .world
-            .sccp_outbound_message_index
-            .view()
-            .iter()
-            .next()
-            .is_some()
-        || state
-            .world
-            .sccp_inbound_messages
-            .view()
-            .iter()
-            .next()
-            .is_some()
-        || state
-            .world
-            .sccp_inbound_anchor_high_water
-            .view()
+        || world.sccp_outbound_message_index().iter().next().is_some()
+        || world.sccp_inbound_messages().iter().next().is_some()
+        || world
+            .sccp_inbound_anchor_high_water()
             .iter()
             .next()
             .is_some();
     if !has_sccp_state {
         return Ok(());
     }
-    let local = sccp_local_sora_network_for_chain_id(&state.chain_id).ok_or_else(|| {
+    if let Some(config) = config {
+        validate_sccp_pending_usage_against_config(pending_usage, config)
+            .map_err(|error| error.to_string())?;
+    }
+    let local = sccp_local_sora_network_for_chain_id(chain_id).ok_or_else(|| {
         format!(
             "SCCP state is nonempty but chain id `{}` is not a canonical public SORA chain id",
-            state.chain_id
+            chain_id
         )
     })?;
     let mut expected_pending_usage = SccpOutboundPendingUsageV1::default();
-    for (_, record) in state.world.sccp_outbound_pending_messages.view().iter() {
+    for (_, record) in world.sccp_outbound_pending_messages().iter() {
         expected_pending_usage = expected_pending_usage
             .checked_add_payload(record.payload_bytes.len())
             .ok_or_else(|| "restored SCCP pending outbound usage overflows".to_owned())?;
@@ -38333,11 +38385,11 @@ pub(crate) fn validate_sccp_state_local_profile(state: &State) -> core::result::
         ));
     }
     validate_sccp_inbound_anchor_high_water_index(
-        &state.world.sccp_inbound_messages,
-        &state.world.sccp_inbound_anchor_high_water,
+        world.sccp_inbound_messages(),
+        world.sccp_inbound_anchor_high_water(),
     )?;
-    validate_sccp_registry_local_profile(registry.as_ref(), &state.chain_id)?;
-    for (key, record) in state.world.sccp_outbound_pending_messages.view().iter() {
+    validate_sccp_registry_local_profile(registry, chain_id)?;
+    for (key, record) in world.sccp_outbound_pending_messages().iter() {
         let projection = crate::bridge::validate_sccp_outbound_message_record_v1(key, record)
             .ok_or_else(|| {
                 "SCCP outbound replay record carries malformed, non-canonical, oversized, or identity-mismatched payload evidence"
@@ -38351,7 +38403,7 @@ pub(crate) fn validate_sccp_state_local_profile(state: &State) -> core::result::
             ));
         }
         let route = validate_sccp_outbound_retained_route(
-            registry.as_ref(),
+            registry,
             key,
             record.destination_binding_hash,
             record.route_configuration_hash,
@@ -38359,7 +38411,7 @@ pub(crate) fn validate_sccp_state_local_profile(state: &State) -> core::result::
         )?;
         validate_sccp_outbound_payload_for_retained_route(&projection, route)?;
     }
-    for (key, record) in state.world.sccp_outbound_proofs.view().iter() {
+    for (key, record) in world.sccp_outbound_proofs().iter() {
         if !record.is_well_formed_for_key(key) {
             return Err(format!(
                 "terminal SCCP replay record {} is malformed for its exact outbound key",
@@ -38381,17 +38433,17 @@ pub(crate) fn validate_sccp_state_local_profile(state: &State) -> core::result::
             ));
         }
         let _ = validate_sccp_outbound_retained_route(
-            registry.as_ref(),
+            registry,
             key,
             record.destination_binding_hash,
             record.route_configuration_hash,
             "proof record",
         )?;
     }
-    let pending = state.world.sccp_outbound_pending_messages.view();
-    let terminal = state.world.sccp_outbound_proofs.view();
-    let locator = state.world.sccp_outbound_message_locator.view();
-    let ordered = state.world.sccp_outbound_message_index.view();
+    let pending = world.sccp_outbound_pending_messages();
+    let terminal = world.sccp_outbound_proofs();
+    let locator = world.sccp_outbound_message_locator();
+    let ordered = world.sccp_outbound_message_index();
     let retained_union_len = pending
         .len()
         .checked_add(terminal.len())
@@ -38540,8 +38592,7 @@ pub(crate) fn validate_sccp_state_local_profile(state: &State) -> core::result::
                     archive_messages.len()
                 ));
             }
-            let (header, artifact, messages) = state
-                .kura()
+            let (header, artifact, messages) = kura
                 .v2_finality_artifact_with_archive(index.recorded_at_height)
                 .map_err(|error| {
                     format!(
@@ -38639,7 +38690,7 @@ pub(crate) fn validate_sccp_state_local_profile(state: &State) -> core::result::
             archive_messages.len()
         ));
     }
-    for (key, record) in state.world.sccp_inbound_messages.view().iter() {
+    for (key, record) in world.sccp_inbound_messages().iter() {
         if !key.is_well_formed() || !record.is_well_formed_for_lane(key.lane) {
             return Err(format!(
                 "inbound SCCP replay record {} is malformed for its exact inbound key",
@@ -38711,6 +38762,46 @@ pub(crate) fn validate_sccp_state_local_profile(state: &State) -> core::result::
         }
     }
     Ok(())
+}
+
+/// Validate configuration-independent invariants of hydrated SCCP governance and replay state.
+///
+/// Snapshot decoding runs before the operator's actual configuration is
+/// installed. Pending-state limits are therefore checked by [`State::set_zk`]
+/// at that later boundary rather than against placeholder defaults here.
+pub(crate) fn validate_sccp_state_local_profile(state: &State) -> core::result::Result<(), String> {
+    let world = state.world.view();
+    let registry = state.sccp_registry_snapshot();
+    validate_sccp_state_view(
+        &world,
+        registry.as_ref(),
+        &state.chain_id,
+        state.committed_height(),
+        state.kura(),
+        None,
+    )
+}
+
+/// Validate the exact SCCP state that a one-block snapshot rollback would expose.
+///
+/// The preview uses uncommitted MV write transactions and is dropped on both
+/// success and failure, so validation cannot rewind WSV, DA, or Kura state.
+/// Unlike initial decoding, this runs after installation of the actual runtime
+/// configuration and enforces its pending-state limits against the rollback.
+pub(crate) fn validate_sccp_snapshot_revert_candidate(
+    state: &State,
+) -> core::result::Result<(), String> {
+    let reverted_world = state.world.block_and_revert();
+    let reverted_registry =
+        ValidatedSccpRegistryV1::try_from_wire(reverted_world.sccp_registry.get().clone())?;
+    validate_sccp_state_view(
+        &reverted_world,
+        reverted_registry.as_ref(),
+        &state.chain_id,
+        state.committed_height().saturating_sub(1),
+        state.kura(),
+        Some(&state.zk.sccp),
+    )
 }
 
 /// Immutable, fully validated SCCP governance registry.
@@ -39093,6 +39184,61 @@ impl ValidatedSccpRegistryV1 {
     pub(crate) fn to_wire(&self) -> SccpOnChainRegistryV1 {
         self.wire.clone()
     }
+}
+
+fn validate_canonical_sccp_registry_wire(
+    wire: &SccpOnChainRegistryV1,
+) -> core::result::Result<(), String> {
+    let validated = ValidatedSccpRegistryV1::try_from_wire(wire.clone())?;
+    if validated.registry() != wire {
+        return Err(
+            "invalid SCCP registry: snapshot registry is not in canonical lane/route order"
+                .to_owned(),
+        );
+    }
+    Ok(())
+}
+
+/// Validate the exact multi-version cell envelope used to persist the SCCP registry.
+///
+/// Both the committed `blocks` value and a non-null `revert` value are consensus
+/// material: snapshot reconciliation can promote the latter back into the live
+/// state. The envelope therefore rejects missing or unknown fields and validates
+/// both registry versions before any snapshot becomes observable.
+pub(crate) fn validate_sccp_registry_cell_json(
+    value: &norito::json::Value,
+) -> core::result::Result<(), String> {
+    let norito::json::Value::Object(cell) = value else {
+        return Err(
+            "snapshot SCCP registry must use the exact `{revert,blocks}` cell envelope".to_owned(),
+        );
+    };
+    if let Some(field) = cell
+        .keys()
+        .find(|field| field.as_str() != "revert" && field.as_str() != "blocks")
+    {
+        return Err(format!(
+            "snapshot SCCP registry cell contains unknown field `{field}`"
+        ));
+    }
+    let blocks = cell
+        .get("blocks")
+        .ok_or_else(|| "snapshot SCCP registry cell is missing `blocks`".to_owned())?;
+    let revert = cell
+        .get("revert")
+        .ok_or_else(|| "snapshot SCCP registry cell is missing `revert`".to_owned())?;
+
+    let validate_value = |value: &norito::json::Value, role: &str| {
+        let wire: SccpOnChainRegistryV1 = norito::json::value::from_value(value.clone())
+            .map_err(|error| format!("snapshot SCCP registry {role} is invalid: {error}"))?;
+        validate_canonical_sccp_registry_wire(&wire)
+            .map_err(|error| format!("snapshot SCCP registry {role} is invalid: {error}"))
+    };
+    validate_value(blocks, "blocks")?;
+    if !revert.is_null() {
+        validate_value(revert, "revert")?;
+    }
+    Ok(())
 }
 
 #[derive(Debug)]
@@ -40808,7 +40954,7 @@ impl<'state> StateBlock<'state> {
                     AssetId::new(asset_definition.clone(), receipt.payer_account_id.clone());
                 let current = aggregate.remove(&asset_id).unwrap_or_else(Numeric::zero);
                 let next = current
-                    .checked_add(receipt.fee_amount.clone())
+                    .checked_add(receipt.fee_amount.as_numeric().clone())
                     .ok_or_else(|| {
                         MergeLedgerCommitError::InvalidNexusFeeReceipt(format!(
                             "aggregate fee overflow for payer {}",
@@ -40827,7 +40973,7 @@ impl<'state> StateBlock<'state> {
                 .world
                 .assets
                 .get(asset_id)
-                .map_or_else(Numeric::zero, |value| (**value).clone());
+                .map_or_else(Numeric::zero, |value| value.as_ref().as_numeric().clone());
             if available < *required {
                 return Err(MergeLedgerCommitError::InsufficientNexusFeeBalance {
                     payer: asset_id.account().clone(),
@@ -40841,17 +40987,19 @@ impl<'state> StateBlock<'state> {
         tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
         tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
         for (asset_id, amount) in &aggregate {
+            let quantity = Quantity::from_canonical_numeric(amount.clone())
+                .map_err(|err| MergeLedgerCommitError::NexusFeeSettlement(err.to_string()))?;
             tx.world
                 .withdraw_numeric_asset(asset_id, amount)
                 .map_err(|err| MergeLedgerCommitError::NexusFeeSettlement(err.to_string()))?;
             tx.world
-                .decrease_asset_total_amount(asset_id.definition(), amount)
+                .decrease_asset_total_amount(asset_id.definition(), &quantity)
                 .map_err(|err| MergeLedgerCommitError::NexusFeeSettlement(err.to_string()))?;
             tx.world.emit_events(Some(
                 iroha_data_model::events::data::prelude::AssetEvent::Removed(
                     iroha_data_model::events::data::prelude::AssetChanged {
                         asset: asset_id.clone(),
-                        amount: amount.clone(),
+                        amount: quantity,
                     },
                 ),
             ));
@@ -40888,17 +41036,19 @@ impl<'state> StateBlock<'state> {
         let mut tx = self.transaction();
         tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
         for (asset_id, amount) in &aggregate_burns {
+            let quantity = Quantity::from_canonical_numeric(amount.clone())
+                .map_err(|err| MergeLedgerCommitError::NexusFeeSettlement(err.to_string()))?;
             tx.world
                 .withdraw_numeric_asset(asset_id, amount)
                 .map_err(|err| MergeLedgerCommitError::NexusFeeSettlement(err.to_string()))?;
             tx.world
-                .decrease_asset_total_amount(asset_id.definition(), amount)
+                .decrease_asset_total_amount(asset_id.definition(), &quantity)
                 .map_err(|err| MergeLedgerCommitError::NexusFeeSettlement(err.to_string()))?;
             tx.world.emit_events(Some(
                 iroha_data_model::events::data::prelude::AssetEvent::Removed(
                     iroha_data_model::events::data::prelude::AssetChanged {
                         asset: asset_id.clone(),
-                        amount: amount.clone(),
+                        amount: quantity,
                     },
                 ),
             ));
@@ -43990,6 +44140,11 @@ mod tiered_snapshot_diff_tests {
         SccpOutboundMessageKeyV1,
         SccpOutboundPendingMessageRecordV1,
     ) {
+        let key_pair = checked_keypair();
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let sender = authority
+            .to_i105_for_discriminant(iroha_sccp::SCCP_TAIRA_I105_DISCRIMINANT_V1)
+            .expect("retained SCCP inventory sender has one canonical Taira I105 rendering");
         let payload = iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
             version: 1,
             source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
@@ -44001,7 +44156,7 @@ mod tiered_snapshot_diff_tests {
             asset_id: b"xor".to_vec(),
             amount: 77,
             sender_codec: iroha_sccp::SCCP_CODEC_CANONICAL_TEXT,
-            sender: b"sora:retained-archive".to_vec(),
+            sender: sender.into_bytes(),
             recipient_codec: iroha_sccp::SCCP_CODEC_EVM_ADDRESS20,
             recipient: [0x22; 20].to_vec(),
             route_id_codec: iroha_sccp::SCCP_CODEC_CANONICAL_TEXT,
@@ -44018,8 +44173,6 @@ mod tiered_snapshot_diff_tests {
         )
         .expect("retained SCCP inventory payload validates");
 
-        let key_pair = checked_keypair();
-        let authority = AccountId::new(key_pair.public_key().clone());
         let transaction = TransactionBuilder::new(
             ChainId::from(iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1),
             authority,
@@ -44221,7 +44374,6 @@ mod tiered_snapshot_diff_tests {
         record.source_identity_hash =
             iroha_data_model::bridge::sccp_source_identity_hash_v1(&route.source_identity)
                 .expect("fixture source identity hash");
-        record.anchor_interval_height = record.trust_anchor.checkpoint_height + 1;
         let successor = SccpNativeTrustAnchorV1 {
             anchor_hash: [0x98; 32],
             checkpoint_height: record.trust_anchor.checkpoint_height + 10,
@@ -45608,9 +45760,9 @@ mod tiered_snapshot_diff_tests {
 
     #[test]
     fn sccp_local_profile_rejects_malformed_direct_terminal_record() {
-        let (mut world, key, message, mut proof, _, _) = world_with_valid_sccp_outbound_history();
+        let (mut world, key, _message, mut proof, _, _) = world_with_valid_sccp_outbound_history();
         proof.accepted_at_height = 0;
-        replace_complete_sccp_outbound_history(&mut world, key, message, proof);
+        world.sccp_outbound_proofs.insert(key, proof);
         let state = direct_sccp_state_at_height_one(world, exact_sccp_finality_kura());
 
         let error = validate_sccp_state_local_profile(&state)
@@ -46180,7 +46332,7 @@ mod tiered_snapshot_diff_tests {
             },
             1,
         );
-        assert_rejected(malformed, "forged malformed key", "malformed key");
+        assert_rejected(malformed, "forged malformed key", "nonzero anchor hash");
     }
 
     #[test]
@@ -46310,11 +46462,7 @@ mod tiered_snapshot_diff_tests {
         assert!(message.is_well_formed_for_key(&other_lane_key));
         assert!(proof.is_well_formed_for_key(&other_lane_key));
         replace_complete_sccp_outbound_history(&mut world, other_lane_key, message, proof);
-        assert_rejected(
-            world,
-            "cross-lane route",
-            "identity-mismatched payload evidence",
-        );
+        assert_rejected(world, "cross-lane route", "belongs to another exact lane");
     }
 
     #[test]
@@ -46329,12 +46477,7 @@ mod tiered_snapshot_diff_tests {
             world.sccp_outbound_message_index = Storage::default();
             world.sccp_outbound_proofs = Storage::default();
             world.sccp_outbound_proofs.insert(key, proof);
-            let state = State::new_with_chain(
-                world,
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-                ChainId::from(iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1),
-            );
+            let state = direct_sccp_state_at_height_one(world, Kura::blank_kura_for_testing());
             let error = validate_sccp_state_local_profile(&state)
                 .expect_err("forged in-memory outbound proof index must fail closed");
             assert!(
@@ -46580,6 +46723,41 @@ mod transfer_transcript_tests {
     }
 
     #[test]
+    fn transfer_transcript_identity_preflight_is_replay_aware() {
+        let kura = Kura::blank_kura_for_testing();
+        let query = crate::query::store::LiveQueryStore::start_test();
+        let state = State::new(World::default(), Arc::clone(&kura), query);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+
+        {
+            let mut transaction = block.transaction();
+            let error = transaction
+                .require_transfer_transcript_identity("test transfer")
+                .expect_err("live transfer without call_hash must fail closed");
+            assert!(error.to_string().contains("transaction call_hash"));
+
+            let call_hash = iroha_crypto::Hash::prehashed([0xA5; iroha_crypto::Hash::LENGTH]);
+            transaction.tx_call_hash = Some(call_hash);
+            assert_eq!(
+                transaction
+                    .require_transfer_transcript_identity("test transfer")
+                    .expect("live transfer with call_hash must pass"),
+                Some(call_hash)
+            );
+        }
+
+        block.replay_compatibility = true;
+        let transaction = block.transaction();
+        assert_eq!(
+            transaction
+                .require_transfer_transcript_identity("test replay transfer")
+                .expect("replay transfer intentionally skips transcript identity"),
+            None
+        );
+    }
+
+    #[test]
     fn replay_transfer_transcripts_skip_fastpq_work_without_call_hash() {
         let kura = Kura::blank_kura_for_testing();
         let query = crate::query::store::LiveQueryStore::start_test();
@@ -46766,10 +46944,10 @@ mod transfer_transcript_tests {
             .build(&ALICE_ID);
             let alice_asset_id = AssetId::new(asset_definition_id.clone(), ALICE_ID.clone());
             let bob_asset_id = AssetId::new(asset_definition_id, BOB_ID.clone());
-            let alice_asset = Asset::new(alice_asset_id.clone(), Numeric::from(10_u32));
+            let alice_asset = Asset::new(alice_asset_id.clone(), Quantity::from(10_u32));
             let mut assets = vec![alice_asset];
             if let Some(balance) = receiver_asset_balance {
-                assets.push(Asset::new(bob_asset_id.clone(), Numeric::from(balance)));
+                assets.push(Asset::new(bob_asset_id.clone(), Quantity::from(balance)));
             }
             let world = World::with_assets(
                 [domain],
@@ -46802,7 +46980,7 @@ mod transfer_transcript_tests {
         {
             let mut tx = block_seq.transaction();
             tx.tx_call_hash = Some(call_hash);
-            Transfer::asset_numeric(alice_asset_id.clone(), 3_u32, BOB_ID.clone())
+            Transfer::asset_quantity(alice_asset_id.clone(), 3_u32, BOB_ID.clone())
                 .execute(&ALICE_ID, &mut tx)
                 .expect("sequential transfer");
             tx.apply();
@@ -46817,7 +46995,7 @@ mod transfer_transcript_tests {
         let state_det = State::new(world_det, Arc::clone(&kura_det), query_det);
         let mut block_det = state_det.block(header);
         let instruction: InstructionBox =
-            Transfer::asset_numeric(alice_asset_id.clone(), 3_u32, BOB_ID.clone()).into();
+            Transfer::asset_quantity(alice_asset_id.clone(), 3_u32, BOB_ID.clone()).into();
         let mut delta = DetachedStateTransactionDelta::default();
         crate::executor::execute_instruction_detached(&ALICE_ID, &instruction, &mut delta)
             .expect("detached transfer should be recorded");
@@ -46870,7 +47048,7 @@ mod transfer_transcript_tests {
         let mut block_batch = state_batch.block(header);
         let mut first_delta = DetachedStateTransactionDelta::default();
         let first_instruction: InstructionBox =
-            Transfer::asset_numeric(alice_asset_id.clone(), 3_u32, BOB_ID.clone()).into();
+            Transfer::asset_quantity(alice_asset_id.clone(), 3_u32, BOB_ID.clone()).into();
         crate::executor::execute_instruction_detached(
             &ALICE_ID,
             &first_instruction,
@@ -46879,7 +47057,7 @@ mod transfer_transcript_tests {
         .expect("first detached transfer should be recorded");
         let mut second_delta = DetachedStateTransactionDelta::default();
         let second_instruction: InstructionBox =
-            Transfer::asset_numeric(alice_asset_id.clone(), 2_u32, BOB_ID.clone()).into();
+            Transfer::asset_quantity(alice_asset_id.clone(), 2_u32, BOB_ID.clone()).into();
         crate::executor::execute_instruction_detached(
             &ALICE_ID,
             &second_instruction,
@@ -49647,7 +49825,7 @@ mod replay_validation_tests {
                 AssetDefinition::numeric(asset_definition_id.clone())
                     .with_name("credit".to_owned()),
             )),
-            InstructionBox::from(Mint::asset_numeric(Numeric::from(7_u32), asset_id.clone())),
+            InstructionBox::from(Mint::asset_quantity(7_u32, asset_id.clone())),
             InstructionBox::from(SetKeyValue::account(
                 user_id.clone(),
                 "tier".parse::<Name>().expect("account metadata key"),
@@ -49695,7 +49873,7 @@ mod replay_validation_tests {
             dataspace_id,
         );
         let block3_instructions = vec![
-            InstructionBox::from(Mint::asset_numeric(Numeric::from(5_u32), asset_id.clone())),
+            InstructionBox::from(Mint::asset_quantity(5_u32, asset_id.clone())),
             InstructionBox::from(SetAccountAliasBinding::bind(
                 user_id.clone(),
                 audit_alias,
@@ -51244,6 +51422,23 @@ impl StateTransaction<'_, '_> {
         Ok(())
     }
 
+    #[cfg(test)]
+    /// Return transaction and staged block SCCP work for side-effect assertions.
+    pub(crate) fn sccp_verifier_work_for_testing(
+        &self,
+    ) -> (SccpVerifierWorkV1, SccpVerifierWorkV1) {
+        (
+            self.sccp_verifier_work_in_tx,
+            self.sccp_verifier_work_after_block,
+        )
+    }
+
+    #[cfg(test)]
+    /// Return the number of transfer transcripts staged by this transaction.
+    pub(crate) fn pending_transfer_transcript_count_for_testing(&self) -> usize {
+        self.pending_transfer_transcripts.len()
+    }
+
     /// Reserve deterministic SCCP verifier work before dispatching any proof-controlled
     /// cryptography.
     ///
@@ -51538,6 +51733,32 @@ impl StateTransaction<'_, '_> {
         }
     }
 
+    /// Require the deterministic identity used by transfer transcripts before balance mutation.
+    ///
+    /// Committed-block replay deliberately skips transcript construction, so historical execution
+    /// remains valid even when the original transaction identity is unavailable to the replay
+    /// adapter. Live execution must fail closed before mutating balances or holder indexes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error`] when live execution has no transaction `call_hash`.
+    pub(crate) fn require_transfer_transcript_identity(
+        &self,
+        context: &str,
+    ) -> Result<Option<iroha_crypto::Hash>, Error> {
+        if self.replay_compatibility {
+            return Ok(None);
+        }
+        self.tx_call_hash.map(Some).ok_or_else(|| {
+            Error::InvariantViolation(
+                format!(
+                    "{context} requires a transaction call_hash before balance or transcript mutation"
+                )
+                .into(),
+            )
+        })
+    }
+
     /// Record a transfer delta so the FASTPQ prover can consume a structured transcript.
     pub fn record_transfer_transcript(
         &mut self,
@@ -51556,14 +51777,11 @@ impl StateTransaction<'_, '_> {
         if deltas.is_empty() {
             return Ok(());
         }
-        if self.replay_compatibility {
+        let Some(batch_hash) =
+            self.require_transfer_transcript_identity("FastPQ transfer transcript recording")?
+        else {
             return Ok(());
-        }
-        let batch_hash = self.tx_call_hash.ok_or_else(|| {
-            Error::InvariantViolation(
-                "FastPQ transfer transcript recording requires a transaction call_hash".into(),
-            )
-        })?;
+        };
         let authority_digest = crate::fastpq::authority_digest(authority);
         let poseidon_preimage_digest = match deltas.as_slice() {
             [delta] => Some(crate::fastpq::poseidon_preimage_digest(delta, &batch_hash)),
@@ -52343,6 +52561,132 @@ impl StateTransaction<'_, '_> {
         Json::from(payload)
     }
 
+    fn execute_generic_ivm_trigger_program(
+        &mut self,
+        id: &TriggerId,
+        authority: &AccountId,
+        event: &EventBox,
+        metadata: &Metadata,
+        summary: &crate::smartcontracts::ivm::cache::GenericProgramSummary,
+        nft_seq_base_override: Option<u64>,
+    ) -> Result<ExecutionStep, ValidationFail> {
+        crate::smartcontracts::ivm::validate_generic_execution_context(
+            &self.world,
+            metadata,
+            summary.code_hash,
+        )?;
+        let eff_cycles = crate::executor::validate_prepared_ivm_execution_policy(
+            self,
+            &summary.metadata,
+            summary.code_offset,
+            summary.program(),
+        )?;
+        let gas_cap = crate::smartcontracts::ivm::gas_limit_for_cycles(eff_cycles);
+        let remaining_block_budget = if self.gas_limit_per_block == 0 {
+            u64::MAX
+        } else {
+            self.gas_limit_per_block.saturating_sub(
+                self.gas_used_in_block_so_far
+                    .saturating_add(self.last_tx_gas_used),
+            )
+        };
+        let mut gas_limit = gas_cap.min(remaining_block_budget);
+        if gas_limit == u64::MAX {
+            gas_limit = DEFAULT_TRIGGER_GAS_LIMIT;
+        }
+
+        let (prepared_contract_cache, amx_analysis) = {
+            let mut cache = self.ivm_cache.lock();
+            let prepared_contract_cache = cache.prepared_contract_cache();
+            let amx_analysis = cache.analyze_generic_program(summary).map_err(|error| {
+                ValidationFail::InternalError(format!(
+                    "invalid admitted generic-trigger analysis: {error}"
+                ))
+            })?;
+            (prepared_contract_cache, amx_analysis)
+        };
+        let mut vm = IVM::new(gas_limit);
+        vm.set_zk_trace_enabled(false);
+        vm.load_program(summary.program())
+            .map_err(|error| ValidationFail::InternalError(error.to_string()))?;
+        vm.set_max_cycles(eff_cycles.get());
+        vm.set_gas_limit(gas_limit);
+
+        let host_args = self.trigger_host_args(event, Json::default());
+        let accounts = self.trigger_accounts_snapshot();
+        let streaming_metadata =
+            crate::pipeline::overlay::resolve_streaming_metadata(self, authority);
+        let bound_contract_records =
+            crate::smartcontracts::code::snapshot_bound_contract_records_by_subject(self);
+        let axt_policy_snapshot = self.axt_policy_snapshot();
+        let mut host = crate::smartcontracts::ivm::host::CoreHostImpl::with_accounts_and_args(
+            authority.clone(),
+            accounts,
+            host_args,
+        );
+        host.set_generic_execution();
+        host.set_prepared_contract_cache(prepared_contract_cache);
+        host.set_amx_analysis(amx_analysis);
+        host.set_amx_limits(
+            crate::smartcontracts::ivm::host::CoreHost::amx_limits_from_config(&self.pipeline),
+        );
+        host.set_axt_timing(self.nexus.axt);
+        host.hydrate_axt_replay_ledger(self);
+        let current_block_time_ms = u64::try_from(self._curr_block.creation_time().as_millis())
+            .expect("block creation timestamp must fit into u64");
+        host.set_trigger_id(id.clone());
+        host.set_block_time_ms(current_block_time_ms);
+        let default_base = self._curr_block.height().get().saturating_mul(256);
+        host.set_nft_seq_base(nft_seq_base_override.unwrap_or(default_base));
+        #[cfg(feature = "telemetry")]
+        host.set_telemetry(self.telemetry.clone());
+        host.set_crypto_config(self.crypto());
+        host.set_zk_config(&self.zk);
+        host.set_chain_id(self.chain_id());
+        host.set_public_inputs_from_parameters(self.world.parameters.get());
+        host.set_vrf_epoch_seeds_from_world(&self.world);
+        host.set_query_state(self);
+        host.set_bound_contract_records_by_subject_snapshot(bound_contract_records);
+        host = host.with_axt_policy_snapshot(&axt_policy_snapshot);
+        crate::pipeline::overlay::apply_streaming_metadata(&mut host, streaming_metadata);
+        host.set_zk_snapshots_from_world(&self.world, &self.zk)
+            .map_err(|error| {
+                ValidationFail::InternalError(format!("invalid ZK snapshot state: {error}"))
+            })?;
+
+        let run_result = vm.run_with_host(&mut host);
+        let trigger_gas_used = gas_limit.saturating_sub(vm.remaining_gas());
+        if let Err(error) = run_result {
+            let error =
+                crate::smartcontracts::ivm::map_vm_error_with_context_to_validation(&vm, &error);
+            {
+                let _consumed_host = host;
+            }
+            self.last_tx_gas_used = self.last_tx_gas_used.saturating_add(trigger_gas_used);
+            return Err(error);
+        }
+
+        let artifacts = host.into_execution_artifacts(None);
+        self.last_tx_gas_used = self.last_tx_gas_used.saturating_add(trigger_gas_used);
+        let artifacts = artifacts?;
+        crate::validation_fee::enforce_opaque_deferred_instruction_groups(
+            &artifacts.queued_instructions_by_authority(),
+            self,
+            None,
+        )
+        .map_err(|rejection| match rejection {
+            TransactionRejectionReason::Validation(fail) => fail,
+            other => ValidationFail::NotPermitted(format!(
+                "validation-fee policy resolution failed during generic IVM trigger execution: {other:?}"
+            )),
+        })?;
+        let queued_instructions = artifacts.queued_instructions();
+        let step = ExecutionStep(ConstVec::from(queued_instructions));
+        self.seed_time_trigger_call_hash(id, authority, event, &step);
+        let queued = artifacts.apply_to_transaction(self, authority)?;
+        Ok(ConstVec::<InstructionBox>::from(queued).into())
+    }
+
     /// Execute any condition of trigger, staging its state changes.
     ///
     /// Returns the execution step on success, or the rejection reason on failure.
@@ -52412,14 +52756,45 @@ impl StateTransaction<'_, '_> {
                         .map_err(|e| ValidationFail::InternalError(e.to_string()))?
                     }
                 };
-                let meta = summary.metadata.clone();
-                crate::pipeline::overlay::validate_header_policy(&meta)
-                    .map_err(ValidationFail::IvmAdmission)?;
-                let eff_cycles = NonZeroU64::new(
-                    meta.max_cycles
-                        .min(self.pipeline.ivm_max_cycles_upper_bound.get()),
+                let live_code = self
+                    .world
+                    .contract_code
+                    .get(&identity.code_hash)
+                    .ok_or_else(|| {
+                        ValidationFail::NotPermitted(format!(
+                            "contract bytecode `{}` not found in WSV",
+                            identity.code_hash
+                        ))
+                    })?;
+                if summary.prepared_contract().artifact() != live_code.as_slice() {
+                    return Err(ValidationFail::NotPermitted(format!(
+                        "cached contract bytecode `{}` does not match live WSV",
+                        identity.code_hash
+                    ))
+                    .into());
+                }
+                let eff_cycles = crate::executor::validate_prepared_ivm_execution_policy(
+                    self,
+                    &summary.metadata,
+                    summary.code_offset,
+                    live_code.as_ref(),
+                )?;
+                let manifest = self
+                    .world
+                    .contract_manifests
+                    .get(&identity.code_hash)
+                    .ok_or_else(|| {
+                        ValidationFail::NotPermitted(format!(
+                            "contract instance `{}` has no manifest",
+                            identity.contract_address
+                        ))
+                    })?;
+                crate::smartcontracts::ivm::validate_manifest_hashes(
+                    manifest,
+                    summary.code_hash,
+                    summary.abi_hash,
                 )
-                .expect("validated IVM metadata and pipeline ceiling are positive");
+                .map_err(ValidationFail::IvmAdmission)?;
                 let gas_cap = crate::smartcontracts::ivm::gas_limit_for_cycles(eff_cycles);
                 let remaining_block_budget = if self.gas_limit_per_block == 0 {
                     u64::MAX
@@ -52568,93 +52943,146 @@ impl StateTransaction<'_, '_> {
                             ))
                         })?;
                     let bytecode = bytecode.clone();
-                    let summary = {
+                    let admitted = {
                         let mut cache = self.ivm_cache.lock();
                         cache
-                            .summarize_program(bytecode.as_ref())
-                            .map_err(|e| ValidationFail::InternalError(e.to_string()))?
+                            .summarize_executable(bytecode.as_ref())
+                            .map_err(crate::smartcontracts::ivm::program_admission_error)?
                     };
-                    let meta = summary.metadata.clone();
-                    crate::pipeline::overlay::validate_header_policy(&meta)
-                        .map_err(ValidationFail::IvmAdmission)?;
-                    let eff_cycles = NonZeroU64::new(
-                        meta.max_cycles
-                            .min(self.pipeline.ivm_max_cycles_upper_bound.get()),
-                    )
-                    .expect("validated IVM metadata and pipeline ceiling are positive");
-                    let gas_cap = crate::smartcontracts::ivm::gas_limit_for_cycles(eff_cycles);
-                    let remaining_block_budget = if self.gas_limit_per_block == 0 {
-                        u64::MAX
-                    } else {
-                        self.gas_limit_per_block.saturating_sub(
-                            self.gas_used_in_block_so_far
-                                .saturating_add(self.last_tx_gas_used),
-                        )
-                    };
-                    let mut gas_limit = gas_cap.min(remaining_block_budget);
-                    if gas_limit == u64::MAX {
-                        gas_limit = DEFAULT_TRIGGER_GAS_LIMIT;
-                    }
-                    let selector = crate::executor::requested_contract_entrypoint(
-                        &contract_call_metadata,
-                    )?
-                    .ok_or_else(|| {
-                        ValidationFail::NotPermitted(
-                            "self-describing raw-IVM trigger callback requires explicit contract_entrypoint metadata"
-                                .to_owned(),
-                        )
-                    })?;
-                    let runtime_identity = crate::executor::require_raw_contract_runtime_identity(
-                        &self.world,
-                        summary.code_hash,
-                        &contract_call_metadata,
-                    )?;
-                    let entrypoint_authorization =
-                        crate::executor::authorize_prepared_raw_contract_selector(
-                            &self.world,
-                            authority,
-                            summary.prepared_contract(),
-                            &selector,
-                            &runtime_identity,
-                        )?;
-                    let contract_subject =
-                        crate::smartcontracts::code::fetch_bound_contract_subject(
-                            self,
-                            &runtime_identity.contract_address,
-                        )
-                        .ok_or_else(|| {
-                            ValidationFail::NotPermitted(format!(
-                                "contract instance `{}` has no valid subject binding",
-                                runtime_identity.contract_address
-                            ))
-                        })?;
-                    let transition = crate::executor::validate_prepared_contract_lifecycle_call(
-                        &self.world,
-                        &runtime_identity.contract_address,
-                        runtime_identity.code_hash,
-                        summary.prepared_contract(),
-                        &selector,
-                    )?;
-                    debug_assert!(
-                        transition.is_none(),
-                        "trigger lifecycle selectors are rejected before state validation"
-                    );
-                    let trigger_args = self.trigger_args_from_event(&event);
-                    let mut contract_call_context =
-                        crate::executor::parse_prepared_trigger_call_execution_context(
-                            &contract_call_metadata,
-                            summary.prepared_contract(),
-                            &trigger_args,
-                            gas_limit,
-                        )?;
-                    contract_call_context.bind_runtime_identity(runtime_identity, contract_subject);
-                    let mut vm = summary
-                        .checkout_runtime(gas_limit)
-                        .map_err(|e| ValidationFail::InternalError(e.to_string()))?;
-                    if let Some(entrypoint_pc) = contract_call_context.entrypoint_pc() {
-                        let code_len = vm.memory.code_len();
-                        vm.set_register(1, code_len);
-                        vm.set_program_counter(entrypoint_pc).map_err(|err| {
+                    match admitted {
+                        crate::smartcontracts::ivm::cache::ExecutableProgramSummary::Generic(
+                            summary,
+                        ) => (
+                            self.execute_generic_ivm_trigger_program(
+                                id,
+                                authority,
+                                &event,
+                                &contract_call_metadata,
+                                &summary,
+                                nft_seq_base_override,
+                            ),
+                            None,
+                        ),
+                        crate::smartcontracts::ivm::cache::ExecutableProgramSummary::Contract(
+                            summary,
+                        ) => {
+                            let eff_cycles =
+                                crate::executor::validate_prepared_ivm_execution_policy(
+                                    self,
+                                    &summary.metadata,
+                                    summary.code_offset,
+                                    bytecode.as_ref(),
+                                )?;
+                            let gas_cap =
+                                crate::smartcontracts::ivm::gas_limit_for_cycles(eff_cycles);
+                            let remaining_block_budget = if self.gas_limit_per_block == 0 {
+                                u64::MAX
+                            } else {
+                                self.gas_limit_per_block.saturating_sub(
+                                    self.gas_used_in_block_so_far
+                                        .saturating_add(self.last_tx_gas_used),
+                                )
+                            };
+                            let mut gas_limit = gas_cap.min(remaining_block_budget);
+                            if gas_limit == u64::MAX {
+                                gas_limit = DEFAULT_TRIGGER_GAS_LIMIT;
+                            }
+                            let selector = crate::executor::requested_contract_entrypoint(
+                                &contract_call_metadata,
+                            )?
+                            .ok_or_else(|| {
+                                ValidationFail::NotPermitted(
+                                    "self-describing raw-IVM trigger callback requires explicit contract_entrypoint metadata"
+                                        .to_owned(),
+                                )
+                            })?;
+                            let runtime_identity =
+                                crate::executor::require_raw_contract_runtime_identity(
+                                    &self.world,
+                                    summary.code_hash,
+                                    &contract_call_metadata,
+                                )?;
+                            let live_code = self
+                                .world
+                                .contract_code
+                                .get(&runtime_identity.code_hash)
+                                .ok_or_else(|| {
+                                    ValidationFail::NotPermitted(format!(
+                                        "contract bytecode `{}` not found in WSV",
+                                        runtime_identity.code_hash
+                                    ))
+                                })?;
+                            if live_code.as_slice() != bytecode.as_ref() {
+                                return Err(ValidationFail::NotPermitted(format!(
+                                    "raw-IVM trigger bytecode `{}` does not match live WSV",
+                                    runtime_identity.code_hash
+                                ))
+                                .into());
+                            }
+                            let manifest = self
+                                .world
+                                .contract_manifests
+                                .get(&runtime_identity.code_hash)
+                                .ok_or_else(|| {
+                                    ValidationFail::NotPermitted(format!(
+                                        "contract instance `{}` has no manifest",
+                                        runtime_identity.contract_address
+                                    ))
+                                })?;
+                            crate::smartcontracts::ivm::validate_manifest_hashes(
+                                manifest,
+                                summary.code_hash,
+                                summary.abi_hash,
+                            )
+                            .map_err(ValidationFail::IvmAdmission)?;
+                            let entrypoint_authorization =
+                                crate::executor::authorize_prepared_raw_contract_selector(
+                                    &self.world,
+                                    authority,
+                                    summary.prepared_contract(),
+                                    &selector,
+                                    &runtime_identity,
+                                )?;
+                            let contract_subject =
+                                crate::smartcontracts::code::fetch_bound_contract_subject(
+                                    self,
+                                    &runtime_identity.contract_address,
+                                )
+                                .ok_or_else(|| {
+                                    ValidationFail::NotPermitted(format!(
+                                        "contract instance `{}` has no valid subject binding",
+                                        runtime_identity.contract_address
+                                    ))
+                                })?;
+                            let transition =
+                                crate::executor::validate_prepared_contract_lifecycle_call(
+                                    &self.world,
+                                    &runtime_identity.contract_address,
+                                    runtime_identity.code_hash,
+                                    summary.prepared_contract(),
+                                    &selector,
+                                )?;
+                            debug_assert!(
+                                transition.is_none(),
+                                "trigger lifecycle selectors are rejected before state validation"
+                            );
+                            let trigger_args = self.trigger_args_from_event(&event);
+                            let mut contract_call_context =
+                                crate::executor::parse_prepared_trigger_call_execution_context(
+                                    &contract_call_metadata,
+                                    summary.prepared_contract(),
+                                    &trigger_args,
+                                    gas_limit,
+                                )?;
+                            contract_call_context
+                                .bind_runtime_identity(runtime_identity, contract_subject);
+                            let mut vm = summary
+                                .checkout_runtime(gas_limit)
+                                .map_err(|e| ValidationFail::InternalError(e.to_string()))?;
+                            if let Some(entrypoint_pc) = contract_call_context.entrypoint_pc() {
+                                let code_len = vm.memory.code_len();
+                                vm.set_register(1, code_len);
+                                vm.set_program_counter(entrypoint_pc).map_err(|err| {
                             let selector = contract_call_context
                                 .runtime_context()
                                 .map(|runtime| runtime.entrypoint)
@@ -52663,92 +53091,101 @@ impl StateTransaction<'_, '_> {
                                 "contract entrypoint `{selector}` resolved to invalid pc: {err}"
                             ))
                         })?;
-                    }
-                    let host_args =
-                        self.trigger_host_args(&event, contract_call_context.args().clone());
-                    let contract_runtime_context = contract_call_context.runtime_context();
-                    // Attach core IVM host adapter. Stateful syscalls enqueue ISIs
-                    // which we collect after `vm.run()` and return as the trigger step.
-                    let accounts = self.trigger_accounts_snapshot();
-                    let mut host =
+                            }
+                            let host_args = self
+                                .trigger_host_args(&event, contract_call_context.args().clone());
+                            let contract_runtime_context = contract_call_context.runtime_context();
+                            // Attach core IVM host adapter. Stateful syscalls enqueue ISIs
+                            // which we collect after `vm.run()` and return as the trigger step.
+                            let accounts = self.trigger_accounts_snapshot();
+                            let mut host =
                         crate::smartcontracts::ivm::host::CoreHostImpl::with_accounts_and_args(
                             authority.clone(),
                             accounts,
                             host_args,
                         );
-                    if let Some(record) = contract_call_context.prepared_argument_record() {
-                        host.set_entrypoint_argument_record(Some(record.clone()));
-                    }
-                    host.set_prepared_contract_cache(summary.prepared_contract_cache());
-                    let current_block_time_ms =
-                        u64::try_from(self._curr_block.creation_time().as_millis())
-                            .expect("block creation timestamp must fit into u64");
-                    host.set_trigger_id(id.clone());
-                    host.set_block_time_ms(current_block_time_ms);
-                    // Seed sample NFT helper sequence with a deterministic base so repeated
-                    // executions (including multiple time-trigger matches in one block) generate
-                    // unique ids without relying on mutable global state.
-                    let default_base = self._curr_block.height().get().saturating_mul(256);
-                    host.set_nft_seq_base(nft_seq_base_override.unwrap_or(default_base));
-                    #[cfg(feature = "telemetry")]
-                    host.set_telemetry(self.telemetry.clone());
-                    host.set_crypto_config(self.crypto());
-                    host.set_zk_config(&self.zk);
-                    host.set_chain_id(self.chain_id());
-                    host.set_public_inputs_from_parameters(self.world.parameters.get());
-                    host.set_vrf_epoch_seeds_from_world(&self.world);
-                    host.set_query_state(self);
-                    host.set_contract_runtime_context(contract_runtime_context.clone());
-                    host.set_contract_entrypoint_authorization(Some(entrypoint_authorization));
-                    host.set_zk_snapshots_from_world(&self.world, &self.zk)
-                        .map_err(|e| {
-                            ValidationFail::InternalError(format!("invalid ZK snapshot state: {e}"))
-                        })?;
-                    vm.set_max_cycles(eff_cycles.get());
-                    vm.set_gas_limit(gas_limit);
-                    if let Some(argument_record) = contract_call_context.prepared_argument_record()
-                    {
-                        argument_record
-                            .precharge_vm(&mut vm)
-                            .map_err(|error| ValidationFail::NotPermitted(error.to_string()))?;
-                    }
-                    let run_result = vm.run_with_host(&mut host);
-                    let trigger_gas_used = gas_limit.saturating_sub(vm.remaining_gas());
-                    let run_error = run_result.err().map(|error| {
-                        crate::smartcontracts::ivm::map_vm_error_with_context_to_validation(
-                            &vm, &error,
-                        )
-                    });
-                    if let Some(error) = run_error {
-                        {
-                            let _consumed_host = host;
+                            if let Some(record) = contract_call_context.prepared_argument_record() {
+                                host.set_entrypoint_argument_record(Some(record.clone()));
+                            }
+                            host.set_prepared_contract_cache(summary.prepared_contract_cache());
+                            let current_block_time_ms =
+                                u64::try_from(self._curr_block.creation_time().as_millis())
+                                    .expect("block creation timestamp must fit into u64");
+                            host.set_trigger_id(id.clone());
+                            host.set_block_time_ms(current_block_time_ms);
+                            // Seed sample NFT helper sequence with a deterministic base so repeated
+                            // executions (including multiple time-trigger matches in one block) generate
+                            // unique ids without relying on mutable global state.
+                            let default_base = self._curr_block.height().get().saturating_mul(256);
+                            host.set_nft_seq_base(nft_seq_base_override.unwrap_or(default_base));
+                            #[cfg(feature = "telemetry")]
+                            host.set_telemetry(self.telemetry.clone());
+                            host.set_crypto_config(self.crypto());
+                            host.set_zk_config(&self.zk);
+                            host.set_chain_id(self.chain_id());
+                            host.set_public_inputs_from_parameters(self.world.parameters.get());
+                            host.set_vrf_epoch_seeds_from_world(&self.world);
+                            host.set_query_state(self);
+                            host.set_contract_runtime_context(contract_runtime_context.clone());
+                            host.set_contract_entrypoint_authorization(Some(
+                                entrypoint_authorization,
+                            ));
+                            host.set_zk_snapshots_from_world(&self.world, &self.zk)
+                                .map_err(|e| {
+                                    ValidationFail::InternalError(format!(
+                                        "invalid ZK snapshot state: {e}"
+                                    ))
+                                })?;
+                            vm.set_max_cycles(eff_cycles.get());
+                            vm.set_gas_limit(gas_limit);
+                            if let Some(argument_record) =
+                                contract_call_context.prepared_argument_record()
+                            {
+                                argument_record.precharge_vm(&mut vm).map_err(|error| {
+                                    ValidationFail::NotPermitted(error.to_string())
+                                })?;
+                            }
+                            let run_result = vm.run_with_host(&mut host);
+                            let trigger_gas_used = gas_limit.saturating_sub(vm.remaining_gas());
+                            let run_error = run_result.err().map(|error| {
+                                crate::smartcontracts::ivm::map_vm_error_with_context_to_validation(
+                                    &vm, &error,
+                                )
+                            });
+                            if let Some(error) = run_error {
+                                {
+                                    let _consumed_host = host;
+                                }
+                                self.last_tx_gas_used =
+                                    self.last_tx_gas_used.saturating_add(trigger_gas_used);
+                                return Err(error.into());
+                            }
+                            // Collect queued ISIs from the host, execute them via the executor,
+                            // and return them as the step.
+                            let artifacts =
+                                host.into_execution_artifacts(contract_runtime_context.clone());
+                            self.last_tx_gas_used =
+                                self.last_tx_gas_used.saturating_add(trigger_gas_used);
+                            let artifacts = artifacts?;
+                            let runtime_origin = contract_runtime_context.as_ref().map(|context| {
+                                crate::validation_fee::OpaqueDeferredRuntimeOrigin::new(
+                                    context,
+                                    bytecode.as_ref(),
+                                )
+                            });
+                            crate::validation_fee::enforce_opaque_deferred_instruction_groups(
+                                &artifacts.queued_instructions_by_authority(),
+                                self,
+                                runtime_origin,
+                            )?;
+                            let queued_instructions = artifacts.queued_instructions();
+                            let step = ExecutionStep(ConstVec::from(queued_instructions));
+                            self.seed_time_trigger_call_hash(id, authority, &event, &step);
+                            let queued = artifacts.apply_to_transaction(self, authority)?;
+                            let cvs: ConstVec<InstructionBox> = ConstVec::from(queued);
+                            (Ok(cvs.into()), None)
                         }
-                        self.last_tx_gas_used =
-                            self.last_tx_gas_used.saturating_add(trigger_gas_used);
-                        return Err(error.into());
                     }
-                    // Collect queued ISIs from the host, execute them via the executor,
-                    // and return them as the step.
-                    let artifacts = host.into_execution_artifacts(contract_runtime_context.clone());
-                    self.last_tx_gas_used = self.last_tx_gas_used.saturating_add(trigger_gas_used);
-                    let artifacts = artifacts?;
-                    let runtime_origin = contract_runtime_context.as_ref().map(|context| {
-                        crate::validation_fee::OpaqueDeferredRuntimeOrigin::new(
-                            context,
-                            bytecode.as_ref(),
-                        )
-                    });
-                    crate::validation_fee::enforce_opaque_deferred_instruction_groups(
-                        &artifacts.queued_instructions_by_authority(),
-                        self,
-                        runtime_origin,
-                    )?;
-                    let queued_instructions = artifacts.queued_instructions();
-                    let step = ExecutionStep(ConstVec::from(queued_instructions));
-                    self.seed_time_trigger_call_hash(id, authority, &event, &step);
-                    let queued = artifacts.apply_to_transaction(self, authority)?;
-                    let cvs: ConstVec<InstructionBox> = ConstVec::from(queued);
-                    (Ok(cvs.into()), None)
                 } else {
                     warn!(
                         trigger_id = %id,
@@ -53503,7 +53940,7 @@ pub(crate) mod deserialize {
             let commit_topology = take_topology_cell(&mut map, "commit_topology")?;
             let prev_commit_topology = take_topology_cell(&mut map, "prev_commit_topology")?;
 
-            drain_unknown(&map, "state");
+            reject_unknown(&map, "state")?;
 
             if legacy_contract_subject_ledger_missing {
                 let (historical_addresses, manifest_hash) = if block_hashes_vec.is_empty() {
@@ -54915,17 +55352,17 @@ pub(crate) mod deserialize {
         let defi_oracle_attestations = take_optional_default(&mut map, "defi_oracle_attestations")?;
         let twitter_bindings = take_optional_default(&mut map, "twitter_bindings")?;
         let twitter_bindings_by_uaid = take_optional_default(&mut map, "twitter_bindings_by_uaid")?;
+        let registry_value = map
+            .get("sccp_registry")
+            .ok_or_else(|| json::Error::missing_field("sccp_registry"))?;
+        validate_sccp_registry_cell_json(registry_value).map_err(|message| {
+            json::Error::InvalidField {
+                field: "sccp_registry".to_owned(),
+                message,
+            }
+        })?;
         let sccp_registry: Cell<iroha_data_model::bridge::SccpRegistryV1> =
             take_required(&mut map, "sccp_registry")?;
-        let registry_wire = sccp_registry.view().get().clone();
-        let validated_registry = ValidatedSccpRegistryV1::try_from_wire(registry_wire.clone())
-            .map_err(json::Error::Message)?;
-        if validated_registry.registry() != &registry_wire {
-            return Err(json::Error::Message(
-                "invalid SCCP registry: snapshot registry is not in canonical lane/route order"
-                    .to_owned(),
-            ));
-        }
         let sccp_outbound_pending_usage = take_required(&mut map, "sccp_outbound_pending_usage")?;
         let sccp_outbound_pending_messages =
             take_required(&mut map, "sccp_outbound_pending_messages")?;
@@ -54934,7 +55371,7 @@ pub(crate) mod deserialize {
         let sccp_outbound_message_index = take_required(&mut map, "sccp_outbound_message_index")?;
         let sccp_outbound_proofs = take_required(&mut map, "sccp_outbound_proofs")?;
         let sccp_inbound_messages = take_required(&mut map, "sccp_inbound_messages")?;
-        let sccp_inbound_anchor_high_water =
+        let sccp_inbound_anchor_high_water: Storage<SccpInboundAnchorHighWaterKeyV1, u64> =
             take_required(&mut map, "sccp_inbound_anchor_high_water")?;
         validate_sccp_outbound_pending_messages(&sccp_outbound_pending_messages)?;
         validate_sccp_outbound_pending_usage(
@@ -54949,9 +55386,11 @@ pub(crate) mod deserialize {
         )?;
         validate_sccp_outbound_proofs(&sccp_outbound_proofs, &sccp_outbound_message_locator)?;
         validate_sccp_inbound_messages(&sccp_inbound_messages)?;
+        let sccp_inbound_messages_view = sccp_inbound_messages.view();
+        let sccp_inbound_anchor_high_water_view = sccp_inbound_anchor_high_water.view();
         validate_sccp_inbound_anchor_high_water_index(
-            &sccp_inbound_messages,
-            &sccp_inbound_anchor_high_water,
+            &sccp_inbound_messages_view,
+            &sccp_inbound_anchor_high_water_view,
         )
         .map_err(|message| json::Error::InvalidField {
             field: "world.sccp_inbound_anchor_high_water".to_owned(),
@@ -55086,7 +55525,7 @@ pub(crate) mod deserialize {
             take_optional_default(&mut map, "merge_hint_roots")?;
         let merge_global_state_root: Cell<Option<Hash>> =
             take_optional_default(&mut map, "merge_global_state_root")?;
-        drain_unknown(&map, "world");
+        reject_unknown(&map, "world")?;
 
         let mut world = World {
             parameters,
@@ -55816,13 +56255,14 @@ pub(crate) mod deserialize {
         }
     }
 
-    fn drain_unknown(map: &json::native::Map, context: &str) {
-        if map.is_empty() {
-            return;
-        }
-        for key in map.keys() {
-            trace!(target: "state::deserialize", context = context, field = %key, "ignoring unknown field");
-        }
+    fn reject_unknown(map: &json::native::Map, context: &str) -> Result<(), json::Error> {
+        let Some(field) = map.keys().next() else {
+            return Ok(());
+        };
+        Err(json::Error::InvalidField {
+            field: format!("{context}.{field}"),
+            message: "unknown field is not permitted in a signed first-release snapshot".to_owned(),
+        })
     }
 
     #[cfg(test)]
@@ -56811,7 +57251,7 @@ mod tests {
             .with_name("coin".to_owned())
             .build(&ALICE_ID);
         let asset_id = AssetId::new(definition_id.clone(), ALICE_ID.clone());
-        let asset = Asset::new(asset_id.clone(), Numeric::new(5_u32, 0));
+        let asset = Asset::new(asset_id.clone(), Quantity::from(5_u32));
         let world = World::with_assets([domain], [account], [definition], [asset], []);
         let state = State::new(
             world,
@@ -56819,39 +57259,6 @@ mod tests {
             LiveQueryStore::start_test(),
         );
         (state, definition_id, asset_id)
-    }
-
-    #[test]
-    #[should_panic(expected = "negative balance")]
-    fn world_with_assets_rejects_negative_initial_balance() {
-        let domain_id = DomainId::try_new("negative_balance", "universal").expect("domain id");
-        let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
-        let account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
-        let definition_id = AssetDefinitionId::new(domain_id, "coin".parse().expect("asset name"));
-        let definition = AssetDefinition::numeric(definition_id.clone())
-            .with_name("coin".to_owned())
-            .build(&ALICE_ID);
-        let asset = Asset::new(
-            AssetId::new(definition_id, ALICE_ID.clone()),
-            Numeric::new(-1_i32, 0),
-        );
-
-        let _ = World::with_assets([domain], [account], [definition], [asset], []);
-    }
-
-    #[test]
-    #[should_panic(expected = "negative total quantity")]
-    fn world_with_assets_rejects_negative_initial_total() {
-        let domain_id = DomainId::try_new("negative_total", "universal").expect("domain id");
-        let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
-        let account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
-        let definition_id = AssetDefinitionId::new(domain_id, "coin".parse().expect("asset name"));
-        let mut definition = AssetDefinition::numeric(definition_id)
-            .with_name("coin".to_owned())
-            .build(&ALICE_ID);
-        definition.total_quantity = Numeric::new(-1_i32, 0);
-
-        let _ = World::with([domain], [account], [definition]);
     }
 
     #[test]
@@ -56866,53 +57273,19 @@ mod tests {
             .build(&ALICE_ID);
         let asset = Asset::new(
             AssetId::new(definition_id, ALICE_ID.clone()),
-            Numeric::new(1_u32, 1),
+            "0.1".parse().expect("valid quantity"),
         );
 
         let _ = World::with_assets([domain], [account], [definition], [asset], []);
     }
 
     #[test]
-    fn state_snapshot_rejects_negative_numeric_asset_state() {
-        let (state, definition_id, asset_id) = snapshot_state_with_numeric_asset();
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut block = state.block(header);
-        **block.world.assets.get_mut(&asset_id).expect("asset exists") = Numeric::new(-1_i32, 0);
-        block
-            .commit()
-            .expect("commit adversarial negative-balance snapshot fixture");
-        let value = norito::json::to_value(&state).expect("serialize negative balance snapshot");
-        let error = deserialize_state_snapshot_value(value)
-            .err()
-            .expect("negative persisted balance must fail closed");
-        assert!(error.to_string().contains("negative balance"), "{error}");
-
-        let (state, definition_id_again, _) = snapshot_state_with_numeric_asset();
-        assert_eq!(definition_id_again, definition_id);
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut block = state.block(header);
-        block
-            .world
-            .asset_definitions
-            .get_mut(&definition_id_again)
-            .expect("asset definition exists")
-            .total_quantity = Numeric::new(-1_i32, 0);
-        block
-            .commit()
-            .expect("commit adversarial negative-total snapshot fixture");
-        let value = norito::json::to_value(&state).expect("serialize negative total snapshot");
-        let error = deserialize_state_snapshot_value(value)
-            .err()
-            .expect("negative persisted total must fail closed");
-        assert!(
-            error.to_string().contains("negative total quantity"),
-            "{error}"
-        );
-
+    fn state_snapshot_rejects_numeric_asset_state_outside_spec() {
         let (state, _, asset_id) = snapshot_state_with_numeric_asset();
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
-        **block.world.assets.get_mut(&asset_id).expect("asset exists") = Numeric::new(1_u32, 1);
+        **block.world.assets.get_mut(&asset_id).expect("asset exists") =
+            "0.1".parse().expect("valid quantity");
         block
             .commit()
             .expect("commit adversarial invalid-scale snapshot fixture");
@@ -59258,7 +59631,7 @@ mod tests {
         let event = data_pre::DataEvent::Domain(data_pre::DomainEvent::Account(
             data_pre::AccountEvent::Asset(data_pre::AssetEvent::Added(data_pre::AssetChanged {
                 asset: asset_id,
-                amount: Numeric::from(1_u32),
+                amount: Quantity::from(1_u32),
             })),
         ));
 
@@ -59286,7 +59659,7 @@ mod tests {
         let (subject, _) = gen_account_in("wide-trigger-amount");
         let asset_definition = AssetDefinitionId::new(asset_domain, "coin".parse().unwrap());
         let wide_amount = "9223372036854775808"
-            .parse::<Numeric>()
+            .parse::<Quantity>()
             .expect("canonical integer one above i64::MAX");
         let event = data_pre::DataEvent::Domain(data_pre::DomainEvent::Account(
             data_pre::AccountEvent::Asset(data_pre::AssetEvent::Added(data_pre::AssetChanged {
@@ -59351,7 +59724,7 @@ mod tests {
         let event = data_pre::DataEvent::Domain(data_pre::DomainEvent::Account(
             data_pre::AccountEvent::Asset(data_pre::AssetEvent::Added(data_pre::AssetChanged {
                 asset: asset_id,
-                amount: Numeric::from(1_u32),
+                amount: Quantity::from(1_u32),
             })),
         ));
 
@@ -60099,10 +60472,12 @@ mod tests {
         ];
 
         for wire in invalid {
-            let _generation = state.begin_state_view_write();
-            let mut registry = state.world.sccp_registry.block();
-            *registry.get_mut() = wire;
-            registry.commit();
+            {
+                let _generation = state.begin_state_view_write();
+                let mut registry = state.world.sccp_registry.block();
+                *registry.get_mut() = wire;
+                registry.commit();
+            }
             let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let _ = state.sccp_registry_snapshot();
             }));
@@ -61998,10 +62373,10 @@ mod tests {
             enabled: true,
             ..Default::default()
         };
-        nexus.fees.base_fee = Numeric::zero();
-        nexus.fees.per_byte_fee = Numeric::zero();
-        nexus.fees.per_instruction_fee = Numeric::zero();
-        nexus.fees.per_gas_unit_fee = Numeric::zero();
+        nexus.fees.base_fee = Quantity::zero();
+        nexus.fees.per_byte_fee = Quantity::zero();
+        nexus.fees.per_instruction_fee = Quantity::zero();
+        nexus.fees.per_gas_unit_fee = Quantity::zero();
         state
             .set_nexus(nexus)
             .expect("enable Nexus for manual lifecycle test");
@@ -101293,7 +101668,7 @@ mod tests {
         .expect("register asset definition");
 
         let asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
-        Mint::asset_numeric(5_u32, asset_id.clone())
+        Mint::asset_quantity(5_u32, asset_id.clone())
             .execute(&ALICE_ID, &mut stx)
             .expect("mint tracked balance");
         stx.world.asset_metadata.insert(
@@ -101549,7 +101924,7 @@ mod tests {
 
         let global_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
         let (_, global_asset_value) =
-            Asset::new(global_asset_id.clone(), Numeric::new(1, 0)).into_key_value();
+            Asset::new(global_asset_id.clone(), Quantity::from(1)).into_key_value();
         stx.world
             .assets
             .insert(global_asset_id.clone(), global_asset_value);
@@ -101564,7 +101939,7 @@ mod tests {
             ),
         );
         let (_, scoped_asset_value) =
-            Asset::new(scoped_asset_id.clone(), Numeric::new(1, 0)).into_key_value();
+            Asset::new(scoped_asset_id.clone(), Quantity::from(1)).into_key_value();
         stx.world
             .assets
             .insert(scoped_asset_id.clone(), scoped_asset_value);
@@ -101678,8 +102053,7 @@ mod tests {
             scoped_asset_id.clone(),
             other_asset_id,
         ] {
-            let (_, asset_value) =
-                Asset::new(asset_id.clone(), Numeric::new(1, 0)).into_key_value();
+            let (_, asset_value) = Asset::new(asset_id.clone(), Quantity::from(1)).into_key_value();
             stx.world.assets.insert(asset_id.clone(), asset_value);
             stx.world.track_asset_holder(&asset_id);
         }
@@ -101806,7 +102180,7 @@ mod tests {
         .expect("register asset definition");
 
         let asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
-        let (_, asset_value) = Asset::new(asset_id.clone(), Numeric::new(9, 0)).into_key_value();
+        let (_, asset_value) = Asset::new(asset_id.clone(), 9_u32).into_key_value();
         stx.world.assets.insert(asset_id.clone(), asset_value);
         stx.world.track_asset_holder(&asset_id);
 
@@ -101816,7 +102190,7 @@ mod tests {
             .expect("asset total query succeeds");
         assert_eq!(
             tracked_total,
-            Numeric::zero(),
+            Quantity::zero(),
             "query should return tracked definition total quantity"
         );
     }
@@ -101847,7 +102221,7 @@ mod tests {
             }
             .build(&ALICE_ID);
             let asset_id = AssetId::of(asset_def_id.clone(), ALICE_ID.clone());
-            let asset = Asset::new(asset_id.clone(), Numeric::new(0, 0));
+            let asset = Asset::new(asset_id.clone(), Quantity::from(0));
 
             let world = World::with_assets([domain], [account], [asset_def], [asset], []);
             (world, domain_id, asset_def_id, asset_id, ALICE_ID.clone())
@@ -101874,7 +102248,7 @@ mod tests {
         let mut block_seq = state_seq.block(header);
         {
             let mut stx = block_seq.transaction();
-            Mint::asset_numeric(5_u32, asset_id.clone())
+            Mint::asset_quantity(5_u32, asset_id.clone())
                 .execute(&authority, &mut stx)
                 .expect("mint");
             SetKeyValue::account(authority.clone(), account_key.clone(), Json::new(1u32))
@@ -102089,7 +102463,7 @@ mod tests {
         );
         let alice_asset = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
         let failing_instruction: InstructionBox =
-            Transfer::asset_numeric(alice_asset, 1_u32, BOB_ID.clone()).into();
+            Transfer::asset_quantity(alice_asset, 1_u32, BOB_ID.clone()).into();
         let trigger = Trigger::new(
             trigger_id.clone(),
             Action::new(
@@ -103017,7 +103391,7 @@ mod tests {
 
     #[test]
     fn sccp_registry_rejects_multiple_enabled_revisions_atomically() {
-        let mut lane = eth_test_lane_for_testing();
+        let mut lane = sccp_evm_lane_for_testing(SccpNetworkV1::EthereumMainnet);
         let anchor = iroha_data_model::bridge::SccpNativeTrustAnchorV1 {
             backend: iroha_data_model::bridge::BridgeNativeProofBackendV1::EthereumBeacon,
             anchor_hash: [0xA5; 32],
@@ -103394,7 +103768,7 @@ mod tests {
             let mut state_block = state.block(header);
             {
                 let mut stx = state_block.transaction();
-                Mint::asset_numeric(1_u32, asset_id.clone())
+                Mint::asset_quantity(1_u32, asset_id.clone())
                     .execute(&ALICE_ID, &mut stx)
                     .unwrap();
                 SetKeyValue::account(
@@ -103405,7 +103779,7 @@ mod tests {
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
                 let trigger_action = Action::new(
-                    vec![InstructionBox::from(Burn::asset_numeric(
+                    vec![InstructionBox::from(Burn::asset_quantity(
                         1_u32,
                         asset_id.clone(),
                     ))],
@@ -103537,6 +103911,122 @@ mod tests {
         assert!(
             view.world.asset_definition(&asset_definition_id).is_err(),
             "asset definition created by a failing trigger must not persist",
+        );
+    }
+
+    #[test]
+    fn authenticated_generic_ivm_trigger_executes_without_contract_identity() {
+        use iroha_data_model::{
+            events::execute_trigger::{ExecuteTriggerEvent, ExecuteTriggerEventFilter},
+            transaction::{Executable, IvmBytecode},
+            trigger::{
+                Trigger,
+                action::{Action, Repeats},
+            },
+        };
+
+        let state = State::new(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let trigger_id: TriggerId = "generic_ivm_callback".parse().expect("trigger id");
+        let mut program = ivm::ProgramMetadata {
+            max_cycles: 100,
+            ..ivm::ProgramMetadata::default()
+        }
+        .encode();
+        program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+        let generic_code_hash = ivm::contract_code_hash(&program);
+
+        let block1 = new_dummy_block_with_payload(|header| {
+            header.set_height(nonzero!(1_u64));
+        });
+        {
+            let mut state_block = state.block(block1.as_ref().header());
+            let mut transaction = state_block.transaction();
+            Register::domain(Domain::new(
+                DomainId::try_new("wonderland", "universal").expect("domain id"),
+            ))
+            .execute(&ALICE_ID, &mut transaction)
+            .expect("register domain");
+            Register::account(new_sample_account(&ALICE_ID))
+                .execute(&ALICE_ID, &mut transaction)
+                .expect("register account");
+            Grant::account_permission(
+                iroha_executor_data_model::permission::trigger::CanRegisterTrigger {
+                    authority: ALICE_ID.clone(),
+                },
+                ALICE_ID.clone(),
+            )
+            .execute(&ALICE_ID, &mut transaction)
+            .expect("grant trigger registration");
+            Register::trigger(Trigger::new(
+                trigger_id.clone(),
+                Action::new(
+                    Executable::Ivm(IvmBytecode::from_compiled(program)),
+                    Repeats::Indefinitely,
+                    ALICE_ID.clone(),
+                    ExecuteTriggerEventFilter::new()
+                        .for_trigger(trigger_id.clone())
+                        .under_authority(ALICE_ID.clone()),
+                ),
+            ))
+            .execute(&ALICE_ID, &mut transaction)
+            .expect("register authenticated generic trigger");
+            transaction.apply();
+            state_block.commit().expect("commit generic trigger");
+        }
+
+        let block2 = new_dummy_block_with_payload(|header| {
+            header.set_height(nonzero!(2_u64));
+        });
+        let mut state_block = state.block(block2.as_ref().header());
+        let mut transaction = state_block.transaction();
+        let event = ExecuteTriggerEvent {
+            trigger_id: trigger_id.clone(),
+            authority: ALICE_ID.clone(),
+            args: Json::default(),
+        };
+        let step = transaction
+            .execute_called_trigger(&trigger_id, &event)
+            .expect("generic IVM trigger executes at pc zero");
+        assert!(step.0.is_empty());
+
+        transaction.world.contract_manifests.insert(
+            generic_code_hash,
+            iroha_data_model::smart_contract::manifest::ContractManifest {
+                seiyaku_name: None,
+                code_hash: Some(generic_code_hash),
+                abi_hash: Some(Hash::prehashed(ivm::syscalls::compute_abi_hash(
+                    ivm::SyscallPolicy::AbiV1,
+                ))),
+                compiler_fingerprint: None,
+                features_bitmap: None,
+                access_set_hints: None,
+                entrypoints: None,
+                states: None,
+                kotoba: None,
+                error_codes: None,
+                provenance: None,
+            },
+        );
+        let events_before = transaction.world.external_event_buf.len();
+        let error = transaction
+            .execute_called_trigger(&trigger_id, &event)
+            .expect_err("a manifest-bound hash must not execute as a generic trigger");
+        assert!(
+            matches!(
+                &error,
+                TransactionRejectionReason::Validation(ValidationFail::NotPermitted(message))
+                    if message.contains("contract manifest")
+            ),
+            "unexpected generic-trigger binding error: {error:?}"
+        );
+        assert_eq!(
+            transaction.world.external_event_buf.len(),
+            events_before,
+            "generic-trigger binding rejection must emit no completion event"
         );
     }
 
@@ -103722,6 +104212,46 @@ mod tests {
                 .get(&metadata_marker)
                 .cloned()
                 .expect("authorized raw trigger writes its metadata marker");
+            let live_manifest = stx
+                .world
+                .contract_manifests
+                .remove(code_hash)
+                .expect("remove raw-trigger manifest for adversarial check");
+            let missing_manifest_events_before = stx.world.external_event_buf.len();
+            ivm::reset_argument_record_decode_count();
+            let missing_manifest = stx
+                .execute_called_trigger(&trigger_id, &event)
+                .expect_err("raw trigger must reject a missing live manifest even with warm code");
+            assert!(
+                matches!(
+                    &missing_manifest,
+                    TransactionRejectionReason::Validation(ValidationFail::NotPermitted(message))
+                        if message.contains("has no manifest")
+                ),
+                "unexpected missing-manifest trigger error: {missing_manifest:?}"
+            );
+            assert_eq!(
+                ivm::argument_record_decode_count(),
+                0,
+                "missing trigger manifest must reject before event argument decoding"
+            );
+            assert_eq!(
+                stx.world.external_event_buf.len(),
+                missing_manifest_events_before,
+                "missing trigger manifest must emit no completion event"
+            );
+            assert_eq!(
+                stx.world
+                    .account(&contract_subject)
+                    .expect("raw trigger contract subject account")
+                    .metadata()
+                    .get(&metadata_marker),
+                Some(&authorized_marker),
+                "missing trigger manifest must apply no queued effect"
+            );
+            stx.world
+                .contract_manifests
+                .insert(code_hash, live_manifest);
             Revoke::account_permission(callback_permission.clone(), ALICE_ID.clone())
                 .execute(&ALICE_ID, &mut stx)
                 .expect("revoke raw IVM trigger entrypoint permission");
@@ -104293,7 +104823,7 @@ seiyaku IdentitylessRawCallback {
             })
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
-            Mint::asset_numeric(1_000_u32, gold_source.clone())
+            Mint::asset_quantity(1_000_u32, gold_source.clone())
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
             Grant::account_permission(
@@ -104398,7 +104928,7 @@ seiyaku IdentitylessRawCallback {
             let mut state_block = state.block(block2.as_ref().header());
             let mut stx = state_block.transaction();
 
-            Mint::asset_numeric(5_u32, rose_target.clone())
+            Mint::asset_quantity(5_u32, rose_target.clone())
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
 
@@ -106739,8 +107269,8 @@ seiyaku IdentitylessRawCallback {
     }
 
     fn setup_nexus_fee_merge_state(
-        sponsor_balance: Numeric,
-        fee_amount: Numeric,
+        sponsor_balance: Quantity,
+        fee_amount: Quantity,
         source_id: [u8; 32],
     ) -> (State, AccountId, AssetDefinitionId, Vec<KeyPair>) {
         let (sponsor_id, _sponsor_kp) = gen_account_in("wonderland");
@@ -106804,9 +107334,9 @@ seiyaku IdentitylessRawCallback {
                 instruction_count: 0,
                 gas_used: 0,
                 base_fee: fee_amount,
-                per_byte_fee: Numeric::zero(),
-                per_instruction_fee: Numeric::zero(),
-                per_gas_unit_fee: Numeric::zero(),
+                per_byte_fee: Quantity::zero(),
+                per_instruction_fee: Quantity::zero(),
+                per_gas_unit_fee: Quantity::zero(),
             },
         }];
         let envelope = LaneRelayEnvelope::new(
@@ -106846,67 +107376,9 @@ seiyaku IdentitylessRawCallback {
     }
 
     #[test]
-    fn nexus_fee_receipt_rejects_negative_amounts_and_schedule_rates() {
-        let fee_asset_id = iroha_config::parameters::defaults::nexus::fees::fee_asset_id();
-        let payer = gen_account_in("fee_receipt_negative").0;
-        let receipt = NexusFeeReceipt {
-            version: 1,
-            source_id: [0xA9; 32],
-            dataspace_id: DataSpaceId::UNIVERSAL,
-            lane_id: LaneId::new(0),
-            block_height: 1,
-            payer_account_id: payer,
-            fee_asset_id: fee_asset_id.clone(),
-            fee_amount: Numeric::one(),
-            schedule: NexusFeeScheduleInputs {
-                tx_bytes_len: 0,
-                instruction_count: 0,
-                gas_used: 0,
-                base_fee: Numeric::one(),
-                per_byte_fee: Numeric::zero(),
-                per_instruction_fee: Numeric::zero(),
-                per_gas_unit_fee: Numeric::zero(),
-            },
-        };
-        let negative = Numeric::new(-1_i32, 0);
-        let mut cases = Vec::new();
-        let mut case = receipt.clone();
-        case.fee_amount = negative.clone();
-        case.schedule.base_fee = negative.clone();
-        cases.push(case);
-        let mut case = receipt.clone();
-        case.schedule.base_fee = negative.clone();
-        cases.push(case);
-        let mut case = receipt.clone();
-        case.schedule.per_byte_fee = negative.clone();
-        cases.push(case);
-        let mut case = receipt.clone();
-        case.schedule.per_instruction_fee = negative.clone();
-        cases.push(case);
-        let mut case = receipt;
-        case.schedule.per_gas_unit_fee = negative;
-        cases.push(case);
-
-        for case in cases {
-            let error = State::validate_nexus_fee_receipt(
-                &case,
-                LaneId::new(0),
-                DataSpaceId::UNIVERSAL,
-                1,
-                &fee_asset_id,
-            )
-            .expect_err("negative Nexus fee receipt field must be rejected");
-            assert!(matches!(
-                error,
-                MergeLedgerCommitError::InvalidNexusFeeReceipt(_)
-            ));
-        }
-    }
-
-    #[test]
     fn commit_merge_entry_burns_nexus_fee_receipts_once() {
         let (state, sponsor_id, asset_def_id, commit_keypairs) =
-            setup_nexus_fee_merge_state(Numeric::from(10_u32), Numeric::from(3_u32), [0x42; 32]);
+            setup_nexus_fee_merge_state(Quantity::from(10_u32), Quantity::from(3_u32), [0x42; 32]);
         let candidate = state
             .merge_entry_candidates_from_lane_relays()
             .into_iter()
@@ -106961,7 +107433,7 @@ seiyaku IdentitylessRawCallback {
     #[test]
     fn commit_merge_entry_rejects_tampered_canonical_settlement_hash() {
         let (state, sponsor_id, asset_def_id, commit_keypairs) =
-            setup_nexus_fee_merge_state(Numeric::from(10_u32), Numeric::from(3_u32), [0x46; 32]);
+            setup_nexus_fee_merge_state(Quantity::from(10_u32), Quantity::from(3_u32), [0x46; 32]);
         let mut candidate = state
             .merge_entry_candidates_from_lane_relays()
             .into_iter()
@@ -106994,7 +107466,7 @@ seiyaku IdentitylessRawCallback {
     #[test]
     fn commit_merge_entry_rejects_commitment_changed_after_hashing() {
         let (state, sponsor_id, asset_def_id, commit_keypairs) =
-            setup_nexus_fee_merge_state(Numeric::from(10_u32), Numeric::from(3_u32), [0x47; 32]);
+            setup_nexus_fee_merge_state(Quantity::from(10_u32), Quantity::from(3_u32), [0x47; 32]);
         let mut candidate = state
             .merge_entry_candidates_from_lane_relays()
             .into_iter()
@@ -107027,7 +107499,7 @@ seiyaku IdentitylessRawCallback {
     #[test]
     fn commit_merge_entry_rejects_insufficient_nexus_fee_balance_without_partial_burn() {
         let (state, sponsor_id, asset_def_id, commit_keypairs) =
-            setup_nexus_fee_merge_state(Numeric::from(1_u32), Numeric::from(3_u32), [0x43; 32]);
+            setup_nexus_fee_merge_state(Quantity::from(1_u32), Quantity::from(3_u32), [0x43; 32]);
         let candidate = state
             .merge_entry_candidates_from_lane_relays()
             .into_iter()
@@ -107052,7 +107524,7 @@ seiyaku IdentitylessRawCallback {
     #[test]
     fn merge_append_failure_does_not_mutate_fee_state_or_replay_markers() {
         let (state, sponsor_id, asset_def_id, commit_keypairs) =
-            setup_nexus_fee_merge_state(Numeric::from(10_u32), Numeric::from(3_u32), [0x44; 32]);
+            setup_nexus_fee_merge_state(Quantity::from(10_u32), Quantity::from(3_u32), [0x44; 32]);
         let candidate = state
             .merge_entry_candidates_from_lane_relays()
             .into_iter()
@@ -107078,7 +107550,7 @@ seiyaku IdentitylessRawCallback {
     fn staged_fee_merge_kura_failure_publishes_no_burn_or_receipt_cache() {
         let source_id = [0x47; 32];
         let (state, sponsor_id, asset_def_id, commit_keypairs) =
-            setup_nexus_fee_merge_state(Numeric::from(10_u32), Numeric::from(3_u32), source_id);
+            setup_nexus_fee_merge_state(Quantity::from(10_u32), Quantity::from(3_u32), source_id);
         let candidate = state
             .merge_entry_candidates_from_lane_relays()
             .into_iter()
@@ -107153,7 +107625,7 @@ seiyaku IdentitylessRawCallback {
     fn staged_fee_merge_missing_transaction_membership_publishes_no_burn_or_receipt_cache() {
         let source_id = [0x46; 32];
         let (state, sponsor_id, asset_def_id, commit_keypairs) =
-            setup_nexus_fee_merge_state(Numeric::from(10_u32), Numeric::from(3_u32), source_id);
+            setup_nexus_fee_merge_state(Quantity::from(10_u32), Quantity::from(3_u32), source_id);
         let candidate = state
             .merge_entry_candidates_from_lane_relays()
             .into_iter()
@@ -107203,7 +107675,7 @@ seiyaku IdentitylessRawCallback {
     fn restart_rejects_orphan_merge_sidecar_without_burning_or_truncating() {
         let source_id = [0x45; 32];
         let (state, sponsor_id, asset_def_id, commit_keypairs) =
-            setup_nexus_fee_merge_state(Numeric::from(10_u32), Numeric::from(3_u32), source_id);
+            setup_nexus_fee_merge_state(Quantity::from(10_u32), Quantity::from(3_u32), source_id);
         let candidate = state
             .merge_entry_candidates_from_lane_relays()
             .into_iter()
@@ -107243,7 +107715,7 @@ seiyaku IdentitylessRawCallback {
     fn exact_merge_carrier_replay_burns_settlement_once() {
         let source_id = [0x45; 32];
         let (state, sponsor_id, asset_def_id, commit_keypairs) =
-            setup_nexus_fee_merge_state(Numeric::from(10_u32), Numeric::from(3_u32), source_id);
+            setup_nexus_fee_merge_state(Quantity::from(10_u32), Quantity::from(3_u32), source_id);
         let candidate = state
             .merge_entry_candidates_from_lane_relays()
             .into_iter()
@@ -107294,7 +107766,7 @@ seiyaku IdentitylessRawCallback {
     fn restart_replays_durable_merge_settlement_exactly_once() {
         let source_id = [0x45; 32];
         let (state, sponsor_id, asset_def_id, commit_keypairs) =
-            setup_nexus_fee_merge_state(Numeric::from(10_u32), Numeric::from(3_u32), source_id);
+            setup_nexus_fee_merge_state(Quantity::from(10_u32), Quantity::from(3_u32), source_id);
         let candidate = state
             .merge_entry_candidates_from_lane_relays()
             .into_iter()
@@ -108574,7 +109046,7 @@ seiyaku IdentitylessRawCallback {
         let by_call = Trigger::new(
             by_call_id.clone(),
             Action::new(
-                vec![InstructionBox::from(Mint::asset_numeric(
+                vec![InstructionBox::from(Mint::asset_quantity(
                     1_u32,
                     asset_id.clone(),
                 ))],
@@ -109606,7 +110078,7 @@ seiyaku IdentitylessRawCallback {
 
         let pipeline_trigger_id: TriggerId = "pipeline_mint_then_failing_data".parse().unwrap();
         let pipeline_action = Action::new(
-            vec![InstructionBox::from(Mint::asset_numeric(
+            vec![InstructionBox::from(Mint::asset_quantity(
                 1_u32,
                 asset_id.clone(),
             ))],
@@ -109697,7 +110169,7 @@ seiyaku IdentitylessRawCallback {
 
         let by_call_id: TriggerId = "call_then_failing_data".parse().unwrap();
         let by_call_action = Action::new(
-            vec![InstructionBox::from(Mint::asset_numeric(
+            vec![InstructionBox::from(Mint::asset_quantity(
                 1_u32,
                 asset_id.clone(),
             ))],
@@ -109948,7 +110420,7 @@ seiyaku IdentitylessRawCallback {
         {
             let mut stx = state_block1.transaction();
             let action = Action::new(
-                vec![InstructionBox::from(Mint::asset_numeric(
+                vec![InstructionBox::from(Mint::asset_quantity(
                     1_u32,
                     alice_asset_id.clone(),
                 ))],
@@ -110106,7 +110578,7 @@ seiyaku IdentitylessRawCallback {
         {
             let mut stx = state_block1.transaction();
             let action = Action::new(
-                vec![InstructionBox::from(Mint::asset_numeric(
+                vec![InstructionBox::from(Mint::asset_quantity(
                     1_u32,
                     alice_asset_id.clone(),
                 ))],
@@ -110244,7 +110716,7 @@ seiyaku IdentitylessRawCallback {
         {
             let mut stx = state_block1.transaction();
             let action = Action::new(
-                vec![InstructionBox::from(Mint::asset_numeric(
+                vec![InstructionBox::from(Mint::asset_quantity(
                     1_u32,
                     alice_asset_id.clone(),
                 ))],
@@ -111505,7 +111977,7 @@ seiyaku IdentitylessRawCallback {
         let mut state_block = state.block(header);
         {
             let mut stx = state_block.transaction();
-            Mint::asset_numeric(1_u32, asset_id.clone())
+            Mint::asset_quantity(1_u32, asset_id.clone())
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
 
@@ -111976,7 +112448,7 @@ seiyaku IdentitylessRawCallback {
         let by_call = Trigger::new(
             by_call_id.clone(),
             Action::new(
-                vec![InstructionBox::from(Mint::asset_numeric(
+                vec![InstructionBox::from(Mint::asset_quantity(
                     1_u32,
                     asset_id.clone(),
                 ))],
@@ -112089,7 +112561,7 @@ seiyaku IdentitylessRawCallback {
         let trigger = Trigger::new(
             trigger_id.clone(),
             Action::new(
-                vec![InstructionBox::from(Mint::asset_numeric(
+                vec![InstructionBox::from(Mint::asset_quantity(
                     1_u32,
                     asset_id.clone(),
                 ))],
@@ -112560,7 +113032,7 @@ seiyaku IdentitylessRawCallback {
         .execute(&ALICE_ID, &mut stx)
         .unwrap();
         let asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
-        Mint::asset_numeric(numeric!(1), asset_id.clone())
+        Mint::asset_quantity(1_u32, asset_id.clone())
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
 
@@ -112618,7 +113090,7 @@ seiyaku IdentitylessRawCallback {
         .execute(&ALICE_ID, &mut stx)
         .unwrap();
         let asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
-        Mint::asset_numeric(numeric!(1), asset_id.clone())
+        Mint::asset_quantity(1_u32, asset_id.clone())
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
 
@@ -112676,7 +113148,7 @@ seiyaku IdentitylessRawCallback {
                 .with_name(__asset_definition_id.name().to_string())
         }
         .build(&ALICE_ID);
-        let asset = Asset::new(asset_id.clone(), Numeric::new(1, 0));
+        let asset = Asset::new(asset_id.clone(), Quantity::from(1));
 
         let mut world = World::with_assets([domain], [account], [asset_def], [asset], []);
         let mut metadata = Metadata::default();

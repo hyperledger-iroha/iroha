@@ -1,5 +1,6 @@
 package org.hyperledger.iroha.android.model.instructions;
 
+import java.math.BigInteger;
 import java.util.Arrays;
 import java.util.Collections;
 import org.hyperledger.iroha.android.address.AccountAddress;
@@ -140,7 +141,7 @@ public final class ZkAssetInstructionsTest {
         ShieldInstruction.builder()
             .setAsset("rose#wonderland")
             .setFrom("alice")
-            .setAmount("340282366920938463463374607431768211455")
+            .setAmount(new BigInteger("340282366920938463463374607431768211455"))
             .setNoteCommitment(commitment)
             .setEncryptedPayload(samplePayload())
             .build();

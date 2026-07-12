@@ -5111,14 +5111,14 @@ impl NetworkBuilder {
                 let validator_id = peer.account_id();
                 bootstrap_tx.push(Register::account(Account::new(validator_id.clone())).into());
                 bootstrap_tx.push(
-                    Mint::asset_numeric(
+                    Mint::asset_quantity(
                         stake_amount,
                         AssetId::new(stake_asset_id.clone(), validator_id.clone()),
                     )
                     .into(),
                 );
                 bootstrap_tx.push(
-                    Mint::asset_numeric(
+                    Mint::asset_quantity(
                         fee_seed_amount,
                         AssetId::new(fee_asset_id.clone(), validator_id),
                     )
@@ -5132,7 +5132,7 @@ impl NetworkBuilder {
                 gas_account_id,
             ] {
                 bootstrap_tx.push(
-                    Mint::asset_numeric(
+                    Mint::asset_quantity(
                         fee_seed_amount,
                         AssetId::new(fee_asset_id.clone(), account_id),
                     )
@@ -5194,14 +5194,14 @@ impl NetworkBuilder {
                     .into(),
                 );
                 soracloud_validator_bootstrap.push(
-                    Mint::asset_numeric(
+                    Mint::asset_quantity(
                         500_000_u32,
                         AssetId::new(agent_wallet_asset_definition.clone(), account_id.clone()),
                     )
                     .into(),
                 );
                 soracloud_validator_bootstrap.push(
-                    Mint::asset_numeric(
+                    Mint::asset_quantity(
                         500_000_u32,
                         AssetId::new(hf_shared_lease_asset_definition.clone(), account_id),
                     )

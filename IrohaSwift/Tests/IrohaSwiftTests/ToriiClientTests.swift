@@ -8464,6 +8464,51 @@ final class ToriiClientTests: XCTestCase {
         XCTAssertTrue(record.metadata.isEmpty)
     }
 
+    func testAssetAndRwaReadbacksRejectNoncanonicalQuantities() throws {
+        for quantity in ["-1", "01", "1.0", "1.20", " 1", "1e0"] {
+            let assetJSON = """
+            {"asset":"62Fk4FPcMuLvW5QjDGNF2a4jAmjM","quantity":"\(quantity)"}
+            """
+            XCTAssertThrowsError(
+                try JSONDecoder().decode(ToriiAssetBalance.self, from: Data(assetJSON.utf8)),
+                "accepted asset quantity \(quantity)"
+            )
+
+            let rwaJSON = """
+            {
+              "id":"lot-001$commodities.sora",
+              "owned_by":"owner",
+              "quantity":"\(quantity)",
+              "held_quantity":"0",
+              "primary_reference":"vault://receipts/2",
+              "status":null,
+              "is_frozen":false,
+              "metadata":{}
+            }
+            """
+            XCTAssertThrowsError(
+                try JSONDecoder().decode(ToriiExplorerRwaRecord.self, from: Data(rwaJSON.utf8)),
+                "accepted RWA quantity \(quantity)"
+            )
+        }
+
+        let badHeld = """
+        {
+          "id":"lot-001$commodities.sora",
+          "owned_by":"owner",
+          "quantity":"1",
+          "held_quantity":"0.0",
+          "primary_reference":"vault://receipts/2",
+          "status":null,
+          "is_frozen":false,
+          "metadata":{}
+        }
+        """
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(ToriiExplorerRwaRecord.self, from: Data(badHeld.utf8))
+        )
+    }
+
     @available(iOS 15.0, macOS 12.0, *)
     func testGetExplorerRwaDetailEncodesPathAndDecodesResponse() async throws {
         StubURLProtocol.handler = { request in

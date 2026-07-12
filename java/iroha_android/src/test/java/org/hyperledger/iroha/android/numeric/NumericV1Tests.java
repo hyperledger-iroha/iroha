@@ -21,6 +21,16 @@ public final class NumericV1Tests {
     assertEquals("1.23", NumericV1.DecimalValue.parse("1.2300").toString());
     assertEquals("0", NumericV1.DecimalValue.parse("0.000").toString());
     assertEquals("12.5", NumericV1.QuantityValue.parse("12.50").toString());
+    assertEquals("12.5", NumericV1.QuantityValue.parseCanonical("12.5").toString());
+    for (final String alternate :
+        new String[] {"", " ", "\t1", "1 ", "+1", "01", "1.", ".5", "1e0", "-0", "-0.0", "1.0", "1.2300", "0.0"}) {
+      assertCode(
+          NumericV1.ErrorCode.INVALID_TEXT,
+          () -> NumericV1.QuantityValue.parseCanonical(alternate));
+    }
+    assertCode(
+        NumericV1.ErrorCode.NEGATIVE_QUANTITY,
+        () -> NumericV1.QuantityValue.parseCanonical("-1"));
     assertCode(NumericV1.ErrorCode.NEGATIVE_QUANTITY, () -> NumericV1.QuantityValue.parse("-0.1"));
     assertCode(
         NumericV1.ErrorCode.MANTISSA_OVERFLOW,
@@ -209,6 +219,23 @@ public final class NumericV1Tests {
         else if ("envelope".equals(input) && "quantity".equals(decodeAs)) NumericV1.decodeQuantityEnvelope(bytes);
         else throw new AssertionError("unknown fixture decoder " + input + "/" + decodeAs);
       });
+    }
+
+    for (final Object raw : (List<Object>) fixture.get("invalid_text")) {
+      final Map<String, Object> vector = (Map<String, Object>) raw;
+      final String kind = (String) vector.get("kind");
+      final Object input = vector.get("input");
+      final NumericV1.ErrorCode expected =
+          NumericV1.ErrorCode.valueOf(
+              ((String) vector.get("expected")).toUpperCase(java.util.Locale.ROOT));
+      assertCode(
+          expected,
+          () -> {
+            if ("int".equals(kind)) NumericV1.decodeIntJsonValue(input);
+            else if ("decimal".equals(kind)) NumericV1.decodeDecimalJsonValue(input);
+            else if ("quantity".equals(kind)) NumericV1.decodeQuantityJsonValue(input);
+            else throw new AssertionError("unknown invalid text fixture kind " + kind);
+          });
     }
   }
 

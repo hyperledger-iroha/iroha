@@ -2,7 +2,7 @@
 
 use std::{collections::BTreeSet, fmt, str::FromStr};
 
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::Quantity;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 
@@ -175,7 +175,7 @@ pub struct FeeSponsorPolicy {
     /// Optional policy-local maximum fee. The global sponsor cap still applies.
     #[norito(skip_serializing_if = "Option::is_none")]
     #[norito(default)]
-    pub max_fee: Option<Numeric>,
+    pub max_fee: Option<Quantity>,
     /// Ordered rules. Deny rules override allow rules during evaluation.
     #[norito(default)]
     pub rules: Vec<FeeSponsorRule>,
@@ -197,8 +197,18 @@ impl FeeSponsorPolicy {
 #[cfg(test)]
 mod tests {
     use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_primitives::numeric::Numeric;
+    use norito::codec::{Decode as _, Encode as _};
 
     use super::*;
+
+    #[derive(Encode)]
+    struct ForgedFeeSponsorPolicy {
+        id: FeeSponsorPolicyId,
+        enabled: bool,
+        max_fee: Option<Numeric>,
+        rules: Vec<FeeSponsorRule>,
+    }
 
     fn sponsor_account() -> AccountId {
         let keypair = KeyPair::try_from_seed(vec![0x53; 32], Algorithm::Ed25519)
@@ -267,5 +277,24 @@ mod tests {
         assert!(!policy.enabled);
         assert_eq!(policy.max_fee, None);
         assert!(policy.rules.is_empty());
+    }
+
+    #[test]
+    fn negative_numeric_payload_cannot_decode_as_sponsor_fee_cap() {
+        let forged = ForgedFeeSponsorPolicy {
+            id: FeeSponsorPolicyId::new(
+                sponsor_account(),
+                "negative_cap".parse().expect("valid policy name"),
+            ),
+            enabled: true,
+            max_fee: Some(Numeric::new(-1_i32, 0)),
+            rules: Vec::new(),
+        };
+        let encoded = forged.encode();
+
+        assert!(
+            FeeSponsorPolicy::decode(&mut encoded.as_slice()).is_err(),
+            "a negative signed payload must not decode as a sponsor fee cap"
+        );
     }
 }

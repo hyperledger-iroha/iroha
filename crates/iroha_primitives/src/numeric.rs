@@ -49,11 +49,13 @@ pub struct Numeric {
     scale: u32,
 }
 
-/// Canonical non-negative decimal used for quantities such as money.
+/// Canonical non-negative decimal for asset and resource quantities.
 ///
 /// `Quantity` is nominal: it cannot contain negative values or noncanonical
 /// decimal representations, so ledger-domain mistakes are rejected before a
-/// value reaches storage or hashing.
+/// value reaches storage or hashing. The name deliberately does not imply
+/// currency: an Iroha asset may represent money, a commodity, a vote, or a
+/// right.
 #[repr(transparent)]
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Quantity(Numeric);

@@ -112,7 +112,7 @@ fn pay(AccountId a, AccountId b, AssetDefinitionId asset, int x) {
 }
 ```
 
-`TransferAssetBatch` እንደ ግለሰብ የ`Transfer::asset_numeric` ጥሪዎች ተመሳሳይ ፍቃድ እና የሂሳብ ቼኮችን ይሰራል፣ነገር ግን ሁሉንም ዴልታዎች በአንድ `TransferTranscript` ይመዘግባል። የብዝሃ-ዴልታ ግልባጮች የፔሲዶን መፈጨትን ያስወግዳሉ የዴልታ ግዴታዎች በክትትል ውስጥ እስከሚገቡ ድረስ። የ Kotodama ግንበኛ አሁን የመጀመርያ/ፍጻሜ syscallsን በራስ-ሰር ያመነጫል፣ስለዚህ ኮንትራቶች ያለእጅ ኮድ Norito ጭነት ማስተላለፍ ይችላሉ።
+`TransferAssetBatch` እንደ ግለሰብ የ`Transfer::asset_quantity` ጥሪዎች ተመሳሳይ ፍቃድ እና የሂሳብ ቼኮችን ይሰራል፣ነገር ግን ሁሉንም ዴልታዎች በአንድ `TransferTranscript` ይመዘግባል። የብዝሃ-ዴልታ ግልባጮች የፔሲዶን መፈጨትን ያስወግዳሉ የዴልታ ግዴታዎች በክትትል ውስጥ እስከሚገቡ ድረስ። የ Kotodama ግንበኛ አሁን የመጀመርያ/ፍጻሜ syscallsን በራስ-ሰር ያመነጫል፣ስለዚህ ኮንትራቶች ያለእጅ ኮድ Norito ጭነት ማስተላለፍ ይችላሉ።
 
 ## የረድፍ ቆጠራ ሪግሬሽን ታጥቆ
 

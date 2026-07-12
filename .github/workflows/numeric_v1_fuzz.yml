@@ -1,0 +1,78 @@
+name: Numeric V1 strict fuzz smoke
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/numeric_v1_fuzz.yml"
+      - "crates/iroha_primitives/src/bigint.rs"
+      - "crates/iroha_primitives/src/numeric.rs"
+      - "crates/iroha_primitives/src/numeric_abi.rs"
+      - "crates/ivm/fuzz/**"
+      - "crates/ivm/src/numeric.rs"
+      - "crates/ivm/src/numeric_v1.rs"
+      - "crates/ivm/src/numeric_gas.rs"
+      - "crates/ivm/src/numeric_tlv.rs"
+      - "crates/ivm/spec/syscalls.toml"
+      - "crates/ivm_abi/src/syscalls.rs"
+      - "pytests/scripts/fuzz_smoke_test.py"
+      - "scripts/fuzz_smoke.sh"
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: numeric-v1-fuzz-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  numeric_v1_fuzz:
+    name: Numeric V1 libFuzzer gate
+    # Sanitizing the complete IVM dependency graph is memory intensive; use
+    # the same managed Linux pool as the repository's full workspace gates.
+    runs-on: [self-hosted, Linux, iroha2]
+    # A clean sanitizer build of the IVM graph can exceed 45 minutes even
+    # though the libFuzzer execution itself is capped at 60 seconds.
+    timeout-minutes: 120
+    env:
+      RUNS: "10000"
+      FUZZ_MAX_TOTAL_TIME: "60"
+      FUZZ_RSS_LIMIT_MB: "3072"
+      FUZZ_CODEGEN_UNITS: "16"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: nightly-2025-05-08
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: "true"
+          shared-key: numeric-v1-fuzz-nightly-2025-05-08
+          workspaces: "crates/ivm/fuzz -> target"
+
+      - name: Install pinned cargo-fuzz
+        run: |
+          cargo +nightly-2025-05-08 install cargo-fuzz \
+            --version 0.13.2 \
+            --locked
+          cargo-fuzz --version
+
+      - name: Run fail-closed Numeric V1 fuzz smoke
+        run: scripts/fuzz_smoke.sh --strict --numeric-v1-only
+
+      - name: Archive crash artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: numeric-v1-fuzz-artifacts-${{ github.run_id }}-${{ github.run_attempt }}
+          path: crates/ivm/fuzz/artifacts/numeric_v1
+          if-no-files-found: ignore
+          retention-days: 30

@@ -3072,7 +3072,16 @@ impl IVM {
             VMError::AssertionFailed => VmTrapKind::AssertionFailed,
             VMError::ExceededMaxCycles => VmTrapKind::ExceededMaxCycles,
             VMError::InvalidMetadata => VmTrapKind::InvalidMetadata,
+            VMError::UnsupportedProgramVersion { .. } => VmTrapKind::UnsupportedProgramVersion,
+            VMError::UnsupportedProgramFeatureBits { .. } => {
+                VmTrapKind::UnsupportedProgramFeatureBits
+            }
+            VMError::UnsupportedProgramAbiVersion { .. } => {
+                VmTrapKind::UnsupportedProgramAbiVersion
+            }
+            VMError::ProgramVectorLengthTooLarge { .. } => VmTrapKind::ProgramVectorLengthTooLarge,
             VMError::ArtifactAbiHashMismatch { .. } => VmTrapKind::ArtifactAbiHashMismatch,
+            VMError::GenericSyscallNotAllowed { .. } => VmTrapKind::GenericSyscallNotAllowed,
             VMError::InvalidVectorLength { .. } => VmTrapKind::InvalidVectorLength,
             VMError::MissingHalt => VmTrapKind::MissingHalt,
             VMError::VectorExtensionDisabled
@@ -8711,16 +8720,30 @@ mod tests {
     fn program_with_unaligned_contract_prefix() -> (Vec<u8>, usize) {
         let interface = crate::metadata::EmbeddedContractInterfaceV1 {
             seiyaku_name: "TestContract".to_owned(),
-            compiler_fingerprint: String::new(),
+            compiler_fingerprint: "ivm-runtime-tests".to_owned(),
             abi_hash: crate::syscalls::compute_abi_hash(crate::SyscallPolicy::AbiV1),
             features_bitmap: 0,
             access_set_hints: None,
             kotoba: Vec::new(),
-            entrypoints: Vec::new(),
+            entrypoints: vec![crate::metadata::EmbeddedEntrypointDescriptor {
+                name: "inspect".to_owned(),
+                kind: iroha_data_model::smart_contract::manifest::EntryPointKind::View,
+                params: Vec::new(),
+                argument_schema: None,
+                return_type: None,
+                return_schema: None,
+                permission: None,
+                read_keys: Vec::new(),
+                write_keys: Vec::new(),
+                access_hints_complete: Some(true),
+                access_hints_skipped: Vec::new(),
+                triggers: Vec::new(),
+                entry_pc: 0,
+            }],
             error_codes: Vec::new(),
             states: Vec::new(),
         };
-        let prefix = (0..32)
+        let prefix = (1..=32)
             .map(|len| crate::metadata::EmbeddedContractInterfaceV1 {
                 seiyaku_name: "TestContract".to_owned(),
                 compiler_fingerprint: "x".repeat(len),
@@ -9129,7 +9152,7 @@ mod tests {
     }
 
     #[test]
-    fn deployable_contract_traps_noncanonical_indirect_control_flow() {
+    fn deployable_contract_rejects_noncanonical_indirect_control_flow_at_admission() {
         set_banner_enabled(false);
         let (mut program, _) = program_with_unaligned_contract_prefix();
         let indirect = crate::encoding::wide::encode_rr(instruction::wide::control::JALR, 0, 2, 0);
@@ -9137,9 +9160,11 @@ mod tests {
         program[instruction_start..].copy_from_slice(&indirect.to_le_bytes());
 
         let mut vm = IVM::new(u64::MAX);
-        vm.load_program(&program).expect("contract program loads");
-        vm.set_register(2, vm.pc());
-        assert_eq!(vm.run(), Err(VMError::AssertionFailed));
+        assert_eq!(
+            vm.load_program(&program),
+            Err(VMError::InvalidMetadata),
+            "unverifiable indirect control flow must fail before execution"
+        );
     }
 
     #[test]
@@ -9504,6 +9529,35 @@ seiyaku Demo {
             IVM::classify_trap(&VMError::MissingHalt),
             VmTrapKind::MissingHalt
         );
+    }
+
+    #[test]
+    fn unsupported_program_metadata_errors_preserve_exact_trap_kind() {
+        let cases = [
+            (
+                VMError::UnsupportedProgramVersion { major: 2, minor: 0 },
+                VmTrapKind::UnsupportedProgramVersion,
+            ),
+            (
+                VMError::UnsupportedProgramFeatureBits { bits: 0x80 },
+                VmTrapKind::UnsupportedProgramFeatureBits,
+            ),
+            (
+                VMError::UnsupportedProgramAbiVersion { version: 2 },
+                VmTrapKind::UnsupportedProgramAbiVersion,
+            ),
+            (
+                VMError::ProgramVectorLengthTooLarge {
+                    vector_length: u8::MAX,
+                    max_allowed: 64,
+                },
+                VmTrapKind::ProgramVectorLengthTooLarge,
+            ),
+        ];
+
+        for (error, expected) in cases {
+            assert_eq!(IVM::classify_trap(&error), expected);
+        }
     }
 
     #[test]

@@ -25,6 +25,66 @@ private func canonicalAuthorityLiteral(from signingKey: SigningKey) throws -> St
 }
 
 final class TransactionEncoderValidationTests: XCTestCase {
+    func testAssetBuildersRejectNoncanonicalAndNegativeQuantitiesBeforeNativeDispatch() throws {
+        let signingKey = try SigningKey.ed25519(privateKey: Data(repeating: 13, count: 32))
+        let authority = try canonicalAuthorityLiteral(from: signingKey)
+        let assetDefinitionId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
+
+        for quantity in ["1.0", "01", "-1", " 1", "1e0"] {
+            let transfer = TransferRequest(
+                chainId: "chain",
+                authority: authority,
+                assetDefinitionId: assetDefinitionId,
+                quantity: quantity,
+                destination: authority,
+                description: nil
+            )
+            XCTAssertThrowsError(
+                try SwiftTransactionEncoder.encodeTransfer(
+                    transfer: transfer,
+                    signingKey: signingKey,
+                    creationTimeMs: 1
+                )
+            ) { error in
+                XCTAssertTrue(error is KotodamaNumericV1Error)
+            }
+
+            let mint = MintRequest(
+                chainId: "chain",
+                authority: authority,
+                assetDefinitionId: assetDefinitionId,
+                quantity: quantity,
+                destination: authority
+            )
+            XCTAssertThrowsError(
+                try SwiftTransactionEncoder.encodeMint(
+                    request: mint,
+                    signingKey: signingKey,
+                    creationTimeMs: 1
+                )
+            ) { error in
+                XCTAssertTrue(error is KotodamaNumericV1Error)
+            }
+
+            let burn = BurnRequest(
+                chainId: "chain",
+                authority: authority,
+                assetDefinitionId: assetDefinitionId,
+                quantity: quantity,
+                destination: authority
+            )
+            XCTAssertThrowsError(
+                try SwiftTransactionEncoder.encodeBurn(
+                    request: burn,
+                    signingKey: signingKey,
+                    creationTimeMs: 1
+                )
+            ) { error in
+                XCTAssertTrue(error is KotodamaNumericV1Error)
+            }
+        }
+    }
+
     func testSetMetadataRejectsMalformedAuthority() throws {
         let targetAccount = try canonicalOwnerLiteral()
         let value = try NoritoJSON(["profile": "demo"])
@@ -179,6 +239,67 @@ final class TransactionEncoderValidationTests: XCTestCase {
         ) { error in
             XCTAssertEqual(error as? TransactionInputError,
                            .malformedAccountId(field: "feeSponsor", value: malformed))
+        }
+    }
+
+    func testNativeAssetEntryPointsRejectNoncanonicalQuantitiesBeforeDispatch() throws {
+        let keypair = try Keypair(privateKeyBytes: Data(repeating: 15, count: 32))
+        let authority = AccountId.make(publicKey: keypair.publicKey)
+        let assetDefinitionId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
+
+        for quantity in ["-1", "01", "1.0", "1.2300", " 1", "1e0"] {
+            XCTAssertThrowsError(
+                try NoritoNativeBridge.shared.encodeTransfer(
+                    chainId: "chain",
+                    authority: authority,
+                    creationTimeMs: 1,
+                    ttlMs: nil,
+                    assetDefinitionId: assetDefinitionId,
+                    quantity: quantity,
+                    destination: authority,
+                    privateKey: keypair.privateKeyBytes
+                )
+            ) { error in
+                XCTAssertTrue(error is KotodamaNumericV1Error)
+            }
+            XCTAssertThrowsError(
+                try NoritoNativeBridge.shared.encodeMint(
+                    chainId: "chain",
+                    authority: authority,
+                    creationTimeMs: 1,
+                    ttlMs: nil,
+                    assetDefinitionId: assetDefinitionId,
+                    quantity: quantity,
+                    destination: authority,
+                    privateKey: keypair.privateKeyBytes
+                )
+            ) { error in
+                XCTAssertTrue(error is KotodamaNumericV1Error)
+            }
+            XCTAssertThrowsError(
+                try NoritoNativeBridge.shared.encodeBurn(
+                    chainId: "chain",
+                    authority: authority,
+                    creationTimeMs: 1,
+                    ttlMs: nil,
+                    assetDefinitionId: assetDefinitionId,
+                    quantity: quantity,
+                    destination: authority,
+                    privateKey: keypair.privateKeyBytes
+                )
+            ) { error in
+                XCTAssertTrue(error is KotodamaNumericV1Error)
+            }
+            XCTAssertThrowsError(
+                try NoritoNativeBridge.shared.encodeTransferInstructionBox(
+                    authority: authority,
+                    assetDefinitionId: assetDefinitionId,
+                    quantity: quantity,
+                    destination: authority
+                )
+            ) { error in
+                XCTAssertTrue(error is KotodamaNumericV1Error)
+            }
         }
     }
 

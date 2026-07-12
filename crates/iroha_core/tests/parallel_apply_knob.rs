@@ -62,7 +62,7 @@ fn make_block(
         alice_id.clone(),
     );
     let instrs: Vec<InstructionBox> = vec![
-        Mint::asset_numeric(5_u32, asset).into(),
+        Mint::asset_quantity(5_u32, asset).into(),
         SetKeyValue::account(
             alice_id.clone(),
             "k".parse().unwrap(),

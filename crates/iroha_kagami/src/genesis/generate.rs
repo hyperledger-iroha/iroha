@@ -764,11 +764,11 @@ pub fn generate_default(
         .asset("cabbage".parse()?, NumericSpec::default())
         .finish_domain();
 
-    let mint = Mint::asset_numeric(
+    let mint = Mint::asset_quantity(
         13u32,
         AssetId::new(rose_asset_definition_id.clone(), ALICE_ID.clone()),
     );
-    let mint_cabbage = Mint::asset_numeric(
+    let mint_cabbage = Mint::asset_quantity(
         44u32,
         AssetId::new(cabbage_asset_definition_id, ALICE_ID.clone()),
     );
@@ -1731,7 +1731,7 @@ fn generate_synthetic(
                 builder.append_instruction(Register::account(Account::new(account_id.clone())));
 
             for asset_definition_id in &synthetic_asset_definitions {
-                let mint = Mint::asset_numeric(
+                let mint = Mint::asset_quantity(
                     13u32,
                     AssetId::new(asset_definition_id.clone(), account_id.clone()),
                 );

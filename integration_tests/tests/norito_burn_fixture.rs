@@ -113,9 +113,9 @@ fn burn_asset_fixture_matches_rust_encoding() {
     let expected_asset_id = fixture_asset_id();
     let expected_quantity = Numeric::from_str("4").expect("valid numeric quantity");
     let expected_instruction: InstructionBox =
-        Burn::asset_numeric(expected_quantity, expected_asset_id).into();
+        Burn::asset_quantity(expected_quantity, expected_asset_id).into();
     assert_fixture_matches(
-        "burn_asset_numeric.json",
+        "burn_asset_quantity.json",
         "burn-asset-numeric-v1",
         &expected_instruction,
     );
@@ -126,7 +126,7 @@ fn burn_asset_fractional_fixture_matches_rust_encoding() {
     let expected_asset_id = fixture_asset_id();
     let expected_quantity = Numeric::from_str("3.1415").expect("valid numeric quantity");
     let expected_instruction: InstructionBox =
-        Burn::asset_numeric(expected_quantity, expected_asset_id).into();
+        Burn::asset_quantity(expected_quantity, expected_asset_id).into();
     assert_fixture_matches(
         "burn_asset_fractional.json",
         "burn-asset-fractional-v1",
@@ -139,9 +139,9 @@ fn mint_asset_fixture_matches_rust_encoding() {
     let expected_asset_id = fixture_asset_id();
     let expected_quantity = Numeric::from_str("4").expect("valid numeric quantity");
     let expected_instruction: InstructionBox =
-        Mint::asset_numeric(expected_quantity, expected_asset_id).into();
+        Mint::asset_quantity(expected_quantity, expected_asset_id).into();
     assert_fixture_matches(
-        "mint_asset_numeric.json",
+        "mint_asset_quantity.json",
         "mint-asset-numeric-v1",
         &expected_instruction,
     );

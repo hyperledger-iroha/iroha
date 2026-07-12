@@ -26,7 +26,7 @@ on:
       - "scripts/check_kotodama_perf.py"
       - "scripts/check_kotodama_docs.py"
       - "scripts/regenerate_kotodama_goldens.py"
-      - "scripts/kotodama_goldens.tsv"
+      - "scripts/ivm_artifacts.tsv"
       - "scripts/kotodama_v1_size_baseline.json"
       - "pytests/scripts/check_kotodama_perf_test.py"
       - "pytests/scripts/check_kotodama_docs_test.py"

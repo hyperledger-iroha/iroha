@@ -2952,62 +2952,6 @@ fn resolve_contract_target(args: ContractTargetArgs) -> Result<ResolvedContractT
     }
 }
 
-fn resolve_optional_contract_address<C: RunContext>(
-    context: &C,
-    args: &ContractTargetArgs,
-) -> Result<Option<iroha::data_model::smart_contract::ContractAddress>> {
-    match (
-        args.contract_address.as_deref(),
-        args.contract_alias.as_deref(),
-    ) {
-        (None, None) => Ok(None),
-        (Some(_), Some(_)) => Err(eyre!(
-            "provide exactly one contract target via --contract-address or --contract-alias"
-        )),
-        (Some(contract_address), None) => {
-            Ok(Some(contract_address.parse().wrap_err(
-                "invalid --contract-address canonical literal",
-            )?))
-        }
-        (None, Some(contract_alias_raw)) => {
-            let contract_alias: iroha::data_model::smart_contract::ContractAlias =
-                contract_alias_raw
-                    .parse()
-                    .wrap_err("invalid --contract-alias")?;
-            let client: Client = context.client_from_config();
-            let response = client
-                .post_contract_alias_resolve(&contract_alias)
-                .wrap_err("failed to call `/v1/contracts/aliases/resolve`")?;
-            let status = response.status();
-            let body = response.into_body();
-
-            match status {
-                StatusCode::OK => {
-                    let value: norito::json::Value = norito::json::from_slice(&body)
-                        .wrap_err("decode contract alias response")?;
-                    let resolved = value
-                        .get("contract_address")
-                        .and_then(norito::json::Value::as_str)
-                        .ok_or_else(|| {
-                            eyre!("contract alias response missing `contract_address`")
-                        })?;
-                    Ok(Some(
-                        resolved
-                            .parse()
-                            .wrap_err("resolved contract address is invalid")?,
-                    ))
-                }
-                StatusCode::NOT_FOUND => Err(eyre!("contract alias `{contract_alias}` not found")),
-                status => Err(eyre!(
-                    "contract alias resolve request failed with HTTP {}: {}",
-                    status,
-                    std::str::from_utf8(&body).unwrap_or("")
-                )),
-            }
-        }
-    }
-}
-
 fn load_contract_payload_value(
     payload_json: Option<&str>,
     payload_file: Option<&std::path::Path>,
@@ -5573,7 +5517,7 @@ mod tests {
 
     #[test]
     fn program_summary_reports_hashes() {
-        let program = minimal_program();
+        let program = minimal_view_contract_program();
         let expected_code_hash = ivm::contract_code_hash(&program);
         let summary = program_summary_from_bytes(&program).expect("summary");
         assert_eq!(summary.code_hash, expected_code_hash);
@@ -5609,10 +5553,6 @@ mod tests {
             code_file: None,
             code_b64: Some(code_b64),
             gas_limit: 42,
-            target: ContractTargetArgs {
-                contract_address: None,
-                contract_alias: None,
-            },
         };
         args.run(&mut ctx).expect("simulate");
         let output = ctx.take_output().expect("output");
@@ -5626,6 +5566,32 @@ mod tests {
         assert!(
             has_gas_limit,
             "metadata_keys missing gas_limit: {metadata_keys:?}"
+        );
+    }
+
+    #[test]
+    fn simulate_routes_cntr_artifacts_to_contract_specific_commands() {
+        let key_pair = fixture_key_pair(2);
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let mut ctx = TestContext::new(authority.clone());
+        let args = SimulateArgs {
+            authority: authority.to_string(),
+            private_key: ExposedPrivateKey(key_pair.private_key().clone()).to_string(),
+            code_file: None,
+            code_b64: Some(
+                base64::engine::general_purpose::STANDARD
+                    .encode(minimal_view_contract_program()),
+            ),
+            gas_limit: 42,
+        };
+
+        let error = args
+            .run(&mut ctx)
+            .expect_err("CNTR simulation requires contract-aware dispatch");
+        assert!(
+            error.to_string().contains("contract call --simulate")
+                && error.to_string().contains("contract debug-call"),
+            "unexpected routing error: {error}"
         );
     }
 
@@ -6245,24 +6211,21 @@ mod tests {
 
 #[derive(clap::Args, Debug)]
 pub struct SimulateArgs {
-    /// Authority account identifier (canonical I105 account literal)
+    /// Authority account identifier for an ABI-bound generic IVM program.
     #[arg(long)]
     pub authority: String,
     /// Hex-encoded private key used to sign the simulated transaction
     #[arg(long, value_name = "HEX")]
     pub private_key: String,
-    /// Path to compiled `.to` file (mutually exclusive with --code-b64)
+    /// Path to a generic (non-CNTR) compiled `.to` file (mutually exclusive with --code-b64).
     #[arg(long, conflicts_with = "code_b64")]
     pub code_file: Option<PathBuf>,
-    /// Base64-encoded code (mutually exclusive with --code-file)
+    /// Base64-encoded generic program (mutually exclusive with --code-file).
     #[arg(long, conflicts_with = "code_file")]
     pub code_b64: Option<String>,
     /// Required `gas_limit` metadata to include in the simulated transaction
     #[arg(long)]
     pub gas_limit: u64,
-    /// Optional canonical contract target metadata for call-time binding checks
-    #[command(flatten)]
-    pub target: ContractTargetArgs,
 }
 
 impl Run for SimulateArgs {
@@ -6271,21 +6234,25 @@ impl Run for SimulateArgs {
             .wrap_err("failed to resolve --authority")?;
         let private_key: PrivateKey = self.private_key.parse().wrap_err("invalid --private-key")?;
         let code = load_code_bytes(self.code_file.clone(), self.code_b64.clone())?;
-        let summary = program_summary_from_bytes(&code)?;
-        let contract_address = resolve_optional_contract_address(context, &self.target)?;
+        let summary = match iroha_core::smartcontracts::ivm::cache::IvmCache::new()
+            .summarize_executable(&code)
+            .map_err(|err| eyre!("failed to prepare IVM program: {err}"))?
+        {
+            iroha_core::smartcontracts::ivm::cache::ExecutableProgramSummary::Generic(summary) => {
+                summary
+            }
+            iroha_core::smartcontracts::ivm::cache::ExecutableProgramSummary::Contract(_) => {
+                return Err(eyre!(
+                    "`contract simulate` accepts only generic IVM programs; use `contract call --simulate` for a live deployed contract or `contract debug-call` for a local CNTR artifact"
+                ));
+            }
+        };
 
         let mut metadata = Metadata::default();
         metadata.insert(
             Name::from_str("gas_limit")?,
             iroha_primitives::json::Json::from(self.gas_limit),
         );
-        if let Some(contract_address) = contract_address.as_ref() {
-            metadata.insert(
-                Name::from_str("contract_address")?,
-                iroha_primitives::json::Json::from(contract_address.as_ref()),
-            );
-        }
-
         let chain_id = context.config().chain.clone();
         let tx = TransactionBuilder::new(chain_id, authority.clone())
             .with_metadata(metadata.clone())

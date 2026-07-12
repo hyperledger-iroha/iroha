@@ -1,6 +1,6 @@
 use std::fmt::Display;
 
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::Quantity;
 #[cfg(feature = "json")]
 use norito::json::{FastJsonWrite, JsonSerialize};
 
@@ -44,9 +44,9 @@ impl Transfer<Account, AssetDefinitionId, Account> {
     }
 }
 
-impl Transfer<Asset, Numeric, Account> {
-    /// Constructs a new [`Transfer`] for an [`Asset`] of [`Numeric`] type.
-    pub fn asset_numeric(asset_id: AssetId, quantity: impl Into<Numeric>, to: AccountId) -> Self {
+impl Transfer<Asset, Quantity, Account> {
+    /// Constructs a new [`Transfer`] for a non-negative [`Asset`] quantity.
+    pub fn asset_quantity(asset_id: AssetId, quantity: impl Into<Quantity>, to: AccountId) -> Self {
         Self {
             source: asset_id,
             object: quantity.into(),
@@ -84,7 +84,7 @@ impl_display! {
 impl_into_box! {
     Transfer<Account, DomainId, Account> |
     Transfer<Account, AssetDefinitionId, Account> |
-    Transfer<Asset, Numeric, Account> | Transfer<Account, NftId, Account>
+    Transfer<Asset, Quantity, Account> | Transfer<Account, NftId, Account>
 => TransferBox
 }
 
@@ -99,7 +99,7 @@ isi_box! {
         /// Transfer [`AssetDefinition`] to another [`Account`].
         AssetDefinition(Transfer<Account, AssetDefinitionId, Account>),
         /// Transfer [`Asset`] to another [`Account`].
-        Asset(Transfer<Asset, Numeric, Account>),
+        Asset(Transfer<Asset, Quantity, Account>),
         /// Transfer [`Nft`] to another [`Account`].
         Nft(Transfer<Account, NftId, Account>),
     }
@@ -118,7 +118,7 @@ enum_type! {
 impl crate::seal::Instruction for TransferBox {}
 impl crate::seal::Instruction for Transfer<Account, DomainId, Account> {}
 impl crate::seal::Instruction for Transfer<Account, AssetDefinitionId, Account> {}
-impl crate::seal::Instruction for Transfer<Asset, Numeric, Account> {}
+impl crate::seal::Instruction for Transfer<Asset, Quantity, Account> {}
 impl crate::seal::Instruction for Transfer<Account, NftId, Account> {}
 
 impl<'a, S, O, D> norito::core::DecodeFromSlice<'a> for Transfer<S, O, D>
@@ -191,7 +191,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for TransferBox {
                 super::read_aos_field(bytes, &mut offset, flags)?, flags
             )?),
             2 => Self::Asset(super::decode_aos_slice_field::<
-                Transfer<Asset, Numeric, Account>,
+                Transfer<Asset, Quantity, Account>,
             >(
                 super::read_aos_field(bytes, &mut offset, flags)?, flags
             )?),
@@ -230,7 +230,7 @@ isi! {
         /// Asset definition being transferred.
         asset_definition: AssetDefinitionId,
         /// Amount to transfer.
-        amount: Numeric,
+        amount: Quantity,
     }
 }
 
@@ -241,7 +241,7 @@ impl TransferAssetBatchEntry {
         from: AccountId,
         to: AccountId,
         asset_definition: AssetDefinitionId,
-        amount: impl Into<Numeric>,
+        amount: impl Into<Quantity>,
     ) -> Self {
         Self {
             from,
@@ -253,7 +253,7 @@ impl TransferAssetBatchEntry {
 }
 
 isi! {
-    /// Deterministic batch transfer instruction covering multiple `Transfer::asset_numeric` calls.
+    /// Deterministic batch transfer instruction covering multiple `Transfer::asset_quantity` calls.
     pub struct TransferAssetBatch {
         /// Ordered transfer entries executed sequentially.
         entries: Vec<TransferAssetBatchEntry>,
@@ -294,7 +294,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for TransferAssetBatchEntry {
             super::read_aos_field(bytes, &mut offset, flags)?,
             flags,
         )?;
-        let amount = super::decode_aos_canonical_field::<Numeric>(
+        let amount = super::decode_aos_canonical_field::<Quantity>(
             super::read_aos_field(bytes, &mut offset, flags)?,
             flags,
         )?;
@@ -391,6 +391,7 @@ impl FastJsonWrite for TransferAssetBatch {
 #[cfg(test)]
 mod tests {
     use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_primitives::numeric::{Numeric, NumericOperationError};
     use norito::core::DecodeFromSlice;
 
     use super::*;
@@ -409,18 +410,39 @@ mod tests {
     }
 
     #[test]
-    fn transfer_decode_from_slice_roundtrips_asset_numeric() {
+    fn transfer_decode_from_slice_roundtrips_asset_quantity() {
         let from = account(0x11);
         let to = account(0x22);
         let asset_id = AssetId::of(asset_definition(), from);
-        let transfer = Transfer::asset_numeric(asset_id, 7_u32, to);
+        let transfer = Transfer::asset_quantity(asset_id, 7_u32, to);
         let bytes = transfer.encode();
 
         let (decoded, used) =
-            Transfer::<Asset, Numeric, Account>::decode_from_slice(&bytes).expect("decode");
+            Transfer::<Asset, Quantity, Account>::decode_from_slice(&bytes).expect("decode");
 
         assert_eq!(used, bytes.len());
         assert_eq!(decoded, transfer);
+    }
+
+    #[test]
+    fn negative_asset_quantity_cannot_decode_as_transfer() {
+        let from = account(0x19);
+        let to = account(0x29);
+        let negative = Numeric::new(-25_i32, 1);
+        assert_eq!(
+            Quantity::try_from_numeric(negative.clone()),
+            Err(NumericOperationError::NegativeQuantity)
+        );
+        let forged = Transfer::<Asset, Numeric, Account> {
+            source: AssetId::of(asset_definition(), from),
+            object: negative,
+            destination: to,
+        };
+
+        assert!(
+            Transfer::<Asset, Quantity, Account>::decode_from_slice(&forged.encode()).is_err(),
+            "negative signed payload must not decode as an asset transfer"
+        );
     }
 
     #[test]
@@ -428,7 +450,7 @@ mod tests {
         let from = account(0x33);
         let to = account(0x44);
         let asset_id = AssetId::of(asset_definition(), from);
-        let transfer_box = TransferBox::Asset(Transfer::asset_numeric(asset_id, 11_u32, to));
+        let transfer_box = TransferBox::Asset(Transfer::asset_quantity(asset_id, 11_u32, to));
         let (payload, flags) = norito::codec::encode_with_header_flags(&transfer_box);
         let framed = norito::core::frame_bare_with_header_flags::<TransferBox>(&payload, flags)
             .expect("frame transfer box");

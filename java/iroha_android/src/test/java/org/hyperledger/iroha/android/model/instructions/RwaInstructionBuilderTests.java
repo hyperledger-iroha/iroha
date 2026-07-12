@@ -1,6 +1,7 @@
 package org.hyperledger.iroha.android.model.instructions;
 
 import java.util.Map;
+import org.hyperledger.iroha.android.numeric.NumericV1;
 import org.hyperledger.iroha.android.testing.TestAccountIds;
 import org.junit.Test;
 
@@ -72,7 +73,10 @@ public final class RwaInstructionBuilderTests {
     final UnfreezeRwaInstruction unfreeze =
         UnfreezeRwaInstruction.builder().setRwaId("lot-004$commodities").build();
     final HoldRwaInstruction hold =
-        HoldRwaInstruction.builder().setRwaId("lot-004$commodities").setQuantity(3).build();
+        HoldRwaInstruction.builder()
+            .setRwaId("lot-004$commodities")
+            .setQuantity(NumericV1.QuantityValue.parseCanonical("3"))
+            .build();
     final ReleaseRwaInstruction release =
         ReleaseRwaInstruction.builder().setRwaId("lot-004$commodities").setQuantity("1").build();
     final ForceTransferRwaInstruction forceTransfer =

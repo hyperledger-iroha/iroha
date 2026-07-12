@@ -1521,8 +1521,21 @@ public final class IrohaSDK: @unchecked Sendable {
         try SocialInstructionBuilders.sendToTwitter(binding: binding, amount: amount)
     }
 
+    /// Build a `SendToTwitter` instruction from a validated lossless quantity value.
+    public func buildSendToTwitter(binding: SocialKeyedHash,
+                                   amount: KotodamaQuantity) throws -> NoritoJSON {
+        try SocialInstructionBuilders.sendToTwitter(binding: binding, amount: amount)
+    }
+
     /// Convenience overload to build a `SendToTwitter` payload from pepper id and digest.
     public func buildSendToTwitter(pepperId: String, digest: String, amount: String) throws -> NoritoJSON {
+        try SocialInstructionBuilders.sendToTwitter(pepperId: pepperId, digest: digest, amount: amount)
+    }
+
+    /// Convenience overload accepting a validated lossless quantity value.
+    public func buildSendToTwitter(pepperId: String,
+                                   digest: String,
+                                   amount: KotodamaQuantity) throws -> NoritoJSON {
         try SocialInstructionBuilders.sendToTwitter(pepperId: pepperId, digest: digest, amount: amount)
     }
 

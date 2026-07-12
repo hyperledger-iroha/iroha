@@ -201,8 +201,8 @@ Common envelope: `InstructionExecutionError` with variants for evaluation errors
 
 ## Practical Examples
 - Minting and transfer:
-  - `Mint::asset_numeric(10, asset_id)` → adds 10 if allowed by spec/mintability; events: `AssetEvent::Added`.
-  - `Transfer::asset_numeric(asset_id, 5, to_account)` → moves 5; events for removal/addition.
+  - `Mint::asset_quantity(10, asset_id)` → adds 10 if allowed by spec/mintability; events: `AssetEvent::Added`.
+  - `Transfer::asset_quantity(asset_id, 5, to_account)` → moves 5; events for removal/addition.
 - Metadata updates:
   - `SetKeyValue::account(account_id, "avatar".parse()?, json)` → upsert; removal via `RemoveKeyValue::account(...)`.
 - Role/permission management:

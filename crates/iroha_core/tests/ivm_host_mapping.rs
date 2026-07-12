@@ -267,7 +267,7 @@ fn host_rejects_insufficient_asset_transfer() {
     let new_asset_def =
         AssetDefinition::numeric(asset_def.clone()).with_name(asset_def.name().to_string());
     let reg_asset_def = RegisterBox::from(Register::asset_definition(new_asset_def));
-    let mint = MintBox::from(Mint::asset_numeric(
+    let mint = MintBox::from(Mint::asset_quantity(
         100u64,
         AssetId::of(asset_def.clone(), from.clone()),
     ));
@@ -747,18 +747,8 @@ fn transfer_batch_apply_syscall_enqueues_batch() {
     );
 
     let batch = TransferAssetBatch::new(vec![
-        TransferAssetBatchEntry::new(
-            from.clone(),
-            to_a.clone(),
-            asset_def_id.clone(),
-            Numeric::from(7_u32),
-        ),
-        TransferAssetBatchEntry::new(
-            from.clone(),
-            to_b.clone(),
-            asset_def_id.clone(),
-            Numeric::from(4_u32),
-        ),
+        TransferAssetBatchEntry::new(from.clone(), to_a.clone(), asset_def_id.clone(), 7_u32),
+        TransferAssetBatchEntry::new(from.clone(), to_b.clone(), asset_def_id.clone(), 4_u32),
     ]);
     let encoded_batch = norito::to_bytes(&batch).expect("encode batch");
     let decoded: TransferAssetBatch =

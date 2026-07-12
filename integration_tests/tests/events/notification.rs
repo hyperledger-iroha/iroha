@@ -26,7 +26,7 @@ async fn trigger_completion_success_should_produce_event_scenario(network: &Netw
     let asset_id = AssetId::new(asset_definition_id, account_id);
     let trigger_id = "mint_rose_event".parse::<TriggerId>()?;
 
-    let instruction = Mint::asset_numeric(1u32, asset_id.clone());
+    let instruction = Mint::asset_quantity(1u32, asset_id.clone());
     let register_trigger = Register::trigger(Trigger::new(
         trigger_id.clone(),
         Action::new(

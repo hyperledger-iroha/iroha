@@ -601,6 +601,16 @@ fileprivate func decodeRequiredStringValue(
     )
 }
 
+fileprivate func decodeCanonicalToriiQuantity(_ value: String, field: String) throws -> String {
+    do {
+        return try KotodamaNumericV1Codec.decodeQuantityJSON(value).canonicalString
+    } catch let error as KotodamaNumericV1Error {
+        throw ToriiClientError.invalidPayload(
+            "\(field) must be a canonical non-negative Kotodama V1 quantity (\(error.code.rawValue))."
+        )
+    }
+}
+
 public struct ToriiAssetBalance: Decodable, Sendable {
     public let asset: String
     public let accountId: String?
@@ -628,7 +638,10 @@ public struct ToriiAssetBalance: Decodable, Sendable {
         self.scope = try container.decodeIfPresent(String.self, forKey: .scope) ?? "account"
         self.assetName = try container.decodeIfPresent(String.self, forKey: .assetName)
         self.assetAlias = try container.decodeIfPresent(String.self, forKey: .assetAlias)
-        self.quantity = try container.decode(String.self, forKey: .quantity)
+        self.quantity = try decodeCanonicalToriiQuantity(
+            container.decode(String.self, forKey: .quantity),
+            field: "asset balance quantity"
+        )
     }
 }
 
@@ -4258,8 +4271,14 @@ public struct ToriiExplorerRwaRecord: Decodable, Sendable, Equatable {
         }
         id = identifier
         ownedBy = owner
-        self.quantity = quantity
-        self.heldQuantity = heldQuantity
+        self.quantity = try decodeCanonicalToriiQuantity(
+            quantity,
+            field: "RWA explorer quantity"
+        )
+        self.heldQuantity = try decodeCanonicalToriiQuantity(
+            heldQuantity,
+            field: "RWA explorer held_quantity"
+        )
         self.primaryReference = primaryReference
         self.status = status
         self.isFrozen = isFrozen
@@ -5206,7 +5225,7 @@ extension ToriiExplorerTransferDetails {
             return nil
         }
         guard let destination = stringValue(map["destination"]),
-              let amount = stringValue(map["object"]) else {
+              let amount = quantityValue(map["object"]) else {
             return nil
         }
         let parsedAsset = parseAssetId(destination)
@@ -5249,7 +5268,7 @@ extension ToriiExplorerTransferDetails {
         }
         guard let source = stringValue(map["source"]),
               let destination = stringValue(map["destination"]),
-              let amount = stringValue(map["object"]) else {
+              let amount = quantityValue(map["object"]) else {
             return nil
         }
         let sourceFields = decodeToriiAssetIdFields(source)
@@ -5278,7 +5297,7 @@ extension ToriiExplorerTransferDetails {
             guard let sender = stringValue(entryMap["from"]),
                   let receiver = stringValue(entryMap["to"]),
                   let rawAssetDefinition = stringValue(entryMap["asset_definition"]),
-                  let amount = stringValue(entryMap["amount"]) else {
+                  let amount = quantityValue(entryMap["amount"]) else {
                 return nil
             }
             let assetDefinition = canonicalPublicAssetDefinitionLiteral(rawAssetDefinition) ?? rawAssetDefinition
@@ -5305,6 +5324,13 @@ extension ToriiExplorerTransferDetails {
         default:
             return nil
         }
+    }
+
+    fileprivate static func quantityValue(_ value: ToriiJSONValue?) -> String? {
+        guard case let .string(string)? = value else {
+            return nil
+        }
+        return try? KotodamaNumericV1Codec.decodeQuantityJSON(string).canonicalString
     }
 
     fileprivate static func parseAssetId(_ value: String) -> (definition: String?, account: String?) {
@@ -8951,7 +8977,10 @@ public struct ToriiUaidPortfolioAsset: Decodable, Sendable {
         let rawAssetDefinitionId = try container.decode(String.self, forKey: .assetDefinitionId)
         assetId = canonicalPublicAssetDefinitionLiteral(rawAssetId) ?? rawAssetId
         assetDefinitionId = canonicalPublicAssetDefinitionLiteral(rawAssetDefinitionId) ?? rawAssetDefinitionId
-        quantity = try container.decode(String.self, forKey: .quantity)
+        quantity = try decodeCanonicalToriiQuantity(
+            container.decode(String.self, forKey: .quantity),
+            field: "UAID portfolio asset quantity"
+        )
     }
 }
 

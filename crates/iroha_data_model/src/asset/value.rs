@@ -3,7 +3,7 @@
 use derive_more::Display;
 use getset::Getters;
 use iroha_data_model_derive::{IdEqOrdHash, model};
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::Quantity;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 
@@ -29,7 +29,7 @@ mod model {
         pub id: AssetId,
         /// Asset's Quantity.
         #[getset(get = "pub")]
-        pub value: Numeric,
+        pub value: Quantity,
     }
 }
 
@@ -42,11 +42,11 @@ pub type AssetEntry<'world> = Ref<'world, AssetId, AssetValue>;
 /// [`Asset`] without `id` field.
 /// Needed only for the world-state asset map to reduce memory usage.
 /// In other places use [`Asset`] directly.
-pub type AssetValue = Owned<Numeric>;
+pub type AssetValue = Owned<Quantity>;
 
 impl Asset {
     /// Constructor
-    pub fn new(id: AssetId, value: impl Into<Numeric>) -> <Self as Registered>::With {
+    pub fn new(id: AssetId, value: impl Into<Quantity>) -> <Self as Registered>::With {
         Self {
             id,
             value: value.into(),
@@ -63,5 +63,24 @@ impl IntoKeyValue for Asset {
     type Value = AssetValue;
     fn into_key_value(self) -> (Self::Key, Self::Value) {
         (self.id, Owned::new(self.value))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use iroha_primitives::numeric::Numeric;
+    use norito::codec::{Decode, Encode};
+
+    use super::*;
+
+    #[test]
+    fn negative_numeric_payload_cannot_decode_as_stored_asset_value() {
+        let forged = Owned::new(Numeric::new(-1_i32, 0));
+        let encoded = forged.encode();
+
+        assert!(
+            AssetValue::decode(&mut encoded.as_slice()).is_err(),
+            "a signed negative payload must not cross the nominal stored-balance boundary"
+        );
     }
 }

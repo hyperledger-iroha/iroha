@@ -36,7 +36,7 @@ translator: machine-google-reviewed
 - Համոզվեք, որ հետևում եք մեր [ոճի ուղեցույցներին] (#style-guides) կոդի և փաստաթղթերի համար:
 - Գրեք [թեստեր] (https://doc.rust-lang.org/cargo/commands/cargo-test.html): Համոզվեք, որ նրանք բոլորն անցնում են (`cargo test --workspace`): Եթե ​​դիպչում եք SM ծածկագրման կույտին, ապա գործարկեք նաև `cargo test -p iroha_crypto --features "sm sm_proptest"`-ը՝ կամընտիր fuzz/հատուկ զրահը գործարկելու համար:
   - Ծանոթագրություն. IVM կատարողը գործադրող թեստերը ավտոմատ կերպով կսինթեզեն կատարողի նվազագույն, որոշիչ բայթկոդ, եթե `defaults/executor.to` չկա: Թեստերն իրականացնելու համար ոչ մի նախնական քայլ չի պահանջվում: Պարիտետի համար կանոնական բայթկոդ ստեղծելու համար կարող եք գործարկել.
-    - `cargo run --manifest-path scripts/generate_executor_to/Cargo.toml`
+    - `cargo run --locked -p ivm --bin ivm_fixture_export -- --write`
     - `cargo run --manifest-path scripts/regenerate_codec_samples/Cargo.toml`
 - Եթե փոխում եք derive/proc-macro crates-ը, գործարկեք trybuild UI փաթեթները միջոցով
   `make check-proc-macro-ui` (կամ

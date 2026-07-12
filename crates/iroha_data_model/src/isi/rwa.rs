@@ -1,6 +1,6 @@
 //! Dedicated instructions for real-world asset lots.
 
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::Quantity;
 
 use super::*;
 use crate::rwa::{NewRwa, Rwa, RwaControlPolicy, RwaId, RwaParentRef};
@@ -21,7 +21,7 @@ isi! {
         /// Lot being transferred.
         pub rwa: RwaId,
         /// Quantity to transfer.
-        pub quantity: Numeric,
+        pub quantity: Quantity,
         /// Destination account that will own the transferred lot.
         pub destination: AccountId,
     }
@@ -47,7 +47,7 @@ isi! {
         /// Lot being redeemed.
         pub rwa: RwaId,
         /// Quantity to redeem.
-        pub quantity: Numeric,
+        pub quantity: Quantity,
     }
 }
 
@@ -73,7 +73,7 @@ isi! {
         /// Lot receiving the hold.
         pub rwa: RwaId,
         /// Quantity to reserve.
-        pub quantity: Numeric,
+        pub quantity: Quantity,
     }
 }
 
@@ -83,7 +83,7 @@ isi! {
         /// Lot receiving the release.
         pub rwa: RwaId,
         /// Quantity to release.
-        pub quantity: Numeric,
+        pub quantity: Quantity,
     }
 }
 
@@ -93,7 +93,7 @@ isi! {
         /// Lot being moved.
         pub rwa: RwaId,
         /// Quantity to move.
-        pub quantity: Numeric,
+        pub quantity: Quantity,
         /// Destination account that will own the transferred lot.
         pub destination: AccountId,
     }
@@ -328,7 +328,7 @@ impl_rwa_decode_from_slice!(RegisterRwa { rwa: NewRwa });
 impl_rwa_decode_from_slice!(TransferRwa {
     source: AccountId,
     rwa: RwaId,
-    quantity: Numeric,
+    quantity: Quantity,
     destination: AccountId,
 });
 
@@ -341,7 +341,7 @@ impl_rwa_decode_from_slice!(MergeRwas {
 
 impl_rwa_decode_from_slice!(RedeemRwa {
     rwa: RwaId,
-    quantity: Numeric,
+    quantity: Quantity,
 });
 
 impl_rwa_decode_from_slice!(FreezeRwa { rwa: RwaId });
@@ -350,17 +350,17 @@ impl_rwa_decode_from_slice!(UnfreezeRwa { rwa: RwaId });
 
 impl_rwa_decode_from_slice!(HoldRwa {
     rwa: RwaId,
-    quantity: Numeric,
+    quantity: Quantity,
 });
 
 impl_rwa_decode_from_slice!(ReleaseRwa {
     rwa: RwaId,
-    quantity: Numeric,
+    quantity: Quantity,
 });
 
 impl_rwa_decode_from_slice!(ForceTransferRwa {
     rwa: RwaId,
-    quantity: Numeric,
+    quantity: Quantity,
     destination: AccountId,
 });
 
@@ -448,10 +448,22 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RwaInstructionBox {
 #[cfg(test)]
 mod tests {
     use iroha_crypto::{Algorithm, Hash, KeyPair};
-    use iroha_primitives::{json::Json, numeric::NumericSpec};
+    use iroha_primitives::{
+        json::Json,
+        numeric::{Numeric, NumericSpec},
+    };
+    use norito::codec::Encode;
     use norito::core::DecodeFromSlice;
 
     use super::*;
+
+    #[derive(Encode)]
+    struct ForgedTransferRwa {
+        source: AccountId,
+        rwa: RwaId,
+        quantity: Numeric,
+        destination: AccountId,
+    }
 
     fn account(seed: u8) -> AccountId {
         let keypair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
@@ -479,13 +491,13 @@ mod tests {
     }
 
     fn parent_ref() -> RwaParentRef {
-        RwaParentRef::new(rwa_id("rwa-parent"), Numeric::from(25_u64))
+        RwaParentRef::new(rwa_id("rwa-parent"), Quantity::from(25_u64))
     }
 
     fn new_rwa() -> NewRwa {
         NewRwa::new(
             domain(),
-            Numeric::from(100_u64),
+            Quantity::from(100_u64),
             NumericSpec::fractional(2),
             "warehouse-lot-7".to_owned(),
             Some("active".parse::<Name>().expect("status")),
@@ -541,7 +553,7 @@ mod tests {
         assert_slice_roundtrip(TransferRwa {
             source: source.clone(),
             rwa: rwa.clone(),
-            quantity: Numeric::from(5_u64),
+            quantity: Quantity::from(5_u64),
             destination: destination.clone(),
         });
         assert_slice_roundtrip(MergeRwas {
@@ -552,21 +564,21 @@ mod tests {
         });
         assert_slice_roundtrip(RedeemRwa {
             rwa: rwa.clone(),
-            quantity: Numeric::from(2_u64),
+            quantity: Quantity::from(2_u64),
         });
         assert_slice_roundtrip(FreezeRwa { rwa: rwa.clone() });
         assert_slice_roundtrip(UnfreezeRwa { rwa: rwa.clone() });
         assert_slice_roundtrip(HoldRwa {
             rwa: rwa.clone(),
-            quantity: Numeric::from(3_u64),
+            quantity: Quantity::from(3_u64),
         });
         assert_slice_roundtrip(ReleaseRwa {
             rwa: rwa.clone(),
-            quantity: Numeric::from(1_u64),
+            quantity: Quantity::from(1_u64),
         });
         assert_slice_roundtrip(ForceTransferRwa {
             rwa: rwa.clone(),
-            quantity: Numeric::from(4_u64),
+            quantity: Quantity::from(4_u64),
             destination,
         });
         assert_slice_roundtrip(SetRwaControls {
@@ -590,6 +602,21 @@ mod tests {
     }
 
     #[test]
+    fn negative_numeric_payload_cannot_decode_as_rwa_instruction_quantity() {
+        let forged = ForgedTransferRwa {
+            source: account(0xA1),
+            rwa: rwa_id("negative-rwa-transfer"),
+            quantity: Numeric::new(-1_i32, 0),
+            destination: account(0xB2),
+        };
+
+        assert!(
+            TransferRwa::decode_from_slice(&forged.encode()).is_err(),
+            "a negative signed payload must not decode as an RWA transfer"
+        );
+    }
+
+    #[test]
     fn rwa_instruction_box_registry_decodes_type_name_and_stable_id() {
         let registry = crate::isi::registry::default();
         assert_registry_decodes(
@@ -603,7 +630,7 @@ mod tests {
             RwaInstructionBox::Transfer(TransferRwa {
                 source: account(0xA1),
                 rwa: rwa_id("rwa-registry"),
-                quantity: Numeric::from(5_u64),
+                quantity: Quantity::from(5_u64),
                 destination: account(0xB2),
             }),
         );

@@ -47,6 +47,7 @@ import {
 } from "./validationError.js";
 import { buildCanonicalRequestHeaders } from "./canonicalRequest.js";
 import { blake2b256 } from "./blake2b.js";
+import { NumericV1, NumericV1Error } from "./numericV1.js";
 import { SM2_DEFAULT_DISTINGUISHED_ID, verifyEd25519, verifySm2 } from "./crypto.js";
 import {
   getCurveEntryByPublicKeyMulticodec,
@@ -16924,8 +16925,8 @@ function normalizeExplorerRwaRecord(payload, context) {
   const record = ensureRecord(payload ?? {}, context);
   const id = requireNonEmptyString(record.id ?? "", `${context}.id`);
   const ownedBy = requireNonEmptyString(record.owned_by ?? "", `${context}.owned_by`);
-  const quantity = requireNonEmptyString(record.quantity ?? "", `${context}.quantity`);
-  const heldQuantity = requireNonEmptyString(
+  const quantity = requireCanonicalQuantity(record.quantity, `${context}.quantity`);
+  const heldQuantity = requireCanonicalQuantity(
     record.held_quantity ?? "",
     `${context}.held_quantity`,
   );
@@ -17599,7 +17600,7 @@ function normalizeUaidPortfolioAsset(value, context) {
       record.asset_definition_id,
       `${context}.asset_definition_id`,
     ),
-    quantity: requireNonEmptyString(record.quantity, `${context}.quantity`),
+    quantity: requireCanonicalQuantity(record.quantity, `${context}.quantity`),
   };
 }
 
@@ -18667,6 +18668,26 @@ function requireExactNonEmptyString(value, name) {
     );
   }
   return value;
+}
+
+function requireCanonicalQuantity(value, name) {
+  if (typeof value !== "string") {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_NUMERIC,
+      `${name} must be a canonical Kotodama V1 quantity string`,
+      name,
+    );
+  }
+  try {
+    return NumericV1.decodeQuantityJson(value).toString();
+  } catch (error) {
+    if (!(error instanceof NumericV1Error)) throw error;
+    throw createValidationError(
+      ValidationErrorCode.INVALID_NUMERIC,
+      `${name} must be a canonical non-negative Kotodama V1 quantity (${error.code})`,
+      name,
+    );
+  }
 }
 
 function requireExactBoolean(value, name) {
@@ -29071,7 +29092,11 @@ function normalizeDomainListResponse(payload) {
 }
 
 function normalizeAssetDefinitionListResponse(payload) {
-  return normalizeIdListResponse(payload, "asset definition list response");
+  return normalizeIterableItems(
+    payload,
+    "asset definition list response",
+    normalizeAssetDefinitionListItem,
+  );
 }
 
 function normalizeNftListResponse(payload) {
@@ -29723,7 +29748,7 @@ function normalizeRepoLeg(value, context) {
       record.asset_definition_id,
       `${context}.asset_definition_id`,
     ),
-    quantity: requireNonEmptyString(record.quantity, `${context}.quantity`),
+    quantity: requireCanonicalQuantity(record.quantity, `${context}.quantity`),
     metadata: cloneJsonValue(record.metadata ?? {}, `${context}.metadata`),
   };
 }
@@ -30919,6 +30944,20 @@ function normalizeListItemWithId(value, context) {
   return { ...record, id };
 }
 
+function normalizeAssetDefinitionListItem(value, context) {
+  const normalized = normalizeListItemWithId(value, context);
+  if (normalized.total_quantity === undefined || normalized.total_quantity === null) {
+    return normalized;
+  }
+  return {
+    ...normalized,
+    total_quantity: requireCanonicalQuantity(
+      normalized.total_quantity,
+      `${context}.total_quantity`,
+    ),
+  };
+}
+
 function rejectAliasField(record, context, aliasKey, canonicalKey) {
   if (Object.prototype.hasOwnProperty.call(record, aliasKey)) {
     throw new TypeError(
@@ -30934,10 +30973,7 @@ function normalizeAccountAssetListItem(value, context) {
     record.asset_id ?? record.asset,
     `${context}.asset`,
   );
-  if (typeof record.quantity !== "string") {
-    throw new TypeError(`${context}.quantity must be a string`);
-  }
-  const quantity = requireNonEmptyString(record.quantity, `${context}.quantity`);
+  const quantity = requireCanonicalQuantity(record.quantity, `${context}.quantity`);
   const normalized = {
     ...record,
     asset: record.asset ?? assetId,
@@ -30954,10 +30990,7 @@ function normalizeAssetHolderListItem(value, context) {
     record.account_id,
     `${context}.account_id`,
   );
-  if (typeof record.quantity !== "string") {
-    throw new TypeError(`${context}.quantity must be a string`);
-  }
-  const quantity = requireNonEmptyString(record.quantity, `${context}.quantity`);
+  const quantity = requireCanonicalQuantity(record.quantity, `${context}.quantity`);
   const normalized = {
     ...record,
     account_id: accountId,

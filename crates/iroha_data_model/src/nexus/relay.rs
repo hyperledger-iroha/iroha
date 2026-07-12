@@ -1182,6 +1182,7 @@ mod tests {
     use std::num::NonZeroU64;
 
     use iroha_crypto::{Hash, HashOf, KeyPair};
+    use iroha_primitives::numeric::Quantity;
 
     use super::*;
     use crate::{
@@ -1320,15 +1321,15 @@ mod tests {
                 source_id: [0xB6; 32],
                 payer_account_id: checked_account_id(),
                 fee_asset_id: "xor#universal".to_owned(),
-                fee_amount: Numeric::from(1_u32),
+                fee_amount: Quantity::from(1_u32),
                 schedule: NexusFeeScheduleInputs {
                     tx_bytes_len: 1,
                     instruction_count: 1,
                     gas_used: 0,
-                    base_fee: Numeric::zero(),
-                    per_byte_fee: Numeric::zero(),
-                    per_instruction_fee: Numeric::from(1_u32),
-                    per_gas_unit_fee: Numeric::zero(),
+                    base_fee: Quantity::zero(),
+                    per_byte_fee: Quantity::zero(),
+                    per_instruction_fee: Quantity::from(1_u32),
+                    per_gas_unit_fee: Quantity::zero(),
                 },
                 lane_id: envelope.lane_id,
                 dataspace_id: envelope.dataspace_id,
@@ -1615,15 +1616,15 @@ mod tests {
                 source_id: [0x11; 32],
                 payer_account_id: checked_account_id(),
                 fee_asset_id: "xor#universal".to_owned(),
-                fee_amount: Numeric::from(1_u32),
+                fee_amount: Quantity::from(1_u32),
                 schedule: NexusFeeScheduleInputs {
                     tx_bytes_len: 1,
                     instruction_count: 1,
                     gas_used: 0,
-                    base_fee: Numeric::zero(),
-                    per_byte_fee: Numeric::zero(),
-                    per_instruction_fee: Numeric::from(1_u32),
-                    per_gas_unit_fee: Numeric::zero(),
+                    base_fee: Quantity::zero(),
+                    per_byte_fee: Quantity::zero(),
+                    per_instruction_fee: Quantity::from(1_u32),
+                    per_gas_unit_fee: Quantity::zero(),
                 },
                 lane_id: envelope.lane_id,
                 dataspace_id: envelope.dataspace_id,

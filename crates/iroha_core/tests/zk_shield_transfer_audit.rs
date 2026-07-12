@@ -131,7 +131,7 @@ fn shield_and_transfer_emit_audit_roots_and_commitments() {
                 .with_name(asset_def_id.name().to_string()),
         )
         .into(),
-        Mint::asset_numeric(10_000u64, AssetId::of(asset_def_id.clone(), owner.clone())).into(),
+        Mint::asset_quantity(10_000u64, AssetId::of(asset_def_id.clone(), owner.clone())).into(),
         verifying_keys::RegisterVerifyingKey {
             id: vk_transfer_id.clone(),
             record: vk_record.clone(),

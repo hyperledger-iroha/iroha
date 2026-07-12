@@ -878,6 +878,14 @@ permanent replay protection and proof history; immutable sidecars count in
 total/operator disk usage but are excluded from the evictable-body budget. No
 total-state bound is claimed.
 
+Kura disk accounting is publication ordered across canonical rewrites, retired
+trees, lane-geometry mutations, state journals, projections, query indexes, and
+roster persistence. Cached readers wait for an in-flight filesystem mutation;
+partial cleanup or scan failure invalidates the affected total instead of
+publishing a stale value. Once a canonical rewrite is durably committed, a
+cleanup failure is reported as deferred cleanup and cannot make callers retry a
+successful logical commit.
+
 The remaining SCCP release work is external, independently verifiable evidence:
 
 - obtain independently audited, reproducible semantic circuit, witness
@@ -886,6 +894,9 @@ The remaining SCCP release work is external, independently verifiable evidence:
 - deploy the exact contracts and native source-verifier material, obtain
   authenticated finalized verifier/runtime readbacks, and confirm every
   governed runtime/key/policy hash;
+- execute the locked TRON artifact on a real TVM/TRE runtime and retain
+  identity-checked included success and negative receipts; EVM compatibility
+  execution is not TVM evidence;
 - apply the typed governance actions, run successful value-moving canaries in
   both directions, and confirm replay, stale-revision, wrong-route, and
   unavailable-ingress failures remain closed;

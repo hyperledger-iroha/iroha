@@ -167,7 +167,7 @@ use iroha_data_model::{
 };
 use iroha_primitives::{
     json::Json,
-    numeric::Numeric,
+    numeric::{Numeric, Quantity},
     soradns::{
         GatewayHostBindings, GatewayHostProfile, derive_gateway_hosts,
         derive_gateway_hosts_with_profile,
@@ -7194,7 +7194,7 @@ fn transfer_asset_batch_from_json(value: json::Value) -> napi::Result<Instructio
                     format!("invalid {context}.asset_definition: {err}"),
                 )
             })?;
-        let amount: Numeric =
+        let amount: Quantity =
             json::from_value(required_value(&mut entry_fields, "amount", &context)?)
                 .map_err(norito_to_napi)?;
         if !entry_fields.is_empty() {
@@ -7307,11 +7307,11 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                                 "Mint.Asset.destination field missing",
                             )
                         })?;
-                    let quantity: Numeric =
+                    let quantity: Quantity =
                         json::from_value(quantity_value).map_err(norito_to_napi)?;
                     let destination: AssetId =
                         json::from_value(destination_value).map_err(norito_to_napi)?;
-                    let mint = Mint::asset_numeric(quantity, destination);
+                    let mint = Mint::asset_quantity(quantity, destination);
                     return Ok(InstructionBox::from(MintBox::Asset(mint)));
                 }
                 if let Some(json::Value::Object(mut trigger_fields)) =
@@ -7412,11 +7412,11 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                                 "Burn.Asset.destination field missing",
                             )
                         })?;
-                    let quantity: Numeric =
+                    let quantity: Quantity =
                         json::from_value(quantity_value).map_err(norito_to_napi)?;
                     let asset_id: AssetId =
                         json::from_value(destination_value).map_err(norito_to_napi)?;
-                    let burn = Burn::asset_numeric(quantity, asset_id);
+                    let burn = Burn::asset_quantity(quantity, asset_id);
                     return Ok(InstructionBox::from(BurnBox::Asset(burn)));
                 }
                 if let Some(json::Value::Object(mut trigger_fields)) =
@@ -7482,11 +7482,11 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                             )
                         })?;
                     let source: AssetId = json::from_value(source_value).map_err(norito_to_napi)?;
-                    let quantity: Numeric =
+                    let quantity: Quantity =
                         json::from_value(quantity_value).map_err(norito_to_napi)?;
                     let destination =
                         parse_account_id_value(destination_value, "Transfer.Asset.destination")?;
-                    let transfer = Transfer::asset_numeric(source, quantity, destination);
+                    let transfer = Transfer::asset_quantity(source, quantity, destination);
                     return Ok(InstructionBox::from(TransferBox::Asset(transfer)));
                 }
                 if let Some(json::Value::Object(mut domain_fields)) = transfer_map.remove("Domain")
@@ -10201,12 +10201,12 @@ pub fn encode_contract_argument_record_json(
     payload_json: String,
 ) -> napi::Result<Buffer> {
     let schema_value = json::parse_value(&schema_json).map_err(norito_to_napi)?;
-    let schema: ivm_abi::entrypoint::EntrypointArgumentSchemaV1 =
+    let schema: iroha_data_model::smart_contract::entrypoint::EntrypointArgumentSchemaV1 =
         json::from_value(schema_value).map_err(norito_to_napi)?;
     let payload_value = json::parse_value(&payload_json).map_err(norito_to_napi)?;
     let payload: Json = json::from_value(payload_value).map_err(norito_to_napi)?;
     let record =
-        ivm::encode_argument_record_from_json(&schema, &payload).map_err(norito_to_napi)?;
+        iroha_core::encode_argument_record_from_json(&schema, &payload).map_err(norito_to_napi)?;
     Ok(Buffer::from(record))
 }
 
@@ -13603,7 +13603,8 @@ pub fn build_transfer_asset_payload(
         ));
     }
     let metadata = parse_metadata_payload("transaction", metadata_json)?;
-    let instruction: InstructionBox = Transfer::asset_numeric(source, quantity, destination).into();
+    let instruction: InstructionBox =
+        Transfer::asset_quantity(source, quantity, destination).into();
     let builder = configure_transaction_builder(
         TransactionBuilder::new(ChainId::from(chain_id), authority)
             .with_instructions([instruction]),
@@ -19045,7 +19046,8 @@ seiyaku Privacy {
         let asset_id = AssetId::new(asset_definition, account_id.clone());
 
         let mint_box: MintBox =
-            Mint::asset_numeric(Numeric::from_str("10").expect("valid numeric"), asset_id).into();
+            Mint::asset_quantity("10".parse::<Quantity>().expect("valid quantity"), asset_id)
+                .into();
         let instruction = InstructionBox::from(mint_box);
 
         let json_value =
@@ -19073,7 +19075,7 @@ seiyaku Privacy {
                 source,
                 destination,
                 asset_definition,
-                Numeric::from_str("1.25").expect("valid numeric"),
+                "1.25".parse::<Quantity>().expect("valid quantity"),
             )]);
         let instruction = InstructionBox::from(batch);
 
@@ -19126,7 +19128,7 @@ seiyaku Privacy {
         let asset_id = AssetId::new(asset_definition, account_id.clone());
 
         let burn_box: BurnBox =
-            Burn::asset_numeric(Numeric::from_str("5").expect("valid numeric"), asset_id).into();
+            Burn::asset_quantity("5".parse::<Quantity>().expect("valid quantity"), asset_id).into();
         let instruction = InstructionBox::from(burn_box);
 
         let json_value =
@@ -19936,9 +19938,9 @@ seiyaku Privacy {
         );
         let asset_id = AssetId::new(asset_definition, source_account.clone());
 
-        let transfer_box: TransferBox = Transfer::asset_numeric(
+        let transfer_box: TransferBox = Transfer::asset_quantity(
             asset_id,
-            Numeric::from_str("25").expect("valid numeric"),
+            Quantity::from_str("25").expect("valid quantity"),
             destination,
         )
         .into();
@@ -21366,7 +21368,8 @@ seiyaku Privacy {
         );
         let asset_id = AssetId::new(asset_definition, authority.clone());
         let instruction: InstructionBox =
-            Mint::asset_numeric(Numeric::from_str("10").expect("valid numeric"), asset_id).into();
+            Mint::asset_quantity("10".parse::<Quantity>().expect("valid quantity"), asset_id)
+                .into();
 
         let tx = sign_js_transaction(
             TransactionBuilder::new(chain_id, authority.clone()).with_instructions([instruction]),
@@ -21577,8 +21580,8 @@ seiyaku Privacy {
         );
         let asset_id = AssetId::new(asset_definition, authority.clone());
 
-        let instruction_box: InstructionBox = Mint::asset_numeric(
-            Numeric::from_str("10").expect("valid numeric"),
+        let instruction_box: InstructionBox = Mint::asset_quantity(
+            Quantity::from_str("10").expect("valid quantity"),
             asset_id.clone(),
         )
         .into();

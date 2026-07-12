@@ -168,9 +168,9 @@ fn test_total_quantity(
     let mut mint_and_burn_assets: Vec<InstructionBox> = Vec::new();
     for asset_id in asset_ids.iter().cloned() {
         mint_and_burn_assets
-            .push(Mint::asset_numeric(initial_value.clone(), asset_id.clone()).into());
-        mint_and_burn_assets.push(Mint::asset_numeric(to_mint.clone(), asset_id.clone()).into());
-        mint_and_burn_assets.push(Burn::asset_numeric(to_burn.clone(), asset_id).into());
+            .push(Mint::asset_quantity(initial_value.clone(), asset_id.clone()).into());
+        mint_and_burn_assets.push(Mint::asset_quantity(to_mint.clone(), asset_id.clone()).into());
+        mint_and_burn_assets.push(Burn::asset_quantity(to_burn.clone(), asset_id).into());
     }
     test_client.submit_all_blocking(mint_and_burn_assets)?;
     let observed_after_burn = wait_for_quantity(&get_quantity, &expected_after_burn, "mint+burn")?;

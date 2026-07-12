@@ -20,6 +20,8 @@ nonce and prevents message-id reuse when a replacement route restarts its local
 nonce. The destination binding includes both policy hashes and both verifier
 and route identities, so a proof for one deployment cannot be replayed through
 another route that shares its verifier.
+The governed destination deployment requires the corresponding typed
+`outbound_proof_policy`; policy-less JSON and Norito records are invalid.
 
 `transferToTaira(bytes,uint256)` constructs the complete canonical Transfer
 payload, burns wrapped XOR, and emits the exact six-field `SccpTransfer` event.

@@ -36,7 +36,7 @@ translator: machine-google-reviewed
 - დარწმუნდით, რომ მიჰყევით ჩვენს [სტილის სახელმძღვანელოებს] (#style-guides) კოდისა და დოკუმენტაციისთვის.
 - ჩაწერეთ [ტესტები] (https://doc.rust-lang.org/cargo/commands/cargo-test.html). დარწმუნდით, რომ ისინი ყველა გაივლიან (`cargo test --workspace`). თუ შეეხებით SM კრიპტოგრაფიის დასტას, ასევე გაუშვით `cargo test -p iroha_crypto --features "sm sm_proptest"` არჩევითი fuzz/საკუთრების აღკაზმვის შესასრულებლად.
   - შენიშვნა: ტესტები, რომლებიც ახორციელებენ IVM შემსრულებელს, ავტომატურად სინთეზირებენ მინიმალურ, დეტერმინისტულ შემსრულებლის ბაიტეკოდს, თუ `defaults/executor.to` არ არის. წინასწარი ნაბიჯი არ არის საჭირო ტესტების გასაშვებად. პარიტეტისთვის კანონიკური ბაიტეკოდის შესაქმნელად, შეგიძლიათ გაუშვათ:
-    - `cargo run --manifest-path scripts/generate_executor_to/Cargo.toml`
+    - `cargo run --locked -p ivm --bin ivm_fixture_export -- --write`
     - `cargo run --manifest-path scripts/regenerate_codec_samples/Cargo.toml`
 - თუ თქვენ შეცვლით derive/proc-macro crates, გაუშვით trybuild UI კომპლექტები მეშვეობით
   `make check-proc-macro-ui` (ან

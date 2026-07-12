@@ -19,6 +19,159 @@
 //! false until a fixed-VK cross-field transcript/verifier constrains those same
 //! operations without generic scalar emulation and passes the device gates.
 
+use iroha_data_model::offline::KagemushaPastaCycleParityV1;
+use norito::codec::{Decode, Encode};
+use sha2::{Digest as _, Sha256};
+
+/// Version of the compact leapfrog proof window.
+pub const KAGEMUSHA_LEAPFROG_PROOF_WINDOW_VERSION_V1: u16 = 1;
+/// Maximum augmented IPA proof bytes for one fixed Kagemusha step circuit.
+///
+/// The measured degree-12 proof is 1,536 bytes. The release contract retains
+/// 256 bytes of shape headroom, but does not allow the old 4 KiB-per-proof
+/// envelope to silently consume the complete peer budget.
+pub const KAGEMUSHA_LEAPFROG_STEP_PROOF_MAX_BYTES_V1: usize = 1_792;
+/// Maximum canonical Norito bytes for the complete newest/predecessor window.
+///
+/// This is the payload embedded in `KagemushaRecursiveSpendProofV2::proof`;
+/// statement, branch-conflict, and output-membership data have a separate
+/// budget in the complete peer archive.
+pub const KAGEMUSHA_LEAPFROG_PROOF_WINDOW_MAX_BYTES_V1: usize = 3_680;
+/// Domain separator for identities of complete compact proof windows.
+pub const KAGEMUSHA_LEAPFROG_PROOF_WINDOW_DIGEST_DOMAIN_V1: &[u8] =
+    b"iroha:kagemusha:leapfrog-proof-window:v1";
+
+/// One fixed-circuit proof retained by the alternating Pasta leapfrog.
+///
+/// The proof's public instances, fixed verifier key, and authenticated release
+/// determine the complete deferred MSM equation. Coefficients, point-source
+/// indices, transcript challenges, and IPA accumulator limbs are therefore
+/// deliberately absent: accepting caller-serialized copies would both waste
+/// the peer budget and permit the circuit and terminal decider to consume
+/// different equations.
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
+pub struct KagemushaLeapfrogStepProofV1 {
+    /// Curve/circuit parity of this proof.
+    pub parity: KagemushaPastaCycleParityV1,
+    /// Recursive transition count proved by this layer.
+    pub proof_step_count: u32,
+    /// Ordinary Poseidon Halo2/IPA proof plus the canonical folded generator.
+    pub proof_bytes: Vec<u8>,
+}
+
+impl KagemushaLeapfrogStepProofV1 {
+    /// Validate the bounded, non-empty fixed-circuit wire shape.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.proof_step_count == 0
+            || self.proof_bytes.is_empty()
+            || self.proof_bytes.len() > KAGEMUSHA_LEAPFROG_STEP_PROOF_MAX_BYTES_V1
+        {
+            return Err("Kagemusha leapfrog step proof shape mismatch".to_owned());
+        }
+        Ok(())
+    }
+}
+
+/// Constant-size newest/predecessor proof window transported by one bundle.
+///
+/// Layer `i` proves the application transition and performs the native-point
+/// half of proof `i - 1` plus the native-scalar half of proof `i - 2`. The
+/// halves are joined by the exact deferred-equation digest exposed by layer
+/// `i - 1`. A terminal verifier fully verifies the newest two ordinary proofs;
+/// induction then covers every older layer. Initialization is the only
+/// single-proof window and is a circuit base case bound to finalized top-up
+/// evidence.
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
+pub struct KagemushaLeapfrogProofWindowV1 {
+    /// Wire layout version.
+    pub version: u16,
+    /// Proof for the current public statement.
+    pub newest: KagemushaLeapfrogStepProofV1,
+    /// Previous proof, absent only for recursive step one.
+    pub predecessor: Option<KagemushaLeapfrogStepProofV1>,
+}
+
+fn opposite_parity(parity: KagemushaPastaCycleParityV1) -> KagemushaPastaCycleParityV1 {
+    match parity {
+        KagemushaPastaCycleParityV1::TransitionEq => KagemushaPastaCycleParityV1::StateEp,
+        KagemushaPastaCycleParityV1::StateEp => KagemushaPastaCycleParityV1::TransitionEq,
+    }
+}
+
+impl KagemushaLeapfrogProofWindowV1 {
+    /// Validate the exact two-layer window and its canonical archive budget.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.version != KAGEMUSHA_LEAPFROG_PROOF_WINDOW_VERSION_V1 {
+            return Err("Kagemusha leapfrog proof-window version mismatch".to_owned());
+        }
+        self.newest.validate()?;
+        match (&self.predecessor, self.newest.proof_step_count) {
+            (None, 1) => {}
+            (Some(predecessor), newest_step) if newest_step > 1 => {
+                predecessor.validate()?;
+                if predecessor.proof_step_count.checked_add(1) != Some(newest_step)
+                    || predecessor.parity != opposite_parity(self.newest.parity)
+                    || predecessor.proof_bytes == self.newest.proof_bytes
+                {
+                    return Err("Kagemusha leapfrog predecessor binding mismatch".to_owned());
+                }
+            }
+            _ => {
+                return Err("Kagemusha leapfrog predecessor presence mismatch".to_owned());
+            }
+        }
+        let encoded = norito::to_bytes(self)
+            .map_err(|error| format!("failed to encode Kagemusha proof window: {error}"))?;
+        if encoded.len() > KAGEMUSHA_LEAPFROG_PROOF_WINDOW_MAX_BYTES_V1 {
+            return Err(format!(
+                "Kagemusha leapfrog proof window is {} bytes; maximum is {}",
+                encoded.len(),
+                KAGEMUSHA_LEAPFROG_PROOF_WINDOW_MAX_BYTES_V1
+            ));
+        }
+        Ok(())
+    }
+
+    /// Construct the next constant-size window from one newly generated proof.
+    ///
+    /// Cryptographic callers must first prove that `newest` binds the old
+    /// window's newest proof digest, deferred equation, result state, manifest,
+    /// and application transition. This method only performs the canonical
+    /// lossless window rotation after that proof has been generated.
+    pub fn advance(
+        previous: &Self,
+        newest: KagemushaLeapfrogStepProofV1,
+    ) -> Result<Self, String> {
+        previous.validate()?;
+        newest.validate()?;
+        if newest.proof_step_count != previous.newest.proof_step_count.saturating_add(1)
+            || newest.parity != opposite_parity(previous.newest.parity)
+            || newest.proof_bytes == previous.newest.proof_bytes
+        {
+            return Err("Kagemusha leapfrog window advance mismatch".to_owned());
+        }
+        let window = Self {
+            version: KAGEMUSHA_LEAPFROG_PROOF_WINDOW_VERSION_V1,
+            newest,
+            predecessor: Some(previous.newest.clone()),
+        };
+        window.validate()?;
+        Ok(window)
+    }
+
+    /// Return a domain-separated identity of the exact canonical window.
+    pub fn digest(&self) -> Result<[u8; 32], String> {
+        self.validate()?;
+        let encoded = norito::to_bytes(self)
+            .map_err(|error| format!("failed to encode Kagemusha proof window: {error}"))?;
+        let mut hasher = Sha256::new();
+        hasher.update(KAGEMUSHA_LEAPFROG_PROOF_WINDOW_DIGEST_DOMAIN_V1);
+        hasher.update([0]);
+        hasher.update(encoded);
+        Ok(hasher.finalize().into())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use halo2_proofs::{

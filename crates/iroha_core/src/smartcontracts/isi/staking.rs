@@ -21,7 +21,10 @@ use iroha_data_model::{
     peer::PeerId,
     prelude::AccountId,
 };
-use iroha_primitives::{BigInt, numeric::Numeric};
+use iroha_primitives::{
+    BigInt,
+    numeric::{Numeric, Quantity},
+};
 
 use super::prelude::*;
 use crate::{
@@ -617,7 +620,9 @@ impl Execute for BondPublicLaneStake {
             .world
             .assets
             .get(&stake_ctx.staker_asset)
-            .map_or_else(Numeric::zero, |balance| balance.as_ref().clone());
+            .map_or_else(Numeric::zero, |balance| {
+                balance.as_ref().as_numeric().clone()
+            });
         if available < amount {
             return Err(Error::Math(MathError::NotEnoughQuantity));
         }
@@ -1092,10 +1097,16 @@ impl Execute for ClaimPublicLaneRewards {
 
             let transfer = iroha_data_model::isi::Transfer::<
                 Asset,
-                Numeric,
+                Quantity,
                 iroha_data_model::account::Account,
-            >::asset_numeric(
-                asset_id.clone(), amount, self.account.clone()
+            >::asset_quantity(
+                asset_id.clone(),
+                Quantity::from_canonical_numeric(amount).map_err(|error| {
+                    Error::InvariantViolation(
+                        format!("reward claim left the asset quantity domain: {error}").into(),
+                    )
+                })?,
+                self.account.clone(),
             );
             transfer.execute(&sink_account, state_transaction)?;
             state_transaction
@@ -1404,7 +1415,7 @@ fn validate_reward_sink(
                 "reward asset must exist in the configured fee sink account".into(),
             )
         })?;
-    if sink_balance.as_ref() < total_reward {
+    if sink_balance.as_ref().as_numeric() < total_reward {
         return Err(Error::InvariantViolation(
             "insufficient balance in reward fee sink for recorded payout".into(),
         ));
@@ -2237,11 +2248,11 @@ mod tests {
         .unwrap();
         let reward_asset = AssetId::new(asset_def_id.clone(), sink.clone());
         let initial_stake = Numeric::new(u64::from(mint_amount.max(1)), 0);
-        Mint::asset_numeric(mint_amount, reward_asset.clone())
+        Mint::asset_quantity(mint_amount, reward_asset.clone())
             .execute(&ALICE_ID, stx)
             .unwrap();
         let validator_asset = AssetId::new(asset_def_id.clone(), validator.clone());
-        Mint::asset_numeric(mint_amount, validator_asset.clone())
+        Mint::asset_quantity(mint_amount, validator_asset.clone())
             .execute(&ALICE_ID, stx)
             .unwrap();
 
@@ -2330,10 +2341,10 @@ mod tests {
         .unwrap();
         let validator_asset = AssetId::new(asset_def_id.clone(), validator.clone());
         let delegator_asset = AssetId::new(asset_def_id.clone(), delegator.clone());
-        Mint::asset_numeric(10_000u32, validator_asset)
+        Mint::asset_quantity(10_000u32, validator_asset)
             .execute(&ALICE_ID, stx)
             .unwrap();
-        Mint::asset_numeric(10_000u32, delegator_asset)
+        Mint::asset_quantity(10_000u32, delegator_asset)
             .execute(&ALICE_ID, stx)
             .unwrap();
 
@@ -3896,7 +3907,7 @@ mod tests {
         stx.nexus.fees.fee_sink_account_id = escrow.to_string();
         stx.nexus.fees.fee_asset_id = asset_def_id.to_string();
         let reward_asset = AssetId::new(asset_def_id.clone(), escrow.clone());
-        Mint::asset_numeric(1_000u32, reward_asset.clone())
+        Mint::asset_quantity(1_000u32, reward_asset.clone())
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
         RegisterPublicLaneValidator {
@@ -4167,7 +4178,7 @@ mod tests {
                 .expect("replacement is single-signatory")
                 .clone(),
         ));
-        Mint::asset_numeric(
+        Mint::asset_quantity(
             10_000u32,
             AssetId::new(asset_def_id.clone(), replacement.clone()),
         )
@@ -4287,7 +4298,7 @@ mod tests {
         stx.nexus.staking.stake_escrow_account_id = escrow.to_string();
         stx.nexus.staking.slash_sink_account_id = escrow.to_string();
         finalize_validator_lifecycle(&mut stx).expect("finalize lifecycle before replacement");
-        Mint::asset_numeric(
+        Mint::asset_quantity(
             10_000u32,
             AssetId::new(asset_def_id.clone(), replacement.clone()),
         )
@@ -4486,7 +4497,7 @@ mod tests {
             stx.nexus.staking.stake_asset_id = asset_def_id.to_string();
             stx.nexus.staking.stake_escrow_account_id = escrow.to_string();
             stx.nexus.staking.slash_sink_account_id = escrow.to_string();
-            Mint::asset_numeric(
+            Mint::asset_quantity(
                 10_000u32,
                 AssetId::new(asset_def_id.clone(), replacement.clone()),
             )
@@ -5423,7 +5434,7 @@ mod tests {
             .commit_topology
             .get_mut()
             .push(replacement_peer.clone());
-        Mint::asset_numeric(
+        Mint::asset_quantity(
             10_000u32,
             AssetId::new(asset_def_id.clone(), replacement.clone()),
         )

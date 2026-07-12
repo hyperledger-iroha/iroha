@@ -9115,6 +9115,13 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
+            if matches!(
+                &self.proof.payload,
+                iroha_data_model::bridge::BridgeProofPayload::NativeProtocol(_)
+            ) {
+                state_transaction
+                    .require_transfer_transcript_identity("SCCP native inbound settlement")?;
+            }
             let current_height = state_transaction._curr_block.height.get();
             let validated = encode_and_validate_bridge_proof(&self.proof, state_transaction)?;
             let outbound_proof = validated.outbound_proof;
@@ -9399,7 +9406,10 @@ pub mod isi {
     fn verified_bridge_proof_record_for_receipt<'a>(
         receipt: &iroha_data_model::bridge::BridgeReceipt,
         state_transaction: &'a StateTransaction<'_, '_>,
-    ) -> Option<&'a iroha_data_model::bridge::BridgeProofRecord> {
+    ) -> Option<(
+        &'a iroha_data_model::proof::ProofId,
+        &'a iroha_data_model::bridge::BridgeProofRecord,
+    )> {
         state_transaction
             .world
             .proofs
@@ -9417,56 +9427,45 @@ pub mod isi {
                 if bridge_record.commitment == receipt.proof_hash
                     && bridge_record.proof.backend_label() == id.backend
                 {
-                    Some(bridge_record)
+                    Some((id, bridge_record))
                 } else {
                     None
                 }
             })
     }
 
-    fn validate_sccp_bridge_receipt_matches_payload(
-        receipt: &iroha_data_model::bridge::BridgeReceipt,
+    fn derive_sccp_bridge_receipt_projection(
+        lane: iroha_data_model::nexus::LaneId,
+        proof_hash: [u8; 32],
         message: &iroha_sccp::SccpPayloadV1,
         message_id: [u8; 32],
-    ) -> Result<(), Error> {
+    ) -> iroha_data_model::bridge::BridgeReceipt {
         let iroha_sccp::SccpPayloadV1::Transfer(payload) = message;
-        let expected_direction = if payload.asset_home_domain == iroha_sccp::SCCP_DOMAIN_SORA {
-            b"release".as_slice()
+        let direction = if payload.asset_home_domain == iroha_sccp::SCCP_DOMAIN_SORA {
+            b"release".to_vec()
         } else {
-            b"mint".as_slice()
+            b"mint".to_vec()
         };
-        if receipt.direction.as_slice() != expected_direction {
-            return Err(invalid_bridge_receipt(
-                "SCCP bridge receipt direction does not match transfer payload",
-            ));
+        // Spell every field out so adding another caller-controlled receipt field is a compile
+        // error until its authenticated projection is defined here. SCCP V1 authenticates no
+        // destination transaction hash, so accepting any `dest_tx` would forge proof provenance.
+        iroha_data_model::bridge::BridgeReceipt {
+            lane,
+            direction,
+            source_tx: message_id,
+            dest_tx: None,
+            proof_hash,
+            amount: payload.amount,
+            asset_id: payload.asset_id.clone(),
+            recipient: payload.recipient.clone(),
         }
-        if receipt.source_tx != message_id {
-            return Err(invalid_bridge_receipt(
-                "SCCP bridge receipt source_tx does not match message id",
-            ));
-        }
-        if receipt.amount != payload.amount {
-            return Err(invalid_bridge_receipt(
-                "SCCP bridge receipt amount does not match transfer payload",
-            ));
-        }
-        if receipt.asset_id != payload.asset_id {
-            return Err(invalid_bridge_receipt(
-                "SCCP bridge receipt asset_id does not match transfer payload",
-            ));
-        }
-        if receipt.recipient != payload.recipient {
-            return Err(invalid_bridge_receipt(
-                "SCCP bridge receipt recipient does not match transfer payload",
-            ));
-        }
-        Ok(())
     }
 
-    fn validate_bridge_receipt_matches_proof(
-        receipt: &iroha_data_model::bridge::BridgeReceipt,
+    fn derive_bridge_receipt_projection(
+        lane: iroha_data_model::nexus::LaneId,
+        proof_hash: [u8; 32],
         proof: &iroha_data_model::bridge::BridgeProof,
-    ) -> Result<(), Error> {
+    ) -> Result<iroha_data_model::bridge::BridgeReceipt, Error> {
         match &proof.payload {
             iroha_data_model::bridge::BridgeProofPayload::NativeProtocol(native) => {
                 let decoded = iroha_sccp::decode_bridge_native_protocol_proof_v1(native).map_err(
@@ -9476,11 +9475,12 @@ pub mod isi {
                         ))
                     },
                 )?;
-                validate_sccp_bridge_receipt_matches_payload(
-                    receipt,
+                Ok(derive_sccp_bridge_receipt_projection(
+                    lane,
+                    proof_hash,
                     &decoded.payload,
                     decoded.source.message_id,
-                )
+                ))
             }
             iroha_data_model::bridge::BridgeProofPayload::SccpDestination(destination) => {
                 let parsed =
@@ -9490,21 +9490,26 @@ pub mod isi {
                         )
                     })?;
                 let bundle = parsed.bundle();
-                validate_sccp_bridge_receipt_matches_payload(
-                    receipt,
+                Ok(derive_sccp_bridge_receipt_projection(
+                    lane,
+                    proof_hash,
                     &bundle.payload,
                     bundle.commitment.message_id,
-                )
+                ))
             }
             iroha_data_model::bridge::BridgeProofPayload::Ics(_)
-            | iroha_data_model::bridge::BridgeProofPayload::TransparentZk(_) => Ok(()),
+            | iroha_data_model::bridge::BridgeProofPayload::TransparentZk(_) => {
+                Err(invalid_bridge_receipt(
+                    "generic bridge proofs have no authenticated receipt projection; only closed SCCP proof variants may emit bridge receipts",
+                ))
+            }
         }
     }
 
     fn validate_bridge_receipt_lane_matches_transaction(
         receipt: &iroha_data_model::bridge::BridgeReceipt,
         state_transaction: &StateTransaction<'_, '_>,
-    ) -> Result<(), Error> {
+    ) -> Result<iroha_data_model::nexus::LaneId, Error> {
         let Some(current_lane_id) = state_transaction.current_lane_id else {
             return Err(invalid_bridge_receipt(
                 "bridge receipt requires an active transaction lane",
@@ -9526,16 +9531,17 @@ pub mod isi {
                 receipt.lane
             )));
         }
-        Ok(())
+        Ok(current_lane_id)
     }
 
     fn consume_bridge_receipt_proof(
         receipt: &iroha_data_model::bridge::BridgeReceipt,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
-        validate_bridge_receipt_lane_matches_transaction(receipt, state_transaction)?;
+        let current_lane =
+            validate_bridge_receipt_lane_matches_transaction(receipt, state_transaction)?;
         {
-            let bridge_record =
+            let (proof_id, bridge_record) =
                 verified_bridge_proof_record_for_receipt(receipt, state_transaction).ok_or_else(
                     || {
                         invalid_bridge_receipt(
@@ -9543,7 +9549,16 @@ pub mod isi {
                         )
                     },
                 )?;
-            validate_bridge_receipt_matches_proof(receipt, &bridge_record.proof)?;
+            let expected = derive_bridge_receipt_projection(
+                current_lane,
+                proof_id.proof_hash,
+                &bridge_record.proof,
+            )?;
+            if receipt != &expected {
+                return Err(invalid_bridge_receipt(
+                    "SCCP bridge receipt does not exactly match the complete proof-derived projection",
+                ));
+            }
         }
         if !state_transaction
             .bridge_receipt_proofs_available_in_tx
@@ -10431,12 +10446,7 @@ pub mod isi {
             settlement.settlement_asset_definition_id.clone(),
             authority.clone(),
         );
-        if state_transaction.tx_call_hash.is_none() {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "SCCP message recording requires a transaction call_hash before custody or outbox mutation"
-                    .into(),
-            ));
-        }
+        state_transaction.require_transfer_transcript_identity("SCCP message recording")?;
         crate::smartcontracts::isi::asset::isi::execute_user_numeric_asset_transfer(
             state_transaction,
             authority,
@@ -11420,7 +11430,7 @@ pub mod isi {
                     .world
                     .asset_total_amount(asset_def_id)
                     .map_err(Error::from)?;
-                if transparent_total > iroha_primitives::numeric::Numeric::zero() {
+                if transparent_total > Quantity::zero() {
                     aborted = true;
                     working_policy.pending_transition = None;
                     working_policy.mode = transition.previous_mode();
@@ -12668,9 +12678,9 @@ pub mod isi {
 
             let source_asset_id =
                 shield_public_asset_id(state_transaction, self.asset(), self.from())?;
-            let transfer = Transfer::asset_numeric(
+            let transfer = Transfer::asset_quantity(
                 source_asset_id,
-                Numeric::new(*self.amount(), 0),
+                Quantity::from(*self.amount()),
                 self.to().clone(),
             );
             transfer.execute(self.from(), state_transaction)?;
@@ -12949,10 +12959,7 @@ pub mod isi {
                     err.to_string(),
                 ))
             })?;
-            let burn = Burn::asset_numeric(
-                iroha_primitives::numeric::Numeric::new(*self.amount(), 0),
-                asset_id,
-            );
+            let burn = Burn::asset_quantity(Quantity::from(*self.amount()), asset_id);
             burn.execute(authority, state_transaction)?;
             state_transaction.register_commitments(1)?;
             // Append commitment and update root; emit audit metadata with roots and commitment.
@@ -13723,10 +13730,7 @@ pub mod isi {
                 state_transaction.zk.tree_frontier_checkpoint_interval,
                 state_transaction.zk.reorg_depth_bound,
             );
-            let mint = Mint::asset_numeric(
-                iroha_primitives::numeric::Numeric::new(*self.public_amount(), 0),
-                asset_id,
-            );
+            let mint = Mint::asset_quantity(Quantity::from(*self.public_amount()), asset_id);
             mint.execute(authority, state_transaction)?;
             // Emit an audit pulse with latest unshield info, including proof hash
             let key: Name = "zk.unshield.last".parse().unwrap();
@@ -16184,17 +16188,6 @@ pub mod isi {
     fn validate_fee_sponsor_policy(
         policy: &iroha_data_model::nexus::FeeSponsorPolicy,
     ) -> Result<(), Error> {
-        if let Some(max_fee) = &policy.max_fee
-            && max_fee < &Numeric::zero()
-        {
-            return Err(InstructionExecutionError::InvalidParameter(
-                InvalidParameterError::SmartContract(
-                    "fee sponsor policy max_fee must be non-negative".into(),
-                ),
-            )
-            .into());
-        }
-
         if policy.enabled
             && !policy
                 .rules
@@ -18026,9 +18019,14 @@ pub mod isi {
             artifact: &SccpReceiptArtifactFixture,
         ) -> BridgeReceipt {
             let iroha_sccp::SccpPayloadV1::Transfer(payload) = &artifact.bundle.payload;
+            let direction = if payload.asset_home_domain == iroha_sccp::SCCP_DOMAIN_SORA {
+                b"release".to_vec()
+            } else {
+                b"mint".to_vec()
+            };
             BridgeReceipt {
                 lane: LaneId::SINGLE,
-                direction: b"release".to_vec(),
+                direction,
                 source_tx: artifact.bundle.commitment.message_id,
                 dest_tx: None,
                 proof_hash,
@@ -18036,6 +18034,14 @@ pub mod isi {
                 asset_id: payload.asset_id.clone(),
                 recipient: payload.recipient.clone(),
             }
+        }
+
+        fn sccp_bridge_receipt_for_proof_test(
+            proof_hash: [u8; 32],
+            proof: &BridgeProof,
+        ) -> BridgeReceipt {
+            derive_bridge_receipt_projection(LaneId::SINGLE, proof_hash, proof)
+                .expect("closed SCCP proof fixture has a complete receipt projection")
         }
 
         #[test]
@@ -19123,6 +19129,43 @@ pub mod isi {
         }
 
         #[test]
+        fn replay_sccp_message_skips_call_hash_and_transfer_transcript() {
+            let state = State::new_for_testing(
+                World::default(),
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let header = iroha_data_model::block::BlockHeader::new(
+                NonZeroU64::new(1).expect("nonzero height"),
+                None,
+                None,
+                None,
+                0,
+                0,
+            );
+            let mut block = state.block(header);
+            block.replay_compatibility = true;
+            let mut stx = block.transaction();
+            enable_sccp_recording_for_test(&mut stx, LaneId::SINGLE);
+            assert!(stx.tx_call_hash.is_none());
+            let payload = sora_outbound_sccp_payload(149);
+            let before = sccp_outbound_mutation_snapshot(&stx, &ALICE_ID);
+
+            crate::bridge::test_record_sccp_message(canonical_test_sccp_payload_bytes(&payload))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("committed-block replay intentionally skips transfer transcripts");
+
+            let after = sccp_outbound_mutation_snapshot(&stx, &ALICE_ID);
+            assert_eq!(after.pending.len(), before.pending.len() + 1);
+            assert_eq!(after.locators.len(), before.locators.len() + 1);
+            assert_eq!(after.ordered_index.len(), before.ordered_index.len() + 1);
+            assert_eq!(after.usage.message_count, before.usage.message_count + 1);
+            assert_ne!(after.sender_balance, before.sender_balance);
+            assert_ne!(after.custody_balance, before.custody_balance);
+            assert_eq!(stx.pending_transfer_transcript_count_for_testing(), 0);
+        }
+
+        #[test]
         fn record_sccp_message_rejects_corrupt_or_overflowing_usage_before_mutation() {
             let state = State::new_for_testing(
                 World::default(),
@@ -19578,7 +19621,7 @@ pub mod isi {
                     .execute(&ALICE_ID, &mut stx)
                     .expect("register unsupported SCCP authority fixture");
                 let sender_asset = AssetId::new(settlement_asset.clone(), authority.clone());
-                Mint::asset_numeric(Numeric::new(100_u64, 0), sender_asset.clone())
+                Mint::asset_quantity(100_u64, sender_asset.clone())
                     .execute(&ALICE_ID, &mut stx)
                     .expect("fund unsupported SCCP authority fixture");
                 let sender_before = sccp_asset_balance(&stx, &sender_asset);
@@ -21911,7 +21954,7 @@ seiyaku GovernanceLifecycle {
             }
             let sender_asset_id = AssetId::new(settlement_asset_definition_id, ALICE_ID.clone());
             if stx.world.asset(&sender_asset_id).is_err() {
-                Mint::asset_numeric(Numeric::new(1_000_000_u64, 0), sender_asset_id)
+                Mint::asset_quantity(1_000_000_u64, sender_asset_id)
                     .execute(&ALICE_ID, stx)
                     .expect("fund SCCP sender fixture");
             }
@@ -21998,6 +22041,104 @@ seiyaku GovernanceLifecycle {
             }
         }
 
+        #[derive(Debug, Clone, PartialEq, Eq)]
+        struct SccpInboundMutationSnapshot {
+            verifier_work: (
+                crate::state::SccpVerifierWorkV1,
+                crate::state::SccpVerifierWorkV1,
+            ),
+            custody_balance: Numeric,
+            recipient_balance: Numeric,
+            holders: Option<BTreeSet<AccountId>>,
+            assets: Option<BTreeSet<AssetId>>,
+            nonzero_holders: Option<BTreeSet<AccountId>>,
+            proofs:
+                BTreeMap<iroha_data_model::proof::ProofId, iroha_data_model::proof::ProofRecord>,
+            proofs_by_status: BTreeMap<
+                iroha_data_model::proof::ProofStatus,
+                BTreeSet<iroha_data_model::proof::ProofId>,
+            >,
+            proof_tags: BTreeMap<iroha_data_model::proof::ProofId, Vec<[u8; 4]>>,
+            proofs_by_tag: BTreeMap<[u8; 4], Vec<iroha_data_model::proof::ProofId>>,
+            inbound: BTreeMap<
+                iroha_data_model::bridge::SccpInboundMessageKeyV1,
+                iroha_data_model::bridge::SccpInboundMessageRecordV1,
+            >,
+            high_water: BTreeMap<iroha_data_model::bridge::SccpInboundAnchorHighWaterKeyV1, u64>,
+            receipt_markers: BTreeSet<[u8; 32]>,
+            transfer_transcripts: usize,
+            events: Vec<Arc<DataEvent>>,
+        }
+
+        fn sccp_inbound_mutation_snapshot(
+            stx: &StateTransaction<'_, '_>,
+            settlement_asset: &AssetDefinitionId,
+            custody: &AccountId,
+            recipient: &AccountId,
+        ) -> SccpInboundMutationSnapshot {
+            let custody_asset = AssetId::new(settlement_asset.clone(), custody.clone());
+            let recipient_asset = AssetId::new(settlement_asset.clone(), recipient.clone());
+            SccpInboundMutationSnapshot {
+                verifier_work: stx.sccp_verifier_work_for_testing(),
+                custody_balance: sccp_asset_balance(stx, &custody_asset),
+                recipient_balance: sccp_asset_balance(stx, &recipient_asset),
+                holders: stx
+                    .world
+                    .asset_definition_holders
+                    .get(settlement_asset)
+                    .cloned(),
+                assets: stx
+                    .world
+                    .asset_definition_assets
+                    .get(settlement_asset)
+                    .cloned(),
+                nonzero_holders: stx
+                    .world
+                    .asset_definition_nonzero_holders
+                    .get(settlement_asset)
+                    .cloned(),
+                proofs: stx
+                    .world
+                    .proofs
+                    .iter()
+                    .map(|(id, record)| (id.clone(), record.clone()))
+                    .collect(),
+                proofs_by_status: stx
+                    .world
+                    .proofs_by_status
+                    .iter()
+                    .map(|(status, ids)| (*status, ids.clone()))
+                    .collect(),
+                proof_tags: stx
+                    .world
+                    .proof_tags
+                    .iter()
+                    .map(|(id, tags)| (id.clone(), tags.clone()))
+                    .collect(),
+                proofs_by_tag: stx
+                    .world
+                    .proofs_by_tag
+                    .iter()
+                    .map(|(tag, ids)| (*tag, ids.clone()))
+                    .collect(),
+                inbound: stx
+                    .world
+                    .sccp_inbound_messages
+                    .iter()
+                    .map(|(key, record)| (*key, *record))
+                    .collect(),
+                high_water: stx
+                    .world
+                    .sccp_inbound_anchor_high_water
+                    .iter()
+                    .map(|(key, height)| (*key, *height))
+                    .collect(),
+                receipt_markers: stx.bridge_receipt_proofs_available_in_tx.clone(),
+                transfer_transcripts: stx.pending_transfer_transcript_count_for_testing(),
+                events: stx.world.internal_event_buf.clone(),
+            }
+        }
+
         fn exact_sccp_fixture_sender(
             fixture: &iroha_sccp::SccpExactOutboundTestFixtureV1,
         ) -> AccountId {
@@ -22022,7 +22163,7 @@ seiyaku GovernanceLifecycle {
             let (settlement_asset, _) = sccp_test_settlement_ids(stx);
             let sender_asset = AssetId::new(settlement_asset, sender.clone());
             if stx.world.asset(&sender_asset).is_err() {
-                Mint::asset_numeric(Numeric::new(1_000_000_u64, 0), sender_asset)
+                Mint::asset_quantity(1_000_000_u64, sender_asset)
                     .execute(&ALICE_ID, stx)
                     .expect("fund exact SCCP sender fixture");
             }
@@ -22160,9 +22301,13 @@ seiyaku GovernanceLifecycle {
                 .expect("register SCCP settlement asset fixture");
             }
             if !custody_amount.is_zero() {
-                Mint::asset_numeric(custody_amount, AssetId::new(asset.clone(), custody.clone()))
-                    .execute(&ALICE_ID, stx)
-                    .expect("fund SCCP custody fixture");
+                Mint::asset_quantity(
+                    Quantity::try_from_numeric(custody_amount)
+                        .expect("non-negative SCCP custody fixture"),
+                    AssetId::new(asset.clone(), custody.clone()),
+                )
+                .execute(&ALICE_ID, stx)
+                .expect("fund SCCP custody fixture");
             }
             (asset, custody)
         }
@@ -22217,7 +22362,7 @@ seiyaku GovernanceLifecycle {
                 .iter()
                 .zip(balances.iter())
                 .map(|(asset_id, (_, amount))| {
-                    Asset::new(asset_id.clone(), Numeric::new(*amount, 0))
+                    Asset::new(asset_id.clone(), Quantity::from(*amount))
                 })
                 .collect();
             let mut world = World::with_assets([domain], [account], [asset_definition], assets, []);
@@ -22340,7 +22485,7 @@ seiyaku GovernanceLifecycle {
                 .with_name(asset_def_id.name().to_string())
                 .build(&ALICE_ID);
             let alice_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
-            let alice_asset = Asset::new(alice_asset_id, Numeric::new(100, 0));
+            let alice_asset = Asset::new(alice_asset_id, Quantity::from(100));
             let world = World::with_assets(
                 [domain],
                 [alice, receiver_account],
@@ -22758,7 +22903,7 @@ seiyaku GovernanceLifecycle {
                 AssetBalanceScope::Dataspace(home_dataspace),
             );
             let (home_source_asset_id, home_source_asset_value) =
-                Asset::new(home_source_asset.clone(), Numeric::new(100, 0)).into_key_value();
+                Asset::new(home_source_asset.clone(), Quantity::from(100)).into_key_value();
             stx.world
                 .assets
                 .insert(home_source_asset_id.clone(), home_source_asset_value);
@@ -24275,7 +24420,7 @@ seiyaku GovernanceLifecycle {
                 .confidential_policy(AssetConfidentialPolicy::convertible())
                 .build(&ALICE_ID);
             let asset_id = AssetId::of(asset_def_id.clone(), ALICE_ID.clone());
-            let asset = Asset::new(asset_id.clone(), Numeric::new(10, 0));
+            let asset = Asset::new(asset_id.clone(), Quantity::from(10));
             let mut world =
                 World::with_assets([domain], [account], [asset_definition], [asset], []);
             world.zk_assets.insert(asset_def_id.clone(), {
@@ -24445,7 +24590,7 @@ seiyaku GovernanceLifecycle {
             .execute(&ALICE_ID, &mut stx)
             .expect("register asset definition");
             let asset_id = AssetId::new(asset_def_id.clone(), account_id.clone());
-            let asset = Asset::new(asset_id.clone(), Numeric::new(1, 0));
+            let asset = Asset::new(asset_id.clone(), Quantity::from(1));
             let (asset_id, asset_value) = asset.into_key_value();
             stx.world.assets.insert(asset_id.clone(), asset_value);
             stx.world.track_asset_holder(&asset_id);
@@ -24659,7 +24804,7 @@ seiyaku GovernanceLifecycle {
             .expect("register asset definition");
 
             let asset_id = AssetId::new(asset_def_id.clone(), holder_id.clone());
-            let asset = Asset::new(asset_id.clone(), Numeric::new(1, 0));
+            let asset = Asset::new(asset_id.clone(), Quantity::from(1));
             let (asset_id, asset_value) = asset.into_key_value();
             stx.world.assets.insert(asset_id.clone(), asset_value);
             stx.world.track_asset_holder(&asset_id);
@@ -26638,10 +26783,6 @@ seiyaku GovernanceLifecycle {
                 .rules
                 .push(FeeSponsorRule::new(FeeSponsorRuleEffect::Deny));
 
-            let mut negative_max_fee =
-                allow_all_fee_sponsor_policy(&sponsor_id, "negative_max_fee");
-            negative_max_fee.max_fee = Some(Numeric::new(-1_i32, 0));
-
             let mut empty_wire_id = allow_all_fee_sponsor_policy(&sponsor_id, "empty_wire_id");
             empty_wire_id.rules[0]
                 .instruction_wire_ids
@@ -26659,7 +26800,6 @@ seiyaku GovernanceLifecycle {
 
             for (policy, expected) in [
                 (no_allow, "must contain at least one allow rule"),
-                (negative_max_fee, "max_fee must be non-negative"),
                 (empty_wire_id, "empty instruction wire id"),
                 (empty_entrypoint, "empty entrypoint"),
                 (unknown_sponsor_policy, "unknown fee sponsor policy sponsor"),
@@ -26823,10 +26963,15 @@ seiyaku GovernanceLifecycle {
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
 
-            let (_, proof_hash) = seed_generic_bridge_proof_for_receipt_test(&mut stx, 1);
+            let artifact = sccp_message_artifact_for_receipt_test(
+                sccp_transfer_payload_for_receipt_test(50),
+                1,
+            );
+            let proof = sccp_bridge_proof_for_receipt_test(&artifact);
+            let proof_hash = insert_bridge_proof_record_for_receipt_test(&mut stx, proof);
             set_current_lane_for_test(&mut stx, LaneId::SINGLE);
             stx.world.internal_event_buf.clear();
-            let receipt = bridge_receipt_for_test(proof_hash);
+            let receipt = sccp_bridge_receipt_for_receipt_test(proof_hash, &artifact);
 
             RecordBridgeReceipt::new(receipt.clone())
                 .execute(&ALICE_ID, &mut stx)
@@ -26865,6 +27010,35 @@ seiyaku GovernanceLifecycle {
                 stx.bridge_receipt_proofs_available_in_tx
                     .contains(&proof_hash)
             );
+        }
+
+        #[test]
+        fn generic_bridge_proof_has_no_receipt_projection() {
+            let state = State::new(
+                World::default(),
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            let (_, proof_hash) = seed_generic_bridge_proof_for_receipt_test(&mut stx, 11);
+            set_current_lane_for_test(&mut stx, LaneId::SINGLE);
+            stx.world.internal_event_buf.clear();
+
+            let error = RecordBridgeReceipt::new(bridge_receipt_for_test(proof_hash))
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("generic proofs authenticate no complete receipt projection");
+            assert!(
+                format!("{error:?}").contains("no authenticated receipt projection"),
+                "unexpected generic receipt rejection: {error:?}"
+            );
+            assert!(
+                stx.bridge_receipt_proofs_available_in_tx
+                    .contains(&proof_hash),
+                "unsupported projections must not consume the fresh proof marker"
+            );
+            assert!(stx.world.internal_event_buf.is_empty());
         }
 
         #[test]
@@ -26979,6 +27153,135 @@ seiyaku GovernanceLifecycle {
         }
 
         #[test]
+        fn submit_native_transfer_proof_rejects_missing_call_hash_without_mutation_and_retries() {
+            let state = State::new(
+                World::default(),
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            let (proof, native, registry) = native_ethereum_bridge_proof_for_payload_for_test(
+                sccp_native_inbound_transfer_payload_for_test(80, 7),
+            );
+            let (asset, custody) = configure_native_sccp_settlement_for_test(
+                &mut stx,
+                registry,
+                NumericSpec::default(),
+                Numeric::new(100_u64, 0),
+            );
+            assert!(stx.tx_call_hash.is_none());
+            let before = sccp_inbound_mutation_snapshot(&stx, &asset, &custody, &ALICE_ID);
+            iroha_sccp::reset_sccp_destination_proof_work_counters_v1();
+
+            let error = SubmitBridgeProof::new(proof.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("native settlement without transaction identity must fail closed");
+            assert!(
+                format!("{error:?}").contains("transaction call_hash"),
+                "unexpected missing-call-hash error: {error:?}"
+            );
+            assert_eq!(
+                sccp_inbound_mutation_snapshot(&stx, &asset, &custody, &ALICE_ID),
+                before,
+                "identity preflight must precede verifier quota, cryptography, balances, indexes, replay state, proof state, transcripts, markers, and events"
+            );
+            assert_eq!(
+                iroha_sccp::sccp_destination_proof_work_counters_v1(),
+                iroha_sccp::SccpDestinationProofWorkCountersV1::default(),
+                "identity rejection must precede every instrumented SCCP proof operation"
+            );
+
+            seed_sccp_test_tx_call_hash(&mut stx, 0x8C);
+            SubmitBridgeProof::new(proof.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect("the exact same proof must succeed after supplying transaction identity");
+
+            let after = sccp_inbound_mutation_snapshot(&stx, &asset, &custody, &ALICE_ID);
+            assert_eq!(
+                after.custody_balance,
+                before
+                    .custody_balance
+                    .checked_sub(Numeric::new(7_u64, 9))
+                    .expect("funded custody subtraction")
+            );
+            assert_eq!(
+                after.recipient_balance,
+                before
+                    .recipient_balance
+                    .checked_add(Numeric::new(7_u64, 9))
+                    .expect("recipient addition")
+            );
+            assert_eq!(after.transfer_transcripts, before.transfer_transcripts + 1);
+            assert_eq!(after.proofs.len(), before.proofs.len() + 1);
+            assert_eq!(after.inbound.len(), before.inbound.len() + 1);
+            assert_eq!(after.high_water.len(), before.high_water.len() + 1);
+            assert_eq!(
+                after.receipt_markers.len(),
+                before.receipt_markers.len() + 1
+            );
+            assert!(
+                after
+                    .receipt_markers
+                    .contains(&bridge_proof_hash_for_test(&proof))
+            );
+            let replay_key = iroha_data_model::bridge::SccpInboundMessageKeyV1::new(
+                native.message_key.lane,
+                native.message_key.message_id,
+            )
+            .expect("validated native replay key");
+            assert!(after.inbound.contains_key(&replay_key));
+        }
+
+        #[test]
+        fn replay_native_transfer_skips_call_hash_and_transfer_transcript() {
+            let state = State::new(
+                World::default(),
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            state_block.replay_compatibility = true;
+            let mut stx = state_block.transaction();
+            let (proof, _native, registry) = native_ethereum_bridge_proof_for_payload_for_test(
+                sccp_native_inbound_transfer_payload_for_test(79, 7),
+            );
+            let (asset, custody) = configure_native_sccp_settlement_for_test(
+                &mut stx,
+                registry,
+                NumericSpec::default(),
+                Numeric::new(100_u64, 0),
+            );
+            assert!(stx.tx_call_hash.is_none());
+            let before = sccp_inbound_mutation_snapshot(&stx, &asset, &custody, &ALICE_ID);
+
+            SubmitBridgeProof::new(proof)
+                .execute(&ALICE_ID, &mut stx)
+                .expect("committed-block replay intentionally skips transfer transcripts");
+
+            let after = sccp_inbound_mutation_snapshot(&stx, &asset, &custody, &ALICE_ID);
+            assert_eq!(after.transfer_transcripts, before.transfer_transcripts);
+            assert_eq!(
+                after.custody_balance,
+                before
+                    .custody_balance
+                    .checked_sub(Numeric::new(7_u64, 9))
+                    .expect("funded replay custody subtraction")
+            );
+            assert_eq!(
+                after.recipient_balance,
+                before
+                    .recipient_balance
+                    .checked_add(Numeric::new(7_u64, 9))
+                    .expect("replay recipient addition")
+            );
+            assert_eq!(after.proofs.len(), before.proofs.len() + 1);
+            assert_eq!(after.inbound.len(), before.inbound.len() + 1);
+        }
+
+        #[test]
         fn submit_native_transfer_proof_releases_custody_atomically_and_only_once() {
             let state = State::new(
                 World::default(),
@@ -27002,6 +27305,7 @@ seiyaku GovernanceLifecycle {
             let custody_before = sccp_asset_balance(&stx, &custody_asset);
             let recipient_before = sccp_asset_balance(&stx, &recipient_asset);
             let released = Numeric::new(7_u64, 9);
+            seed_sccp_test_tx_call_hash(&mut stx, 0x8D);
 
             SubmitBridgeProof::new(proof.clone())
                 .execute(&ALICE_ID, &mut stx)
@@ -27072,6 +27376,7 @@ seiyaku GovernanceLifecycle {
             let custody_asset = AssetId::new(asset.clone(), custody);
             let recipient_asset = AssetId::new(asset, ALICE_ID.clone());
             let custody_before = sccp_asset_balance(&stx, &custody_asset);
+            seed_sccp_test_tx_call_hash(&mut stx, 0x8E);
 
             SubmitBridgeProof::new(proof.clone())
                 .execute(&ALICE_ID, &mut stx)
@@ -27297,6 +27602,7 @@ seiyaku GovernanceLifecycle {
             );
             let custody_asset = AssetId::new(asset.clone(), custody);
             let recipient_asset = AssetId::new(asset, ALICE_ID.clone());
+            seed_sccp_test_tx_call_hash(&mut pre_cutoff, 0x8F);
             SubmitBridgeProof::new(proof.clone())
                 .execute(&ALICE_ID, &mut pre_cutoff)
                 .expect("event finalized at the governed retirement cutoff must remain claimable");
@@ -27345,6 +27651,7 @@ seiyaku GovernanceLifecycle {
             stx.chain_id =
                 iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1);
             stx.zk.max_proof_size_bytes = 32 * 1024 * 1024;
+            seed_sccp_test_tx_call_hash(&mut stx, 0x90);
 
             let unknown = replace_native_proof_trust_anchor_for_test(
                 proof.clone(),
@@ -27407,6 +27714,7 @@ seiyaku GovernanceLifecycle {
             )
             .expect("validated native replay key");
             let proof_count_before = stx.world.proofs.iter().count();
+            seed_sccp_test_tx_call_hash(&mut stx, 0x91);
 
             SubmitBridgeProof::new(proof)
                 .execute(&ALICE_ID, &mut stx)
@@ -27452,6 +27760,7 @@ seiyaku GovernanceLifecycle {
                 native.message_key.message_id,
             )
             .expect("validated native replay key");
+            seed_sccp_test_tx_call_hash(&mut stx, 0x92);
 
             SubmitBridgeProof::new(proof)
                 .execute(&ALICE_ID, &mut stx)
@@ -27496,6 +27805,7 @@ seiyaku GovernanceLifecycle {
                 native.message_key.message_id,
             )
             .expect("validated native replay key");
+            seed_sccp_test_tx_call_hash(&mut stx, 0x93);
 
             let error = SubmitBridgeProof::new(proof)
                 .execute(&ALICE_ID, &mut stx)
@@ -27525,6 +27835,7 @@ seiyaku GovernanceLifecycle {
                 iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1);
             stx.zk.max_proof_size_bytes = 32 * 1024 * 1024;
             let proof_commitment = bridge_proof_hash_for_test(&proof);
+            seed_sccp_test_tx_call_hash(&mut stx, 0x94);
 
             SubmitBridgeProof::new(proof)
                 .execute(&ALICE_ID, &mut stx)
@@ -27583,6 +27894,7 @@ seiyaku GovernanceLifecycle {
                 iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1);
             stx.zk.max_proof_size_bytes = 32 * 1024 * 1024;
             let proof_commitment = bridge_proof_hash_for_test(&proof);
+            seed_sccp_test_tx_call_hash(&mut stx, 0x95);
 
             SubmitBridgeProof::new(proof.clone())
                 .execute(&ALICE_ID, &mut stx)
@@ -27662,6 +27974,7 @@ seiyaku GovernanceLifecycle {
             stx.chain_id =
                 iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1);
             stx.zk.max_proof_size_bytes = 32 * 1024 * 1024;
+            seed_sccp_test_tx_call_hash(&mut stx, 0x96);
 
             let other_key = iroha_data_model::bridge::SccpInboundMessageKeyV1::new(
                 iroha_data_model::bridge::SccpLaneIdV1 {
@@ -27728,6 +28041,7 @@ seiyaku GovernanceLifecycle {
                 abandoned.chain_id =
                     iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1);
                 abandoned.zk.max_proof_size_bytes = 32 * 1024 * 1024;
+                seed_sccp_test_tx_call_hash(&mut abandoned, 0x97);
                 SubmitBridgeProof::new(proof.clone())
                     .execute(&ALICE_ID, &mut abandoned)
                     .expect("native proof must be valid inside abandoned overlay");
@@ -27739,6 +28053,7 @@ seiyaku GovernanceLifecycle {
             retry.chain_id =
                 iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1);
             retry.zk.max_proof_size_bytes = 32 * 1024 * 1024;
+            seed_sccp_test_tx_call_hash(&mut retry, 0x97);
             assert!(retry.world.sccp_inbound_messages.get(&key).is_none());
             assert!(retry.world.proofs.iter().all(|(_, record)| {
                 record
@@ -27760,22 +28075,23 @@ seiyaku GovernanceLifecycle {
 
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
-            let proof;
+            let artifact = sccp_message_artifact_for_receipt_test(
+                sccp_transfer_payload_for_receipt_test(49),
+                3,
+            );
+            let proof = sccp_bridge_proof_for_receipt_test(&artifact);
             let proof_hash;
             {
                 let mut seed_stx = state_block.transaction();
-                (proof, proof_hash) = seed_generic_bridge_proof_for_receipt_test(&mut seed_stx, 3);
+                proof_hash =
+                    insert_bridge_proof_record_for_receipt_test(&mut seed_stx, proof.clone());
                 seed_stx.apply();
             }
 
             let mut replay_stx = state_block.transaction();
-            let duplicate_err = SubmitBridgeProof::new(proof)
-                .execute(&ALICE_ID, &mut replay_stx)
-                .expect_err("duplicate proof replay must reject before receipt");
-            assert!(format!("{duplicate_err:?}").contains("authoritative on-chain verifier"));
             set_current_lane_for_test(&mut replay_stx, LaneId::SINGLE);
 
-            let receipt = bridge_receipt_for_test(proof_hash);
+            let receipt = sccp_bridge_receipt_for_proof_test(proof_hash, &proof);
             let receipt_err = RecordBridgeReceipt::new(receipt)
                 .execute(&ALICE_ID, &mut replay_stx)
                 .expect_err("receipt must not be valid after prior-transaction proof");
@@ -27814,10 +28130,15 @@ seiyaku GovernanceLifecycle {
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
 
-            let (_, proof_hash) = seed_generic_bridge_proof_for_receipt_test(&mut stx, 4);
+            let artifact = sccp_message_artifact_for_receipt_test(
+                sccp_transfer_payload_for_receipt_test(48),
+                4,
+            );
+            let proof = sccp_bridge_proof_for_receipt_test(&artifact);
+            let proof_hash = insert_bridge_proof_record_for_receipt_test(&mut stx, proof.clone());
             set_current_lane_for_test(&mut stx, LaneId::SINGLE);
             stx.world.internal_event_buf.clear();
-            let receipt = bridge_receipt_for_test(proof_hash);
+            let receipt = sccp_bridge_receipt_for_proof_test(proof_hash, &proof);
             RecordBridgeReceipt::new(receipt.clone())
                 .execute(&ALICE_ID, &mut stx)
                 .expect("first receipt should consume the fresh proof");
@@ -28023,6 +28344,7 @@ seiyaku GovernanceLifecycle {
             enum ReceiptMismatch {
                 Direction,
                 SourceTx,
+                DestTx,
                 Amount,
                 AssetId,
                 Recipient,
@@ -28031,6 +28353,7 @@ seiyaku GovernanceLifecycle {
             for (index, mismatch) in [
                 ReceiptMismatch::Direction,
                 ReceiptMismatch::SourceTx,
+                ReceiptMismatch::DestTx,
                 ReceiptMismatch::Amount,
                 ReceiptMismatch::AssetId,
                 ReceiptMismatch::Recipient,
@@ -28054,34 +28377,41 @@ seiyaku GovernanceLifecycle {
                 let proof_hash = insert_bridge_proof_record_for_receipt_test(&mut stx, proof);
                 set_current_lane_for_test(&mut stx, LaneId::SINGLE);
                 let mut receipt = sccp_bridge_receipt_for_receipt_test(proof_hash, &artifact);
-                let expected_error = match mismatch {
+                let baseline = receipt.clone();
+                match mismatch {
                     ReceiptMismatch::Direction => {
-                        receipt.direction = b"release".to_vec();
-                        "direction does not match transfer payload"
+                        receipt.direction = if receipt.direction == b"release" {
+                            b"mint".to_vec()
+                        } else {
+                            b"release".to_vec()
+                        };
                     }
                     ReceiptMismatch::SourceTx => {
                         receipt.source_tx[0] ^= 0xFF;
-                        "source_tx does not match message id"
+                    }
+                    ReceiptMismatch::DestTx => {
+                        receipt.dest_tx = Some([0xD5; 32]);
                     }
                     ReceiptMismatch::Amount => {
                         receipt.amount += 1;
-                        "amount does not match transfer payload"
                     }
                     ReceiptMismatch::AssetId => {
                         receipt.asset_id.push(b'!');
-                        "asset_id does not match transfer payload"
                     }
                     ReceiptMismatch::Recipient => {
                         receipt.recipient.push(b'!');
-                        "recipient does not match transfer payload"
                     }
-                };
+                }
+                assert_ne!(
+                    receipt, baseline,
+                    "mismatch case {index} must change the signed receipt projection"
+                );
 
                 let err = RecordBridgeReceipt::new(receipt)
                     .execute(&ALICE_ID, &mut stx)
                     .expect_err("forged SCCP receipt field must reject");
                 assert!(
-                    format!("{err:?}").contains(expected_error),
+                    format!("{err:?}").contains("complete proof-derived projection"),
                     "unexpected error for mismatch {index}: {err:?}"
                 );
                 assert!(
@@ -28092,6 +28422,25 @@ seiyaku GovernanceLifecycle {
                 assert!(stx.world.internal_event_buf.iter().all(|event| {
                     !matches!(event.as_ref(), DataEvent::Bridge(BridgeEvent::Emitted(_)))
                 }));
+
+                RecordBridgeReceipt::new(baseline.clone())
+                    .execute(&ALICE_ID, &mut stx)
+                    .expect("the exact destination proof projection must remain retryable");
+                assert!(
+                    !stx.bridge_receipt_proofs_available_in_tx
+                        .contains(&proof_hash),
+                    "the corrected destination receipt must consume its marker exactly once"
+                );
+                let emitted: Vec<_> = stx
+                    .world
+                    .internal_event_buf
+                    .iter()
+                    .filter_map(|event| match event.as_ref() {
+                        DataEvent::Bridge(BridgeEvent::Emitted(emitted)) => Some(emitted),
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(emitted, vec![&baseline]);
             }
         }
 
@@ -28120,7 +28469,7 @@ seiyaku GovernanceLifecycle {
                 .execute(&ALICE_ID, &mut stx)
                 .expect_err("forged SCCP receipt must reject");
             assert!(
-                format!("{err:?}").contains("amount does not match transfer payload"),
+                format!("{err:?}").contains("complete proof-derived projection"),
                 "unexpected error: {err:?}"
             );
             assert!(
@@ -28151,6 +28500,95 @@ seiyaku GovernanceLifecycle {
                 })
                 .collect();
             assert_eq!(emitted, vec![&receipt]);
+        }
+
+        #[test]
+        fn native_bridge_receipt_binds_every_field_and_allows_exact_correction() {
+            #[derive(Clone, Copy)]
+            enum ReceiptMismatch {
+                Direction,
+                SourceTx,
+                DestTx,
+                Amount,
+                AssetId,
+                Recipient,
+            }
+
+            let (proof, _, _) = native_ethereum_bridge_proof_for_payload_for_test(
+                sccp_native_inbound_transfer_payload_for_test(160, 20),
+            );
+            for (index, mismatch) in [
+                ReceiptMismatch::Direction,
+                ReceiptMismatch::SourceTx,
+                ReceiptMismatch::DestTx,
+                ReceiptMismatch::Amount,
+                ReceiptMismatch::AssetId,
+                ReceiptMismatch::Recipient,
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let state = State::new(
+                    World::default(),
+                    Kura::blank_kura_for_testing(),
+                    LiveQueryStore::start_test(),
+                );
+                let block = new_dummy_block();
+                let mut state_block = state.block(block.as_ref().header());
+                let mut stx = state_block.transaction();
+                let proof_hash =
+                    insert_bridge_proof_record_for_receipt_test(&mut stx, proof.clone());
+                set_current_lane_for_test(&mut stx, LaneId::SINGLE);
+                stx.world.internal_event_buf.clear();
+                let receipt = sccp_bridge_receipt_for_proof_test(proof_hash, &proof);
+                assert!(
+                    receipt.dest_tx.is_none(),
+                    "SCCP V1 authenticates no dest_tx"
+                );
+                let mut forged = receipt.clone();
+                match mismatch {
+                    ReceiptMismatch::Direction => forged.direction.push(b'!'),
+                    ReceiptMismatch::SourceTx => forged.source_tx[0] ^= 0xFF,
+                    ReceiptMismatch::DestTx => forged.dest_tx = Some([0xD6; 32]),
+                    ReceiptMismatch::Amount => forged.amount += 1,
+                    ReceiptMismatch::AssetId => forged.asset_id.push(b'!'),
+                    ReceiptMismatch::Recipient => forged.recipient.push(b'!'),
+                }
+                assert_ne!(forged, receipt, "mismatch case {index} must alter receipt");
+
+                let error = RecordBridgeReceipt::new(forged)
+                    .execute(&ALICE_ID, &mut stx)
+                    .expect_err("a forged native SCCP receipt field must fail closed");
+                assert!(
+                    format!("{error:?}").contains("complete proof-derived projection"),
+                    "unexpected native mismatch {index} error: {error:?}"
+                );
+                assert!(
+                    stx.bridge_receipt_proofs_available_in_tx
+                        .contains(&proof_hash),
+                    "failed native receipt validation must preserve the proof marker"
+                );
+                assert!(stx.world.internal_event_buf.is_empty());
+
+                RecordBridgeReceipt::new(receipt.clone())
+                    .execute(&ALICE_ID, &mut stx)
+                    .expect("the exact native proof projection must remain retryable");
+                assert!(
+                    !stx.bridge_receipt_proofs_available_in_tx
+                        .contains(&proof_hash),
+                    "the corrected receipt must consume the proof marker exactly once"
+                );
+                let emitted: Vec<_> = stx
+                    .world
+                    .internal_event_buf
+                    .iter()
+                    .filter_map(|event| match event.as_ref() {
+                        DataEvent::Bridge(BridgeEvent::Emitted(emitted)) => Some(emitted),
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(emitted, vec![&receipt]);
+            }
         }
 
         #[test]

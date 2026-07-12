@@ -2717,7 +2717,7 @@ fn main() { subscription_bill(); }"#,
             "rose".parse().unwrap(),
         );
         let asset_id = AssetId::of(asset_def, account);
-        let isi = InstructionBox::from(Mint::asset_numeric(1u32, asset_id));
+        let isi = InstructionBox::from(Mint::asset_quantity(1u32, asset_id));
         let bytes = norito::to_bytes(&isi).expect("encode InstructionBox");
         let hex_payload = format!("0x{}", hex::encode(bytes));
         let src = format!("fn main() {{ execute_instruction(norito_bytes(\"{hex_payload}\")); }}");

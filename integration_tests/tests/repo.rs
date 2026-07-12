@@ -279,12 +279,12 @@ fn repo_roundtrip_transfers_balances_and_clears_agreement() -> Result<()> {
                 .with_name(__asset_definition_id.name().to_string())
         })
         .into(),
-        Mint::asset_numeric(
+        Mint::asset_quantity(
             numeric!(2000),
             AssetId::new(cash_def_id.clone(), BOB_ID.clone()),
         )
         .into(),
-        Mint::asset_numeric(
+        Mint::asset_quantity(
             numeric!(1500),
             AssetId::new(collateral_def_id.clone(), ALICE_ID.clone()),
         )
@@ -504,7 +504,7 @@ fn repo_roundtrip_transfers_balances_and_clears_agreement() -> Result<()> {
     }
 
     // Provide additional collateral so the counterparty can settle above the recorded pledge.
-    client.submit_blocking(Mint::asset_numeric(
+    client.submit_blocking(Mint::asset_quantity(
         numeric!(50),
         AssetId::new(collateral_def_id.clone(), BOB_ID.clone()),
     ))?;
@@ -607,12 +607,12 @@ fn repo_margin_call_enforces_cadence_and_participant_rules() -> Result<()> {
                 .with_name(__asset_definition_id.name().to_string())
         })
         .into(),
-        Mint::asset_numeric(
+        Mint::asset_quantity(
             numeric!(2000),
             AssetId::new(cash_def_id.clone(), BOB_ID.clone()),
         )
         .into(),
-        Mint::asset_numeric(
+        Mint::asset_quantity(
             numeric!(1500),
             AssetId::new(collateral_def_id.clone(), ALICE_ID.clone()),
         )
@@ -730,12 +730,12 @@ fn repo_roundtrip_with_custodian_routes_collateral() -> Result<()> {
                 .with_name(__asset_definition_id.name().to_string())
         })
         .into(),
-        Mint::asset_numeric(
+        Mint::asset_quantity(
             numeric!(2000),
             AssetId::new(cash_def_id.clone(), BOB_ID.clone()),
         )
         .into(),
-        Mint::asset_numeric(
+        Mint::asset_quantity(
             numeric!(1500),
             AssetId::new(collateral_def_id.clone(), ALICE_ID.clone()),
         )

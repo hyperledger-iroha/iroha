@@ -183,8 +183,8 @@ AssetDefinition ባለቤትነት፡ `AssetDefinition.owned_by` ወደ መድ�
 
 ---## ተግባራዊ ምሳሌዎች
 - ማዕድን ማውጣት እና ማስተላለፍ;
-  - `Mint::asset_numeric(10, asset_id)` → በስፔክ/mintability ከተፈቀደ 10 ይጨምራል; ክስተቶች: `AssetEvent::Added`.
-  - `Transfer::asset_numeric(asset_id, 5, to_account)` → ይንቀሳቀሳል 5; ለማስወገድ / ለመደመር ክስተቶች.
+  - `Mint::asset_quantity(10, asset_id)` → በስፔክ/mintability ከተፈቀደ 10 ይጨምራል; ክስተቶች: `AssetEvent::Added`.
+  - `Transfer::asset_quantity(asset_id, 5, to_account)` → ይንቀሳቀሳል 5; ለማስወገድ / ለመደመር ክስተቶች.
 - የዲበ ውሂብ ዝመናዎች፡-
   - `SetKeyValue::account(account_id, "avatar".parse()?, json)` → ወደላይ; ማስወገድ በ `RemoveKeyValue::account(...)`.
 የሚና/ፈቃድ አስተዳደር፡-

@@ -276,11 +276,25 @@ impl V2ApplyService {
         // the Kura checkpoint/manifest are separate durable systems. A crash
         // after WSV commit must retry these idempotent associations even
         // though executing the block a second time is forbidden.
-        self.persist_post_apply_metadata(context, task)?;
+        self.persist_post_apply_metadata(context, task)
+            .map_err(|error| {
+                V2ApplyError::committed_recovery_required("post-apply metadata", &error)
+            })?;
 
-        let receipt = self.kura.store_v2_finality_artifact(&artifact)?;
+        let receipt = self
+            .kura
+            .store_v2_finality_artifact(&artifact)
+            .map_err(|error| {
+                V2ApplyError::committed_recovery_required("v2 finality artifact", &error)
+            })?;
         self.kura
-            .promote_kagemusha_topup_finality_sidecar(&artifact, &receipt)?;
+            .promote_kagemusha_topup_finality_sidecar(&artifact, &receipt)
+            .map_err(|error| {
+                V2ApplyError::committed_recovery_required(
+                    "Kagemusha finality sidecar promotion",
+                    &error,
+                )
+            })?;
         Ok(DurableApplyCompletion::new(task.id(), receipt, artifact))
     }
 
@@ -424,9 +438,9 @@ impl V2ApplyService {
             commit_topology,
             None,
         );
-        state_block
-            .commit()
-            .map_err(|error| V2ApplyError::StateCommit(error.to_string()))?;
+        state_block.commit().map_err(|error| {
+            V2ApplyError::committed_recovery_required("WSV publication after Kura commit", &error)
+        })?;
 
         self.queue.remove_committed_hashes(
             committed_block
@@ -545,13 +559,39 @@ pub(crate) enum V2ApplyError {
     /// Certificate-aware block commit conversion failed.
     #[error("Sumeragi v2 block commit conversion failed: {0}")]
     Commit(String),
-    /// WSV transaction could not commit.
-    #[error("Sumeragi v2 state commit failed: {0}")]
-    StateCommit(String),
+    /// Kura or WSV crossed the canonical commit point but the complete durable transition failed.
+    #[error("Sumeragi v2 committed transition requires restart recovery at {stage}: {detail}")]
+    CommittedRecoveryRequired {
+        /// Post-commit stage that could not be completed.
+        stage: &'static str,
+        /// Underlying persistence diagnostic.
+        detail: String,
+    },
     /// Test-only crash boundary after Kura commits and before WSV publication.
     #[cfg(test)]
     #[error("injected crash after Kura store and before WSV commit")]
     InjectedCrashAfterKuraStore,
+}
+
+impl V2ApplyError {
+    fn committed_recovery_required(stage: &'static str, error: &impl std::fmt::Display) -> Self {
+        Self::CommittedRecoveryRequired {
+            stage,
+            detail: error.to_string(),
+        }
+    }
+
+    /// Return whether the live consensus process must stop producing output until restart.
+    #[must_use]
+    pub(crate) const fn requires_restart_recovery(&self) -> bool {
+        match self {
+            Self::Kura(error) => error.requires_restart_recovery(),
+            Self::CommittedRecoveryRequired { .. } => true,
+            #[cfg(test)]
+            Self::InjectedCrashAfterKuraStore => true,
+            _ => false,
+        }
+    }
 }
 
 impl BodyValidationError for V2ApplyError {
@@ -605,6 +645,38 @@ mod tests {
         },
         tx::AcceptedTransaction,
     };
+
+    #[test]
+    fn restart_recovery_classification_distinguishes_commit_boundaries() {
+        assert!(
+            V2ApplyError::Kura(crate::kura::Error::DaBlockRewriteCommitStateUnknown {
+                detail: "unknown marker".to_owned(),
+            })
+            .requires_restart_recovery()
+        );
+        assert!(
+            V2ApplyError::Kura(
+                crate::kura::Error::CanonicalBlockCommittedRecoveryRequired {
+                    detail: "new marker won".to_owned(),
+                }
+            )
+            .requires_restart_recovery()
+        );
+        assert!(
+            V2ApplyError::committed_recovery_required(
+                "post-apply metadata",
+                &"injected persistence failure",
+            )
+            .requires_restart_recovery()
+        );
+        assert!(
+            !V2ApplyError::Kura(crate::kura::Error::IO(
+                std::io::Error::other("pre-marker retry"),
+                std::path::PathBuf::from("pre-marker-stage"),
+            ))
+            .requires_restart_recovery()
+        );
+    }
 
     struct ApplyFixture {
         context: wire::HeightContext,

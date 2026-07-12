@@ -343,7 +343,7 @@ fn append_npos_bootstrap(
                 builder.append_instruction(Register::account(Account::new(validator_id.clone())));
             registrations.accounts.insert(validator_id.clone());
         }
-        builder = builder.append_instruction(Mint::asset_numeric(
+        builder = builder.append_instruction(Mint::asset_quantity(
             DEFAULT_NPOS_BOOTSTRAP_STAKE_AMOUNT,
             AssetId::new(stake_asset_id.clone(), validator_id.clone()),
         ));

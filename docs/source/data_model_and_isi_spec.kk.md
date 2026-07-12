@@ -183,8 +183,8 @@ translator: machine-google-reviewed
 
 ---## Практикалық мысалдар
 - соғу және аудару:
-  - `Mint::asset_numeric(10, asset_id)` → спецификация/айналу мүмкіндігі рұқсат етілсе, 10 қосады; оқиғалар: `AssetEvent::Added`.
-  - `Transfer::asset_numeric(asset_id, 5, to_account)` → 5 жылжытады; жою/қосу оқиғалары.
+  - `Mint::asset_quantity(10, asset_id)` → спецификация/айналу мүмкіндігі рұқсат етілсе, 10 қосады; оқиғалар: `AssetEvent::Added`.
+  - `Transfer::asset_quantity(asset_id, 5, to_account)` → 5 жылжытады; жою/қосу оқиғалары.
 - Метадеректер жаңартулары:
   - `SetKeyValue::account(account_id, "avatar".parse()?, json)` → жоғарғы жағы; `RemoveKeyValue::account(...)` арқылы жою.
 - Рөл/рұқсаттарды басқару:

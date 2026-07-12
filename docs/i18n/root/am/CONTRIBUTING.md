@@ -36,7 +36,7 @@ translator: machine-google-reviewed
 - ለኮድ እና ለሰነድ የእኛን [የቅጥ መመሪያዎች](#style-guides) መከተልዎን ያረጋግጡ።
 - ጻፍ [ሙከራዎች] (https://doc.rust-lang.org/cargo/commands/cargo-test.html). ሁሉም ማለፋቸውን ያረጋግጡ (`cargo test --workspace`)። የኤስ ኤም ክሪፕቶግራፊ ቁልልን ከነካክ፣ እንዲሁም `cargo test -p iroha_crypto --features "sm sm_proptest"`ን አስኪ አማራጭ ፉዝ/ንብረት ማሰሪያን ለማስፈጸም።
   - ማሳሰቢያ፡ የIVM ፈጻሚን የሚለማመዱ ሙከራዎች `defaults/executor.to` ከሌለ በትንሹ የሚወስን ፈጻሚ ባይት ኮድ በራስ ሰር ያዋህዳሉ። ሙከራዎችን ለማካሄድ ምንም ቅድመ-ደረጃ አያስፈልግም. ለፓሪቲ ቀኖናዊ ባይትኮድ ለማመንጨት የሚከተሉትን ማድረግ ይችላሉ፡-
-    - `cargo run --manifest-path scripts/generate_executor_to/Cargo.toml`
+    - `cargo run --locked -p ivm --bin ivm_fixture_export -- --write`
     - `cargo run --manifest-path scripts/regenerate_codec_samples/Cargo.toml`
 - ዴሪቭ/ፕሮክ-ማክሮ ሳጥኖችን ከቀየሩ፣ trybuild UI suites ን በ በኩል ያሂዱ
   `make check-proc-macro-ui` (ወይም

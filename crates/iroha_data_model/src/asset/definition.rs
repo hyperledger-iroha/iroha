@@ -6,7 +6,7 @@ use derive_more::Display;
 use getset::{CopyGetters, Getters};
 use iroha_crypto::Hash;
 use iroha_data_model_derive::{IdEqOrdHash, RegistrableBuilder, model};
-use iroha_primitives::numeric::{Numeric, NumericSpec};
+use iroha_primitives::numeric::{NumericSpec, Quantity};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 #[cfg(feature = "json")]
@@ -222,8 +222,8 @@ mod model {
         pub owned_by: AccountId,
         /// The total amount of this asset in existence (sum of all asset values).
         #[getset(get = "pub")]
-        #[registrable_builder(skip, init = Numeric::zero())]
-        pub total_quantity: Numeric,
+        #[registrable_builder(skip, init = Quantity::zero())]
+        pub total_quantity: Quantity,
         /// Confidential asset policy controlling shielded operations.
         #[getset(get = "pub")]
         #[registrable_builder(default = AssetConfidentialPolicy::default())]
@@ -894,8 +894,34 @@ impl HasMetadata for NewAssetDefinition {
 
 #[cfg(test)]
 mod validation_tests {
+    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_primitives::numeric::Numeric;
+    use norito::codec::{Decode as _, Encode as _};
+
     use super::*;
     use crate::domain::DomainId;
+
+    #[derive(Encode)]
+    struct ForgedAssetDefinition {
+        id: AssetDefinitionId,
+        name: String,
+        description: Option<String>,
+        alias: Option<AssetDefinitionAlias>,
+        spec: NumericSpec,
+        mintable: Mintable,
+        logo: Option<SorafsUri>,
+        metadata: Metadata,
+        balance_scope_policy: AssetBalancePolicy,
+        owned_by: AccountId,
+        total_quantity: Numeric,
+        confidential_policy: AssetConfidentialPolicy,
+    }
+
+    fn owner() -> AccountId {
+        let key_pair = KeyPair::try_from_seed(vec![0xA5; 32], Algorithm::Ed25519)
+            .expect("derive checked asset-definition fixture owner");
+        AccountId::new(key_pair.public_key().clone())
+    }
 
     #[test]
     fn constructors_leave_name_empty_without_explicit_with_name() {
@@ -914,6 +940,37 @@ mod validation_tests {
         assert!(
             custom.name.is_empty(),
             "new constructor must not auto-fill name"
+        );
+    }
+
+    #[test]
+    fn negative_numeric_payload_cannot_decode_as_asset_definition_total() {
+        let id = AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").expect("domain"),
+            "rose".parse().expect("name"),
+        );
+        let definition = AssetDefinition::numeric(id)
+            .with_name("Rose".to_owned())
+            .build(&owner());
+        let forged = ForgedAssetDefinition {
+            id: definition.id.clone(),
+            name: definition.name.clone(),
+            description: definition.description.clone(),
+            alias: definition.alias.clone(),
+            spec: definition.spec,
+            mintable: definition.mintable,
+            logo: definition.logo.clone(),
+            metadata: definition.metadata.clone(),
+            balance_scope_policy: definition.balance_scope_policy,
+            owned_by: definition.owned_by.clone(),
+            total_quantity: Numeric::new(-1_i32, 0),
+            confidential_policy: definition.confidential_policy.clone(),
+        };
+        let encoded = forged.encode();
+
+        assert!(
+            AssetDefinition::decode(&mut encoded.as_slice()).is_err(),
+            "a signed negative payload must not cross the nominal total-quantity boundary"
         );
     }
 

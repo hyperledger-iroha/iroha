@@ -8,7 +8,7 @@
 
 use std::collections::BTreeMap;
 
-use iroha_primitives::{json::Json, numeric::Numeric};
+use iroha_primitives::{json::Json, numeric::Quantity};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 
@@ -65,7 +65,7 @@ pub struct ImplicitAccountCreationFee {
     /// Asset definition used to pay the fee.
     pub asset_definition_id: AssetDefinitionId,
     /// Amount of the fee.
-    pub amount: Numeric,
+    pub amount: Quantity,
     /// Where the fee should be routed.
     pub destination: ImplicitAccountFeeDestination,
 }
@@ -90,7 +90,7 @@ pub struct AccountAdmissionPolicy {
     pub implicit_creation_fee: Option<ImplicitAccountCreationFee>,
     /// Optional minimum amounts required for the first receipt per asset definition.
     #[norito(default)]
-    pub min_initial_amounts: BTreeMap<AssetDefinitionId, Numeric>,
+    pub min_initial_amounts: BTreeMap<AssetDefinitionId, Quantity>,
     /// Optional role to assign automatically when an account is created implicitly.
     #[norito(default)]
     pub default_role_on_create: Option<RoleId>,
@@ -157,7 +157,7 @@ impl AccountAdmissionPolicy {
 
     /// Return the minimum initial amount required for the given asset definition, if configured.
     #[must_use]
-    pub fn min_initial_amount_for(&self, id: &AssetDefinitionId) -> Option<&Numeric> {
+    pub fn min_initial_amount_for(&self, id: &AssetDefinitionId) -> Option<&Quantity> {
         self.min_initial_amounts.get(id)
     }
 
@@ -170,10 +170,64 @@ impl AccountAdmissionPolicy {
 
 #[cfg(all(test, feature = "json"))]
 mod tests {
+    use iroha_primitives::numeric::Numeric;
+    use norito::codec::{Decode as _, Encode as _};
     use norito::json;
 
     use super::*;
     use crate::domain::DomainId;
+
+    #[derive(Encode)]
+    struct ForgedImplicitAccountCreationFee {
+        asset_definition_id: AssetDefinitionId,
+        amount: Numeric,
+        destination: ImplicitAccountFeeDestination,
+    }
+
+    #[derive(Encode)]
+    struct ForgedAccountAdmissionPolicy {
+        mode: AccountAdmissionMode,
+        max_implicit_creations_per_tx: Option<u32>,
+        max_implicit_creations_per_block: Option<u32>,
+        implicit_creation_fee: Option<ImplicitAccountCreationFee>,
+        min_initial_amounts: BTreeMap<AssetDefinitionId, Numeric>,
+        default_role_on_create: Option<RoleId>,
+    }
+
+    fn asset_definition_id() -> AssetDefinitionId {
+        AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").expect("domain"),
+            "rose".parse().expect("asset name"),
+        )
+    }
+
+    #[test]
+    fn negative_numeric_payloads_cannot_decode_as_account_admission_amounts() {
+        let forged_fee = ForgedImplicitAccountCreationFee {
+            asset_definition_id: asset_definition_id(),
+            amount: Numeric::new(-1_i32, 0),
+            destination: ImplicitAccountFeeDestination::Burn,
+        };
+        let encoded = forged_fee.encode();
+        assert!(
+            ImplicitAccountCreationFee::decode(&mut encoded.as_slice()).is_err(),
+            "a negative signed payload must not decode as an implicit-creation fee"
+        );
+
+        let forged_policy = ForgedAccountAdmissionPolicy {
+            mode: AccountAdmissionMode::ImplicitReceive,
+            max_implicit_creations_per_tx: None,
+            max_implicit_creations_per_block: None,
+            implicit_creation_fee: None,
+            min_initial_amounts: BTreeMap::from([(asset_definition_id(), Numeric::new(-1_i32, 0))]),
+            default_role_on_create: None,
+        };
+        let encoded = forged_policy.encode();
+        assert!(
+            AccountAdmissionPolicy::decode(&mut encoded.as_slice()).is_err(),
+            "a negative signed payload must not decode as a minimum initial amount"
+        );
+    }
 
     #[test]
     fn policy_json_roundtrips_with_tagged_mode() {
@@ -239,7 +293,7 @@ mod tests {
                 DomainId::try_new("wonderland", "universal").unwrap(),
                 "rose".parse().unwrap(),
             ),
-            Numeric::new(5, 0),
+            Quantity::from(5_u32),
         );
         let policy = AccountAdmissionPolicy {
             mode: AccountAdmissionMode::ImplicitReceive,
@@ -250,7 +304,7 @@ mod tests {
                     DomainId::try_new("wonderland", "universal").unwrap(),
                     "rose".parse().unwrap(),
                 ),
-                amount: Numeric::new(2, 0),
+                amount: Quantity::from(2_u32),
                 destination: ImplicitAccountFeeDestination::Burn,
             }),
             min_initial_amounts: minimums,

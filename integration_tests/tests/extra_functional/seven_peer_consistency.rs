@@ -140,7 +140,7 @@ fn seven_peer_cross_peer_consistency_basic() -> Result<()> {
     .wrap_err("seven_peer_consistency status fetch failed")?;
     // Mint on one peer and wait until the network advances a few blocks
     let quantity = numeric!(500);
-    if let Err(err) = submitter_client.submit_blocking(Mint::asset_numeric(
+    if let Err(err) = submitter_client.submit_blocking(Mint::asset_quantity(
         quantity.clone(),
         AssetId::new(asset_definition_id.clone(), account_id.clone()),
     )) {

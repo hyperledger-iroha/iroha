@@ -4,7 +4,7 @@ use std::{string::String, vec::Vec};
 
 use getset::Getters;
 use iroha_data_model_derive::{EventSet, HasOrigin, model};
-use iroha_primitives::{json::Json, numeric::Numeric};
+use iroha_primitives::{json::Json, numeric::Quantity};
 #[allow(unused_imports)]
 #[cfg(feature = "json")]
 use norito::json::{self, JsonDeserialize, JsonSerialize};
@@ -438,7 +438,7 @@ mod asset {
         #[cfg_attr(not(feature = "json"), norito(reuse_archived))]
         pub struct AssetChanged {
             pub asset: AssetId,
-            pub amount: Numeric,
+            pub amount: Quantity,
         }
 
         /// [`Self`] represents updated total asset quantity.
@@ -448,7 +448,7 @@ mod asset {
         #[cfg_attr(not(feature = "json"), norito(reuse_archived))]
         pub struct AssetDefinitionTotalQuantityChanged {
             pub asset_definition: AssetDefinitionId,
-            pub total_amount: Numeric,
+            pub total_amount: Quantity,
         }
 
         /// [`Self`] represents updated total asset quantity.
@@ -474,7 +474,7 @@ mod asset {
             /// Id of the asset definition that flipped to `Not`.
             pub asset_definition: AssetDefinitionId,
             /// Amount minted in the flipping transaction.
-            pub minted_amount: Numeric,
+            pub minted_amount: Quantity,
             /// Account that performed the mint.
             pub authority: AccountId,
         }
@@ -654,7 +654,7 @@ mod rwa {
             /// New child lot receiving the transferred quantity.
             pub child: RwaId,
             /// Quantity moved into the child lot.
-            pub quantity: Numeric,
+            pub quantity: Quantity,
             /// Owner of the child lot.
             pub new_owner: AccountId,
         }
@@ -680,7 +680,7 @@ mod rwa {
             /// Lot whose quantity changed.
             pub rwa: RwaId,
             /// Quantity affected by the operation.
-            pub quantity: Numeric,
+            pub quantity: Quantity,
         }
 
         /// Event emitted when held quantity changes.
@@ -692,7 +692,7 @@ mod rwa {
             /// Lot whose held quantity changed.
             pub rwa: RwaId,
             /// Quantity affected by the hold or release.
-            pub quantity: Numeric,
+            pub quantity: Quantity,
         }
 
         /// Event emitted when a lot's control policy changes.

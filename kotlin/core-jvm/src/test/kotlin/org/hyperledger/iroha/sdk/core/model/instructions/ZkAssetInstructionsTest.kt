@@ -1,5 +1,6 @@
 package org.hyperledger.iroha.sdk.core.model.instructions
 
+import java.math.BigInteger
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -179,7 +180,7 @@ class ZkAssetInstructionsTest {
         val instruction = ShieldInstruction.builder()
             .setAsset("rose#wonderland")
             .setFrom("alice")
-            .setAmount("340282366920938463463374607431768211455")
+            .setAmount(BigInteger("340282366920938463463374607431768211455"))
             .setNoteCommitment(commitment)
             .setEncryptedPayload(samplePayload())
             .build()

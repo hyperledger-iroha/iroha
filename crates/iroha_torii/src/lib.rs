@@ -50840,10 +50840,10 @@ pub(crate) mod tests_runtime_handlers {
     ) {
         let mut nexus = iroha_config::parameters::actual::Nexus::default();
         nexus.enabled = true;
-        nexus.fees.base_fee = Numeric::from(1_u32);
-        nexus.fees.per_byte_fee = Numeric::zero();
-        nexus.fees.per_instruction_fee = Numeric::zero();
-        nexus.fees.per_gas_unit_fee = Numeric::zero();
+        nexus.fees.base_fee = Quantity::from(1_u32);
+        nexus.fees.per_byte_fee = Quantity::zero();
+        nexus.fees.per_instruction_fee = Quantity::zero();
+        nexus.fees.per_gas_unit_fee = Quantity::zero();
         nexus.fees.fee_asset_id = fee_asset_id.to_string();
         nexus.fees.fee_sink_account_id = fee_sink_account_id.to_string();
 

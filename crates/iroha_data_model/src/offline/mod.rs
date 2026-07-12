@@ -138,21 +138,20 @@ pub const KAGEMUSHA_VERIFIER_ROLE_TOPUP_SHIELD_V2: &str =
     "kagemusha_topup_shield_v2_verifier_record";
 /// Shared verifier role id for unshield evidence.
 pub const KAGEMUSHA_VERIFIER_ROLE_UNSHIELD_V2: &str = "confidential_unshield_v3_verifier_record";
-/// Chain verifier role for the EqAffine/Vesta transition proof profile.
-pub const KAGEMUSHA_VERIFIER_ROLE_TRANSITION_V3: &str =
-    "kagemusha_recursive_transition_v3_verifier_record";
-/// Chain verifier role for the EpAffine/Pallas state-wrapper proof profile.
-pub const KAGEMUSHA_VERIFIER_ROLE_STATE_V3: &str = "kagemusha_recursive_state_v3_verifier_record";
+/// Chain verifier role for the EqAffine/Vesta recursive-step parity.
+pub const KAGEMUSHA_VERIFIER_ROLE_STEP_EQ_V3: &str =
+    "kagemusha_recursive_step_eq_v3_verifier_record";
+/// Chain verifier role for the EpAffine/Pallas recursive-step parity.
+pub const KAGEMUSHA_VERIFIER_ROLE_STEP_EP_V3: &str =
+    "kagemusha_recursive_step_ep_v3_verifier_record";
 /// Shared verifier purpose for top-up and offline split evidence.
 pub const KAGEMUSHA_VERIFIER_PURPOSE_TRANSFER_V2: &str = "offline_split";
 /// Verifier purpose for the public-to-confidential top-up transition.
 pub const KAGEMUSHA_VERIFIER_PURPOSE_TOPUP_SHIELD_V2: &str = "online_to_offline_topup_shield";
 /// Shared verifier purpose for offline-to-online redemption.
 pub const KAGEMUSHA_VERIFIER_PURPOSE_UNSHIELD_V2: &str = "offline_to_online_redemption";
-/// Chain verifier purpose for every value-conserving recursive transition.
-pub const KAGEMUSHA_VERIFIER_PURPOSE_TRANSITION_V3: &str = "kagemusha_recursive_spend_transition";
-/// Chain verifier purpose for the constant-size recursive state wrapper.
-pub const KAGEMUSHA_VERIFIER_PURPOSE_STATE_V3: &str = "kagemusha_recursive_spend_state";
+/// Shared verifier purpose for either parity of a value-conserving recursive step.
+pub const KAGEMUSHA_VERIFIER_PURPOSE_STEP_V3: &str = "kagemusha_recursive_spend_step";
 /// Domain separator for the self-contained V2 request authorization signature.
 pub const KAGEMUSHA_REQUEST_AUTHORIZATION_DOMAIN_V2: &str =
     "iroha:kagemusha:v2:request-authorization";
@@ -187,20 +186,20 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1: &str = "halo2/ipa-pa
 /// Poseidon transcript profile shared by both Pasta-cycle proof parities.
 pub const KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V1: &str =
     "kagemusha-pasta-cycle-poseidon-v1";
-/// Circuit id for the EqAffine/Vesta transition proof.
-pub const KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_EQ_CIRCUIT_ID_V1: &str =
-    "kagemusha-recursive-spend-transition-eq-v1";
-/// Circuit id for the EpAffine/Pallas state wrapper proof.
-pub const KAGEMUSHA_RECURSIVE_SPEND_STATE_EP_CIRCUIT_ID_V1: &str =
-    "kagemusha-recursive-spend-state-ep-v1";
-/// Verifying-key curve for the EqAffine transition profile.
-pub const KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_VERIFIER_CURVE_V3: &str = "vesta";
-/// Verifying-key curve for the EpAffine state-wrapper profile.
-pub const KAGEMUSHA_RECURSIVE_SPEND_STATE_VERIFIER_CURVE_V3: &str = "pallas";
-/// Canonical public inputs for the EqAffine/Vesta transition circuit.
-pub const KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PUBLIC_INPUTS_SCHEMA_V3: &[u8] = br#"{"schema":"kagemusha_recursive_spend_transition_v3","public_inputs":["public_statement_digest_limb0","public_statement_digest_limb1","public_statement_digest_limb2","public_statement_digest_limb3","previous_state_digest_limb0","previous_state_digest_limb1","previous_state_digest_limb2","previous_state_digest_limb3","result_state_digest_limb0","result_state_digest_limb1","result_state_digest_limb2","result_state_digest_limb3","manifest_sha256_limb0","manifest_sha256_limb1","manifest_sha256_limb2","manifest_sha256_limb3"]}"#;
-/// Canonical public inputs for the EpAffine/Pallas recursive state wrapper.
-pub const KAGEMUSHA_RECURSIVE_SPEND_STATE_PUBLIC_INPUTS_SCHEMA_V3: &[u8] = br#"{"schema":"kagemusha_recursive_spend_state_v3","public_inputs":["transition_proof_digest_limb0","transition_proof_digest_limb1","transition_proof_digest_limb2","transition_proof_digest_limb3","state_digest_limb0","state_digest_limb1","state_digest_limb2","state_digest_limb3","manifest_sha256_limb0","manifest_sha256_limb1","manifest_sha256_limb2","manifest_sha256_limb3"]}"#;
+/// Circuit id for the EqAffine/Vesta recursive-step parity.
+pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V1: &str =
+    "kagemusha-recursive-spend-step-eq-v1";
+/// Circuit id for the EpAffine/Pallas recursive-step parity.
+pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V1: &str =
+    "kagemusha-recursive-spend-step-ep-v1";
+/// Verifying-key curve for the EqAffine recursive-step parity.
+pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_VERIFIER_CURVE_V3: &str = "vesta";
+/// Verifying-key curve for the EpAffine recursive-step parity.
+pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_VERIFIER_CURVE_V3: &str = "pallas";
+/// Canonical field-neutral public inputs enforced by the EqAffine/Vesta step circuit.
+pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PUBLIC_INPUTS_SCHEMA_V3: &[u8] = br#"{"schema":"kagemusha_recursive_spend_step_eq_v3","public_inputs":["public_statement_digest_limb0","public_statement_digest_limb1","public_statement_digest_limb2","public_statement_digest_limb3","previous_state_digest_limb0","previous_state_digest_limb1","previous_state_digest_limb2","previous_state_digest_limb3","result_state_digest_limb0","result_state_digest_limb1","result_state_digest_limb2","result_state_digest_limb3","manifest_sha256_limb0","manifest_sha256_limb1","manifest_sha256_limb2","manifest_sha256_limb3"]}"#;
+/// Canonical field-neutral public inputs enforced by the EpAffine/Pallas step circuit.
+pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PUBLIC_INPUTS_SCHEMA_V3: &[u8] = br#"{"schema":"kagemusha_recursive_spend_step_ep_v3","public_inputs":["public_statement_digest_limb0","public_statement_digest_limb1","public_statement_digest_limb2","public_statement_digest_limb3","previous_state_digest_limb0","previous_state_digest_limb1","previous_state_digest_limb2","previous_state_digest_limb3","result_state_digest_limb0","result_state_digest_limb1","result_state_digest_limb2","result_state_digest_limb3","manifest_sha256_limb0","manifest_sha256_limb1","manifest_sha256_limb2","manifest_sha256_limb3"]}"#;
 /// Version of the canonical cross-field state boundary.
 pub const KAGEMUSHA_RECURSIVE_SPEND_STATE_BOUNDARY_VERSION_V1: u16 = 1;
 /// Version of the canonical Pasta-cycle proof envelope.
@@ -215,24 +214,24 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_IPA_K_V1: u32 = 12;
 pub const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_FILE_BYTES_V3: u64 = 256 * 1024 * 1024;
 /// Framing magic for a streamed V3 recursive-spend key artifact.
 pub const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_KEY_MAGIC_V3: &[u8; 8] = b"KRV3KEY\0";
-/// Canonical EqAffine/Vesta parameter package file name.
-pub const KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PARAMETERS_FILE_NAME_V3: &str =
-    "transition-eq.parameters.krv3";
-/// Canonical EqAffine/Vesta proving-key package file name.
-pub const KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROVING_KEY_FILE_NAME_V3: &str =
-    "transition-eq.proving-key.krv3";
-/// Canonical EqAffine/Vesta verifying-key package file name.
-pub const KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_VERIFYING_KEY_FILE_NAME_V3: &str =
-    "transition-eq.verifying-key.krv3";
-/// Canonical EpAffine/Pallas parameter package file name.
-pub const KAGEMUSHA_RECURSIVE_SPEND_STATE_PARAMETERS_FILE_NAME_V3: &str =
-    "state-ep.parameters.krv3";
-/// Canonical EpAffine/Pallas proving-key package file name.
-pub const KAGEMUSHA_RECURSIVE_SPEND_STATE_PROVING_KEY_FILE_NAME_V3: &str =
-    "state-ep.proving-key.krv3";
-/// Canonical EpAffine/Pallas verifying-key package file name.
-pub const KAGEMUSHA_RECURSIVE_SPEND_STATE_VERIFYING_KEY_FILE_NAME_V3: &str =
-    "state-ep.verifying-key.krv3";
+/// Canonical EqAffine/Vesta step parameter package file name.
+pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PARAMETERS_FILE_NAME_V3: &str =
+    "step-eq.parameters.krv3";
+/// Canonical EqAffine/Vesta step proving-key package file name.
+pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PROVING_KEY_FILE_NAME_V3: &str =
+    "step-eq.proving-key.krv3";
+/// Canonical EqAffine/Vesta step verifying-key package file name.
+pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_VERIFYING_KEY_FILE_NAME_V3: &str =
+    "step-eq.verifying-key.krv3";
+/// Canonical EpAffine/Pallas step parameter package file name.
+pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PARAMETERS_FILE_NAME_V3: &str =
+    "step-ep.parameters.krv3";
+/// Canonical EpAffine/Pallas step proving-key package file name.
+pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PROVING_KEY_FILE_NAME_V3: &str =
+    "step-ep.proving-key.krv3";
+/// Canonical EpAffine/Pallas step verifying-key package file name.
+pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_VERIFYING_KEY_FILE_NAME_V3: &str =
+    "step-ep.verifying-key.krv3";
 /// Circuit/verifier role used by the compact Commit-QC plus anchor-path verifier.
 pub const KAGEMUSHA_TOPUP_FINALITY_CIRCUIT_ID_V2: &str = "kagemusha-topup-finality-qc-merkle-v2";
 /// Canonical release-manifest purpose of the trusted validator-roster artifact.
@@ -4077,7 +4076,7 @@ impl KagemushaRecursiveSpendRedemptionIntentV2 {
             || actual_lineage_roots != expected_lineage_roots
             || self.parent_proof_step_count == 0
             || self.parent_proof_step_count > KAGEMUSHA_RECURSIVE_SPEND_MAX_PROOF_STEPS_V2
-            || self.parent_peer_hop_count > u32::from(KAGEMUSHA_RECURSIVE_SPEND_MAX_BRANCH_DEPTH_V2)
+            || self.parent_peer_hop_count > KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2
             || self.public_amount.scale != self.input_note.amount.scale
             || self.unshield_public_inputs_digest == [0; 32]
             || self.unshield_public_inputs_digest != self.unshield_public_inputs.digest()?
@@ -4858,7 +4857,7 @@ impl KagemushaRecursiveSpendSplitIntentV2 {
                 || input.input_root == [0; 32]
                 || input.proof_step_count == 0
                 || input.proof_step_count >= KAGEMUSHA_RECURSIVE_SPEND_MAX_PROOF_STEPS_V2
-                || input.peer_hop_count >= u32::from(KAGEMUSHA_RECURSIVE_SPEND_MAX_BRANCH_DEPTH_V2)
+                || input.peer_hop_count >= KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2
                 || !consumed_material.insert(input.input_note.note_commitment)
                 || !consumed_material.insert(input.input_note.spend_nullifier)
             {
@@ -5206,7 +5205,7 @@ impl KagemushaRecursiveSpendPublicStatementV2 {
             || self.current_note.amount.scale != self.asset_scale
             || self.proof_step_count == 0
             || self.proof_step_count > KAGEMUSHA_RECURSIVE_SPEND_MAX_PROOF_STEPS_V2
-            || self.peer_hop_count > u32::from(KAGEMUSHA_RECURSIVE_SPEND_MAX_BRANCH_DEPTH_V2)
+            || self.peer_hop_count > KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2
             || claim_roots != lineage_roots
             || self.verifier_key_id.name != KAGEMUSHA_RECURSIVE_SPEND_STATE_EP_CIRCUIT_ID_V1
             || self.verifier_key_id.backend.as_str()
@@ -5322,7 +5321,7 @@ impl KagemushaRecursiveSpendVerifyRequestV2 {
         if self.verified_at_ms == 0
             || self.block_height == 0
             || self.maximum_hops == 0
-            || self.maximum_hops > u32::from(KAGEMUSHA_RECURSIVE_SPEND_MAX_BRANCH_DEPTH_V2)
+            || self.maximum_hops > KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2
             || self.bundle.statement.peer_hop_count > self.maximum_hops
             || self.artifact_binding != self.bundle.statement.artifact_binding
             || self.recipient_request.chain_id != self.bundle.statement.chain_id

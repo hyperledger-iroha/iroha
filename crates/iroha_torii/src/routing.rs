@@ -10,6 +10,7 @@
 
 use core::str::FromStr;
 use std::{
+    num::NonZeroU64,
     sync::{Arc, LazyLock, RwLock},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -494,13 +495,13 @@ pub(crate) struct PipelinePreflightQueue {
 pub(crate) struct PipelinePreflightFees {
     pub fee_asset_id: String,
     pub fee_sink_account_id: String,
-    pub base_fee: iroha_primitives::numeric::Numeric,
-    pub per_byte_fee: iroha_primitives::numeric::Numeric,
-    pub per_instruction_fee: iroha_primitives::numeric::Numeric,
-    pub per_gas_unit_fee: iroha_primitives::numeric::Numeric,
+    pub base_fee: iroha_primitives::numeric::Quantity,
+    pub per_byte_fee: iroha_primitives::numeric::Quantity,
+    pub per_instruction_fee: iroha_primitives::numeric::Quantity,
+    pub per_gas_unit_fee: iroha_primitives::numeric::Quantity,
     pub sponsorship_enabled: bool,
-    pub sponsor_max_fee: iroha_primitives::numeric::Numeric,
-    pub sponsor_verified_balance_safety_floor: iroha_primitives::numeric::Numeric,
+    pub sponsor_max_fee: iroha_primitives::numeric::Quantity,
+    pub sponsor_verified_balance_safety_floor: iroha_primitives::numeric::Quantity,
     #[norito(skip_serializing_if = "Option::is_none")]
     pub canonical_sponsor_account_id: Option<String>,
     pub fee_receipts_activation_height: u64,
@@ -3494,8 +3495,6 @@ impl MaybeTelemetry {
     }
 }
 use core::convert::Infallible;
-#[cfg(feature = "app_api")]
-use std::num::NonZeroU64;
 
 use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
 use futures::stream;
@@ -6690,19 +6689,22 @@ fn sccp_exact_proof_material(
     let Some(indexed) = sccp_indexed_outbound_record(state, message_id)? else {
         return Ok(None);
     };
-    let bundle = reconstruct_sccp_message_bundle_from_indexed_record(state, indexed.clone())?;
+    let (verified_finality, bundle) =
+        reconstruct_sccp_message_bundle_from_indexed_record(state, indexed.clone())?;
     let registry = state.sccp_registry_snapshot();
     let governed_route = sccp_historical_route_for_record(registry.as_ref(), &indexed)?;
-    let request = iroha_sccp::build_sccp_groth16_bn254_proof_request_from_governed_route_v1(
-        &bundle,
-        governed_route,
-    )
-    .ok_or_else(|| {
-        sccp_internal_error(format!(
-            "failed to derive the canonical SCCP proof request for finalized message {}",
-            hex::encode(message_id)
-        ))
-    })?;
+    let request =
+        iroha_core::bridge::build_sccp_groth16_bn254_proof_request_from_verified_finality_v1(
+            &verified_finality,
+            &bundle,
+            governed_route,
+        )
+        .ok_or_else(|| {
+            sccp_internal_error(format!(
+                "failed to derive the canonical SCCP proof request for finalized message {}",
+                hex::encode(message_id)
+            ))
+        })?;
     Ok(Some(SccpExactProofMaterial {
         indexed,
         bundle,
@@ -7592,9 +7594,21 @@ mod sccp_first_release_api_tests {
             .is_some()
         );
 
-        let material = sccp_exact_proof_material(&state, message_id)
-            .expect("bodyless proof-request lookup")
-            .expect("bodyless proof request exists");
+        iroha_sccp::reset_sccp_destination_proof_work_counters_v1();
+        let mut material = None;
+        for _ in 0..4 {
+            material = Some(
+                sccp_exact_proof_material(&state, message_id)
+                    .expect("bodyless proof-request lookup")
+                    .expect("bodyless proof request exists"),
+            );
+        }
+        let material = material.expect("repeated proof construction returns material");
+        assert_eq!(
+            iroha_sccp::sccp_destination_proof_work_counters_v1().bls_verifications,
+            0,
+            "Kura-backed proof-request construction must reuse verified finality"
+        );
         assert_eq!(material.bundle, bundle);
         assert_eq!(material.indexed.descriptor.commitment_index, 0);
         let finality = iroha_sccp::decode_taira_bridge_finality_proof(&bundle.finality_proof)
@@ -8073,10 +8087,13 @@ fn validate_archived_sccp_message_descriptor(
 fn reconstruct_sccp_message_bundles_from_indexed_records(
     state: &CoreState,
     indexed_records: &[SccpIndexedOutboundRecord],
-) -> Result<Vec<TairaSccpMessageProofV1>> {
-    let Some(first) = indexed_records.first() else {
-        return Ok(Vec::new());
-    };
+) -> Result<(
+    iroha_core::bridge::VerifiedV2FinalityArtifact,
+    Vec<TairaSccpMessageProofV1>,
+)> {
+    let first = indexed_records.first().ok_or_else(|| {
+        sccp_internal_error("SCCP bundle reconstruction requires at least one indexed record")
+    })?;
     let height = first.descriptor.recorded_at_height;
     if indexed_records
         .iter()
@@ -8101,6 +8118,7 @@ fn reconstruct_sccp_message_bundles_from_indexed_records(
         .collect::<Vec<_>>();
     let finality_proof_bytes =
         build_sccp_finality_proof_bytes(&finalized.finality_proof, finalized.commitment_root)?;
+    let verified_finality = finalized.verified_finality().clone();
     let mut bundles = Vec::with_capacity(indexed_records.len());
     for indexed in indexed_records {
         let index = usize::try_from(indexed.descriptor.commitment_index)
@@ -8134,23 +8152,27 @@ fn reconstruct_sccp_message_bundles_from_indexed_records(
             finality_proof: finality_proof_bytes.clone(),
         });
     }
-    Ok(bundles)
+    Ok((verified_finality, bundles))
 }
 
 fn reconstruct_sccp_message_bundle_from_indexed_record(
     state: &CoreState,
     indexed: SccpIndexedOutboundRecord,
-) -> Result<TairaSccpMessageProofV1> {
-    let mut bundles = reconstruct_sccp_message_bundles_from_indexed_records(
+) -> Result<(
+    iroha_core::bridge::VerifiedV2FinalityArtifact,
+    TairaSccpMessageProofV1,
+)> {
+    let (verified_finality, mut bundles) = reconstruct_sccp_message_bundles_from_indexed_records(
         state,
         std::slice::from_ref(&indexed),
     )?;
-    bundles.pop().ok_or_else(|| {
+    let bundle = bundles.pop().ok_or_else(|| {
         sccp_internal_error(format!(
             "SCCP message {} produced no reconstructed finalized bundle",
             hex::encode(indexed.key.message_id)
         ))
-    })
+    })?;
+    Ok((verified_finality, bundle))
 }
 
 fn sccp_message_bundle_for_request(
@@ -8160,7 +8182,8 @@ fn sccp_message_bundle_for_request(
     let Some(indexed) = sccp_indexed_outbound_record(state, message_id)? else {
         return Ok(None);
     };
-    reconstruct_sccp_message_bundle_from_indexed_record(state, indexed).map(Some)
+    reconstruct_sccp_message_bundle_from_indexed_record(state, indexed)
+        .map(|(_, bundle)| Some(bundle))
 }
 
 fn sccp_committed_outbound_context(
@@ -13733,9 +13756,9 @@ fn contract_state_logical_map_parts<'a>(
 #[cfg(feature = "app_api")]
 fn contract_state_value_kind(
     ty: &ivm::EmbeddedStateType,
-) -> Option<ivm_abi::state_value::StateValueKindV1> {
+) -> Option<ivm::state_value::StateValueKindV1> {
     use ivm::EmbeddedStateType as Type;
-    use ivm_abi::state_value::StateValueKindV1 as Kind;
+    use ivm::state_value::StateValueKindV1 as Kind;
 
     Some(match ty {
         Type::Int => Kind::Int,
@@ -13764,10 +13787,10 @@ fn contract_state_value_kind(
 #[cfg(feature = "app_api")]
 fn append_contract_state_schema_nodes(
     ty: &ivm::EmbeddedStateType,
-    nodes: &mut Vec<ivm_abi::state_value::StateValueNodeV1>,
+    nodes: &mut Vec<ivm::state_value::StateValueNodeV1>,
 ) -> bool {
     use ivm::EmbeddedStateType as Type;
-    use ivm_abi::state_value::StateValueNodeV1 as Node;
+    use ivm::state_value::StateValueNodeV1 as Node;
 
     match ty {
         Type::Struct { name, fields } => {
@@ -13802,7 +13825,7 @@ fn append_contract_state_schema_nodes(
             if !append_contract_state_schema_nodes(element, &mut element_nodes) {
                 return false;
             }
-            let element = ivm_abi::state_value::StateValueSchemaV1 {
+            let element = ivm::state_value::StateValueSchemaV1 {
                 nodes: element_nodes,
             };
             if !element.validate() {
@@ -13828,12 +13851,12 @@ fn append_contract_state_schema_nodes(
 #[cfg(feature = "app_api")]
 fn contract_state_value_schema(
     ty: &ivm::EmbeddedStateType,
-) -> core::result::Result<ivm_abi::state_value::StateValueSchemaV1, String> {
+) -> core::result::Result<ivm::state_value::StateValueSchemaV1, String> {
     let mut nodes = Vec::new();
     if !append_contract_state_schema_nodes(ty, &mut nodes) {
         return Err("state map values require an entry key".into());
     }
-    let schema = ivm_abi::state_value::StateValueSchemaV1 { nodes };
+    let schema = ivm::state_value::StateValueSchemaV1 { nodes };
     schema
         .validate()
         .then_some(schema)
@@ -13981,11 +14004,11 @@ fn decode_contract_state_pointer_json(
 #[cfg(feature = "app_api")]
 fn decode_contract_state_atoms_json(
     ty: &ivm::EmbeddedStateType,
-    atoms: &[ivm_abi::state_value::StateValueAtomV1],
+    atoms: &[ivm::state_value::StateValueAtomV1],
     atom_index: &mut usize,
 ) -> core::result::Result<norito::json::Value, String> {
     use ivm::EmbeddedStateType as Type;
-    use ivm_abi::state_value::StateValueAtomV1 as Atom;
+    use ivm::state_value::StateValueAtomV1 as Atom;
 
     match ty {
         Type::Struct { fields, .. } => {
@@ -14081,7 +14104,7 @@ fn decode_contract_state_scalar_json(
     bytes: &[u8],
     ty: &ivm::EmbeddedStateType,
 ) -> core::result::Result<norito::json::Value, String> {
-    use ivm_abi::state_value::{
+    use ivm::state_value::{
         MAX_STATE_VALUE_RECORD_BYTES, StateValueRecordV1, state_value_schema_hash_v1,
     };
 
@@ -14703,15 +14726,15 @@ mod contract_state_tests {
 
     fn make_state_record(
         ty: &ivm::EmbeddedStateType,
-        atoms: Vec<ivm_abi::state_value::StateValueAtomV1>,
+        atoms: Vec<ivm::state_value::StateValueAtomV1>,
     ) -> Vec<u8> {
         let _canonical_flags =
             norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
         let schema = contract_state_value_schema(ty).expect("valid embedded schema");
         assert!(schema.validate_atoms(&atoms), "fixture atoms match schema");
         let schema_payload = norito::to_bytes(&schema).expect("encode state schema");
-        let record = ivm_abi::state_value::StateValueRecordV1 {
-            schema_hash: ivm_abi::state_value::state_value_schema_hash_v1(&schema_payload),
+        let record = ivm::state_value::StateValueRecordV1 {
+            schema_hash: ivm::state_value::state_value_schema_hash_v1(&schema_payload),
             atoms,
         };
         norito::to_bytes(&record).expect("encode persisted state record")
@@ -14835,7 +14858,7 @@ mod contract_state_tests {
 
     #[test]
     fn decode_contract_state_scalar_json_returns_lossless_strings_for_ints() {
-        use ivm_abi::state_value::StateValueAtomV1;
+        use ivm::state_value::StateValueAtomV1;
 
         let ty = ivm::EmbeddedStateType::Int;
         let value = "922337203685477500012345678901234567890"
@@ -14863,10 +14886,8 @@ mod contract_state_tests {
     #[test]
     fn decode_contract_state_scalar_json_consumes_raw_persisted_records_not_transport_tlvs() {
         let ty = ivm::EmbeddedStateType::Bool;
-        let persisted = make_state_record(
-            &ty,
-            vec![ivm_abi::state_value::StateValueAtomV1::Bool(true)],
-        );
+        let persisted =
+            make_state_record(&ty, vec![ivm::state_value::StateValueAtomV1::Bool(true)]);
         assert_eq!(
             decode_contract_state_scalar_json(&persisted, &ty).expect("decode persisted record"),
             norito::json::Value::from(true)
@@ -14884,7 +14905,7 @@ mod contract_state_tests {
             numeric::{Numeric, Quantity},
             numeric_abi::{DecimalValueV1, QuantityValueV1},
         };
-        use ivm_abi::state_value::StateValueAtomV1;
+        use ivm::state_value::StateValueAtomV1;
 
         let decimal_text = "-123456789012345678901234567890.1234567890123456789";
         let decimal = DecimalValueV1::try_from_numeric(
@@ -14937,7 +14958,7 @@ mod contract_state_tests {
     #[test]
     fn decode_contract_state_scalar_json_rejects_malformed_numeric_atoms_and_records() {
         use iroha_primitives::numeric_abi::IntValueV1;
-        use ivm_abi::state_value::StateValueAtomV1;
+        use ivm::state_value::StateValueAtomV1;
 
         let ty = ivm::EmbeddedStateType::Int;
         let mut frame = IntValueV1::try_new("-7".parse().expect("parse int"))
@@ -15028,7 +15049,7 @@ mod contract_state_tests {
 
     #[test]
     fn decode_contract_state_scalar_json_supports_decimal_and_quantity() {
-        use ivm_abi::state_value::StateValueAtomV1;
+        use ivm::state_value::StateValueAtomV1;
 
         let decimal = "123.450"
             .parse::<iroha_primitives::numeric::Numeric>()
@@ -15063,7 +15084,7 @@ mod contract_state_tests {
 
     #[test]
     fn decode_contract_state_map_value_json_preserves_struct_field_encodings() {
-        use ivm_abi::state_value::StateValueAtomV1;
+        use ivm::state_value::StateValueAtomV1;
 
         let schema = ivm::EmbeddedStateType::Struct {
             name: "MintRequestRecord".to_owned(),
@@ -15135,7 +15156,7 @@ mod contract_state_tests {
             format!("BeneficiaryTrancheIndexByLookupKey/{stored_key}"),
             make_state_record(
                 &value_ty,
-                vec![ivm_abi::state_value::StateValueAtomV1::Pointer(make_tlv(
+                vec![ivm::state_value::StateValueAtomV1::Pointer(make_tlv(
                     PointerType::Int,
                     &value_frame,
                 ))],
@@ -15187,7 +15208,7 @@ mod contract_state_tests {
         let decoded = decode_contract_state_scalar_json(
             &make_state_record(
                 &ty,
-                vec![ivm_abi::state_value::StateValueAtomV1::Pointer(make_tlv(
+                vec![ivm::state_value::StateValueAtomV1::Pointer(make_tlv(
                     PointerType::Json,
                     &json_payload,
                 ))],
@@ -15224,7 +15245,7 @@ mod contract_state_tests {
         let error = decode_contract_state_scalar_json(
             &make_state_record(
                 &ivm::EmbeddedStateType::Json,
-                vec![ivm_abi::state_value::StateValueAtomV1::Pointer(make_tlv(
+                vec![ivm::state_value::StateValueAtomV1::Pointer(make_tlv(
                     PointerType::NoritoBytes,
                     &json_payload,
                 ))],
@@ -15246,7 +15267,7 @@ mod contract_state_tests {
         .expect("encode int fixture");
         let encoded = make_state_record(
             &int_ty,
-            vec![ivm_abi::state_value::StateValueAtomV1::Pointer(make_tlv(
+            vec![ivm::state_value::StateValueAtomV1::Pointer(make_tlv(
                 PointerType::Int,
                 &frame,
             ))],
@@ -15584,7 +15605,7 @@ struct NormalizedAssetTransfer {
     authority: AccountId,
     asset_definition_id: AssetDefinitionId,
     asset_balance_scope: iroha_data_model::asset::AssetBalanceScope,
-    amount: iroha_primitives::numeric::Numeric,
+    amount: iroha_primitives::numeric::Quantity,
     destination: AccountId,
     memo: Option<String>,
     fee_sponsor: Option<String>,
@@ -15672,26 +15693,58 @@ fn exact_asset_transfer_scope(raw: &str) -> Result<iroha_data_model::asset::Asse
 }
 
 #[cfg(feature = "app_api")]
-fn exact_asset_transfer_amount(raw: &str) -> Result<iroha_primitives::numeric::Numeric> {
+fn exact_asset_transfer_amount(raw: &str) -> Result<iroha_primitives::numeric::Quantity> {
     if raw.is_empty() || raw.len() > ASSET_TRANSFER_MAX_AMOUNT_LITERAL_BYTES {
         return Err(conversion_error(format!(
             "amount must be a non-empty canonical numeric no longer than {ASSET_TRANSFER_MAX_AMOUNT_LITERAL_BYTES} bytes"
         )));
     }
     let amount = raw
-        .parse::<iroha_primitives::numeric::Numeric>()
+        .parse::<iroha_primitives::numeric::Quantity>()
         .map_err(|error| conversion_error(format!("invalid amount: {error}")))?;
     if amount.to_string() != raw {
         return Err(conversion_error(
             "amount must use the exact canonical numeric representation".to_owned(),
         ));
     }
-    if amount <= iroha_primitives::numeric::Numeric::zero() {
+    if amount <= iroha_primitives::numeric::Quantity::zero() {
         return Err(conversion_error(
             "amount must be strictly positive".to_owned(),
         ));
     }
     Ok(amount)
+}
+
+#[cfg(all(test, feature = "app_api"))]
+mod asset_transfer_quantity_tests {
+    use super::exact_asset_transfer_amount;
+
+    #[test]
+    fn exact_asset_transfer_amount_accepts_only_positive_canonical_quantity_text() {
+        for valid in ["1", "1.25", "0.0000000000000000000000000001"] {
+            let quantity = exact_asset_transfer_amount(valid).expect("canonical quantity");
+            assert_eq!(quantity.to_string(), valid);
+        }
+
+        for invalid in [
+            "",
+            "0",
+            "-1",
+            "+1",
+            "01",
+            "1.0",
+            "1e0",
+            " 1",
+            "1 ",
+            "0.00000000000000000000000000001",
+            "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042048",
+        ] {
+            assert!(
+                exact_asset_transfer_amount(invalid).is_err(),
+                "accepted invalid quantity text `{invalid}`"
+            );
+        }
+    }
 }
 
 #[cfg(feature = "app_api")]
@@ -15900,7 +15953,7 @@ impl NormalizedAssetTransfer {
             self.authority.clone(),
             self.asset_balance_scope,
         );
-        let instruction: InstructionBox = Transfer::asset_numeric(
+        let instruction: InstructionBox = Transfer::asset_quantity(
             source_asset_id,
             self.amount.clone(),
             self.destination.clone(),
@@ -24628,7 +24681,7 @@ mod multisig_selector_tests {
             &mut world,
             &multisig_account_id,
             vec![
-                dm::Mint::asset_numeric(25_u32, test_asset_id_for(&multisig_account_id)).into(),
+                dm::Mint::asset_quantity(25_u32, test_asset_id_for(&multisig_account_id)).into(),
                 dm::Log::new(
                     dm::Level::INFO,
                     format!("PAYNET_PACS009_MINT_V1:{pacs009_marker_payload}"),
@@ -24700,7 +24753,7 @@ mod multisig_selector_tests {
             &mut world,
             &multisig_account_id,
             vec![
-                dm::Transfer::asset_numeric(
+                dm::Transfer::asset_quantity(
                     test_asset_id_for(&multisig_account_id),
                     25_u32,
                     signer_two_id.clone(),
@@ -24808,7 +24861,7 @@ mod multisig_selector_tests {
             &mut world,
             &multisig_account_id,
             vec![
-                dm::Mint::asset_numeric(25_u32, test_asset_id_for(&multisig_account_id)).into(),
+                dm::Mint::asset_quantity(25_u32, test_asset_id_for(&multisig_account_id)).into(),
                 dm::Log::new(
                     dm::Level::INFO,
                     "PAYNET_PACS009_MINT_V1:{not-json".to_owned(),
@@ -29339,7 +29392,7 @@ async fn wait_for_contract_alias_target_with_timeout(
     norito::derive::NoritoSerialize,
 )]
 #[norito(deny_unknown_fields)]
-/// Exact request payload for a detached, single-instruction numeric asset transfer.
+/// Exact request payload for a detached, single-instruction quantity transfer.
 ///
 /// Omitting both signing fields prepares a transaction scaffold. Supplying both
 /// fields verifies and submits the exact deterministic transaction described by
@@ -29351,7 +29404,7 @@ pub struct AssetTransferRequestDto {
     pub asset_definition_id: String,
     /// Explicit balance bucket: `global` or canonical `dataspace:<u64>`.
     pub asset_balance_scope: String,
-    /// Exact canonical, strictly positive numeric amount.
+    /// Exact canonical, strictly positive quantity.
     pub amount: String,
     /// Exact canonical I105 destination account.
     pub destination: String,
@@ -29387,7 +29440,7 @@ pub struct AssetTransferIntentDto {
     pub asset_definition_id: String,
     /// Exact canonical balance scope.
     pub asset_balance_scope: String,
-    /// Canonical strictly positive numeric amount.
+    /// Canonical strictly positive quantity.
     pub amount: String,
     /// Canonical I105 destination account.
     pub destination: String,
@@ -45212,7 +45265,7 @@ mod tx_query_filter_tests {
         let def = test_asset_definition_id();
         let asset_id = dm::AssetId::new(def.clone(), authority.clone());
         let other_asset_id = dm::AssetId::new(def, other_account);
-        let mint = dm::Mint::asset_numeric(1_u32, asset_id.clone());
+        let mint = dm::Mint::asset_quantity(1_u32, asset_id.clone());
         let tx = make_external_tx_with_instructions(
             &authority,
             &keypair,
@@ -45247,7 +45300,7 @@ mod tx_query_filter_tests {
         let def = test_asset_definition_id();
         let asset_id = dm::AssetId::new(def.clone(), authority.clone());
         let other_asset_id = dm::AssetId::new(def, other_account);
-        let mint = dm::Mint::asset_numeric(1_u32, asset_id.clone());
+        let mint = dm::Mint::asset_quantity(1_u32, asset_id.clone());
         let instruction: dm::InstructionBox = mint.into();
 
         assert!(instruction_matches_asset_id(&instruction, &asset_id));
@@ -45263,7 +45316,7 @@ mod tx_query_filter_tests {
         let source_asset_id = dm::AssetId::new(def.clone(), sender.clone());
         let recipient_asset_id = dm::AssetId::new(def.clone(), recipient.clone());
         let other_asset_id = dm::AssetId::new(def, other);
-        let transfer = dm::Transfer::asset_numeric(source_asset_id.clone(), 1_u32, recipient);
+        let transfer = dm::Transfer::asset_quantity(source_asset_id.clone(), 1_u32, recipient);
         let instruction: dm::InstructionBox = transfer.into();
 
         assert!(instruction_matches_asset_id(&instruction, &source_asset_id));
@@ -45289,7 +45342,7 @@ mod tx_query_filter_tests {
             &keypair,
             1_710_000_000_000,
             vec![
-                dm::Transfer::asset_numeric(source_asset_id.clone(), 1_u32, recipient.clone())
+                dm::Transfer::asset_quantity(source_asset_id.clone(), 1_u32, recipient.clone())
                     .into(),
             ],
         );
@@ -45358,7 +45411,7 @@ mod tx_query_filter_tests {
         let def = test_asset_definition_id();
         let asset_id = dm::AssetId::new(def.clone(), holder.clone());
         let other_asset_id = dm::AssetId::new(def, other_holder);
-        let nested: dm::InstructionBox = dm::Mint::asset_numeric(1_u32, asset_id.clone()).into();
+        let nested: dm::InstructionBox = dm::Mint::asset_quantity(1_u32, asset_id.clone()).into();
         let propose = MultisigPropose::new(controller, vec![nested], None);
         let instruction: dm::InstructionBox = propose.into();
 
@@ -45373,7 +45426,7 @@ mod tx_query_filter_tests {
         let (carol, _) = account_with_key();
         let def = test_asset_definition_id();
         let asset_id = dm::AssetId::new(def, alice.clone());
-        let transfer = dm::Transfer::asset_numeric(asset_id, 10_u32, bob.clone());
+        let transfer = dm::Transfer::asset_quantity(asset_id, 10_u32, bob.clone());
         let instruction: dm::InstructionBox = transfer.into();
 
         assert!(instruction_matches_account_id(&instruction, &alice));
@@ -45408,7 +45461,7 @@ mod tx_query_filter_tests {
         let (bob, _) = account_with_key();
         let def = test_asset_definition_id();
         let asset_id = dm::AssetId::new(def, alice.clone());
-        let mint = dm::Mint::asset_numeric(1_u32, asset_id);
+        let mint = dm::Mint::asset_quantity(1_u32, asset_id);
         let instruction: dm::InstructionBox = mint.into();
 
         assert!(instruction_matches_account_id(&instruction, &alice));
@@ -45421,7 +45474,7 @@ mod tx_query_filter_tests {
         let (bob, _) = account_with_key();
         let def = test_asset_definition_id();
         let asset_id = dm::AssetId::new(def, alice.clone());
-        let burn = dm::Burn::asset_numeric(1_u32, asset_id);
+        let burn = dm::Burn::asset_quantity(1_u32, asset_id);
         let instruction: dm::InstructionBox = burn.into();
 
         assert!(instruction_matches_account_id(&instruction, &alice));
@@ -45510,7 +45563,7 @@ mod tx_query_filter_tests {
         let (nested_account, _) = account_with_key();
         let (other, _) = account_with_key();
         let nested_asset = dm::AssetId::new(test_asset_definition_id(), nested_account.clone());
-        let nested: dm::InstructionBox = dm::Mint::asset_numeric(1_u32, nested_asset).into();
+        let nested: dm::InstructionBox = dm::Mint::asset_quantity(1_u32, nested_asset).into();
         let propose = MultisigPropose::new(multisig.clone(), vec![nested], None);
         let instruction: dm::InstructionBox = propose.into();
 
@@ -45533,7 +45586,7 @@ mod tx_query_filter_tests {
         let recipient_asset_literal = recipient_asset_id.to_string();
         let def_literal = def.to_string();
         let instruction: dm::InstructionBox =
-            dm::Transfer::asset_numeric(asset_id, 10_u32, bob.clone()).into();
+            dm::Transfer::asset_quantity(asset_id, 10_u32, bob.clone()).into();
 
         let movements = account_history_movements_from_instruction(&instruction);
 
@@ -45585,7 +45638,7 @@ mod tx_query_filter_tests {
             &keypair,
             1_710_000_000_000,
             vec![
-                dm::Transfer::asset_numeric(source_asset_id.clone(), 10_u32, recipient.clone())
+                dm::Transfer::asset_quantity(source_asset_id.clone(), 10_u32, recipient.clone())
                     .into(),
             ],
         );
@@ -45665,7 +45718,7 @@ mod tx_query_filter_tests {
         let (unrelated, _) = account_with_key();
         let asset_id = dm::AssetId::new(test_asset_definition_id(), sender.clone());
         let instruction: dm::InstructionBox =
-            dm::Transfer::asset_numeric(asset_id, 10_u32, recipient.clone()).into();
+            dm::Transfer::asset_quantity(asset_id, 10_u32, recipient.clone()).into();
         let tx = make_external_tx_with_instructions(
             &authority,
             &keypair,
@@ -45692,7 +45745,7 @@ mod tx_query_filter_tests {
             &authority,
             &keypair,
             1_710_000_000_000,
-            vec![dm::Mint::asset_numeric(12_u32, asset_id.clone()).into()],
+            vec![dm::Mint::asset_quantity(12_u32, asset_id.clone()).into()],
         );
         let mut index = AccountHistoryIndex::default();
 
@@ -45910,7 +45963,7 @@ mod tx_query_filter_tests {
         let asset_def: dm::AssetDefinitionId =
             test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400dd");
         let asset_id = dm::AssetId::new(asset_def.clone(), account.clone());
-        let mint = dm::Mint::asset_numeric(1_u32, asset_id.clone());
+        let mint = dm::Mint::asset_quantity(1_u32, asset_id.clone());
 
         let tx =
             make_external_tx_with_instructions(&account, &kp, 1_710_000_000_000, vec![mint.into()]);
@@ -45945,7 +45998,7 @@ mod tx_query_filter_tests {
             &keypair,
             1_710_000_000_000,
             vec![
-                dm::Transfer::asset_numeric(source_asset_id.clone(), 1_u32, recipient.clone())
+                dm::Transfer::asset_quantity(source_asset_id.clone(), 1_u32, recipient.clone())
                     .into(),
             ],
         );
@@ -46603,10 +46656,10 @@ mod explorer_lookup_tests {
         let alice_asset = dm::AssetId::new(def.clone(), alice.clone());
         let bob_asset = dm::AssetId::new(def, bob.clone());
         let instructions = vec![
-            dm::Mint::asset_numeric(10_u32, alice_asset.clone()).into(),
-            dm::Burn::asset_numeric(1_u32, alice_asset).into(),
-            dm::Mint::asset_numeric(10_u32, bob_asset.clone()).into(),
-            dm::Burn::asset_numeric(1_u32, bob_asset).into(),
+            dm::Mint::asset_quantity(10_u32, alice_asset.clone()).into(),
+            dm::Burn::asset_quantity(1_u32, alice_asset).into(),
+            dm::Mint::asset_quantity(10_u32, bob_asset.clone()).into(),
+            dm::Burn::asset_quantity(1_u32, bob_asset).into(),
         ];
         let (state, tx_hash) = build_state_with_single_transaction(instructions);
 
@@ -47328,7 +47381,7 @@ mod tx_query_integration_smoke {
         let asset_def: dm::AssetDefinitionId =
             test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400dd");
         let asset_id = dm::AssetId::new(asset_def, actor_id.clone().into());
-        let mint = dm::Mint::asset_numeric(1_u32, asset_id.clone());
+        let mint = dm::Mint::asset_quantity(1_u32, asset_id.clone());
 
         let mut bldr_asset = dm::TransactionBuilder::new(chain_id.clone(), actor_id.clone().into());
         bldr_asset.set_creation_time(core::time::Duration::from_millis(1000));
@@ -47461,7 +47514,7 @@ mod tx_query_integration_smoke {
         })
         .execute(exec_id.account(), &mut stx0)
         .ok();
-        dm::Mint::asset_numeric(
+        dm::Mint::asset_quantity(
             100_u32,
             dm::AssetId::new(def_id.clone(), alice_id.account().clone()),
         )
@@ -47483,7 +47536,7 @@ mod tx_query_integration_smoke {
         let mut tx_builder = dm::TransactionBuilder::new(chain_id, alice_id.account().clone());
         tx_builder.set_creation_time(core::time::Duration::from_millis(1_000));
         let signed_transfer = tx_builder
-            .with_instructions::<dm::InstructionBox>([dm::Transfer::asset_numeric(
+            .with_instructions::<dm::InstructionBox>([dm::Transfer::asset_quantity(
                 source_asset_id,
                 7_u32,
                 bob_id.account().clone(),
@@ -52740,7 +52793,7 @@ mod query_endpoint_tests {
             test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400dd");
         let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&alice_id);
         let asset_id = AssetId::new(asset_def_id, alice_id.clone());
-        let asset = Asset::new(asset_id.clone(), Numeric::from(13_u32));
+        let asset = Asset::new(asset_id.clone(), Quantity::from(13_u32));
         let world = World::with_assets([domain], [account], [asset_def], [asset], []);
         let state = Arc::new(iroha_core::state::State::new_for_testing(
             world,
@@ -57644,15 +57697,15 @@ mod validation_fee_torii_ingress_tests {
         policy: &ValidationFeePolicyV1,
         include_fee: bool,
     ) -> SignedTransaction {
-        let principal = Transfer::asset_numeric(
+        let principal = Transfer::asset_quantity(
             AssetId::new(fee_asset.clone(), user.clone()),
-            Numeric::new(1, 0),
+            1_u32,
             recipient.clone(),
         );
         let mut instructions: Vec<InstructionBox> = vec![principal.into()];
         if include_fee {
             instructions.push(
-                Transfer::asset_numeric(
+                Transfer::asset_quantity(
                     AssetId::new(fee_asset.clone(), user.clone()),
                     policy.fee_amount_numeric(),
                     validation_fee_policy_treasury(policy),
@@ -57839,13 +57892,13 @@ mod validation_fee_torii_ingress_tests {
             MultisigPropose::new(
                 multisig.clone(),
                 vec![
-                    Transfer::asset_numeric(
+                    Transfer::asset_quantity(
                         AssetId::new(fee_asset.clone(), multisig.clone()),
-                        Numeric::new(1, 0),
+                        1_u32,
                         recipient.clone(),
                     )
                     .into(),
-                    Transfer::asset_numeric(
+                    Transfer::asset_quantity(
                         AssetId::new(fee_asset.clone(), multisig.clone()),
                         policy.fee_amount_numeric(),
                         treasury.clone(),
@@ -57911,9 +57964,9 @@ mod validation_fee_torii_ingress_tests {
             signed(
                 vec![
                     proposal().into(),
-                    Transfer::asset_numeric(
+                    Transfer::asset_quantity(
                         AssetId::new(xor, user.clone()),
-                        Numeric::new(1, 0),
+                        1_u32,
                         recipient.clone(),
                     )
                     .into(),
@@ -63973,13 +64026,13 @@ fn build_repo_state_for_tests() -> RepoTestFixture {
     .execute(&authority_id, &mut stx)
     .unwrap();
 
-    Mint::asset_numeric(
+    Mint::asset_quantity(
         numeric!(5000),
         AssetId::new(cash_def_id.clone(), counterparty_id.clone()),
     )
     .execute(&authority_id, &mut stx)
     .unwrap();
-    Mint::asset_numeric(
+    Mint::asset_quantity(
         numeric!(6000),
         AssetId::new(collateral_def_id.clone(), initiator_id.clone()),
     )
@@ -66496,6 +66549,7 @@ fn build_onboarding_alias_auto_renew_instructions(
     retry_backoff_ms: u64,
     max_failures: u32,
     max_charge_amount: u64,
+    max_cycles: NonZeroU64,
 ) -> Result<(Vec<InstructionBox>, NftId)> {
     use iroha_executor_data_model::permission::nft::CanModifyNftMetadata;
     use iroha_executor_data_model::permission::trigger::CanRegisterTrigger;
@@ -66550,6 +66604,7 @@ fn build_onboarding_alias_auto_renew_instructions(
                 subscriber.clone(),
                 subscription_id.clone(),
                 lease_quote.expires_at_ms,
+                max_cycles,
             ))),
             InstructionBox::from(Transfer::nft(
                 onboarding_authority.clone(),
@@ -66754,6 +66809,7 @@ pub async fn handle_v1_accounts_onboard(
             signer.alias_auto_renew_retry_backoff_ms,
             signer.alias_auto_renew_max_failures,
             lease_quote.charge_amount,
+            app.state.ivm_admission_cycle_limit(),
         )?;
         auto_renew_instructions = instructions;
     }
@@ -66958,7 +67014,7 @@ pub async fn handle_v1_accounts_faucet(
             )),
         ));
     }
-    instructions.push(InstructionBox::from(Transfer::asset_numeric(
+    instructions.push(InstructionBox::from(Transfer::asset_quantity(
         source_asset_id,
         faucet.amount.clone(),
         account_id.clone(),
@@ -67169,6 +67225,7 @@ pub async fn handle_v1_accounts_onboard_multisig(
             signer.alias_auto_renew_retry_backoff_ms,
             signer.alias_auto_renew_max_failures,
             lease_quote.charge_amount,
+            app.state.ivm_admission_cycle_limit(),
         )?;
         auto_renew_instructions = instructions;
     }
@@ -67565,6 +67622,7 @@ pub async fn handle_post_v1_account_alias_auto_renew(
                     account_id.clone(),
                     subscription_id.clone(),
                     record.expires_at_ms,
+                    app.state.ivm_admission_cycle_limit(),
                 ),
             )));
         } else {
@@ -67584,6 +67642,7 @@ pub async fn handle_post_v1_account_alias_auto_renew(
                     account_id.clone(),
                     subscription_id.clone(),
                     record.expires_at_ms,
+                    app.state.ivm_admission_cycle_limit(),
                 ),
             )));
         }
@@ -72623,7 +72682,7 @@ pub async fn handle_v1_explorer_asset_definition_econometrics(
                             }
                             let sender = asset_transfer.source().account().clone();
                             let receiver = asset_transfer.destination().clone();
-                            let amount = asset_transfer.object().clone();
+                            let amount = asset_transfer.object().as_numeric().clone();
 
                             for acc in &mut velocity_accs {
                                 if tx_ms < acc.start_ms {
@@ -72647,7 +72706,7 @@ pub async fn handle_v1_explorer_asset_definition_econometrics(
                             }
                             let sender = entry.from().clone();
                             let receiver = entry.to().clone();
-                            let amount = entry.amount().clone();
+                            let amount = entry.amount().as_numeric().clone();
 
                             for acc in &mut velocity_accs {
                                 if tx_ms < acc.start_ms {
@@ -72670,7 +72729,7 @@ pub async fn handle_v1_explorer_asset_definition_econometrics(
                             if asset_mint.destination().definition() != &definition_id {
                                 continue;
                             }
-                            let amount = asset_mint.object().clone();
+                            let amount = asset_mint.object().as_numeric().clone();
 
                             for acc in &mut issuance_accs {
                                 if tx_ms < acc.start_ms {
@@ -72701,7 +72760,7 @@ pub async fn handle_v1_explorer_asset_definition_econometrics(
                             if asset_burn.destination().definition() != &definition_id {
                                 continue;
                             }
-                            let amount = asset_burn.object().clone();
+                            let amount = asset_burn.object().as_numeric().clone();
 
                             for acc in &mut issuance_accs {
                                 if tx_ms < acc.start_ms {
@@ -72906,7 +72965,7 @@ mod explorer_asset_definition_econometrics_tests {
         .ok();
 
         // Ensure balances exist so transfers/burn would be valid if executed.
-        dm::Mint::asset_numeric(
+        dm::Mint::asset_quantity(
             1_000_u32,
             dm::AssetId::new(def_id.clone(), alice_id.clone().into()),
         )
@@ -72914,7 +72973,7 @@ mod explorer_asset_definition_econometrics_tests {
         .ok();
         // Avoid depending on intra-block transaction ordering: ensure burn is valid even if it
         // executes before the transfers in the canonicalized payload order.
-        dm::Mint::asset_numeric(
+        dm::Mint::asset_quantity(
             10_u32,
             dm::AssetId::new(def_id.clone(), bob_id.clone().into()),
         )
@@ -72945,7 +73004,7 @@ mod explorer_asset_definition_econometrics_tests {
         let mut txb_mint = dm::TransactionBuilder::new(chain_id.clone(), exec_id.clone().into());
         txb_mint.set_creation_time(core::time::Duration::from_millis(mint_ms));
         let signed_mint = txb_mint
-            .with_instructions::<dm::InstructionBox>([dm::Mint::asset_numeric(
+            .with_instructions::<dm::InstructionBox>([dm::Mint::asset_quantity(
                 100_u32,
                 asset_alice.clone(),
             )
@@ -72959,7 +73018,7 @@ mod explorer_asset_definition_econometrics_tests {
             dm::TransactionBuilder::new(chain_id.clone(), alice_id.clone().into());
         txb_transfer.set_creation_time(core::time::Duration::from_millis(transfer_ms));
         let signed_transfer = txb_transfer
-            .with_instructions::<dm::InstructionBox>([dm::Transfer::asset_numeric(
+            .with_instructions::<dm::InstructionBox>([dm::Transfer::asset_quantity(
                 asset_alice.clone(),
                 7_u32,
                 bob_id.clone().into(),
@@ -72995,7 +73054,7 @@ mod explorer_asset_definition_econometrics_tests {
         let mut txb_burn = dm::TransactionBuilder::new(chain_id, bob_id.clone().into());
         txb_burn.set_creation_time(core::time::Duration::from_millis(burn_ms));
         let signed_burn = txb_burn
-            .with_instructions::<dm::InstructionBox>([dm::Burn::asset_numeric(
+            .with_instructions::<dm::InstructionBox>([dm::Burn::asset_quantity(
                 5_u32,
                 asset_bob.clone(),
             )
@@ -73233,13 +73292,13 @@ mod explorer_asset_definition_snapshot_tests {
         .execute(exec_id.account(), &mut stx0)
         .ok();
 
-        dm::Mint::asset_numeric(
+        dm::Mint::asset_quantity(
             100_u32,
             dm::AssetId::new(def_id.clone(), alice_id.clone().into()),
         )
         .execute(exec_id.account(), &mut stx0)
         .ok();
-        dm::Mint::asset_numeric(
+        dm::Mint::asset_quantity(
             100_u32,
             dm::AssetId::new(def_id.clone(), bob_id.clone().into()),
         )
@@ -73419,13 +73478,13 @@ mod explorer_asset_definition_snapshot_tests {
         .execute(exec_id.account(), &mut stx0)
         .ok();
 
-        dm::Mint::asset_numeric(
+        dm::Mint::asset_quantity(
             1_u32,
             dm::AssetId::new(def_id.clone(), alice_id.clone().into()),
         )
         .execute(exec_id.account(), &mut stx0)
         .ok();
-        dm::Mint::asset_numeric(
+        dm::Mint::asset_quantity(
             100_u32,
             dm::AssetId::new(def_id.clone(), bob_id.clone().into()),
         )
@@ -76852,7 +76911,7 @@ fn resolve_trigger_id(
 }
 
 #[cfg(feature = "app_api")]
-fn ivm_syscall_program(syscall: u32) -> IvmBytecode {
+fn ivm_syscall_program(syscall: u32, max_cycles: NonZeroU64) -> IvmBytecode {
     let opcode = u8::try_from(syscall).expect("syscall opcode fits in u8");
     let mut code = Vec::new();
     code.extend_from_slice(
@@ -76860,7 +76919,11 @@ fn ivm_syscall_program(syscall: u32) -> IvmBytecode {
             .to_le_bytes(),
     );
     code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
-    let mut blob = ivm::ProgramMetadata::default().encode();
+    let mut blob = ivm::ProgramMetadata {
+        max_cycles: max_cycles.get(),
+        ..ivm::ProgramMetadata::default()
+    }
+    .encode();
     blob.extend_from_slice(&code);
     IvmBytecode::from_compiled(blob)
 }
@@ -76871,6 +76934,7 @@ fn build_billing_trigger(
     authority: AccountId,
     subscription_id: NftId,
     charge_at_ms: u64,
+    max_cycles: NonZeroU64,
 ) -> Trigger {
     use iroha_data_model::events::time::{ExecutionTime, Schedule, TimeEventFilter};
 
@@ -76888,6 +76952,7 @@ fn build_billing_trigger(
     let action = Action::new(
         Executable::Ivm(ivm_syscall_program(
             ivm::syscalls::SYSCALL_SUBSCRIPTION_BILL,
+            max_cycles,
         )),
         Repeats::Exactly(1),
         authority,
@@ -76939,12 +77004,17 @@ fn build_account_alias_auto_renew_state(
 }
 
 #[cfg(feature = "app_api")]
-fn build_usage_trigger(trigger_id: TriggerId, authority: AccountId) -> Trigger {
+fn build_usage_trigger(
+    trigger_id: TriggerId,
+    authority: AccountId,
+    max_cycles: NonZeroU64,
+) -> Trigger {
     use iroha_data_model::events::execute_trigger::ExecuteTriggerEventFilter;
 
     let action = Action::new(
         Executable::Ivm(ivm_syscall_program(
             ivm::syscalls::SYSCALL_SUBSCRIPTION_RECORD_USAGE,
+            max_cycles,
         )),
         Repeats::Indefinitely,
         authority.clone(),
@@ -77188,12 +77258,17 @@ pub async fn handle_post_v1_subscription_create(
             authority.clone(),
             subscription_id.clone(),
             charge_at_ms,
+            state.ivm_admission_cycle_limit(),
         ),
     )));
 
     if let Some(ref usage_trigger_id) = usage_trigger_id {
         instructions.push(InstructionBox::from(Register::trigger(
-            build_usage_trigger(usage_trigger_id.clone(), authority.clone()),
+            build_usage_trigger(
+                usage_trigger_id.clone(),
+                authority.clone(),
+                state.ivm_admission_cycle_limit(),
+            ),
         )));
         let grant_provider = grant_usage_to_provider.unwrap_or(true);
         if grant_provider && plan.provider != authority {
@@ -77585,6 +77660,7 @@ pub async fn handle_post_v1_subscription_resume(
             authority.clone(),
             subscription_id.clone(),
             next_charge_ms,
+            state.ivm_admission_cycle_limit(),
         ),
     )));
     let tx = sign_app_api_transaction(
@@ -77879,6 +77955,7 @@ pub async fn handle_post_v1_subscription_charge_now(
             authority.clone(),
             subscription_id.clone(),
             charge_at_ms,
+            state.ivm_admission_cycle_limit(),
         ),
     )));
     let tx = sign_app_api_transaction(
@@ -78028,6 +78105,7 @@ mod subscription_api_tests {
             1_000,
             3,
             7,
+            defaults::pipeline::IVM_MAX_CYCLES_UPPER_BOUND,
         )
         .expect("build auto-renew instructions");
         let expected_permission: Permission =
@@ -78153,6 +78231,7 @@ mod subscription_api_tests {
                 500,
                 3,
                 200,
+                defaults::pipeline::IVM_MAX_CYCLES_UPPER_BOUND,
             )
             .expect("onboarding auto-renew instructions");
         let onboarding_tx = sign_app_api_transaction(
@@ -78475,8 +78554,25 @@ mod subscription_api_tests {
 
     #[test]
     fn ivm_syscall_program_emits_bytecode() {
-        let program = ivm_syscall_program(ivm::syscalls::SYSCALL_SUBSCRIPTION_BILL);
+        let configured_limit = NonZeroU64::new(17).expect("non-zero test cycle limit");
+        let program =
+            ivm_syscall_program(ivm::syscalls::SYSCALL_SUBSCRIPTION_BILL, configured_limit);
         assert!(!program.as_ref().is_empty());
+        assert_eq!(
+            ivm::ProgramMetadata::parse(program.as_ref())
+                .expect("generated subscription program metadata")
+                .metadata
+                .max_cycles,
+            configured_limit.get(),
+            "Torii must embed the live admission ceiling, not a compiled default"
+        );
+        let admitted = iroha_core::smartcontracts::ivm::cache::IvmCache::new()
+            .summarize_executable(program.as_ref())
+            .expect("subscription syscall helper must be a valid program");
+        assert!(matches!(
+            admitted,
+            iroha_core::smartcontracts::ivm::cache::ExecutableProgramSummary::Generic(_)
+        ));
     }
 
     #[test]
@@ -78490,6 +78586,7 @@ mod subscription_api_tests {
             authority.clone(),
             subscription_id.clone(),
             55,
+            defaults::pipeline::IVM_MAX_CYCLES_UPPER_BOUND,
         );
         assert_eq!(trigger.id(), &trigger_id);
         let meta = trigger.metadata();
@@ -78518,7 +78615,11 @@ mod subscription_api_tests {
         };
         let trigger_id: TriggerId = "usage_trigger".parse().unwrap();
         let authority = ALICE_ID.clone();
-        let trigger = build_usage_trigger(trigger_id.clone(), authority.clone());
+        let trigger = build_usage_trigger(
+            trigger_id.clone(),
+            authority.clone(),
+            defaults::pipeline::IVM_MAX_CYCLES_UPPER_BOUND,
+        );
         match trigger.action().filter() {
             EventFilterBox::ExecuteTrigger(filter) => {
                 let expected = ExecuteTriggerEventFilter::new()

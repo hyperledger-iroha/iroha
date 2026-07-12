@@ -2696,7 +2696,7 @@ mod measured_bytes_impls {
         const_vec::ConstVec,
         conststr::ConstString,
         json::Json,
-        numeric::{Numeric, NumericSpec},
+        numeric::{Numeric, NumericSpec, Quantity},
     };
 
     use crate::{
@@ -2921,6 +2921,12 @@ mod measured_bytes_impls {
     impl MeasuredBytes for Numeric {
         fn measured_bytes(&self) -> usize {
             size_of::<Numeric>().saturating_add(self.mantissa().measured_bytes_extra())
+        }
+    }
+
+    impl MeasuredBytes for Quantity {
+        fn measured_bytes(&self) -> usize {
+            size_of::<Quantity>().saturating_add(self.mantissa().measured_bytes_extra())
         }
     }
 

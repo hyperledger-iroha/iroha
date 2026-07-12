@@ -183,8 +183,8 @@ IDs میں `Display`/`FromStr` راؤنڈ ٹرپ کے ساتھ مستحکم سٹ
 
 ---## عملی مثالیں۔
 - ٹکسال اور منتقلی:
-  - `Mint::asset_numeric(10, asset_id)` → 10 کا اضافہ کرتا ہے اگر اسپیس/منٹیبلٹی کے ذریعہ اجازت دی جائے؛ واقعات: `AssetEvent::Added`۔
-  - `Transfer::asset_numeric(asset_id, 5, to_account)` → چالیں 5؛ ہٹانے/اضافی کرنے کے واقعات۔
+  - `Mint::asset_quantity(10, asset_id)` → 10 کا اضافہ کرتا ہے اگر اسپیس/منٹیبلٹی کے ذریعہ اجازت دی جائے؛ واقعات: `AssetEvent::Added`۔
+  - `Transfer::asset_quantity(asset_id, 5, to_account)` → چالیں 5؛ ہٹانے/اضافی کرنے کے واقعات۔
 - میٹا ڈیٹا اپ ڈیٹس:
   - `SetKeyValue::account(account_id, "avatar".parse()?, json)` → upsert; `RemoveKeyValue::account(...)` کے ذریعے ہٹانا۔
 - کردار/اجازت کا انتظام:

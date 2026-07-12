@@ -2528,8 +2528,8 @@ mod tests {
     use super::*;
     use crate::{IVM, encoding, instruction, syscalls};
     use ivm_abi::metadata::{
-        EmbeddedContractInterfaceV1, EmbeddedStateDescriptor, EmbeddedStateType,
-        LITERAL_SECTION_MAGIC, ProgramMetadata,
+        EmbeddedContractInterfaceV1, EmbeddedEntrypointDescriptor, EmbeddedStateDescriptor,
+        EmbeddedStateType, LITERAL_SECTION_MAGIC, ProgramMetadata,
     };
 
     fn state_map_interface(name: &str, key: EmbeddedStateType) -> EmbeddedContractInterfaceV1 {
@@ -2540,7 +2540,21 @@ mod tests {
             features_bitmap: 0,
             access_set_hints: None,
             kotoba: Vec::new(),
-            entrypoints: Vec::new(),
+            entrypoints: vec![EmbeddedEntrypointDescriptor {
+                name: "inspect".to_owned(),
+                kind: iroha_data_model::smart_contract::manifest::EntryPointKind::View,
+                params: Vec::new(),
+                argument_schema: None,
+                return_type: None,
+                return_schema: None,
+                permission: None,
+                read_keys: Vec::new(),
+                write_keys: Vec::new(),
+                access_hints_complete: Some(true),
+                access_hints_skipped: Vec::new(),
+                triggers: Vec::new(),
+                entry_pc: 0,
+            }],
             states: vec![EmbeddedStateDescriptor {
                 name: name.to_owned(),
                 ty: EmbeddedStateType::StateMap {
@@ -2555,6 +2569,7 @@ mod tests {
     fn load_state_map_schema(vm: &mut IVM, name: &str, key: EmbeddedStateType) {
         let mut artifact = ProgramMetadata::default().encode();
         artifact.extend_from_slice(&state_map_interface(name, key).encode_section());
+        artifact.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
         vm.load_program(&artifact)
             .expect("load StateMap CNTR schema");
     }

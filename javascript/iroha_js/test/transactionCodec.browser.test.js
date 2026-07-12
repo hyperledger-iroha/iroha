@@ -457,7 +457,7 @@ test("browser builder rejects ambiguous, non-canonical, and hostile inputs", () 
     () => buildBrowserTransferPayload(sampleInput({ nonce: 0 })),
     "invalid_integer",
   );
-  for (const quantity of [0, -1, "01", "1.0", "1e3", Number.NaN]) {
+  for (const quantity of [0, 1, -1, "01", "1.0", "1e3", Number.NaN]) {
     expectCodecError(
       () => buildBrowserTransferPayload(sampleInput({ quantity })),
       "invalid_quantity",

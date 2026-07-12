@@ -75,38 +75,38 @@ fn asset_totals_track_multi_account_mint_and_burn() {
     .execute(&ALICE_ID, &mut stx)
     .expect("register asset definition");
 
-    Mint::asset_numeric(
+    Mint::asset_quantity(
         50_u32,
         AssetId::new(definition_id.clone(), holder_wonderland.clone()),
     )
     .execute(&ALICE_ID, &mut stx)
     .expect("mint wonderland holder");
-    Mint::asset_numeric(
+    Mint::asset_quantity(
         40_u32,
         AssetId::new(definition_id.clone(), holder_looking_glass.clone()),
     )
     .execute(&ALICE_ID, &mut stx)
     .expect("mint looking glass holder");
-    Mint::asset_numeric(
+    Mint::asset_quantity(
         10_u32,
         AssetId::new(definition_id.clone(), burn_to_zero.clone()),
     )
     .execute(&ALICE_ID, &mut stx)
     .expect("mint burn-to-zero holder");
 
-    Burn::asset_numeric(
+    Burn::asset_quantity(
         15_u32,
         AssetId::new(definition_id.clone(), holder_wonderland.clone()),
     )
     .execute(&ALICE_ID, &mut stx)
     .expect("partial burn from wonderland holder");
-    Burn::asset_numeric(
+    Burn::asset_quantity(
         5_u32,
         AssetId::new(definition_id.clone(), holder_looking_glass.clone()),
     )
     .execute(&ALICE_ID, &mut stx)
     .expect("partial burn from looking glass holder");
-    Burn::asset_numeric(
+    Burn::asset_quantity(
         10_u32,
         AssetId::new(definition_id.clone(), burn_to_zero.clone()),
     )
@@ -184,7 +184,7 @@ fn asset_totals_drop_when_unregistering_account() {
     .execute(&ALICE_ID, &mut stx_1)
     .expect("register definition");
 
-    Mint::asset_numeric(25_u32, AssetId::new(definition_id.clone(), holder.clone()))
+    Mint::asset_quantity(25_u32, AssetId::new(definition_id.clone(), holder.clone()))
         .execute(&ALICE_ID, &mut stx_1)
         .expect("mint holder balance");
 
@@ -279,13 +279,13 @@ fn asset_totals_preserve_when_unregistering_domain_with_foreign_holders() {
     .execute(&ALICE_ID, &mut stx_1)
     .expect("register source definition");
 
-    Mint::asset_numeric(
+    Mint::asset_quantity(
         7_u32,
         AssetId::new(definition_id.clone(), source_holder.clone()),
     )
     .execute(&ALICE_ID, &mut stx_1)
     .expect("mint source holder");
-    Mint::asset_numeric(
+    Mint::asset_quantity(
         33_u32,
         AssetId::new(definition_id.clone(), foreign_holder.clone()),
     )
@@ -391,13 +391,13 @@ fn unregistering_definition_domain_cleans_foreign_assets() {
     .execute(&ALICE_ID, &mut stx_1)
     .expect("register source definition");
 
-    Mint::asset_numeric(
+    Mint::asset_quantity(
         4_u32,
         AssetId::new(definition_id.clone(), source_holder.clone()),
     )
     .execute(&ALICE_ID, &mut stx_1)
     .expect("mint source holder");
-    Mint::asset_numeric(
+    Mint::asset_quantity(
         11_u32,
         AssetId::new(definition_id.clone(), foreign_holder.clone()),
     )

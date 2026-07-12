@@ -95,7 +95,7 @@ fn register_custody_account(stx: &mut StateTransaction<'_, '_>, route: &SccpGove
 }
 
 fn materialize_custody_asset(stx: &mut StateTransaction<'_, '_>, route: &SccpGovernedRouteV1) {
-    Mint::asset_numeric(
+    Mint::asset_quantity(
         1_u64,
         AssetId::new(
             route.settlement.asset_definition_id.clone(),

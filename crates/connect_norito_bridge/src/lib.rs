@@ -63,7 +63,10 @@ use iroha_data_model::{
     },
 };
 use iroha_executor_data_model::isi::multisig::{MultisigRegister, MultisigSpec};
-use iroha_primitives::{json::Json, numeric::Numeric};
+use iroha_primitives::{
+    json::Json,
+    numeric::{Numeric, Quantity},
+};
 use iroha_torii_shared::{connect as proto, connect_sdk};
 use iroha_version::codec::{DecodeVersioned as _, EncodeVersioned as _};
 use ivm::{AccelerationConfig, BackendRuntimeStatus};
@@ -505,8 +508,8 @@ fn parse_asset_definition_with_balance_scope(
     Ok((definition, AssetBalanceScope::Dataspace(dataspace_id)))
 }
 
-fn parse_quantity(value: String) -> BridgeResult<Numeric> {
-    Numeric::from_str(&value).map_err(|_| BridgeError::Quantity)
+fn parse_quantity(value: String) -> BridgeResult<Quantity> {
+    Quantity::from_str(&value).map_err(|_| BridgeError::Quantity)
 }
 
 fn parse_private_key(bytes: &[u8]) -> BridgeResult<PrivateKey> {
@@ -4576,7 +4579,7 @@ struct AssetTxInputs {
     asset_definition: AssetDefinitionId,
     asset_scope: AssetBalanceScope,
     destination: AccountId,
-    quantity: Numeric,
+    quantity: Quantity,
     ttl: Option<NonZeroU64>,
     private_key: PrivateKey,
 }
@@ -10354,9 +10357,9 @@ mod detached_transaction_scaffold_tests {
         } else {
             AssetId::new(definition, authority)
         };
-        let transfer: InstructionBox = Transfer::asset_numeric(
+        let transfer: InstructionBox = Transfer::asset_quantity(
             asset,
-            "1.25".parse::<Numeric>().expect("amount"),
+            "1.25".parse::<Quantity>().expect("quantity"),
             destination,
         )
         .into();
@@ -13642,7 +13645,7 @@ pub unsafe extern "C" fn connect_norito_encode_transfer_signed_transaction(
             nonce,
             private_key,
             || {
-                let transfer = Transfer::asset_numeric(asset_id, quantity, destination);
+                let transfer = Transfer::asset_quantity(asset_id, quantity, destination);
                 Executable::from([InstructionBox::from(transfer)])
             },
         )?;
@@ -13732,7 +13735,7 @@ pub unsafe extern "C" fn connect_norito_encode_transfer_signed_transaction_with_
             metadata,
             private_key,
             || {
-                let transfer = Transfer::asset_numeric(asset_id, quantity, destination);
+                let transfer = Transfer::asset_quantity(asset_id, quantity, destination);
                 Executable::from([InstructionBox::from(transfer)])
             },
         )?;
@@ -13820,7 +13823,7 @@ pub unsafe extern "C" fn connect_norito_encode_transfer_signed_transaction_alg(
             nonce,
             private_key,
             || {
-                let transfer = Transfer::asset_numeric(asset_id, quantity, destination);
+                let transfer = Transfer::asset_quantity(asset_id, quantity, destination);
                 Executable::from([InstructionBox::from(transfer)])
             },
         )?;
@@ -13914,7 +13917,7 @@ pub unsafe extern "C" fn connect_norito_encode_transfer_signed_transaction_with_
             metadata,
             private_key,
             || {
-                let transfer = Transfer::asset_numeric(asset_id, quantity, destination);
+                let transfer = Transfer::asset_quantity(asset_id, quantity, destination);
                 Executable::from([InstructionBox::from(transfer)])
             },
         )?;
@@ -13956,7 +13959,7 @@ pub unsafe extern "C" fn connect_norito_encode_transfer_instruction_box(
             parse_asset_definition_with_balance_scope(asset_definition)?;
         let asset_id = AssetId::with_scope(asset_definition, authority, asset_scope);
         let instruction =
-            InstructionBox::from(Transfer::asset_numeric(asset_id, quantity, destination));
+            InstructionBox::from(Transfer::asset_quantity(asset_id, quantity, destination));
         let instruction_bytes =
             norito::core::to_bytes(&instruction).map_err(|_| BridgeError::JsonSerialize)?;
 
@@ -14086,8 +14089,8 @@ pub unsafe extern "C" fn connect_norito_encode_validation_fee_transfer_signed_tr
             private_key,
             || {
                 let principal_transfer =
-                    Transfer::asset_numeric(principal_asset_id, quantity, destination);
-                let fee_transfer = Transfer::asset_numeric(fee_asset_id, fee_quantity, treasury);
+                    Transfer::asset_quantity(principal_asset_id, quantity, destination);
+                let fee_transfer = Transfer::asset_quantity(fee_asset_id, fee_quantity, treasury);
                 Executable::from([
                     InstructionBox::from(principal_transfer),
                     InstructionBox::from(fee_transfer),
@@ -18616,7 +18619,7 @@ pub unsafe extern "C" fn connect_norito_encode_mint_signed_transaction(
             nonce,
             private_key,
             || {
-                let mint = Mint::asset_numeric(quantity, asset_id);
+                let mint = Mint::asset_quantity(quantity, asset_id);
                 Executable::from([InstructionBox::from(mint)])
             },
         )?;
@@ -18704,7 +18707,7 @@ pub unsafe extern "C" fn connect_norito_encode_mint_signed_transaction_alg(
             nonce,
             private_key,
             || {
-                let mint = Mint::asset_numeric(quantity, asset_id);
+                let mint = Mint::asset_quantity(quantity, asset_id);
                 Executable::from([InstructionBox::from(mint)])
             },
         )?;
@@ -18910,7 +18913,7 @@ pub unsafe extern "C" fn connect_norito_encode_burn_signed_transaction(
             nonce,
             private_key,
             || {
-                let burn = Burn::asset_numeric(quantity, asset_id);
+                let burn = Burn::asset_quantity(quantity, asset_id);
                 Executable::from([InstructionBox::from(burn)])
             },
         )?;
@@ -19113,7 +19116,7 @@ pub unsafe extern "C" fn connect_norito_encode_burn_signed_transaction_alg(
             nonce,
             private_key,
             || {
-                let burn = Burn::asset_numeric(quantity, asset_id);
+                let burn = Burn::asset_quantity(quantity, asset_id);
                 Executable::from([InstructionBox::from(burn)])
             },
         )?;

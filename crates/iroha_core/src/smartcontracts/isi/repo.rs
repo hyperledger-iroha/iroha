@@ -13,7 +13,7 @@ use iroha_data_model::{
     prelude::*,
     repo::{RepoAgreement, RepoGovernance},
 };
-use iroha_primitives::numeric::NumericSpec;
+use iroha_primitives::numeric::{Numeric, NumericSpec, Quantity};
 
 use super::prelude::*;
 use crate::{
@@ -25,10 +25,7 @@ const MAX_HAIRCUT_BPS: u16 = 10_000;
 const MS_PER_DAY: u64 = 86_400_000;
 const ACT_360_YEAR_MS: u64 = MS_PER_DAY * 360;
 
-fn ensure_positive_quantity(quantity: &Numeric, label: &str) -> Result<(), Error> {
-    if quantity.mantissa().is_negative() {
-        return Err(InstructionExecutionError::Math(MathError::NegativeValue));
-    }
+fn ensure_positive_quantity(quantity: &Quantity, label: &str) -> Result<(), Error> {
     if quantity.is_zero() {
         return Err(InstructionExecutionError::InvariantViolation(
             format!("{label} must be greater than zero").into(),
@@ -120,13 +117,13 @@ fn ensure_substitution_allowed(
 }
 
 fn compute_accrued_interest(
-    principal: Numeric,
+    principal: &Quantity,
     rate_bps: u16,
     elapsed_ms: u64,
     cash_spec: NumericSpec,
-) -> Result<Numeric, Error> {
+) -> Result<Quantity, Error> {
     if rate_bps == 0 || elapsed_ms == 0 || principal.is_zero() {
-        return Ok(Numeric::zero());
+        return Ok(Quantity::zero());
     }
 
     let rate_fraction = Numeric::try_new(u128::from(rate_bps), 4).map_err(|err| {
@@ -149,6 +146,7 @@ fn compute_accrued_interest(
             )
         })?;
     let raw_interest = principal
+        .as_numeric()
         .checked_mul(rate_time, NumericSpec::fractional(28))
         .ok_or_else(|| {
             InstructionExecutionError::InvariantViolation(
@@ -157,16 +155,21 @@ fn compute_accrued_interest(
         })?;
     let rounded = raw_interest.round(NumericSpec::fractional(cash_spec.scale().unwrap_or(28)));
     assert_numeric_spec_with(&rounded, cash_spec)?;
-    Ok(rounded)
+    Quantity::from_canonical_numeric(rounded).map_err(|err| {
+        InstructionExecutionError::InvariantViolation(
+            format!("repo interest produced an invalid quantity: {err}").into(),
+        )
+        .into()
+    })
 }
 
 fn expected_cash_settlement(
-    principal: Numeric,
+    principal: &Quantity,
     rate_bps: u16,
     initiated_timestamp_ms: u64,
     settlement_timestamp_ms: u64,
     cash_spec: NumericSpec,
-) -> Result<Numeric, Error> {
+) -> Result<Quantity, Error> {
     if settlement_timestamp_ms < initiated_timestamp_ms {
         return Err(InstructionExecutionError::InvariantViolation(
             "reverse repo settlement predates agreement initiation".into(),
@@ -174,11 +177,12 @@ fn expected_cash_settlement(
     }
 
     let elapsed_ms = settlement_timestamp_ms - initiated_timestamp_ms;
-    let interest = compute_accrued_interest(principal.clone(), rate_bps, elapsed_ms, cash_spec)?;
-    principal.checked_add(interest).ok_or_else(|| {
+    let interest = compute_accrued_interest(principal, rate_bps, elapsed_ms, cash_spec)?;
+    principal.checked_add(&interest).map_err(|_| {
         InstructionExecutionError::InvariantViolation(
             "repo cash leg overflowed while adding accrued interest".into(),
         )
+        .into()
     })
 }
 
@@ -252,21 +256,21 @@ impl Execute for RepoIsi {
         let cash_spec = state_transaction
             .numeric_spec_for(&cash_def_id)
             .map_err(Error::from)?;
-        assert_numeric_spec_with(cash_leg.quantity(), cash_spec)?;
+        assert_numeric_spec_with(cash_leg.quantity().as_numeric(), cash_spec)?;
 
         let collateral_spec = state_transaction
             .numeric_spec_for(&collateral_def_id)
             .map_err(Error::from)?;
-        assert_numeric_spec_with(collateral_leg.quantity(), collateral_spec)?;
+        assert_numeric_spec_with(collateral_leg.quantity().as_numeric(), collateral_spec)?;
 
         let cash_source = AssetId::new(cash_def_id.clone(), counterparty.clone());
         let cash_destination = AssetId::new(cash_def_id.clone(), initiator.clone());
         state_transaction
             .world
-            .withdraw_numeric_asset(&cash_source, cash_leg.quantity())?;
+            .withdraw_numeric_asset(&cash_source, cash_leg.quantity().as_numeric())?;
         state_transaction
             .world
-            .deposit_numeric_asset(&cash_destination, cash_leg.quantity())?;
+            .deposit_numeric_asset(&cash_destination, cash_leg.quantity().as_numeric())?;
 
         let collateral_holder_account = custodian.clone().unwrap_or_else(|| counterparty.clone());
         let collateral_source = AssetId::new(collateral_def_id.clone(), initiator.clone());
@@ -274,10 +278,11 @@ impl Execute for RepoIsi {
             AssetId::new(collateral_def_id.clone(), collateral_holder_account.clone());
         state_transaction
             .world
-            .withdraw_numeric_asset(&collateral_source, collateral_leg.quantity())?;
-        state_transaction
-            .world
-            .deposit_numeric_asset(&collateral_destination, collateral_leg.quantity())?;
+            .withdraw_numeric_asset(&collateral_source, collateral_leg.quantity().as_numeric())?;
+        state_transaction.world.deposit_numeric_asset(
+            &collateral_destination,
+            collateral_leg.quantity().as_numeric(),
+        )?;
 
         let agreement = RepoAgreement::new(
             agreement_id.clone(),
@@ -443,7 +448,7 @@ impl Execute for ReverseRepoIsi {
             .numeric_spec_for(&cash_def_id)
             .map_err(Error::from)?;
         let expected_cash_quantity = expected_cash_settlement(
-            stored_agreement.cash_leg().quantity().clone(),
+            stored_agreement.cash_leg().quantity(),
             *stored_agreement.rate_bps(),
             *stored_agreement.initiated_timestamp_ms(),
             settlement_timestamp_ms,
@@ -458,12 +463,12 @@ impl Execute for ReverseRepoIsi {
                 .into(),
             ));
         }
-        assert_numeric_spec_with(cash_leg.quantity(), cash_spec)?;
+        assert_numeric_spec_with(cash_leg.quantity().as_numeric(), cash_spec)?;
 
         let collateral_spec = state_transaction
             .numeric_spec_for(&collateral_def_id)
             .map_err(Error::from)?;
-        assert_numeric_spec_with(collateral_leg.quantity(), collateral_spec)?;
+        assert_numeric_spec_with(collateral_leg.quantity().as_numeric(), collateral_spec)?;
 
         let stored_collateral = stored_agreement.collateral_leg();
         let collateral_differs = stored_collateral.asset_definition_id()
@@ -487,20 +492,21 @@ impl Execute for ReverseRepoIsi {
         let cash_destination = AssetId::new(cash_def_id.clone(), counterparty.clone());
         state_transaction
             .world
-            .withdraw_numeric_asset(&cash_source, cash_leg.quantity())?;
+            .withdraw_numeric_asset(&cash_source, cash_leg.quantity().as_numeric())?;
         state_transaction
             .world
-            .deposit_numeric_asset(&cash_destination, cash_leg.quantity())?;
+            .deposit_numeric_asset(&cash_destination, cash_leg.quantity().as_numeric())?;
 
         let collateral_source =
             AssetId::new(collateral_def_id.clone(), collateral_holder_account.clone());
         let collateral_destination = AssetId::new(collateral_def_id.clone(), initiator.clone());
         state_transaction
             .world
-            .withdraw_numeric_asset(&collateral_source, collateral_leg.quantity())?;
-        state_transaction
-            .world
-            .deposit_numeric_asset(&collateral_destination, collateral_leg.quantity())?;
+            .withdraw_numeric_asset(&collateral_source, collateral_leg.quantity().as_numeric())?;
+        state_transaction.world.deposit_numeric_asset(
+            &collateral_destination,
+            collateral_leg.quantity().as_numeric(),
+        )?;
 
         state_transaction
             .world

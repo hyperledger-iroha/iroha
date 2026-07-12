@@ -7914,10 +7914,10 @@ pub mod tests {
             iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
         nexus.dataspace_catalog = DataSpaceCatalog::default();
         nexus.routing_policy = iroha_config::parameters::actual::LaneRoutingPolicy::default();
-        nexus.fees.base_fee = Numeric::zero();
-        nexus.fees.per_byte_fee = Numeric::zero();
-        nexus.fees.per_instruction_fee = Numeric::zero();
-        nexus.fees.per_gas_unit_fee = Numeric::zero();
+        nexus.fees.base_fee = Quantity::zero();
+        nexus.fees.per_byte_fee = Quantity::zero();
+        nexus.fees.per_instruction_fee = Quantity::zero();
+        nexus.fees.per_gas_unit_fee = Quantity::zero();
     }
 
     fn state_with_future_created_autoscale_lane(
@@ -7938,10 +7938,10 @@ pub mod tests {
         };
         let mut nexus = state.nexus_snapshot();
         nexus.enabled = true;
-        nexus.fees.base_fee = Numeric::zero();
-        nexus.fees.per_byte_fee = Numeric::zero();
-        nexus.fees.per_instruction_fee = Numeric::zero();
-        nexus.fees.per_gas_unit_fee = Numeric::zero();
+        nexus.fees.base_fee = Quantity::zero();
+        nexus.fees.per_byte_fee = Quantity::zero();
+        nexus.fees.per_instruction_fee = Quantity::zero();
+        nexus.fees.per_gas_unit_fee = Quantity::zero();
         nexus.lane_catalog = LaneCatalog::new(
             nonzero!(2_u32),
             vec![LaneConfig::default(), future_elastic.clone()],
@@ -8619,7 +8619,7 @@ pub mod tests {
         nexus.dataspace_catalog = (*dataspace_catalog).clone();
         nexus.routing_policy.default_lane = lane_id;
         nexus.routing_policy.default_dataspace = dataspace_id;
-        nexus.fees.base_fee = Numeric::zero();
+        nexus.fees.base_fee = Quantity::zero();
 
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let queue = Arc::new(Queue::test(
@@ -8682,7 +8682,7 @@ pub mod tests {
         } = nexus_fee_fixture(Some(Numeric::from(10_u32)), None);
         let mut nexus = state.nexus_snapshot();
         nexus.enabled = true;
-        nexus.fees.base_fee = Numeric::zero();
+        nexus.fees.base_fee = Quantity::zero();
         state
             .set_nexus(nexus.clone())
             .expect("apply initial single-lane Nexus config");
@@ -8798,7 +8798,7 @@ pub mod tests {
         } = nexus_fee_fixture(Some(Numeric::from(10_u32)), None);
         let mut nexus = state.nexus_snapshot();
         nexus.enabled = true;
-        nexus.fees.base_fee = Numeric::zero();
+        nexus.fees.base_fee = Quantity::zero();
         state
             .set_nexus(nexus.clone())
             .expect("apply initial single-lane Nexus config");
@@ -8938,7 +8938,7 @@ pub mod tests {
         {
             let nexus = state.nexus.get_mut();
             nexus.enabled = true;
-            nexus.fees.base_fee = Numeric::zero();
+            nexus.fees.base_fee = Quantity::zero();
             nexus.lane_catalog = initial_catalog;
             nexus.lane_config =
                 iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
@@ -9460,10 +9460,10 @@ pub mod tests {
         {
             let nexus = state.nexus.get_mut();
             nexus.enabled = true;
-            nexus.fees.base_fee = Numeric::zero();
-            nexus.fees.per_byte_fee = Numeric::zero();
-            nexus.fees.per_instruction_fee = Numeric::zero();
-            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.fees.base_fee = Quantity::zero();
+            nexus.fees.per_byte_fee = Quantity::zero();
+            nexus.fees.per_instruction_fee = Quantity::zero();
+            nexus.fees.per_gas_unit_fee = Quantity::zero();
             nexus.lane_config =
                 iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
         }
@@ -10913,7 +10913,7 @@ pub mod tests {
         current_nexus.enabled = true;
         current_nexus.lane_catalog = (*lane_catalog).clone();
         current_nexus.dataspace_catalog = (*dataspace_catalog).clone();
-        current_nexus.fees.base_fee = Numeric::zero();
+        current_nexus.fees.base_fee = Quantity::zero();
         current_nexus.routing_policy.rules = vec![LaneRoutingRule {
             lane: current_route.lane_id,
             dataspace: Some(current_route.dataspace_id),
@@ -11067,7 +11067,7 @@ pub mod tests {
         current_nexus.enabled = true;
         current_nexus.lane_catalog = current_lane_catalog.clone();
         current_nexus.dataspace_catalog = current_dataspace_catalog.clone();
-        current_nexus.fees.base_fee = Numeric::zero();
+        current_nexus.fees.base_fee = Quantity::zero();
         current_nexus.routing_policy.rules = vec![LaneRoutingRule {
             lane,
             dataspace: Some(current_dataspace),
@@ -11212,10 +11212,10 @@ pub mod tests {
             nexus.autoscale.enabled = true;
             nexus.autoscale.min_lanes = nonzero!(1_u32);
             nexus.autoscale.max_lanes = nonzero!(8_u32);
-            nexus.fees.base_fee = Numeric::zero();
-            nexus.fees.per_byte_fee = Numeric::zero();
-            nexus.fees.per_instruction_fee = Numeric::zero();
-            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.fees.base_fee = Quantity::zero();
+            nexus.fees.per_byte_fee = Quantity::zero();
+            nexus.fees.per_instruction_fee = Quantity::zero();
+            nexus.fees.per_gas_unit_fee = Quantity::zero();
             nexus.lane_catalog =
                 LaneCatalog::new(nonzero!(2_u32), vec![LaneConfig::default(), elastic_lane])
                     .expect("lane catalog");
@@ -11333,10 +11333,10 @@ pub mod tests {
         {
             let nexus = state.nexus.get_mut();
             nexus.enabled = true;
-            nexus.fees.base_fee = Numeric::zero();
-            nexus.fees.per_byte_fee = Numeric::zero();
-            nexus.fees.per_instruction_fee = Numeric::zero();
-            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.fees.base_fee = Quantity::zero();
+            nexus.fees.per_byte_fee = Quantity::zero();
+            nexus.fees.per_instruction_fee = Quantity::zero();
+            nexus.fees.per_gas_unit_fee = Quantity::zero();
             nexus.autoscale.enabled = true;
             nexus.autoscale.min_lanes = nonzero!(1_u32);
             nexus.autoscale.max_lanes = nonzero!(8_u32);
@@ -13284,8 +13284,8 @@ pub mod tests {
         let mut fixture = nexus_fee_fixture(Some(Numeric::from(50_u32)), None);
         {
             let nexus = fixture.state.nexus.get_mut();
-            nexus.fees.base_fee = Numeric::zero();
-            nexus.fees.per_gas_unit_fee = Numeric::from(1_u32);
+            nexus.fees.base_fee = Quantity::zero();
+            nexus.fees.per_gas_unit_fee = Quantity::from(1_u32);
         }
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let queue = Queue::test(config_factory(), &time_source);
@@ -14246,12 +14246,12 @@ pub mod tests {
         {
             let nexus = state.nexus.get_mut();
             nexus.enabled = true;
-            nexus.fees.base_fee = Numeric::from(1_u32);
-            nexus.fees.per_byte_fee = Numeric::zero();
-            nexus.fees.per_instruction_fee = Numeric::zero();
-            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.fees.base_fee = Quantity::from(1_u32);
+            nexus.fees.per_byte_fee = Quantity::zero();
+            nexus.fees.per_instruction_fee = Quantity::zero();
+            nexus.fees.per_gas_unit_fee = Quantity::zero();
             nexus.fees.sponsorship_enabled = true;
-            nexus.fees.sponsor_max_fee = Numeric::zero();
+            nexus.fees.sponsor_max_fee = Quantity::zero();
             nexus.fees.fee_asset_id = fee_asset_selector;
             nexus.fees.fee_sink_account_id = sink_id.to_string();
             nexus.fees.burn_from_unix_timestamp_ms = 0;
@@ -14328,10 +14328,10 @@ pub mod tests {
         nexus.enabled = true;
         nexus.lane_catalog = (*fresh_lanes).clone();
         nexus.dataspace_catalog = (*fresh_dataspaces).clone();
-        nexus.fees.base_fee = Numeric::zero();
-        nexus.fees.per_byte_fee = Numeric::zero();
-        nexus.fees.per_instruction_fee = Numeric::zero();
-        nexus.fees.per_gas_unit_fee = Numeric::zero();
+        nexus.fees.base_fee = Quantity::zero();
+        nexus.fees.per_byte_fee = Quantity::zero();
+        nexus.fees.per_instruction_fee = Quantity::zero();
+        nexus.fees.per_gas_unit_fee = Quantity::zero();
         nexus.routing_policy.default_lane = refreshed.lane_id;
         nexus.routing_policy.default_dataspace = refreshed.dataspace_id;
         state.set_nexus(nexus).expect("apply fresh Nexus state");
@@ -14363,10 +14363,10 @@ pub mod tests {
         let mut fixture = native_amx_participant_drift_fixture(&time_source);
         {
             let nexus = fixture.state.nexus.get_mut();
-            nexus.fees.base_fee = Numeric::zero();
-            nexus.fees.per_byte_fee = Numeric::zero();
-            nexus.fees.per_instruction_fee = Numeric::zero();
-            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.fees.base_fee = Quantity::zero();
+            nexus.fees.per_byte_fee = Quantity::zero();
+            nexus.fees.per_instruction_fee = Quantity::zero();
+            nexus.fees.per_gas_unit_fee = Quantity::zero();
         }
         assert_eq!(
             fixture.stale_plan.coordinator_route(),
@@ -14702,10 +14702,10 @@ pub mod tests {
         nexus.enabled = true;
         nexus.lane_catalog = (*fresh_lanes).clone();
         nexus.dataspace_catalog = (*fresh_dataspaces).clone();
-        nexus.fees.base_fee = Numeric::zero();
-        nexus.fees.per_byte_fee = Numeric::zero();
-        nexus.fees.per_instruction_fee = Numeric::zero();
-        nexus.fees.per_gas_unit_fee = Numeric::zero();
+        nexus.fees.base_fee = Quantity::zero();
+        nexus.fees.per_byte_fee = Quantity::zero();
+        nexus.fees.per_instruction_fee = Quantity::zero();
+        nexus.fees.per_gas_unit_fee = Quantity::zero();
         nexus.routing_policy.default_lane = fresh.lane_id;
         nexus.routing_policy.default_dataspace = fresh.dataspace_id;
         state.set_nexus(nexus).expect("apply fresh Nexus state");
@@ -14758,10 +14758,10 @@ pub mod tests {
         nexus.enabled = true;
         nexus.lane_catalog = (*fresh_lanes).clone();
         nexus.dataspace_catalog = (*fresh_dataspaces).clone();
-        nexus.fees.base_fee = Numeric::zero();
-        nexus.fees.per_byte_fee = Numeric::zero();
-        nexus.fees.per_instruction_fee = Numeric::zero();
-        nexus.fees.per_gas_unit_fee = Numeric::zero();
+        nexus.fees.base_fee = Quantity::zero();
+        nexus.fees.per_byte_fee = Quantity::zero();
+        nexus.fees.per_instruction_fee = Quantity::zero();
+        nexus.fees.per_gas_unit_fee = Quantity::zero();
         nexus.routing_policy.default_lane = fresh.lane_id;
         nexus.routing_policy.default_dataspace = fresh.dataspace_id;
         state.set_nexus(nexus).expect("apply fresh Nexus state");
@@ -15323,10 +15323,10 @@ pub mod tests {
         let mut fixture = native_amx_participant_drift_fixture(&time_source);
         {
             let nexus = fixture.state.nexus.get_mut();
-            nexus.fees.base_fee = Numeric::zero();
-            nexus.fees.per_byte_fee = Numeric::zero();
-            nexus.fees.per_instruction_fee = Numeric::zero();
-            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.fees.base_fee = Quantity::zero();
+            nexus.fees.per_byte_fee = Quantity::zero();
+            nexus.fees.per_instruction_fee = Quantity::zero();
+            nexus.fees.per_gas_unit_fee = Quantity::zero();
         }
         assert_eq!(
             fixture.stale_plan.coordinator_route(),
@@ -15387,10 +15387,10 @@ pub mod tests {
         let mut fixture = native_amx_participant_drift_fixture(&time_source);
         {
             let nexus = fixture.state.nexus.get_mut();
-            nexus.fees.base_fee = Numeric::zero();
-            nexus.fees.per_byte_fee = Numeric::zero();
-            nexus.fees.per_instruction_fee = Numeric::zero();
-            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.fees.base_fee = Quantity::zero();
+            nexus.fees.per_byte_fee = Quantity::zero();
+            nexus.fees.per_instruction_fee = Quantity::zero();
+            nexus.fees.per_gas_unit_fee = Quantity::zero();
         }
         assert_eq!(
             fixture.stale_plan.coordinator_route(),
@@ -15453,10 +15453,10 @@ pub mod tests {
         let mut fixture = native_amx_participant_drift_fixture(&time_source);
         {
             let nexus = fixture.state.nexus.get_mut();
-            nexus.fees.base_fee = Numeric::zero();
-            nexus.fees.per_byte_fee = Numeric::zero();
-            nexus.fees.per_instruction_fee = Numeric::zero();
-            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.fees.base_fee = Quantity::zero();
+            nexus.fees.per_byte_fee = Quantity::zero();
+            nexus.fees.per_instruction_fee = Quantity::zero();
+            nexus.fees.per_gas_unit_fee = Quantity::zero();
         }
         assert_eq!(
             fixture.stale_plan.coordinator_route(),
@@ -15591,10 +15591,10 @@ pub mod tests {
         {
             let nexus = state.nexus.get_mut();
             nexus.enabled = true;
-            nexus.fees.base_fee = Numeric::zero();
-            nexus.fees.per_byte_fee = Numeric::zero();
-            nexus.fees.per_instruction_fee = Numeric::zero();
-            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.fees.base_fee = Quantity::zero();
+            nexus.fees.per_byte_fee = Quantity::zero();
+            nexus.fees.per_instruction_fee = Quantity::zero();
+            nexus.fees.per_gas_unit_fee = Quantity::zero();
             nexus.autoscale.enabled = true;
             nexus.autoscale.min_lanes = nonzero!(1_u32);
             nexus.autoscale.max_lanes = nonzero!(8_u32);
@@ -15908,10 +15908,10 @@ pub mod tests {
         nexus.configured_lane_catalog = nexus.lane_catalog.clone();
         nexus.lane_config = LaneGeometry::from_catalog(&nexus.lane_catalog);
         nexus.dataspace_catalog = (*dataspace_catalog).clone();
-        nexus.fees.base_fee = Numeric::zero();
-        nexus.fees.per_byte_fee = Numeric::zero();
-        nexus.fees.per_instruction_fee = Numeric::zero();
-        nexus.fees.per_gas_unit_fee = Numeric::zero();
+        nexus.fees.base_fee = Quantity::zero();
+        nexus.fees.per_byte_fee = Quantity::zero();
+        nexus.fees.per_instruction_fee = Quantity::zero();
+        nexus.fees.per_gas_unit_fee = Quantity::zero();
         // Keep the state snapshot aligned with the queue so route activity checks
         // do not replace the explicit test router.
         *state.nexus.write() = nexus;
@@ -16099,10 +16099,10 @@ pub mod tests {
         nexus.enabled = true;
         nexus.lane_catalog = lane_catalog;
         nexus.dataspace_catalog = (*dataspace_catalog).clone();
-        nexus.fees.base_fee = Numeric::zero();
-        nexus.fees.per_byte_fee = Numeric::zero();
-        nexus.fees.per_instruction_fee = Numeric::zero();
-        nexus.fees.per_gas_unit_fee = Numeric::zero();
+        nexus.fees.base_fee = Quantity::zero();
+        nexus.fees.per_byte_fee = Quantity::zero();
+        nexus.fees.per_instruction_fee = Quantity::zero();
+        nexus.fees.per_gas_unit_fee = Quantity::zero();
         nexus.routing_policy.default_lane = test_lane;
         nexus.routing_policy.default_dataspace = test_dataspace;
         state.set_nexus(nexus).expect("set Nexus config");
@@ -16180,10 +16180,10 @@ pub mod tests {
         assert!(first_teu > 0, "expected positive TEU weight");
         {
             let nexus = state.nexus.get_mut();
-            nexus.fees.base_fee = Numeric::zero();
-            nexus.fees.per_byte_fee = Numeric::zero();
-            nexus.fees.per_instruction_fee = Numeric::zero();
-            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.fees.base_fee = Quantity::zero();
+            nexus.fees.per_byte_fee = Quantity::zero();
+            nexus.fees.per_instruction_fee = Quantity::zero();
+            nexus.fees.per_gas_unit_fee = Quantity::zero();
             let mut lanes = nexus.lane_catalog.lanes().to_vec();
             lanes
                 .iter_mut()

@@ -17,8 +17,26 @@ import org.hyperledger.iroha.sdk.client.PipelineStatusOptions
 import org.hyperledger.iroha.sdk.tx.SignedTransaction
 import org.hyperledger.iroha.sdk.tx.SignedTransactionHasher
 import org.hyperledger.iroha.sdk.tx.norito.NoritoJavaCodecAdapter
+import org.hyperledger.iroha.sdk.numeric.KotodamaQuantity
 
 class NexusAppClientTest {
+
+    @Test
+    fun `transfer input requires canonical quantity strings`() {
+        listOf(" ", "+1", "01", "1e0", "-1", "1.0", "1.2300").forEach { quantity ->
+            assertFailsWith<IllegalArgumentException> {
+                NexusTransferInput("asset", quantity, "destination")
+            }
+        }
+        assertEquals(
+            "1.25",
+            NexusTransferInput(
+                "asset",
+                KotodamaQuantity.parseCanonical("1.25"),
+                "destination",
+            ).quantity,
+        )
+    }
 
     @Test
     fun `transferWithWallet builds signs submits and waits`() {

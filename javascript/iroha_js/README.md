@@ -3313,12 +3313,16 @@ plain object. Passing primitives, arrays, or class instances throws a
 `TypeError` before any HTTP call, keeping the JS-04 validation guarantees aligned
 with the Rust/Python SDKs.
 
-All pagination knobs (`limit`, `offset`, `pageSize`, `maxItems`, `fetch_size`) accept the
-`NumericLike` inputs used across the transaction builders (`number`, `string`, or `bigint`).
-They are normalised via the same unsigned-integer validators before any request fires
+All pagination knobs (`limit`, `offset`, `pageSize`, `maxItems`, `fetch_size`) accept
+`number`, `string`, or `bigint`. They are normalised via unsigned-integer validators before any request fires
 (integers only, up to `Number.MAX_SAFE_INTEGER`), so passing `"25"` or `10n` behaves
 exactly like `25` while still surfacing a `TypeError` when the value is negative,
 fractional, NaN, or otherwise invalid.
+
+Asset and RWA quantities use the stricter `QuantityInput` surface:
+`KotodamaQuantity`, an exact canonical quantity string, or `bigint`. JavaScript
+`number` is deliberately rejected, and strings are never trimmed or rewritten;
+for example `"1"` is valid while `" 1"`, `"01"`, `"+1"`, and `"1.0"` are not.
 
 The first-release Offline HTTP surface is a sharp `/v1` contract: asset-scoped
 readiness, asynchronous top-up and redemption commands, and one pollable

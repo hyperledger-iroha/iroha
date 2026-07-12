@@ -322,6 +322,7 @@ mod tests {
     use std::num::NonZeroU64;
 
     use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_primitives::numeric::Quantity;
     use norito::codec::Encode;
     use norito::core::DecodeFromSlice;
 
@@ -433,7 +434,7 @@ mod tests {
         FeeSponsorPolicy {
             id: policy_id,
             enabled: true,
-            max_fee: Some(Numeric::from(10_u32)),
+            max_fee: Some(Quantity::from(10_u32)),
             rules: vec![FeeSponsorRule::new(FeeSponsorRuleEffect::Allow)],
         }
     }

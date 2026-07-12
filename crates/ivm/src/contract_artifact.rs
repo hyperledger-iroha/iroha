@@ -93,7 +93,7 @@ fn verify_contract_artifact_with_profile(
     profile: ArtifactValidationProfile,
 ) -> Result<VerifiedContractArtifact, ContractArtifactError> {
     let parsed = parse_contract_metadata(artifact)?;
-    let envelope = validate_contract_envelope(artifact, &parsed)?;
+    let envelope = validate_contract_envelope(artifact, &parsed, profile)?;
     let decoded = IvmCache::decode_stream(&artifact[parsed.code_offset..]).map_err(|err| {
         ContractArtifactError::invalid(format!(
             "instruction decode failed for executable stream: {err}"
@@ -162,7 +162,7 @@ impl PreparedContract {
         profile: ArtifactValidationProfile,
     ) -> Result<Self, ContractArtifactError> {
         let parsed = parse_contract_metadata(artifact.as_ref())?;
-        let envelope = validate_contract_envelope(artifact.as_ref(), &parsed)?;
+        let envelope = validate_contract_envelope(artifact.as_ref(), &parsed, profile)?;
         let instruction_region = artifact.get(parsed.code_offset..).ok_or_else(|| {
             ContractArtifactError::invalid("executable stream offset exceeds artifact length")
         })?;
@@ -252,12 +252,22 @@ fn parse_contract_metadata(
 fn validate_contract_envelope(
     artifact: &[u8],
     parsed: &ParsedProgramMetadata,
+    profile: ArtifactValidationProfile,
 ) -> Result<ValidatedContractEnvelope, ContractArtifactError> {
     let metadata = parsed.metadata.clone();
-    if metadata.version_major != 1 || metadata.version_minor != 1 {
+    let expected_minor = match profile {
+        ArtifactValidationProfile::Production => 1,
+        ArtifactValidationProfile::KotoTest => 0,
+    };
+    if metadata.version_major != 1 || metadata.version_minor != expected_minor {
         return Err(ContractArtifactError::invalid(format!(
-            "expected IVM 1.1 contract artifact, got {}.{}",
-            metadata.version_major, metadata.version_minor
+            "expected IVM 1.{expected_minor} {} artifact, got {}.{}",
+            match profile {
+                ArtifactValidationProfile::Production => "contract",
+                ArtifactValidationProfile::KotoTest => "Kotodama test",
+            },
+            metadata.version_major,
+            metadata.version_minor,
         )));
     }
     if metadata.mode & !(mode::ZK | mode::VECTOR) != 0 {
@@ -1509,7 +1519,19 @@ mod tests {
         public_entry_pc: u64,
         test_return_pc: u64,
     ) -> Arc<[u8]> {
-        let metadata = ProgramMetadata::default();
+        kotodama_test_fixture_with_minor(instructions, public_entry_pc, test_return_pc, 0)
+    }
+
+    fn kotodama_test_fixture_with_minor(
+        instructions: &[u32],
+        public_entry_pc: u64,
+        test_return_pc: u64,
+        version_minor: u8,
+    ) -> Arc<[u8]> {
+        let metadata = ProgramMetadata {
+            version_minor,
+            ..ProgramMetadata::default()
+        };
         let descriptor = |name: &str, entry_pc| EmbeddedEntrypointDescriptor {
             name: name.to_owned(),
             kind: EntryPointKind::View,
@@ -1557,8 +1579,29 @@ mod tests {
         prepare_koto_test_contract(Arc::clone(&valid))
             .expect("unreachable test helper syscall is valid for local test preparation");
         let production_error = prepare_contract(Arc::clone(&valid))
+            .expect_err("production preparation must reject the IVM 1.0 test profile");
+        assert!(
+            production_error
+                .to_string()
+                .contains("expected IVM 1.1 contract")
+        );
+
+        let production_profile =
+            kotodama_test_fixture_with_minor(&[halt, private, halt, halt], 0, 12, 1);
+        let test_profile_error = prepare_koto_test_contract(Arc::clone(&production_profile))
+            .expect_err("local test preparation must reject a production IVM profile");
+        assert!(
+            test_profile_error
+                .to_string()
+                .contains("expected IVM 1.0 Kotodama test")
+        );
+        let private_syscall_error = prepare_contract(production_profile)
             .expect_err("production preparation must reject the private test syscall");
-        assert!(production_error.to_string().contains("disallowed syscall"));
+        assert!(
+            private_syscall_error
+                .to_string()
+                .contains("disallowed syscall")
+        );
 
         let reachable = kotodama_test_fixture(&[private, halt, halt], 0, 8);
         let reachable_error = prepare_koto_test_contract(reachable)

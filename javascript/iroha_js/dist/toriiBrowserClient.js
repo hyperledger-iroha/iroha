@@ -1,3 +1,5 @@
+import { NumericV1, NumericV1Error } from "./numericV1.js";
+
 const DEFAULT_SUCCESS_STATUSES = [200];
 const MULTISIG_PROPOSAL_STATUS_VALUES = new Set([
   "COLLECTING_SIGNATURES",
@@ -57,6 +59,51 @@ function requireNonEmptyString(value, context) {
     throw new TypeError(`${context} must not be empty`);
   }
   return trimmed;
+}
+
+function requireCanonicalQuantity(value, context) {
+  if (typeof value !== "string") {
+    throw new TypeError(`${context} must be a canonical Kotodama V1 quantity string`);
+  }
+  try {
+    return NumericV1.decodeQuantityJson(value).toString();
+  } catch (error) {
+    if (!(error instanceof NumericV1Error)) throw error;
+    throw new TypeError(
+      `${context} must be a canonical non-negative Kotodama V1 quantity (${error.code})`,
+    );
+  }
+}
+
+function normalizeQuantityRecord(value, context, fields, { optional = false } = {}) {
+  const record = requireObject(value, context);
+  const normalized = { ...record };
+  for (const field of fields) {
+    if (normalized[field] === undefined || normalized[field] === null) {
+      if (!optional) {
+        throw new TypeError(`${context}.${field} must be a canonical Kotodama V1 quantity string`);
+      }
+    } else {
+      normalized[field] = requireCanonicalQuantity(
+        normalized[field],
+        `${context}.${field}`,
+      );
+    }
+  }
+  return normalized;
+}
+
+function normalizeQuantityPage(value, context, fields, options) {
+  const page = requireObject(value, context);
+  if (!Array.isArray(page.items)) {
+    throw new TypeError(`${context}.items must be an array`);
+  }
+  return {
+    ...page,
+    items: page.items.map((item, index) =>
+      normalizeQuantityRecord(item, `${context}.items[${index}]`, fields, options),
+    ),
+  };
 }
 
 function normalizePositiveInteger(value, context, fallback) {
@@ -546,14 +593,18 @@ export class ToriiBrowserClient {
         asset_id: opts.assetId ?? opts.asset_id,
       },
       signal: signalFrom(opts),
-    });
+    }).then((payload) =>
+      normalizeQuantityPage(payload, "explorer assets response", ["quantity"]),
+    );
   }
 
   getExplorerAsset(assetId, options = {}) {
     const opts = requireObject(options, "getExplorerAsset options");
     return this._json("GET", `/v1/explorer/assets/${encodeURIComponent(requireNonEmptyString(assetId, "assetId"))}`, {
       signal: signalFrom(opts),
-    });
+    }).then((payload) =>
+      normalizeQuantityRecord(payload, "explorer asset response", ["quantity"]),
+    );
   }
 
   listAccountAssets(accountId, options = {}) {
@@ -566,7 +617,9 @@ export class ToriiBrowserClient {
         count_mode: normalizeCountMode(opts.countMode ?? opts.count_mode, "countMode"),
       },
       signal: signalFrom(opts),
-    });
+    }).then((payload) =>
+      normalizeQuantityPage(payload, "account assets response", ["quantity"]),
+    );
   }
 
   queryAccountTransactions(accountId, options = {}) {
@@ -603,7 +656,9 @@ export class ToriiBrowserClient {
         count_mode: normalizeCountMode(opts.countMode ?? opts.count_mode, "countMode"),
       },
       signal: signalFrom(opts),
-    });
+    }).then((payload) =>
+      normalizeQuantityPage(payload, "asset holders response", ["quantity"]),
+    );
   }
 
   listAssetDefinitions(options = {}) {
@@ -614,14 +669,28 @@ export class ToriiBrowserClient {
         count_mode: normalizeCountMode(opts.countMode ?? opts.count_mode, "countMode"),
       },
       signal: signalFrom(opts),
-    });
+    }).then((payload) =>
+      normalizeQuantityPage(
+        payload,
+        "asset definitions response",
+        ["total_quantity"],
+        { optional: true },
+      ),
+    );
   }
 
   getAssetDefinition(assetDefinitionId, options = {}) {
     const opts = requireObject(options, "getAssetDefinition options");
     return this._json("GET", `/v1/assets/definitions/${encodeURIComponent(requireNonEmptyString(assetDefinitionId, "assetDefinitionId"))}`, {
       signal: signalFrom(opts),
-    });
+    }).then((payload) =>
+      normalizeQuantityRecord(
+        payload,
+        "asset definition response",
+        ["total_quantity"],
+        { optional: true },
+      ),
+    );
   }
 
   resolveAlias(aliasOrRequest, options = {}) {
@@ -657,7 +726,14 @@ export class ToriiBrowserClient {
         owned_by: opts.ownedBy ?? opts.owned_by,
       },
       signal: signalFrom(opts),
-    });
+    }).then((payload) =>
+      normalizeQuantityPage(
+        payload,
+        "explorer asset definitions response",
+        ["total_quantity"],
+        { optional: true },
+      ),
+    );
   }
 
   getExplorerAssetDefinitionEconometrics(assetDefinitionId, options = {}) {
@@ -702,14 +778,18 @@ export class ToriiBrowserClient {
         domain: opts.domain,
       },
       signal: signalFrom(opts),
-    });
+    }).then((payload) =>
+      normalizeQuantityPage(payload, "explorer rwas response", ["quantity", "held_quantity"]),
+    );
   }
 
   getExplorerRwa(rwaId, options = {}) {
     const opts = requireObject(options, "getExplorerRwa options");
     return this._json("GET", `/v1/explorer/rwas/${encodeURIComponent(requireNonEmptyString(rwaId, "rwaId"))}`, {
       signal: signalFrom(opts),
-    });
+    }).then((payload) =>
+      normalizeQuantityRecord(payload, "explorer rwa response", ["quantity", "held_quantity"]),
+    );
   }
 
   listExplorerBlocks(options = {}) {

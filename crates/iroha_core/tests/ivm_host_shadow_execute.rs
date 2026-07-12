@@ -139,7 +139,7 @@ fn ivm_host_shadow_execute_matches_native_execute() {
         let executor = tx.world.executor().clone();
         let set_detail: InstructionBox =
             SetKeyValue::account(authority.clone(), key.clone(), value.clone()).into();
-        let mint: InstructionBox = Mint::asset_numeric(
+        let mint: InstructionBox = Mint::asset_quantity(
             amount.clone(),
             AssetId::of(asset_def.clone(), authority.clone()),
         )

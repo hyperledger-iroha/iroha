@@ -24,3 +24,9 @@ norito = { path = "../norito" }
 halo2curves = { workspace = true }
 iroha_crypto = { path = "../iroha_crypto", features = ["bls"] }
 iroha_data_model = { path = "../iroha_data_model", default-features = false, features = ["json"] }
+
+[dev-dependencies]
+# Unit-test builds compile the deterministic fixture module under `cfg(test)`.
+# Enable only the data-model construction surface that those test-only fixtures
+# require; downstream production users still receive the minimal dependency.
+iroha_data_model = { path = "../iroha_data_model", default-features = false, features = ["json", "test-fixtures", "transparent_api"] }

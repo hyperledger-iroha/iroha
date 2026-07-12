@@ -112,7 +112,7 @@ fn pay(AccountId a, AccountId b, AssetDefinitionId asset, int x) {
 }
 ```
 
-`TransferAssetBatch` exécute les mêmes vérifications d'autorisation et arithmétiques que les appels `Transfer::asset_numeric` individuels, mais enregistre tous les deltas dans un seul `TransferTranscript`. Les transcriptions multi-delta échappent au résumé de Poséidon jusqu'à ce que les engagements par delta atterrissent dans un suivi. Le générateur Kotodama émet désormais automatiquement les appels système de début/fin, afin que les contrats puissent déployer des transferts par lots sans coder manuellement les charges utiles Norito.
+`TransferAssetBatch` exécute les mêmes vérifications d'autorisation et arithmétiques que les appels `Transfer::asset_quantity` individuels, mais enregistre tous les deltas dans un seul `TransferTranscript`. Les transcriptions multi-delta échappent au résumé de Poséidon jusqu'à ce que les engagements par delta atterrissent dans un suivi. Le générateur Kotodama émet désormais automatiquement les appels système de début/fin, afin que les contrats puissent déployer des transferts par lots sans coder manuellement les charges utiles Norito.
 
 ## Harnais de régression par nombre de lignes
 

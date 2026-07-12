@@ -333,7 +333,7 @@ mod tests {
         let alice = account(1);
         let bob = account(2);
         let instruction: InstructionBox =
-            Transfer::asset_numeric(asset_id(alice.clone()), 10u32, bob.clone()).into();
+            Transfer::asset_quantity(asset_id(alice.clone()), 10u32, bob.clone()).into();
 
         let activities = instruction_account_activities(&instruction);
         assert!(activities.contains(&AccountInstructionActivity {
@@ -350,8 +350,8 @@ mod tests {
     fn mint_burn_and_metadata_match_asset_owner() {
         let alice = account(3);
         let asset = asset_id(alice.clone());
-        let mint: InstructionBox = Mint::asset_numeric(7u32, asset.clone()).into();
-        let burn: InstructionBox = Burn::asset_numeric(2u32, asset.clone()).into();
+        let mint: InstructionBox = Mint::asset_quantity(7u32, asset.clone()).into();
+        let burn: InstructionBox = Burn::asset_quantity(2u32, asset.clone()).into();
         let metadata: InstructionBox = SetKeyValue::account(
             alice.clone(),
             "tier".parse::<Name>().expect("metadata key"),

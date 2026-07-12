@@ -22,6 +22,16 @@ class NumericV1Test {
         assertEquals("1.23", KotodamaDecimal.parse("1.2300").toString())
         assertEquals("0", KotodamaDecimal.parse("0.000").toString())
         assertEquals("12.5", KotodamaQuantity.parse("12.50").toString())
+        assertEquals("12.5", KotodamaQuantity.parseCanonical("12.5").toString())
+        listOf("", " ", "\t1", "1 ", "+1", "01", "1.", ".5", "1e0", "-0", "-0.0", "1.0", "1.2300", "0.0")
+            .forEach { alternate ->
+                assertCode(NumericV1ErrorCode.INVALID_TEXT) {
+                    KotodamaQuantity.parseCanonical(alternate)
+                }
+            }
+        assertCode(NumericV1ErrorCode.NEGATIVE_QUANTITY) {
+            KotodamaQuantity.parseCanonical("-1")
+        }
         assertCode(NumericV1ErrorCode.NEGATIVE_QUANTITY) { KotodamaQuantity.parse("-0.1") }
         assertCode(NumericV1ErrorCode.MANTISSA_OVERFLOW) {
             KotodamaQuantity.parse("-" + "9".repeat(154))
@@ -186,6 +196,25 @@ class NumericV1Test {
                     "envelope" to "decimal" -> NumericV1Codec.decodeDecimalEnvelope(bytes)
                     "envelope" to "quantity" -> NumericV1Codec.decodeQuantityEnvelope(bytes)
                     else -> error("unknown fixture decoder $input/$decodeAs")
+                }
+            }
+        }
+
+        fixture.getValue("invalid_text").jsonArray.forEach { element ->
+            val vector = element.jsonObject
+            val id = vector.getValue("id").jsonPrimitive.content
+            val kind = vector.getValue("kind").jsonPrimitive.content
+            val inputPrimitive = vector.getValue("input").jsonPrimitive
+            val input: Any = if (inputPrimitive.isString) inputPrimitive.content else inputPrimitive
+            val expected = NumericV1ErrorCode.valueOf(
+                vector.getValue("expected").jsonPrimitive.content.uppercase(),
+            )
+            assertCode(expected) {
+                when (kind) {
+                    "int" -> NumericV1Codec.decodeIntJsonValue(input)
+                    "decimal" -> NumericV1Codec.decodeDecimalJsonValue(input)
+                    "quantity" -> NumericV1Codec.decodeQuantityJsonValue(input)
+                    else -> error("unknown invalid text fixture kind $kind")
                 }
             }
         }

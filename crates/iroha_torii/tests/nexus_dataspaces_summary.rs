@@ -162,7 +162,7 @@ async fn nexus_dataspaces_summary_endpoint_returns_joined_snapshot() {
     })
     .execute(&ALICE_ID, &mut stx)
     .expect("register asset definition");
-    Mint::asset_numeric(
+    Mint::asset_quantity(
         500u64,
         AssetId::new(asset_definition_id.clone(), account_id.clone()),
     )
@@ -335,7 +335,7 @@ async fn nexus_dataspaces_summary_endpoint_reports_portfolio_only_default_datasp
     })
     .execute(&ALICE_ID, &mut stx)
     .expect("register asset definition");
-    Mint::asset_numeric(25u64, AssetId::new(definition_id, account_id.clone()))
+    Mint::asset_quantity(25u64, AssetId::new(definition_id, account_id.clone()))
         .execute(&ALICE_ID, &mut stx)
         .expect("mint asset");
     stx.apply();
@@ -655,7 +655,7 @@ async fn nexus_dataspaces_summary_endpoint_reports_null_alias_for_uncataloged_da
     })
     .execute(&ALICE_ID, &mut stx)
     .expect("register asset definition");
-    Mint::asset_numeric(9u64, AssetId::new(definition_id, account_id.clone()))
+    Mint::asset_quantity(9u64, AssetId::new(definition_id, account_id.clone()))
         .execute(&ALICE_ID, &mut stx)
         .expect("mint asset");
     stx.apply();
@@ -815,7 +815,7 @@ async fn nexus_dataspaces_summary_endpoint_merges_bound_accounts_and_consensus_t
     })
     .execute(&ALICE_ID, &mut stx)
     .expect("register asset definition");
-    Mint::asset_numeric(
+    Mint::asset_quantity(
         13u64,
         AssetId::new(definition_id, primary_account_id.clone()),
     )

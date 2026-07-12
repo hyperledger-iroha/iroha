@@ -2,6 +2,7 @@ package org.hyperledger.iroha.sdk.core.model.instructions
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import org.hyperledger.iroha.sdk.numeric.KotodamaQuantity
 
 class RwaInstructionBuildersTest {
 
@@ -67,7 +68,10 @@ class RwaInstructionBuildersTest {
         val redeem = RedeemRwaInstruction("lot-004${'$'}commodities", "2")
         val freeze = FreezeRwaInstruction("lot-004${'$'}commodities")
         val unfreeze = UnfreezeRwaInstruction("lot-004${'$'}commodities")
-        val hold = HoldRwaInstruction("lot-004${'$'}commodities", 3)
+        val hold = HoldRwaInstruction(
+            "lot-004${'$'}commodities",
+            KotodamaQuantity.parseCanonical("3"),
+        )
         val release = ReleaseRwaInstruction("lot-004${'$'}commodities", "1")
         val forceTransfer = ForceTransferRwaInstruction(
             rwaId = "lot-004${'$'}commodities",

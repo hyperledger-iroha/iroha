@@ -3,6 +3,7 @@ package org.hyperledger.iroha.sdk.nexus
 import org.hyperledger.iroha.sdk.client.JsonEncoder
 import org.hyperledger.iroha.sdk.client.JsonNumbers
 import org.hyperledger.iroha.sdk.client.JsonParser
+import org.hyperledger.iroha.sdk.numeric.NumericV1Codec
 
 /** Minimal JSON parser for UAID responses. */
 object UaidJsonParser {
@@ -32,7 +33,7 @@ object UaidJsonParser {
                     UaidPortfolioResponse.UaidPortfolioAsset(
                         assetId = asString(asset["asset_id"], "uaid portfolio.dataspaces[$i].accounts[$j].assets[$k].asset_id"),
                         assetDefinitionId = asString(asset["asset_definition_id"], "uaid portfolio.dataspaces[$i].accounts[$j].assets[$k].asset_definition_id"),
-                        quantity = asString(asset["quantity"], "uaid portfolio.dataspaces[$i].accounts[$j].assets[$k].quantity"),
+                        quantity = NumericV1Codec.decodeQuantityJsonValue(asset["quantity"]).toString(),
                     )
                 }
                 UaidPortfolioResponse.UaidPortfolioAccount(accountId, label, assets)

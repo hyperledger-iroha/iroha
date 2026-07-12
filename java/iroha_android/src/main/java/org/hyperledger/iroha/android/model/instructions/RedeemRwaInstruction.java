@@ -4,6 +4,7 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
+import org.hyperledger.iroha.android.numeric.NumericV1;
 
 /** Typed builder for the {@code RedeemRwa} instruction. */
 public final class RedeemRwaInstruction implements InstructionTemplate {
@@ -91,14 +92,12 @@ public final class RedeemRwaInstruction implements InstructionTemplate {
     }
 
     public Builder setQuantity(final String quantity) {
-      if (quantity == null || quantity.isBlank()) {
-        throw new IllegalArgumentException("quantity must not be blank");
-      }
-      this.quantity = quantity;
+      this.quantity = InstructionQuantity.requireCanonical(quantity);
       return this;
     }
 
-    public Builder setQuantity(final Number quantity) {
+    /** Set a lossless validated quantity value. */
+    public Builder setQuantity(final NumericV1.QuantityValue quantity) {
       Objects.requireNonNull(quantity, "quantity");
       return setQuantity(quantity.toString());
     }

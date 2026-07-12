@@ -2377,7 +2377,7 @@ mod asset {
         }
 
         instructions.push(InstructionBox::from(
-            iroha::data_model::isi::Transfer::asset_numeric(id, args.quantity.clone(), to.clone()),
+            iroha::data_model::isi::Transfer::asset_quantity(id, args.quantity.clone(), to.clone()),
         ));
         Ok(instructions)
     }
@@ -2408,26 +2408,26 @@ mod asset {
                         .resolve_asset_id(context)
                         .wrap_err("failed to resolve asset identifier")?;
                     let instruction =
-                        iroha::data_model::isi::Mint::asset_numeric(args.quantity, id);
+                        iroha::data_model::isi::Mint::asset_quantity(args.quantity, id);
                     let submit = if args.no_wait {
                         context.finish_unconfirmed([instruction])
                     } else {
                         context.finish([instruction])
                     };
-                    submit.wrap_err("Failed to mint numeric asset")
+                    submit.wrap_err("Failed to mint asset quantity")
                 }
                 Burn(args) => {
                     let id = args
                         .resolve_asset_id(context)
                         .wrap_err("failed to resolve asset identifier")?;
                     let instruction =
-                        iroha::data_model::isi::Burn::asset_numeric(args.quantity, id);
+                        iroha::data_model::isi::Burn::asset_quantity(args.quantity, id);
                     let submit = if args.no_wait {
                         context.finish_unconfirmed([instruction])
                     } else {
                         context.finish([instruction])
                     };
-                    submit.wrap_err("Failed to burn numeric asset")
+                    submit.wrap_err("Failed to burn asset quantity")
                 }
                 Transfer(args) => {
                     let id = args
@@ -2949,7 +2949,7 @@ mod asset {
         pub to: String,
         /// Transfer amount (integer or decimal)
         #[arg(short, long)]
-        pub quantity: Numeric,
+        pub quantity: Quantity,
         /// Attempt to register the destination when implicit receive is disabled.
         #[arg(long)]
         pub ensure_destination: bool,
@@ -2992,7 +2992,7 @@ mod asset {
         pub scope: Option<iroha::data_model::asset::AssetBalanceScope>,
         /// Amount of change (integer or decimal)
         #[arg(short, long)]
-        pub quantity: Numeric,
+        pub quantity: Quantity,
         /// Submit without waiting for confirmation.
         #[arg(long)]
         pub no_wait: bool,
@@ -3106,7 +3106,6 @@ mod asset {
         use super::*;
         use iroha::data_model::isi::{Instruction, TransferBox};
         use iroha_crypto::Algorithm;
-        use iroha_primitives::numeric::Numeric;
 
         fn fixture_key_pair(seed: u8) -> KeyPair {
             KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
@@ -3129,7 +3128,7 @@ mod asset {
                 account: Some(asset_id.account().to_string()),
                 scope: None,
                 to: to.to_string(),
-                quantity: Numeric::new(5, 0),
+                quantity: Quantity::from(5_u32),
                 ensure_destination,
                 no_wait: false,
             };

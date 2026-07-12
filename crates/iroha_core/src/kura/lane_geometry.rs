@@ -25,14 +25,18 @@ use iroha_data_model::{
     nexus::{DataSpaceId, LaneId},
     transaction::signed::TransactionEntrypoint,
 };
-use norito::codec::{Decode, Encode};
+use norito::codec::{Decode, DecodeAll, Encode};
+#[cfg(all(unix, not(any(target_os = "espidf", target_os = "redox"))))]
+use rustix::fs::{
+    AtFlags, Dir, FileType as RustixFileType, Mode, OFlags, openat, statat, unlinkat,
+};
 #[cfg(any(
     target_vendor = "apple",
     target_os = "linux",
     target_os = "android",
     target_os = "redox"
 ))]
-use rustix::fs::{CWD, RenameFlags, renameat_with};
+use rustix::fs::{RenameFlags, renameat_with};
 
 use super::{
     AUTONOMOUS_LANE_BLOCKS_DATA_FILE, AUTONOMOUS_LANE_BLOCKS_INDEX_FILE,
@@ -92,6 +96,9 @@ static CONFIGURED_CATALOG_PREFLIGHT_FAIL_AFTER_ESTABLISH: std::sync::Mutex<Optio
     std::sync::Mutex::new(None);
 #[cfg(test)]
 static GEOMETRY_MOVE_TARGET_COLLISION: std::sync::Mutex<Option<PathBuf>> =
+    std::sync::Mutex::new(None);
+#[cfg(all(test, unix))]
+static GEOMETRY_MOVE_PARENT_SUBSTITUTION: std::sync::Mutex<Option<(PathBuf, PathBuf, PathBuf)>> =
     std::sync::Mutex::new(None);
 
 #[cfg(test)]
@@ -169,19 +176,101 @@ impl GeometryEvidencePolicy {
     target_os = "android",
     target_os = "redox"
 ))]
-fn rename_geometry_path_noreplace(source: &Path, target: &Path) -> std::io::Result<()> {
-    renameat_with(CWD, source, CWD, target, RenameFlags::NOREPLACE).map_err(std::io::Error::from)
+fn rename_geometry_path_noreplace_at(
+    source_parent: &File,
+    source_name: &std::ffi::OsStr,
+    target_parent: &File,
+    target_name: &std::ffi::OsStr,
+) -> std::io::Result<()> {
+    renameat_with(
+        source_parent,
+        source_name,
+        target_parent,
+        target_name,
+        RenameFlags::NOREPLACE,
+    )
+    .map_err(std::io::Error::from)
+}
+
+#[cfg(all(unix, not(any(target_os = "espidf", target_os = "redox"))))]
+fn geometry_stat_identity(stat: &rustix::fs::Stat) -> GeometryFileIdentity {
+    GeometryFileIdentity {
+        device: stat.st_dev as u64,
+        inode: stat.st_ino as u64,
+    }
 }
 
 #[cfg(windows)]
-fn rename_geometry_path_noreplace(_source: &Path, _target: &Path) -> std::io::Result<()> {
-    // `std::fs::rename` uses `MOVEFILE_REPLACE_EXISTING` on Windows, so it cannot uphold the
-    // authenticated no-clobber invariant for merge files. Fail closed until the Windows backend
-    // provides a true atomic no-replace primitive.
+fn rename_geometry_path_noreplace_at(
+    _source_parent: &File,
+    _source_name: &std::ffi::OsStr,
+    _target_parent: &File,
+    _target_name: &std::ffi::OsStr,
+) -> std::io::Result<()> {
     Err(std::io::Error::new(
         ErrorKind::Unsupported,
-        "atomic no-clobber lane geometry rename is unsupported on Windows",
+        "atomic descriptor-relative lane geometry rename is unsupported on Windows",
     ))
+}
+
+#[cfg(test)]
+fn inject_geometry_move_target_collision_for_test(target: &Path, directory: bool) -> Result<()> {
+    let inject_collision = {
+        let mut hook = GEOMETRY_MOVE_TARGET_COLLISION
+            .lock()
+            .expect("geometry move collision hook lock");
+        if hook.as_deref() == Some(target) {
+            hook.take();
+            true
+        } else {
+            false
+        }
+    };
+    if inject_collision {
+        if directory {
+            fs::create_dir(target).map_err(|error| Error::IO(error, target.to_path_buf()))?;
+        } else {
+            fs::write(target, b"injected-no-clobber-target")
+                .map_err(|error| Error::IO(error, target.to_path_buf()))?;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(test))]
+fn inject_geometry_move_target_collision_for_test(_target: &Path, _directory: bool) -> Result<()> {
+    Ok(())
+}
+
+#[cfg(all(test, unix))]
+fn inject_geometry_move_parent_substitution_for_test(target_parent: &Path) -> Result<()> {
+    use std::os::unix::fs::symlink;
+
+    let substitution = {
+        let mut hook = GEOMETRY_MOVE_PARENT_SUBSTITUTION
+            .lock()
+            .expect("geometry move parent-substitution hook lock");
+        if hook
+            .as_ref()
+            .is_some_and(|(expected, _, _)| expected == target_parent)
+        {
+            hook.take()
+        } else {
+            None
+        }
+    };
+    if let Some((_, displaced_parent, replacement_parent)) = substitution {
+        fs::rename(target_parent, &displaced_parent)
+            .map_err(|error| Error::IO(error, target_parent.to_path_buf()))?;
+        symlink(&replacement_parent, target_parent)
+            .map_err(|error| Error::IO(error, target_parent.to_path_buf()))?;
+    }
+    Ok(())
+}
+
+#[cfg(not(all(test, unix)))]
+fn inject_geometry_move_parent_substitution_for_test(_target_parent: &Path) -> Result<()> {
+    Ok(())
 }
 
 #[cfg(not(any(
@@ -191,10 +280,15 @@ fn rename_geometry_path_noreplace(_source: &Path, _target: &Path) -> std::io::Re
     target_os = "redox",
     windows
 )))]
-fn rename_geometry_path_noreplace(_source: &Path, _target: &Path) -> std::io::Result<()> {
+fn rename_geometry_path_noreplace_at(
+    _source_parent: &File,
+    _source_name: &std::ffi::OsStr,
+    _target_parent: &File,
+    _target_name: &std::ffi::OsStr,
+) -> std::io::Result<()> {
     Err(std::io::Error::new(
         ErrorKind::Unsupported,
-        "atomic no-clobber lane geometry rename is unsupported on this platform",
+        "atomic descriptor-relative lane geometry rename is unsupported on this platform",
     ))
 }
 
@@ -396,7 +490,7 @@ fn configured_catalog_store_root_identity(store_root: &Path) -> Result<GeometryF
             "Kura configured-catalog store root must be a non-symlink directory",
         ));
     }
-    Ok(geometry_file_identity(&metadata))
+    checked_geometry_file_identity(&metadata, store_root)
 }
 
 fn configured_catalog_require_store_root_identity(
@@ -482,13 +576,13 @@ fn read_configured_catalog_journal_for_preflight(
         ));
     }
 
-    let expected_identity = geometry_file_identity(&path_metadata);
+    let expected_identity = checked_geometry_file_identity(&path_metadata, path)?;
     let mut file = File::open(path).map_err(|error| Error::IO(error, path.to_path_buf()))?;
     let opened_metadata = file
         .metadata()
         .map_err(|error| Error::IO(error, path.to_path_buf()))?;
     if !opened_metadata.is_file()
-        || geometry_file_identity(&opened_metadata) != expected_identity
+        || checked_geometry_file_identity(&opened_metadata, path)? != expected_identity
         || opened_metadata.len() > MAX_GEOMETRY_JOURNAL_BYTES
     {
         return Err(Error::IO(
@@ -545,11 +639,11 @@ fn read_configured_catalog_journal_for_preflight(
     let final_path_metadata =
         fs::symlink_metadata(path).map_err(|error| Error::IO(error, path.to_path_buf()))?;
     if !final_opened_metadata.is_file()
-        || geometry_file_identity(&final_opened_metadata) != expected_identity
+        || checked_geometry_file_identity(&final_opened_metadata, path)? != expected_identity
         || final_opened_metadata.len() != u64::try_from(bytes.len()).unwrap_or(u64::MAX)
         || final_path_metadata.file_type().is_symlink()
         || !final_path_metadata.file_type().is_file()
-        || geometry_file_identity(&final_path_metadata) != expected_identity
+        || checked_geometry_file_identity(&final_path_metadata, path)? != expected_identity
     {
         return Err(Error::IO(
             std::io::Error::new(
@@ -1218,11 +1312,12 @@ fn write_initial_configured_catalog_temp(
         .create_new(true)
         .open(temp_path)
         .map_err(|error| Error::IO(error, temp_path.to_path_buf()))?;
-    let identity = geometry_file_identity(
+    let identity = checked_geometry_file_identity(
         &file
             .metadata()
             .map_err(|error| Error::IO(error, temp_path.to_path_buf()))?,
-    );
+        temp_path,
+    )?;
     file.write_all(bytes)
         .map_err(|error| Error::IO(error, temp_path.to_path_buf()))?;
     file.sync_all()
@@ -1231,7 +1326,7 @@ fn write_initial_configured_catalog_temp(
         .map_err(|error| Error::IO(error, temp_path.to_path_buf()))?;
     if path_metadata.file_type().is_symlink()
         || !path_metadata.file_type().is_file()
-        || geometry_file_identity(&path_metadata) != identity
+        || checked_geometry_file_identity(&path_metadata, temp_path)? != identity
         || path_metadata.len() != u64::try_from(bytes.len()).unwrap_or(u64::MAX)
     {
         return Err(Error::IO(
@@ -1322,7 +1417,7 @@ fn promote_initial_configured_catalog_temp(
         .map_err(|error| Error::IO(error, temp_path.to_path_buf()))?;
     if temp_metadata.file_type().is_symlink()
         || !temp_metadata.file_type().is_file()
-        || geometry_file_identity(&temp_metadata) != temp_identity
+        || checked_geometry_file_identity(&temp_metadata, temp_path)? != temp_identity
         || temp_metadata.len() != u64::try_from(expected_bytes.len()).unwrap_or(u64::MAX)
     {
         return Err(Error::IO(
@@ -1359,7 +1454,7 @@ fn promote_initial_configured_catalog_temp(
         .map_err(|error| Error::IO(error, journal_path.to_path_buf()))?;
     if journal_metadata.file_type().is_symlink()
         || !journal_metadata.file_type().is_file()
-        || geometry_file_identity(&journal_metadata) != temp_identity
+        || checked_geometry_file_identity(&journal_metadata, journal_path)? != temp_identity
     {
         return Err(Error::IO(
             std::io::Error::new(
@@ -1375,7 +1470,7 @@ fn promote_initial_configured_catalog_temp(
         .map_err(|error| Error::IO(error, temp_path.to_path_buf()))?;
     if final_temp_metadata.file_type().is_symlink()
         || !final_temp_metadata.file_type().is_file()
-        || geometry_file_identity(&final_temp_metadata) != temp_identity
+        || checked_geometry_file_identity(&final_temp_metadata, temp_path)? != temp_identity
     {
         return Err(Error::IO(
             std::io::Error::new(
@@ -2350,12 +2445,14 @@ impl Kura {
                 &journal.records[record_index].operations,
                 GeometryEvidencePolicy::AllowJournalIntentProvisioning,
             ) {
-                return Err(Error::IO(
+                let ambiguous = Error::IO(
                     std::io::Error::other(format!(
                         "lane geometry apply failed ({error}); rollback failed ({rollback_error})"
                     )),
                     self.lane_geometry_journal_path(),
-                ));
+                );
+                self.poison_canonical_storage("lane geometry apply rollback", &ambiguous);
+                return Err(Error::CanonicalStoragePoisoned);
             }
             journal.records[record_index].phase = LaneGeometryPhase::RolledBack;
             self.write_lane_geometry_journal(&journal)?;
@@ -5476,12 +5573,24 @@ impl Kura {
         // would let a concurrent append reopen the old pathname after its cached
         // handles were dropped.
         let _write_guard = active_blocks.then(|| self.block_store_write_lock.lock());
-        if active_blocks {
-            let mut store = self.block_store.lock();
+        let mut block_store = active_blocks.then(|| self.block_store.lock());
+        if let Some(store) = block_store.as_mut() {
+            if !self.validate_path_kind(&old_blocks, true)? {
+                return Err(self.geometry_error(
+                    ErrorKind::NotFound,
+                    "active primary block store disappeared before relabel",
+                ));
+            }
             store.flush_pending_fsync(true)?;
             store.drop_cached_handles();
         }
         let mut merge_log = active_merge.then(|| self.merge_log.lock());
+        if active_merge && !self.validate_path_kind(&old_merge, false)? {
+            return Err(self.geometry_error(
+                ErrorKind::NotFound,
+                "active primary merge log disappeared before relabel",
+            ));
+        }
         if let Some(log) = merge_log.as_mut()
             && let Some(file) = log.file.as_mut()
         {
@@ -5498,10 +5607,23 @@ impl Kura {
             &new_merge,
             GeometryPairTargetKind::MutableLive,
         )?;
-        if active_blocks {
-            self.block_store
-                .lock()
-                .retarget_existing_path(new_blocks.clone());
+        #[cfg(test)]
+        if active_blocks
+            && self
+                .pause_primary_relabel_before_retarget
+                .swap(false, std::sync::atomic::Ordering::AcqRel)
+        {
+            self.primary_relabel_paused
+                .store(true, std::sync::atomic::Ordering::Release);
+            while self
+                .primary_relabel_paused
+                .load(std::sync::atomic::Ordering::Acquire)
+            {
+                std::thread::yield_now();
+            }
+        }
+        if let Some(store) = block_store.as_mut() {
+            store.retarget_existing_path(new_blocks.clone());
             *self.active_blocks_dir.lock() = new_blocks.clone();
             self.invalidate_durable_budget_snapshot();
         }
@@ -5519,7 +5641,7 @@ impl Kura {
                 *path = new_blocks.join(suffix);
             }
         }
-        self.require_lane_marker(updated)
+        Ok(())
     }
 
     fn require_absent_or_sealed_geometry_binding_at(
@@ -6251,6 +6373,233 @@ impl Kura {
         Ok(())
     }
 
+    #[cfg(all(unix, not(any(target_os = "espidf", target_os = "redox"))))]
+    fn remove_geometry_directory_contents_at(
+        directory: &File,
+        display_path: &Path,
+        depth: usize,
+        entries_seen: &mut usize,
+    ) -> Result<()> {
+        use std::{ffi::OsStr, os::unix::ffi::OsStrExt};
+
+        if depth > MAX_GEOMETRY_ARCHIVE_DEPTH {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "lane geometry GC tree exceeds the maximum directory depth",
+                ),
+                display_path.to_path_buf(),
+            ));
+        }
+        loop {
+            // Re-open the directory stream after each unlink. POSIX does not promise that a
+            // stream continues without skipping entries when its directory is mutated in place.
+            let mut entries = Dir::read_from(directory)
+                .map_err(std::io::Error::from)
+                .map_err(|error| Error::IO(error, display_path.to_path_buf()))?;
+            let mut next_name = None;
+            for entry in &mut entries {
+                let entry = entry
+                    .map_err(std::io::Error::from)
+                    .map_err(|error| Error::IO(error, display_path.to_path_buf()))?;
+                if !matches!(entry.file_name().to_bytes(), b"." | b"..") {
+                    next_name = Some(entry.file_name().to_owned());
+                    break;
+                }
+            }
+            let Some(name) = next_name else { break };
+            let name = name.as_c_str();
+            *entries_seen = entries_seen.checked_add(1).ok_or_else(|| {
+                Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        "lane geometry GC tree entry count overflow",
+                    ),
+                    display_path.to_path_buf(),
+                )
+            })?;
+            if *entries_seen > MAX_GEOMETRY_ARCHIVE_ENTRIES {
+                return Err(Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        "lane geometry GC tree exceeds the maximum entry count",
+                    ),
+                    display_path.to_path_buf(),
+                ));
+            }
+
+            let child_path = display_path.join(OsStr::from_bytes(name.to_bytes()));
+            let before = statat(directory, name, AtFlags::SYMLINK_NOFOLLOW)
+                .map_err(std::io::Error::from)
+                .map_err(|error| Error::IO(error, child_path.clone()))?;
+            let before_identity = geometry_stat_identity(&before);
+            match RustixFileType::from_raw_mode(before.st_mode) {
+                RustixFileType::Directory => {
+                    let child_depth = depth.checked_add(1).ok_or_else(|| {
+                        Error::IO(
+                            std::io::Error::new(
+                                ErrorKind::InvalidData,
+                                "lane geometry GC tree depth overflow",
+                            ),
+                            child_path.clone(),
+                        )
+                    })?;
+                    let child = File::from(
+                        openat(
+                            directory,
+                            name,
+                            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                            Mode::empty(),
+                        )
+                        .map_err(std::io::Error::from)
+                        .map_err(|error| Error::IO(error, child_path.clone()))?,
+                    );
+                    let opened = child
+                        .metadata()
+                        .map_err(|error| Error::IO(error, child_path.clone()))?;
+                    if !opened.is_dir()
+                        || checked_geometry_file_identity(&opened, &child_path)? != before_identity
+                    {
+                        return Err(Error::IO(
+                            std::io::Error::new(
+                                ErrorKind::InvalidData,
+                                "lane geometry GC directory changed while being opened",
+                            ),
+                            child_path,
+                        ));
+                    }
+                    Self::remove_geometry_directory_contents_at(
+                        &child,
+                        &child_path,
+                        child_depth,
+                        entries_seen,
+                    )?;
+                    let after = statat(directory, name, AtFlags::SYMLINK_NOFOLLOW)
+                        .map_err(std::io::Error::from)
+                        .map_err(|error| Error::IO(error, child_path.clone()))?;
+                    if RustixFileType::from_raw_mode(after.st_mode) != RustixFileType::Directory
+                        || geometry_stat_identity(&after) != before_identity
+                    {
+                        return Err(Error::IO(
+                            std::io::Error::new(
+                                ErrorKind::InvalidData,
+                                "lane geometry GC directory entry changed before removal",
+                            ),
+                            child_path,
+                        ));
+                    }
+                    drop(child);
+                    unlinkat(directory, name, AtFlags::REMOVEDIR)
+                        .map_err(std::io::Error::from)
+                        .map_err(|error| Error::IO(error, child_path))?;
+                }
+                RustixFileType::RegularFile => {
+                    let after = statat(directory, name, AtFlags::SYMLINK_NOFOLLOW)
+                        .map_err(std::io::Error::from)
+                        .map_err(|error| Error::IO(error, child_path.clone()))?;
+                    if RustixFileType::from_raw_mode(after.st_mode) != RustixFileType::RegularFile
+                        || geometry_stat_identity(&after) != before_identity
+                    {
+                        return Err(Error::IO(
+                            std::io::Error::new(
+                                ErrorKind::InvalidData,
+                                "lane geometry GC file entry changed before removal",
+                            ),
+                            child_path,
+                        ));
+                    }
+                    unlinkat(directory, name, AtFlags::empty())
+                        .map_err(std::io::Error::from)
+                        .map_err(|error| Error::IO(error, child_path))?;
+                }
+                _ => {
+                    return Err(Error::IO(
+                        std::io::Error::new(
+                            ErrorKind::InvalidData,
+                            "lane geometry GC tree contains a non-regular entry",
+                        ),
+                        child_path,
+                    ));
+                }
+            }
+        }
+        directory
+            .sync_all()
+            .map_err(|error| Error::IO(error, display_path.to_path_buf()))
+    }
+
+    #[cfg(all(unix, not(any(target_os = "espidf", target_os = "redox"))))]
+    fn remove_authenticated_geometry_tree_at(
+        parent: &File,
+        name: &std::ffi::OsStr,
+        expected_identity: GeometryFileIdentity,
+        display_path: &Path,
+    ) -> Result<()> {
+        let root = File::from(
+            openat(
+                parent,
+                name,
+                OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                Mode::empty(),
+            )
+            .map_err(std::io::Error::from)
+            .map_err(|error| Error::IO(error, display_path.to_path_buf()))?,
+        );
+        let opened = root
+            .metadata()
+            .map_err(|error| Error::IO(error, display_path.to_path_buf()))?;
+        if !opened.is_dir()
+            || checked_geometry_file_identity(&opened, display_path)? != expected_identity
+        {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "lane geometry GC root changed while being opened",
+                ),
+                display_path.to_path_buf(),
+            ));
+        }
+        let mut entries_seen = 0_usize;
+        Self::remove_geometry_directory_contents_at(&root, display_path, 0, &mut entries_seen)?;
+        let final_entry = statat(parent, name, AtFlags::SYMLINK_NOFOLLOW)
+            .map_err(std::io::Error::from)
+            .map_err(|error| Error::IO(error, display_path.to_path_buf()))?;
+        if RustixFileType::from_raw_mode(final_entry.st_mode) != RustixFileType::Directory
+            || geometry_stat_identity(&final_entry) != expected_identity
+        {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "lane geometry GC root entry changed before removal",
+                ),
+                display_path.to_path_buf(),
+            ));
+        }
+        drop(root);
+        unlinkat(parent, name, AtFlags::REMOVEDIR)
+            .map_err(std::io::Error::from)
+            .map_err(|error| Error::IO(error, display_path.to_path_buf()))?;
+        parent
+            .sync_all()
+            .map_err(|error| Error::IO(error, display_path.to_path_buf()))
+    }
+
+    #[cfg(not(all(unix, not(any(target_os = "espidf", target_os = "redox")))))]
+    fn remove_authenticated_geometry_tree_at(
+        _parent: &File,
+        _name: &std::ffi::OsStr,
+        _expected_identity: GeometryFileIdentity,
+        display_path: &Path,
+    ) -> Result<()> {
+        Err(Error::IO(
+            std::io::Error::new(
+                ErrorKind::Unsupported,
+                "descriptor-relative lane geometry GC is unsupported on this platform",
+            ),
+            display_path.to_path_buf(),
+        ))
+    }
+
     fn remove_authenticated_geometry_archive(
         &self,
         pending: &LaneGeometryPendingArchiveGc,
@@ -6271,6 +6620,24 @@ impl Kura {
         if !root_exists && !quarantine_exists {
             return Ok((0, false));
         }
+        let root_name = root.file_name().map(ToOwned::to_owned).ok_or_else(|| {
+            self.geometry_error(
+                ErrorKind::InvalidInput,
+                "lane geometry archive root has no name",
+            )
+        })?;
+        let quarantine_name = quarantine
+            .file_name()
+            .map(ToOwned::to_owned)
+            .ok_or_else(|| {
+                self.geometry_error(
+                    ErrorKind::InvalidInput,
+                    "lane geometry GC quarantine has no name",
+                )
+            })?;
+        let (archive_parent_handle, archive_parent_identity) =
+            self.open_geometry_parent(&archive_parent)?;
+        self.require_geometry_path_identity(&archive_parent, true, archive_parent_identity)?;
 
         // The archive root and its quarantine name are both below the counted retired-geometry
         // tree. Register the entire rename/deletion window so a concurrent usage scan cannot
@@ -6281,9 +6648,20 @@ impl Kura {
                 self.authenticate_geometry_archive(&root, pending, merge_releases)?;
             self.require_geometry_path_identity(&root, true, identity)?;
             self.inject_geometry_move_target_collision_for_test(&quarantine, true)?;
-            rename_geometry_path_noreplace(&root, &quarantine)
-                .map_err(|error| Error::IO(error, root.clone()))?;
-            self.sync_geometry_parent(root.parent())?;
+            self.require_geometry_path_identity(&root, true, identity)?;
+            self.require_geometry_path_identity(&archive_parent, true, archive_parent_identity)?;
+            self.inject_geometry_move_parent_substitution_for_test(&archive_parent)?;
+            rename_geometry_path_noreplace_at(
+                &archive_parent_handle,
+                &root_name,
+                &archive_parent_handle,
+                &quarantine_name,
+            )
+            .map_err(|error| Error::IO(error, root.clone()))?;
+            archive_parent_handle
+                .sync_all()
+                .map_err(|error| Error::IO(error, archive_parent.clone()))?;
+            self.require_geometry_path_identity(&archive_parent, true, archive_parent_identity)?;
             self.require_geometry_path_identity(&quarantine, true, identity)?;
             self.fail_lane_geometry_gc_stage_for_test(GC_FAIL_AFTER_ARCHIVE_QUARANTINE)?;
             quarantine
@@ -6293,12 +6671,19 @@ impl Kura {
 
         // Revalidate after quarantine promotion. The root identity check prevents a path swap
         // between authentication and rename from turning this into an arbitrary tree deletion.
+        // Descent and unlinking remain relative to the already-authenticated parent/root handles,
+        // so an ancestor substitution after this check cannot redirect removal through a symlink.
+        self.require_geometry_path_identity(&archive_parent, true, archive_parent_identity)?;
         let (bytes, identity) =
             self.authenticate_geometry_archive(&deletion_root, pending, merge_releases)?;
         self.require_geometry_path_identity(&deletion_root, true, identity)?;
-        fs::remove_dir_all(&deletion_root)
-            .map_err(|error| Error::IO(error, deletion_root.clone()))?;
-        self.sync_geometry_parent(deletion_root.parent())?;
+        self.require_geometry_path_identity(&archive_parent, true, archive_parent_identity)?;
+        Self::remove_authenticated_geometry_tree_at(
+            &archive_parent_handle,
+            &quarantine_name,
+            identity,
+            &deletion_root,
+        )?;
         self.update_disk_usage_delta(bytes, 0);
         accounting_mutation.finish();
         Ok((bytes, true))
@@ -6912,23 +7297,68 @@ impl Kura {
         let source_identity = self.geometry_path_identity(source, directory)?;
         self.sync_geometry_path_contents(source, directory)?;
         self.require_geometry_path_identity(source, directory, source_identity)?;
+        let source_parent = source.parent().ok_or_else(|| {
+            self.geometry_error(
+                ErrorKind::InvalidInput,
+                "lane geometry move source has no parent",
+            )
+        })?;
+        let target_parent = target.parent().ok_or_else(|| {
+            self.geometry_error(
+                ErrorKind::InvalidInput,
+                "lane geometry move target has no parent",
+            )
+        })?;
+        let source_name = source.file_name().ok_or_else(|| {
+            self.geometry_error(
+                ErrorKind::InvalidInput,
+                "lane geometry move source has no name",
+            )
+        })?;
+        let target_name = target.file_name().ok_or_else(|| {
+            self.geometry_error(
+                ErrorKind::InvalidInput,
+                "lane geometry move target has no name",
+            )
+        })?;
         // Active lane storage and retired geometry are both included in Kura's enforced and total
         // usage scans. The rename preserves their exact byte totals, but it must still advance the
         // accounting generation so a scan spanning the move retries instead of publishing a
         // mixed directory snapshot.
         let accounting_mutation = self.begin_total_disk_usage_mutation();
-        if let Some(parent) = target.parent() {
-            create_dir_all_with_context(parent)?;
-            self.validate_path_kind(parent, true)?;
-            self.sync_geometry_parent(Some(parent))?;
-        }
+        bootstrap_ensure_geometry_directory(&self.store_root, target_parent)?;
+        self.validate_path_kind(target_parent, true)?;
+        self.sync_geometry_parent(Some(target_parent))?;
+        let (source_parent_handle, source_parent_identity) =
+            self.open_geometry_parent(source_parent)?;
+        let (target_parent_handle, target_parent_identity) =
+            self.open_geometry_parent(target_parent)?;
         self.inject_geometry_move_target_collision_for_test(target, directory)?;
-        rename_geometry_path_noreplace(source, target)
-            .map_err(|error| Error::IO(error, source.to_path_buf()))?;
+        self.require_geometry_path_identity(source, directory, source_identity)?;
+        self.require_geometry_path_identity(source_parent, true, source_parent_identity)?;
+        self.require_geometry_path_identity(target_parent, true, target_parent_identity)?;
+        self.inject_geometry_move_parent_substitution_for_test(target_parent)?;
+        rename_geometry_path_noreplace_at(
+            &source_parent_handle,
+            source_name,
+            &target_parent_handle,
+            target_name,
+        )
+        .map_err(|error| Error::IO(error, source.to_path_buf()))?;
+        source_parent_handle
+            .sync_all()
+            .map_err(|error| Error::IO(error, source_parent.to_path_buf()))?;
+        if source_parent != target_parent {
+            target_parent_handle
+                .sync_all()
+                .map_err(|error| Error::IO(error, target_parent.to_path_buf()))?;
+        }
+        self.require_geometry_path_identity(source_parent, true, source_parent_identity)?;
+        self.require_geometry_path_identity(target_parent, true, target_parent_identity)?;
         self.require_geometry_path_identity(target, directory, source_identity)?;
-        self.sync_geometry_parent(source.parent())?;
-        if source.parent() != target.parent() {
-            self.sync_geometry_parent(target.parent())?;
+        self.sync_geometry_parent(Some(source_parent))?;
+        if source_parent != target_parent {
+            self.sync_geometry_parent(Some(target_parent))?;
         }
         accounting_mutation.finish();
         Ok(())
@@ -6940,35 +7370,23 @@ impl Kura {
         target: &Path,
         directory: bool,
     ) -> Result<()> {
-        let inject_collision = {
-            let mut hook = GEOMETRY_MOVE_TARGET_COLLISION
-                .lock()
-                .expect("geometry move collision hook lock");
-            if hook.as_deref() == Some(target) {
-                hook.take();
-                true
-            } else {
-                false
-            }
-        };
-        if inject_collision {
-            if directory {
-                fs::create_dir(target).map_err(|error| Error::IO(error, target.to_path_buf()))?;
-            } else {
-                fs::write(target, b"injected-no-clobber-target")
-                    .map_err(|error| Error::IO(error, target.to_path_buf()))?;
-            }
-        }
-        Ok(())
+        inject_geometry_move_target_collision_for_test(target, directory)
+    }
+
+    fn inject_geometry_move_parent_substitution_for_test(
+        &self,
+        target_parent: &Path,
+    ) -> Result<()> {
+        inject_geometry_move_parent_substitution_for_test(target_parent)
     }
 
     #[cfg(not(test))]
     fn inject_geometry_move_target_collision_for_test(
         &self,
-        _target: &Path,
-        _directory: bool,
+        target: &Path,
+        directory: bool,
     ) -> Result<()> {
-        Ok(())
+        inject_geometry_move_target_collision_for_test(target, directory)
     }
 
     fn sync_geometry_path_contents(&self, path: &Path, directory: bool) -> Result<()> {
@@ -7451,7 +7869,7 @@ impl Kura {
                 path.to_path_buf(),
             ));
         }
-        Ok(geometry_file_identity(&metadata))
+        checked_geometry_file_identity(&metadata, path)
     }
 
     fn require_geometry_path_identity(
@@ -7473,12 +7891,35 @@ impl Kura {
         Ok(())
     }
 
+    fn open_geometry_parent(&self, parent: &Path) -> Result<(File, GeometryFileIdentity)> {
+        let before = self.geometry_path_identity(parent, true)?;
+        let directory =
+            File::open(parent).map_err(|error| Error::IO(error, parent.to_path_buf()))?;
+        let opened = directory
+            .metadata()
+            .map_err(|error| Error::IO(error, parent.to_path_buf()))?;
+        if !opened.is_dir()
+            || checked_geometry_file_identity(&opened, parent)? != before
+            || self.geometry_path_identity(parent, true)? != before
+        {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "lane geometry parent changed while being opened",
+                ),
+                parent.to_path_buf(),
+            ));
+        }
+        Ok((directory, before))
+    }
+
     fn verify_open_geometry_file(&self, path: &Path, file: &File) -> Result<()> {
         let path_identity = self.geometry_path_identity(path, false)?;
         let metadata = file
             .metadata()
             .map_err(|error| Error::IO(error, path.to_path_buf()))?;
-        if !metadata.is_file() || geometry_file_identity(&metadata) != path_identity {
+        if !metadata.is_file() || checked_geometry_file_identity(&metadata, path)? != path_identity
+        {
             return Err(Error::IO(
                 std::io::Error::new(
                     ErrorKind::InvalidData,
@@ -8329,6 +8770,142 @@ impl Kura {
         self.store_root.join(JOURNAL_FILE_NAME)
     }
 
+    /// Resolve any interrupted primary-lane relabel before opening canonical files.
+    ///
+    /// State-driven geometry recovery runs only after Kura has loaded the canonical chain. A
+    /// primary relabel therefore needs this smaller root-level bootstrap pass so startup never
+    /// creates an empty configured path while the exact chain is already present under a durable
+    /// journal binding.
+    pub(super) fn resolve_primary_storage_paths_before_open(
+        store_root: &Path,
+        configured: &LaneConfigEntry,
+    ) -> Result<(PathBuf, PathBuf, bool)> {
+        let journal_path = store_root.join(JOURNAL_FILE_NAME);
+        let Some(bytes) = Kura::read_regular_sidecar_bytes_for(
+            store_root,
+            &journal_path,
+            store_root,
+            usize::try_from(MAX_GEOMETRY_JOURNAL_BYTES)?,
+        )?
+        else {
+            return Ok((
+                configured.blocks_dir(store_root),
+                configured.merge_log_path(store_root),
+                false,
+            ));
+        };
+        let mut cursor = bytes.as_slice();
+        let journal = LaneGeometryJournal::decode_all(&mut cursor).map_err(Error::NoritoFrame)?;
+        if journal.encode() != bytes {
+            return Err(lane_geometry_journal_structure_error(
+                store_root,
+                ErrorKind::InvalidData,
+                "lane geometry journal is not canonically encoded",
+            ));
+        }
+        validate_lane_geometry_journal_structure(store_root, &journal)?;
+
+        let primary_lane = configured.lane_id;
+        let applied_prefix = journal
+            .records
+            .iter()
+            .take_while(|record| {
+                matches!(
+                    record.phase,
+                    LaneGeometryPhase::FilesApplied | LaneGeometryPhase::CatalogPublished
+                )
+            })
+            .count();
+
+        for record in journal.records[applied_prefix..].iter().rev() {
+            for operation in record.operations.iter().rev().filter(|operation| {
+                operation.kind == LaneGeometryOperationKind::Relabel
+                    && operation.lane_id == primary_lane
+            }) {
+                let updated = operation.updated.as_ref().ok_or_else(|| {
+                    lane_geometry_journal_structure_error(
+                        store_root,
+                        ErrorKind::InvalidData,
+                        "primary relabel has no updated binding",
+                    )
+                })?;
+                let previous = operation.previous.as_ref().ok_or_else(|| {
+                    lane_geometry_journal_structure_error(
+                        store_root,
+                        ErrorKind::InvalidData,
+                        "primary relabel has no previous binding",
+                    )
+                })?;
+                bootstrap_move_geometry_binding(store_root, updated, previous)?;
+            }
+        }
+        for record in &journal.records[..applied_prefix] {
+            for operation in record.operations.iter().filter(|operation| {
+                operation.kind == LaneGeometryOperationKind::Relabel
+                    && operation.lane_id == primary_lane
+            }) {
+                let previous = operation.previous.as_ref().ok_or_else(|| {
+                    lane_geometry_journal_structure_error(
+                        store_root,
+                        ErrorKind::InvalidData,
+                        "primary relabel has no previous binding",
+                    )
+                })?;
+                let updated = operation.updated.as_ref().ok_or_else(|| {
+                    lane_geometry_journal_structure_error(
+                        store_root,
+                        ErrorKind::InvalidData,
+                        "primary relabel has no updated binding",
+                    )
+                })?;
+                bootstrap_move_geometry_binding(store_root, previous, updated)?;
+            }
+        }
+
+        let checkpoint_binding = journal.checkpoint.as_ref().and_then(|checkpoint| {
+            checkpoint
+                .bindings
+                .iter()
+                .find(|binding| binding.lane_id == primary_lane)
+        });
+        let first_previous = journal.records.iter().find_map(|record| {
+            record
+                .previous_bindings
+                .iter()
+                .find(|binding| binding.lane_id == primary_lane)
+        });
+        let mut active_binding = checkpoint_binding.or(first_previous);
+        for record in &journal.records[..applied_prefix] {
+            if let Some(binding) = record
+                .updated_bindings
+                .iter()
+                .find(|binding| binding.lane_id == primary_lane)
+            {
+                active_binding = Some(binding);
+            }
+        }
+        let Some(binding) = active_binding else {
+            return Ok((
+                configured.blocks_dir(store_root),
+                configured.merge_log_path(store_root),
+                false,
+            ));
+        };
+        let blocks = store_root.join(&binding.blocks_path);
+        let merge = store_root.join(&binding.merge_path);
+        if !bootstrap_validate_path_kind(store_root, &blocks, true)?
+            || !bootstrap_validate_path_kind(store_root, &merge, false)?
+        {
+            return Err(lane_geometry_journal_structure_error(
+                store_root,
+                ErrorKind::NotFound,
+                "durable primary binding is not fully present before Kura startup",
+            ));
+        }
+        bootstrap_require_lane_marker(store_root, &blocks, binding)?;
+        Ok((blocks, merge, true))
+    }
+
     fn geometry_error(&self, kind: ErrorKind, message: &'static str) -> Error {
         Error::IO(
             std::io::Error::new(kind, message),
@@ -8352,6 +8929,509 @@ impl Kura {
         }
         Ok(())
     }
+}
+
+fn bootstrap_validate_path_kind(store_root: &Path, path: &Path, directory: bool) -> Result<bool> {
+    let relative = path.strip_prefix(store_root).map_err(|_| {
+        lane_geometry_journal_structure_error(
+            store_root,
+            ErrorKind::InvalidInput,
+            "bootstrap geometry path escapes the Kura store root",
+        )
+    })?;
+    validate_relative_path(relative)?;
+    bootstrap_validate_existing_ancestors(store_root, path)?;
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(Error::IO(error, path.to_path_buf())),
+    };
+    if metadata.file_type().is_symlink()
+        || (directory && !metadata.is_dir())
+        || (!directory && (!metadata.is_file() || !Kura::sidecar_is_single_link(&metadata)))
+    {
+        return Err(Error::IO(
+            std::io::Error::new(
+                ErrorKind::InvalidData,
+                "bootstrap geometry path is not an authenticated regular path",
+            ),
+            path.to_path_buf(),
+        ));
+    }
+    let canonical_root =
+        fs::canonicalize(store_root).map_err(|error| Error::IO(error, store_root.to_path_buf()))?;
+    let canonical_path =
+        fs::canonicalize(path).map_err(|error| Error::IO(error, path.to_path_buf()))?;
+    if canonical_path != canonical_root.join(relative) {
+        return Err(Error::IO(
+            std::io::Error::new(
+                ErrorKind::InvalidData,
+                "bootstrap geometry path traverses a symlink or escapes the store root",
+            ),
+            path.to_path_buf(),
+        ));
+    }
+    Ok(true)
+}
+
+fn bootstrap_validate_existing_ancestors(store_root: &Path, path: &Path) -> Result<()> {
+    let relative = path.strip_prefix(store_root).map_err(|_| {
+        lane_geometry_journal_structure_error(
+            store_root,
+            ErrorKind::InvalidInput,
+            "bootstrap geometry path escapes the Kura store root",
+        )
+    })?;
+    validate_relative_path(relative)?;
+    let root_metadata = fs::symlink_metadata(store_root)
+        .map_err(|error| Error::IO(error, store_root.to_path_buf()))?;
+    if root_metadata.file_type().is_symlink() || !root_metadata.is_dir() {
+        return Err(Error::IO(
+            std::io::Error::new(
+                ErrorKind::InvalidData,
+                "bootstrap Kura root is not a non-symlink directory",
+            ),
+            store_root.to_path_buf(),
+        ));
+    }
+    let canonical_root =
+        fs::canonicalize(store_root).map_err(|error| Error::IO(error, store_root.to_path_buf()))?;
+    let components = relative.components().collect::<Vec<_>>();
+    let mut cursor = store_root.to_path_buf();
+    let mut expected = PathBuf::new();
+    for component in components.iter().take(components.len().saturating_sub(1)) {
+        cursor.push(component.as_os_str());
+        expected.push(component.as_os_str());
+        let metadata = match fs::symlink_metadata(&cursor) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == ErrorKind::NotFound => break,
+            Err(error) => return Err(Error::IO(error, cursor)),
+        };
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "bootstrap geometry ancestor is not a non-symlink directory",
+                ),
+                cursor,
+            ));
+        }
+        let canonical =
+            fs::canonicalize(&cursor).map_err(|error| Error::IO(error, cursor.clone()))?;
+        if canonical != canonical_root.join(&expected) {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "bootstrap geometry ancestor escapes the Kura store root",
+                ),
+                cursor,
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn bootstrap_ensure_geometry_directory(store_root: &Path, directory: &Path) -> Result<()> {
+    let relative = directory.strip_prefix(store_root).map_err(|_| {
+        lane_geometry_journal_structure_error(
+            store_root,
+            ErrorKind::InvalidInput,
+            "bootstrap geometry directory escapes the Kura store root",
+        )
+    })?;
+    validate_relative_path(relative)?;
+    let mut cursor = store_root.to_path_buf();
+    for component in relative.components() {
+        let parent = cursor.clone();
+        let parent_before =
+            fs::symlink_metadata(&parent).map_err(|error| Error::IO(error, parent.clone()))?;
+        if parent_before.file_type().is_symlink() || !parent_before.is_dir() {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "bootstrap geometry parent is not a non-symlink directory",
+                ),
+                parent,
+            ));
+        }
+        cursor.push(component.as_os_str());
+        match fs::create_dir(&cursor) {
+            Ok(()) => {}
+            Err(error) if error.kind() == ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(Error::IO(error, cursor)),
+        }
+        if !bootstrap_validate_path_kind(store_root, &cursor, true)? {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::NotFound,
+                    "bootstrap geometry directory disappeared after creation",
+                ),
+                cursor,
+            ));
+        }
+        let parent_after =
+            fs::symlink_metadata(&parent).map_err(|error| Error::IO(error, parent.clone()))?;
+        if checked_geometry_file_identity(&parent_before, &parent)?
+            != checked_geometry_file_identity(&parent_after, &parent)?
+        {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "bootstrap geometry parent changed during child creation",
+                ),
+                parent,
+            ));
+        }
+        sync_dir(&parent).map_err(|error| Error::IO(error, parent))?;
+    }
+    Ok(())
+}
+
+fn bootstrap_sync_geometry_path(store_root: &Path, path: &Path, directory: bool) -> Result<()> {
+    let before =
+        fs::symlink_metadata(path).map_err(|error| Error::IO(error, path.to_path_buf()))?;
+    if !bootstrap_validate_path_kind(store_root, path, directory)? {
+        return Err(Error::IO(
+            std::io::Error::new(ErrorKind::NotFound, "bootstrap geometry source is missing"),
+            path.to_path_buf(),
+        ));
+    }
+    if directory {
+        sync_dir(path).map_err(|error| Error::IO(error, path.to_path_buf()))?;
+    } else {
+        let file = File::open(path).map_err(|error| Error::IO(error, path.to_path_buf()))?;
+        let opened = file
+            .metadata()
+            .map_err(|error| Error::IO(error, path.to_path_buf()))?;
+        if checked_geometry_file_identity(&before, path)?
+            != checked_geometry_file_identity(&opened, path)?
+        {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "bootstrap geometry file changed while opening",
+                ),
+                path.to_path_buf(),
+            ));
+        }
+        file.sync_all()
+            .map_err(|error| Error::IO(error, path.to_path_buf()))?;
+    }
+    let after = fs::symlink_metadata(path).map_err(|error| Error::IO(error, path.to_path_buf()))?;
+    if checked_geometry_file_identity(&before, path)?
+        != checked_geometry_file_identity(&after, path)?
+    {
+        return Err(Error::IO(
+            std::io::Error::new(
+                ErrorKind::InvalidData,
+                "bootstrap geometry path changed while synchronizing",
+            ),
+            path.to_path_buf(),
+        ));
+    }
+    Ok(())
+}
+
+fn bootstrap_open_geometry_parent(store_root: &Path, parent: &Path) -> Result<File> {
+    if !bootstrap_validate_path_kind(store_root, parent, true)? {
+        return Err(Error::IO(
+            std::io::Error::new(ErrorKind::NotFound, "bootstrap geometry parent is missing"),
+            parent.to_path_buf(),
+        ));
+    }
+    let before =
+        fs::symlink_metadata(parent).map_err(|error| Error::IO(error, parent.to_path_buf()))?;
+    let directory = File::open(parent).map_err(|error| Error::IO(error, parent.to_path_buf()))?;
+    let opened = directory
+        .metadata()
+        .map_err(|error| Error::IO(error, parent.to_path_buf()))?;
+    let after =
+        fs::symlink_metadata(parent).map_err(|error| Error::IO(error, parent.to_path_buf()))?;
+    if before.file_type().is_symlink()
+        || !before.is_dir()
+        || checked_geometry_file_identity(&before, parent)?
+            != checked_geometry_file_identity(&opened, parent)?
+        || checked_geometry_file_identity(&before, parent)?
+            != checked_geometry_file_identity(&after, parent)?
+        || !bootstrap_validate_path_kind(store_root, parent, true)?
+    {
+        return Err(Error::IO(
+            std::io::Error::new(
+                ErrorKind::InvalidData,
+                "bootstrap geometry parent changed while being opened",
+            ),
+            parent.to_path_buf(),
+        ));
+    }
+    Ok(directory)
+}
+
+fn bootstrap_move_geometry_path(
+    store_root: &Path,
+    source: &Path,
+    target: &Path,
+    directory: bool,
+) -> Result<bool> {
+    if source == target {
+        if bootstrap_validate_path_kind(store_root, source, directory)? {
+            return Ok(false);
+        }
+        return Err(Error::IO(
+            std::io::Error::new(
+                ErrorKind::NotFound,
+                "unchanged primary relabel path is missing during bootstrap recovery",
+            ),
+            source.to_path_buf(),
+        ));
+    }
+    let source_exists = bootstrap_validate_path_kind(store_root, source, directory)?;
+    let target_exists = bootstrap_validate_path_kind(store_root, target, directory)?;
+    match (source_exists, target_exists) {
+        (false, false) | (false, true) => return Ok(false),
+        (true, true) => {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::AlreadyExists,
+                    "both primary relabel paths exist during bootstrap recovery",
+                ),
+                target.to_path_buf(),
+            ));
+        }
+        (true, false) => {}
+    }
+    bootstrap_sync_geometry_path(store_root, source, directory)?;
+    let identity = checked_geometry_file_identity(
+        &fs::symlink_metadata(source).map_err(|error| Error::IO(error, source.to_path_buf()))?,
+        source,
+    )?;
+    let source_parent = source.parent().ok_or_else(|| {
+        Error::IO(
+            std::io::Error::new(
+                ErrorKind::InvalidInput,
+                "primary relabel source has no parent",
+            ),
+            source.to_path_buf(),
+        )
+    })?;
+    let target_parent = target.parent().ok_or_else(|| {
+        Error::IO(
+            std::io::Error::new(
+                ErrorKind::InvalidInput,
+                "primary relabel target has no parent",
+            ),
+            target.to_path_buf(),
+        )
+    })?;
+    let source_name = source.file_name().ok_or_else(|| {
+        Error::IO(
+            std::io::Error::new(
+                ErrorKind::InvalidInput,
+                "primary relabel source has no name",
+            ),
+            source.to_path_buf(),
+        )
+    })?;
+    let target_name = target.file_name().ok_or_else(|| {
+        Error::IO(
+            std::io::Error::new(
+                ErrorKind::InvalidInput,
+                "primary relabel target has no name",
+            ),
+            target.to_path_buf(),
+        )
+    })?;
+    bootstrap_ensure_geometry_directory(store_root, target_parent)?;
+    sync_dir(target_parent).map_err(|error| Error::IO(error, target_parent.to_path_buf()))?;
+    let source_parent_handle = bootstrap_open_geometry_parent(store_root, source_parent)?;
+    let target_parent_handle = bootstrap_open_geometry_parent(store_root, target_parent)?;
+    inject_geometry_move_target_collision_for_test(target, directory)?;
+    if !bootstrap_validate_path_kind(store_root, source, directory)?
+        || checked_geometry_file_identity(
+            &fs::symlink_metadata(source)
+                .map_err(|error| Error::IO(error, source.to_path_buf()))?,
+            source,
+        )? != identity
+    {
+        return Err(Error::IO(
+            std::io::Error::new(
+                ErrorKind::InvalidData,
+                "primary relabel source identity changed before bootstrap rename",
+            ),
+            source.to_path_buf(),
+        ));
+    }
+    rename_geometry_path_noreplace_at(
+        &source_parent_handle,
+        source_name,
+        &target_parent_handle,
+        target_name,
+    )
+    .map_err(|error| Error::IO(error, source.to_path_buf()))?;
+    if !bootstrap_validate_path_kind(store_root, target, directory)?
+        || checked_geometry_file_identity(
+            &fs::symlink_metadata(target)
+                .map_err(|error| Error::IO(error, target.to_path_buf()))?,
+            target,
+        )? != identity
+    {
+        return Err(Error::IO(
+            std::io::Error::new(
+                ErrorKind::InvalidData,
+                "primary relabel target identity changed during bootstrap recovery",
+            ),
+            target.to_path_buf(),
+        ));
+    }
+    source_parent_handle
+        .sync_all()
+        .map_err(|error| Error::IO(error, source_parent.to_path_buf()))?;
+    if source.parent() != target.parent() {
+        target_parent_handle
+            .sync_all()
+            .map_err(|error| Error::IO(error, target_parent.to_path_buf()))?;
+    }
+    Ok(true)
+}
+
+fn bootstrap_preflight_geometry_path(
+    store_root: &Path,
+    source: &Path,
+    target: &Path,
+    directory: bool,
+) -> Result<()> {
+    if source == target {
+        return bootstrap_validate_path_kind(store_root, source, directory)?
+            .then_some(())
+            .ok_or_else(|| {
+                Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::NotFound,
+                        "unchanged primary relabel path is missing during bootstrap recovery",
+                    ),
+                    source.to_path_buf(),
+                )
+            });
+    }
+    let source_exists = bootstrap_validate_path_kind(store_root, source, directory)?;
+    let target_exists = bootstrap_validate_path_kind(store_root, target, directory)?;
+    match (source_exists, target_exists) {
+        (false, false) => {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::NotFound,
+                    "neither primary relabel path exists during bootstrap recovery",
+                ),
+                source.to_path_buf(),
+            ));
+        }
+        (true, true) => {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::AlreadyExists,
+                    "both primary relabel paths exist during bootstrap recovery",
+                ),
+                target.to_path_buf(),
+            ));
+        }
+        (true, false) | (false, true) => {}
+    }
+    bootstrap_validate_existing_ancestors(store_root, source)?;
+    bootstrap_validate_existing_ancestors(store_root, target)
+}
+
+fn bootstrap_move_geometry_binding(
+    store_root: &Path,
+    source: &LaneGeometryBinding,
+    target: &LaneGeometryBinding,
+) -> Result<()> {
+    let source_blocks = store_root.join(&source.blocks_path);
+    let target_blocks = store_root.join(&target.blocks_path);
+    let source_merge = store_root.join(&source.merge_path);
+    let target_merge = store_root.join(&target.merge_path);
+    bootstrap_preflight_geometry_path(store_root, &source_blocks, &target_blocks, true)?;
+    bootstrap_preflight_geometry_path(store_root, &source_merge, &target_merge, false)?;
+
+    let rollback = || -> Result<()> {
+        let merge_result =
+            bootstrap_move_geometry_path(store_root, &target_merge, &source_merge, false);
+        let blocks_result =
+            bootstrap_move_geometry_path(store_root, &target_blocks, &source_blocks, true);
+        match (merge_result, blocks_result) {
+            (Ok(_), Ok(_)) => Ok(()),
+            (merge, blocks) => Err(Error::IO(
+                std::io::Error::other(format!(
+                    "primary relabel rollback failed (merge: {merge:?}; blocks: {blocks:?})"
+                )),
+                source_blocks.clone(),
+            )),
+        }
+    };
+
+    if let Err(error) =
+        bootstrap_move_geometry_path(store_root, &source_blocks, &target_blocks, true)
+    {
+        return match rollback() {
+            Ok(()) => Err(error),
+            Err(rollback_error) => Err(Error::IO(
+                std::io::Error::other(format!(
+                    "primary relabel block move failed ({error}); rollback failed ({rollback_error})"
+                )),
+                source_blocks,
+            )),
+        };
+    }
+    match bootstrap_move_geometry_path(store_root, &source_merge, &target_merge, false) {
+        Ok(_) => Ok(()),
+        Err(error) => match rollback() {
+            Ok(()) => Err(error),
+            Err(rollback_error) => Err(Error::IO(
+                std::io::Error::other(format!(
+                    "primary relabel merge move failed ({error}); block-directory rollback failed ({rollback_error})"
+                )),
+                source_blocks,
+            )),
+        },
+    }
+}
+
+fn bootstrap_require_lane_marker(
+    store_root: &Path,
+    blocks: &Path,
+    binding: &LaneGeometryBinding,
+) -> Result<()> {
+    let path = blocks.join(MARKER_FILE_NAME);
+    let Some(bytes) = Kura::read_regular_sidecar_bytes_for(
+        store_root,
+        &path,
+        blocks,
+        usize::try_from(MAX_LANE_MARKER_BYTES)?,
+    )?
+    else {
+        return Err(Error::IO(
+            std::io::Error::new(
+                ErrorKind::NotFound,
+                "durable primary binding has no incarnation marker",
+            ),
+            path,
+        ));
+    };
+    let mut cursor = bytes.as_slice();
+    let marker = LaneIncarnationMarker::decode_all(&mut cursor).map_err(Error::NoritoFrame)?;
+    if marker.encode() != bytes
+        || marker.version != MARKER_VERSION
+        || marker.lane_id != binding.lane_id
+        || marker.incarnation != binding.incarnation
+        || marker.activation_height != binding.activation_height
+    {
+        return Err(Error::IO(
+            std::io::Error::new(
+                ErrorKind::InvalidData,
+                "durable primary binding marker does not match its journal identity",
+            ),
+            path,
+        ));
+    }
+    Ok(())
 }
 
 fn lane_geometry_journal_structure_error(
@@ -9257,6 +10337,39 @@ fn geometry_file_identity(metadata: &fs::Metadata) -> GeometryFileIdentity {
         GeometryFileIdentity {
             unsupported_nonce: UNSUPPORTED_GEOMETRY_IDENTITY_NONCE.fetch_add(1, Ordering::Relaxed),
         }
+    }
+}
+
+fn checked_geometry_file_identity(
+    metadata: &fs::Metadata,
+    path: &Path,
+) -> Result<GeometryFileIdentity> {
+    let identity = geometry_file_identity(metadata);
+    #[cfg(windows)]
+    if identity.unsupported_nonce != 0 {
+        return Err(Error::IO(
+            std::io::Error::new(
+                ErrorKind::Unsupported,
+                "Windows filesystem did not expose a stable volume and file identity",
+            ),
+            path.to_path_buf(),
+        ));
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = identity;
+        return Err(Error::IO(
+            std::io::Error::new(
+                ErrorKind::Unsupported,
+                "lane geometry requires stable filesystem object identities",
+            ),
+            path.to_path_buf(),
+        ));
+    }
+    #[cfg(any(unix, windows))]
+    {
+        let _ = path;
+        Ok(identity)
     }
 }
 
@@ -11458,6 +12571,181 @@ mod tests {
         );
     }
 
+    #[cfg(any(
+        target_vendor = "apple",
+        target_os = "linux",
+        target_os = "android",
+        target_os = "redox"
+    ))]
+    #[test]
+    fn runtime_geometry_recovery_cannot_escape_a_substituted_parent() {
+        let temp = TempDir::new().expect("temporary directory");
+        let root = temp.path().join("kura");
+        let initial = RuntimeLaneConfig::from_catalog(&configured_primary_catalog("parent-alpha"));
+        let updated = RuntimeLaneConfig::from_catalog(&configured_primary_catalog("parent-beta"));
+        let (incarnations, activations) = initial_geometry();
+        let kura = open_kura(&root, &initial);
+        let _ = durable_geometry_snapshot_identity(&kura, 1);
+
+        kura.apply_lane_geometry_transition(
+            &initial,
+            &updated,
+            &incarnations,
+            &incarnations,
+            &activations,
+            &activations,
+            &BTreeSet::new(),
+        )
+        .expect("apply primary relabel before recovery");
+        assert_eq!(
+            kura.read_lane_geometry_journal()
+                .expect("geometry journal")
+                .records[0]
+                .phase,
+            LaneGeometryPhase::FilesApplied
+        );
+
+        let previous_blocks = initial.primary().blocks_dir(&root);
+        let updated_blocks = updated.primary().blocks_dir(&root);
+        let blocks_parent = previous_blocks.parent().expect("block-store parent");
+        assert_eq!(updated_blocks.parent(), Some(blocks_parent));
+        let displaced_parent = root.join("authenticated-blocks-parent");
+        let outside_parent = temp.path().join("outside-blocks-parent");
+        fs::create_dir(&outside_parent).expect("create outside replacement parent");
+        *GEOMETRY_MOVE_PARENT_SUBSTITUTION
+            .lock()
+            .expect("geometry parent-substitution hook lock") = Some((
+            blocks_parent.to_path_buf(),
+            displaced_parent.clone(),
+            outside_parent.clone(),
+        ));
+
+        kura.recover_lane_geometry_journal(&initial, &incarnations, &activations)
+            .expect_err("a substituted runtime parent must fail recovery closed");
+        assert!(
+            GEOMETRY_MOVE_PARENT_SUBSTITUTION
+                .lock()
+                .expect("geometry parent-substitution hook lock")
+                .is_none(),
+            "the parent substitution must occur at the pre-rename barrier"
+        );
+        assert!(
+            fs::symlink_metadata(blocks_parent)
+                .expect("substituted parent metadata")
+                .file_type()
+                .is_symlink()
+        );
+        for path in [&previous_blocks, &updated_blocks] {
+            assert!(
+                !outside_parent
+                    .join(path.file_name().expect("block-store name"))
+                    .exists(),
+                "descriptor-relative recovery must not publish through the replacement symlink"
+            );
+        }
+        assert!(
+            displaced_parent
+                .join(
+                    previous_blocks
+                        .file_name()
+                        .expect("previous block-store name")
+                )
+                .is_dir(),
+            "the authenticated parent handle must receive the recovered block store"
+        );
+        assert!(
+            !displaced_parent
+                .join(
+                    updated_blocks
+                        .file_name()
+                        .expect("updated block-store name")
+                )
+                .exists(),
+            "the descriptor-relative rename must consume its authenticated source"
+        );
+        assert_eq!(
+            kura.read_lane_geometry_journal()
+                .expect("unchanged geometry journal")
+                .records[0]
+                .phase,
+            LaneGeometryPhase::FilesApplied,
+            "failed recovery must not advance the durable journal phase"
+        );
+    }
+
+    #[test]
+    fn bootstrap_geometry_moves_never_clobber_targets_materialized_after_preflight() {
+        let temp = TempDir::new().expect("temporary directory");
+        let root = temp.path().join("kura");
+        fs::create_dir_all(&root).expect("create bootstrap Kura root");
+
+        let source_blocks = root.join("bootstrap-collision/source-blocks");
+        let target_blocks = root.join("bootstrap-collision/target-blocks");
+        fs::create_dir_all(&source_blocks).expect("seed bootstrap source blocks");
+        fs::write(source_blocks.join("sentinel"), b"source-blocks")
+            .expect("seed bootstrap source sentinel");
+        *GEOMETRY_MOVE_TARGET_COLLISION
+            .lock()
+            .expect("geometry collision hook lock") = Some(target_blocks.clone());
+        bootstrap_move_geometry_path(&root, &source_blocks, &target_blocks, true)
+            .expect_err("descriptor-relative bootstrap rename must reject the racing target");
+        assert_eq!(
+            fs::read(source_blocks.join("sentinel")).expect("source sentinel remains"),
+            b"source-blocks"
+        );
+        assert!(
+            fs::read_dir(&target_blocks)
+                .expect("read injected target")
+                .next()
+                .is_none(),
+            "the racing directory must remain empty and must not receive source contents"
+        );
+
+        let source_merge = root.join("bootstrap-collision/source-merge.log");
+        let target_merge = root.join("bootstrap-collision/target-merge.log");
+        fs::write(&source_merge, b"source-merge").expect("seed bootstrap source merge");
+        *GEOMETRY_MOVE_TARGET_COLLISION
+            .lock()
+            .expect("geometry collision hook lock") = Some(target_merge.clone());
+        bootstrap_move_geometry_path(&root, &source_merge, &target_merge, false)
+            .expect_err("descriptor-relative bootstrap rename must reject the racing file");
+        assert_eq!(
+            fs::read(source_merge).expect("source merge remains"),
+            b"source-merge"
+        );
+        assert_eq!(
+            fs::read(target_merge).expect("racing merge target remains"),
+            b"injected-no-clobber-target"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bootstrap_geometry_move_rejects_a_symlinked_target_parent() {
+        use std::os::unix::fs::symlink;
+
+        let temp = TempDir::new().expect("temporary directory");
+        let root = temp.path().join("kura");
+        let outside = temp.path().join("outside");
+        fs::create_dir_all(&root).expect("create bootstrap Kura root");
+        fs::create_dir_all(&outside).expect("create outside target");
+        let source = root.join("source.log");
+        fs::write(&source, b"canonical-source").expect("seed canonical source");
+        symlink(&outside, root.join("escaped-parent")).expect("plant target-parent symlink");
+        let target = root.join("escaped-parent/target.log");
+
+        bootstrap_move_geometry_path(&root, &source, &target, false)
+            .expect_err("bootstrap move must reject an ancestor symlink");
+        assert_eq!(
+            fs::read(source).expect("canonical source remains"),
+            b"canonical-source"
+        );
+        assert!(
+            !outside.join("target.log").exists(),
+            "bootstrap recovery must not publish outside the authenticated Kura root"
+        );
+    }
+
     #[test]
     fn mutable_pair_move_supports_a_stationary_block_path_and_later_merge_appends() {
         let temp = TempDir::new().expect("temporary directory");
@@ -12683,6 +13971,187 @@ mod tests {
     }
 
     #[test]
+    fn primary_relabel_files_applied_restart_recovers_exact_chain() {
+        let temp = TempDir::new().expect("temporary directory");
+        let root = temp.path().join("kura");
+        let initial_catalog = configured_primary_catalog("primary-alpha");
+        let updated_catalog = configured_primary_catalog("primary-beta");
+        let initial = RuntimeLaneConfig::from_catalog(&initial_catalog);
+        let updated = RuntimeLaneConfig::from_catalog(&updated_catalog);
+        let (incarnations, activations) = initial_geometry();
+        let kura = open_kura(&root, &initial);
+        let _ = durable_geometry_snapshot_identity(&kura, 3);
+        let expected_hashes = (1..=3)
+            .map(|height| {
+                kura.get_durable_block_hash(NonZeroUsize::new(height).expect("non-zero"))
+                    .expect("durable block hash")
+            })
+            .collect::<Vec<_>>();
+
+        kura.apply_lane_geometry_transition(
+            &initial,
+            &updated,
+            &incarnations,
+            &incarnations,
+            &activations,
+            &activations,
+            &BTreeSet::new(),
+        )
+        .expect("durably move primary files before catalog publication");
+        assert_eq!(
+            kura.read_lane_geometry_journal().unwrap().records[0].phase,
+            LaneGeometryPhase::FilesApplied
+        );
+        let old_blocks = initial.primary().blocks_dir(&root);
+        let new_blocks = updated.primary().blocks_dir(&root);
+        assert!(!old_blocks.exists());
+        assert!(new_blocks.exists());
+        drop(kura);
+
+        let reopened = open_kura(&root, &initial);
+        assert_eq!(reopened.durable_blocks_count(), 3);
+        assert_eq!(*reopened.active_blocks_dir.lock(), new_blocks);
+        assert!(
+            !old_blocks.exists(),
+            "startup must not provision an empty old path"
+        );
+        for (height, expected) in (1..=3).zip(expected_hashes) {
+            assert_eq!(
+                reopened.get_durable_block_hash(NonZeroUsize::new(height).unwrap()),
+                Some(expected)
+            );
+        }
+
+        reopened
+            .recover_lane_geometry_journal(&initial, &incarnations, &activations)
+            .expect("authoritative old catalog rolls the durable intent back");
+        assert_eq!(*reopened.active_blocks_dir.lock(), old_blocks);
+        assert!(old_blocks.exists());
+        assert!(!new_blocks.exists());
+        assert_eq!(reopened.durable_blocks_count(), 3);
+    }
+
+    struct PrimaryRelabelResumeGuard<'a>(&'a std::sync::atomic::AtomicBool);
+
+    impl Drop for PrimaryRelabelResumeGuard<'_> {
+        fn drop(&mut self) {
+            self.0.store(false, std::sync::atomic::Ordering::Release);
+        }
+    }
+
+    #[test]
+    fn primary_relabel_reader_blocks_until_retarget() {
+        let temp = TempDir::new().expect("temporary directory");
+        let root = temp.path().join("kura");
+        let initial = RuntimeLaneConfig::from_catalog(&configured_primary_catalog("reader-alpha"));
+        let updated = RuntimeLaneConfig::from_catalog(&configured_primary_catalog("reader-beta"));
+        let (incarnations, activations) = initial_geometry();
+        let kura = open_kura(&root, &initial);
+        let _ = durable_geometry_snapshot_identity(&kura, 1);
+        let expected = kura
+            .get_durable_block_hash(nonzero!(1_usize))
+            .expect("durable block hash");
+        kura.block_data.lock()[0].1 = None;
+        kura.pause_primary_relabel_before_retarget
+            .store(true, std::sync::atomic::Ordering::Release);
+
+        thread::scope(|scope| {
+            let transition = scope.spawn(|| {
+                kura.apply_lane_geometry_transition(
+                    &initial,
+                    &updated,
+                    &incarnations,
+                    &incarnations,
+                    &activations,
+                    &activations,
+                    &BTreeSet::new(),
+                )
+            });
+            let resume_guard = PrimaryRelabelResumeGuard(&kura.primary_relabel_paused);
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while !kura
+                .primary_relabel_paused
+                .load(std::sync::atomic::Ordering::Acquire)
+            {
+                assert!(Instant::now() < deadline, "primary relabel did not pause");
+                thread::yield_now();
+            }
+            assert!(
+                kura.block_store.try_lock().is_none(),
+                "the canonical BlockStore guard must span rename through retarget"
+            );
+
+            let (reader_tx, reader_rx) = mpsc::channel();
+            let reader_kura = Arc::clone(&kura);
+            let reader = scope.spawn(move || {
+                let block = reader_kura.get_block(nonzero!(1_usize));
+                reader_tx.send(block).expect("send reader result");
+            });
+            assert!(
+                reader_rx.recv_timeout(Duration::from_millis(50)).is_err(),
+                "reader must not reopen the old path while relabel is between rename and retarget"
+            );
+            drop(resume_guard);
+            transition
+                .join()
+                .expect("transition thread")
+                .expect("journaled primary relabel");
+            let block = reader_rx
+                .recv_timeout(Duration::from_secs(5))
+                .expect("reader completes after retarget")
+                .expect("canonical block remains readable");
+            assert_eq!(block.hash(), expected);
+            reader.join().expect("reader thread");
+        });
+    }
+
+    #[test]
+    fn lane_geometry_recovery_holds_sidecar_lock() {
+        let temp = TempDir::new().expect("temporary directory");
+        let root = temp.path().join("kura");
+        let initial = RuntimeLaneConfig::from_catalog(&configured_primary_catalog("lock-alpha"));
+        let updated = RuntimeLaneConfig::from_catalog(&configured_primary_catalog("lock-beta"));
+        let (incarnations, activations) = initial_geometry();
+        let kura = open_kura(&root, &initial);
+        kura.apply_lane_geometry_transition(
+            &initial,
+            &updated,
+            &incarnations,
+            &incarnations,
+            &activations,
+            &activations,
+            &BTreeSet::new(),
+        )
+        .expect("apply primary relabel");
+        kura.pause_primary_relabel_before_retarget
+            .store(true, std::sync::atomic::Ordering::Release);
+
+        thread::scope(|scope| {
+            let recovery = scope.spawn(|| {
+                kura.recover_lane_geometry_journal(&initial, &incarnations, &activations)
+            });
+            let resume_guard = PrimaryRelabelResumeGuard(&kura.primary_relabel_paused);
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while !kura
+                .primary_relabel_paused
+                .load(std::sync::atomic::Ordering::Acquire)
+            {
+                assert!(Instant::now() < deadline, "lane recovery did not pause");
+                thread::yield_now();
+            }
+            assert!(
+                kura.sidecar_lock.try_lock().is_none(),
+                "runtime geometry recovery must exclude lane sidecar I/O"
+            );
+            drop(resume_guard);
+            recovery
+                .join()
+                .expect("recovery thread")
+                .expect("recover primary relabel");
+        });
+    }
+
+    #[test]
     fn recovery_publishes_uncertain_boundary_before_rolling_tail_forward() {
         let temp = TempDir::new().expect("temporary directory");
         let root = temp.path().join("kura");
@@ -13575,6 +15044,122 @@ mod tests {
         assert_eq!(
             fs::read(quarantine.join("operator-data")).expect("collision retained"),
             b"retain"
+        );
+    }
+
+    #[cfg(any(
+        target_vendor = "apple",
+        target_os = "linux",
+        target_os = "android",
+        target_os = "redox"
+    ))]
+    #[test]
+    fn geometry_gc_quarantine_cannot_escape_a_substituted_parent() {
+        let temp = TempDir::new().expect("temporary directory");
+        let root = temp.path().join("kura");
+        let kura = open_kura(&root, &initial_and_extended_configs().0);
+        let fixture = prepare_retired_geometry_archive(&kura, &root);
+        kura.fail_next_lane_geometry_gc_at_stage_for_test(GC_FAIL_AFTER_COMPACTION_INTENT);
+        checkpoint_retired_geometry(&kura, &fixture, 20).expect_err("leave pending deletion");
+
+        let archive_parent = fixture.archive_root.parent().expect("archive parent");
+        let root_name = fixture.archive_root.file_name().expect("transition id");
+        let quarantine_name = format!("{GC_QUARANTINE_PREFIX}{}", root_name.to_string_lossy());
+        let displaced_parent = root.join("authenticated-retired-parent");
+        let outside_parent = temp.path().join("outside-retired-parent");
+        fs::create_dir(&outside_parent).expect("create outside replacement parent");
+        *GEOMETRY_MOVE_PARENT_SUBSTITUTION
+            .lock()
+            .expect("geometry parent-substitution hook lock") = Some((
+            archive_parent.to_path_buf(),
+            displaced_parent.clone(),
+            outside_parent.clone(),
+        ));
+
+        kura.resume_proven_lane_geometry_archive_gc()
+            .expect_err("a substituted archive parent must fail GC closed");
+        assert!(
+            GEOMETRY_MOVE_PARENT_SUBSTITUTION
+                .lock()
+                .expect("geometry parent-substitution hook lock")
+                .is_none(),
+            "the parent substitution must occur at the pre-rename barrier"
+        );
+        assert!(
+            fs::symlink_metadata(archive_parent)
+                .expect("substituted archive parent metadata")
+                .file_type()
+                .is_symlink()
+        );
+        for name in [root_name, std::ffi::OsStr::new(&quarantine_name)] {
+            assert!(
+                !outside_parent.join(name).exists(),
+                "descriptor-relative GC must not publish through the replacement symlink"
+            );
+        }
+        assert!(
+            displaced_parent.join(&quarantine_name).is_dir(),
+            "the authenticated parent handle must receive the quarantine"
+        );
+        assert!(
+            !displaced_parent.join(root_name).exists(),
+            "the descriptor-relative rename must consume its authenticated source"
+        );
+        assert!(
+            !kura
+                .read_lane_geometry_journal()
+                .expect("pending geometry journal")
+                .pending_archive_gc
+                .is_empty(),
+            "failed parent revalidation must retain the durable GC intent"
+        );
+    }
+
+    #[cfg(all(unix, not(any(target_os = "espidf", target_os = "redox"))))]
+    #[test]
+    fn geometry_gc_descriptor_deletion_cannot_follow_a_substituted_parent() {
+        use std::os::unix::fs::symlink;
+
+        let temp = TempDir::new().expect("temporary directory");
+        let root = temp.path().join("kura");
+        let kura = open_kura(&root, &initial_and_extended_configs().0);
+        let archive_parent = root.join("descriptor-gc-parent");
+        let deletion_root = archive_parent.join(".gc-authenticated");
+        let nested = deletion_root.join("nested/leaf");
+        fs::create_dir_all(&nested).expect("create authenticated deletion tree");
+        fs::write(nested.join("payload.norito"), b"authenticated")
+            .expect("seed authenticated deletion tree");
+        let deletion_identity = kura
+            .geometry_path_identity(&deletion_root, true)
+            .expect("authenticated deletion identity");
+        let (parent_handle, _) = kura
+            .open_geometry_parent(&archive_parent)
+            .expect("authenticated deletion parent");
+
+        let displaced_parent = root.join("descriptor-gc-parent.displaced");
+        let outside_parent = temp.path().join("outside-descriptor-gc-parent");
+        let outside_collision = outside_parent.join(".gc-authenticated");
+        fs::create_dir_all(&outside_collision).expect("create outside collision");
+        fs::write(outside_collision.join("operator-data"), b"retain")
+            .expect("outside collision sentinel");
+        fs::rename(&archive_parent, &displaced_parent).expect("displace authenticated parent");
+        symlink(&outside_parent, &archive_parent).expect("substitute archive parent");
+
+        Kura::remove_authenticated_geometry_tree_at(
+            &parent_handle,
+            std::ffi::OsStr::new(".gc-authenticated"),
+            deletion_identity,
+            &deletion_root,
+        )
+        .expect("descriptor-relative deletion stays under the authenticated parent handle");
+        assert!(
+            !displaced_parent.join(".gc-authenticated").exists(),
+            "the authenticated quarantine must be removed"
+        );
+        assert_eq!(
+            fs::read(outside_collision.join("operator-data")).expect("outside sentinel retained"),
+            b"retain",
+            "the substituted path namespace must remain untouched"
         );
     }
 

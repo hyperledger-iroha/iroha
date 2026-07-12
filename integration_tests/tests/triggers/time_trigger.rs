@@ -262,7 +262,7 @@ async fn mint_asset_after_3_sec_scenario(
         );
         let schedule_at = start_time + gap;
         let schedule = TimeSchedule::starting_at(schedule_at);
-        let instruction = Mint::asset_numeric(1_u32, asset_id.clone());
+        let instruction = Mint::asset_quantity(1_u32, asset_id.clone());
         let register_trigger = Register::trigger(Trigger::new(
             "mint_rose_schedule".parse().expect("Valid"),
             Action::new(
@@ -365,7 +365,7 @@ async fn pre_commit_trigger_should_be_executed_scenario(
             let account_id = ALICE_ID.clone();
             let asset_id = AssetId::new(asset_definition_id, account_id.clone());
 
-            let instruction = Mint::asset_numeric(1u32, asset_id.clone());
+            let instruction = Mint::asset_quantity(1u32, asset_id.clone());
             let register_trigger = Register::trigger(Trigger::new(
                 "mint_rose_precommit".parse()?,
                 Action::new(

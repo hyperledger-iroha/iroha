@@ -183,8 +183,8 @@ Envelope comum: `InstructionExecutionError` com variantes para erros de avaliaç
 
 ---## Exemplos práticos
 - Cunhagem e transferência:
-  - `Mint::asset_numeric(10, asset_id)` → adiciona 10 se permitido pela especificação/mintabilidade; eventos: `AssetEvent::Added`.
-  - `Transfer::asset_numeric(asset_id, 5, to_account)` → move 5; eventos para remoção/adição.
+  - `Mint::asset_quantity(10, asset_id)` → adiciona 10 se permitido pela especificação/mintabilidade; eventos: `AssetEvent::Added`.
+  - `Transfer::asset_quantity(asset_id, 5, to_account)` → move 5; eventos para remoção/adição.
 - Atualizações de metadados:
   - `SetKeyValue::account(account_id, "avatar".parse()?, json)` → inserção superior; remoção via `RemoveKeyValue::account(...)`.
 - Gerenciamento de funções/permissões:

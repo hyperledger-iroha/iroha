@@ -16,11 +16,9 @@ use norito::{
 };
 
 use crate::{
-    Identifiable, Name,
-    asset::prelude::AssetDefinitionId,
-    metadata::Metadata,
-    prelude::{AccountId, Numeric},
+    Identifiable, Name, asset::prelude::AssetDefinitionId, metadata::Metadata, prelude::AccountId,
 };
+use iroha_primitives::numeric::Quantity;
 
 #[model]
 mod model {
@@ -65,7 +63,17 @@ pub struct RepoCashLeg {
     /// Asset definition used for the cash consideration.
     pub asset_definition_id: AssetDefinitionId,
     /// Quantity of the cash asset exchanged at initiation.
-    pub quantity: Numeric,
+    pub quantity: Quantity,
+}
+
+impl RepoCashLeg {
+    /// Construct a cash leg with a nominal non-negative quantity.
+    pub fn new(asset_definition_id: AssetDefinitionId, quantity: impl Into<Quantity>) -> Self {
+        Self {
+            asset_definition_id,
+            quantity: quantity.into(),
+        }
+    }
 }
 
 /// Collateral leg definition used by repo instructions.
@@ -76,17 +84,17 @@ pub struct RepoCollateralLeg {
     /// Asset definition pledged as collateral.
     pub asset_definition_id: AssetDefinitionId,
     /// Quantity of collateral exchanged at initiation.
-    pub quantity: Numeric,
+    pub quantity: Quantity,
     /// Optional metadata (e.g., ISIN/series) attached at admission time.
     pub metadata: Metadata,
 }
 
 impl RepoCollateralLeg {
     /// Construct a collateral leg without metadata.
-    pub fn new(asset_definition_id: AssetDefinitionId, quantity: Numeric) -> Self {
+    pub fn new(asset_definition_id: AssetDefinitionId, quantity: impl Into<Quantity>) -> Self {
         Self {
             asset_definition_id,
-            quantity,
+            quantity: quantity.into(),
             metadata: Metadata::default(),
         }
     }
@@ -249,8 +257,24 @@ impl JsonKeyCodec for RepoAgreementId {
 
 #[cfg(test)]
 mod tests {
+    use iroha_primitives::numeric::Numeric;
+    use norito::codec::{Decode, Encode};
+
     use super::*;
     use crate::domain::DomainId;
+
+    #[derive(Encode)]
+    struct ForgedRepoCashLeg {
+        asset_definition_id: AssetDefinitionId,
+        quantity: Numeric,
+    }
+
+    #[derive(Encode)]
+    struct ForgedRepoCollateralLeg {
+        asset_definition_id: AssetDefinitionId,
+        quantity: Numeric,
+        metadata: Metadata,
+    }
 
     const ALICE_ID_STR: &str = "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE";
     fn sample_agreement(initiated_ms: u64, margin_frequency_secs: u64) -> RepoAgreement {
@@ -267,14 +291,14 @@ mod tests {
                 DomainId::try_new("wonderland", "universal").unwrap(),
                 "usd".parse().unwrap(),
             ),
-            quantity: Numeric::from(1_000u32),
+            quantity: Quantity::from(1_000u32),
         };
         let collateral_leg = RepoCollateralLeg::new(
             iroha_data_model::asset::AssetDefinitionId::new(
                 DomainId::try_new("wonderland", "universal").unwrap(),
                 "bond".parse().unwrap(),
             ),
-            Numeric::from(1_100u32),
+            Quantity::from(1_100u32),
         );
         RepoAgreement::new(
             "daily".parse().unwrap(),
@@ -334,5 +358,33 @@ mod tests {
         assert!(!agreement.is_margin_check_due(129_999));
         assert!(agreement.is_margin_check_due(130_000));
         assert!(agreement.is_margin_check_due(130_001));
+    }
+
+    #[test]
+    fn negative_numeric_payloads_cannot_decode_as_repo_leg_quantities() {
+        let domain = DomainId::try_new("wonderland", "universal").expect("domain");
+        let cash = AssetDefinitionId::new(domain.clone(), "usd".parse().expect("name"));
+        let collateral = AssetDefinitionId::new(domain, "bond".parse().expect("name"));
+
+        let encoded = ForgedRepoCashLeg {
+            asset_definition_id: cash,
+            quantity: Numeric::new(-1_i32, 0),
+        }
+        .encode();
+        assert!(
+            RepoCashLeg::decode(&mut encoded.as_slice()).is_err(),
+            "a negative signed payload must not decode as a repo cash quantity"
+        );
+
+        let encoded = ForgedRepoCollateralLeg {
+            asset_definition_id: collateral,
+            quantity: Numeric::new(-1_i32, 0),
+            metadata: Metadata::default(),
+        }
+        .encode();
+        assert!(
+            RepoCollateralLeg::decode(&mut encoded.as_slice()).is_err(),
+            "a negative signed payload must not decode as a repo collateral quantity"
+        );
     }
 }

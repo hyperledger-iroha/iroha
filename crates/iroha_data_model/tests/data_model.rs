@@ -25,7 +25,7 @@ fn transfer_isi_should_be_valid() {
         "btc".parse().unwrap(),
     );
     let source_asset_id = AssetId::new(asset_definition_id, source_account);
-    let _instruction = Transfer::asset_numeric(source_asset_id, 12u32, destination_account);
+    let _instruction = Transfer::asset_quantity(source_asset_id, 12u32, destination_account);
 }
 
 #[test]

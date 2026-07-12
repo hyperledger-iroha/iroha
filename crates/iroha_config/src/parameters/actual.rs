@@ -70,7 +70,11 @@ use iroha_data_model::{
     },
     taikai::TaikaiAvailabilityClass,
 };
-use iroha_primitives::{addr::SocketAddr, numeric::Numeric, unique_vec::UniqueVec};
+use iroha_primitives::{
+    addr::SocketAddr,
+    numeric::{Numeric, Quantity},
+    unique_vec::UniqueVec,
+};
 use norito::{codec::Encode, streaming::EntropyMode};
 use rust_decimal::Decimal;
 use thiserror::Error;
@@ -2554,19 +2558,19 @@ pub struct NexusFees {
     /// Account that receives collected fees.
     pub fee_sink_account_id: String,
     /// Base fee charged per transaction.
-    pub base_fee: Numeric,
+    pub base_fee: Quantity,
     /// Per-byte fee charged over the signed transaction payload.
-    pub per_byte_fee: Numeric,
+    pub per_byte_fee: Quantity,
     /// Per-instruction fee charged for native ISI batches.
-    pub per_instruction_fee: Numeric,
+    pub per_instruction_fee: Quantity,
     /// Per-gas-unit fee multiplier applied to measured gas usage.
-    pub per_gas_unit_fee: Numeric,
+    pub per_gas_unit_fee: Quantity,
     /// Whether fee sponsorship is permitted.
     pub sponsorship_enabled: bool,
     /// Maximum fee a sponsor can cover per transaction (0 = unlimited).
-    pub sponsor_max_fee: Numeric,
+    pub sponsor_max_fee: Quantity,
     /// Minimum verified sponsor balance left unused by lane-relay-burn admission.
-    pub sponsor_verified_balance_safety_floor: Numeric,
+    pub sponsor_verified_balance_safety_floor: Quantity,
     /// Canonical sponsor account required by activated lane-relay-burn fee settlement.
     pub canonical_sponsor_account_id: Option<String>,
     /// First block height whose lane commitments include Nexus fee receipts.
@@ -3235,13 +3239,13 @@ struct NexusConsensusStakingV1 {
 struct NexusConsensusFeesV1 {
     fee_asset_id: String,
     fee_sink_account_id: String,
-    base_fee: Numeric,
-    per_byte_fee: Numeric,
-    per_instruction_fee: Numeric,
-    per_gas_unit_fee: Numeric,
+    base_fee: Quantity,
+    per_byte_fee: Quantity,
+    per_instruction_fee: Quantity,
+    per_gas_unit_fee: Quantity,
     sponsorship_enabled: bool,
-    sponsor_max_fee: Numeric,
-    sponsor_verified_balance_safety_floor: Numeric,
+    sponsor_max_fee: Quantity,
+    sponsor_verified_balance_safety_floor: Quantity,
     canonical_sponsor_account_id: Option<String>,
     fee_receipts_activation_height: u64,
     external_settlement_enabled: bool,
@@ -10714,7 +10718,7 @@ mod tests {
         );
 
         let mut fee_drift = baseline.clone();
-        fee_drift.fees.per_byte_fee = Numeric::from(123_456_u32);
+        fee_drift.fees.per_byte_fee = Quantity::from(123_456_u32);
         assert_ne!(
             nexus_consensus_policy_digest(&fee_drift).expect("valid fee drift"),
             expected

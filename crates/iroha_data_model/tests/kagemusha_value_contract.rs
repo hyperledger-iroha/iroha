@@ -7,12 +7,13 @@ use iroha_data_model::{
     asset::AssetDefinitionId,
     domain::DomainId,
     offline::{
-        KagemushaRecursiveSpendArtifactBindingV3, KagemushaRecursiveSpendBranchClaimV2,
-        KagemushaRecursiveSpendBranchV2, KagemushaRecursiveSpendInputBranchV2,
-        KagemushaRecursiveSpendRedemptionIntentV2, KagemushaRecursiveSpendSplitIntentV2,
-        KagemushaRecursiveSpendTopUpAnchorRefV2, KagemushaScaledAmountV2,
-        KagemushaSpendableNoteDescriptorV2, KagemushaUnshieldPublicInputsBindingV2,
-        KagemushaValidationError, kagemusha_confidential_amount_encoding_v2,
+        KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2, KagemushaRecursiveSpendArtifactBindingV3,
+        KagemushaRecursiveSpendBranchClaimV2, KagemushaRecursiveSpendBranchV2,
+        KagemushaRecursiveSpendInputBranchV2, KagemushaRecursiveSpendRedemptionIntentV2,
+        KagemushaRecursiveSpendSplitIntentV2, KagemushaRecursiveSpendTopUpAnchorRefV2,
+        KagemushaScaledAmountV2, KagemushaSpendableNoteDescriptorV2,
+        KagemushaUnshieldPublicInputsBindingV2, KagemushaValidationError,
+        kagemusha_confidential_amount_encoding_v2,
     },
     prelude::Numeric,
 };
@@ -268,6 +269,38 @@ fn split_rejects_nonconservation_duplicate_material_and_overlapping_claims() {
         overlapping_claims.validate_public_binding(),
         Err(KagemushaValidationError::InvalidRecursiveSpendProof {
             field: "branch_claims.conflict"
+        })
+    ));
+}
+
+#[test]
+fn peer_hop_limit_is_eight_and_independent_of_branch_depth() {
+    let mut last_permitted_parent = split_intent();
+    last_permitted_parent.inputs[0].peer_hop_count = KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2 - 1;
+    last_permitted_parent
+        .validate_public_binding()
+        .expect("a seventh-hop parent may produce the eighth peer hop");
+
+    let mut exhausted_parent = split_intent();
+    exhausted_parent.inputs[0].peer_hop_count = KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2;
+    assert!(matches!(
+        exhausted_parent.validate_public_binding(),
+        Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+            field: "split.inputs"
+        })
+    ));
+
+    let mut terminal_redemption = redemption_intent(TOTAL, None);
+    terminal_redemption.parent_peer_hop_count = KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2;
+    terminal_redemption
+        .validate_public_binding()
+        .expect("redemption does not add a peer hop at the eight-hop boundary");
+
+    terminal_redemption.parent_peer_hop_count = KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2 + 1;
+    assert!(matches!(
+        terminal_redemption.validate_public_binding(),
+        Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+            field: "redemption"
         })
     ));
 }

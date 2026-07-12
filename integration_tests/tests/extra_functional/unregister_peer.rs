@@ -329,7 +329,7 @@ async fn mint(
     quantity: Numeric,
     timeout_duration: Duration,
 ) -> Result<()> {
-    let mint_asset = Mint::asset_numeric(
+    let mint_asset = Mint::asset_quantity(
         quantity,
         AssetId::new(asset_definition_id.clone(), account_id.clone()),
     );

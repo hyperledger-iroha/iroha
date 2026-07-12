@@ -15,8 +15,8 @@ use halo2_proofs::{
 };
 use iroha_data_model::{
     offline::{
-        KagemushaRecursiveSpendBranchV2, KagemushaRecursiveSpendPublicStatementV2,
-        KagemushaRecursiveSpendTransitionV2,
+        KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2, KagemushaRecursiveSpendBranchV2,
+        KagemushaRecursiveSpendPublicStatementV2, KagemushaRecursiveSpendTransitionV2,
     },
     proof::VerifyingKeyRecord,
 };
@@ -122,6 +122,7 @@ const I_UNSHIELD_PUBLIC_AMOUNT: usize = I_UNSHIELD_PUBLIC_INPUTS_DIGEST + 4;
 pub const KAGEMUSHA_RECURSIVE_SPEND_V2_INSTANCE_ROWS: usize = I_UNSHIELD_PUBLIC_AMOUNT + 1;
 
 const PATH_SELECTOR_COUNT: usize = 64;
+const PEER_HOP_SELECTOR_COUNT: usize = KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2 as usize + 1;
 
 /// Fixed public and private witness values for one V2 output branch.
 #[derive(Clone, Debug)]
@@ -133,6 +134,8 @@ pub struct KagemushaRecursiveSpendTransitionValuesV2 {
     amount_low_carry: Scalar,
     /// One-hot selector for the parent branch depth on append.
     path_depth_selectors: [Scalar; PATH_SELECTOR_COUNT],
+    /// One-hot selector constraining the current peer-hop count to `0..=8`.
+    peer_hop_selectors: [Scalar; PEER_HOP_SELECTOR_COUNT],
 }
 
 impl Default for KagemushaRecursiveSpendTransitionValuesV2 {
@@ -142,10 +145,13 @@ impl Default for KagemushaRecursiveSpendTransitionValuesV2 {
             Scalar::from(KAGEMUSHA_RECURSIVE_SPEND_V2_INSTANCE_LAYOUT_VERSION);
         // Keygen uses this witnessless, internally consistent init shape.
         public[I_PROOF_STEP_COUNT] = Scalar::from(1);
+        let mut peer_hop_selectors = [Scalar::from(0); PEER_HOP_SELECTOR_COUNT];
+        peer_hop_selectors[0] = Scalar::from(1);
         Self {
             public,
             amount_low_carry: Scalar::from(0),
             path_depth_selectors: [Scalar::from(0); PATH_SELECTOR_COUNT],
+            peer_hop_selectors,
         }
     }
 }
@@ -196,6 +202,26 @@ impl KagemushaRecursiveSpendTransitionValuesV2 {
         if selector_sum != value(I_APPEND_PROFILE) + value(I_REDEMPTION_PROFILE) {
             return Err("Kagemusha V2 branch-depth selector sum mismatch".to_owned());
         }
+        let peer_hop_selector_sum = self
+            .peer_hop_selectors
+            .iter()
+            .copied()
+            .fold(zero, |sum, selector| sum + selector);
+        let peer_hop_count = self.peer_hop_selectors.iter().copied().enumerate().fold(
+            zero,
+            |sum, (hop, selector)| {
+                sum + selector * Scalar::from(u64::try_from(hop).expect("peer hop fits u64"))
+            },
+        );
+        if self
+            .peer_hop_selectors
+            .iter()
+            .any(|selector| *selector != zero && *selector != one)
+            || peer_hop_selector_sum != one
+            || peer_hop_count != value(I_PEER_HOP_COUNT)
+        {
+            return Err("Kagemusha V2 peer-hop count exceeds the eight-hop bound".to_owned());
+        }
         Ok(())
     }
 }
@@ -206,6 +232,7 @@ pub struct KagemushaRecursiveSpendTransitionConfigV2 {
     public_advice: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
     amount_low_carry: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
     path_depth_selector: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+    peer_hop_selector: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
     relation: Selector,
 }
 
@@ -261,6 +288,7 @@ impl Circuit<Scalar> for KagemushaRecursiveSpendTransitionCircuitV2 {
         let public_instance = meta.instance_column();
         let amount_low_carry = meta.advice_column();
         let path_depth_selector = meta.advice_column();
+        let peer_hop_selector = meta.advice_column();
         let relation = meta.selector();
 
         meta.create_gate("kagemusha_recursive_spend_v2_transition", |meta| {
@@ -338,6 +366,31 @@ impl Circuit<Scalar> for KagemushaRecursiveSpendTransitionCircuitV2 {
                 enabled.clone() * (one.clone() - extends.clone()) * p(I_PREVIOUS_PROOF_STEP_COUNT),
                 enabled.clone() * (one.clone() - extends.clone()) * p(I_PREVIOUS_PEER_HOP_COUNT),
                 enabled.clone() * (one.clone() - extends.clone()) * p(I_PARENT_BRANCH_DEPTH),
+            ]);
+
+            // Peer transfers are capped at eight independently of the 64-level
+            // branch-path capacity. Redemption-change transitions can extend a
+            // branch without adding a peer hop, so these bounds must not share
+            // a selector or protocol constant.
+            let mut peer_hop_selector_sum = zero.clone();
+            let mut selected_peer_hop = zero.clone();
+            for hop in 0..PEER_HOP_SELECTOR_COUNT {
+                let selector = meta.query_advice(
+                    peer_hop_selector,
+                    Rotation(i32::try_from(hop).expect("peer-hop selector row fits i32")),
+                );
+                constraints
+                    .push(enabled.clone() * selector.clone() * (selector.clone() - one.clone()));
+                peer_hop_selector_sum = peer_hop_selector_sum + selector.clone();
+                selected_peer_hop = selected_peer_hop
+                    + selector
+                        * Expression::Constant(Scalar::from(
+                            u64::try_from(hop).expect("peer hop fits u64"),
+                        ));
+            }
+            constraints.extend([
+                enabled.clone() * (peer_hop_selector_sum - one.clone()),
+                enabled.clone() * (selected_peer_hop - p(I_PEER_HOP_COUNT)),
             ]);
 
             // Every amount uses the authoritative asset scale.  An absent
@@ -599,6 +652,7 @@ impl Circuit<Scalar> for KagemushaRecursiveSpendTransitionCircuitV2 {
             public_advice,
             amount_low_carry,
             path_depth_selector,
+            peer_hop_selector,
             relation,
         }
     }
@@ -637,6 +691,15 @@ impl Circuit<Scalar> for KagemushaRecursiveSpendTransitionCircuitV2 {
                         &mut region,
                         move || format!("path_depth_selector_{row}"),
                         config.path_depth_selector,
+                        row,
+                        || Value::known(selector),
+                    )?;
+                }
+                for (row, selector) in values.peer_hop_selectors.iter().copied().enumerate() {
+                    assign_advice_compat(
+                        &mut region,
+                        move || format!("peer_hop_selector_{row}"),
+                        config.peer_hop_selector,
                         row,
                         || Value::known(selector),
                     )?;
@@ -1371,6 +1434,8 @@ mod tests {
         p[I_HAS_CHANGE] = Scalar::from(1);
         p[I_PROOF_STEP_COUNT] = Scalar::from(2);
         p[I_PEER_HOP_COUNT] = Scalar::from(1);
+        values.peer_hop_selectors[0] = Scalar::from(0);
+        values.peer_hop_selectors[1] = Scalar::from(1);
         p[I_PREVIOUS_PROOF_STEP_COUNT] = Scalar::from(1);
         p[I_PREVIOUS_PEER_HOP_COUNT] = Scalar::from(0);
         p[I_BRANCH_DEPTH] = Scalar::from(1);
@@ -1430,6 +1495,8 @@ mod tests {
         p[I_HAS_CHANGE] = Scalar::from(1);
         p[I_PROOF_STEP_COUNT] = Scalar::from(2);
         p[I_PEER_HOP_COUNT] = Scalar::from(3);
+        values.peer_hop_selectors[0] = Scalar::from(0);
+        values.peer_hop_selectors[3] = Scalar::from(1);
         p[I_PREVIOUS_PROOF_STEP_COUNT] = Scalar::from(1);
         p[I_PREVIOUS_PEER_HOP_COUNT] = Scalar::from(3);
         p[I_BRANCH_DEPTH] = Scalar::from(4);
@@ -1728,6 +1795,41 @@ mod tests {
         )
         .expect("mock prover");
         assert!(prover.verify().is_err());
+    }
+
+    #[test]
+    fn transition_relation_enforces_eight_peer_hops_independently_of_branch_depth() {
+        let mut at_limit = valid_append_values();
+        at_limit.public[I_PEER_HOP_COUNT] = Scalar::from(8);
+        at_limit.public[I_PREVIOUS_PEER_HOP_COUNT] = Scalar::from(7);
+        at_limit.peer_hop_selectors[1] = Scalar::from(0);
+        at_limit.peer_hop_selectors[8] = Scalar::from(1);
+        let instances = vec![at_limit.public.to_vec()];
+        let prover = halo2_proofs::dev::MockProver::run(
+            9,
+            &KagemushaRecursiveSpendTransitionCircuitV2 { values: at_limit },
+            instances,
+        )
+        .expect("mock prover at peer-hop limit");
+        prover.assert_satisfied();
+
+        let mut above_limit = valid_append_values();
+        above_limit.public[I_PEER_HOP_COUNT] = Scalar::from(9);
+        above_limit.public[I_PREVIOUS_PEER_HOP_COUNT] = Scalar::from(8);
+        assert!(
+            halo2_proofs::dev::MockProver::run(
+                9,
+                &KagemushaRecursiveSpendTransitionCircuitV2 {
+                    values: above_limit,
+                },
+                vec![vec![
+                    Scalar::from(0);
+                    KAGEMUSHA_RECURSIVE_SPEND_V2_INSTANCE_ROWS
+                ]],
+            )
+            .is_err(),
+            "a ninth peer hop must fail before proof construction"
+        );
     }
 
     #[test]

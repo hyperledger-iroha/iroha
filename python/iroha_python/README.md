@@ -73,9 +73,11 @@ assert NumericV1Codec.decode_quantity_envelope(payload) == KotodamaQuantity(
 )
 ```
 
-Python `float` and `decimal.Decimal` inputs are rejected. Use exact strings or,
-for component construction, an arbitrary-precision integer mantissa plus an
-explicit scale.
+`NumericV1Codec` rejects Python `float` and `decimal.Decimal` inputs. Use exact
+strings or, for component construction, an arbitrary-precision integer
+mantissa plus an explicit scale. Higher-level ledger helpers additionally
+accept `Decimal` because it is a lossless host value and normalize it before
+calling the codec.
 
 ## Kagemusha lifecycle support
 
@@ -365,6 +367,13 @@ client.transfer_assets_and_wait(
     ],
 )
 ```
+
+Ledger quantity helpers accept `KotodamaQuantity`, canonical quantity strings,
+Python integers, or finite `Decimal` values. `Decimal` inputs are normalized
+losslessly; strings are treated as wire values and must already use canonical
+spelling. Python `float`, JSON numbers on readback, negative quantities, and
+alternate strings such as `"01"`, `"1.0"`, or `"1e0"` are rejected before a
+transaction is encoded.
 
 ## RWA instructions
 
@@ -798,14 +807,14 @@ config = TransactionConfig(chain_id="dev-chain", authority="sorauﾛ1NcMBm2dﾌB
 draft = TransactionDraft(config)
 draft.register_domain("wonderland") \
      .register_account("sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6", metadata={"role": "admin"}) \
-     .register_asset_definition_numeric(
+     .register_asset_definition(
         "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
         owner="sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
         scale=2,
         mintable="Infinitely",
         metadata={"sym": "ROS"},
      ) \
-     .mint_asset_numeric("norito:<asset-id-hex>", 10)
+     .mint_asset_quantity("norito:<asset-id-hex>", 10)
 
 pair = Ed25519KeyPair.from_private_key(bytes([1] * 32))
 envelope = draft.sign_with_keypair(pair)
@@ -1785,7 +1794,7 @@ no environment variables need to be exported.
   transactions (bare + versioned Norito bytes) with signature/hash inspection
   helpers plus dict/JSON export/import helpers for envelopes.
 - Provide Python-friendly instruction constructors (register domain/account,
-  mint/transfer numeric assets) to assemble manifests without raw JSON, plus
+  mint/transfer quantity assets) to assemble manifests without raw JSON, plus
   `Instruction.from_json`/`Instruction.to_json` helpers for full Norito
   coverage when bespoke wrappers are unnecessary.
 - Expose typed wrappers for `DomainId`, `AccountId`, `AssetDefinitionId`, and

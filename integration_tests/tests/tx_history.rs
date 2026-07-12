@@ -50,8 +50,8 @@ fn client_has_rejected_and_accepted_txs_should_return_tx_history() -> Result<()>
     //When
     let quantity = numeric!(200);
     let asset_id = AssetId::new(asset_definition_id, account_id.clone());
-    let mint_existed_asset = Mint::asset_numeric(quantity.clone(), asset_id);
-    let mint_not_existed_asset = Mint::asset_numeric(
+    let mint_existed_asset = Mint::asset_quantity(quantity.clone(), asset_id);
+    let mint_not_existed_asset = Mint::asset_quantity(
         quantity,
         AssetId::new(
             AssetDefinitionId::new(
@@ -654,7 +654,7 @@ async fn sealed_reveal_adversarial_cases_hold_on_multi_peer_network() -> Result<
     let mint_amount = numeric!(7);
     let (_, mint_commitment, mint_reveal) = sealed_entrypoints_for_instructions(
         &client,
-        vec![Mint::asset_numeric(mint_amount.clone(), asset_id.clone()).into()],
+        vec![Mint::asset_quantity(mint_amount.clone(), asset_id.clone()).into()],
         [0xA5; 32],
         reveal_after_height,
         reveal_deadline_height,

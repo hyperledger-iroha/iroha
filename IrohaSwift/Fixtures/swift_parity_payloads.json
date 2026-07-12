@@ -12,7 +12,7 @@
             "arguments": {
               "action": "TransferAsset",
               "asset_definition_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-              "quantity": "15.7500",
+              "quantity": "15.75",
               "destination": "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53"
             }
           }
@@ -36,7 +36,7 @@
             "arguments": {
               "action": "MintAsset",
               "asset_definition_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-              "quantity": "42.0100",
+              "quantity": "42.01",
               "destination": "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53"
             }
           }
@@ -60,7 +60,7 @@
             "arguments": {
               "action": "BurnAsset",
               "asset_definition_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-              "quantity": "5.2500",
+              "quantity": "5.25",
               "destination": "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53"
             }
           }

@@ -46,7 +46,7 @@ fn zk_transfer_and_unshield_emit_proof_hash_in_metadata() {
                 .with_name(asset_def_id.name().to_string()),
         )
         .into(),
-        Mint::asset_numeric(10_000u64, AssetId::of(asset_def_id.clone(), owner.clone())).into(),
+        Mint::asset_quantity(10_000u64, AssetId::of(asset_def_id.clone(), owner.clone())).into(),
         iroha_data_model::isi::zk::RegisterZkAsset::new(
             asset_def_id.clone(),
             iroha_data_model::isi::zk::ZkAssetMode::Hybrid,

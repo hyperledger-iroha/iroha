@@ -10,7 +10,7 @@ public enum SocialInstructionBuilderError: LocalizedError {
         case .invalidDigest:
             return "bindingHash.digest must be a canonical Norito hash literal or 64‑character hexadecimal string"
         case .invalidAmount:
-            return "amount must be a non-empty string representing a Numeric quantity"
+            return "amount must be a canonical non-negative Kotodama V1 quantity"
         }
     }
 }
@@ -157,17 +157,33 @@ public enum SocialInstructionBuilders {
     ///   - amount: Decimal string representing the `Numeric` amount to send.
     /// - Returns: `NoritoJSON` encoding of `{ "SendToTwitter": { "binding_hash": { ... }, "amount": "<amount>" } }`.
     public static func sendToTwitter(binding: SocialKeyedHash, amount: String) throws -> NoritoJSON {
-        let normalizedAmount = amount.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !normalizedAmount.isEmpty else {
+        let canonicalAmount: String
+        do {
+            canonicalAmount = try KotodamaNumericV1Codec.decodeQuantityJSON(amount).canonicalString
+        } catch {
             throw SocialInstructionBuilderError.invalidAmount
         }
         let keyed = SocialKeyedHashJSON(pepper_id: binding.pepperId, digest: binding.digest)
-        let payload = SendToTwitterJSON(SendToTwitter: .init(binding_hash: keyed, amount: normalizedAmount))
+        let payload = SendToTwitterJSON(SendToTwitter: .init(binding_hash: keyed, amount: canonicalAmount))
         return try NoritoJSON(payload)
+    }
+
+    /// Build a `SendToTwitter` instruction from a validated lossless quantity value.
+    public static func sendToTwitter(binding: SocialKeyedHash,
+                                     amount: KotodamaQuantity) throws -> NoritoJSON {
+        try sendToTwitter(binding: binding, amount: amount.canonicalString)
     }
 
     /// Convenience overload that accepts a raw digest string.
     public static func sendToTwitter(pepperId: String, digest: String, amount: String) throws -> NoritoJSON {
+        let binding = try SocialKeyedHash(pepperId: pepperId, digest: digest)
+        return try sendToTwitter(binding: binding, amount: amount)
+    }
+
+    /// Convenience overload accepting a validated lossless quantity value.
+    public static func sendToTwitter(pepperId: String,
+                                     digest: String,
+                                     amount: KotodamaQuantity) throws -> NoritoJSON {
         let binding = try SocialKeyedHash(pepperId: pepperId, digest: digest)
         return try sendToTwitter(binding: binding, amount: amount)
     }
@@ -188,4 +204,3 @@ public enum SocialInstructionBuilders {
         return try cancelTwitterEscrow(binding: binding)
     }
 }
-

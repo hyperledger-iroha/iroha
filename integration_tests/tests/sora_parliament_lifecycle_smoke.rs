@@ -1246,7 +1246,7 @@ async fn setup_hostile_fixture(
     let total_fund = CITIZEN_FUND.saturating_mul(u128::try_from(total_accounts).expect("count"));
     let alice_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
     let funding_mint_tx_hash = alice
-        .submit(Mint::asset_numeric(
+        .submit(Mint::asset_quantity(
             u64::try_from(total_fund).expect("mint amount should fit u64"),
             alice_asset_id.clone(),
         ))
@@ -1276,7 +1276,7 @@ async fn setup_hostile_fixture(
                 .iter()
                 .chain(honest.iter())
                 .map(|(account_id, _)| {
-                    Transfer::asset_numeric(
+                    Transfer::asset_quantity(
                         AssetId::new(asset_def_id.clone(), ALICE_ID.clone()),
                         u64::try_from(CITIZEN_FUND).expect("fund amount should fit u64"),
                         account_id.clone(),
@@ -1557,7 +1557,7 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
     let total_fund = CITIZEN_FUND.saturating_mul(u128::try_from(CITIZEN_COUNT).expect("count"));
     let alice_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
     let funding_mint_tx_hash = alice
-        .submit(Mint::asset_numeric(
+        .submit(Mint::asset_quantity(
             u64::try_from(total_fund).expect("total fund should fit u64"),
             alice_asset_id.clone(),
         ))
@@ -1589,7 +1589,7 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
         let missing = total_fund.saturating_sub(observed);
         if missing > 0 {
             let retry_mint_tx_hash = alice
-                .submit(Mint::asset_numeric(
+                .submit(Mint::asset_quantity(
                     u64::try_from(missing).expect("missing fund should fit u64"),
                     alice_asset_id.clone(),
                 ))
@@ -1646,7 +1646,7 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
 
     alice
         .submit_all_blocking(citizens.iter().map(|(account_id, _)| {
-            Transfer::asset_numeric(
+            Transfer::asset_quantity(
                 AssetId::new(asset_def_id.clone(), ALICE_ID.clone()),
                 u64::try_from(CITIZEN_FUND).expect("fund amount should fit u64"),
                 account_id.clone(),

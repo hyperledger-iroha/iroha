@@ -85,12 +85,12 @@ pub fn default_manifest(
         .asset("cabbage".parse()?, NumericSpec::default())
         .finish_domain();
 
-    let mint_rose = Mint::asset_numeric(
+    let mint_rose = Mint::asset_quantity(
         13u32,
         AssetId::new(rose_definition.clone(), ALICE_ID.clone()),
     );
     let mint_cabbage =
-        Mint::asset_numeric(44u32, AssetId::new(cabbage_definition, ALICE_ID.clone()));
+        Mint::asset_quantity(44u32, AssetId::new(cabbage_definition, ALICE_ID.clone()));
     let grant_set_parameters = Grant::account_permission(CanSetParameters, ALICE_ID.clone());
     let grant_register_domains = Grant::account_permission(CanRegisterDomain, ALICE_ID.clone());
     let transfer_rose_definition = Transfer::asset_definition(

@@ -112,7 +112,7 @@ fn pay(AccountId a, AccountId b, AssetDefinitionId asset, int x) {
 }
 ```
 
-`TransferAssetBatch` individual `Transfer::asset_numeric` qo'ng'iroqlari bilan bir xil ruxsat va arifmetik tekshiruvlarni amalga oshiradi, lekin bitta `TransferTranscript` ichidagi barcha deltalarni yozib oladi. Ko'p deltali transkriptlar delta bo'yicha majburiyatlar keyingi kuzatuvga kelguniga qadar poseydon hazmini yo'q qiladi. Kotodama quruvchisi endi avtomatik ravishda boshlash/tugash tizimi chaqiruvlarini chiqaradi, shuning uchun kontraktlar Norito foydali yuklarini qo'lda kodlamasdan paketli o'tkazmalarni o'rnatishi mumkin.
+`TransferAssetBatch` individual `Transfer::asset_quantity` qo'ng'iroqlari bilan bir xil ruxsat va arifmetik tekshiruvlarni amalga oshiradi, lekin bitta `TransferTranscript` ichidagi barcha deltalarni yozib oladi. Ko'p deltali transkriptlar delta bo'yicha majburiyatlar keyingi kuzatuvga kelguniga qadar poseydon hazmini yo'q qiladi. Kotodama quruvchisi endi avtomatik ravishda boshlash/tugash tizimi chaqiruvlarini chiqaradi, shuning uchun kontraktlar Norito foydali yuklarini qo'lda kodlamasdan paketli o'tkazmalarni o'rnatishi mumkin.
 
 ## Qatorlar soni regressiyasi
 

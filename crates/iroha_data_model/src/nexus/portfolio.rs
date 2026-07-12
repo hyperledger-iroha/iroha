@@ -1,6 +1,6 @@
 //! Portfolio snapshot structures for UAID aggregation.
 
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::Quantity;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 
@@ -84,6 +84,6 @@ pub struct AssetPosition {
     pub asset_id: AssetId,
     /// Asset definition identifier for the position.
     pub asset_definition_id: AssetDefinitionId,
-    /// Quantity held; serialized as Norito numeric value.
-    pub quantity: Numeric,
+    /// Canonical non-negative quantity held.
+    pub quantity: Quantity,
 }

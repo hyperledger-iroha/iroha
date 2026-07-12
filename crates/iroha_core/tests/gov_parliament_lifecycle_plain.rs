@@ -201,9 +201,9 @@ fn sora_parliament_plain_lifecycle_with_20_citizens() {
     }
 
     for citizen in &citizens {
-        Transfer::asset_numeric(
+        Transfer::asset_quantity(
             AssetId::new(asset_def_id.clone(), proposer_id.clone()),
-            Numeric::new(CITIZEN_FUND, 0),
+            CITIZEN_FUND,
             citizen.clone(),
         )
         .execute(&proposer_id, &mut stx_1)

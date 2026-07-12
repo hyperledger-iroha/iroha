@@ -183,8 +183,8 @@ Sobre común: `InstructionExecutionError` con variantes para errores de evaluaci
 
 ---## Ejemplos prácticos
 - Acuñación y transferencia:
-  - `Mint::asset_numeric(10, asset_id)` → agrega 10 si lo permiten las especificaciones/capacidad de acuñación; eventos: `AssetEvent::Added`.
-  - `Transfer::asset_numeric(asset_id, 5, to_account)` → mueve 5; eventos para eliminación/adición.
+  - `Mint::asset_quantity(10, asset_id)` → agrega 10 si lo permiten las especificaciones/capacidad de acuñación; eventos: `AssetEvent::Added`.
+  - `Transfer::asset_quantity(asset_id, 5, to_account)` → mueve 5; eventos para eliminación/adición.
 - Actualizaciones de metadatos:
   - `SetKeyValue::account(account_id, "avatar".parse()?, json)` → insertar; eliminación a través de `RemoveKeyValue::account(...)`.
 - Gestión de roles/permisos:

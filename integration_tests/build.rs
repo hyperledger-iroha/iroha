@@ -81,7 +81,6 @@ fn main() {
         sample_names.push("default_executor");
     }
 
-    let fallback = fs::read(sample_path(&fixtures_dir, "executor_with_admin")).unwrap_or_default();
     for name in sample_names {
         let source = sample_path(&fixtures_dir, name);
         let destination = sample_path(&samples_dir, name);
@@ -92,20 +91,8 @@ fn main() {
                     panic!("failed to stage {}: {err}", destination.display())
                 });
             }
-            Err(_) if !fallback.is_empty() => {
-                println!(
-                    "cargo:warning=missing fixture {}; staging fallback placeholder",
-                    source.display()
-                );
-                write_file_if_changed(&destination, &fallback).unwrap_or_else(|err| {
-                    panic!("failed to write fallback {}: {err}", destination.display())
-                });
-            }
             Err(err) => {
-                panic!(
-                    "missing fixture {} and no fallback available: {err}",
-                    source.display()
-                );
+                panic!("missing canonical fixture {}: {err}", source.display());
             }
         }
     }

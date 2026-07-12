@@ -5,6 +5,7 @@ import { readFileSync } from "node:fs";
 import { AccountAddress } from "../src/address.js";
 import { ToriiBrowserClient, ToriiBrowserHttpError } from "../src/toriiBrowserClient.js";
 import * as browserSdk from "../src/browser.js";
+import * as browserDistSdk from "../dist/browser.js";
 
 const BASE_URL = "https://localhost:8080/v1/explorer";
 const FIXTURE_ALICE_ID = AccountAddress.fromAccount({
@@ -179,6 +180,49 @@ test("browser aggregate exports reusable browser-safe SDK APIs", () => {
   assert.equal(typeof browserSdk.ToriiBrowserClient, "function");
   assert.equal(typeof browserSdk.normalizeAccountAliasFqn, "function");
   assert.equal(typeof browserSdk.noritoEncodeMultisigProposeRequest, "function");
+  assert.equal(typeof browserSdk.NumericV1?.decodeQuantityJson, "function");
+  assert.equal(typeof browserSdk.KotodamaQuantity, "function");
+  assert.equal(typeof browserDistSdk.NumericV1?.decodeQuantityJson, "function");
+  assert.equal(typeof browserDistSdk.KotodamaQuantity, "function");
+  assert.throws(() => browserSdk.NumericV1.decodeQuantityJson("1.0"), {
+    code: "invalid_text",
+  });
+  assert.throws(() => browserDistSdk.NumericV1.decodeQuantityJson("1.0"), {
+    code: "invalid_text",
+  });
+});
+
+test("ToriiBrowserClient rejects noncanonical asset and RWA quantity readbacks", async () => {
+  const cases = [
+    {
+      payload: { items: [{ asset: "asset", quantity: "1.0" }], total: 1 },
+      invoke: (client) => client.listAccountAssets("account"),
+    },
+    {
+      payload: { items: [{ account_id: "account", quantity: -1 }], total: 1 },
+      invoke: (client) => client.listAssetHolders("asset-definition"),
+    },
+    {
+      payload: { pagination: {}, items: [{ id: "asset", quantity: "01" }] },
+      invoke: (client) => client.listExplorerAssets(),
+    },
+    {
+      payload: {
+        pagination: {},
+        items: [{ id: "rwa", quantity: "1", held_quantity: "0.0" }],
+      },
+      invoke: (client) => client.listExplorerRwas(),
+    },
+  ];
+  for (const entry of cases) {
+    const client = new ToriiBrowserClient("https://torii.example", {
+      fetchImpl: async () => jsonResponse(entry.payload),
+    });
+    await assert.rejects(
+      () => entry.invoke(client),
+      /canonical (?:non-negative )?Kotodama V1 quantity/u,
+    );
+  }
 });
 
 test("ToriiBrowserClient does not statically import Node-only Norito code", () => {

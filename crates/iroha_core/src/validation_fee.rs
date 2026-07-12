@@ -2320,7 +2320,7 @@ fn native_instruction_ds_effect_disposition(
         .is_some()
         || instruction
             .as_any()
-            .downcast_ref::<Transfer<Asset, Numeric, Account>>()
+            .downcast_ref::<Transfer<Asset, Quantity, Account>>()
             .is_some()
     {
         return NativeInstructionDsEffectDisposition::ExplicitAssetTransfer;
@@ -2412,7 +2412,7 @@ fn native_instruction_ds_effect_disposition(
             }
         };
     }
-    reject_known!(Mint<Numeric, Asset>, Burn<Numeric, Asset>);
+    reject_known!(Mint<Quantity, Asset>, Burn<Quantity, Asset>);
 
     if let Some(instruction_wire_id) =
         native_fee_asset_movement_wire_id(instruction, fee_asset_definition_id)
@@ -2606,7 +2606,7 @@ fn collect_instruction_asset_transfers(
                             asset_definition_id: entry.asset_definition().clone(),
                             source_account_id: entry.from().clone(),
                             destination_account_id: entry.to().clone(),
-                            amount: entry.amount().clone(),
+                            amount: entry.amount().as_numeric().clone(),
                         });
                     }
                     continue;
@@ -2614,7 +2614,7 @@ fn collect_instruction_asset_transfers(
 
                 let transfer = instruction
                     .as_any()
-                    .downcast_ref::<Transfer<Asset, Numeric, Account>>()
+                    .downcast_ref::<Transfer<Asset, Quantity, Account>>()
                     .or_else(|| {
                         instruction
                             .as_any()
@@ -2634,7 +2634,7 @@ fn collect_instruction_asset_transfers(
                     asset_definition_id: transfer.source.definition.clone(),
                     source_account_id: transfer.source.account.clone(),
                     destination_account_id: transfer.destination.clone(),
-                    amount: transfer.object.clone(),
+                    amount: transfer.object.as_numeric().clone(),
                 });
             }
             NativeInstructionDsEffectDisposition::RecursiveMultisigProposal => {
@@ -3011,9 +3011,10 @@ mod tests {
         amount: Numeric,
         to: &AccountId,
     ) -> InstructionBox {
-        Transfer::asset_numeric(
+        Transfer::asset_quantity(
             AssetId::new(asset_definition.clone(), from.clone()),
-            amount,
+            Quantity::try_from_numeric(amount)
+                .expect("validation-fee fixture amount must be non-negative"),
             to.clone(),
         )
         .into()
@@ -3067,12 +3068,7 @@ mod tests {
         from: &AccountId,
         to: &AccountId,
     ) -> SettlementLeg {
-        SettlementLeg::new(
-            asset_definition_id.clone(),
-            Numeric::new(1_u64, 0),
-            from.clone(),
-            to.clone(),
-        )
+        SettlementLeg::new(asset_definition_id.clone(), 1_u64, from.clone(), to.clone())
     }
 
     fn tx(
@@ -3353,11 +3349,8 @@ mod tests {
         let user = account(1);
         let treasury = account(3);
         let policy = policy(&treasury);
-        let mint: InstructionBox = Mint::asset_numeric(
-            Numeric::new(1_u64, 0),
-            AssetId::new(policy_fee_asset(&policy), user),
-        )
-        .into();
+        let mint: InstructionBox =
+            Mint::asset_quantity(1_u64, AssetId::new(policy_fee_asset(&policy), user)).into();
         let instruction_wire_id = core::any::type_name::<MintBox>();
 
         assert_eq!(
@@ -4031,12 +4024,7 @@ mod tests {
         ));
 
         let batch = TransferAssetBatch::new(vec![
-            TransferAssetBatchEntry::new(
-                user.clone(),
-                recipient,
-                fee_asset.clone(),
-                Numeric::new(1u64, 0),
-            ),
+            TransferAssetBatchEntry::new(user.clone(), recipient, fee_asset.clone(), 1_u64),
             TransferAssetBatchEntry::new(
                 user.clone(),
                 treasury.clone(),
@@ -5370,13 +5358,13 @@ mod tests {
                         user.clone(),
                         recipient_a,
                         fee_asset.clone(),
-                        Numeric::new(1u64, 0),
+                        1_u64,
                     ),
                     TransferAssetBatchEntry::new(
                         user.clone(),
                         recipient_b,
                         fee_asset.clone(),
-                        Numeric::new(1u64, 0),
+                        1_u64,
                     ),
                     TransferAssetBatchEntry::new(user, treasury, fee_asset, minor_units(20)),
                 ])
@@ -5425,13 +5413,13 @@ mod tests {
                             user.clone(),
                             recipient_a.clone(),
                             fee_asset.clone(),
-                            Numeric::new(1u64, 0),
+                            1_u64,
                         ),
                         TransferAssetBatchEntry::new(
                             user.clone(),
                             recipient_b.clone(),
                             fee_asset.clone(),
-                            Numeric::new(1u64, 0),
+                            1_u64,
                         ),
                         TransferAssetBatchEntry::new(
                             user.clone(),
@@ -5464,7 +5452,7 @@ mod tests {
                         user.clone(),
                         recipient.clone(),
                         fee_asset.clone(),
-                        Numeric::new(1u64, 0),
+                        1_u64,
                     ),
                     TransferAssetBatchEntry::new(
                         user,
@@ -5509,13 +5497,13 @@ mod tests {
                         user.clone(),
                         recipient_a.clone(),
                         fee_asset.clone(),
-                        Numeric::new(1u64, 0),
+                        1_u64,
                     ),
                     TransferAssetBatchEntry::new(
                         user.clone(),
                         recipient_b.clone(),
                         fee_asset.clone(),
-                        Numeric::new(1u64, 0),
+                        1_u64,
                     ),
                     TransferAssetBatchEntry::new(
                         user.clone(),
@@ -5546,13 +5534,13 @@ mod tests {
                         user.clone(),
                         recipient_a.clone(),
                         fee_asset.clone(),
-                        Numeric::new(1u64, 0),
+                        1_u64,
                     ),
                     TransferAssetBatchEntry::new(
                         user.clone(),
                         recipient_b.clone(),
                         fee_asset.clone(),
-                        Numeric::new(1u64, 0),
+                        1_u64,
                     ),
                     TransferAssetBatchEntry::new(
                         user.clone(),
@@ -5581,14 +5569,9 @@ mod tests {
                         user.clone(),
                         recipient_a,
                         fee_asset.clone(),
-                        Numeric::new(1u64, 0),
+                        1_u64,
                     ),
-                    TransferAssetBatchEntry::new(
-                        user,
-                        recipient_b,
-                        fee_asset.clone(),
-                        Numeric::new(1u64, 0),
-                    ),
+                    TransferAssetBatchEntry::new(user, recipient_b, fee_asset.clone(), 1_u64),
                     TransferAssetBatchEntry::new(
                         sponsor,
                         treasury.clone(),
@@ -6041,13 +6024,13 @@ mod tests {
                             multisig.clone(),
                             recipient_a,
                             fee_asset.clone(),
-                            Numeric::new(1u64, 0),
+                            1_u64,
                         ),
                         TransferAssetBatchEntry::new(
                             multisig.clone(),
                             recipient_b,
                             fee_asset.clone(),
-                            Numeric::new(1u64, 0),
+                            1_u64,
                         ),
                         TransferAssetBatchEntry::new(
                             multisig,
@@ -6103,13 +6086,13 @@ mod tests {
                                 multisig.clone(),
                                 recipient_a.clone(),
                                 fee_asset.clone(),
-                                Numeric::new(1u64, 0),
+                                1_u64,
                             ),
                             TransferAssetBatchEntry::new(
                                 multisig.clone(),
                                 recipient_b.clone(),
                                 fee_asset.clone(),
-                                Numeric::new(1u64, 0),
+                                1_u64,
                             ),
                             TransferAssetBatchEntry::new(
                                 multisig.clone(),

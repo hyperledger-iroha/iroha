@@ -213,3 +213,15 @@ def test_consumes_every_rust_authored_shared_golden_vector() -> None:
             vector["expected"],
             partial(decode, bytes.fromhex(vector["hex"])),
         )
+
+    for vector in fixture["invalid_text"]:
+        decode = getattr(NumericV1Codec, f"decode_{vector['kind']}_json")
+        try:
+            decode(vector["input"])
+        except NumericV1Error as error:
+            actual = error.code
+        except TypeError:
+            actual = "invalid_text"
+        else:
+            pytest.fail(f"{vector['id']} unexpectedly accepted invalid numeric JSON")
+        assert actual == vector["expected"], vector["id"]

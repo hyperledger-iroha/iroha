@@ -274,7 +274,7 @@ async fn call_execute_trigger() -> Result<()> {
         })
         .await??;
 
-        let instruction = Mint::asset_numeric(1u32, asset_id.clone());
+        let instruction = Mint::asset_quantity(1u32, asset_id.clone());
         let register_trigger =
             build_register_trigger_isi(asset_id.account(), vec![instruction.into()]);
         submit_instruction_and_wait(
@@ -326,7 +326,7 @@ async fn execute_trigger_should_produce_event() -> Result<()> {
             let account_id = ALICE_ID.clone();
             let asset_id = AssetId::new(asset_definition_id, account_id.clone());
 
-            let instruction = Mint::asset_numeric(1u32, asset_id.clone());
+            let instruction = Mint::asset_quantity(1u32, asset_id.clone());
             let register_trigger =
                 build_register_trigger_isi(asset_id.account(), vec![instruction.into()]);
             submit_instruction_and_wait(
@@ -424,7 +424,7 @@ async fn trigger_failure_should_not_cancel_other_triggers_execution() -> Result<
             let register_trigger = Register::trigger(Trigger::new(
                 trigger_id,
                 Action::new(
-                    vec![Mint::asset_numeric(1u32, asset_id.clone())],
+                    vec![Mint::asset_quantity(1u32, asset_id.clone())],
                     Repeats::Indefinitely,
                     account_id.clone(),
                     TimeEventFilter::new(ExecutionTime::PreCommit),
@@ -539,7 +539,7 @@ async fn trigger_should_not_be_executed_with_zero_repeats_count() -> Result<()> 
             let asset_id = AssetId::new(asset_definition_id, account_id.clone());
             let trigger_id = "self_modifying_trigger".parse::<TriggerId>()?;
 
-            let trigger_instructions = vec![Mint::asset_numeric(1u32, asset_id.clone())];
+            let trigger_instructions = vec![Mint::asset_quantity(1u32, asset_id.clone())];
             let register_trigger = Register::trigger(Trigger::new(
                 trigger_id.clone(),
                 Action::new(
@@ -666,7 +666,7 @@ async fn trigger_should_be_able_to_modify_its_own_repeats_count() -> Result<()> 
 
             let trigger_instructions: Vec<InstructionBox> = vec![
                 Mint::trigger_repetitions(1_u32, trigger_id.clone()).into(),
-                Mint::asset_numeric(1u32, asset_id.clone()).into(),
+                Mint::asset_quantity(1u32, asset_id.clone()).into(),
             ];
             let register_trigger = Register::trigger(Trigger::new(
                 trigger_id.clone(),
@@ -1097,7 +1097,7 @@ async fn trigger_should_be_able_to_modify_other_trigger() -> Result<()> {
             .await?;
 
             let trigger_should_be_unregistered_instructions =
-                vec![Mint::asset_numeric(1u32, asset_id.clone())];
+                vec![Mint::asset_quantity(1u32, asset_id.clone())];
             let register_trigger = Register::trigger(Trigger::new(
                 trigger_id_to_be_unregistered.clone(),
                 Action::new(
@@ -1226,7 +1226,7 @@ async fn trigger_burn_repetitions() -> Result<()> {
             };
             let trigger_id = candidate.parse::<TriggerId>()?;
 
-            let trigger_instructions = vec![Mint::asset_numeric(1u32, asset_id.clone())];
+            let trigger_instructions = vec![Mint::asset_quantity(1u32, asset_id.clone())];
             let register_trigger = Register::trigger(Trigger::new(
                 trigger_id.clone(),
                 Action::new(

@@ -94,7 +94,7 @@ fn sorafs_pin_fee_bootstrap_instructions() -> Vec<InstructionBox> {
     vec![
         Register::account(Account::new(treasury)).into(),
         Register::asset_definition(fee_definition).into(),
-        Mint::asset_numeric(seed_amount, AssetId::new(fee_asset_id, ALICE_ID.clone())).into(),
+        Mint::asset_quantity(seed_amount, AssetId::new(fee_asset_id, ALICE_ID.clone())).into(),
     ]
 }
 

@@ -13777,7 +13777,7 @@ mod tests {
         );
         let missing_asset = AssetId::new(missing_def, sut.account_id.clone());
         let action = Action::new(
-            [Transfer::asset_numeric(
+            [Transfer::asset_quantity(
                 missing_asset,
                 1_u32,
                 sut.account_id.clone(),

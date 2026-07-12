@@ -1059,7 +1059,7 @@ pub async fn setup_runtime_governance_fixture(
         + extra_runtime_budget;
     let alice_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
     let funding_mint_tx_hash = alice
-        .submit(Mint::asset_numeric(
+        .submit(Mint::asset_quantity(
             u64::try_from(total_fund).expect("total fund should fit u64"),
             alice_asset_id.clone(),
         ))
@@ -1084,7 +1084,7 @@ pub async fn setup_runtime_governance_fixture(
 
     let funding_distribution_tx_hash = alice
         .submit_all(citizens.iter().map(|(account_id, _)| {
-            Transfer::asset_numeric(
+            Transfer::asset_quantity(
                 AssetId::new(asset_def_id.clone(), ALICE_ID.clone()),
                 u64::try_from(CITIZEN_FUND).expect("fund amount should fit u64"),
                 account_id.clone(),
@@ -1443,7 +1443,7 @@ pub async fn enact_runtime_upgrade_round(
     fixture
         .alice
         .submit_all(runtime_voters.iter().map(|(account_id, _)| {
-            Transfer::asset_numeric(
+            Transfer::asset_quantity(
                 AssetId::new(fixture.asset_def_id.clone(), ALICE_ID.clone()),
                 runtime_transfer_amount,
                 account_id.clone(),
@@ -1630,7 +1630,7 @@ pub async fn enact_runtime_upgrade_round(
         for tick_idx in 0..40_u64 {
             let tick_tx_hash = fixture
                 .alice
-                .submit(Mint::asset_numeric(1_u32, fixture.alice_asset_id.clone()))
+                .submit(Mint::asset_quantity(1_u32, fixture.alice_asset_id.clone()))
                 .wrap_err_with(|| {
                     format!(
                         "submit runtime activation tick transaction #{tick_idx} ({round_label})"

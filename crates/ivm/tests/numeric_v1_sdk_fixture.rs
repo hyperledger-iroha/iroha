@@ -4,7 +4,11 @@
 #[path = "../examples/numeric_v1_fixture.rs"]
 mod fixture_generator;
 
-use iroha_primitives::numeric_abi::{DecimalValueV1, IntValueV1, NumericAbiError, QuantityValueV1};
+use iroha_primitives::{
+    bigint::BigInt,
+    numeric::{Numeric, NumericError},
+    numeric_abi::{DecimalValueV1, IntValueV1, NumericAbiError, QuantityValueV1},
+};
 use ivm::{VMError, numeric::PointerAbiFaultV1, numeric_tlv};
 
 #[test]
@@ -21,6 +25,31 @@ fn every_valid_and_adversarial_vector_has_the_pinned_rust_outcome() {
         .join("../../fixtures/numeric_v1_golden.json");
     let text = std::fs::read_to_string(path).expect("read shared numeric fixture");
     let document = norito::json::parse_value(&text).expect("parse shared numeric fixture");
+
+    for vector in document
+        .get("text")
+        .and_then(norito::json::Value::as_array)
+        .expect("canonical text vectors")
+    {
+        let input = string(vector, "input");
+        let canonical = match string(vector, "kind") {
+            "decimal" => input
+                .parse::<Numeric>()
+                .expect("valid decimal text")
+                .to_string(),
+            "quantity" => input
+                .parse::<iroha_primitives::numeric::Quantity>()
+                .expect("valid quantity text")
+                .to_string(),
+            other => panic!("unknown canonical text kind {other}"),
+        };
+        assert_eq!(
+            canonical,
+            string(vector, "canonical"),
+            "{}",
+            string(vector, "id")
+        );
+    }
 
     for vector in document
         .get("valid")
@@ -107,6 +136,87 @@ fn every_valid_and_adversarial_vector_has_the_pinned_rust_outcome() {
             string(vector, "id")
         );
     }
+
+    for vector in document
+        .get("invalid_text")
+        .and_then(norito::json::Value::as_array)
+        .expect("invalid text vectors")
+    {
+        let input = vector.get("input").expect("invalid text input");
+        let actual = numeric_text_error_category(string(vector, "kind"), input)
+            .expect_err("invalid text vector must fail");
+        assert_eq!(
+            actual,
+            string(vector, "expected"),
+            "{}",
+            string(vector, "id")
+        );
+    }
+}
+
+fn canonical_integer_syntax(source: &str) -> bool {
+    let magnitude = source.strip_prefix('-').unwrap_or(source);
+    !magnitude.is_empty()
+        && magnitude.bytes().all(|byte| byte.is_ascii_digit())
+        && (magnitude == "0" || !magnitude.starts_with('0'))
+        && source != "-0"
+}
+
+fn canonical_scaled_syntax(source: &str) -> bool {
+    let unsigned = source.strip_prefix('-').unwrap_or(source);
+    let mut parts = unsigned.split('.');
+    let whole = parts.next().unwrap_or_default();
+    let fraction = parts.next();
+    if parts.next().is_some()
+        || whole.is_empty()
+        || !whole.bytes().all(|byte| byte.is_ascii_digit())
+        || (whole != "0" && whole.starts_with('0'))
+        || fraction.is_some_and(|digits| {
+            digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit())
+        })
+    {
+        return false;
+    }
+    source != "-0" && source != "-0.0"
+}
+
+fn numeric_text_error_category(
+    kind: &str,
+    input: &norito::json::Value,
+) -> Result<(), &'static str> {
+    let source = input.as_str().ok_or("invalid_text")?;
+    match kind {
+        "int" => {
+            if !canonical_integer_syntax(source) {
+                return Err("invalid_text");
+            }
+            let value = source.parse::<BigInt>().map_err(|_| "mantissa_overflow")?;
+            IntValueV1::try_new(value)
+                .map(|_| ())
+                .map_err(|error| match error {
+                    NumericAbiError::MantissaOverflow => "mantissa_overflow",
+                    other => panic!("unexpected int text error: {other:?}"),
+                })
+        }
+        "decimal" | "quantity" => {
+            if !canonical_scaled_syntax(source) {
+                return Err("invalid_text");
+            }
+            let value = source.parse::<Numeric>().map_err(|error| match error {
+                NumericError::MantissaTooLarge => "mantissa_overflow",
+                NumericError::ScaleTooLarge => "invalid_scale",
+                NumericError::Malformed => "invalid_text",
+            })?;
+            if value.to_string() != source {
+                return Err("invalid_text");
+            }
+            if kind == "quantity" && value.mantissa().is_negative() {
+                return Err("negative_quantity");
+            }
+            Ok(())
+        }
+        other => panic!("unknown invalid-text kind {other}"),
+    }
 }
 
 fn string<'a>(value: &'a norito::json::Value, key: &str) -> &'a str {
@@ -118,7 +228,10 @@ fn string<'a>(value: &'a norito::json::Value, key: &str) -> &'a str {
 
 fn frame_error_category(error: NumericAbiError) -> &'static str {
     match error {
+        NumericAbiError::FrameTooShort => "frame_too_short",
         NumericAbiError::FrameTooLarge => "frame_too_large",
+        NumericAbiError::InvalidHeader => "invalid_header",
+        NumericAbiError::LengthMismatch => "length_mismatch",
         NumericAbiError::NonCanonicalMantissa => "noncanonical_mantissa",
         NumericAbiError::NonCanonicalDecimal => "noncanonical_decimal",
         NumericAbiError::InvalidScale => "invalid_scale",

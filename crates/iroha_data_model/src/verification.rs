@@ -248,7 +248,7 @@ fn index_assets<'a>(
             report.ok(INVARIANT_ASSET_DEF_EXISTS);
 
             let spec = definition.spec();
-            match spec.check(asset.value()) {
+            match spec.check(asset.value().as_numeric()) {
                 Ok(()) => report.ok(INVARIANT_ASSET_VALUE_SPEC),
                 Err(err) => report.violation(
                     INVARIANT_ASSET_VALUE_SPEC,
@@ -259,7 +259,7 @@ fn index_assets<'a>(
                 ),
             }
 
-            let value = asset.value().clone();
+            let value = asset.value().as_numeric().clone();
             let entry = totals
                 .entry(id.definition().clone())
                 .or_insert_with(Numeric::zero);
@@ -314,7 +314,7 @@ fn verify_asset_totals(
 ) {
     for (id, definition) in definitions {
         let observed = totals.get(id).cloned().unwrap_or_else(Numeric::zero);
-        let expected_total = definition.total_quantity().clone();
+        let expected_total = definition.total_quantity().as_numeric().clone();
         if observed == expected_total {
             report.ok(INVARIANT_ASSET_DEF_TOTAL_MATCH);
         } else {
@@ -333,7 +333,7 @@ mod tests {
     use std::collections::BTreeSet;
 
     use iroha_crypto::KeyPair;
-    use iroha_primitives::numeric::NumericSpec;
+    use iroha_primitives::numeric::{NumericSpec, Quantity};
 
     use super::*;
     use crate::{
@@ -383,13 +383,13 @@ mod tests {
             metadata: Metadata::default(),
             balance_scope_policy: AssetBalancePolicy::Global,
             owned_by: account_id.clone(),
-            total_quantity: Numeric::new(10, 0),
+            total_quantity: Quantity::from(10_u32),
             confidential_policy: AssetConfidentialPolicy::default(),
         };
 
         let asset = Asset {
             id: AssetId::new(definition_id.clone(), account_id.clone()),
-            value: Numeric::new(10, 0),
+            value: Quantity::from(10_u32),
         };
 
         let domains = vec![domain];
@@ -448,13 +448,13 @@ mod tests {
             metadata: Metadata::default(),
             balance_scope_policy: AssetBalancePolicy::Global,
             owned_by: missing_owner,
-            total_quantity: Numeric::new(5, 0),
+            total_quantity: Quantity::from(5_u32),
             confidential_policy: AssetConfidentialPolicy::default(),
         };
 
         let asset = Asset {
             id: AssetId::new(definition_id.clone(), account_id.clone()),
-            value: Numeric::new(5, 1),
+            value: "0.5".parse().expect("quantity"),
         };
 
         let domains = vec![domain];
@@ -536,7 +536,7 @@ mod tests {
             metadata: Metadata::default(),
             balance_scope_policy: AssetBalancePolicy::Global,
             owned_by: owner_account_id,
-            total_quantity: Numeric::zero(),
+            total_quantity: Quantity::zero(),
             confidential_policy: AssetConfidentialPolicy::default(),
         };
 

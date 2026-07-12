@@ -260,6 +260,7 @@ isi! {
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
+    #[norito(deny_unknown_fields)]
     pub struct RecordBridgeReceipt {
         /// Bridge receipt payload to record.
         pub receipt: crate::bridge::BridgeReceipt,
@@ -750,6 +751,26 @@ mod tests {
         assert_registry_decodes(
             &registry,
             RecordSccpMessage::new(outbound_context(), vec![0xCA, 0xFE]),
+        );
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn record_bridge_receipt_json_rejects_unknown_instruction_fields() {
+        let instruction = RecordBridgeReceipt::new(receipt());
+        let canonical =
+            norito::json::to_json(&instruction).expect("serialize bridge receipt instruction JSON");
+        assert_eq!(
+            norito::json::from_json::<RecordBridgeReceipt>(&canonical)
+                .expect("canonical bridge receipt instruction JSON decodes"),
+            instruction
+        );
+
+        let hostile = canonical.replacen('{', "{\"adversarial_extension\":null,", 1);
+        assert_ne!(hostile, canonical);
+        assert!(
+            norito::json::from_json::<RecordBridgeReceipt>(&hostile).is_err(),
+            "signed receipt instruction JSON must reject unknown fields"
         );
     }
 }

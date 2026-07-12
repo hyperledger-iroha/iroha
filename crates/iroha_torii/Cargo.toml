@@ -107,7 +107,6 @@ iroha_schema_gen = { workspace = true, optional = true }
 iroha_telemetry = { workspace = true, optional = true }
 iroha_zkp_halo2 = { path = "../iroha_zkp_halo2", optional = true }
 ivm = { path = "../ivm" }
-ivm_abi = { workspace = true }
 sorafs_manifest = { path = "../sorafs_manifest", default-features = false }
 reqwest = { workspace = true, features = ["json", "rustls-tls-native-roots", "http2", "stream"] }
 url = { workspace = true }

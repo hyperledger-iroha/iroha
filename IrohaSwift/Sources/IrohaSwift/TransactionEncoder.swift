@@ -624,6 +624,7 @@ struct SwiftTransactionEncoder {
         let feeSponsor = try transfer.feeSponsor.map {
             try TransactionInputValidator.sanitizeAccountId($0, field: "feeSponsor")
         }
+        let quantity = try KotodamaNumericV1Codec.decodeQuantityJSON(transfer.quantity).canonicalString
         let privateKey = try privateKeyBytes(from: signingKey)
         let native = try bridgeOrThrow {
             try NoritoNativeBridge.shared.encodeTransfer(chainId: ids.chainId,
@@ -632,7 +633,7 @@ struct SwiftTransactionEncoder {
                                                          ttlMs: transfer.ttlMs,
                                                          nonce: transfer.nonce,
                                                          assetDefinitionId: assetDefinitionId,
-                                                         quantity: transfer.quantity,
+                                                         quantity: quantity,
                                                          destination: destination,
                                                          feeSponsor: feeSponsor,
                                                          privateKey: privateKey,
@@ -659,6 +660,7 @@ struct SwiftTransactionEncoder {
             throw TransactionInputError.emptyAssetDefinitionId
         }
         let destination = ids.accountIds["destination"] ?? request.destination
+        let quantity = try KotodamaNumericV1Codec.decodeQuantityJSON(request.quantity).canonicalString
         let privateKey = try privateKeyBytes(from: signingKey)
         let native = try bridgeOrThrow {
             try NoritoNativeBridge.shared.encodeMint(chainId: ids.chainId,
@@ -667,7 +669,7 @@ struct SwiftTransactionEncoder {
                                                      ttlMs: request.ttlMs,
                                                      nonce: request.nonce,
                                                      assetDefinitionId: assetDefinitionId,
-                                                     quantity: request.quantity,
+                                                     quantity: quantity,
                                                      destination: destination,
                                                      privateKey: privateKey,
                                                      algorithm: signingKey.algorithm)
@@ -693,6 +695,7 @@ struct SwiftTransactionEncoder {
             throw TransactionInputError.emptyAssetDefinitionId
         }
         let destination = ids.accountIds["destination"] ?? request.destination
+        let quantity = try KotodamaNumericV1Codec.decodeQuantityJSON(request.quantity).canonicalString
         let privateKey = try privateKeyBytes(from: signingKey)
         let native = try bridgeOrThrow {
             try NoritoNativeBridge.shared.encodeBurn(chainId: ids.chainId,
@@ -701,7 +704,7 @@ struct SwiftTransactionEncoder {
                                                      ttlMs: request.ttlMs,
                                                      nonce: request.nonce,
                                                      assetDefinitionId: assetDefinitionId,
-                                                     quantity: request.quantity,
+                                                     quantity: quantity,
                                                      destination: destination,
                                                      privateKey: privateKey,
                                                      algorithm: signingKey.algorithm)

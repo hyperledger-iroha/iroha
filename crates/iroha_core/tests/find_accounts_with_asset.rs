@@ -67,14 +67,14 @@ fn multi_account_mint_returns_only_positive_holders() {
     .execute(&ALICE_ID, &mut stx)
     .expect("register asset definition");
 
-    Mint::asset_numeric(5u32, AssetId::new(definition_id.clone(), holder_a.clone()))
+    Mint::asset_quantity(5u32, AssetId::new(definition_id.clone(), holder_a.clone()))
         .execute(&ALICE_ID, &mut stx)
         .expect("mint to holder A");
-    Mint::asset_numeric(7u32, AssetId::new(definition_id.clone(), holder_b.clone()))
+    Mint::asset_quantity(7u32, AssetId::new(definition_id.clone(), holder_b.clone()))
         .execute(&ALICE_ID, &mut stx)
         .expect("mint to holder B");
-    Mint::asset_numeric(
-        Numeric::zero(),
+    Mint::asset_quantity(
+        Quantity::zero(),
         AssetId::new(definition_id.clone(), zero_holder.clone()),
     )
     .execute(&ALICE_ID, &mut stx)

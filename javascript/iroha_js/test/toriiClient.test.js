@@ -14922,7 +14922,7 @@ test("listExplorerRwas encodes owner/domain filters and pagination", async () =>
             id: SAMPLE_RWA_ID,
             owned_by: SAMPLE_ACCOUNT_ID,
             quantity: "10.5",
-            held_quantity: "1.0",
+            held_quantity: "1",
             primary_reference: "vault-cert-001",
             status: "active",
             is_frozen: false,
@@ -14952,7 +14952,7 @@ test("listExplorerRwas encodes owner/domain filters and pagination", async () =>
     id: SAMPLE_RWA_ID,
     ownedBy: SAMPLE_ACCOUNT_ID,
     quantity: "10.5",
-    heldQuantity: "1.0",
+    heldQuantity: "1",
     primaryReference: "vault-cert-001",
     status: "active",
     isFrozen: false,
@@ -14961,7 +14961,7 @@ test("listExplorerRwas encodes owner/domain filters and pagination", async () =>
       id: SAMPLE_RWA_ID,
       owned_by: SAMPLE_ACCOUNT_ID,
       quantity: "10.5",
-      held_quantity: "1.0",
+      held_quantity: "1",
       primary_reference: "vault-cert-001",
       status: "active",
       is_frozen: false,
@@ -15014,6 +15014,43 @@ test("getExplorerRwaDetail encodes path and decodes response", async () => {
       metadata: {},
     },
   });
+});
+
+test("explorer RWA readbacks reject noncanonical quantity fields", async () => {
+  for (const record of [
+    {
+      id: SAMPLE_RWA_ID,
+      owned_by: SAMPLE_ACCOUNT_ID,
+      quantity: "1.0",
+      held_quantity: "0",
+      primary_reference: "vault-cert",
+      status: null,
+      is_frozen: false,
+      metadata: {},
+    },
+    {
+      id: SAMPLE_RWA_ID,
+      owned_by: SAMPLE_ACCOUNT_ID,
+      quantity: "1",
+      held_quantity: "-1",
+      primary_reference: "vault-cert",
+      status: null,
+      is_frozen: false,
+      metadata: {},
+    },
+  ]) {
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () => createResponse({
+        status: 200,
+        jsonData: { pagination: {}, items: [record] },
+        headers: { "content-type": "application/json" },
+      }),
+    });
+    await assert.rejects(
+      () => client.listExplorerRwas(),
+      /canonical non-negative Kotodama V1 quantity/u,
+    );
+  }
 });
 
 test("queryRwas posts structured envelope", async () => {
@@ -15686,6 +15723,26 @@ test("listAccountAssets enforces canonical quantity strings", async () => {
     () => client.listAccountAssets(FIXTURE_ALICE_ID),
     /account asset list response\.items\[0]\.quantity/,
   );
+});
+
+test("listAccountAssets rejects noncanonical quantity spellings", async () => {
+  for (const quantity of [-1, "01", "1.0", "1.20", " 1", "1e0"]) {
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () =>
+        createResponse({
+          status: 200,
+          jsonData: {
+            items: [{ asset_id: FIXTURE_ASSET_ID_A, quantity }],
+            total: 1,
+          },
+          headers: { "content-type": "application/json" },
+        }),
+    });
+    await assert.rejects(
+      () => client.listAccountAssets(FIXTURE_ALICE_ID),
+      /account asset list response\.items\[0\]\.quantity/,
+    );
+  }
 });
 
 test("listAccountAssets rejects camelCase assetId fields", async () => {

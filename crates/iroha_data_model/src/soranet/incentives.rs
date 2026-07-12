@@ -8,7 +8,7 @@
 //! necessary observability hooks.
 
 use iroha_crypto::{PrivateKey, PublicKey, Signature, SignatureOf};
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::{Numeric, NumericOperationError, Quantity};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 #[cfg(feature = "json")]
@@ -409,10 +409,16 @@ impl RelayRewardInstructionV1 {
     }
 
     /// Convert the reward instruction into a [`Transfer`] instruction from the provided treasury account.
-    #[must_use]
-    pub fn to_transfer_instruction(&self, treasury_account: &AccountId) -> InstructionBox {
+    ///
+    /// # Errors
+    /// Returns an error when an arithmetic producer supplied a negative payout.
+    pub fn to_transfer_instruction(
+        &self,
+        treasury_account: &AccountId,
+    ) -> Result<InstructionBox, NumericOperationError> {
         let asset = AssetId::new(self.payout_asset_id.clone(), treasury_account.clone());
-        Transfer::asset_numeric(asset, self.payout_amount.clone(), self.beneficiary.clone()).into()
+        let payout = Quantity::try_from_numeric(self.payout_amount.clone())?;
+        Ok(Transfer::asset_quantity(asset, payout, self.beneficiary.clone()).into())
     }
 }
 
@@ -845,7 +851,9 @@ mod tests {
             metadata: Metadata::default(),
         };
         let treasury = sample_account(4);
-        let instruction_box = instruction.to_transfer_instruction(&treasury);
+        let instruction_box = instruction
+            .to_transfer_instruction(&treasury)
+            .expect("non-negative payout");
         let transfer_box = instruction_box
             .as_any()
             .downcast_ref::<TransferBox>()
@@ -856,7 +864,7 @@ mod tests {
         assert_eq!(transfer.source.definition(), &instruction.payout_asset_id);
         assert_eq!(transfer.source.account(), &treasury);
         assert_eq!(transfer.destination, instruction.beneficiary);
-        assert_eq!(transfer.object, instruction.payout_amount);
+        assert_eq!(transfer.object.as_numeric(), &instruction.payout_amount);
     }
 
     #[test]

@@ -1,16 +1,13 @@
-//! Prebuild minimal IVM sample bytecode files for integration tests.
+//! Stage deterministic IVM sample bytecode for integration tests.
 //!
-//! This utility writes small deterministic `.to` fixture files under
-//! `crates/ivm/target/prebuilt/samples/` and a `build_config.toml` indicating
-//! the current profile. The integration tests and CLI look for these files by
-//! name when performing executor upgrades.
-//!
-//! Usage:
-//!   cargo run -p ivm --bin ivm_prebuild
+//! Synthetic executor fixtures are built by the canonical library builder.
+//! Compiler-owned samples are copied from their checked-in canonical outputs;
+//! this tool never substitutes a placeholder for a missing contract.
 
-use std::{env, fs, io::Write, path::PathBuf};
+use std::{env, fs, path::PathBuf};
 
-const DEFAULT_MAX_CYCLES: u64 = 1_000_000;
+use ivm::prebuilt_fixtures::{SYNTHETIC_EXECUTOR_FIXTURES, build_synthetic_executor_program};
+
 const SAMPLE_MANIFEST: &str = include_str!("../../prebuilt_samples.txt");
 
 fn prebuilt_sample_names() -> Vec<&'static str> {
@@ -23,393 +20,70 @@ fn prebuilt_sample_names() -> Vec<&'static str> {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let crate_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let workspace_root = crate_dir
+        .parent()
+        .and_then(std::path::Path::parent)
+        .expect("ivm crate must belong to the workspace");
+    let fixtures_dir = workspace_root.join("integration_tests/fixtures/ivm");
     let prebuilt_dir = crate_dir.join("target/prebuilt");
     let samples_dir = prebuilt_dir.join("samples");
     fs::create_dir_all(&samples_dir)?;
 
-    // Record the build profile so tests can adjust expectations if needed
     let profile = if cfg!(debug_assertions) {
         "Debug"
     } else {
         "Release"
     };
-    let build_config = format!("profile = \"{profile}\"\n");
     fs::write(
         prebuilt_dir.join("build_config.toml"),
-        build_config.as_bytes(),
+        format!("profile = \"{profile}\"\n"),
     )?;
 
-    let samples = prebuilt_sample_names();
-
-    for (i, name) in samples.into_iter().enumerate() {
-        let mut path = samples_dir.join(name);
-        path.set_extension("to");
-        let mut file = fs::File::create(&path)?;
-        // Create realistic bytecode for known samples; fall back to a minimal HALT
-        // program for others.
-        let payload = match name {
-            // Mint 1 unit of the canonical wonderland rose asset to the current authority using pointer-ABI inputs.
-            "mint_rose_trigger" => build_program_mint_rose_for_authority(),
-            // Convenience: create one NFT per known account
-            "create_nft_for_every_user_trigger" => build_program_create_nft_for_authority(),
-            // Store a ForwardCursor under key "cursor" in the authority's metadata (WAT template)
-            "query_assets_and_save_cursor" => build_program_set_account_detail_defaults(),
-            // Just succeed; embed a harmless metadata write so the executor path succeeds
-            "smart_contract_can_filter_queries" => build_program_set_account_detail_defaults(),
-            _ => build_minimal_valid_program(i as u8),
-        };
-        file.write_all(&payload)?;
-        eprintln!("wrote {} ({} bytes)", path.display(), payload.len());
-    }
-
-    Ok(())
-}
-
-fn default_max_cycles() -> u64 {
-    DEFAULT_MAX_CYCLES
-}
-
-fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
-    use iroha_crypto::Hash;
-
-    let mut out = Vec::with_capacity(7 + payload.len() + Hash::LENGTH);
-    out.extend_from_slice(&type_id.to_be_bytes());
-    out.push(1);
-    out.extend_from_slice(&(payload.len() as u32).to_be_bytes());
-    out.extend_from_slice(payload);
-    let h: [u8; Hash::LENGTH] = Hash::new(payload).into();
-    out.extend_from_slice(&h);
-    out
-}
-
-fn literal_data_start(literal_count: usize) -> usize {
-    literal_count
-        .checked_mul(8)
-        .and_then(|bytes| bytes.checked_add(16))
-        .expect("literal table size fits usize")
-}
-
-fn assemble_program_with_literals(code: &[u8], literals: &[&[u8]]) -> Vec<u8> {
-    let mut program = ivm::ProgramMetadata {
-        version_major: 1,
-        version_minor: 1,
-        mode: 0,
-        vector_length: 4,
-        max_cycles: default_max_cycles(),
-        abi_version: 1,
-    }
-    .encode();
-    if !literals.is_empty() {
-        let data_start = literal_data_start(literals.len());
-        let data_len = literals
+    for name in prebuilt_sample_names() {
+        let bytes = if let Some(tag) = SYNTHETIC_EXECUTOR_FIXTURES
             .iter()
-            .try_fold(0usize, |total, literal| total.checked_add(literal.len()));
-        let data_len = data_len.expect("literal data length fits usize");
-        let unpadded_literal_len = data_start
-            .checked_add(data_len)
-            .expect("literal section length fits usize");
-        let post_pad = (4 - (unpadded_literal_len % 4)) % 4;
-        program.extend_from_slice(b"LTLB");
-        program.extend_from_slice(
-            &u32::try_from(literals.len())
-                .expect("literal count fits u32")
-                .to_le_bytes(),
-        );
-        program.extend_from_slice(&(post_pad as u32).to_le_bytes()); // post-pad bytes
-        program.extend_from_slice(
-            &u32::try_from(data_len)
-                .expect("literal data length fits u32")
-                .to_le_bytes(),
-        );
-        let mut relative_offset = u64::try_from(data_start).expect("literal offset fits u64");
-        for literal in literals {
-            let descriptor =
-                ivm::encode_literal_descriptor(ivm::LiteralKindV1::PointerTlv, relative_offset)
-                    .expect("literal offset fits descriptor");
-            program.extend_from_slice(&descriptor.to_le_bytes());
-            relative_offset = relative_offset
-                .checked_add(u64::try_from(literal.len()).expect("literal length fits u64"))
-                .expect("literal offset fits u64");
-        }
-        for literal in literals {
-            program.extend_from_slice(literal);
-        }
-        program.extend(std::iter::repeat_n(0u8, post_pad));
+            .position(|candidate| *candidate == name)
+        {
+            build_synthetic_executor_program(
+                u8::try_from(tag).expect("synthetic fixture inventory fits u8"),
+            )
+        } else {
+            let source = fixtures_dir.join(name).with_extension("to");
+            fs::read(&source).map_err(|error| {
+                format!(
+                    "canonical compiler-owned fixture {} is missing or unreadable: {error}",
+                    source.display()
+                )
+            })?
+        };
+        let output = samples_dir.join(name).with_extension("to");
+        fs::write(&output, &bytes)?;
+        eprintln!("wrote {} ({} bytes)", output.display(), bytes.len());
     }
-    program.extend_from_slice(code);
-    program
-}
-
-fn build_minimal_valid_program(tag: u8) -> Vec<u8> {
-    // Construct a valid metadata header (IVM) and a tiny code section that
-    // immediately HALTs. Prebuilt samples are not meant to exercise real
-    // logic; they only need to be accepted by the VM and allow the executor
-    // migration call to complete without error.
-    let meta = ivm::ProgramMetadata {
-        version_major: 1,
-        version_minor: 1,
-        mode: 0,
-        // Encode a tiny discriminator in the metadata so the node can
-        // emulate specific sample behaviours (e.g., force a migration
-        // failure for `executor_with_migration_fail`). Zero selects the
-        // host maximum, so use `tag + 1` to avoid zero.
-        vector_length: tag.saturating_add(1),
-        // Provide a sensible cycle budget as part of metadata; the program
-        // halts on the first instruction so this is not actually consumed.
-        max_cycles: default_max_cycles(),
-        abi_version: 1,
-    };
-    let mut v = meta.encode();
-
-    // Emit a single HALT instruction using the native wide opcode encoding so
-    // `IVM::run()` returns immediately.
-    let halt = ivm::encoding::wide::encode_halt().to_le_bytes();
-    v.extend_from_slice(&halt);
-
-    v
-}
-
-fn build_program_mint_rose_for_authority() -> Vec<u8> {
-    use iroha_data_model::prelude::AssetDefinitionId;
-    use iroha_primitives::numeric::Quantity;
-    use ivm::{
-        PointerType, encoding, instruction::wide, kotodama::compiler::encode_addi,
-        syscalls as ivm_sys,
-    };
-
-    let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        iroha_data_model::domain::DomainId::try_new("wonderland", "universal").unwrap(),
-        "rose".parse().unwrap(),
-    );
-    let asset_payload = norito::to_bytes(&asset_def).expect("encode asset definition");
-    let asset_tlv = make_tlv(PointerType::AssetDefinitionId as u16, &asset_payload);
-    let amount_tlv =
-        ivm::numeric_tlv::encode_quantity(&Quantity::from(1_u64)).expect("encode quantity");
-
-    let mut code = Vec::new();
-    // r10 <- &AccountId(authority)
-    code.extend_from_slice(
-        &encoding::wide::encode_sys(wide::system::SCALL, ivm_sys::SYSCALL_GET_AUTHORITY as u8)
-            .to_le_bytes(),
-    );
-    code.extend_from_slice(&encode_addi(13, 10, 0).expect("encode addi").to_le_bytes()); // save account pointer
-    // r10 <- &AssetDefinitionId (literal TLV)
-    code.extend_from_slice(
-        &encoding::wide::encode_literal(wide::memory::LDLIT, 10, 0).to_le_bytes(),
-    );
-    code.extend_from_slice(
-        &encoding::wide::encode_sys(
-            wide::system::SCALL,
-            ivm_sys::SYSCALL_INPUT_PUBLISH_TLV as u8,
-        )
-        .to_le_bytes(),
-    );
-    code.extend_from_slice(&encode_addi(11, 10, 0).expect("encode addi").to_le_bytes()); // r11 = asset ptr
-    // r10 <- &Quantity(1) (literal TLV), then publish it into VM-owned memory.
-    code.extend_from_slice(
-        &encoding::wide::encode_literal(wide::memory::LDLIT, 10, 1).to_le_bytes(),
-    );
-    code.extend_from_slice(
-        &encoding::wide::encode_sys(
-            wide::system::SCALL,
-            ivm_sys::SYSCALL_INPUT_PUBLISH_TLV as u8,
-        )
-        .to_le_bytes(),
-    );
-    code.extend_from_slice(&encode_addi(12, 10, 0).expect("encode addi").to_le_bytes()); // r12 = quantity ptr
-    code.extend_from_slice(&encode_addi(10, 13, 0).expect("encode addi").to_le_bytes()); // r10 = account ptr
-    code.extend_from_slice(
-        &encoding::wide::encode_sys(wide::system::SCALL, ivm_sys::SYSCALL_MINT_ASSET as u8)
-            .to_le_bytes(),
-    );
-    code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
-
-    assemble_program_with_literals(&code, &[&asset_tlv, &amount_tlv])
-}
-
-fn build_program_create_nft_for_authority() -> Vec<u8> {
-    use ivm::{encoding, instruction::wide, syscalls as ivm_sys};
-    let mut code = Vec::new();
-    code.extend_from_slice(
-        &encoding::wide::encode_sys(
-            wide::system::SCALL,
-            ivm_sys::SYSCALL_CREATE_NFTS_FOR_ALL_USERS as u8,
-        )
-        .to_le_bytes(),
-    );
-    code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
-
-    let mut v = ivm::ProgramMetadata {
-        version_major: 1,
-        version_minor: 1,
-        mode: 0,
-        vector_length: 4,
-        max_cycles: default_max_cycles(),
-        abi_version: 1,
-    }
-    .encode();
-    v.extend_from_slice(&code);
-    v
-}
-
-fn build_program_set_account_detail_defaults() -> Vec<u8> {
-    use iroha_data_model::{prelude::Name, query::parameters::ForwardCursor};
-    use iroha_primitives::json::Json;
-    use ivm::{
-        PointerType, encoding, instruction::wide, kotodama::compiler::encode_addi,
-        syscalls as ivm_sys,
-    };
-    use nonzero_ext::nonzero;
-    use norito::json;
-
-    let key: Name = "cursor".parse().expect("key name");
-    let key_payload = norito::to_bytes(&key).expect("encode key name");
-    let cursor = ForwardCursor {
-        query: "sc_dummy".to_owned(),
-        cursor: nonzero!(1_u64),
-        gas_budget: None,
-    };
-    let value_value = json::to_value(&cursor).expect("encode ForwardCursor");
-    let value_json = Json::from(&value_value);
-    let value_payload = norito::to_bytes(&value_json).expect("encode cursor json");
-    let key_tlv = make_tlv(PointerType::Name as u16, &key_payload);
-    let value_tlv = make_tlv(PointerType::Json as u16, &value_payload);
-
-    let mut code = Vec::new();
-    // r10 <- &AccountId(authority)
-    code.extend_from_slice(
-        &encoding::wide::encode_sys(wide::system::SCALL, ivm_sys::SYSCALL_GET_AUTHORITY as u8)
-            .to_le_bytes(),
-    );
-    code.extend_from_slice(&encode_addi(13, 10, 0).expect("encode addi").to_le_bytes()); // save account pointer
-    // r10 <- &Name("cursor")
-    code.extend_from_slice(
-        &encoding::wide::encode_literal(wide::memory::LDLIT, 10, 0).to_le_bytes(),
-    );
-    code.extend_from_slice(
-        &encoding::wide::encode_sys(
-            wide::system::SCALL,
-            ivm_sys::SYSCALL_INPUT_PUBLISH_TLV as u8,
-        )
-        .to_le_bytes(),
-    );
-    code.extend_from_slice(&encode_addi(11, 10, 0).expect("encode addi").to_le_bytes()); // r11 = key ptr
-    // r10 <- &Json(cursor)
-    code.extend_from_slice(
-        &encoding::wide::encode_literal(wide::memory::LDLIT, 10, 1).to_le_bytes(),
-    );
-    code.extend_from_slice(
-        &encoding::wide::encode_sys(
-            wide::system::SCALL,
-            ivm_sys::SYSCALL_INPUT_PUBLISH_TLV as u8,
-        )
-        .to_le_bytes(),
-    );
-    code.extend_from_slice(&encode_addi(12, 10, 0).expect("encode addi").to_le_bytes()); // r12 = value ptr
-    code.extend_from_slice(&encode_addi(10, 13, 0).expect("encode addi").to_le_bytes()); // r10 = account ptr
-    code.extend_from_slice(
-        &encoding::wide::encode_sys(
-            wide::system::SCALL,
-            ivm_sys::SYSCALL_SET_ACCOUNT_DETAIL as u8,
-        )
-        .to_le_bytes(),
-    );
-    code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
-
-    assemble_program_with_literals(&code, &[&key_tlv, &value_tlv])
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn assert_parses_with_abi(bytes: &[u8]) {
-        let parsed = ivm::ProgramMetadata::parse(bytes).expect("metadata parses");
-        assert_eq!(parsed.metadata.abi_version, 1);
-        ivm::IVM::new(u64::MAX)
-            .load_program(bytes)
-            .expect("fixture passes literal and instruction admission");
+    #[test]
+    fn sample_manifest_has_every_synthetic_fixture_once() {
+        let names = prebuilt_sample_names();
+        for fixture in SYNTHETIC_EXECUTOR_FIXTURES {
+            assert_eq!(
+                names.iter().filter(|name| **name == fixture).count(),
+                1,
+                "{fixture} must occur exactly once"
+            );
+        }
     }
 
     #[test]
-    fn fallback_samples_encode_valid_headers() {
-        assert_parses_with_abi(&build_minimal_valid_program(0));
-        assert_parses_with_abi(&build_program_mint_rose_for_authority());
-        assert_parses_with_abi(&build_program_create_nft_for_authority());
-        assert_parses_with_abi(&build_program_set_account_detail_defaults());
-    }
-
-    #[test]
-    fn mint_sample_uses_authenticated_quantity_literal() {
-        let mut vm = ivm::IVM::new(u64::MAX);
-        vm.load_program(&build_program_mint_rose_for_authority())
-            .expect("load mint sample");
-        let asset_pointer =
-            u64::try_from(literal_data_start(2)).expect("literal data offset fits u64");
-        let asset = vm
-            .validate_tlv(asset_pointer)
-            .expect("authenticated asset literal");
-        assert_eq!(asset.type_id, ivm::PointerType::AssetDefinitionId);
-        let amount_pointer = asset_pointer
-            .checked_add(
-                u64::try_from(7 + asset.payload.len() + iroha_crypto::Hash::LENGTH)
-                    .expect("asset envelope length fits u64"),
-            )
-            .expect("amount pointer fits u64");
-        let amount = vm
-            .validate_tlv(amount_pointer)
-            .expect("authenticated quantity literal");
-        assert_eq!(amount.type_id, ivm::PointerType::Quantity);
-        let amount = iroha_primitives::numeric_abi::QuantityValueV1::decode_frame(amount.payload)
-            .expect("canonical quantity frame")
-            .into_quantity();
-        assert_eq!(amount, iroha_primitives::numeric::Quantity::from(1_u64));
-    }
-
-    #[test]
-    fn mint_sample_rejects_tampered_literal_bytes_and_descriptors() {
-        let program = build_program_mint_rose_for_authority();
-        let parsed = ivm::ProgramMetadata::parse(&program).expect("parse mint fixture metadata");
-        let literal = parsed
-            .literal_section
-            .expect("mint fixture has indexed literals");
-        assert_eq!(literal.count, 2);
-
-        let asset_payload_len = u32::from_be_bytes(
-            program[literal.data_start + 3..literal.data_start + 7]
-                .try_into()
-                .expect("asset payload length bytes"),
-        ) as usize;
-        let amount_start = literal
-            .data_start
-            .checked_add(7 + asset_payload_len + iroha_crypto::Hash::LENGTH)
-            .expect("amount literal offset fits");
-        assert!(amount_start < literal.data_end);
-
-        let mut corrupted_payload = program.clone();
-        corrupted_payload[amount_start + 7] ^= 1;
-        assert!(
-            ivm::IVM::new(u64::MAX)
-                .load_program(&corrupted_payload)
-                .is_err(),
-            "literal payload substitution must invalidate the authenticated table"
-        );
-
-        let mut duplicate_descriptor = program;
-        let first_descriptor =
-            duplicate_descriptor[literal.entries_start..literal.entries_start + 8].to_vec();
-        duplicate_descriptor[literal.entries_start + 8..literal.entries_start + 16]
-            .copy_from_slice(&first_descriptor);
-        assert!(
-            ivm::IVM::new(u64::MAX)
-                .load_program(&duplicate_descriptor)
-                .is_err(),
-            "duplicate or reordered literal targets must fail admission"
-        );
-    }
-
-    #[test]
-    fn sample_manifest_includes_threshold_escrow() {
-        assert!(prebuilt_sample_names().contains(&"threshold_escrow"));
+    fn sample_manifest_has_no_unknown_or_duplicate_names() {
+        let names = prebuilt_sample_names();
+        let unique: std::collections::BTreeSet<_> = names.iter().copied().collect();
+        assert_eq!(names.len(), unique.len(), "sample names must be unique");
+        assert!(names.contains(&"threshold_escrow"));
     }
 }

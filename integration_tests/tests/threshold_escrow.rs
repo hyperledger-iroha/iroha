@@ -496,7 +496,7 @@ async fn setup_ledger_for_sample(
         );
     }
     instructions.push(
-        Mint::asset_numeric(
+        Mint::asset_quantity(
             initial_amount,
             AssetId::new(asset_definition_id.clone(), ALICE_ID.clone()),
         )

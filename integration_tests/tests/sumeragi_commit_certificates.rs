@@ -657,12 +657,12 @@ fn stake_genesis_post_topology_transactions(topology: &[PeerId]) -> Vec<Vec<Inst
         Register::domain(Domain::new(nexus_domain.clone())).into(),
         Register::asset_definition(definition).into(),
         Register::asset_definition(fee_definition).into(),
-        Mint::asset_numeric(
+        Mint::asset_quantity(
             HIGH_STAKE,
             AssetId::new(stake_asset_id.clone(), gas_account_id.clone()),
         )
         .into(),
-        Mint::asset_numeric(
+        Mint::asset_quantity(
             NEXUS_FEE_SEED_AMOUNT,
             AssetId::new(fee_asset_id.clone(), gas_account_id.clone()),
         )
@@ -675,14 +675,14 @@ fn stake_genesis_post_topology_transactions(topology: &[PeerId]) -> Vec<Vec<Inst
             bootstrap_tx.push(Register::account(Account::new(validator_id.clone())).into());
         }
         bootstrap_tx.push(
-            Mint::asset_numeric(
+            Mint::asset_quantity(
                 stake,
                 AssetId::new(stake_asset_id.clone(), validator_id.clone()),
             )
             .into(),
         );
         bootstrap_tx.push(
-            Mint::asset_numeric(
+            Mint::asset_quantity(
                 NEXUS_FEE_SEED_AMOUNT,
                 AssetId::new(fee_asset_id.clone(), validator_id),
             )

@@ -1,4 +1,5 @@
 using Hyperledger.Iroha.Norito;
+using Hyperledger.Iroha.Numeric;
 
 namespace Hyperledger.Iroha.Transactions;
 
@@ -37,6 +38,14 @@ public abstract record class TransactionInstruction
         return new TransferAssetInstruction(assetDefinitionId, quantity, destinationAccountId);
     }
 
+    public static TransferAssetInstruction TransferAsset(
+        string assetDefinitionId,
+        NumericV1.QuantityValue quantity,
+        string destinationAccountId)
+    {
+        return new TransferAssetInstruction(assetDefinitionId, quantity, destinationAccountId);
+    }
+
     public static TransferDomainInstruction TransferDomain(string domainId, string destinationAccountId)
     {
         return new TransferDomainInstruction(domainId, destinationAccountId);
@@ -59,7 +68,23 @@ public abstract record class TransactionInstruction
         return new MintAssetInstruction(assetDefinitionId, quantity, destinationAccountId);
     }
 
+    public static MintAssetInstruction MintAsset(
+        string assetDefinitionId,
+        NumericV1.QuantityValue quantity,
+        string destinationAccountId)
+    {
+        return new MintAssetInstruction(assetDefinitionId, quantity, destinationAccountId);
+    }
+
     public static BurnAssetInstruction BurnAsset(string assetDefinitionId, string quantity, string destinationAccountId)
+    {
+        return new BurnAssetInstruction(assetDefinitionId, quantity, destinationAccountId);
+    }
+
+    public static BurnAssetInstruction BurnAsset(
+        string assetDefinitionId,
+        NumericV1.QuantityValue quantity,
+        string destinationAccountId)
     {
         return new BurnAssetInstruction(assetDefinitionId, quantity, destinationAccountId);
     }

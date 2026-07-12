@@ -1118,15 +1118,29 @@ public enum KagemushaRecursiveSpendCodecs {
         let blockHeight = try scalarUInt64(reader.field(), field: "verifiedAtBlockHeight")
         let verifiedAt = try scalarUInt64(reader.field(), field: "verifiedAtMilliseconds")
         try reader.finish("verifyResult")
+        let summary = try decodeBundleSummary(summaryArchive)
         guard valid else {
             throw KagemushaRecursiveSpendError.invalidArchive("verifyResult.valid")
+        }
+        // Mirror Rust `KagemushaRecursiveSpendVerifyResultV2::validate_public_binding`
+        // before wallet code can persist a native result.
+        guard chainAdmissible,
+              stateRedeemable,
+              witnessless,
+              requestDigest.contains(where: { $0 != 0 }),
+              bindingDigest.contains(where: { $0 != 0 }),
+              circuitID == KagemushaRecursiveSpend.stateEpCircuitID,
+              blockHeight > 0,
+              verifiedAt > 0,
+              summary.verifierKeyID == verifierKeyID else {
+            throw KagemushaRecursiveSpendError.invalidArchive("verifyResult.binding")
         }
         return KagemushaRecursiveSpendVerifyResult(
             valid: valid,
             chainAdmissible: chainAdmissible,
             stateRedeemable: stateRedeemable,
             witnesslessRedemptionSupported: witnessless,
-            summary: try decodeBundleSummary(summaryArchive),
+            summary: summary,
             recipientRequestDigest: requestDigest,
             requestOutputBindingDigest: bindingDigest,
             verifierKeyID: verifierKeyID,

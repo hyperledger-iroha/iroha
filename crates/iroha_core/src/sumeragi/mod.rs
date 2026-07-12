@@ -715,6 +715,7 @@ pub(crate) mod exec;
 pub(crate) mod lane_planner;
 pub mod message;
 pub mod network_topology;
+pub(crate) mod output_guard;
 pub(crate) mod penalties;
 pub(crate) mod safety_wal;
 pub(crate) mod smt;
@@ -769,7 +770,10 @@ pub fn status_snapshot() -> StatusSnapshot {
     status::snapshot()
 }
 
-use self::message::*;
+use self::{
+    message::*,
+    output_guard::{ConsensusOutputGuard, process_consensus_output_guard},
+};
 use crate::{EventsSender, IrohaNetwork, kura::Kura, queue::Queue};
 
 /// Bundle of genesis block and its publishing key.
@@ -843,6 +847,7 @@ pub struct SumeragiHandle {
     lane_relay: mpsc::SyncSender<LaneRelayMessage>,
     wake: mpsc::SyncSender<()>,
     ingress_ready: Arc<AtomicBool>,
+    output_guard: Arc<ConsensusOutputGuard>,
 }
 
 impl SumeragiHandle {
@@ -853,6 +858,7 @@ impl SumeragiHandle {
         lane_relay: mpsc::SyncSender<LaneRelayMessage>,
         wake: mpsc::SyncSender<()>,
         ingress_ready: Arc<AtomicBool>,
+        output_guard: Arc<ConsensusOutputGuard>,
     ) -> Self {
         Self {
             block,
@@ -861,11 +867,12 @@ impl SumeragiHandle {
             lane_relay,
             wake,
             ingress_ready,
+            output_guard,
         }
     }
 
     fn ingress_is_ready(&self) -> bool {
-        self.ingress_ready.load(Ordering::Acquire)
+        self.ingress_ready.load(Ordering::Acquire) && !self.output_guard.restart_required()
     }
 
     fn wake(&self) {
@@ -873,6 +880,9 @@ impl SumeragiHandle {
     }
 
     fn try_enqueue_block(&self, sender: Option<PeerId>, message: BlockMessage) -> bool {
+        let Some(_permit) = self.output_guard.acquire() else {
+            return false;
+        };
         if !self.ingress_is_ready() {
             iroha_logger::debug!(
                 "rejecting Sumeragi ingress until context and safety WAL replay complete"
@@ -949,6 +959,9 @@ impl SumeragiHandle {
     }
 
     fn try_enqueue_lane_relay(&self, message: LaneRelayMessage) -> bool {
+        let Some(_permit) = self.output_guard.acquire() else {
+            return false;
+        };
         if !self.ingress_is_ready() {
             return false;
         }
@@ -1026,6 +1039,12 @@ impl SumeragiHandle {
     ) -> bool {
         self.try_enqueue_lane_relay(LaneRelayMessage::NativeAmx { sender, message })
     }
+
+    /// Return whether a fatal consensus failure requires process restart.
+    #[must_use]
+    pub fn restart_required(&self) -> bool {
+        self.output_guard.restart_required()
+    }
 }
 
 #[cfg(test)]
@@ -1044,6 +1063,7 @@ pub(crate) fn test_sumeragi_handle(
         lane_relay_tx,
         wake_tx,
         Arc::new(AtomicBool::new(true)),
+        ConsensusOutputGuard::isolated(),
     );
     (handle, block_rx)
 }
@@ -1085,6 +1105,12 @@ impl SumeragiStartArgs {
             network,
             genesis_network,
         } = self;
+        let output_guard = process_consensus_output_guard();
+        if output_guard.restart_required() {
+            return Err(eyre::eyre!(
+                "Sumeragi consensus is restart-required after a fatal live-runner failure"
+            ));
+        }
 
         let vote_channel_cap = config.queues.commands.get();
         let block_payload_channel_cap = config.queues.chunks.get();
@@ -1105,6 +1131,7 @@ impl SumeragiStartArgs {
             lane_relay_tx,
             wake_tx,
             Arc::clone(&ingress_ready),
+            Arc::clone(&output_guard),
         );
 
         let worker = SumeragiWorker {
@@ -1118,6 +1145,7 @@ impl SumeragiStartArgs {
             genesis_network,
             lane_relay_rx,
             ingress_ready,
+            output_guard,
             vote_rx,
             block_payload_rx,
             block_rx,
@@ -1148,6 +1176,7 @@ struct SumeragiWorker {
     genesis_network: GenesisWithPubKey,
     lane_relay_rx: mpsc::Receiver<LaneRelayMessage>,
     ingress_ready: Arc<AtomicBool>,
+    output_guard: Arc<ConsensusOutputGuard>,
     vote_rx: mpsc::Receiver<InboundBlockMessage>,
     block_payload_rx: mpsc::Receiver<InboundBlockMessage>,
     block_rx: mpsc::Receiver<InboundBlockMessage>,
@@ -1210,6 +1239,19 @@ mod authoritative_runtime_gate_tests {
         );
         let _ = receiver.try_recv().expect("drain the bounded v2 queue");
         assert!(handle.incoming_block_message(v2_message()));
+    }
+
+    #[test]
+    fn restart_required_ingress_rejects_before_queue_mutation() {
+        let (handle, receiver) = test_sumeragi_handle(1);
+        handle.output_guard.activate_restart_required();
+
+        assert!(handle.restart_required());
+        assert!(!handle.incoming_block_message(v2_message()));
+        assert!(
+            receiver.try_recv().is_err(),
+            "restart-required admission must not mutate the bounded ingress queue"
+        );
     }
 }
 
