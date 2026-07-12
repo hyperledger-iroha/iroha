@@ -5843,12 +5843,13 @@ fn analyze_statement_inner(
                             bind_tuple_fields_rec(&mut out, vars, name, &expr, &expr.ty);
                         }
                         Type::Struct { fields, .. } => {
-                            for (i, (_fname, fty)) in fields.iter().enumerate() {
+                            for (i, (fname, fty)) in fields.iter().enumerate() {
                                 let direct = match expr.kind() {
                                     ExprKind::Tuple(values) => values.get(i),
-                                    ExprKind::StructLiteral { fields, .. } => {
-                                        fields.get(i).map(|(_, value)| value)
-                                    }
+                                    ExprKind::StructLiteral { fields, .. } => fields
+                                        .iter()
+                                        .find(|(field, _)| field == fname)
+                                        .map(|(_, value)| value),
                                     _ => None,
                                 };
                                 let val_expr = direct.cloned().unwrap_or_else(|| TypedExpr {
@@ -5942,15 +5943,16 @@ fn analyze_statement_inner(
                                 });
                             }
                             for (i, name) in names.iter().enumerate() {
-                                let (_fname, ti) = fields
+                                let (fname, ti) = fields
                                     .get(i)
                                     .cloned()
                                     .expect("struct arity already validated");
                                 let direct = match expr.kind() {
                                     ExprKind::Tuple(values) => values.get(i),
-                                    ExprKind::StructLiteral { fields, .. } => {
-                                        fields.get(i).map(|(_, value)| value)
-                                    }
+                                    ExprKind::StructLiteral { fields, .. } => fields
+                                        .iter()
+                                        .find(|(field, _)| field == &fname)
+                                        .map(|(_, value)| value),
                                     _ => None,
                                 };
                                 let val_expr = direct.cloned().unwrap_or_else(|| TypedExpr {
@@ -16333,6 +16335,41 @@ mod tests {
             .map(|name| name.rsplit("::").next().unwrap().to_string())
             .collect();
         assert_eq!(suffixes, vec!["pair", "pair#0", "pair#1"]);
+    }
+
+    #[test]
+    fn struct_destructuring_uses_declaration_order_for_out_of_order_literals() {
+        let program = parse(
+            "struct Pair { int first, string second } \
+             fn f() { \
+                 let pair = Pair { second: \"two\", first: 1 }; \
+                 let (left, right) = Pair { second: \"four\", first: 3 }; \
+             }",
+        )
+        .expect("parse named struct literals");
+        let typed = analyze(&program).expect("analyze named struct literals");
+        let TypedItem::Function(function) = &typed.items[0];
+
+        let binding = |suffix: &str| {
+            function
+                .body
+                .statements
+                .iter()
+                .find_map(|statement| match statement {
+                    TypedStatement::Let { name, value }
+                        if name.rsplit("::").next() == Some(suffix) =>
+                    {
+                        Some(value)
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("missing binding `{suffix}`"))
+        };
+
+        assert!(matches!(binding("pair#0").expr, ExprKind::IntLiteral(ref value) if value == &BigInt::from(1_i64)));
+        assert!(matches!(binding("pair#1").expr, ExprKind::String(ref value) if value == "two"));
+        assert!(matches!(binding("left").expr, ExprKind::IntLiteral(ref value) if value == &BigInt::from(3_i64)));
+        assert!(matches!(binding("right").expr, ExprKind::String(ref value) if value == "four"));
     }
 
     #[test]

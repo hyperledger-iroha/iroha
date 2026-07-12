@@ -28951,7 +28951,7 @@ signed ancestor-linked solid-block header proof,
   effect, syscall, access, gas, and lowering policy. Every new privileged
   operation must update bytecode-derived admission, ABI-v1 hashes/goldens,
   deterministic host behavior, docs, and adversarial tests in the same change.
-- Finish and validate the bounded-List, exact-Amount, native-JSON, and typed
+- Finish and validate the bounded-List, exact-decimal/quantity, native-JSON, and typed
   core-query-page corridor. The implementation and source migration are under
   final audit; regenerate every mapped golden, manifest, syscall/pointer table,
   and ABI hash only after frontend and ABI hardening are green. Then prove one
