@@ -2344,7 +2344,9 @@ impl Kura {
             }
         };
 
-        Self::ensure_lane_directories(&store_dir, lane_config, &blocks_root, &merge_log_path)?;
+        if !journal_resolved_primary {
+            Self::ensure_lane_directories(&store_dir, lane_config, &blocks_root, &merge_log_path)?;
+        }
 
         if merge_log.total_entries > block_count {
             let trimmed = merge_log.total_entries - block_count;
