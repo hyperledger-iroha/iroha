@@ -159,8 +159,8 @@ public struct ProofAttachment: Sendable, Equatable {
     }
 
     func noritoPayload() throws -> Data {
-        var writer = OfflineNoritoWriter()
-        writer.writeField(OfflineNorito.encodeString(backend))
+        var writer = CanonicalNoritoWriter()
+        writer.writeField(CanonicalNorito.encodeString(backend))
         writer.writeField(Self.proofBoxPayload(backend: backend, bytes: proof))
 
         let vkRef: VerifyingKeyReference
@@ -173,7 +173,7 @@ public struct ProofAttachment: Sendable, Equatable {
 
         let tail = envelopeHash != nil ? 2 : (verifyingKeyCommitment != nil ? 1 : 0)
         if tail >= 1 {
-            writer.writeField(try OfflineNorito.encodeOption(
+            writer.writeField(try CanonicalNorito.encodeOption(
                 verifyingKeyCommitment,
                 encode: { try Self.fixedBytesPayload($0,
                                                      expectedLength: Self.hashLength,
@@ -181,7 +181,7 @@ public struct ProofAttachment: Sendable, Equatable {
             ))
         }
         if tail >= 2 {
-            writer.writeField(try OfflineNorito.encodeOption(
+            writer.writeField(try CanonicalNorito.encodeOption(
                 envelopeHash,
                 encode: { try Self.fixedBytesPayload($0,
                                                      expectedLength: Self.hashLength,
@@ -198,16 +198,16 @@ public struct ProofAttachment: Sendable, Equatable {
     }
 
     private static func proofBoxPayload(backend: String, bytes: Data) -> Data {
-        var writer = OfflineNoritoWriter()
-        writer.writeField(OfflineNorito.encodeString(backend))
-        writer.writeField(OfflineNorito.encodeBytesVec(bytes))
+        var writer = CanonicalNoritoWriter()
+        writer.writeField(CanonicalNorito.encodeString(backend))
+        writer.writeField(CanonicalNorito.encodeBytesVec(bytes))
         return writer.data
     }
 
     private static func verifyingKeyIdPayload(_ ref: VerifyingKeyReference) -> Data {
-        var writer = OfflineNoritoWriter()
-        writer.writeField(OfflineNorito.encodeString(ref.backend))
-        writer.writeField(OfflineNorito.encodeString(ref.name))
+        var writer = CanonicalNoritoWriter()
+        writer.writeField(CanonicalNorito.encodeString(ref.backend))
+        writer.writeField(CanonicalNorito.encodeString(ref.name))
         return writer.data
     }
 
@@ -220,7 +220,7 @@ public struct ProofAttachment: Sendable, Equatable {
         guard actual == expectedLength else {
             throw makeError(expectedLength, actual)
         }
-        var writer = OfflineNoritoWriter()
+        var writer = CanonicalNoritoWriter()
         for byte in bytes {
             writer.writeLength(1)
             writer.writeUInt8(byte)

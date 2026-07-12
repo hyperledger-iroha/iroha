@@ -85,13 +85,7 @@ let package = Package(
     products: [
         .library(
             name: "IrohaSwift",
-            targets: ["IrohaSwift"]),
-        .library(
-            name: "IrohaSwiftMobileTransports",
-            targets: ["IrohaSwiftMobileTransports"]),
-        .library(
-            name: "IrohaSwiftTransferUI",
-            targets: ["IrohaSwiftTransferUI"])
+            targets: ["IrohaSwift"])
     ],
     targets: targets + [
         .target(
@@ -103,18 +97,6 @@ let package = Package(
             swiftSettings: swiftSettings,
             linkerSettings: irohaSwiftLinkerSettings
         ),
-        .target(
-            name: "IrohaSwiftMobileTransports",
-            dependencies: ["IrohaSwift"],
-            path: "Sources/IrohaSwiftMobileTransports",
-            swiftSettings: swiftSettings
-        ),
-        .target(
-            name: "IrohaSwiftTransferUI",
-            dependencies: ["IrohaSwift"],
-            path: "Sources/IrohaSwiftTransferUI",
-            swiftSettings: swiftSettings
-        ),
         .testTarget(
             name: "IrohaSwiftTests",
             dependencies: testDependencies,
@@ -122,12 +104,6 @@ let package = Package(
             resources: [
                 .process("Fixtures")
             ],
-            swiftSettings: swiftSettings
-        ),
-        .testTarget(
-            name: "IrohaSwiftTransportUITests",
-            dependencies: ["IrohaSwift", "IrohaSwiftMobileTransports", "IrohaSwiftTransferUI"],
-            path: "Tests/IrohaSwiftTransportUITests",
             swiftSettings: swiftSettings
         )
     ]

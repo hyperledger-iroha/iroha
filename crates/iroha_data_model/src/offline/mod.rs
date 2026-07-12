@@ -179,7 +179,9 @@ pub const KAGEMUSHA_RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES: u
 pub const KAGEMUSHA_AGGREGATION_MODE_CHECKED_PREFOLD_V1: u16 = 1;
 /// Kagemusha aggregation mode for compact tokens whose private-hop verifier is proven in-circuit.
 pub const KAGEMUSHA_AGGREGATION_MODE_RECURSIVE_IN_CIRCUIT_V1: u16 = 2;
-/// Sole first-release product selector for recursive spend-again-offline cash.
+/// Sole first-release product selector for recursive spend-again offline cash.
+pub const KAGEMUSHA_RECURSIVE_SPEND_PRODUCT_MODE_V1: &str = "recursive_spend_v1";
+/// Internal mode bound into ABI-18 native capability and V3 artifact records.
 pub const KAGEMUSHA_RECURSIVE_SPEND_MODE_V2: &str = "recursive_spend_v2";
 /// Maximum asset scale accepted by the exact Kagemusha V2 amount contract.
 pub const KAGEMUSHA_SCALED_AMOUNT_MAX_SCALE_V2: u32 = 28;
@@ -427,7 +429,7 @@ pub const fn preferred_kagemusha_offline_spend_mode(
     pasta_cycle_v3_backend_available: bool,
 ) -> Option<&'static str> {
     if pasta_cycle_v3_backend_available {
-        Some(KAGEMUSHA_RECURSIVE_SPEND_MODE_V2)
+        Some(KAGEMUSHA_RECURSIVE_SPEND_PRODUCT_MODE_V1)
     } else {
         None
     }
@@ -2819,9 +2821,9 @@ mod model {
     /// Public inputs used by the native bridge to derive one receiver-owned
     /// confidential output.
     ///
-    /// The receiver's transient 32-byte spend secret is deliberately not part
-    /// of this archive. It is supplied through a separate native-only argument
-    /// and must never cross the stable Norito or Swift model boundary.
+    /// The receiver's local note opening is deliberately not part of this
+    /// archive. It is supplied through a separate native-only archive and must
+    /// never cross a payment, Torii, or peer protocol boundary.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
@@ -2842,9 +2844,9 @@ mod model {
     /// Public descriptor plus sender-prover material derived for one receiver
     /// output by the native bridge.
     ///
-    /// `recipient_output_prover_material` may contain only the amount opening,
+    /// `sender_output_prover_material` may contain only the amount opening,
     /// `rho`, and owner tag required by the sender's proof. It must never
-    /// contain the receiver spend secret or the output diversifier.
+    /// contain the receiver spend key or the output diversifier.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
@@ -2854,7 +2856,7 @@ mod model {
         /// Receiver-owned confidential output descriptor.
         pub recipient_output: KagemushaSpendableNoteDescriptorV2,
         /// Opaque, bounded opening archive consumed by the sender prover.
-        pub recipient_output_prover_material: Vec<u8>,
+        pub sender_output_prover_material: Vec<u8>,
     }
 
     /// Canonical unsigned fields of a receiver-created payment request.
@@ -2888,17 +2890,18 @@ mod model {
         pub expires_at_ms: u64,
         /// Requested recipient output descriptor.
         pub recipient_output: KagemushaSpendableNoteDescriptorV2,
-        /// Native-only output opening archive used by the sender prover.
-        pub recipient_output_prover_material: Vec<u8>,
+        /// Peer-carried opaque output-opening archive consumed by the sender prover.
+        pub sender_output_prover_material: Vec<u8>,
     }
 
     /// Receiver-created, nonce-bound and device-signed request for one exact offline payment.
     ///
-    /// `recipient_output_prover_material` is opaque to SDK callers. The native
-    /// prover derives it from a receiver-held 32-byte secret and the public
-    /// request fields. It contains only the output-opening material the sender
-    /// needs to prove the requested commitment; it must never contain the
-    /// receiver's spend key.
+    /// `sender_output_prover_material` is part of the signed peer request but
+    /// remains opaque to wallet code. The native bridge derives it from a
+    /// receiver-held local note opening and the public request fields. It
+    /// contains only the amount opening, `rho`, and owner tag needed to prove
+    /// the requested commitment; it must never contain the receiver's spend
+    /// key or diversifier.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
@@ -2929,8 +2932,8 @@ mod model {
         pub expires_at_ms: u64,
         /// Requested recipient output descriptor.
         pub recipient_output: KagemushaSpendableNoteDescriptorV2,
-        /// Native-only output opening archive used by the sender prover.
-        pub recipient_output_prover_material: Vec<u8>,
+        /// Peer-carried opaque output-opening archive consumed by the sender prover.
+        pub sender_output_prover_material: Vec<u8>,
         /// Receiver-device signature over the canonical unsigned fields.
         pub signature: Signature,
     }
@@ -10213,8 +10216,8 @@ impl KagemushaRecipientOutputDerivationResultV2 {
                 field: "recipient_output_derivation.amount",
             });
         }
-        if self.recipient_output_prover_material.is_empty()
-            || self.recipient_output_prover_material.len() > 4 * 1024
+        if self.sender_output_prover_material.is_empty()
+            || self.sender_output_prover_material.len() > 4 * 1024
         {
             return Err(KagemushaFoldError::InvalidRecursiveSpendProof {
                 field: "recipient_output_derivation.prover_material",
@@ -10270,11 +10273,11 @@ impl KagemushaRecipientPaymentRequestSigningPayloadV2 {
                 field: "recipient_output.amount",
             });
         }
-        if self.recipient_output_prover_material.is_empty()
-            || self.recipient_output_prover_material.len() > 4 * 1024
+        if self.sender_output_prover_material.is_empty()
+            || self.sender_output_prover_material.len() > 4 * 1024
         {
             return Err(KagemushaFoldError::InvalidRecursiveSpendProof {
-                field: "recipient_output_prover_material",
+                field: "sender_output_prover_material",
             });
         }
         Ok(())
@@ -10310,7 +10313,7 @@ impl KagemushaRecipientPaymentRequestV2 {
             issued_at_ms: payload.issued_at_ms,
             expires_at_ms: payload.expires_at_ms,
             recipient_output: payload.recipient_output,
-            recipient_output_prover_material: payload.recipient_output_prover_material,
+            sender_output_prover_material: payload.sender_output_prover_material,
             signature,
         };
         request.validate_public_binding()?;
@@ -10332,7 +10335,7 @@ impl KagemushaRecipientPaymentRequestV2 {
             issued_at_ms: self.issued_at_ms,
             expires_at_ms: self.expires_at_ms,
             recipient_output: self.recipient_output.clone(),
-            recipient_output_prover_material: self.recipient_output_prover_material.clone(),
+            sender_output_prover_material: self.sender_output_prover_material.clone(),
         }
     }
 
@@ -17074,7 +17077,7 @@ pub fn derive_offline_note_payment_token_id(
 }
 
 #[cfg(test)]
-mod offline_note_tests {
+mod kagemusha_tests {
     #![allow(
         clippy::assertions_on_constants,
         clippy::items_after_statements,
@@ -18701,6 +18704,7 @@ mod offline_note_tests {
             capabilities.bridge_abi_version,
             KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3
         );
+        assert_eq!(capabilities.mode, KAGEMUSHA_RECURSIVE_SPEND_MODE_V2);
         assert!(!capabilities.proof_backend_available);
         assert_eq!(
             capabilities.missing_gates,
@@ -19992,7 +19996,7 @@ mod offline_note_tests {
                 5,
                 9,
             ),
-            recipient_output_prover_material: vec![0xA5; 96],
+            sender_output_prover_material: vec![0xA5; 96],
         };
         result
             .validate_for_request(&request)
@@ -20099,7 +20103,7 @@ mod offline_note_tests {
             issued_at_ms: 5_000,
             expires_at_ms: 20_000,
             recipient_output: recipient.clone(),
-            recipient_output_prover_material: vec![0x71; 64],
+            sender_output_prover_material: vec![0x71; 64],
         };
         let recipient_request = KagemushaRecipientPaymentRequestV2::from_signed_payload(
             recipient_request_payload.clone(),
@@ -21600,7 +21604,7 @@ mod offline_note_tests {
         );
         assert_eq!(
             preferred_kagemusha_offline_spend_mode(true),
-            Some(KAGEMUSHA_RECURSIVE_SPEND_MODE_V2)
+            Some(KAGEMUSHA_RECURSIVE_SPEND_PRODUCT_MODE_V1)
         );
         assert_eq!(preferred_kagemusha_offline_spend_mode(false), None);
         assert_eq!(

@@ -2802,11 +2802,25 @@
             "type": "string"
           },
           "creation_time_ms": {
-            "format": "uint64",
-            "type": "integer"
+            "oneOf": [
+              {
+                "format": "uint64",
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "executed_tx_hash_hex": {
-            "type": "string"
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "ok": {
             "type": "boolean"
@@ -2815,21 +2829,55 @@
             "type": "string"
           },
           "signing_message_b64": {
-            "type": "string"
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "submitted": {
-            "type": "boolean"
+            "oneOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "target_instructions_hash": {
             "type": "string"
           },
           "target_proposal_id": {
             "type": "string"
+          },
+          "tx_hash_hex": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
           "ok",
-          "resolved_multisig_account_id"
+          "resolved_multisig_account_id",
+          "submitted",
+          "action",
+          "target_proposal_id",
+          "target_instructions_hash",
+          "cancel_proposal_id",
+          "cancel_instructions_hash",
+          "tx_hash_hex",
+          "executed_tx_hash_hex",
+          "creation_time_ms",
+          "signing_message_b64"
         ],
         "type": "object"
       },
@@ -2971,8 +3019,7 @@
             "type": "string"
           },
           "intent": {
-            "$ref": "#/components/schemas/JsonValue",
-            "nullable": true
+            "$ref": "#/components/schemas/JsonValue"
           },
           "operation_type": {
             "maxLength": 64,
@@ -2999,9 +3046,15 @@
             "type": "string"
           },
           "terminal_at_ms": {
-            "format": "uint64",
-            "nullable": true,
-            "type": "integer"
+            "oneOf": [
+              {
+                "format": "uint64",
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -3023,8 +3076,7 @@
             "type": "string"
           },
           "intent": {
-            "$ref": "#/components/schemas/JsonValue",
-            "nullable": true
+            "$ref": "#/components/schemas/JsonValue"
           },
           "operation_type": {
             "maxLength": 64,
@@ -3056,9 +3108,15 @@
             "type": "string"
           },
           "terminal_at_ms": {
-            "format": "uint64",
-            "nullable": true,
-            "type": "integer"
+            "oneOf": [
+              {
+                "format": "uint64",
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -3317,37 +3375,93 @@
         "additionalProperties": false,
         "properties": {
           "creation_time_ms": {
-            "format": "uint64",
-            "type": "integer"
+            "oneOf": [
+              {
+                "format": "uint64",
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "executed_tx_hash_hex": {
-            "type": "string"
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "instructions_hash": {
-            "type": "string"
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "ok": {
             "type": "boolean"
           },
           "proposal_id": {
-            "type": "string"
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "resolved_multisig_account_id": {
             "type": "string"
           },
           "signing_message_b64": {
-            "type": "string"
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "submitted": {
-            "type": "boolean"
+            "oneOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "tx_hash_hex": {
-            "type": "string"
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
           "ok",
-          "resolved_multisig_account_id"
+          "resolved_multisig_account_id",
+          "submitted",
+          "proposal_id",
+          "instructions_hash",
+          "tx_hash_hex",
+          "executed_tx_hash_hex",
+          "creation_time_ms",
+          "signing_message_b64"
         ],
         "type": "object"
       },
@@ -3915,6 +4029,78 @@
             "type": "object"
           }
         ]
+      },
+      "OfflineActiveTopUpShieldVerifier": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/OfflineActiveTransferVerifier"
+          }
+        ],
+        "description": "Role-specific active verifier record for the zero-input Kagemusha top-up shield circuit; it must not be substituted with the peer-transfer verifier."
+      },
+      "OfflineActiveTransferVerifier": {
+        "properties": {
+          "activation_height": {
+            "description": "Inclusive activation height; zero means active since genesis.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "circuit_id": {
+            "description": "Exact confidential-transfer circuit selected at the evaluated block.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "commitment": {
+            "description": "Lowercase 32-byte commitment of the registered verifying key.",
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "id": {
+            "$ref": "#/components/schemas/OfflineVerifyingKeyId"
+          },
+          "max_proof_bytes": {
+            "description": "Maximum transfer-proof payload accepted by the active registry record.",
+            "format": "uint32",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "public_inputs_schema_hash": {
+            "description": "Lowercase 32-byte public-input schema hash.",
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "version": {
+            "description": "Governance-managed monotonic verifier-record version.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "withdrawal_height": {
+            "anyOf": [
+              {
+                "format": "uint64",
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Exclusive withdrawal height, or null when no withdrawal is scheduled."
+          }
+        },
+        "required": [
+          "id",
+          "version",
+          "circuit_id",
+          "commitment",
+          "public_inputs_schema_hash",
+          "max_proof_bytes",
+          "activation_height",
+          "withdrawal_height"
+        ],
+        "type": "object"
       },
       "OfflineBase64Bytes": {
         "description": "Standard padded base64 representation of an explicitly adapted byte field.",
@@ -4594,8 +4780,45 @@
       },
       "OfflineReadiness": {
         "properties": {
+          "active_topup_shield_verifier": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OfflineActiveTopUpShieldVerifier"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Authoritative active public-to-confidential top-up shield verifier at the evaluated height, or null with a topup_shield_verifier_unavailable blocker."
+          },
+          "active_transfer_verifier": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OfflineActiveTransferVerifier"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Authoritative active confidential-transfer verifier at the evaluated height, or null with a transfer_verifier_unavailable blocker."
+          },
           "asset_definition_id": {
+            "description": "Resolved canonical unprefixed Base58 asset-definition address; an alias selector is never echoed here.",
+            "pattern": "^[1-9A-HJ-NP-Za-km-z]{28}$",
             "type": "string"
+          },
+          "asset_scale": {
+            "anyOf": [
+              {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Authoritative live asset-definition scale, including values above the Offline payment limit when asset_scale_unsupported is reported, or null with an asset_scale_unavailable blocker. A ready response always has scale at most 28."
           },
           "blockers": {
             "items": {
@@ -4621,8 +4844,11 @@
         },
         "required": [
           "asset_definition_id",
+          "asset_scale",
           "evaluated_block_height",
           "evaluated_block_hash",
+          "active_transfer_verifier",
+          "active_topup_shield_verifier",
           "ready",
           "blockers"
         ],
@@ -4639,6 +4865,7 @@
           },
           "message": {
             "description": "Non-empty human-readable and non-stable explanation without surrounding whitespace or control characters.",
+            "maxLength": 1024,
             "minLength": 1,
             "pattern": "^(?!\\s)(?:[^\\u0000-\\u001F\\u007F-\\u009F])*[^\\s\\u0000-\\u001F\\u007F-\\u009F]$",
             "type": "string"
@@ -4691,7 +4918,8 @@
         "type": "object"
       },
       "OfflineRedeemRequest": {
-        "description": "Direct structured JSON representation of OfflineRedeemRequest. application/x-norito carries the corresponding typed value directly, not a wrapper containing encoded bytes. JSON decoding ignores unknown object members but rejects duplicate declared members.",
+        "additionalProperties": false,
+        "description": "Direct structured JSON representation of OfflineRedeemRequest. application/x-norito carries the corresponding typed value directly, not a wrapper containing encoded bytes. Unknown and duplicate members are rejected.",
         "properties": {
           "amount": {
             "$ref": "#/components/schemas/OfflineScaledAmount"
@@ -5240,22 +5468,20 @@
           "payer": {
             "type": "string"
           },
-          "topup_anchor_nullifiers": {
-            "items": {
-              "$ref": "#/components/schemas/OfflineFixed32Bytes"
-            },
-            "maxItems": 2,
-            "minItems": 1,
-            "type": "array"
+          "shield_leaf_index": {
+            "format": "uint32",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "shield_verifier_commitment": {
+            "$ref": "#/components/schemas/OfflineFixed32Bytes"
+          },
+          "shield_verifier_id": {
+            "$ref": "#/components/schemas/OfflineVerifyingKeyId"
           },
           "topup_operation_id": {
             "$ref": "#/components/schemas/OfflineOperationIdBytes"
-          },
-          "transfer_verifier_commitment": {
-            "$ref": "#/components/schemas/OfflineFixed32Bytes"
-          },
-          "transfer_verifier_id": {
-            "$ref": "#/components/schemas/OfflineVerifyingKeyId"
           },
           "version": {
             "enum": [
@@ -5274,15 +5500,47 @@
           "amount",
           "initial_root",
           "finalized_root",
-          "topup_anchor_nullifiers",
+          "shield_leaf_index",
           "current_note",
           "topup_operation_id",
-          "transfer_verifier_id",
-          "transfer_verifier_commitment",
+          "shield_verifier_id",
+          "shield_verifier_commitment",
           "artifact_generation",
           "finalized_height",
           "finalized_tx_hash",
           "anchor_digest"
+        ],
+        "type": "object"
+      },
+      "OfflineTopUpAnchorMerkleProof": {
+        "additionalProperties": false,
+        "description": "Canonical balanced-Merkle inclusion path for the exact block-local top-up anchor. Native verification also requires leaf_index < leaf_count and the canonical sibling count.",
+        "properties": {
+          "leaf_count": {
+            "format": "uint32",
+            "maximum": 16,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "leaf_index": {
+            "format": "uint32",
+            "maximum": 15,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "siblings": {
+            "items": {
+              "$ref": "#/components/schemas/OfflineFixed32Bytes"
+            },
+            "maxItems": 4,
+            "minItems": 0,
+            "type": "array"
+          }
+        },
+        "required": [
+          "leaf_index",
+          "leaf_count",
+          "siblings"
         ],
         "type": "object"
       },
@@ -5298,6 +5556,116 @@
         "required": [
           "topup_operation_id",
           "anchor_digest"
+        ],
+        "type": "object"
+      },
+      "OfflineTopUpFinalityCompactQc": {
+        "additionalProperties": false,
+        "properties": {
+          "certificate": {
+            "$ref": "#/components/schemas/SumeragiV2CommitQuorumCertificate"
+          },
+          "height_context": {
+            "$ref": "#/components/schemas/OfflineTopUpFinalityHeightContext"
+          }
+        },
+        "required": [
+          "height_context",
+          "certificate"
+        ],
+        "type": "object"
+      },
+      "OfflineTopUpFinalityHeightContext": {
+        "additionalProperties": false,
+        "properties": {
+          "chain_id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "context_id": {
+            "$ref": "#/components/schemas/SumeragiV2HeightContextId"
+          },
+          "da_layout": {
+            "$ref": "#/components/schemas/SumeragiV2DataAvailabilityLayout"
+          },
+          "epoch": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "epoch_end_height": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "height": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "leader_seed": {
+            "$ref": "#/components/schemas/SumeragiV2Bytes32"
+          },
+          "mode": {
+            "$ref": "#/components/schemas/SumeragiV2ConsensusMode"
+          },
+          "next_epoch_snapshot": {
+            "$ref": "#/components/schemas/SumeragiV2FinalizedNextEpochSnapshot"
+          },
+          "nexus_amx_context_hash": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "parent_commit_qc": {
+            "$ref": "#/components/schemas/SumeragiV2CommitQuorumCertificate"
+          },
+          "protocol_version": {
+            "enum": [
+              2
+            ],
+            "format": "uint16",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "context_id",
+          "chain_id",
+          "protocol_version",
+          "height",
+          "epoch",
+          "epoch_end_height",
+          "mode",
+          "nexus_amx_context_hash",
+          "da_layout",
+          "leader_seed"
+        ],
+        "type": "object"
+      },
+      "OfflineTopUpFinalityProof": {
+        "additionalProperties": false,
+        "description": "Direct typed Sumeragi-v2 finality proof for one applied top-up; this is never a base64-wrapped Norito archive.",
+        "properties": {
+          "anchor": {
+            "$ref": "#/components/schemas/OfflineTopUpAnchorRef"
+          },
+          "anchor_path": {
+            "$ref": "#/components/schemas/OfflineTopUpAnchorMerkleProof"
+          },
+          "commit_qc": {
+            "$ref": "#/components/schemas/OfflineTopUpFinalityCompactQc"
+          },
+          "version": {
+            "enum": [
+              1
+            ],
+            "format": "uint16",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "anchor",
+          "commit_qc",
+          "anchor_path"
         ],
         "type": "object"
       },
@@ -5320,7 +5688,8 @@
         "type": "object"
       },
       "OfflineTopUpRequest": {
-        "description": "Direct structured JSON representation of OfflineTopUpRequest. application/x-norito carries the corresponding typed value directly, not a wrapper containing encoded bytes. JSON decoding ignores unknown object members but rejects duplicate declared members.",
+        "additionalProperties": false,
+        "description": "Direct structured JSON representation of OfflineTopUpRequest. application/x-norito carries the corresponding typed value directly, not a wrapper containing encoded bytes. Unknown and duplicate members are rejected.",
         "properties": {
           "amount": {
             "$ref": "#/components/schemas/OfflineScaledAmount"
@@ -5344,21 +5713,16 @@
           "operation_id": {
             "$ref": "#/components/schemas/OfflineOperationIdBytes"
           },
-          "pallas_open_envelopes_archive": {
-            "$ref": "#/components/schemas/OfflineByteArray",
-            "description": "Typed Norito-JSON byte array inside the structured DTO; this is not a whole-payload wrapper."
-          },
-          "record_bundle": {
-            "$ref": "#/components/schemas/OfflineVerifiedFoldRecordBundle",
-            "description": "Typed checked confidential-transfer proof bundle."
+          "shield_evidence": {
+            "$ref": "#/components/schemas/OfflineTopUpShieldEvidence",
+            "description": "Typed public-to-confidential proof that appends exactly the first spendable note without consuming a confidential input."
           }
         },
         "required": [
           "asset",
           "amount",
           "current_note",
-          "record_bundle",
-          "pallas_open_envelopes_archive",
+          "shield_evidence",
           "artifact_generation",
           "operation_id",
           "authorization"
@@ -5371,6 +5735,10 @@
           "anchor": {
             "$ref": "#/components/schemas/OfflineTopUpAnchor",
             "description": "Direct typed top-up anchor representation; it is not a Norito-base64 wrapper."
+          },
+          "finality_proof": {
+            "$ref": "#/components/schemas/OfflineTopUpFinalityProof",
+            "description": "Direct typed consensus proof for the exact anchor; it is mandatory before a wallet may run recursive init."
           },
           "finalized_block_height": {
             "format": "uint64",
@@ -5390,7 +5758,35 @@
           "transaction_hash",
           "finalized_block_height",
           "server_time_ms",
-          "anchor"
+          "anchor",
+          "finality_proof"
+        ],
+        "type": "object"
+      },
+      "OfflineTopUpShieldEvidence": {
+        "additionalProperties": false,
+        "properties": {
+          "finalized_root": {
+            "$ref": "#/components/schemas/OfflineFixed32Bytes"
+          },
+          "initial_root": {
+            "$ref": "#/components/schemas/OfflineFixed32Bytes"
+          },
+          "leaf_index": {
+            "format": "uint32",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "proof": {
+            "$ref": "#/components/schemas/OfflineProofAttachment"
+          }
+        },
+        "required": [
+          "initial_root",
+          "finalized_root",
+          "leaf_index",
+          "proof"
         ],
         "type": "object"
       },
@@ -9131,6 +9527,28 @@
         ],
         "type": "object"
       },
+      "SccpRecentCursorV1": {
+        "additionalProperties": false,
+        "properties": {
+          "after_index": {
+            "format": "uint32",
+            "maximum": 511,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "from": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "from",
+          "after_index"
+        ],
+        "type": "object"
+      },
       "SccpRecentMessageLinksV1": {
         "additionalProperties": false,
         "properties": {
@@ -9163,6 +9581,12 @@
             "maxLength": 4096,
             "minLength": 1,
             "type": "string"
+          },
+          "commitment_index": {
+            "format": "uint32",
+            "maximum": 511,
+            "minimum": 0,
+            "type": "integer"
           },
           "destination_binding_hash": {
             "$ref": "#/components/schemas/SccpPrefixedHex32"
@@ -9224,6 +9648,7 @@
         },
         "required": [
           "height",
+          "commitment_index",
           "message_id_hex",
           "kind",
           "source_profile",
@@ -9241,12 +9666,15 @@
         "additionalProperties": false,
         "properties": {
           "items": {
-            "description": "Unique messages ordered by descending block height.",
+            "description": "Unique messages ordered by descending block height and ascending commitment index.",
             "items": {
               "$ref": "#/components/schemas/SccpRecentMessageV1"
             },
             "maxItems": 50,
             "type": "array"
+          },
+          "next": {
+            "$ref": "#/components/schemas/SccpRecentCursorV1"
           }
         },
         "required": [
@@ -9397,6 +9825,24 @@
             "minimum": 1,
             "type": "integer"
           },
+          "max_outbound_message_payload_bytes": {
+            "const": 4096,
+            "type": "integer"
+          },
+          "max_outbound_messages_per_block": {
+            "const": 512,
+            "type": "integer"
+          },
+          "max_pending_outbound_messages": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "max_pending_outbound_payload_bytes": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
           "max_proof_bytes_per_block": {
             "maximum": 9007199254740991,
             "minimum": 1,
@@ -9434,6 +9880,10 @@
           }
         },
         "required": [
+          "max_outbound_messages_per_block",
+          "max_outbound_message_payload_bytes",
+          "max_pending_outbound_messages",
+          "max_pending_outbound_payload_bytes",
           "max_proofs_per_transaction",
           "max_proofs_per_block",
           "max_proof_bytes_per_proof",
@@ -10471,6 +10921,9 @@
           "aggregate_signature": {
             "$ref": "#/components/schemas/SumeragiV2BlsProof"
           },
+          "execution_commitment": {
+            "$ref": "#/components/schemas/SumeragiV2ExecutionCommitment"
+          },
           "phase": {
             "$ref": "#/components/schemas/SumeragiV2CommitPhase"
           },
@@ -10498,6 +10951,7 @@
           "round",
           "phase",
           "subject",
+          "execution_commitment",
           "signers",
           "aggregate_signature"
         ],
@@ -10673,6 +11127,62 @@
         "required": [
           "min_signers",
           "total_power"
+        ],
+        "type": "object"
+      },
+      "SumeragiV2ExecutionCommitment": {
+        "additionalProperties": false,
+        "description": "Mandatory deterministic execution result authenticated by every Prepare/Commit vote and quorum certificate. A top-up root is present exactly when topup_anchor_count is non-zero.",
+        "oneOf": [
+          {
+            "not": {
+              "required": [
+                "topup_anchor_root"
+              ]
+            },
+            "properties": {
+              "topup_anchor_count": {
+                "const": 0
+              }
+            }
+          },
+          {
+            "properties": {
+              "topup_anchor_count": {
+                "maximum": 16,
+                "minimum": 1
+              }
+            },
+            "required": [
+              "topup_anchor_root"
+            ]
+          }
+        ],
+        "properties": {
+          "ordinary_writes_root": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "parent_state_root": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "post_state_root": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "topup_anchor_count": {
+            "format": "uint32",
+            "maximum": 16,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "topup_anchor_root": {
+            "$ref": "#/components/schemas/Hash"
+          }
+        },
+        "required": [
+          "parent_state_root",
+          "post_state_root",
+          "ordinary_writes_root",
+          "topup_anchor_count"
         ],
         "type": "object"
       },
@@ -10926,6 +11436,9 @@
           "aggregate_signature": {
             "$ref": "#/components/schemas/SumeragiV2BlsProof"
           },
+          "execution_commitment": {
+            "$ref": "#/components/schemas/SumeragiV2ExecutionCommitment"
+          },
           "phase": {
             "$ref": "#/components/schemas/SumeragiV2GlobalPhase"
           },
@@ -10953,6 +11466,7 @@
           "round",
           "phase",
           "subject",
+          "execution_commitment",
           "signers",
           "aggregate_signature"
         ],
@@ -18270,6 +18784,122 @@
         "x-iroha-tool-effect": "read"
       }
     },
+    "/v1/multisig/approve": {
+      "post": {
+        "description": "Resolve a multisig selector, target a proposal by `proposal_id` or `instructions_hash`, and optionally submit the approval transaction.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MultisigApproveRequest"
+              }
+            },
+            "application/x-norito": {
+              "schema": {
+                "format": "binary",
+                "type": "string"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MultisigResponse"
+                }
+              }
+            },
+            "description": "Successful response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Invalid multisig selector or payload."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Multisig alias or referenced proposal not found."
+          }
+        },
+        "summary": "Approve a multisig proposal.",
+        "tags": [
+          "Multisig"
+        ],
+        "x-iroha-tool-effect": "write"
+      }
+    },
+    "/v1/multisig/cancel": {
+      "post": {
+        "description": "Resolve a multisig selector, target an active proposal by `proposal_id` or `instructions_hash`, and either propose or approve the corresponding cancel action.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MultisigCancelRequest"
+              }
+            },
+            "application/x-norito": {
+              "schema": {
+                "format": "binary",
+                "type": "string"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MultisigCancelResponse"
+                }
+              }
+            },
+            "description": "Successful response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Invalid multisig selector or payload."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Multisig alias or referenced proposal not found."
+          }
+        },
+        "summary": "Cancel a multisig proposal.",
+        "tags": [
+          "Multisig"
+        ],
+        "x-iroha-tool-effect": "write"
+      }
+    },
     "/v1/multisig/proposals/get": {
       "post": {
         "description": "Resolve a multisig selector and fetch a proposal by `proposal_id` or `instructions_hash`.",
@@ -19586,7 +20216,7 @@
     },
     "/v1/offline/operations/{operation_id}": {
       "get": {
-        "description": "Return the current tagged state of an accepted top-up or redemption. Pending responses include Retry-After. Pending state can be recovered from the transaction queue, and committed terminal state is resolved through Kura's bounded operation-id index and exact canonical carrier, including its validated merge entry when applicable; the auxiliary admission registry is process-local and eligible for pruning 24 hours after the signed authorization expires. A 503 response means that index reconstruction or the indexed block or merge history is temporarily unavailable.",
+        "description": "Return the current tagged state of an accepted top-up or redemption. Pending responses include Retry-After. Pending state can be recovered from the transaction queue, and committed terminal state is resolved through Kura's bounded operation-id index and exact canonical carrier, including its validated merge entry when applicable. The process-local admission registry retains only fixed-size canonical request bindings, shares configured count/byte capacity with in-flight reservations, never capacity-evicts an unexpired binding, and prunes accepted bindings 24 hours after signed authorization expiry. A 503 response means that admission capacity, index reconstruction, or indexed block/merge history is temporarily unavailable.",
         "operationId": "offlineOperationStatus",
         "parameters": [
           {
@@ -19725,7 +20355,30 @@
                 }
               }
             },
-            "description": "The status request was rejected by the Torii rate limit."
+            "description": "The status request was rejected by the Torii rate limit.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Offline failures are not cacheable.",
+                "schema": {
+                  "example": "no-store",
+                  "type": "string"
+                }
+              },
+              "Retry-After": {
+                "description": "Whole-second retry delay; the ErrorEnvelope retry_after_seconds detail carries the same value.",
+                "schema": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "Vary": {
+                "description": "Negotiated response dimension.",
+                "schema": {
+                  "example": "Accept",
+                  "type": "string"
+                }
+              }
+            }
           },
           "500": {
             "content": {
@@ -19755,7 +20408,30 @@
                 }
               }
             },
-            "description": "The offline operation index or indexed block body is temporarily unavailable."
+            "description": "The offline operation index or indexed block body is temporarily unavailable.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Offline failures are not cacheable.",
+                "schema": {
+                  "example": "no-store",
+                  "type": "string"
+                }
+              },
+              "Retry-After": {
+                "description": "Whole-second retry delay; the ErrorEnvelope retry_after_seconds detail carries the same value.",
+                "schema": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "Vary": {
+                "description": "Negotiated response dimension.",
+                "schema": {
+                  "example": "Accept",
+                  "type": "string"
+                }
+              }
+            }
           }
         },
         "summary": "Fetch an offline operation.",
@@ -19767,7 +20443,7 @@
     },
     "/v1/offline/readiness": {
       "get": {
-        "description": "Evaluate offline-payment readiness for one asset definition at a specific committed block. A successfully evaluated but unavailable capability returns 200 with ready=false and typed blockers. A 503 readiness_unavailable response means Torii could not evaluate readiness.",
+        "description": "Evaluate offline-payment readiness for one asset definition at a specific committed block. The response binds the live asset scale and active confidential-transfer verifier record to that same height and block hash so clients can cross-check capabilities and release manifests. A successfully evaluated but unavailable capability returns 200 with ready=false and typed blockers. A 503 readiness_unavailable response means Torii could not evaluate readiness.",
         "operationId": "offlineReadiness",
         "parameters": [
           {
@@ -19925,6 +20601,44 @@
               }
             }
           },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The readiness request was rejected by an ingress or route rate limit.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Offline failures are not cacheable.",
+                "schema": {
+                  "example": "no-store",
+                  "type": "string"
+                }
+              },
+              "Retry-After": {
+                "description": "Whole-second retry delay; the ErrorEnvelope retry_after_seconds detail carries the same value.",
+                "schema": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "Vary": {
+                "description": "Negotiated response dimension.",
+                "schema": {
+                  "example": "Accept",
+                  "type": "string"
+                }
+              }
+            }
+          },
           "503": {
             "content": {
               "application/json": {
@@ -19938,7 +20652,30 @@
                 }
               }
             },
-            "description": "Torii could not evaluate readiness (readiness_unavailable)."
+            "description": "Torii could not evaluate readiness (readiness_unavailable).",
+            "headers": {
+              "Cache-Control": {
+                "description": "Offline failures are not cacheable.",
+                "schema": {
+                  "example": "no-store",
+                  "type": "string"
+                }
+              },
+              "Retry-After": {
+                "description": "Whole-second retry delay; the ErrorEnvelope retry_after_seconds detail carries the same value.",
+                "schema": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "Vary": {
+                "description": "Negotiated response dimension.",
+                "schema": {
+                  "example": "Accept",
+                  "type": "string"
+                }
+              }
+            }
           }
         },
         "summary": "Report offline-payment readiness.",
@@ -19950,7 +20687,7 @@
     },
     "/v1/offline/redeem": {
       "post": {
-        "description": "Submit one directly encoded OfflineRedeemRequest. JSON contains the structured request itself and application/x-norito contains the canonical typed Norito value; whole-payload base64 wrappers are rejected. Acceptance is asynchronous and returns the operation resource in Location.",
+        "description": "Submit one typed Kagemusha OfflineRedeemRequest. JSON contains the structured request and application/x-norito contains the canonical Norito value. Acceptance is asynchronous and returns the operation resource in Location.",
         "operationId": "offlineRedeem",
         "parameters": [
           {
@@ -20159,7 +20896,30 @@
                 }
               }
             },
-            "description": "The command was rejected by a Torii or transaction-queue rate limit."
+            "description": "The command was rejected by a Torii or transaction-queue rate limit.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Offline failures are not cacheable.",
+                "schema": {
+                  "example": "no-store",
+                  "type": "string"
+                }
+              },
+              "Retry-After": {
+                "description": "Whole-second retry delay; the ErrorEnvelope retry_after_seconds detail carries the same value.",
+                "schema": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "Vary": {
+                "description": "Negotiated response dimension.",
+                "schema": {
+                  "example": "Accept",
+                  "type": "string"
+                }
+              }
+            }
           },
           "500": {
             "content": {
@@ -20189,7 +20949,30 @@
                 }
               }
             },
-            "description": "The operation cannot currently be accepted."
+            "description": "The operation cannot currently be accepted.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Offline failures are not cacheable.",
+                "schema": {
+                  "example": "no-store",
+                  "type": "string"
+                }
+              },
+              "Retry-After": {
+                "description": "Whole-second retry delay; the ErrorEnvelope retry_after_seconds detail carries the same value.",
+                "schema": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "Vary": {
+                "description": "Negotiated response dimension.",
+                "schema": {
+                  "example": "Accept",
+                  "type": "string"
+                }
+              }
+            }
           }
         },
         "summary": "Submit an offline redemption.",
@@ -20201,7 +20984,7 @@
     },
     "/v1/offline/top-up": {
       "post": {
-        "description": "Submit one directly encoded OfflineTopUpRequest. JSON contains the structured request itself and application/x-norito contains the canonical typed Norito value; whole-payload base64 wrappers are rejected. Acceptance is asynchronous and returns the operation resource in Location.",
+        "description": "Submit one typed Kagemusha OfflineTopUpRequest. JSON contains the structured request and application/x-norito contains the canonical Norito value. Acceptance is asynchronous and returns the operation resource in Location.",
         "operationId": "offlineTopUp",
         "parameters": [
           {
@@ -20410,7 +21193,30 @@
                 }
               }
             },
-            "description": "The command was rejected by a Torii or transaction-queue rate limit."
+            "description": "The command was rejected by a Torii or transaction-queue rate limit.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Offline failures are not cacheable.",
+                "schema": {
+                  "example": "no-store",
+                  "type": "string"
+                }
+              },
+              "Retry-After": {
+                "description": "Whole-second retry delay; the ErrorEnvelope retry_after_seconds detail carries the same value.",
+                "schema": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "Vary": {
+                "description": "Negotiated response dimension.",
+                "schema": {
+                  "example": "Accept",
+                  "type": "string"
+                }
+              }
+            }
           },
           "500": {
             "content": {
@@ -20440,7 +21246,30 @@
                 }
               }
             },
-            "description": "The operation cannot currently be accepted."
+            "description": "The operation cannot currently be accepted.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Offline failures are not cacheable.",
+                "schema": {
+                  "example": "no-store",
+                  "type": "string"
+                }
+              },
+              "Retry-After": {
+                "description": "Whole-second retry delay; the ErrorEnvelope retry_after_seconds detail carries the same value.",
+                "schema": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "Vary": {
+                "description": "Negotiated response dimension.",
+                "schema": {
+                  "example": "Accept",
+                  "type": "string"
+                }
+              }
+            }
           }
         },
         "summary": "Submit an offline top-up.",
@@ -21952,7 +22781,7 @@
     },
     "/v1/sccp/messages/recent": {
       "get": {
-        "description": "Returns at most 50 newest messages from the authoritative height-ordered outbound index. Values outside the documented window are rejected rather than clamped.",
+        "description": "Returns at most 50 newest messages from the authoritative height-ordered outbound index. Use the returned compound cursor as paired `from` and `after_index` fields; values outside the documented window and unpaired `after_index` values are rejected.",
         "parameters": [
           {
             "description": "Optional inclusive maximum recorded block height.",
@@ -21962,6 +22791,18 @@
             "schema": {
               "format": "uint64",
               "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Optional last-consumed commitment index at `from`; requires `from` and resumes at the next position.",
+            "in": "query",
+            "name": "after_index",
+            "required": false,
+            "schema": {
+              "format": "uint32",
+              "maximum": 511,
+              "minimum": 0,
               "type": "integer"
             }
           },
@@ -28802,7 +29643,7 @@
       "name": "Sumeragi"
     },
     {
-      "description": "Offline readiness and asynchronous top-up/redemption operations. Requests use the same typed DTO in JSON and Norito; whole-payload base64 wrapper objects are not part of the public API.",
+      "description": "Kagemusha readiness and asynchronous top-up/redemption operations. Requests use the same typed DTO in JSON and canonical Norito.",
       "name": "Offline"
     },
     {

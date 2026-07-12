@@ -430,19 +430,33 @@ jobs:
 
   sumeragi_formal:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
-      - name: Install pinned Apalache
-        run: bash scripts/formal/install_apalache.sh 0.52.2
-      - name: Apalache version
-        run: target/apalache/toolchains/v0.52.2/bin/apalache-mc --version
-      - name: Sumeragi formal model checks (fast + deep)
+      - name: Cache pinned TLAPM
+        uses: actions/cache@v4
+        with:
+          path: target/tlapm/toolchains/763bf3c1826d77a4cf206f43d5aa16775da1da33/x86_64-linux-gnu
+          key: sumeragi-v2-tlapm-linux-x86-64-763bf3c1826d77a4cf206f43d5aa16775da1da33
+      - name: Install pinned formal tools
+        run: |
+          bash scripts/formal/install_sumeragi_v2_tlapm.sh
+          bash scripts/formal/install_sumeragi_v2_tla2tools.sh
+          bash scripts/formal/install_sumeragi_v2_verus.sh
+          echo "$GITHUB_WORKSPACE/target/verus/toolchains/0.2026.05.31.5dd6d83/x86-linux" >> "$GITHUB_PATH"
+      - name: Sumeragi v2 TLAPS, bounded TLC, and production Verus gates
         run: bash ci/check_sumeragi_formal.sh
+      - name: Upload Sumeragi v2 formal logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sumeragi-v2-formal-pr
+          path: target/formal/sumeragi_v2
+          if-no-files-found: ignore
 
   docs_i18n_metadata:
     runs-on: ubuntu-latest

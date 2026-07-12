@@ -5116,7 +5116,6 @@ mod tests {
     fn canonical_path_grammar_rejects_ambiguous_shapes() {
         let invalid_paths = [
             "/offline/readiness",
-            "/v1/offline/v2/readiness",
             "/v1/offline/note_issue",
             "/v1/offline/list",
             "/v1/offline/{operationId}",

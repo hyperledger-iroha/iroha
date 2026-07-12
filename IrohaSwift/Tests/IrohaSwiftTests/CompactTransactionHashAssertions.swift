@@ -6,7 +6,7 @@ func XCTAssertCanonicalExternalEntrypointHash(
     file: StaticString = #filePath,
     line: UInt = #line
 ) {
-    var compact = OfflineCompactNoritoWriter()
+    var compact = CompactNoritoWriter()
     compact.writeUInt32LE(0)
     compact.writeField(envelope.signedTransaction)
     XCTAssertEqual(
@@ -17,7 +17,7 @@ func XCTAssertCanonicalExternalEntrypointHash(
         line: line
     )
 
-    var fixedWidth = OfflineNoritoWriter()
+    var fixedWidth = CanonicalNoritoWriter()
     fixedWidth.writeUInt32LE(0)
     fixedWidth.writeField(envelope.signedTransaction)
     XCTAssertNotEqual(

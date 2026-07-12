@@ -391,6 +391,7 @@ impl AdapterOutcome {
     }
 
     /// Borrow the effects now safe for asynchronous execution.
+    #[cfg(test)]
     pub(crate) fn effects(&self) -> &[AdapterEffect] {
         &self.effects
     }

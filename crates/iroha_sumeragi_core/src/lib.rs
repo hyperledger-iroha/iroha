@@ -36,7 +36,15 @@ pub use types::{
     SignatureShare, SignedProposal, SignedTimeoutVote, SignedVote, Subject, TimeoutCertificate,
     TimeoutSignatureGroup, TimeoutVote, Validator, ValidatorId, Vote, VotingMode, VotingPower,
 };
-pub use wal::{DurableState, PersistenceId, ReplayError, WalEntry, WalRecord};
+pub use wal::{
+    DurableState, EncodedWalFrame, PersistenceId, RecoveredWalRecord, ReplayError,
+    SAFETY_WAL_FILE_HEADER_LEN, SAFETY_WAL_FILE_MAGIC, SAFETY_WAL_FORMAT_VERSION,
+    SAFETY_WAL_FRAME_HEADER_LEN, SAFETY_WAL_FRAME_MAGIC, SAFETY_WAL_HASH_LEN,
+    SAFETY_WAL_MAX_RECORD_BYTES, WalAppendError, WalAppendIo, WalAppendReceipt, WalAppendState,
+    WalCodecError, WalEntry, WalFileHasher, WalFileIdentity, WalFileRecovery, WalFrameCorruption,
+    WalHeaderCorruption, WalIdentityField, WalIoStage, WalRecord, WalRetirementAuthorization,
+    encode_wal_file_header, encode_wal_frame, recover_wal_file,
+};
 
 #[cfg(test)]
 mod tests;

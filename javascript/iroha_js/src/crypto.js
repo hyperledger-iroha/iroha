@@ -1183,8 +1183,7 @@ function probeKagemushaRecursiveSpendNative(native) {
   );
 }
 
-export const KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1 = "recursive_compact_v1";
-export const KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V2 = "recursive_spend_v2";
+export const KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1 = "recursive_spend_v1";
 export const KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 18;
 export const KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 7;
 export const KAGEMUSHA_RECURSIVE_SPEND_TOPUP_REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 15;
@@ -1269,7 +1268,7 @@ export function preferredKagemushaOfflineSpendMode(
 ) {
   if (arguments.length === 0) {
     return isKagemushaRecursiveSpendNativeAvailable()
-      ? KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V2
+      ? KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1
       : null;
   }
   if (arguments.length !== 1 || typeof pastaCycleV3BackendAvailable !== "boolean") {
@@ -1278,12 +1277,12 @@ export function preferredKagemushaOfflineSpendMode(
     );
   }
   return pastaCycleV3BackendAvailable
-    ? KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V2
+    ? KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1
     : null;
 }
 
 export function isKagemushaSpendAgainMode(value) {
-  return value === KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V2;
+  return value === KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1;
 }
 
 export function canRedeemKagemushaRecursiveSpendWitnessless(proofCircuitId, hopCount) {

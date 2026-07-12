@@ -2076,6 +2076,7 @@ impl Actor {
         cached
     }
 
+    #[cfg(test)]
     fn lane_block_artifact_has_matching_application_receipt(
         kura: &crate::kura::Kura,
         artifact: &crate::kura::LaneBlockArtifact,
@@ -2982,6 +2983,7 @@ impl Actor {
         }))
     }
 
+    #[cfg(test)]
     fn rebroadcast_cached_lane_block_bundles_if_due(&mut self, now: Instant) -> usize {
         let _ = self.prune_durably_finalized_lane_block_state();
         if self.last_lane_block_rebroadcast.is_some_and(|last| {

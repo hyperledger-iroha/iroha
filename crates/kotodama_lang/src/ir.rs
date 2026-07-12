@@ -7009,7 +7009,10 @@ fn lower_surface_builtin_call(
                     dest: zero,
                     value: 0,
                 });
-                let result = ctx.new_temp();
+                let result_words = runtime_value_word_types(&spec.value)
+                    .into_iter()
+                    .map(|_| ctx.new_temp())
+                    .collect::<Vec<_>>();
                 let cond = ctx.new_temp();
                 ctx.current_instr(Instr::Binary {
                     dest: cond,
@@ -7028,20 +7031,14 @@ fn lower_surface_builtin_call(
                 ctx.start_block(then_bb);
                 let decoded = decode_state_map_value_blob(ctx, t_blob, &spec.value)
                     .expect("durable map value should decode");
-                ctx.current_instr(Instr::Copy {
-                    dest: result,
-                    src: decoded,
-                });
+                copy_runtime_value_words(ctx, decoded, &spec.value, &result_words);
                 ctx.finish_current(Terminator::Jump(end_bb));
                 ctx.start_block(else_bb);
                 let def = lower_expr(ctx, dexpr, vars);
-                ctx.current_instr(Instr::Copy {
-                    dest: result,
-                    src: def,
-                });
+                copy_runtime_value_words(ctx, def, &spec.value, &result_words);
                 ctx.finish_current(Terminator::Jump(end_bb));
                 ctx.start_block(end_bb);
-                return result;
+                return rebuild_runtime_value(ctx, &spec.value, &result_words);
             }
             let m = lower_expr(ctx, mexpr, vars);
             let d = lower_expr(ctx, dexpr, vars);
@@ -7107,7 +7104,10 @@ fn lower_surface_builtin_call(
                     dest: zero,
                     value: 0,
                 });
-                let result = ctx.new_temp();
+                let result_words = runtime_value_word_types(&spec.value)
+                    .into_iter()
+                    .map(|_| ctx.new_temp())
+                    .collect::<Vec<_>>();
                 let cond = ctx.new_temp();
                 ctx.current_instr(Instr::Binary {
                     dest: cond,
@@ -7126,20 +7126,14 @@ fn lower_surface_builtin_call(
                 ctx.start_block(then_bb);
                 let existing = decode_state_map_value_blob(ctx, t_blob, &spec.value)
                     .expect("durable map value should decode");
-                ctx.current_instr(Instr::Copy {
-                    dest: result,
-                    src: existing,
-                });
+                copy_runtime_value_words(ctx, existing, &spec.value, &result_words);
                 ctx.finish_current(Terminator::Jump(end_bb));
                 ctx.start_block(else_bb);
                 let def = lower_expr(ctx, dexpr, vars);
-                ctx.current_instr(Instr::Copy {
-                    dest: result,
-                    src: def,
-                });
+                copy_runtime_value_words(ctx, def, &spec.value, &result_words);
                 ctx.finish_current(Terminator::Jump(end_bb));
                 ctx.start_block(end_bb);
-                return result;
+                return rebuild_runtime_value(ctx, &spec.value, &result_words);
             }
             let m = lower_expr(ctx, mexpr, vars);
             let sk = ctx.new_temp();
@@ -7205,7 +7199,10 @@ fn lower_surface_builtin_call(
                     dest: zero,
                     value: 0,
                 });
-                let result = ctx.new_temp();
+                let result_words = runtime_value_word_types(&spec.value)
+                    .into_iter()
+                    .map(|_| ctx.new_temp())
+                    .collect::<Vec<_>>();
                 let cond = ctx.new_temp();
                 ctx.current_instr(Instr::Binary {
                     dest: cond,
@@ -7224,21 +7221,15 @@ fn lower_surface_builtin_call(
                 ctx.start_block(then_bb);
                 let existing = decode_state_map_value_blob(ctx, t_blob, &spec.value)
                     .expect("durable map value should decode");
-                ctx.current_instr(Instr::Copy {
-                    dest: result,
-                    src: existing,
-                });
+                copy_runtime_value_words(ctx, existing, &spec.value, &result_words);
                 ctx.finish_current(Terminator::Jump(end_bb));
                 ctx.start_block(else_bb);
                 let def = lower_expr(ctx, dexpr, vars);
                 let _ = lower_state_map_set_value(ctx, &bn, key_tmp, &spec.key, &spec.value, def);
-                ctx.current_instr(Instr::Copy {
-                    dest: result,
-                    src: def,
-                });
+                copy_runtime_value_words(ctx, def, &spec.value, &result_words);
                 ctx.finish_current(Terminator::Jump(end_bb));
                 ctx.start_block(end_bb);
-                return result;
+                return rebuild_runtime_value(ctx, &spec.value, &result_words);
             }
             let m = lower_expr(ctx, mexpr, vars);
             let sk = ctx.new_temp();
@@ -12221,6 +12212,201 @@ fn either(bool value) -> bool { return value || rhs(); }
         assert!(
             child_paths.is_empty(),
             "unexpected child paths: {child_paths:?}"
+        );
+    }
+
+    #[test]
+    fn aggregate_unwrap_or_lowers_one_eager_fallback_call() {
+        let source = r#"
+            seiyaku C {
+                struct PolicyState {
+                    int version,
+                    bytes document,
+                    bytes document_hash,
+                    AccountId approved_by,
+                    int applied_at_ms,
+                    Name change_id,
+                }
+                state StateMap<Name, PolicyState> Policies;
+                state StateMap<int, int> FallbackCalls;
+
+                fn observed_fallback() -> PolicyState {
+                    let count = FallbackCalls.get(1).unwrap_or(0);
+                    FallbackCalls[1] = count + 1;
+                    return PolicyState {
+                        version: 0,
+                        document: b"fallback",
+                        document_hash: b"fallback-hash",
+                        approved_by: context::authority(),
+                        applied_at_ms: 0,
+                        change_id: Name::parse("fallback"),
+                    };
+                }
+
+                kotoage fn main() -> int authorize("WriteState") {
+                    let policy = Policies.get(Name::parse("spend")).unwrap_or(
+                        observed_fallback(),
+                    );
+                    return policy.version;
+                }
+            }
+        "#;
+        let program = parse(source).expect("parse mixed aggregate unwrap_or");
+        let typed = analyze(&program).expect("analyze mixed aggregate unwrap_or");
+        let lowered = lower(&typed).expect("lower mixed aggregate unwrap_or");
+        let main = lowered
+            .functions
+            .iter()
+            .find(|function| function.name == "main")
+            .expect("main function");
+        let fallback_calls = main
+            .blocks
+            .iter()
+            .flat_map(|block| &block.instrs)
+            .filter(|instruction| {
+                matches!(
+                    instruction,
+                    Instr::CallMulti { callee, .. } if callee == "observed_fallback"
+                )
+            })
+            .count();
+        assert_eq!(
+            fallback_calls, 1,
+            "eager unwrap_or must evaluate an effectful fallback exactly once"
+        );
+    }
+
+    #[test]
+    fn tuple_binding_projects_one_captured_call_result() {
+        let source = r#"
+            seiyaku C {
+                state StateMap<int, int> Observations;
+
+                fn observed_pair() -> (int, int) {
+                    let count = Observations.get(1).unwrap_or(0);
+                    Observations[1] = count + 1;
+                    return (1, 2);
+                }
+
+                kotoage fn main() -> int authorize("WriteState") {
+                    let pair = observed_pair();
+                    return pair.0 + pair.1;
+                }
+            }
+        "#;
+        let program = parse(source).expect("parse tuple call binding");
+        let typed = analyze(&program).expect("analyze tuple call binding");
+        let lowered = lower(&typed).expect("lower tuple call binding");
+        let main = lowered
+            .functions
+            .iter()
+            .find(|function| function.name == "main")
+            .expect("main function");
+        let calls = main
+            .blocks
+            .iter()
+            .flat_map(|block| &block.instrs)
+            .filter(|instruction| {
+                matches!(
+                    instruction,
+                    Instr::CallMulti { callee, .. } if callee == "observed_pair"
+                )
+            })
+            .count();
+        assert_eq!(
+            calls, 1,
+            "tuple field bindings must project one captured call result"
+        );
+    }
+
+    #[test]
+    fn tuple_destructuring_projects_one_captured_call_result() {
+        let source = r#"
+            seiyaku C {
+                state StateMap<int, int> Observations;
+
+                fn observed_pair() -> (int, int) {
+                    let count = Observations.get(1).unwrap_or(0);
+                    Observations[1] = count + 1;
+                    return (1, 2);
+                }
+
+                kotoage fn main() -> int authorize("WriteState") {
+                    let (left, right) = observed_pair();
+                    return left + right;
+                }
+            }
+        "#;
+        let program = parse(source).expect("parse tuple destructuring call");
+        let typed = analyze(&program).expect("analyze tuple destructuring call");
+        let lowered = lower(&typed).expect("lower tuple destructuring call");
+        let main = lowered
+            .functions
+            .iter()
+            .find(|function| function.name == "main")
+            .expect("main function");
+        let calls = main
+            .blocks
+            .iter()
+            .flat_map(|block| &block.instrs)
+            .filter(|instruction| {
+                matches!(
+                    instruction,
+                    Instr::CallMulti { callee, .. } if callee == "observed_pair"
+                )
+            })
+            .count();
+        assert_eq!(
+            calls, 1,
+            "tuple destructuring must project one captured call result"
+        );
+    }
+
+    #[test]
+    fn nested_struct_binding_projects_one_captured_call_result() {
+        let source = r#"
+            seiyaku C {
+                struct Inner { int value, bytes marker }
+                struct Outer { Inner inner, int version }
+                state StateMap<int, int> Observations;
+
+                fn observed_outer() -> Outer {
+                    let count = Observations.get(1).unwrap_or(0);
+                    Observations[1] = count + 1;
+                    return Outer {
+                        inner: Inner { value: 40, marker: b"nested" },
+                        version: 2,
+                    };
+                }
+
+                kotoage fn main() -> int authorize("WriteState") {
+                    let outer = observed_outer();
+                    return outer.inner.value + outer.version;
+                }
+            }
+        "#;
+        let program = parse(source).expect("parse nested struct call binding");
+        let typed = analyze(&program).expect("analyze nested struct call binding");
+        let lowered = lower(&typed).expect("lower nested struct call binding");
+        let main = lowered
+            .functions
+            .iter()
+            .find(|function| function.name == "main")
+            .expect("main function");
+        let calls = main
+            .blocks
+            .iter()
+            .flat_map(|block| &block.instrs)
+            .filter(|instruction| {
+                matches!(
+                    instruction,
+                    Instr::CallMulti { callee, .. } if callee == "observed_outer"
+                )
+            })
+            .count();
+        assert_eq!(
+            calls, 1,
+            "nested struct fields must project one captured call result"
         );
     }
 

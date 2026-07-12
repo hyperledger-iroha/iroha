@@ -381,18 +381,18 @@ final class AccountAddressTests: XCTestCase {
         var algorithmAndPayload = Data([SigningAlgorithm.ed25519.noritoDiscriminant])
         algorithmAndPayload.append(publicKey)
 
-        var expected = OfflineNoritoWriter()
+        var expected = CanonicalNoritoWriter()
         expected.writeUInt32LE(0)
-        expected.writeField(OfflineNorito.encodeConstVec(algorithmAndPayload))
+        expected.writeField(CanonicalNorito.encodeConstVec(algorithmAndPayload))
         XCTAssertEqual(try address.noritoAccountControllerPayload(), expected.data)
 
-        var compactPublicKey = OfflineCompactNoritoWriter()
+        var compactPublicKey = CompactNoritoWriter()
         compactPublicKey.writeUInt64LE(UInt64(algorithmAndPayload.count))
         for byte in algorithmAndPayload {
             compactPublicKey.writeLength(1)
             compactPublicKey.writeUInt8(byte)
         }
-        var expectedCompact = OfflineCompactNoritoWriter()
+        var expectedCompact = CompactNoritoWriter()
         expectedCompact.writeUInt32LE(0)
         expectedCompact.writeField(compactPublicKey.data)
         XCTAssertEqual(try address.compactNoritoAccountControllerPayload(), expectedCompact.data)
@@ -407,23 +407,23 @@ final class AccountAddressTests: XCTestCase {
         )
         let memberCount = try XCTUnwrap(vector.controller?.members?.count)
 
-        var controllerReader = OfflineNoritoReader(data: try address.compactNoritoAccountControllerPayload())
+        var controllerReader = CanonicalNoritoReader(data: try address.compactNoritoAccountControllerPayload())
         XCTAssertEqual(try controllerReader.readUInt32LE(), 1)
-        var policyReader = OfflineNoritoReader(data: try controllerReader.readCompactField())
+        var policyReader = CanonicalNoritoReader(data: try controllerReader.readCompactField())
         XCTAssertEqual(controllerReader.remaining(), 0)
 
-        var versionReader = OfflineNoritoReader(data: try policyReader.readCompactField())
+        var versionReader = CanonicalNoritoReader(data: try policyReader.readCompactField())
         XCTAssertEqual(try versionReader.readUInt8(), vector.controller?.version)
         XCTAssertEqual(versionReader.remaining(), 0)
 
-        var thresholdReader = OfflineNoritoReader(data: try policyReader.readCompactField())
+        var thresholdReader = CanonicalNoritoReader(data: try policyReader.readCompactField())
         XCTAssertEqual(try thresholdReader.readUInt16LE(), vector.controller?.threshold)
         XCTAssertEqual(thresholdReader.remaining(), 0)
 
-        var membersReader = OfflineNoritoReader(data: try policyReader.readCompactField())
+        var membersReader = CanonicalNoritoReader(data: try policyReader.readCompactField())
         XCTAssertEqual(try membersReader.readUInt64LE(), UInt64(memberCount))
         for _ in 0..<memberCount {
-            var memberReader = OfflineNoritoReader(data: try membersReader.readCompactField())
+            var memberReader = CanonicalNoritoReader(data: try membersReader.readCompactField())
             _ = try memberReader.readCompactField()
             _ = try memberReader.readCompactField()
             XCTAssertEqual(memberReader.remaining(), 0)

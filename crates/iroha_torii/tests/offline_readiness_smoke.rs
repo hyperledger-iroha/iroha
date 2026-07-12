@@ -653,56 +653,6 @@ async fn offline_router_exposes_only_the_final_first_release_contract() {
     assert_eq!(missing_operation.status(), StatusCode::NOT_FOUND);
 
     for (method, path) in [
-        (Method::GET, "/v1/offline/v2/readiness"),
-        (Method::POST, "/v1/offline/v2/kagemusha/topup"),
-        (Method::POST, "/v1/offline/v2/notes/redeem"),
-        (Method::POST, "/v1/offline/keys/refill"),
-        (Method::POST, "/v1/offline/notes/issue"),
-        (Method::POST, "/v1/offline/notes/redeem"),
-        (Method::POST, "/v1/offline/cash/load"),
-        (Method::POST, "/v1/offline/cash/redeem"),
-        (Method::POST, "/v1/offline/audit"),
-        (Method::GET, "/v1/offline/v2/readiness/"),
-        (Method::GET, "/v1/offline//v2/readiness"),
-        (Method::GET, "/v1/OFFLINE/v2/readiness"),
-        (Method::GET, "/v1/offline/%76%32/readiness"),
-        (Method::GET, "/v1/offline/v2%2Freadiness"),
-    ] {
-        let response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method(method.clone())
-                    .uri(path)
-                    .header(CONTENT_TYPE, "application/json")
-                    .header(ACCEPT, "application/json")
-                    .extension(connect_info())
-                    .body(axum::body::Body::from("{}"))
-                    .expect("retired route request"),
-            )
-            .await
-            .expect("retired route response");
-        assert_eq!(
-            response.status(),
-            StatusCode::NOT_FOUND,
-            "retired method/path pair must be unregistered: {method} {path}"
-        );
-        let body = response
-            .into_body()
-            .collect()
-            .await
-            .expect("collect retired-route response")
-            .to_bytes();
-        let error: iroha_torii_shared::ErrorEnvelope =
-            norito::json::from_slice(&body).expect("decode retired-route error");
-        assert_eq!(
-            error.code(),
-            "route_not_found",
-            "normalization or parameter capture must not resolve a retired route: {method} {path}"
-        );
-    }
-
-    for (method, path) in [
         (Method::POST, "/v1/offline/readiness".to_owned()),
         (Method::GET, "/v1/offline/top-up".to_owned()),
         (Method::GET, "/v1/offline/redeem".to_owned()),

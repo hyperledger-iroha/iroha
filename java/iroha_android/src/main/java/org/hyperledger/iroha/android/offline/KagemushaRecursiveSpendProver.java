@@ -18,8 +18,10 @@ public final class KagemushaRecursiveSpendProver {
   static final int PASTA_CYCLE_V3_REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 18;
   public static final String PASTA_CYCLE_V3_ARTIFACT_MANIFEST_SCHEMA =
       "kagemusha.offline.recursive_spend.artifact_manifest.v3";
-  public static final String MODE = "recursive_spend_v2";
-  public static final String PASTA_CYCLE_V3_MODE = MODE;
+  /** Public product selector. This is intentionally distinct from the artifact contract. */
+  public static final String MODE = "recursive_spend_v1";
+  /** Internal ABI-18/V3 manifest and native-capability mode. */
+  public static final String PASTA_CYCLE_V3_MODE = "recursive_spend_v2";
   public static final String PASTA_CYCLE_V3_PROOF_BACKEND =
       "halo2/ipa-pasta-cycle-v1";
   public static final String PASTA_CYCLE_V3_TRANSCRIPT_PROFILE =
@@ -93,7 +95,7 @@ public final class KagemushaRecursiveSpendProver {
   private static final boolean PASTA_CYCLE_V3_BACKEND_AVAILABLE = loadPastaCycleV3Backend();
 
   public enum Mode {
-    RECURSIVE_SPEND("recursive_spend_v2");
+    RECURSIVE_SPEND("recursive_spend_v1");
 
     private final String wireName;
 

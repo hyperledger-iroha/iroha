@@ -2526,7 +2526,7 @@ impl IVMHost for CoreHost {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{IVM, ProgramMetadata, encoding, instruction, syscalls};
+    use crate::{IVM, encoding, instruction, syscalls};
     use ivm_abi::metadata::{
         EmbeddedContractInterfaceV1, EmbeddedStateDescriptor, EmbeddedStateType,
         LITERAL_SECTION_MAGIC, ProgramMetadata,

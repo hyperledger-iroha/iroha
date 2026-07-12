@@ -32,6 +32,8 @@ function demoAccountId() {
 
 const ACCOUNT_ID = demoAccountId();
 const POLICY_ID = "phone#retail";
+const PROGRAM_ID = "identifier_lookup_retail";
+const OUTPUT_OPENING_PUBLIC_KEY = "ed25519:output-opening-key";
 const OPAQUE_ID = `opaque:${"11".repeat(32)}`;
 const RECEIPT_HASH = "22".repeat(32);
 const UAID = `uaid:${"33".repeat(31)}35`;
@@ -488,10 +490,12 @@ function claimRecordFixture(overrides = {}) {
 function identifierPolicyFixture(overrides = {}) {
   return {
     policy_id: POLICY_ID,
+    program_id: PROGRAM_ID,
     owner: ACCOUNT_ID,
     active: true,
     normalization: "phone_e164",
     resolver_public_key: "ed25519:resolver-key",
+    output_opening_public_key: OUTPUT_OPENING_PUBLIC_KEY,
     backend: "bfv-affine-sha3-256-v1",
     input_encryption: "bfv-v1",
     input_encryption_public_parameters: "ABCD",
@@ -515,6 +519,14 @@ function identifierPolicyFixture(overrides = {}) {
       public_inputs_schema_hash: PROOF_SCHEMA_HASH,
       verifying_key_bytes_b64: "AQID",
     },
+    ram_fhe_profile: {
+      profile_version: 1,
+      register_count: 4,
+      memory_lane_count: 32,
+      ciphertext_mul_per_step: 16,
+      encrypted_input_mode: "encrypted_envelope_v1",
+      min_ciphertext_modulus: 1099511627776,
+    },
     note: "retail phone policy",
     ...overrides,
   };
@@ -535,11 +547,21 @@ test("listIdentifierPolicies normalizes BFV and proof-verifier metadata", async 
   const result = await client.listIdentifierPolicies();
   assert.equal(result.total, 1);
   assert.equal(result.items[0].policy_id, POLICY_ID);
+  assert.equal(result.items[0].program_id, PROGRAM_ID);
   assert.equal(result.items[0].owner, ACCOUNT_ID);
+  assert.equal(
+    result.items[0].output_opening_public_key,
+    OUTPUT_OPENING_PUBLIC_KEY,
+  );
   assert.equal(result.items[0].input_encryption, "bfv-v1");
   assert.equal(result.items[0].input_encryption_public_parameters, "ABCD");
   assert.equal(result.items[0].proof_verifier.proof_backend, "halo2-ipa");
   assert.equal(result.items[0].proof_verifier.public_inputs_schema_hash, PROOF_SCHEMA_HASH);
+  assert.equal(result.items[0].ram_fhe_profile.register_count, 4);
+  assert.equal(
+    result.items[0].ram_fhe_profile.encrypted_input_mode,
+    "encrypted_envelope_v1",
+  );
   assert.equal(
     result.items[0].input_encryption_public_parameters_decoded.parameters.polynomial_degree,
     64,
@@ -562,12 +584,26 @@ test("listIdentifierPolicies normalizes BFV and proof-verifier metadata", async 
 
 test("listIdentifierPolicies rejects non-exact policy metadata", async () => {
   const cases = [
+    ["program_id", { program_id: ` ${PROGRAM_ID}` }],
     ["owner", { owner: ` ${ACCOUNT_ID}` }],
     ["normalization", { normalization: "Phone_E164" }],
     ["backend", { backend: "bfv-affine-sha3-256-v1 " }],
+    [
+      "output_opening_public_key",
+      { output_opening_public_key: ` ${OUTPUT_OPENING_PUBLIC_KEY}` },
+    ],
     ["input_encryption", { input_encryption: "BFV-v1" }],
     ["input_encryption_public_parameters", { input_encryption_public_parameters: " ABCD" }],
     ["note", { note: "retail phone policy " }],
+    [
+      "ram_fhe_profile.encrypted_input_mode",
+      {
+        ram_fhe_profile: {
+          ...identifierPolicyFixture().ram_fhe_profile,
+          encrypted_input_mode: "EncryptedEnvelopeV1",
+        },
+      },
+    ],
     [
       "input_encryption_public_parameters_decoded.norito_length_encoding",
       {

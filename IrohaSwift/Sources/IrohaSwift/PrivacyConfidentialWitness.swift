@@ -311,9 +311,9 @@ public enum PrivacyConfidentialWitnessCodecs {
     }
 
     public static func encodeWitness(_ witness: PrivacyConfidentialWitnessV1) throws -> Data {
-        var writer = OfflineCompactNoritoWriter()
-        writer.writeField(OfflineCompactNorito.encodeString(witness.chainId))
-        writer.writeField(OfflineCompactNorito.encodeString(witness.assetDefinitionId))
+        var writer = CompactNoritoWriter()
+        writer.writeField(CompactNorito.encodeString(witness.chainId))
+        writer.writeField(CompactNorito.encodeString(witness.assetDefinitionId))
         writer.writeField(encodeBytesVec(witness.spendKey))
         writer.writeField(try encodeSequence(witness.treeCommitments, encodeBytesVec))
         writer.writeField(try encodeSequence(witness.inputs, encodeNoteWitness))
@@ -330,9 +330,9 @@ public enum PrivacyConfidentialWitnessCodecs {
     }
 
     public static func encodeWitnessV2(_ witness: PrivacyConfidentialWitnessV2) throws -> Data {
-        var writer = OfflineCompactNoritoWriter()
-        writer.writeField(OfflineCompactNorito.encodeString(witness.chainId))
-        writer.writeField(OfflineCompactNorito.encodeString(witness.assetDefinitionId))
+        var writer = CompactNoritoWriter()
+        writer.writeField(CompactNorito.encodeString(witness.chainId))
+        writer.writeField(CompactNorito.encodeString(witness.assetDefinitionId))
         writer.writeField(encodeBytesVec(witness.spendKey))
         writer.writeField(try encodeSequence(witness.inputPaths, encodeMerklePathV2))
         writer.writeField(try encodeSequence(witness.inputs, encodeNoteWitness))
@@ -561,16 +561,16 @@ public enum PrivacyConfidentialWitnessCodecs {
         guard proof.count <= proofMaxBytes else {
             throw PrivacyConfidentialWitnessError.invalidField("proof")
         }
-        var writer = OfflineCompactNoritoWriter()
-        writer.writeField(OfflineCompactNorito.encodeString(try privacyRequestText(
+        var writer = CompactNoritoWriter()
+        writer.writeField(CompactNorito.encodeString(try privacyRequestText(
             algorithmId,
             field: "algorithmId"
         )))
-        writer.writeField(OfflineCompactNorito.encodeString(try privacyRequestText(
+        writer.writeField(CompactNorito.encodeString(try privacyRequestText(
             entrypoint,
             field: "entrypoint"
         )))
-        writer.writeField(OfflineCompactNorito.encodeString(try privacyRequestText(vkRef, field: "vkRef")))
+        writer.writeField(CompactNorito.encodeString(try privacyRequestText(vkRef, field: "vkRef")))
         writer.writeField(encodeBytesVec(publicInputs))
         writer.writeField(encodeBytesVec(witness))
         writer.writeField(encodeBytesVec(proof))
@@ -587,18 +587,18 @@ public enum PrivacyConfidentialWitnessCodecs {
     }
 
     private static func encodeNoteWitness(_ note: PrivacyConfidentialNoteWitnessV1) throws -> Data {
-        var writer = OfflineCompactNoritoWriter()
+        var writer = CompactNoritoWriter()
         writer.writeField(try ConfidentialNoteCrypto.u128LittleEndianBytes(note.amount))
         writer.writeField(encodeBytesVec(note.rho))
         writer.writeField(encodeBytesVec(note.diversifier))
-        writer.writeField(OfflineCompactNorito.encodeUInt64(note.leafIndex))
+        writer.writeField(CompactNorito.encodeUInt64(note.leafIndex))
         return writer.data
     }
 
     private static func encodeMerklePathV2(
         _ path: PrivacyConfidentialMerklePathWitnessV2
     ) throws -> Data {
-        var writer = OfflineCompactNoritoWriter()
+        var writer = CompactNoritoWriter()
         writer.writeField(try encodeSequence(path.siblings, encodeBytesVec))
         writer.writeField(encodeBytesVec(path.directions))
         // Native recomputes these nodes and rejects inconsistent supplied
@@ -611,7 +611,7 @@ public enum PrivacyConfidentialWitnessCodecs {
     private static func encodeTransferOutput(
         _ output: PrivacyConfidentialTransferOutputWitnessV1
     ) throws -> Data {
-        var writer = OfflineCompactNoritoWriter()
+        var writer = CompactNoritoWriter()
         writer.writeField(try ConfidentialNoteCrypto.u128LittleEndianBytes(output.amount))
         writer.writeField(encodeBytesVec(output.rho))
         writer.writeField(encodeBytesVec(output.ownerTag))
@@ -621,7 +621,7 @@ public enum PrivacyConfidentialWitnessCodecs {
     private static func encodeUnshieldChange(
         _ change: PrivacyConfidentialUnshieldChangeWitnessV1
     ) throws -> Data {
-        var writer = OfflineCompactNoritoWriter()
+        var writer = CompactNoritoWriter()
         writer.writeField(try ConfidentialNoteCrypto.u128LittleEndianBytes(change.amount))
         writer.writeField(encodeBytesVec(change.rho))
         return writer.data
@@ -631,7 +631,7 @@ public enum PrivacyConfidentialWitnessCodecs {
         _ values: [T],
         _ encode: (T) throws -> Data
     ) throws -> Data {
-        var writer = OfflineCompactNoritoWriter()
+        var writer = CompactNoritoWriter()
         writer.writeUInt64LE(UInt64(values.count))
         for value in values {
             writer.writeField(try encode(value))
@@ -640,7 +640,7 @@ public enum PrivacyConfidentialWitnessCodecs {
     }
 
     private static func encodeBytesVec(_ bytes: Data) -> Data {
-        var writer = OfflineCompactNoritoWriter()
+        var writer = CompactNoritoWriter()
         writer.writeUInt64LE(UInt64(bytes.count))
         writer.writeBytes(bytes)
         return writer.data

@@ -21,7 +21,7 @@ final class TransactionParityFixturesTests: XCTestCase {
                 Data(base64Encoded: entry.signedBase64),
                 "invalid signed_base64 for \(name)"
             )
-            var compact = OfflineCompactNoritoWriter()
+            var compact = CompactNoritoWriter()
             compact.writeUInt32LE(0)
             compact.writeField(signedBytes)
             XCTAssertEqual(
@@ -153,7 +153,7 @@ final class TransactionParityFixturesTests: XCTestCase {
 
         let bare = Data(versioned.dropFirst())
         XCTAssertEqual(bare.count, Int(try XCTUnwrap(fixture["bare.bytes"])))
-        var compact = OfflineCompactNoritoWriter()
+        var compact = CompactNoritoWriter()
         compact.writeUInt32LE(0)
         compact.writeField(bare)
         XCTAssertEqual(
@@ -165,7 +165,7 @@ final class TransactionParityFixturesTests: XCTestCase {
             fixture["canonical.hash"]
         )
 
-        var fixedWidth = OfflineNoritoWriter()
+        var fixedWidth = CanonicalNoritoWriter()
         fixedWidth.writeUInt32LE(0)
         fixedWidth.writeField(bare)
         XCTAssertNotEqual(

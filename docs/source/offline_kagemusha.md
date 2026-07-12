@@ -6,12 +6,14 @@ sender change use the canonical first-release
 backend is intentionally fail-closed until branch lineage is proven in-circuit;
 retired pre-release wire shapes are not accepted as compatibility inputs.
 
-The sole first-release product selector is `recursive_spend_v2`. It requires
+The sole first-release product selector is `recursive_spend_v1`. It requires
 exact native bridge ABI 18 and the governed
 `kagemusha.offline.recursive_spend.artifact_manifest.v3` manifest. Artifact
 streaming, validation, atomic six-file installation, readiness, and uninstall
 use only the V3 lifecycle; ABI-6/ABI-7 fixtures and unsuffixed bridge helpers
-are not compatibility surfaces.
+are not compatibility surfaces. The manifest and native capability record keep
+their internal typed-contract mode `recursive_spend_v2`; callers must never
+publish or accept that internal value as the product selector.
 
 > **Release blocker:** the current Reserved-lineage prototype does not verify
 > an inner Kagemusha proof. It opens a fixed `1..n` polynomial that is unrelated
@@ -28,36 +30,25 @@ records the rejected KZG measurements, the exact Axiom 0.5 IPA wire mismatch,
 the required folded-generator accumulator/decider, and the branch-bound split
 proofs for recipient and change.
 
-Kagemusha is the only active chain implementation for offline payments. Nodes
-expose offline-offline payments through `settlement.offline.kagemusha_enabled`,
-which defaults to `true`; runtime bearer-audit dispatch is not available.
+Kagemusha is the sole chain implementation for offline payments. Nodes expose
+it through `settlement.offline.kagemusha_enabled`, which defaults to `true`.
 Mobile artifact archives are served and gated by Core API, so Torii readiness
 returns a typed `prover_artifacts_unavailable` blocker until production
 artifacts exist.
-Retired `IssueOfflineNote`, `AuditOfflineNote`, and `RedeemOfflineNote` payloads,
-plus SDK/bridge defund composites, are retained only as historical data-model
-fixture types and are not registered or dispatched by the node's default
-instruction surface.
-
-There is no legacy HTTP adapter in the first release. Earlier note-issuer,
-audit, V1 Kagemusha wrapper, and defund routes are unregistered rather than
-mounted as rejection shims. Production payment admission uses typed Kagemusha
-online-to-offline top-ups, `KagemushaTransfer`, and typed recursive redemption.
+Production payment admission uses typed Kagemusha online-to-offline top-ups,
+locally verified recursive peer transfers, and typed recursive redemption.
 The SDK producer builds `OfflineTopUpRequest` directly and checks its asset,
 exact scaled amount, proof, current-note, artifact-generation, operation, and
-signed authorization bindings before submission. It does not accept an older
-request archive or construct a whole-payload base64 wrapper.
+signed authorization bindings before submission.
 Submission uses the signed transaction pipeline or `POST /v1/offline/top-up`.
 The Torii request is a direct typed `OfflineTopUpRequest`: JSON clients send the
 structured request, and Norito clients send the canonical typed value with
 schema name `iroha.torii.v1.offline.top_up.request` as
-`application/x-norito`. The public request never wraps the full payload in a
-`*_norito_base64` field.
+`application/x-norito`.
 Acceptance is asynchronous and returns `202 Accepted`, a typed operation
 reference, and a `Location` header for
 `/v1/offline/operations/{operation_id}`. The applied top-up result carries the
-finalized anchor as a typed value. There is no parallel note-issue or
-version-nested HTTP route in the first-release surface.
+finalized anchor as a typed value.
 
 The typed V2 top-up instruction is also fail-closed at Core execution, not only
 at the Torii route. While
@@ -2259,9 +2250,7 @@ typed `OfflineRedeemRequest`: its structured representation for
 `iroha.torii.v1.offline.redeem.request` for `application/x-norito`. Torii
 validates the chain, asset, exact scaled amount, current note, proof, optional
 proof-bound offline change, operation id, and recipient/device authorization
-before admitting the command. Whole-payload base64 wrappers, compact-token
-dispatch markers, projection-verifier dispatch markers, field aliases, and a
-second structured-note parser are not part of the first-release contract.
+before admitting the command.
 Top-up and redemption bodies use Torii's configured `max_content_len`; they do
 not inherit Axum's 2 MiB default. A request above that configured ceiling is
 rejected with typed `413 request_payload_too_large` before admission.
@@ -3561,7 +3550,7 @@ lineage-witness assembly helpers, before probing those symbols with malformed
 Norito archives. Swift reports native compact-token, recursive-aggregation, and
 recursive-spend Kagemusha provers as available only when the loaded bridge
 returns the expected Kagemusha rejection without output bytes, and the Swift
-recursive-spend wrapper refuses to select `recursive_spend_v2` unless the exact
+recursive-spend wrapper refuses to select `recursive_spend_v1` unless the exact
 ABI-18 surface and proof-backend capability pass that probe.
 Native bridge ABI 7 exposes fail-closed reserved symbols for
 `connect_norito_kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes`
@@ -3717,15 +3706,15 @@ without the witness helpers needed for later redemption.
 The Swift wrapper also exports the same ABI-6 requirement for wallet-side
 capability checks.
 JavaScript/Node and Python require an exact ABI-18 native version probe
-before reporting recursive spend as available or selecting `recursive_spend_v2`;
+before reporting recursive spend as available or selecting `recursive_spend_v1`;
 the Node NAPI host exports `connectNoritoBridgeAbiVersion`, while the Python
 PyO3 extension exports `kagemusha_recursive_spend_native_bridge_abi_version`.
 Kotlin/JVM and Java Android also call the native bridge ABI-version JNI probe and
 probe the verify plus both lineage-witness JNI symbols before reporting
-recursive spend as available or defaulting to `recursive_spend_v2`. C#
+recursive spend as available or defaulting to `recursive_spend_v1`. C#
 publishes the same exact ABI-18 requirement and probes verify plus both
 lineage-witness P/Invoke symbols before its optional wrapper calls the bridge.
-All SDKs expose the same default spend-mode choice: `recursive_spend_v2` is selected only when the exact ABI-18
+All SDKs expose the same default spend-mode choice: `recursive_spend_v1` is selected only when the exact ABI-18
 recursive-spend surface is available, and no preferred production mode is returned otherwise. Compact and checked pre-fold
 labels remain internal aggregation/fixture material only; first-release selectors must not fall
 back to them or export a checked pre-fold spend mode. Every maintained SDK's

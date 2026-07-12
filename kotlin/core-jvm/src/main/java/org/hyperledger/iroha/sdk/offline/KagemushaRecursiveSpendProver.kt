@@ -8,7 +8,7 @@ import java.security.MessageDigest
 /** Exact ABI-18 Kagemusha recursive-spend bridge. */
 class KagemushaRecursiveSpendProver private constructor() {
     enum class Mode(val wireName: String) {
-        RECURSIVE_SPEND("recursive_spend_v2"),
+        RECURSIVE_SPEND("recursive_spend_v1"),
     }
 
     companion object {
@@ -18,8 +18,10 @@ class KagemushaRecursiveSpendProver private constructor() {
         internal const val PASTA_CYCLE_V3_REQUIRED_NATIVE_BRIDGE_ABI_VERSION: Int = 18
         const val PASTA_CYCLE_V3_ARTIFACT_MANIFEST_SCHEMA: String =
             "kagemusha.offline.recursive_spend.artifact_manifest.v3"
-        const val MODE: String = "recursive_spend_v2"
-        const val PASTA_CYCLE_V3_MODE: String = MODE
+        /** Public product selector. This is intentionally distinct from the artifact contract. */
+        const val MODE: String = "recursive_spend_v1"
+        /** Internal ABI-18/V3 manifest and native-capability mode. */
+        const val PASTA_CYCLE_V3_MODE: String = "recursive_spend_v2"
         const val PASTA_CYCLE_V3_PROOF_BACKEND: String = "halo2/ipa-pasta-cycle-v1"
         const val PASTA_CYCLE_V3_TRANSCRIPT_PROFILE: String =
             "kagemusha-pasta-cycle-poseidon-v1"

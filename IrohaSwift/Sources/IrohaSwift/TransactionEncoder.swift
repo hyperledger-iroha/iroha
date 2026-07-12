@@ -292,7 +292,6 @@ enum SwiftTransactionEncoderError: Error, LocalizedError, Sendable {
     case unsupportedSigningAlgorithm(SigningAlgorithm)
     case invalidClaimIdentifierReceipt(String)
     case invalidNativeSignedTransaction(String)
-    case retiredOfflineNotePayment
 
     public var errorDescription: String? {
         switch self {
@@ -308,8 +307,6 @@ enum SwiftTransactionEncoderError: Error, LocalizedError, Sendable {
             return "ClaimIdentifier receipt is invalid: \(reason)"
         case let .invalidNativeSignedTransaction(reason):
             return "Native signed transaction is invalid: \(reason)"
-        case .retiredOfflineNotePayment:
-            return "Classic Offline Note payment transactions are retired; use Kagemusha payment flows."
         }
     }
 }
@@ -492,30 +489,30 @@ private enum SetPrimaryAccountAliasSwiftNoritoEncoder {
         aliasDataspaceId: UInt64,
         alias: String
     ) throws -> Data {
-        let accountPayload = try OfflineNorito.encodeAccountId(accountId)
+        let accountPayload = try CanonicalNorito.encodeAccountId(accountId)
         let accountAliasPayload = try encodeAccountAlias(
             aliasDomain: aliasDomain,
             aliasDataspaceId: aliasDataspaceId,
             alias: alias
         )
 
-        var instructionPayload = OfflineNoritoWriter()
+        var instructionPayload = CanonicalNoritoWriter()
         instructionPayload.writeField(accountPayload)
-        instructionPayload.writeField(try OfflineNorito.encodeOption(accountAliasPayload, encode: { $0 }))
+        instructionPayload.writeField(try CanonicalNorito.encodeOption(accountAliasPayload, encode: { $0 }))
         instructionPayload.writeField(encodeNoneOption())
 
         let framedInstruction = noritoEncode(typeName: instructionTypeName, payload: instructionPayload.data, flags: 0)
-        var wireInstruction = OfflineNoritoWriter()
-        wireInstruction.writeField(OfflineNorito.encodeString(instructionWireName))
-        wireInstruction.writeField(OfflineNorito.encodeBytesVec(framedInstruction))
+        var wireInstruction = CanonicalNoritoWriter()
+        wireInstruction.writeField(CanonicalNorito.encodeString(instructionWireName))
+        wireInstruction.writeField(CanonicalNorito.encodeBytesVec(framedInstruction))
         return wireInstruction.data
     }
 
     private static func encodeAccountAlias(aliasDomain: String?, aliasDataspaceId: UInt64, alias: String) throws -> Data {
-        var payload = OfflineNoritoWriter()
-        payload.writeField(OfflineNorito.encodeString(alias))
-        payload.writeField(try OfflineNorito.encodeOption(aliasDomain, encode: OfflineNorito.encodeString))
-        payload.writeField(OfflineNorito.encodeUInt64(aliasDataspaceId))
+        var payload = CanonicalNoritoWriter()
+        payload.writeField(CanonicalNorito.encodeString(alias))
+        payload.writeField(try CanonicalNorito.encodeOption(aliasDomain, encode: CanonicalNorito.encodeString))
+        payload.writeField(CanonicalNorito.encodeUInt64(aliasDataspaceId))
         return payload.data
     }
 
@@ -525,23 +522,23 @@ private enum SetPrimaryAccountAliasSwiftNoritoEncoder {
                                                  ttlMs: UInt64?,
                                                  instructionPayload: Data) throws -> Data {
         let executablePayload = encodeExecutable(instructionPayload: instructionPayload)
-        var transactionPayload = OfflineNoritoWriter()
-        transactionPayload.writeField(OfflineNorito.encodeString(chainId))
-        transactionPayload.writeField(OfflineNorito.encodeString(authority))
-        transactionPayload.writeField(OfflineNorito.encodeUInt64(creationTimeMs))
+        var transactionPayload = CanonicalNoritoWriter()
+        transactionPayload.writeField(CanonicalNorito.encodeString(chainId))
+        transactionPayload.writeField(CanonicalNorito.encodeString(authority))
+        transactionPayload.writeField(CanonicalNorito.encodeUInt64(creationTimeMs))
         transactionPayload.writeField(executablePayload)
-        transactionPayload.writeField(try OfflineNorito.encodeOption(ttlMs, encode: OfflineNorito.encodeUInt64))
+        transactionPayload.writeField(try CanonicalNorito.encodeOption(ttlMs, encode: CanonicalNorito.encodeUInt64))
         transactionPayload.writeField(encodeNoneOption())
         transactionPayload.writeField(encodeEmptyMetadata())
         return transactionPayload.data
     }
 
     private static func encodeExecutable(instructionPayload: Data) -> Data {
-        var instructions = OfflineNoritoWriter()
+        var instructions = CanonicalNoritoWriter()
         instructions.writeLength(1)
         instructions.writeField(instructionPayload)
 
-        var executable = OfflineNoritoWriter()
+        var executable = CanonicalNoritoWriter()
         executable.writeUInt32LE(0)
         executable.writeField(instructions.data)
         return executable.data
@@ -549,8 +546,8 @@ private enum SetPrimaryAccountAliasSwiftNoritoEncoder {
 
     private static func encodeSignedTransaction(signature: Data,
                                                 transactionPayload: Data) -> Data {
-        var signedTransaction = OfflineNoritoWriter()
-        signedTransaction.writeField(OfflineNorito.encodeConstVec(signature))
+        var signedTransaction = CanonicalNoritoWriter()
+        signedTransaction.writeField(CanonicalNorito.encodeConstVec(signature))
         signedTransaction.writeField(transactionPayload)
         signedTransaction.writeField(encodeNoneOption())
         signedTransaction.writeField(encodeNoneOption())
@@ -558,14 +555,14 @@ private enum SetPrimaryAccountAliasSwiftNoritoEncoder {
     }
 
     private static func encodeTransactionEntrypoint(_ signedTransaction: Data) -> Data {
-        var entrypoint = OfflineCompactNoritoWriter()
+        var entrypoint = CompactNoritoWriter()
         entrypoint.writeUInt32LE(0)
         entrypoint.writeField(signedTransaction)
         return entrypoint.data
     }
 
     private static func encodeEmptyMetadata() -> Data {
-        var metadata = OfflineNoritoWriter()
+        var metadata = CanonicalNoritoWriter()
         metadata.writeLength(0)
         return metadata.data
     }

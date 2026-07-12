@@ -6,6 +6,18 @@ import sys
 from pathlib import Path
 
 
+def test_offline_readiness_verifier_roles_are_public_exports() -> None:
+    import iroha_python
+    from iroha_python import (
+        OfflineActiveTopUpShieldVerifier,
+        OfflineActiveTransferVerifier,
+    )
+
+    assert OfflineActiveTopUpShieldVerifier is OfflineActiveTransferVerifier
+    assert "OfflineActiveTopUpShieldVerifier" in iroha_python.__all__
+    assert "OfflineActiveTransferVerifier" in iroha_python.__all__
+
+
 def test_package_root_lazy_crypto_exports_preserve_import_error_cause() -> None:
     root = Path(__file__).resolve().parents[3]
     script = """

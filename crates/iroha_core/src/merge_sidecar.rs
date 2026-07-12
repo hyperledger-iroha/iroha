@@ -2190,12 +2190,14 @@ pub(crate) struct MergeSigningGuard {
 
 impl MergeSigningGuard {
     /// Open the guard under the Kura root and fail closed on malformed records.
+    #[cfg(test)]
     pub(crate) fn open(store_root: &Path) -> Result<Self, MergeSidecarError> {
         Self::open_with_committed_frontier(store_root, 0, 0)
     }
 
     /// Open and reconcile the guard against the exact latest globally ordered
     /// merge epoch recovered from canonical Kura/state.
+    #[cfg(test)]
     pub(crate) fn open_with_committed_epoch(
         store_root: &Path,
         committed_epoch: u64,
