@@ -7765,6 +7765,7 @@ TEXT_REQUIREMENTS = {
     ),
     "crates/iroha_data_model/src/offline/mod.rs": (
         "KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3: u32 = 18;",
+        'KAGEMUSHA_RECURSIVE_SPEND_PRODUCT_MODE_V1: &str = "recursive_spend_v1";',
         'KAGEMUSHA_RECURSIVE_SPEND_MODE_V2: &str = "recursive_spend_v2";',
         "KAGEMUSHA_RECURSIVE_SPEND_V2_PROOF_BACKEND_AVAILABLE: bool = false;",
         "pub struct KagemushaRecursiveSpendNativeCapabilitiesV1",
@@ -7779,7 +7780,7 @@ TEXT_REQUIREMENTS = {
         "pub const fn preferred_kagemusha_offline_spend_mode(",
         "pasta_cycle_v3_backend_available: bool",
         "if pasta_cycle_v3_backend_available",
-        "Some(KAGEMUSHA_RECURSIVE_SPEND_MODE_V2)",
+        "Some(KAGEMUSHA_RECURSIVE_SPEND_PRODUCT_MODE_V1)",
         "preferred_kagemusha_offline_spend_mode(true)",
         "preferred_kagemusha_offline_spend_mode(false)",
         "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1",
@@ -7948,7 +7949,9 @@ TEXT_REQUIREMENTS = {
     "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendV2.swift": (
         "The ABI-18 Kagemusha recursive spend V2 bridge is unavailable.",
         "requiredNativeBridgeAbiVersion: UInt32 = 18",
-        'public static let mode = "recursive_spend_v2"',
+        'public static let productMode = "recursive_spend_v1"',
+        'public static let artifactManifestMode = "recursive_spend_v2"',
+        "public static let mode = productMode",
         "cachedNativeCapabilities?.proofBackendAvailable == true",
         "connect_norito_kagemusha_recursive_spend_capabilities_v1",
         "connect_norito_kagemusha_topup_finality_verify_v2",
@@ -8094,14 +8097,14 @@ SDK_SELECTOR_REQUIREMENTS = {
         "    pasta_cycle_v3_backend_available: bool,\n"
         ") -> Option<&'static str> {\n"
         "    if pasta_cycle_v3_backend_available {\n"
-        "        Some(KAGEMUSHA_RECURSIVE_SPEND_MODE_V2)\n"
+        "        Some(KAGEMUSHA_RECURSIVE_SPEND_PRODUCT_MODE_V1)\n"
         "    } else {\n"
         "        None\n"
         "    }\n"
         "}",
     ),
     "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendProver.swift": (
-        'case recursiveSpend = "recursive_spend_v2"',
+        'case recursiveSpend = "recursive_spend_v1"',
         "public static func preferredMode(\n"
         "        pastaCycleV3BackendAvailable: Bool\n"
         "    ) -> KagemushaOfflineSpendMode? {\n"
@@ -8109,12 +8112,14 @@ SDK_SELECTOR_REQUIREMENTS = {
         "    }",
     ),
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt": (
-        'RECURSIVE_SPEND("recursive_spend_v2")',
+        'RECURSIVE_SPEND("recursive_spend_v1")',
+        'PASTA_CYCLE_V3_MODE: String = "recursive_spend_v2"',
         "fun preferredMode(pastaCycleV3BackendAvailable: Boolean): Mode? =\n"
         "            if (pastaCycleV3BackendAvailable) Mode.RECURSIVE_SPEND else null",
     ),
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProver.java": (
-        'RECURSIVE_SPEND("recursive_spend_v2")',
+        'RECURSIVE_SPEND("recursive_spend_v1")',
+        'PASTA_CYCLE_V3_MODE = "recursive_spend_v2"',
         "public static Mode preferredMode(final boolean pastaCycleV3BackendAvailable) {\n"
         "    return pastaCycleV3BackendAvailable ? Mode.RECURSIVE_SPEND : null;\n"
         "  }",
@@ -8125,7 +8130,7 @@ SDK_SELECTOR_REQUIREMENTS = {
         ") {",
         "arguments.length !== 1 || typeof pastaCycleV3BackendAvailable !== \"boolean\"",
         "return pastaCycleV3BackendAvailable\n"
-        "    ? KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V2\n"
+        "    ? KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1\n"
         "    : null;",
     ),
     "javascript/iroha_js/src/crypto.browser.js": (
@@ -8134,13 +8139,13 @@ SDK_SELECTOR_REQUIREMENTS = {
         ") {",
         "arguments.length !== 1 || typeof pastaCycleV3BackendAvailable !== \"boolean\"",
         "return pastaCycleV3BackendAvailable\n"
-        "    ? KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V2\n"
+        "    ? KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1\n"
         "    : null;",
     ),
     "python/iroha_python/src/iroha_python/kagemusha.py": (
         "pasta_cycle_v3_backend_available: object = _PREFERRED_MODE_AUTODETECT",
         "elif type(pasta_cycle_v3_backend_available) is bool:",
-        "if available:\n        return KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V2",
+        "if available:\n        return KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1",
     ),
 }
 
@@ -9713,7 +9718,12 @@ def check_v3_first_release_contract(errors: list[str]) -> None:
         rust_string_constant(model, "KAGEMUSHA_RECURSIVE_SPEND_MODE_V2")
         != "recursive_spend_v2"
     ):
-        errors.append(f"{model_path}: first-release mode must be exactly recursive_spend_v2")
+        errors.append(f"{model_path}: internal artifact mode must be exactly recursive_spend_v2")
+    if (
+        rust_string_constant(model, "KAGEMUSHA_RECURSIVE_SPEND_PRODUCT_MODE_V1")
+        != "recursive_spend_v1"
+    ):
+        errors.append(f"{model_path}: public product selector must be exactly recursive_spend_v1")
 
     input_match = re.search(
         r"const\s+INPUTS\s*:\s*&\[InputSpec\]\s*=\s*&\[(?P<body>[\s\S]*?)\n\];",
@@ -10692,12 +10702,12 @@ if mode == "--negative-control-v3-native-ingest":
 
 if mode == "--negative-control-v3-legacy-mode":
     run_negative_control(
-        "retired first-release mode rejection",
+        "alternate product mode rejection",
         lambda: override_text(
             "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendProver.swift",
-            '    case recursiveSpend = "recursive_spend_v2"',
-            '    case recursiveSpend = "recursive_spend_v2"\n'
-            '    case recursiveSpendV1 = "recursive_spend_v1"',
+            '    case recursiveSpend = "recursive_spend_v1"',
+            '    case recursiveSpend = "recursive_spend_v1"\n'
+            '    case recursiveSpendV2 = "recursive_spend_v2"',
         ),
     )
     raise SystemExit(0)
@@ -10707,7 +10717,7 @@ if mode == "--negative-control-sdk-default":
         "ABI-18 first-release selector",
         lambda: override_text(
             "crates/iroha_data_model/src/offline/mod.rs",
-            "        Some(KAGEMUSHA_RECURSIVE_SPEND_MODE_V2)",
+            "        Some(KAGEMUSHA_RECURSIVE_SPEND_PRODUCT_MODE_V1)",
             "        None",
         ),
     )
@@ -10718,22 +10728,22 @@ if mode == "--negative-control-sdk-default-cross-sdk":
         mutations = (
             (
                 "crates/iroha_data_model/src/offline/mod.rs",
-                'KAGEMUSHA_RECURSIVE_SPEND_MODE_V2: &str = "recursive_spend_v2"',
-                'KAGEMUSHA_RECURSIVE_SPEND_MODE_V2: &str = "unsupported_mode"',
+                'KAGEMUSHA_RECURSIVE_SPEND_PRODUCT_MODE_V1: &str = "recursive_spend_v1"',
+                'KAGEMUSHA_RECURSIVE_SPEND_PRODUCT_MODE_V1: &str = "unsupported_mode"',
             ),
             (
                 "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendProver.swift",
-                'case recursiveSpend = "recursive_spend_v2"',
+                'case recursiveSpend = "recursive_spend_v1"',
                 'case recursiveSpend = "unsupported_mode"',
             ),
             (
                 "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt",
-                'RECURSIVE_SPEND("recursive_spend_v2")',
+                'RECURSIVE_SPEND("recursive_spend_v1")',
                 'RECURSIVE_SPEND("unsupported_mode")',
             ),
             (
                 "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProver.java",
-                'RECURSIVE_SPEND("recursive_spend_v2")',
+                'RECURSIVE_SPEND("recursive_spend_v1")',
                 'RECURSIVE_SPEND("unsupported_mode")',
             ),
         )
@@ -10741,7 +10751,7 @@ if mode == "--negative-control-sdk-default-cross-sdk":
             override_text(target, old, new)
 
     run_negative_control(
-        "cross-SDK ABI-18/V2 production selector",
+        "cross-SDK recursive_spend_v1 product selector",
         mutate_cross_sdk_default_selectors,
     )
     raise SystemExit(0)
@@ -22133,5 +22143,5 @@ if errors:
         print(f"error: {error}", file=sys.stderr)
     raise SystemExit(1)
 
-print("Kagemusha first-release selection is exact ABI 18 recursive_spend_v2; proof capability remains explicitly fail-closed until every audited Pasta-cycle V3 gate is satisfied")
+print("Kagemusha first-release selection is public recursive_spend_v1 with internal recursive_spend_v2 at exact ABI 18; proof capability remains explicitly fail-closed until every audited Pasta-cycle V3 gate is satisfied")
 PY

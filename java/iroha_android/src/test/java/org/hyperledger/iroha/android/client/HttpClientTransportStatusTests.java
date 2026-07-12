@@ -1,6 +1,5 @@
 package org.hyperledger.iroha.android.client;
 
-import java.math.BigInteger;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -11,10 +10,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionException;
 import java.util.concurrent.atomic.AtomicInteger;
-import org.hyperledger.iroha.android.client.stream.ToriiStreamException;
-import org.hyperledger.iroha.android.client.stream.ToriiStreamProtocolException;
 import org.hyperledger.iroha.android.client.transport.TransportRequest;
 import org.hyperledger.iroha.android.client.transport.TransportResponse;
 import org.hyperledger.iroha.android.model.TransactionPayload;
@@ -28,12 +24,12 @@ public final class HttpClientTransportStatusTests {
   private HttpClientTransportStatusTests() {}
 
   public static void main(final String[] args) {
-    waitForTransactionStatusResolvesOnCommit();
+    waitForTransactionStatusWaitsThroughCommitUntilApplied();
     waitForTransactionStatusTreatsNotFoundAsPending();
     waitForTransactionStatusIgnoresNoritoBodyOnNotFound();
     waitForTransactionStatusThrowsOnFailure();
     waitForTransactionStatusFailureIncludesRejectionReason();
-    waitForTransactionStatusFailureUsesRejectedStatusContentReason();
+    waitForTransactionStatusFailureUsesCurrentDiagnosticReason();
     waitForTransactionStatusSurfacesUnexpectedHttpStatusDetails();
     waitForTransactionStatusUsesCompactJsonMessage();
     waitForTransactionStatusUsesNestedJsonErrorMessage();
@@ -43,18 +39,21 @@ public final class HttpClientTransportStatusTests {
     waitForTransactionStatusHonoursMaxAttempts();
     waitForTransactionStatusSaturatesOverflowingDeadline();
     waitForTransactionStatusFailsOnInvalidPayload();
-    waitForTransactionStatusStreamSurfacesTerminalStreamErrorBeforeFiltering();
-    waitForTransactionStatusStreamFailsClosedOnMalformedTerminalError();
-    waitForTransactionStatusStreamRejectsResumeHeaderWithoutDispatchingStream();
+    waitForTransactionStatusRejectsNonAuthoritativeTerminalPayloads();
+    waitForTransactionStatusRejectsRetiredSuccessResponseCodes();
+    waitForTransactionStatusRejectsNoritoWhenJsonWasRequested();
+    waitForTransactionStatusRejectsNonCanonicalRequestHashes();
     submitTransactionProvidesCanonicalHashForPolling();
     submitTransactionPrefersAuthoritativeReceiptHashHeaderForPolling();
     System.out.println("[IrohaAndroid] HTTP client status tests passed.");
   }
 
-  private static void waitForTransactionStatusResolvesOnCommit() {
+  private static void waitForTransactionStatusWaitsThroughCommitUntilApplied() {
+    final String hash = canonicalHash("deadbeef");
     final SequencedExecutor executor = new SequencedExecutor(
-        newResponse(202, statusPayload("Pending")),
-        newResponse(200, statusPayload("Committed")));
+        newResponse(200, statusPayload(hash, "Queued")),
+        newResponse(200, statusPayload(hash, "Committed")),
+        newResponse(200, statusPayload(hash, "Applied")));
     final HttpClientTransport transport = HttpClientTransport.withExecutor(
         executor,
         ClientConfig.builder()
@@ -72,20 +71,23 @@ public final class HttpClientTransportStatusTests {
             .build();
 
     final Map<String, Object> result =
-        transport.waitForTransactionStatus("deadbeef", options).join();
+        transport.waitForTransactionStatus(hash, options).join();
 
-    assert "Committed".equals(
+    assert "Applied".equals(
             PipelineStatusExtractor.extractStatusKind(result).orElse(null))
-        : "Expected committed status";
-    assert observed.toString().contains("Pending@1")
+        : "Expected Applied status";
+    assert observed.toString().contains("Queued@1")
         && observed.toString().contains("Committed@2")
-        : "Observer should capture pending and committed statuses";
+        && observed.toString().contains("Applied@3")
+        : "Observer should capture pending, committed, and Applied statuses";
   }
 
   private static void waitForTransactionStatusTreatsNotFoundAsPending() {
+    final String hash = canonicalHash("deadbeef");
     final SequencedExecutor executor = new SequencedExecutor(
         newResponse(404, new byte[0]),
-        newResponse(200, statusPayload("Committed")));
+        newResponse(200, statusPayload(hash, "Committed")),
+        newResponse(200, statusPayload(hash, "Applied")));
     final HttpClientTransport transport = HttpClientTransport.withExecutor(
         executor,
         ClientConfig.builder()
@@ -96,19 +98,21 @@ public final class HttpClientTransportStatusTests {
     final Map<String, Object> result =
         transport
             .waitForTransactionStatus(
-                "deadbeef", PipelineStatusOptions.builder().intervalMillis(0L).build())
+                hash, PipelineStatusOptions.builder().intervalMillis(0L).build())
             .join();
 
-    assert "Committed".equals(
+    assert "Applied".equals(
             PipelineStatusExtractor.extractStatusKind(result).orElse(null))
-        : "Expected committed status after 404 retry";
+        : "Expected Applied status after 404 retry";
   }
 
   private static void waitForTransactionStatusIgnoresNoritoBodyOnNotFound() {
+    final String hash = canonicalHash("deadbeef");
     final byte[] noritoBody = new byte[] {'N', 'R', 'T', '0', 0x01};
     final SequencedExecutor executor = new SequencedExecutor(
         newResponse(404, noritoBody),
-        newResponse(200, statusPayload("Committed")));
+        newResponse(200, statusPayload(hash, "Committed")),
+        newResponse(200, statusPayload(hash, "Applied")));
     final HttpClientTransport transport = HttpClientTransport.withExecutor(
         executor,
         ClientConfig.builder()
@@ -119,25 +123,26 @@ public final class HttpClientTransportStatusTests {
     final Map<String, Object> result =
         transport
             .waitForTransactionStatus(
-                "deadbeef", PipelineStatusOptions.builder().intervalMillis(0L).build())
+                hash, PipelineStatusOptions.builder().intervalMillis(0L).build())
             .join();
 
-    assert "Committed".equals(
+    assert "Applied".equals(
             PipelineStatusExtractor.extractStatusKind(result).orElse(null))
-        : "Expected committed status after Norito 404 retry";
+        : "Expected Applied status after Norito 404 retry";
   }
 
   private static void waitForTransactionStatusThrowsOnFailure() {
+    final String hash = canonicalHash("cafebabe");
     final HttpClientTransport transport = HttpClientTransport.withExecutor(
         request -> CompletableFuture.completedFuture(
-            newResponse(200, statusPayload("Rejected"))),
+            newResponse(200, statusPayload(hash, "Rejected"))),
         ClientConfig.builder().setBaseUri(URI.create("http://localhost:8080")).build());
 
     boolean threw = false;
     try {
       transport
           .waitForTransactionStatus(
-              "cafebabe", PipelineStatusOptions.builder().intervalMillis(0L).build())
+              hash, PipelineStatusOptions.builder().intervalMillis(0L).build())
           .join();
     } catch (final RuntimeException ex) {
       threw = true;
@@ -151,16 +156,17 @@ public final class HttpClientTransportStatusTests {
 
   private static void waitForTransactionStatusFailureIncludesRejectionReason() {
     final String rejectionReason = "build_claim_missing";
+    final String hash = canonicalHash("cafed00d");
     final HttpClientTransport transport = HttpClientTransport.withExecutor(
         request -> CompletableFuture.completedFuture(
-            newResponse(200, statusPayloadWithRejectionReason("Rejected", rejectionReason))),
+            newResponse(200, statusPayloadWithRejectionReason(hash, rejectionReason))),
         ClientConfig.builder().setBaseUri(URI.create("http://localhost:8080")).build());
 
     boolean threw = false;
     try {
       transport
           .waitForTransactionStatus(
-              "cafed00d", PipelineStatusOptions.builder().intervalMillis(0L).build())
+              hash, PipelineStatusOptions.builder().intervalMillis(0L).build())
           .join();
     } catch (final RuntimeException ex) {
       threw = true;
@@ -175,18 +181,19 @@ public final class HttpClientTransportStatusTests {
     assert threw : "Expected waitForTransactionStatus to throw on failure status";
   }
 
-  private static void waitForTransactionStatusFailureUsesRejectedStatusContentReason() {
+  private static void waitForTransactionStatusFailureUsesCurrentDiagnosticReason() {
     final String rejectionReason = "allowance_exceeded";
+    final String hash = canonicalHash("cafe0001");
     final HttpClientTransport transport = HttpClientTransport.withExecutor(
         request -> CompletableFuture.completedFuture(
-            newResponse(200, statusPayloadWithRejectedContent("Rejected", rejectionReason))),
+            newResponse(200, statusPayloadWithRejectionReason(hash, rejectionReason))),
         ClientConfig.builder().setBaseUri(URI.create("http://localhost:8080")).build());
 
     boolean threw = false;
     try {
       transport
           .waitForTransactionStatus(
-              "cafe0001", PipelineStatusOptions.builder().intervalMillis(0L).build())
+              hash, PipelineStatusOptions.builder().intervalMillis(0L).build())
           .join();
     } catch (final RuntimeException ex) {
       threw = true;
@@ -194,7 +201,7 @@ public final class HttpClientTransportStatusTests {
       assert cause instanceof TransactionStatusException : "Expected TransactionStatusException";
       final TransactionStatusException statusError = (TransactionStatusException) cause;
       assert rejectionReason.equals(statusError.rejectionReason().orElse(null))
-          : "Expected content rejection reason to be surfaced";
+          : "Expected diagnostic rejection reason to be surfaced";
     }
     assert threw : "Expected waitForTransactionStatus to throw on failure status";
   }
@@ -213,7 +220,7 @@ public final class HttpClientTransportStatusTests {
     try {
       transport
           .waitForTransactionStatus(
-              "abcd", PipelineStatusOptions.builder().intervalMillis(0L).build())
+              canonicalHash("abcd"), PipelineStatusOptions.builder().intervalMillis(0L).build())
           .join();
     } catch (final RuntimeException ex) {
       threw = true;
@@ -221,7 +228,7 @@ public final class HttpClientTransportStatusTests {
       assert cause instanceof TransactionStatusHttpException
           : "Expected TransactionStatusHttpException";
       final TransactionStatusHttpException statusError = (TransactionStatusHttpException) cause;
-      assert "abcd".equals(statusError.hashHex())
+      assert canonicalHash("abcd").equals(statusError.hashHex())
           : "Expected hash to propagate";
       assert statusError.statusCode() == 429
           : "Expected status code to propagate";
@@ -253,7 +260,7 @@ public final class HttpClientTransportStatusTests {
     try {
       transport
           .waitForTransactionStatus(
-              "feed", PipelineStatusOptions.builder().intervalMillis(0L).build())
+              canonicalHash("feed"), PipelineStatusOptions.builder().intervalMillis(0L).build())
           .join();
     } catch (final RuntimeException ex) {
       threw = true;
@@ -283,7 +290,7 @@ public final class HttpClientTransportStatusTests {
     try {
       transport
           .waitForTransactionStatus(
-              "face", PipelineStatusOptions.builder().intervalMillis(0L).build())
+              canonicalHash("face"), PipelineStatusOptions.builder().intervalMillis(0L).build())
           .join();
     } catch (final RuntimeException ex) {
       threw = true;
@@ -315,7 +322,7 @@ public final class HttpClientTransportStatusTests {
     try {
       transport
           .waitForTransactionStatus(
-              "bead", PipelineStatusOptions.builder().intervalMillis(0L).build())
+              canonicalHash("bead"), PipelineStatusOptions.builder().intervalMillis(0L).build())
           .join();
     } catch (final RuntimeException ex) {
       threw = true;
@@ -343,7 +350,7 @@ public final class HttpClientTransportStatusTests {
     try {
       transport
           .waitForTransactionStatus(
-              "beef", PipelineStatusOptions.builder().intervalMillis(0L).build())
+              canonicalHash("beef"), PipelineStatusOptions.builder().intervalMillis(0L).build())
           .join();
     } catch (final RuntimeException ex) {
       threw = true;
@@ -412,7 +419,7 @@ public final class HttpClientTransportStatusTests {
       try {
         transport
             .waitForTransactionStatus(
-                "babe", PipelineStatusOptions.builder().intervalMillis(0L).build())
+                canonicalHash("babe"), PipelineStatusOptions.builder().intervalMillis(0L).build())
             .join();
       } catch (final RuntimeException ex) {
         threw = true;
@@ -524,16 +531,17 @@ public final class HttpClientTransportStatusTests {
   }
 
   private static void waitForTransactionStatusHonoursMaxAttempts() {
+    final String hash = canonicalHash("feed");
     final HttpClientTransport transport = HttpClientTransport.withExecutor(
         request -> CompletableFuture.completedFuture(
-            newResponse(200, statusPayload("Pending"))),
+            newResponse(200, statusPayload(hash, "Queued"))),
         ClientConfig.builder().setBaseUri(URI.create("http://localhost:8080")).build());
 
     boolean threw = false;
     try {
       transport
           .waitForTransactionStatus(
-              "feed", PipelineStatusOptions.builder().intervalMillis(0L).maxAttempts(2).timeoutMillis(null).build())
+              hash, PipelineStatusOptions.builder().intervalMillis(0L).maxAttempts(2).timeoutMillis(null).build())
           .join();
     } catch (final RuntimeException ex) {
       threw = true;
@@ -545,13 +553,14 @@ public final class HttpClientTransportStatusTests {
   }
 
   private static void waitForTransactionStatusSaturatesOverflowingDeadline() {
+    final String hash = canonicalHash("feed");
     final AtomicInteger requests = new AtomicInteger();
     final HttpClientTransport transport =
         HttpClientTransport.withExecutor(
             request -> {
               requests.incrementAndGet();
               return CompletableFuture.completedFuture(
-                  newResponse(200, statusPayload("Pending")));
+                  newResponse(200, statusPayload(hash, "Queued")));
             },
             ClientConfig.builder().setBaseUri(URI.create("http://localhost:8080")).build());
 
@@ -559,7 +568,7 @@ public final class HttpClientTransportStatusTests {
     try {
       transport
           .waitForTransactionStatus(
-              "feed",
+              hash,
               PipelineStatusOptions.builder()
                   .intervalMillis(0L)
                   .maxAttempts(2)
@@ -588,7 +597,7 @@ public final class HttpClientTransportStatusTests {
     try {
       transport
           .waitForTransactionStatus(
-              "feedface", PipelineStatusOptions.builder().intervalMillis(0L).build())
+              canonicalHash("feedface"), PipelineStatusOptions.builder().intervalMillis(0L).build())
           .join();
     } catch (final RuntimeException ex) {
       threw = true;
@@ -599,106 +608,102 @@ public final class HttpClientTransportStatusTests {
     assert threw : "Expected waitForTransactionStatus to fail on invalid payload";
   }
 
-  private static void waitForTransactionStatusStreamSurfacesTerminalStreamErrorBeforeFiltering() {
-    final String terminalPayload =
-        "event: stream_error\n"
-            + "data: {\"code\":\"stream_lagged\",\"message\":\"receiver lagged\","
-            + "\"dropped_messages\":7,\"replay_available\":false}\n\n";
-    final SequencedExecutor executor =
-        new SequencedExecutor(
-            newResponse(202, statusPayload("Pending")),
-            newResponse(200, terminalPayload.getBytes(StandardCharsets.UTF_8)));
-    final HttpClientTransport transport =
-        HttpClientTransport.withExecutor(
-            executor,
-            ClientConfig.builder()
-                .setBaseUri(URI.create("http://localhost:8080"))
-                .setRequestTimeout(Duration.ofSeconds(5))
-                .build());
+  private static void waitForTransactionStatusRejectsNonAuthoritativeTerminalPayloads() {
+    final String hash = canonicalHash("f00d");
+    final List<byte[]> invalidPayloads =
+        List.of(
+            statusPayload(canonicalHash("bad0"), "Applied"),
+            statusPayload(hash, "Applied", "local", "state", 7),
+            statusPayload(hash, "Applied", "global", "cache", 7),
+            statusPayload(hash, "Applied", "global", "state", null),
+            statusPayload(hash, "Applied", "global", "state", 0),
+            statusPayload(hash, "Applied", "global", "state", -1),
+            statusPayload(hash, "Applied", "global", "state", 1.5),
+            statusPayload(hash, "Rejected", "global", "cache", null));
 
-    try {
-      transport
-          .waitForTransactionStatusStream(
-              "deadbeef", PipelineStatusOptions.builder().timeoutMillis(5_000L).build())
-          .join();
-    } catch (final CompletionException expected) {
-      if (!(expected.getCause() instanceof ToriiStreamException terminal)) {
-        throw new AssertionError("expected typed terminal stream failure", expected);
-      }
-      assert "stream_lagged".equals(terminal.code()) : "terminal code mismatch";
-      assert BigInteger.valueOf(7L).equals(terminal.droppedMessages())
-          : "terminal dropped-message count mismatch";
-      assert !terminal.replayAvailable() : "canonical live stream must not advertise replay";
-      return;
-    }
-    throw new AssertionError("Expected pipeline stream to fail on terminal stream_error");
-  }
-
-  private static void waitForTransactionStatusStreamFailsClosedOnMalformedTerminalError() {
-    final String[] malformedPayloads = {
-      "{\"code\":\"stream_lagged\",\"message\":\"lagged\",\"dropped_messages\":1}",
-      "{\"code\":\"stream_lagged\",\"message\":\"lagged\",\"dropped_messages\":-1,\"replay_available\":false}",
-      "{\"code\":\"stream_lagged\",\"message\":\"lagged\",\"dropped_messages\":1,\"replay_available\":false,\"extra\":true}"
-    };
-    for (final String payload : malformedPayloads) {
-      final String terminalPayload = "event: stream_error\ndata: " + payload + "\n\n";
-      final SequencedExecutor executor =
-          new SequencedExecutor(
-              newResponse(202, statusPayload("Pending")),
-              newResponse(200, terminalPayload.getBytes(StandardCharsets.UTF_8)));
+    for (final byte[] payload : invalidPayloads) {
       final HttpClientTransport transport =
           HttpClientTransport.withExecutor(
-              executor,
-              ClientConfig.builder()
-                  .setBaseUri(URI.create("http://localhost:8080"))
-                  .setRequestTimeout(Duration.ofSeconds(5))
-                  .build());
-
+              request -> CompletableFuture.completedFuture(newResponse(200, payload)),
+              ClientConfig.builder().setBaseUri(URI.create("http://localhost:8080")).build());
       try {
         transport
-            .waitForTransactionStatusStream(
-                "deadbeef", PipelineStatusOptions.builder().timeoutMillis(5_000L).build())
+            .waitForTransactionStatus(
+                hash, PipelineStatusOptions.builder().intervalMillis(0L).build())
             .join();
-      } catch (final CompletionException expected) {
-        if (!(expected.getCause() instanceof ToriiStreamProtocolException protocolError)) {
-          throw new AssertionError("expected malformed terminal protocol failure", expected);
-        }
-        assert payload.equals(protocolError.rawData()) : "malformed raw payload mismatch";
+      } catch (final RuntimeException expected) {
+        final Throwable cause = expected.getCause() != null ? expected.getCause() : expected;
+        assert cause instanceof IllegalStateException
+            : "Expected non-authoritative status to fail closed";
         continue;
       }
-      throw new AssertionError("Expected malformed terminal stream_error rejection: " + payload);
+      throw new AssertionError("Expected non-authoritative terminal payload rejection");
     }
   }
 
-  private static void waitForTransactionStatusStreamRejectsResumeHeaderWithoutDispatchingStream() {
-    final AtomicInteger dispatches = new AtomicInteger();
+  private static void waitForTransactionStatusRejectsRetiredSuccessResponseCodes() {
+    final String hash = canonicalHash("202");
     final HttpClientTransport transport =
         HttpClientTransport.withExecutor(
-            request -> {
-              dispatches.incrementAndGet();
-              return CompletableFuture.completedFuture(
-                  newResponse(202, statusPayload("Pending")));
-            },
-            ClientConfig.builder()
-                .setBaseUri(URI.create("http://localhost:8080"))
-                .putDefaultHeader("lAsT-eVeNt-Id", "stale")
-                .build());
-
+            request ->
+                CompletableFuture.completedFuture(newResponse(202, statusPayload(hash, "Applied"))),
+            ClientConfig.builder().setBaseUri(URI.create("http://localhost:8080")).build());
     try {
       transport
-          .waitForTransactionStatusStream(
-              "deadbeef", PipelineStatusOptions.builder().timeoutMillis(5_000L).build())
+          .waitForTransactionStatus(
+              hash, PipelineStatusOptions.builder().intervalMillis(0L).build())
           .join();
-    } catch (final CompletionException expected) {
-      if (!(expected.getCause() instanceof IllegalArgumentException)
-          || !expected.getCause().getMessage().contains("no replay log")) {
-        throw new AssertionError("expected canonical resume-header rejection", expected);
-      }
-      assert dispatches.get() == 1
-          : "only the bounded status snapshot may dispatch before stream rejection";
+    } catch (final RuntimeException expected) {
+      final Throwable cause = expected.getCause() != null ? expected.getCause() : expected;
+      assert cause instanceof TransactionStatusHttpException
+          : "Expected HTTP 202 status reads to be rejected";
       return;
     }
-    throw new AssertionError("Expected pipeline stream resume header rejection");
+    throw new AssertionError("Expected retired status response code rejection");
+  }
+
+  private static void waitForTransactionStatusRejectsNoritoWhenJsonWasRequested() {
+    final String hash = canonicalHash("0bad");
+    final HttpClientTransport transport =
+        HttpClientTransport.withExecutor(
+            request ->
+                CompletableFuture.completedFuture(
+                    newResponse(200, new byte[] {'N', 'R', 'T', '0', 0x01})),
+            ClientConfig.builder().setBaseUri(URI.create("http://localhost:8080")).build());
+    try {
+      transport
+          .waitForTransactionStatus(
+              hash, PipelineStatusOptions.builder().intervalMillis(0L).build())
+          .join();
+    } catch (final RuntimeException expected) {
+      final Throwable cause = expected.getCause() != null ? expected.getCause() : expected;
+      assert cause instanceof IllegalStateException
+          : "Expected content negotiation mismatch to fail closed";
+      return;
+    }
+    throw new AssertionError("Expected non-JSON status payload rejection");
+  }
+
+  private static void waitForTransactionStatusRejectsNonCanonicalRequestHashes() {
+    final String hash = canonicalHash("abcd");
+    for (final String invalid :
+        List.of(hash.toUpperCase(java.util.Locale.ROOT), " " + hash, hash + " ", "0x" + hash)) {
+      final AtomicInteger dispatches = new AtomicInteger();
+      final HttpClientTransport transport =
+          HttpClientTransport.withExecutor(
+              request -> {
+                dispatches.incrementAndGet();
+                return CompletableFuture.completedFuture(newResponse(404, new byte[0]));
+              },
+              ClientConfig.builder().setBaseUri(URI.create("http://localhost:8080")).build());
+      try {
+        transport.waitForTransactionStatus(invalid, PipelineStatusOptions.builder().build());
+      } catch (final IllegalArgumentException expected) {
+        assert dispatches.get() == 0 : "Invalid hash must fail before network dispatch";
+        continue;
+      }
+      throw new AssertionError("Expected non-canonical request hash rejection: " + invalid);
+    }
   }
 
   private static void submitTransactionProvidesCanonicalHashForPolling() {
@@ -723,10 +728,10 @@ public final class HttpClientTransportStatusTests {
                 expectedHash, PipelineStatusOptions.builder().intervalMillis(0L).build())
             .join();
 
-    assert "Committed".equals(PipelineStatusExtractor.extractStatusKind(payload).orElse(null))
-        : "Expected committed status after polling";
+    assert "Applied".equals(PipelineStatusExtractor.extractStatusKind(payload).orElse(null))
+        : "Expected Applied status after polling";
     assert executor.observedExpectedHash()
-        : "Status polling must include canonical hash in request URI";
+        : "Status polling must include canonical hash and scope=auto in request URI";
   }
 
   private static void submitTransactionPrefersAuthoritativeReceiptHashHeaderForPolling() {
@@ -764,28 +769,71 @@ public final class HttpClientTransportStatusTests {
     return new TransportResponse(status, body, "", Map.of());
   }
 
+  private static String canonicalHash(final String prefix) {
+    if (prefix == null || !prefix.matches("[0-9a-f]+") || prefix.length() > 64) {
+      throw new IllegalArgumentException("canonical hash prefix must be lowercase hexadecimal");
+    }
+    final StringBuilder hash = new StringBuilder(prefix);
+    while (hash.length() < 64) {
+      hash.append('0');
+    }
+    return hash.toString();
+  }
+
   private static TransportResponse newResponse(
       final int status, final byte[] body, final Map<String, java.util.List<String>> headers) {
     return new TransportResponse(status, body, "", headers);
   }
 
-  private static byte[] statusPayload(final String kind) {
-    final String json = "{\"kind\":\"Transaction\",\"content\":{\"status\":{\"kind\":\""
-        + kind + "\"}}}";
+  private static byte[] statusPayload(final String hash, final String kind) {
+    final boolean terminal =
+        "Applied".equals(kind) || "Rejected".equals(kind) || "Expired".equals(kind);
+    return statusPayload(
+        hash,
+        kind,
+        "global",
+        terminal ? "state" : "cache",
+        "Applied".equals(kind) ? 7 : null);
+  }
+
+  private static byte[] statusPayload(
+      final String hash,
+      final String kind,
+      final String scope,
+      final String resolvedFrom,
+      final Number blockHeight) {
+    final String renderedBlockHeight =
+        blockHeight == null ? "" : ",\"block_height\":" + blockHeight;
+    final String json =
+        "{\"hash\":\""
+            + hash
+            + "\",\"status\":{\"kind\":\""
+            + kind
+            + "\""
+            + renderedBlockHeight
+            + "},\"summary\":\""
+            + kind
+            + "\",\"diagnostics\":[],\"scope\":\""
+            + scope
+            + "\",\"resolved_from\":\""
+            + resolvedFrom
+            + "\"}";
     return json.getBytes(StandardCharsets.UTF_8);
   }
 
   private static byte[] statusPayloadWithRejectionReason(
-      final String kind, final String rejectionReason) {
-    final String json = "{\"kind\":\"Transaction\",\"content\":{\"status\":{\"kind\":\""
-        + kind + "\",\"rejection_reason\":\"" + rejectionReason + "\"}}}";
-    return json.getBytes(StandardCharsets.UTF_8);
-  }
-
-  private static byte[] statusPayloadWithRejectedContent(
-      final String kind, final String statusContent) {
-    final String json = "{\"kind\":\"Transaction\",\"content\":{\"status\":{\"kind\":\""
-        + kind + "\",\"content\":\"" + statusContent + "\"}}}";
+      final String hash, final String rejectionReason) {
+    final String escaped = escapeJsonString(rejectionReason);
+    final String json =
+        "{\"hash\":\""
+            + hash
+            + "\",\"status\":{\"kind\":\"Rejected\"},\"summary\":\"Rejected: "
+            + escaped
+            + "\",\"diagnostics\":[{\"category\":\"validation\",\"message\":\""
+            + escaped
+            + "\",\"decoded_reason\":\""
+            + escaped
+            + "\"}],\"scope\":\"global\",\"resolved_from\":\"state\"}";
     return json.getBytes(StandardCharsets.UTF_8);
   }
 
@@ -857,16 +905,22 @@ public final class HttpClientTransportStatusTests {
       }
       if ("GET".equals(request.method())) {
         final String query = request.uri().getQuery();
-        if (query != null && query.contains("hash=" + expectedHash)) {
+        if (query != null
+            && query.contains("hash=" + expectedHash)
+            && query.contains("scope=auto")) {
           observedExpectedHash = true;
         }
         final int count = pollCount.getAndIncrement();
         if (count == 0) {
           return CompletableFuture.completedFuture(
-              new TransportResponse(202, statusPayload("Pending"), "", Map.of()));
+              new TransportResponse(200, statusPayload(expectedHash, "Queued"), "", Map.of()));
+        }
+        if (count == 1) {
+          return CompletableFuture.completedFuture(
+              new TransportResponse(200, statusPayload(expectedHash, "Committed"), "", Map.of()));
         }
         return CompletableFuture.completedFuture(
-            new TransportResponse(200, statusPayload("Committed"), "", Map.of()));
+            new TransportResponse(200, statusPayload(expectedHash, "Applied"), "", Map.of()));
       }
       throw new IllegalStateException("Unexpected HTTP method " + request.method());
     }

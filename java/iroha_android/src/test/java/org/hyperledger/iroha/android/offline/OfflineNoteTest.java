@@ -1079,7 +1079,7 @@ public final class OfflineNoteTest {
         () -> VerifyingKeyBoxCodec.encodeNorito("halo2/ipa", new byte[0]),
         "empty verifying key bytes should fail");
     assertEquals(
-        "recursive_spend_v2",
+        "recursive_spend_v1",
         KagemushaRecursiveSpendProver.Mode.RECURSIVE_SPEND.wireName(),
         "recursive Kagemusha spend wire mode");
     assertEquals(

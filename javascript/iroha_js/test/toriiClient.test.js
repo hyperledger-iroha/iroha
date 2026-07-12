@@ -10616,205 +10616,146 @@ test("getSumeragiStatus fetches consensus metrics", async () => {
   });
 });
 
-test("getSumeragiStatusTyped normalizes governance seals", async () => {
+function sumeragiV2Status(overrides = {}) {
+  return {
+    protocol_version: 2,
+    node_fingerprint: "hash:NODE#0001",
+    build_fingerprint: "hash:BUILD#0001",
+    config_fingerprint: "hash:CONFIG#0001",
+    height_context_id: ["hash:CONTEXT#0001"],
+    height: 15,
+    view: 4,
+    phase: { phase: "Prepare", details: null },
+    leader: 1,
+    body_state: { state: "Validated", details: null },
+    pending_persistence_id: null,
+    last_committed_height: 14,
+    last_committed_subject: {
+      parent_block_hash: "hash:PARENT#0001",
+      block_hash: "hash:BLOCK#0001",
+      payload_hash: "hash:PAYLOAD#0001",
+    },
+    ...overrides,
+  };
+}
+
+test("getSumeragiStatusTyped parses the authoritative v2 reducer status", async () => {
   const fetchImpl = async (url, init) => {
     assert.equal(url, `${BASE_URL}/v1/sumeragi/status`);
     assert.equal(init.headers.Accept, "application/json");
     return createResponse({
       status: 200,
-      jsonData: {
-        mode_tag: "iroha2-consensus::permissioned-sumeragi@v2",
-        staged_mode_tag: "iroha2-consensus::npos-sumeragi@v2",
-        staged_mode_activation_height: "10",
-        mode_activation_lag_blocks: 2,
-        consensus_caps: {
-          collectors_k: "2",
-          redundant_send_r: "1",
-          da_enabled: true,
-          rbc_chunk_max_bytes: "1024",
-          rbc_session_ttl_ms: 5000,
-          rbc_store_max_sessions: "64",
-          rbc_store_soft_sessions: "32",
-          rbc_store_max_bytes: "4096",
-          rbc_store_soft_bytes: "2048",
-        },
-        commit_qc: {
-          height: "41",
-          view: "2",
-          epoch: "5",
-          block_hash: "0xabc",
-          validator_set_hash: "0xdef",
-          validator_set_len: "4",
-          signatures_total: "3",
-        },
-        commit_quorum: {
-          height: "41",
-          view: "2",
-          block_hash: "0xabc",
-          signatures_present: "3",
-          signatures_counted: "3",
-          signatures_set_b: "2",
-          signatures_required: "3",
-          last_updated_ms: "1700",
-        },
-        leader_index: "5",
-        lane_commitments: [
-          {
-            block_height: "42",
-            lane_id: "7",
-            tx_count: 3,
-            total_chunks: 4,
-            rbc_bytes_total: 256,
-            teu_total: 64,
-            block_hash: "feedface",
+      jsonData: sumeragiV2Status({
+        pending_persistence_id: 17,
+        locked_prepare_qc: {
+          round: {
+            context_id: ["hash:CONTEXT#0001"],
+            height: 15,
+            view: 3,
           },
-        ],
-        dataspace_commitments: [
-          {
-            block_height: "42",
-            lane_id: "7",
-            dataspace_id: 9,
-            tx_count: 1,
-            total_chunks: 1,
-            rbc_bytes_total: 96,
-            teu_total: 16,
-            block_hash: "facedead",
+          phase: { phase: "Prepare", details: null },
+          subject: {
+            parent_block_hash: "hash:PARENT#0001",
+            block_hash: "hash:BLOCK#0001",
+            payload_hash: "hash:PAYLOAD#0001",
           },
-        ],
-        lane_governance: [
-          {
-            lane_id: "7",
-            alias: "archive",
-            dataspace_id: "9",
-            visibility: "public",
-            storage_profile: "full_replica",
-            manifest_required: true,
-            manifest_ready: false,
-            validator_ids: ["alice@test"],
-            protected_namespaces: ["finance"],
-            privacy_commitments: [
-              {
-                id: "4",
-                scheme: "merkle",
-                merkle: { root: "0xffff", max_depth: "12" },
-              },
-              {
-                id: 5,
-                scheme: "snark",
-                snark: {
-                  circuit_id: "8",
-                  verifying_key_digest: "0xaaaa",
-                  statement_hash: "0xbbbb",
-                  proof_hash: "0xcccc",
-                },
-              },
-            ],
+        },
+        last_timeout_certificate: {
+          round: {
+            context_id: ["hash:CONTEXT#0001"],
+            height: 15,
+            view: 3,
           },
-        ],
-        lane_governance_sealed_total: "2",
-        lane_governance_sealed_aliases: ["archive", "payments"],
-      },
+          highest_prepare_qc: null,
+          certificate_hash: "hash:TC#0001",
+        },
+      }),
       headers: { "content-type": "application/json" },
     });
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const payload = await client.getSumeragiStatusTyped();
-  assert.equal(payload.mode_tag, "iroha2-consensus::permissioned-sumeragi@v2");
-  assert.equal(payload.staged_mode_tag, "iroha2-consensus::npos-sumeragi@v2");
-  assert.equal(payload.staged_mode_activation_height, 10);
-  assert.equal(payload.mode_activation_lag_blocks, 2);
-  assert.ok(payload.consensus_caps);
-  assert.equal(payload.consensus_caps.collectors_k, 2);
-  assert.equal(payload.consensus_caps.rbc_chunk_max_bytes, 1024);
-  assert.deepEqual(payload.commit_qc, {
-    height: 41,
-    view: 2,
-    epoch: 5,
-    block_hash: "0xabc",
-    validator_set_hash: "0xdef",
-    validator_set_len: 4,
-    signatures_total: 3,
-  });
-  assert.deepEqual(payload.commit_quorum, {
-    height: 41,
-    view: 2,
-    block_hash: "0xabc",
-    signatures_present: 3,
-    signatures_counted: 3,
-    signatures_set_b: 2,
-    signatures_required: 3,
-    last_updated_ms: 1700,
-  });
-  assert.equal(payload.leader_index, "5");
-  assert.deepEqual(payload.lane_commitments, [
-    {
-      block_height: 42,
-      lane_id: 7,
-      tx_count: 3,
-      total_chunks: 4,
-      rbc_bytes_total: 256,
-      teu_total: 64,
-      block_hash: "feedface",
-    },
-  ]);
-  assert.deepEqual(payload.dataspace_commitments, [
-    {
-      block_height: 42,
-      lane_id: 7,
-      dataspace_id: 9,
-      tx_count: 1,
-      total_chunks: 1,
-      rbc_bytes_total: 96,
-      teu_total: 16,
-      block_hash: "facedead",
-    },
-  ]);
-  assert.deepEqual(payload.lane_governance, [
-    {
-      lane_id: 7,
-      alias: "archive",
-      dataspace_id: 9,
-      visibility: "public",
-      storage_profile: "full_replica",
-      governance: null,
-      manifest_required: true,
-      manifest_ready: false,
-      manifest_path: null,
-      validator_ids: ["alice@test"],
-      quorum: null,
-      protected_namespaces: ["finance"],
-      runtime_upgrade: null,
-      privacy_commitments: [
-        {
-          id: 4,
-          scheme: "merkle",
-          merkle: { root: "0xffff", max_depth: 12 },
-          snark: null,
+  assert.equal(payload.protocol_version, 2);
+  assert.deepEqual(payload.height_context_id, ["hash:CONTEXT#0001"]);
+  assert.equal(payload.height, 15);
+  assert.equal(payload.view, 4);
+  assert.deepEqual(payload.phase, { phase: "Prepare", details: null });
+  assert.equal(payload.locked_prepare_qc.round.view, 3);
+  assert.equal(payload.last_timeout_certificate.certificate_hash, "hash:TC#0001");
+  assert.deepEqual(payload.body_state, { state: "Validated", details: null });
+  assert.equal(payload.pending_persistence_id, 17);
+  assert.equal(payload.last_committed_height, 14);
+  assert.equal(payload.last_committed_subject.payload_hash, "hash:PAYLOAD#0001");
+});
+
+test("getSumeragiStatusTyped rejects the retired actor/RBC schema", async () => {
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () =>
+      createResponse({
+        status: 200,
+        jsonData: {
+          mode_tag: "iroha2-consensus::permissioned-sumeragi@v2",
+          commit_qc: { height: 14 },
+          pending_rbc: { sessions: 0 },
         },
-        {
-          id: 5,
-          scheme: "snark",
-          merkle: null,
-          snark: {
-            circuit_id: 8,
-            verifying_key_digest: "0xaaaa",
-            statement_hash: "0xbbbb",
-            proof_hash: "0xcccc",
-          },
-        },
-      ],
-    },
-  ]);
-  assert.equal(payload.lane_governance_sealed_total, 2);
-  assert.deepEqual(payload.lane_governance_sealed_aliases, ["archive", "payments"]);
+        headers: { "content-type": "application/json" },
+      }),
+  });
+
+  await assert.rejects(
+    () => client.getSumeragiStatusTyped(),
+    /unsupported fields: commit_qc, mode_tag, pending_rbc/,
+  );
+});
+
+test("getSumeragiStatusTyped fails closed on malformed v2 reducer state", async () => {
+  const cases = [
+    [
+      "wrong protocol",
+      sumeragiV2Status({ protocol_version: 1 }),
+      /protocol_version must be 2/,
+    ],
+    [
+      "tag payload",
+      sumeragiV2Status({ phase: { phase: "Prepare", details: {} } }),
+      /sumeragi\.phase\.details must be null/,
+    ],
+    [
+      "future commit",
+      sumeragiV2Status({ height: 13 }),
+      /last_committed_height must not exceed/,
+    ],
+    [
+      "zero persistence id",
+      sumeragiV2Status({ pending_persistence_id: 0 }),
+      /pending_persistence_id must be positive/,
+    ],
+    [
+      "retired field",
+      sumeragiV2Status({ pending_rbc: { sessions: 0 } }),
+      /unsupported fields: pending_rbc/,
+    ],
+  ];
+
+  for (const [label, jsonData, expected] of cases) {
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () =>
+        createResponse({
+          status: 200,
+          jsonData,
+          headers: { "content-type": "application/json" },
+        }),
+    });
+    // eslint-disable-next-line no-await-in-loop
+    await assert.rejects(() => client.getSumeragiStatusTyped(), expected, label);
+  }
 });
 
 test("getSumeragiStatusTyped parses settlement and relay envelopes", async () => {
   const fetchImpl = async () =>
     createResponse({
       status: 200,
-      jsonData: {
-        mode_tag: "iroha2-consensus::permissioned-sumeragi@v2",
+      jsonData: sumeragiV2Status({
         lane_settlement_commitments: [
           {
             block_height: "21",
@@ -10881,7 +10822,7 @@ test("getSumeragiStatusTyped parses settlement and relay envelopes", async () =>
             },
           },
         ],
-      },
+      }),
       headers: { "content-type": "application/json" },
     });
   const client = new ToriiClient(BASE_URL, { fetchImpl });
@@ -10898,8 +10839,7 @@ test("getSumeragiStatusTyped rejects invalid relay settlement hash", async () =>
   const fetchImpl = async () =>
     createResponse({
       status: 200,
-      jsonData: {
-        mode_tag: "iroha2-consensus::permissioned-sumeragi@v2",
+      jsonData: sumeragiV2Status({
         lane_relay_envelopes: [
           {
             lane_id: 1,
@@ -10921,7 +10861,7 @@ test("getSumeragiStatusTyped rejects invalid relay settlement hash", async () =>
             rbc_bytes_total: 0,
           },
         ],
-      },
+      }),
       headers: { "content-type": "application/json" },
     });
   const client = new ToriiClient(BASE_URL, { fetchImpl });
@@ -10932,8 +10872,7 @@ test("getSumeragiStatusTyped rejects invalid relay fastpq_proof digest", async (
   const fetchImpl = async () =>
     createResponse({
       status: 200,
-      jsonData: {
-        mode_tag: "iroha2-consensus::permissioned-sumeragi@v2",
+      jsonData: sumeragiV2Status({
         lane_relay_envelopes: [
           {
             lane_id: 1,
@@ -10956,7 +10895,7 @@ test("getSumeragiStatusTyped rejects invalid relay fastpq_proof digest", async (
             fastpq_proof: { proof_digest: 42 },
           },
         ],
-      },
+      }),
       headers: { "content-type": "application/json" },
     });
   const client = new ToriiClient(BASE_URL, { fetchImpl });
@@ -24107,6 +24046,13 @@ test("getOfflineReadiness rejects invalid selectors and contradictory snapshots"
     }),
     offlineReadinessPayload({
       active_topup_shield_verifier: offlineActiveTopUpShieldVerifier({ withdrawal_height: 42 }),
+    }),
+    offlineReadinessPayload({
+      ready: false,
+      blockers: [{
+        code: "topup_shield_verifier_unavailable",
+        message: "top-up shield verifier unavailable",
+      }],
     }),
     offlineReadinessPayload({
       ready: false,

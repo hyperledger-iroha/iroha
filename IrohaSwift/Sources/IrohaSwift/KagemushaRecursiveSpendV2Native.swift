@@ -107,6 +107,27 @@ extension NoritoNativeBridge {
         #endif
     }
 
+    func kagemushaRecursiveSpendTopUpV2(requestArchive: Data) throws -> Data? {
+        try callKagemushaV2Archive(
+            symbol: "connect_norito_kagemusha_recursive_spend_topup_v2",
+            archive: requestArchive
+        )
+    }
+
+    func kagemushaRecursiveSpendVerifyV2(requestArchive: Data) throws -> Data? {
+        try callKagemushaV2Archive(
+            symbol: "connect_norito_kagemusha_recursive_spend_verify_v2",
+            archive: requestArchive
+        )
+    }
+
+    func kagemushaRecursiveSpendRedeemV2(requestArchive: Data) throws -> Data? {
+        try callKagemushaV2Archive(
+            symbol: "connect_norito_kagemusha_recursive_spend_redeem_v2",
+            archive: requestArchive
+        )
+    }
+
     private func copyKagemushaV2Output(
         status: Int32,
         pointer: UnsafeMutablePointer<UInt8>?,
@@ -164,12 +185,12 @@ extension NoritoNativeBridge {
 
     func kagemushaRecipientOutputDeriveV2(
         requestArchive: Data,
-        receiverSpendSecret: Data
+        noteOpeningArchive: Data
     ) throws -> Data? {
         try callKagemushaV2TwoArchives(
             symbol: "connect_norito_kagemusha_recipient_output_derive_v2",
             first: requestArchive,
-            second: receiverSpendSecret
+            second: noteOpeningArchive
         )
     }
 

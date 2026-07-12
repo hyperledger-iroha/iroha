@@ -580,6 +580,7 @@ const LANE_BLOCK_SPECULATIVE_SIBLINGS_PER_GROUP: usize = 2;
 /// Bound durable status recovery independently of total certified lane history.
 const LANE_BLOCK_STATUS_CERTIFIED_SCAN_LIMIT: usize = 64;
 /// Limit periodic lane-block replay to a small stable round-robin slice per due tick.
+#[cfg(test)]
 const LANE_BLOCK_REBROADCAST_BUNDLES_PER_TICK: usize = 2;
 /// Standalone lane proposals, votes, and certificates fan out both directly to the committee and
 /// over the consensus topic. Keep retries bounded so stalled lane sessions cannot multiply traffic
@@ -13582,6 +13583,7 @@ pub(super) struct Actor {
     tick_in_progress: bool,
     last_tick_heartbeat_log: Instant,
     last_lane_block_rebroadcast: Option<Instant>,
+    #[cfg(test)]
     lane_block_rebroadcast_cursor: Option<crate::lane_consensus::LaneBlockSessionKey>,
     tick_timing: TickTimingMonitor,
     tick_timing_thresholds: TickTimingThresholds,
@@ -23368,6 +23370,7 @@ impl Actor {
             tick_in_progress: false,
             last_tick_heartbeat_log: now,
             last_lane_block_rebroadcast: None,
+            #[cfg(test)]
             lane_block_rebroadcast_cursor: None,
             tick_timing: TickTimingMonitor::new(now),
             tick_timing_thresholds: TickTimingThresholds::default(),

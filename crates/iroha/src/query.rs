@@ -709,7 +709,7 @@ mod query_errors_handling {
     #[test]
     fn text_json_is_not_a_supported_response_media_type() -> Result<()> {
         let payload = QueryResponse::Iterable(QueryOutput {
-            batch: QueryOutputBatchBoxTuple { tuple: Vec::new() },
+            batch: QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::String(Vec::new())),
             remaining_items: Some(0),
             has_more: false,
             continue_cursor: None,

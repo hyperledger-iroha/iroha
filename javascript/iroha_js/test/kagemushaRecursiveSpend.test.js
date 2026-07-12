@@ -7,8 +7,7 @@ import { ed25519 } from "@noble/curves/ed25519";
 import { AccountAddress } from "../src/address.js";
 import {
   KAGEMUSHA_PROOF_ATTACHMENT_WIRE_NAME,
-  KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1,
-  KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V2,
+  KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1,
   KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1,
   KAGEMUSHA_RECURSIVE_COMPACT_MULTI_HOP_UNAVAILABLE_FRAGMENT,
   KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE_FRAGMENT,
@@ -4808,13 +4807,9 @@ test("confidential v2 derivation helpers reject padded chain and asset IDs befor
   assert.deepEqual(calls, []);
 });
 
-test("Kagemusha offline spend mode exposes only recursive spend V2", () => {
+test("Kagemusha offline spend mode exposes only recursive spend V1", () => {
   const completeBinding = completeRecursiveSpendBinding();
 
-  assert.equal(
-    KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1,
-    "recursive_compact_v1",
-  );
   assert.equal(
     KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_NATIVE_BRIDGE_ABI_VERSION,
     7,
@@ -4844,12 +4839,15 @@ test("Kagemusha offline spend mode exposes only recursive spend V2", () => {
   assert.equal(isKagemushaRecursiveCompactUnavailable(null), false);
   assert.equal(
     preferredKagemushaOfflineSpendMode(true),
-    KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V2,
+    KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1,
   );
   assert.equal(preferredKagemushaOfflineSpendMode(false), null);
-  assert.equal(isKagemushaSpendAgainMode("recursive_spend_v2"), true);
-  assert.equal(isKagemushaSpendAgainMode("recursive_spend_v1"), false);
+  assert.equal(isKagemushaSpendAgainMode("recursive_spend_v1"), true);
+  assert.equal(isKagemushaSpendAgainMode("recursive_spend_v2"), false);
   assert.equal(isKagemushaSpendAgainMode("recursive_compact_v1"), false);
+  assert.equal(isKagemushaSpendAgainMode(" recursive_spend_v1"), false);
+  assert.equal(isKagemushaSpendAgainMode("RECURSIVE_SPEND_V1"), false);
+  assert.equal(isKagemushaSpendAgainMode(null), false);
   assert.throws(
     () => preferredKagemushaOfflineSpendMode(false, true),
     /requires zero arguments or one boolean pastaCycleV3BackendAvailable argument/u,
@@ -4857,7 +4855,7 @@ test("Kagemusha offline spend mode exposes only recursive spend V2", () => {
   withNativeBinding(completeBinding, () => {
     assert.equal(
       preferredKagemushaOfflineSpendMode(),
-      KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V2,
+      KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1,
     );
     assert.equal(isKagemushaRecursiveCompactPaymentTokenNativeAvailable(), false);
     assert.equal(
@@ -4889,7 +4887,7 @@ test("Kagemusha offline spend mode exposes only recursive spend V2", () => {
       );
       assert.equal(
         preferredKagemushaOfflineSpendMode(),
-        KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V2,
+        KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1,
       );
       assert.throws(
         () =>
@@ -5054,7 +5052,7 @@ test("Kagemusha offline spend mode exposes only recursive spend V2", () => {
       );
       assert.equal(
         preferredKagemushaOfflineSpendMode(),
-        KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V2,
+        KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1,
       );
       assert.deepEqual(
         kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(

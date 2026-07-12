@@ -512,6 +512,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
     }
 
     /// Constant retransmission interval derived from the configured timeout.
+    #[cfg(test)]
     pub(crate) const fn retransmit_interval(&self) -> Duration {
         self.retransmit_interval
     }

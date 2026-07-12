@@ -1,5 +1,5 @@
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     collections::{BTreeMap, HashMap, HashSet},
     sync::Arc,
 };
@@ -824,6 +824,7 @@ pub struct SemanticContext {
     typed_hir_nodes: RefCell<BTreeMap<HirId, Type>>,
     pending_diagnostic: RefCell<Option<crate::semantic_diagnostics::SemanticDiagnostic>>,
     required_list_capacity: RefCell<Option<u8>>,
+    next_synthetic_binding: Cell<usize>,
 }
 
 impl SemanticContext {
@@ -1612,6 +1613,18 @@ impl SemanticContext {
         self.pending_diagnostic.borrow_mut().take();
     }
 
+    fn fresh_aggregate_capture(&self) -> String {
+        let index = self.next_synthetic_binding.get();
+        self.next_synthetic_binding.set(
+            index
+                .checked_add(1)
+                .expect("aggregate capture counter must not overflow"),
+        );
+        // NUL cannot occur in a source identifier, so this compiler-owned
+        // binding cannot collide with a user local in any nested scope.
+        format!("\0aggregate_capture#{index}")
+    }
+
     /// Check whether one expression can initialize `expected` without letting
     /// a speculative error replace the diagnostic for the enclosing invalid
     /// construct. Typed expression analysis is otherwise side-effect free; a
@@ -1656,6 +1669,7 @@ impl SemanticContext {
         self.typed_hir_nodes.borrow_mut().clear();
         self.pending_diagnostic.borrow_mut().take();
         self.required_list_capacity.borrow_mut().take();
+        self.next_synthetic_binding.set(0);
     }
 }
 
@@ -4952,9 +4966,16 @@ fn bind_struct_fields_rec(
     let resolved_ty = resolve_struct_type(ty);
     if let Type::Struct { fields, .. } = resolved_ty {
         for (i, (_fname, fty)) in fields.iter().enumerate() {
+            // `base_expr` has already been captured by the synthetic binding
+            // named `base_name`. Project from that binding so an effectful
+            // aggregate expression is never evaluated once per field.
+            let captured = TypedExpr {
+                expr: ExprKind::Ident(base_name.to_owned()),
+                ty: base_expr.ty.clone(),
+            };
             let member = TypedExpr {
                 expr: ExprKind::Member {
-                    object: Box::new(base_expr.clone()),
+                    object: Box::new(captured),
                     field: i.to_string(),
                 },
                 ty: resolve_struct_type(fty),
@@ -4984,26 +5005,19 @@ fn bind_tuple_fields_rec(
     if let Type::Tuple(elements) = resolve_struct_type(ty) {
         for (idx, elem_ty) in elements.iter().enumerate() {
             let resolved_elem_ty = resolve_struct_type(elem_ty);
-            let element_expr = if let ExprKind::Tuple(items) = base_expr.kind() {
-                if let Some(item) = items.get(idx) {
-                    item.clone()
-                } else {
-                    TypedExpr {
-                        expr: ExprKind::Member {
-                            object: Box::new(base_expr.clone()),
-                            field: idx.to_string(),
-                        },
-                        ty: resolved_elem_ty.clone(),
-                    }
-                }
-            } else {
-                TypedExpr {
-                    expr: ExprKind::Member {
-                        object: Box::new(base_expr.clone()),
-                        field: idx.to_string(),
-                    },
-                    ty: resolved_elem_ty.clone(),
-                }
+            // Tuple literals and calls are both evaluated by the parent
+            // binding. Synthetic flattened names only project that captured
+            // value; cloning a literal item here would also duplicate calls
+            // nested inside the literal.
+            let element_expr = TypedExpr {
+                expr: ExprKind::Member {
+                    object: Box::new(TypedExpr {
+                        expr: ExprKind::Ident(base_name.to_owned()),
+                        ty: base_expr.ty.clone(),
+                    }),
+                    field: idx.to_string(),
+                },
+                ty: resolved_elem_ty.clone(),
             };
             let child_name = format!("{base_name}#{idx}");
             vars.insert(child_name.clone(), resolved_elem_ty.clone());
@@ -5843,22 +5857,17 @@ fn analyze_statement_inner(
                             bind_tuple_fields_rec(&mut out, vars, name, &expr, &expr.ty);
                         }
                         Type::Struct { fields, .. } => {
-                            for (i, (fname, fty)) in fields.iter().enumerate() {
-                                let direct = match expr.kind() {
-                                    ExprKind::Tuple(values) => values.get(i),
-                                    ExprKind::StructLiteral { fields, .. } => fields
-                                        .iter()
-                                        .find(|(field, _)| field == fname)
-                                        .map(|(_, value)| value),
-                                    _ => None,
-                                };
-                                let val_expr = direct.cloned().unwrap_or_else(|| TypedExpr {
+                            for (i, (_fname, fty)) in fields.iter().enumerate() {
+                                let val_expr = TypedExpr {
                                     expr: ExprKind::Member {
-                                        object: Box::new(expr.clone()),
+                                        object: Box::new(TypedExpr {
+                                            expr: ExprKind::Ident(name.clone()),
+                                            ty: expr.ty.clone(),
+                                        }),
                                         field: i.to_string(),
                                     },
                                     ty: fty.clone(),
-                                });
+                                };
                                 let sname = format!("{name}#{i}");
                                 let field_ty = resolve_struct_type(fty);
                                 vars.insert(sname.clone(), field_ty.clone());
@@ -5905,12 +5914,22 @@ fn analyze_statement_inner(
                                     ),
                                 });
                             }
+                            let capture_name = context.fresh_aggregate_capture();
+                            let captured = TypedExpr {
+                                expr: ExprKind::Ident(capture_name.clone()),
+                                ty: expr.ty.clone(),
+                            };
+                            vars.insert(capture_name.clone(), expr.ty.clone());
+                            out.push(TypedStatement::Let {
+                                name: capture_name,
+                                value: expr.clone(),
+                            });
                             // Destructure by emitting member-access typed expressions for each field.
                             for (i, name) in names.iter().enumerate() {
                                 let ti = ts.get(i).cloned().expect("tuple arity already validated");
                                 let member = TypedExpr {
                                     expr: ExprKind::Member {
-                                        object: Box::new(expr.clone()),
+                                        object: Box::new(captured.clone()),
                                         field: i.to_string(),
                                     },
                                     ty: ti.clone(),
@@ -5942,26 +5961,28 @@ fn analyze_statement_inner(
                                     ),
                                 });
                             }
+                            let capture_name = context.fresh_aggregate_capture();
+                            let captured = TypedExpr {
+                                expr: ExprKind::Ident(capture_name.clone()),
+                                ty: expr.ty.clone(),
+                            };
+                            vars.insert(capture_name.clone(), expr.ty.clone());
+                            out.push(TypedStatement::Let {
+                                name: capture_name,
+                                value: expr.clone(),
+                            });
                             for (i, name) in names.iter().enumerate() {
-                                let (fname, ti) = fields
+                                let (_fname, ti) = fields
                                     .get(i)
                                     .cloned()
                                     .expect("struct arity already validated");
-                                let direct = match expr.kind() {
-                                    ExprKind::Tuple(values) => values.get(i),
-                                    ExprKind::StructLiteral { fields, .. } => fields
-                                        .iter()
-                                        .find(|(field, _)| field == &fname)
-                                        .map(|(_, value)| value),
-                                    _ => None,
-                                };
-                                let val_expr = direct.cloned().unwrap_or_else(|| TypedExpr {
+                                let val_expr = TypedExpr {
                                     expr: ExprKind::Member {
-                                        object: Box::new(expr.clone()),
+                                        object: Box::new(captured.clone()),
                                         field: i.to_string(),
                                     },
                                     ty: resolve_struct_type(&ti),
-                                });
+                                };
                                 let field_ty = resolve_struct_type(&ti);
                                 if name != "_" {
                                     vars.insert(name.clone(), field_ty.clone());
@@ -16366,10 +16387,24 @@ mod tests {
                 .unwrap_or_else(|| panic!("missing binding `{suffix}`"))
         };
 
-        assert!(matches!(binding("pair#0").expr, ExprKind::IntLiteral(ref value) if value == &BigInt::from(1_i64)));
-        assert!(matches!(binding("pair#1").expr, ExprKind::String(ref value) if value == "two"));
-        assert!(matches!(binding("left").expr, ExprKind::IntLiteral(ref value) if value == &BigInt::from(3_i64)));
-        assert!(matches!(binding("right").expr, ExprKind::String(ref value) if value == "four"));
+        let is_projection = |value: &TypedExpr, base: Option<&str>, index: &str| {
+            matches!(
+                &value.expr,
+                ExprKind::Member { object, field }
+                    if field == index
+                        && matches!(
+                            object.kind(),
+                            ExprKind::Ident(name)
+                                if base.is_none_or(|base| {
+                                    name.rsplit("::").next() == Some(base)
+                                })
+                        )
+            )
+        };
+        assert!(is_projection(binding("pair#0"), Some("pair"), "0"));
+        assert!(is_projection(binding("pair#1"), Some("pair"), "1"));
+        assert!(is_projection(binding("left"), None, "0"));
+        assert!(is_projection(binding("right"), None, "1"));
     }
 
     #[test]

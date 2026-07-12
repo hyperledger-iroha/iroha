@@ -87,15 +87,6 @@ public interface IrohaClient {
     return future;
   }
 
-  default CompletableFuture<Map<String, Object>> waitForTransactionStatusStream(
-      final String hashHex, final PipelineStatusOptions options) {
-    final CompletableFuture<Map<String, Object>> future = new CompletableFuture<>();
-    future.completeExceptionally(
-        new IllegalStateException(
-            "waitForTransactionStatusStream requires a concrete IrohaClient implementation"));
-    return future;
-  }
-
   /**
    * Proposes a generic multisig instruction batch via `POST /v1/multisig/propose`.
    *

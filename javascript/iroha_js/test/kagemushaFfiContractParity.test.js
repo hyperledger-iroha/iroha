@@ -7,19 +7,9 @@ import { fileURLToPath } from "node:url";
 
 const REPO_ROOT = fileURLToPath(new URL("../../..", import.meta.url));
 
-const REQUIRED_C_SYMBOLS = Object.freeze([
-  "connect_norito_kagemusha_recursive_spend_init",
-  "connect_norito_kagemusha_recursive_spend_append",
-  "connect_norito_kagemusha_recursive_spend_transition_profile_init",
-  "connect_norito_kagemusha_recursive_spend_transition_profile_append",
-  "connect_norito_kagemusha_recursive_spend_lineage_append_boundary",
-  "connect_norito_kagemusha_recursive_spend_lineage_witness_from_init_result",
-  "connect_norito_kagemusha_recursive_spend_lineage_witness_append_result",
-  "connect_norito_kagemusha_recursive_spend_verify",
-  "connect_norito_kagemusha_recursive_spend_redeem",
-  "connect_norito_kagemusha_recursive_spend_topup",
-  "connect_norito_kagemusha_recursive_spend_compact_payment_token_from_bundle",
-]);
+// The first release has no compatibility export set. Only exact ABI-18 V2
+// proof/protocol symbols and the governed V3 artifact lifecycle ship.
+const REQUIRED_C_SYMBOLS = Object.freeze([]);
 
 const REQUIRED_KAGEMUSHA_V2_PROOF_SYMBOLS = Object.freeze([
   "connect_norito_kagemusha_recursive_spend_init_v2",
@@ -7117,13 +7107,13 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     ],
     [
       "--negative-control-sdk-default",
-      /Some\(KAGEMUSHA_RECURSIVE_SPEND_MODE_V2\)[\s\S]*?"        None",/u,
+      /Some\(KAGEMUSHA_RECURSIVE_SPEND_PRODUCT_MODE_V1\)[\s\S]*?"        None",/u,
       "ABI-18 first-release selector",
     ],
     [
       "--negative-control-sdk-default-cross-sdk",
-      /KAGEMUSHA_RECURSIVE_SPEND_MODE_V2[\s\S]*?case recursiveSpend[\s\S]*?RECURSIVE_SPEND[\s\S]*?unsupported_mode/u,
-      "cross-SDK ABI-18\/V2 production selector",
+      /KAGEMUSHA_RECURSIVE_SPEND_PRODUCT_MODE_V1[\s\S]*?case recursiveSpend[\s\S]*?RECURSIVE_SPEND[\s\S]*?unsupported_mode/u,
+      "cross-SDK recursive_spend_v1 product selector",
     ],
     [
       "--negative-control-v3-release-inventory",
@@ -7137,8 +7127,8 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
     ],
     [
       "--negative-control-v3-legacy-mode",
-      /retired first-release mode rejection[\s\S]*?case recursiveSpendV1[\s\S]*?case recursiveSpend/u,
-      "retired first-release mode rejection",
+      /alternate product mode rejection[\s\S]*?case recursiveSpend = [\s\S]*?case recursiveSpendV2/u,
+      "alternate product mode rejection",
     ],
     [
       "--negative-control-readiness-script-configured-default-wording",
@@ -10719,11 +10709,11 @@ test("recursive Kagemusha active marker scan covers workflow-backed and C# test 
     "crates/iroha_core/src/smartcontracts/isi/offline.rs",
     "crates/iroha_data_model/src/isi/offline.rs",
     "crates/iroha_js_host/src/lib.rs",
-    "crates/iroha_torii/src/offline_v2_issuer.rs",
+    "crates/iroha_torii/src/offline_commands.rs",
     "crates/iroha_torii/src/openapi.rs",
     "crates/iroha_torii/src/zk_prover.rs",
-    "crates/iroha_torii/tests/offline_kagemusha_only_smoke.rs",
-    "crates/iroha_torii/tests/offline_v2_kagemusha_redeem_smoke.rs",
+    "crates/iroha_torii/tests/offline_operation_contract.rs",
+    "crates/iroha_torii/tests/offline_redeem_contract.rs",
     "kotlin/offline-wallet-android/src/androidTest/java/org/hyperledger/iroha/android/offline/KagemushaDeviceLabArtifactExportTest.java",
     "kotlin/offline-wallet-android/src/androidTest/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
     "crates/iroha_data_model/benches/kagemusha_recursive_spend_payload.rs",
@@ -12354,7 +12344,7 @@ test("recursive Kagemusha policy negative controls pin lineage accumulator cover
 
   const offlineVectorPlatformBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-offline-vector-platform-aliases":'),
-    guard.indexOf('if mode == "--negative-control-torii-offline-v2-kagemusha-redeem":'),
+    guard.indexOf('if mode == "--negative-control-torii-kagemusha-redeem":'),
   );
   assertContainsAll(
     workflow,
@@ -12401,19 +12391,19 @@ test("recursive Kagemusha policy negative controls pin lineage accumulator cover
   );
 
   const toriiKagemushaRedeemBranch = guard.slice(
-    guard.indexOf('if mode == "--negative-control-torii-offline-v2-kagemusha-redeem":'),
-    guard.indexOf('if mode == "--negative-control-torii-offline-v2-kagemusha-openapi":'),
+    guard.indexOf('if mode == "--negative-control-torii-kagemusha-redeem":'),
+    guard.indexOf('if mode == "--negative-control-torii-kagemusha-openapi":'),
   );
   assertContainsAll(
     workflow,
-    ["ci/check_kagemusha_recursive_spend_policy.sh --negative-control-torii-offline-v2-kagemusha-redeem"],
+    ["ci/check_kagemusha_recursive_spend_policy.sh --negative-control-torii-kagemusha-redeem"],
     "Kagemusha payload workflow must run the typed first-release Torii offline redeem ingress negative control",
   );
   assertContainsAll(
     guard,
     [
       "typed first-release Torii offline redeem ingress negative control",
-      "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-torii-offline-v2-kagemusha-redeem",
+      "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-torii-kagemusha-redeem",
     ],
     "policy negative-control inventory must include the typed first-release Torii offline redeem command",
   );
@@ -12423,7 +12413,7 @@ test("recursive Kagemusha policy negative controls pin lineage accumulator cover
       "crates/iroha_torii_shared/src/route_catalog.rs",
       'pub const REDEEM_PATH: &str = "/v1/offline/redeem";',
       "crates/iroha_torii_shared/src/offline_api.rs",
-      "KagemushaRecursiveSpendRedeemRequest as OfflineRedeemRequest",
+      "KagemushaRecursiveSpendRedeemRequestV2 as OfflineRedeemRequest",
       "iroha_torii_shared::offline_api::OfflineRedeemRequest,",
       "&route_catalog::offline::REDEEM,",
       "validate_kagemusha_v2_redeem_snapshot(&app, &redeem_request)?;",
@@ -12454,19 +12444,19 @@ test("recursive Kagemusha policy negative controls pin lineage accumulator cover
   );
 
   const toriiKagemushaOpenApiBranch = guard.slice(
-    guard.indexOf('if mode == "--negative-control-torii-offline-v2-kagemusha-openapi":'),
-    guard.indexOf('if mode == "--negative-control-torii-offline-v2-kagemusha-smoke":'),
+    guard.indexOf('if mode == "--negative-control-torii-kagemusha-openapi":'),
+    guard.indexOf('if mode == "--negative-control-torii-kagemusha-smoke":'),
   );
   assertContainsAll(
     workflow,
-    ["ci/check_kagemusha_recursive_spend_policy.sh --negative-control-torii-offline-v2-kagemusha-openapi"],
+    ["ci/check_kagemusha_recursive_spend_policy.sh --negative-control-torii-kagemusha-openapi"],
     "Kagemusha payload workflow must run the typed first-release Torii offline redeem OpenAPI negative control",
   );
   assertContainsAll(
     guard,
     [
       "typed first-release Torii offline redeem OpenAPI negative control",
-      "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-torii-offline-v2-kagemusha-openapi",
+      "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-torii-kagemusha-openapi",
     ],
     "policy negative-control inventory must include the typed first-release Torii offline redeem OpenAPI command",
   );
@@ -12476,8 +12466,7 @@ test("recursive Kagemusha policy negative controls pin lineage accumulator cover
       "crates/iroha_torii/src/openapi.rs",
       "docs/portal/static/openapi/torii.json",
       "docs/portal/static/openapi/versions/current/torii.json",
-      'assert!(redeem_description.contains("directly encoded OfflineRedeemRequest"));',
-      'assert!(redeem_description.contains("whole-payload base64 wrappers are rejected"));',
+      'assert!(redeem_description.contains("typed Kagemusha OfflineRedeemRequest"));',
       '"/v1/offline/redeem": {',
       '"$ref": "#/components/schemas/OfflineRedeemRequest"',
       "for target, before, after in cases:",
@@ -12506,30 +12495,30 @@ test("recursive Kagemusha policy negative controls pin lineage accumulator cover
   );
 
   const toriiKagemushaSmokeBranch = guard.slice(
-    guard.indexOf('if mode == "--negative-control-torii-offline-v2-kagemusha-smoke":'),
+    guard.indexOf('if mode == "--negative-control-torii-kagemusha-smoke":'),
     guard.indexOf('if mode == "--negative-control-active-kagemusha-todo":'),
   );
   assertContainsAll(
     workflow,
-    ["ci/check_kagemusha_recursive_spend_policy.sh --negative-control-torii-offline-v2-kagemusha-smoke"],
+    ["ci/check_kagemusha_recursive_spend_policy.sh --negative-control-torii-kagemusha-smoke"],
     "Kagemusha payload workflow must run the typed first-release Torii offline redeem smoke negative control",
   );
   assertContainsAll(
     guard,
     [
       "typed first-release Torii offline redeem smoke negative control",
-      "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-torii-offline-v2-kagemusha-smoke",
+      "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-torii-kagemusha-smoke",
     ],
     "policy negative-control inventory must include the typed Torii offline redeem smoke command",
   );
   assertContainsAll(
     toriiKagemushaSmokeBranch,
     [
-      'target = "crates/iroha_torii/tests/offline_v2_kagemusha_redeem_smoke.rs"',
-      "redeem_is_a_typed_async_command_on_the_final_route",
+      'target = "crates/iroha_torii/tests/offline_redeem_contract.rs"',
+      "typed_offline_redeem_route_accepts_only_the_direct_v2_request",
       'TORII_SOURCE.contains("NoritoJson(request)")',
-      "redeem_has_no_wrapper_or_compatibility_payload",
-      "retired_redeem_routes_are_not_mounted",
+      "typed_offline_redeem_contract_rejects_wrappers_aliases_and_ambiguous_envelopes",
+      "offline_operation_polling_preserves_redeem_identity_and_finality_integrity",
       "for before, after in cases:",
     ],
     "typed Torii offline redeem smoke negative control must mutate every final-route assertion",
@@ -15355,7 +15344,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-android-device-lab-family-override-binding",
     "--negative-control-android-device-lab-assembler-identity-fields",
     "--negative-control-native-c-bridge-abi-version",
-    "--negative-control-abi18-pasta-cycle-mode-v2",
+    "--negative-control-product-artifact-mode-separation",
     "--negative-control-native-bridge-zero-envelope-pallas-guard",
     "--negative-control-native-bridge-recursive-compact-invalid-proof-isolation",
     "--negative-control-bridge-zk1-i10p-parser-exactness",
@@ -17755,7 +17744,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   const androidDeviceLabAssemblerIdentityBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-android-device-lab-assembler-identity-fields":'),
-    guard.indexOf('if mode == "--negative-control-abi18-pasta-cycle-mode-v2":'),
+    guard.indexOf('if mode == "--negative-control-product-artifact-mode-separation":'),
   );
   assert.match(
     guard,
@@ -17778,23 +17767,23 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "Android device-lab assembler identity negative control must not pass unconditionally after run_checks",
   );
   const abi18PastaCycleModeBranch = guard.slice(
-    guard.indexOf('if mode == "--negative-control-abi18-pasta-cycle-mode-v2":'),
+    guard.indexOf('if mode == "--negative-control-product-artifact-mode-separation":'),
     guard.indexOf('if mode == "--negative-control-native-c-bridge-abi-version":'),
   );
   assert.match(
     guard,
-    /KAGEMUSHA_RECURSIVE_SPEND_MODE_V2: &str = "recursive_spend_v2";[\s\S]*?Swift ABI-18 Pasta-cycle first-release mode V2 contract[\s\S]*?Kotlin ABI-18 Pasta-cycle first-release mode V2 contract[\s\S]*?Android Java ABI-18 Pasta-cycle first-release mode V2 contract[\s\S]*?native bridge ABI-18 Pasta-cycle first-release mode V2 fixture[\s\S]*?ABI-18 recursion adapter contract mode/u,
-    "SDK parity guard must pin recursive_spend_v2 across every ABI-18 Pasta-cycle surface",
+    /KAGEMUSHA_RECURSIVE_SPEND_PRODUCT_MODE_V1: &str = "recursive_spend_v1";[\s\S]*?KAGEMUSHA_RECURSIVE_SPEND_MODE_V2: &str = "recursive_spend_v2";[\s\S]*?Swift public selector\/internal artifact mode separation[\s\S]*?Kotlin public selector\/internal artifact mode separation[\s\S]*?Android Java public selector\/internal artifact mode separation[\s\S]*?native bridge ABI-18 Pasta-cycle first-release mode V2 fixture[\s\S]*?ABI-18 recursion adapter contract mode/u,
+    "SDK parity guard must separate the public V1 selector from the internal V2 artifact mode",
   );
   assert.match(
     guard,
     /KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3: u32 = 18;[\s\S]*?requiredNativeBridgeAbiVersion: UInt32 = 18[\s\S]*?REQUIRED_NATIVE_BRIDGE_ABI_VERSION: Int = 18[\s\S]*?REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 18;[\s\S]*?CONNECT_NORITO_BRIDGE_ABI_VERSION:\\s\*u32\\s\*=\\s\*18;[\s\S]*?ABI-18 recursion adapter contract mode/u,
-    "SDK parity guard must pin ABI 18 with the first-release V2 Pasta-cycle mode across Rust, Swift, Kotlin, Java, bridge, and docs",
+    "SDK parity guard must pin ABI 18 with public V1/internal V2 separation across Rust, Swift, Kotlin, Java, bridge, and docs",
   );
   assert.match(
     abi18PastaCycleModeBranch,
-    /recursive_spend_v2[\s\S]*?unsupported_mode[\s\S]*?for target, old, new, expected_label in cases:[\s\S]*?negative control rejected every one-sided ABI-18 Pasta-cycle V2 substitution/u,
-    "ABI-18 Pasta-cycle mode negative control must reject one-sided recursive_spend_v2 substitutions",
+    /recursive_spend_v1[\s\S]*?recursive_spend_v2[\s\S]*?unsupported_mode[\s\S]*?for target, old, new, expected_label in cases:[\s\S]*?negative control rejected every public-selector\/internal-artifact mode substitution/u,
+    "ABI-18 Pasta-cycle mode negative control must reject public and internal mode substitutions",
   );
   const nativeCBridgeAbiVersionBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-native-c-bridge-abi-version":'),
@@ -18008,8 +17997,6 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "IrohaSwift/Tests/IrohaSwiftTests/PrivacyNativeBridgeTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/PrivacyConfidentialWitnessTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/KagemushaTopUpParityTests.swift",
-    "IrohaSwift/Tests/IrohaSwiftTests/ConfidentialUnshieldRedeemNativeTests.swift",
-    "IrohaSwift/Tests/IrohaSwiftTests/IrohaSDKConfidentialUnshieldWorkflowTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/NoritoTests.swift",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/PrivacyConfidentialWitness.java",
@@ -18069,13 +18056,13 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     preferredModeFallbackBranch,
-    /javascript\/iroha_js\/src\/crypto\.js[\s\S]*void recursiveCompactAvailable[\s\S]*del recursive_compact_available[\s\S]*C# preferred Kagemusha spend-again-only mode policy[\s\S]*checked_prefold_export_mutations[\s\S]*KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1[\s\S]*CheckedPrefoldV1/u,
+    /javascript\/iroha_js\/src\/crypto\.js[\s\S]*pastaCycleV3BackendAvailable[\s\S]*python\/iroha_python\/src\/iroha_python\/kagemusha\.py[\s\S]*if available[\s\S]*C# preferred Kagemusha spend-again-only mode policy[\s\S]*checked_prefold_export_mutations[\s\S]*KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1[\s\S]*CheckedPrefoldV1/u,
     "preferred-mode fallback negative control must mutate first-release spend-again selectors",
   );
   assert.match(
     guard,
-    /checked_prefold_spend_mode_forbidden[\s\S]*?javascript\/iroha_js\/src\/crypto\.js[\s\S]*?javascript\/iroha_js\/index\.d\.ts[\s\S]*?python\/iroha_python\/src\/iroha_python\/kagemusha\.py[\s\S]*?crates\/iroha_data_model\/src\/offline\/mod\.rs[\s\S]*?IrohaSwift\/Sources\/IrohaSwift\/KagemushaRecursiveSpendProver\.swift[\s\S]*?kotlin\/core-jvm\/src\/main\/java\/org\/hyperledger\/iroha\/sdk\/offline\/KagemushaRecursiveSpendProver\.kt[\s\S]*?java\/iroha_android\/src\/main\/java\/org\/hyperledger\/iroha\/android\/offline\/KagemushaRecursiveSpendProver\.java[\s\S]*?csharp\/src\/Hyperledger\.Iroha\.Sdk\/Offline\/KagemushaRecursiveSpend\.cs[\s\S]*?must not expose checked-prefold Kagemusha spend mode/u,
-    "preferred-mode guard must forbid checked-prefold spend-mode exports across SDKs",
+    /checked_prefold_spend_mode_forbidden[\s\S]*?javascript\/iroha_js\/src\/crypto\.js[\s\S]*?javascript\/iroha_js\/index\.d\.ts[\s\S]*?python\/iroha_python\/src\/iroha_python\/kagemusha\.py[\s\S]*?crates\/iroha_data_model\/src\/offline\/mod\.rs[\s\S]*?IrohaSwift\/Sources\/IrohaSwift\/KagemushaRecursiveSpendProver\.swift[\s\S]*?kotlin\/core-jvm\/src\/main\/java\/org\/hyperledger\/iroha\/sdk\/offline\/KagemushaRecursiveSpendProver\.kt[\s\S]*?java\/iroha_android\/src\/main\/java\/org\/hyperledger\/iroha\/android\/offline\/KagemushaRecursiveSpendProver\.java[\s\S]*?csharp\/src\/Hyperledger\.Iroha\.Sdk\/Offline\/KagemushaRecursiveSpend\.cs[\s\S]*?must not expose an alternate Kagemusha spend mode/u,
+    "preferred-mode guard must forbid compact and checked-prefold spend-mode exports across SDKs",
   );
   assert.match(
     preferredModeFallbackBranch,
@@ -18085,14 +18072,13 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   assertContainsAll(
     preferredModeFallbackBranch,
     [
-      "javascript/iroha_js/src/crypto.js compact projection must not select spend-again cash",
-      "javascript/iroha_js/dist/crypto.js compact projection must not select spend-again cash",
-      "javascript/iroha_js/src/crypto.browser.js compact projection must not select spend-again cash",
-      "javascript/iroha_js/dist/crypto.browser.js compact projection must not select spend-again cash",
-      "Python compact projection must not select spend-again cash",
-      "preferred Kagemusha single-argument fallback removal",
+      "javascript/iroha_js/src/crypto.js preferred Kagemusha explicit capability arity missing pattern",
+      "javascript/iroha_js/dist/crypto.js preferred Kagemusha explicit capability arity missing pattern",
+      "javascript/iroha_js/src/crypto.browser.js preferred Kagemusha explicit capability arity missing pattern",
+      "javascript/iroha_js/dist/crypto.browser.js preferred Kagemusha explicit capability arity missing pattern",
       "Python preferred Kagemusha explicit capability arity",
       "C# preferred Kagemusha spend-again-only mode policy",
+      "PreferredMode(bool recursiveSpendAvailable)",
     ],
     "preferred-mode fallback negative control must require every retained JS/Python/C# fallback drift label",
   );
@@ -18979,20 +18965,22 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     {
       start: 'if mode == "--negative-control-swift-sdk-job-workflow":',
       end: 'if mode == "--negative-control-swift-sdk-runner-workflow":',
-      expected: "Kagemusha payload workflow must define the Swift SDK parse job",
+      expected:
+        "Kagemusha payload workflow must define the current-API Swift/native interoperability job",
       label: "Swift SDK job workflow branch must require the missing job label",
     },
     {
       start: 'if mode == "--negative-control-swift-sdk-runner-workflow":',
       end: 'if mode == "--negative-control-swift-sdk-parse-workflow":',
-      expected: "Kagemusha payload workflow must run the Swift SDK parse job on macOS",
+      expected:
+        "Kagemusha payload workflow must run the current-API Swift/native interoperability job on macOS",
       label: "Swift SDK runner workflow branch must require the macOS runner label",
     },
     {
       start: 'if mode == "--negative-control-swift-sdk-parse-workflow":',
       end: 'if mode == "--negative-control-swift-sdk-parse-surface-script":',
       expected:
-        "Kagemusha payload workflow must run the Swift confidential-unshield redeem E2E check in the combined job",
+        "Kagemusha payload workflow must run the current-API Swift/native interoperability gate",
       label: "Swift SDK parse workflow branch must require the combined E2E command label",
     },
     {
@@ -19011,7 +18999,8 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     {
       start: 'if mode == "--negative-control-swift-sdk-needs-workflow":',
       end: 'if mode == "--negative-control-csharp-sdk-job-workflow":',
-      expected: "Kagemusha payload benchmark job must wait for the Swift SDK parse job",
+      expected:
+        "Kagemusha payload benchmark job must wait for the current-API Swift/native interoperability job",
       label: "Swift SDK dependency workflow branch must require the benchmark dependency label",
     },
     {
@@ -24382,7 +24371,6 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     [
       "if appendNeedsPreviousProofOpenEnvelopes, previousProofOpenEnvelopes == nil",
       "if false, previousProofOpenEnvelopes == nil",
-      "previousProofOpenEnvelopesOptional",
       "previousProofOpenEnvelopes: nil",
     ],
     "SDK append previous-proof opening selection negative control must mutate missing-required SDK regression rows",
@@ -24404,10 +24392,31 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     ],
     "SDK append previous-proof opening selection negative control must mutate the exact JS previousProofOpenEnvelopes error predicates",
   );
+  assertContainsAll(
+    sdkAppendPreviousProofOpeningSelectionBranch,
+    [
+      "block_replacements = (",
+      "val malformedPreviousOpenArchives = listOf(",
+      "final Object[][] malformedPreviousOpenArchives = {",
+      "pallasOpenEnvelopeVectorArchive(count = 0)",
+      "pallasOpenEnvelopeVectorArchive(count = 2)",
+      "pallasOpenEnvelopeVectorArchive(0)",
+      "pallasOpenEnvelopeVectorArchive(2)",
+      "previousProofOpenEnvelopes[0].params.curve_id must be Pallas",
+      "previousProofOpenEnvelopes[0] transcript_label must be non-empty",
+      "previousProofOpenEnvelopes[0].vk_commitment is required",
+      "Trailing bytes after previousProofOpenEnvelopes[0]",
+      "Unexpected end of data",
+      "archiveError.message",
+      "archiveError.getMessage()",
+      "adversarialCase",
+    ],
+    "SDK append previous-proof opening selection negative control must mutate exact Kotlin and Android Java Pallas table rows inside table blocks",
+  );
   assert.match(
     sdkAppendPreviousProofOpeningSelectionBranch,
-    /block_replacements\s*=\s*\([\s\S]*?malformedPreviousOpenArchives[\s\S]*?pallasOpenEnvelopeVectorArchive\(count = 0\)[\s\S]*?pallasOpenEnvelopeVectorArchive\(count = 2\)[\s\S]*?previousProofOpenEnvelopes\[0\]\.params\.curve_id must be Pallas[\s\S]*?previousProofOpenEnvelopes\[0\] transcript_label must be non-empty[\s\S]*?previousProofOpenEnvelopes\[0\] transcript_label exceeds 128 bytes[\s\S]*?previousProofOpenEnvelopes\[0\]\.vk_commitment is required[\s\S]*?previousProofOpenEnvelopes\[0\]\.vk_commitment must be exactly 32 bytes[\s\S]*?previousProofOpenEnvelopes\[0\]\.public_inputs_schema_hash must be exactly 32 bytes[\s\S]*?previousProofOpenEnvelopes\[0\]\.domain_tag must be exactly 32 bytes[\s\S]*?Trailing bytes after previousProofOpenEnvelopes\[0\][\s\S]*?Unexpected end of data[\s\S]*?assertEquals\(expectedMessage, archiveError\.message\)[\s\S]*?Object\[\]\[\] malformedPreviousOpenArchives[\s\S]*?pallasOpenEnvelopeVectorArchive\(0\)[\s\S]*?pallasOpenEnvelopeVectorArchive\(2\)[\s\S]*?previousProofOpenEnvelopes\[0\]\.params\.curve_id must be Pallas[\s\S]*?previousProofOpenEnvelopes\[0\] transcript_label must be non-empty[\s\S]*?previousProofOpenEnvelopes\[0\] transcript_label exceeds 128 bytes[\s\S]*?previousProofOpenEnvelopes\[0\]\.vk_commitment is required[\s\S]*?previousProofOpenEnvelopes\[0\]\.vk_commitment must be exactly 32 bytes[\s\S]*?previousProofOpenEnvelopes\[0\]\.public_inputs_schema_hash must be exactly 32 bytes[\s\S]*?previousProofOpenEnvelopes\[0\]\.domain_tag must be exactly 32 bytes[\s\S]*?Trailing bytes after previousProofOpenEnvelopes\[0\][\s\S]*?Unexpected end of data[\s\S]*?assert expectedMessage\.equals\(archiveError\.getMessage\(\)\);/u,
-    "SDK append previous-proof opening selection negative control must mutate exact Kotlin and Android Java Pallas table rows inside table blocks",
+    /val malformedPreviousOpenArchives = listOf\([\s\S]*?archiveError\.message[\s\S]*?final Object\[\]\[\] malformedPreviousOpenArchives = \{[\s\S]*?archiveError\.getMessage\(\)/u,
+    "SDK append previous-proof opening selection negative control must preserve Kotlin-before-Java table coverage",
   );
   assertContainsAll(
     sdkAppendPreviousProofOpeningSelectionBranch,
@@ -24424,7 +24433,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
       'Kotlin typed recursive spend append previous-proof Pallas diagnostics missing "previousProofOpenEnvelopes[0].domain_tag must be exactly 32 bytes"',
       'Kotlin typed recursive spend append previous-proof Pallas diagnostics missing "Trailing bytes after previousProofOpenEnvelopes[0]"',
       'Kotlin typed recursive spend append previous-proof Pallas diagnostics missing pallasOpenEnvelopeVectorArchiveWithPayload(byteArrayOf(0x00)) to "Unexpected end of data"',
-      "Kotlin typed recursive spend append previous-proof Pallas diagnostics missing assertEquals(expectedMessage, archiveError.message)",
+      'Kotlin fail-closed lineage append previous-proof containment missing "outputProofCircuitId is not valid for the previous bundle",',
       'Android Java typed recursive spend append previous-proof Pallas diagnostics missing "previousProofOpenEnvelopes must be a valid Vec<iroha_zkp_halo2::OpenVerifyEnvelope> Norito archive"',
       'Android Java typed recursive spend append previous-proof Pallas diagnostics missing {pallasOpenEnvelopeVectorArchive(0), "previousProofOpenEnvelopes requires exactly 1 envelope(s)"}',
       'Android Java typed recursive spend append previous-proof Pallas diagnostics missing {pallasOpenEnvelopeVectorArchive(2), "previousProofOpenEnvelopes requires exactly 1 envelope(s)"}',
@@ -24437,7 +24446,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
       'Android Java typed recursive spend append previous-proof Pallas diagnostics missing "previousProofOpenEnvelopes[0].domain_tag must be exactly 32 bytes"',
       'Android Java typed recursive spend append previous-proof Pallas diagnostics missing "Trailing bytes after previousProofOpenEnvelopes[0]"',
       'Android Java typed recursive spend append previous-proof Pallas diagnostics missing {pallasOpenEnvelopeVectorArchiveWithPayload(new byte[] {0x00}), "Unexpected end of data"}',
-      "Android Java typed recursive spend append previous-proof Pallas diagnostics missing assert expectedMessage.equals(archiveError.getMessage());",
+      'Android Java typed recursive spend append previous-proof Pallas diagnostics missing assert "outputProofCircuitId is not valid for the previous bundle"',
     ],
     "SDK append previous-proof opening selection negative control must require exact JVM/Android Pallas row diagnostics",
   );

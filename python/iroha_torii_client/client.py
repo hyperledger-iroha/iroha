@@ -462,6 +462,7 @@ __all__ = [
     "OfflineVerifiedFoldVerifierRecordJson",
     "OfflineVerifiedFoldRecordBundleJson",
     "OfflineProofAttachmentJson",
+    "OfflineTopUpShieldEvidenceJson",
     "OfflineRecursiveSpendBundleJson",
     "OfflineTopUpAnchorReferenceJson",
     "OfflineBranchPathJson",
@@ -490,6 +491,21 @@ __all__ = [
     "OfflineVerifierKeyId",
     "OfflineTopUpAnchor",
     "OfflineTopUpFinalityProofAnchor",
+    "OfflineTopUpFinalityConsensusMode",
+    "OfflineTopUpFinalityPayloadEncoding",
+    "OfflineTopUpFinalityGlobalPhase",
+    "OfflineTopUpFinalityDataAvailabilityLayout",
+    "OfflineTopUpFinalityHeightContextId",
+    "OfflineTopUpFinalityConsensusRound",
+    "OfflineTopUpFinalityBlockSubject",
+    "OfflineTopUpFinalityExecutionCommitment",
+    "OfflineTopUpFinalityQuorumCertificate",
+    "OfflineTopUpFinalityValidatorPower",
+    "OfflineTopUpFinalityDualQuorum",
+    "OfflineTopUpFinalityNextEpochSnapshot",
+    "OfflineTopUpFinalityHeightContext",
+    "OfflineTopUpFinalityCompactQc",
+    "OfflineTopUpAnchorMerkleProof",
     "OfflineTopUpFinalityProof",
     "OfflineTopUpResult",
     "OfflineRedeemResult",
@@ -2629,6 +2645,15 @@ class OfflineProofAttachmentJson(_OfflineProofAttachmentJsonOptional):
     vk_ref: OfflineVerifierKeyIdJson
 
 
+class OfflineTopUpShieldEvidenceJson(TypedDict):
+    """Public-to-confidential insertion proof for one online top-up."""
+
+    initial_root: List[int]
+    finalized_root: List[int]
+    leaf_index: int
+    proof: OfflineProofAttachmentJson
+
+
 class OfflineVerifiedFoldStepJson(TypedDict):
     """One checked confidential-transfer proof step."""
 
@@ -2846,8 +2871,7 @@ class OfflineTopUpRequest(TypedDict):
     asset: str
     amount: OfflineScaledAmountJson
     current_note: OfflineSpendableNoteJson
-    record_bundle: OfflineVerifiedFoldRecordBundleJson
-    pallas_open_envelopes_archive: List[int]
+    shield_evidence: OfflineTopUpShieldEvidenceJson
     artifact_generation: str
     operation_id: List[int]
     authorization: OfflineAuthorizationJson
@@ -2887,6 +2911,16 @@ _OFFLINE_MAX_U32 = (1 << 32) - 1
 _OFFLINE_MAX_U64 = (1 << 64) - 1
 _OFFLINE_MAX_U128 = (1 << 128) - 1
 _OFFLINE_MAX_ASSET_SCALE = 28
+_OFFLINE_TOP_UP_SHIELD_TREE_CAPACITY = 1 << 16
+_OFFLINE_TOP_UP_SHIELD_MAX_PROOF_BYTES = 192 * 1024
+_OFFLINE_TOP_UP_FINALITY_MAX_VALIDATORS = 4096
+_OFFLINE_TOP_UP_FINALITY_MAX_ANCHORS_PER_BLOCK = 16
+_OFFLINE_TOP_UP_FINALITY_MAX_SIBLINGS = 4
+_OFFLINE_TOP_UP_FINALITY_PROOF_VERSION = 1
+_OFFLINE_SUMERAGI_PROTOCOL_VERSION = 2
+_OFFLINE_BLS_PROOF_BYTES = 96
+_OFFLINE_HASH_LITERAL_RE = re.compile(r"^hash:([0-9A-F]{64})#([0-9A-F]{4})$")
+_OFFLINE_BLS_VALIDATOR_ID_RE = re.compile(r"^ea0130[0-9A-F]{96}$")
 _OFFLINE_MAX_JSON_DEPTH = 128
 _OFFLINE_MAX_JSON_RESPONSE_BYTES = 256 * 1024
 
@@ -2938,6 +2972,25 @@ def _offline_mapping(value: Any, context: str) -> Mapping[str, Any]:
     if not isinstance(value, Mapping):
         raise RuntimeError(f"{context} must be an object")
     return value
+
+
+def _offline_exact_object_fields(
+    mapping: Mapping[str, Any],
+    context: str,
+    *,
+    required: Sequence[str],
+    optional: Sequence[str] = (),
+) -> None:
+    required_fields = set(required)
+    allowed_fields = required_fields | set(optional)
+    missing = required_fields - mapping.keys()
+    if missing:
+        field = min(missing)
+        raise RuntimeError(f"{context}.{field} is required")
+    unexpected = set(mapping) - allowed_fields
+    if unexpected:
+        field = min(unexpected)
+        raise RuntimeError(f"{context}.{field} is not part of the first-release contract")
 
 
 def _offline_unsigned(
@@ -3052,6 +3105,36 @@ def _offline_transaction_hash(value: Any, context: str) -> str:
     return value
 
 
+def _offline_crc16_ccitt_false(value: bytes) -> int:
+    crc = 0xFFFF
+    for byte in value:
+        crc ^= byte << 8
+        for _ in range(8):
+            crc = (
+                ((crc << 1) ^ 0x1021) & 0xFFFF
+                if crc & 0x8000
+                else (crc << 1) & 0xFFFF
+            )
+    return crc
+
+
+def _offline_hash_literal(value: Any, context: str) -> str:
+    if not isinstance(value, str):
+        raise RuntimeError(f"{context} must be a canonical Norito hash literal")
+    match = _OFFLINE_HASH_LITERAL_RE.fullmatch(value)
+    if match is None:
+        raise RuntimeError(
+            f"{context} must use canonical hash:<uppercase hex>#<CRC16> syntax"
+        )
+    body, checksum = match.groups()
+    expected = _offline_crc16_ccitt_false(f"hash:{body}".encode("ascii"))
+    if int(checksum, 16) != expected:
+        raise RuntimeError(f"{context} hash checksum does not match its body")
+    if int(body[-2:], 16) & 1 == 0:
+        raise RuntimeError(f"{context} must set the Iroha hash marker bit")
+    return value
+
+
 def _offline_scaled_amount(value: Any, context: str) -> None:
     amount = _offline_mapping(value, context)
     _offline_unsigned(
@@ -3065,6 +3148,80 @@ def _offline_scaled_amount(value: Any, context: str) -> None:
         f"{context}.scale",
         _OFFLINE_MAX_ASSET_SCALE,
     )
+
+
+def _offline_top_up_shield_evidence_request(value: Any, context: str) -> None:
+    record = _offline_mapping(value, context)
+    _offline_exact_object_fields(
+        record,
+        context,
+        required=("initial_root", "finalized_root", "leaf_index", "proof"),
+    )
+    initial_root = _offline_fixed_bytes(
+        _offline_required(record, "initial_root", context),
+        f"{context}.initial_root",
+        non_zero=True,
+    )
+    finalized_root = _offline_fixed_bytes(
+        _offline_required(record, "finalized_root", context),
+        f"{context}.finalized_root",
+        non_zero=True,
+    )
+    if finalized_root == initial_root:
+        raise RuntimeError(f"{context}.finalized_root must differ from initial_root")
+    _offline_unsigned(
+        _offline_required(record, "leaf_index", context),
+        f"{context}.leaf_index",
+        _OFFLINE_TOP_UP_SHIELD_TREE_CAPACITY - 1,
+    )
+
+    proof_context = f"{context}.proof"
+    proof = _offline_mapping(_offline_required(record, "proof", context), proof_context)
+    _offline_exact_object_fields(
+        proof,
+        proof_context,
+        required=("backend", "proof", "vk_ref"),
+        optional=("vk_commitment", "envelope_hash", "lane_privacy"),
+    )
+    backend = _offline_exact_string(
+        _offline_required(proof, "backend", proof_context),
+        f"{proof_context}.backend",
+    )
+    if len(backend.encode("utf-8")) > 256:
+        raise RuntimeError(f"{proof_context}.backend must contain at most 256 UTF-8 bytes")
+
+    proof_box_context = f"{proof_context}.proof"
+    proof_box = _offline_mapping(
+        _offline_required(proof, "proof", proof_context), proof_box_context
+    )
+    _offline_exact_object_fields(
+        proof_box,
+        proof_box_context,
+        required=("backend", "bytes"),
+    )
+    proof_backend = _offline_exact_string(
+        _offline_required(proof_box, "backend", proof_box_context),
+        f"{proof_box_context}.backend",
+    )
+    if proof_backend != backend:
+        raise RuntimeError(f"{proof_box_context}.backend must equal {proof_context}.backend")
+    proof_bytes = _offline_byte_array(
+        _offline_required(proof_box, "bytes", proof_box_context),
+        f"{proof_box_context}.bytes",
+    )
+    if not 1 <= len(proof_bytes) <= _OFFLINE_TOP_UP_SHIELD_MAX_PROOF_BYTES:
+        raise RuntimeError(
+            f"{proof_box_context}.bytes must contain between 1 and "
+            f"{_OFFLINE_TOP_UP_SHIELD_MAX_PROOF_BYTES} bytes"
+        )
+    _offline_verifier_key_id(
+        _offline_required(proof, "vk_ref", proof_context), f"{proof_context}.vk_ref"
+    )
+    for field in ("vk_commitment", "envelope_hash"):
+        if field in proof and proof[field] is not None:
+            _offline_fixed_bytes(proof[field], f"{proof_context}.{field}", non_zero=True)
+    if "lane_privacy" in proof and proof["lane_privacy"] is not None:
+        _offline_mapping(proof["lane_privacy"], f"{proof_context}.lane_privacy")
 
 
 def _normalize_offline_command(
@@ -3092,17 +3249,36 @@ def _normalize_offline_command(
         )
 
     if kind == "top_up":
-        _offline_exact_string(_offline_required(record, "asset", context), f"{context}.asset")
-        _offline_scaled_amount(_offline_required(record, "amount", context), f"{context}.amount")
-        _offline_mapping(
-            _offline_required(record, "current_note", context), f"{context}.current_note"
+        _offline_exact_object_fields(
+            record,
+            context,
+            required=(
+                "asset",
+                "amount",
+                "current_note",
+                "shield_evidence",
+                "artifact_generation",
+                "operation_id",
+                "authorization",
+            ),
         )
-        _offline_mapping(
-            _offline_required(record, "record_bundle", context), f"{context}.record_bundle"
+        asset = _offline_exact_string(
+            _offline_required(record, "asset", context), f"{context}.asset"
         )
-        _offline_byte_array(
-            _offline_required(record, "pallas_open_envelopes_archive", context),
-            f"{context}.pallas_open_envelopes_archive",
+        amount = _offline_scaled_amount_model(
+            _offline_required(record, "amount", context), f"{context}.amount"
+        )
+        current_note = _offline_spendable_note(
+            _offline_required(record, "current_note", context),
+            f"{context}.current_note",
+        )
+        if current_note.asset != asset:
+            raise RuntimeError(f"{context}.current_note.asset must equal {context}.asset")
+        if current_note.amount != amount:
+            raise RuntimeError(f"{context}.current_note.amount must equal {context}.amount")
+        _offline_top_up_shield_evidence_request(
+            _offline_required(record, "shield_evidence", context),
+            f"{context}.shield_evidence",
         )
         generation = _offline_exact_string(
             _offline_required(record, "artifact_generation", context),
@@ -3473,11 +3649,11 @@ class OfflineTopUpAnchor:
     amount: OfflineScaledAmount
     initial_root: Tuple[int, ...]
     finalized_root: Tuple[int, ...]
-    topup_anchor_nullifiers: Tuple[Tuple[int, ...], ...]
+    shield_leaf_index: int
     current_note: OfflineSpendableNote
     topup_operation_id: Tuple[int, ...]
-    transfer_verifier_id: OfflineVerifierKeyId
-    transfer_verifier_commitment: Tuple[int, ...]
+    shield_verifier_id: OfflineVerifierKeyId
+    shield_verifier_commitment: Tuple[int, ...]
     artifact_generation: str
     finalized_height: int
     finalized_tx_hash: Tuple[int, ...]
@@ -3493,19 +3669,161 @@ class OfflineTopUpFinalityProofAnchor:
 
 
 @dataclass(frozen=True)
-class OfflineTopUpFinalityProof:
-    """Typed outer envelope for an otherwise opaque Sumeragi-v2 proof.
+class OfflineTopUpFinalityConsensusMode:
+    """Adjacent-tag Sumeragi-v2 consensus mode."""
 
-    The consensus certificate and Merkle path remain direct, defensively
-    copied JSON objects for the native verifier.  The SDK only inspects the
-    operation, digest, and height bindings needed to prevent response-field
-    substitution before that cryptographic verification runs.
-    """
+    mode: Literal["permissioned", "npos"]
+    details: None = None
+
+
+@dataclass(frozen=True)
+class OfflineTopUpFinalityPayloadEncoding:
+    """Adjacent-tag data-availability payload encoding."""
+
+    encoding: Literal["plain", "reed_solomon16"]
+    details: None = None
+
+
+@dataclass(frozen=True)
+class OfflineTopUpFinalityGlobalPhase:
+    """Adjacent-tag Sumeragi-v2 voting phase."""
+
+    phase: Literal["prepare", "commit"]
+    details: None = None
+
+
+@dataclass(frozen=True)
+class OfflineTopUpFinalityDataAvailabilityLayout:
+    """Frozen data-availability layout in a finality height context."""
+
+    encoding: OfflineTopUpFinalityPayloadEncoding
+    chunk_size_bytes: int
+    data_shards: int
+    parity_shards: int
+    max_payload_size_bytes: int
+    max_chunk_count: int
+
+
+@dataclass(frozen=True)
+class OfflineTopUpFinalityHeightContextId:
+    """Typed hash of one complete immutable Sumeragi-v2 height context."""
+
+    hash: str
+
+
+@dataclass(frozen=True)
+class OfflineTopUpFinalityConsensusRound:
+    """Height-context-bound Sumeragi-v2 round."""
+
+    context_id: OfflineTopUpFinalityHeightContextId
+    height: int
+    view: int
+
+
+@dataclass(frozen=True)
+class OfflineTopUpFinalityBlockSubject:
+    """Exact parent, block, and payload hashes certified by a QC."""
+
+    parent_block_hash: Optional[str]
+    block_hash: str
+    payload_hash: str
+
+
+@dataclass(frozen=True)
+class OfflineTopUpFinalityExecutionCommitment:
+    """Deterministic state transition authenticated by a QC."""
+
+    parent_state_root: str
+    post_state_root: str
+    ordinary_writes_root: str
+    topup_anchor_root: Optional[str]
+    topup_anchor_count: int
+
+
+@dataclass(frozen=True)
+class OfflineTopUpFinalityQuorumCertificate:
+    """Closed structural representation of a Sumeragi-v2 QC."""
+
+    round: OfflineTopUpFinalityConsensusRound
+    phase: OfflineTopUpFinalityGlobalPhase
+    subject: OfflineTopUpFinalityBlockSubject
+    execution_commitment: OfflineTopUpFinalityExecutionCommitment
+    signers: Tuple[int, ...]
+    aggregate_signature: Tuple[int, ...]
+
+
+@dataclass(frozen=True)
+class OfflineTopUpFinalityValidatorPower:
+    """One BLS validator identity and its frozen positive voting power."""
+
+    validator: str
+    power: int
+
+
+@dataclass(frozen=True)
+class OfflineTopUpFinalityDualQuorum:
+    """Canonical count-and-power quorum derived from a frozen roster."""
+
+    min_signers: int
+    total_power: int
+
+
+@dataclass(frozen=True)
+class OfflineTopUpFinalityNextEpochSnapshot:
+    """Parent-authenticated complete next-epoch election snapshot."""
+
+    epoch: int
+    epoch_end_height: int
+    mode: OfflineTopUpFinalityConsensusMode
+    roster: Tuple[OfflineTopUpFinalityValidatorPower, ...]
+    validator_set_pops: Tuple[Tuple[int, ...], ...]
+    quorum: OfflineTopUpFinalityDualQuorum
+    leader_seed: Tuple[int, ...]
+
+
+@dataclass(frozen=True)
+class OfflineTopUpFinalityHeightContext:
+    """Bounded projection of the immutable finality height context."""
+
+    context_id: OfflineTopUpFinalityHeightContextId
+    chain_id: str
+    protocol_version: Literal[2]
+    height: int
+    epoch: int
+    epoch_end_height: int
+    next_epoch_snapshot: Optional[OfflineTopUpFinalityNextEpochSnapshot]
+    mode: OfflineTopUpFinalityConsensusMode
+    parent_commit_qc: Optional[OfflineTopUpFinalityQuorumCertificate]
+    nexus_amx_context_hash: str
+    da_layout: OfflineTopUpFinalityDataAvailabilityLayout
+    leader_seed: Tuple[int, ...]
+
+
+@dataclass(frozen=True)
+class OfflineTopUpFinalityCompactQc:
+    """Projected height context and its exact persisted Commit certificate."""
+
+    height_context: OfflineTopUpFinalityHeightContext
+    certificate: OfflineTopUpFinalityQuorumCertificate
+
+
+@dataclass(frozen=True)
+class OfflineTopUpAnchorMerkleProof:
+    """Canonical balanced-Merkle inclusion path for one top-up anchor."""
+
+    leaf_index: int
+    leaf_count: int
+    siblings: Tuple[Tuple[int, ...], ...]
+
+
+@dataclass(frozen=True)
+class OfflineTopUpFinalityProof:
+    """Closed typed Sumeragi-v2 finality proof for one applied top-up."""
 
     version: Literal[1]
     anchor: OfflineTopUpFinalityProofAnchor
-    commit_qc: Mapping[str, Any]
-    anchor_path: Mapping[str, Any]
+    commit_qc: OfflineTopUpFinalityCompactQc
+    anchor_path: OfflineTopUpAnchorMerkleProof
 
 
 @dataclass(frozen=True)
@@ -3885,6 +4203,539 @@ def _offline_verifier_key_id(value: Any, context: str) -> OfflineVerifierKeyId:
     return OfflineVerifierKeyId(
         backend=backend,
         name=name,
+    )
+
+
+def _offline_top_up_finality_height_context_id(
+    value: Any, context: str
+) -> OfflineTopUpFinalityHeightContextId:
+    if not isinstance(value, list) or len(value) != 1:
+        raise RuntimeError(f"{context} must be a one-element typed-hash array")
+    return OfflineTopUpFinalityHeightContextId(
+        hash=_offline_hash_literal(value[0], f"{context}[0]")
+    )
+
+
+def _offline_top_up_finality_consensus_mode(
+    value: Any, context: str
+) -> OfflineTopUpFinalityConsensusMode:
+    record = _offline_mapping(value, context)
+    mode = _offline_required(record, "mode", context)
+    if mode not in ("permissioned", "npos"):
+        raise RuntimeError(f"{context}.mode must be permissioned or npos")
+    if _offline_required(record, "details", context) is not None:
+        raise RuntimeError(f"{context}.details must be null for a unit variant")
+    return OfflineTopUpFinalityConsensusMode(mode=mode, details=None)
+
+
+def _offline_top_up_finality_payload_encoding(
+    value: Any, context: str
+) -> OfflineTopUpFinalityPayloadEncoding:
+    record = _offline_mapping(value, context)
+    encoding = _offline_required(record, "encoding", context)
+    if encoding not in ("plain", "reed_solomon16"):
+        raise RuntimeError(
+            f"{context}.encoding must be plain or reed_solomon16"
+        )
+    if _offline_required(record, "details", context) is not None:
+        raise RuntimeError(f"{context}.details must be null for a unit variant")
+    return OfflineTopUpFinalityPayloadEncoding(encoding=encoding, details=None)
+
+
+def _offline_top_up_finality_phase(
+    value: Any, context: str
+) -> OfflineTopUpFinalityGlobalPhase:
+    record = _offline_mapping(value, context)
+    phase = _offline_required(record, "phase", context)
+    if phase not in ("prepare", "commit"):
+        raise RuntimeError(f"{context}.phase must be prepare or commit")
+    if _offline_required(record, "details", context) is not None:
+        raise RuntimeError(f"{context}.details must be null for a unit variant")
+    return OfflineTopUpFinalityGlobalPhase(phase=phase, details=None)
+
+
+def _offline_top_up_finality_da_layout(
+    value: Any, context: str
+) -> OfflineTopUpFinalityDataAvailabilityLayout:
+    record = _offline_mapping(value, context)
+    encoding = _offline_top_up_finality_payload_encoding(
+        _offline_required(record, "encoding", context), f"{context}.encoding"
+    )
+    chunk_size_bytes = _offline_unsigned(
+        _offline_required(record, "chunk_size_bytes", context),
+        f"{context}.chunk_size_bytes",
+        _OFFLINE_MAX_U32,
+        positive=True,
+    )
+    data_shards = _offline_unsigned(
+        _offline_required(record, "data_shards", context),
+        f"{context}.data_shards",
+        (1 << 16) - 1,
+    )
+    parity_shards = _offline_unsigned(
+        _offline_required(record, "parity_shards", context),
+        f"{context}.parity_shards",
+        (1 << 16) - 1,
+    )
+    if encoding.encoding == "plain" and (data_shards != 0 or parity_shards != 0):
+        raise RuntimeError(f"{context} plain encoding requires zero shard counts")
+    if encoding.encoding == "reed_solomon16" and (
+        data_shards == 0 or parity_shards == 0
+    ):
+        raise RuntimeError(
+            f"{context} reed_solomon16 encoding requires positive shard counts"
+        )
+    return OfflineTopUpFinalityDataAvailabilityLayout(
+        encoding=encoding,
+        chunk_size_bytes=chunk_size_bytes,
+        data_shards=data_shards,
+        parity_shards=parity_shards,
+        max_payload_size_bytes=_offline_unsigned(
+            _offline_required(record, "max_payload_size_bytes", context),
+            f"{context}.max_payload_size_bytes",
+            _OFFLINE_MAX_U64,
+            positive=True,
+        ),
+        max_chunk_count=_offline_unsigned(
+            _offline_required(record, "max_chunk_count", context),
+            f"{context}.max_chunk_count",
+            _OFFLINE_MAX_U32,
+            positive=True,
+        ),
+    )
+
+
+def _offline_top_up_finality_round(
+    value: Any, context: str
+) -> OfflineTopUpFinalityConsensusRound:
+    record = _offline_mapping(value, context)
+    return OfflineTopUpFinalityConsensusRound(
+        context_id=_offline_top_up_finality_height_context_id(
+            _offline_required(record, "context_id", context), f"{context}.context_id"
+        ),
+        height=_offline_unsigned(
+            _offline_required(record, "height", context),
+            f"{context}.height",
+            _OFFLINE_MAX_U64,
+            positive=True,
+        ),
+        view=_offline_unsigned(
+            _offline_required(record, "view", context),
+            f"{context}.view",
+            _OFFLINE_MAX_U64,
+        ),
+    )
+
+
+def _offline_top_up_finality_subject(
+    value: Any,
+    context: str,
+    *,
+    round_height: int,
+) -> OfflineTopUpFinalityBlockSubject:
+    record = _offline_mapping(value, context)
+    raw_parent = record.get("parent_block_hash")
+    parent_block_hash = (
+        None
+        if raw_parent is None
+        else _offline_hash_literal(raw_parent, f"{context}.parent_block_hash")
+    )
+    if (round_height == 1) != (parent_block_hash is None):
+        raise RuntimeError(
+            f"{context}.parent_block_hash must be absent only at genesis height"
+        )
+    return OfflineTopUpFinalityBlockSubject(
+        parent_block_hash=parent_block_hash,
+        block_hash=_offline_hash_literal(
+            _offline_required(record, "block_hash", context), f"{context}.block_hash"
+        ),
+        payload_hash=_offline_hash_literal(
+            _offline_required(record, "payload_hash", context), f"{context}.payload_hash"
+        ),
+    )
+
+
+def _offline_top_up_finality_execution_commitment(
+    value: Any,
+    context: str,
+    *,
+    require_topup: bool,
+) -> OfflineTopUpFinalityExecutionCommitment:
+    record = _offline_mapping(value, context)
+    topup_anchor_count = _offline_unsigned(
+        _offline_required(record, "topup_anchor_count", context),
+        f"{context}.topup_anchor_count",
+        _OFFLINE_TOP_UP_FINALITY_MAX_ANCHORS_PER_BLOCK,
+    )
+    raw_topup_root = record.get("topup_anchor_root")
+    topup_anchor_root = (
+        None
+        if raw_topup_root is None
+        else _offline_hash_literal(raw_topup_root, f"{context}.topup_anchor_root")
+    )
+    if (topup_anchor_count == 0) != (topup_anchor_root is None):
+        raise RuntimeError(
+            f"{context}.topup_anchor_root must be present exactly when topup_anchor_count is positive"
+        )
+    if require_topup and topup_anchor_count == 0:
+        raise RuntimeError(
+            f"{context}.topup_anchor_count must be positive for a top-up finality proof"
+        )
+    return OfflineTopUpFinalityExecutionCommitment(
+        parent_state_root=_offline_hash_literal(
+            _offline_required(record, "parent_state_root", context),
+            f"{context}.parent_state_root",
+        ),
+        post_state_root=_offline_hash_literal(
+            _offline_required(record, "post_state_root", context),
+            f"{context}.post_state_root",
+        ),
+        ordinary_writes_root=_offline_hash_literal(
+            _offline_required(record, "ordinary_writes_root", context),
+            f"{context}.ordinary_writes_root",
+        ),
+        topup_anchor_root=topup_anchor_root,
+        topup_anchor_count=topup_anchor_count,
+    )
+
+
+def _offline_top_up_finality_qc(
+    value: Any,
+    context: str,
+    *,
+    require_topup: bool,
+) -> OfflineTopUpFinalityQuorumCertificate:
+    record = _offline_mapping(value, context)
+    round_ = _offline_top_up_finality_round(
+        _offline_required(record, "round", context), f"{context}.round"
+    )
+    phase = _offline_top_up_finality_phase(
+        _offline_required(record, "phase", context), f"{context}.phase"
+    )
+    if phase.phase != "commit":
+        raise RuntimeError(f"{context}.phase must be commit in finality evidence")
+    raw_signers = _offline_required(record, "signers", context)
+    if not isinstance(raw_signers, list) or not (
+        1 <= len(raw_signers) <= _OFFLINE_TOP_UP_FINALITY_MAX_VALIDATORS
+    ):
+        raise RuntimeError(
+            f"{context}.signers must contain between 1 and "
+            f"{_OFFLINE_TOP_UP_FINALITY_MAX_VALIDATORS} indices"
+        )
+    signers = tuple(
+        _offline_unsigned(raw, f"{context}.signers[{index}]", _OFFLINE_MAX_U32)
+        for index, raw in enumerate(raw_signers)
+    )
+    if any(left >= right for left, right in zip(signers, signers[1:])):
+        raise RuntimeError(f"{context}.signers must be strictly increasing and unique")
+    aggregate_signature = tuple(
+        _offline_byte_array(
+            _offline_required(record, "aggregate_signature", context),
+            f"{context}.aggregate_signature",
+            _OFFLINE_BLS_PROOF_BYTES,
+        )
+    )
+    if not any(aggregate_signature):
+        raise RuntimeError(f"{context}.aggregate_signature must not be all zero")
+    return OfflineTopUpFinalityQuorumCertificate(
+        round=round_,
+        phase=phase,
+        subject=_offline_top_up_finality_subject(
+            _offline_required(record, "subject", context),
+            f"{context}.subject",
+            round_height=round_.height,
+        ),
+        execution_commitment=_offline_top_up_finality_execution_commitment(
+            _offline_required(record, "execution_commitment", context),
+            f"{context}.execution_commitment",
+            require_topup=require_topup,
+        ),
+        signers=signers,
+        aggregate_signature=aggregate_signature,
+    )
+
+
+def _offline_top_up_finality_validator_power(
+    value: Any, context: str
+) -> OfflineTopUpFinalityValidatorPower:
+    record = _offline_mapping(value, context)
+    validator = _offline_exact_string(
+        _offline_required(record, "validator", context), f"{context}.validator"
+    )
+    if _OFFLINE_BLS_VALIDATOR_ID_RE.fullmatch(validator) is None:
+        raise RuntimeError(
+            f"{context}.validator must be a canonical uppercase BLS-normal peer id"
+        )
+    return OfflineTopUpFinalityValidatorPower(
+        validator=validator,
+        power=_offline_unsigned(
+            _offline_required(record, "power", context),
+            f"{context}.power",
+            _OFFLINE_MAX_U64,
+            positive=True,
+        ),
+    )
+
+
+def _offline_top_up_finality_quorum(
+    value: Any,
+    context: str,
+    roster: Tuple[OfflineTopUpFinalityValidatorPower, ...],
+) -> OfflineTopUpFinalityDualQuorum:
+    record = _offline_mapping(value, context)
+    quorum = OfflineTopUpFinalityDualQuorum(
+        min_signers=_offline_unsigned(
+            _offline_required(record, "min_signers", context),
+            f"{context}.min_signers",
+            _OFFLINE_TOP_UP_FINALITY_MAX_VALIDATORS,
+            positive=True,
+        ),
+        total_power=_offline_unsigned(
+            _offline_required(record, "total_power", context),
+            f"{context}.total_power",
+            _OFFLINE_MAX_U64,
+            positive=True,
+        ),
+    )
+    expected_min_signers = len(roster) * 2 // 3 + 1
+    expected_total_power = sum(entry.power for entry in roster)
+    if expected_total_power > _OFFLINE_MAX_U64:
+        raise RuntimeError(f"{context}.total_power overflows uint64")
+    if quorum.min_signers != expected_min_signers:
+        raise RuntimeError(f"{context}.min_signers is not canonical for its roster")
+    if quorum.total_power != expected_total_power:
+        raise RuntimeError(f"{context}.total_power does not equal its roster power")
+    return quorum
+
+
+def _offline_top_up_finality_next_epoch_snapshot(
+    value: Any,
+    context: str,
+    *,
+    current_epoch: int,
+    successor_height: int,
+    current_mode: OfflineTopUpFinalityConsensusMode,
+) -> OfflineTopUpFinalityNextEpochSnapshot:
+    record = _offline_mapping(value, context)
+    epoch = _offline_unsigned(
+        _offline_required(record, "epoch", context),
+        f"{context}.epoch",
+        _OFFLINE_MAX_U64,
+        positive=True,
+    )
+    if current_epoch == _OFFLINE_MAX_U64 or epoch != current_epoch + 1:
+        raise RuntimeError(f"{context}.epoch must immediately follow the current epoch")
+    epoch_end_height = _offline_unsigned(
+        _offline_required(record, "epoch_end_height", context),
+        f"{context}.epoch_end_height",
+        _OFFLINE_MAX_U64,
+        positive=True,
+    )
+    if epoch_end_height < successor_height:
+        raise RuntimeError(f"{context}.epoch_end_height precedes the successor height")
+    mode = _offline_top_up_finality_consensus_mode(
+        _offline_required(record, "mode", context), f"{context}.mode"
+    )
+    if mode != current_mode:
+        raise RuntimeError(f"{context}.mode must equal the current consensus mode")
+    raw_roster = _offline_required(record, "roster", context)
+    if not isinstance(raw_roster, list) or not (
+        1 <= len(raw_roster) <= _OFFLINE_TOP_UP_FINALITY_MAX_VALIDATORS
+    ):
+        raise RuntimeError(
+            f"{context}.roster must contain between 1 and "
+            f"{_OFFLINE_TOP_UP_FINALITY_MAX_VALIDATORS} validators"
+        )
+    roster = tuple(
+        _offline_top_up_finality_validator_power(raw, f"{context}.roster[{index}]")
+        for index, raw in enumerate(raw_roster)
+    )
+    if any(
+        left.validator >= right.validator for left, right in zip(roster, roster[1:])
+    ):
+        raise RuntimeError(
+            f"{context}.roster must be strictly ordered by unique validator id"
+        )
+    if mode.mode == "permissioned" and any(entry.power != 1 for entry in roster):
+        raise RuntimeError(f"{context}.roster permissioned voting powers must all be one")
+    raw_pops = _offline_required(record, "validator_set_pops", context)
+    if not isinstance(raw_pops, list) or len(raw_pops) != len(roster):
+        raise RuntimeError(
+            f"{context}.validator_set_pops must align one-for-one with roster"
+        )
+    validator_set_pops = tuple(
+        tuple(
+            _offline_byte_array(
+                raw,
+                f"{context}.validator_set_pops[{index}]",
+                _OFFLINE_BLS_PROOF_BYTES,
+            )
+        )
+        for index, raw in enumerate(raw_pops)
+    )
+    if any(not any(proof) for proof in validator_set_pops):
+        raise RuntimeError(f"{context}.validator_set_pops must not contain zero proofs")
+    return OfflineTopUpFinalityNextEpochSnapshot(
+        epoch=epoch,
+        epoch_end_height=epoch_end_height,
+        mode=mode,
+        roster=roster,
+        validator_set_pops=validator_set_pops,
+        quorum=_offline_top_up_finality_quorum(
+            _offline_required(record, "quorum", context), f"{context}.quorum", roster
+        ),
+        leader_seed=_offline_fixed_bytes(
+            _offline_required(record, "leader_seed", context), f"{context}.leader_seed"
+        ),
+    )
+
+
+def _offline_top_up_finality_height_context(
+    value: Any,
+    context: str,
+    *,
+    expected_finalized_height: int,
+) -> OfflineTopUpFinalityHeightContext:
+    record = _offline_mapping(value, context)
+    context_id = _offline_top_up_finality_height_context_id(
+        _offline_required(record, "context_id", context), f"{context}.context_id"
+    )
+    chain_id = _offline_exact_string(
+        _offline_required(record, "chain_id", context), f"{context}.chain_id"
+    )
+    if len(chain_id.encode("utf-8")) > 128:
+        raise RuntimeError(f"{context}.chain_id must contain at most 128 UTF-8 bytes")
+    protocol_version = _offline_unsigned(
+        _offline_required(record, "protocol_version", context),
+        f"{context}.protocol_version",
+        (1 << 16) - 1,
+    )
+    if protocol_version != _OFFLINE_SUMERAGI_PROTOCOL_VERSION:
+        raise RuntimeError(
+            f"{context}.protocol_version must be {_OFFLINE_SUMERAGI_PROTOCOL_VERSION}"
+        )
+    height = _offline_unsigned(
+        _offline_required(record, "height", context),
+        f"{context}.height",
+        _OFFLINE_MAX_U64,
+        positive=True,
+    )
+    if height != expected_finalized_height:
+        raise RuntimeError(
+            f"{context}.height does not match finalized_block_height"
+        )
+    epoch = _offline_unsigned(
+        _offline_required(record, "epoch", context), f"{context}.epoch", _OFFLINE_MAX_U64
+    )
+    epoch_end_height = _offline_unsigned(
+        _offline_required(record, "epoch_end_height", context),
+        f"{context}.epoch_end_height",
+        _OFFLINE_MAX_U64,
+        positive=True,
+    )
+    if epoch_end_height < height:
+        raise RuntimeError(f"{context}.epoch_end_height must not precede height")
+    mode = _offline_top_up_finality_consensus_mode(
+        _offline_required(record, "mode", context), f"{context}.mode"
+    )
+    raw_next_snapshot = record.get("next_epoch_snapshot")
+    if raw_next_snapshot is None:
+        next_epoch_snapshot = None
+    else:
+        if height == _OFFLINE_MAX_U64:
+            raise RuntimeError(f"{context}.height has no representable successor")
+        next_epoch_snapshot = _offline_top_up_finality_next_epoch_snapshot(
+            raw_next_snapshot,
+            f"{context}.next_epoch_snapshot",
+            current_epoch=epoch,
+            successor_height=height + 1,
+            current_mode=mode,
+        )
+    if (height == epoch_end_height) != (next_epoch_snapshot is not None):
+        raise RuntimeError(
+            f"{context}.next_epoch_snapshot must be present exactly at epoch end"
+        )
+    raw_parent_qc = record.get("parent_commit_qc")
+    parent_commit_qc = (
+        None
+        if raw_parent_qc is None
+        else _offline_top_up_finality_qc(
+            raw_parent_qc,
+            f"{context}.parent_commit_qc",
+            require_topup=False,
+        )
+    )
+    if (height == 1) != (parent_commit_qc is None):
+        raise RuntimeError(
+            f"{context}.parent_commit_qc must be absent only at genesis height"
+        )
+    if parent_commit_qc is not None and parent_commit_qc.round.height + 1 != height:
+        raise RuntimeError(
+            f"{context}.parent_commit_qc.round.height must immediately precede height"
+        )
+    return OfflineTopUpFinalityHeightContext(
+        context_id=context_id,
+        chain_id=chain_id,
+        protocol_version=2,
+        height=height,
+        epoch=epoch,
+        epoch_end_height=epoch_end_height,
+        next_epoch_snapshot=next_epoch_snapshot,
+        mode=mode,
+        parent_commit_qc=parent_commit_qc,
+        nexus_amx_context_hash=_offline_hash_literal(
+            _offline_required(record, "nexus_amx_context_hash", context),
+            f"{context}.nexus_amx_context_hash",
+        ),
+        da_layout=_offline_top_up_finality_da_layout(
+            _offline_required(record, "da_layout", context), f"{context}.da_layout"
+        ),
+        leader_seed=_offline_fixed_bytes(
+            _offline_required(record, "leader_seed", context), f"{context}.leader_seed"
+        ),
+    )
+
+
+def _offline_top_up_anchor_merkle_proof(
+    value: Any,
+    context: str,
+    *,
+    expected_leaf_count: int,
+) -> OfflineTopUpAnchorMerkleProof:
+    record = _offline_mapping(value, context)
+    leaf_count = _offline_unsigned(
+        _offline_required(record, "leaf_count", context),
+        f"{context}.leaf_count",
+        _OFFLINE_TOP_UP_FINALITY_MAX_ANCHORS_PER_BLOCK,
+        positive=True,
+    )
+    if leaf_count != expected_leaf_count:
+        raise RuntimeError(
+            f"{context}.leaf_count must equal commit_qc certificate topup_anchor_count"
+        )
+    leaf_index = _offline_unsigned(
+        _offline_required(record, "leaf_index", context),
+        f"{context}.leaf_index",
+        _OFFLINE_TOP_UP_FINALITY_MAX_ANCHORS_PER_BLOCK - 1,
+    )
+    if leaf_index >= leaf_count:
+        raise RuntimeError(f"{context}.leaf_index must be less than leaf_count")
+    raw_siblings = _offline_required(record, "siblings", context)
+    if not isinstance(raw_siblings, list):
+        raise RuntimeError(f"{context}.siblings must be an array")
+    expected_depth = (leaf_count - 1).bit_length()
+    if len(raw_siblings) != expected_depth or len(raw_siblings) > _OFFLINE_TOP_UP_FINALITY_MAX_SIBLINGS:
+        raise RuntimeError(
+            f"{context}.siblings must contain the canonical {expected_depth}-level path"
+        )
+    siblings = tuple(
+        _offline_fixed_bytes(raw, f"{context}.siblings[{index}]", non_zero=True)
+        for index, raw in enumerate(raw_siblings)
+    )
+    return OfflineTopUpAnchorMerkleProof(
+        leaf_index=leaf_index,
+        leaf_count=leaf_count,
+        siblings=siblings,
     )
 
 

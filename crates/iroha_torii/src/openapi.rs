@@ -90,7 +90,7 @@ fn tags_section() -> Value {
     offline.insert(
         "description".into(),
         Value::String(
-            "Offline readiness and asynchronous top-up/redemption operations. Requests use the same typed DTO in JSON and Norito; whole-payload base64 wrapper objects are not part of the public API."
+            "Kagemusha readiness and asynchronous top-up/redemption operations. Requests use the same typed DTO in JSON and canonical Norito."
                 .to_owned(),
         ),
     );
@@ -807,7 +807,7 @@ fn offline_paths() -> Map {
             "/v1/offline/top-up",
             "offlineTopUp",
             "Submit an offline top-up.",
-            "Submit one directly encoded OfflineTopUpRequest. JSON contains the structured request itself and application/x-norito contains the canonical typed Norito value; whole-payload base64 wrappers are rejected. Acceptance is asynchronous and returns the operation resource in Location.",
+            "Submit one typed Kagemusha OfflineTopUpRequest. JSON contains the structured request and application/x-norito contains the canonical Norito value. Acceptance is asynchronous and returns the operation resource in Location.",
             "#/components/schemas/OfflineTopUpRequest",
             iroha_torii_shared::offline_api::OFFLINE_TOP_UP_REQUEST_SCHEMA_NAME,
         ),
@@ -815,7 +815,7 @@ fn offline_paths() -> Map {
             "/v1/offline/redeem",
             "offlineRedeem",
             "Submit an offline redemption.",
-            "Submit one directly encoded OfflineRedeemRequest. JSON contains the structured request itself and application/x-norito contains the canonical typed Norito value; whole-payload base64 wrappers are rejected. Acceptance is asynchronous and returns the operation resource in Location.",
+            "Submit one typed Kagemusha OfflineRedeemRequest. JSON contains the structured request and application/x-norito contains the canonical Norito value. Acceptance is asynchronous and returns the operation resource in Location.",
             "#/components/schemas/OfflineRedeemRequest",
             iroha_torii_shared::offline_api::OFFLINE_REDEEM_REQUEST_SCHEMA_NAME,
         ),
@@ -10506,7 +10506,7 @@ fn insert_offline_typed_schemas(schemas: &mut Map) {
                 "required": ["version", "anchor", "commit_qc", "anchor_path"],
                 "additionalProperties": false,
                 "properties": {
-                    "version": { "type": "integer", "format": "uint16", "enum": [2] },
+                    "version": { "type": "integer", "format": "uint16", "enum": [1] },
                     "anchor": { "$ref": "#/components/schemas/OfflineTopUpAnchorRef" },
                     "commit_qc": { "$ref": "#/components/schemas/OfflineTopUpFinalityCompactQc" },
                     "anchor_path": { "$ref": "#/components/schemas/OfflineTopUpAnchorMerkleProof" }
@@ -20371,27 +20371,6 @@ mod tests {
                 "missing final offline route {path}"
             );
         }
-        for path in [
-            "/v1/offline/keys/refill",
-            "/v1/offline/notes/issue",
-            "/v1/offline/notes/redeem",
-            "/v1/offline/audit",
-            "/v1/offline/policy",
-            "/v1/offline/revocations",
-            "/v1/offline/revocations/bundle",
-            "/v1/offline/v2/readiness",
-            "/v1/offline/v2/keys/refill",
-            "/v1/offline/v2/notes/issue",
-            "/v1/offline/v2/notes/redeem",
-            "/v1/offline/v2/kagemusha/readiness",
-            "/v1/offline/v2/kagemusha/topup",
-            "/v1/offline/v2/audit",
-        ] {
-            assert!(
-                !paths.contains_key(path),
-                "retired offline route leaked: {path}"
-            );
-        }
         assert!(!paths.contains_key("/v1/attestation/issue"));
         let topup_post = paths
             .get("/v1/offline/top-up")
@@ -20403,8 +20382,7 @@ mod tests {
             .get("description")
             .and_then(Value::as_str)
             .expect("offline top-up description");
-        assert!(topup_description.contains("directly encoded OfflineTopUpRequest"));
-        assert!(topup_description.contains("whole-payload base64 wrappers are rejected"));
+        assert!(topup_description.contains("typed Kagemusha OfflineTopUpRequest"));
         let redeem_post = paths
             .get("/v1/offline/redeem")
             .and_then(Value::as_object)
@@ -20415,8 +20393,7 @@ mod tests {
             .get("description")
             .and_then(Value::as_str)
             .expect("offline redeem description");
-        assert!(redeem_description.contains("directly encoded OfflineRedeemRequest"));
-        assert!(redeem_description.contains("whole-payload base64 wrappers are rejected"));
+        assert!(redeem_description.contains("typed Kagemusha OfflineRedeemRequest"));
         let topup_request_schema = topup_post
             .get("requestBody")
             .and_then(Value::as_object)
@@ -20489,7 +20466,7 @@ mod tests {
             assert_eq!(
                 schema.get("additionalProperties").and_then(Value::as_bool),
                 Some(false),
-                "direct request JSON must reject retired and unknown fields"
+                "typed request JSON must reject unknown fields"
             );
             assert_eq!(schema.get("type").and_then(Value::as_str), Some("object"));
             assert!(
@@ -20504,7 +20481,7 @@ mod tests {
             let properties = schema
                 .get("properties")
                 .and_then(Value::as_object)
-                .expect("direct offline request properties");
+                .expect("typed offline request properties");
             assert!(!properties.contains_key("topup_request_norito_base64"));
             assert!(!properties.contains_key("redeem_request_norito_base64"));
         }
@@ -20676,7 +20653,7 @@ mod tests {
         );
         for required in [
             "OfflineSpendableNoteDescriptor",
-            "OfflineVerifiedFoldRecordBundle",
+            "OfflineTopUpShieldEvidence",
             "OfflineRequestAuthorization",
             "OfflineSpendBundle",
             "OfflineProofAttachment",
@@ -20806,6 +20783,18 @@ mod tests {
             property_ref(schemas, "OfflineTopUpFinalityProof", "anchor_path"),
             "#/components/schemas/OfflineTopUpAnchorMerkleProof"
         );
+        assert_eq!(
+            component_properties(schemas, "OfflineTopUpFinalityProof")
+                .get("version")
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("enum"))
+                .and_then(Value::as_array)
+                .and_then(|values| values.first())
+                .and_then(Value::as_u64),
+            Some(u64::from(
+                iroha_data_model::offline::KAGEMUSHA_TOPUP_FINALITY_PROOF_VERSION_V2
+            ))
+        );
 
         let top_up_anchor = component_properties(schemas, "OfflineTopUpAnchor");
         assert_eq!(
@@ -20868,6 +20857,22 @@ mod tests {
         assert!(
             !top_up_anchor.contains_key("topup_anchor_nullifiers"),
             "the retired aggregate nullifier list must not reappear beside the typed current note"
+        );
+        assert_eq!(
+            top_up_anchor
+                .get("shield_leaf_index")
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("maximum"))
+                .and_then(Value::as_u64),
+            Some(65_535)
+        );
+        assert_eq!(
+            property_ref(schemas, "OfflineTopUpAnchor", "shield_verifier_id"),
+            "#/components/schemas/OfflineVerifyingKeyId"
+        );
+        assert_eq!(
+            property_ref(schemas, "OfflineTopUpAnchor", "shield_verifier_commitment"),
+            "#/components/schemas/OfflineFixed32Bytes"
         );
         assert_eq!(
             component_properties(schemas, "OfflineScaledAmount")

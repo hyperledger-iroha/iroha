@@ -102,17 +102,18 @@ print(
     readiness.ready,
     readiness.asset_scale,
     readiness.active_transfer_verifier,
+    readiness.active_topup_shield_verifier,
     readiness.blockers,
 )
 ```
 
 The readiness decoder preserves the authoritative nullable `u32` asset scale
-and the typed, key-material-free transfer verifier from the same evaluated
-block. A scale above 28 remains decodable with
+and distinct typed, key-material-free transfer and top-up shield verifiers from
+the same evaluated block. A scale above 28 remains decodable with
 `asset_scale_unsupported`; only `ready=True` requires the supported Offline
-amount range and an active verifier. Verifier activation/withdrawal bounds,
-hashes, proof-size limits, blocker correlations, and duplicate blocker codes
-are validated before the snapshot is returned.
+amount range and both active verifier roles. Verifier activation/withdrawal
+bounds, hashes, proof-size limits, exact null/blocker correlations, and
+duplicate blocker codes are validated before the snapshot is returned.
 
 `OfflineTopUpRequest` and `OfflineRedeemRequest` are exported `TypedDict`
 contracts, and an applied top-up returns a frozen `OfflineTopUpAnchor` rather
@@ -202,7 +203,7 @@ verifier-batch reservation remain reserved ABI-7 state; unavailable compact surf
 `recursive_compact_v1` is an admission-neutral projection identifier, not a
 spend-again product mode; compact availability never wins selector choice.
 `preferred_kagemusha_offline_spend_mode()` selects
-`recursive_spend_v2` when the native extension reports native bridge ABI 18 exactly
+`recursive_spend_v1` when the native extension reports native bridge ABI 18 exactly
 and every required recursive-spend method rejects the malformed availability
 probe, and otherwise returns `None` rather than falling back to archived
 checked-prefold fixtures:
@@ -216,9 +217,9 @@ helpers, `kagemusha_recursive_spend_verify`, and
 `kagemusha_recursive_spend_redeem`. Explicit capability selection must pass both
 `recursive_compact_available` and `recursive_spend_available`; single-argument
 selectors are not shipped.
-`is_kagemusha_spend_again_mode(...)` accepts only the first-release
-`recursive_spend_v2` selector and rejects the retired `recursive_spend_v1` and
-`recursive_compact_v1`.
+`is_kagemusha_spend_again_mode(...)` accepts only the first-release public
+`recursive_spend_v1` selector and rejects the internal artifact mode
+`recursive_spend_v2` and `recursive_compact_v1`.
 
 Transaction helpers expose the same Kagemusha instruction surface without
 asking wallet code to reframe native archives. Use
@@ -790,8 +791,19 @@ if status and status.enabled:
 
 # Fetch consensus status with structured accessors
 snapshot = client.get_sumeragi_status_typed()
-print(snapshot.highest_qc.height, snapshot.tx_queue.saturated)
-print("DA reschedules:", snapshot.da_reschedule_total)
+print(
+    snapshot.height,
+    snapshot.view,
+    snapshot.phase.value,
+    snapshot.last_committed_height,
+)
+print(
+    snapshot.build_fingerprint,
+    snapshot.config_fingerprint,
+    snapshot.height_context_id.hash,
+)
+if snapshot.pending_persistence_id is not None:
+    print("Waiting for WAL acknowledgement", snapshot.pending_persistence_id)
 
 # Inspect Nexus lane commitments and governance coverage from `/v1/status`
 status_snapshot = client.get_status_snapshot_typed()

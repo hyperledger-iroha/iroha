@@ -23,8 +23,6 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 import org.hyperledger.iroha.android.KeyManagementException;
 import org.hyperledger.iroha.android.client.queue.PendingTransactionQueue;
@@ -50,10 +48,6 @@ import org.hyperledger.iroha.android.telemetry.NetworkContextProvider;
 import org.hyperledger.iroha.android.telemetry.TelemetryOptions;
 import org.hyperledger.iroha.android.telemetry.TelemetrySink;
 import org.hyperledger.iroha.android.client.stream.ToriiEventStreamClient;
-import org.hyperledger.iroha.android.client.stream.ToriiEventStream;
-import org.hyperledger.iroha.android.client.stream.ToriiEventStreamListener;
-import org.hyperledger.iroha.android.client.stream.ToriiEventStreamOptions;
-import org.hyperledger.iroha.android.client.stream.ToriiStreamException;
 import org.hyperledger.iroha.android.tx.SignedTransaction;
 import org.hyperledger.iroha.android.tx.SignedTransactionHasher;
 import org.hyperledger.iroha.android.client.HttpTransportExecutor;
@@ -265,49 +259,6 @@ public final class HttpClientTransport implements IrohaClient {
     final long deadline = saturatedDeadline(resolved.timeoutMillis());
     final CompletableFuture<Map<String, Object>> future = new CompletableFuture<>();
     pollPipelineStatus(hashHex, resolved, deadline, 0, null, future);
-    return future;
-  }
-
-  @Override
-  public CompletableFuture<Map<String, Object>> waitForTransactionStatusStream(
-      final String hashHex, final PipelineStatusOptions options) {
-    Objects.requireNonNull(hashHex, "hashHex");
-    final PipelineStatusOptions resolved = PipelineStatusOptions.resolve(options);
-    final long deadline = saturatedDeadline(resolved.timeoutMillis());
-    final CompletableFuture<Map<String, Object>> future = new CompletableFuture<>();
-    fetchPipelineStatusSnapshot(hashHex)
-        .whenComplete(
-            (payload, throwable) -> {
-              if (future.isDone()) {
-                return;
-              }
-              if (throwable != null) {
-                final Throwable cause = unwrapCompletion(throwable);
-                future.completeExceptionally(cause);
-                return;
-              }
-
-              final AtomicInteger attempts = new AtomicInteger(payload == null ? 0 : 1);
-              final AtomicReference<Map<String, Object>> lastPayload = new AtomicReference<>(payload);
-              if (payload != null
-                  && processPipelineTerminalPayload(
-                      hashHex, resolved, payload, attempts.get(), future)) {
-                return;
-              }
-
-              if (deadline != Long.MAX_VALUE && System.currentTimeMillis() >= deadline) {
-                future.completeExceptionally(
-                    new TransactionTimeoutException(
-                        "Transaction " + hashHex + " did not reach a terminal status "
-                            + "within the configured timeout",
-                        hashHex,
-                        attempts.get(),
-                        lastPayload.get()));
-                return;
-              }
-
-              openPipelineStatusStream(hashHex, resolved, deadline, attempts, lastPayload, future);
-            });
     return future;
   }
 
@@ -1413,23 +1364,19 @@ public final class HttpClientTransport implements IrohaClient {
                 notifyResponse(request, clientResponse);
 
                 final int statusCode = clientResponse.statusCode();
-                if (statusCode != 200
-                    && statusCode != 202
-                    && statusCode != 204
-                    && statusCode != 404) {
+                if (statusCode != 200 && statusCode != 404) {
                   future.completeExceptionally(
                       buildPipelineStatusHttpException(hashHex, clientResponse));
                   return;
                 }
 
                 final Map<String, Object> payload =
-                    parsePipelineStatusPayload(clientResponse.body());
+                    statusCode == 404 ? null : parsePipelineStatusPayload(clientResponse.body());
                 final int nextAttempts = attemptsSoFar + 1;
-                final Optional<String> statusKind =
+                final String statusLiteral =
                     payload == null
-                        ? Optional.empty()
-                        : PipelineStatusExtractor.extractStatusKind(payload);
-                final String statusLiteral = statusKind.orElse(null);
+                        ? null
+                        : PipelineStatusExtractor.requireAuthoritativeStatus(payload, hashHex);
                 final boolean isSuccess =
                     statusLiteral != null && options.successStatuses().contains(statusLiteral);
                 final boolean isFailure =
@@ -1494,191 +1441,6 @@ public final class HttpClientTransport implements IrohaClient {
             });
   }
 
-  private CompletableFuture<Map<String, Object>> fetchPipelineStatusSnapshot(final String hashHex) {
-    final CompletableFuture<Map<String, Object>> future = new CompletableFuture<>();
-    final TransportRequest request =
-        ToriiRequestBuilder.buildStatusRequest(
-            config.baseUri(), hashHex, config.requestTimeout(), config.defaultHeaders());
-    notifyRequest(request);
-    executor
-        .execute(request)
-        .whenComplete(
-            (response, throwable) -> {
-              if (throwable != null) {
-                final Throwable cause = unwrapCompletion(throwable);
-                notifyFailure(request, cause);
-                future.completeExceptionally(cause);
-                return;
-              }
-
-              final ClientResponse clientResponse =
-                  new ClientResponse(
-                      response.statusCode(),
-                      response.body(),
-                      response.message(),
-                      null,
-                      extractRejectCode(response));
-              notifyResponse(request, clientResponse);
-
-              final int statusCode = clientResponse.statusCode();
-              if (statusCode != 200
-                  && statusCode != 202
-                  && statusCode != 204
-                  && statusCode != 404) {
-                future.completeExceptionally(
-                    buildPipelineStatusHttpException(hashHex, clientResponse));
-                return;
-              }
-
-              try {
-                future.complete(parsePipelineStatusPayload(clientResponse.body()));
-              } catch (final Exception error) {
-                future.completeExceptionally(error);
-              }
-            });
-    return future;
-  }
-
-  private void openPipelineStatusStream(
-      final String hashHex,
-      final PipelineStatusOptions options,
-      final long deadline,
-      final AtomicInteger attempts,
-      final AtomicReference<Map<String, Object>> lastPayload,
-      final CompletableFuture<Map<String, Object>> future) {
-    final ToriiEventStreamOptions.Builder streamOptions = ToriiEventStreamOptions.builder();
-    streamOptions.putQueryParameter("filter", transactionHashFilter(hashHex));
-    if (options.timeoutMillis() != null) {
-      streamOptions.setTimeout(Duration.ofMillis(Math.max(0L, options.timeoutMillis())));
-    }
-
-    final AtomicReference<ToriiEventStream> streamRef = new AtomicReference<>();
-    future.whenComplete(
-        (ignored, throwable) -> {
-          final ToriiEventStream active = streamRef.getAndSet(null);
-          if (active != null) {
-            active.close();
-          }
-        });
-
-    if (deadline != Long.MAX_VALUE) {
-      final long remainingMs = Math.max(0L, deadline - System.currentTimeMillis());
-      CompletableFuture
-          .runAsync(
-              () -> {},
-              CompletableFuture.delayedExecutor(remainingMs, TimeUnit.MILLISECONDS))
-          .whenComplete(
-              (ignored, throwable) -> {
-                if (future.isDone()) {
-                  return;
-                }
-                if (throwable != null) {
-                  future.completeExceptionally(unwrapCompletion(throwable));
-                  return;
-                }
-                future.completeExceptionally(
-                    new TransactionTimeoutException(
-                        "Transaction " + hashHex + " did not reach a terminal status "
-                            + "within the configured timeout",
-                        hashHex,
-                        attempts.get(),
-                        lastPayload.get()));
-              });
-    }
-
-    final ToriiEventStream stream;
-    try {
-      stream =
-          newEventStreamClient()
-              .openSseStream(
-                "/v1/events/sse",
-                streamOptions.build(),
-                new ToriiEventStreamListener() {
-                  @Override
-                  public void onEvent(
-                      final org.hyperledger.iroha.android.client.stream.ServerSentEvent event) {
-                    if (future.isDone()) {
-                      return;
-                    }
-                    try {
-                      final Optional<ToriiStreamException> terminalError =
-                          event.terminalStreamError();
-                      if (terminalError.isPresent()) {
-                        future.completeExceptionally(terminalError.get());
-                        return;
-                      }
-                      final Map<String, Object> payload = parsePipelineEventPayload(event.data());
-                      if (!isTransactionPipelineEvent(payload)) {
-                        return;
-                      }
-                      lastPayload.set(payload);
-                      final int attempt = attempts.incrementAndGet();
-                      processPipelineTerminalPayload(hashHex, options, payload, attempt, future);
-                    } catch (final Throwable error) {
-                      if (!future.isDone()) {
-                        future.completeExceptionally(error);
-                      }
-                    }
-                  }
-
-                  @Override
-                  public void onClosed() {
-                    if (future.isDone()) {
-                      return;
-                    }
-                    future.completeExceptionally(
-                        new IOException(
-                            "Torii SSE stream closed before transaction "
-                                + hashHex
-                                + " reached a terminal status"));
-                  }
-
-                  @Override
-                  public void onError(final Throwable error) {
-                    if (future.isDone()) {
-                      return;
-                    }
-                    future.completeExceptionally(error);
-                  }
-                });
-    } catch (final RuntimeException error) {
-      future.completeExceptionally(error);
-      return;
-    }
-    streamRef.set(stream);
-  }
-
-  private boolean processPipelineTerminalPayload(
-      final String hashHex,
-      final PipelineStatusOptions options,
-      final Map<String, Object> payload,
-      final int attempt,
-      final CompletableFuture<Map<String, Object>> future) {
-    final Optional<String> statusKind = PipelineStatusExtractor.extractStatusKind(payload);
-    final String statusLiteral = statusKind.orElse(null);
-    final boolean isSuccess =
-        statusLiteral != null && options.successStatuses().contains(statusLiteral);
-    final boolean isFailure =
-        statusLiteral != null && options.failureStatuses().contains(statusLiteral);
-
-    if (options.observer() != null) {
-      options.observer().onStatus(statusLiteral, payload, attempt);
-    }
-
-    if (isSuccess) {
-      future.complete(payload != null ? payload : Collections.emptyMap());
-      return true;
-    }
-    if (isFailure) {
-      final String rejectionReason =
-          PipelineStatusExtractor.extractRejectionReason(payload).orElse(null);
-      future.completeExceptionally(
-          new TransactionStatusException(hashHex, statusLiteral, rejectionReason, payload));
-      return true;
-    }
-    return false;
-  }
-
   private void scheduleNextPoll(
       final String hashHex,
       final PipelineStatusOptions options,
@@ -1715,54 +1477,25 @@ public final class HttpClientTransport implements IrohaClient {
   @SuppressWarnings("unchecked")
   private Map<String, Object> parsePipelineStatusPayload(final byte[] body) {
     if (body == null || body.length == 0) {
-      return null;
+      throw new IllegalStateException("Pipeline status response must not be empty");
     }
     if (body.length >= 4
         && body[0] == 'N'
         && body[1] == 'R'
         && body[2] == 'T'
         && body[3] == '0') {
-      return null;
+      throw new IllegalStateException(
+          "Pipeline status response violated the requested application/json contract");
     }
     final String json = new String(body, StandardCharsets.UTF_8).trim();
     if (json.isEmpty()) {
-      return null;
+      throw new IllegalStateException("Pipeline status response must not be empty");
     }
     final Object parsed = JsonParser.parse(json);
     if (parsed instanceof Map) {
       return (Map<String, Object>) parsed;
     }
     throw new IllegalStateException("Pipeline status response must be a JSON object");
-  }
-
-  @SuppressWarnings("unchecked")
-  private Map<String, Object> parsePipelineEventPayload(final String json) {
-    if (json == null || json.trim().isEmpty()) {
-      throw new IllegalStateException("Pipeline event payload must be a JSON object");
-    }
-    final Object parsed = JsonParser.parse(json.trim());
-    if (parsed instanceof Map) {
-      return (Map<String, Object>) parsed;
-    }
-    throw new IllegalStateException("Pipeline event payload must be a JSON object");
-  }
-
-  private boolean isTransactionPipelineEvent(final Map<String, Object> payload) {
-    if (payload == null) {
-      return false;
-    }
-    final Object event = payload.get("event");
-    if (event == null) {
-      return true;
-    }
-    return "Transaction".equalsIgnoreCase(String.valueOf(event).trim());
-  }
-
-  private static String transactionHashFilter(final String hashHex) {
-    return JsonEncoder.encode(
-        objectMapOf(
-            "op", "eq",
-            "args", Collections.unmodifiableList(Arrays.asList("tx_hash", hashHex))));
   }
 
   private static TransactionStatusHttpException buildPipelineStatusHttpException(

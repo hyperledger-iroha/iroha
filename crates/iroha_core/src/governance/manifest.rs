@@ -673,12 +673,14 @@ struct LaneManifestSourceContentDigestV1 {
     digest: [u8; 32],
 }
 
+#[cfg(any(test, feature = "telemetry"))]
 #[derive(Encode)]
 struct LaneManifestRegistryDigestV1 {
     version: u8,
     lanes: Vec<LaneManifestStatusDigestV1>,
 }
 
+#[cfg(any(test, feature = "telemetry"))]
 #[derive(Encode)]
 struct LaneManifestStatusDigestV1 {
     lane: u32,
@@ -692,6 +694,7 @@ struct LaneManifestStatusDigestV1 {
     privacy_commitments: Vec<LanePrivacyCommitmentDigestV1>,
 }
 
+#[cfg(any(test, feature = "telemetry"))]
 #[derive(Encode)]
 struct GovernanceRulesDigestV1 {
     version: u32,
@@ -702,6 +705,7 @@ struct GovernanceRulesDigestV1 {
     runtime_upgrade: Option<RuntimeUpgradeHookDigestV1>,
 }
 
+#[cfg(any(test, feature = "telemetry"))]
 #[derive(Encode)]
 struct ManifestValidatorBindingDigestV1 {
     validator: AccountId,
@@ -709,6 +713,7 @@ struct ManifestValidatorBindingDigestV1 {
     torii_url: Option<String>,
 }
 
+#[cfg(any(test, feature = "telemetry"))]
 #[derive(Encode)]
 struct RuntimeUpgradeHookDigestV1 {
     allow: bool,
@@ -717,6 +722,7 @@ struct RuntimeUpgradeHookDigestV1 {
     allowed_ids: Option<Vec<String>>,
 }
 
+#[cfg(any(test, feature = "telemetry"))]
 #[derive(Encode)]
 enum LanePrivacyCommitmentDigestV1 {
     Merkle {
@@ -1477,6 +1483,7 @@ impl LaneManifestRegistry {
         Ok(arr)
     }
 
+    #[cfg(test)]
     fn validate_manifest(
         path: &Path,
         lane_id: LaneId,

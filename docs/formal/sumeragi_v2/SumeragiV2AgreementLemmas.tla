@@ -237,18 +237,26 @@ PROOF
       BY <2>1, <2>4 DEF CertificateBackedBy
     <2>6. commitVote.signer \in Honest
       BY <2>4, <2>5 DEF VoteBacksCertificate
-    <2>7. PICK prepared \in prepareQCs:
+    <2>7. CommitIntentsPreparedBy(commitIntents, prepareQCs)
+      BY <1>1 DEF HonestCommitIntentPrepared
+    <2>8. \E prepared \in prepareQCs:
              /\ prepared.context = commitVote.context
              /\ prepared.view = commitVote.view
              /\ prepared.phase = "Prepare"
              /\ prepared.subject = commitVote.subject
-      BY <1>1, <2>5, <2>6 DEF HonestCommitIntentPrepared
-    <2>8. /\ prepared.context = committed.context
+      BY <2>5, <2>6, <2>7 DEF CommitIntentsPreparedBy
+    <2>9. PICK prepared \in prepareQCs:
+             /\ prepared.context = commitVote.context
+             /\ prepared.view = commitVote.view
+             /\ prepared.phase = "Prepare"
+             /\ prepared.subject = commitVote.subject
+      BY <2>8
+    <2>10. /\ prepared.context = committed.context
           /\ prepared.view = committed.view
           /\ prepared.phase = "Prepare"
           /\ prepared.subject = committed.subject
-      BY <2>5, <2>7 DEF VoteBacksCertificate
-    <2> QED BY <2>7, <2>8
+      BY <2>5, <2>9 DEF VoteBacksCertificate
+    <2> QED BY <2>9, <2>10
   <1> QED BY <1>1
 
 (***************************************************************************

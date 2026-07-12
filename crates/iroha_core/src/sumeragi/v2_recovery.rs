@@ -79,6 +79,7 @@ impl PendingKuraApply {
 
 impl RecoveredV2Height {
     /// Borrow the exact verified context selected for this process lifetime.
+    #[cfg(test)]
     pub(crate) const fn verified_context(&self) -> &VerifiedHeightContext {
         &self.verified_context
     }
