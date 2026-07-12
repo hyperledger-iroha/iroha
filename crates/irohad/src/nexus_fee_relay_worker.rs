@@ -642,7 +642,7 @@ impl NexusFeeRelayWorker {
         Ok(view
             .world()
             .asset(&asset_id)
-            .map(|asset| asset.value().clone().into_inner())
+            .map(|asset| asset.value().clone().into_inner().into_numeric())
             .unwrap_or_else(|_| Numeric::zero()))
     }
 

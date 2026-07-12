@@ -70,7 +70,11 @@ use iroha_data_model::{
     },
     taikai::TaikaiAvailabilityClass,
 };
-use iroha_primitives::{addr::SocketAddr, numeric::Numeric, unique_vec::UniqueVec};
+use iroha_primitives::{
+    addr::SocketAddr,
+    numeric::{Numeric, Quantity},
+    unique_vec::UniqueVec,
+};
 use norito::{codec::Encode, streaming::EntropyMode};
 use rust_decimal::Decimal;
 use thiserror::Error;
@@ -8119,7 +8123,7 @@ pub struct ToriiFaucet {
     /// on-chain asset alias that must be resolved against world state.
     pub asset_definition_id: String,
     /// Fixed quantity transferred by each accepted faucet claim.
-    pub amount: Numeric,
+    pub amount: Quantity,
     /// Difficulty in leading zero bits for faucet proof-of-work (0 disables PoW).
     pub pow_difficulty_bits: u8,
     /// Scrypt `log2(N)` cost parameter for faucet proof-of-work.
