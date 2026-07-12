@@ -141,6 +141,7 @@ class SumeragiV2WireFixtureTest {
             response.certificate.round,
             response.certificate.phase,
             changedSubject,
+            response.certificate.executionCommitment,
             response.certificate.signers,
             response.certificate.aggregateSignature(),
         )
@@ -151,6 +152,99 @@ class SumeragiV2WireFixtureTest {
             response.signature(),
         )
         assertFalse(response.signaturePreimage().contentEquals(changedSubjectResponse.signaturePreimage()))
+
+        val changedParentState = response.certificate.executionCommitment.parentStateRoot.bytes()
+        changedParentState[0] = (changedParentState[0].toInt() xor 1).toByte()
+        val changedExecutionCommitment = SumeragiV2Wire.ExecutionCommitment.withoutTopups(
+            SumeragiV2Wire.Hash32(changedParentState),
+            response.certificate.executionCommitment.postStateRoot,
+            response.certificate.executionCommitment.ordinaryWritesRoot,
+        )
+        val changedExecutionCertificate = SumeragiV2Wire.QuorumCertificate(
+            response.certificate.round,
+            response.certificate.phase,
+            response.certificate.subject,
+            changedExecutionCommitment,
+            response.certificate.signers,
+            response.certificate.aggregateSignature(),
+        )
+        val changedExecutionResponse = SumeragiV2Wire.CommitCertificateResponse(
+            response.requestHash,
+            changedExecutionCertificate,
+            response.responder,
+            response.signature(),
+        )
+        assertFalse(
+            response.signaturePreimage().contentEquals(changedExecutionResponse.signaturePreimage()),
+            "commit response signature preimage did not bind the execution commitment",
+        )
+    }
+
+    @Test
+    fun `execution commitments reject noncanonical topup bindings`() {
+        val responseMessage = fixtureRows().single {
+            it.kind == "message" && it.name == "commit_certificate_response"
+        }
+        val responsePayload =
+            SumeragiV2Wire.ConsensusMessageV2.decodeCanonical(
+                responseMessage.hex.hexBytes(),
+            ).payload as SumeragiV2Wire.ConsensusPayload.CommitCertificateResponseMessage
+        val base = responsePayload.value.certificate.executionCommitment
+        val topupRoot = base.parentStateRoot
+
+        assertFailsWith<IllegalArgumentException> {
+            SumeragiV2Wire.ExecutionCommitment(
+                base.parentStateRoot,
+                base.postStateRoot,
+                base.ordinaryWritesRoot,
+                topupRoot,
+                0,
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            SumeragiV2Wire.ExecutionCommitment(
+                base.parentStateRoot,
+                base.postStateRoot,
+                base.ordinaryWritesRoot,
+                null,
+                1,
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            SumeragiV2Wire.ExecutionCommitment(
+                base.parentStateRoot,
+                base.postStateRoot,
+                base.ordinaryWritesRoot,
+                topupRoot,
+                SumeragiV2Wire.MAX_KAGEMUSHA_TOPUP_ANCHORS_PER_BLOCK + 1,
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            SumeragiV2Wire.ExecutionCommitment(
+                base.parentStateRoot,
+                base.postStateRoot,
+                base.ordinaryWritesRoot,
+                topupRoot,
+                1,
+            )
+        }
+
+        val canonicalPostState = SumeragiV2Wire.ExecutionCommitment.topupPostStateRoot(
+            1,
+            base.ordinaryWritesRoot,
+            topupRoot,
+        )
+        val valid = SumeragiV2Wire.ExecutionCommitment(
+            base.parentStateRoot,
+            canonicalPostState,
+            base.ordinaryWritesRoot,
+            topupRoot,
+            1,
+        )
+        assertContentEquals(
+            valid.encode(),
+            SumeragiV2Wire.ExecutionCommitment.decode(valid.encode()).encode(),
+        )
     }
 
     @Test

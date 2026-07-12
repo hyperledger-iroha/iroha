@@ -473,6 +473,7 @@ impl AdapterOutcome {
     }
 
     /// Borrow the effects now safe for asynchronous execution.
+    #[cfg(test)]
     pub(crate) fn effects(&self) -> &[AdapterEffect] {
         &self.effects
     }
@@ -722,7 +723,11 @@ impl SumeragiV2Adapter {
             replay_complete: false,
             fail_closed: false,
         };
-        let startup = adapter.reducer.resume_after_replay();
+        let replay_tag = adapter.reducer.current_tag();
+        let startup = adapter
+            .reducer
+            .step(reducer::Event::ResumeAfterReplay { tag: replay_tag })?
+            .into_effects();
         let startup = adapter.drive_effects(startup)?;
         adapter.replay_complete = true;
         adapter.publish_status()?;
@@ -1099,13 +1104,12 @@ impl SumeragiV2Adapter {
                 );
             }
             wire::ConsensusMessageV2Payload::TimeoutVote(vote) => {
-                let (vote, highest) = registry.timeout_vote_to_core(&vote, &self.wire_context)?;
-                self.registry = registry;
-                let result = self.receive_verified_timeout_vote(tag, vote, highest);
-                if result.is_err() {
-                    self.fail_closed = true;
-                }
-                return result;
+                let vote = registry.timeout_vote_to_core(&vote, &self.wire_context)?;
+                return self.dispatch_staged_authenticated_ingress(
+                    registry,
+                    reducer::Event::TimeoutVoteReceived { tag, vote },
+                    None,
+                );
             }
             wire::ConsensusMessageV2Payload::TimeoutCertificate(certificate) => {
                 let certificate = registry.tc_to_core(&certificate, &self.wire_context)?;
@@ -1157,32 +1161,6 @@ impl SumeragiV2Adapter {
             self.active_subject = previous_active_subject;
         }
         result
-    }
-
-    fn receive_verified_timeout_vote(
-        &mut self,
-        tag: reducer::EventTag,
-        vote: reducer::SignedTimeoutVote,
-        highest: Option<reducer::QuorumCertificate>,
-    ) -> Result<AdapterOutcome, AdapterError> {
-        let mut effects = Vec::new();
-        if let Some(certificate) = highest {
-            effects.extend(
-                self.step_authenticated_ingress(reducer::Event::QuorumCertificateReceived {
-                    tag,
-                    certificate,
-                })?
-                .into_effects(),
-            );
-        }
-        let outcome =
-            self.step_authenticated_ingress(reducer::Event::TimeoutVoteReceived { tag, vote })?;
-        let disposition = outcome.disposition();
-        effects.extend(outcome.into_effects());
-        Ok(AdapterOutcome {
-            disposition,
-            effects,
-        })
     }
 
     /// Pass an authenticated canonical envelope to the reducer.
@@ -1595,7 +1573,8 @@ impl SumeragiV2Adapter {
 
     fn step(&mut self, event: reducer::Event) -> Result<AdapterOutcome, AdapterError> {
         let priority = match &event {
-            reducer::Event::BodyAvailable { .. }
+            reducer::Event::ResumeAfterReplay { .. }
+            | reducer::Event::BodyAvailable { .. }
             | reducer::Event::BodyStored { .. }
             | reducer::Event::ValidationCompleted { .. }
             | reducer::Event::Persisted { .. }
@@ -1902,9 +1881,9 @@ impl SumeragiV2Adapter {
                     reducer::SignableMessage::Vote(vote) => {
                         SignRequest::Vote(self.registry.unsigned_vote_to_wire(vote)?)
                     }
-                    reducer::SignableMessage::TimeoutVote(vote) => {
-                        SignRequest::TimeoutVote(self.registry.unsigned_timeout_vote_to_wire(vote)?)
-                    }
+                    reducer::SignableMessage::TimeoutVote(vote) => SignRequest::TimeoutVote(
+                        self.registry.unsigned_timeout_vote_to_wire(&vote)?,
+                    ),
                 };
                 Ok(AdapterEffect::Sign { tag, request })
             }
@@ -1961,7 +1940,8 @@ fn progress_rank(event: &reducer::Event) -> u8 {
         }
         reducer::Event::TimeoutCertificateReceived { .. } => 2,
         reducer::Event::QuorumCertificateReceived { .. } => 1,
-        reducer::Event::LocalProposalReady { .. }
+        reducer::Event::ResumeAfterReplay { .. }
+        | reducer::Event::LocalProposalReady { .. }
         | reducer::Event::ProposalReceived { .. }
         | reducer::Event::VoteReceived { .. }
         | reducer::Event::TimeoutVoteReceived { .. }
@@ -2316,13 +2296,7 @@ impl WireRegistry {
         &mut self,
         vote: &wire::TimeoutVote,
         context: &wire::HeightContext,
-    ) -> Result<
-        (
-            reducer::SignedTimeoutVote,
-            Option<reducer::QuorumCertificate>,
-        ),
-        AdapterError,
-    > {
+    ) -> Result<reducer::SignedTimeoutVote, AdapterError> {
         vote.validate(context)?;
         let round = self.round_to_core(vote.round, context)?;
         let highest = vote
@@ -2330,29 +2304,26 @@ impl WireRegistry {
             .as_ref()
             .map(|certificate| self.qc_to_core(certificate, context))
             .transpose()?;
-        Ok((
-            reducer::SignedTimeoutVote::new(
-                reducer::TimeoutVote::new(
-                    context_id(vote.round.context_id),
-                    round,
-                    self.validator_id(vote.signer)?,
-                    highest.as_ref().map(reducer::QuorumCertificate::reference),
-                ),
-                reducer::OpaqueSignature::new(vote.signature.clone()),
+        Ok(reducer::SignedTimeoutVote::new(
+            reducer::TimeoutVote::new(
+                context_id(vote.round.context_id),
+                round,
+                self.validator_id(vote.signer)?,
+                highest,
             ),
-            highest,
+            reducer::OpaqueSignature::new(vote.signature.clone()),
         ))
     }
 
     fn unsigned_timeout_vote_to_wire(
         &mut self,
-        vote: reducer::TimeoutVote,
+        vote: &reducer::TimeoutVote,
     ) -> Result<wire::TimeoutVote, AdapterError> {
         let highest_prepare_qc = vote
             .highest_prepare()
-            .map(|reference| {
+            .map(|certificate| {
                 self.certificates
-                    .get(&reference)
+                    .get(&certificate.reference())
                     .cloned()
                     .ok_or(AdapterError::MissingCertificate)
             })
@@ -2369,7 +2340,7 @@ impl WireRegistry {
         &mut self,
         vote: &reducer::SignedTimeoutVote,
     ) -> Result<wire::TimeoutVote, AdapterError> {
-        let mut wire = self.unsigned_timeout_vote_to_wire(vote.vote())?;
+        let mut wire = self.unsigned_timeout_vote_to_wire(&vote.vote())?;
         wire.signature = vote.signature().as_bytes().to_vec();
         Ok(wire)
     }
@@ -2718,7 +2689,7 @@ impl WireRegistry {
                 vote: self.unsigned_vote_to_wire(*vote)?,
             },
             reducer::WalRecord::TimeoutIntent(vote) => {
-                WalRecordV2::TimeoutIntent(self.unsigned_timeout_vote_to_wire(*vote)?)
+                WalRecordV2::TimeoutIntent(self.unsigned_timeout_vote_to_wire(vote)?)
             }
             reducer::WalRecord::InstallTimeout(certificate) => {
                 WalRecordV2::InstallTimeout(self.tc_to_wire(certificate, aggregator)?)
@@ -2833,10 +2804,7 @@ impl WireRegistry {
                 let high = vote
                     .highest_prepare_qc
                     .as_ref()
-                    .map(|certificate| {
-                        self.qc_to_core_unchecked(certificate)
-                            .map(|certificate| certificate.reference())
-                    })
+                    .map(|certificate| self.qc_to_core_unchecked(certificate))
                     .transpose()?;
                 reducer::WalRecord::TimeoutIntent(reducer::TimeoutVote::new(
                     context_id(wire_context_id),

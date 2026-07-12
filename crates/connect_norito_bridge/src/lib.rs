@@ -88,7 +88,7 @@ use sorafs_manifest::{
     build_signed_orderbook_settlement_receipt_bytes_ed25519_v1, derive_orderbook_order_id_v1,
     reference_ffi as sorafs_reference_ffi, sign_orderbook_payload_bytes_ed25519_v1,
 };
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 
 #[cfg(feature = "privacy-production-enabled")]
 mod privacy_production;
@@ -9346,9 +9346,173 @@ const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_DECLARED_BYTES_V3: u64 =
     iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_FILE_BYTES_V3 * 6;
 const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_MANIFEST_BYTES_V3: c_ulong = 1024 * 1024;
 const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_HEADER_BYTES_V3: usize = 64 * 1024;
+// Release invariant: these entrypoints remain fail-closed until both
+// release-envelope authentication and init-to-finality binding are present
+// and covered by adversarial tests. Capability negotiation must not advertise
+// the prover while either invariant is absent.
+const KAGEMUSHA_RECURSIVE_SPEND_AUTHENTICATED_RELEASE_ENVELOPE_WIRED_V3: bool = false;
+const KAGEMUSHA_RECURSIVE_SPEND_INIT_BINDS_TOPUP_FINALITY_V2: bool = false;
+
+/// Secret-bearing, local-only request for constructing the zero-input shield
+/// transition used by a recursive Kagemusha top-up. This archive never goes
+/// to Torii and is zeroized immediately after the native prover returns.
+#[derive(Clone, Debug, PartialEq, Eq, norito::Encode, norito::Decode)]
+struct KagemushaTopUpShieldBuildRequestV2 {
+    chain_id: ChainId,
+    asset: AssetId,
+    amount: iroha_data_model::offline::KagemushaScaledAmountV2,
+    payer: AccountId,
+    operation_id: [u8; 32],
+    spend_key: [u8; 32],
+    rho: [u8; 32],
+    diversifier: [u8; 32],
+    leaf_index: u32,
+    zero_path: KagemushaTopUpZeroPathV2,
+    shield_verifier_id: VerifyingKeyId,
+    shield_verifier_commitment: [u8; 32],
+    artifact_generation: String,
+}
+
+/// Bounded authoritative next-zero path returned by `/v1/zk/merkle-path`.
+#[derive(Clone, Debug, PartialEq, Eq, norito::Encode, norito::Decode)]
+struct KagemushaTopUpZeroPathV2 {
+    siblings: Vec<[u8; 32]>,
+    directions: Vec<u8>,
+    root: [u8; 32],
+}
+
+fn kagemusha_topup_shield_build_unsigned_from_archive_v2(
+    request_archive: &[u8],
+) -> BridgeResult<iroha_data_model::offline::KagemushaRecursiveSpendTopUpUnsignedV2> {
+    #[cfg(not(feature = "privacy-production-enabled"))]
+    {
+        let _ = request_archive;
+        return Err(BridgeError::KagemushaRecursiveSpendV2Unavailable);
+    }
+
+    #[cfg(feature = "privacy-production-enabled")]
+    {
+        use iroha_core::zk::{
+            ZK_BACKEND_HALO2_IPA,
+            confidential_v2::{
+                ConfidentialMerklePathV2, KAGEMUSHA_TOPUP_SHIELD_V2_CIRCUIT_ID,
+                build_kagemusha_topup_shield_proof_v2, kagemusha_topup_shield_v2_vk_box,
+            },
+            hash_vk,
+        };
+        use iroha_data_model::offline::{
+            KagemushaRecursiveSpendTopUpUnsignedV2, KagemushaSpendableNoteDescriptorV2,
+            KagemushaTopUpShieldEvidenceV2,
+        };
+
+        let mut request: KagemushaTopUpShieldBuildRequestV2 =
+            decode_canonical_kagemusha_archive(request_archive)?;
+        let outcome = (|| {
+            request
+                .amount
+                .validate()
+                .map_err(|_| BridgeError::KagemushaProve)?;
+            if request.asset.account() != &request.payer
+                || request.asset.definition().to_string().is_empty()
+                || request.zero_path.siblings.len()
+                    != iroha_core::zk::confidential_v2::CONFIDENTIAL_TREE_DEPTH_V2
+                || request.zero_path.directions.len() != request.zero_path.siblings.len()
+                || request.zero_path.root == [0; 32]
+                || request.shield_verifier_id.backend.as_str() != ZK_BACKEND_HALO2_IPA
+                || request.shield_verifier_commitment == [0; 32]
+            {
+                return Err(BridgeError::KagemushaProve);
+            }
+            let vk_box =
+                kagemusha_topup_shield_v2_vk_box().map_err(|_| BridgeError::KagemushaProve)?;
+            if hash_vk(&vk_box) != request.shield_verifier_commitment {
+                return Err(BridgeError::KagemushaProve);
+            }
+            let path = ConfidentialMerklePathV2 {
+                siblings: request.zero_path.siblings.clone(),
+                directions: request.zero_path.directions.clone(),
+                witness_nodes: Vec::new(),
+                root: request.zero_path.root,
+            };
+            let proof = build_kagemusha_topup_shield_proof_v2(
+                &request.chain_id,
+                &request.asset.definition().to_string(),
+                &request.payer.to_string(),
+                request.operation_id,
+                request.amount.atomic_units,
+                request.amount.scale,
+                &request.spend_key,
+                request.rho,
+                request.diversifier,
+                request.leaf_index,
+                &path,
+                KAGEMUSHA_TOPUP_SHIELD_V2_CIRCUIT_ID,
+                &vk_box,
+            )
+            .map_err(|_| BridgeError::KagemushaProve)?;
+            let mut attachment = ProofAttachment::new_ref(
+                ZK_BACKEND_HALO2_IPA.into(),
+                proof.proof,
+                request.shield_verifier_id.clone(),
+            );
+            attachment.vk_commitment = Some(request.shield_verifier_commitment);
+            let unsigned = KagemushaRecursiveSpendTopUpUnsignedV2 {
+                asset: request.asset.clone(),
+                amount: request.amount,
+                current_note: KagemushaSpendableNoteDescriptorV2 {
+                    chain_id: request.chain_id.clone(),
+                    asset: request.asset.definition().clone(),
+                    note_commitment: proof.output_commitment,
+                    spend_nullifier: proof.spend_nullifier,
+                    amount: request.amount,
+                },
+                shield_evidence: KagemushaTopUpShieldEvidenceV2 {
+                    initial_root: proof.initial_root,
+                    finalized_root: proof.finalized_root,
+                    leaf_index: proof.leaf_index,
+                    proof: attachment,
+                },
+                artifact_generation: request.artifact_generation.clone(),
+                operation_id: request.operation_id,
+            };
+            unsigned
+                .validate_public_binding()
+                .map_err(|_| BridgeError::KagemushaProve)?;
+            Ok(unsigned)
+        })();
+        request.spend_key.zeroize();
+        request.rho.zeroize();
+        request.diversifier.zeroize();
+        outcome
+    }
+}
+
+const fn kagemusha_topup_finality_entrypoint_callable_v2(
+    proof_backend: bool,
+    authenticated_release_envelope: bool,
+    init_binds_topup_finality: bool,
+) -> bool {
+    proof_backend && authenticated_release_envelope && init_binds_topup_finality
+}
+
+const KAGEMUSHA_TOPUP_FINALITY_VERIFY_ENTRYPOINT_CALLABLE_V2: bool =
+    kagemusha_topup_finality_entrypoint_callable_v2(
+        iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_V2_PROOF_BACKEND_AVAILABLE,
+        KAGEMUSHA_RECURSIVE_SPEND_AUTHENTICATED_RELEASE_ENVELOPE_WIRED_V3,
+        KAGEMUSHA_RECURSIVE_SPEND_INIT_BINDS_TOPUP_FINALITY_V2,
+    );
+
 // Flip only when init/append/verify/redeem all invoke the audited Pasta prover
-// and terminal decider rather than the fail-closed sentinel.
-const KAGEMUSHA_RECURSIVE_SPEND_V2_PROOF_ENTRYPOINTS_CALLABLE: bool = false;
+// and terminal decider rather than the fail-closed sentinel. Requiring the
+// same finality boundary prevents proving from becoming callable while init
+// can still construct a lineage that is not bound to chain finality.
+const KAGEMUSHA_RECURSIVE_SPEND_V2_PROOF_ENTRYPOINTS_CALLABLE: bool =
+    iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_V2_PROOF_BACKEND_AVAILABLE
+        && kagemusha_topup_finality_entrypoint_callable_v2(
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_V2_PROOF_BACKEND_AVAILABLE,
+            KAGEMUSHA_RECURSIVE_SPEND_AUTHENTICATED_RELEASE_ENVELOPE_WIRED_V3,
+            KAGEMUSHA_RECURSIVE_SPEND_INIT_BINDS_TOPUP_FINALITY_V2,
+        );
 
 fn kagemusha_recursive_spend_artifact_registry_v3()
 -> &'static Mutex<HashMap<u64, Arc<Mutex<KagemushaRecursiveSpendArtifactIngestV3>>>> {
@@ -10241,6 +10405,9 @@ pub unsafe extern "C" fn connect_norito_kagemusha_topup_finality_verify_v2(
     expected_manifest_sha256_len: c_ulong,
 ) -> c_int {
     let result = (|| {
+        if !KAGEMUSHA_TOPUP_FINALITY_VERIFY_ENTRYPOINT_CALLABLE_V2 {
+            return Err(BridgeError::KagemushaRecursiveSpendV2Unavailable);
+        }
         if proof_norito_ptr.is_null()
             || roster_norito_ptr.is_null()
             || anchor_norito_ptr.is_null()
@@ -10857,11 +11024,35 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_init_v2(
     kagemusha_recursive_spend_v2_unavailable(out_bundle_ptr, out_bundle_len)
 }
 
-/// Build the canonical V2 chain-facing online-to-offline instruction.
+/// Build the canonical unsigned online-to-offline request from a Torii
+/// next-zero Merkle path and local confidential note secrets.
 ///
-/// This phase verifies and wraps only the checked confidential-transfer
-/// request. Recursive init happens locally after Torii returns the finalized
-/// top-up anchor, so no lineage proving artifact is consumed here.
+/// The input is the local-only `KagemushaTopUpShieldBuildRequestV2`; output is
+/// a canonical `KagemushaRecursiveSpendTopUpUnsignedV2`. Secret key material
+/// is wiped before this function returns and is never included in output.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_kagemusha_topup_shield_build_unsigned_v2(
+    request_norito_ptr: *const c_uchar,
+    request_norito_len: c_ulong,
+    out_unsigned_ptr: *mut *mut c_uchar,
+    out_unsigned_len: *mut c_ulong,
+) -> c_int {
+    let result = (|| {
+        clear_bridge_output_or_null(out_unsigned_ptr, out_unsigned_len)?;
+        let bytes =
+            unsafe { read_kagemusha_archive_bytes(request_norito_ptr, request_norito_len) }?;
+        let unsigned = kagemusha_topup_shield_build_unsigned_from_archive_v2(&bytes)?;
+        let archive = norito::to_bytes(&unsigned).map_err(|_| BridgeError::KagemushaProve)?;
+        unsafe { write_kagemusha_archive_bridge(out_unsigned_ptr, out_unsigned_len, &archive) }
+    })();
+    bridge_result_to_code(result)
+}
+
+/// Compute the authorization digest for a canonical unsigned V2 top-up.
+///
+/// Recursive init happens locally only after Torii returns the finalized
+/// top-up anchor and consensus proof, so no lineage proving artifact is
+/// consumed here.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_topup_unsigned_payload_digest_v2(
     unsigned_norito_ptr: *const c_uchar,
@@ -12563,7 +12754,21 @@ mod offline_note_prover_tests {
     }
 
     #[test]
-    fn topup_finality_verifier_rejects_null_and_noncanonical_archives() {
+    fn topup_finality_verifier_remains_fail_closed_before_parsing_archives() {
+        assert!(!KAGEMUSHA_TOPUP_FINALITY_VERIFY_ENTRYPOINT_CALLABLE_V2);
+        assert!(!kagemusha_topup_finality_entrypoint_callable_v2(
+            false, true, true
+        ));
+        assert!(!kagemusha_topup_finality_entrypoint_callable_v2(
+            true, false, true
+        ));
+        assert!(!kagemusha_topup_finality_entrypoint_callable_v2(
+            true, true, false
+        ));
+        assert!(kagemusha_topup_finality_entrypoint_callable_v2(
+            true, true, true
+        ));
+
         let null_rc = unsafe {
             connect_norito_kagemusha_topup_finality_verify_v2(
                 ptr::null(),
@@ -12578,7 +12783,7 @@ mod offline_note_prover_tests {
                 0,
             )
         };
-        assert_eq!(null_rc, ERR_NULL_PTR);
+        assert_eq!(null_rc, ERR_KAGEMUSHA_RECURSIVE_SPEND_V2_UNAVAILABLE);
 
         let malformed = [0xA5_u8];
         let expected_manifest_sha256 = [0x5A_u8; 32];
@@ -12596,7 +12801,7 @@ mod offline_note_prover_tests {
                 expected_manifest_sha256.len() as c_ulong,
             )
         };
-        assert_eq!(malformed_rc, ERR_KAGEMUSHA_PROVE);
+        assert_eq!(malformed_rc, ERR_KAGEMUSHA_RECURSIVE_SPEND_V2_UNAVAILABLE);
 
         let oversized_proof_rc = unsafe {
             connect_norito_kagemusha_topup_finality_verify_v2(
@@ -12612,7 +12817,10 @@ mod offline_note_prover_tests {
                 expected_manifest_sha256.len() as c_ulong,
             )
         };
-        assert_eq!(oversized_proof_rc, ERR_KAGEMUSHA_PROVE);
+        assert_eq!(
+            oversized_proof_rc,
+            ERR_KAGEMUSHA_RECURSIVE_SPEND_V2_UNAVAILABLE
+        );
 
         let oversized_anchor_rc = unsafe {
             connect_norito_kagemusha_topup_finality_verify_v2(
@@ -12628,7 +12836,10 @@ mod offline_note_prover_tests {
                 expected_manifest_sha256.len() as c_ulong,
             )
         };
-        assert_eq!(oversized_anchor_rc, ERR_KAGEMUSHA_PROVE);
+        assert_eq!(
+            oversized_anchor_rc,
+            ERR_KAGEMUSHA_RECURSIVE_SPEND_V2_UNAVAILABLE
+        );
 
         let wrong_digest_length_rc = unsafe {
             connect_norito_kagemusha_topup_finality_verify_v2(
@@ -12644,7 +12855,10 @@ mod offline_note_prover_tests {
                 31,
             )
         };
-        assert_eq!(wrong_digest_length_rc, ERR_KAGEMUSHA_PROVE);
+        assert_eq!(
+            wrong_digest_length_rc,
+            ERR_KAGEMUSHA_RECURSIVE_SPEND_V2_UNAVAILABLE
+        );
     }
 
     fn recursive_spend_v3_artifact_fixture() -> (Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>) {
@@ -29227,6 +29441,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_sorafs_SorafsRe
     target_os = "macos",
     target_os = "windows"
 ))]
+#[cfg(test)]
 #[allow(clippy::missing_safety_doc)]
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_NativeOfflineNoteProver_nativeProveNoteRedeemWithVk(
@@ -29244,6 +29459,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_NativeOffli
     target_os = "macos",
     target_os = "windows"
 ))]
+#[cfg(test)]
 #[allow(clippy::missing_safety_doc)]
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_NativeOfflineNoteProver_nativeProveNoteAuditWithVk(
@@ -29261,6 +29477,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_NativeOffli
     target_os = "macos",
     target_os = "windows"
 ))]
+#[cfg(test)]
 #[allow(clippy::missing_safety_doc)]
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_NativeOfflineNoteProver_nativeVerifyNoteRedeemWithVk(
@@ -29278,6 +29495,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_NativeOffli
     target_os = "macos",
     target_os = "windows"
 ))]
+#[cfg(test)]
 #[allow(clippy::missing_safety_doc)]
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_NativeOfflineNoteProver_nativeVerifyNoteAuditWithVk(
@@ -29295,6 +29513,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_NativeOffli
     target_os = "macos",
     target_os = "windows"
 ))]
+#[cfg(test)]
 #[allow(clippy::missing_safety_doc)]
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaCompactPaymentTokenProver_nativeProveVerifiedCompactPaymentTokenWithRecords(
@@ -29476,6 +29695,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRe
     target_os = "macos",
     target_os = "windows"
 ))]
+#[cfg(test)]
 #[allow(clippy::missing_safety_doc)]
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_NativeOfflineNoteProver_nativeProveNoteRedeemWithVk(
@@ -29493,6 +29713,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_NativeO
     target_os = "macos",
     target_os = "windows"
 ))]
+#[cfg(test)]
 #[allow(clippy::missing_safety_doc)]
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_NativeOfflineNoteProver_nativeProveNoteAuditWithVk(
@@ -29510,6 +29731,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_NativeO
     target_os = "macos",
     target_os = "windows"
 ))]
+#[cfg(test)]
 #[allow(clippy::missing_safety_doc)]
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_NativeOfflineNoteProver_nativeVerifyNoteRedeemWithVk(
@@ -29527,6 +29749,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_NativeO
     target_os = "macos",
     target_os = "windows"
 ))]
+#[cfg(test)]
 #[allow(clippy::missing_safety_doc)]
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_NativeOfflineNoteProver_nativeVerifyNoteAuditWithVk(
@@ -29544,6 +29767,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_NativeO
     target_os = "macos",
     target_os = "windows"
 ))]
+#[cfg(test)]
 #[allow(clippy::missing_safety_doc)]
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_KagemushaCompactPaymentTokenProver_nativeProveVerifiedCompactPaymentTokenWithRecords(

@@ -230,6 +230,10 @@ def _capabilities() -> Dict[str, Any]:
             "max_retained_native_trust_anchors_per_lane": 4_096,
         },
         "resource_limits": {
+            "max_outbound_messages_per_block": 512,
+            "max_outbound_message_payload_bytes": 4_096,
+            "max_pending_outbound_messages": 65_536,
+            "max_pending_outbound_payload_bytes": 256 * 1024 * 1024,
             "max_proofs_per_transaction": 1,
             "max_proofs_per_block": 4,
             "max_proof_bytes_per_proof": 8 * 1024 * 1024,
@@ -439,9 +443,12 @@ def _proof_request() -> Dict[str, Any]:
     }
 
 
-def _recent(height: int = 9, message_id: str = MESSAGE_ID) -> Dict[str, Any]:
+def _recent(
+    height: int = 9, message_id: str = MESSAGE_ID, commitment_index: int = 0
+) -> Dict[str, Any]:
     return {
         "height": height,
+        "commitment_index": commitment_index,
         "message_id_hex": message_id,
         "kind": "transfer",
         "source_profile": "sora-taira",
@@ -626,6 +633,10 @@ def test_capabilities_require_exact_paths_and_reject_retired_fields_and_queries(
     assert parsed.registry_path == "/v1/sccp/registry"
     assert parsed.registry_limits.max_retained_routes_per_lane == 64
     assert parsed.registry_limits.max_retained_native_trust_anchors_per_lane == 4_096
+    assert parsed.resource_limits.max_outbound_messages_per_block == 512
+    assert parsed.resource_limits.max_outbound_message_payload_bytes == 4_096
+    assert parsed.resource_limits.max_pending_outbound_messages == 65_536
+    assert parsed.resource_limits.max_pending_outbound_payload_bytes == 256 * 1024 * 1024
     assert parsed.resource_limits.max_bls_signer_contributions_per_transaction == 131_713
     read_only = _capabilities()
     del read_only["proof_submit_path"]
@@ -651,6 +662,26 @@ def test_capabilities_require_exact_paths_and_reject_retired_fields_and_queries(
         value = _capabilities()
         value["resource_limits"][field] = 0
         with pytest.raises(ValueError, match=field):
+            normalize_sccp_capabilities(value)
+    for field, invalid in (
+        ("max_outbound_messages_per_block", 511),
+        ("max_outbound_messages_per_block", 513),
+        ("max_outbound_message_payload_bytes", 4_095),
+        ("max_outbound_message_payload_bytes", 4_097),
+    ):
+        value = _capabilities()
+        value["resource_limits"][field] = invalid
+        with pytest.raises(ValueError, match="fixed outbound"):
+            normalize_sccp_capabilities(value)
+    for field in (
+        "max_outbound_messages_per_block",
+        "max_outbound_message_payload_bytes",
+        "max_pending_outbound_messages",
+        "max_pending_outbound_payload_bytes",
+    ):
+        value = _capabilities()
+        del value["resource_limits"][field]
+        with pytest.raises(ValueError, match="missing required"):
             normalize_sccp_capabilities(value)
     drifted_registry_limits = _capabilities()
     drifted_registry_limits["registry_limits"]["max_retained_routes_per_lane"] = 65
@@ -736,6 +767,8 @@ def test_capability_integers_preserve_canonical_json_tokens_and_shared_range() -
         "max_proof_bytes_per_block",
         "max_native_header_bytes_per_transaction",
         "max_native_header_bytes_per_block",
+        "max_pending_outbound_messages",
+        "max_pending_outbound_payload_bytes",
     )
     for field in byte_fields:
         boundary["resource_limits"][field] = (1 << 53) - 1
@@ -745,6 +778,11 @@ def test_capability_integers_preserve_canonical_json_tokens_and_shared_range() -
     boundary["resource_limits"]["max_proof_bytes_per_block"] = 1 << 53
     with pytest.raises(ValueError, match="max_proof_bytes_per_block"):
         normalize_sccp_capabilities(boundary)
+    for field in ("max_pending_outbound_messages", "max_pending_outbound_payload_bytes"):
+        overflow = _capabilities()
+        overflow["resource_limits"][field] = 1 << 53
+        with pytest.raises(ValueError, match=field):
+            normalize_sccp_capabilities(overflow)
 
 
 def test_registry_checks_retained_history_caps_before_traversal() -> None:
@@ -1085,6 +1123,20 @@ def test_registry_accepts_zero_bn254_limbs_but_rejects_all_zero_point() -> None:
 def test_recent_links_are_exact_and_route_configuration_is_independent() -> None:
     parsed = normalize_sccp_recent_messages({"items": [_recent(9), _recent(8, HASH(0x12))]})
     assert [item["height"] for item in parsed.items] == [9, 8]
+    assert parsed.next is None
+    continued = normalize_sccp_recent_messages(
+        {
+            "items": [
+                _recent((1 << 64) - 1, HASH(0x13), 510),
+                _recent((1 << 64) - 1, HASH(0x14), 511),
+            ],
+            "next": {"from": (1 << 64) - 1, "after_index": 511},
+        }
+    )
+    assert [item["commitment_index"] for item in continued.items] == [510, 511]
+    assert continued.next is not None
+    assert continued.next.from_height == (1 << 64) - 1
+    assert continued.next.after_index == 511
     retired = _recent()
     retired["links"]["job_path"] = f"/v1/sccp/jobs/message/{MESSAGE_ID}"
     with pytest.raises(ValueError, match="retired"):
@@ -1098,9 +1150,53 @@ def test_recent_links_are_exact_and_route_configuration_is_independent() -> None
     with pytest.raises(ValueError, match="distinct"):
         normalize_sccp_recent_messages({"items": [alias]})
     with pytest.raises(ValueError, match="newest-first"):
-        normalize_sccp_recent_messages({"items": [_recent(8), _recent(9)]})
+        normalize_sccp_recent_messages({"items": [_recent(8), _recent(9, HASH(0x12))]})
     with pytest.raises(ValueError, match="duplicate"):
         normalize_sccp_recent_messages({"items": [_recent(), _recent()]})
+    for indices in ((1, 1), (1, 3), (2, 1)):
+        with pytest.raises(ValueError, match="contiguous"):
+            normalize_sccp_recent_messages(
+                {
+                    "items": [
+                        _recent(9, HASH(0x15), indices[0]),
+                        _recent(9, HASH(0x16), indices[1]),
+                    ]
+                }
+            )
+    with pytest.raises(ValueError, match="begin at commitment index zero"):
+        normalize_sccp_recent_messages(
+            {"items": [_recent(9), _recent(8, HASH(0x17), 1)]}
+        )
+    for mutation in (
+        lambda value: value.pop("commitment_index"),
+        lambda value: value.update(commitment_index=512),
+        lambda value: value.update(commitment_index=True),
+    ):
+        invalid_index = _recent()
+        mutation(invalid_index)
+        with pytest.raises((TypeError, ValueError)):
+            normalize_sccp_recent_messages({"items": [invalid_index]})
+    unknown_item = _recent()
+    unknown_item["commitment_position"] = 0
+    with pytest.raises(ValueError, match="retired"):
+        normalize_sccp_recent_messages({"items": [unknown_item]})
+    with pytest.raises(ValueError, match="retired"):
+        normalize_sccp_recent_messages(
+            {"items": [_recent()], "cursor": {"from": 9, "after_index": 0}}
+        )
+    for next_cursor in (
+        None,
+        {"from": 9, "after_index": 1},
+        {"from": 9, "after_index": 0, "extra": 0},
+        {"from": 9, "after_index": 512},
+        {"from": True, "after_index": 0},
+    ):
+        with pytest.raises((TypeError, ValueError)):
+            normalize_sccp_recent_messages({"items": [_recent()], "next": next_cursor})
+    with pytest.raises(ValueError, match="empty"):
+        normalize_sccp_recent_messages(
+            {"items": [], "next": {"from": 9, "after_index": 0}}
+        )
     oversized = _recent()
     oversized["amount"] = str(1 << 128)
     with pytest.raises(ValueError, match="u128"):
@@ -1408,7 +1504,9 @@ def test_torii_exact_endpoints_and_content_negotiation() -> None:
     assert client.get_sccp_registry().version == 1
     assert client.get_sccp_message_bundle(MESSAGE_ID)["version"] == 1
     assert client.get_sccp_proof_request(MESSAGE_ID, format="norito") == proof_request_frame
-    assert client.get_sccp_recent_messages(from_height=9, limit=1).items == ()
+    assert client.get_sccp_recent_messages(
+        from_height=(1 << 64) - 1, after_index=511, limit=1
+    ).items == ()
     assert [call["url"] for call in session.calls] == [
         "https://example.invalid/v1/sccp/capabilities",
         "https://example.invalid/v1/sccp/registry",
@@ -1417,7 +1515,11 @@ def test_torii_exact_endpoints_and_content_negotiation() -> None:
         "https://example.invalid/v1/sccp/messages/recent",
     ]
     assert session.calls[3]["headers"] == {"Accept": "application/x-norito"}
-    assert session.calls[4]["params"] == {"from": "9", "limit": "1"}
+    assert session.calls[4]["params"] == {
+        "from": str((1 << 64) - 1),
+        "after_index": "511",
+        "limit": "1",
+    }
     assert all(call["stream"] is True for call in session.calls)
 
 
@@ -1647,25 +1749,30 @@ def test_torii_rejects_ambiguous_response_formats_without_io(format: Any) -> Non
 
 
 @pytest.mark.parametrize(
-    ("from_height", "limit"),
+    ("from_height", "after_index", "limit"),
     [
-        (0, None),
-        (-1, None),
-        (True, None),
-        ("1", None),
-        (None, 0),
-        (None, -1),
-        (None, 51),
-        (None, True),
+        (0, None, None),
+        (-1, None, None),
+        (True, None, None),
+        ("1", None, None),
+        ((1 << 64), None, None),
+        (None, 0, None),
+        (1, -1, None),
+        (1, 512, None),
+        (1, True, None),
+        (None, None, 0),
+        (None, None, -1),
+        (None, None, 51),
+        (None, None, True),
     ],
 )
 def test_torii_rejects_invalid_recent_queries_without_io(
-    from_height: Any, limit: Any
+    from_height: Any, after_index: Any, limit: Any
 ) -> None:
     session = RecordingSession([])
     with pytest.raises(ValueError):
         ToriiClient("https://example.invalid", session=session).get_sccp_recent_messages(
-            from_height=from_height, limit=limit
+            from_height=from_height, after_index=after_index, limit=limit
         )
     assert session.calls == []
 

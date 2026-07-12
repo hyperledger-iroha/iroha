@@ -2388,6 +2388,7 @@ fn governance_payload_kind(payload: &GovernanceLogPayloadV1) -> &'static str {
         GovernanceLogPayloadV1::ReplicationOrder(_) => "replication_order",
         GovernanceLogPayloadV1::PorChallenge(_) => "por_challenge",
         GovernanceLogPayloadV1::PorProof(_) => "por_proof",
+        GovernanceLogPayloadV1::PdpArchive(_) => "pdp_archive",
         GovernanceLogPayloadV1::AuditVerdict(_) => "audit_verdict",
         GovernanceLogPayloadV1::DealSettlement(_) => "deal_settlement",
         GovernanceLogPayloadV1::SignedReputationSnapshot(_) => "reputation_snapshot",
@@ -2419,7 +2420,9 @@ fn governance_log_validation_code(error: &GovernanceLogValidationError) -> &'sta
         }
         GovernanceLogValidationError::PorChallenge(error) => por_challenge_validation_code(error),
         GovernanceLogValidationError::PorProof(error) => por_proof_validation_code(error),
-        GovernanceLogValidationError::AuditVerdict(_)
+        GovernanceLogValidationError::PdpArchive(_)
+        | GovernanceLogValidationError::PdpArchiveDecisionAfterNode { .. }
+        | GovernanceLogValidationError::AuditVerdict(_)
         | GovernanceLogValidationError::DealSettlement(_)
         | GovernanceLogValidationError::SignedReputationSnapshot(_)
         | GovernanceLogValidationError::ModerationBallotEvent(_)
@@ -2446,7 +2449,9 @@ fn governance_log_validation_category(error: &GovernanceLogValidationError) -> &
             por_challenge_validation_category(error)
         }
         GovernanceLogValidationError::PorProof(_) => CATEGORY_VALIDATION,
-        GovernanceLogValidationError::AuditVerdict(_)
+        GovernanceLogValidationError::PdpArchive(_)
+        | GovernanceLogValidationError::PdpArchiveDecisionAfterNode { .. }
+        | GovernanceLogValidationError::AuditVerdict(_)
         | GovernanceLogValidationError::DealSettlement(_)
         | GovernanceLogValidationError::SignedReputationSnapshot(_)
         | GovernanceLogValidationError::ModerationBallotEvent(_)
@@ -5997,6 +6002,7 @@ fn repair_task_event_context(event: &RepairTaskEventV1) -> Vec<ValidationContext
 fn repair_cause_label(evidence: &RepairEvidenceV1) -> String {
     match &evidence.cause {
         crate::RepairCauseV1::PorFailure(_) => "por_failure",
+        crate::RepairCauseV1::PdpFailure(_) => "pdp_failure",
         crate::RepairCauseV1::LatencySla(_) => "latency_sla",
         crate::RepairCauseV1::ReplicaShortfall(_) => "replica_shortfall",
         crate::RepairCauseV1::Manual(_) => "manual",
@@ -6887,10 +6893,10 @@ mod tests {
         PotrStatus, ProviderAdvertBodyV1, ProviderCapabilityRangeV1, QosHints,
         REFRESH_RECOMMENDATION_SECS, REPAIR_EVIDENCE_VERSION_V1, REPAIR_REPORT_VERSION_V1,
         REPAIR_TASK_VERSION_V1, REPLICATION_ORDER_VERSION_V1, RendezvousTopic, RepairCauseV1,
-        RepairEvidenceV1, RepairPorFailureCauseV1, RepairReportV1, RepairTaskRecordV1,
-        RepairTaskStateV1, RepairTicketId, ReplicationAssignmentV1, ReplicationOrderSlaV1,
-        SIGNED_AUDITOR_REQUEST_VERSION_V1, SignatureAlgorithm, SignedAuditorRequestPayloadV1,
-        SignedAuditorRequestV1, StakePointer,
+        RepairEvidenceV1, RepairPdpFailureCauseV1, RepairPdpFailureKindV1, RepairPorFailureCauseV1,
+        RepairReportV1, RepairTaskRecordV1, RepairTaskStateV1, RepairTicketId,
+        ReplicationAssignmentV1, ReplicationOrderSlaV1, SIGNED_AUDITOR_REQUEST_VERSION_V1,
+        SignatureAlgorithm, SignedAuditorRequestPayloadV1, SignedAuditorRequestV1, StakePointer,
     };
 
     fn workspace_fixture(path: &str) -> PathBuf {
@@ -8572,6 +8578,34 @@ mod tests {
             decode_from_bytes(&to_bytes(&outcome).expect("encode outcome"))
                 .expect("decode outcome");
         assert_eq!(roundtrip, outcome);
+    }
+
+    #[test]
+    fn validate_repair_payload_bytes_uses_stable_pdp_failure_label() {
+        let mut evidence = repair_evidence();
+        evidence.cause = RepairCauseV1::PdpFailure(RepairPdpFailureCauseV1 {
+            challenge_id: [0x41; 32],
+            epoch_id: 9,
+            failed_samples: 1,
+            proof_digest: Some([0x42; 32]),
+            failure_kind: RepairPdpFailureKindV1::InvalidProof,
+        });
+        let bytes = to_bytes(&evidence).expect("encode PDP repair evidence");
+        let outcome = validate_repair_payload_bytes(
+            RepairValidationPayloadKindV1::Evidence,
+            &bytes,
+            "pdp-repair-evidence.to",
+            28,
+        );
+
+        assert!(outcome.is_ok(), "{outcome:?}");
+        assert!(
+            outcome
+                .context
+                .iter()
+                .any(|field| field.key == "cause" && field.value == "pdp_failure"),
+            "PDP repair evidence must retain its stable reference label"
+        );
     }
 
     #[test]

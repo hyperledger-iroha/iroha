@@ -39,8 +39,8 @@ use iroha_crypto::{Hash, HashOf};
 #[allow(unused_imports)]
 use iroha_data_model::nexus::{
     AUTOSCALE_META_COMMITTEE, AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_DRAIN_STATE,
-    AUTOSCALE_META_MANAGED, DataSpaceCatalog, DataSpaceId, LaneCatalog, LaneId, LaneLifecyclePlan,
-    LanePrivacyProof, LaneStorageProfile, LaneVisibility, UniversalAccountId,
+    AUTOSCALE_META_MANAGED, DataSpaceCatalog, DataSpaceId, LaneCatalog, LaneId, LanePrivacyProof,
+    LaneStorageProfile, LaneVisibility, UniversalAccountId,
 };
 use iroha_data_model::{
     account::AccountId,
@@ -85,7 +85,7 @@ use tokio::{
     time::{MissedTickBehavior, interval},
 };
 
-#[cfg(any(test, feature = "iroha-core-tests"))]
+#[cfg(test)]
 use crate::state::LaneLifecycleError;
 #[cfg(feature = "telemetry")]
 use crate::telemetry::{DataspaceTeuGaugeUpdate, LaneTeuGaugeUpdate};
@@ -7797,7 +7797,7 @@ impl Queue {
     ///
     /// # Errors
     /// Returns an error if updating the lane lifecycle or reconfiguring Nexus metadata fails.
-    #[cfg(any(test, feature = "iroha-core-tests"))]
+    #[cfg(test)]
     pub(crate) fn apply_lane_lifecycle(
         &self,
         state: &mut State,
@@ -9089,7 +9089,7 @@ pub mod tests {
         }
 
         fn current(&self) -> Result<RoutingDecision, RoutingResolveError> {
-            *self.decision.read()
+            self.decision.read().clone()
         }
     }
 

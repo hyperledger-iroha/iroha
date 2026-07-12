@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import sys
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -18,10 +19,15 @@ if str(SCRIPT_DIR) not in sys.path:
 from check_sorafs_production_readiness import (  # noqa: E402
     DEFAULT_MAX_SUMMARY_ARTIFACT_AGE_SECS,
     DEFAULT_REQUIRED_GATES,
+    FOUNDATIONAL_PREREQUISITE_IDS,
+    FOUNDATIONAL_PREREQUISITE_SCHEMA,
     GATE_BY_NAME,
+    MAX_FOUNDATIONAL_RELEASE_SEQUENCE,
     SUMMARY_SCHEMA,
+    canonical_lower_hex,
     canonical_string,
     is_production_ready_environment,
+    parse_foundational_signer_public_key,
     require_production_deployment_id_value,
 )
 from sorafs_required_kinds import (  # noqa: E402
@@ -58,6 +64,7 @@ PLAN_FIELDS = frozenset(
         "thresholds",
         "deployment_context",
         "external_summaries",
+        "foundational_prerequisite",
         "summary_contract",
         "steps",
     }
@@ -68,6 +75,16 @@ PLAN_NON_NEGATIVE_THRESHOLD_FIELDS = frozenset({"max_summary_artifact_age_secs"}
 PLAN_THRESHOLD_FIELDS_LABEL = "max_summary_artifact_age_secs and optional now_unix"
 PLAN_DEPLOYMENT_CONTEXT_FIELDS = frozenset({"deployment_id", "environment"})
 COMMAND_PATH_FLAGS = frozenset({"--evidence", "--summary-out"})
+PLAN_FOUNDATIONAL_PREREQUISITE_FIELDS = frozenset(
+    {
+        "schema",
+        "summary",
+        "required_ids",
+        "signer_public_key_fingerprint_sha256",
+        "release_sequence",
+        "previous_envelope_sha256",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -143,6 +160,22 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
         summary_filename="sorafs-production-readiness-summary.json",
     )
     seen_input_files: dict[Path, tuple[str, Path]] = {}
+    foundational_paths = list(args.foundational_prerequisite_summary)
+    if not foundational_paths:
+        errors.append(
+            "production readiness runner requires exactly one foundational prerequisite summary"
+        )
+    elif len(foundational_paths) > 1:
+        errors.append(
+            "production readiness runner requires exactly one foundational prerequisite summary"
+        )
+    errors.extend(
+        require_existing_files(
+            foundational_paths,
+            "--foundational-prerequisite-summary",
+            seen=seen_input_files,
+        )
+    )
     paths_by_gate = summary_paths_by_gate(args)
     for gate in args.required_gates:
         paths = paths_by_gate[gate]
@@ -170,7 +203,7 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
         )
     if any(
         not summary_input_path_is_plan_safe(path)
-        for paths in paths_by_gate.values()
+        for paths in [*paths_by_gate.values(), foundational_paths]
         for path in paths
     ):
         errors.append(
@@ -199,6 +232,56 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
         )
         if not is_production_ready_environment(args.environment):
             errors.append("production readiness runner environment must be production")
+    if args.foundational_signer_public_key_hex is None:
+        errors.append(
+            "production readiness runner requires a foundational prerequisite signer public key"
+        )
+    else:
+        parse_foundational_signer_public_key(
+            args.foundational_signer_public_key_hex,
+            errors,
+            path="production readiness runner foundational signer public key",
+        )
+    require_runner_positive_int(
+        args,
+        "foundational_release_sequence",
+        errors,
+    )
+    if (
+        isinstance(args.foundational_release_sequence, int)
+        and not isinstance(args.foundational_release_sequence, bool)
+        and args.foundational_release_sequence > MAX_FOUNDATIONAL_RELEASE_SEQUENCE
+    ):
+        errors.append(
+            "production readiness runner foundational release sequence must be in 1..2^63-1"
+        )
+    if args.foundational_previous_envelope_sha256 is None:
+        errors.append(
+            "production readiness runner requires a foundational prerequisite predecessor digest"
+        )
+    elif (
+        canonical_lower_hex(args.foundational_previous_envelope_sha256, 64)
+        is None
+    ):
+        errors.append(
+            "production readiness runner foundational predecessor must be canonical lowercase SHA-256"
+        )
+    elif (
+        isinstance(args.foundational_release_sequence, int)
+        and not isinstance(args.foundational_release_sequence, bool)
+        and args.foundational_release_sequence > 0
+    ):
+        predecessor_is_zero = not any(
+            bytes.fromhex(args.foundational_previous_envelope_sha256)
+        )
+        if args.foundational_release_sequence == 1 and not predecessor_is_zero:
+            errors.append(
+                "production readiness runner foundational sequence 1 requires the zero predecessor"
+            )
+        if args.foundational_release_sequence > 1 and predecessor_is_zero:
+            errors.append(
+                "production readiness runner foundational sequence after 1 requires a non-zero predecessor"
+            )
     return errors
 
 
@@ -210,6 +293,8 @@ def build_command_plan(args: argparse.Namespace) -> list[CommandPlan]:
         or args.out_dir / "sorafs-production-readiness-summary.json"
     )
     verifier_command = [sys.executable, str(args.verifier)]
+    for path in args.foundational_prerequisite_summary:
+        verifier_command.extend(["--evidence", str(path)])
     for paths in summary_paths_by_gate(args).values():
         for path in paths:
             verifier_command.extend(["--evidence", str(path)])
@@ -229,7 +314,58 @@ def build_command_plan(args: argparse.Namespace) -> list[CommandPlan]:
         verifier_command.extend(["--deployment-id", args.deployment_id])
     if args.environment is not None:
         verifier_command.extend(["--environment", args.environment])
+    if args.foundational_signer_public_key_hex is not None:
+        verifier_command.extend(
+            [
+                "--foundational-prerequisite-signer-public-key-hex",
+                args.foundational_signer_public_key_hex,
+            ]
+        )
+    if args.foundational_release_sequence is not None:
+        verifier_command.extend(
+            [
+                "--foundational-prerequisite-release-sequence",
+                str(args.foundational_release_sequence),
+            ]
+        )
+    if args.foundational_previous_envelope_sha256 is not None:
+        verifier_command.extend(
+            [
+                "--foundational-prerequisite-previous-envelope-sha256",
+                args.foundational_previous_envelope_sha256,
+            ]
+        )
     return [CommandPlan("sorafs_production_readiness_gate", summary_out, verifier_command)]
+
+
+def foundational_prerequisite_plan(args: argparse.Namespace) -> dict[str, object]:
+    """Render the payload-free foundational prerequisite plan row."""
+
+    foundational_prerequisite: dict[str, object] = {
+        "schema": FOUNDATIONAL_PREREQUISITE_SCHEMA,
+        "summary": (
+            str(args.foundational_prerequisite_summary[0])
+            if len(args.foundational_prerequisite_summary) == 1
+            else ""
+        ),
+        "required_ids": list(FOUNDATIONAL_PREREQUISITE_IDS),
+        "signer_public_key_fingerprint_sha256": "",
+        "release_sequence": args.foundational_release_sequence,
+        "previous_envelope_sha256": (
+            args.foundational_previous_envelope_sha256
+        ),
+    }
+    key_errors: list[str] = []
+    public_key = parse_foundational_signer_public_key(
+        args.foundational_signer_public_key_hex,
+        key_errors,
+        path="production readiness runner foundational signer public key",
+    )
+    if public_key is not None:
+        foundational_prerequisite["signer_public_key_fingerprint_sha256"] = (
+            hashlib.sha256(public_key).hexdigest()
+        )
+    return foundational_prerequisite
 
 
 def plan_json(plan: Sequence[CommandPlan], args: argparse.Namespace) -> dict[str, object]:
@@ -253,6 +389,7 @@ def plan_json(plan: Sequence[CommandPlan], args: argparse.Namespace) -> dict[str
         "required_gates": list(args.required_gates),
         "thresholds": thresholds,
         "deployment_context": deployment_context,
+        "foundational_prerequisite": foundational_prerequisite_plan(args),
         "external_summaries": {
             gate: [str(path) for path in paths]
             for gate, paths in summary_paths_by_gate(args).items()
@@ -286,6 +423,11 @@ def rendered_plan_paths_are_safe(rendered: Mapping[str, object]) -> bool:
             if not isinstance(gate_paths, list):
                 continue
             paths.extend(path for path in gate_paths if isinstance(path, str))
+    foundational_prerequisite = rendered.get("foundational_prerequisite")
+    if isinstance(foundational_prerequisite, Mapping):
+        foundational_summary = foundational_prerequisite.get("summary")
+        if isinstance(foundational_summary, str):
+            paths.append(foundational_summary)
     steps = rendered.get("steps")
     if isinstance(steps, list):
         for step in steps:
@@ -337,6 +479,7 @@ def validate_plan_json(
         }
         for gate in args.required_gates
     }
+    expected_foundational_prerequisite = foundational_prerequisite_plan(args)
 
     def deployment_context_value_errors(
         context: Mapping[str, object],
@@ -375,6 +518,84 @@ def validate_plan_json(
     )
     if isinstance(rendered, Mapping) and not rendered_plan_paths_are_safe(rendered):
         errors.append(PLAN_RENDERED_PATH_ERROR)
+    if isinstance(rendered, Mapping):
+        foundational_prerequisite = rendered.get("foundational_prerequisite")
+        if not isinstance(foundational_prerequisite, Mapping):
+            errors.append(
+                "production readiness runner plan foundational_prerequisite must be an object"
+            )
+        else:
+            if set(foundational_prerequisite) != PLAN_FOUNDATIONAL_PREREQUISITE_FIELDS:
+                errors.append(
+                    "production readiness runner plan foundational_prerequisite fields must match the schema-closed contract"
+                )
+            if foundational_prerequisite != expected_foundational_prerequisite:
+                errors.append(
+                    "production readiness runner plan foundational_prerequisite must match reviewed inputs"
+                )
+            if (
+                foundational_prerequisite.get("schema")
+                != FOUNDATIONAL_PREREQUISITE_SCHEMA
+            ):
+                errors.append(
+                    "production readiness runner plan foundational prerequisite schema must match the contract"
+                )
+            summary_path = canonical_string(
+                foundational_prerequisite.get("summary")
+            )
+            if summary_path is None:
+                errors.append(
+                    "production readiness runner plan foundational prerequisite summary must be canonical"
+                )
+            if foundational_prerequisite.get("required_ids") != list(
+                FOUNDATIONAL_PREREQUISITE_IDS
+            ):
+                errors.append(
+                    "production readiness runner plan foundational prerequisite ids must match the exact contract"
+                )
+            if (
+                canonical_lower_hex(
+                    foundational_prerequisite.get(
+                        "signer_public_key_fingerprint_sha256"
+                    ),
+                    64,
+                )
+                is None
+            ):
+                errors.append(
+                    "production readiness runner plan foundational signer fingerprint must be canonical lowercase SHA-256"
+                )
+            release_sequence = foundational_prerequisite.get("release_sequence")
+            if (
+                not isinstance(release_sequence, int)
+                or isinstance(release_sequence, bool)
+                or release_sequence <= 0
+                or release_sequence > MAX_FOUNDATIONAL_RELEASE_SEQUENCE
+            ):
+                errors.append(
+                    "production readiness runner plan foundational release sequence must be in 1..2^63-1"
+                )
+            predecessor = canonical_lower_hex(
+                foundational_prerequisite.get("previous_envelope_sha256"),
+                64,
+            )
+            if predecessor is None:
+                errors.append(
+                    "production readiness runner plan foundational predecessor must be canonical lowercase SHA-256"
+                )
+            elif isinstance(release_sequence, int) and not isinstance(
+                release_sequence,
+                bool,
+            ):
+                predecessor_is_zero = not any(bytes.fromhex(predecessor))
+                if release_sequence == 1 and not predecessor_is_zero:
+                    errors.append(
+                        "production readiness runner plan foundational sequence 1 requires the zero predecessor"
+                    )
+                if release_sequence > 1 and predecessor_is_zero:
+                    errors.append(
+                        "production readiness runner plan foundational sequence after 1 requires a non-zero predecessor"
+                    )
     return errors
 
 
@@ -419,6 +640,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             default=[],
             help=f"Existing ready summary for `{gate}`.",
         )
+    parser.add_argument(
+        "--foundational-prerequisite-summary",
+        action="append",
+        type=Path,
+        default=[],
+        help=(
+            "Exactly one existing signed foundational prerequisite summary for "
+            "SFM-1, SF-1, SF-2/SF-2c, SF-3, SF-4, SF-5b, SF-6, and SF-8a."
+        ),
+    )
     parser.add_argument("--now-unix", type=positive_int_arg)
     parser.add_argument(
         "--max-summary-artifact-age-secs",
@@ -438,6 +669,22 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "Required final prod/production environment shared by every required "
             "lane summary before aggregate production readiness can run."
         ),
+    )
+    parser.add_argument(
+        "--foundational-prerequisite-signer-public-key-hex",
+        dest="foundational_signer_public_key_hex",
+        help="Required operator-trusted 32-byte Ed25519 public key.",
+    )
+    parser.add_argument(
+        "--foundational-prerequisite-release-sequence",
+        dest="foundational_release_sequence",
+        type=positive_int_arg,
+        help="Required operator-reviewed monotonic foundational release sequence.",
+    )
+    parser.add_argument(
+        "--foundational-prerequisite-previous-envelope-sha256",
+        dest="foundational_previous_envelope_sha256",
+        help="Required operator-reviewed predecessor envelope SHA-256.",
     )
     parser.add_argument(
         "--dry-run",

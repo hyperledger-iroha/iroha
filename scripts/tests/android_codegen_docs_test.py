@@ -75,9 +75,10 @@ def test_manifest_tables_are_inlined(tmp_path: Path) -> None:
             "layout": {
                 "kind": "struct",
                 "fields": [
-                    {"name": "digest", "type": "ManifestDigest"},
-                    {"name": "policy", "type": "PinPolicy"},
+                    {"name": "manifest_payload", "type": "Vec<u8>"},
+                    {"name": "submitted_epoch", "type": "u64"},
                     {"name": "alias", "type": "Option<ManifestAliasBinding>"},
+                    {"name": "successor_of", "type": "Option<ManifestDigest>"},
                 ],
             },
         }
@@ -86,10 +87,12 @@ def test_manifest_tables_are_inlined(tmp_path: Path) -> None:
     docs_mod.render_instructions(instructions, out_path)
     content = out_path.read_text(encoding="utf-8")
     assert "### Manifest field details" in content
-    assert "#### PinPolicy fields" in content
-    assert "| `min_replicas` | `u16` | Minimum replica count required by governance." in content
-    assert "#### StorageClass variants" in content
-    assert "| `Hot` | Low-latency replicas for developer workflows." in content
+    assert "#### ManifestAliasBinding fields" in content
+    assert "`[a-z0-9._-]{1,128}`" in content
+    assert "canonical padded base64" in content
+    assert "decoded size at most 1 MiB" in content
+    assert "`digest` | `ManifestDigest`" not in content
+    assert "#### PinPolicy fields" not in content
 
 
 def test_contract_feature_bitmap_is_not_documented_as_host_hardware() -> None:

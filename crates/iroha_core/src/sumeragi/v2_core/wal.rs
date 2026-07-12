@@ -286,11 +286,7 @@ impl DurableState {
                 {
                     return Err(ReplayError::InvalidLocalVote);
                 }
-                let expected_high = self
-                    .highest_prepare
-                    .as_ref()
-                    .map(QuorumCertificate::reference);
-                if vote.highest_prepare() != expected_high {
+                if vote.highest_prepare() != self.highest_prepare.as_ref() {
                     return Err(ReplayError::TimeoutHighQcMismatch);
                 }
                 if let Some(existing) = self.timeout_intents.get(&vote.round()) {
@@ -298,7 +294,7 @@ impl DurableState {
                         return Err(ReplayError::ConflictingVoteIntent(vote.round()));
                     }
                 } else {
-                    self.timeout_intents.insert(vote.round(), *vote);
+                    self.timeout_intents.insert(vote.round(), vote.clone());
                 }
             }
             WalRecord::InstallTimeout(certificate) => {
@@ -471,7 +467,7 @@ impl DurableState {
     /// Returns the local timeout intent for a round.
     #[must_use]
     pub fn timeout_intent(&self, round: Round) -> Option<TimeoutVote> {
-        self.timeout_intents.get(&round).copied()
+        self.timeout_intents.get(&round).cloned()
     }
 }
 

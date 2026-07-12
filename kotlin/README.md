@@ -21,13 +21,13 @@ repositories {
 }
 
 // Pure JVM — business logic modules, JUnit tests, server-side
-implementation("org.hyperledger.iroha.sdk:core-jvm:0.1-SNAPSHOT")
+implementation("org.hyperledger.iroha.sdk:core-jvm:0.1.0")
 
 // Android wallet without offline payments
-implementation("org.hyperledger.iroha.sdk:client-android:0.1-SNAPSHOT")
+implementation("org.hyperledger.iroha.sdk:client-android:0.1.0")
 
 // Android wallet with offline payments
-implementation("org.hyperledger.iroha.sdk:offline-wallet-android:0.1-SNAPSHOT")
+implementation("org.hyperledger.iroha.sdk:offline-wallet-android:0.1.0")
 ```
 
 ### Torii server-sent events
@@ -101,6 +101,12 @@ devices and app builds without HCE should use QR or Nearby only.
 
 The public `OfflineToriiClient` exposes only readiness for a required asset
 definition, direct-Norito top-up and redeem submissions, and operation status.
+Each readiness snapshot requires the nullable `activeTransferVerifier` and
+`activeTopUpShieldVerifier` fields. A null role must be paired exactly with its
+`transfer_verifier_unavailable` or `topup_shield_verifier_unavailable` blocker;
+every reported verifier must be active at `evaluatedBlockHeight`. A ready
+snapshot additionally requires a supported asset scale and both active
+verifier roles.
 `OfflineTopUpRequest` and `OfflineRedeemRequest` accept only the canonical
 schema-bound request archive; they derive the lowercase idempotency key from
 its nonzero 32-byte `operation_id` field, so callers cannot supply a mismatched
@@ -155,9 +161,9 @@ continues to track the proof-composition reservation, generic compact-token
 reservation, multi-hop verifier-batch reservation, and reserved ABI-7 state.
 Missing native symbols still surface as `IllegalStateException`.
 `KagemushaRecursiveSpendProver` exposes the exact ABI-18 spend-again-offline
-cash surface. Preferred mode selection returns `RECURSIVE_SPEND_V1` only when the
+cash surface. Preferred mode selection returns `RECURSIVE_SPEND` only when the
 ABI probe is exactly 18 and the Pasta-cycle backend is available; its stable
-wire value remains `recursive_spend_v1`. Older bridge modes and permissive
+wire value is exactly `recursive_spend_v2`. Other mode labels and permissive
 symbol-presence fallbacks are not release inputs.
 `transitionProfileInit(requestArchive)` and
 `transitionProfileAppend(requestArchive)` return the canonical Reserved-lineage
@@ -239,6 +245,9 @@ material: Kotlin wallet code must pass it through Norito unchanged and must not
 construct, rewrite, or mutate it. The native bridge validates `vk_commitment`,
 `public_inputs_schema_hash`, and `domain_tag` against the exact previous bundle
 before proving or returning output bytes.
+Wallets use the append-boundary helper to bind that validated previous-proof
+material to the public chain/asset and final-root/current-note boundary before
+append proving.
 Native append streams the previous recursive proof bytes and per-hop accumulator
 material into native-owned accumulator digests (`recursive_proof_chain_digest`,
 lineage/aggregation transcript, fixed-window schedule/shared-manifest/table-base,
@@ -448,9 +457,9 @@ This makes the artifacts available to any project on the same machine via `maven
 **Verify:**
 
 ```bash
-ls ~/.m2/repository/org/hyperledger/iroha/sdk/core-jvm/0.1-SNAPSHOT/
-ls ~/.m2/repository/org/hyperledger/iroha/sdk/client-android/0.1-SNAPSHOT/
-ls ~/.m2/repository/org/hyperledger/iroha/sdk/offline-wallet-android/0.1-SNAPSHOT/
+ls ~/.m2/repository/org/hyperledger/iroha/sdk/core-jvm/0.1.0/
+ls ~/.m2/repository/org/hyperledger/iroha/sdk/client-android/0.1.0/
+ls ~/.m2/repository/org/hyperledger/iroha/sdk/offline-wallet-android/0.1.0/
 ```
 
 ### Quick reference

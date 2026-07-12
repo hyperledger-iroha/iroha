@@ -74,8 +74,8 @@ use iroha_data_model::{
     asset::{AssetDefinitionAlias, AssetDefinitionId, AssetId},
     block::{
         consensus::{
-            LaneBlockCommitment, LaneSettlementReceipt, NativeAmxAttestationQcV2,
-            NativeAmxLegRecordV2, NativeAmxPhase, NativeAmxReceipt,
+            LaneBlockCommitment, LaneBlockProposalV1, LaneSettlementReceipt,
+            NativeAmxAttestationQcV2, NativeAmxLegRecordV2, NativeAmxPhase, NativeAmxReceipt,
         },
         *,
     },
@@ -1005,6 +1005,8 @@ pub(crate) fn validate_native_amx_receipt_against_plan(
                 body: leg.commit_qc.body,
                 plan_legs: plan.legs(),
                 coordinator_proposal: coordinator_proposal.clone(),
+                participant_proposal: leg.participant_proposal.clone(),
+                participant_settlement: leg.participant_settlement.clone(),
             },
             prepare_qc: leg.prepare_qc.clone(),
         }
@@ -1088,6 +1090,26 @@ fn validate_native_amx_attestation_qc(
     if body.participant_lane_id != leg.lane_id || body.participant_dataspace_id != leg.dataspace_id
     {
         return Err("native AMX attestation participant route mismatch".to_owned());
+    }
+    let participant_descriptor = &leg.participant_proposal.descriptor;
+    let participant_settlement_hash =
+        iroha_data_model::nexus::compute_settlement_hash(&leg.participant_settlement)
+            .map_err(|_| "native AMX participant settlement cannot be hashed".to_owned())?;
+    if participant_descriptor.lane_id != leg.lane_id
+        || participant_descriptor.dataspace_id != leg.dataspace_id
+        || participant_descriptor.lane_incarnation != body.participant_lane_incarnation
+        || participant_descriptor.proposal_height != body.authority_context_height
+        || participant_descriptor.previous_lane_block_height
+            != body.participant_previous_block_height
+        || participant_descriptor.previous_lane_block_descriptor_hash
+            != body.participant_previous_block_descriptor_hash
+        || participant_descriptor.lane_block_height != body.participant_lane_block_height
+        || participant_descriptor.lane_block_view != body.participant_lane_block_view
+        || leg.participant_proposal.proposal_hash != body.participant_proposal_hash
+        || participant_settlement_hash != leg.participant_settlement_hash
+        || Hash::from(participant_settlement_hash) != body.participant_settlement_commitment
+    {
+        return Err("native AMX attestation participant finality mismatch".to_owned());
     }
     if body.round.height != receipt.authority_context_height
         || body.authority_context_height != receipt.authority_context_height
@@ -2876,6 +2898,13 @@ pub enum BlockValidationError {
         target_profile: iroha_data_model::bridge::SccpNetworkV1,
         /// SCCP message identifier derived from the exact lane and canonical payload.
         message_id: [u8; 32],
+    },
+    /// SCCP committed block contains too many successful outbound messages. Actual: {actual}, maximum: {max}
+    SccpTooManyOutboundMessages {
+        /// Successful outbound messages reconstructed from committed results.
+        actual: usize,
+        /// Fixed first-release per-block maximum.
+        max: usize,
     },
     /// Mismatch between the actual and expected hashes of the previous block. Expected: {expected:?}, actual: {actual:?}
     PrevBlockHashMismatch {
@@ -6146,6 +6175,10 @@ pub(crate) mod valid {
                         target_profile: key.lane.target,
                         message_id: key.message_id,
                     },
+                    crate::bridge::SccpCommittedBlockValidationError::TooManyOutboundMessages {
+                        actual,
+                        max,
+                    } => BlockValidationError::SccpTooManyOutboundMessages { actual, max },
                     crate::bridge::SccpCommittedBlockValidationError::CommitmentRootMismatch {
                         expected,
                         actual,
@@ -8243,6 +8276,126 @@ pub(crate) mod valid {
                 }
             }
 
+            Self::validate_native_amx_participant_groups(bundle)?;
+
+            Ok(())
+        }
+
+        fn validate_native_amx_participant_groups(
+            bundle: &BlockExecutionContextBundle,
+        ) -> Result<(), BlockValidationError> {
+            type ParticipantGroup = (
+                LaneBlockProposalV1,
+                LaneBlockCommitment,
+                HashOf<LaneBlockCommitment>,
+                Vec<(u64, Hash, [u8; Hash::LENGTH])>,
+            );
+
+            let coordinator_proposals = bundle
+                .lane_payload_ownerships
+                .iter()
+                .map(native_amx_coordinator_proposal_from_ownership)
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .map_err(|error| {
+                    Self::execution_context_error(format!(
+                        "native AMX executable coordinator inventory is invalid: {error}"
+                    ))
+                })?;
+            let mut groups = BTreeMap::<(LaneId, DataSpaceId, Hash, u64), ParticipantGroup>::new();
+            for (index, context) in bundle.external.iter().enumerate() {
+                let Some(receipt) = context.native_amx_receipt.as_ref() else {
+                    continue;
+                };
+                let entrypoint_index = u64::try_from(index).map_err(|_| {
+                    Self::execution_context_error(
+                        "native AMX participant entrypoint index exceeds the canonical u64 range",
+                    )
+                })?;
+                let entrypoint_hash = Hash::from(context.entrypoint_hash);
+                for leg in &receipt.legs {
+                    let descriptor = &leg.participant_proposal.descriptor;
+                    let key = (
+                        descriptor.lane_id,
+                        descriptor.dataspace_id,
+                        descriptor.lane_incarnation,
+                        descriptor.lane_block_height,
+                    );
+                    if let Some((proposal, settlement, settlement_hash, members)) =
+                        groups.get_mut(&key)
+                    {
+                        if proposal != &leg.participant_proposal
+                            || settlement != &leg.participant_settlement
+                            || *settlement_hash != leg.participant_settlement_hash
+                        {
+                            return Err(Self::execution_context_error(format!(
+                                "native AMX participant lane {} dataspace {} height {} carries conflicting grouped control evidence",
+                                descriptor.lane_id.as_u32(),
+                                descriptor.dataspace_id.as_u64(),
+                                descriptor.lane_block_height,
+                            )));
+                        }
+                        if members.iter().any(|(member_index, _, source_id)| {
+                            *member_index == entrypoint_index || *source_id == receipt.source_id
+                        }) {
+                            return Err(Self::execution_context_error(format!(
+                                "native AMX participant lane {} dataspace {} height {} repeats a grouped block member",
+                                descriptor.lane_id.as_u32(),
+                                descriptor.dataspace_id.as_u64(),
+                                descriptor.lane_block_height,
+                            )));
+                        }
+                        members.push((entrypoint_index, entrypoint_hash, receipt.source_id));
+                    } else {
+                        groups.insert(
+                            key,
+                            (
+                                leg.participant_proposal.clone(),
+                                leg.participant_settlement.clone(),
+                                leg.participant_settlement_hash,
+                                vec![(entrypoint_index, entrypoint_hash, receipt.source_id)],
+                            ),
+                        );
+                    }
+                }
+            }
+
+            for (
+                (lane_id, dataspace_id, _, lane_block_height),
+                (proposal, settlement, _, mut members),
+            ) in groups
+            {
+                members.sort_by_key(|(index, _, _)| *index);
+                let member_indices = members
+                    .iter()
+                    .map(|(index, _, _)| *index)
+                    .collect::<Vec<_>>();
+                let member_hashes = members.iter().map(|(_, hash, _)| *hash).collect::<Vec<_>>();
+                let member_sources = members
+                    .iter()
+                    .map(|(_, _, source_id)| *source_id)
+                    .collect::<Vec<_>>();
+                let settlement_sources = settlement
+                    .receipts
+                    .iter()
+                    .map(|receipt| receipt.source_id)
+                    .collect::<Vec<_>>();
+                let proposal_members_are_exact = member_indices
+                    == proposal.descriptor.accepted_candidate_indices
+                    && member_hashes == proposal.descriptor.accepted_transaction_hashes;
+                let proposal_is_executable_anchor = coordinator_proposals
+                    .iter()
+                    .any(|coordinator| coordinator == &proposal);
+                if member_sources != settlement_sources
+                    || (!proposal_members_are_exact && !proposal_is_executable_anchor)
+                {
+                    return Err(Self::execution_context_error(format!(
+                        "native AMX participant lane {} dataspace {} height {} neither exactly covers its grouped members nor matches an executable coordinator anchor",
+                        lane_id.as_u32(),
+                        dataspace_id.as_u64(),
+                        lane_block_height,
+                    )));
+                }
+            }
             Ok(())
         }
 
@@ -15070,7 +15223,13 @@ pub(crate) mod valid {
                 signed_block.header().sccp_commitment_root(),
                 Some(candidate_root)
             );
-            assert!(state_block.world.sccp_outbound_messages.get(&key).is_none());
+            assert!(
+                state_block
+                    .world
+                    .sccp_outbound_pending_messages
+                    .get(&key)
+                    .is_none()
+            );
             assert!(matches!(
                 err,
                 BlockValidationError::SccpCommitmentRootMismatch {
@@ -15111,7 +15270,11 @@ pub(crate) mod valid {
                 "rejected SCCP records must be omitted from the signed root"
             );
             assert!(
-                state_block.world.sccp_outbound_messages.get(&key).is_none(),
+                state_block
+                    .world
+                    .sccp_outbound_pending_messages
+                    .get(&key)
+                    .is_none(),
                 "rejected SCCP records must not persist outbound messages"
             );
         }
@@ -15161,7 +15324,13 @@ pub(crate) mod valid {
                 signed_block.header().sccp_commitment_root(),
                 Some(candidate_root)
             );
-            assert!(state_block.world.sccp_outbound_messages.get(&key).is_none());
+            assert!(
+                state_block
+                    .world
+                    .sccp_outbound_pending_messages
+                    .get(&key)
+                    .is_none()
+            );
             assert!(matches!(
                 err,
                 BlockValidationError::SccpCommitmentRootMismatch {
@@ -23951,6 +24120,9 @@ mod event {
             BlockValidationError::SccpDuplicateOutboundMessage { .. } => {
                 Reason::SccpCommitmentRootMismatch
             }
+            BlockValidationError::SccpTooManyOutboundMessages { .. } => {
+                Reason::SccpCommitmentRootMismatch
+            }
             BlockValidationError::ExecutionContextInvalid(_)
             | BlockValidationError::MissingCertifiedMergeSidecar { .. }
             | BlockValidationError::CommittedFragmentCountMismatch { .. } => {
@@ -25092,6 +25264,49 @@ mod tests {
         proposal
     }
 
+    fn native_amx_test_participant_proposal(
+        body: &NativeAmxAttestationBodyV2,
+        validator_set: Vec<PeerId>,
+        coordinator_proposal: &iroha_data_model::block::consensus::LaneBlockProposalV1,
+    ) -> iroha_data_model::block::consensus::LaneBlockProposalV1 {
+        if body.participant_lane_id == body.coordinator_lane_id
+            && body.participant_dataspace_id == body.coordinator_dataspace_id
+            && body.participant_lane_incarnation == body.coordinator_lane_incarnation
+        {
+            return coordinator_proposal.clone();
+        }
+        let mut descriptor = iroha_data_model::block::consensus::LaneBlockDescriptorV1 {
+            lane_id: body.participant_lane_id,
+            dataspace_id: body.participant_dataspace_id,
+            lane_incarnation: body.participant_lane_incarnation,
+            proposal_height: body.authority_context_height,
+            previous_lane_block_height: body.participant_previous_block_height,
+            previous_lane_block_descriptor_hash: body.participant_previous_block_descriptor_hash,
+            lane_block_height: body.participant_lane_block_height,
+            lane_block_view: body.participant_lane_block_view,
+            subject_hash: Hash::new(b"native-amx-test-participant-subject"),
+            payload_ownership_hash: Hash::new(b"native-amx-test-participant-ownership"),
+            rbc_instance_hash: Hash::new(b"native-amx-test-participant-rbc"),
+            accepted_candidate_indices: vec![0],
+            accepted_transaction_hashes: vec![Hash::from(body.tx_entrypoint_hash)],
+            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set_hash: HashOf::new(&validator_set),
+            validator_count: body.participant_validator_count,
+            min_quorum: body.participant_min_quorum,
+            validator_set,
+            qc_mode_tag: "native-amx:test-participant".to_owned(),
+            descriptor_hash: Hash::prehashed([0; Hash::LENGTH]),
+        };
+        descriptor.descriptor_hash = descriptor.computed_descriptor_hash();
+        let mut proposal = iroha_data_model::block::consensus::LaneBlockProposalV1 {
+            descriptor,
+            proposal_hash: Hash::prehashed([0; Hash::LENGTH]),
+            payload_block_hint: None,
+        };
+        proposal.proposal_hash = proposal.computed_proposal_hash();
+        proposal
+    }
+
     fn signed_native_amx_attestation_qc_with_signer_count(
         phase: NativeAmxPhase,
         source_id: [u8; iroha_crypto::Hash::LENGTH],
@@ -25116,9 +25331,34 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let descriptor = &coordinator_proposal.descriptor;
+        let participant_is_coordinator = participant.lane_id == descriptor.lane_id
+            && participant.dataspace_id == descriptor.dataspace_id;
         let participant_min_quorum =
             crate::sumeragi::network_topology::commit_quorum_from_len(validator_set.len()).max(1);
-        let body = NativeAmxAttestationBodyV2 {
+        let (
+            participant_lane_incarnation,
+            participant_previous_block_height,
+            participant_previous_block_descriptor_hash,
+            participant_lane_block_height,
+            participant_lane_block_view,
+        ) = if participant_is_coordinator {
+            (
+                descriptor.lane_incarnation,
+                descriptor.previous_lane_block_height,
+                descriptor.previous_lane_block_descriptor_hash,
+                descriptor.lane_block_height,
+                descriptor.lane_block_view,
+            )
+        } else {
+            (
+                Hash::new(participant.lane_id.as_u32().to_be_bytes()),
+                0,
+                None,
+                1,
+                0,
+            )
+        };
+        let mut body = NativeAmxAttestationBodyV2 {
             round: iroha_data_model::block::consensus_v2::ConsensusRound {
                 context_id:
                     iroha_data_model::block::consensus_v2::HeightContextId(HashOf::<
@@ -25140,7 +25380,13 @@ mod tests {
             coordinator_lane_incarnation: descriptor.lane_incarnation,
             participant_lane_id: participant.lane_id,
             participant_dataspace_id: participant.dataspace_id,
-            participant_lane_incarnation: Hash::new(participant.lane_id.as_u32().to_be_bytes()),
+            participant_lane_incarnation,
+            participant_previous_block_height,
+            participant_previous_block_descriptor_hash,
+            participant_lane_block_height,
+            participant_lane_block_view,
+            participant_proposal_hash: Hash::prehashed([0; Hash::LENGTH]),
+            participant_settlement_commitment: Hash::prehashed([0; Hash::LENGTH]),
             participant_validator_set_hash: HashOf::new(&validator_set),
             participant_validator_count: u32::try_from(validator_set.len())
                 .expect("fixture validator count"),
@@ -25151,6 +25397,13 @@ mod tests {
             coordinator_lane_block_view: descriptor.lane_block_view,
             coordinator_proposal_hash: coordinator_proposal.proposal_hash,
         };
+        let participant_proposal = native_amx_test_participant_proposal(
+            &body,
+            validator_set.clone(),
+            coordinator_proposal,
+        );
+        body.participant_proposal_hash = participant_proposal.proposal_hash;
+        body.participant_settlement_commitment = body.computed_participant_settlement_commitment();
         let preimage = body.signature_preimage();
         let signatures = ordered_keypairs
             .iter()
@@ -25217,10 +25470,8 @@ mod tests {
         let legs = plan
             .participants
             .iter()
-            .map(|leg| NativeAmxLegRecordV2 {
-                lane_id: leg.route.lane_id,
-                dataspace_id: leg.route.dataspace_id,
-                prepare_qc: signed_native_amx_attestation_qc_with_signer_count(
+            .map(|leg| {
+                let prepare_qc = signed_native_amx_attestation_qc_with_signer_count(
                     NativeAmxPhase::Prepare,
                     source_id,
                     tx_entrypoint_hash,
@@ -25229,8 +25480,8 @@ mod tests {
                     leg.route,
                     keypairs,
                     signer_count,
-                ),
-                commit_qc: signed_native_amx_attestation_qc_with_signer_count(
+                );
+                let commit_qc = signed_native_amx_attestation_qc_with_signer_count(
                     NativeAmxPhase::Commit,
                     source_id,
                     tx_entrypoint_hash,
@@ -25239,7 +25490,25 @@ mod tests {
                     leg.route,
                     keypairs,
                     signer_count,
-                ),
+                );
+                let participant_proposal = native_amx_test_participant_proposal(
+                    &prepare_qc.body,
+                    prepare_qc.validator_set.clone(),
+                    &coordinator_proposal,
+                );
+                let participant_settlement = prepare_qc.body.computed_participant_settlement();
+                let participant_settlement_hash =
+                    iroha_data_model::nexus::compute_settlement_hash(&participant_settlement)
+                        .expect("fixture participant settlement hashes");
+                NativeAmxLegRecordV2 {
+                    lane_id: leg.route.lane_id,
+                    dataspace_id: leg.route.dataspace_id,
+                    participant_proposal,
+                    participant_settlement,
+                    participant_settlement_hash,
+                    prepare_qc,
+                    commit_qc,
+                }
             })
             .collect();
         NativeAmxReceipt {
@@ -25277,6 +25546,154 @@ mod tests {
             .sign(keypair.private_key());
         let tx_hash = AcceptedTransaction::prepare_signed_metadata(&tx).signed_hash;
         (tx, tx_hash)
+    }
+
+    fn native_amx_shared_participant_group_bundle() -> BlockExecutionContextBundle {
+        let paynet = DataSpaceId::new(7);
+        let cbuae = DataSpaceId::new(8);
+        let coordinator = crate::queue::RoutingDecision::new(LaneId::new(1), paynet);
+        let participant = crate::queue::RoutingDecision::new(LaneId::new(2), cbuae);
+        let routing_plan = crate::queue::RoutingPlan::native_amx(
+            coordinator,
+            vec![
+                crate::queue::RouteLeg::new(coordinator, crate::queue::RouteLegRole::Participant),
+                crate::queue::RouteLeg::new(participant, crate::queue::RouteLegRole::Participant),
+            ],
+        );
+        let (first_tx, first_hash) = signed_domain_registration_tx(&[("merchant", "paynet")]);
+        let (second_tx, second_hash) = signed_domain_registration_tx(&[("treasury", "cbuae")]);
+        let first_entrypoint_hash = first_tx.hash_as_entrypoint();
+        let second_entrypoint_hash = second_tx.hash_as_entrypoint();
+        let mut first_source = [0_u8; Hash::LENGTH];
+        first_source.copy_from_slice(first_hash.as_ref());
+        let mut second_source = [0_u8; Hash::LENGTH];
+        second_source.copy_from_slice(second_hash.as_ref());
+        let (_, keypairs) = native_amx_test_world_with_keys();
+        let mut first_receipt = signed_native_amx_receipt(
+            first_source,
+            first_entrypoint_hash,
+            &routing_plan,
+            42,
+            &keypairs,
+        );
+        let mut second_receipt = signed_native_amx_receipt(
+            second_source,
+            second_entrypoint_hash,
+            &routing_plan,
+            42,
+            &keypairs,
+        );
+
+        let mut participant_proposal = first_receipt
+            .legs
+            .iter()
+            .find(|leg| leg.lane_id == participant.lane_id)
+            .expect("participant leg")
+            .participant_proposal
+            .clone();
+        participant_proposal.descriptor.accepted_candidate_indices = vec![0, 1];
+        participant_proposal.descriptor.accepted_transaction_hashes = vec![
+            Hash::from(first_entrypoint_hash),
+            Hash::from(second_entrypoint_hash),
+        ];
+        participant_proposal.descriptor.descriptor_hash =
+            participant_proposal.descriptor.computed_descriptor_hash();
+        participant_proposal.proposal_hash = participant_proposal.computed_proposal_hash();
+        let participant_settlement = LaneBlockCommitment {
+            block_height: participant_proposal.descriptor.lane_block_height,
+            lane_id: participant.lane_id,
+            lane_incarnation: participant_proposal.descriptor.lane_incarnation,
+            dataspace_id: participant.dataspace_id,
+            tx_count: 2,
+            total_local_micro: 0,
+            total_xor_due_micro: 0,
+            total_xor_after_haircut_micro: 0,
+            total_xor_variance_micro: 0,
+            swap_metadata: None,
+            receipts: vec![
+                LaneSettlementReceipt {
+                    source_id: first_source,
+                    local_amount_micro: 0,
+                    xor_due_micro: 0,
+                    xor_after_haircut_micro: 0,
+                    xor_variance_micro: 0,
+                    timestamp_ms: 42,
+                },
+                LaneSettlementReceipt {
+                    source_id: second_source,
+                    local_amount_micro: 0,
+                    xor_due_micro: 0,
+                    xor_after_haircut_micro: 0,
+                    xor_variance_micro: 0,
+                    timestamp_ms: 42,
+                },
+            ],
+            nexus_fee_receipts: Vec::new(),
+            native_amx_receipts: Vec::new(),
+        };
+        let participant_settlement_hash =
+            iroha_data_model::nexus::compute_settlement_hash(&participant_settlement)
+                .expect("shared participant settlement hash");
+        for receipt in [&mut first_receipt, &mut second_receipt] {
+            let leg = receipt
+                .legs
+                .iter_mut()
+                .find(|leg| leg.lane_id == participant.lane_id)
+                .expect("participant leg");
+            leg.participant_proposal = participant_proposal.clone();
+            leg.participant_settlement = participant_settlement.clone();
+            leg.participant_settlement_hash = participant_settlement_hash;
+            for body in [&mut leg.prepare_qc.body, &mut leg.commit_qc.body] {
+                body.participant_proposal_hash = participant_proposal.proposal_hash;
+                body.participant_settlement_commitment = Hash::from(participant_settlement_hash);
+            }
+        }
+
+        BlockExecutionContextBundle::new(vec![
+            crate::queue::execution_context_for_routing_plan(first_entrypoint_hash, &routing_plan)
+                .with_native_amx_receipt(first_receipt),
+            crate::queue::execution_context_for_routing_plan(second_entrypoint_hash, &routing_plan)
+                .with_native_amx_receipt(second_receipt),
+        ])
+    }
+
+    #[test]
+    fn native_amx_group_validation_accepts_shared_members_and_skips_coordinator() {
+        let bundle = native_amx_shared_participant_group_bundle();
+        ValidBlock::validate_native_amx_participant_groups(&bundle)
+            .expect("one exact two-member participant control should validate");
+    }
+
+    #[test]
+    fn native_amx_group_validation_rejects_partial_membership() {
+        let mut bundle = native_amx_shared_participant_group_bundle();
+        bundle.external.pop();
+        assert!(matches!(
+            ValidBlock::validate_native_amx_participant_groups(&bundle),
+            Err(BlockValidationError::ExecutionContextInvalid(message))
+                if message.contains("does not exactly cover its grouped block members")
+        ));
+    }
+
+    #[test]
+    fn native_amx_group_validation_rejects_conflicting_control() {
+        let mut bundle = native_amx_shared_participant_group_bundle();
+        let receipt = bundle.external[1]
+            .native_amx_receipt
+            .as_mut()
+            .expect("native AMX receipt");
+        let leg = receipt
+            .legs
+            .iter_mut()
+            .find(|leg| leg.lane_id == LaneId::new(2))
+            .expect("participant leg");
+        leg.participant_proposal.proposal_hash =
+            Hash::new(b"conflicting grouped participant proposal");
+        assert!(matches!(
+            ValidBlock::validate_native_amx_participant_groups(&bundle),
+            Err(BlockValidationError::ExecutionContextInvalid(message))
+                if message.contains("conflicting grouped control evidence")
+        ));
     }
 
     #[test]

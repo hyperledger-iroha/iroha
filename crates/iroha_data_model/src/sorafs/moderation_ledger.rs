@@ -49,23 +49,17 @@ pub const MODERATION_LEDGER_POLICY_DIGEST_DOMAIN_V1: &[u8] = b"sorafs.moderation
 pub const MODERATION_LEDGER_ROSTER_HASH_DOMAIN_V1: &[u8] =
     b"sorafs.moderation.local.panel-roster-hash.v1";
 /// Domain separator for immutable appeal-intake digests.
-pub const MODERATION_APPEAL_INTAKE_DIGEST_DOMAIN_V1: &[u8] =
-    b"sorafs.moderation.appeal-intake.v1";
+pub const MODERATION_APPEAL_INTAKE_DIGEST_DOMAIN_V1: &[u8] = b"sorafs.moderation.appeal-intake.v1";
 /// Domain separator for pinned PoP registry snapshots.
-pub const MODERATION_POP_SNAPSHOT_DIGEST_DOMAIN_V1: &[u8] =
-    b"sorafs.moderation.pop-snapshot.v1";
+pub const MODERATION_POP_SNAPSHOT_DIGEST_DOMAIN_V1: &[u8] = b"sorafs.moderation.pop-snapshot.v1";
 /// Domain separator for the shared, per-appeal PoP proof challenge.
-pub const MODERATION_POP_CHALLENGE_DOMAIN_V1: &[u8] =
-    b"sorafs.moderation.pop-challenge.v1";
+pub const MODERATION_POP_CHALLENGE_DOMAIN_V1: &[u8] = b"sorafs.moderation.pop-challenge.v1";
 /// Domain separator for deterministic panel-selection seed derivation.
-pub const MODERATION_SORTITION_SEED_DOMAIN_V1: &[u8] =
-    b"sorafs.moderation.sortition-seed.v1";
+pub const MODERATION_SORTITION_SEED_DOMAIN_V1: &[u8] = b"sorafs.moderation.sortition-seed.v1";
 /// Domain separator for deterministic candidate scores.
-pub const MODERATION_SORTITION_SCORE_DOMAIN_V1: &[u8] =
-    b"sorafs.moderation.sortition-score.v1";
+pub const MODERATION_SORTITION_SCORE_DOMAIN_V1: &[u8] = b"sorafs.moderation.sortition-score.v1";
 /// Domain separator for selected roster and waitlist commitments.
-pub const MODERATION_SORTITION_DIGEST_DOMAIN_V1: &[u8] =
-    b"sorafs.moderation.sortition-record.v1";
+pub const MODERATION_SORTITION_DIGEST_DOMAIN_V1: &[u8] = b"sorafs.moderation.sortition-record.v1";
 
 /// Governance-controlled limits and no-show penalties for authoritative ballots.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
@@ -294,9 +288,6 @@ pub struct ModerationPoPRegistrySnapshotV1 {
     pub registry_audit_head: [u8; 32],
     /// Consensus block timestamp at which the snapshot was captured.
     pub captured_at_unix_ms: u64,
-    /// Hash of the already committed parent block used as non-applicant randomness.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
-    pub randomness_anchor: [u8; 32],
 }
 
 impl ModerationPoPRegistrySnapshotV1 {
@@ -307,7 +298,6 @@ impl ModerationPoPRegistrySnapshotV1 {
             ("commitment_root", self.commitment_root),
             ("revocation_root", self.revocation_root),
             ("registry_audit_head", self.registry_audit_head),
-            ("randomness_anchor", self.randomness_anchor),
         ] {
             if digest == [0; 32] {
                 return Err(ModerationPoPRegistrySnapshotError::ZeroDigest { field });
@@ -427,7 +417,10 @@ impl ModerationAppealIntakeV1 {
             ("appealed_decision_digest", self.appealed_decision_digest),
             ("proof_token_digest", self.proof_token_digest),
             ("evidence_bundle_digest", self.evidence_bundle_digest),
-            ("appeal_deposit_lock_digest", self.appeal_deposit_lock_digest),
+            (
+                "appeal_deposit_lock_digest",
+                self.appeal_deposit_lock_digest,
+            ),
             ("policy_digest", self.policy_digest),
         ] {
             if digest == [0; 32] {
@@ -500,7 +493,7 @@ fn validate_appeal_identifier(
     field: &'static str,
     value: &str,
 ) -> Result<(), ModerationAppealIntakeError> {
-    if !is_canonical_identifier(value) {
+    if !is_canonical_moderation_identifier_v1(value) {
         return Err(ModerationAppealIntakeError::InvalidIdentifier {
             field,
             length: value.len(),
@@ -509,7 +502,13 @@ fn validate_appeal_identifier(
     Ok(())
 }
 
-fn is_canonical_identifier(value: &str) -> bool {
+/// Return whether a moderation identifier is bounded canonical ASCII.
+///
+/// This grammar is shared by appeal, case, round, and challenge identifiers so
+/// control characters, Unicode confusables, and whitespace cannot create
+/// ambiguous state keys or operator displays.
+#[must_use]
+pub fn is_canonical_moderation_identifier_v1(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= MODERATION_LEDGER_MAX_IDENTIFIER_BYTES_V1
         && value.is_ascii()
@@ -593,7 +592,9 @@ pub enum ModerationAppealIntakeError {
     #[error("moderation appeal exclusions must contain the appellant")]
     AppellantNotExcluded,
     /// Lifecycle deadlines are not strictly ordered.
-    #[error("moderation appeal deadlines must satisfy registration < acceptance < commit < challenge < reveal")]
+    #[error(
+        "moderation appeal deadlines must satisfy registration < acceptance < commit < challenge < reveal"
+    )]
     InvalidDeadlines,
 }
 
@@ -657,6 +658,9 @@ pub struct ModerationJurorEligibilityRecordV1 {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 pub struct ModerationPanelSelectionV1 {
+    /// Exact already-committed parent block fixed only after registration closes.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub randomness_anchor: [u8; 32],
     /// Deterministic seed digest fixed by appeal, PoP snapshot, and parent block.
     #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
     pub seed_digest: [u8; 32],
@@ -766,7 +770,10 @@ pub fn sorafs_moderation_pop_challenge_v1(
 /// Return the bounded verifier context used by every candidate for one appeal.
 #[must_use]
 pub fn sorafs_moderation_pop_verifier_context_v1(intake_digest: [u8; 32]) -> String {
-    format!("sorafs-moderation-sortition-v1:{}", hex::encode(intake_digest))
+    format!(
+        "sorafs-moderation-sortition-v1:{}",
+        hex::encode(intake_digest)
+    )
 }
 
 /// Derive the immutable selection seed from appeal and non-applicant anchors.
@@ -829,8 +836,7 @@ pub fn sorafs_moderation_select_panel_v1(
     panel_size: u16,
     waitlist_size: u16,
     quorum: u16,
-) -> Result<(Vec<AccountId>, Vec<AccountId>, [u8; 32], [u8; 32]), ModerationSortitionError>
-{
+) -> Result<(Vec<AccountId>, Vec<AccountId>, [u8; 32], [u8; 32]), ModerationSortitionError> {
     if !(1..=MODERATION_LEDGER_MAX_PANEL_SIZE_V1).contains(&panel_size)
         || quorum == 0
         || quorum > panel_size
@@ -839,11 +845,8 @@ pub fn sorafs_moderation_select_panel_v1(
     {
         return Err(ModerationSortitionError::InvalidBounds);
     }
-    let seed_digest = sorafs_moderation_sortition_seed_v1(
-        intake_digest,
-        pop_snapshot_digest,
-        randomness_anchor,
-    );
+    let seed_digest =
+        sorafs_moderation_sortition_seed_v1(intake_digest, pop_snapshot_digest, randomness_anchor);
     let mut accounts = BTreeSet::new();
     let mut nullifiers = BTreeSet::new();
     let mut scored = Vec::with_capacity(candidates.len());
@@ -854,8 +857,8 @@ pub fn sorafs_moderation_select_panel_v1(
         if candidate.proof_digest == [0; 32]
             || candidate.nullifier == [0; 32]
             || candidate.pop_snapshot_digest != pop_snapshot_digest
-            || !is_canonical_identifier(&candidate.case_id)
-            || !is_canonical_identifier(&candidate.round_id)
+            || !is_canonical_moderation_identifier_v1(&candidate.case_id)
+            || !is_canonical_moderation_identifier_v1(&candidate.round_id)
             || scope.is_some_and(|(case_id, round_id)| {
                 &candidate.case_id != case_id || &candidate.round_id != round_id
             })
@@ -874,7 +877,11 @@ pub fn sorafs_moderation_select_panel_v1(
         if !nullifiers.insert(candidate.nullifier) {
             return Err(ModerationSortitionError::DuplicatePersonNullifier);
         }
-        scored.push((sortition_score(seed_digest, candidate), account, candidate.juror.clone()));
+        scored.push((
+            sortition_score(seed_digest, candidate),
+            account,
+            candidate.juror.clone(),
+        ));
     }
     scored.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
     if scored.len() < usize::from(panel_size) {
@@ -1036,7 +1043,7 @@ impl ModerationCaseSpecV1 {
 }
 
 fn validate_identifier(field: &'static str, value: &str) -> Result<(), ModerationCaseSpecError> {
-    if !is_canonical_identifier(value) {
+    if !is_canonical_moderation_identifier_v1(value) {
         return Err(ModerationCaseSpecError::InvalidIdentifier {
             field,
             length: value.len(),
@@ -1161,10 +1168,14 @@ pub struct ModerationCaseRecordV1 {
     pub reveal_count: u32,
     /// Number of submitted challenges.
     pub challenge_count: u32,
+    /// Canonically ordered challenge identifiers used for bounded terminal expiry.
+    pub challenge_ids: Vec<String>,
     /// Number of unresolved challenges.
     pub pending_challenge_count: u32,
     /// Number of accepted challenges.
     pub accepted_challenge_count: u32,
+    /// Number of challenges that expired unresolved and forced fail-safe closure.
+    pub expired_challenge_count: u32,
 }
 
 /// Immutable accepted juror commitment and ledger provenance.
@@ -1258,6 +1269,11 @@ pub enum ModerationChallengeDecisionV1 {
     Rejected,
     /// Challenge was accepted and the ballot must close as challenged.
     Accepted,
+    /// Challenge was not resolved before the reveal window closed.
+    ///
+    /// Finalization derives this state and closes fail-safe without penalizing
+    /// jurors who were prevented from revealing.
+    Expired,
 }
 
 /// Durable payload-free challenge and optional resolution.
@@ -1581,6 +1597,30 @@ mod tests {
     }
 
     #[test]
+    fn moderation_identifiers_reject_controls_unicode_whitespace_and_overflow() {
+        for valid in ["case-1", "round_2", "policy.v1", "ipfs:bag/id@v1"] {
+            assert!(is_canonical_moderation_identifier_v1(valid), "{valid}");
+        }
+        for invalid in [
+            "",
+            " leading",
+            "trailing ",
+            "embedded space",
+            "line\nbreak",
+            "nul\0byte",
+            "confusable-é",
+        ] {
+            assert!(
+                !is_canonical_moderation_identifier_v1(invalid),
+                "{invalid:?}"
+            );
+        }
+        assert!(!is_canonical_moderation_identifier_v1(
+            &"a".repeat(MODERATION_LEDGER_MAX_IDENTIFIER_BYTES_V1 + 1)
+        ));
+    }
+
+    #[test]
     fn policy_rejects_zero_and_overflowing_bounds() {
         let mut candidate = policy();
         candidate.max_panel_size = 0;
@@ -1798,6 +1838,24 @@ mod tests {
         )
         .unwrap();
         assert_eq!(first, second);
+        let later_anchor = sorafs_moderation_select_panel_v1(
+            intake.digest().unwrap(),
+            snapshot_digest,
+            [0xB2; 32],
+            &candidates,
+            intake.panel_size,
+            intake.waitlist_size,
+            intake.quorum,
+        )
+        .unwrap();
+        assert_ne!(
+            first.2, later_anchor.2,
+            "post-registration parent anchors must produce distinct draw seeds"
+        );
+        assert_ne!(
+            first.3, later_anchor.3,
+            "sortition commitments must bind the frozen parent anchor through the seed"
+        );
         assert_eq!(first.0.len(), 3);
         assert_eq!(first.1.len(), 2);
         let unique = first

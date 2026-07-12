@@ -110,7 +110,11 @@ object OfflineOperationCodec {
     private const val STATUS_SCHEMA = "iroha_torii_shared::offline_api::OfflineOperationStatus"
     private const val TOP_UP_ANCHOR_SCHEMA =
         "iroha_data_model::offline::model::KagemushaRecursiveSpendTopUpAnchorV2"
+    private const val TOP_UP_FINALITY_PROOF_SCHEMA =
+        "iroha_data_model::offline::model::KagemushaTopUpFinalityProofV2"
     private const val STATUS_HEADER_PADDING = 8
+    private const val TOP_UP_ANCHOR_MAX_ARCHIVE_BYTES = 64 * 1024
+    private const val TOP_UP_FINALITY_PROOF_MAX_ARCHIVE_BYTES = 1024 * 1024
 
     /** Decode an accepted-operation reference returned by Torii. */
     @JvmStatic
@@ -134,6 +138,30 @@ object OfflineOperationCodec {
     fun encodeStatus(status: OfflineOperationStatus): ByteArray =
         addStatusPadding(
             NoritoCodec.encode(status, STATUS_SCHEMA, StatusAdapter, NoritoHeader.COMPACT_LEN),
+        )
+
+    /** Validate and wrap one canonical finalized top-up anchor archive. */
+    @JvmStatic
+    fun decodeTopUpAnchor(archive: ByteArray): OfflineOperationStatus.TopUpAnchor =
+        OfflineOperationStatus.TopUpAnchor(
+            requireTypedArchive(
+                archive,
+                TOP_UP_ANCHOR_SCHEMA,
+                TOP_UP_ANCHOR_MAX_ARCHIVE_BYTES,
+                "Top-up anchor archive",
+            ),
+        )
+
+    /** Validate and wrap one canonical finalized top-up consensus proof archive. */
+    @JvmStatic
+    fun decodeTopUpFinalityProof(archive: ByteArray): OfflineOperationStatus.TopUpFinalityProof =
+        OfflineOperationStatus.TopUpFinalityProof(
+            requireTypedArchive(
+                archive,
+                TOP_UP_FINALITY_PROOF_SCHEMA,
+                TOP_UP_FINALITY_PROOF_MAX_ARCHIVE_BYTES,
+                "Top-up finality proof archive",
+            ),
         )
 
     private object ReferenceAdapter : TypeAdapter<OfflineOperationReference> {
@@ -233,6 +261,16 @@ object OfflineOperationCodec {
                     }
                     child.writeBytes(view.asBytes())
                 }
+                writeField(it) { child ->
+                    val view = NoritoCodec.fromBytesView(
+                        value.finalityProof.noritoArchive(),
+                        TOP_UP_FINALITY_PROOF_SCHEMA,
+                    )
+                    require(view.flags == encoder.flags) {
+                        "Top-up finality proof flags must match operation status flags"
+                    }
+                    child.writeBytes(view.asBytes())
+                }
             }
             is OfflineOperationStatus.Result.Redeem -> writeVariant(encoder, 1) {
                 val value = result.value
@@ -252,12 +290,29 @@ object OfflineOperationCodec {
                 val serverTime = readField(variant, ::readU64)
                 val anchorPayload = readField(variant, ::readRemainingBytes)
                 val anchorArchive = frameArchive(TOP_UP_ANCHOR_SCHEMA, anchorPayload, decoder.flags)
+                requireArchiveBound(
+                    anchorArchive,
+                    TOP_UP_ANCHOR_MAX_ARCHIVE_BYTES,
+                    "Top-up anchor archive",
+                )
+                val finalityProofPayload = readField(variant, ::readRemainingBytes)
+                val finalityProofArchive = frameArchive(
+                    TOP_UP_FINALITY_PROOF_SCHEMA,
+                    finalityProofPayload,
+                    decoder.flags,
+                )
+                requireArchiveBound(
+                    finalityProofArchive,
+                    TOP_UP_FINALITY_PROOF_MAX_ARCHIVE_BYTES,
+                    "Top-up finality proof archive",
+                )
                 OfflineOperationStatus.Result.TopUp(
                     OfflineOperationStatus.TopUpResult(
                         transactionHash,
                         finalizedHeight,
                         serverTime,
                         OfflineOperationStatus.TopUpAnchor(anchorArchive),
+                        OfflineOperationStatus.TopUpFinalityProof(finalityProofArchive),
                     ),
                 )
             }
@@ -278,6 +333,32 @@ object OfflineOperationCodec {
         writeField(encoder) { writeString(it, error.code) }
         writeField(encoder) { writeString(it, error.message) }
         writeField(encoder) { writeOption(it, error.details, ::writeErrorDetails) }
+    }
+
+    private fun requireArchiveBound(archive: ByteArray, maximumBytes: Int, field: String) {
+        require(archive.isNotEmpty() && archive.size <= maximumBytes) {
+            "$field must contain 1..=$maximumBytes canonical bytes"
+        }
+    }
+
+    private fun requireTypedArchive(
+        value: ByteArray,
+        schema: String,
+        maximumBytes: Int,
+        field: String,
+    ): ByteArray {
+        val archive = value.copyOf()
+        requireArchiveBound(archive, maximumBytes, field)
+        val decoded = NoritoHeader.decode(archive, SchemaHash.hash16(schema))
+        require(
+            decoded.header.compression == NoritoHeader.COMPRESSION_NONE &&
+                decoded.header.flags == NoritoHeader.COMPACT_LEN &&
+                archive.size == NoritoHeader.HEADER_LENGTH + decoded.header.payloadLength,
+        ) {
+            "$field must be an uncompressed, unpadded compact Norito archive"
+        }
+        decoded.header.validateChecksum(decoded.payload)
+        return archive
     }
 
     private fun readError(decoder: NoritoDecoder): OfflineOperationStatus.Error =

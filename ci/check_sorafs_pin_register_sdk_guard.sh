@@ -147,6 +147,7 @@ negative_control_commands = (
     ("JavaScript adversarial test negative control", f"{main_command} --negative-control-js-adversarial-test"),
     ("Python adversarial test negative control", f"{main_command} --negative-control-python-adversarial-test"),
     ("Swift contract test negative control", f"{main_command} --negative-control-swift-contract-test"),
+    ("Swift retired request field negative control", f"{main_command} --negative-control-swift-retired-request-field"),
     ("C# malformed response test negative control", f"{main_command} --negative-control-csharp-malformed-response-test"),
     ("Kotlin builder test negative control", f"{main_command} --negative-control-kotlin-builder-test"),
     ("Kotlin successor digest test negative control", f"{main_command} --negative-control-kotlin-successor-digest-test"),
@@ -285,10 +286,10 @@ def check_workflow():
 
     js = workflow_job(workflow, js_job)
     require("    runs-on: ubuntu-latest" in js, "JavaScript SDK tests must run on Ubuntu")
-    node_setup_match = re.search(r"(?m)^\s+- uses:\s+actions/setup-node@v4\s*$", js)
+    node_setup_match = re.search(r"(?m)^\s+- uses:\s+actions/setup-node@v6\s*$", js)
     node_install_match = re.search(rf"(?m)^\s+run:\s+{re.escape(js_install_command)}\s*$", js)
     require(node_setup_match is not None, "JavaScript SDK tests must set up Node")
-    require(re.search(r'(?m)^\s+node-version:\s+"20"\s*$', js) is not None, "JavaScript SDK tests must pin Node 20")
+    require(re.search(r'(?m)^\s+node-version:\s+"24"\s*$', js) is not None, "JavaScript SDK tests must pin Node 24")
     require(
         re.search(
             r"(?m)^\s+cache-dependency-path:\s+javascript/iroha_js/package-lock\.json\s*$",
@@ -336,12 +337,12 @@ def check_workflow():
 def check_scripts():
     require_contains("ci/check_sorafs_pin_register_js_sdk.sh", 'registerSorafsPinManifest|SoraFS pin-register SDK guard|SoraFS .* SDK runner', "focused JS test pattern")
     require_contains("ci/check_sorafs_pin_register_js_sdk.sh", 'NODE_OVERRIDE="${SORAFS_PIN_REGISTER_JS_SDK_NODE_BIN:-}"', "JavaScript SDK Node override variable")
-    require_contains("ci/check_sorafs_pin_register_js_sdk.sh", "resolve_node_20_bin()", "JavaScript SDK Node 20 resolver")
-    require_contains("ci/check_sorafs_pin_register_js_sdk.sh", "is_node_20_bin()", "JavaScript SDK Node 20 version predicate")
-    require_contains("ci/check_sorafs_pin_register_js_sdk.sh", 'NODE_BIN="$(resolve_node_20_bin)"', "JavaScript SDK selected Node resolver")
+    require_contains("ci/check_sorafs_pin_register_js_sdk.sh", "resolve_node_24_bin()", "JavaScript SDK Node 24 resolver")
+    require_contains("ci/check_sorafs_pin_register_js_sdk.sh", "is_node_24_bin()", "JavaScript SDK Node 24 version predicate")
+    require_contains("ci/check_sorafs_pin_register_js_sdk.sh", 'NODE_BIN="$(resolve_node_24_bin)"', "JavaScript SDK selected Node resolver")
     require_contains("ci/check_sorafs_pin_register_js_sdk.sh", 'NODE_VERSION="$("${NODE_BIN}" --version)"', "JavaScript SDK selected Node capture")
     require_contains("ci/check_sorafs_pin_register_js_sdk.sh", 'printf \'%s\\n\' "${NODE_VERSION}"', "JavaScript SDK Node version evidence")
-    require_contains("ci/check_sorafs_pin_register_js_sdk.sh", "v20.*) ;;", "JavaScript SDK Node 20 matcher")
+    require_contains("ci/check_sorafs_pin_register_js_sdk.sh", "v24.*) ;;", "JavaScript SDK Node 24 matcher")
     require_contains("ci/check_sorafs_pin_register_python_sdk.sh", "client_sorafs_pin_register_test.py", "Python paid-pin test suite")
     require_contains("ci/check_sorafs_pin_register_python_sdk.sh", 'PYTHON_OVERRIDE="${SORAFS_PIN_REGISTER_PYTHON_BIN:-}"', "Python SDK override variable")
     require_contains("ci/check_sorafs_pin_register_python_sdk.sh", "resolve_python_311_bin()", "Python SDK 3.11 resolver")
@@ -427,15 +428,30 @@ def check_swift_contract():
     require_contains("IrohaSwift/Sources/IrohaSwift/ToriiClient.swift", "public func registerSoraFsPinManifest(_ requestBody: ToriiSoraFsPinRegisterRequest) async throws -> ToriiSoraFsPinRegisterResponse", "Swift async API")
     require_contains("IrohaSwift/Sources/IrohaSwift/ToriiClient.swift", 'path: "/v1/sorafs/pin/register"', "Swift endpoint")
     require_contains("IrohaSwift/Sources/IrohaSwift/ToriiClient.swift", "requestBody.normalized()", "Swift request normalization")
-    require_contains("IrohaSwift/Sources/IrohaSwift/ToriiClient.swift", "public var manifestBase64: String?", "Swift manifest base64 input")
-    require_contains("IrohaSwift/Sources/IrohaSwift/ToriiClient.swift", "public var manifestBytes: Data?", "Swift manifest bytes input")
-    require_contains("IrohaSwift/Sources/IrohaSwift/ToriiClient.swift", 'case manifestBase64 = "manifest_b64"', "Swift canonical manifest payload coding key")
-    require_contains("IrohaSwift/Sources/IrohaSwift/ToriiClient.swift", "optionalManifestPayload(manifestBase64: String?, manifestBytes: Data?)", "Swift manifest payload normalization")
+    require_contains("IrohaSwift/Sources/IrohaSwift/ToriiClient.swift", "public var manifestPayload: String?", "Swift manifest payload input")
+    require_contains("IrohaSwift/Sources/IrohaSwift/ToriiClient.swift", 'case manifestPayload = "manifest_payload"', "Swift canonical manifest payload coding key")
+    require_contains("IrohaSwift/Sources/IrohaSwift/ToriiClient.swift", "requiredManifestPayload(", "Swift manifest payload normalization")
+    require_contains("IrohaSwift/Sources/IrohaSwift/ToriiClient.swift", "maximumManifestBytes = 512 * 1024", "Swift manifest payload bound")
+    require_contains("IrohaSwift/Sources/IrohaSwift/ToriiClient.swift", "maximumAliasProofBytes = 1024 * 1024", "Swift alias proof bound")
+    require_contains("IrohaSwift/Sources/IrohaSwift/ToriiClient.swift", "requiredAliasSegment(", "Swift canonical alias segment validation")
     require_contains("IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift", "testRegisterSoraFsPinManifestRejectsMalformedInputsBeforeRequest", "Swift malformed input test")
-    require_contains("IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift", "testRegisterSoraFsPinManifestAcceptsManifestBase64Payload", "Swift manifest base64 request test")
-    require_contains("IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift", 'root["manifest_b64"]', "Swift canonical manifest payload assertion")
+    require_contains("IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift", "testRegisterSoraFsPinManifestAcceptsMaximumManifestAndOmitsOptionalFields", "Swift manifest boundary test")
+    require_contains("IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift", 'root["manifest_payload"]', "Swift canonical manifest payload assertion")
+    require_contains("IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift", 'String(repeating: "a", count: 129)', "Swift oversized alias segment adversarial test")
+    require_contains("IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift", "oversizedAliasProof", "Swift oversized alias proof adversarial test")
     require_contains("IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift", "XCTAssertFalse(didSendRequest)", "Swift no-request assertion")
     require_contains("IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift", "testRegisterSoraFsPinManifestRejectsMalformedResponse", "Swift malformed response test")
+    swift_source = read("IrohaSwift/Sources/IrohaSwift/ToriiClient.swift")
+    request_match = re.search(
+        r"public struct ToriiSoraFsPinRegisterRequest:[\s\S]*?(?=fileprivate struct ToriiSoraFsPinRegisterWireRequest)",
+        swift_source,
+    )
+    require(request_match is not None, "Swift pin-register request declaration is missing")
+    retired = re.search(
+        r"manifestBase64|manifestBytes|manifest_b64|chunkerProfile|chunker_profile|pinPolicy|pin_policy|contentLength|content_length|chunkDigest|chunk_digest",
+        request_match.group(0),
+    )
+    require(retired is None, "Swift pin-register request exposes retired out-of-band fields")
 
 
 def check_csharp_contract():
@@ -457,7 +473,7 @@ def check_csharp_contract():
     require_contains("csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs", "RegisterSoraFsPinManifestAsyncAcceptsCanonicalManifestPayloadBase64", "C# manifest base64 request test")
     require_contains("csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs", 'GetProperty("manifest_payload")', "C# canonical manifest payload assertion")
     require_contains("csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs", "Assert.Null(handler.LastRequest)", "C# no-request assertion")
-    require_contains("csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs", "RegisterSoraFsPinManifestAsyncRejectsMalformedResponse", "C# malformed response test")
+    require_contains("csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs", "RegisterSoraFsPinManifestAsyncRejectsMalformedDigestResponse", "C# malformed response test")
 
 
 def check_jvm_contract():
@@ -622,7 +638,7 @@ if mode == "--negative-control-js-sdk-node-setup-order-workflow":
     )
     mutated = original.replace(install_block, "", 1)
     require(mutated != original, "negative control failed: unable to move JavaScript SDK install before Node setup")
-    insert = mutated.index("      - uses: actions/setup-node@v4\n")
+    insert = mutated.index("      - uses: actions/setup-node@v6\n")
     mutated = mutated[:insert] + install_block + mutated[insert:]
     reject_mutation(workflow_path, mutated, "JavaScript SDK Node setup ordering drift")
 
@@ -713,14 +729,14 @@ if mode == "--negative-control-js-sdk-node-override-script":
 if mode == "--negative-control-js-sdk-node-resolver-script":
     target = "ci/check_sorafs_pin_register_js_sdk.sh"
     original = read(target)
-    mutated = original.replace("resolve_node_20_bin()", "resolve_node_bin()", 1)
+    mutated = original.replace("resolve_node_24_bin()", "resolve_node_bin()", 1)
     require(mutated != original, "negative control failed: unable to mutate JavaScript SDK Node resolver")
     reject_mutation(target, mutated, "JavaScript SDK Node resolver drift")
 
 if mode == "--negative-control-js-sdk-node-major-script":
     target = "ci/check_sorafs_pin_register_js_sdk.sh"
     original = read(target)
-    mutated = original.replace("v20.*) ;;", "v18.*) ;;", 1)
+    mutated = original.replace("v24.*) ;;", "v22.*) ;;", 1)
     require(mutated != original, "negative control failed: unable to mutate JavaScript SDK Node major matcher")
     reject_mutation(target, mutated, "JavaScript SDK Node major script drift")
 
@@ -742,8 +758,8 @@ workflow_modes = {
     "--negative-control-csharp-sdk-needs-workflow": (main_job_needs_line, "    needs: [sorafs_pin_register_swift_sdk_check, sorafs_pin_register_jvm_sdk_tests, sorafs_pin_register_javascript_sdk_tests, sorafs_pin_register_python_sdk_tests]", "C# SDK dependency drift"),
     "--negative-control-js-sdk-job-workflow": ("  sorafs_pin_register_javascript_sdk_tests:\n", "  sorafs_pin_register_javascript_sdk_tests_disabled:\n", "JavaScript SDK job drift"),
     "--negative-control-js-sdk-runner-workflow": ("  sorafs_pin_register_javascript_sdk_tests:\n    runs-on: ubuntu-latest", "  sorafs_pin_register_javascript_sdk_tests:\n    runs-on: macos-latest", "JavaScript SDK runner drift"),
-    "--negative-control-js-sdk-node-setup-workflow": ("      - uses: actions/setup-node@v4\n", "", "JavaScript SDK Node setup drift"),
-    "--negative-control-js-sdk-node-version-workflow": ('          node-version: "20"', '          node-version: "18"', "JavaScript SDK Node version drift"),
+    "--negative-control-js-sdk-node-setup-workflow": ("      - uses: actions/setup-node@v6\n", "", "JavaScript SDK Node setup drift"),
+    "--negative-control-js-sdk-node-version-workflow": ('          node-version: "24"', '          node-version: "22"', "JavaScript SDK Node version drift"),
     "--negative-control-js-sdk-node-cache-workflow": ("          cache-dependency-path: javascript/iroha_js/package-lock.json", "          cache-dependency-path: javascript/iroha_js/package.json", "JavaScript SDK cache path drift"),
     "--negative-control-js-sdk-install-workflow": (f"        run: {js_install_command}", "        run: npm install --prefix javascript/iroha_js", "JavaScript SDK install drift"),
     "--negative-control-js-sdk-script-workflow": (f"        run: {js_command}", "        run: bash ci/check_sorafs_pin_register_js_sdk.sh --skip", "JavaScript SDK script drift"),
@@ -806,9 +822,15 @@ source_modes = {
         "testRegisterSoraFsPinManifestRejectsMalformedInputsDisabled",
         "Swift contract test drift",
     ),
+    "--negative-control-swift-retired-request-field": (
+        "IrohaSwift/Sources/IrohaSwift/ToriiClient.swift",
+        "    public var manifestPayload: String?\n",
+        "    public var manifestPayload: String?\n    public var manifest_b64: String?\n",
+        "Swift retired request field drift",
+    ),
     "--negative-control-csharp-malformed-response-test": (
         "csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs",
-        "RegisterSoraFsPinManifestAsyncRejectsMalformedResponse",
+        "RegisterSoraFsPinManifestAsyncRejectsMalformedDigestResponse",
         "RegisterSoraFsPinManifestAsyncMalformedResponseDisabled",
         "C# malformed response test drift",
     ),

@@ -23,8 +23,8 @@ use iroha_test_network::NetworkBuilder;
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
 use sorafs_car::{CarBuildPlan, CarWriter, compute_chunk_plan_digest_sha3};
 use sorafs_manifest::{
-    DagCodecId, ManifestBuilder, ManifestV1, PinPolicy, SorafsReconciliationReportV1,
-    StorageClass, chunker_registry,
+    DagCodecId, ManifestBuilder, ManifestV1, PinPolicy, SorafsReconciliationReportV1, StorageClass,
+    chunker_registry,
 };
 
 const REPORT_TIMEOUT: Duration = Duration::from_secs(20);
@@ -89,10 +89,7 @@ fn sorafs_pin_fee_bootstrap_instructions() -> Vec<InstructionBox> {
     ]
 }
 
-fn register_paid_pin_manifest(
-    client: &Client,
-    manifest: &ManifestV1,
-) -> Result<()> {
+fn register_paid_pin_manifest(client: &Client, manifest: &ManifestV1) -> Result<()> {
     client.post_sorafs_pin_register(SorafsPinRegisterArgs {
         authority: &ALICE_ID,
         private_key: ALICE_KEYPAIR.private_key(),

@@ -13293,7 +13293,8 @@ mod manifest_tests {
         let runner_key = iroha_crypto::KeyPair::try_random().expect("runner key");
         let policy =
             signed_trust_policy_fixture(&manifest, &governance, &[&runner_key], 1, now_unix);
-        let trust_anchors = std::iter::once(governance.public_key().clone()).collect();
+        let trust_anchors: BTreeSet<PublicKey> =
+            std::iter::once(governance.public_key().clone()).collect();
         let signing_runner = LoadedModerationSigningRunnerV1::from_verified(
             service.runner.clone(),
             policy,
@@ -21173,6 +21174,7 @@ fn governance_payload_kind_cli(payload: &GovernanceLogPayloadV1) -> &'static str
         GovernanceLogPayloadV1::ReplicationOrder(_) => "replication_order",
         GovernanceLogPayloadV1::PorChallenge(_) => "por_challenge",
         GovernanceLogPayloadV1::PorProof(_) => "por_proof",
+        GovernanceLogPayloadV1::PdpArchive(_) => "pdp_archive",
         GovernanceLogPayloadV1::AuditVerdict(_) => "audit_verdict",
         GovernanceLogPayloadV1::DealSettlement(_) => "deal_settlement",
         GovernanceLogPayloadV1::ModerationBallotEvent(_) => "moderation_ballot_event",

@@ -7348,6 +7348,7 @@ mod tests {
                 ),
                 committed: true,
             }],
+            fx_corridor: None,
             outcome: iroha_data_model::isi::SettlementOutcomeRecord::Success(
                 iroha_data_model::isi::SettlementSuccessRecord {
                     first_committed: true,
@@ -10322,6 +10323,7 @@ mod tests {
                 ),
                 committed: true,
             }],
+            fx_corridor: None,
             outcome: iroha_data_model::isi::SettlementOutcomeRecord::Success(
                 iroha_data_model::isi::SettlementSuccessRecord {
                     first_committed: true,

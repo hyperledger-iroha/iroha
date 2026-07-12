@@ -5481,12 +5481,7 @@ pub fn write_pin_registry_fixture(output: PathBuf) -> Result<(), Box<dyn Error>>
     let (digest, manifest_root_cid, manifest_payload) = pin_fixture_default_manifest()?;
     let council_keys = pin_fixture_council_keypair();
 
-    pin_fixture_register_and_approve(
-        &mut tx,
-        digest,
-        manifest_payload,
-        &council_keys,
-    )?;
+    pin_fixture_register_and_approve(&mut tx, digest, manifest_payload, &council_keys)?;
 
     let alias_binding =
         pin_fixture_alias_binding_for(&manifest_root_cid, "sora", "docs", 12, 36, &council_keys)?;

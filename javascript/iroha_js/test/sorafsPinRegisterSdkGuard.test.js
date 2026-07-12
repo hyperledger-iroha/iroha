@@ -40,9 +40,9 @@ function assertRunnerRejectsNodeMajor(script, envName, label) {
       env: { ...process.env, [envName]: fakeNode },
     });
 
-    assert.notEqual(result.status, 0, `${label} must reject non-Node-20 overrides`);
+    assert.notEqual(result.status, 0, `${label} must reject non-Node-24 overrides`);
     assert.match(result.stdout, /^v26\.0\.0$/m, `${label} must print the selected Node version`);
-    assert.match(result.stderr, /require Node 20/u, `${label} must explain the Node 20 gate`);
+    assert.match(result.stderr, /require Node 24/u, `${label} must explain the Node 24 gate`);
     assert.doesNotMatch(
       result.stderr,
       /unexpected fake node invocation/u,
@@ -336,6 +336,7 @@ test("SoraFS pin-register SDK guard locks required workflow lanes", () => {
     "--negative-control-python-sdk-bytecode-script",
     "--negative-control-python-adversarial-test",
     "--negative-control-swift-contract-test",
+    "--negative-control-swift-retired-request-field",
     "--negative-control-csharp-malformed-response-test",
     "--negative-control-kotlin-builder-test",
     "--negative-control-kotlin-successor-digest-test",
@@ -347,7 +348,7 @@ test("SoraFS pin-register SDK guard locks required workflow lanes", () => {
   }
   assert.match(
     read("ci/check_sorafs_pin_register_js_sdk.sh"),
-    /NODE_OVERRIDE="\$\{SORAFS_PIN_REGISTER_JS_SDK_NODE_BIN:-\}"[\s\S]*is_node_20_bin\(\)[\s\S]*resolve_node_20_bin\(\)[\s\S]*NODE_BIN="\$\(resolve_node_20_bin\)"[\s\S]*NODE_VERSION="\$\("\$\{NODE_BIN\}" --version\)"[\s\S]*printf '%s\\n' "\$\{NODE_VERSION\}"[\s\S]*v20\.\*\) ;;[\s\S]*registerSorafsPinManifest\|SoraFS pin-register SDK guard\|SoraFS \.\* SDK runner/,
+    /NODE_OVERRIDE="\$\{SORAFS_PIN_REGISTER_JS_SDK_NODE_BIN:-\}"[\s\S]*is_node_24_bin\(\)[\s\S]*resolve_node_24_bin\(\)[\s\S]*NODE_BIN="\$\(resolve_node_24_bin\)"[\s\S]*NODE_VERSION="\$\("\$\{NODE_BIN\}" --version\)"[\s\S]*printf '%s\\n' "\$\{NODE_VERSION\}"[\s\S]*v24\.\*\) ;;[\s\S]*registerSorafsPinManifest\|SoraFS pin-register SDK guard\|SoraFS \.\* SDK runner/,
     "SoraFS JavaScript SDK runner must print the selected Node version and run runtime-gate meta tests",
   );
   assert.match(
@@ -377,7 +378,7 @@ test("SoraFS pin-register SDK guard locks required workflow lanes", () => {
   );
 });
 
-test("SoraFS JavaScript SDK runner rejects non-Node-20 overrides before tests", () => {
+test("SoraFS JavaScript SDK runner rejects non-Node-24 overrides before tests", () => {
   assertRunnerRejectsNodeMajor(
     "ci/check_sorafs_pin_register_js_sdk.sh",
     "SORAFS_PIN_REGISTER_JS_SDK_NODE_BIN",
@@ -480,12 +481,24 @@ test("SoraFS pin-register SDK guard exposes typed JavaScript helpers", () => {
   assert.match(pythonTests, /body\["manifest_payload"\]/);
   assert.match(pythonTests, /rejects_retired_and_unknown_fields/);
 
-  assert.match(swiftClient, /public var manifestBase64: String\?/);
-  assert.match(swiftClient, /public var manifestBytes: Data\?/);
-  assert.match(swiftClient, /case manifestBase64 = "manifest_b64"/);
-  assert.match(swiftClient, /optionalManifestPayload\(manifestBase64: String\?, manifestBytes: Data\?\)/);
-  assert.match(swiftTests, /testRegisterSoraFsPinManifestAcceptsManifestBase64Payload/);
-  assert.match(swiftTests, /root\["manifest_b64"\]/);
+  assert.match(swiftClient, /public var manifestPayload: String\?/);
+  assert.match(swiftClient, /case manifestPayload = "manifest_payload"/);
+  assert.match(swiftClient, /requiredManifestPayload\(/);
+  assert.match(swiftClient, /maximumManifestBytes = 512 \* 1024/);
+  assert.match(swiftClient, /maximumAliasProofBytes = 1024 \* 1024/);
+  assert.match(swiftClient, /requiredAliasSegment\(/);
+  assert.match(swiftTests, /testRegisterSoraFsPinManifestAcceptsMaximumManifestAndOmitsOptionalFields/);
+  assert.match(swiftTests, /root\["manifest_payload"\]/);
+  assert.match(swiftTests, /String\(repeating: "a", count: 129\)/);
+  assert.match(swiftTests, /oversizedAliasProof/);
+  const swiftRequest = swiftClient.match(
+    /public struct ToriiSoraFsPinRegisterRequest:[\s\S]*?(?=fileprivate struct ToriiSoraFsPinRegisterWireRequest)/,
+  )?.[0];
+  assert.ok(swiftRequest, "Swift SoraFS pin-register request declaration missing");
+  assert.doesNotMatch(
+    swiftRequest,
+    /manifestBase64|manifestBytes|manifest_b64|chunkerProfile|chunker_profile|pinPolicy|pin_policy|contentLength|content_length|chunkDigest|chunk_digest/,
+  );
 
   assert.match(csharpClient, /NormalizeRequiredSoraFsManifestPayload/);
   assert.match(csharpClient, /SoraFsManifestPayloadMaxBytes = 512 \* 1024/);

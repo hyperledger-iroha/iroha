@@ -9,8 +9,8 @@ use iroha_data_model::{
     block::consensus::{Evidence, EvidencePayload, EvidenceRecord},
     consensus::{
         NposConsensusEffects, NposConsensusSlashAction, NposMarkConsensusEvidenceAppliedAction,
-        NposMarkVrfPenaltiesAppliedAction, NposPenaltyAction, NposVrfJailAction, Qc,
-        ValidatorSetCheckpoint, VrfEpochRecord,
+        NposMarkVrfPenaltiesAppliedAction, NposPenaltyAction, Qc, ValidatorSetCheckpoint,
+        VrfEpochRecord,
     },
     nexus::{DataSpaceCatalog, LaneId, PublicLaneValidatorStatus},
     parameter::system::SumeragiNposParameters,
@@ -397,18 +397,6 @@ impl<'a> PenaltyApplier<'a> {
             }
         }
         Ok(actions)
-    }
-
-    fn locate_validator_cached(
-        signer: ValidatorIndex,
-        commit_topology: &[PeerId],
-        map: &BTreeMap<PublicKey, ValidatorLocator>,
-    ) -> Option<(PeerId, ValidatorLocator)> {
-        let signer_idx = usize::try_from(signer).ok()?;
-        let peer = commit_topology.get(signer_idx)?;
-        map.get(peer.public_key())
-            .cloned()
-            .map(|locator| (peer.clone(), locator))
     }
 
     #[allow(clippy::unused_self)]

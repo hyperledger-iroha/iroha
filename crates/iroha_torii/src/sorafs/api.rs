@@ -28948,7 +28948,7 @@ mod app_api_tests {
     use ed25519_dalek::{Signer as _, SigningKey};
     use iroha_config::parameters::actual::SorafsTokenConfig;
     use sorafs_car::{
-        CarBuildPlan,
+        CarBuildPlan, compute_chunk_plan_digest_sha3,
         multi_fetch::{
             FetchOptions, FetchProvider, ProviderMetadata, RangeCapability, StreamBudget,
             fetch_plan_parallel,
@@ -28976,6 +28976,10 @@ mod app_api_tests {
         sorafs::{AdmissionRegistry, StreamTokenIssuer},
         utils::extractors::JsonOnly,
     };
+
+    fn manifest_builder_for_plan(plan: &CarBuildPlan) -> ManifestBuilder {
+        ManifestBuilder::new().chunk_digest_sha3_256(compute_chunk_plan_digest_sha3(&plan.chunks))
+    }
 
     #[test]
     fn walk_query_params_decodes_percent_encoding() {
@@ -29193,7 +29197,7 @@ mod app_api_tests {
 
         let payload = b"deterministic payload for alignment";
         let plan = CarBuildPlan::single_file(payload).expect("plan");
-        let manifest = ManifestBuilder::new()
+        let manifest = manifest_builder_for_plan(&plan)
             .root_cid(vec![0x01, 0x02, 0x03, 0x04])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -29233,7 +29237,7 @@ mod app_api_tests {
 
         let payload = b"payload for misalignment check";
         let plan = CarBuildPlan::single_file(payload).expect("plan");
-        let manifest = ManifestBuilder::new()
+        let manifest = manifest_builder_for_plan(&plan)
             .root_cid(vec![0x0A, 0x0B, 0x0C])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -30525,6 +30529,11 @@ mod chunk_profile_tests {
     use blake3;
     use sorafs_manifest::{BLAKE3_256_MULTIHASH_CODE, DagCodecId, ManifestBuilder, PinPolicy};
 
+    fn manifest_builder_for_plan(plan: &sorafs_car::CarBuildPlan) -> ManifestBuilder {
+        ManifestBuilder::new()
+            .chunk_digest_sha3_256(sorafs_car::compute_chunk_plan_digest_sha3(&plan.chunks))
+    }
+
     #[test]
     fn chunk_profile_for_manifest_accepts_inline_profile() {
         let payload = b"chunk-profile-fixture";
@@ -30535,7 +30544,9 @@ mod chunk_profile_tests {
             max_size: 8,
             break_mask: 1,
         };
-        let manifest = ManifestBuilder::new()
+        let plan = sorafs_car::CarBuildPlan::single_file_with_profile(payload, profile)
+            .expect("chunk plan");
+        let manifest = manifest_builder_for_plan(&plan)
             .root_cid(vec![0xAA; 16])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(profile, BLAKE3_256_MULTIHASH_CODE)
@@ -30555,7 +30566,8 @@ mod chunk_profile_tests {
     fn chunk_profile_for_manifest_rejects_unknown_profile_id() {
         let payload = b"chunk-profile-fixture";
         let content_length = payload.len() as u64;
-        let mut manifest = ManifestBuilder::new()
+        let plan = sorafs_car::CarBuildPlan::single_file(payload).expect("chunk plan");
+        let mut manifest = manifest_builder_for_plan(&plan)
             .root_cid(vec![0xAA; 16])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -31184,6 +31196,19 @@ mod advert_tests {
         tests_runtime_handlers::{mk_app_state_for_tests_with_world, signed_app_headers},
         utils::extractors::JsonOnly,
     };
+
+    fn manifest_builder_for_plan(plan: &CarBuildPlan) -> ManifestBuilder {
+        ManifestBuilder::new().chunk_digest_sha3_256(compute_chunk_plan_digest_sha3(&plan.chunks))
+    }
+
+    fn manifest_builder_for_payload(
+        payload: &[u8],
+        profile: sorafs_chunker::ChunkProfile,
+    ) -> ManifestBuilder {
+        let plan = CarBuildPlan::single_file_with_profile(payload, profile)
+            .expect("derive manifest fixture chunk plan");
+        manifest_builder_for_plan(&plan)
+    }
 
     struct FixedProofTokenRng {
         byte: u8,
@@ -45707,7 +45732,7 @@ mod advert_tests {
 
         let payload = b"proof stream manifest payload";
         let plan = CarBuildPlan::single_file(payload).expect("plan");
-        let manifest = ManifestBuilder::new()
+        let manifest = manifest_builder_for_plan(&plan)
             .root_cid(vec![0xAA; 16])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -46843,7 +46868,7 @@ mod advert_tests {
     }
 
     fn manifest_for_payload(seed: u8, payload: &[u8]) -> ManifestV1 {
-        let manifest = ManifestBuilder::new()
+        let manifest = manifest_builder_for_payload(payload, sorafs_chunker::ChunkProfile::DEFAULT)
             .root_cid(vec![seed; 16])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -48408,7 +48433,7 @@ mod advert_tests {
         let state = Arc::new(inner);
 
         let payload = b"sorafs storage roundtrip payload";
-        let manifest = ManifestBuilder::new()
+        let manifest = manifest_builder_for_payload(payload, sorafs_chunker::ChunkProfile::DEFAULT)
             .root_cid(vec![0xAA; 16])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -48507,7 +48532,7 @@ mod advert_tests {
 
         let payload = b"sorafs manifest export payload";
         let plan = CarBuildPlan::single_file(payload).expect("plan");
-        let manifest = ManifestBuilder::new()
+        let manifest = manifest_builder_for_plan(&plan)
             .root_cid(vec![0xAB; 16])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -50140,7 +50165,7 @@ mod advert_tests {
 
         let payload = b"denylisted site payload";
         let plan = CarBuildPlan::single_file(payload).expect("plan");
-        let manifest = ManifestBuilder::new()
+        let manifest = manifest_builder_for_plan(&plan)
             .root_cid(vec![0xAA; 16])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -50427,7 +50452,7 @@ mod advert_tests {
             sorafs_chunker::ChunkProfile::DEFAULT,
         )
         .expect("plan");
-        let manifest = ManifestBuilder::new()
+        let manifest = manifest_builder_for_plan(&plan)
             .root_cid(vec![0xCD; 16])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -50608,7 +50633,7 @@ mod advert_tests {
         let state = Arc::new(inner);
 
         let payload = b"sorafs storage por sampling payload";
-        let manifest = ManifestBuilder::new()
+        let manifest = manifest_builder_for_payload(payload, sorafs_chunker::ChunkProfile::DEFAULT)
             .root_cid(vec![0xBB; 16])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -51555,7 +51580,7 @@ mod advert_tests {
             max_size: 8,
             break_mask: 1,
         };
-        let manifest = ManifestBuilder::new()
+        let manifest = manifest_builder_for_payload(&payload, profile)
             .root_cid(vec![0xAA; 16])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(profile, sorafs_manifest::BLAKE3_256_MULTIHASH_CODE)
@@ -51759,7 +51784,7 @@ mod advert_tests {
     #[tokio::test]
     async fn storage_pin_returns_not_found_when_disabled() {
         let app = mk_app_state_for_tests();
-        let manifest = ManifestBuilder::new()
+        let manifest = manifest_builder_for_payload(b"noop", sorafs_chunker::ChunkProfile::DEFAULT)
             .root_cid(vec![0xCC; 8])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -52766,7 +52791,7 @@ mod advert_tests {
         let state = Arc::new(inner);
 
         let payload = b"sorafs fetch manifest envelope enforcement payload";
-        let manifest = ManifestBuilder::new()
+        let manifest = manifest_builder_for_payload(payload, sorafs_chunker::ChunkProfile::DEFAULT)
             .root_cid(vec![0xCC; 16])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -53010,7 +53035,7 @@ mod advert_tests {
         let state = Arc::new(inner);
 
         let payload = b"sorafs fetch manifest envelope optional payload";
-        let manifest = ManifestBuilder::new()
+        let manifest = manifest_builder_for_payload(payload, sorafs_chunker::ChunkProfile::DEFAULT)
             .root_cid(vec![0xCC; 16])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -53163,7 +53188,7 @@ mod advert_tests {
         let state = Arc::new(inner);
 
         let payload = b"sorafs capability enforcement payload";
-        let manifest = ManifestBuilder::new()
+        let manifest = manifest_builder_for_payload(payload, sorafs_chunker::ChunkProfile::DEFAULT)
             .root_cid(vec![0xDC; 16])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(

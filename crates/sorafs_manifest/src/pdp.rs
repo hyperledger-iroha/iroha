@@ -33,6 +33,8 @@ pub const PDP_COMMITMENT_VERSION_V1: u8 = 1;
 pub const PDP_CHALLENGE_VERSION_V1: u8 = 1;
 /// PDP proof schema version (v1).
 pub const PDP_PROOF_VERSION_V1: u8 = 1;
+/// PDP Governance DAG archive schema version (v1).
+pub const PDP_GOVERNANCE_ARCHIVE_VERSION_V1: u8 = 1;
 /// Fixed hot-leaf granularity for PDP v1.
 pub const PDP_HOT_LEAF_SIZE_V1: u32 = 4 * 1024;
 /// Fixed segment granularity for PDP v1.
@@ -53,6 +55,9 @@ pub const PDP_COMMITMENT_MAX_CANONICAL_BYTES_V1: usize = 16 * 1024;
 pub const PDP_CHALLENGE_MAX_CANONICAL_BYTES_V1: usize = 512 * 1024;
 /// Maximum canonical proof payload size used by decoders/reference tooling.
 pub const PDP_PROOF_MAX_CANONICAL_BYTES_V1: usize = 16 * 1024 * 1024;
+/// Maximum canonical PDP Governance DAG archive payload size.
+pub const PDP_GOVERNANCE_ARCHIVE_MAX_CANONICAL_BYTES_V1: usize =
+    PDP_CHALLENGE_MAX_CANONICAL_BYTES_V1 + PDP_PROOF_MAX_CANONICAL_BYTES_V1 + 64 * 1024;
 /// Maximum aliases in an embedded chunking profile.
 pub const PDP_CHUNK_PROFILE_MAX_ALIASES_V1: usize = 16;
 /// Maximum bytes in a chunk-profile namespace or name.
@@ -65,6 +70,8 @@ pub const PDP_CHUNK_PROFILE_ALIAS_MAX_BYTES_V1: usize = 128;
 const PDP_COMMITMENT_DIGEST_DOMAIN_V1: &[u8] = b"sorafs.pdp.commitment.digest.v1\0";
 const PDP_CHALLENGE_ID_DOMAIN_V1: &[u8] = b"sorafs.pdp.challenge.id.v1\0";
 const PDP_PROOF_DIGEST_DOMAIN_V1: &[u8] = b"sorafs.pdp.proof.digest.v1\0";
+const PDP_GOVERNANCE_ARCHIVE_DIGEST_DOMAIN_V1: &[u8] =
+    b"sorafs.pdp.governance-archive.v1\0";
 /// Domain under which providers sign canonical PDP proof digests.
 pub const PDP_PROOF_SIGNATURE_DOMAIN_V1: &[u8] = b"sorafs.pdp.proof.signature.v1\0";
 
@@ -1042,6 +1049,283 @@ pub enum PdpProofValidationError {
     /// Canonical encoding failed or exceeded the proof byte cap.
     #[error("PDP proof canonical encoding is unavailable or over limit")]
     CanonicalEncoding,
+}
+
+/// Stable rejection reason recorded for a terminal PDP challenge.
+#[derive(Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, JsonSerialize, PartialEq, Eq)]
+#[norito(tag = "reason", content = "details")]
+pub enum PdpRejectionReasonV1 {
+    /// No proof arrived before the transport deadline.
+    DeadlineExpired,
+    /// A proof reached the service after the transport deadline.
+    SubmissionLate,
+    /// A signed proof claimed an issued-at time beyond governed clock skew.
+    FutureTimestamp,
+    /// An authenticated proof failed binding, coverage, or Merkle verification.
+    InvalidProof,
+    /// The provider admission disappeared while the challenge was pending.
+    AdmissionRevoked,
+    /// The active admission no longer authorised the challenge or provider key.
+    AdmissionInactive,
+    /// Safe local proof generation failed because retained storage was unavailable.
+    StorageUnavailable,
+}
+
+/// Accepted or rejected terminal result for one PDP challenge.
+#[derive(Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, JsonSerialize, PartialEq, Eq)]
+#[norito(tag = "decision", content = "details")]
+pub enum PdpTerminalDecisionV1 {
+    /// Exhaustive admission-bound verification succeeded.
+    Accepted,
+    /// The challenge failed with a stable repair category.
+    Rejected(PdpRejectionReasonV1),
+}
+
+/// Canonical Governance DAG archive payload for one terminal PDP decision.
+#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, PartialEq, Eq)]
+pub struct PdpGovernanceArchiveV1 {
+    /// Schema version.
+    pub version: u8,
+    /// Monotonic local provider-queue sequence.
+    pub sequence: u64,
+    /// Challenge identifier.
+    pub challenge_id: [u8; 32],
+    /// Commitment digest fixed by the challenge.
+    pub commitment_digest: [u8; 32],
+    /// Manifest digest fixed by the challenge.
+    pub manifest_digest: [u8; 32],
+    /// Governance provider identifier.
+    pub provider_id: [u8; 32],
+    /// Challenge epoch.
+    pub epoch_id: u64,
+    /// Terminal decision.
+    pub decision: PdpTerminalDecisionV1,
+    /// Canonical domain-separated proof digest when a proof was supplied.
+    #[norito(default)]
+    pub proof_digest: Option<[u8; 32]>,
+    /// Number of challenged segments verified or failed.
+    pub sampled_segments: u16,
+    /// Number of challenged hot leaves verified or failed.
+    pub sampled_hot_leaves: u16,
+    /// Number of sampled payload bytes established by a successful proof.
+    pub sampled_bytes: u64,
+    /// Challenge issue timestamp.
+    pub issued_at_unix: u64,
+    /// Challenge response deadline.
+    pub response_deadline_unix: u64,
+    /// Server timestamp at terminal decision.
+    pub decided_at_unix: u64,
+    /// Exact council-verified admission envelope digest captured at enqueue.
+    pub admission_envelope_digest: [u8; 32],
+    /// Exact canonical challenge bytes.
+    pub canonical_challenge: Vec<u8>,
+    /// Exact canonical authenticated proof bytes, absent for no-submission failures.
+    #[norito(default)]
+    pub canonical_proof: Option<Vec<u8>>,
+}
+
+impl PdpGovernanceArchiveV1 {
+    /// Validate the archive's bounded canonical payloads and terminal invariants.
+    pub fn validate(&self) -> Result<(), PdpGovernanceArchiveValidationError> {
+        if self.version != PDP_GOVERNANCE_ARCHIVE_VERSION_V1 {
+            return Err(PdpGovernanceArchiveValidationError::UnsupportedVersion {
+                found: self.version,
+            });
+        }
+        if self.sequence == 0
+            || self.challenge_id == [0; 32]
+            || self.commitment_digest == [0; 32]
+            || self.manifest_digest == [0; 32]
+            || self.provider_id == [0; 32]
+            || self.epoch_id == 0
+            || self.admission_envelope_digest == [0; 32]
+        {
+            return Err(PdpGovernanceArchiveValidationError::InvalidIdentity);
+        }
+        if self.issued_at_unix == 0
+            || self.response_deadline_unix <= self.issued_at_unix
+            || self.decided_at_unix < self.issued_at_unix
+        {
+            return Err(PdpGovernanceArchiveValidationError::InvalidTimeline);
+        }
+        if self.proof_digest.is_some() != self.canonical_proof.is_some() {
+            return Err(PdpGovernanceArchiveValidationError::ProofPresenceMismatch);
+        }
+        match self.decision {
+            PdpTerminalDecisionV1::Accepted => {
+                if self.canonical_proof.is_none()
+                    || self.sampled_bytes == 0
+                    || self.decided_at_unix > self.response_deadline_unix
+                {
+                    return Err(PdpGovernanceArchiveValidationError::DecisionMismatch);
+                }
+            }
+            PdpTerminalDecisionV1::Rejected(reason) => {
+                let proof_required = matches!(
+                    reason,
+                    PdpRejectionReasonV1::SubmissionLate
+                        | PdpRejectionReasonV1::FutureTimestamp
+                        | PdpRejectionReasonV1::InvalidProof
+                );
+                if proof_required != self.canonical_proof.is_some() || self.sampled_bytes != 0 {
+                    return Err(PdpGovernanceArchiveValidationError::DecisionMismatch);
+                }
+                if matches!(
+                    reason,
+                    PdpRejectionReasonV1::DeadlineExpired
+                        | PdpRejectionReasonV1::SubmissionLate
+                ) && self.decided_at_unix <= self.response_deadline_unix
+                {
+                    return Err(PdpGovernanceArchiveValidationError::DecisionMismatch);
+                }
+            }
+        }
+
+        let challenge = decode_canonical_archive_challenge(&self.canonical_challenge)?;
+        let sampled_segments = u16::try_from(challenge.samples.len())
+            .map_err(|_| PdpGovernanceArchiveValidationError::SampleCountMismatch)?;
+        let sampled_hot_leaves = challenge
+            .samples
+            .iter()
+            .try_fold(0usize, |total, sample| {
+                total.checked_add(sample.hot_leaf_indices.len())
+            })
+            .and_then(|total| u16::try_from(total).ok())
+            .ok_or(PdpGovernanceArchiveValidationError::SampleCountMismatch)?;
+        if challenge.challenge_id != self.challenge_id
+            || challenge.commitment_digest != self.commitment_digest
+            || challenge.manifest_digest != self.manifest_digest
+            || challenge.provider_id != self.provider_id
+            || challenge.epoch_id != self.epoch_id
+            || challenge.issued_at_unix != self.issued_at_unix
+            || challenge.response_deadline_unix != self.response_deadline_unix
+        {
+            return Err(PdpGovernanceArchiveValidationError::ChallengeBindingMismatch);
+        }
+        if sampled_segments == 0
+            || sampled_hot_leaves == 0
+            || sampled_segments != self.sampled_segments
+            || sampled_hot_leaves != self.sampled_hot_leaves
+        {
+            return Err(PdpGovernanceArchiveValidationError::SampleCountMismatch);
+        }
+
+        if let Some(bytes) = self.canonical_proof.as_ref() {
+            let proof = decode_canonical_archive_proof(bytes)?;
+            proof.verify_signature().map_err(|error| {
+                PdpGovernanceArchiveValidationError::InvalidProofSignature {
+                    reason: error.to_string(),
+                }
+            })?;
+            let digest = proof.proof_digest().map_err(|error| {
+                PdpGovernanceArchiveValidationError::CanonicalEncoding {
+                    reason: error.to_string(),
+                }
+            })?;
+            if Some(digest) != self.proof_digest || proof.challenge_id != self.challenge_id {
+                return Err(PdpGovernanceArchiveValidationError::ProofBindingMismatch);
+            }
+            if matches!(self.decision, PdpTerminalDecisionV1::Accepted)
+                && (proof.commitment_digest != self.commitment_digest
+                    || proof.manifest_digest != self.manifest_digest
+                    || proof.provider_id != self.provider_id
+                    || proof.epoch_id != self.epoch_id)
+            {
+                return Err(PdpGovernanceArchiveValidationError::ProofBindingMismatch);
+            }
+        }
+
+        ensure_canonical_size(self, PDP_GOVERNANCE_ARCHIVE_MAX_CANONICAL_BYTES_V1).map_err(
+            |error| PdpGovernanceArchiveValidationError::CanonicalEncoding {
+                reason: error.to_string(),
+            },
+        )?;
+        Ok(())
+    }
+
+    /// Return the canonical domain-separated archive digest.
+    pub fn digest(&self) -> Result<[u8; 32], norito::core::Error> {
+        domain_separated_norito_digest(PDP_GOVERNANCE_ARCHIVE_DIGEST_DOMAIN_V1, self)
+    }
+}
+
+fn decode_canonical_archive_challenge(
+    bytes: &[u8],
+) -> Result<PdpChallengeV1, PdpGovernanceArchiveValidationError> {
+    if bytes.is_empty() || bytes.len() > PDP_CHALLENGE_MAX_CANONICAL_BYTES_V1 {
+        return Err(PdpGovernanceArchiveValidationError::InvalidCanonicalChallenge);
+    }
+    let challenge = norito::decode_from_bytes::<PdpChallengeV1>(bytes)
+        .map_err(|_| PdpGovernanceArchiveValidationError::InvalidCanonicalChallenge)?;
+    challenge
+        .validate()
+        .map_err(|_| PdpGovernanceArchiveValidationError::InvalidCanonicalChallenge)?;
+    let canonical = norito::to_bytes(&challenge)
+        .map_err(|_| PdpGovernanceArchiveValidationError::InvalidCanonicalChallenge)?;
+    if canonical != bytes {
+        return Err(PdpGovernanceArchiveValidationError::InvalidCanonicalChallenge);
+    }
+    Ok(challenge)
+}
+
+fn decode_canonical_archive_proof(
+    bytes: &[u8],
+) -> Result<PdpProofV1, PdpGovernanceArchiveValidationError> {
+    if bytes.is_empty() || bytes.len() > PDP_PROOF_MAX_CANONICAL_BYTES_V1 {
+        return Err(PdpGovernanceArchiveValidationError::InvalidCanonicalProof);
+    }
+    let proof = norito::decode_from_bytes::<PdpProofV1>(bytes)
+        .map_err(|_| PdpGovernanceArchiveValidationError::InvalidCanonicalProof)?;
+    proof
+        .validate()
+        .map_err(|_| PdpGovernanceArchiveValidationError::InvalidCanonicalProof)?;
+    let canonical = norito::to_bytes(&proof)
+        .map_err(|_| PdpGovernanceArchiveValidationError::InvalidCanonicalProof)?;
+    if canonical != bytes {
+        return Err(PdpGovernanceArchiveValidationError::InvalidCanonicalProof);
+    }
+    Ok(proof)
+}
+
+/// Validation errors for [`PdpGovernanceArchiveV1`].
+#[derive(Debug, Error, Clone, PartialEq, Eq)]
+pub enum PdpGovernanceArchiveValidationError {
+    /// Archive schema version is unsupported.
+    #[error("unsupported PDP governance archive version {found}")]
+    UnsupportedVersion { found: u8 },
+    /// Sequence or identity material is zero/inert.
+    #[error("PDP governance archive identity fields must be non-zero")]
+    InvalidIdentity,
+    /// Challenge and terminal timestamps are inconsistent.
+    #[error("PDP governance archive timeline is inconsistent")]
+    InvalidTimeline,
+    /// Proof digest and proof payload presence disagree.
+    #[error("PDP governance archive proof digest/payload presence mismatch")]
+    ProofPresenceMismatch,
+    /// Terminal decision does not match proof presence, bytes, or deadline state.
+    #[error("PDP governance archive terminal decision is inconsistent")]
+    DecisionMismatch,
+    /// Embedded challenge is malformed, noncanonical, or oversized.
+    #[error("PDP governance archive challenge is not canonical")]
+    InvalidCanonicalChallenge,
+    /// Embedded proof is malformed, noncanonical, or oversized.
+    #[error("PDP governance archive proof is not canonical")]
+    InvalidCanonicalProof,
+    /// Top-level archive fields disagree with the embedded challenge.
+    #[error("PDP governance archive challenge binding mismatch")]
+    ChallengeBindingMismatch,
+    /// Declared sample counts disagree with the embedded challenge.
+    #[error("PDP governance archive sample count mismatch")]
+    SampleCountMismatch,
+    /// Proof digest, challenge, or accepted identity binding disagrees.
+    #[error("PDP governance archive proof binding mismatch")]
+    ProofBindingMismatch,
+    /// Embedded provider signature is invalid.
+    #[error("invalid PDP governance archive proof signature: {reason}")]
+    InvalidProofSignature { reason: String },
+    /// Canonical archive encoding failed or exceeded its hard cap.
+    #[error("PDP governance archive canonical encoding failed: {reason}")]
+    CanonicalEncoding { reason: String },
 }
 
 /// Opaque result returned only after exhaustive PDP verification.
@@ -2076,6 +2360,102 @@ mod tests {
         fixture.proof.commitment_digest = fixture.challenge.commitment_digest;
         fixture.proof.challenge_id = fixture.challenge.challenge_id;
         resign(&mut fixture.proof, &fixture.signing_key);
+    }
+
+    fn accepted_archive(fixture: &Fixture) -> PdpGovernanceArchiveV1 {
+        let verified = verify_pdp_bundle_v1(
+            &fixture.commitment,
+            &fixture.challenge,
+            &fixture.proof,
+            &fixture.admission,
+        )
+        .expect("verified archive fixture");
+        PdpGovernanceArchiveV1 {
+            version: PDP_GOVERNANCE_ARCHIVE_VERSION_V1,
+            sequence: 1,
+            challenge_id: fixture.challenge.challenge_id,
+            commitment_digest: fixture.challenge.commitment_digest,
+            manifest_digest: fixture.challenge.manifest_digest,
+            provider_id: fixture.challenge.provider_id,
+            epoch_id: fixture.challenge.epoch_id,
+            decision: PdpTerminalDecisionV1::Accepted,
+            proof_digest: Some(fixture.proof.proof_digest().expect("proof digest")),
+            sampled_segments: verified.sampled_segments(),
+            sampled_hot_leaves: verified.sampled_hot_leaves(),
+            sampled_bytes: verified.sampled_bytes(),
+            issued_at_unix: fixture.challenge.issued_at_unix,
+            response_deadline_unix: fixture.challenge.response_deadline_unix,
+            decided_at_unix: fixture.proof.issued_at_unix,
+            admission_envelope_digest: *fixture.admission.envelope_digest(),
+            canonical_challenge: norito::to_bytes(&fixture.challenge).expect("challenge bytes"),
+            canonical_proof: Some(norito::to_bytes(&fixture.proof).expect("proof bytes")),
+        }
+    }
+
+    #[test]
+    fn governance_archive_is_typed_canonical_and_roundtrips() {
+        let archive = accepted_archive(&fixture());
+        archive.validate().expect("valid accepted archive");
+        let digest = archive.digest().expect("archive digest");
+        let bytes = norito::to_bytes(&archive).expect("archive bytes");
+        assert!(bytes.len() <= PDP_GOVERNANCE_ARCHIVE_MAX_CANONICAL_BYTES_V1);
+        let decoded: PdpGovernanceArchiveV1 =
+            norito::decode_from_bytes(&bytes).expect("decode archive");
+        assert_eq!(decoded, archive);
+        assert_eq!(decoded.digest().expect("decoded digest"), digest);
+        decoded.validate().expect("decoded archive validates");
+    }
+
+    #[test]
+    fn governance_archive_rejects_identity_timeline_binding_and_payload_attacks() {
+        for mutation in 0..10 {
+            let mut archive = accepted_archive(&fixture());
+            match mutation {
+                0 => archive.version = 0,
+                1 => archive.sequence = 0,
+                2 => archive.manifest_digest[0] ^= 1,
+                3 => archive.sampled_hot_leaves += 1,
+                4 => archive.sampled_bytes = 0,
+                5 => archive.decided_at_unix = archive.response_deadline_unix + 1,
+                6 => archive.proof_digest = None,
+                7 => archive.canonical_challenge.push(0),
+                8 => archive.canonical_proof.as_mut().expect("proof")[0] ^= 1,
+                9 => {
+                    archive.decision = PdpTerminalDecisionV1::Rejected(
+                        PdpRejectionReasonV1::DeadlineExpired,
+                    )
+                }
+                _ => unreachable!(),
+            }
+            assert!(archive.validate().is_err(), "mutation {mutation} must fail");
+        }
+    }
+
+    #[test]
+    fn governance_archive_preserves_authenticated_invalid_proof_and_no_show_evidence() {
+        let fixture = fixture();
+        let mut invalid_proof = fixture.proof.clone();
+        invalid_proof.manifest_digest[0] ^= 1;
+        resign(&mut invalid_proof, &fixture.signing_key);
+        let mut rejected = accepted_archive(&fixture);
+        rejected.decision =
+            PdpTerminalDecisionV1::Rejected(PdpRejectionReasonV1::InvalidProof);
+        rejected.proof_digest = Some(invalid_proof.proof_digest().expect("invalid proof digest"));
+        rejected.canonical_proof =
+            Some(norito::to_bytes(&invalid_proof).expect("invalid proof bytes"));
+        rejected.sampled_bytes = 0;
+        rejected
+            .validate()
+            .expect("authenticated invalid proof remains archivable");
+
+        let mut expired = accepted_archive(&fixture);
+        expired.decision =
+            PdpTerminalDecisionV1::Rejected(PdpRejectionReasonV1::DeadlineExpired);
+        expired.proof_digest = None;
+        expired.canonical_proof = None;
+        expired.sampled_bytes = 0;
+        expired.decided_at_unix = expired.response_deadline_unix + 1;
+        expired.validate().expect("no-show archive");
     }
 
     #[test]

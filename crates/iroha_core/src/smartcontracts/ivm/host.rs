@@ -101,6 +101,7 @@ use iroha_data_model::{
     },
     zk::{BackendTag, OpenVerifyEnvelopeBounds, OpenVerifyEnvelopeValidationError},
 };
+use iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint;
 use iroha_primitives::{
     bigint::BigInt,
     calendar,
@@ -4310,6 +4311,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         Ok((env, prepared))
     }
 
+    #[cfg(test)]
     fn enforce_zk_envelope(
         &self,
         payload: &[u8],
@@ -5165,11 +5167,13 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         16_u64.saturating_add(u64::try_from(payload_len).unwrap_or(u64::MAX))
     }
 
+    #[cfg(test)]
     fn state_keys_gas(examined_count: usize, payload_len: usize) -> u64 {
         Self::state_query_gas(payload_len)
             .saturating_add(u64::try_from(examined_count).unwrap_or(u64::MAX))
     }
 
+    #[cfg(test)]
     fn state_count_gas(examined_count: usize) -> u64 {
         16_u64.saturating_add(u64::try_from(examined_count).unwrap_or(u64::MAX))
     }
@@ -5449,7 +5453,14 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         }
     }
 
-    fn decode_durable_state_path(vm: &IVM, pointer: u64) -> Result<(Name, usize), ivm::VMError> {
+    fn decode_durable_state_path_payload(
+        &self,
+        vm: &IVM,
+        pointer: u64,
+    ) -> Result<(Name, usize), ivm::VMError> {
+        if self.current_contract_runtime_context.is_some() && vm.contract_interface().is_none() {
+            return Err(ivm::VMError::InvalidMetadata);
+        }
         let tlv = Self::expect_tlv(vm, pointer, PointerType::Name)?;
         let path_len = tlv.payload.len();
         if path_len > ivm::syscalls::STATE_MAX_PATH_BYTES {
@@ -5457,6 +5468,26 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         }
         let path = Self::decode_name_payload(tlv.payload)?;
         ivm::host::validate_state_path_name(&path)?;
+        Ok((path, path_len))
+    }
+
+    fn decode_durable_state_path(
+        &self,
+        vm: &IVM,
+        pointer: u64,
+    ) -> Result<(Name, usize), ivm::VMError> {
+        let (path, path_len) = self.decode_durable_state_path_payload(vm, pointer)?;
+        ivm::host::validate_declared_state_path(vm, &path)?;
+        Ok((path, path_len))
+    }
+
+    fn decode_durable_state_scan_path(
+        &self,
+        vm: &IVM,
+        pointer: u64,
+    ) -> Result<(Name, usize), ivm::VMError> {
+        let (path, path_len) = self.decode_durable_state_path_payload(vm, pointer)?;
+        ivm::host::validate_declared_state_scan_path(vm, &path)?;
         Ok((path, path_len))
     }
 
@@ -9891,8 +9922,7 @@ impl<QS> CoreHostImpl<QS> {
         }
         matches!(
             number,
-            ivm::syscalls::SYSCALL_BUILD_PATH_MAP_KEY
-                | ivm::syscalls::SYSCALL_BUILD_PATH_KEY_NORITO
+            ivm::syscalls::SYSCALL_BUILD_PATH_KEY_NORITO
                 | ivm::syscalls::SYSCALL_BUILD_PATH_KEY_NORITO_DIRECT
                 | ivm::syscalls::SYSCALL_STATE_MAP_KEY_AT
                 | ivm::syscalls::SYSCALL_STATE_VALUE_ENCODE
@@ -10692,6 +10722,35 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 let isi = Revoke::account_permission(permission, account);
                 let instr = InstructionBox::from(isi);
                 Ok(self.queue_instruction(instr))
+            }
+            ivm::syscalls::SYSCALL_GRANT_CONTRACT_ENTRYPOINT
+            | ivm::syscalls::SYSCALL_REVOKE_CONTRACT_ENTRYPOINT => {
+                let account: AccountId =
+                    Self::decode_tlv_typed(vm, vm.register(10), PointerType::AccountId)?;
+                let selector_tlv = vm.validate_tlv(vm.register(11))?;
+                if selector_tlv.type_id != PointerType::Blob {
+                    return Err(ivm::VMError::NoritoInvalid);
+                }
+                let entrypoint = core::str::from_utf8(selector_tlv.payload)
+                    .map_err(|_| ivm::VMError::DecodeError)?;
+                if entrypoint.is_empty() || entrypoint.trim() != entrypoint {
+                    return Err(ivm::VMError::DecodeError);
+                }
+                let contract = self
+                    .current_contract_runtime_context
+                    .as_ref()
+                    .map(|context| context.contract_address.clone())
+                    .ok_or(ivm::VMError::PermissionDenied)?;
+                let permission = Permission::from(CanInvokeContractEntrypoint {
+                    contract,
+                    entrypoint: entrypoint.to_owned(),
+                });
+                let instruction = if number == ivm::syscalls::SYSCALL_GRANT_CONTRACT_ENTRYPOINT {
+                    InstructionBox::from(Grant::account_permission(permission, account))
+                } else {
+                    InstructionBox::from(Revoke::account_permission(permission, account))
+                };
+                Ok(self.queue_instruction(instruction))
             }
             ivm::syscalls::SYSCALL_CREATE_TRIGGER => {
                 let ptr = vm.register(10);
@@ -11535,7 +11594,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
             }
             // Durable state syscalls backed by WSV.
             ivm::syscalls::SYSCALL_STATE_GET => {
-                let (path, path_len) = Self::decode_durable_state_path(vm, vm.register(10))?;
+                let (path, path_len) = self.decode_durable_state_path(vm, vm.register(10))?;
                 Self::ensure_contract_state_read_allowed(&path)?;
                 let key = self
                     .scoped_durable_state_path(&path)?
@@ -11546,6 +11605,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                             let len = Self::durable_state_value_payload_len(stored)?;
                             let gas = ivm::host::state_value_gas(path_len, len);
                             ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
+                            ivm::host::validate_declared_state_value_payload(vm, &path, stored)?;
                             let stored = stored.clone();
                             self.log_state_read_key(path.as_ref());
                             Self::load_state_value(vm, &stored)?;
@@ -11563,11 +11623,13 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 if let Some(len) = self.durable_state_base_or_live_value_len(&key)? {
                     let gas = ivm::host::state_value_gas(path_len, len);
                     ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
-                    self.log_state_read_key(path.as_ref());
                     let stored = self
                         .durable_state_base_or_live_get(&key)
                         .ok_or(ivm::VMError::DecodeError)?;
-                    Self::load_state_value(vm, stored.as_ref())?;
+                    ivm::host::validate_declared_state_value_payload(vm, &path, stored.as_ref())?;
+                    let stored = stored.into_owned();
+                    self.log_state_read_key(path.as_ref());
+                    Self::load_state_value(vm, &stored)?;
                     Ok(gas)
                 } else {
                     let gas = ivm::host::state_path_gas(path_len);
@@ -11580,10 +11642,11 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
             ivm::syscalls::SYSCALL_STATE_SET => {
                 let path_ptr = vm.register(10);
                 let val_ptr = vm.register(11);
-                let (path, path_len) = Self::decode_durable_state_path(vm, path_ptr)?;
+                let (path, path_len) = self.decode_durable_state_path(vm, path_ptr)?;
                 Self::ensure_contract_state_write_allowed(&path)?;
                 let val_tlv = Self::expect_tlv(vm, val_ptr, PointerType::NoritoBytes)?;
                 ivm::host::validate_state_value_payload_len(val_tlv.payload.len())?;
+                ivm::host::validate_declared_state_value_payload(vm, &path, val_tlv.payload)?;
                 let key = self
                     .scoped_durable_state_path(&path)?
                     .unwrap_or_else(|| path.clone());
@@ -11602,7 +11665,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 Ok(gas)
             }
             ivm::syscalls::SYSCALL_STATE_DEL => {
-                let (path, path_len) = Self::decode_durable_state_path(vm, vm.register(10))?;
+                let (path, path_len) = self.decode_durable_state_path(vm, vm.register(10))?;
                 Self::ensure_contract_state_write_allowed(&path)?;
                 let scoped_path = self.scoped_durable_state_path(&path)?;
                 let effective_path = scoped_path.as_ref().unwrap_or(&path);
@@ -11626,7 +11689,8 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 if limit > ivm::syscalls::STATE_KEYS_MAX_ITEMS {
                     return Err(ivm::VMError::NoritoInvalid);
                 }
-                let (prefix, path_len) = Self::decode_durable_state_path(vm, vm.register(10))?;
+                let (prefix, path_len) =
+                    self.decode_durable_state_scan_path(vm, vm.register(10))?;
                 let (selected, total, scan_work_gas) =
                     self.collect_durable_state_keys(vm, &prefix, path_len, offset, limit)?;
                 ivm::host::preflight_reserved_state_keys_page(
@@ -11649,7 +11713,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 Ok(gas)
             }
             ivm::syscalls::SYSCALL_STATE_HAS => {
-                let (path, path_len) = Self::decode_durable_state_path(vm, vm.register(10))?;
+                let (path, path_len) = self.decode_durable_state_path(vm, vm.register(10))?;
                 Self::ensure_contract_state_read_allowed(&path)?;
                 let present = self.durable_state_key_present(&path)?;
                 self.log_state_read_key(path.as_ref());
@@ -11657,7 +11721,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 Ok(ivm::host::state_path_gas(path_len))
             }
             ivm::syscalls::SYSCALL_STATE_LEN => {
-                let (path, path_len) = Self::decode_durable_state_path(vm, vm.register(10))?;
+                let (path, path_len) = self.decode_durable_state_path(vm, vm.register(10))?;
                 Self::ensure_contract_state_read_allowed(&path)?;
                 let gas = ivm::host::state_path_gas(path_len);
                 if let Some(len) = self.durable_state_value_len(&path)? {
@@ -11675,7 +11739,8 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 }
             }
             ivm::syscalls::SYSCALL_STATE_COUNT => {
-                let (prefix, path_len) = Self::decode_durable_state_path(vm, vm.register(10))?;
+                let (prefix, path_len) =
+                    self.decode_durable_state_scan_path(vm, vm.register(10))?;
                 let (_, total, scan_work_gas) =
                     self.collect_durable_state_keys(vm, &prefix, path_len, u64::MAX, 0)?;
                 let gas = ivm::host::STATE_QUERY_GAS_BASE.saturating_add(scan_work_gas);
@@ -11912,7 +11977,7 @@ mod pointer_abi_tests {
     use super::{
         tests::{
             begin_axt_envelope, fixture_public_key_from_seed, make_policy_snapshot, norito_blob,
-            proof_blob_for, store_tlv,
+            proof_blob_for, quantity_frame, store_quantity, store_tlv,
         },
         *,
     };
@@ -11934,18 +11999,6 @@ mod pointer_abi_tests {
         let h = IrohaHash::new(payload);
         v.extend_from_slice(h.as_ref());
         v
-    }
-
-    fn quantity_frame(value: &Numeric) -> Vec<u8> {
-        let quantity = Quantity::from_canonical_numeric(value.clone())
-            .expect("canonical non-negative quantity");
-        QuantityValueV1::new(quantity)
-            .encode_frame()
-            .expect("encode quantity frame")
-    }
-
-    fn store_quantity(vm: &mut IVM, value: &Numeric) -> u64 {
-        store_tlv(vm, PointerType::Quantity, &quantity_frame(value))
     }
 
     fn test_policy_snapshot(dsid: DataSpaceId, policy: AxtPolicyEntry) -> AxtPolicySnapshot {
@@ -12004,6 +12057,93 @@ mod pointer_abi_tests {
         assert_eq!(
             host.nested_contract_call_depth, MAX_NESTED_CONTRACT_CALL_DEPTH,
             "rejection must not mutate the active-frame counter"
+        );
+    }
+
+    #[test]
+    fn prevalidated_runtime_binding_captures_exact_root_authorization() {
+        let authority = ALICE_ID.clone();
+        let contract = ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &authority,
+            43,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("derive contract address");
+        let code_hash = Hash::new(b"Torii prevalidated runtime binding");
+        let mut host = CoreHost::new(authority.clone());
+
+        let authorization = ContractEntrypointAuthorizationSnapshot::new(
+            authority.clone(),
+            "inspect".to_owned(),
+            Some("CanInspectContract".to_owned()),
+            &crate::smartcontracts::code::BoundContractIdentity {
+                contract_address: contract.clone(),
+                contract_alias: None,
+                code_hash,
+            },
+        );
+        host.bind_contract_runtime_context(contract.subject_id(), authorization);
+
+        let context = host
+            .current_contract_runtime_context
+            .as_ref()
+            .expect("runtime context");
+        assert_eq!(context.contract_address, contract);
+        assert_eq!(context.contract_subject, contract.subject_id());
+        assert_eq!(context.entrypoint, "inspect");
+        let authorization = host
+            .current_entrypoint_authorization
+            .as_ref()
+            .expect("root authorization");
+        assert!(authorization.is_root());
+        assert_eq!(authorization.authority, authority);
+        assert_eq!(authorization.contract_address, contract);
+        assert_eq!(authorization.code_hash, code_hash);
+        assert_eq!(authorization.entrypoint, "inspect");
+        assert_eq!(
+            authorization.permission.as_deref(),
+            Some("CanInspectContract")
+        );
+    }
+
+    #[test]
+    fn contract_runtime_state_rejects_manifest_free_vm_image() {
+        let authority = ALICE_ID.clone();
+        let contract = ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &authority,
+            44,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("derive contract address");
+        let mut host = CoreHost::new(authority.clone());
+        let authorization = ContractEntrypointAuthorizationSnapshot::new(
+            authority,
+            "inspect".to_owned(),
+            None,
+            &crate::smartcontracts::code::BoundContractIdentity {
+                contract_address: contract.clone(),
+                contract_alias: None,
+                code_hash: Hash::new(b"manifest-free runtime fixture"),
+            },
+        );
+        host.bind_contract_runtime_context(contract.subject_id(), authorization);
+
+        let mut vm = IVM::new(u64::MAX);
+        vm.load_program(&ivm::ProgramMetadata::default().encode())
+            .expect("generic image parses outside deployable admission");
+        let path: Name = "state".parse().expect("state path");
+        let path_payload = norito::to_bytes(&path).expect("encode state path");
+        let path_pointer = vm
+            .alloc_input_tlv(&make_tlv(PointerType::Name as u16, &path_payload))
+            .expect("allocate state path");
+        vm.set_register(10, path_pointer);
+
+        assert_eq!(
+            host.syscall(ivm::syscalls::SYSCALL_STATE_GET, &mut vm),
+            Err(ivm::VMError::InvalidMetadata),
+            "a contract runtime context must never fall back to untyped durable state"
         );
     }
 
@@ -15336,12 +15476,23 @@ mod tests {
             .expect("render typed nested return record")
     }
 
+    fn decode_nested_int(payload: &[u8]) -> i64 {
+        decode_nested_return(
+            payload,
+            iroha_data_model::smart_contract::entrypoint::EntrypointValueKindV1::Int,
+        )
+        .as_str()
+        .expect("nested int renders as a canonical string")
+        .parse()
+        .expect("fixture nested int fits i64")
+    }
+
     pub(super) fn store_tlv(vm: &mut IVM, ty: PointerType, payload: &[u8]) -> u64 {
         let tlv = make_tlv(ty as u16, payload);
         vm.alloc_input_tlv(&tlv).expect("allocate TLV input")
     }
 
-    fn quantity_frame(value: &Numeric) -> Vec<u8> {
+    pub(super) fn quantity_frame(value: &Numeric) -> Vec<u8> {
         let quantity = Quantity::from_canonical_numeric(value.clone())
             .expect("canonical non-negative quantity");
         QuantityValueV1::new(quantity)
@@ -15349,7 +15500,7 @@ mod tests {
             .expect("encode quantity frame")
     }
 
-    fn store_quantity(vm: &mut IVM, value: &Numeric) -> u64 {
+    pub(super) fn store_quantity(vm: &mut IVM, value: &Numeric) -> u64 {
         store_tlv(vm, PointerType::Quantity, &quantity_frame(value))
     }
 
@@ -16225,13 +16376,11 @@ seiyaku AliasPayout {{
         (result, vm, durable_state_overlay, target_ptr)
     }
 
-    fn install_typed_view_binding_fixture(
+    fn install_typed_view_fixture(
         state: &State,
         authority: &AccountId,
         actual_asset: &AssetDefinitionId,
         actual_account: &AccountId,
-        expected_asset: &AssetDefinitionId,
-        expected_account: &AccountId,
     ) -> (ContractAddress, ContractAddress) {
         let pool_contract = install_contract(
             state,
@@ -16257,56 +16406,6 @@ seiyaku TypedPoolViews {
 "#,
             0,
         );
-        let binding_caller = install_contract(
-            state,
-            authority,
-            r#"
-seiyaku TypedPoolBindingCaller {
-  state bytes PoolContract;
-  state AssetDefinitionId ExpectedQuoteAsset;
-  state AccountId ExpectedPoolAccount;
-  state int Checked;
-
-  kotoage fn bind(bytes pool_contract,
-                  AssetDefinitionId expected_quote_asset,
-                  AccountId expected_pool_account) {
-    PoolContract = pool_contract;
-    ExpectedQuoteAsset = expected_quote_asset;
-    ExpectedPoolAccount = expected_pool_account;
-  }
-
-  kotoage fn asset_matches() -> int permission(AssetOps) {
-    let returned_asset = call_contract(PoolContract, "quote_asset", json_object());
-    if tlv_eq(returned_asset, pointer_to_norito(ExpectedQuoteAsset)) {
-      return 1;
-    }
-    return 0;
-  }
-
-  kotoage fn account_matches() -> int permission(AssetOps) {
-    let returned_account = call_contract(PoolContract, "pool_account", json_object());
-    if tlv_eq(returned_account, pointer_to_norito(ExpectedPoolAccount)) {
-      return 1;
-    }
-    return 0;
-  }
-
-  kotoage fn verify() -> int permission(AssetOps) {
-    let payload = json_object();
-    let returned_asset = call_contract(PoolContract, "quote_asset", payload);
-    assert(tlv_eq(returned_asset, pointer_to_norito(ExpectedQuoteAsset)),
-           "quote asset mismatch");
-    Checked = 1;
-    let returned_account = call_contract(PoolContract, "pool_account", payload);
-    assert(tlv_eq(returned_account, pointer_to_norito(ExpectedPoolAccount)),
-           "pool account mismatch");
-    Checked = 2;
-    return Checked;
-  }
-}
-"#,
-            1,
-        );
         let outer_caller = install_contract(
             state,
             authority,
@@ -16315,7 +16414,7 @@ seiyaku OuterCaller {
   kotoage fn main() -> int { return 0; }
 }
 "#,
-            2,
+            1,
         );
         grant_asset_ops_to_account(state, authority, outer_caller.subject_id());
 
@@ -16332,26 +16431,6 @@ seiyaku OuterCaller {
             contract_invocation_from_json(state, pool_contract.clone(), "bind", &pool_bind_payload),
             &mut ivm_cache,
         );
-        let binding_caller_payload = Json::from_str_norito(&format!(
-            r#"{{"pool_contract":"0x{}","expected_quote_asset":"{}","expected_pool_account":"{}"}}"#,
-            hex::encode(pool_contract.as_ref()),
-            expected_asset,
-            expected_account
-        ))
-        .expect("binding caller payload");
-        execute_contract_call_transaction(
-            state,
-            authority,
-            &fixture_signing_keypair(authority),
-            contract_invocation_from_json(
-                state,
-                binding_caller.clone(),
-                "bind",
-                &binding_caller_payload,
-            ),
-            &mut ivm_cache,
-        );
-
         let view = state.view();
         let persisted = |suffix: &str| {
             view.world()
@@ -16361,20 +16440,10 @@ seiyaku OuterCaller {
                 .map(|(_, value)| value.clone())
                 .unwrap_or_else(|| panic!("missing persisted typed binding state {suffix}"))
         };
-        assert_eq!(
-            persisted("/QuoteAsset"),
-            persisted("/ExpectedQuoteAsset"),
-            "fixture must persist byte-identical AssetDefinitionId values",
-        );
-        if actual_account == expected_account {
-            assert_eq!(
-                persisted("/PoolAccount"),
-                persisted("/ExpectedPoolAccount"),
-                "fixture must persist byte-identical AccountId values",
-            );
-        }
+        assert!(!persisted("/QuoteAsset").is_empty());
+        assert!(!persisted("/PoolAccount").is_empty());
 
-        (outer_caller, binding_caller)
+        (outer_caller, pool_contract)
     }
 
     #[test]
@@ -20903,7 +20972,7 @@ seiyaku Callee {
             tlv.payload,
             iroha_data_model::smart_contract::entrypoint::EntrypointValueKindV1::Int,
         );
-        assert_eq!(value, norito::json!(42));
+        assert_eq!(value, norito::json!("42"));
         let host_overhead =
             ivm::gas::syscall_byte_gas(ivm::gas::G_CALL_CONTRACT, request_bytes, tlv.payload.len());
         assert!(
@@ -21122,7 +21191,7 @@ seiyaku Callee {
             tlv.payload,
             iroha_data_model::smart_contract::entrypoint::EntrypointValueKindV1::Int,
         );
-        assert_eq!(value, norito::json!(42));
+        assert_eq!(value, norito::json!("42"));
     }
 
     #[test]
@@ -21269,119 +21338,100 @@ seiyaku Callee {
     }
 
     #[test]
-    fn call_contract_typed_views_accept_exact_norito_binding() {
+    fn call_contract_typed_views_return_exact_norito_values() {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let state = contract_test_state(&authority);
         let asset_definition =
             AssetDefinitionId::new(fixture_domain_id(), "rose".parse().expect("asset name"));
-        let (outer_caller, binding_caller) = install_typed_view_binding_fixture(
-            &state,
-            &authority,
-            &asset_definition,
-            &authority,
-            &asset_definition,
-            &authority,
-        );
+        let (outer_caller, pool_contract) =
+            install_typed_view_fixture(&state, &authority, &asset_definition, &authority);
 
-        for entrypoint in ["asset_matches", "account_matches"] {
-            let (probe_result, probe_vm, probe_overlay) = call_contract_syscall(
-                &state,
-                &authority,
-                &outer_caller,
-                &binding_caller,
-                entrypoint,
-                Json::new(()),
-            );
-            probe_result.expect("matching typed view probe should execute");
-            let probe_return = probe_vm
-                .memory
-                .validate_tlv(probe_vm.register(10))
-                .expect("typed view probe NoritoBytes");
-            let matches: i64 =
-                norito::decode_from_bytes(probe_return.payload).expect("decode match probe");
-            assert_eq!(matches, 1, "{entrypoint} must compare byte-exactly");
-            assert!(probe_overlay.is_empty(), "match probes are read-only");
-        }
-
-        let (result, vm, durable_state_overlay) = call_contract_syscall(
+        let (asset_result, asset_vm, asset_overlay) = call_contract_syscall(
             &state,
             &authority,
             &outer_caller,
-            &binding_caller,
-            "verify",
+            &pool_contract,
+            "quote_asset",
             Json::new(()),
         );
-
-        result.expect("matching typed pool views should satisfy the binding caller");
-        let returned = vm
+        asset_result.expect("typed asset view should execute");
+        let asset_return = asset_vm
             .memory
-            .validate_tlv(vm.register(10))
-            .expect("binding result NoritoBytes");
-        assert_eq!(returned.type_id, PointerType::NoritoBytes);
-        let checked: i64 =
-            norito::decode_from_bytes(returned.payload).expect("decode binding result");
-        assert_eq!(checked, 2, "both typed views must match");
+            .validate_tlv(asset_vm.register(10))
+            .expect("typed asset view NoritoBytes");
+        assert_eq!(asset_return.type_id, PointerType::NoritoBytes);
+        assert_eq!(
+            decode_nested_return(
+                asset_return.payload,
+                iroha_data_model::smart_contract::entrypoint::EntrypointValueKindV1::AssetDefinitionId,
+            ),
+            norito::json::Value::from(asset_definition.to_string()),
+        );
+        assert!(asset_overlay.is_empty(), "typed asset view is read-only");
+
+        let (account_result, account_vm, account_overlay) = call_contract_syscall(
+            &state,
+            &authority,
+            &outer_caller,
+            &pool_contract,
+            "pool_account",
+            Json::new(()),
+        );
+        account_result.expect("typed account view should execute");
+        let account_return = account_vm
+            .memory
+            .validate_tlv(account_vm.register(10))
+            .expect("typed account view NoritoBytes");
+        assert_eq!(account_return.type_id, PointerType::NoritoBytes);
+        assert_eq!(
+            decode_nested_return(
+                account_return.payload,
+                iroha_data_model::smart_contract::entrypoint::EntrypointValueKindV1::AccountId,
+            ),
+            norito::json::Value::from(authority.to_string()),
+        );
         assert!(
-            durable_state_overlay
-                .keys()
-                .any(|key| key.as_ref().ends_with("/Checked")),
-            "successful nested binding must retain the caller's final state write",
+            account_overlay.is_empty(),
+            "typed account view is read-only"
         );
     }
 
     #[test]
-    fn call_contract_typed_view_mismatch_rolls_back_nested_caller_state() {
+    fn call_contract_typed_view_preserves_account_identity_without_coercion() {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
         let mismatched_account: AccountId = fixture_account("bob");
         let state = contract_test_state(&authority);
         let asset_definition =
             AssetDefinitionId::new(fixture_domain_id(), "rose".parse().expect("asset name"));
-        let (outer_caller, binding_caller) = install_typed_view_binding_fixture(
-            &state,
-            &authority,
-            &asset_definition,
-            &authority,
-            &asset_definition,
-            &mismatched_account,
-        );
+        let (outer_caller, pool_contract) =
+            install_typed_view_fixture(&state, &authority, &asset_definition, &authority);
 
-        let (probe_result, probe_vm, probe_overlay) = call_contract_syscall(
+        let (result, vm, durable_state_overlay) = call_contract_syscall(
             &state,
             &authority,
             &outer_caller,
-            &binding_caller,
-            "account_matches",
+            &pool_contract,
+            "pool_account",
             Json::new(()),
         );
-        probe_result.expect("mismatched typed view probe should execute");
-        let probe_return = probe_vm
+        result.expect("typed account view should execute");
+        let returned = vm
             .memory
-            .validate_tlv(probe_vm.register(10))
-            .expect("typed view probe NoritoBytes");
-        let matches: i64 =
-            norito::decode_from_bytes(probe_return.payload).expect("decode mismatch probe");
-        assert_eq!(matches, 0, "the mismatched AccountId must compare unequal");
-        assert!(probe_overlay.is_empty(), "mismatch probe is read-only");
-
-        let (result, _vm, durable_state_overlay) = call_contract_syscall(
-            &state,
-            &authority,
-            &outer_caller,
-            &binding_caller,
-            "verify",
-            Json::new(()),
+            .validate_tlv(vm.register(10))
+            .expect("typed account view NoritoBytes");
+        let account = decode_nested_return(
+            returned.payload,
+            iroha_data_model::smart_contract::entrypoint::EntrypointValueKindV1::AccountId,
         );
-
-        assert!(
-            result.is_err(),
-            "mismatched AccountId view must reject the pool binding",
+        assert_eq!(account, norito::json::Value::from(authority.to_string()));
+        assert_ne!(
+            account,
+            norito::json::Value::from(mismatched_account.to_string()),
+            "typed AccountId returns must not be coerced through a lossy representation",
         );
-        assert!(
-            durable_state_overlay.is_empty(),
-            "the failed nested binding must roll back Checked = 1 after the asset view matched",
-        );
+        assert!(durable_state_overlay.is_empty(), "typed view is read-only");
     }
 
     #[test]
@@ -21406,7 +21456,7 @@ seiyaku ViewCaller {
 seiyaku EffectfulView {
   state int Counter;
 
-  kotoage fn seed(value: int) {
+  kotoage fn seed(int value) {
     Counter = value;
   }
 
@@ -21419,7 +21469,7 @@ seiyaku EffectfulView {
             1,
         );
         let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
-        let seed_payload = Json::from_str_norito(r#"{"value":5}"#).expect("seed payload");
+        let seed_payload = Json::from_str_norito(r#"{"value":"5"}"#).expect("seed payload");
         execute_contract_call_transaction(
             &state,
             &authority,
@@ -21477,8 +21527,7 @@ seiyaku EffectfulView {
                 .memory
                 .validate_tlv(vm.register(10))
                 .expect("view result NoritoBytes");
-            let value: i64 =
-                norito::decode_from_bytes(returned.payload).expect("decode view result");
+            let value = decode_nested_int(returned.payload);
             assert_eq!(value, 6, "each view must begin from the persisted value");
             assert!(
                 durable_state_overlay.is_empty(),
@@ -21625,8 +21674,8 @@ seiyaku Callee {
         grant_asset_ops_to_account(&state, &authority, caller_contract.subject_id());
 
         let payload = Json::from(norito::json!({
-            "backlog_value": 3,
-            "safe_mode_value": 1
+            "backlog_value": "3",
+            "safe_mode_value": "1"
         }));
         let (result, vm, durable_state_overlay) = call_contract_syscall(
             &state,
@@ -21851,7 +21900,7 @@ seiyaku Callee {
 "#,
             1,
         );
-        let payload = Json::from(norito::json!({ "value": 7 }));
+        let payload = Json::from(norito::json!({ "value": "7" }));
         let valid_record =
             encoded_contract_arguments_from_json(&state, &callee_contract, "echo", &payload)
                 .expect("parameterized entrypoint record");
@@ -22054,10 +22103,10 @@ seiyaku Caller {
             &authority,
             r#"
 seiyaku Callee {
-  kotoage fn pull_into_vault(target: AccountId,
-                             asset: AssetDefinitionId,
-                             amount: i64) -> int authorize("AssetOps") {
-    ledger::asset::transfer(source: context::authority(), destination: target, asset_definition: asset, amount: Amount::from_i64(amount), dataspace: DataSpaceId::parse("0"));
+  kotoage fn pull_into_vault(AccountId target,
+                             AssetDefinitionId asset,
+                             quantity amount) -> quantity authorize("AssetOps") {
+    ledger::asset::transfer(source: context::authority(), destination: target, asset_definition: asset, amount: amount, dataspace: DataSpaceId::parse("0"));
     return amount;
   }
 }
@@ -22129,7 +22178,7 @@ seiyaku Callee {
         let nested_payload = Json::from(norito::json!({
             "target": nested_target,
             "asset": nested_asset,
-            "amount": 3
+            "amount": "3"
         }));
         let target_ptr = store_tlv(
             &mut vm,
@@ -22181,156 +22230,6 @@ seiyaku Callee {
         assert_eq!(authority_balance.as_ref(), &Numeric::new(2_u32, 0));
         assert!(
             stx.world.asset(&caller_asset_id).is_err(),
-            "fully drained caller balance should remove the asset entry",
-        );
-        assert_eq!(callee_balance.as_ref(), &Numeric::new(3_u32, 0));
-    }
-
-    #[test]
-    fn contract_call_transaction_preserves_root_and_nested_transfer_authorities() {
-        crate::test_alias::ensure();
-        let authority: AccountId = fixture_account("alice");
-        let asset_def_id: AssetDefinitionId =
-            AssetDefinitionId::new(fixture_domain_id(), "rose".parse().expect("asset name"));
-        let domain = Domain::new(fixture_domain_id()).build(&authority);
-        let account = build_fixture_account(&authority, &authority);
-        let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
-        let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
-        let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(5_u32, 0));
-        let kura = Kura::blank_kura_for_testing();
-        let query = LiveQueryStore::start_test();
-        let world = World::with_assets([domain], [account], [asset_def], [source_asset], []);
-        let state = State::new_with_chain(world, kura, query, ChainId::from("test-chain"));
-        let caller_contract = install_contract(
-            &state,
-            &authority,
-            r#"
-seiyaku Caller {
-  state AccountId CallerAccount;
-  state bytes VaultContract;
-  state AssetDefinitionId SettlementAsset;
-
-  hajimari(caller_account: AccountId,
-       vault_contract: bytes,
-       settlement_asset: AssetDefinitionId) {
-    CallerAccount = caller_account;
-    VaultContract = vault_contract;
-    SettlementAsset = settlement_asset;
-  }
-
-  kotoage fn bind(caller_account: AccountId,
-                  vault_contract: bytes,
-                  settlement_asset: AssetDefinitionId) authorize("AssetOps") {
-    CallerAccount = caller_account;
-    VaultContract = vault_contract;
-    SettlementAsset = settlement_asset;
-  }
-
-  kotoage fn open(amount: i64) -> int authorize("AssetOps") {
-    ledger::asset::transfer(source: context::authority(), destination: CallerAccount, asset_definition: SettlementAsset, amount: Amount::from_i64(amount), dataspace: DataSpaceId::parse("0"));
-    let payload = json::object();
-    let deposit_payload = json::set_i64(payload, Name::parse("amount"), amount);
-    return codec::decode_i64(contract::call(contract: VaultContract, entrypoint: "deposit", arguments: deposit_payload));
-  }
-}
-"#,
-            0,
-        );
-        let callee_contract = install_contract(
-            &state,
-            &authority,
-            r#"
-seiyaku Vault {
-  state AccountId VaultAccount;
-  state AssetDefinitionId SettlementAsset;
-
-  hajimari(vault_account: AccountId, settlement_asset: AssetDefinitionId) {
-    VaultAccount = vault_account;
-    SettlementAsset = settlement_asset;
-  }
-
-  kotoage fn bind(vault_account: AccountId,
-                settlement_asset: AssetDefinitionId) authorize("AssetOps") {
-    VaultAccount = vault_account;
-    SettlementAsset = settlement_asset;
-  }
-
-  kotoage fn deposit(amount: i64) -> int authorize("AssetOps") {
-    ledger::asset::transfer(source: context::authority(), destination: VaultAccount, asset_definition: SettlementAsset, amount: Amount::from_i64(amount), dataspace: DataSpaceId::parse("0"));
-    return amount;
-  }
-}
-"#,
-            1,
-        );
-        grant_asset_ops_to_account(&state, &authority, authority.clone());
-        grant_asset_ops_to_account(&state, &authority, caller_contract.subject_id());
-
-        let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
-        let callee_bind_payload = Json::from_str_norito(&format!(
-            r#"{{"vault_account":"{}","settlement_asset":"{}"}}"#,
-            callee_contract.subject_id(),
-            asset_def_id
-        ))
-        .expect("callee bind payload");
-        execute_contract_call_transaction(
-            &state,
-            &authority,
-            &fixture_signing_keypair(&authority),
-            contract_invocation_from_json(
-                &state,
-                callee_contract.clone(),
-                "bind",
-                &callee_bind_payload,
-            ),
-            &mut ivm_cache,
-        );
-        let caller_bind_payload = Json::from_str_norito(&format!(
-            r#"{{"caller_account":"{}","vault_contract":"{}","settlement_asset":"{}"}}"#,
-            caller_contract.subject_id(),
-            format!("0x{}", hex::encode(callee_contract.as_ref())),
-            asset_def_id
-        ))
-        .expect("caller bind payload");
-        execute_contract_call_transaction(
-            &state,
-            &authority,
-            &fixture_signing_keypair(&authority),
-            contract_invocation_from_json(
-                &state,
-                caller_contract.clone(),
-                "bind",
-                &caller_bind_payload,
-            ),
-            &mut ivm_cache,
-        );
-        let open_payload = Json::from_str_norito(r#"{"amount":3}"#).expect("open payload");
-        execute_contract_call_transaction(
-            &state,
-            &authority,
-            &fixture_signing_keypair(&authority),
-            contract_invocation_from_json(&state, caller_contract.clone(), "open", &open_payload),
-            &mut ivm_cache,
-        );
-
-        let view = state.view();
-        let authority_balance = view
-            .world()
-            .asset(&source_asset_id)
-            .expect("authority asset remains")
-            .value()
-            .clone();
-        let caller_asset_id = AssetId::of(asset_def_id.clone(), caller_contract.subject_id());
-        let callee_asset_id = AssetId::of(asset_def_id, callee_contract.subject_id());
-        let callee_balance = view
-            .world()
-            .asset(&callee_asset_id)
-            .expect("vault asset exists")
-            .value()
-            .clone();
-        assert_eq!(authority_balance.as_ref(), &Numeric::new(2_u32, 0));
-        assert!(
-            view.world().asset(&caller_asset_id).is_err(),
             "fully drained caller balance should remove the asset entry",
         );
         assert_eq!(callee_balance.as_ref(), &Numeric::new(3_u32, 0));
@@ -22399,16 +22298,16 @@ seiyaku Vault {
 seiyaku AliasPayout {
   state AssetDefinitionId SettlementAsset;
 
-  hajimari(settlement_asset: AssetDefinitionId) {
+  hajimari(AssetDefinitionId settlement_asset) {
     SettlementAsset = settlement_asset;
   }
 
-  kotoage fn bind(settlement_asset: AssetDefinitionId) authorize("AssetOps") {
+  kotoage fn bind(AssetDefinitionId settlement_asset) authorize("AssetOps") {
     SettlementAsset = settlement_asset;
   }
 
-  kotoage fn pay(amount: i64) -> int authorize("AssetOps") {
-    ledger::asset::transfer(source: context::authority(), destination: AccountId::parse("merchant@paynet"), asset_definition: SettlementAsset, amount: Amount::from_i64(amount), dataspace: DataSpaceId::parse("0"));
+  kotoage fn pay(quantity amount) -> quantity authorize("AssetOps") {
+    ledger::asset::transfer(source: context::authority(), destination: AccountId::parse("merchant@paynet"), asset_definition: SettlementAsset, amount: amount, dataspace: DataSpaceId::parse("0"));
     return amount;
   }
 }
@@ -22428,7 +22327,7 @@ seiyaku AliasPayout {
             contract_invocation_from_json(&state, contract.clone(), "bind", &bind_payload),
             &mut ivm_cache,
         );
-        let pay_payload = Json::from_str_norito(r#"{"amount":2}"#).expect("pay payload");
+        let pay_payload = Json::from_str_norito(r#"{"amount":"2"}"#).expect("pay payload");
         execute_contract_call_transaction(
             &state,
             &authority,
@@ -22469,7 +22368,7 @@ seiyaku AliasPayout {
         tx.apply();
         block.commit().expect("commit alias rebind");
 
-        let pay_payload = Json::from_str_norito(r#"{"amount":1}"#).expect("pay payload");
+        let pay_payload = Json::from_str_norito(r#"{"amount":"1"}"#).expect("pay payload");
         execute_contract_call_transaction(
             &state,
             &authority,
@@ -22566,17 +22465,17 @@ seiyaku AliasPayout {
 seiyaku AliasPayout {
   state AssetDefinitionId SettlementAsset;
 
-  hajimari(settlement_asset: AssetDefinitionId) {
+  hajimari(AssetDefinitionId settlement_asset) {
     SettlementAsset = settlement_asset;
   }
 
-  kotoage fn bind(settlement_asset: AssetDefinitionId) authorize("AssetOps") {
+  kotoage fn bind(AssetDefinitionId settlement_asset) authorize("AssetOps") {
     SettlementAsset = settlement_asset;
   }
 
-  kotoage fn pay(amount: i64) -> int authorize("AssetOps") {
+  kotoage fn pay(quantity amount) -> quantity authorize("AssetOps") {
     let merchant = ledger::account::resolve_alias("merchant@paynet");
-    ledger::asset::transfer(source: context::authority(), destination: merchant, asset_definition: SettlementAsset, amount: Amount::from_i64(amount), dataspace: DataSpaceId::parse("0"));
+    ledger::asset::transfer(source: context::authority(), destination: merchant, asset_definition: SettlementAsset, amount: amount, dataspace: DataSpaceId::parse("0"));
     return amount;
   }
 }
@@ -22596,7 +22495,7 @@ seiyaku AliasPayout {
             contract_invocation_from_json(&state, contract.clone(), "bind", &bind_payload),
             &mut ivm_cache,
         );
-        let pay_payload = Json::from_str_norito(r#"{"amount":2}"#).expect("pay payload");
+        let pay_payload = Json::from_str_norito(r#"{"amount":"2"}"#).expect("pay payload");
         execute_contract_call_transaction(
             &state,
             &authority,
@@ -22636,7 +22535,7 @@ seiyaku AliasPayout {
         tx.apply();
         block.commit().expect("commit alias rebind");
 
-        let pay_payload = Json::from_str_norito(r#"{"amount":1}"#).expect("pay payload");
+        let pay_payload = Json::from_str_norito(r#"{"amount":"1"}"#).expect("pay payload");
         execute_contract_call_transaction(
             &state,
             &authority,
@@ -22789,7 +22688,7 @@ seiyaku AliasPayout {
             contract_invocation_from_json(&state, contract.clone(), "bind", &bind_payload),
             &mut ivm_cache,
         );
-        let pay_payload = Json::from_str_norito(r#"{"amount":2}"#).expect("pay payload");
+        let pay_payload = Json::from_str_norito(r#"{"amount":"2"}"#).expect("pay payload");
         execute_contract_call_transaction(
             &state,
             &authority,
@@ -22829,7 +22728,7 @@ seiyaku AliasPayout {
         tx.apply();
         block.commit().expect("commit alias rebind");
 
-        let pay_payload = Json::from_str_norito(r#"{"amount":1}"#).expect("pay payload");
+        let pay_payload = Json::from_str_norito(r#"{"amount":"1"}"#).expect("pay payload");
         execute_contract_call_transaction(
             &state,
             &authority,
@@ -22917,17 +22816,17 @@ seiyaku AliasPayout {
 seiyaku AliasPayout {
   state AssetDefinitionId SettlementAsset;
 
-  hajimari(settlement_asset: AssetDefinitionId) {
+  hajimari(AssetDefinitionId settlement_asset) {
     SettlementAsset = settlement_asset;
   }
 
-  kotoage fn bind(settlement_asset: AssetDefinitionId) authorize("AssetOps") {
+  kotoage fn bind(AssetDefinitionId settlement_asset) authorize("AssetOps") {
     SettlementAsset = settlement_asset;
   }
 
-  kotoage fn pay(amount: i64) -> int authorize("AssetOps") {
+  kotoage fn pay(quantity amount) -> quantity authorize("AssetOps") {
     let merchant = ledger::account::resolve_alias("merchant@paynet");
-    ledger::asset::transfer(source: context::authority(), destination: merchant, asset_definition: SettlementAsset, amount: Amount::from_i64(amount), dataspace: DataSpaceId::parse("0"));
+    ledger::asset::transfer(source: context::authority(), destination: merchant, asset_definition: SettlementAsset, amount: amount, dataspace: DataSpaceId::parse("0"));
     return amount;
   }
 }
@@ -22948,7 +22847,7 @@ seiyaku AliasPayout {
             &mut ivm_cache,
         );
 
-        let pay_payload = Json::from_str_norito(r#"{"amount":2}"#).expect("pay payload");
+        let pay_payload = Json::from_str_norito(r#"{"amount":"2"}"#).expect("pay payload");
         let result = execute_contract_call_transaction_result(
             &state,
             &authority,
@@ -23038,7 +22937,7 @@ seiyaku AliasPayout {
             &mut ivm_cache,
         );
 
-        let pay_payload = Json::from_str_norito(r#"{"amount":2}"#).expect("pay payload");
+        let pay_payload = Json::from_str_norito(r#"{"amount":"2"}"#).expect("pay payload");
         let result = execute_contract_call_transaction_result(
             &state,
             &authority,
@@ -23117,7 +23016,7 @@ seiyaku AliasPayout {
             &mut ivm_cache,
         );
 
-        let pay_payload = Json::from_str_norito(r#"{"amount":2}"#).expect("pay payload");
+        let pay_payload = Json::from_str_norito(r#"{"amount":"2"}"#).expect("pay payload");
         let result = execute_contract_call_transaction_result(
             &state,
             &authority,
@@ -23253,7 +23152,7 @@ seiyaku AliasPayout {
             &mut ivm_cache,
         );
 
-        let pay_payload = Json::from_str_norito(r#"{"amount":2}"#).expect("pay payload");
+        let pay_payload = Json::from_str_norito(r#"{"amount":"2"}"#).expect("pay payload");
         let result = execute_contract_call_transaction_result(
             &state,
             &authority,
@@ -23343,7 +23242,7 @@ seiyaku AliasPayout {
             &mut ivm_cache,
         );
 
-        let pay_payload = Json::from_str_norito(r#"{"amount":2}"#).expect("pay payload");
+        let pay_payload = Json::from_str_norito(r#"{"amount":"2"}"#).expect("pay payload");
         let result = execute_contract_call_transaction_result(
             &state,
             &authority,
@@ -23422,7 +23321,7 @@ seiyaku AliasPayout {
             &mut ivm_cache,
         );
 
-        let pay_payload = Json::from_str_norito(r#"{"amount":2}"#).expect("pay payload");
+        let pay_payload = Json::from_str_norito(r#"{"amount":"2"}"#).expect("pay payload");
         let result = execute_contract_call_transaction_result(
             &state,
             &authority,
@@ -23558,7 +23457,7 @@ seiyaku AliasPayout {
             &mut ivm_cache,
         );
 
-        let pay_payload = Json::from_str_norito(r#"{"amount":2}"#).expect("pay payload");
+        let pay_payload = Json::from_str_norito(r#"{"amount":"2"}"#).expect("pay payload");
         let result = execute_contract_call_transaction_result(
             &state,
             &authority,
@@ -23702,7 +23601,7 @@ seiyaku AliasPayout {
             &mut ivm_cache,
         );
 
-        let pay_payload = Json::from_str_norito(r#"{"amount":2}"#).expect("pay payload");
+        let pay_payload = Json::from_str_norito(r#"{"amount":"2"}"#).expect("pay payload");
         let result = execute_contract_call_transaction_result(
             &state,
             &authority,
@@ -23833,7 +23732,7 @@ seiyaku AliasPayout {
             &mut ivm_cache,
         );
 
-        let pay_payload = Json::from_str_norito(r#"{"amount":2}"#).expect("pay payload");
+        let pay_payload = Json::from_str_norito(r#"{"amount":"2"}"#).expect("pay payload");
         let result = execute_contract_call_transaction_result(
             &state,
             &authority,
@@ -23961,7 +23860,7 @@ seiyaku AliasPayout {
             &mut ivm_cache,
         );
 
-        let pay_payload = Json::from_str_norito(r#"{"amount":2}"#).expect("pay payload");
+        let pay_payload = Json::from_str_norito(r#"{"amount":"2"}"#).expect("pay payload");
         let result = execute_contract_call_transaction_result(
             &state,
             &authority,
@@ -24102,7 +24001,7 @@ seiyaku AliasPayout {
             &mut ivm_cache,
         );
 
-        let pay_payload = Json::from_str_norito(r#"{"amount":2}"#).expect("pay payload");
+        let pay_payload = Json::from_str_norito(r#"{"amount":"2"}"#).expect("pay payload");
         let result = execute_contract_call_transaction_result(
             &state,
             &authority,
@@ -24185,7 +24084,7 @@ seiyaku AliasPayout {
             &mut ivm_cache,
         );
 
-        let pay_payload = Json::from_str_norito(r#"{"amount":2}"#).expect("pay payload");
+        let pay_payload = Json::from_str_norito(r#"{"amount":"2"}"#).expect("pay payload");
         let result = execute_contract_call_transaction_result(
             &state,
             &authority,
@@ -24260,7 +24159,7 @@ seiyaku AliasPayout {
             &mut ivm_cache,
         );
 
-        let pay_payload = Json::from_str_norito(r#"{"amount":2}"#).expect("pay payload");
+        let pay_payload = Json::from_str_norito(r#"{"amount":"2"}"#).expect("pay payload");
         let result = execute_contract_call_transaction_result(
             &state,
             &authority,
@@ -24392,16 +24291,16 @@ seiyaku AliasPayout {
 seiyaku AliasPayout {
   state AssetDefinitionId SettlementAsset;
 
-  hajimari(settlement_asset: AssetDefinitionId) {
+  hajimari(AssetDefinitionId settlement_asset) {
     SettlementAsset = settlement_asset;
   }
 
-  kotoage fn bind(settlement_asset: AssetDefinitionId) authorize("AssetOps") {
+  kotoage fn bind(AssetDefinitionId settlement_asset) authorize("AssetOps") {
     SettlementAsset = settlement_asset;
   }
 
-  kotoage fn pay(amount: i64) -> int authorize("AssetOps") {
-    ledger::asset::transfer(source: context::authority(), destination: AccountId::parse("merchant@bank.paynet"), asset_definition: SettlementAsset, amount: Amount::from_i64(amount), dataspace: DataSpaceId::parse("0"));
+  kotoage fn pay(quantity amount) -> quantity authorize("AssetOps") {
+    ledger::asset::transfer(source: context::authority(), destination: AccountId::parse("merchant@bank.paynet"), asset_definition: SettlementAsset, amount: amount, dataspace: DataSpaceId::parse("0"));
     return amount;
   }
 }
@@ -24421,7 +24320,7 @@ seiyaku AliasPayout {
             contract_invocation_from_json(&state, contract.clone(), "bind", &bind_payload),
             &mut ivm_cache,
         );
-        let pay_payload = Json::from_str_norito(r#"{"amount":2}"#).expect("pay payload");
+        let pay_payload = Json::from_str_norito(r#"{"amount":"2"}"#).expect("pay payload");
         execute_contract_call_transaction(
             &state,
             &authority,
@@ -24461,7 +24360,7 @@ seiyaku AliasPayout {
         tx.apply();
         block.commit().expect("commit alias rebind");
 
-        let pay_payload = Json::from_str_norito(r#"{"amount":1}"#).expect("pay payload");
+        let pay_payload = Json::from_str_norito(r#"{"amount":"1"}"#).expect("pay payload");
         execute_contract_call_transaction(
             &state,
             &authority,
@@ -24492,216 +24391,6 @@ seiyaku AliasPayout {
         assert_eq!(authority_balance.as_ref(), &Numeric::new(2_u32, 0));
         assert_eq!(merchant_balance.as_ref(), &Numeric::new(2_u32, 0));
         assert_eq!(replacement_balance.as_ref(), &Numeric::new(1_u32, 0));
-    }
-
-    #[test]
-    fn contract_call_transaction_preserves_three_hop_transfer_authorities() {
-        crate::test_alias::ensure();
-        let authority: AccountId = fixture_account("alice");
-        let asset_def_id: AssetDefinitionId =
-            AssetDefinitionId::new(fixture_domain_id(), "rose".parse().expect("asset name"));
-        let domain = Domain::new(fixture_domain_id()).build(&authority);
-        let account = build_fixture_account(&authority, &authority);
-        let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
-        let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
-        let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(5_u32, 0));
-        let kura = Kura::blank_kura_for_testing();
-        let query = LiveQueryStore::start_test();
-        let world = World::with_assets([domain], [account], [asset_def], [source_asset], []);
-        let state = State::new_with_chain(world, kura, query, ChainId::from("test-chain"));
-        let caller_contract = install_contract(
-            &state,
-            &authority,
-            r#"
-seiyaku Caller {
-  state AccountId CallerAccount;
-  state bytes ForwarderContract;
-  state AssetDefinitionId SettlementAsset;
-
-  hajimari(caller_account: AccountId,
-       forwarder_contract: bytes,
-       settlement_asset: AssetDefinitionId) {
-    CallerAccount = caller_account;
-    ForwarderContract = forwarder_contract;
-    SettlementAsset = settlement_asset;
-  }
-
-  kotoage fn bind(caller_account: AccountId,
-                  forwarder_contract: bytes,
-                  settlement_asset: AssetDefinitionId) authorize("AssetOps") {
-    CallerAccount = caller_account;
-    ForwarderContract = forwarder_contract;
-    SettlementAsset = settlement_asset;
-  }
-
-  kotoage fn open(amount: i64) -> int authorize("AssetOps") {
-    ledger::asset::transfer(source: context::authority(), destination: CallerAccount, asset_definition: SettlementAsset, amount: Amount::from_i64(amount), dataspace: DataSpaceId::parse("0"));
-    let payload = json::object();
-    let forward_payload = json::set_i64(payload, Name::parse("amount"), amount);
-    return codec::decode_i64(contract::call(contract: ForwarderContract, entrypoint: "forward", arguments: forward_payload));
-  }
-}
-"#,
-            0,
-        );
-        let forwarder_contract = install_contract(
-            &state,
-            &authority,
-            r#"
-seiyaku Forwarder {
-  state AccountId ForwarderAccount;
-  state bytes VaultContract;
-  state AssetDefinitionId SettlementAsset;
-
-  hajimari(forwarder_account: AccountId,
-       vault_contract: bytes,
-       settlement_asset: AssetDefinitionId) {
-    ForwarderAccount = forwarder_account;
-    VaultContract = vault_contract;
-    SettlementAsset = settlement_asset;
-  }
-
-  kotoage fn bind(forwarder_account: AccountId,
-                  vault_contract: bytes,
-                  settlement_asset: AssetDefinitionId) authorize("AssetOps") {
-    ForwarderAccount = forwarder_account;
-    VaultContract = vault_contract;
-    SettlementAsset = settlement_asset;
-  }
-
-  kotoage fn forward(amount: i64) -> int authorize("AssetOps") {
-    ledger::asset::transfer(source: context::authority(), destination: ForwarderAccount, asset_definition: SettlementAsset, amount: Amount::from_i64(amount), dataspace: DataSpaceId::parse("0"));
-    let payload = json::object();
-    let deposit_payload = json::set_i64(payload, Name::parse("amount"), amount);
-    return codec::decode_i64(contract::call(contract: VaultContract, entrypoint: "deposit", arguments: deposit_payload));
-  }
-}
-"#,
-            1,
-        );
-        let vault_contract = install_contract(
-            &state,
-            &authority,
-            r#"
-seiyaku Vault {
-  state AccountId VaultAccount;
-  state AssetDefinitionId SettlementAsset;
-
-  hajimari(vault_account: AccountId, settlement_asset: AssetDefinitionId) {
-    VaultAccount = vault_account;
-    SettlementAsset = settlement_asset;
-  }
-
-  kotoage fn bind(vault_account: AccountId,
-                settlement_asset: AssetDefinitionId) authorize("AssetOps") {
-    VaultAccount = vault_account;
-    SettlementAsset = settlement_asset;
-  }
-
-  kotoage fn deposit(amount: i64) -> int authorize("AssetOps") {
-    ledger::asset::transfer(source: context::authority(), destination: VaultAccount, asset_definition: SettlementAsset, amount: Amount::from_i64(amount), dataspace: DataSpaceId::parse("0"));
-    return amount;
-  }
-}
-"#,
-            2,
-        );
-        grant_asset_ops_to_account(&state, &authority, authority.clone());
-        grant_asset_ops_to_account(&state, &authority, caller_contract.subject_id());
-        grant_asset_ops_to_account(&state, &authority, forwarder_contract.subject_id());
-
-        let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
-        let vault_bind_payload = Json::from_str_norito(&format!(
-            r#"{{"vault_account":"{}","settlement_asset":"{}"}}"#,
-            vault_contract.subject_id(),
-            asset_def_id
-        ))
-        .expect("vault bind payload");
-        execute_contract_call_transaction(
-            &state,
-            &authority,
-            &fixture_signing_keypair(&authority),
-            contract_invocation_from_json(
-                &state,
-                vault_contract.clone(),
-                "bind",
-                &vault_bind_payload,
-            ),
-            &mut ivm_cache,
-        );
-        let forwarder_bind_payload = Json::from_str_norito(&format!(
-            r#"{{"forwarder_account":"{}","vault_contract":"{}","settlement_asset":"{}"}}"#,
-            forwarder_contract.subject_id(),
-            format!("0x{}", hex::encode(vault_contract.as_ref())),
-            asset_def_id
-        ))
-        .expect("forwarder bind payload");
-        execute_contract_call_transaction(
-            &state,
-            &authority,
-            &fixture_signing_keypair(&authority),
-            contract_invocation_from_json(
-                &state,
-                forwarder_contract.clone(),
-                "bind",
-                &forwarder_bind_payload,
-            ),
-            &mut ivm_cache,
-        );
-        let caller_bind_payload = Json::from_str_norito(&format!(
-            r#"{{"caller_account":"{}","forwarder_contract":"{}","settlement_asset":"{}"}}"#,
-            caller_contract.subject_id(),
-            format!("0x{}", hex::encode(forwarder_contract.as_ref())),
-            asset_def_id
-        ))
-        .expect("caller bind payload");
-        execute_contract_call_transaction(
-            &state,
-            &authority,
-            &fixture_signing_keypair(&authority),
-            contract_invocation_from_json(
-                &state,
-                caller_contract.clone(),
-                "bind",
-                &caller_bind_payload,
-            ),
-            &mut ivm_cache,
-        );
-        let open_payload = Json::from_str_norito(r#"{"amount":3}"#).expect("open payload");
-        execute_contract_call_transaction(
-            &state,
-            &authority,
-            &fixture_signing_keypair(&authority),
-            contract_invocation_from_json(&state, caller_contract.clone(), "open", &open_payload),
-            &mut ivm_cache,
-        );
-
-        let view = state.view();
-        let authority_balance = view
-            .world()
-            .asset(&source_asset_id)
-            .expect("authority asset remains")
-            .value()
-            .clone();
-        let caller_asset_id = AssetId::of(asset_def_id.clone(), caller_contract.subject_id());
-        let forwarder_asset_id = AssetId::of(asset_def_id.clone(), forwarder_contract.subject_id());
-        let vault_asset_id = AssetId::of(asset_def_id, vault_contract.subject_id());
-        let vault_balance = view
-            .world()
-            .asset(&vault_asset_id)
-            .expect("vault asset exists")
-            .value()
-            .clone();
-        assert_eq!(authority_balance.as_ref(), &Numeric::new(2_u32, 0));
-        assert!(
-            view.world().asset(&caller_asset_id).is_err(),
-            "fully drained caller balance should remove the caller asset entry",
-        );
-        assert!(
-            view.world().asset(&forwarder_asset_id).is_err(),
-            "fully drained forwarder balance should remove the forwarder asset entry",
-        );
-        assert_eq!(vault_balance.as_ref(), &Numeric::new(3_u32, 0));
     }
 
     #[test]
@@ -28603,7 +28292,7 @@ seiyaku Vault {
             .compile_source_with_manifest(
                 r#"
 seiyaku PreparedArguments {
-  kotoage fn invoke(count: i64, label: Name) authorize("Invoke") {
+  kotoage fn invoke(int count, Name label) authorize("Invoke") {
   }
 }
 "#,
@@ -28621,7 +28310,7 @@ seiyaku PreparedArguments {
             .expect("argument schema");
         let canonical = ivm::encode_argument_record_from_json(
             schema,
-            &Json::from(norito::json!({"count": 7, "label": "ready"})),
+            &Json::from(norito::json!({"count": "7", "label": "ready"})),
         )
         .expect("encode arguments");
         ivm::reset_argument_record_decode_count();
@@ -28724,7 +28413,7 @@ seiyaku PreparedArguments {
             .compile_source_with_manifest(
                 r#"
 seiyaku PreparedBoundaryArguments {
-  view fn invoke(small: bytes, payload: bytes) -> bytes {
+  view fn invoke(bytes small, bytes payload) -> bytes {
     let _small = small;
     return payload;
   }

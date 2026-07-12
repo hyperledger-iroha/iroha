@@ -778,7 +778,7 @@ fn build_por_proof(
     Ok(por_proof)
 }
 
-fn load_gateway_signing_key(config: &StorageConfig) -> Result<PrivateKey, eyre::Report> {
+pub(crate) fn load_gateway_signing_key(config: &StorageConfig) -> Result<PrivateKey, eyre::Report> {
     let path = config
         .stream_token_signing_key_path()
         .ok_or_else(|| eyre::eyre!("gateway signing key path not configured"))?;

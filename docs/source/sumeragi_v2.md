@@ -91,6 +91,13 @@ caches, and telemetry are also local-only. The DA encoding, chunk geometry, maxi
 and Nexus/AMX commitment are already signed into the `HeightContext`; mutable RBC configuration is
 not a second source of those values.
 
+The signed DA layout must describe every payload up to its advertised maximum. Plain layouts use
+no data or parity shards. RS16 layouts require non-zero data and parity shard counts, an even chunk
+size, and a total stripe width that fits the canonical `u16` representation. `max_chunk_count` must
+accommodate the complete encoded stripe count for `max_payload_size_bytes`. Genesis and every
+derived height context apply the same checked geometry validation, so an unusable layout is rejected
+before height one rather than stalling proposal production.
+
 A native AMX route plan is capped at 256 total legs including its single coordinator, so a receipt
 can carry at most 255 participant legs. Request validation, block admission, and certified merge
 replay apply that same coordinator-inclusive boundary; a 256-participant receipt is rejected before
@@ -171,6 +178,11 @@ The shipped Taira profile sets `role = "validator"`, a 1,000 ms genesis cadence,
 deadline, bounded 96-transaction/16 MiB bodies, and the finalized NPoS stake-snapshot roster. An
 observer changes only `role = "observer"`; it must not change the shared fingerprint.
 
+Only a voting peer with a BLS-Normal consensus key opens the durable Native AMX sign-once guard.
+Observers and other non-signing peers do not create or require that filesystem journal and can run
+on non-Unix platforms. A voting validator still fails closed on a platform that cannot provide the
+secure guard; there is no in-memory or insecure signing fallback.
+
 ## Round protocol
 
 The global protocol has only Prepare and Commit votes.
@@ -241,6 +253,43 @@ application receipt bound to the canonical global block and its transaction resu
 results are retained, or the exact hash-only snapshot anchor after compaction. Restart repairs the
 narrow full-body certificate-before-receipt crash boundary from those canonical artifacts.
 
+Native AMX gives every participant leg a genuine lane-local finality object. Planning groups all
+AMX sources touching the same active lane slot into one canonical, non-empty participant proposal;
+if a lane is a coordinator for one source and a participant for another, those roles still share one
+proposal rather than competing for the same height. The participant proposal carries its own lane
+incarnation, predecessor, block height, and lane-local view. Its signed attestation body binds that
+height and view, the exact participant proposal hash, and the exact participant settlement
+commitment hash. None of those values is copied from the coordinator proposal or from the global
+Sumeragi view. Empty participant proposals remain invalid because they cannot prove which committed
+sources the participant committee authorized. Unlike ordinary asynchronous lane completion, a
+carrier containing Native AMX work is admissible only after every participant leg supplies matching
+Prepare and Commit QCs for that exact finality object.
+
+The durable Native AMX signing claim is keyed by participant lane, dataspace, incarnation, height,
+view, phase, and signer. A claimed slot may be retried only with the same proposal and settlement
+hashes; a different source may share the claim only when it belongs to that same batched proposal
+and settlement. Commit repeats the complete participant identity certified by Prepare and carries
+the exact matching PrepareQC. A conflicting proposal or settlement for an already claimed slot
+fails closed across restart. Global round view monotonicity remains an independent guard and never
+forces equality with the participant lane view.
+
+Participant finality is control-only. Exactly one coordinator ownership executes each AMX source
+and commits its state transition; participant proposals are not executable-payload handoffs and
+cannot appear as independent merge executions. Participant committees may deterministically
+preflight the settlement against the frozen state, but preflight cannot mutate State. The signed
+participant settlement binds the proposal, included sources, resulting effect commitment, and
+participant coordinates. It does not recursively contain the Native AMX receipt whose leg commits
+its hash, avoiding a receipt-to-settlement hash cycle.
+
+After the carrier global block is decided and its coordinator results are applied, Kura persists an
+idempotent participant application receipt linking the participant proposal and settlement to that
+canonical block and result. Only that durable acknowledgement advances the participant lane
+frontier. A crash after global application but before the participant receipt leaves the old
+frontier blocked; restart reconstructs and persists the receipt from the canonical block without
+executing the transaction again. Lane draining, retirement, and same-ID recreation treat such an
+unapplied participant slot as live work, so autoscaling cannot destroy its storage generation or
+admit the next incarnation early.
+
 A fresh lane height always starts at lane view zero, independently of the winning global proposal
 view. The global proposer signs an executable-payload handoff naming the exact locked block and
 fans it to the whole frozen lane committee. Any exact committee member may authenticate those same
@@ -249,7 +298,24 @@ payload digest excludes the producer but includes the global anchor and executab
 accepts producer-signature variants only when the origin proposal and body are identical. V2 does
 not admit unanchored, hintless payloads: without the globally locked ownership there is no
 deterministic promotion rule capable of preventing a Byzantine producer from permanently splitting
-first-write lane slots.
+first-write lane slots. A globally hinted payload also carries no producer-selected reservation,
+routing-plan, or Native AMX metadata. Those fields are not committed by the global ownership record,
+so V2 reconstructs the compatibility payload only from its exact committed entrypoints and rejects a
+committee member that tries to race an alternate execution policy into Kura's first-write slot.
+The crash-atomic Kura lane-geometry marker is a universal active-segment boundary, not an
+autonomous-payload special case. Globally anchored lane-ownership sidecars, autonomous payloads,
+certified lane sessions, globally anchored or autonomous execution inputs, direct-execution
+preflights, and `Current`, `DirectExecution`, and `MergeExecution` application receipts all require
+the exact active lane, dataspace, and incarnation, with proposal height strictly after that
+incarnation's activation, both when persisted and when served. Canonical ownership repair and
+active-session, ownership, and direct-receipt snapshots apply the same marker check and revalidate
+the active segment after checking canonical execution evidence. A same-ID lane recreation therefore
+establishes a new durable storage generation
+before accepting height one; delayed payloads, certified sessions, or cached execution artifacts
+from the retired incarnation cannot replace or be read through the fresh lane slot. Only the
+geometry retirement/archive scanners may read marker-mismatched artifacts, using the authenticated
+historical binding while moving or proving retired storage. Committed-log receipt repair skips those
+historical merge executions instead of repopulating them into the active segment.
 
 An autonomous Prepare vote carries a second domain-separated READY signature over the exact
 producer-authenticated payload. The resulting PrepareQC embeds the READY aggregate, historical

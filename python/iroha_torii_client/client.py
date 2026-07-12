@@ -39,6 +39,7 @@ import re
 import secrets
 import time
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import (
     Any,
     Callable,
@@ -63,6 +64,7 @@ from .norito_frame import validate_norito_frame
 from .sccp import (
     SccpBridgeSubmitResponse,
     SccpCapabilities,
+    SccpRecentCursor,
     SccpRecentMessages,
     SccpRegistry,
     SccpRegistryLimits,
@@ -366,6 +368,7 @@ __all__ = [
     "SccpRegistryLimits",
     "SccpResourceLimits",
     "SccpRegistry",
+    "SccpRecentCursor",
     "SccpRecentMessages",
     "SccpBridgeSubmitResponse",
     "RuntimeAbiActive",
@@ -445,6 +448,9 @@ __all__ = [
     "KaigiRelayHealthSnapshot",
     "SumeragiQcEntry",
     "OfflineReadinessBlocker",
+    "OfflineVerifierId",
+    "OfflineActiveTransferVerifier",
+    "OfflineActiveTopUpShieldVerifier",
     "OfflineReadiness",
     "OfflineAssetScale",
     "OfflineScaledAmountJson",
@@ -495,6 +501,8 @@ __all__ = [
     "OfflineSpendableNote",
     "OfflineVerifierKeyId",
     "OfflineTopUpAnchor",
+    "OfflineTopUpFinalityProofAnchor",
+    "OfflineTopUpFinalityProof",
     "OfflineTopUpResult",
     "OfflineRedeemResult",
     "OfflineTopUpOperationResult",
@@ -2883,6 +2891,10 @@ _OFFLINE_OPERATIONS_PATH = "/v1/offline/operations"
 _OFFLINE_OPERATION_ID_RE = re.compile(r"^(?!0{64}$)[0-9a-f]{64}$")
 _OFFLINE_TRANSACTION_HASH_RE = re.compile(r"^[0-9a-f]{64}$")
 _OFFLINE_ERROR_CODE_RE = re.compile(r"^[a-z0-9][a-z0-9_]{0,63}$")
+_OFFLINE_ASSET_DEFINITION_ID_RE = re.compile(r"^[1-9A-HJ-NP-Za-km-z]{28}$")
+_OFFLINE_ASSET_ALIAS_RE = re.compile(
+    r"^[a-z0-9]+(?:[._-][a-z0-9]+)*#[a-z0-9]+(?:-[a-z0-9]+)*(?:\.[a-z0-9]+(?:-[a-z0-9]+)*)?$"
+)
 _OFFLINE_MAX_U32 = (1 << 32) - 1
 _OFFLINE_MAX_U64 = (1 << 64) - 1
 _OFFLINE_MAX_U128 = (1 << 128) - 1
@@ -2903,6 +2915,29 @@ def _offline_exact_string(value: Any, context: str, *, non_empty: bool = True) -
     if any(ord(character) < 0x20 or 0x7F <= ord(character) <= 0x9F for character in value):
         raise RuntimeError(f"{context} must not contain control characters")
     return value
+
+
+def _offline_asset_selector(value: Any, context: str) -> str:
+    selector = _offline_exact_string(value, context)
+    pattern = (
+        _OFFLINE_ASSET_ALIAS_RE
+        if "#" in selector
+        else _OFFLINE_ASSET_DEFINITION_ID_RE
+    )
+    if pattern.fullmatch(selector) is None:
+        raise RuntimeError(
+            f"{context} must be a canonical Base58 asset definition id or lowercase scoped asset alias"
+        )
+    return selector
+
+
+def _offline_canonical_asset_definition_id(value: Any, context: str) -> str:
+    asset_definition_id = _offline_exact_string(value, context)
+    if _OFFLINE_ASSET_DEFINITION_ID_RE.fullmatch(asset_definition_id) is None:
+        raise RuntimeError(
+            f"{context} must be a canonical unprefixed Base58 asset definition id"
+        )
+    return asset_definition_id
 
 
 def _offline_required(mapping: Mapping[str, Any], field: str, context: str) -> Any:
@@ -2946,6 +2981,10 @@ def _snapshot_offline_json(
         return value
     if isinstance(value, int):
         return _offline_unsigned(value, context, _OFFLINE_MAX_U128)
+    if isinstance(value, Decimal):
+        if not value.is_finite():
+            raise RuntimeError(f"{context} must not contain non-finite numbers")
+        return value
     if isinstance(value, float):
         raise RuntimeError(f"{context} must not contain floating-point numbers")
 
@@ -3130,12 +3169,114 @@ class OfflineReadinessBlocker:
 
 
 @dataclass(frozen=True)
+class OfflineVerifierId:
+    """Stable registry identity of a verifier selected for Offline transfers."""
+
+    backend: str
+    name: str
+
+
+@dataclass(frozen=True)
+class OfflineActiveTransferVerifier:
+    """Key-material-free transfer verifier active at the readiness snapshot."""
+
+    id: OfflineVerifierId
+    version: int
+    circuit_id: str
+    commitment: str
+    public_inputs_schema_hash: str
+    max_proof_bytes: int
+    activation_height: int
+    withdrawal_height: Optional[int]
+
+
+# The two readiness fields expose the same key-material-free registry record
+# shape while retaining distinct semantic names at the public API boundary.
+OfflineActiveTopUpShieldVerifier = OfflineActiveTransferVerifier
+
+
+def _offline_active_transfer_verifier(
+    value: Any,
+    evaluated_block_height: int,
+    context: str,
+) -> OfflineActiveTransferVerifier:
+    record = _offline_mapping(value, context)
+    raw_id = _offline_mapping(_offline_required(record, "id", context), f"{context}.id")
+    backend = _offline_exact_string(
+        _offline_required(raw_id, "backend", f"{context}.id"),
+        f"{context}.id.backend",
+    )
+    name = _offline_exact_string(
+        _offline_required(raw_id, "name", f"{context}.id"),
+        f"{context}.id.name",
+    )
+    if len(backend) > 256 or len(name) > 256:
+        raise RuntimeError(f"{context}.id backend and name must not exceed 256 characters")
+    version = _offline_unsigned(
+        _offline_required(record, "version", context),
+        f"{context}.version",
+        _OFFLINE_MAX_U32,
+    )
+    circuit_id = _offline_exact_string(
+        _offline_required(record, "circuit_id", context),
+        f"{context}.circuit_id",
+    )
+    commitment = _offline_transaction_hash(
+        _offline_required(record, "commitment", context),
+        f"{context}.commitment",
+    )
+    public_inputs_schema_hash = _offline_transaction_hash(
+        _offline_required(record, "public_inputs_schema_hash", context),
+        f"{context}.public_inputs_schema_hash",
+    )
+    max_proof_bytes = _offline_unsigned(
+        _offline_required(record, "max_proof_bytes", context),
+        f"{context}.max_proof_bytes",
+        _OFFLINE_MAX_U32,
+        positive=True,
+    )
+    activation_height = _offline_unsigned(
+        _offline_required(record, "activation_height", context),
+        f"{context}.activation_height",
+        _OFFLINE_MAX_U64,
+    )
+    raw_withdrawal_height = _offline_required(record, "withdrawal_height", context)
+    withdrawal_height = (
+        None
+        if raw_withdrawal_height is None
+        else _offline_unsigned(
+            raw_withdrawal_height,
+            f"{context}.withdrawal_height",
+            _OFFLINE_MAX_U64,
+            positive=True,
+        )
+    )
+    if activation_height > evaluated_block_height:
+        raise RuntimeError(f"{context}.activation_height is after the evaluated block")
+    if withdrawal_height is not None and withdrawal_height <= evaluated_block_height:
+        raise RuntimeError(f"{context}.withdrawal_height is not after the evaluated block")
+    return OfflineActiveTransferVerifier(
+        id=OfflineVerifierId(backend=backend, name=name),
+        version=version,
+        circuit_id=circuit_id,
+        commitment=commitment,
+        public_inputs_schema_hash=public_inputs_schema_hash,
+        max_proof_bytes=max_proof_bytes,
+        activation_height=activation_height,
+        withdrawal_height=withdrawal_height,
+    )
+
+
+@dataclass(frozen=True)
 class OfflineReadiness:
     """Snapshot-bound offline readiness for one asset definition."""
 
     asset_definition_id: str
+    asset_scale: Optional[int]
     evaluated_block_height: int
     evaluated_block_hash: str
+    active_transfer_verifier: Optional[OfflineActiveTransferVerifier]
+    active_topup_shield_verifier: Optional[OfflineActiveTopUpShieldVerifier]
     ready: bool
     blockers: Tuple[OfflineReadinessBlocker, ...]
 
@@ -3143,18 +3284,31 @@ class OfflineReadiness:
     def from_payload(
         cls,
         payload: Mapping[str, Any],
-        expected_asset_definition_id: str,
+        requested_asset_selector: str,
     ) -> "OfflineReadiness":
         context = "offline readiness response"
+        requested_selector = _offline_asset_selector(
+            requested_asset_selector, "requested asset selector"
+        )
         record = _offline_mapping(payload, context)
-        asset_definition_id = _offline_exact_string(
+        asset_definition_id = _offline_canonical_asset_definition_id(
             _offline_required(record, "asset_definition_id", context),
             f"{context}.asset_definition_id",
         )
-        if asset_definition_id != expected_asset_definition_id:
+        if "#" not in requested_selector and asset_definition_id != requested_selector:
             raise RuntimeError(
                 f"{context}.asset_definition_id does not match the requested asset"
             )
+        raw_asset_scale = _offline_required(record, "asset_scale", context)
+        asset_scale = (
+            None
+            if raw_asset_scale is None
+            else _offline_unsigned(
+                raw_asset_scale,
+                f"{context}.asset_scale",
+                _OFFLINE_MAX_U32,
+            )
+        )
         evaluated_block_height = _offline_unsigned(
             _offline_required(record, "evaluated_block_height", context),
             f"{context}.evaluated_block_height",
@@ -3164,6 +3318,30 @@ class OfflineReadiness:
             _offline_required(record, "evaluated_block_hash", context),
             f"{context}.evaluated_block_hash",
         )
+        raw_active_transfer_verifier = _offline_required(
+            record, "active_transfer_verifier", context
+        )
+        active_transfer_verifier = (
+            None
+            if raw_active_transfer_verifier is None
+            else _offline_active_transfer_verifier(
+                raw_active_transfer_verifier,
+                evaluated_block_height,
+                f"{context}.active_transfer_verifier",
+            )
+        )
+        raw_active_topup_shield_verifier = _offline_required(
+            record, "active_topup_shield_verifier", context
+        )
+        active_topup_shield_verifier = (
+            None
+            if raw_active_topup_shield_verifier is None
+            else _offline_active_transfer_verifier(
+                raw_active_topup_shield_verifier,
+                evaluated_block_height,
+                f"{context}.active_topup_shield_verifier",
+            )
+        )
         ready = _offline_required(record, "ready", context)
         if not isinstance(ready, bool):
             raise RuntimeError(f"{context}.ready must be a boolean")
@@ -3171,6 +3349,7 @@ class OfflineReadiness:
         if not isinstance(raw_blockers, list):
             raise RuntimeError(f"{context}.blockers must be an array")
         blockers: List[OfflineReadinessBlocker] = []
+        blocker_codes: set[str] = set()
         for index, raw in enumerate(raw_blockers):
             blocker_context = f"{context}.blockers[{index}]"
             blocker = _offline_mapping(raw, blocker_context)
@@ -3182,17 +3361,58 @@ class OfflineReadiness:
                 raise RuntimeError(
                     f"{blocker_context}.code must be a stable lowercase code of 1 to 64 characters"
                 )
+            if code in blocker_codes:
+                raise RuntimeError(f"{context}.blockers repeats blocker code {code}")
+            blocker_codes.add(code)
             message = _offline_required(blocker, "message", blocker_context)
             if not isinstance(message, str):
                 raise RuntimeError(f"{blocker_context}.message must be a string")
             _offline_exact_string(message, f"{blocker_context}.message")
+            if len(message) > 1024:
+                raise RuntimeError(
+                    f"{blocker_context}.message must not exceed 1024 Unicode characters"
+                )
             blockers.append(OfflineReadinessBlocker(code=code, message=message))
         if ready != (len(blockers) == 0):
             raise RuntimeError(f"{context}.ready must be true exactly when blockers is empty")
+        if ("asset_scale_unavailable" in blocker_codes) != (asset_scale is None):
+            raise RuntimeError(
+                f"{context}.asset_scale_unavailable must be present exactly when asset_scale is null"
+            )
+        if ("asset_scale_unsupported" in blocker_codes) != (
+            asset_scale is not None and asset_scale > _OFFLINE_MAX_ASSET_SCALE
+        ):
+            raise RuntimeError(
+                f"{context}.asset_scale_unsupported must be present exactly when asset_scale exceeds 28"
+            )
+        if ("transfer_verifier_unavailable" in blocker_codes) != (
+            active_transfer_verifier is None
+        ):
+            raise RuntimeError(
+                f"{context}.transfer_verifier_unavailable must be present exactly when no active verifier is reported"
+            )
+        if ("topup_shield_verifier_unavailable" in blocker_codes) != (
+            active_topup_shield_verifier is None
+        ):
+            raise RuntimeError(
+                f"{context}.topup_shield_verifier_unavailable must be present exactly when no active top-up shield verifier is reported"
+            )
+        if ready and (
+            asset_scale is None
+            or asset_scale > _OFFLINE_MAX_ASSET_SCALE
+            or active_transfer_verifier is None
+            or active_topup_shield_verifier is None
+        ):
+            raise RuntimeError(
+                f"{context}.ready requires a supported scale and active transfer and top-up shield verifiers"
+            )
         return cls(
             asset_definition_id=asset_definition_id,
+            asset_scale=asset_scale,
             evaluated_block_height=evaluated_block_height,
             evaluated_block_hash=evaluated_block_hash,
+            active_transfer_verifier=active_transfer_verifier,
+            active_topup_shield_verifier=active_topup_shield_verifier,
             ready=ready,
             blockers=tuple(blockers),
         )
@@ -3277,6 +3497,30 @@ class OfflineTopUpAnchor:
 
 
 @dataclass(frozen=True)
+class OfflineTopUpFinalityProofAnchor:
+    """Exact top-up identity authenticated by a finality proof."""
+
+    topup_operation_id: Tuple[int, ...]
+    anchor_digest: Tuple[int, ...]
+
+
+@dataclass(frozen=True)
+class OfflineTopUpFinalityProof:
+    """Typed outer envelope for an otherwise opaque Sumeragi-v2 proof.
+
+    The consensus certificate and Merkle path remain direct, defensively
+    copied JSON objects for the native verifier.  The SDK only inspects the
+    operation, digest, and height bindings needed to prevent response-field
+    substitution before that cryptographic verification runs.
+    """
+
+    version: Literal[1]
+    anchor: OfflineTopUpFinalityProofAnchor
+    commit_qc: Mapping[str, Any]
+    anchor_path: Mapping[str, Any]
+
+
+@dataclass(frozen=True)
 class OfflineTopUpResult:
     """Terminal result of an applied top-up."""
 
@@ -3284,6 +3528,7 @@ class OfflineTopUpResult:
     finalized_block_height: int
     server_time_ms: int
     anchor: OfflineTopUpAnchor
+    finality_proof: OfflineTopUpFinalityProof
 
 
 @dataclass(frozen=True)
@@ -3804,6 +4049,107 @@ def _offline_top_up_anchor(
     )
 
 
+def _offline_top_up_finality_proof(
+    value: Any,
+    context: str,
+    *,
+    expected_operation_id: str,
+    expected_anchor_digest: Tuple[int, ...],
+    expected_finalized_height: int,
+) -> OfflineTopUpFinalityProof:
+    record = _offline_mapping(value, context)
+    version = _offline_unsigned(
+        _offline_required(record, "version", context),
+        f"{context}.version",
+        (1 << 16) - 1,
+    )
+    if version != 1:
+        raise RuntimeError(f"{context}.version must be 1")
+
+    anchor_context = f"{context}.anchor"
+    raw_anchor = _offline_mapping(
+        _offline_required(record, "anchor", context), anchor_context
+    )
+    topup_operation_id = _offline_fixed_bytes(
+        _offline_required(raw_anchor, "topup_operation_id", anchor_context),
+        f"{anchor_context}.topup_operation_id",
+        non_zero=True,
+    )
+    if bytes(topup_operation_id).hex() != expected_operation_id:
+        raise RuntimeError(
+            f"{anchor_context}.topup_operation_id does not match the operation"
+        )
+    anchor_digest = _offline_fixed_bytes(
+        _offline_required(raw_anchor, "anchor_digest", anchor_context),
+        f"{anchor_context}.anchor_digest",
+        non_zero=True,
+    )
+    if anchor_digest != expected_anchor_digest:
+        raise RuntimeError(
+            f"{anchor_context}.anchor_digest does not match the finalized anchor"
+        )
+
+    commit_qc_context = f"{context}.commit_qc"
+    commit_qc = _offline_mapping(
+        _offline_required(record, "commit_qc", context), commit_qc_context
+    )
+    height_context_context = f"{commit_qc_context}.height_context"
+    height_context = _offline_mapping(
+        _offline_required(commit_qc, "height_context", commit_qc_context),
+        height_context_context,
+    )
+    context_height = _offline_unsigned(
+        _offline_required(height_context, "height", height_context_context),
+        f"{height_context_context}.height",
+        _OFFLINE_MAX_U64,
+        positive=True,
+    )
+    if context_height != expected_finalized_height:
+        raise RuntimeError(
+            f"{height_context_context}.height does not match finalized_block_height"
+        )
+
+    certificate_context = f"{commit_qc_context}.certificate"
+    certificate = _offline_mapping(
+        _offline_required(commit_qc, "certificate", commit_qc_context),
+        certificate_context,
+    )
+    round_context = f"{certificate_context}.round"
+    certificate_round = _offline_mapping(
+        _offline_required(certificate, "round", certificate_context), round_context
+    )
+    certificate_height = _offline_unsigned(
+        _offline_required(certificate_round, "height", round_context),
+        f"{round_context}.height",
+        _OFFLINE_MAX_U64,
+        positive=True,
+    )
+    if certificate_height != expected_finalized_height:
+        raise RuntimeError(
+            f"{round_context}.height does not match finalized_block_height"
+        )
+
+    anchor_path_context = f"{context}.anchor_path"
+    anchor_path = _offline_mapping(
+        _offline_required(record, "anchor_path", context), anchor_path_context
+    )
+    return OfflineTopUpFinalityProof(
+        version=1,
+        anchor=OfflineTopUpFinalityProofAnchor(
+            topup_operation_id=topup_operation_id,
+            anchor_digest=anchor_digest,
+        ),
+        commit_qc=cast(
+            Mapping[str, Any],
+            _snapshot_offline_json(commit_qc, commit_qc_context),
+        ),
+        anchor_path=cast(
+            Mapping[str, Any],
+            _snapshot_offline_json(anchor_path, anchor_path_context),
+        ),
+    )
+
+
 def _offline_applied_result(
     value: Any, context: str, operation_id: str
 ) -> OfflineAppliedResult:
@@ -3837,16 +4183,27 @@ def _offline_applied_result(
             expected_transaction_hash=transaction_hash,
             expected_finalized_height=finalized_block_height,
         )
+        finality_proof = _offline_top_up_finality_proof(
+            _offline_required(result, "finality_proof", result_context),
+            f"{result_context}.finality_proof",
+            expected_operation_id=operation_id,
+            expected_anchor_digest=anchor.anchor_digest,
+            expected_finalized_height=finalized_block_height,
+        )
         return OfflineTopUpOperationResult(
             OfflineTopUpResult(
                 transaction_hash=transaction_hash,
                 finalized_block_height=finalized_block_height,
                 server_time_ms=server_time_ms,
                 anchor=anchor,
+                finality_proof=finality_proof,
             )
         )
-    if "anchor" in result:
-        raise RuntimeError(f"{result_context}.anchor is invalid for a redeem result")
+    for top_up_only_field in ("anchor", "finality_proof"):
+        if top_up_only_field in result:
+            raise RuntimeError(
+                f"{result_context}.{top_up_only_field} is invalid for a redeem result"
+            )
     return OfflineRedeemOperationResult(
         OfflineRedeemResult(
             transaction_hash=transaction_hash,
@@ -5327,7 +5684,9 @@ class _SumeragiV2StatusParser:
     MAX_COMMITTED_LANE_BLOCKS = 128
     MAX_LANE_BLOCK_SESSIONS = 128
     MAX_NATIVE_AMX_PARTICIPANT_LEGS = 255
+    MAX_NATIVE_AMX_PARTICIPANT_SETTLEMENT_RECEIPTS = 4096
     MAX_U32 = (1 << 32) - 1
+    MAX_U64 = (1 << 64) - 1
     MAX_U128 = (1 << 128) - 1
 
     @classmethod
@@ -5582,6 +5941,24 @@ class _SumeragiV2StatusParser:
         if maximum is not None and number > maximum:
             raise RuntimeError(f"{context} exceeds its protocol bound")
         return number
+
+    @classmethod
+    def _exact_unsigned(
+        cls,
+        value: Any,
+        context: str,
+        *,
+        positive: bool = False,
+        maximum: Optional[int] = None,
+    ) -> int:
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise RuntimeError(f"{context} must be an unsigned integer")
+        return cls._unsigned(
+            value,
+            context,
+            positive=positive,
+            maximum=maximum,
+        )
 
     @classmethod
     def _optional_unsigned(cls, value: Any, context: str) -> Optional[int]:
@@ -6191,6 +6568,12 @@ class _SumeragiV2StatusParser:
                 "participant_lane_id",
                 "participant_dataspace_id",
                 "participant_lane_incarnation",
+                "participant_previous_block_height",
+                "participant_previous_block_descriptor_hash",
+                "participant_lane_block_height",
+                "participant_lane_block_view",
+                "participant_proposal_hash",
+                "participant_settlement_commitment",
                 "participant_validator_set_hash",
                 "participant_validator_count",
                 "participant_min_quorum",
@@ -6252,6 +6635,33 @@ class _SumeragiV2StatusParser:
             record.get("coordinator_lane_block_view"),
             f"{context}.coordinator_lane_block_view",
         )
+        participant_previous_height = cls._exact_unsigned(
+            record.get("participant_previous_block_height"),
+            f"{context}.participant_previous_block_height",
+            maximum=cls.MAX_U64,
+        )
+        previous_descriptor_value = record.get(
+            "participant_previous_block_descriptor_hash"
+        )
+        previous_descriptor_hash = (
+            None
+            if previous_descriptor_value is None
+            else cls._nonzero_hash(
+                previous_descriptor_value,
+                f"{context}.participant_previous_block_descriptor_hash",
+            )
+        )
+        participant_height = cls._exact_unsigned(
+            record.get("participant_lane_block_height"),
+            f"{context}.participant_lane_block_height",
+            positive=True,
+            maximum=cls.MAX_U64,
+        )
+        participant_view = cls._exact_unsigned(
+            record.get("participant_lane_block_view"),
+            f"{context}.participant_lane_block_view",
+            maximum=cls.MAX_U64,
+        )
         source_id = cls._byte32(record.get("source_id"), f"{context}.source_id")
         entrypoint_hash = cls._hash(
             record.get("tx_entrypoint_hash"), f"{context}.tx_entrypoint_hash"
@@ -6259,8 +6669,10 @@ class _SumeragiV2StatusParser:
         if (
             round_value["height"] != authority_height
             or round_value["view"] != coordinator_view
+            or participant_previous_height + 1 != participant_height
+            or (participant_previous_height == 0)
+            != (previous_descriptor_hash is None)
             or min_quorum != expected_quorum
-            or entrypoint_hash[5:69] != source_id
         ):
             raise RuntimeError(f"{context} contains inconsistent round or quorum fields")
         return {
@@ -6300,6 +6712,18 @@ class _SumeragiV2StatusParser:
             "participant_lane_incarnation": cls._nonzero_hash(
                 record.get("participant_lane_incarnation"),
                 f"{context}.participant_lane_incarnation",
+            ),
+            "participant_previous_block_height": participant_previous_height,
+            "participant_previous_block_descriptor_hash": previous_descriptor_hash,
+            "participant_lane_block_height": participant_height,
+            "participant_lane_block_view": participant_view,
+            "participant_proposal_hash": cls._nonzero_hash(
+                record.get("participant_proposal_hash"),
+                f"{context}.participant_proposal_hash",
+            ),
+            "participant_settlement_commitment": cls._nonzero_hash(
+                record.get("participant_settlement_commitment"),
+                f"{context}.participant_settlement_commitment",
             ),
             "participant_validator_set_hash": cls._hash(
                 record.get("participant_validator_set_hash"),
@@ -6405,24 +6829,259 @@ class _SumeragiV2StatusParser:
         }
 
     @classmethod
+    def _native_amx_participant_proposal(cls, value: Any, *, context: str) -> Dict[str, Any]:
+        proposal = cls._exact_mapping(
+            value,
+            context,
+            {"descriptor", "proposal_hash"},
+        )
+        descriptor_context = f"{context}.descriptor"
+        descriptor = cls._mapping(proposal.get("descriptor"), descriptor_context)
+        required_fields = {
+            "lane_id",
+            "dataspace_id",
+            "lane_incarnation",
+            "proposal_height",
+            "previous_lane_block_height",
+            "lane_block_height",
+            "lane_block_view",
+            "subject_hash",
+            "payload_ownership_hash",
+            "rbc_instance_hash",
+            "accepted_candidate_indices",
+            "accepted_transaction_hashes",
+            "validator_set_hash_version",
+            "validator_set_hash",
+            "validator_set",
+            "validator_count",
+            "min_quorum",
+            "qc_mode_tag",
+            "descriptor_hash",
+        }
+        allowed_fields = required_fields | {"previous_lane_block_descriptor_hash"}
+        missing = sorted(required_fields - set(descriptor))
+        unknown = sorted(set(descriptor) - allowed_fields)
+        if missing:
+            raise RuntimeError(f"{descriptor_context} is missing required field {missing[0]}")
+        if unknown:
+            raise RuntimeError(f"{descriptor_context} contains unknown field {unknown[0]}")
+
+        previous_height = cls._exact_unsigned(
+            descriptor.get("previous_lane_block_height"),
+            f"{descriptor_context}.previous_lane_block_height",
+            maximum=cls.MAX_U64,
+        )
+        if previous_height == 0:
+            if "previous_lane_block_descriptor_hash" in descriptor:
+                raise RuntimeError(f"{descriptor_context} must omit the genesis predecessor hash")
+            previous_hash = None
+        else:
+            if descriptor.get("previous_lane_block_descriptor_hash") is None:
+                raise RuntimeError(f"{descriptor_context} must carry a predecessor descriptor hash")
+            previous_hash = cls._nonzero_hash(
+                descriptor.get("previous_lane_block_descriptor_hash"),
+                f"{descriptor_context}.previous_lane_block_descriptor_hash",
+            )
+        lane_height = cls._exact_unsigned(
+            descriptor.get("lane_block_height"),
+            f"{descriptor_context}.lane_block_height",
+            positive=True,
+            maximum=cls.MAX_U64,
+        )
+        if previous_height + 1 != lane_height:
+            raise RuntimeError(f"{descriptor_context} lane-block heights are not contiguous")
+
+        indices = [
+            cls._exact_unsigned(
+                item,
+                f"{descriptor_context}.accepted_candidate_indices[{index}]",
+                maximum=cls.MAX_U64,
+            )
+            for index, item in enumerate(
+                cls._array(
+                    descriptor.get("accepted_candidate_indices"),
+                    f"{descriptor_context}.accepted_candidate_indices",
+                    minimum=1,
+                    maximum=4096,
+                )
+            )
+        ]
+        transaction_hashes = [
+            cls._nonzero_hash(
+                item,
+                f"{descriptor_context}.accepted_transaction_hashes[{index}]",
+            )
+            for index, item in enumerate(
+                cls._array(
+                    descriptor.get("accepted_transaction_hashes"),
+                    f"{descriptor_context}.accepted_transaction_hashes",
+                    minimum=1,
+                    maximum=4096,
+                )
+            )
+        ]
+        if (
+            len(indices) != len(transaction_hashes)
+            or len(set(indices)) != len(indices)
+            or len(set(transaction_hashes)) != len(transaction_hashes)
+        ):
+            raise RuntimeError(f"{descriptor_context} accepted work is inconsistent")
+
+        validators = [
+            cls._non_empty_string(item, f"{descriptor_context}.validator_set[{index}]")
+            for index, item in enumerate(
+                cls._array(
+                    descriptor.get("validator_set"),
+                    f"{descriptor_context}.validator_set",
+                    minimum=1,
+                    maximum=cls.MAX_VALIDATORS,
+                )
+            )
+        ]
+        if len(set(validators)) != len(validators):
+            raise RuntimeError(f"{descriptor_context}.validator_set contains duplicates")
+        validator_count = cls._exact_unsigned(
+            descriptor.get("validator_count"),
+            f"{descriptor_context}.validator_count",
+            positive=True,
+            maximum=cls.MAX_VALIDATORS,
+        )
+        min_quorum = cls._exact_unsigned(
+            descriptor.get("min_quorum"),
+            f"{descriptor_context}.min_quorum",
+            positive=True,
+            maximum=cls.MAX_VALIDATORS,
+        )
+        expected_quorum = len(validators) - (len(validators) - 1) // 3
+        validator_hash_version = cls._exact_unsigned(
+            descriptor.get("validator_set_hash_version"),
+            f"{descriptor_context}.validator_set_hash_version",
+            maximum=0xFFFF,
+        )
+        if (
+            validator_hash_version != 1
+            or validator_count != len(validators)
+            or min_quorum != expected_quorum
+        ):
+            raise RuntimeError(f"{descriptor_context} committee fields are inconsistent")
+        return {
+            "descriptor": {
+                "lane_id": cls._exact_unsigned(
+                    descriptor.get("lane_id"),
+                    f"{descriptor_context}.lane_id",
+                    maximum=cls.MAX_U32,
+                ),
+                "dataspace_id": cls._exact_unsigned(
+                    descriptor.get("dataspace_id"),
+                    f"{descriptor_context}.dataspace_id",
+                    maximum=cls.MAX_U64,
+                ),
+                "lane_incarnation": cls._nonzero_hash(
+                    descriptor.get("lane_incarnation"),
+                    f"{descriptor_context}.lane_incarnation",
+                ),
+                "proposal_height": cls._exact_unsigned(
+                    descriptor.get("proposal_height"),
+                    f"{descriptor_context}.proposal_height",
+                    positive=True,
+                    maximum=cls.MAX_U64,
+                ),
+                "previous_lane_block_height": previous_height,
+                **(
+                    {"previous_lane_block_descriptor_hash": previous_hash}
+                    if previous_hash is not None
+                    else {}
+                ),
+                "lane_block_height": lane_height,
+                "lane_block_view": cls._exact_unsigned(
+                    descriptor.get("lane_block_view"),
+                    f"{descriptor_context}.lane_block_view",
+                    maximum=cls.MAX_U64,
+                ),
+                "subject_hash": cls._nonzero_hash(
+                    descriptor.get("subject_hash"),
+                    f"{descriptor_context}.subject_hash",
+                ),
+                "payload_ownership_hash": cls._nonzero_hash(
+                    descriptor.get("payload_ownership_hash"),
+                    f"{descriptor_context}.payload_ownership_hash",
+                ),
+                "rbc_instance_hash": cls._nonzero_hash(
+                    descriptor.get("rbc_instance_hash"),
+                    f"{descriptor_context}.rbc_instance_hash",
+                ),
+                "accepted_candidate_indices": indices,
+                "accepted_transaction_hashes": transaction_hashes,
+                "validator_set_hash_version": validator_hash_version,
+                "validator_set_hash": cls._hash(
+                    descriptor.get("validator_set_hash"),
+                    f"{descriptor_context}.validator_set_hash",
+                ),
+                "validator_set": validators,
+                "validator_count": validator_count,
+                "min_quorum": min_quorum,
+                "qc_mode_tag": cls._non_empty_string(
+                    descriptor.get("qc_mode_tag"),
+                    f"{descriptor_context}.qc_mode_tag",
+                ),
+                "descriptor_hash": cls._nonzero_hash(
+                    descriptor.get("descriptor_hash"),
+                    f"{descriptor_context}.descriptor_hash",
+                ),
+            },
+            "proposal_hash": cls._nonzero_hash(
+                proposal.get("proposal_hash"), f"{context}.proposal_hash"
+            ),
+        }
+
+    @classmethod
     def _native_amx_leg(cls, value: Any, *, context: str) -> Dict[str, Any]:
         record = cls._exact_mapping(
             value,
             context,
-            {"lane_id", "dataspace_id", "prepare_qc", "commit_qc"},
+            {
+                "lane_id",
+                "dataspace_id",
+                "participant_proposal",
+                "participant_settlement",
+                "participant_settlement_hash",
+                "prepare_qc",
+                "commit_qc",
+            },
         )
-        lane_id = cls._unsigned(
+        lane_id = cls._exact_unsigned(
             record.get("lane_id"), f"{context}.lane_id", maximum=cls.MAX_U32
         )
-        dataspace_id = cls._unsigned(
-            record.get("dataspace_id"), f"{context}.dataspace_id"
+        dataspace_id = cls._exact_unsigned(
+            record.get("dataspace_id"),
+            f"{context}.dataspace_id",
+            maximum=cls.MAX_U64,
         )
-        prepare = cls._native_amx_qc(
-            record.get("prepare_qc"), context=f"{context}.prepare_qc"
+        proposal = cls._native_amx_participant_proposal(
+            record.get("participant_proposal"),
+            context=f"{context}.participant_proposal",
         )
-        commit = cls._native_amx_qc(
-            record.get("commit_qc"), context=f"{context}.commit_qc"
+        settlement_value = cls._mapping(
+            record.get("participant_settlement"),
+            f"{context}.participant_settlement",
         )
+        if settlement_value.get("native_amx_receipts") != []:
+            raise RuntimeError(f"{context}.participant_settlement must be terminal")
+        if settlement_value.get("nexus_fee_receipts") != []:
+            raise RuntimeError(f"{context}.participant_settlement cannot contain fee receipts")
+        cls._array(
+            settlement_value.get("receipts"),
+            f"{context}.participant_settlement.receipts",
+            minimum=1,
+            maximum=cls.MAX_NATIVE_AMX_PARTICIPANT_SETTLEMENT_RECEIPTS,
+        )
+        settlement = cls._settlement(settlement_value, context=f"{context}.participant_settlement")
+        settlement_hash = cls._nonzero_hash(
+            record.get("participant_settlement_hash"),
+            f"{context}.participant_settlement_hash",
+        )
+        prepare = cls._native_amx_qc(record.get("prepare_qc"), context=f"{context}.prepare_qc")
+        commit = cls._native_amx_qc(record.get("commit_qc"), context=f"{context}.commit_qc")
         if prepare["body"]["phase"]["phase"] != "prepare":
             raise RuntimeError(f"{context}.prepare_qc carries the wrong phase")
         if commit["body"]["phase"]["phase"] != "commit":
@@ -6440,14 +7099,61 @@ class _SumeragiV2StatusParser:
             if prepare[field] != commit[field]:
                 raise RuntimeError(f"{context} prepare and commit committees differ")
         body = prepare["body"]
+        descriptor = proposal["descriptor"]
         if (
             body["participant_lane_id"] != lane_id
             or body["participant_dataspace_id"] != dataspace_id
+            or descriptor["lane_id"] != lane_id
+            or descriptor["dataspace_id"] != dataspace_id
+            or descriptor["lane_incarnation"] != body["participant_lane_incarnation"]
+            or descriptor["proposal_height"] != body["authority_context_height"]
+            or descriptor["previous_lane_block_height"] != body["participant_previous_block_height"]
+            or descriptor.get("previous_lane_block_descriptor_hash")
+            != body["participant_previous_block_descriptor_hash"]
+            or descriptor["lane_block_height"] != body["participant_lane_block_height"]
+            or descriptor["lane_block_view"] != body["participant_lane_block_view"]
+            or proposal["proposal_hash"] != body["participant_proposal_hash"]
+            or descriptor["validator_set_hash_version"] != prepare["validator_set_hash_version"]
+            or descriptor["validator_set_hash"] != prepare["validator_set_hash"]
+            or descriptor["validator_set"] != prepare["validator_set"]
+            or descriptor["validator_count"] != body["participant_validator_count"]
+            or descriptor["min_quorum"] != body["participant_min_quorum"]
         ):
-            raise RuntimeError(f"{context} route differs from its signed body")
+            raise RuntimeError(f"{context} participant proposal differs from its signed body")
+        receipts = settlement["receipts"]
+        receipt_sources = [receipt["source_id"] for receipt in receipts]
+        if (
+            settlement_hash != body["participant_settlement_commitment"]
+            or settlement["block_height"] != body["participant_lane_block_height"]
+            or settlement["lane_id"] != lane_id
+            or settlement["dataspace_id"] != dataspace_id
+            or settlement["lane_incarnation"] != body["participant_lane_incarnation"]
+            or settlement["tx_count"] != len(receipts)
+            or settlement["total_local_micro"] != "0"
+            or settlement["total_xor_due_micro"] != "0"
+            or settlement["total_xor_after_haircut_micro"] != "0"
+            or settlement["total_xor_variance_micro"] != "0"
+            or settlement["swap_metadata"] is not None
+            or len(set(receipt_sources)) != len(receipt_sources)
+            or receipt_sources.count(body["source_id"]) != 1
+            or any(
+                receipt["local_amount_micro"] != "0"
+                or receipt["xor_due_micro"] != "0"
+                or receipt["xor_after_haircut_micro"] != "0"
+                or receipt["xor_variance_micro"] != "0"
+                or receipt["timestamp_ms"] != body["authority_context_height"]
+                for receipt in receipts
+            )
+            or settlement["nexus_fee_receipts"]
+            or settlement["native_amx_receipts"]
+        ):
+            raise RuntimeError(f"{context} participant settlement differs from its signed body")
         return {
             "lane_id": lane_id,
             "dataspace_id": dataspace_id,
+            "participant_proposal": proposal,
+            "participant_settlement": settlement,
+            "participant_settlement_hash": settlement_hash,
             "prepare_qc": prepare,
             "commit_qc": commit,
         }
@@ -7356,7 +8062,11 @@ class ToriiClient:
         )
 
     def get_sccp_recent_messages(
-        self, *, from_height: Optional[int] = None, limit: Optional[int] = None
+        self,
+        *,
+        from_height: Optional[int] = None,
+        after_index: Optional[int] = None,
+        limit: Optional[int] = None,
     ) -> SccpRecentMessages:
         """Fetch newest-first SCCP messages (`GET /v1/sccp/messages/recent`)."""
 
@@ -7369,6 +8079,18 @@ class ToriiClient:
             ):
                 raise ValueError("SCCP recent-message from_height must be a positive u64")
             params_dict["from"] = str(from_height)
+        if after_index is not None:
+            if from_height is None:
+                raise ValueError(
+                    "SCCP recent-message after_index requires the paired from_height"
+                )
+            if (
+                isinstance(after_index, bool)
+                or not isinstance(after_index, int)
+                or not 0 <= after_index <= 511
+            ):
+                raise ValueError("SCCP recent-message after_index must be an integer in 0..511")
+            params_dict["after_index"] = str(after_index)
         if limit is not None:
             if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 50:
                 raise ValueError("SCCP recent-message limit must be an integer in 1..50")
@@ -8594,9 +9316,9 @@ class ToriiClient:
     # First-release Offline API
     # ------------------------------------------------------------------
     def get_offline_readiness(self, asset_definition_id: str) -> OfflineReadiness:
-        """Fetch the readiness snapshot for one exact asset definition."""
+        """Fetch readiness by canonical asset id or live asset alias."""
 
-        asset = _offline_exact_string(asset_definition_id, "asset_definition_id")
+        asset = _offline_asset_selector(asset_definition_id, "asset_definition_id")
         response = self._request(
             "GET",
             _OFFLINE_READINESS_PATH,
@@ -8699,6 +9421,7 @@ class ToriiClient:
             payload = json.loads(
                 text,
                 object_pairs_hook=_offline_json_object_without_duplicates,
+                parse_float=Decimal,
                 parse_constant=_offline_reject_json_constant,
             )
         except (ValueError, RecursionError) as error:

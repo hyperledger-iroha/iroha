@@ -16,6 +16,7 @@ mod governance;
 pub mod metering;
 mod moderation;
 mod orderbook;
+pub mod pdp_provider;
 pub mod por;
 pub mod potr;
 mod reconciliation;
@@ -59,6 +60,12 @@ pub use orderbook::{
     OrderbookEventKind, OrderbookProviderSettlementLedgerEntry, OrderbookReceiptOutcome,
     OrderbookRuntimeError, OrderbookSettlementLedger, OrderbookSnapshot, OrderbookSubmitOutcome,
     local_orderbook_provider_id_for_owner_account,
+};
+pub use pdp_provider::{
+    PdpChallengeEnqueueOutcome, PdpGovernanceArchiveV1, PdpNextChallengeV1,
+    PdpProofBuildError, PdpProviderProtocol, PdpProviderProtocolError,
+    PdpProviderTelemetrySnapshot, PdpRejectionReasonV1, PdpTerminalDecisionV1,
+    PdpTerminalHandoff, PdpTerminalOutcomeV1, build_signed_pdp_proof_v1,
 };
 pub use por::{
     ManifestVrfBundle, ManifestVrfKey, PlannedChallenge, PorChallengePlannerError, PorRandomness,
@@ -1899,6 +1906,16 @@ pub trait GovernancePublisher: Send + Sync + std::fmt::Debug {
         settlement: &DealSettlementV1,
         encoded: &[u8],
     ) -> Result<(), GovernancePublishError>;
+    /// Persist an admission-bound PDP terminal archive to the governance pipeline.
+    fn publish_pdp_archive(
+        &self,
+        _archive: &PdpGovernanceArchiveV1,
+        _encoded: &[u8],
+    ) -> Result<(), GovernancePublishError> {
+        Err(GovernancePublishError::other(
+            "PDP governance archive publication is not implemented by this publisher",
+        ))
+    }
     /// Persist a repair audit event to the governance pipeline.
     fn publish_repair_audit_event(
         &self,
@@ -2254,6 +2271,7 @@ pub struct NodeHandle {
     potr: PotrTracker,
     por_history: Arc<RwLock<HashMap<PorHistoryKey, PorHistoryEntry>>>,
     storage: Option<Arc<StorageBackend>>,
+    pdp_provider: Option<PdpProviderProtocol>,
     deal_engine: DealEngine,
     repair: RepairManager,
     repair_mutation_lock: Arc<Mutex<()>>,
@@ -2351,6 +2369,7 @@ enum GovernanceOutboxKindV1 {
     AppealFinanceWeeklyRollup,
     AppealFinanceSettlementReceipt,
     OrderbookSettlementReceipt,
+    PdpArchive,
 }
 
 impl GovernanceOutboxKindV1 {
@@ -2370,6 +2389,7 @@ impl GovernanceOutboxKindV1 {
             Self::AppealFinanceWeeklyRollup => 11,
             Self::AppealFinanceSettlementReceipt => 12,
             Self::OrderbookSettlementReceipt => 13,
+            Self::PdpArchive => 14,
         }
     }
 }
@@ -3454,6 +3474,11 @@ fn validate_governance_outbox_entry(
                 .validate()
                 .map_err(|err| GovernancePublishError::other(err.to_string()))?;
         }
+        GovernanceOutboxKindV1::PdpArchive => {
+            decode_canonical_governance_payload::<PdpGovernanceArchiveV1>(&entry.payload_bytes)?
+                .validate()
+                .map_err(|err| GovernancePublishError::other(err.to_string()))?;
+        }
     }
     Ok(())
 }
@@ -3582,6 +3607,12 @@ fn publish_governance_outbox_entry(
                 decode_canonical_governance_payload::<SettlementReceiptV1>(&entry.payload_bytes)?;
             publisher.publish_orderbook_settlement_receipt(&payload, &entry.payload_bytes)
         }
+        GovernanceOutboxKindV1::PdpArchive => {
+            let payload = decode_canonical_governance_payload::<PdpGovernanceArchiveV1>(
+                &entry.payload_bytes,
+            )?;
+            publisher.publish_pdp_archive(&payload, &entry.payload_bytes)
+        }
     }
 }
 
@@ -3661,12 +3692,52 @@ pub enum NodeStorageError {
     Scheduler(#[from] SchedulerAdmissionError),
 }
 
+/// Errors returned by the embedded admission-bound PDP provider service.
+#[derive(Debug, Error)]
+pub enum NodePdpError {
+    /// Storage and the durable provider protocol are disabled.
+    #[error("SoraFS PDP provider service is disabled for this node")]
+    Disabled,
+    /// Durable challenge/proof lifecycle processing failed.
+    #[error(transparent)]
+    Protocol(#[from] PdpProviderProtocolError),
+    /// Stored manifest or witness access failed.
+    #[error(transparent)]
+    Storage(#[from] StorageError),
+    /// Provider proof construction or signing failed.
+    #[error(transparent)]
+    ProofBuild(#[from] PdpProofBuildError),
+    /// The retained manifest has no PDP commitment.
+    #[error("stored SoraFS manifest has no PDP commitment")]
+    CommitmentUnavailable,
+    /// The queued challenge does not bind the retained manifest commitment.
+    #[error("PDP challenge commitment does not match retained storage")]
+    CommitmentMismatch,
+    /// The active council admission does not authorise the locally configured signing key.
+    #[error("configured PDP provider signing key is not authorised by active admission")]
+    SigningKeyNotAdmitted,
+    /// The configured provider signing key could not be loaded safely.
+    #[error("failed to load configured PDP provider signing key: {0}")]
+    SigningKey(String),
+}
+
 /// Errors that prevent a SoraFS node handle from starting with trustworthy state.
 #[derive(Debug, Error)]
 pub enum NodeInitError {
     /// The configured storage backend could not be opened or validated.
     #[error("failed to initialise SoraFS storage backend: {0}")]
     Storage(#[from] StorageError),
+    /// The durable admission-bound PDP provider checkpoint could not be opened or validated.
+    #[error(
+        "failed to initialise SoraFS PDP provider checkpoint `{path}`: {message}",
+        path = path.display()
+    )]
+    PdpProvider {
+        /// Configured storage root containing the PDP checkpoint.
+        path: PathBuf,
+        /// Validation or I/O diagnostic.
+        message: String,
+    },
     /// A durable runtime checkpoint could not be read, decoded, or validated.
     #[error(
         "failed to restore SoraFS {component} checkpoint `{path}`: {message}",
@@ -3797,6 +3868,67 @@ pub enum ReconciliationError {
     Validation(#[from] ReconciliationValidationError),
 }
 
+impl PdpTerminalHandoff for NodeHandle {
+    fn archive(
+        &self,
+        idempotency_key: [u8; 32],
+        archive: &PdpGovernanceArchiveV1,
+    ) -> Result<[u8; 32], pdp_provider::PdpExternalHandoffError> {
+        archive.validate().map_err(|error| {
+            pdp_provider::PdpExternalHandoffError(format!(
+                "validate PDP governance archive handoff: {error}"
+            ))
+        })?;
+        let bytes = norito::to_bytes(archive).map_err(|error| {
+            pdp_provider::PdpExternalHandoffError(format!(
+                "encode PDP governance archive handoff: {error}"
+            ))
+        })?;
+        self.enqueue_governance_outbox(GovernanceOutboxKindV1::PdpArchive, bytes.clone())
+            .map_err(|error| pdp_provider::PdpExternalHandoffError(error.to_string()))?;
+        self.flush_governance_outbox()
+            .map_err(|error| pdp_provider::PdpExternalHandoffError(error.to_string()))?;
+        Ok(pdp_handoff_receipt(
+            b"archive",
+            idempotency_key,
+            *blake3::hash(&bytes).as_bytes(),
+        ))
+    }
+
+    fn repair(
+        &self,
+        idempotency_key: [u8; 32],
+        report: &RepairReportV1,
+    ) -> Result<[u8; 32], pdp_provider::PdpExternalHandoffError> {
+        let bytes = norito::to_bytes(report).map_err(|error| {
+            pdp_provider::PdpExternalHandoffError(format!(
+                "encode PDP repair handoff: {error}"
+            ))
+        })?;
+        self.enqueue_repair_report(report)
+            .map_err(|error| pdp_provider::PdpExternalHandoffError(error.to_string()))?;
+        Ok(pdp_handoff_receipt(
+            b"repair",
+            idempotency_key,
+            *blake3::hash(&bytes).as_bytes(),
+        ))
+    }
+}
+
+fn pdp_handoff_receipt(
+    kind: &[u8],
+    idempotency_key: [u8; 32],
+    payload_digest: [u8; 32],
+) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"sorafs.node.pdp.handoff-receipt.v1\0");
+    hasher.update(&(kind.len() as u64).to_le_bytes());
+    hasher.update(kind);
+    hasher.update(&idempotency_key);
+    hasher.update(&payload_digest);
+    *hasher.finalize().as_bytes()
+}
+
 impl NodeHandle {
     /// Construct a new handle for the embedded storage worker.
     ///
@@ -3905,6 +4037,20 @@ impl NodeHandle {
             schedulers.update_storage_bytes(0, capacity_limit);
             None
         };
+        let pdp_provider_state_dir = config.data_dir().join("pdp-provider");
+        let pdp_provider = storage
+            .as_ref()
+            .map(|_| {
+                PdpProviderProtocol::open(
+                    config.pdp_provider_policy(),
+                    &pdp_provider_state_dir,
+                )
+                .map_err(|error| NodeInitError::PdpProvider {
+                        path: pdp_provider_state_dir.clone(),
+                        message: error.to_string(),
+                    })
+            })
+            .transpose()?;
 
         let smoothing = config.smoothing_config();
         let event_history_limit = config.runtime_retention().event_history_limit();
@@ -3985,6 +4131,7 @@ impl NodeHandle {
             potr: PotrTracker::default(),
             por_history: Arc::new(RwLock::new(HashMap::new())),
             storage,
+            pdp_provider,
             deal_engine,
             repair,
             repair_mutation_lock: Arc::new(Mutex::new(())),
@@ -4146,6 +4293,12 @@ impl NodeHandle {
     #[must_use]
     pub fn config(&self) -> &StorageConfig {
         &self.config
+    }
+
+    /// Return the durable PDP provider protocol when storage is enabled.
+    #[must_use]
+    pub fn pdp_provider_protocol(&self) -> Option<&PdpProviderProtocol> {
+        self.pdp_provider.as_ref()
     }
 
     /// Returns a reference to the repair scheduler configuration.
@@ -16592,7 +16745,7 @@ mod tests {
     };
     use iroha_telemetry::metrics::global_or_default;
     use norito::to_bytes;
-    use sorafs_car::CarBuildPlan;
+    use sorafs_car::{CarBuildPlan, compute_chunk_plan_digest_sha3};
     use sorafs_manifest::PorReportIsoWeek;
     use sorafs_manifest::{
         BYTES_PER_GIB as ORDERBOOK_BYTES_PER_GIB, ByteRangeV1, DagCodecId, ManifestBuilder,
@@ -16644,6 +16797,10 @@ mod tests {
         sample_proof as por_sample_proof, sample_provider_key as por_sample_provider_key,
         sample_verdict as por_sample_verdict,
     };
+
+    fn manifest_builder_for_plan(plan: &CarBuildPlan) -> ManifestBuilder {
+        ManifestBuilder::new().chunk_digest_sha3_256(compute_chunk_plan_digest_sha3(&plan.chunks))
+    }
 
     fn subsequent_por_challenge(base: &PorChallengeV1, seconds: u64) -> PorChallengeV1 {
         let mut challenge = base.clone();
@@ -19256,7 +19413,7 @@ mod tests {
 
         let payload = b"digest-lookup-fixture";
         let plan = CarBuildPlan::single_file(payload).expect("plan");
-        let manifest = ManifestBuilder::new()
+        let manifest = manifest_builder_for_plan(&plan)
             .root_cid(vec![0xAA; 16])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -26653,7 +26810,7 @@ mod tests {
 
         let payload = b"repair-worker-fixture";
         let plan = CarBuildPlan::single_file(payload).expect("plan");
-        let manifest = ManifestBuilder::new()
+        let manifest = manifest_builder_for_plan(&plan)
             .root_cid(vec![0xEA; 16])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -26787,7 +26944,7 @@ mod tests {
 
         let payload = b"repair-worker-rehydrate";
         let plan = CarBuildPlan::single_file(payload).expect("plan");
-        let manifest_a = ManifestBuilder::new()
+        let manifest_a = manifest_builder_for_plan(&plan)
             .root_cid(vec![0xA1; 16])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -26800,7 +26957,7 @@ mod tests {
             .pin_policy(PinPolicy::default())
             .build()
             .expect("manifest");
-        let manifest_b = ManifestBuilder::new()
+        let manifest_b = manifest_builder_for_plan(&plan)
             .root_cid(vec![0xB2; 16])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -26897,7 +27054,7 @@ mod tests {
 
         let payload = b"repair-worker-orchestrator";
         let plan = CarBuildPlan::single_file(payload).expect("plan");
-        let manifest = ManifestBuilder::new()
+        let manifest = manifest_builder_for_plan(&plan)
             .root_cid(vec![0xC3; 16])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -27040,7 +27197,7 @@ mod tests {
         let now_unix = retention_epoch + 10;
         let mut policy = PinPolicy::default();
         policy.retention_epoch = retention_epoch;
-        let manifest = ManifestBuilder::new()
+        let manifest = manifest_builder_for_plan(&plan)
             .root_cid(vec![0x11; 8])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -27910,7 +28067,7 @@ mod tests {
         let plan = CarBuildPlan::single_file(payload).expect("plan");
         let mut policy = PinPolicy::default();
         policy.retention_epoch = 1_700_000_000;
-        let manifest = ManifestBuilder::new()
+        let manifest = manifest_builder_for_plan(&plan)
             .root_cid(vec![0x33; 8])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -28063,7 +28220,7 @@ mod tests {
         let now_unix = retention_epoch + 10;
         let mut policy = PinPolicy::default();
         policy.retention_epoch = retention_epoch;
-        let manifest = ManifestBuilder::new()
+        let manifest = manifest_builder_for_plan(&plan)
             .root_cid(vec![0x22; 8])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -28135,7 +28292,7 @@ mod tests {
         let mut policy = PinPolicy::default();
         policy.retention_epoch = retention_epoch;
 
-        let manifest_a = ManifestBuilder::new()
+        let manifest_a = manifest_builder_for_plan(&plan)
             .root_cid(vec![0x33; 8])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -28148,7 +28305,7 @@ mod tests {
             .pin_policy(policy.clone())
             .build()
             .expect("manifest a");
-        let manifest_b = ManifestBuilder::new()
+        let manifest_b = manifest_builder_for_plan(&plan)
             .root_cid(vec![0x44; 8])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -28212,7 +28369,7 @@ mod tests {
         let plan_a = CarBuildPlan::single_file(payload_a).expect("plan");
         let mut policy_a = PinPolicy::default();
         policy_a.retention_epoch = retention_epoch;
-        let manifest_a = ManifestBuilder::new()
+        let manifest_a = manifest_builder_for_plan(&plan_a)
             .root_cid(vec![0x01; 8])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -28235,7 +28392,7 @@ mod tests {
         let plan_b = CarBuildPlan::single_file(payload_b).expect("plan");
         let mut policy_b = PinPolicy::default();
         policy_b.retention_epoch = retention_epoch;
-        let manifest_b = ManifestBuilder::new()
+        let manifest_b = manifest_builder_for_plan(&plan_b)
             .root_cid(vec![0x02; 8])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -28288,7 +28445,7 @@ mod tests {
         let expired_plan = CarBuildPlan::single_file(&expired_payload).expect("plan");
         let mut expired_policy = PinPolicy::default();
         expired_policy.retention_epoch = unix_now_secs().saturating_sub(10);
-        let expired_manifest = ManifestBuilder::new()
+        let expired_manifest = manifest_builder_for_plan(&expired_plan)
             .root_cid(vec![0x33; 8])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -28308,7 +28465,7 @@ mod tests {
 
         let new_payload = vec![0xBB; 24];
         let new_plan = CarBuildPlan::single_file(&new_payload).expect("plan");
-        let new_manifest = ManifestBuilder::new()
+        let new_manifest = manifest_builder_for_plan(&new_plan)
             .root_cid(vec![0x44; 8])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -28349,6 +28506,7 @@ mod tests {
         assert_eq!(observed.alias(), cfg.alias());
         assert_eq!(observed.adverts().topics(), cfg.adverts().topics());
         assert!(handle.storage().is_some());
+        assert!(handle.pdp_provider_protocol().is_some());
     }
 
     #[test]
@@ -29274,7 +29432,7 @@ mod tests {
 
         let payload = b"node handle storage fetch test";
         let plan = CarBuildPlan::single_file(payload).expect("plan");
-        let manifest = ManifestBuilder::new()
+        let manifest = manifest_builder_for_plan(&plan)
             .root_cid(vec![0xAA; 16])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -29306,7 +29464,7 @@ mod tests {
 
         let payload = b"SoraFS node handle PoR sampling payload";
         let plan = CarBuildPlan::single_file(payload).expect("plan");
-        let manifest = ManifestBuilder::new()
+        let manifest = manifest_builder_for_plan(&plan)
             .root_cid(vec![0xBB; 16])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -29392,7 +29550,7 @@ mod tests {
 
         let payload = vec![0xEE; 128 * 1024];
         let plan = CarBuildPlan::single_file(&payload).expect("plan");
-        let manifest = ManifestBuilder::new()
+        let manifest = manifest_builder_for_plan(&plan)
             .root_cid(vec![0xDD; 8])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -29562,7 +29720,7 @@ mod tests {
         let plan = CarBuildPlan::single_file(payload).expect("plan");
         let mut policy = PinPolicy::default();
         policy.retention_epoch = retention_epoch;
-        let manifest = ManifestBuilder::new()
+        let manifest = manifest_builder_for_plan(&plan)
             .root_cid(cid)
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -29589,7 +29747,7 @@ mod tests {
 
         let payload = b"disabled storage payload";
         let plan = CarBuildPlan::single_file(payload).expect("plan");
-        let manifest = ManifestBuilder::new()
+        let manifest = manifest_builder_for_plan(&plan)
             .root_cid(vec![0xCC; 8])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(

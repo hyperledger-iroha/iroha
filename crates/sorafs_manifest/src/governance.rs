@@ -13,6 +13,7 @@ use crate::{
     capacity::ReplicationOrderV1,
     deal::DealSettlementV1,
     orderbook::SettlementReceiptV1,
+    pdp::{PdpGovernanceArchiveV1, PdpGovernanceArchiveValidationError},
     por::{AuditVerdictV1, PorChallengeV1, PorProofV1, PorReportIsoWeek},
     reconciliation::{SORAFS_RECONCILIATION_REPORT_VERSION_V1, SorafsReconciliationReportV1},
     repair::{
@@ -2398,6 +2399,8 @@ pub enum GovernanceLogPayloadV1 {
     PorChallenge(PorChallengeV1),
     /// Proof-of-Retrievability response.
     PorProof(PorProofV1),
+    /// Admission-bound PDP terminal archive.
+    PdpArchive(PdpGovernanceArchiveV1),
     /// Audit verdict for a challenge.
     AuditVerdict(AuditVerdictV1),
     /// Deal settlement snapshot.
@@ -2436,6 +2439,18 @@ impl GovernanceLogPayloadV1 {
             GovernanceLogPayloadV1::PorProof(proof) => proof
                 .validate()
                 .map_err(GovernanceLogValidationError::PorProof),
+            GovernanceLogPayloadV1::PdpArchive(archive) => {
+                archive
+                    .validate()
+                    .map_err(GovernanceLogValidationError::PdpArchive)?;
+                if archive.decided_at_unix > timestamp {
+                    return Err(GovernanceLogValidationError::PdpArchiveDecisionAfterNode {
+                        decided_at: archive.decided_at_unix,
+                        node_timestamp: timestamp,
+                    });
+                }
+                Ok(())
+            }
             GovernanceLogPayloadV1::AuditVerdict(verdict) => verdict
                 .validate()
                 .map_err(GovernanceLogValidationError::AuditVerdict),
@@ -3071,6 +3086,15 @@ pub enum GovernanceLogValidationError {
     PorChallenge(crate::por::PorChallengeValidationError),
     #[error("proof validation failed: {0}")]
     PorProof(crate::por::PorProofValidationError),
+    #[error("PDP governance archive validation failed: {0}")]
+    PdpArchive(PdpGovernanceArchiveValidationError),
+    #[error(
+        "PDP archive decision timestamp {decided_at} exceeds governance node timestamp {node_timestamp}"
+    )]
+    PdpArchiveDecisionAfterNode {
+        decided_at: u64,
+        node_timestamp: u64,
+    },
     #[error("audit verdict validation failed: {0}")]
     AuditVerdict(crate::por::AuditVerdictValidationError),
     #[error("deal settlement validation failed: {0}")]

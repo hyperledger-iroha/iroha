@@ -3422,7 +3422,7 @@ fn main() {
     }
 
     #[test]
-    fn account_multisig_admin_builtins_emit_account_admin_syscalls() {
+    fn static_account_multisig_admin_builtins_emit_exact_account_hints() {
         let account = sample_account_literal();
         let src = format!(
             r#"
@@ -3434,13 +3434,6 @@ kotoage fn main() authorize("CompilerFixture") {{
   ledger::account::add_signatory(account, signatory);
   ledger::account::remove_signatory(account, signatory);
   ledger::account::set_quorum(account, 2);
-  ledger::account::add_signatory(account, signatory);
-  ledger::account::remove_signatory(account, signatory);
-  ledger::account::set_quorum(account, 3);
-}}
-
-kotoage fn dynamic(AccountId account, int quorum) authorize("CompilerFixture") {{
-  ledger::account::set_quorum(account, quorum);
 }}
 
 }}
@@ -3474,6 +3467,47 @@ kotoage fn dynamic(AccountId account, int quorum) authorize("CompilerFixture") {
                 "expected {label} syscall in compiled code"
             );
         }
+
+        let hints = manifest
+            .access_set_hints
+            .expect("expected static account multisig access hints");
+        assert!(hints.read_keys.contains(&format!("account:{account}")));
+        assert!(hints.write_keys.contains(&format!("account:{account}")));
+        assert!(!hints.read_keys.contains(&ACCOUNT_WILDCARD_KEY.to_string()));
+        assert!(!hints.write_keys.contains(&ACCOUNT_WILDCARD_KEY.to_string()));
+        assert!(!hints.read_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
+        assert!(!hints.write_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
+    }
+
+    #[test]
+    fn dynamic_account_quorum_emits_checked_conversion_and_scoped_account_hints() {
+        let src = r#"
+seiyaku CompilerFixture {
+
+kotoage fn dynamic(AccountId account, int quorum) authorize("CompilerFixture") {
+  ledger::account::set_quorum(account, quorum);
+}
+
+}
+"#;
+        let compiler = test_mode_compiler();
+        let (bytes, manifest) = compiler
+            .compile_source_with_manifest(src)
+            .expect("compile dynamic account quorum builtin");
+        let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
+        let code = &bytes[parsed.code_offset..];
+
+        let set_quorum = encoding::wide::encode_sys(
+            instruction::wide::system::SCALL,
+            u8::try_from(ivm_abi::syscalls::SYSCALL_SET_ACCOUNT_QUORUM)
+                .expect("account quorum syscall id fits in u8"),
+        )
+        .to_le_bytes();
+        assert!(
+            code.windows(set_quorum.len())
+                .any(|window| window == set_quorum),
+            "expected SET_ACCOUNT_QUORUM syscall in compiled code"
+        );
         let int_to_u64 = encoding::wide::encode_syscallx(ivm_abi::syscalls::SYSCALL_INT_TRY_TO_U64)
             .to_le_bytes();
         assert!(
@@ -3484,9 +3518,9 @@ kotoage fn dynamic(AccountId account, int quorum) authorize("CompilerFixture") {
 
         let hints = manifest
             .access_set_hints
-            .expect("expected account multisig access hints");
-        assert!(hints.read_keys.contains(&format!("account:{account}")));
-        assert!(hints.write_keys.contains(&format!("account:{account}")));
+            .expect("expected dynamic account quorum access hints");
+        assert!(hints.read_keys.contains(&ACCOUNT_WILDCARD_KEY.to_string()));
+        assert!(hints.write_keys.contains(&ACCOUNT_WILDCARD_KEY.to_string()));
         assert!(!hints.read_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
         assert!(!hints.write_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
     }
@@ -5509,12 +5543,7 @@ fn main() {
 seiyaku CompilerFixture {
 
 fn verify(bytes payload) {
-  let _proof = crypto::vrf::verify(
-    message: payload,
-    proof: payload,
-    public_key: payload,
-    variant: 1,
-  );
+  let _proof = crypto::vrf::verify(request: payload);
   let _batch = crypto::vrf::verify_batch(payload);
 }
 
@@ -5550,11 +5579,25 @@ view fn main() {
                 "expected {label} syscall in compiled code"
             );
         }
+
+        let publish = encoding::wide::encode_sys(
+            instruction::wide::system::SCALL,
+            u8::try_from(ivm_abi::syscalls::SYSCALL_INPUT_PUBLISH_TLV)
+                .expect("INPUT_PUBLISH_TLV syscall id fits in u8"),
+        )
+        .to_le_bytes();
+        assert_eq!(
+            code.windows(publish.len())
+                .filter(|window| *window == publish)
+                .count(),
+            2,
+            "single and batch VRF verification each publish exactly one request envelope"
+        );
     }
 
     #[test]
     fn vrf_builtins_reject_invalid_arguments() {
-        for (src, expected) in [
+        for (src, expected_code, expected_message) in [
             (
                 r#"
 seiyaku CompilerFixture {
@@ -5565,13 +5608,27 @@ fn main() {
     message: payload,
     proof: payload,
     public_key: payload,
-    variant: Name::parse("variant"),
+    variant: 1,
   );
 }
 
 }
 "#,
-                "crypto::vrf::verify expects (bytes, bytes, bytes, int variant)",
+                Some("E_RETIRED_VRF_VERIFY_ARGS"),
+                "four-register VRF verify form is retired",
+            ),
+            (
+                r#"
+seiyaku CompilerFixture {
+
+fn main() {
+  let _bad = crypto::vrf::verify(request: 1);
+}
+
+}
+"#,
+                None,
+                "crypto::vrf::verify expects one bytes-encoded VrfVerifyRequest",
             ),
             (
                 r#"
@@ -5583,14 +5640,18 @@ fn main() {
 
 }
 "#,
+                None,
                 "crypto::vrf::verify_batch expects (bytes)",
             ),
         ] {
             let parsed = parse(src).expect("parse source");
             let err = analyze(&parsed).expect_err("semantic analysis should reject VRF args");
+            if let Some(expected_code) = expected_code {
+                assert_eq!(err.code, expected_code);
+            }
             assert!(
-                err.message.contains(expected),
-                "expected `{expected}`, got `{}`",
+                err.message.contains(expected_message),
+                "expected `{expected_message}`, got `{}`",
                 err.message
             );
         }
@@ -6848,10 +6909,11 @@ fn main() { let _chain = context::chain_id(1); }
                 r#"
 seiyaku CompilerFixture {
 kotoage fn apply(AccountId account, AssetDefinitionId asset, Option<quantity> cap, quantity replacement_cap, string alias, AccountId replacement) authorize("ControlAdmin") {
+  let Option<quantity> no_cap = Option::none;
   ledger::asset::set_transfer_freeze(account: account, asset_definition: asset, frozen: true);
   ledger::asset::set_transfer_daily_limit(account: account, asset_definition: asset, cap: cap);
   ledger::asset::set_transfer_daily_limit(account: account, asset_definition: asset, cap: Option::some(replacement_cap));
-  ledger::asset::set_transfer_daily_limit(account: account, asset_definition: asset, cap: Option::none);
+  ledger::asset::set_transfer_daily_limit(account: account, asset_definition: asset, cap: no_cap);
   ledger::account::recovery::propose(alias: alias, replacement: replacement);
   ledger::account::recovery::approve(alias: alias);
   ledger::account::recovery::cancel(alias: alias);
@@ -9230,9 +9292,7 @@ seiyaku StagedMintRequest {
         let mut bases = Vec::new();
         for bb in &update_record.blocks {
             for instr in &bb.instrs {
-                if let ir::Instr::PathMapKey { base, .. }
-                | ir::Instr::PathMapKeyNorito { base, .. } = instr
-                {
+                if let ir::Instr::PathMapKeyNorito { base, .. } = instr {
                     bases.push(
                         string_map
                             .get(&(update_record_idx, *base))
@@ -11895,19 +11955,6 @@ impl Compiler {
                     {
                         param_temp_map.entry((func_idx, param_idx)).or_insert(*dest);
                     }
-                    if let ir::Instr::PathMapKey { dest, base, key } = instr
-                        && let Some(base_hint) = state_path_hints.get(&(func_idx, *base)).cloned()
-                    {
-                        let map_base = base_hint.base_name();
-                        if let Some(key_val) = int_const_map.get(&(func_idx, *key)).copied() {
-                            let path = format!("{map_base}/{key_val}");
-                            state_path_hints
-                                .insert((func_idx, *dest), StatePathHint::Literal(path));
-                        } else {
-                            state_path_hints
-                                .insert((func_idx, *dest), StatePathHint::Map { base: map_base });
-                        }
-                    }
                     if let ir::Instr::PathMapKeyNorito {
                         dest,
                         base,
@@ -12112,19 +12159,6 @@ impl Compiler {
                         {
                             let hex = hex::encode(tlv_bytes);
                             string_map.insert((func_idx, *dest), format!("0x{hex}"));
-                        }
-                    }
-                    if let ir::Instr::PathMapKey { dest, base, key } = instr
-                        && let Some(base_hint) = state_path_hints.get(&(func_idx, *base)).cloned()
-                    {
-                        let map_base = base_hint.base_name();
-                        if let Some(key_val) = int_const_map.get(&(func_idx, *key)).copied() {
-                            let path = format!("{map_base}/{key_val}");
-                            state_path_hints
-                                .insert((func_idx, *dest), StatePathHint::Literal(path));
-                        } else {
-                            state_path_hints
-                                .insert((func_idx, *dest), StatePathHint::Map { base: map_base });
                         }
                     }
                     if let ir::Instr::PathMapKeyNorito {
@@ -13467,6 +13501,51 @@ impl Compiler {
                             let word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
                                 num as u8,
+                            );
+                            code.extend_from_slice(&word.to_le_bytes());
+                        }
+                        Instr::GrantContractEntrypoint {
+                            account,
+                            entrypoint,
+                        }
+                        | Instr::RevokeContractEntrypoint {
+                            account,
+                            entrypoint,
+                        } => {
+                            // r10 = &AccountId; r11 = &Blob containing the UTF-8 selector.
+                            if let Some(a) = string_map.get(&(func_idx, *account)) {
+                                let key = DataKey(DataKind::Account, a.clone());
+                                emit_literal_load(&mut code, &fixups, 10, key);
+                            } else {
+                                let r = src_reg(account, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(10, r, 0)?);
+                            }
+                            if let Some(selector) = string_map.get(&(func_idx, *entrypoint)) {
+                                let key = DataKey(DataKind::Blob, selector.clone());
+                                emit_literal_load(&mut code, &fixups, 11, key);
+                            } else {
+                                let r = src_reg(entrypoint, scratch2, &mut code)?;
+                                push_word(&mut code, encode_addi(11, r, 0)?);
+                            }
+                            let publish = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
+                            );
+                            code.extend_from_slice(&publish.to_le_bytes());
+                            push_word(&mut code, encode_addi(12, 10, 0)?);
+                            push_word(&mut code, encode_addi(10, 11, 0)?);
+                            code.extend_from_slice(&publish.to_le_bytes());
+                            push_word(&mut code, encode_addi(11, 10, 0)?);
+                            push_word(&mut code, encode_addi(10, 12, 0)?);
+                            let number = match instr {
+                                Instr::GrantContractEntrypoint { .. } => {
+                                    syscalls::SYSCALL_GRANT_CONTRACT_ENTRYPOINT
+                                }
+                                _ => syscalls::SYSCALL_REVOKE_CONTRACT_ENTRYPOINT,
+                            };
+                            let word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                number as u8,
                             );
                             code.extend_from_slice(&word.to_le_bytes());
                         }
@@ -16366,35 +16445,6 @@ impl Compiler {
                             push_word(&mut code, encode_addi(rd, 10, 0)?);
                             spill_back(dest, rd, spilled, imm, &mut code)?;
                         }
-                        Instr::PathMapKey { dest, base, key } => {
-                            // r10=&Name base; publish; r11=key; SCALL BUILD_PATH_MAP_KEY; move to dest
-                            if let Some(s) = string_map.get(&(func_idx, *base)) {
-                                let key_b = DataKey(DataKind::Name, s.clone());
-                                emit_literal_load(&mut code, &fixups, 10, key_b);
-                            } else {
-                                let r = src_reg(base, scratch1, &mut code)?;
-                                push_word(&mut code, encode_addi(10, r, 0)?);
-                            }
-                            // publish base name
-                            let pub_word = encoding::wide::encode_sys(
-                                instruction::wide::system::SCALL,
-                                syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
-                            );
-                            code.extend_from_slice(&pub_word.to_le_bytes());
-                            // move key (i64) into r11
-                            let rkey = src_reg(key, scratch1, &mut code)?;
-                            push_word(&mut code, encode_addi(11, rkey, 0)?);
-                            // build path
-                            let word = encoding::wide::encode_sys(
-                                instruction::wide::system::SCALL,
-                                syscalls::SYSCALL_BUILD_PATH_MAP_KEY as u8,
-                            );
-                            code.extend_from_slice(&word.to_le_bytes());
-                            // move r10 to dest
-                            let (rd, spilled, imm) = dst_reg(dest);
-                            push_word(&mut code, encode_addi(rd, 10, 0)?);
-                            spill_back(dest, rd, spilled, imm, &mut code)?;
-                        }
                         Instr::EncodeInt { dest, value } => {
                             let rv = src_reg(value, scratch1, &mut code)?;
                             push_word(&mut code, encode_addi(10, rv, 0)?);
@@ -17567,43 +17617,19 @@ impl Compiler {
                             push_word(&mut code, encode_addi(rd, 10, 0)?);
                             spill_back(dest, rd, spilled, imm, &mut code)?;
                         }
-                        Instr::VrfVerify {
-                            dest,
-                            input,
-                            public_key,
-                            proof,
-                            variant,
-                        } => {
+                        Instr::VrfVerify { dest, request } => {
                             let pub_word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
                                 syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
                             );
-                            if let Some(s) = string_map.get(&(func_idx, *input)) {
+                            if let Some(s) = string_map.get(&(func_idx, *request)) {
                                 let key = DataKey(DataKind::Blob, s.clone());
                                 emit_literal_load(&mut code, &fixups, 10, key);
                             } else {
-                                let r = src_reg(input, scratch1, &mut code)?;
+                                let r = src_reg(request, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(10, r, 0)?);
                             }
                             code.extend_from_slice(&pub_word.to_le_bytes());
-                            if let Some(s) = string_map.get(&(func_idx, *public_key)) {
-                                let key = DataKey(DataKind::Blob, s.clone());
-                                emit_literal_load(&mut code, &fixups, 11, key);
-                            } else {
-                                let r = src_reg(public_key, scratch2, &mut code)?;
-                                push_word(&mut code, encode_addi(11, r, 0)?);
-                            }
-                            code.extend_from_slice(&pub_word.to_le_bytes());
-                            if let Some(s) = string_map.get(&(func_idx, *proof)) {
-                                let key = DataKey(DataKind::Blob, s.clone());
-                                emit_literal_load(&mut code, &fixups, 12, key);
-                            } else {
-                                let r = src_reg(proof, scratchd, &mut code)?;
-                                push_word(&mut code, encode_addi(12, r, 0)?);
-                            }
-                            code.extend_from_slice(&pub_word.to_le_bytes());
-                            let rvar = src_reg(variant, scratch1, &mut code)?;
-                            push_word(&mut code, encode_addi(13, rvar, 0)?);
                             let word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
                                 syscalls::SYSCALL_VRF_VERIFY as u8,
@@ -19846,6 +19872,19 @@ fn record_isi_access(
             add_account_hint_rw(access_set, &account);
             add_permission_account_hint_w(access_set, &account, &perm);
         }
+        ir::Instr::GrantContractEntrypoint { account, .. }
+        | ir::Instr::RevokeContractEntrypoint { account, .. } => {
+            let Some(account) = account_access_hint_for_temp(
+                string_map,
+                authority_account_temps,
+                func_idx,
+                *account,
+            ) else {
+                return apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
+            };
+            add_account_hint_rw(access_set, &account);
+            add_permission_account_hint_w(access_set, &account, "CanInvokeContractEntrypoint");
+        }
         ir::Instr::RegisterAsset { asset, .. } => {
             if let Some(id) = parse_temp::<AssetDefinitionId>(string_map, func_idx, *asset) {
                 add_asset_def_domain_r_if_projected(access_set, &id);
@@ -22028,7 +22067,6 @@ fn classify_ir_access(instr: &ir::Instr) -> IrAccessClass {
         | ir::Instr::StateMapKeyAt { .. }
         | ir::Instr::StateValueEncode { .. }
         | ir::Instr::DecodeInt { .. }
-        | ir::Instr::PathMapKey { .. }
         | ir::Instr::PathMapKeyNorito { .. }
         | ir::Instr::EncodeInt { .. }
         | ir::Instr::PointerToNorito { .. }
@@ -22136,6 +22174,12 @@ fn classify_ir_access(instr: &ir::Instr) -> IrAccessClass {
         ir::Instr::SetTriggerEnabled { .. } => access_class_for_builtin(Builtin::SetTriggerEnabled),
         ir::Instr::GrantPermission { .. } => access_class_for_builtin(Builtin::GrantPermission),
         ir::Instr::RevokePermission { .. } => access_class_for_builtin(Builtin::RevokePermission),
+        ir::Instr::GrantContractEntrypoint { .. } => {
+            access_class_for_builtin(Builtin::GrantContractEntrypoint)
+        }
+        ir::Instr::RevokeContractEntrypoint { .. } => {
+            access_class_for_builtin(Builtin::RevokeContractEntrypoint)
+        }
         ir::Instr::CreateRole { .. } => access_class_for_builtin(Builtin::CreateRole),
         ir::Instr::DeleteRole { .. } => access_class_for_builtin(Builtin::DeleteRole),
         ir::Instr::GrantRole { .. } => access_class_for_builtin(Builtin::GrantRole),

@@ -1,5 +1,6 @@
 package org.hyperledger.iroha.sdk.client
 
+import java.math.BigDecimal
 import java.math.BigInteger
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -36,6 +37,12 @@ class JsonParserTest {
     }
 
     @Test
+    fun decimalAndExponentTokensRemainExact() {
+        assertEquals(BigDecimal("-0.5"), JsonParser.parse("-0.5"))
+        assertEquals(BigDecimal("1e400"), JsonParser.parse("1e400"))
+    }
+
+    @Test
     fun duplicateObjectKeysAreRejectedBeforeLastKeyWinsParsing() {
         assertFailsWith<IllegalStateException> {
             JsonParser.parse("""{"bundle_id":"forged","bundle_id":"trusted"}""")
@@ -46,5 +53,23 @@ class JsonParserTest {
         assertFailsWith<IllegalStateException> {
             JsonParser.parse("""{"bundle\u005fid":"forged","bundle_id":"trusted"}""")
         }
+    }
+
+    @Test
+    fun stringsRequireValidJsonControlsAndUnicodeScalars() {
+        assertEquals("emoji: 😀", JsonParser.parse("\"emoji: \\uD83D\\uDE00\""))
+        assertEquals("emoji: 😀", JsonParser.parse("\"emoji: 😀\""))
+        assertFailsWith<IllegalStateException> { JsonParser.parse("\"raw\u0001control\"") }
+        assertFailsWith<IllegalStateException> { JsonParser.parse("\"\\uD800\"") }
+        assertFailsWith<IllegalStateException> { JsonParser.parse("\"${'\uD800'}\"") }
+        assertFailsWith<IllegalStateException> { JsonParser.parse("\"\\uDC00\"") }
+    }
+
+    @Test
+    fun nestingIsBoundedBeforeTheRuntimeStack() {
+        val accepted = "[".repeat(128) + "0" + "]".repeat(128)
+        JsonParser.parse(accepted)
+        val rejected = "[".repeat(129) + "0" + "]".repeat(129)
+        assertFailsWith<IllegalStateException> { JsonParser.parse(rejected) }
     }
 }

@@ -19,9 +19,10 @@ use iroha_data_model::{
     block::{
         BlockHeader, CertifiedMergeLedgerReference, SignedBlock,
         consensus::{
-            CertPhase, LaneBlockDescriptorV1, LaneBlockProposalPayloadHintV1, LaneBlockProposalV1,
-            LaneBlockQcV1, NativeAmxAttestationBodyV2, NativeAmxAttestationQcV2,
-            NativeAmxLegRecordV2, NativeAmxPhase, NativeAmxReceipt, SumeragiLanePayloadOwnership,
+            CertPhase, LaneBlockCommitment, LaneBlockDescriptorV1, LaneBlockProposalPayloadHintV1,
+            LaneBlockProposalV1, LaneBlockQcV1, LaneSettlementReceipt, NativeAmxAttestationBodyV2,
+            NativeAmxAttestationQcV2, NativeAmxLegRecordV2, NativeAmxPhase, NativeAmxReceipt,
+            SumeragiLanePayloadOwnership,
         },
         consensus_v2 as wire,
     },
@@ -40,6 +41,7 @@ use super::{
     InboundBlockMessage, LaneRelayMessage,
     main_loop::lane_scheduler::{
         lane_block_redrive_leader, prepare_v2_lane_payload_plan, proposal_lookahead_enabled,
+        v2_known_lane_tip_for_route,
     },
     message::BlockMessage,
     v2_candidate::{
@@ -400,6 +402,62 @@ struct NativeVoteClaimKey {
     signer: HashOf<PeerId>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct NativeVoteSlotKey {
+    chain_id_hash: Hash,
+    context_id: wire::HeightContextId,
+    epoch: u64,
+    authority_context_height: u64,
+    participant_lane: LaneId,
+    participant_dataspace: DataSpaceId,
+    participant_lane_incarnation: Hash,
+    participant_lane_block_height: u64,
+    participant_lane_block_view: u64,
+    phase: NativeAmxPhase,
+    signer: HashOf<PeerId>,
+}
+
+impl NativeVoteSlotKey {
+    fn from_body(body: &NativeAmxAttestationBodyV2, signer: &PeerId) -> Self {
+        Self {
+            chain_id_hash: body.chain_id_hash,
+            context_id: body.round.context_id,
+            epoch: body.epoch,
+            authority_context_height: body.authority_context_height,
+            participant_lane: body.participant_lane_id,
+            participant_dataspace: body.participant_dataspace_id,
+            participant_lane_incarnation: body.participant_lane_incarnation,
+            participant_lane_block_height: body.participant_lane_block_height,
+            participant_lane_block_view: body.participant_lane_block_view,
+            phase: body.phase,
+            signer: HashOf::new(signer),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct NativeVoteSlotClaim {
+    proposal_hash: Hash,
+    settlement_commitment: Hash,
+}
+
+#[derive(Clone, Debug)]
+struct NativeParticipantControl {
+    proposal: LaneBlockProposalV1,
+    settlement: LaneBlockCommitment,
+}
+
+type NativeParticipantControlMap = BTreeMap<(LaneId, DataSpaceId), NativeParticipantControl>;
+
+impl NativeVoteSlotClaim {
+    fn from_body(body: &NativeAmxAttestationBodyV2) -> Self {
+        Self {
+            proposal_hash: body.participant_proposal_hash,
+            settlement_commitment: body.participant_settlement_commitment,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct NativeRequestKey {
     body: NativeAmxAttestationBodyV2,
@@ -448,7 +506,7 @@ pub(crate) struct V2LaneWorkAdapter {
     kura: Arc<Kura>,
     lane_drain_signing_guard: LaneDrainSigningGuard,
     merge_signing_guard: MergeSigningGuard,
-    native_signing_guard: NativeAmxSigningGuard,
+    native_signing_guard: Option<NativeAmxSigningGuard>,
     signing_guard_failure: Option<String>,
     native_signing_capacity_exhausted: bool,
     limits: V2LaneWorkLimits,
@@ -462,6 +520,9 @@ pub(crate) struct V2LaneWorkAdapter {
     native_sessions: NativeAmxSessionCache,
     native_claims: BTreeMap<NativeVoteClaimKey, NativeAmxAttestationBodyV2>,
     native_claim_signatures: BTreeMap<NativeVoteClaimKey, Vec<u8>>,
+    /// Authenticated signer decisions retained for the whole global height so
+    /// global view changes cannot hide a participant lane-slot equivocation.
+    native_slot_claims: BTreeMap<NativeVoteSlotKey, NativeVoteSlotClaim>,
     local_native_claims: BTreeMap<NativeVoteClaimKey, NativeAmxAttestationBodyV2>,
     native_requests: BTreeMap<NativeRequestKey, NativeAmxMessage>,
     authenticated_native_requests: BTreeMap<Hash, (PeerId, NativeAmxMessage)>,
@@ -561,6 +622,17 @@ impl V2LaneWorkAdapter {
         if is_pre_apply && !committed_context_matches {
             return Err(V2LaneWorkError::NexusContextMismatch);
         }
+        if let Some(height) = usize::try_from(state_height)
+            .ok()
+            .and_then(NonZeroUsize::new)
+            && let Some(block) = kura.get_block(height)
+        {
+            // Repair the post-commit Native AMX effect sidecar before any new
+            // participant proposal can extend its lane-local frontier. This
+            // is idempotent and runs only after durable v2 finality exists.
+            kura.persist_native_amx_participant_application_receipts(&block)
+                .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
+        }
         let chain_id = context.chain_id.clone().into_inner();
         let committed_merge_epoch = state
             .merge_ledger()
@@ -581,17 +653,23 @@ impl V2LaneWorkAdapter {
         let lane_drain_signing_guard =
             LaneDrainSigningGuard::open(&kura.store_root(), &active_lane_incarnations)
                 .map_err(|error| V2LaneWorkError::SigningGuard(error.to_string()))?;
-        let native_signing_capacity = limits.native_signing_capacity()?;
-        let native_signing_guard = NativeAmxSigningGuard::open(
-            &kura.store_root(),
-            context.height,
-            context.id(),
-            context.epoch,
-            Hash::new(chain_id.as_bytes()),
-            local_peer.clone(),
-            native_signing_capacity,
-        )
-        .map_err(|error| V2LaneWorkError::SigningGuard(error.to_string()))?;
+        let native_signing_guard = if native_signing_guard_required(voting_enabled, &local_peer) {
+            let native_signing_capacity = limits.native_signing_capacity()?;
+            Some(
+                NativeAmxSigningGuard::open(
+                    &kura.store_root(),
+                    context.height,
+                    context.id(),
+                    context.epoch,
+                    Hash::new(chain_id.as_bytes()),
+                    local_peer.clone(),
+                    native_signing_capacity,
+                )
+                .map_err(|error| V2LaneWorkError::SigningGuard(error.to_string()))?,
+            )
+        } else {
+            None
+        };
         let mut adapter = Self {
             context,
             local_peer,
@@ -622,6 +700,7 @@ impl V2LaneWorkAdapter {
             ),
             native_claims: BTreeMap::new(),
             native_claim_signatures: BTreeMap::new(),
+            native_slot_claims: BTreeMap::new(),
             local_native_claims: BTreeMap::new(),
             native_requests: BTreeMap::new(),
             authenticated_native_requests: BTreeMap::new(),
@@ -892,31 +971,43 @@ impl V2LaneWorkAdapter {
         let mut recovered = self.hydrate_durable_autonomous_lane_sessions()?;
         let committed_height = u64::try_from(self.state.committed_height())
             .map_err(|_| V2LaneWorkError::StateHeightMismatch)?;
-        let artifacts = self
-            .kura
-            .lane_block_artifacts_snapshot()
-            .into_iter()
-            .filter(|artifact| {
-                let ownership = &artifact.ownership;
-                ownership.proposal_height <= committed_height
-                    && proposal_lookahead_enabled(&nexus, ownership.proposal_height)
-                    && !self
-                        .state
-                        .lane_block_artifact_is_applied_or_snapshot_anchored_cached(artifact)
-            })
-            .take(self.limits.session_capacity.get())
-            .collect::<Vec<_>>();
-        for artifact in artifacts {
+        let remaining = self.limits.session_capacity.get().saturating_sub(recovered);
+        if remaining == 0 {
+            return Ok(recovered);
+        }
+        let mut candidates = Vec::with_capacity(remaining);
+        // Apply every actionability guard before consuming the global bound.
+        // Otherwise stale routes or non-committee history from low-sorted lanes
+        // can starve an exact recoverable payload indefinitely.
+        for artifact in self.kura.lane_block_artifacts_snapshot() {
             let ownership = &artifact.ownership;
+            if ownership.proposal_height > committed_height
+                || !proposal_lookahead_enabled(&nexus, ownership.proposal_height)
+                || self
+                    .state
+                    .lane_block_artifact_is_applied_or_snapshot_anchored_cached(&artifact)
+                || !ownership
+                    .lane_block_descriptor_validator_set
+                    .contains(&self.local_peer)
+                || !self.lane_route_active(
+                    ownership.lane_id,
+                    ownership.dataspace_id,
+                    ownership.lane_incarnation,
+                    ownership.proposal_height,
+                )
+                || self
+                    .expected_lane_validators(ownership.lane_id, ownership.proposal_height)
+                    .as_deref()
+                    != Some(ownership.lane_block_descriptor_validator_set.as_slice())
+            {
+                continue;
+            }
             let Some(proposal) = proposal_from_ownership(ownership, artifact.proposal_block_hash)
             else {
                 return Err(V2LaneWorkError::Persistence(
                     "committed lane ownership cannot reconstruct its exact proposal".to_owned(),
                 ));
             };
-            if !proposal.descriptor.validator_set.contains(&self.local_peer) {
-                continue;
-            }
             let epoch = self.epoch_for_proposal_height(ownership.proposal_height);
             if self
                 .kura
@@ -958,6 +1049,17 @@ impl V2LaneWorkAdapter {
                             .to_owned(),
                     )
                 })?;
+            if !Self::global_block_matches_payload(&block, hint, &proposal, &selected) {
+                return Err(V2LaneWorkError::Persistence(
+                    "committed lane payload does not match its protected global block".to_owned(),
+                ));
+            }
+            candidates.push((proposal, selected, epoch));
+            if candidates.len() == remaining {
+                break;
+            }
+        }
+        for (proposal, selected, epoch) in candidates {
             let payload = LaneExecutablePayloadV1::new_signed(
                 self.chain_id_hash(),
                 epoch,
@@ -983,6 +1085,9 @@ impl V2LaneWorkAdapter {
 
     fn hydrate_durable_autonomous_lane_sessions(&mut self) -> Result<usize, V2LaneWorkError> {
         let capacity = self.limits.session_capacity.get();
+        // Kura bounds its scan per lane. Filter the resulting cross-lane set
+        // before applying our global session bound so inert history cannot
+        // crowd out work this validator can actually vote for.
         let mut recovered = self
             .kura
             .latest_autonomous_lane_block_artifacts_snapshot(
@@ -991,16 +1096,36 @@ impl V2LaneWorkAdapter {
                 |proposal_height| self.epoch_for_proposal_height(proposal_height),
             )
             .into_iter()
-            .filter(|(artifact, proposal)| {
-                proposal.descriptor.proposal_height <= self.context.height
-                    && artifact
-                        .executable_payload
-                        .origin_proposal
-                        .payload_block_hint
-                        .is_some()
-                    && !self.kura.lane_block_application_receipt_available(
-                        &artifact.executable_payload.origin_proposal,
+            .filter(|(artifact, _cursor)| {
+                let payload = &artifact.executable_payload;
+                let proposal = &payload.origin_proposal;
+                let descriptor = &proposal.descriptor;
+                let Some(hint) = proposal.payload_block_hint else {
+                    return false;
+                };
+                let certified = self
+                    .kura
+                    .read_certified_lane_block_artifact(
+                        descriptor.lane_id,
+                        descriptor.lane_block_height,
                     )
+                    .is_some_and(|certified| certified.proposal == *proposal);
+                descriptor.proposal_height <= self.context.height
+                    && !self.autonomous_origin_is_applied_or_snapshot_anchored(proposal)
+                    && descriptor.validator_set.contains(&self.local_peer)
+                    && self.lane_route_active(
+                        descriptor.lane_id,
+                        descriptor.dataspace_id,
+                        descriptor.lane_incarnation,
+                        descriptor.proposal_height,
+                    )
+                    && self
+                        .expected_lane_validators(descriptor.lane_id, descriptor.proposal_height)
+                        .as_deref()
+                        == Some(descriptor.validator_set.as_slice())
+                    && self.global_anchor_matches_payload(hint, proposal, &payload.entrypoints)
+                    && (certified
+                        || self.lane_executable_payload_passes_stateful_preflight(payload))
             })
             .collect::<Vec<_>>();
         if recovered.len() > capacity {
@@ -1016,89 +1141,23 @@ impl V2LaneWorkAdapter {
             let Some(hint) = proposal.payload_block_hint else {
                 continue;
             };
-            if !descriptor.validator_set.contains(&self.local_peer)
-                || !self.lane_route_active(
-                    descriptor.lane_id,
-                    descriptor.dataspace_id,
-                    descriptor.lane_incarnation,
-                    descriptor.proposal_height,
-                )
-                || self
-                    .expected_lane_validators(descriptor.lane_id, descriptor.proposal_height)
-                    .as_deref()
-                    != Some(descriptor.validator_set.as_slice())
-                || !self.global_anchor_matches_payload(hint, &proposal, &payload.entrypoints)
-            {
-                continue;
-            }
-
-            let certified = self
-                .kura
-                .read_certified_lane_block_artifact(
-                    descriptor.lane_id,
-                    descriptor.lane_block_height,
-                )
-                .filter(|certified| certified.proposal == proposal);
-            if certified.is_none()
-                && !self.lane_executable_payload_passes_stateful_preflight(&payload)
-            {
-                continue;
-            }
-
-            let mut next_sessions = self.lane_sessions.clone();
-            next_sessions
-                .insert_recovered_proposal_replacing_uncommitted_conflict(proposal.clone())
-                .map_err(|error| V2LaneWorkError::RolloverConflict(error.to_string()))?;
-            let availability_body = crate::lane_consensus::lane_payload_availability_body(
-                &payload,
+            debug_assert!(descriptor.validator_set.contains(&self.local_peer));
+            debug_assert!(self.global_anchor_matches_payload(
+                hint,
                 &proposal,
-                self.chain_id_hash(),
-                self.epoch_for_proposal_height(descriptor.proposal_height),
-            )
-            .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
-            next_sessions
-                .authorize_payload_availability(&proposal, availability_body)
-                .map_err(|error| V2LaneWorkError::RolloverConflict(error.to_string()))?;
-
-            if let Some(availability) = artifact.availability_certificate.as_ref() {
-                let qc = availability.certificate.clone();
-                if qc.body == proposal.vote_body(CertPhase::Prepare) {
-                    let pops = qc
-                        .payload_availability_qc
-                        .as_ref()
-                        .map(|availability_qc| {
-                            availability_qc
-                                .validator_set
-                                .iter()
-                                .zip(&availability_qc.validator_set_pops)
-                                .map(|(peer, pop)| (peer.public_key().clone(), pop.clone()))
-                                .collect::<BTreeMap<_, _>>()
-                        })
-                        .ok_or_else(|| {
-                            V2LaneWorkError::Persistence(
-                                "durable autonomous availability certificate omitted READY proof"
-                                    .to_owned(),
-                            )
-                        })?;
-                    next_sessions
-                        .insert_qc_with_pops(qc, &pops)
-                        .map_err(|error| V2LaneWorkError::RolloverConflict(error.to_string()))?;
-                }
-            }
-
-            if let Some(certified) = certified {
-                let crate::kura::CertifiedLaneBlockArtifact {
-                    prepare_qc,
-                    commit_qc,
-                    signer_pops,
-                    ..
-                } = certified;
-                next_sessions
-                    .insert_qc_with_pops(prepare_qc, &signer_pops)
-                    .map_err(|error| V2LaneWorkError::RolloverConflict(error.to_string()))?;
-                next_sessions
-                    .insert_qc_with_pops(commit_qc, &signer_pops)
-                    .map_err(|error| V2LaneWorkError::RolloverConflict(error.to_string()))?;
+                &payload.entrypoints
+            ));
+            let Some(block) = self.observed_global_anchor(hint) else {
+                continue;
+            };
+            let mut next_sessions = self.lane_sessions.clone();
+            if !self.hydrate_exact_durable_autonomous_origin_for_protected_block(
+                &proposal,
+                &block,
+                &artifact,
+                &mut next_sessions,
+            )? {
+                continue;
             }
             self.lane_sessions = next_sessions;
 
@@ -1115,6 +1174,119 @@ impl V2LaneWorkAdapter {
             hydrated = hydrated.saturating_add(1);
         }
         Ok(hydrated)
+    }
+
+    fn hydrate_exact_durable_autonomous_origin_for_protected_block(
+        &self,
+        proposal: &LaneBlockProposalV1,
+        block: &SignedBlock,
+        artifact: &crate::kura::AutonomousLaneBlockArtifact,
+        sessions: &mut LaneBlockSessionCache,
+    ) -> Result<bool, V2LaneWorkError> {
+        let descriptor = &proposal.descriptor;
+        let epoch = self.epoch_for_proposal_height(descriptor.proposal_height);
+        let Some((payload, durable_origin)) = self.autonomous_certification_payload(
+            descriptor.lane_id,
+            descriptor.lane_block_height,
+            epoch,
+        ) else {
+            return Err(V2LaneWorkError::Persistence(
+                "durable autonomous payload failed origin/cursor validation".to_owned(),
+            ));
+        };
+        let Some(hint) = proposal.payload_block_hint else {
+            return Err(V2LaneWorkError::Persistence(
+                "durable V2 autonomous origin omitted its global proposal hint".to_owned(),
+            ));
+        };
+        if artifact.executable_payload != payload
+            || durable_origin != *proposal
+            || payload.origin_proposal != *proposal
+            || !descriptor.validator_set.contains(&self.local_peer)
+            || !self.lane_route_active(
+                descriptor.lane_id,
+                descriptor.dataspace_id,
+                descriptor.lane_incarnation,
+                descriptor.proposal_height,
+            )
+            || self
+                .expected_lane_validators(descriptor.lane_id, descriptor.proposal_height)
+                .as_deref()
+                != Some(descriptor.validator_set.as_slice())
+            || !Self::global_block_matches_payload(block, hint, proposal, &payload.entrypoints)
+            || self.autonomous_origin_is_applied_or_snapshot_anchored(proposal)
+        {
+            return Ok(false);
+        }
+
+        let certified = self
+            .kura
+            .read_certified_lane_block_artifact(descriptor.lane_id, descriptor.lane_block_height)
+            .filter(|certified| certified.proposal == *proposal);
+        if certified.is_none() && !self.lane_executable_payload_passes_stateful_preflight(&payload)
+        {
+            return Ok(false);
+        }
+
+        sessions
+            .insert_recovered_proposal_replacing_uncommitted_conflict(proposal.clone())
+            .map_err(|error| V2LaneWorkError::RolloverConflict(error.to_string()))?;
+        let availability_body = crate::lane_consensus::lane_payload_availability_body(
+            &payload,
+            proposal,
+            self.chain_id_hash(),
+            epoch,
+        )
+        .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
+        sessions
+            .authorize_payload_availability(proposal, availability_body)
+            .map_err(|error| V2LaneWorkError::RolloverConflict(error.to_string()))?;
+
+        if let Some(availability) = artifact.availability_certificate.as_ref() {
+            let qc = availability.certificate.clone();
+            if qc.body != proposal.vote_body(CertPhase::Prepare) {
+                return Err(V2LaneWorkError::Persistence(
+                    "durable autonomous availability certificate changed its origin subject"
+                        .to_owned(),
+                ));
+            }
+            let pops = qc
+                .payload_availability_qc
+                .as_ref()
+                .map(|availability_qc| {
+                    availability_qc
+                        .validator_set
+                        .iter()
+                        .zip(&availability_qc.validator_set_pops)
+                        .map(|(peer, pop)| (peer.public_key().clone(), pop.clone()))
+                        .collect::<BTreeMap<_, _>>()
+                })
+                .ok_or_else(|| {
+                    V2LaneWorkError::Persistence(
+                        "durable autonomous availability certificate omitted READY proof"
+                            .to_owned(),
+                    )
+                })?;
+            sessions
+                .insert_qc_with_pops(qc, &pops)
+                .map_err(|error| V2LaneWorkError::RolloverConflict(error.to_string()))?;
+        }
+
+        if let Some(certified) = certified {
+            let crate::kura::CertifiedLaneBlockArtifact {
+                prepare_qc,
+                commit_qc,
+                signer_pops,
+                ..
+            } = certified;
+            sessions
+                .insert_qc_with_pops(prepare_qc, &signer_pops)
+                .map_err(|error| V2LaneWorkError::RolloverConflict(error.to_string()))?;
+            sessions
+                .insert_qc_with_pops(commit_qc, &signer_pops)
+                .map_err(|error| V2LaneWorkError::RolloverConflict(error.to_string()))?;
+        }
+        Ok(true)
     }
 
     /// Bind locally planned lane proposals to the exact global block body.
@@ -1412,6 +1584,28 @@ impl V2LaneWorkAdapter {
                 Ok(LaneBlockSessionInsertOutcome::Duplicate) => {}
                 Err(_) => return V2LaneIngressOutcome::Rejected,
             }
+            let descriptor = &proposal.descriptor;
+            let epoch = self.epoch_for_proposal_height(descriptor.proposal_height);
+            // The payload write can precede the global lock/body handoff. On
+            // restart it remains deliberately dormant until this exact body is
+            // protected; authorize it in the cloned cache before publishing
+            // any in-memory binding or releasing the vote driver.
+            if let Some(artifact) = self.kura.read_autonomous_lane_block_artifact(
+                descriptor.lane_id,
+                descriptor.lane_block_height,
+                self.chain_id_hash(),
+                epoch,
+            ) && !self
+                .hydrate_exact_durable_autonomous_origin_for_protected_block(
+                    proposal,
+                    block,
+                    &artifact,
+                    &mut next_sessions,
+                )
+                .is_ok_and(|hydrated| hydrated)
+            {
+                return V2LaneIngressOutcome::Rejected;
+            }
         }
         // Do not delete any losing durable sidecar until every in-memory
         // locked-body check and session insertion has succeeded. Once this
@@ -1688,6 +1882,7 @@ impl V2LaneWorkAdapter {
             || payload.epoch != proposal_epoch
             || !sender_authorized
             || !anchor_authorized
+            || !validators.contains(&self.local_peer)
             || payload
                 .validate(self.chain_id_hash(), proposal_epoch)
                 .is_err()
@@ -1712,6 +1907,9 @@ impl V2LaneWorkAdapter {
                 descriptor.proposal_height,
             )
             || expected_validators.as_deref() != Some(validators.as_slice())
+            || self.autonomous_origin_is_applied_or_snapshot_anchored(
+                &payload.origin_proposal,
+            )
         {
             return V2LaneIngressOutcome::Rejected;
         }
@@ -3056,11 +3254,10 @@ impl V2LaneWorkAdapter {
         round.context_id == self.context.id() && round.height == self.context.height
     }
 
-    /// Advance the Native AMX round namespace and discard every artifact from
-    /// the superseded view before it can consume bounded capacity or be
-    /// retransmitted. Native AMX certificates bind the exact global view, so
-    /// no request, vote bucket, or anti-equivocation claim is reusable after a
-    /// view change.
+    /// Advance the Native AMX round namespace and discard retransmittable work
+    /// from the superseded global view. Authenticated participant lane-slot
+    /// claims deliberately survive for this adapter's whole global height so a
+    /// signer cannot hide proposal/settlement equivocation behind a view change.
     fn advance_native_view(&mut self, active_view: wire::View) -> bool {
         if active_view < self.native_active_view {
             return false;
@@ -3794,6 +3991,21 @@ impl V2LaneWorkAdapter {
         let Some(block) = self.observed_global_anchor(hint) else {
             return false;
         };
+        Self::global_block_matches_payload(&block, hint, proposal, entrypoints)
+    }
+
+    fn global_block_matches_payload(
+        block: &SignedBlock,
+        hint: LaneBlockProposalPayloadHintV1,
+        proposal: &LaneBlockProposalV1,
+        entrypoints: &[iroha_data_model::transaction::TransactionEntrypoint],
+    ) -> bool {
+        if block.hash() != hint.proposal_block_hash
+            || block.header().height().get() != hint.proposal_height
+            || block.header().view_change_index() != hint.proposal_view
+        {
+            return false;
+        }
         let block_entrypoints = block.external_entrypoints_cloned().collect::<Vec<_>>();
         let selected = proposal
             .descriptor
@@ -3813,6 +4025,19 @@ impl V2LaneWorkAdapter {
                         .is_some_and(|anchored| anchored.same_consensus_identity(proposal))
                 })
             })
+    }
+
+    fn autonomous_origin_is_applied_or_snapshot_anchored(
+        &self,
+        proposal: &LaneBlockProposalV1,
+    ) -> bool {
+        self.kura.lane_block_application_receipt_available(proposal)
+            || self
+                .canonical_anchor_for_proposal(proposal)
+                .is_some_and(|artifact| {
+                    self.state
+                        .lane_block_artifact_is_applied_or_snapshot_anchored_cached(&artifact)
+                })
     }
 
     fn lane_handoff_has_protected_global_anchor(
@@ -3923,6 +4148,10 @@ impl V2LaneWorkAdapter {
         lane_id: LaneId,
         dataspace_id: DataSpaceId,
     ) -> bool {
+        tag == self.canonical_qc_mode_tag(lane_id, dataspace_id)
+    }
+
+    fn canonical_qc_mode_tag(&self, lane_id: LaneId, dataspace_id: DataSpaceId) -> String {
         let base = match self.context.mode {
             wire::ConsensusMode::Permissioned => wire::PERMISSIONED_TAG,
             wire::ConsensusMode::Npos => wire::NPOS_TAG,
@@ -3932,7 +4161,7 @@ impl V2LaneWorkAdapter {
             hex::encode(self.context.id().0.as_ref()),
             self.context.epoch
         );
-        tag == LaneRelayEnvelope::lane_qc_mode_tag_for(lane_id, dataspace_id, &context_tag)
+        LaneRelayEnvelope::lane_qc_mode_tag_for(lane_id, dataspace_id, &context_tag)
     }
 
     fn hydrate_canonical_lane_artifacts(&mut self) -> Result<(), V2LaneWorkError> {
@@ -4246,6 +4475,11 @@ impl V2LaneWorkAdapter {
         if let Some(outcome) = self.authenticated_native_vote_replay(key, &vote) {
             return outcome;
         }
+        let slot_key = NativeVoteSlotKey::from_body(&vote.body, &vote.signer);
+        let slot_claim = NativeVoteSlotClaim::from_body(&vote.body);
+        if self.native_vote_slot_conflicts(slot_key, slot_claim) {
+            return V2LaneIngressOutcome::Rejected;
+        }
         let Some((validators, _)) = self.native_committee_shape(&vote.body) else {
             return V2LaneIngressOutcome::Rejected;
         };
@@ -4258,7 +4492,10 @@ impl V2LaneWorkAdapter {
             .get()
             .saturating_mul(self.limits.body_buckets_per_session.get())
             .saturating_mul(crate::native_amx::MAX_NATIVE_AMX_VALIDATORS);
-        if self.native_claims.len() >= claim_capacity {
+        if self.native_claims.len() >= claim_capacity
+            || (!self.native_slot_claims.contains_key(&slot_key)
+                && self.native_slot_claims.len() >= claim_capacity)
+        {
             return V2LaneIngressOutcome::Rejected;
         }
         // Only an exact replay of a previously authenticated full vote can
@@ -4273,11 +4510,17 @@ impl V2LaneWorkAdapter {
             Ok(()) => {
                 self.native_claims.insert(key, body);
                 self.native_claim_signatures.insert(key, signature);
+                self.native_slot_claims
+                    .entry(slot_key)
+                    .or_insert(slot_claim);
                 V2LaneIngressOutcome::Inserted
             }
             Err(NativeAmxSessionError::DuplicateSigner) => {
                 self.native_claims.insert(key, body);
                 self.native_claim_signatures.insert(key, signature);
+                self.native_slot_claims
+                    .entry(slot_key)
+                    .or_insert(slot_claim);
                 V2LaneIngressOutcome::Duplicate
             }
             Err(
@@ -4324,6 +4567,16 @@ impl V2LaneWorkAdapter {
         })
     }
 
+    fn native_vote_slot_conflicts(
+        &self,
+        key: NativeVoteSlotKey,
+        claim: NativeVoteSlotClaim,
+    ) -> bool {
+        self.native_slot_claims
+            .get(&key)
+            .is_some_and(|accepted| *accepted != claim)
+    }
+
     fn native_body_matches_context(
         &self,
         body: &NativeAmxAttestationBodyV2,
@@ -4336,7 +4589,6 @@ impl V2LaneWorkAdapter {
             && body.epoch == self.context.epoch
             && body.chain_id_hash == self.native_chain_id_hash()
             && body.authority_context_height == self.context.height
-            && body.coordinator_lane_block_view == body.round.view
             && self.native_coordinator_height_is_current(body)
             && self.nexus_route_active(
                 body.coordinator_lane_id,
@@ -4411,7 +4663,7 @@ impl V2LaneWorkAdapter {
             min_signers,
             previous_height,
             previous_hash,
-        )
+        ) && self.native_participant_request_is_authoritative(request)
     }
 
     fn native_coordinator_request_matches_authority_shape(
@@ -4438,7 +4690,43 @@ impl V2LaneWorkAdapter {
             min_signers,
             previous_height,
             previous_hash,
-        )
+        ) && self.native_participant_request_is_authoritative(request)
+    }
+
+    fn native_participant_request_is_authoritative(
+        &self,
+        request: &NativeAmxAttestationRequestV2,
+    ) -> bool {
+        let body = &request.body;
+        let Some((validators, min_signers)) = self.native_committee_shape_for_route(
+            body.participant_lane_id,
+            body.participant_dataspace_id,
+            body.authority_context_height,
+        ) else {
+            return false;
+        };
+        let Some((previous_height, previous_hash)) = v2_known_lane_tip_for_route(
+            self.state.as_ref(),
+            self.kura.as_ref(),
+            body.authority_context_height,
+            body.participant_lane_id,
+            body.participant_dataspace_id,
+            body.participant_lane_incarnation,
+        ) else {
+            return false;
+        };
+        let descriptor = &request.participant_proposal.descriptor;
+        request.validate_plan_binding().is_ok()
+            && body.participant_previous_block_height == previous_height
+            && body.participant_previous_block_descriptor_hash == previous_hash
+            && body.participant_lane_block_height == previous_height.saturating_add(1)
+            && descriptor.validator_set == validators
+            && usize::try_from(descriptor.min_quorum).ok() == Some(min_signers)
+            && self.qc_mode_tag_matches_context(
+                &descriptor.qc_mode_tag,
+                body.participant_lane_id,
+                body.participant_dataspace_id,
+            )
     }
 
     fn native_coordinator_predecessor(
@@ -4598,8 +4886,7 @@ impl V2LaneWorkAdapter {
         body: NativeAmxAttestationBodyV2,
     ) -> Option<NativeAmxVoteV2> {
         if self.signing_guard_failure.is_some()
-            || !self.voting_enabled
-            || self.local_peer.public_key().try_algorithm().ok() != Some(Algorithm::BlsNormal)
+            || !native_signing_guard_required(self.voting_enabled, &self.local_peer)
             || !self.native_body_matches_context(&body, self.native_active_view)
         {
             return None;
@@ -4623,11 +4910,23 @@ impl V2LaneWorkAdapter {
                 return None;
             }
         }
-        match self.native_signing_guard.record(&body) {
+        let Some(native_signing_guard) = self.native_signing_guard.as_ref() else {
+            let message =
+                "Native AMX signing guard is unavailable for a voting BLS peer".to_owned();
+            iroha_logger::error!(
+                height = body.round.height,
+                view = body.round.view,
+                "Native AMX signing guard failed closed"
+            );
+            self.signing_guard_failure = Some(message);
+            return None;
+        };
+        match native_signing_guard.record(&body) {
             Ok(()) => {}
             Err(
                 NativeAmxSigningGuardError::Equivocation
-                | NativeAmxSigningGuardError::PlanEquivocation,
+                | NativeAmxSigningGuardError::PlanEquivocation
+                | NativeAmxSigningGuardError::SlotEquivocation,
             ) => return None,
             Err(NativeAmxSigningGuardError::Capacity) => {
                 if !self.native_signing_capacity_exhausted {
@@ -4664,11 +4963,205 @@ impl V2LaneWorkAdapter {
         })
     }
 
+    fn prepare_native_participant_controls(
+        &self,
+        candidates: &[CandidateDescriptor<'_>],
+        coordinator_proposals: &[LaneBlockProposalV1],
+    ) -> Result<NativeParticipantControlMap, BTreeSet<usize>> {
+        let mut grouped =
+            BTreeMap::<(LaneId, DataSpaceId), Vec<(usize, Hash, [u8; Hash::LENGTH])>>::new();
+        for (candidate_index, candidate) in candidates.iter().copied().enumerate() {
+            let RoutingPlan::NativeAmx(plan) = candidate.routing_plan() else {
+                continue;
+            };
+            let entrypoint_hash = Hash::from(candidate.entrypoint_hash());
+            let mut source_id = [0_u8; Hash::LENGTH];
+            source_id.copy_from_slice(candidate.transaction().hash().as_ref());
+            for participant in &plan.participants {
+                grouped
+                    .entry((participant.route.lane_id, participant.route.dataspace_id))
+                    .or_default()
+                    .push((candidate_index, entrypoint_hash, source_id));
+            }
+        }
+
+        let mut unavailable = BTreeSet::new();
+        let mut controls = BTreeMap::new();
+        for ((lane_id, dataspace_id), mut members) in grouped {
+            let route = RoutingDecision::new(lane_id, dataspace_id);
+            members.sort_by_key(|(index, _, _)| *index);
+            if members.len() > crate::native_amx::MAX_NATIVE_AMX_PARTICIPANT_CONTROL_SOURCES {
+                unavailable.extend(members.iter().map(|(index, _, _)| *index));
+                continue;
+            }
+            let coordinator_proposal = coordinator_proposals.iter().find(|proposal| {
+                proposal.descriptor.lane_id == route.lane_id
+                    && proposal.descriptor.dataspace_id == route.dataspace_id
+            });
+            let Some(participant_lane_incarnation) = self
+                .state
+                .lane_incarnation_at_height(route.lane_id, self.context.height)
+            else {
+                unavailable.extend(members.iter().map(|(index, _, _)| *index));
+                continue;
+            };
+            let Some((validators, min_signers)) = self.native_committee_shape_for_route(
+                route.lane_id,
+                route.dataspace_id,
+                self.context.height,
+            ) else {
+                unavailable.extend(members.iter().map(|(index, _, _)| *index));
+                continue;
+            };
+            let proposal = if let Some(proposal) = coordinator_proposal {
+                proposal.clone()
+            } else {
+                let Some((previous_height, previous_hash)) = v2_known_lane_tip_for_route(
+                    self.state.as_ref(),
+                    self.kura.as_ref(),
+                    self.context.height,
+                    route.lane_id,
+                    route.dataspace_id,
+                    participant_lane_incarnation,
+                ) else {
+                    unavailable.extend(members.iter().map(|(index, _, _)| *index));
+                    continue;
+                };
+                let Some(lane_block_height) = previous_height.checked_add(1) else {
+                    unavailable.extend(members.iter().map(|(index, _, _)| *index));
+                    continue;
+                };
+                let lane_block_view = 0;
+                let accepted_candidate_indices = members
+                    .iter()
+                    .map(|(index, _, _)| u64::try_from(*index))
+                    .collect::<Result<Vec<_>, _>>();
+                let Ok(accepted_candidate_indices) = accepted_candidate_indices else {
+                    unavailable.extend(members.iter().map(|(index, _, _)| *index));
+                    continue;
+                };
+                let accepted_transaction_hashes =
+                    members.iter().map(|(_, hash, _)| *hash).collect::<Vec<_>>();
+                let qc_mode_tag = self.canonical_qc_mode_tag(route.lane_id, route.dataspace_id);
+                let mut ownership = SumeragiLanePayloadOwnership {
+                    proposal_height: self.context.height,
+                    // This is an independent participant control view, not the
+                    // coordinator's global consensus view.
+                    proposal_view: lane_block_view,
+                    lane_id: route.lane_id,
+                    dataspace_id: route.dataspace_id,
+                    lane_incarnation: participant_lane_incarnation,
+                    lane_block_height,
+                    lane_block_view,
+                    subject_hash: Hash::prehashed([0; Hash::LENGTH]),
+                    qc_mode_tag: qc_mode_tag.clone(),
+                    accepted_candidate_indices: accepted_candidate_indices.clone(),
+                    accepted_transaction_hashes: accepted_transaction_hashes.clone(),
+                    previous_lane_block_height: previous_height,
+                    previous_lane_block_descriptor_hash: previous_hash,
+                    lane_block_descriptor_hash: Some(Hash::prehashed([1; Hash::LENGTH])),
+                    lane_block_descriptor_validator_set: validators.clone(),
+                    lane_block_descriptor_validator_count: u32::try_from(validators.len())
+                        .unwrap_or(u32::MAX),
+                    lane_block_descriptor_min_quorum: u32::try_from(min_signers)
+                        .unwrap_or(u32::MAX),
+                    payload_ownership_hash: Hash::prehashed([0; Hash::LENGTH]),
+                    rbc_instance_hash: Hash::prehashed([0; Hash::LENGTH]),
+                };
+                let Ok(replay) = ownership.compute_replay_hashes() else {
+                    unavailable.extend(members.iter().map(|(index, _, _)| *index));
+                    continue;
+                };
+                ownership.subject_hash = replay.subject_hash;
+                ownership.payload_ownership_hash = replay.payload_ownership_hash;
+                ownership.rbc_instance_hash = replay.rbc_instance_hash;
+                ownership.lane_block_descriptor_hash = Some(replay.lane_block_descriptor_hash);
+                let descriptor = LaneBlockDescriptorV1 {
+                    lane_id: ownership.lane_id,
+                    dataspace_id: ownership.dataspace_id,
+                    lane_incarnation: ownership.lane_incarnation,
+                    proposal_height: ownership.proposal_height,
+                    previous_lane_block_height: ownership.previous_lane_block_height,
+                    previous_lane_block_descriptor_hash: ownership
+                        .previous_lane_block_descriptor_hash,
+                    lane_block_height: ownership.lane_block_height,
+                    lane_block_view: ownership.lane_block_view,
+                    subject_hash: ownership.subject_hash,
+                    payload_ownership_hash: ownership.payload_ownership_hash,
+                    rbc_instance_hash: ownership.rbc_instance_hash,
+                    accepted_candidate_indices,
+                    accepted_transaction_hashes,
+                    validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+                    validator_set_hash: HashOf::new(&validators),
+                    validator_set: validators.clone(),
+                    validator_count: ownership.lane_block_descriptor_validator_count,
+                    min_quorum: ownership.lane_block_descriptor_min_quorum,
+                    qc_mode_tag,
+                    descriptor_hash: replay.lane_block_descriptor_hash,
+                };
+                let mut proposal = LaneBlockProposalV1 {
+                    descriptor,
+                    proposal_hash: Hash::prehashed([0; Hash::LENGTH]),
+                    payload_block_hint: None,
+                };
+                proposal.proposal_hash = proposal.computed_proposal_hash();
+                proposal
+            };
+            if crate::lane_consensus::validate_lane_block_proposal(&proposal).is_err()
+                || proposal.descriptor.lane_incarnation != participant_lane_incarnation
+                || proposal.descriptor.validator_set != validators
+                || usize::try_from(proposal.descriptor.min_quorum).ok() != Some(min_signers)
+            {
+                unavailable.extend(members.iter().map(|(index, _, _)| *index));
+                continue;
+            }
+            let receipts = members
+                .iter()
+                .map(|(_, _, source_id)| LaneSettlementReceipt {
+                    source_id: *source_id,
+                    local_amount_micro: 0,
+                    xor_due_micro: 0,
+                    xor_after_haircut_micro: 0,
+                    xor_variance_micro: 0,
+                    timestamp_ms: self.context.height,
+                })
+                .collect::<Vec<_>>();
+            let settlement = LaneBlockCommitment {
+                block_height: proposal.descriptor.lane_block_height,
+                lane_id: route.lane_id,
+                lane_incarnation: participant_lane_incarnation,
+                dataspace_id: route.dataspace_id,
+                tx_count: u64::try_from(receipts.len()).unwrap_or(u64::MAX),
+                total_local_micro: 0,
+                total_xor_due_micro: 0,
+                total_xor_after_haircut_micro: 0,
+                total_xor_variance_micro: 0,
+                swap_metadata: None,
+                receipts,
+                nexus_fee_receipts: Vec::new(),
+                native_amx_receipts: Vec::new(),
+            };
+            controls.insert(
+                (route.lane_id, route.dataspace_id),
+                NativeParticipantControl {
+                    proposal,
+                    settlement,
+                },
+            );
+        }
+        if unavailable.is_empty() {
+            Ok(controls)
+        } else {
+            Err(unavailable)
+        }
+    }
+
     fn prepare_native_receipt(
         &mut self,
         view: wire::View,
         candidate: CandidateDescriptor<'_>,
         coordinator_proposals: &[LaneBlockProposalV1],
+        participant_controls: &NativeParticipantControlMap,
     ) -> Option<NativeAmxReceipt> {
         let RoutingPlan::NativeAmx(plan) = candidate.routing_plan() else {
             return None;
@@ -4715,6 +5208,31 @@ impl V2LaneWorkAdapter {
             let participant_lane_incarnation = self
                 .state
                 .lane_incarnation_at_height(participant.route.lane_id, self.context.height)?;
+            let participant_control = participant_controls
+                .get(&(participant.route.lane_id, participant.route.dataspace_id))?;
+            let participant_proposal = &participant_control.proposal;
+            let participant_descriptor = &participant_proposal.descriptor;
+            let participant_is_coordinator = participant.route == plan.coordinator.route;
+            let participant_entrypoint_count = participant_descriptor
+                .accepted_transaction_hashes
+                .iter()
+                .filter(|hash| **hash == entrypoint_hash)
+                .count();
+            if participant_descriptor.lane_id != participant.route.lane_id
+                || participant_descriptor.dataspace_id != participant.route.dataspace_id
+                || participant_descriptor.lane_incarnation != participant_lane_incarnation
+                || participant_descriptor.proposal_height != self.context.height
+                || participant_descriptor.validator_set != validators
+                || participant_descriptor.validator_count != u32::try_from(validators.len()).ok()?
+                || participant_descriptor.min_quorum != u32::try_from(min_signers).ok()?
+                || participant_entrypoint_count > 1
+                || (participant_is_coordinator && participant_entrypoint_count != 1)
+            {
+                return None;
+            }
+            let participant_settlement = participant_control.settlement.clone();
+            let participant_settlement_hash =
+                iroha_data_model::nexus::compute_settlement_hash(&participant_settlement).ok()?;
             let prepare_body = NativeAmxAttestationBodyV2 {
                 round,
                 epoch: self.context.epoch,
@@ -4729,6 +5247,14 @@ impl V2LaneWorkAdapter {
                 participant_lane_id: participant.route.lane_id,
                 participant_dataspace_id: participant.route.dataspace_id,
                 participant_lane_incarnation,
+                participant_previous_block_height: participant_descriptor
+                    .previous_lane_block_height,
+                participant_previous_block_descriptor_hash: participant_descriptor
+                    .previous_lane_block_descriptor_hash,
+                participant_lane_block_height: participant_descriptor.lane_block_height,
+                participant_lane_block_view: participant_descriptor.lane_block_view,
+                participant_proposal_hash: participant_proposal.proposal_hash,
+                participant_settlement_commitment: Hash::from(participant_settlement_hash),
                 participant_validator_set_hash: HashOf::new(&validators),
                 participant_validator_count: u32::try_from(validators.len()).ok()?,
                 participant_min_quorum: u32::try_from(min_signers).ok()?,
@@ -4741,6 +5267,8 @@ impl V2LaneWorkAdapter {
                 body: prepare_body,
                 plan_legs: plan_legs.clone(),
                 coordinator_proposal: coordinator_proposal.clone(),
+                participant_proposal: participant_proposal.clone(),
+                participant_settlement,
             };
             if request.validate_plan_binding().is_err()
                 || !self.native_coordinator_request_is_authoritative(&request, &self.local_peer)
@@ -4833,6 +5361,11 @@ impl V2LaneWorkAdapter {
             legs.push(NativeAmxLegRecordV2 {
                 lane_id: participant.route.lane_id,
                 dataspace_id: participant.route.dataspace_id,
+                participant_proposal: commit_request.participant_proposal,
+                participant_settlement: commit_request.participant_settlement,
+                participant_settlement_hash: HashOf::from_untyped_unchecked(
+                    commit_body.participant_settlement_commitment,
+                ),
                 prepare_qc,
                 commit_qc,
             });
@@ -5807,6 +6340,20 @@ impl CandidateWorkProvider for &mut V2LaneWorkAdapter {
                 "lane-local proposal count exceeds the bounded session capacity",
             ));
         }
+        let participant_controls = self
+            .prepare_native_participant_controls(candidates, &lane_plan.proposals)
+            .map_err(|indices| {
+                CandidateWorkUnavailable::new(
+                    indices,
+                    "Native AMX participant lane conflicts with coordinator ownership or authority",
+                )
+            })?;
+        if participant_controls.len() > self.limits.session_capacity.get() {
+            return Err(all_unavailable(
+                candidates.len(),
+                "Native AMX participant proposal count exceeds the bounded session capacity",
+            ));
+        }
 
         let mut receipts = Vec::with_capacity(candidates.len());
         let mut unavailable = BTreeSet::new();
@@ -5814,7 +6361,12 @@ impl CandidateWorkProvider for &mut V2LaneWorkAdapter {
             match candidate.routing_plan() {
                 RoutingPlan::Single(_) => receipts.push(None),
                 RoutingPlan::NativeAmx(_) => {
-                    match self.prepare_native_receipt(view, candidate, &lane_plan.proposals) {
+                    match self.prepare_native_receipt(
+                        view,
+                        candidate,
+                        &lane_plan.proposals,
+                        &participant_controls,
+                    ) {
                         Some(receipt) => receipts.push(Some(receipt)),
                         None => {
                             receipts.push(None);
@@ -6218,6 +6770,30 @@ fn proposal_from_ownership(
     Some(proposal)
 }
 
+fn native_signing_guard_required(voting_enabled: bool, local_peer: &PeerId) -> bool {
+    voting_enabled && local_peer.public_key().try_algorithm().ok() == Some(Algorithm::BlsNormal)
+}
+
+#[cfg(test)]
+mod native_signing_guard_policy_tests {
+    use super::*;
+
+    #[test]
+    fn native_signing_guard_is_required_only_for_voting_bls_peers() {
+        let bls = KeyPair::try_from_seed(vec![0xA1; 32], Algorithm::BlsNormal)
+            .expect("derive deterministic BLS key");
+        let ed25519 = KeyPair::try_from_seed(vec![0xA2; 32], Algorithm::Ed25519)
+            .expect("derive deterministic Ed25519 key");
+        let bls_peer = PeerId::new(bls.public_key().clone());
+        let ed25519_peer = PeerId::new(ed25519.public_key().clone());
+
+        assert!(native_signing_guard_required(true, &bls_peer));
+        assert!(!native_signing_guard_required(false, &bls_peer));
+        assert!(!native_signing_guard_required(true, &ed25519_peer));
+        assert!(!native_signing_guard_required(false, &ed25519_peer));
+    }
+}
+
 #[cfg(all(test, unix))]
 mod tests {
     use std::{
@@ -6331,6 +6907,18 @@ mod tests {
             LiveQueryStore::start_test(),
             chain_id.clone(),
         ));
+        let nexus = state.nexus_snapshot();
+        let incarnations = state.lane_incarnations_snapshot();
+        for entry in nexus.lane_config.entries() {
+            let incarnation = incarnations.get(&entry.lane_id).copied().ok_or_else(|| {
+                V2LaneWorkError::Persistence(format!(
+                    "test fixture lane {} has no active incarnation",
+                    entry.lane_id.as_u32(),
+                ))
+            })?;
+            kura.install_lane_incarnation_marker_for_test(entry, incarnation, 0)
+                .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
+        }
         let powers = match mode {
             wire::ConsensusMode::Permissioned => [1, 1, 1, 1],
             wire::ConsensusMode::Npos => [4, 3, 2, 1],
@@ -7287,8 +7875,10 @@ mod tests {
         }
         successor.drive_lane_sessions();
         assert_eq!(
-            successor.persist_anchored_sessions(),
-            Ok(1),
+            successor
+                .persist_anchored_sessions()
+                .expect("persist carried anchored lane session"),
+            1,
             "carried PrepareQC must finish and persist at the consecutive global height"
         );
         assert!(
@@ -7470,8 +8060,10 @@ mod tests {
             V2LaneIngressOutcome::Inserted
         );
         assert_eq!(
-            adapter.persist_anchored_sessions(),
-            Ok(0),
+            adapter
+                .persist_anchored_sessions()
+                .expect("defer Kura-ahead anchored lane session"),
+            0,
             "a complete Kura-anchored session must defer until its global WSV commit"
         );
         assert_eq!(adapter.pending_committed_lanes.len(), 1);
@@ -8024,7 +8616,7 @@ mod tests {
         let mut source_id = [0_u8; Hash::LENGTH];
         source_id.copy_from_slice(entrypoint_hash.as_ref());
         let validators = adapter.frozen_validator_set();
-        NativeAmxAttestationBodyV2 {
+        let mut body = NativeAmxAttestationBodyV2 {
             round: wire::ConsensusRound {
                 context_id: adapter.context.id(),
                 height: adapter.context.height,
@@ -8050,6 +8642,12 @@ mod tests {
                 .state
                 .lane_incarnation_at_height(LaneId::SINGLE, adapter.context.height)
                 .expect("fixture single-lane incarnation"),
+            participant_previous_block_height: 0,
+            participant_previous_block_descriptor_hash: None,
+            participant_lane_block_height: 1,
+            participant_lane_block_view: 0,
+            participant_proposal_hash: Hash::new(b"v2-lane-work-participant-proposal"),
+            participant_settlement_commitment: Hash::prehashed([0; Hash::LENGTH]),
             participant_validator_set_hash: HashOf::new(&validators),
             participant_validator_count: u32::try_from(validators.len())
                 .expect("fixture validator count"),
@@ -8061,7 +8659,9 @@ mod tests {
             planned_coordinator_block_height: 1,
             coordinator_lane_block_view: 0,
             coordinator_proposal_hash: Hash::new(b"v2-lane-work-coordinator-proposal"),
-        }
+        };
+        body.participant_settlement_commitment = body.computed_participant_settlement_commitment();
+        body
     }
 
     fn coordinator_proposal(adapter: &V2LaneWorkAdapter, keys: &[KeyPair]) -> LaneBlockProposalV1 {
@@ -8240,7 +8840,12 @@ mod tests {
         let lane_block_height = proposal.descriptor.lane_block_height;
         adapter.pending_committed_lanes.push_back(session.clone());
 
-        assert_eq!(adapter.persist_anchored_sessions(), Ok(1));
+        assert_eq!(
+            adapter
+                .persist_anchored_sessions()
+                .expect("persist anchored lane session"),
+            1
+        );
         assert!(adapter.pending_committed_lanes.is_empty());
         assert!(
             adapter
@@ -8292,7 +8897,12 @@ mod tests {
         );
 
         restarted.pending_committed_lanes.push_back(session);
-        assert_eq!(restarted.persist_anchored_sessions(), Ok(1));
+        assert_eq!(
+            restarted
+                .persist_anchored_sessions()
+                .expect("persist idempotent anchored lane session"),
+            1
+        );
         assert!(restarted.pending_committed_lanes.is_empty());
         assert_eq!(
             restarted
@@ -8361,7 +8971,12 @@ mod tests {
             1,
             "restart must re-queue the exact certified session whose receipt is absent"
         );
-        assert_eq!(restarted.persist_anchored_sessions(), Ok(1));
+        assert_eq!(
+            restarted
+                .persist_anchored_sessions()
+                .expect("retry canonical receipt persistence after restart"),
+            1
+        );
         assert!(restarted.pending_committed_lanes.is_empty());
         assert!(
             restarted
@@ -8394,7 +9009,12 @@ mod tests {
         adapter
             .pending_committed_lanes
             .extend([missing_session, mismatched_session]);
-        assert_eq!(adapter.persist_anchored_sessions(), Ok(0));
+        assert_eq!(
+            adapter
+                .persist_anchored_sessions()
+                .expect("defer sessions without a canonical anchor"),
+            0
+        );
         assert_eq!(adapter.pending_committed_lanes.len(), 2);
         assert!(
             adapter
@@ -8492,10 +9112,23 @@ mod tests {
             )],
         );
         body.plan_digest = plan.digest();
+        body.participant_previous_block_height =
+            coordinator_proposal.descriptor.previous_lane_block_height;
+        body.participant_previous_block_descriptor_hash = coordinator_proposal
+            .descriptor
+            .previous_lane_block_descriptor_hash;
+        body.participant_lane_block_height = coordinator_proposal.descriptor.lane_block_height;
+        body.participant_lane_block_view = coordinator_proposal.descriptor.lane_block_view;
+        body.participant_proposal_hash = coordinator_proposal.proposal_hash;
+        let participant_proposal = coordinator_proposal.clone();
+        let participant_settlement = body.computed_participant_settlement();
+        body.participant_settlement_commitment = body.computed_participant_settlement_commitment();
         NativeAmxAttestationRequestV2 {
             body,
             plan_legs: plan.legs(),
             coordinator_proposal,
+            participant_proposal,
+            participant_settlement,
         }
     }
 
@@ -8507,6 +9140,22 @@ mod tests {
         request.coordinator_proposal.proposal_hash =
             request.coordinator_proposal.computed_proposal_hash();
         request.body.coordinator_proposal_hash = request.coordinator_proposal.proposal_hash;
+        if request.body.participant_lane_id == request.body.coordinator_lane_id
+            && request.body.participant_dataspace_id == request.body.coordinator_dataspace_id
+        {
+            request.participant_proposal = request.coordinator_proposal.clone();
+            let descriptor = &request.participant_proposal.descriptor;
+            request.body.participant_lane_incarnation = descriptor.lane_incarnation;
+            request.body.participant_previous_block_height = descriptor.previous_lane_block_height;
+            request.body.participant_previous_block_descriptor_hash =
+                descriptor.previous_lane_block_descriptor_hash;
+            request.body.participant_lane_block_height = descriptor.lane_block_height;
+            request.body.participant_lane_block_view = descriptor.lane_block_view;
+            request.body.participant_proposal_hash = request.participant_proposal.proposal_hash;
+            request.participant_settlement = request.body.computed_participant_settlement();
+            request.body.participant_settlement_commitment =
+                request.body.computed_participant_settlement_commitment();
+        }
     }
 
     fn signed_native_vote(body: NativeAmxAttestationBodyV2, key: &KeyPair) -> NativeAmxVoteV2 {
@@ -8525,7 +9174,12 @@ mod tests {
         let hard = NonZeroUsize::new(crate::native_amx::MAX_NATIVE_AMX_SIGNING_GUARD_RECORDS_HARD)
             .expect("hard limit is nonzero");
         let at_limit = V2LaneWorkLimits::new(hard, one, one, one, one, hard);
-        assert_eq!(at_limit.native_signing_capacity(), Ok(hard));
+        assert_eq!(
+            at_limit
+                .native_signing_capacity()
+                .expect("exact hard limit is valid"),
+            hard
+        );
         let (adapter, _) = fixture_with_limits(wire::ConsensusMode::Permissioned, at_limit)
             .expect("the exact durable journal hard limit is accepted");
         drop(adapter);
@@ -8534,7 +9188,12 @@ mod tests {
             NonZeroUsize::new(crate::native_amx::MAX_NATIVE_AMX_SIGNING_GUARD_RECORDS_HARD + 1)
                 .expect("hard limit successor is nonzero");
         let over_limit = V2LaneWorkLimits::new(over, one, one, one, one, over);
-        assert_eq!(over_limit.native_signing_capacity(), Ok(hard));
+        assert_eq!(
+            over_limit
+                .native_signing_capacity()
+                .expect("logical capacity is clamped to the hard limit"),
+            hard
+        );
         let (adapter, _) = fixture_with_limits(wire::ConsensusMode::Permissioned, over_limit)
             .expect("a valid logical capacity is clamped at the durable hard limit");
         drop(adapter);
@@ -8542,8 +9201,10 @@ mod tests {
         let request_bound = NonZeroUsize::new(17).expect("nonzero request bound");
         let request_limited = V2LaneWorkLimits::new(hard, one, one, one, one, request_bound);
         assert_eq!(
-            request_limited.native_signing_capacity(),
-            Ok(request_bound),
+            request_limited
+                .native_signing_capacity()
+                .expect("authenticated request bound is valid"),
+            request_bound,
             "the authenticated request budget is the durable per-height signing budget"
         );
 
@@ -8576,17 +9237,24 @@ mod tests {
             Some(4_194_304),
             "test must exercise the exact production-default product"
         );
-        assert_eq!(limits.native_signing_capacity(), Ok(control));
+        assert_eq!(
+            limits
+                .native_signing_capacity()
+                .expect("production native signing capacity is valid"),
+            control
+        );
 
         let (validator, _) = fixture_with_limits(wire::ConsensusMode::Permissioned, limits)
             .expect("production defaults construct a voting adapter");
         assert!(validator.voting_enabled);
+        assert!(validator.native_signing_guard.is_some());
         drop(validator);
 
         let (observer, _) =
             fixture_with_limits_and_voting(wire::ConsensusMode::Permissioned, limits, false)
                 .expect("production defaults construct an observer adapter");
         assert!(!observer.voting_enabled);
+        assert!(observer.native_signing_guard.is_none());
     }
 
     #[test]
@@ -8773,6 +9441,11 @@ mod tests {
         adapter
             .native_claim_signatures
             .insert(remote_claim, vote.bls_signature.clone());
+        let durable_slot_key = NativeVoteSlotKey::from_body(&request.body, &vote.signer);
+        let durable_slot_claim = NativeVoteSlotClaim::from_body(&request.body);
+        adapter
+            .native_slot_claims
+            .insert(durable_slot_key, durable_slot_claim);
         let authenticated_request = NativeAmxMessage::PrepareRequest(request.clone());
         let authenticated_request_key =
             native_authenticated_request_key(&adapter.local_peer, &authenticated_request);
@@ -8816,6 +9489,15 @@ mod tests {
         assert!(adapter.authenticated_native_requests.is_empty());
         assert!(adapter.native_claims.is_empty());
         assert!(adapter.native_claim_signatures.is_empty());
+        assert_eq!(adapter.native_slot_claims.len(), 1);
+        let mut conflicting_slot = request.body;
+        conflicting_slot.round.view = 1;
+        conflicting_slot.participant_proposal_hash =
+            Hash::new(b"conflicting participant proposal after global view change");
+        assert!(adapter.native_vote_slot_conflicts(
+            NativeVoteSlotKey::from_body(&conflicting_slot, &vote.signer),
+            NativeVoteSlotClaim::from_body(&conflicting_slot),
+        ));
         assert!(adapter.local_native_claims.is_empty());
         assert!(
             adapter
@@ -9683,6 +10365,195 @@ mod tests {
     }
 
     #[test]
+    fn raw_autonomous_payload_never_persists_on_a_non_committee_node() {
+        let (mut adapter, keys) = fixture_at_height(wire::ConsensusMode::Permissioned, 1);
+        let (block, proposal) = globally_anchored_lane_block_fixture(&adapter, &keys);
+        adapter.globally_locked_body_hash = Some(block.hash());
+        adapter.globally_locked_body = Some(block.clone());
+        let producer_key = keys
+            .iter()
+            .find(|key| {
+                proposal
+                    .descriptor
+                    .validator_set
+                    .iter()
+                    .any(|peer| peer.public_key() == key.public_key())
+            })
+            .expect("fixture lane producer key");
+        let producer = PeerId::new(producer_key.public_key().clone());
+        let payload = LaneExecutablePayloadV1::new_signed(
+            adapter.chain_id_hash(),
+            adapter.context.epoch,
+            proposal.clone(),
+            block.external_entrypoints_cloned().collect(),
+            producer.clone(),
+            producer_key.private_key(),
+        )
+        .expect("construct committee-authenticated executable payload");
+        let outsider_key =
+            KeyPair::try_from_seed(vec![0xD9; 32], Algorithm::BlsNormal).expect("outsider key");
+        adapter.local_peer = PeerId::new(outsider_key.public_key().clone());
+        adapter.key_pair = outsider_key;
+
+        assert_eq!(
+            adapter.accept_lane_executable_payload(payload, Some(&producer), 0),
+            V2LaneIngressOutcome::Rejected,
+            "a valid remote signature must not allocate raw Kura state outside the committee",
+        );
+        assert!(
+            adapter
+                .kura
+                .read_autonomous_lane_block_artifact(
+                    proposal.descriptor.lane_id,
+                    proposal.descriptor.lane_block_height,
+                    adapter.chain_id_hash(),
+                    adapter.context.epoch,
+                )
+                .is_none(),
+        );
+        assert!(!adapter.lane_sessions.contains_proposal(&proposal));
+    }
+
+    #[test]
+    fn applied_autonomous_origin_replay_is_rejected_without_redriving_votes() {
+        let (mut adapter, keys) = fixture_at_height(wire::ConsensusMode::Permissioned, 1);
+        let (block, proposal) = globally_anchored_lane_block_fixture(&adapter, &keys);
+        adapter
+            .kura
+            .store_block(block.clone())
+            .expect("persist canonical global block");
+        let committed = ValidBlock::committed_from_replay_signed_block(block.clone());
+        commit_test_block_to_state(adapter.state.as_ref(), &committed, &adapter.context);
+        let certified = CommittedLaneBlockSession {
+            proposal: proposal.clone(),
+            prepare_qc: lane_qc_for_phase(&proposal, &keys, CertPhase::Prepare),
+            commit_qc: lane_qc_for_phase(&proposal, &keys, CertPhase::Commit),
+        };
+        adapter
+            .kura
+            .persist_committed_lane_block_session(&certified, &lane_signer_pops(&keys))
+            .expect("persist exact certified lane origin");
+        adapter
+            .kura
+            .persist_lane_block_application_receipt(&proposal)
+            .expect("publish exact applied receipt");
+        assert!(adapter.autonomous_origin_is_applied_or_snapshot_anchored(&proposal),);
+
+        adapter.globally_locked_body_hash = Some(block.hash());
+        adapter.globally_locked_body = Some(block.clone());
+        let producer_key = keys
+            .iter()
+            .find(|key| {
+                proposal
+                    .descriptor
+                    .validator_set
+                    .iter()
+                    .any(|peer| peer.public_key() == key.public_key())
+            })
+            .expect("fixture lane producer key");
+        let producer = PeerId::new(producer_key.public_key().clone());
+        let payload = LaneExecutablePayloadV1::new_signed(
+            adapter.chain_id_hash(),
+            adapter.context.epoch,
+            proposal.clone(),
+            block.external_entrypoints_cloned().collect(),
+            producer.clone(),
+            producer_key.private_key(),
+        )
+        .expect("construct replayed executable payload");
+        adapter.drain_effects(usize::MAX);
+
+        assert_eq!(
+            adapter.accept_lane_message(
+                InboundBlockMessage::new(
+                    BlockMessage::LaneExecutablePayload(payload),
+                    Some(producer),
+                ),
+                0,
+            ),
+            V2LaneIngressOutcome::Rejected,
+            "an applied origin must not return a drive-triggering ingress outcome",
+        );
+        assert!(adapter.drain_effects(usize::MAX).is_empty());
+        assert!(!adapter.lane_sessions.contains_proposal(&proposal));
+        assert!(
+            adapter
+                .kura
+                .read_autonomous_lane_block_artifact(
+                    proposal.descriptor.lane_id,
+                    proposal.descriptor.lane_block_height,
+                    adapter.chain_id_hash(),
+                    adapter.context.epoch,
+                )
+                .is_none(),
+            "a finalized proposal must be rejected before raw payload persistence",
+        );
+    }
+
+    #[test]
+    fn locked_body_rehydrates_payload_written_before_restart_without_network_replay() {
+        let (mut adapter, keys) = fixture_at_height(wire::ConsensusMode::Permissioned, 1);
+        let (block, proposal) = planned_lane_candidate_block_at_view(&adapter, &keys, 0);
+        adapter.globally_locked_body_hash = Some(block.hash());
+        adapter.globally_locked_body = Some(block.clone());
+        let payload = LaneExecutablePayloadV1::new_signed(
+            adapter.chain_id_hash(),
+            adapter.context.epoch,
+            proposal.clone(),
+            block.external_entrypoints_cloned().collect(),
+            adapter.local_peer.clone(),
+            adapter.key_pair.private_key(),
+        )
+        .expect("construct exact payload before simulated crash");
+        let local_peer = adapter.local_peer.clone();
+        assert_ne!(
+            adapter.accept_lane_executable_payload(payload, Some(&local_peer), 0),
+            V2LaneIngressOutcome::Rejected,
+        );
+
+        let context = adapter.context.clone();
+        let local_key = adapter.key_pair.clone();
+        let state = Arc::clone(&adapter.state);
+        let kura = Arc::clone(&adapter.kura);
+        let limits = adapter.limits;
+        drop(adapter);
+
+        let mut restarted = V2LaneWorkAdapter::new(
+            context,
+            local_peer.clone(),
+            local_key,
+            true,
+            state,
+            kura,
+            limits,
+            None,
+            None,
+        )
+        .expect("restart before the global body is locally rebound");
+        assert!(
+            !restarted.lane_sessions.contains_proposal(&proposal),
+            "an unprotected Kura payload must remain dormant until the exact body locks",
+        );
+        assert!(restarted.mark_global_body_locked(block.hash()));
+        assert_ne!(
+            restarted.bind_locked_global_body(&block),
+            V2LaneIngressOutcome::Rejected,
+            "binding the exact protected body must authorize the already-durable payload",
+        );
+        assert!(restarted.lane_sessions.contains_proposal(&proposal));
+        assert!(
+            restarted
+                .lane_sessions
+                .local_vote_rebroadcast_artifacts_for(&local_peer)
+                .iter()
+                .any(|(cached, vote)| {
+                    cached == &proposal && vote.body.phase == CertPhase::Prepare
+                }),
+            "locked-body binding must redrive a local Prepare vote without inbound payload replay",
+        );
+    }
+
+    #[test]
     fn v2_payload_and_new_view_ingress_advance_only_the_durable_transport_cursor() {
         let (mut adapter, keys) = fixture_at_height(wire::ConsensusMode::Permissioned, 1);
         let (block, proposal) = globally_anchored_lane_block_fixture(&adapter, &keys);
@@ -9937,7 +10808,8 @@ mod tests {
             proposal.descriptor.lane_id,
             proposal.descriptor.dataspace_id,
         ));
-        let accepted = AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(entrypoint.clone()));
+        let accepted =
+            AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(entrypoint.clone()));
         let reservation = crate::queue::LaneQueueReservationKeyV1 {
             signed_transaction_hash: accepted.hash(),
             entrypoint_hash: entrypoint.hash(),

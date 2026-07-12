@@ -1059,7 +1059,7 @@ public final class OfflineNoteTest {
   private static void kagemushaRecursiveSpendNativeProverValidatesInput() {
     assertTrue(
         KagemushaRecursiveSpendProver.preferredMode(true)
-            == KagemushaRecursiveSpendProver.Mode.RECURSIVE_SPEND_V1,
+            == KagemushaRecursiveSpendProver.Mode.RECURSIVE_SPEND,
         "ABI-18 Pasta-cycle recursive spend should be the only production mode");
     assertTrue(
         KagemushaRecursiveSpendProver.preferredMode(false) == null,
@@ -1079,8 +1079,8 @@ public final class OfflineNoteTest {
         () -> VerifyingKeyBoxCodec.encodeNorito("halo2/ipa", new byte[0]),
         "empty verifying key bytes should fail");
     assertEquals(
-        "recursive_spend_v1",
-        KagemushaRecursiveSpendProver.Mode.RECURSIVE_SPEND_V1.wireName(),
+        "recursive_spend_v2",
+        KagemushaRecursiveSpendProver.Mode.RECURSIVE_SPEND.wireName(),
         "recursive Kagemusha spend wire mode");
     assertEquals(
         6,

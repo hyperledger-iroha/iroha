@@ -31,6 +31,9 @@ SORAFS_GATEWAY_COMPLIANCE_PLAN = DOCS_SOURCE_DIR / "sorafs_gateway_compliance_pl
 SORAFS_GATEWAY_LOAD_PLAN = DOCS_SOURCE_DIR / "sorafs_gateway_load_tests.md"
 SORAFS_GATEWAY_DNS_OWNER_RUNBOOK = DOCS_SOURCE_DIR / "sorafs_gateway_dns_owner_runbook.md"
 SORAFS_GOVERNANCE_DAG_PLAN = DOCS_SOURCE_DIR / "sorafs_governance_dag_plan.md"
+SORAFS_GOVERNANCE_DAG_SERVICE_RS = (
+    REPO_ROOT / "crates" / "sorafs_node" / "src" / "bin" / "sorafs_governance_dag.rs"
+)
 SORAFS_HEDGING_PLAN = DOCS_SOURCE_DIR / "sorafs_hedging_plan.md"
 SORAFS_MODERATION_PANEL_PLAN = DOCS_SOURCE_DIR / "sorafs_moderation_panel_plan.md"
 SORAFS_ORDERBOOK_PLAN = DOCS_SOURCE_DIR / "sorafs_orderbook_plan.md"
@@ -8050,8 +8053,12 @@ def test_android_codegen_sorafs_fixture_replay_uses_no_follow_io() -> None:
     assert "def require_codegen_file" in replay
     assert "def read_open_flags" in replay
     assert "def write_open_flags" in replay
+    assert "def signing_key_write_open_flags" in replay
     assert "def write_all(fd: int, chunk: bytes) -> None" in replay
-    assert "from sorafs_path_identity import error_diagnostic_label" in replay
+    assert "def write_test_council_signing_seed(path: Path) -> None" in replay
+    assert "def require_generated_council_signature(manifest_report: dict) -> None" in replay
+    assert "from sorafs_path_identity import (" in replay
+    assert "error_diagnostic_label" in replay
     assert "from sorafs_checker_preflight import fsync_checker_output_parent" in replay
     assert "from sorafs_evidence_json import (" in replay
     assert "json_object_without_duplicate_keys" in replay
@@ -8092,10 +8099,11 @@ def test_android_codegen_sorafs_fixture_replay_uses_no_follow_io() -> None:
     assert "fixture_meta[metadata_path_field] = metadata_path.as_posix()" in replay
     assert "def main(argv: list[str] | None = None) -> int" in replay
     assert "parser.parse_args(argv)" in replay
-    assert "Path(tempfile.gettempdir()).resolve(strict=True)" in replay
+    assert "resolve_path_identity(" in replay
     assert 'TemporaryDirectory(dir=temporary_root)' in replay
     assert "path_diagnostic_label" in replay
     assert 'getattr(os, "O_NOFOLLOW", 0)' in replay
+    assert "os.O_EXCL" in replay
     assert "os.open(path, read_open_flags())" in replay
     assert "parse_constant=reject_non_standard_json_constant" in replay
     assert "object_pairs_hook=json_object_without_duplicate_keys" in replay
@@ -8111,6 +8119,8 @@ def test_android_codegen_sorafs_fixture_replay_uses_no_follow_io() -> None:
     assert "failed to read {label} `{path_label}`: {error_label}" in replay
     assert "payload_path = require_codegen_file(" in replay
     assert "plan_path = require_codegen_file(" in replay
+    assert 'f"--council-signing-key-file={council_signing_key_file}"' in replay
+    assert "ANDROID_CODEGEN_TEST_COUNCIL_SIGNING_SEED.hex()" not in replay
     assert 'path.open("r"' not in replay
     assert 'path.open("w"' not in replay
     assert "os.fdopen(fd, \"w\", encoding=\"utf-8\")" not in replay
@@ -8130,6 +8140,16 @@ def test_android_codegen_sorafs_fixture_replay_uses_no_follow_io() -> None:
     assert "test_write_json_fsyncs_output_parent_after_descriptor_close" in replay_test
     assert "test_write_json_parent_fsync_failure_does_not_leak_path" in replay_test
     assert "test_write_json_rejects_symlinked_parent_before_create" in replay_test
+    assert "test_test_council_signing_seed_is_ephemeral_private_and_exact" in replay_test
+    assert (
+        "test_test_council_signing_seed_rejects_symlink_and_existing_output"
+        in replay_test
+    )
+    assert "test_manifest_stub_receives_only_ephemeral_signing_key_path" in replay_test
+    assert (
+        "test_generated_manifest_requires_one_canonical_council_signature"
+        in replay_test
+    )
     assert "test_ensure_codegen_directory_mkdir_error_is_sanitized" in replay_test
     assert (
         "test_validate_codegen_path_rejects_secret_looking_path_without_leaking"
@@ -15151,7 +15171,7 @@ def test_pop_credentials_runtime_services_stay_open_in_docs() -> None:
         "Credential issuer | Signs credentials, updates commitment roots, and publishes rollups. | Payload signatures, a local issued-credential bundle helper, bounded issuer policy, and authorised native publication ISIs are shipped; daemon and production key management are not shipped.",
         "Credential registry | Stores commitment roots, revocation updates, and event digests. | Consensus-owned commitment/root/revocation/audit state and typed queries are shipped; a dedicated service facade and deployed multi-peer evidence are not shipped.",
         "Juror client | Stores credentials, syncs revocations, and generates proofs. | Not shipped.",
-        "Verification service | Validates juror proofs for sortition, voting, and appeal panels. | Local Halo2/IPA prover and production verifier, `sorafs-validate pop`, and SDK/bridge reference gate shipped; deployed service integration is not shipped.",
+        "Verification service | Validates juror proofs for sortition, voting, and appeal panels. | Local Halo2/IPA prover and production verifier, native authoritative moderation-intake/sortition verification, `sorafs-validate pop`, and SDK/bridge reference gate are shipped; the deployed service facade is not shipped.",
         "Build the credential issuer daemon and enrollment approval workflow around the native registry, including HSM/threshold key management, retry-safe transaction submission, operator observability, and disaster recovery.",
         "Deploy the native registry on a reviewed multi-validator environment and collect restart, reconciliation, rollback-rejection, and audit-head evidence; add a dedicated Torii registry facade only if the operator/client contract requires one.",
         "Build juror client storage, revocation sync, proof generation, and local credential rotation.",
@@ -20243,12 +20263,12 @@ def test_unshipped_reference_sdk_distribution_surface_is_not_exposed() -> None:
     assert exposed == {}
 
 
-def test_pdp_provider_protocol_work_stays_open_in_docs() -> None:
+def test_pdp_provider_protocol_work_and_storage_foundation_are_documented() -> None:
     source = read(SORAFS_PDP_PLAN)
     normalized = re.sub(r"\s+", " ", source)
 
     required_open = (
-        "The deployed provider protocol is not production-ready yet: Torii therefore rejects PDP proof-stream requests with `400 Bad Request` until persisted-node proof generation, signed challenge/proof transport, governance archival, and repair handoff are wired end to end.",
+        "The deployed provider protocol is not production-ready yet: Torii therefore rejects PDP proof-stream requests with `400 Bad Request` until signed challenge/proof transport, admission-bound live submission, governance archival, and repair handoff are wired end to end.",
         "The PDP rollout evidence gate requires payload-free provider-transport, proof-generation, validator-replay, governance/repair, observability, and governance-approval artifacts before reporting `ready`",
         "Torii `/v1/sorafs/proof/stream` accepts PoR and PoTR only. It parses `pdp` but returns `400 Bad Request` so clients do not mistake PoR samples for PDP provider proofs.",
         "Do not remove the Torii fail-closed PDP guard until these local gates exist:",
@@ -20259,7 +20279,8 @@ def test_pdp_provider_protocol_work_stays_open_in_docs() -> None:
         "Repair pipeline handoff for `pdp_failure` events.",
         "Do not document the unshipped `sorafs pdp ...` commands as operator-ready until they exist in the CLI and have focused tests.",
         "Required before production enablement:",
-        "Storage-node integration tests that generate PDP proofs from persisted payloads and validate them against commitment roots.",
+        "`sorafs_node::StorageBackend` persists the commitment and bounded retained tree, rehydrates them on restart, and generates exact challenge witnesses while holding the manifest read lease.",
+        "Integration and adversarial tests cover restart parity, corrupted chunks, short/mutating reads, symlink and hard-link replacement, out-of-range/duplicate samples, and eviction races.",
         "Torii endpoint tests for challenge issuance, proof submission, governance archival, repair handoff, and telemetry counters.",
         "Remaining production gates:",
         "Ship operator CLI commands and SDK validators.",
@@ -20742,31 +20763,42 @@ def test_unshipped_pdp_provider_protocol_surface_is_not_exposed() -> None:
     assert exposed == {}
 
 
-def test_governance_dag_ipfs_ipns_work_stays_unshipped_in_docs() -> None:
+def test_governance_dag_ipfs_ipns_service_is_documented_as_shipped() -> None:
     source = read(SORAFS_GOVERNANCE_DAG_PLAN)
+    service = read(SORAFS_GOVERNANCE_DAG_SERVICE_RS)
 
     outstanding_start = source.index("Still outstanding:")
     outstanding_end = source.index("\n## Goals & Scope", outstanding_start)
-    outstanding = source[outstanding_start:outstanding_end]
-    normalized_outstanding = re.sub(r"\s+", " ", outstanding)
-
-    required_outstanding = (
-        "IPFS Cluster pinning and IPNS head publication",
-        "Runtime RocksDB/IPLD mirror datastore and query service",
-        "IPFS/IPNS-backed `sorafs governance dag` operations for live heads",
-        "public checkpoint publication, and public checkpoint recovery",
-        "Runtime/IPFS-backed dashboard REST/GraphQL API",
-        "Live IPFS/IPNS publisher metrics",
-        "End-to-end tests with local IPFS/IPNS infrastructure",
+    normalized_outstanding = re.sub(
+        r"\s+", " ", source[outstanding_start:outstanding_end]
     )
-    missing = [
-        phrase for phrase in required_outstanding if phrase not in normalized_outstanding
-    ]
+    required_shipped = (
+        "The `sorafs_governance_dag` binary is the always-on production service",
+        "uploads and recursively pins every new block plus the signed head",
+        "authenticated HTTP compare-and-swap or IPNS resolve/publish/",
+        "An authenticated checkpoint and write-ahead publish intent",
+        "bounded public mirror, head, block, node, checkpoint, health, and Prometheus surface",
+    )
+    normalized_source = re.sub(r"\s+", " ", source)
+    assert [phrase for phrase in required_shipped if phrase not in normalized_source] == []
+    assert "unimplemented IPFS/IPNS publisher" in normalized_source
+    assert "deployment/package integration" in normalized_source
+    assert "RocksDB/IPLD backend only if" in normalized_outstanding
+    assert "IPFS Cluster pinning and IPNS head publication" not in normalized_outstanding
 
-    assert "does not yet ship the\nfull IPFS/IPNS governance DAG pipeline" in source
-    assert "Add live-head, public checkpoint recovery, and dashboard runbooks only when" in source
-    assert "the IPFS/IPNS pipeline and metrics actually exist" in source
-    assert missing == []
+    for marker in (
+        "async fn ipfs_add_verified(",
+        "async fn ipfs_pin(",
+        "async fn ipfs_verify_pin(",
+        "async fn ipfs_cat(",
+        "async fn publish_ipns_head(",
+        "CHECKPOINT_AUTH_DOMAIN_V1",
+        "PUBLISH_INTENT_FILE",
+        '"/v1/sorafs/governance/dag/checkpoint"',
+        "sorafs_governance_dag_ipfs_pin_lag_seconds",
+        "real_kubo_publication_ipns_restart_and_tamper_lane",
+    ):
+        assert marker in service
 
 
 def test_governance_dag_docs_keep_rollout_contract_markers() -> None:
@@ -21010,7 +21042,7 @@ def test_governance_dag_canary_builder_is_checked_in() -> None:
     assert "--route-body-blake3-hex" in docs
 
 
-UNSHIPPED_GOVERNANCE_DAG_PUBLIC_ROUTE_PATTERNS = (
+BYPASS_GOVERNANCE_DAG_PUBLIC_ROUTE_PATTERNS = (
     "/v1/sorafs/governance/dag/ipfs",
     "/v1/sorafs/governance/dag/ipns",
     "/v1/sorafs/governance/dag/live",
@@ -21020,7 +21052,7 @@ UNSHIPPED_GOVERNANCE_DAG_PUBLIC_ROUTE_PATTERNS = (
     "/v1/sorafs/governance/dag/graphql",
 )
 
-UNSHIPPED_GOVERNANCE_DAG_PUBLIC_CLI_SUBCOMMANDS = (
+BYPASS_GOVERNANCE_DAG_PUBLIC_CLI_SUBCOMMANDS = (
     "live-head",
     "fetch-head",
     "publish-checkpoint",
@@ -21030,7 +21062,7 @@ UNSHIPPED_GOVERNANCE_DAG_PUBLIC_CLI_SUBCOMMANDS = (
     "ipns-publish",
 )
 
-UNSHIPPED_GOVERNANCE_DAG_PUBLIC_NESTED_CLI_COMMANDS = (
+BYPASS_GOVERNANCE_DAG_PUBLIC_NESTED_CLI_COMMANDS = (
     "governance dag live-head",
     "governance dag fetch-head",
     "governance dag publish-checkpoint",
@@ -21041,29 +21073,29 @@ UNSHIPPED_GOVERNANCE_DAG_PUBLIC_NESTED_CLI_COMMANDS = (
 )
 
 
-def unshipped_governance_dag_public_route_matches(source: str) -> list[str]:
+def governance_dag_bypass_route_matches(source: str) -> list[str]:
     return [
         route
-        for route in UNSHIPPED_GOVERNANCE_DAG_PUBLIC_ROUTE_PATTERNS
+        for route in BYPASS_GOVERNANCE_DAG_PUBLIC_ROUTE_PATTERNS
         if re.search(rf"(?<![A-Za-z0-9_/-]){re.escape(route)}(?=$|[\"`/\s?}}])", source)
     ]
 
 
-def unshipped_governance_dag_public_cli_matches(source: str) -> list[str]:
+def governance_dag_bypass_cli_matches(source: str) -> list[str]:
     hyphenated_matches = [
         subcommand
-        for subcommand in UNSHIPPED_GOVERNANCE_DAG_PUBLIC_CLI_SUBCOMMANDS
+        for subcommand in BYPASS_GOVERNANCE_DAG_PUBLIC_CLI_SUBCOMMANDS
         if f'"{subcommand}"' in source or f"`{subcommand}`" in source
     ]
     nested_matches = [
         command
-        for command in UNSHIPPED_GOVERNANCE_DAG_PUBLIC_NESTED_CLI_COMMANDS
+        for command in BYPASS_GOVERNANCE_DAG_PUBLIC_NESTED_CLI_COMMANDS
         if re.search(rf"(?<![A-Za-z0-9_/-]){re.escape(command)}(?=$|[\"`\s])", source)
     ]
     return hyphenated_matches + nested_matches
 
 
-def test_governance_dag_public_surface_matcher_has_negative_controls() -> None:
+def test_governance_dag_bypass_surface_matcher_has_negative_controls() -> None:
     shipped_local_routes = (
         "/v1/sorafs/governance/dag/dashboard",
         "/v1/sorafs/governance/dag/head",
@@ -21118,7 +21150,7 @@ def test_governance_dag_public_surface_matcher_has_negative_controls() -> None:
         "ipfs-publish-canary",
     )
 
-    assert unshipped_governance_dag_public_route_matches(
+    assert governance_dag_bypass_route_matches(
         '"GET /v1/sorafs/governance/dag/ipfs/pins" '
         "`/v1/sorafs/governance/dag/public` "
         '"/v1/sorafs/governance/dag/graphql?query=checkpoint"'
@@ -21128,25 +21160,25 @@ def test_governance_dag_public_surface_matcher_has_negative_controls() -> None:
         "/v1/sorafs/governance/dag/graphql",
     ]
     assert (
-        unshipped_governance_dag_public_route_matches(
+        governance_dag_bypass_route_matches(
             " ".join(f'"{route}"' for route in shipped_local_routes)
         )
         == []
     )
     assert (
-        unshipped_governance_dag_public_route_matches(
+        governance_dag_bypass_route_matches(
             " ".join(f'"{route}"' for route in shipped_local_route_candidates)
         )
         == []
     )
-    assert unshipped_governance_dag_public_cli_matches(
+    assert governance_dag_bypass_cli_matches(
         '"live-head" `checkpoint-publish` "ipns-publish"'
     ) == [
         "live-head",
         "checkpoint-publish",
         "ipns-publish",
     ]
-    assert unshipped_governance_dag_public_cli_matches(
+    assert governance_dag_bypass_cli_matches(
         "`sorafs governance dag live-head` "
         '"sorafs governance dag fetch-head" '
         "`governance dag checkpoint-publish` "
@@ -21157,22 +21189,22 @@ def test_governance_dag_public_surface_matcher_has_negative_controls() -> None:
         "governance dag checkpoint-publish",
         "governance dag ipfs-publish",
     ]
-    assert unshipped_governance_dag_public_cli_matches(
+    assert governance_dag_bypass_cli_matches(
         " ".join(f'"{subcommand}"' for subcommand in shipped_local_subcommands)
     ) == []
 
 
-def test_unshipped_governance_dag_public_service_surface_is_not_exposed() -> None:
+def test_ad_hoc_governance_dag_bypass_surface_is_not_exposed() -> None:
     exposed: dict[str, list[str]] = {}
 
     for path in (TORII_SORAFS_API_RS, TORII_OPENAPI_RS):
         source = read(path)
-        matched = unshipped_governance_dag_public_route_matches(source)
+        matched = governance_dag_bypass_route_matches(source)
         if matched:
             exposed[str(path.relative_to(REPO_ROOT))] = matched
 
     cli_source = read(SORAFS_CLI_RS)
-    matched_commands = unshipped_governance_dag_public_cli_matches(cli_source)
+    matched_commands = governance_dag_bypass_cli_matches(cli_source)
     if matched_commands:
         exposed[str(SORAFS_CLI_RS.relative_to(REPO_ROOT))] = matched_commands
 
@@ -23142,7 +23174,10 @@ def test_commit_reveal_torii_no_show_plan_readback_regressions_are_pinned() -> N
         "Some(3)",
     )
 
-    assert route in router
+    assert (
+        "SORAFS_MODERATION_BALLOTS_BY_CASE_ID_BY_ROUND_ID_NO_SHOW_PLAN_GET"
+        in router
+    )
     assert f'"{route}".to_owned()' in openapi
     assert [item for item in handler_requirements if item not in handler] == []
     assert [item for item in serializer_requirements if item not in serializer] == []
@@ -23507,7 +23542,9 @@ def test_commit_reveal_authoritative_ledger_foundation_is_pinned() -> None:
         "private_pop_proof_sortition_and_activation_reject_adversarial_inputs",
         "insufficient_pool_and_no_show_failover_exhaustion_are_terminal",
         "primary_no_show_uses_next_unique_waitlist_juror_atomically",
-        "active_pop_root_rotation_invalidates_pending_appeal_snapshot",
+        "later_pop_revocation_rotation_does_not_rewrite_or_brick_admitted_snapshot",
+        "unresolved_challenge_expires_fail_safe_without_deadlock_or_no_show_penalties",
+        "genesis_moderation_permission_bypass_matches_executor_policy",
     ):
         assert f"fn {adversarial_test}" in core
 

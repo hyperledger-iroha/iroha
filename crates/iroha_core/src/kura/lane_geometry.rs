@@ -17,7 +17,7 @@ use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
     block::{
         BlockHeader, SignedBlock,
-        consensus::LaneBlockProposalV1,
+        consensus::{LaneBlockDescriptorV1, LaneBlockProposalV1, SumeragiLanePayloadOwnership},
         execution_context::{ExternalExecutionContext, ExternalExecutionRouteRole},
     },
     merge::MergeLedgerEntry,
@@ -55,6 +55,7 @@ const MARKER_FILE_NAME: &str = ".lane-incarnation.norito";
 const TRANSITION_DOMAIN: &[u8] = b"iroha:kura:lane-geometry-transition:v2\0";
 const CATALOG_DOMAIN: &[u8] = b"iroha:kura:lane-geometry-catalog:v1\0";
 const CHECKPOINT_DOMAIN: &[u8] = b"iroha:kura:lane-geometry-checkpoint:v2\0";
+#[cfg(test)]
 const UNSCOPED_LINEAGE_DOMAIN: &[u8] = b"iroha:kura:lane-geometry-unscoped-lineage:v1\0";
 const PENDING_GC_DOMAIN: &[u8] = b"iroha:kura:lane-geometry-pending-gc:v2\0";
 const MERGE_RELEASE_MARKERS_DOMAIN: &[u8] = b"iroha:kura:lane-geometry-merge-markers:v1\0";
@@ -839,6 +840,7 @@ impl Kura {
     /// admission: payloads coordinated by another lane, malformed artifacts,
     /// and in-flight files remain blocking. Callers must first validate a
     /// globally committed drain certificate for every supplied identity.
+    #[cfg(test)]
     pub(crate) fn apply_lane_geometry_transition_with_certified_retirements(
         &self,
         previous: &LaneConfig,
@@ -873,6 +875,7 @@ impl Kura {
     }
 
     /// Apply one lane geometry transition bound to the complete retained lineage state.
+    #[cfg(test)]
     pub(crate) fn apply_lane_geometry_transition_with_lineage_roots(
         &self,
         previous: &LaneConfig,
@@ -2372,6 +2375,7 @@ impl Kura {
                 let expected_epoch = raw.executable_payload.epoch;
                 let artifact = self
                     .read_autonomous_lane_block_artifact_from_paths_locked(
+                        &entry,
                         storage_lane_id,
                         lane_block_height,
                         &autonomous_data,
@@ -4189,11 +4193,64 @@ impl Kura {
         Ok(())
     }
 
-    /// Require an autonomous lane artifact to target the exact active storage
-    /// incarnation and a height strictly after that incarnation's activation.
+    /// Require a lane artifact to target the exact active storage binding and
+    /// a height strictly after that incarnation's activation.
     ///
     /// Callers hold `lane_geometry_lock`, so the marker and active segment
     /// cannot be replaced between this check and the sidecar read or write.
+    pub(super) fn require_active_lane_artifact(
+        &self,
+        entry: &LaneConfigEntry,
+        descriptor: &LaneBlockDescriptorV1,
+    ) -> Result<()> {
+        if descriptor.lane_id != entry.lane_id || descriptor.dataspace_id != entry.dataspace_id {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "lane artifact does not match the active lane or dataspace",
+                ),
+                entry.blocks_dir(&self.store_root).join(MARKER_FILE_NAME),
+            ));
+        }
+        self.require_active_lane_incarnation(
+            entry,
+            descriptor.lane_incarnation,
+            descriptor.proposal_height,
+        )
+    }
+
+    /// Require a global-block ownership artifact to target the exact active
+    /// storage binding and a height strictly after incarnation activation.
+    ///
+    /// Callers hold `lane_geometry_lock`, so the marker and active segment
+    /// cannot be replaced between this check and the sidecar read or write.
+    pub(super) fn require_active_lane_ownership_artifact(
+        &self,
+        entry: &LaneConfigEntry,
+        ownership: &SumeragiLanePayloadOwnership,
+    ) -> Result<()> {
+        if ownership.lane_id != entry.lane_id || ownership.dataspace_id != entry.dataspace_id {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "lane ownership artifact does not match the active lane or dataspace",
+                ),
+                entry.blocks_dir(&self.store_root).join(MARKER_FILE_NAME),
+            ));
+        }
+        self.require_active_lane_incarnation(
+            entry,
+            ownership.lane_incarnation,
+            ownership.proposal_height,
+        )
+    }
+
+    /// Require an incarnation and proposal height to match an active marker.
+    ///
+    /// This lower-level form is reserved for replay claims that do not carry a
+    /// full lane descriptor. Artifact paths should use
+    /// [`Self::require_active_lane_artifact`] so lane and dataspace are checked
+    /// as well.
     pub(super) fn require_active_lane_incarnation(
         &self,
         entry: &LaneConfigEntry,
@@ -4210,7 +4267,7 @@ impl Kura {
             return Err(Error::IO(
                 std::io::Error::new(
                     ErrorKind::InvalidData,
-                    "autonomous lane artifact does not match the active incarnation marker",
+                    "lane artifact does not match the active geometry marker",
                 ),
                 path,
             ));
@@ -4218,8 +4275,8 @@ impl Kura {
         Ok(())
     }
 
-    #[cfg(test)]
-    pub(super) fn install_lane_incarnation_marker_for_test(
+    /// Install the exact active lane marker required by an isolated test fixture.
+    pub(crate) fn install_lane_incarnation_marker_for_test(
         &self,
         entry: &LaneConfigEntry,
         incarnation: Hash,
@@ -4233,6 +4290,26 @@ impl Kura {
             merge_path: self.relative_geometry_path(&entry.merge_log_path(&self.store_root))?,
         };
         self.write_lane_marker(&binding)
+    }
+
+    /// Install a marker for a blank test store without rewriting existing geometry.
+    pub(crate) fn install_lane_incarnation_marker_if_missing_for_test(
+        &self,
+        entry: &LaneConfigEntry,
+        incarnation: Hash,
+        activation_height: u64,
+    ) -> Result<()> {
+        let path = entry.blocks_dir(&self.store_root).join(MARKER_FILE_NAME);
+        if self.validate_path_kind(&path, false)? {
+            return Ok(());
+        }
+        self.install_lane_incarnation_marker_for_test(entry, incarnation, activation_height)
+    }
+
+    /// Replace the in-memory active lane entries after a test mutates its Nexus fixture.
+    pub(crate) fn replace_lane_storage_entries_for_test(&self, lane_config: &LaneConfig) {
+        let _geometry_guard = self.lane_geometry_lock.lock();
+        *self.lane_storage_entries.lock() = Self::lane_storage_entries_from_config(lane_config);
     }
 
     fn read_lane_marker(&self, path: &Path) -> Result<LaneIncarnationMarker> {
@@ -5815,6 +5892,7 @@ fn geometry_catalog_fingerprint(bindings: &[LaneGeometryBinding]) -> Hash {
     Hash::new_from_chunks(&[CATALOG_DOMAIN, encoded.as_slice()])
 }
 
+#[cfg(test)]
 fn unscoped_lineage_root(bindings: &[LaneGeometryBinding]) -> Hash {
     let catalog = geometry_catalog_fingerprint(bindings);
     Hash::new_from_chunks(&[UNSCOPED_LINEAGE_DOMAIN, catalog.as_ref()])
@@ -6554,7 +6632,7 @@ mod tests {
             lane_id,
             dataspace_id,
             lane_incarnation: incarnation,
-            proposal_height: lane_block_height.max(1),
+            proposal_height: lane_block_height.saturating_add(1).max(2),
             previous_lane_block_height: lane_block_height.saturating_sub(1),
             previous_lane_block_descriptor_hash: lane_block_height
                 .checked_sub(1)
@@ -6732,7 +6810,19 @@ mod tests {
             .expect("geometry retirement fixture participant");
         let participant_validator_set = vec![PeerId::new(participant_keypair.public_key().clone())];
         let descriptor = &coordinator_proposal.descriptor;
-        let prepare_body = NativeAmxAttestationBodyV2 {
+        let (participant_proposal, _) = geometry_lane_proposal_and_ownership(
+            participant.route.lane_id,
+            participant.route.dataspace_id,
+            participant_lane_incarnation,
+            descriptor.proposal_height,
+            descriptor.lane_block_view,
+            1,
+            0,
+            Hash::from(entrypoint_hash),
+            participant_keypair,
+        );
+        let participant_descriptor = &participant_proposal.descriptor;
+        let mut prepare_body = NativeAmxAttestationBodyV2 {
             round: ConsensusRound {
                 context_id: HeightContextId(HashOf::<HeightContext>::from_untyped_unchecked(
                     Hash::new(b"geometry-native-amx-v2-context"),
@@ -6752,6 +6842,13 @@ mod tests {
             participant_lane_id: participant.route.lane_id,
             participant_dataspace_id: participant.route.dataspace_id,
             participant_lane_incarnation,
+            participant_previous_block_height: participant_descriptor.previous_lane_block_height,
+            participant_previous_block_descriptor_hash: participant_descriptor
+                .previous_lane_block_descriptor_hash,
+            participant_lane_block_height: participant_descriptor.lane_block_height,
+            participant_lane_block_view: participant_descriptor.lane_block_view,
+            participant_proposal_hash: participant_proposal.proposal_hash,
+            participant_settlement_commitment: Hash::prehashed([0; Hash::LENGTH]),
             participant_validator_set_hash: HashOf::new(&participant_validator_set),
             participant_validator_count: 1,
             participant_min_quorum: 1,
@@ -6760,6 +6857,12 @@ mod tests {
             coordinator_lane_block_view: descriptor.lane_block_view,
             coordinator_proposal_hash: coordinator_proposal.proposal_hash,
         };
+        prepare_body.participant_settlement_commitment =
+            prepare_body.computed_participant_settlement_commitment();
+        let participant_settlement = prepare_body.computed_participant_settlement();
+        let participant_settlement_hash =
+            iroha_data_model::nexus::compute_settlement_hash(&participant_settlement)
+                .expect("geometry participant settlement hashes");
         let participant_pop = bls_normal_pop_prove(participant_keypair.private_key())
             .expect("geometry retirement participant PoP");
         let qc = |body| NativeAmxAttestationQcV2 {
@@ -6790,6 +6893,9 @@ mod tests {
             legs: vec![NativeAmxLegRecordV2 {
                 lane_id: participant.route.lane_id,
                 dataspace_id: participant.route.dataspace_id,
+                participant_proposal,
+                participant_settlement,
+                participant_settlement_hash,
                 prepare_qc,
                 commit_qc,
             }],
@@ -7357,9 +7463,16 @@ mod tests {
         let source_hash = transaction.hash();
         let mut source_id = [0_u8; Hash::LENGTH];
         source_id.copy_from_slice(source_hash.as_ref());
+        let parent: SignedBlock = BlockBuilder::new(Vec::<AcceptedTransaction<'static>>::new())
+            .chain(0, None)
+            .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key())
+            .unpack(|_| {})
+            .into();
+        kura.store_block(Arc::new(parent.clone()))
+            .expect("store pre-activation parent block");
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(transaction));
         let mut block: SignedBlock = BlockBuilder::new(vec![accepted])
-            .chain(0, None)
+            .chain(0, Some(&parent))
             .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key())
             .unpack(|_| {})
             .into();

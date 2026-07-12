@@ -5,6 +5,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import org.hyperledger.iroha.android.client.JsonNumbers;
 import java.util.Objects;
 import org.hyperledger.iroha.android.client.JsonEncoder;
 import org.hyperledger.iroha.android.client.JsonParser;
@@ -250,10 +251,7 @@ public final class UaidJsonParser {
     if (!(value instanceof Number number)) {
       throw new IllegalStateException(path + " is not a number");
     }
-    if (number instanceof Float || number instanceof Double) {
-      throw new IllegalStateException(path + " must be an integer");
-    }
-    return number.longValue();
+    return JsonNumbers.asLong(number, path);
   }
 
   private static Long asOptionalLong(final Object value, final String path) {

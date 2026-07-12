@@ -334,6 +334,12 @@ const ISO_STATUS_VALUES = new Map([
   ["rejected", "Rejected"],
   ["committed", "Committed"],
 ]);
+const MULTISIG_PROPOSAL_STATUS_VALUES = new Set([
+  "COLLECTING_SIGNATURES",
+  "FINALIZED",
+  "CANCELED",
+  "EXPIRED",
+]);
 const PACS002_STATUS_CODES = new Set(["ACTC", "ACSP", "ACSC", "ACWC", "PDNG", "RJCT"]);
 
 function resolveNativeBinding(nativeBinding) {
@@ -5707,7 +5713,7 @@ export class ToriiClient {
 
   /**
    * Fetch newest-first SCCP message discovery (`GET /v1/sccp/messages/recent`).
-   * @param {{from?: number, limit?: number, signal?: AbortSignal}} [options]
+   * @param {{from?: number, after_index?: number, limit?: number, signal?: AbortSignal}} [options]
    * @returns {Promise<object>}
    */
   async getSccpRecentMessages(options = {}) {
@@ -5715,7 +5721,8 @@ export class ToriiClient {
       message: "must be a plain object",
     });
     const unknown = Object.keys(record).find(
-      (key) => key !== "from" && key !== "limit" && key !== "signal",
+      (key) =>
+        key !== "from" && key !== "after_index" && key !== "limit" && key !== "signal",
     );
     if (unknown !== undefined) {
       throw new TypeError(`getSccpRecentMessages.options contains unknown field \`${unknown}\``);
@@ -5728,6 +5735,21 @@ export class ToriiClient {
         );
       }
       params.from = String(record.from);
+    }
+    if (record.after_index !== undefined) {
+      if (record.from === undefined) {
+        throw new TypeError("getSccpRecentMessages.options.after_index requires from");
+      }
+      if (
+        !Number.isSafeInteger(record.after_index) ||
+        record.after_index < 0 ||
+        record.after_index > 511
+      ) {
+        throw new TypeError(
+          "getSccpRecentMessages.options.after_index must be an integer in 0..511",
+        );
+      }
+      params.after_index = String(record.after_index);
     }
     if (record.limit !== undefined) {
       if (!Number.isSafeInteger(record.limit) || record.limit < 1 || record.limit > 50) {
@@ -8759,18 +8781,18 @@ export class ToriiClient {
   }
 
   /**
-   * List nonterminal multisig proposals for a selector (`POST /v1/multisig/proposals/query`).
+   * List multisig proposals for a selector, optionally filtered by lifecycle status (`POST /v1/multisig/proposals/list`).
    * @param {object} request
    * @param {{signal?: AbortSignal}} [options]
    * @returns {Promise<object>}
    */
   async listMultisigProposals(request = {}, options = {}) {
     const { signal } = normalizeSignalOnlyOption(options, "listMultisigProposals");
-    const payload = normalizeMultisigSelectorOnlyRequest(
+    const payload = normalizeMultisigProposalsListRequest(
       request,
       "listMultisigProposals request",
     );
-    const response = await this._request("POST", "/v1/multisig/proposals/query", {
+    const response = await this._request("POST", "/v1/multisig/proposals/list", {
       headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(payload),
       signal,
@@ -8784,15 +8806,15 @@ export class ToriiClient {
   }
 
   /**
-   * Fetch one multisig proposal by proposal id or instructions hash (`POST /v1/multisig/proposals/lookup`).
+   * Fetch one multisig proposal by proposal id or instructions hash (`POST /v1/multisig/proposals/get`).
    * @param {object} request
    * @param {{signal?: AbortSignal}} [options]
    * @returns {Promise<object>}
    */
   async getMultisigProposal(request = {}, options = {}) {
     const { signal } = normalizeSignalOnlyOption(options, "getMultisigProposal");
-    const payload = normalizeMultisigProposalLookupRequest(request);
-    const response = await this._request("POST", "/v1/multisig/proposals/lookup", {
+    const payload = normalizeMultisigProposalGetRequest(request);
+    const response = await this._request("POST", "/v1/multisig/proposals/get", {
       headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(payload),
       signal,
@@ -14181,6 +14203,8 @@ function parseSumeragiNexusFeeReceipt(value, context) {
   });
 }
 
+const MAX_NATIVE_AMX_PARTICIPANT_SETTLEMENT_RECEIPTS = 4096;
+
 function parseSumeragiNativeAmxBody(value, context) {
   const record = assertExactSumeragiRecord(
     value,
@@ -14198,6 +14222,12 @@ function parseSumeragiNativeAmxBody(value, context) {
       "participant_lane_id",
       "participant_dataspace_id",
       "participant_lane_incarnation",
+      "participant_previous_block_height",
+      "participant_previous_block_descriptor_hash",
+      "participant_lane_block_height",
+      "participant_lane_block_view",
+      "participant_proposal_hash",
+      "participant_settlement_commitment",
       "participant_validator_set_hash",
       "participant_validator_count",
       "participant_min_quorum",
@@ -14242,6 +14272,26 @@ function parseSumeragiNativeAmxBody(value, context) {
     record.coordinator_lane_block_view,
     `${context}.coordinator_lane_block_view`,
   );
+  const participantPreviousHeight = parseSumeragiExactUnsigned(
+    record.participant_previous_block_height,
+    `${context}.participant_previous_block_height`,
+  );
+  const participantPreviousDescriptorHash =
+    record.participant_previous_block_descriptor_hash === null
+      ? null
+      : parseSumeragiNonzeroHash(
+          record.participant_previous_block_descriptor_hash,
+          `${context}.participant_previous_block_descriptor_hash`,
+        );
+  const participantHeight = parseSumeragiExactUnsigned(
+    record.participant_lane_block_height,
+    `${context}.participant_lane_block_height`,
+    { positive: true },
+  );
+  const participantView = parseSumeragiExactUnsigned(
+    record.participant_lane_block_view,
+    `${context}.participant_lane_block_view`,
+  );
   const sourceId = parseSumeragiByte32(record.source_id, `${context}.source_id`);
   const entrypointHash = parseSumeragiHash(
     record.tx_entrypoint_hash,
@@ -14250,8 +14300,9 @@ function parseSumeragiNativeAmxBody(value, context) {
   if (
     round.height !== authorityHeight ||
     round.view !== coordinatorView ||
-    minQuorum !== expectedQuorum ||
-    entrypointHash.slice(5, 69) !== sourceId
+    participantPreviousHeight + 1 !== participantHeight ||
+    (participantPreviousHeight === 0) !== (participantPreviousDescriptorHash === null) ||
+    minQuorum !== expectedQuorum
   ) {
     throw new RangeError(`${context} contains inconsistent round or quorum fields`);
   }
@@ -14289,6 +14340,18 @@ function parseSumeragiNativeAmxBody(value, context) {
       record.participant_lane_incarnation,
       `${context}.participant_lane_incarnation`,
     ),
+    participant_previous_block_height: participantPreviousHeight,
+    participant_previous_block_descriptor_hash: participantPreviousDescriptorHash,
+    participant_lane_block_height: participantHeight,
+    participant_lane_block_view: participantView,
+    participant_proposal_hash: parseSumeragiNonzeroHash(
+      record.participant_proposal_hash,
+      `${context}.participant_proposal_hash`,
+    ),
+    participant_settlement_commitment: parseSumeragiNonzeroHash(
+      record.participant_settlement_commitment,
+      `${context}.participant_settlement_commitment`,
+    ),
     participant_validator_set_hash: parseSumeragiHash(
       record.participant_validator_set_hash,
       `${context}.participant_validator_set_hash`,
@@ -14318,6 +14381,12 @@ function sumeragiNativeAmxBodyIdentityEqual(left, right) {
     "participant_lane_id",
     "participant_dataspace_id",
     "participant_lane_incarnation",
+    "participant_previous_block_height",
+    "participant_previous_block_descriptor_hash",
+    "participant_lane_block_height",
+    "participant_lane_block_view",
+    "participant_proposal_hash",
+    "participant_settlement_commitment",
     "participant_validator_set_hash",
     "participant_validator_count",
     "participant_min_quorum",
@@ -14431,16 +14500,263 @@ function parseSumeragiNativeAmxQc(value, context) {
   });
 }
 
+function parseSumeragiNativeAmxParticipantProposal(value, context) {
+  const proposal = assertExactSumeragiRecord(
+    value,
+    ["descriptor", "proposal_hash"],
+    context,
+  );
+  const descriptorContext = `${context}.descriptor`;
+  const descriptor = ensureRecord(proposal.descriptor, descriptorContext);
+  const requiredFields = [
+    "lane_id",
+    "dataspace_id",
+    "lane_incarnation",
+    "proposal_height",
+    "previous_lane_block_height",
+    "lane_block_height",
+    "lane_block_view",
+    "subject_hash",
+    "payload_ownership_hash",
+    "rbc_instance_hash",
+    "accepted_candidate_indices",
+    "accepted_transaction_hashes",
+    "validator_set_hash_version",
+    "validator_set_hash",
+    "validator_set",
+    "validator_count",
+    "min_quorum",
+    "qc_mode_tag",
+    "descriptor_hash",
+  ];
+  const allowedFields = new Set([
+    ...requiredFields,
+    "previous_lane_block_descriptor_hash",
+  ]);
+  for (const field of requiredFields) {
+    if (!Object.prototype.hasOwnProperty.call(descriptor, field)) {
+      throw new TypeError(`${descriptorContext} is missing required field ${field}`);
+    }
+  }
+  for (const field of Object.keys(descriptor)) {
+    if (!allowedFields.has(field)) {
+      throw new TypeError(`${descriptorContext} contains unknown field ${field}`);
+    }
+  }
+
+  const previousHeight = parseSumeragiExactUnsigned(
+    descriptor.previous_lane_block_height,
+    `${descriptorContext}.previous_lane_block_height`,
+  );
+  let previousDescriptorHash = null;
+  if (previousHeight === 0) {
+    if (Object.prototype.hasOwnProperty.call(descriptor, "previous_lane_block_descriptor_hash")) {
+      throw new TypeError(`${descriptorContext} must omit the genesis predecessor hash`);
+    }
+  } else {
+    if (!Object.prototype.hasOwnProperty.call(descriptor, "previous_lane_block_descriptor_hash")) {
+      throw new TypeError(`${descriptorContext} must carry a predecessor descriptor hash`);
+    }
+    previousDescriptorHash = parseSumeragiNonzeroHash(
+      descriptor.previous_lane_block_descriptor_hash,
+      `${descriptorContext}.previous_lane_block_descriptor_hash`,
+    );
+  }
+  const laneBlockHeight = parseSumeragiExactUnsigned(
+    descriptor.lane_block_height,
+    `${descriptorContext}.lane_block_height`,
+    { positive: true },
+  );
+  if (previousHeight + 1 !== laneBlockHeight) {
+    throw new RangeError(`${descriptorContext} lane-block heights must be contiguous`);
+  }
+
+  const acceptedCandidateIndices = Object.freeze(
+    assertSumeragiArrayBound(
+      descriptor.accepted_candidate_indices,
+      4096,
+      `${descriptorContext}.accepted_candidate_indices`,
+      1,
+    ).map((candidate, index) =>
+      parseSumeragiExactUnsigned(
+        candidate,
+        `${descriptorContext}.accepted_candidate_indices[${index}]`,
+      ),
+    ),
+  );
+  const acceptedTransactionHashes = Object.freeze(
+    assertSumeragiArrayBound(
+      descriptor.accepted_transaction_hashes,
+      4096,
+      `${descriptorContext}.accepted_transaction_hashes`,
+      1,
+    ).map((hash, index) =>
+      parseSumeragiNonzeroHash(
+        hash,
+        `${descriptorContext}.accepted_transaction_hashes[${index}]`,
+      ),
+    ),
+  );
+  if (
+    acceptedCandidateIndices.length !== acceptedTransactionHashes.length ||
+    new Set(acceptedCandidateIndices).size !== acceptedCandidateIndices.length ||
+    new Set(acceptedTransactionHashes).size !== acceptedTransactionHashes.length
+  ) {
+    throw new TypeError(`${descriptorContext} accepted work is inconsistent`);
+  }
+
+  const validators = Object.freeze(
+    assertSumeragiArrayBound(
+      descriptor.validator_set,
+      128,
+      `${descriptorContext}.validator_set`,
+      1,
+    ).map((validator, index) =>
+      requireExactNonEmptyString(validator, `${descriptorContext}.validator_set[${index}]`),
+    ),
+  );
+  if (new Set(validators).size !== validators.length) {
+    throw new TypeError(`${descriptorContext}.validator_set contains duplicate validators`);
+  }
+  const validatorCount = parseSumeragiExactUnsigned(
+    descriptor.validator_count,
+    `${descriptorContext}.validator_count`,
+    { positive: true, max: 128 },
+  );
+  const minQuorum = parseSumeragiExactUnsigned(
+    descriptor.min_quorum,
+    `${descriptorContext}.min_quorum`,
+    { positive: true, max: 128 },
+  );
+  const expectedQuorum = validators.length - Math.floor((validators.length - 1) / 3);
+  const validatorSetHashVersion = parseSumeragiExactUnsigned(
+    descriptor.validator_set_hash_version,
+    `${descriptorContext}.validator_set_hash_version`,
+    { max: 0xffff },
+  );
+  if (
+    validatorSetHashVersion !== 1 ||
+    validatorCount !== validators.length ||
+    minQuorum !== expectedQuorum
+  ) {
+    throw new TypeError(`${descriptorContext} committee fields are inconsistent`);
+  }
+
+  const normalizedDescriptor = {
+    lane_id: parseSumeragiExactUnsigned(descriptor.lane_id, `${descriptorContext}.lane_id`, {
+      max: 0xffffffff,
+    }),
+    dataspace_id: parseSumeragiExactUnsigned(
+      descriptor.dataspace_id,
+      `${descriptorContext}.dataspace_id`,
+    ),
+    lane_incarnation: parseSumeragiNonzeroHash(
+      descriptor.lane_incarnation,
+      `${descriptorContext}.lane_incarnation`,
+    ),
+    proposal_height: parseSumeragiExactUnsigned(
+      descriptor.proposal_height,
+      `${descriptorContext}.proposal_height`,
+      { positive: true },
+    ),
+    previous_lane_block_height: previousHeight,
+    ...(previousDescriptorHash === null
+      ? {}
+      : { previous_lane_block_descriptor_hash: previousDescriptorHash }),
+    lane_block_height: laneBlockHeight,
+    lane_block_view: parseSumeragiExactUnsigned(
+      descriptor.lane_block_view,
+      `${descriptorContext}.lane_block_view`,
+    ),
+    subject_hash: parseSumeragiNonzeroHash(
+      descriptor.subject_hash,
+      `${descriptorContext}.subject_hash`,
+    ),
+    payload_ownership_hash: parseSumeragiNonzeroHash(
+      descriptor.payload_ownership_hash,
+      `${descriptorContext}.payload_ownership_hash`,
+    ),
+    rbc_instance_hash: parseSumeragiNonzeroHash(
+      descriptor.rbc_instance_hash,
+      `${descriptorContext}.rbc_instance_hash`,
+    ),
+    accepted_candidate_indices: acceptedCandidateIndices,
+    accepted_transaction_hashes: acceptedTransactionHashes,
+    validator_set_hash_version: validatorSetHashVersion,
+    validator_set_hash: parseSumeragiHash(
+      descriptor.validator_set_hash,
+      `${descriptorContext}.validator_set_hash`,
+    ),
+    validator_set: validators,
+    validator_count: validatorCount,
+    min_quorum: minQuorum,
+    qc_mode_tag: requireExactNonEmptyString(
+      descriptor.qc_mode_tag,
+      `${descriptorContext}.qc_mode_tag`,
+    ),
+    descriptor_hash: parseSumeragiNonzeroHash(
+      descriptor.descriptor_hash,
+      `${descriptorContext}.descriptor_hash`,
+    ),
+  };
+  return Object.freeze({
+    descriptor: Object.freeze(normalizedDescriptor),
+    proposal_hash: parseSumeragiNonzeroHash(
+      proposal.proposal_hash,
+      `${context}.proposal_hash`,
+    ),
+  });
+}
+
 function parseSumeragiNativeAmxLeg(value, context) {
   const record = assertExactSumeragiRecord(
     value,
-    ["lane_id", "dataspace_id", "prepare_qc", "commit_qc"],
+    [
+      "lane_id",
+      "dataspace_id",
+      "participant_proposal",
+      "participant_settlement",
+      "participant_settlement_hash",
+      "prepare_qc",
+      "commit_qc",
+    ],
     context,
   );
   const laneId = parseSumeragiUnsigned(record.lane_id, `${context}.lane_id`, {
     max: 0xffffffff,
   });
   const dataspaceId = parseSumeragiUnsigned(record.dataspace_id, `${context}.dataspace_id`);
+  const participantProposal = parseSumeragiNativeAmxParticipantProposal(
+    record.participant_proposal,
+    `${context}.participant_proposal`,
+  );
+  const settlementWire = ensureRecord(
+    record.participant_settlement,
+    `${context}.participant_settlement`,
+  );
+  if (
+    !Array.isArray(settlementWire.native_amx_receipts) ||
+    settlementWire.native_amx_receipts.length !== 0
+  ) {
+    throw new TypeError(`${context}.participant_settlement must be terminal`);
+  }
+  if (
+    !Array.isArray(settlementWire.nexus_fee_receipts) ||
+    settlementWire.nexus_fee_receipts.length !== 0
+  ) {
+    throw new TypeError(`${context}.participant_settlement cannot contain fee receipts`);
+  }
+  assertSumeragiArrayBound(
+    settlementWire.receipts,
+    MAX_NATIVE_AMX_PARTICIPANT_SETTLEMENT_RECEIPTS,
+    `${context}.participant_settlement.receipts`,
+    1,
+  );
+  const participantSettlement = parseLaneSettlementCommitments([settlementWire])[0];
+  const participantSettlementHash = parseSumeragiNonzeroHash(
+    record.participant_settlement_hash,
+    `${context}.participant_settlement_hash`,
+  );
   const prepareQc = parseSumeragiNativeAmxQc(record.prepare_qc, `${context}.prepare_qc`);
   const commitQc = parseSumeragiNativeAmxQc(record.commit_qc, `${context}.commit_qc`);
   if (prepareQc.body.phase.phase !== "prepare") {
@@ -14462,13 +14778,67 @@ function parseSumeragiNativeAmxLeg(value, context) {
       throw new TypeError(`${context} prepare and commit committees differ`);
     }
   }
+  const body = prepareQc.body;
+  const descriptor = participantProposal.descriptor;
   if (
-    prepareQc.body.participant_lane_id !== laneId ||
-    prepareQc.body.participant_dataspace_id !== dataspaceId
+    body.participant_lane_id !== laneId ||
+    body.participant_dataspace_id !== dataspaceId ||
+    descriptor.lane_id !== laneId ||
+    descriptor.dataspace_id !== dataspaceId ||
+    descriptor.lane_incarnation !== body.participant_lane_incarnation ||
+    descriptor.proposal_height !== body.authority_context_height ||
+    descriptor.previous_lane_block_height !== body.participant_previous_block_height ||
+    (descriptor.previous_lane_block_descriptor_hash ?? null) !==
+      body.participant_previous_block_descriptor_hash ||
+    descriptor.lane_block_height !== body.participant_lane_block_height ||
+    descriptor.lane_block_view !== body.participant_lane_block_view ||
+    participantProposal.proposal_hash !== body.participant_proposal_hash ||
+    descriptor.validator_set_hash_version !== prepareQc.validator_set_hash_version ||
+    descriptor.validator_set_hash !== prepareQc.validator_set_hash ||
+    JSON.stringify(descriptor.validator_set) !== JSON.stringify(prepareQc.validator_set) ||
+    descriptor.validator_count !== body.participant_validator_count ||
+    descriptor.min_quorum !== body.participant_min_quorum
   ) {
-    throw new TypeError(`${context} route differs from its signed body`);
+    throw new TypeError(`${context} participant proposal differs from its signed body`);
   }
-  return Object.freeze({ lane_id: laneId, dataspace_id: dataspaceId, prepare_qc: prepareQc, commit_qc: commitQc });
+  const receipts = participantSettlement.receipts;
+  const receiptSources = receipts.map((receipt) => receipt.source_id);
+  if (
+    participantSettlementHash !== body.participant_settlement_commitment ||
+    participantSettlement.block_height !== body.participant_lane_block_height ||
+    participantSettlement.lane_id !== laneId ||
+    participantSettlement.dataspace_id !== dataspaceId ||
+    participantSettlement.lane_incarnation !== body.participant_lane_incarnation ||
+    participantSettlement.tx_count !== receipts.length ||
+    participantSettlement.total_local_micro !== "0" ||
+    participantSettlement.total_xor_due_micro !== "0" ||
+    participantSettlement.total_xor_after_haircut_micro !== "0" ||
+    participantSettlement.total_xor_variance_micro !== "0" ||
+    participantSettlement.swap_metadata !== null ||
+    new Set(receiptSources).size !== receiptSources.length ||
+    receiptSources.filter((sourceId) => sourceId === body.source_id).length !== 1 ||
+    receipts.some(
+      (receipt) =>
+        receipt.local_amount_micro !== "0" ||
+        receipt.xor_due_micro !== "0" ||
+        receipt.xor_after_haircut_micro !== "0" ||
+        receipt.xor_variance_micro !== "0" ||
+        receipt.timestamp_ms !== body.authority_context_height,
+    ) ||
+    participantSettlement.nexus_fee_receipts.length !== 0 ||
+    participantSettlement.native_amx_receipts.length !== 0
+  ) {
+    throw new TypeError(`${context} participant settlement differs from its signed body`);
+  }
+  return Object.freeze({
+    lane_id: laneId,
+    dataspace_id: dataspaceId,
+    participant_proposal: participantProposal,
+    participant_settlement: participantSettlement,
+    participant_settlement_hash: participantSettlementHash,
+    prepare_qc: prepareQc,
+    commit_qc: commitQc,
+  });
 }
 
 function parseSumeragiNativeAmxReceipt(value, context) {
@@ -15159,6 +15529,13 @@ function parseSumeragiUnsigned(value, context, options = {}) {
     throw new RangeError(`${context} exceeds its protocol bound`);
   }
   return numeric;
+}
+
+function parseSumeragiExactUnsigned(value, context, options = {}) {
+  if (typeof value !== "number" || !Number.isSafeInteger(value)) {
+    throw new TypeError(`${context} must be an unsigned integer`);
+  }
+  return parseSumeragiUnsigned(value, context, options);
 }
 
 function parseSumeragiUnsignedDecimal(value, context) {
@@ -23990,6 +24367,40 @@ function normalizeMultisigSelectorOnlyRequest(input, context) {
   return normalizeMultisigAccountSelector(input, context);
 }
 
+function normalizeMultisigProposalStatus(value, context) {
+  const status = requireNonEmptyString(value, context).trim().toUpperCase();
+  if (!MULTISIG_PROPOSAL_STATUS_VALUES.has(status)) {
+    throw new TypeError(
+      `${context} must be one of ${[...MULTISIG_PROPOSAL_STATUS_VALUES].join(", ")}`,
+    );
+  }
+  return status;
+}
+
+function normalizeMultisigProposalsListRequest(input, context) {
+  const record = ensureRecord(input, context);
+  const payload = normalizeMultisigAccountSelector(record, context);
+  if (record.status !== undefined) {
+    if (!Array.isArray(record.status)) {
+      throw new TypeError(`${context}.status must be an array`);
+    }
+    payload.status = record.status.map((status, index) =>
+      normalizeMultisigProposalStatus(status, `${context}.status[${index}]`),
+    );
+  }
+  if (record.cursor !== undefined && record.cursor !== null) {
+    payload.cursor = requireNonEmptyString(record.cursor, `${context}.cursor`);
+  }
+  if (record.limit !== undefined && record.limit !== null) {
+    payload.limit = ToriiClient._normalizeUnsignedInteger(
+      record.limit,
+      `${context}.limit`,
+      { allowZero: false },
+    );
+  }
+  return payload;
+}
+
 function normalizeMultisigProposeInstructionInput(value, context) {
   if (
     typeof value === "string" ||
@@ -24369,7 +24780,24 @@ function normalizeMultisigProposalEntry(payload, context) {
       record.instructions_hash,
       `${context}.instructions_hash`,
     ),
+    operation_type: requireNonEmptyString(
+      record.operation_type,
+      `${context}.operation_type`,
+    ),
+    intent:
+      record.intent === undefined || record.intent === null
+        ? null
+        : cloneJsonValue(record.intent, `${context}.intent`),
     proposal: cloneJsonValue(record.proposal, `${context}.proposal`),
+    status: normalizeMultisigProposalStatus(record.status, `${context}.status`),
+    terminal_at_ms:
+      record.terminal_at_ms === undefined || record.terminal_at_ms === null
+        ? null
+        : ToriiClient._normalizeUnsignedInteger(
+            record.terminal_at_ms,
+            `${context}.terminal_at_ms`,
+            { allowZero: true },
+          ),
   };
 }
 
@@ -24390,10 +24818,14 @@ function normalizeMultisigProposalsListResponse(
     proposals: proposalsValue.map((entry, index) =>
       normalizeMultisigProposalEntry(entry, `${context}.proposals[${index}]`),
     ),
+    next_cursor:
+      record.next_cursor === undefined || record.next_cursor === null
+        ? null
+        : requireNonEmptyString(record.next_cursor, `${context}.next_cursor`),
   };
 }
 
-function normalizeMultisigProposalLookupRequest(input) {
+function normalizeMultisigProposalGetRequest(input) {
   const record = ensureRecord(input, "getMultisigProposal request");
   const payload = normalizeMultisigAccountSelector(record, "getMultisigProposal request");
   const proposalId = pickOverride(record, "proposal_id", "proposalId");
@@ -24414,10 +24846,12 @@ function normalizeMultisigProposalLookupRequest(input) {
       "getMultisigProposal request.instructions_hash",
     );
   }
-  if (!payload.proposal_id && !payload.instructions_hash) {
+  const hasProposalId = payload.proposal_id !== undefined;
+  const hasInstructionsHash = payload.instructions_hash !== undefined;
+  if (hasProposalId === hasInstructionsHash) {
     throw createValidationError(
       ValidationErrorCode.INVALID_OBJECT,
-      "getMultisigProposal request requires proposal_id or instructions_hash",
+      "getMultisigProposal request requires exactly one of proposal_id or instructions_hash",
       "getMultisigProposal.request",
     );
   }
@@ -24434,12 +24868,7 @@ function normalizeMultisigProposalGetResponse(
       record.resolved_multisig_account_id,
       `${context}.resolved_multisig_account_id`,
     ),
-    proposal_id: requireNonEmptyString(record.proposal_id, `${context}.proposal_id`),
-    instructions_hash: normalizeHex32String(
-      record.instructions_hash,
-      `${context}.instructions_hash`,
-    ),
-    proposal: cloneJsonValue(record.proposal, `${context}.proposal`),
+    ...normalizeMultisigProposalEntry(record, context),
   };
 }
 

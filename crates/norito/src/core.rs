@@ -7796,6 +7796,37 @@ pub(crate) fn encode_bare_with_flags<T: NoritoSerialize>(
     Ok((payload, final_flags))
 }
 
+/// Return the exact canonical framed length without allocating an output buffer.
+///
+/// This deliberately counts a real serialization pass instead of trusting
+/// [`NoritoSerialize::encoded_len_exact`], because that method is only an
+/// optimization hint and an incorrect implementation must not understate a
+/// resource-admission bound.
+///
+/// # Errors
+///
+/// Returns a serialization error or [`Error::LengthMismatch`] if the framed
+/// length cannot be represented by `usize`.
+pub fn encoded_frame_len<T: NoritoSerialize>(value: &T) -> Result<usize, Error> {
+    let encode_guard = EncodeContextGuard::enter();
+    let flags = current_decode_flags_effective().unwrap_or_else(default_encode_flags);
+    let mut sink = std::io::sink();
+    let mut counted = CountingWriter {
+        inner: &mut sink,
+        len: 0,
+    };
+    {
+        let _guard = DecodeFlagsGuard::enter(flags);
+        value.serialize(&mut counted)?;
+    }
+    let payload_len = counted.len;
+    drop(encode_guard);
+    Header::SIZE
+        .checked_add(payload_alignment_padding_for::<T>())
+        .and_then(|framing| framing.checked_add(payload_len))
+        .ok_or(Error::LengthMismatch)
+}
+
 /// Serialize an object to a new byte vector.
 ///
 /// The returned buffer begins with [`Header::SIZE`] bytes reserved for the
@@ -9516,6 +9547,15 @@ mod tests {
             decode_field_canonical::<BadExactLen>(&encoded).expect("decode bad exact len");
         assert_eq!(decoded, value);
         assert_eq!(used, encoded.len());
+    }
+
+    #[test]
+    fn encoded_frame_len_ignores_bad_encoded_len_exact() {
+        let value = BadExactLen(0xAABBCCDD);
+        assert_eq!(
+            encoded_frame_len(&value).expect("count canonical frame"),
+            to_bytes(&value).expect("encode canonical frame").len()
+        );
     }
 
     #[test]

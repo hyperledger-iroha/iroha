@@ -116,6 +116,8 @@ pub enum ResolvedValueTarget {
     Intrinsic,
     /// State supplied by an explicitly typed standalone-test target.
     ExternalState,
+    /// Constant supplied by an explicitly typed standalone-test target.
+    ExternalConst,
 }
 
 /// Target selected for one source type reference.
@@ -125,6 +127,8 @@ pub enum ResolvedTypeTarget {
     Builtin,
     /// User-defined struct declaration.
     Struct(SymbolId),
+    /// Struct supplied by an explicitly typed standalone-test target.
+    ExternalStruct,
 }
 
 /// One resolved named type use.
@@ -170,6 +174,8 @@ pub enum ResolvedTarget {
     Value(ResolvedValueTarget),
     /// Named struct literal.
     StructLiteral(SymbolId),
+    /// Named struct literal supplied by an explicitly typed standalone-test target.
+    ExternalStructLiteral,
     /// Simple named assignment target.
     Assignment(ResolvedValueTarget),
 }
@@ -1378,11 +1384,14 @@ fn resolve_type(
     source: &SourceFile,
     fact: &TypeUseFact,
     structs: &BTreeMap<String, SymbolId>,
+    external_structs: &BTreeSet<String>,
 ) -> Result<ResolvedTypeUse, Diagnostic> {
     let target = if builtin_type(&fact.name) {
         ResolvedTypeTarget::Builtin
     } else if let Some(symbol) = structs.get(&fact.name) {
         ResolvedTypeTarget::Struct(*symbol)
+    } else if external_structs.contains(&fact.name) {
+        ResolvedTypeTarget::ExternalStruct
     } else {
         return Err(Diagnostic::error(
             "K2002",
@@ -1415,6 +1424,9 @@ struct GlobalTargets {
     imports: BTreeSet<String>,
     external_functions: BTreeSet<String>,
     external_states: BTreeSet<String>,
+    external_structs: BTreeSet<String>,
+    external_consts: BTreeSet<String>,
+    external_error_codes: BTreeMap<String, u32>,
 }
 
 struct HirLowerer<'a> {
@@ -1753,6 +1765,10 @@ impl<'a> HirLowerer<'a> {
             Some(ResolvedValueTarget::Intrinsic)
         } else if self.globals.external_states.contains(name) {
             Some(ResolvedValueTarget::ExternalState)
+        } else if self.globals.external_consts.contains(name) {
+            Some(ResolvedValueTarget::ExternalConst)
+        } else if let Some(code) = self.globals.external_error_codes.get(name) {
+            Some(ResolvedValueTarget::ErrorCode(*code))
         } else {
             None
         };
@@ -1774,6 +1790,8 @@ impl<'a> HirLowerer<'a> {
     ) -> Option<ResolvedTypeTarget> {
         if builtin_type(name) {
             Some(ResolvedTypeTarget::Builtin)
+        } else if self.globals.external_structs.contains(name) {
+            Some(ResolvedTypeTarget::ExternalStruct)
         } else {
             self.globals
                 .structs
@@ -2237,12 +2255,13 @@ impl<'a> HirLowerer<'a> {
                 }
             }
             Expr::StructLiteral { name, fields } => {
-                self.node_mut(id).target = self
-                    .globals
-                    .structs
-                    .get(name)
-                    .copied()
-                    .map(ResolvedTarget::StructLiteral);
+                self.node_mut(id).target = if let Some(symbol) = self.globals.structs.get(name) {
+                    Some(ResolvedTarget::StructLiteral(*symbol))
+                } else if self.globals.external_structs.contains(name) {
+                    Some(ResolvedTarget::ExternalStructLiteral)
+                } else {
+                    None
+                };
                 if self.node_mut(id).target.is_none() {
                     self.diagnostics.push(Diagnostic::error(
                         "K2002",
@@ -2502,13 +2521,8 @@ pub(crate) fn resolve(
     ast: SpannedProgram,
     source: &SourceFile,
 ) -> Result<ResolvedProgram, DiagnosticBundle> {
-    resolve_with_imports_and_externals(
-        ast,
-        source,
-        &BTreeMap::new(),
-        &BTreeSet::new(),
-        &BTreeSet::new(),
-    )
+    let external = ExternalResolutionEnvironment::default();
+    resolve_with_imports_and_externals(ast, source, &BTreeMap::new(), &external)
 }
 
 /// Resolve a module source while retaining explicit import-alias calls for the typed linker.
@@ -2517,31 +2531,34 @@ pub(crate) fn resolve_with_imports(
     source: &SourceFile,
     imports: &BTreeMap<String, ()>,
 ) -> Result<ResolvedProgram, DiagnosticBundle> {
-    resolve_with_imports_and_externals(ast, source, imports, &BTreeSet::new(), &BTreeSet::new())
+    let external = ExternalResolutionEnvironment::default();
+    resolve_with_imports_and_externals(ast, source, imports, &external)
 }
 
-/// Resolve a standalone test source against its target's typed functions and states.
+/// Names exported by one typed standalone-test target for fail-closed resolution.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct ExternalResolutionEnvironment {
+    pub(crate) functions: BTreeSet<String>,
+    pub(crate) states: BTreeSet<String>,
+    pub(crate) structs: BTreeSet<String>,
+    pub(crate) consts: BTreeSet<String>,
+    pub(crate) error_codes: BTreeMap<String, u32>,
+}
+
+/// Resolve a standalone test source against its target's typed interface.
 pub(crate) fn resolve_with_external_environment(
     ast: SpannedProgram,
     source: &SourceFile,
-    external_functions: &BTreeSet<String>,
-    external_states: &BTreeSet<String>,
+    external: &ExternalResolutionEnvironment,
 ) -> Result<ResolvedProgram, DiagnosticBundle> {
-    resolve_with_imports_and_externals(
-        ast,
-        source,
-        &BTreeMap::new(),
-        external_functions,
-        external_states,
-    )
+    resolve_with_imports_and_externals(ast, source, &BTreeMap::new(), external)
 }
 
 fn resolve_with_imports_and_externals(
     ast: SpannedProgram,
     source: &SourceFile,
     imports: &BTreeMap<String, ()>,
-    external_functions: &BTreeSet<String>,
-    external_states: &BTreeSet<String>,
+    external: &ExternalResolutionEnvironment,
 ) -> Result<ResolvedProgram, DiagnosticBundle> {
     if ast.facts.source_map.source() != source.id() {
         return Err(DiagnosticBundle::single(Diagnostic::error(
@@ -2677,7 +2694,7 @@ fn resolve_with_imports_and_externals(
 
     let mut types = Vec::with_capacity(ast.facts.type_uses.len());
     for fact in &ast.facts.type_uses {
-        match resolve_type(&ast, source, fact, &structs) {
+        match resolve_type(&ast, source, fact, &structs, &external.structs) {
             Ok(resolved) => types.push(resolved),
             Err(diagnostic) => diagnostics.push(diagnostic),
         }
@@ -2695,7 +2712,7 @@ fn resolve_with_imports_and_externals(
             Some(ResolvedCallTarget::Struct(*symbol))
         } else if intrinsic_call(&fact.name) {
             Some(ResolvedCallTarget::Intrinsic)
-        } else if external_functions.contains(&fact.name) {
+        } else if external.functions.contains(&fact.name) {
             Some(ResolvedCallTarget::External)
         } else if fact
             .name
@@ -2772,8 +2789,11 @@ fn resolve_with_imports_and_externals(
         consts,
         error_codes,
         imports: imports.keys().cloned().collect(),
-        external_functions: external_functions.clone(),
-        external_states: external_states.clone(),
+        external_functions: external.functions.clone(),
+        external_states: external.states.clone(),
+        external_structs: external.structs.clone(),
+        external_consts: external.consts.clone(),
+        external_error_codes: external.error_codes.clone(),
     };
     let SpannedProgram { program, facts } = ast;
     let (program, mut arena, lower_diagnostics) = HirLowerer::new(

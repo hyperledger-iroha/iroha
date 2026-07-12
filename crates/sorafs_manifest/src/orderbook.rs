@@ -55,6 +55,9 @@ pub const ORDERBOOK_RUNTIME_SNAPSHOT_MAX_CANONICAL_BYTES_V1: usize = 64 * 1024 *
 pub const ORDERBOOK_RUNTIME_SNAPSHOT_MAX_ENTRIES_V1: usize = 65_536;
 const ORDERBOOK_DECODE_MAX_DEPTH_V1: usize = 64;
 const ORDERBOOK_TRADE_ID_DOMAIN_V1: &[u8] = b"sorafs.orderbook.trade-id.v1";
+/// Domain separator for settlement-channel identifiers derived from trades.
+pub const ORDERBOOK_SETTLEMENT_CHANNEL_ID_DOMAIN_V1: &[u8] =
+    b"sorafs.orderbook.settlement-channel-id.v1";
 const ORDERBOOK_ORDER_SIGNATURE_DOMAIN_V1: &[u8] = b"sorafs.orderbook.order-signature.v1";
 const ORDERBOOK_CANCEL_SIGNATURE_DOMAIN_V1: &[u8] = b"sorafs.orderbook.cancel-signature.v1";
 const SETTLEMENT_RECEIPT_SIGNATURE_DOMAIN_V1: &[u8] =
@@ -1081,6 +1084,26 @@ pub fn derive_orderbook_trade_id_v1(
         trade_id[31] = 1;
     }
     trade_id
+}
+
+/// Derive the canonical settlement-channel identifier for a trade.
+///
+/// A valid trade has exactly one first-release channel. Keeping this derivation
+/// in the shared payload crate ensures local mirrors, ledger execution, SDKs,
+/// and reconciliation workers cannot choose different channel identifiers for
+/// the same fill.
+pub fn derive_orderbook_settlement_channel_id_v1(
+    trade: &TradeEventV1,
+) -> Result<[u8; 32], OrderbookValidationError> {
+    trade.validate()?;
+    let mut hasher = Hasher::new();
+    hasher.update(ORDERBOOK_SETTLEMENT_CHANNEL_ID_DOMAIN_V1);
+    hasher.update(&trade.trade_id);
+    let mut channel_id = *hasher.finalize().as_bytes();
+    if channel_id.iter().all(|byte| *byte == 0) {
+        channel_id[31] = 1;
+    }
+    Ok(channel_id)
 }
 
 fn sort_bids_by_price_time(entries: &mut [WorkingOrderV1]) {
@@ -2942,6 +2965,33 @@ mod tests {
         assert_eq!(channel.xor_locked, XorAmount::from_micro(6_009_000));
         assert_eq!(channel.status, SettlementChannelStatusV1::Open);
         assert_eq!(channel.validate(), Ok(()));
+    }
+
+    #[test]
+    fn settlement_channel_id_is_canonical_and_trade_bound() {
+        let trade = snapshot_trade();
+        let channel_id = derive_orderbook_settlement_channel_id_v1(&trade)
+            .expect("valid trade derives a channel id");
+        assert_ne!(channel_id, [0; 32]);
+        assert_eq!(
+            derive_orderbook_settlement_channel_id_v1(&trade),
+            Ok(channel_id)
+        );
+
+        let mut other = trade.clone();
+        other.trade_id[0] ^= 1;
+        assert_ne!(
+            derive_orderbook_settlement_channel_id_v1(&other)
+                .expect("other valid trade derives a channel id"),
+            channel_id
+        );
+
+        let mut invalid = trade;
+        invalid.trade_id = [0; 32];
+        assert_eq!(
+            derive_orderbook_settlement_channel_id_v1(&invalid),
+            Err(OrderbookValidationError::InvalidTradeId)
+        );
     }
 
     #[test]

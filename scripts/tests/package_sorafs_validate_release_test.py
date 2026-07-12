@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 import shutil
 from pathlib import Path
@@ -121,6 +122,37 @@ def test_release_packager_accepts_regular_staged_files(tmp_path: Path) -> None:
     assert (tmp_path / "out" / f"{package.name}.sha256").is_file()
     assert (tmp_path / "out" / f"{package.name}.manifest.json").is_file()
     assert (tmp_path / "out" / f"{package.name}.manifest.json.sha256").is_file()
+
+
+def test_release_packager_uses_windows_executable_name_for_windows_target(
+    tmp_path: Path,
+) -> None:
+    fake_binary = write_fake_validator(
+        tmp_path / "sorafs-validate.exe",
+        "#!/usr/bin/env python3\nprint('fake help')\n",
+    )
+
+    result = run_packager(
+        tmp_path,
+        fake_binary,
+        extra_args=["--target", "x86_64-pc-windows-msvc"],
+    )
+
+    assert result.returncode == 0, result.stderr
+    manifest_path = (
+        tmp_path
+        / "out"
+        / "sorafs-validate-test-version-x86_64-pc-windows-msvc.manifest.json"
+    )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["binary"] == "sorafs-validate.exe"
+    assert manifest["stage_files"][0]["path"] == "sorafs-validate.exe"
+    assert (
+        tmp_path
+        / "out"
+        / "sorafs-validate-test-version-x86_64-pc-windows-msvc"
+        / "sorafs-validate.exe"
+    ).is_file()
 
 
 def test_release_packager_rejects_missing_option_value_without_shell_error(

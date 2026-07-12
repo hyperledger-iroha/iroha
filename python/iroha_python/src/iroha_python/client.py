@@ -75,6 +75,7 @@ from iroha_torii_client.client import (
     OfflineProofBackend,
     OfflinePeerSplitTransitionJson,
     OfflinePeerSplitTransitionVariantJson,
+    OfflineActiveTransferVerifier,
     OfflineReadiness,
     SumeragiV2AdapterQueueStatus,
     SumeragiV2BlockSubject,
@@ -87,6 +88,7 @@ from iroha_torii_client.client import (
     SumeragiV2TimeoutReference,
     SumeragiV2TxQueueStatus,
     OfflineReadinessBlocker,
+    OfflineVerifierId,
     OfflineRedeemChangeJson,
     OfflineRedeemOperationResult,
     OfflineRedeemRequest,
@@ -109,6 +111,8 @@ from iroha_torii_client.client import (
     OfflineSpendBranchJson,
     OfflineTopUpAnchor,
     OfflineTopUpAnchorReferenceJson,
+    OfflineTopUpFinalityProof,
+    OfflineTopUpFinalityProofAnchor,
     OfflineTopUpOperationResult,
     OfflineTopUpRequest,
     OfflineTopUpResult,
@@ -4217,12 +4221,12 @@ _KOTODAMA_RESERVED_IDENTIFIERS = frozenset(
 )
 _KOTODAMA_RESERVED_DECLARATION_IDENTIFIERS = frozenset(
     {
-        "i64",
-        "u128",
+        "int",
+        "decimal",
+        "quantity",
         "bool",
         "string",
         "bytes",
-        "Amount",
         "Json",
         "AccountId",
         "AssetDefinitionId",
@@ -4248,9 +4252,25 @@ _KOTODAMA_RESERVED_DECLARATION_IDENTIFIERS = frozenset(
         "SoracloudRequest",
         "SoracloudResponse",
         "state_map_get",
+        "__kotodama_list_len",
+        "__kotodama_list_get",
+        "__kotodama_list_try_set",
+        "__kotodama_list_try_push",
+        "__kotodama_list_pop",
+        "__kotodama_list_contains",
+        "__kotodama_list_take",
+        "__kotodama_list_enumerate",
+        "__kotodama_decimal_div_round",
+        "__kotodama_quantity_div_round",
+        "__kotodama_quantity_ratio_round",
+        "__kotodama_decimal_to_int_trunc",
+        "__kotodama_decimal_to_int_round",
     }
 )
 _KOTODAMA_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_KOTODAMA_RETIRED_NUMERIC_TYPE_RE = re.compile(
+    r"(?<![A-Za-z0-9_])(?:i64|u128|Amount|num|number|float|money)(?![A-Za-z0-9_])"
+)
 
 
 def _contract_object(value: Any, path: str) -> Mapping[str, Any]:
@@ -4280,6 +4300,13 @@ def _contract_optional_string(value: Any, path: str) -> Optional[str]:
     if value is None:
         return None
     return _contract_required_string(value, path)
+
+
+def _contract_type_name(value: Any, path: str) -> str:
+    type_name = _contract_required_string(value, path)
+    if _KOTODAMA_RETIRED_NUMERIC_TYPE_RE.search(type_name) is not None:
+        raise TypeError(f"{path} contains a retired Kotodama numeric type")
+    return type_name
 
 
 def _contract_string_tuple(value: Any, path: str) -> Tuple[str, ...]:
@@ -4372,10 +4399,10 @@ class EntrypointValueKindV1(str, Enum):
     """Leaf representation used by the exact V1 public boundary schema."""
 
     INT = "Int"
-    U128 = "U128"
+    DECIMAL = "Decimal"
+    QUANTITY = "Quantity"
     BOOL = "Bool"
     STRING = "String"
-    AMOUNT = "Amount"
     JSON = "Json"
     NAME = "Name"
     ACCOUNT_ID = "AccountId"
@@ -4617,11 +4644,11 @@ class EntrypointValueTypeV1:
         """Render the exact canonical Kotodama V1 type name."""
 
         leaf_names = {
-            EntrypointValueKindV1.INT: "i64",
-            EntrypointValueKindV1.U128: "u128",
+            EntrypointValueKindV1.INT: "int",
+            EntrypointValueKindV1.DECIMAL: "decimal",
+            EntrypointValueKindV1.QUANTITY: "quantity",
             EntrypointValueKindV1.BOOL: "bool",
             EntrypointValueKindV1.STRING: "string",
-            EntrypointValueKindV1.AMOUNT: "Amount",
             EntrypointValueKindV1.JSON: "Json",
             EntrypointValueKindV1.NAME: "Name",
             EntrypointValueKindV1.ACCOUNT_ID: "AccountId",
@@ -4635,7 +4662,7 @@ class EntrypointValueTypeV1:
 
         core_views = {
             "AccountView": (["id", "metadata"], ["AccountId", "Json"]),
-            "AssetView": (["id", "amount"], ["AssetId", "Amount"]),
+            "AssetView": (["id", "amount"], ["AssetId", "quantity"]),
             "AssetDefinitionView": (
                 [
                     "id",
@@ -4650,7 +4677,7 @@ class EntrypointValueTypeV1:
                     "string",
                     "Option<string>",
                     "AccountId",
-                    "Amount",
+                    "quantity",
                     "Json",
                 ],
             ),
@@ -4705,7 +4732,7 @@ class EntrypointValueTypeV1:
                         or children[0].get("kind") != "List"
                         or children[0].get("capacity") != 64
                         or children[0].get("list_element_core_view") is None
-                        or children[1]["text"] != "Option<i64>"
+                        or children[1]["text"] != "Option<int>"
                     ):
                         raise ValueError("forged QueryPage schema")
                     result = {
@@ -4800,7 +4827,7 @@ class ContractEntrypointParameter:
         value = _contract_object(payload, "entrypoint parameter")
         return cls(
             name=_contract_required_string(value.get("name"), "entrypoint parameter.name"),
-            type_name=_contract_required_string(
+            type_name=_contract_type_name(
                 value.get("type_name"), "entrypoint parameter.type_name"
             ),
         )
@@ -4925,8 +4952,12 @@ class ContractEntrypointDescriptor:
             ),
             params=params,
             argument_schema=argument_schema,
-            return_type=_contract_optional_string(
-                value.get("return_type"), "entrypoint descriptor.return_type"
+            return_type=(
+                None
+                if value.get("return_type") is None
+                else _contract_type_name(
+                    value.get("return_type"), "entrypoint descriptor.return_type"
+                )
             ),
             return_schema=return_schema,
             permission=_contract_optional_string(
@@ -5032,7 +5063,7 @@ class ContractStateDescriptor:
             raise TypeError("state descriptor.name must be a canonical Kotodama identifier")
         return cls(
             name=name,
-            type_name=_contract_required_string(
+            type_name=_contract_type_name(
                 value.get("type_name"), "state descriptor.type_name"
             ),
         )
@@ -5084,7 +5115,7 @@ class ContractDynamicAccessHint:
             base_key=_contract_required_string(
                 value.get("base_key"), "dynamic access hint.base_key"
             ),
-            key_type=_contract_required_string(
+            key_type=_contract_type_name(
                 value.get("key_type"), "dynamic access hint.key_type"
             ),
             bound_kind=_contract_required_string(
@@ -7208,6 +7239,9 @@ class SumeragiNativeAmxPhase(str, Enum):
     COMMIT = "commit"
 
 
+_MAX_NATIVE_AMX_PARTICIPANT_SETTLEMENT_RECEIPTS = 4096
+
+
 def _required_field(payload: Mapping[str, Any], field_name: str, context: str) -> Any:
     if field_name not in payload:
         raise TypeError(f"{context} is missing required `{field_name}` field")
@@ -7370,6 +7404,12 @@ class SumeragiNativeAmxAttestationBody:
     participant_lane_id: int
     participant_dataspace_id: int
     participant_lane_incarnation: str
+    participant_previous_block_height: int
+    participant_previous_block_descriptor_hash: Optional[str]
+    participant_lane_block_height: int
+    participant_lane_block_view: int
+    participant_proposal_hash: str
+    participant_settlement_commitment: str
     participant_validator_set_hash: str
     participant_validator_count: int
     participant_min_quorum: int
@@ -7399,6 +7439,12 @@ class SumeragiNativeAmxAttestationBody:
             "participant_lane_id",
             "participant_dataspace_id",
             "participant_lane_incarnation",
+            "participant_previous_block_height",
+            "participant_previous_block_descriptor_hash",
+            "participant_lane_block_height",
+            "participant_lane_block_view",
+            "participant_proposal_hash",
+            "participant_settlement_commitment",
             "participant_validator_set_hash",
             "participant_validator_count",
             "participant_min_quorum",
@@ -7453,6 +7499,28 @@ class SumeragiNativeAmxAttestationBody:
         coordinator_view = _strict_uint(
             payload, "coordinator_lane_block_view", 64, context
         )
+        participant_previous_height = _strict_uint(
+            payload, "participant_previous_block_height", 64, context
+        )
+        participant_height = _strict_uint(
+            payload, "participant_lane_block_height", 64, context
+        )
+        participant_view = _strict_uint(
+            payload, "participant_lane_block_view", 64, context
+        )
+        previous_descriptor_value = _required_field(
+            payload, "participant_previous_block_descriptor_hash", context
+        )
+        if previous_descriptor_value is None:
+            previous_descriptor_hash: Optional[str] = None
+        else:
+            previous_descriptor_hash = _strict_hash_literal(
+                {
+                    "participant_previous_block_descriptor_hash": previous_descriptor_value
+                },
+                "participant_previous_block_descriptor_hash",
+                context,
+            )
         source_id = _strict_hex_string(payload, "source_id", 32, context)
         entrypoint_hash = _strict_hash_literal(payload, "tx_entrypoint_hash", context)
         if (
@@ -7460,7 +7528,10 @@ class SumeragiNativeAmxAttestationBody:
             or authority_context_height != round_value.height
             or coordinator_view != round_value.view
             or planned_height == 0
-            or entrypoint_hash[5:69] != source_id
+            or participant_height == 0
+            or participant_previous_height + 1 != participant_height
+            or (participant_previous_height == 0)
+            != (previous_descriptor_hash is None)
             or validator_count == 0
             or validator_count > 128
             or min_quorum != expected_quorum
@@ -7492,6 +7563,16 @@ class SumeragiNativeAmxAttestationBody:
             participant_lane_incarnation=_strict_hash_literal(
                 payload, "participant_lane_incarnation", context
             ),
+            participant_previous_block_height=participant_previous_height,
+            participant_previous_block_descriptor_hash=previous_descriptor_hash,
+            participant_lane_block_height=participant_height,
+            participant_lane_block_view=participant_view,
+            participant_proposal_hash=_strict_hash_literal(
+                payload, "participant_proposal_hash", context
+            ),
+            participant_settlement_commitment=_strict_hash_literal(
+                payload, "participant_settlement_commitment", context
+            ),
             participant_validator_set_hash=_strict_hash_literal(
                 payload, "participant_validator_set_hash", context
             ),
@@ -7521,6 +7602,12 @@ class SumeragiNativeAmxAttestationBody:
             self.participant_lane_id,
             self.participant_dataspace_id,
             self.participant_lane_incarnation,
+            self.participant_previous_block_height,
+            self.participant_previous_block_descriptor_hash,
+            self.participant_lane_block_height,
+            self.participant_lane_block_view,
+            self.participant_proposal_hash,
+            self.participant_settlement_commitment,
             self.participant_validator_set_hash,
             self.participant_validator_count,
             self.participant_min_quorum,
@@ -7641,12 +7728,209 @@ class SumeragiNativeAmxAttestationQc:
 
 
 @dataclass(frozen=True)
+class SumeragiNativeAmxParticipantLaneBlockDescriptor:
+    """Strict control-only participant lane-block descriptor."""
+
+    lane_id: int
+    dataspace_id: int
+    lane_incarnation: str
+    proposal_height: int
+    previous_lane_block_height: int
+    previous_lane_block_descriptor_hash: Optional[str]
+    lane_block_height: int
+    lane_block_view: int
+    subject_hash: str
+    payload_ownership_hash: str
+    rbc_instance_hash: str
+    accepted_candidate_indices: Tuple[int, ...]
+    accepted_transaction_hashes: Tuple[str, ...]
+    validator_set_hash_version: int
+    validator_set_hash: str
+    validator_set: Tuple[str, ...]
+    validator_count: int
+    min_quorum: int
+    qc_mode_tag: str
+    descriptor_hash: str
+
+    @classmethod
+    def from_payload(
+        cls, payload: Mapping[str, Any]
+    ) -> "SumeragiNativeAmxParticipantLaneBlockDescriptor":
+        context = "native AMX participant lane-block descriptor"
+        if not isinstance(payload, Mapping):
+            raise TypeError(f"{context} must be an object")
+        required_fields = {
+            "lane_id",
+            "dataspace_id",
+            "lane_incarnation",
+            "proposal_height",
+            "previous_lane_block_height",
+            "lane_block_height",
+            "lane_block_view",
+            "subject_hash",
+            "payload_ownership_hash",
+            "rbc_instance_hash",
+            "accepted_candidate_indices",
+            "accepted_transaction_hashes",
+            "validator_set_hash_version",
+            "validator_set_hash",
+            "validator_set",
+            "validator_count",
+            "min_quorum",
+            "qc_mode_tag",
+            "descriptor_hash",
+        }
+        allowed_fields = required_fields | {"previous_lane_block_descriptor_hash"}
+        unknown = sorted(set(payload).difference(allowed_fields))
+        if unknown:
+            raise ValueError(f"{context} contains unknown field `{unknown[0]}`")
+        missing = sorted(required_fields.difference(payload))
+        if missing:
+            raise TypeError(f"{context} is missing required `{missing[0]}` field")
+
+        previous_height = _strict_uint(
+            payload, "previous_lane_block_height", 64, context
+        )
+        previous_value = payload.get("previous_lane_block_descriptor_hash")
+        if previous_height == 0:
+            if "previous_lane_block_descriptor_hash" in payload:
+                raise ValueError(
+                    f"{context} must omit the predecessor hash at genesis"
+                )
+            previous_hash: Optional[str] = None
+        else:
+            if previous_value is None:
+                raise TypeError(f"{context} must carry a predecessor descriptor hash")
+            previous_hash = _strict_hash_literal(
+                {"previous_lane_block_descriptor_hash": previous_value},
+                "previous_lane_block_descriptor_hash",
+                context,
+            )
+
+        lane_height = _strict_uint(payload, "lane_block_height", 64, context)
+        if lane_height == 0 or previous_height + 1 != lane_height:
+            raise ValueError(f"{context} lane-block heights must be contiguous")
+
+        indices_value = _required_field(payload, "accepted_candidate_indices", context)
+        hashes_value = _required_field(payload, "accepted_transaction_hashes", context)
+        if (
+            not isinstance(indices_value, list)
+            or not isinstance(hashes_value, list)
+            or not indices_value
+            or len(indices_value) > 4096
+            or len(indices_value) != len(hashes_value)
+        ):
+            raise TypeError(
+                f"{context} accepted work must be matching bounded non-empty lists"
+            )
+        indices = tuple(
+            _strict_uint({"index": value}, "index", 64, f"{context} accepted work")
+            for value in indices_value
+        )
+        hashes = tuple(
+            _strict_hash_literal(
+                {"hash": value}, "hash", f"{context} accepted transaction"
+            )
+            for value in hashes_value
+        )
+        if len(set(indices)) != len(indices) or len(set(hashes)) != len(hashes):
+            raise ValueError(f"{context} accepted work contains duplicates")
+
+        validators_value = _required_field(payload, "validator_set", context)
+        if (
+            not isinstance(validators_value, list)
+            or not validators_value
+            or len(validators_value) > 128
+        ):
+            raise TypeError(f"{context} validator set must be a bounded non-empty list")
+        validators: List[str] = []
+        for index, validator in enumerate(validators_value):
+            if not isinstance(validator, str) or validator.strip() == "":
+                raise TypeError(
+                    f"{context} validator at index {index} must be a non-empty string"
+                )
+            validators.append(validator)
+        if len(set(validators)) != len(validators):
+            raise ValueError(f"{context} validator set contains duplicates")
+        validator_count = _strict_uint(payload, "validator_count", 32, context)
+        min_quorum = _strict_uint(payload, "min_quorum", 32, context)
+        expected_quorum = len(validators) - (len(validators) - 1) // 3
+        version = _strict_uint(payload, "validator_set_hash_version", 16, context)
+        if (
+            version != 1
+            or validator_count != len(validators)
+            or min_quorum != expected_quorum
+        ):
+            raise ValueError(f"{context} contains inconsistent committee fields")
+
+        return cls(
+            lane_id=_strict_uint(payload, "lane_id", 32, context),
+            dataspace_id=_strict_uint(payload, "dataspace_id", 64, context),
+            lane_incarnation=_strict_hash_literal(
+                payload, "lane_incarnation", context
+            ),
+            proposal_height=_strict_uint(payload, "proposal_height", 64, context),
+            previous_lane_block_height=previous_height,
+            previous_lane_block_descriptor_hash=previous_hash,
+            lane_block_height=lane_height,
+            lane_block_view=_strict_uint(payload, "lane_block_view", 64, context),
+            subject_hash=_strict_hash_literal(payload, "subject_hash", context),
+            payload_ownership_hash=_strict_hash_literal(
+                payload, "payload_ownership_hash", context
+            ),
+            rbc_instance_hash=_strict_hash_literal(
+                payload, "rbc_instance_hash", context
+            ),
+            accepted_candidate_indices=indices,
+            accepted_transaction_hashes=hashes,
+            validator_set_hash_version=version,
+            validator_set_hash=_strict_hash_literal(
+                payload, "validator_set_hash", context
+            ),
+            validator_set=tuple(validators),
+            validator_count=validator_count,
+            min_quorum=min_quorum,
+            qc_mode_tag=_strict_nonempty_string(payload, "qc_mode_tag", context),
+            descriptor_hash=_strict_hash_literal(payload, "descriptor_hash", context),
+        )
+
+
+@dataclass(frozen=True)
+class SumeragiNativeAmxParticipantLaneBlockProposal:
+    """Exact participant proposal, with recovery payload hints forbidden."""
+
+    descriptor: SumeragiNativeAmxParticipantLaneBlockDescriptor
+    proposal_hash: str
+
+    @classmethod
+    def from_payload(
+        cls, payload: Mapping[str, Any]
+    ) -> "SumeragiNativeAmxParticipantLaneBlockProposal":
+        context = "native AMX participant lane-block proposal"
+        if not isinstance(payload, Mapping):
+            raise TypeError(f"{context} must be an object")
+        _strict_exact_fields(payload, {"descriptor", "proposal_hash"}, context)
+        descriptor = _required_field(payload, "descriptor", context)
+        if not isinstance(descriptor, Mapping):
+            raise TypeError(f"{context} `descriptor` must be an object")
+        return cls(
+            descriptor=SumeragiNativeAmxParticipantLaneBlockDescriptor.from_payload(
+                descriptor
+            ),
+            proposal_hash=_strict_hash_literal(payload, "proposal_hash", context),
+        )
+
+
+@dataclass(frozen=True)
 class SumeragiNativeAmxLeg:
     """Prepare and commit v2 certificates for one participant lane/dataspace."""
 
     lane_id: int
     dataspace_id: int
     lane_incarnation: str
+    participant_proposal: SumeragiNativeAmxParticipantLaneBlockProposal
+    participant_settlement: SumeragiLaneSettlementCommitment
+    participant_settlement_hash: str
     prepare_qc: SumeragiNativeAmxAttestationQc
     commit_qc: SumeragiNativeAmxAttestationQc
 
@@ -7657,13 +7941,48 @@ class SumeragiNativeAmxLeg:
             raise TypeError(f"{context} must be an object")
         _strict_exact_fields(
             payload,
-            {"lane_id", "dataspace_id", "prepare_qc", "commit_qc"},
+            {
+                "lane_id",
+                "dataspace_id",
+                "participant_proposal",
+                "participant_settlement",
+                "participant_settlement_hash",
+                "prepare_qc",
+                "commit_qc",
+            },
             context,
         )
+        proposal_payload = _required_field(payload, "participant_proposal", context)
+        settlement_payload = _required_field(payload, "participant_settlement", context)
         prepare_payload = _required_field(payload, "prepare_qc", context)
         commit_payload = _required_field(payload, "commit_qc", context)
-        if not isinstance(prepare_payload, Mapping) or not isinstance(commit_payload, Mapping):
-            raise TypeError(f"{context} prepare and commit QCs must be objects")
+        if (
+            not isinstance(proposal_payload, Mapping)
+            or not isinstance(settlement_payload, Mapping)
+            or not isinstance(prepare_payload, Mapping)
+            or not isinstance(commit_payload, Mapping)
+        ):
+            raise TypeError(f"{context} participant artifacts and QCs must be objects")
+        # The protocol-defined participant settlement is terminal and cannot
+        # recursively embed another native AMX receipt.
+        if settlement_payload.get("native_amx_receipts") != []:
+            raise ValueError(f"{context} participant settlement must be terminal")
+        if settlement_payload.get("nexus_fee_receipts") != []:
+            raise ValueError(f"{context} participant settlement cannot charge a fee")
+        settlement_receipts_payload = settlement_payload.get("receipts")
+        if (
+            not isinstance(settlement_receipts_payload, list)
+            or not settlement_receipts_payload
+            or len(settlement_receipts_payload)
+            > _MAX_NATIVE_AMX_PARTICIPANT_SETTLEMENT_RECEIPTS
+        ):
+            raise ValueError(
+                f"{context} participant settlement receipts must be bounded and non-empty"
+            )
+        proposal = SumeragiNativeAmxParticipantLaneBlockProposal.from_payload(
+            proposal_payload
+        )
+        settlement = SumeragiLaneSettlementCommitment.from_payload(settlement_payload)
         prepare = SumeragiNativeAmxAttestationQc.from_payload(prepare_payload)
         commit = SumeragiNativeAmxAttestationQc.from_payload(commit_payload)
         if prepare.body.phase is not SumeragiNativeAmxPhase.PREPARE:
@@ -7681,15 +8000,67 @@ class SumeragiNativeAmxLeg:
             raise ValueError(f"{context} prepare and commit validator sets do not match")
         lane_id = _strict_uint(payload, "lane_id", 32, context)
         dataspace_id = _strict_uint(payload, "dataspace_id", 64, context)
+        settlement_hash = _strict_hash_literal(
+            payload, "participant_settlement_hash", context
+        )
+        body = prepare.body
+        descriptor = proposal.descriptor
         if (
-            prepare.body.participant_lane_id != lane_id
-            or prepare.body.participant_dataspace_id != dataspace_id
+            body.participant_lane_id != lane_id
+            or body.participant_dataspace_id != dataspace_id
+            or descriptor.lane_id != lane_id
+            or descriptor.dataspace_id != dataspace_id
+            or descriptor.lane_incarnation != body.participant_lane_incarnation
+            or descriptor.proposal_height != body.authority_context_height
+            or descriptor.previous_lane_block_height
+            != body.participant_previous_block_height
+            or descriptor.previous_lane_block_descriptor_hash
+            != body.participant_previous_block_descriptor_hash
+            or descriptor.lane_block_height != body.participant_lane_block_height
+            or descriptor.lane_block_view != body.participant_lane_block_view
+            or proposal.proposal_hash != body.participant_proposal_hash
+            or descriptor.validator_set_hash_version
+            != prepare.validator_set_hash_version
+            or descriptor.validator_set_hash != prepare.validator_set_hash
+            or descriptor.validator_set != prepare.validator_set
+            or descriptor.validator_count != body.participant_validator_count
+            or descriptor.min_quorum != body.participant_min_quorum
         ):
-            raise ValueError(f"{context} participant identity differs from its QC bodies")
+            raise ValueError(f"{context} participant proposal differs from its QC bodies")
+        settlement_sources = [receipt.source_id for receipt in settlement.receipts]
+        if (
+            settlement_hash != body.participant_settlement_commitment
+            or settlement.block_height != body.participant_lane_block_height
+            or settlement.lane_id != lane_id
+            or settlement.dataspace_id != dataspace_id
+            or settlement.lane_incarnation != body.participant_lane_incarnation
+            or settlement.tx_count != len(settlement.receipts)
+            or settlement.total_local_micro != 0
+            or settlement.total_xor_due_micro != 0
+            or settlement.total_xor_after_haircut_micro != 0
+            or settlement.total_xor_variance_micro != 0
+            or settlement.swap_metadata is not None
+            or len(set(settlement_sources)) != len(settlement_sources)
+            or settlement_sources.count(body.source_id) != 1
+            or any(
+                receipt.local_amount_micro != 0
+                or receipt.xor_due_micro != 0
+                or receipt.xor_after_haircut_micro != 0
+                or receipt.xor_variance_micro != 0
+                or receipt.timestamp_ms != body.authority_context_height
+                for receipt in settlement.receipts
+            )
+            or settlement.nexus_fee_receipts
+            or settlement.native_amx_receipts
+        ):
+            raise ValueError(f"{context} participant settlement differs from its QC body")
         return cls(
             lane_id=lane_id,
             dataspace_id=dataspace_id,
-            lane_incarnation=prepare.body.participant_lane_incarnation,
+            lane_incarnation=body.participant_lane_incarnation,
+            participant_proposal=proposal,
+            participant_settlement=settlement,
+            participant_settlement_hash=settlement_hash,
             prepare_qc=prepare,
             commit_qc=commit,
         )
@@ -10531,8 +10902,10 @@ __all__ = [
     "OfflineProofBackend",
     "OfflinePeerSplitTransitionJson",
     "OfflinePeerSplitTransitionVariantJson",
+    "OfflineActiveTransferVerifier",
     "OfflineReadiness",
     "OfflineReadinessBlocker",
+    "OfflineVerifierId",
     "OfflineRedeemChangeJson",
     "OfflineRedeemOperationResult",
     "OfflineRedeemRequest",
@@ -10555,6 +10928,8 @@ __all__ = [
     "OfflineSpendBranchJson",
     "OfflineTopUpAnchor",
     "OfflineTopUpAnchorReferenceJson",
+    "OfflineTopUpFinalityProof",
+    "OfflineTopUpFinalityProofAnchor",
     "OfflineTopUpOperationResult",
     "OfflineTopUpRequest",
     "OfflineTopUpResult",
@@ -10599,6 +10974,8 @@ __all__ = [
     "SumeragiNativeAmxPhase",
     "SumeragiNativeAmxAttestationBody",
     "SumeragiNativeAmxAttestationQc",
+    "SumeragiNativeAmxParticipantLaneBlockDescriptor",
+    "SumeragiNativeAmxParticipantLaneBlockProposal",
     "SumeragiNativeAmxLeg",
     "SumeragiNativeAmxReceipt",
     "SumeragiNewViewReceipt",

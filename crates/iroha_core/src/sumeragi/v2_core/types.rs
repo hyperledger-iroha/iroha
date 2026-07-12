@@ -4,6 +4,8 @@ use super::{Quorum, QuorumError};
 
 /// Wire protocol version implemented by this crate.
 pub const PROTOCOL_VERSION_V2: u16 = 2;
+/// Maximum voting validators accepted by a frozen v2 height context.
+pub const MAX_VOTING_ROSTER_LEN: usize = 128;
 
 macro_rules! fixed_id {
     ($name:ident, $doc:literal) => {
@@ -293,8 +295,9 @@ impl HeightContext {
     ///
     /// # Errors
     ///
-    /// Returns an error for an empty, unordered, zero-powered, overflowing, or
-    /// mode-inconsistent roster, or for an invalid parent certificate.
+    /// Returns an error for an empty, oversized, unordered, zero-powered,
+    /// overflowing, or mode-inconsistent roster, or for an invalid parent
+    /// certificate.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         id: ContextId,
@@ -310,6 +313,9 @@ impl HeightContext {
     ) -> Result<Self, HeightContextError> {
         if roster.is_empty() {
             return Err(HeightContextError::EmptyRoster);
+        }
+        if roster.len() > MAX_VOTING_ROSTER_LEN {
+            return Err(HeightContextError::RosterTooLarge);
         }
         let mut total = 0_u64;
         let mut previous = None;
@@ -466,6 +472,8 @@ impl HeightContext {
 pub enum HeightContextError {
     /// A height context cannot operate without voting validators.
     EmptyRoster,
+    /// The voting roster exceeds the first-release protocol bound.
+    RosterTooLarge,
     /// The roster contains duplicates or is not canonically ordered.
     RosterNotStrictlyOrdered,
     /// A voting validator has zero power.
@@ -482,6 +490,10 @@ impl fmt::Display for HeightContextError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::EmptyRoster => formatter.write_str("height context has an empty roster"),
+            Self::RosterTooLarge => write!(
+                formatter,
+                "height context voting roster exceeds the protocol limit of {MAX_VOTING_ROSTER_LEN}"
+            ),
             Self::RosterNotStrictlyOrdered => {
                 formatter.write_str("validator roster is not strictly ordered")
             }
@@ -903,22 +915,22 @@ impl SignedProposal {
 }
 
 /// A durable timeout intent for one view.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct TimeoutVote {
     context_id: ContextId,
     round: Round,
     signer: ValidatorId,
-    highest_prepare: Option<CertificateRef>,
+    highest_prepare: Option<QuorumCertificate>,
 }
 
 impl TimeoutVote {
     /// Constructs a timeout vote.
     #[must_use]
-    pub const fn new(
+    pub fn new(
         context_id: ContextId,
         round: Round,
         signer: ValidatorId,
-        highest_prepare: Option<CertificateRef>,
+        highest_prepare: Option<QuorumCertificate>,
     ) -> Self {
         Self {
             context_id,
@@ -930,26 +942,34 @@ impl TimeoutVote {
 
     /// Returns the height context identifier.
     #[must_use]
-    pub const fn context_id(self) -> ContextId {
+    pub const fn context_id(&self) -> ContextId {
         self.context_id
     }
 
     /// Returns the timed-out round.
     #[must_use]
-    pub const fn round(self) -> Round {
+    pub const fn round(&self) -> Round {
         self.round
     }
 
     /// Returns the signer.
     #[must_use]
-    pub const fn signer(self) -> ValidatorId {
+    pub const fn signer(&self) -> ValidatorId {
         self.signer
     }
 
     /// Returns the highest durable `PrepareQC` observed by the signer.
     #[must_use]
-    pub const fn highest_prepare(self) -> Option<CertificateRef> {
+    pub const fn highest_prepare(&self) -> Option<&QuorumCertificate> {
+        self.highest_prepare.as_ref()
+    }
+
+    /// Returns the stable reference authenticated by this vote.
+    #[must_use]
+    pub fn highest_prepare_ref(&self) -> Option<CertificateRef> {
         self.highest_prepare
+            .as_ref()
+            .map(QuorumCertificate::reference)
     }
 }
 
@@ -969,8 +989,8 @@ impl SignedTimeoutVote {
 
     /// Returns the timeout vote.
     #[must_use]
-    pub const fn vote(&self) -> TimeoutVote {
-        self.vote
+    pub fn vote(&self) -> TimeoutVote {
+        self.vote.clone()
     }
 
     /// Returns the opaque signature.

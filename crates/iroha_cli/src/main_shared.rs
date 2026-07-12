@@ -3758,7 +3758,7 @@ mod peer {
 mod multisig {
     use core::convert::TryFrom;
     use std::{
-        collections::BTreeMap,
+        collections::{BTreeMap, BTreeSet},
         num::{NonZeroU16, NonZeroU64},
         time::{Duration, SystemTime},
     };
@@ -3771,7 +3771,7 @@ mod multisig {
 
     #[derive(clap::Subcommand, Debug)]
     pub enum Command {
-        /// List pending multisig transactions relevant to you
+        /// List pending multisig proposals for explicitly selected authorities
         #[command(subcommand)]
         List(List),
         /// Register a multisig account
@@ -4106,15 +4106,18 @@ mod multisig {
 
     #[derive(clap::Subcommand, Debug)]
     pub enum List {
-        /// List all pending multisig transactions relevant to you
+        /// List pending proposals for an explicit finite set of multisig authorities
         All {
+            /// Exact multisig account id or canonical alias to query; repeat for each authority
+            #[arg(long = "multisig-selector", required = true)]
+            multisig_selectors: Vec<String>,
             /// Maximum number of proposals to emit after server ordering (client-side cap)
             #[arg(long)]
             limit: Option<u64>,
             /// Number of ordered proposals to skip after fetching cursor pages
             #[arg(long, default_value_t = 0)]
             offset: u64,
-            /// Cursor page size for the remote approvals list endpoint
+            /// Cursor page size for each remote proposals list request
             #[arg(long)]
             fetch_size: Option<u64>,
         },
@@ -4123,14 +4126,21 @@ mod multisig {
     impl Run for List {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             let client = context.client_from_config();
-            let (limit, offset, fetch_size) = match self {
+            let (multisig_selectors, limit, offset, fetch_size) = match self {
                 Self::All {
+                    multisig_selectors,
                     limit,
                     offset,
                     fetch_size,
-                } => (limit, offset, fetch_size),
+                } => (multisig_selectors, limit, offset, fetch_size),
             };
-            let entries = load_multisig_list_all_entries(&client, fetch_size, offset, limit)?;
+            let entries = load_multisig_list_all_entries(
+                &client,
+                &multisig_selectors,
+                fetch_size,
+                offset,
+                limit,
+            )?;
             match context.output_format() {
                 CliOutputFormat::Json => context.print_data(&entries),
                 CliOutputFormat::Text => {
@@ -4249,93 +4259,46 @@ mod multisig {
         proposal: MultisigProposalValue,
     }
 
-    fn multisig_approvals_remote_page_size(
-        fetch_size: Option<u64>,
+    fn proposal_list_request_for_selector(
+        selector: &str,
+        cursor: Option<String>,
         limit: Option<u64>,
-    ) -> Option<u64> {
-        fetch_size.or(limit)
-    }
-
-    fn collect_multisig_approvals_with<F>(
-        fetch_size: Option<u64>,
-        offset: u64,
-        limit: Option<u64>,
-        fetch_page: &mut F,
-    ) -> Result<Vec<iroha::client::MultisigApprovalEntry>>
-    where
-        F: FnMut(
-            iroha::client::MultisigApprovalsListRequest,
-        ) -> Result<iroha::client::MultisigApprovalsListResponse>,
-    {
-        let mut cursor = None;
-        let mut skip_remaining =
-            usize::try_from(offset).wrap_err("multisig offset exceeds usize")?;
-        let mut remaining_limit = limit
-            .map(|value| usize::try_from(value).wrap_err("multisig limit exceeds usize"))
-            .transpose()?;
-        let mut approvals = Vec::new();
-        let remote_limit = multisig_approvals_remote_page_size(fetch_size, limit);
-
-        loop {
-            if remaining_limit == Some(0) {
-                break;
-            }
-
-            let response = fetch_page(iroha::client::MultisigApprovalsListRequest {
-                status: vec![COLLECTING_SIGNATURES_STATUS.to_owned()],
-                operation_type: Vec::new(),
-                requires_my_signature: false,
-                cursor: cursor.clone(),
-                limit: remote_limit,
-            })?;
-
-            for entry in response.items {
-                if skip_remaining > 0 {
-                    skip_remaining -= 1;
-                    continue;
-                }
-                if remaining_limit == Some(0) {
-                    break;
-                }
-                approvals.push(entry);
-                if let Some(remaining) = remaining_limit.as_mut() {
-                    *remaining -= 1;
-                }
-            }
-
-            if response.next_cursor.is_none() {
-                break;
-            }
-            cursor = response.next_cursor;
+    ) -> Result<iroha::client::MultisigProposalsListRequest> {
+        if selector.is_empty() || selector.trim() != selector {
+            eyre::bail!("multisig selectors must be exact non-empty literals");
         }
-
-        Ok(approvals)
-    }
-
-    fn collect_multisig_approvals(
-        client: &Client,
-        fetch_size: Option<u64>,
-        offset: u64,
-        limit: Option<u64>,
-    ) -> Result<Vec<iroha::client::MultisigApprovalEntry>> {
-        let mut fetch_page = |request| client.query_multisig_approvals_for_authority(&request);
-        collect_multisig_approvals_with(fetch_size, offset, limit, &mut fetch_page)
-    }
-
-    fn multisig_list_all_entry_from_approval(
-        approval: iroha::client::MultisigApprovalEntry,
-    ) -> MultisigListAllEntry {
-        let iroha::client::MultisigApprovalEntry {
+        let parsed_account = AccountId::parse_encoded(selector)
+            .map(iroha::data_model::account::ParsedAccountId::into_account_id)
+            .ok();
+        let (multisig_account_id, multisig_account_alias) = match parsed_account {
+            Some(account_id) => (Some(account_id), None),
+            None if selector.contains('@') => (None, Some(selector.to_owned())),
+            None => eyre::bail!(
+                "multisig selector `{selector}` must be a canonical I105 account id or account alias"
+            ),
+        };
+        Ok(iroha::client::MultisigProposalsListRequest {
             multisig_account_id,
+            multisig_account_alias,
+            status: vec![COLLECTING_SIGNATURES_STATUS.to_owned()],
+            cursor,
+            limit,
+        })
+    }
+
+    fn multisig_list_all_entry_from_proposal(
+        multisig_account_id: AccountId,
+        proposal: iroha::client::MultisigProposalEntry,
+    ) -> MultisigListAllEntry {
+        let iroha::client::MultisigProposalEntry {
             proposal_id,
             instructions_hash,
-            proposal,
             operation_type,
             intent,
+            proposal,
             status,
             terminal_at_ms,
-            ..
-        } = approval;
+        } = proposal;
         MultisigListAllEntry {
             multisig_account_id,
             proposal_id,
@@ -4349,20 +4312,105 @@ mod multisig {
         }
     }
 
+    fn collect_multisig_proposals_with<F>(
+        selectors: &[String],
+        fetch_size: Option<u64>,
+        fetch_page: &mut F,
+    ) -> Result<Vec<MultisigListAllEntry>>
+    where
+        F: FnMut(
+            iroha::client::MultisigProposalsListRequest,
+        ) -> Result<iroha::client::MultisigProposalsListResponse>,
+    {
+        if selectors.is_empty() {
+            eyre::bail!("at least one --multisig-selector is required");
+        }
+        let mut seen_selectors = BTreeSet::new();
+        let mut merged = BTreeMap::<(AccountId, String), MultisigListAllEntry>::new();
+
+        for selector in selectors {
+            if !seen_selectors.insert(selector.clone()) {
+                eyre::bail!("duplicate multisig selector `{selector}`");
+            }
+            let mut cursor = None;
+            let mut seen_cursors = BTreeSet::new();
+            let mut resolved_account_id = None;
+
+            loop {
+                let request =
+                    proposal_list_request_for_selector(selector, cursor.clone(), fetch_size)?;
+                let response = fetch_page(request)?;
+                if let Some(expected) = resolved_account_id.as_ref() {
+                    if expected != &response.resolved_multisig_account_id {
+                        eyre::bail!(
+                            "multisig selector `{selector}` resolved to different accounts across cursor pages"
+                        );
+                    }
+                } else {
+                    resolved_account_id = Some(response.resolved_multisig_account_id.clone());
+                }
+
+                for proposal in response.proposals {
+                    let entry = multisig_list_all_entry_from_proposal(
+                        response.resolved_multisig_account_id.clone(),
+                        proposal,
+                    );
+                    let key = (
+                        entry.multisig_account_id.clone(),
+                        entry.instructions_hash.clone(),
+                    );
+                    if let Some(existing) = merged.get(&key) {
+                        if existing != &entry {
+                            eyre::bail!(
+                                "conflicting multisig proposal payload for {} on {}",
+                                entry.instructions_hash,
+                                entry.multisig_account_id
+                            );
+                        }
+                    } else {
+                        merged.insert(key, entry);
+                    }
+                }
+
+                let Some(next_cursor) = response.next_cursor else {
+                    break;
+                };
+                if next_cursor.is_empty() || !seen_cursors.insert(next_cursor.clone()) {
+                    eyre::bail!(
+                        "multisig selector `{selector}` returned an invalid or repeated cursor"
+                    );
+                }
+                cursor = Some(next_cursor);
+            }
+        }
+
+        let mut entries = merged.into_values().collect::<Vec<_>>();
+        entries.sort_by(|left, right| {
+            right
+                .proposed_at_ms
+                .cmp(&left.proposed_at_ms)
+                .then_with(|| left.instructions_hash.cmp(&right.instructions_hash))
+                .then_with(|| left.multisig_account_id.cmp(&right.multisig_account_id))
+        });
+        Ok(entries)
+    }
+
     fn load_multisig_list_all_entries(
         client: &Client,
+        selectors: &[String],
         fetch_size: Option<u64>,
         offset: u64,
         limit: Option<u64>,
     ) -> Result<Vec<MultisigListAllEntry>> {
-        collect_multisig_approvals(client, fetch_size, offset, limit).map(|approvals| {
-            approvals
-                .into_iter()
-                .map(multisig_list_all_entry_from_approval)
-                .collect()
-        })
+        let mut fetch_page = |request| client.post_multisig_proposals_list(&request);
+        let entries = collect_multisig_proposals_with(selectors, fetch_size, &mut fetch_page)?;
+        let offset = usize::try_from(offset).wrap_err("multisig offset exceeds usize")?;
+        let limit = limit
+            .map(|value| usize::try_from(value).wrap_err("multisig limit exceeds usize"))
+            .transpose()?
+            .unwrap_or(usize::MAX);
+        Ok(entries.into_iter().skip(offset).take(limit).collect())
     }
-
     fn format_multisig_intent(intent: &Option<Json>) -> Result<String> {
         match intent {
             Some(value) => norito::json::to_json(value)
@@ -4407,16 +4455,10 @@ mod multisig {
             );
         }
 
-        fn sample_approval_entry(
+        fn sample_proposal_entry(
             suffix: &str,
             proposed_at_ms: u64,
-        ) -> iroha::client::MultisigApprovalEntry {
-            let suffix_seed = suffix
-                .bytes()
-                .fold(0x40_u8, |seed, byte| seed.wrapping_add(byte))
-                .max(1);
-            let multisig_account_id =
-                AccountId::new(fixture_key_pair(suffix_seed).public_key().clone());
+        ) -> iroha::client::MultisigProposalEntry {
             let proposal = MultisigProposalValue::new(
                 Vec::new(),
                 proposed_at_ms,
@@ -4424,15 +4466,10 @@ mod multisig {
                 BTreeSet::new(),
                 None,
             );
-            iroha::client::MultisigApprovalEntry {
-                multisig_account_id,
-                spec: MultisigSpec::new(
-                    BTreeMap::new(),
-                    NonZeroU16::new(1).expect("quorum"),
-                    NonZeroU64::new(DEFAULT_MULTISIG_TTL_MS).expect("ttl"),
-                ),
-                proposal_id: format!("proposal-{suffix}"),
-                instructions_hash: format!("hash-{suffix}"),
+            let instructions_hash = format!("{suffix:0>64}");
+            iroha::client::MultisigProposalEntry {
+                proposal_id: instructions_hash.clone(),
+                instructions_hash,
                 proposal,
                 operation_type: "TRANSFER".to_owned(),
                 intent: Some(Json::new(norito::json!({ "sequence": suffix }))),
@@ -4460,64 +4497,149 @@ mod multisig {
         }
 
         #[test]
-        fn collect_multisig_approvals_applies_fetch_size_offset_and_limit_across_pages() {
-            let entries = vec![
-                sample_approval_entry("0", 5),
-                sample_approval_entry("1", 4),
-                sample_approval_entry("2", 3),
-                sample_approval_entry("3", 2),
-                sample_approval_entry("4", 1),
-            ];
+        fn selector_explicit_collection_merges_pages_and_authorities_deterministically() {
+            let first_account = AccountId::new(fixture_key_pair(0x51).public_key().clone());
+            let second_account = AccountId::new(fixture_key_pair(0x52).public_key().clone());
+            let selectors = vec!["first@sbp".to_owned(), "second@sbp".to_owned()];
             let mut requests = Vec::new();
-            let mut fetch_page = |request: iroha::client::MultisigApprovalsListRequest| {
-                requests.push((request.cursor.clone(), request.limit));
-                let page = match request.cursor.as_deref() {
-                    None => iroha::client::MultisigApprovalsListResponse {
-                        items: entries[..2].to_vec(),
-                        next_cursor: Some("cursor-1".to_owned()),
+            let mut fetch_page = |request: iroha::client::MultisigProposalsListRequest| {
+                let selector = request
+                    .multisig_account_alias
+                    .clone()
+                    .expect("alias selector");
+                requests.push((selector.clone(), request.cursor.clone(), request.limit));
+                let page = match (selector.as_str(), request.cursor.as_deref()) {
+                    ("first@sbp", None) => iroha::client::MultisigProposalsListResponse {
+                        resolved_multisig_account_id: first_account.clone(),
+                        proposals: vec![sample_proposal_entry("0", 5)],
+                        next_cursor: Some("first-next".to_owned()),
                     },
-                    Some("cursor-1") => iroha::client::MultisigApprovalsListResponse {
-                        items: entries[2..4].to_vec(),
-                        next_cursor: Some("cursor-2".to_owned()),
-                    },
-                    Some("cursor-2") => iroha::client::MultisigApprovalsListResponse {
-                        items: entries[4..].to_vec(),
+                    ("first@sbp", Some("first-next")) => {
+                        iroha::client::MultisigProposalsListResponse {
+                            resolved_multisig_account_id: first_account.clone(),
+                            proposals: vec![sample_proposal_entry("2", 3)],
+                            next_cursor: None,
+                        }
+                    }
+                    ("second@sbp", None) => iroha::client::MultisigProposalsListResponse {
+                        resolved_multisig_account_id: second_account.clone(),
+                        proposals: vec![
+                            sample_proposal_entry("1", 4),
+                            sample_proposal_entry("3", 2),
+                        ],
                         next_cursor: None,
                     },
-                    Some(other) => panic!("unexpected cursor {other}"),
+                    other => panic!("unexpected request {other:?}"),
                 };
                 Ok(page)
             };
 
-            let actual = collect_multisig_approvals_with(Some(2), 1, Some(3), &mut fetch_page)
-                .expect("collect approvals");
+            let actual = collect_multisig_proposals_with(&selectors, Some(2), &mut fetch_page)
+                .expect("collect proposals");
 
-            let proposal_ids = actual
+            let proposed_at = actual
                 .iter()
-                .map(|entry| entry.proposal_id.clone())
+                .map(|entry| entry.proposed_at_ms)
                 .collect::<Vec<_>>();
-            assert_eq!(
-                proposal_ids,
-                vec![
-                    "proposal-1".to_owned(),
-                    "proposal-2".to_owned(),
-                    "proposal-3".to_owned(),
-                ]
-            );
+            assert_eq!(proposed_at, vec![5, 4, 3, 2]);
             assert_eq!(
                 requests,
-                vec![(None, Some(2)), (Some("cursor-1".to_owned()), Some(2)),]
+                vec![
+                    ("first@sbp".to_owned(), None, Some(2)),
+                    (
+                        "first@sbp".to_owned(),
+                        Some("first-next".to_owned()),
+                        Some(2),
+                    ),
+                    ("second@sbp".to_owned(), None, Some(2)),
+                ]
+            );
+        }
+
+        #[test]
+        fn selector_explicit_collection_rejects_empty_duplicate_and_repeated_cursor_inputs() {
+            let mut never_fetch =
+                |_request| -> Result<iroha::client::MultisigProposalsListResponse> {
+                    panic!("invalid selector must fail before I/O")
+                };
+            assert!(collect_multisig_proposals_with(&[], None, &mut never_fetch).is_err());
+            assert!(
+                collect_multisig_proposals_with(
+                    &["same@sbp".to_owned(), "same@sbp".to_owned()],
+                    None,
+                    &mut |request| Ok(iroha::client::MultisigProposalsListResponse {
+                        resolved_multisig_account_id: AccountId::new(
+                            fixture_key_pair(0x53).public_key().clone(),
+                        ),
+                        proposals: Vec::new(),
+                        next_cursor: request.cursor.is_none().then(|| "next".to_owned()),
+                    }),
+                )
+                .is_err()
+            );
+
+            let account = AccountId::new(fixture_key_pair(0x54).public_key().clone());
+            let mut fetch = |_request| {
+                Ok(iroha::client::MultisigProposalsListResponse {
+                    resolved_multisig_account_id: account.clone(),
+                    proposals: Vec::new(),
+                    next_cursor: Some("loop".to_owned()),
+                })
+            };
+            let error = collect_multisig_proposals_with(&["loop@sbp".to_owned()], None, &mut fetch)
+                .expect_err("repeated cursor must fail closed");
+            assert!(error.to_string().contains("repeated cursor"));
+        }
+
+        #[test]
+        fn selector_explicit_collection_deduplicates_identical_entries_and_rejects_conflicts() {
+            let account = AccountId::new(fixture_key_pair(0x56).public_key().clone());
+            let selectors = vec!["first@sbp".to_owned(), "second@sbp".to_owned()];
+            let identical = sample_proposal_entry("b", 7);
+            let mut fetch_identical = |_request| {
+                Ok(iroha::client::MultisigProposalsListResponse {
+                    resolved_multisig_account_id: account.clone(),
+                    proposals: vec![identical.clone()],
+                    next_cursor: None,
+                })
+            };
+            let deduplicated =
+                collect_multisig_proposals_with(&selectors, None, &mut fetch_identical)
+                    .expect("identical selector projections should deduplicate");
+            assert_eq!(deduplicated.len(), 1);
+
+            let mut calls = 0_u8;
+            let mut fetch_conflict = |_request| {
+                calls += 1;
+                let mut entry = identical.clone();
+                if calls == 2 {
+                    entry.operation_type = "MINT".to_owned();
+                }
+                Ok(iroha::client::MultisigProposalsListResponse {
+                    resolved_multisig_account_id: account.clone(),
+                    proposals: vec![entry],
+                    next_cursor: None,
+                })
+            };
+            let error = collect_multisig_proposals_with(&selectors, None, &mut fetch_conflict)
+                .expect_err("conflicting duplicate proposal projections must fail closed");
+            assert!(
+                error
+                    .to_string()
+                    .contains("conflicting multisig proposal payload")
             );
         }
 
         #[test]
         fn render_multisig_list_all_text_outputs_human_readable_blocks() {
-            let entry = multisig_list_all_entry_from_approval(sample_approval_entry("a", 42));
+            let account = AccountId::new(fixture_key_pair(0x55).public_key().clone());
+            let entry =
+                multisig_list_all_entry_from_proposal(account, sample_proposal_entry("a", 42));
             let rendered =
                 render_multisig_list_all_text(std::slice::from_ref(&entry)).expect("render text");
 
             assert!(rendered.contains("multisig_account_id: "));
-            assert!(rendered.contains("proposal_id: proposal-a"));
+            assert!(rendered.contains(&format!("proposal_id: {}", "a".repeat(64))));
             assert!(rendered.contains("status: COLLECTING_SIGNATURES"));
             assert!(rendered.contains("operation_type: TRANSFER"));
             assert!(rendered.contains("intent: {\"sequence\":\"a\"}"));
@@ -6944,6 +7066,7 @@ mod settlement {
         metadata::Metadata,
         nexus::DataSpaceId,
         prelude::{AssetDefinitionId, Name, Numeric},
+        query::settlement::prelude::{FindFxCorridorPolicyById, FindFxCorridorPolicyRegistry},
     };
 
     #[derive(clap::Subcommand, Debug)]
@@ -6956,6 +7079,10 @@ mod settlement {
         SetFxCorridorPolicy(SetFxCorridorPolicyArgs),
         /// Execute one policy-backed native FX corridor settlement
         SettleFxCorridor(SettleFxCorridorArgs),
+        /// Read one governed native FX corridor policy
+        GetFxCorridorPolicy(GetFxCorridorPolicyArgs),
+        /// Read the complete governed native FX corridor policy registry
+        ListFxCorridorPolicies,
     }
 
     impl Run for Command {
@@ -6965,6 +7092,13 @@ mod settlement {
                 Command::Pvp(args) => args.run(context),
                 Command::SetFxCorridorPolicy(args) => args.run(context),
                 Command::SettleFxCorridor(args) => args.run(context),
+                Command::GetFxCorridorPolicy(args) => args.run(context),
+                Command::ListFxCorridorPolicies => {
+                    let registry = context
+                        .client_from_config()
+                        .query_single(FindFxCorridorPolicyRegistry)?;
+                    context.print_data(&registry)
+                }
             }
         }
     }
@@ -7009,6 +7143,22 @@ mod settlement {
         pub disabled: bool,
     }
 
+    #[derive(clap::Args, Debug)]
+    pub struct GetFxCorridorPolicyArgs {
+        /// Stable policy identifier
+        #[arg(long)]
+        pub policy_id: Name,
+    }
+
+    impl GetFxCorridorPolicyArgs {
+        fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+            let policy = context
+                .client_from_config()
+                .query_single(FindFxCorridorPolicyById::new(self.policy_id))?;
+            context.print_data(&policy)
+        }
+    }
+
     impl SetFxCorridorPolicyArgs {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             let policy = FxCorridorPolicy {
@@ -7028,6 +7178,9 @@ mod settlement {
                 rate_denominator: self.rate_denominator,
                 enabled: !self.disabled,
             };
+            if let Some(error) = policy.invariant_error() {
+                return Err(eyre!(error));
+            }
             let instruction: SettlementInstructionBox = SetFxCorridorPolicy { policy }.into();
             context.finish([InstructionBox::from(instruction)])
         }
@@ -7060,6 +7213,14 @@ mod settlement {
 
     impl SettleFxCorridorArgs {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+            if self.expected_policy_revision == 0 {
+                return Err(eyre!(
+                    "--expected-policy-revision must be greater than zero"
+                ));
+            }
+            if self.source_amount.is_zero() || self.source_amount.mantissa().is_negative() {
+                return Err(eyre!("--source-amount must be positive"));
+            }
             let instruction = SettleFxCorridor {
                 policy_id: self.policy_id,
                 expected_policy_revision: self.expected_policy_revision,

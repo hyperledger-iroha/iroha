@@ -37,7 +37,10 @@ use sorafs_manifest::{
     repair::{GcAuditEventV1, RepairAuditEventV1, RepairSlashProposalV1, RepairTaskStatusV1},
 };
 
-use crate::{GovernancePublishError, GovernancePublisher, RepairSlashStage};
+use crate::{
+    GovernancePublishError, GovernancePublisher, PdpGovernanceArchiveV1, PdpRejectionReasonV1,
+    PdpTerminalDecisionV1, RepairSlashStage,
+};
 
 static TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 const GOVERNANCE_DAG_SINK_FILESYSTEM: &str = "filesystem";
@@ -159,6 +162,10 @@ impl FilesystemGovernancePublisher {
 
     fn repairs_root(&self) -> PathBuf {
         self.root.join("repairs")
+    }
+
+    fn pdp_archive_root(&self) -> PathBuf {
+        self.root.join("pdp").join("archives")
     }
 
     fn repair_audit_root(&self) -> PathBuf {
@@ -560,6 +567,33 @@ fn status_label(status: DealSettlementStatusV1) -> &'static str {
         DealSettlementStatusV1::Completed => "completed",
         DealSettlementStatusV1::Cancelled => "cancelled",
         DealSettlementStatusV1::Defaulted => "defaulted",
+    }
+}
+
+fn pdp_decision_label(decision: PdpTerminalDecisionV1) -> &'static str {
+    match decision {
+        PdpTerminalDecisionV1::Accepted => "accepted",
+        PdpTerminalDecisionV1::Rejected(PdpRejectionReasonV1::DeadlineExpired) => {
+            "rejected_deadline_expired"
+        }
+        PdpTerminalDecisionV1::Rejected(PdpRejectionReasonV1::SubmissionLate) => {
+            "rejected_submission_late"
+        }
+        PdpTerminalDecisionV1::Rejected(PdpRejectionReasonV1::FutureTimestamp) => {
+            "rejected_future_timestamp"
+        }
+        PdpTerminalDecisionV1::Rejected(PdpRejectionReasonV1::InvalidProof) => {
+            "rejected_invalid_proof"
+        }
+        PdpTerminalDecisionV1::Rejected(PdpRejectionReasonV1::AdmissionRevoked) => {
+            "rejected_admission_revoked"
+        }
+        PdpTerminalDecisionV1::Rejected(PdpRejectionReasonV1::AdmissionInactive) => {
+            "rejected_admission_inactive"
+        }
+        PdpTerminalDecisionV1::Rejected(PdpRejectionReasonV1::StorageUnavailable) => {
+            "rejected_storage_unavailable"
+        }
     }
 }
 
@@ -2544,6 +2578,123 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
             Ok(())
         })();
         record_governance_dag_publish_result("deal_settlement", &result, encoded.len());
+        result
+    }
+
+    fn publish_pdp_archive(
+        &self,
+        archive: &PdpGovernanceArchiveV1,
+        encoded: &[u8],
+    ) -> Result<(), GovernancePublishError> {
+        let result = (|| -> Result<(), GovernancePublishError> {
+            let _publication_guard = self.lock_publication()?;
+            ensure_canonical_governance_encoding(archive, encoded, "PDP governance archive")?;
+            archive.validate().map_err(|error| {
+                GovernancePublishError::other(format!("invalid PDP governance archive: {error}"))
+            })?;
+            let digest = blake3::hash(encoded);
+            let digest_hex = digest.to_hex().to_string();
+            let base_path = self.pdp_archive_root().join(format!(
+                "{:020}-{}-{}-{digest_hex}",
+                archive.epoch_id,
+                hex::encode(archive.provider_id),
+                hex::encode(archive.challenge_id),
+            ));
+
+            let encoded_path = base_path.with_extension("to");
+            write_atomic(&encoded_path, encoded)?;
+            write_digest_sidecar(&encoded_path, encoded)?;
+
+            let decision = pdp_decision_label(archive.decision);
+            let mut payload = JsonMap::new();
+            payload.insert("version".into(), JsonValue::from(u64::from(archive.version)));
+            payload.insert("sequence".into(), JsonValue::from(archive.sequence));
+            payload.insert(
+                "challenge_id_hex".into(),
+                JsonValue::from(hex::encode(archive.challenge_id)),
+            );
+            payload.insert(
+                "commitment_digest_hex".into(),
+                JsonValue::from(hex::encode(archive.commitment_digest)),
+            );
+            payload.insert(
+                "manifest_digest_hex".into(),
+                JsonValue::from(hex::encode(archive.manifest_digest)),
+            );
+            payload.insert(
+                "provider_id_hex".into(),
+                JsonValue::from(hex::encode(archive.provider_id)),
+            );
+            payload.insert("epoch_id".into(), JsonValue::from(archive.epoch_id));
+            payload.insert("decision".into(), JsonValue::from(decision));
+            payload.insert(
+                "proof_digest_hex".into(),
+                archive
+                    .proof_digest
+                    .map(|digest| hex::encode(digest))
+                    .map_or(JsonValue::Null, JsonValue::from),
+            );
+            payload.insert(
+                "sampled_segments".into(),
+                JsonValue::from(u64::from(archive.sampled_segments)),
+            );
+            payload.insert(
+                "sampled_hot_leaves".into(),
+                JsonValue::from(u64::from(archive.sampled_hot_leaves)),
+            );
+            payload.insert("sampled_bytes".into(), JsonValue::from(archive.sampled_bytes));
+            payload.insert("issued_at_unix".into(), JsonValue::from(archive.issued_at_unix));
+            payload.insert(
+                "response_deadline_unix".into(),
+                JsonValue::from(archive.response_deadline_unix),
+            );
+            payload.insert(
+                "decided_at_unix".into(),
+                JsonValue::from(archive.decided_at_unix),
+            );
+            payload.insert("encoded_blake3".into(), JsonValue::from(digest_hex.clone()));
+            let json_body = json::to_json_pretty(&JsonValue::Object(payload)).map_err(|error| {
+                GovernancePublishError::other(format!("serialize PDP archive json: {error}"))
+            })?;
+            let json_path = base_path.with_extension("json");
+            write_atomic(&json_path, json_body.as_bytes())?;
+            write_digest_sidecar(&json_path, json_body.as_bytes())?;
+
+            let mut labels = JsonMap::new();
+            labels.insert(
+                "challenge_id_hex".into(),
+                JsonValue::from(hex::encode(archive.challenge_id)),
+            );
+            labels.insert(
+                "manifest_digest_hex".into(),
+                JsonValue::from(hex::encode(archive.manifest_digest)),
+            );
+            labels.insert(
+                "provider_id_hex".into(),
+                JsonValue::from(hex::encode(archive.provider_id)),
+            );
+            labels.insert("epoch_id".into(), JsonValue::from(archive.epoch_id));
+            labels.insert("decision".into(), JsonValue::from(decision));
+            labels.insert("sequence".into(), JsonValue::from(archive.sequence));
+            self.record_publish_index(
+                "pdp_archive",
+                &encoded_path,
+                &json_path,
+                &digest_hex,
+                encoded.len(),
+                labels,
+            )?;
+            self.record_runtime_signed_payload(
+                "pdp_archive",
+                GovernanceLogPayloadV1::PdpArchive(archive.clone()),
+                &encoded_path,
+                &json_path,
+                &digest_hex,
+                encoded.len(),
+            )?;
+            Ok(())
+        })();
+        record_governance_dag_publish_result("pdp_archive", &result, encoded.len());
         result
     }
 

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use sorafs_car::{
-    CarBuildPlan, CarWriteStats, CarWriter, chunker_registry,
+    CarBuildPlan, CarWriteStats, CarWriter, chunker_registry, compute_chunk_plan_digest_sha3,
     gateway::GatewayFetchedManifest,
     multi_fetch::{ChunkReceipt, FetchOutcome, FetchProvider, ProviderId, ProviderReport},
 };
@@ -86,6 +86,7 @@ fn build_manifest(
             plan.chunk_profile,
             chunker_registry::DEFAULT_MULTIHASH_CODE,
         ))
+        .chunk_digest_sha3_256(compute_chunk_plan_digest_sha3(&plan.chunks))
         .content_length(plan.content_length)
         .car_digest(car_stats.car_archive_digest.into())
         .car_size(car_stats.car_size)

@@ -2977,7 +2977,7 @@ mod tests {
     use ed25519_dalek::{PUBLIC_KEY_LENGTH, SIGNATURE_LENGTH, Signer, SigningKey};
     use norito::to_bytes;
     use sorafs_car::{
-        CarWriter,
+        CarWriter, compute_chunk_plan_digest_sha3,
         multi_fetch::{ChunkReceipt, FetchOutcome, FetchProvider, ProviderId, ProviderReport},
     };
     use sorafs_manifest::{
@@ -4677,6 +4677,7 @@ mod tests {
             .root_cid(stats.root_cids[0].clone())
             .dag_codec(DagCodecId(stats.dag_codec))
             .chunking_from_profile(plan.chunk_profile, chunker_registry::DEFAULT_MULTIHASH_CODE)
+            .chunk_digest_sha3_256(compute_chunk_plan_digest_sha3(&plan.chunks))
             .content_length(plan.content_length)
             .car_digest(car_digest)
             .car_size(stats.car_size)
@@ -4778,6 +4779,7 @@ mod tests {
             .root_cid(stats.root_cids[0].clone())
             .dag_codec(DagCodecId(stats.dag_codec))
             .chunking_from_profile(plan.chunk_profile, chunker_registry::DEFAULT_MULTIHASH_CODE)
+            .chunk_digest_sha3_256(compute_chunk_plan_digest_sha3(&plan.chunks))
             .content_length(plan.content_length)
             .car_digest(car_digest)
             .car_size(stats.car_size)

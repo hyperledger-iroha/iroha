@@ -210,6 +210,14 @@ pub struct SccpRegistryLimits {
 #[norito(deny_unknown_fields)]
 /// Consensus-critical SCCP proof and verifier-work limits.
 pub struct SccpResourceLimits {
+    /// Maximum successful outbound SCCP messages committed by one block.
+    pub max_outbound_messages_per_block: u32,
+    /// Maximum canonical bytes retained for one outbound SCCP payload.
+    pub max_outbound_message_payload_bytes: u64,
+    /// Maximum payload-bearing outbound messages awaiting destination proof acceptance.
+    pub max_pending_outbound_messages: u64,
+    /// Maximum canonical outbound payload bytes awaiting destination proof acceptance.
+    pub max_pending_outbound_payload_bytes: u64,
     /// Maximum closed SCCP proofs in one transaction.
     pub max_proofs_per_transaction: u32,
     /// Maximum closed SCCP proofs committed in one block.
@@ -313,6 +321,16 @@ fn expected_sccp_registry_limits() -> SccpRegistryLimits {
 }
 
 fn validate_sccp_resource_limits(limits: SccpResourceLimits) -> Result<()> {
+    if limits.max_outbound_messages_per_block
+        != iroha_data_model::bridge::SCCP_OUTBOUND_MESSAGES_MAX_PER_BLOCK_V1
+        || limits.max_outbound_message_payload_bytes
+            != u64::try_from(iroha_data_model::bridge::SCCP_OUTBOUND_MESSAGE_MAX_PAYLOAD_BYTES_V1)
+                .expect("SCCP outbound payload bound fits u64")
+    {
+        return Err(eyre!(
+            "SCCP capabilities advertise incompatible fixed outbound message limits"
+        ));
+    }
     macro_rules! require_nonzero {
         ($($field:ident),+ $(,)?) => {
             $(if limits.$field == 0 {
@@ -324,6 +342,10 @@ fn validate_sccp_resource_limits(limits: SccpResourceLimits) -> Result<()> {
         };
     }
     require_nonzero!(
+        max_outbound_messages_per_block,
+        max_outbound_message_payload_bytes,
+        max_pending_outbound_messages,
+        max_pending_outbound_payload_bytes,
         max_proofs_per_transaction,
         max_proofs_per_block,
         max_proof_bytes_per_proof,
@@ -355,6 +377,9 @@ fn validate_sccp_resource_limits(limits: SccpResourceLimits) -> Result<()> {
         };
     }
     require_json_safe!(
+        max_outbound_message_payload_bytes,
+        max_pending_outbound_messages,
+        max_pending_outbound_payload_bytes,
         max_proof_bytes_per_proof,
         max_proof_bytes_per_transaction,
         max_proof_bytes_per_block,
@@ -556,6 +581,8 @@ pub struct SccpRecentMessageLinks {
 pub struct SccpRecentMessage {
     /// Height of the finalized SORA block that anchored the message.
     pub height: u64,
+    /// Zero-based position in the finalized SCCP commitment tree.
+    pub commitment_index: u32,
     /// Hex-encoded canonical lane-bound SCCP message id.
     pub message_id_hex: String,
     /// Stable logical SCCP payload kind.
@@ -592,6 +619,26 @@ pub struct SccpRecentMessage {
 
 #[derive(
     Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+#[norito(deny_unknown_fields)]
+/// Compound continuation returned by recent SCCP discovery.
+pub struct SccpRecentCursor {
+    /// Height of the last returned item.
+    pub from: u64,
+    /// Commitment index of the last returned item.
+    pub after_index: u32,
+}
+
+#[derive(
+    Clone,
     Debug,
     PartialEq,
     Eq,
@@ -605,6 +652,10 @@ pub struct SccpRecentMessage {
 pub struct SccpRecentMessages {
     /// Newest-first committed outbound SCCP messages.
     pub items: Vec<SccpRecentMessage>,
+    /// Continuation for the next page when additional entries exist.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub next: Option<SccpRecentCursor>,
 }
 
 fn sccp_recent_projection_text(value: &iroha_sccp::SccpNormalizedCodecValueV1) -> Option<&str> {
@@ -693,6 +744,7 @@ fn validate_sccp_recent_messages(messages: &SccpRecentMessages) -> Result<()> {
     }
     let mut message_ids = std::collections::BTreeSet::new();
     let mut previous_height = u64::MAX;
+    let mut previous_commitment_index = None;
     for (index, item) in messages.items.iter().enumerate() {
         let label = format!("SCCP recent item {index}");
         if item.height == 0 || item.height > previous_height {
@@ -700,7 +752,26 @@ fn validate_sccp_recent_messages(messages: &SccpRecentMessages) -> Result<()> {
                 "{label} must have a positive height in newest-first order"
             ));
         }
+        if item.commitment_index
+            >= iroha_data_model::bridge::SCCP_OUTBOUND_MESSAGES_MAX_PER_BLOCK_V1
+        {
+            return Err(eyre!("{label} has an out-of-range commitment index"));
+        }
+        if item.height == previous_height {
+            if previous_commitment_index
+                .is_some_and(|previous| item.commitment_index != previous + 1)
+            {
+                return Err(eyre!(
+                    "{label} must follow the previous same-height commitment index"
+                ));
+            }
+        } else if index != 0 && item.commitment_index != 0 {
+            return Err(eyre!(
+                "{label} must begin an older block at commitment index zero"
+            ));
+        }
         previous_height = item.height;
+        previous_commitment_index = Some(item.commitment_index);
         let message_id =
             decode_exact_nonzero_sccp_hex32(&item.message_id_hex, &format!("{label} message id"))?;
         if !message_ids.insert(message_id) {
@@ -755,6 +826,21 @@ fn validate_sccp_recent_messages(messages: &SccpRecentMessages) -> Result<()> {
             return Err(eyre!("{label} contains a mismatched SCCP readback link"));
         }
     }
+    match (messages.next, messages.items.last()) {
+        (Some(next), Some(last))
+            if next.from == last.height && next.after_index == last.commitment_index => {}
+        (Some(_), Some(_)) => {
+            return Err(eyre!(
+                "SCCP recent continuation must identify the last returned item"
+            ));
+        }
+        (Some(_), None) => {
+            return Err(eyre!(
+                "SCCP recent continuation is forbidden for an empty page"
+            ));
+        }
+        (None, _) => {}
+    }
     Ok(())
 }
 
@@ -763,6 +849,8 @@ fn validate_sccp_recent_messages(messages: &SccpRecentMessages) -> Result<()> {
 pub struct SccpRecentMessagesQuery {
     /// Inclusive block height from which to scan backwards.
     pub from: Option<u64>,
+    /// Last commitment index already consumed at `from`.
+    pub after_index: Option<u32>,
     /// Maximum number of messages to return; Torii caps this at 50.
     pub limit: Option<u64>,
 }
@@ -772,11 +860,24 @@ impl SccpRecentMessagesQuery {
     ///
     /// # Errors
     ///
-    /// Returns an error for block height zero or a result limit outside `1..=50`.
+    /// Returns an error for block height zero, an unpaired/out-of-range commitment cursor, or a
+    /// result limit outside `1..=50`.
     pub fn validate(self) -> Result<()> {
         if self.from == Some(0) {
             return Err(eyre!(
                 "SCCP recent query `from` must be a positive block height"
+            ));
+        }
+        if self.after_index.is_some() && self.from.is_none() {
+            return Err(eyre!(
+                "SCCP recent query `after_index` requires the paired `from` height"
+            ));
+        }
+        if self.after_index.is_some_and(|index| {
+            index >= iroha_data_model::bridge::SCCP_OUTBOUND_MESSAGES_MAX_PER_BLOCK_V1
+        }) {
+            return Err(eyre!(
+                "SCCP recent query `after_index` must be between 0 and 511"
             ));
         }
         if self.limit.is_some_and(|limit| !(1..=50).contains(&limit)) {
@@ -789,6 +890,10 @@ impl SccpRecentMessagesQuery {
         self.validate()?;
         if let Some(from) = self.from {
             url.query_pairs_mut().append_pair("from", &from.to_string());
+        }
+        if let Some(after_index) = self.after_index {
+            url.query_pairs_mut()
+                .append_pair("after_index", &after_index.to_string());
         }
         if let Some(limit) = self.limit {
             url.query_pairs_mut()
@@ -1791,12 +1896,46 @@ fn decode_sccp_bridge_submit_response(
     norito::derive::NoritoSerialize,
     norito::derive::NoritoDeserialize,
 )]
+/// Selector-explicit request for the Torii multisig proposals listing API.
+pub struct MultisigProposalsListRequest {
+    /// Active concrete multisig account id.
+    #[norito(default)]
+    pub multisig_account_id: Option<iroha_data_model::account::AccountId>,
+    /// Stable multisig alias in canonical `name@domain.dataspace` or `name@dataspace` form.
+    #[norito(default)]
+    pub multisig_account_alias: Option<String>,
+    /// Optional lifecycle status filters.
+    #[norito(default)]
+    pub status: Vec<String>,
+    /// Opaque cursor returned by the preceding page.
+    #[norito(default)]
+    pub cursor: Option<String>,
+    /// Optional page size.
+    #[norito(default)]
+    pub limit: Option<u64>,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
 /// Multisig proposal entry returned by the Torii multisig proposals API.
 pub struct MultisigProposalEntry {
     /// Stable proposal identifier.
     pub proposal_id: String,
     /// Deterministic hash of the proposal instructions.
     pub instructions_hash: String,
+    /// Canonical operation type inferred from the proposal payload.
+    pub operation_type: String,
+    /// Optional machine-readable intent payload for structured operation families.
+    #[norito(default)]
+    pub intent: Option<Json>,
     /// Proposal payload and approval state.
     pub proposal: iroha_executor_data_model::isi::multisig::MultisigProposalValue,
     /// Proposal lifecycle status.
@@ -1822,6 +1961,67 @@ pub struct MultisigProposalsListResponse {
     pub resolved_multisig_account_id: iroha_data_model::account::AccountId,
     /// Matching proposal entries.
     pub proposals: Vec<MultisigProposalEntry>,
+    /// Opaque cursor for the next page, absent when this page is final.
+    #[norito(default)]
+    pub next_cursor: Option<String>,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+/// Selector-explicit request for one multisig proposal.
+pub struct MultisigProposalsGetRequest {
+    /// Active concrete multisig account id.
+    #[norito(default)]
+    pub multisig_account_id: Option<iroha_data_model::account::AccountId>,
+    /// Stable multisig alias in canonical `name@domain.dataspace` or `name@dataspace` form.
+    #[norito(default)]
+    pub multisig_account_alias: Option<String>,
+    /// Stable proposal identifier; mutually exclusive with `instructions_hash`.
+    #[norito(default)]
+    pub proposal_id: Option<String>,
+    /// Deterministic instruction hash; mutually exclusive with `proposal_id`.
+    #[norito(default)]
+    pub instructions_hash: Option<String>,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+/// Response payload returned by the Torii multisig proposal get API.
+pub struct MultisigProposalGetResponse {
+    /// Canonical multisig account id resolved by the server.
+    pub resolved_multisig_account_id: iroha_data_model::account::AccountId,
+    /// Stable proposal identifier.
+    pub proposal_id: String,
+    /// Deterministic instruction hash.
+    pub instructions_hash: String,
+    /// Canonical operation type inferred from the proposal payload.
+    pub operation_type: String,
+    /// Optional machine-readable intent payload.
+    #[norito(default)]
+    pub intent: Option<Json>,
+    /// Proposal payload and approval state.
+    pub proposal: iroha_executor_data_model::isi::multisig::MultisigProposalValue,
+    /// Proposal lifecycle status.
+    pub status: String,
+    /// Terminal timestamp for finalized, canceled, or expired proposals.
+    #[norito(default)]
+    pub terminal_at_ms: Option<u64>,
 }
 
 #[derive(
@@ -1900,126 +2100,6 @@ pub struct MultisigResponse {
     /// Optional detached signing message bytes.
     #[norito(default)]
     pub signing_message_b64: Option<String>,
-}
-
-#[derive(
-    Clone,
-    Debug,
-    Default,
-    PartialEq,
-    Eq,
-    JsonSerialize,
-    JsonDeserialize,
-    norito::derive::NoritoSerialize,
-    norito::derive::NoritoDeserialize,
-)]
-/// Request payload for caller-authority-scoped multisig approvals listing.
-pub struct MultisigApprovalsListRequest {
-    /// Optional status filter list such as `COLLECTING_SIGNATURES`, `FINALIZED`, `CANCELED`, or `EXPIRED`.
-    #[norito(default)]
-    pub status: Vec<String>,
-    /// Optional canonical proposal type filter list such as `TRANSFER` or `MINT_REQUEST`.
-    #[norito(default)]
-    pub operation_type: Vec<String>,
-    /// When true, return only proposals that still require the caller authority to sign.
-    #[norito(default)]
-    pub requires_my_signature: bool,
-    /// Opaque pagination cursor.
-    #[norito(default)]
-    pub cursor: Option<String>,
-    /// Optional page size.
-    #[norito(default)]
-    pub limit: Option<u64>,
-}
-
-#[derive(
-    Clone,
-    Debug,
-    PartialEq,
-    Eq,
-    JsonSerialize,
-    JsonDeserialize,
-    norito::derive::NoritoSerialize,
-    norito::derive::NoritoDeserialize,
-)]
-/// Caller-authority-visible multisig approval entry returned by Torii.
-pub struct MultisigApprovalEntry {
-    /// Canonical multisig account id that owns the proposal.
-    pub multisig_account_id: iroha_data_model::account::AccountId,
-    /// Active multisig specification for the owning account.
-    pub spec: iroha_executor_data_model::isi::multisig::MultisigSpec,
-    /// Stable proposal identifier.
-    pub proposal_id: String,
-    /// Deterministic hash of the proposal instructions.
-    pub instructions_hash: String,
-    /// Proposal payload and approval state.
-    pub proposal: iroha_executor_data_model::isi::multisig::MultisigProposalValue,
-    /// Canonical operation type inferred from the proposal payload.
-    pub operation_type: String,
-    /// Optional machine-readable intent payload for structured operation families.
-    #[norito(default)]
-    pub intent: Option<Json>,
-    /// Proposal lifecycle status.
-    pub status: String,
-    /// Terminal timestamp for finalized, canceled, or expired proposals.
-    #[norito(default)]
-    pub terminal_at_ms: Option<u64>,
-}
-
-#[derive(
-    Clone,
-    Debug,
-    PartialEq,
-    Eq,
-    JsonSerialize,
-    JsonDeserialize,
-    norito::derive::NoritoSerialize,
-    norito::derive::NoritoDeserialize,
-)]
-/// Response payload returned by the caller-authority-scoped multisig approvals listing API.
-pub struct MultisigApprovalsListResponse {
-    /// Matching approval entries.
-    pub items: Vec<MultisigApprovalEntry>,
-    /// Opaque cursor for the next page, if any.
-    #[norito(default)]
-    pub next_cursor: Option<String>,
-}
-
-#[derive(
-    Clone,
-    Debug,
-    Default,
-    PartialEq,
-    Eq,
-    JsonSerialize,
-    JsonDeserialize,
-    norito::derive::NoritoSerialize,
-    norito::derive::NoritoDeserialize,
-)]
-/// Request payload for fetching one caller-authority-visible multisig approval.
-pub struct MultisigApprovalsGetRequest {
-    /// Stable proposal identifier.
-    #[norito(default)]
-    pub proposal_id: Option<String>,
-    /// Deterministic hash of the proposal instructions.
-    #[norito(default)]
-    pub instructions_hash: Option<String>,
-}
-
-#[derive(
-    Clone,
-    Debug,
-    PartialEq,
-    Eq,
-    JsonSerialize,
-    JsonDeserialize,
-    norito::derive::NoritoSerialize,
-    norito::derive::NoritoDeserialize,
-)]
-/// Response payload returned by the caller-authority-scoped multisig approvals get API.
-pub struct MultisigApprovalsGetResponse {
-    /// The matching approval entry.
-    pub item: MultisigApprovalEntry,
 }
 
 const DEFAULT_MAX_QUEUED_DURATION: Duration = Duration::from_secs(60);
@@ -4161,6 +4241,50 @@ fn validate_multisig_response(response: &MultisigResponse) -> Result<()> {
         }
     }
 
+    Ok(())
+}
+
+fn validate_multisig_read_selector(
+    multisig_account_id: Option<&iroha_data_model::account::AccountId>,
+    multisig_account_alias: Option<&str>,
+) -> Result<()> {
+    match (multisig_account_id, multisig_account_alias) {
+        (Some(_), None) => Ok(()),
+        (None, Some(alias)) if !alias.is_empty() && alias.trim() == alias => Ok(()),
+        (None, Some(_)) => Err(eyre!(
+            "multisig_account_alias must be an exact non-empty canonical literal"
+        )),
+        _ => Err(eyre!(
+            "exactly one of multisig_account_id or multisig_account_alias must be set"
+        )),
+    }
+}
+
+fn validate_multisig_proposal_read_selector(
+    proposal_id: Option<&str>,
+    instructions_hash: Option<&str>,
+) -> Result<()> {
+    let literal = match (proposal_id, instructions_hash) {
+        (Some(value), None) | (None, Some(value)) => value,
+        _ => {
+            return Err(eyre!(
+                "exactly one of proposal_id or instructions_hash must be set"
+            ));
+        }
+    };
+    if literal.is_empty() || literal.trim() != literal {
+        return Err(eyre!(
+            "proposal selector must be an exact non-empty canonical instruction hash"
+        ));
+    }
+    let parsed = literal
+        .parse::<iroha_crypto::HashOf<Vec<iroha_data_model::isi::InstructionBox>>>()
+        .wrap_err("proposal selector must be a canonical instruction hash")?;
+    if parsed.to_string() != literal {
+        return Err(eyre!(
+            "proposal selector must use canonical lowercase instruction-hash encoding"
+        ));
+    }
     Ok(())
 }
 
@@ -8326,17 +8450,37 @@ mod evidence_http_tests {
         let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let account_id = AccountId::new(checked_random_keypair().public_key().clone());
         let account_id_literal = account_id.to_string();
+        let proposal_id = "a".repeat(64);
         let response = json_response(
             StatusCode::OK,
-            &format!("{{\"resolved_multisig_account_id\":\"{account_id}\",\"proposals\":[]}}"),
+            &format!(concat!(
+                "{{\"resolved_multisig_account_id\":\"{account_id}\",\"proposals\":[{{",
+                "\"proposal_id\":\"{proposal_id}\",\"instructions_hash\":\"{proposal_id}\",",
+                "\"operation_type\":\"ONCHAIN_MULTISIG\",\"intent\":null,",
+                "\"proposal\":{{\"instructions\":[],\"proposed_at_ms\":1,\"expires_at_ms\":2,",
+                "\"approvals\":[],\"is_relayed\":null}},\"status\":\"COLLECTING_SIGNATURES\",",
+                "\"terminal_at_ms\":null}}]}}"
+            )),
         );
 
         with_mock_http(respond_with(&snapshots, response), || {
+            let request = MultisigProposalsListRequest {
+                multisig_account_id: Some(account_id.clone()),
+                multisig_account_alias: None,
+                status: vec!["COLLECTING_SIGNATURES".to_owned()],
+                cursor: None,
+                limit: None,
+            };
             let resp = client
-                .post_multisig_proposals_list(&account_id, &["COLLECTING_SIGNATURES"])
+                .post_multisig_proposals_list(&request)
                 .expect("post multisig proposals list");
             assert_eq!(resp.resolved_multisig_account_id, account_id);
-            assert!(resp.proposals.is_empty());
+            assert_eq!(resp.proposals.len(), 1);
+            assert_eq!(resp.proposals[0].proposal_id, proposal_id);
+            assert_eq!(resp.proposals[0].operation_type, "ONCHAIN_MULTISIG");
+            assert_eq!(resp.proposals[0].status, "COLLECTING_SIGNATURES");
+            assert!(resp.proposals[0].intent.is_none());
+            assert!(resp.proposals[0].terminal_at_ms.is_none());
         });
 
         let store = snapshots.lock().expect("lock snapshot store");
@@ -8345,7 +8489,7 @@ mod evidence_http_tests {
         assert_eq!(snapshot.method, HttpMethod::POST);
         assert_eq!(
             snapshot.url.as_str(),
-            "http://mock.local/v1/multisig/proposals/query"
+            "http://mock.local/v1/multisig/proposals/list"
         );
         let body: Value = norito::json::from_slice(&snapshot.body).expect("decode request body");
         assert_eq!(
@@ -8357,6 +8501,119 @@ mod evidence_http_tests {
             name.eq_ignore_ascii_case("content-type") && value == APPLICATION_JSON
         });
         assert!(has_content_type, "Content-Type header missing");
+        let has_accept = snapshot
+            .headers
+            .iter()
+            .any(|(name, value)| name.eq_ignore_ascii_case("accept") && value == APPLICATION_JSON);
+        assert!(has_accept, "Accept header missing");
+    }
+
+    #[test]
+    fn multisig_proposal_reads_reject_missing_or_ambiguous_selectors_before_io() {
+        let client = client_with_base_url(base_url());
+        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let account_id = AccountId::new(checked_random_keypair().public_key().clone());
+        let response = json_response(StatusCode::OK, "{}");
+
+        with_mock_http(respond_with(&snapshots, response), || {
+            for request in [
+                MultisigProposalsListRequest {
+                    multisig_account_id: None,
+                    multisig_account_alias: None,
+                    status: Vec::new(),
+                    cursor: None,
+                    limit: None,
+                },
+                MultisigProposalsListRequest {
+                    multisig_account_id: Some(account_id.clone()),
+                    multisig_account_alias: Some("cbdc@hbl.sbp".to_owned()),
+                    status: Vec::new(),
+                    cursor: None,
+                    limit: None,
+                },
+            ] {
+                let error = client
+                    .post_multisig_proposals_list(&request)
+                    .expect_err("authority selector must be exact");
+                assert!(error.to_string().contains("exactly one"));
+            }
+
+            let request = MultisigProposalsGetRequest {
+                multisig_account_id: Some(account_id.clone()),
+                multisig_account_alias: None,
+                proposal_id: None,
+                instructions_hash: None,
+            };
+            let error = client
+                .post_multisig_proposals_get(&request)
+                .expect_err("proposal selector is required");
+            assert!(error.to_string().contains("exactly one"));
+
+            let hash = "a".repeat(64);
+            let request = MultisigProposalsGetRequest {
+                multisig_account_id: Some(account_id),
+                multisig_account_alias: None,
+                proposal_id: Some(hash.clone()),
+                instructions_hash: Some(hash),
+            };
+            let error = client
+                .post_multisig_proposals_get(&request)
+                .expect_err("dual proposal selectors must fail");
+            assert!(error.to_string().contains("exactly one"));
+        });
+
+        assert!(
+            snapshots.lock().expect("lock snapshot store").is_empty(),
+            "invalid selectors must not issue HTTP requests"
+        );
+    }
+
+    #[test]
+    fn post_multisig_proposals_get_builds_selector_explicit_request() {
+        let client = client_with_base_url(base_url());
+        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let account_id = AccountId::new(checked_random_keypair().public_key().clone());
+        let proposal_id = "a".repeat(64);
+        let response = json_response(
+            StatusCode::OK,
+            &format!(concat!(
+                "{{\"resolved_multisig_account_id\":\"{account_id}\",",
+                "\"proposal_id\":\"{proposal_id}\",\"instructions_hash\":\"{proposal_id}\",",
+                "\"operation_type\":\"ONCHAIN_MULTISIG\",\"intent\":null,",
+                "\"proposal\":{{\"instructions\":[],\"proposed_at_ms\":1,\"expires_at_ms\":2,",
+                "\"approvals\":[],\"is_relayed\":null}},\"status\":\"COLLECTING_SIGNATURES\",",
+                "\"terminal_at_ms\":null}}"
+            )),
+        );
+        let request = MultisigProposalsGetRequest {
+            multisig_account_id: Some(account_id.clone()),
+            multisig_account_alias: None,
+            proposal_id: Some(proposal_id.clone()),
+            instructions_hash: None,
+        };
+
+        with_mock_http(respond_with(&snapshots, response), || {
+            let decoded = client
+                .post_multisig_proposals_get(&request)
+                .expect("post multisig proposal get");
+            assert_eq!(decoded.resolved_multisig_account_id, account_id);
+            assert_eq!(decoded.proposal_id, proposal_id);
+        });
+
+        let store = snapshots.lock().expect("lock snapshot store");
+        assert_eq!(store.len(), 1);
+        let snapshot = &store[0];
+        assert_eq!(snapshot.method, HttpMethod::POST);
+        assert_eq!(
+            snapshot.url.as_str(),
+            "http://mock.local/v1/multisig/proposals/get"
+        );
+        assert!(snapshot.headers.iter().any(|(name, value)| {
+            name.eq_ignore_ascii_case("accept") && value == APPLICATION_JSON
+        }));
+        let body: Value = norito::json::from_slice(&snapshot.body).expect("decode request body");
+        assert_eq!(body["proposal_id"].as_str(), Some(proposal_id.as_str()));
+        assert!(body["instructions_hash"].is_null());
     }
 
     #[test]
@@ -8600,104 +8857,6 @@ mod evidence_http_tests {
 
         let store = snapshots.lock().expect("lock snapshot store");
         assert_eq!(store.len(), 4);
-    }
-
-    #[test]
-    fn query_multisig_approvals_for_authority_builds_signed_request() {
-        let client = client_with_base_url(base_url());
-        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = json_response(StatusCode::OK, "{\"items\":[],\"next_cursor\":null}");
-        let request = MultisigApprovalsListRequest {
-            status: vec!["COLLECTING_SIGNATURES".to_owned()],
-            operation_type: vec!["TRANSFER".to_owned()],
-            requires_my_signature: true,
-            cursor: Some("cursor-1".to_owned()),
-            limit: Some(25),
-        };
-
-        with_mock_http(respond_with(&snapshots, response), || {
-            let resp = client
-                .query_multisig_approvals_for_authority(&request)
-                .expect("query multisig approvals");
-            assert!(resp.items.is_empty());
-            assert!(resp.next_cursor.is_none());
-        });
-
-        let store = snapshots.lock().expect("lock snapshot store");
-        assert_eq!(store.len(), 1);
-        let snapshot = &store[0];
-        assert_eq!(snapshot.method, HttpMethod::POST);
-        assert_eq!(
-            snapshot.url.as_str(),
-            "http://mock.local/v1/multisig/approvals/query-for-authority"
-        );
-        let body: Value = norito::json::from_slice(&snapshot.body).expect("decode request body");
-        assert_eq!(
-            body,
-            norito::json::to_value(&request).expect("serialize approvals request")
-        );
-        let has_header = |expected_name: &str| {
-            snapshot
-                .headers
-                .iter()
-                .any(|(name, _)| name.eq_ignore_ascii_case(expected_name))
-        };
-        assert!(has_header(HEADER_ACCOUNT), "X-Iroha-Account header missing");
-        assert!(
-            has_header(HEADER_SIGNATURE),
-            "X-Iroha-Signature header missing"
-        );
-        assert!(
-            has_header(HEADER_TIMESTAMP_MS),
-            "X-Iroha-Timestamp-Ms header missing",
-        );
-        assert!(has_header(HEADER_NONCE), "X-Iroha-Nonce header missing");
-    }
-
-    #[test]
-    fn lookup_multisig_approval_for_authority_builds_signed_request() {
-        let client = client_with_base_url(base_url());
-        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let account_id = AccountId::new(checked_random_keypair().public_key().clone());
-        let response = json_response(
-            StatusCode::OK,
-            &format!(
-                "{{\"item\":{{\"multisig_account_id\":\"{account_id}\",\"spec\":{{\"signatories\":{{}},\"quorum\":1,\"transaction_ttl_ms\":60000}},\"proposal_id\":\"hash\",\"instructions_hash\":\"hash\",\"proposal\":{{\"instructions\":[],\"proposed_at_ms\":1,\"expires_at_ms\":2,\"approvals\":[]}},\"operation_type\":\"UNKNOWN\",\"intent\":null,\"status\":\"COLLECTING_SIGNATURES\",\"terminal_at_ms\":null}}}}"
-            ),
-        );
-        let request = MultisigApprovalsGetRequest {
-            proposal_id: Some("hash".to_owned()),
-            instructions_hash: None,
-        };
-
-        with_mock_http(respond_with(&snapshots, response), || {
-            let resp = client
-                .lookup_multisig_approval_for_authority(&request)
-                .expect("lookup multisig approval");
-            assert_eq!(resp.item.multisig_account_id, account_id);
-            assert_eq!(resp.item.proposal_id, "hash");
-        });
-
-        let store = snapshots.lock().expect("lock snapshot store");
-        assert_eq!(store.len(), 1);
-        let snapshot = &store[0];
-        assert_eq!(snapshot.method, HttpMethod::POST);
-        assert_eq!(
-            snapshot.url.as_str(),
-            "http://mock.local/v1/multisig/approvals/lookup-for-authority"
-        );
-        let body: Value = norito::json::from_slice(&snapshot.body).expect("decode request body");
-        assert_eq!(
-            body,
-            norito::json::to_value(&request).expect("serialize approvals get request")
-        );
-        assert!(
-            snapshot
-                .headers
-                .iter()
-                .any(|(name, _)| name.eq_ignore_ascii_case(HEADER_ACCOUNT)),
-            "X-Iroha-Account header missing",
-        );
     }
 
     #[test]
@@ -13999,28 +14158,25 @@ impl Client {
             .send()
     }
 
-    /// Convenience: POST `/v1/multisig/proposals/query` for a multisig account id.
+    /// Convenience: selector-explicit POST `/v1/multisig/proposals/list`.
     ///
     /// # Errors
     /// Returns an error if request construction, JSON serialization, the HTTP call,
     /// or response decoding fails.
     pub fn post_multisig_proposals_list(
         &self,
-        multisig_account_id: &iroha_data_model::account::AccountId,
-        statuses: &[&str],
+        request: &MultisigProposalsListRequest,
     ) -> Result<MultisigProposalsListResponse> {
-        let url = join_torii_url(&self.torii_url, "v1/multisig/proposals/query");
-        let status = statuses
-            .iter()
-            .map(|value| (*value).to_owned())
-            .collect::<Vec<_>>();
-        let body = norito::json::to_vec(&norito::json!({
-            "multisig_account_id": multisig_account_id,
-            "status": status,
-        }))?;
+        validate_multisig_read_selector(
+            request.multisig_account_id.as_ref(),
+            request.multisig_account_alias.as_deref(),
+        )?;
+        let url = join_torii_url(&self.torii_url, "v1/multisig/proposals/list");
+        let body = norito::json::to_vec(request)?;
         let resp = self
             .default_request(HttpMethod::POST, url)
             .header("Content-Type", APPLICATION_JSON)
+            .header("Accept", APPLICATION_JSON)
             .body(body)
             .build()?
             .send()?;
@@ -14033,6 +14189,44 @@ impl Client {
         }
         norito::json::from_slice(resp.body())
             .map_err(|err| eyre!("failed to decode multisig proposals list response: {err}"))
+    }
+
+    /// Convenience: selector-explicit POST `/v1/multisig/proposals/get`.
+    ///
+    /// # Errors
+    /// Returns an error if the authority or proposal selector is not exact, request
+    /// construction or JSON serialization fails, the HTTP call fails, or the response
+    /// cannot be decoded.
+    pub fn post_multisig_proposals_get(
+        &self,
+        request: &MultisigProposalsGetRequest,
+    ) -> Result<MultisigProposalGetResponse> {
+        validate_multisig_read_selector(
+            request.multisig_account_id.as_ref(),
+            request.multisig_account_alias.as_deref(),
+        )?;
+        validate_multisig_proposal_read_selector(
+            request.proposal_id.as_deref(),
+            request.instructions_hash.as_deref(),
+        )?;
+        let url = join_torii_url(&self.torii_url, "v1/multisig/proposals/get");
+        let body = norito::json::to_vec(request)?;
+        let resp = self
+            .default_request(HttpMethod::POST, url)
+            .header("Content-Type", APPLICATION_JSON)
+            .header("Accept", APPLICATION_JSON)
+            .body(body)
+            .build()?
+            .send()?;
+        if resp.status() != StatusCode::OK {
+            return Err(eyre!(
+                "Failed to get multisig proposal with HTTP status: {}. {}",
+                resp.status(),
+                std::str::from_utf8(resp.body()).unwrap_or("")
+            ));
+        }
+        norito::json::from_slice(resp.body())
+            .map_err(|err| eyre!("failed to decode multisig proposal get response: {err}"))
     }
 
     /// Convenience: POST `/v1/multisig/propose` with a typed instruction batch.
@@ -14070,65 +14264,6 @@ impl Client {
         validate_multisig_response(&decoded)
             .wrap_err("failed to validate multisig propose response")?;
         Ok(decoded)
-    }
-
-    /// Convenience: signed POST `/v1/multisig/approvals/query-for-authority` for the caller authority.
-    ///
-    /// # Errors
-    /// Returns an error if request construction, JSON serialization, the HTTP call,
-    /// or response decoding fails.
-    pub fn query_multisig_approvals_for_authority(
-        &self,
-        request: &MultisigApprovalsListRequest,
-    ) -> Result<MultisigApprovalsListResponse> {
-        let body = norito::json::to_vec(request)
-            .wrap_err("failed to encode multisig approvals query request")?;
-        let url = join_torii_url(&self.torii_url, "v1/multisig/approvals/query-for-authority");
-        let response = self.send_builder(
-            self.account_signed_request(HttpMethod::POST, url, body)?
-                .header("Content-Type", APPLICATION_JSON)
-                .header("Accept", APPLICATION_JSON),
-        )?;
-        if response.status() != StatusCode::OK {
-            return Err(
-                ResponseReport::with_msg("failed to query multisig approvals", &response)
-                    .unwrap_or_else(core::convert::identity)
-                    .into(),
-            );
-        }
-        norito::json::from_slice(response.body())
-            .wrap_err("failed to decode multisig approvals query response")
-    }
-
-    /// Convenience: signed POST `/v1/multisig/approvals/lookup-for-authority` for the caller authority.
-    ///
-    /// # Errors
-    /// Returns an error if request construction, JSON serialization, the HTTP call,
-    /// or response decoding fails.
-    pub fn lookup_multisig_approval_for_authority(
-        &self,
-        request: &MultisigApprovalsGetRequest,
-    ) -> Result<MultisigApprovalsGetResponse> {
-        let body = norito::json::to_vec(request)
-            .wrap_err("failed to encode multisig approval lookup request")?;
-        let url = join_torii_url(
-            &self.torii_url,
-            "v1/multisig/approvals/lookup-for-authority",
-        );
-        let response = self.send_builder(
-            self.account_signed_request(HttpMethod::POST, url, body)?
-                .header("Content-Type", APPLICATION_JSON)
-                .header("Accept", APPLICATION_JSON),
-        )?;
-        if response.status() != StatusCode::OK {
-            return Err(
-                ResponseReport::with_msg("failed to look up multisig approval", &response)
-                    .unwrap_or_else(core::convert::identity)
-                    .into(),
-            );
-        }
-        norito::json::from_slice(response.body())
-            .wrap_err("failed to decode multisig approval lookup response")
     }
 
     /// Convenience: GET `/v1/sorafs/pin` to list manifests in the pin registry.
@@ -30474,6 +30609,10 @@ mod tests {
                 max_retained_native_trust_anchors_per_lane: 4_096,
             },
             resource_limits: SccpResourceLimits {
+                max_outbound_messages_per_block: 512,
+                max_outbound_message_payload_bytes: 4_096,
+                max_pending_outbound_messages: 65_536,
+                max_pending_outbound_payload_bytes: 256 * 1024 * 1024,
                 max_proofs_per_transaction: 1,
                 max_proofs_per_block: 4,
                 max_proof_bytes_per_proof: 8 * 1024 * 1024,
@@ -30503,6 +30642,7 @@ mod tests {
         SccpRecentMessages {
             items: vec![SccpRecentMessage {
                 height: 42,
+                commitment_index: 0,
                 message_id_hex: "67".repeat(32),
                 kind: "transfer".to_owned(),
                 source_profile: "sora-taira".to_owned(),
@@ -30546,6 +30686,7 @@ mod tests {
                     proof_request_path: format!("/v1/sccp/proof-requests/{}", "67".repeat(32)),
                 },
             }],
+            next: None,
         }
     }
 
@@ -30744,6 +30885,10 @@ mod tests {
             };
         }
         assert_zero_resource_limit_rejects!(
+            max_outbound_messages_per_block,
+            max_outbound_message_payload_bytes,
+            max_pending_outbound_messages,
+            max_pending_outbound_payload_bytes,
             max_proofs_per_transaction,
             max_proofs_per_block,
             max_proof_bytes_per_proof,
@@ -30780,12 +30925,28 @@ mod tests {
             };
         }
         assert_unsafe_json_resource_limit_rejects!(
+            max_outbound_message_payload_bytes,
+            max_pending_outbound_messages,
+            max_pending_outbound_payload_bytes,
             max_proof_bytes_per_proof,
             max_proof_bytes_per_transaction,
             max_proof_bytes_per_block,
             max_native_header_bytes_per_transaction,
             max_native_header_bytes_per_block,
         );
+
+        let mut drifted_outbox = valid.clone();
+        drifted_outbox
+            .resource_limits
+            .max_outbound_messages_per_block = 511;
+        validate_sccp_capabilities(&drifted_outbox)
+            .expect_err("drifted fixed SCCP outbound message cap must reject");
+        let mut drifted_payload = valid.clone();
+        drifted_payload
+            .resource_limits
+            .max_outbound_message_payload_bytes = 4_095;
+        validate_sccp_capabilities(&drifted_payload)
+            .expect_err("drifted fixed SCCP outbound payload cap must reject");
 
         let mut per_proof_over_transaction = valid.clone();
         per_proof_over_transaction
@@ -31088,6 +31249,7 @@ mod tests {
             client_with_base_url(base_url()).get_sccp_recent_messages_with_query(
                 SccpRecentMessagesQuery {
                     from: Some(42),
+                    after_index: Some(12),
                     limit: Some(7),
                 },
             )
@@ -31097,26 +31259,40 @@ mod tests {
         assert_eq!(decoded, payload);
         let snapshot = store.lock().expect("snapshot lock")[0].clone();
         assert_eq!(snapshot.url.path(), "/v1/sccp/messages/recent");
-        assert_eq!(snapshot.url.query(), Some("from=42&limit=7"));
+        assert_eq!(snapshot.url.query(), Some("from=42&after_index=12&limit=7"));
         assert_eq!(snapshot.max_response_bytes, SCCP_RECENT_RESPONSE_MAX_BYTES);
         assert_single_accept_header(&snapshot, APPLICATION_NORITO);
 
         for query in [
             SccpRecentMessagesQuery {
                 from: Some(0),
+                after_index: None,
                 limit: Some(1),
             },
             SccpRecentMessagesQuery {
                 from: Some(1),
+                after_index: None,
                 limit: Some(0),
             },
             SccpRecentMessagesQuery {
                 from: Some(1),
+                after_index: None,
                 limit: Some(51),
             },
             SccpRecentMessagesQuery {
                 from: Some(1),
+                after_index: None,
                 limit: Some(u64::MAX),
+            },
+            SccpRecentMessagesQuery {
+                from: None,
+                after_index: Some(0),
+                limit: Some(1),
+            },
+            SccpRecentMessagesQuery {
+                from: Some(1),
+                after_index: Some(512),
+                limit: Some(1),
             },
         ] {
             assert!(query.validate().is_err());
@@ -31137,6 +31313,24 @@ mod tests {
         let mut duplicate = valid.clone();
         duplicate.items.push(duplicate.items[0].clone());
         assert!(validate_sccp_recent_messages(&duplicate).is_err());
+
+        let mut out_of_range_index = valid.clone();
+        out_of_range_index.items[0].commitment_index = 512;
+        assert!(validate_sccp_recent_messages(&out_of_range_index).is_err());
+
+        let mut wrong_cursor = valid.clone();
+        wrong_cursor.next = Some(SccpRecentCursor {
+            from: 42,
+            after_index: 1,
+        });
+        assert!(validate_sccp_recent_messages(&wrong_cursor).is_err());
+
+        let mut exact_cursor = valid.clone();
+        exact_cursor.next = Some(SccpRecentCursor {
+            from: 42,
+            after_index: 0,
+        });
+        validate_sccp_recent_messages(&exact_cursor).expect("exact compound cursor validates");
 
         let mut aliased = valid.clone();
         aliased.items[0].route_configuration_hash =
@@ -31218,9 +31412,25 @@ mod tests {
             norito::json::from_value::<SccpRecentMessages>(missing_projection).is_err(),
             "required payload projection must not default during JSON decoding"
         );
+        let mut missing_index = norito::json::to_value(&valid).expect("recent response JSON value");
+        let first_item = missing_index
+            .as_object_mut()
+            .and_then(|root| root.get_mut("items"))
+            .and_then(norito::json::Value::as_array_mut)
+            .and_then(|items| items.first_mut())
+            .and_then(norito::json::Value::as_object_mut)
+            .expect("first recent response item");
+        assert!(first_item.remove("commitment_index").is_some());
+        assert!(
+            norito::json::from_value::<SccpRecentMessages>(missing_index).is_err(),
+            "required commitment index must not default during JSON decoding"
+        );
 
         let template = valid.items[0].clone();
-        let mut oversized = SccpRecentMessages { items: Vec::new() };
+        let mut oversized = SccpRecentMessages {
+            items: Vec::new(),
+            next: None,
+        };
         for index in 0_u8..51 {
             let mut item = template.clone();
             item.height = u64::from(51 - index);

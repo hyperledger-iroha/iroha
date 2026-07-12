@@ -2100,25 +2100,6 @@ impl Actor {
         cached
     }
 
-    fn lane_block_artifact_has_matching_application_receipt(
-        kura: &crate::kura::Kura,
-        artifact: &crate::kura::LaneBlockArtifact,
-    ) -> bool {
-        let ownership = &artifact.ownership;
-        let Some(receipt) = kura
-            .read_lane_block_application_receipt(ownership.lane_id, ownership.lane_block_height)
-        else {
-            return false;
-        };
-        let descriptor = &receipt.proposal.descriptor;
-        descriptor.lane_id == ownership.lane_id
-            && descriptor.dataspace_id == ownership.dataspace_id
-            && descriptor.lane_block_height == ownership.lane_block_height
-            && descriptor.lane_block_view == ownership.lane_block_view
-            && Some(descriptor.descriptor_hash) == ownership.lane_block_descriptor_hash
-            && receipt.artifact.ownership == *ownership
-    }
-
     pub(super) fn shared_lane_block_authority_for_ingress(
         &self,
         target_height: u64,
@@ -3005,99 +2986,6 @@ impl Actor {
                 .unwrap_or(now)
                 .max(now)
         }))
-    }
-
-    fn rebroadcast_cached_lane_block_bundles_if_due(&mut self, now: Instant) -> usize {
-        let _ = self.prune_durably_finalized_lane_block_state();
-        if self.last_lane_block_rebroadcast.is_some_and(|last| {
-            now.saturating_duration_since(last) < self.legacy_lane_block_rebroadcast_cooldown()
-        }) {
-            return 0;
-        }
-
-        let local_peer = self.common_config.peer.id().clone();
-        let bundles = self
-            .subsystems
-            .lane_blocks
-            .periodic_rebroadcast_bundles_after(
-                &local_peer,
-                self.lane_block_rebroadcast_cursor,
-                LANE_BLOCK_REBROADCAST_BUNDLES_PER_TICK,
-                |proposal| self.lane_block_proposal_is_admissible_for_rebroadcast(proposal),
-            );
-        let Some(last_bundle) = bundles.last() else {
-            return 0;
-        };
-        self.lane_block_rebroadcast_cursor = Some(last_bundle.key);
-        self.last_lane_block_rebroadcast = Some(now);
-
-        let mut scheduled = 0_usize;
-        for bundle in bundles {
-            let proposal = bundle.proposal;
-            if !self.lane_block_route_accepts_ingress(
-                proposal.descriptor.lane_id,
-                proposal.descriptor.dataspace_id,
-                proposal.descriptor.lane_incarnation,
-                proposal.descriptor.proposal_height,
-                proposal.descriptor.lane_block_height,
-            ) || !self.lane_block_slot_within_ingress_horizon(
-                proposal.descriptor.lane_id,
-                proposal.descriptor.dataspace_id,
-                proposal.descriptor.proposal_height,
-                proposal.descriptor.lane_block_height,
-                proposal.proposal_hash,
-            ) || !self.lane_block_authority_accepts_ingress(
-                proposal.descriptor.lane_id,
-                proposal.descriptor.dataspace_id,
-                proposal.descriptor.lane_incarnation,
-                proposal.descriptor.proposal_height,
-                proposal.descriptor.lane_block_height,
-                proposal.proposal_hash,
-                proposal.descriptor.validator_count,
-                proposal.descriptor.min_quorum,
-                proposal.descriptor.validator_set_hash,
-                Some(proposal.descriptor.validator_set.as_slice()),
-                None,
-            ) {
-                continue;
-            }
-
-            if bundle.rebroadcast_proposal {
-                scheduled =
-                    scheduled.saturating_add(self.schedule_lane_block_message_to_validator_set(
-                        BlockMessage::LaneBlockProposal(proposal.clone()),
-                        proposal.descriptor.validator_set.as_slice(),
-                    ));
-            }
-            for vote in bundle.local_votes {
-                if !self
-                    .lane_block_vote_body_targets_authorized_local_signer(&vote.body, &local_peer)
-                {
-                    continue;
-                }
-                scheduled =
-                    scheduled.saturating_add(self.schedule_lane_block_message_to_validator_set(
-                        BlockMessage::LaneBlockVote(vote.clone()),
-                        proposal.descriptor.validator_set.as_slice(),
-                    ));
-                self.schedule_background(BackgroundRequest::Broadcast {
-                    msg: BlockMessageWire::new(BlockMessage::LaneBlockVote(vote)),
-                });
-                scheduled = scheduled.saturating_add(1);
-            }
-            for qc in bundle.qcs {
-                scheduled =
-                    scheduled.saturating_add(self.schedule_lane_block_message_to_validator_set(
-                        BlockMessage::LaneBlockQc(qc.clone()),
-                        qc.validator_set.as_slice(),
-                    ));
-                self.schedule_background(BackgroundRequest::Broadcast {
-                    msg: BlockMessageWire::new(BlockMessage::LaneBlockQc(qc)),
-                });
-                scheduled = scheduled.saturating_add(1);
-            }
-        }
-        scheduled
     }
 
     fn broadcast_due_lane_block_new_view_votes(&mut self) -> usize {

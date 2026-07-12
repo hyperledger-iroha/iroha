@@ -290,6 +290,80 @@ class AttestedOfflineNoteTest {
     }
 
     @Test
+    fun androidKeyMintChallengeBuildsBeforeKeyGeneration() {
+        val fixture = loadFixture()
+        val vector = obj(obj(fixture, "chain_vectors"), "android_keymint_challenge")
+        val signingDigest = hexBytes(string(vector, "android_signing_certificate_sha256"))
+        val challenge = AttestedOfflineNote.DeviceAttestationRegistration
+            .androidPreKeyGenerationChallengeHash(
+                version = int(vector, "version"),
+                deviceId = string(vector, "device_id"),
+                accountId = string(vector, "account_id"),
+                assetDefinitionId = nullableString(vector, "asset_definition_id"),
+                iosTeamId = nullableString(vector, "ios_team_id"),
+                iosBundleId = nullableString(vector, "ios_bundle_id"),
+                iosEnvironment = nullableString(vector, "ios_environment"),
+                androidPackageName = string(vector, "android_package_name"),
+                androidSigningCertificateSha256 = signingDigest,
+                publicKey = base64Bytes(string(vector, "public_key")),
+                assertionScheme = string(vector, "assertion_scheme"),
+                assertionKeyAlgorithm = string(vector, "assertion_key_algorithm"),
+                assertionUsageCountLimit = nullableInt(vector, "assertion_usage_count_limit"),
+                oneUse = bool(vector, "one_use"),
+                recentBlockHeight = long(vector, "recent_block_height"),
+                recentBlockHash = hexBytes(string(vector, "recent_block_hash")),
+                expiresAtMs = long(vector, "expires_at_ms"),
+            )
+        assertEquals(string(vector, "challenge_hash"), hex(challenge))
+
+        val changedDigest = signingDigest.copyOf().also { it[0] = (it[0].toInt() xor 1).toByte() }
+        val changedChallenge = AttestedOfflineNote.DeviceAttestationRegistration
+            .androidPreKeyGenerationChallengeHash(
+                version = int(vector, "version"),
+                deviceId = string(vector, "device_id"),
+                accountId = string(vector, "account_id"),
+                assetDefinitionId = nullableString(vector, "asset_definition_id"),
+                iosTeamId = nullableString(vector, "ios_team_id"),
+                iosBundleId = nullableString(vector, "ios_bundle_id"),
+                iosEnvironment = nullableString(vector, "ios_environment"),
+                androidPackageName = string(vector, "android_package_name"),
+                androidSigningCertificateSha256 = changedDigest,
+                publicKey = base64Bytes(string(vector, "public_key")),
+                assertionScheme = string(vector, "assertion_scheme"),
+                assertionKeyAlgorithm = string(vector, "assertion_key_algorithm"),
+                assertionUsageCountLimit = nullableInt(vector, "assertion_usage_count_limit"),
+                oneUse = bool(vector, "one_use"),
+                recentBlockHeight = long(vector, "recent_block_height"),
+                recentBlockHash = hexBytes(string(vector, "recent_block_hash")),
+                expiresAtMs = long(vector, "expires_at_ms"),
+            )
+        assertFalse(challenge.contentEquals(changedChallenge))
+
+        assertFailsWith<IllegalArgumentException> {
+            AttestedOfflineNote.DeviceAttestationRegistration
+                .androidPreKeyGenerationChallengeHash(
+                    version = int(vector, "version"),
+                    deviceId = string(vector, "device_id"),
+                    accountId = string(vector, "account_id"),
+                    assetDefinitionId = nullableString(vector, "asset_definition_id"),
+                    iosTeamId = nullableString(vector, "ios_team_id"),
+                    iosBundleId = nullableString(vector, "ios_bundle_id"),
+                    iosEnvironment = nullableString(vector, "ios_environment"),
+                    androidPackageName = string(vector, "android_package_name"),
+                    androidSigningCertificateSha256 = signingDigest,
+                    publicKey = base64Bytes(string(vector, "public_key")),
+                    assertionScheme = "android-keymint-ecdsa-p256-usage-limit",
+                    assertionKeyAlgorithm = string(vector, "assertion_key_algorithm"),
+                    assertionUsageCountLimit = nullableInt(vector, "assertion_usage_count_limit"),
+                    oneUse = bool(vector, "one_use"),
+                    recentBlockHeight = long(vector, "recent_block_height"),
+                    recentBlockHash = hexBytes(string(vector, "recent_block_hash")),
+                    expiresAtMs = long(vector, "expires_at_ms"),
+                )
+        }
+    }
+
+    @Test
     fun attestedOfflineNoteInstructionWrappersRejectProofMismatches() {
         val fixture = loadFixture()
         val audit = audit(fixture)

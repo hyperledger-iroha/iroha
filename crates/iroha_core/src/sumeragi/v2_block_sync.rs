@@ -60,6 +60,7 @@ impl DiscoveredCommitCertificate {
     }
 
     /// Borrow the authenticated transport response for diagnostics/tests.
+    #[cfg(test)]
     pub(crate) const fn response(&self) -> &wire::CommitCertificateResponse {
         &self.response
     }
@@ -461,6 +462,7 @@ impl V2BlockSyncDiscovery {
     }
 
     /// Number of bounded outstanding requests.
+    #[cfg(test)]
     pub(crate) fn outstanding_len(&self) -> usize {
         self.outstanding.len()
     }

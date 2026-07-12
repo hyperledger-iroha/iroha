@@ -36,7 +36,7 @@ use iroha_data_model::{
     executor::{ManifestAbiHashMismatchInfo, ManifestCodeHashMismatchInfo},
     isi::{
         InstructionBox,
-        settlement::{DvpIsi, PvpIsi, SettleFxCorridor},
+        settlement::{DvpIsi, PvpIsi, SettleFxCorridor, SettlementInstructionBox},
         smart_contract_code::{
             ActivateContractInstance, RegisterSmartContractBytes, RegisterSmartContractCode,
         },
@@ -1465,6 +1465,7 @@ impl TxOverlay {
         }
     }
 
+    #[cfg(test)]
     fn from_ivm_proved_instructions(
         instrs: Vec<InstructionBox>,
         _authority: &AccountId,
@@ -1862,6 +1863,24 @@ impl TxOverlay {
                     } else if let Some(fx) = instr.as_any().downcast_ref::<SettleFxCorridor>() {
                         admission_validate_fx_corridor(effect_authority, state_tx, fx)
                             .map_err(ValidationFail::from)?;
+                    } else if let Some(settlement) =
+                        instr.as_any().downcast_ref::<SettlementInstructionBox>()
+                    {
+                        match settlement {
+                            SettlementInstructionBox::Dvp(dvp) => {
+                                admission_validate_dvp(effect_authority, state_tx, dvp)
+                                    .map_err(ValidationFail::from)?;
+                            }
+                            SettlementInstructionBox::Pvp(pvp) => {
+                                admission_validate_pvp(effect_authority, state_tx, pvp)
+                                    .map_err(ValidationFail::from)?;
+                            }
+                            SettlementInstructionBox::SettleFxCorridor(fx) => {
+                                admission_validate_fx_corridor(effect_authority, state_tx, fx)
+                                    .map_err(ValidationFail::from)?;
+                            }
+                            SettlementInstructionBox::SetFxCorridorPolicy(_) => {}
+                        }
                     }
                     if let Some(reg_asset_definition) = extract_register_asset_definition(instr) {
                         ensure_asset_definition_registration_allowed(
@@ -4125,7 +4144,7 @@ seiyaku ProtectedStateFreeOverlay {
         );
         metadata.insert(
             "contract_payload".parse().expect("metadata key"),
-            Json::from(norito::json!({ "value": 7 })),
+            Json::from(norito::json!({ "value": "7" })),
         );
         let transaction = TransactionBuilder::new(chain_id, authority)
             .with_metadata(metadata)
@@ -4172,7 +4191,7 @@ seiyaku PermissionlessStateFreeOverlay {
         );
         metadata.insert(
             "contract_payload".parse().expect("metadata key"),
-            Json::from(norito::json!({ "value": 7 })),
+            Json::from(norito::json!({ "value": "7" })),
         );
         let transaction = TransactionBuilder::new(
             ChainId::from("permissionless-state-free-overlay"),
@@ -4229,7 +4248,7 @@ seiyaku ProtectedParameterizedOverlay {
             .expect("write argument schema");
         let arguments = ivm::encode_argument_record_from_json(
             schema,
-            &Json::from(norito::json!({ "value": 7 })),
+            &Json::from(norito::json!({ "value": "7" })),
         )
         .expect("encode canonical parameterized arguments");
         let arguments = ContractArgumentRecord::try_new(arguments)
@@ -7406,7 +7425,7 @@ seiyaku ProtectedProved {
         );
         metadata.insert(
             "contract_payload".parse().expect("metadata key"),
-            Json::from(norito::json!({ "value": 9 })),
+            Json::from(norito::json!({ "value": "9" })),
         );
         metadata.insert(
             "contract_address".parse().expect("metadata key"),

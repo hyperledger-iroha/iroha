@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import copy
 import hashlib
 import json
 import re
@@ -33,6 +34,7 @@ from iroha_torii_client import (  # noqa: E402  (import depends on sys.path muta
     OfflineRedeemRequest,
     OfflineRejectedOperation,
     OfflineTopUpAnchor,
+    OfflineTopUpFinalityProof,
     OfflineTopUpRequest,
     ToriiCanonicalRequestAuth,
     ToriiClient,
@@ -229,7 +231,10 @@ def _nexus_fee_receipt_payload() -> Dict[str, Any]:
 
 def _native_amx_receipt_payload() -> Dict[str, Any]:
     transaction_hash = _canonical_hash(0x61)
-    source_id = transaction_hash[5:69]
+    source_id = "AB" * 32
+    previous_descriptor_hash = _canonical_hash(0x68)
+    participant_proposal_hash = _canonical_hash(0x69)
+    participant_settlement_hash = _canonical_hash(0x6B)
     common_body = {
         "round": {
             "context_id": [_canonical_hash(0x62)],
@@ -248,6 +253,12 @@ def _native_amx_receipt_payload() -> Dict[str, Any]:
         "participant_lane_id": 3,
         "participant_dataspace_id": 8,
         "participant_lane_incarnation": _canonical_hash(0x65),
+        "participant_previous_block_height": 7,
+        "participant_previous_block_descriptor_hash": previous_descriptor_hash,
+        "participant_lane_block_height": 8,
+        "participant_lane_block_view": 1,
+        "participant_proposal_hash": participant_proposal_hash,
+        "participant_settlement_commitment": participant_settlement_hash,
         "participant_validator_set_hash": _canonical_hash(0x66),
         "participant_validator_count": 4,
         "participant_min_quorum": 3,
@@ -286,6 +297,69 @@ def _native_amx_receipt_payload() -> Dict[str, Any]:
             {
                 "lane_id": 3,
                 "dataspace_id": 8,
+                "participant_proposal": {
+                    "descriptor": {
+                        "lane_id": 3,
+                        "dataspace_id": 8,
+                        "lane_incarnation": _canonical_hash(0x65),
+                        "proposal_height": 10,
+                        "previous_lane_block_height": 7,
+                        "previous_lane_block_descriptor_hash": previous_descriptor_hash,
+                        "lane_block_height": 8,
+                        "lane_block_view": 1,
+                        "subject_hash": _canonical_hash(0x6D),
+                        "payload_ownership_hash": _canonical_hash(0x6F),
+                        "rbc_instance_hash": _canonical_hash(0x71),
+                        "accepted_candidate_indices": [0],
+                        "accepted_transaction_hashes": [transaction_hash],
+                        "validator_set_hash_version": 1,
+                        "validator_set_hash": _canonical_hash(0x66),
+                        "validator_set": [
+                            "validator-a",
+                            "validator-b",
+                            "validator-c",
+                            "validator-d",
+                        ],
+                        "validator_count": 4,
+                        "min_quorum": 3,
+                        "qc_mode_tag": "permissioned:native-amx-v2",
+                        "descriptor_hash": _canonical_hash(0x73),
+                    },
+                    "proposal_hash": participant_proposal_hash,
+                },
+                "participant_settlement": {
+                    "block_height": 8,
+                    "lane_id": 3,
+                    "lane_incarnation": _canonical_hash(0x65),
+                    "dataspace_id": 8,
+                    "tx_count": 2,
+                    "total_local_micro": "0",
+                    "total_xor_due_micro": "0",
+                    "total_xor_after_haircut_micro": "0",
+                    "total_xor_variance_micro": "0",
+                    "swap_metadata": None,
+                    "receipts": [
+                        {
+                            "source_id": source_id,
+                            "local_amount_micro": "0",
+                            "xor_due_micro": "0",
+                            "xor_after_haircut_micro": "0",
+                            "xor_variance_micro": "0",
+                            "timestamp_ms": 10,
+                        },
+                        {
+                            "source_id": "CD" * 32,
+                            "local_amount_micro": "0",
+                            "xor_due_micro": "0",
+                            "xor_after_haircut_micro": "0",
+                            "xor_variance_micro": "0",
+                            "timestamp_ms": 10,
+                        },
+                    ],
+                    "nexus_fee_receipts": [],
+                    "native_amx_receipts": [],
+                },
+                "participant_settlement_hash": participant_settlement_hash,
                 "prepare_qc": qc("prepare"),
                 "commit_qc": qc("commit"),
             }
@@ -2517,6 +2591,218 @@ def test_get_sumeragi_status_parses_exact_nested_fee_and_native_amx_receipts() -
         "detail": None,
     }
     assert len(native["legs"][0]["commit_qc"]["bls_aggregate_signature"]) == 96
+    leg = native["legs"][0]
+    assert (
+        leg["participant_proposal"]["proposal_hash"]
+        == leg["prepare_qc"]["body"]["participant_proposal_hash"]
+    )
+    assert (
+        leg["participant_settlement_hash"]
+        == leg["commit_qc"]["body"]["participant_settlement_commitment"]
+    )
+    assert leg["participant_settlement"]["block_height"] == 8
+    assert len(leg["participant_settlement"]["receipts"]) == 2
+    assert leg["prepare_qc"]["body"]["source_id"] == "AB" * 32
+    assert leg["prepare_qc"]["body"]["tx_entrypoint_hash"] == _canonical_hash(0x61)
+
+
+def test_get_sumeragi_status_accepts_first_native_amx_participant_block() -> None:
+    payload = _sumeragi_v2_status_payload()
+    settlement = _lane_settlement_payload()
+    native = _native_amx_receipt_payload()
+    leg = native["legs"][0]
+    for qc in (leg["prepare_qc"], leg["commit_qc"]):
+        qc["body"]["participant_previous_block_height"] = 0
+        qc["body"]["participant_previous_block_descriptor_hash"] = None
+        qc["body"]["participant_lane_block_height"] = 1
+    descriptor = leg["participant_proposal"]["descriptor"]
+    descriptor["previous_lane_block_height"] = 0
+    del descriptor["previous_lane_block_descriptor_hash"]
+    descriptor["lane_block_height"] = 1
+    leg["participant_settlement"]["block_height"] = 1
+    settlement["native_amx_receipts"] = [native]
+    payload["lane_settlement_commitments"] = [settlement]
+
+    parsed_leg = _get_sumeragi_status(payload).lane_settlement_commitments[0][
+        "native_amx_receipts"
+    ][0]["legs"][0]
+
+    assert parsed_leg["prepare_qc"]["body"]["participant_previous_block_descriptor_hash"] is None
+    assert (
+        "previous_lane_block_descriptor_hash"
+        not in parsed_leg["participant_proposal"]["descriptor"]
+    )
+
+
+def test_get_sumeragi_status_accepts_mixed_role_proposal_without_current_entrypoint() -> None:
+    payload = _sumeragi_v2_status_payload()
+    settlement = _lane_settlement_payload()
+    native = _native_amx_receipt_payload()
+    leg = native["legs"][0]
+    leg["lane_id"] = 2
+    leg["dataspace_id"] = 7
+    for qc in (leg["prepare_qc"], leg["commit_qc"]):
+        qc["body"]["participant_lane_id"] = 2
+        qc["body"]["participant_dataspace_id"] = 7
+        qc["body"]["participant_lane_incarnation"] = _canonical_hash(0x51)
+    descriptor = leg["participant_proposal"]["descriptor"]
+    descriptor["lane_id"] = 2
+    descriptor["dataspace_id"] = 7
+    descriptor["lane_incarnation"] = _canonical_hash(0x51)
+    descriptor["accepted_transaction_hashes"] = [_canonical_hash(0x77)]
+    leg["participant_settlement"]["lane_id"] = 2
+    leg["participant_settlement"]["dataspace_id"] = 7
+    leg["participant_settlement"]["lane_incarnation"] = _canonical_hash(0x51)
+    settlement["native_amx_receipts"] = [native]
+    payload["lane_settlement_commitments"] = [settlement]
+
+    parsed_leg = _get_sumeragi_status(payload).lane_settlement_commitments[0][
+        "native_amx_receipts"
+    ][0]["legs"][0]
+
+    assert parsed_leg["participant_proposal"]["descriptor"][
+        "accepted_transaction_hashes"
+    ] == [_canonical_hash(0x77)]
+
+
+def test_get_sumeragi_status_rejects_native_amx_participant_finality_tampering() -> None:
+    def extra_leg_field(leg: Dict[str, Any]) -> None:
+        leg["future_leg_field"] = 1
+
+    def missing_settlement_hash(leg: Dict[str, Any]) -> None:
+        del leg["participant_settlement_hash"]
+
+    def wrong_proposal_type(leg: Dict[str, Any]) -> None:
+        leg["participant_proposal"] = []
+
+    def wrong_settlement_hash_type(leg: Dict[str, Any]) -> None:
+        leg["participant_settlement_hash"] = 7
+
+    def set_phase_string(leg: Dict[str, Any]) -> None:
+        leg["prepare_qc"]["body"]["phase"] = "prepare"
+
+    def missing_body_field(leg: Dict[str, Any]) -> None:
+        del leg["prepare_qc"]["body"]["participant_lane_block_height"]
+
+    def extra_body_field(leg: Dict[str, Any]) -> None:
+        leg["prepare_qc"]["body"]["future_participant_field"] = 1
+
+    def wrong_body_type(leg: Dict[str, Any]) -> None:
+        leg["prepare_qc"]["body"]["participant_lane_block_view"] = "1"
+
+    def mismatch_commit_identity(leg: Dict[str, Any]) -> None:
+        leg["commit_qc"]["body"]["participant_proposal_hash"] = _canonical_hash(0x75)
+
+    def mismatch_proposal_hash(leg: Dict[str, Any]) -> None:
+        leg["participant_proposal"]["proposal_hash"] = _canonical_hash(0x75)
+
+    def add_payload_hint(leg: Dict[str, Any]) -> None:
+        leg["participant_proposal"]["payload_block_hint"] = None
+
+    def missing_descriptor_field(leg: Dict[str, Any]) -> None:
+        del leg["participant_proposal"]["descriptor"]["subject_hash"]
+
+    def extra_descriptor_field(leg: Dict[str, Any]) -> None:
+        leg["participant_proposal"]["descriptor"]["future_descriptor_field"] = 1
+
+    def missing_predecessor(leg: Dict[str, Any]) -> None:
+        del leg["participant_proposal"]["descriptor"]["previous_lane_block_descriptor_hash"]
+
+    def null_non_genesis_predecessor(leg: Dict[str, Any]) -> None:
+        for qc in (leg["prepare_qc"], leg["commit_qc"]):
+            qc["body"]["participant_previous_block_descriptor_hash"] = None
+
+    def nonnull_genesis_predecessor(leg: Dict[str, Any]) -> None:
+        for qc in (leg["prepare_qc"], leg["commit_qc"]):
+            qc["body"]["participant_previous_block_height"] = 0
+            qc["body"]["participant_lane_block_height"] = 1
+
+    def explicit_null_genesis_descriptor(leg: Dict[str, Any]) -> None:
+        for qc in (leg["prepare_qc"], leg["commit_qc"]):
+            qc["body"]["participant_previous_block_height"] = 0
+            qc["body"]["participant_previous_block_descriptor_hash"] = None
+            qc["body"]["participant_lane_block_height"] = 1
+        descriptor = leg["participant_proposal"]["descriptor"]
+        descriptor["previous_lane_block_height"] = 0
+        descriptor["previous_lane_block_descriptor_hash"] = None
+        descriptor["lane_block_height"] = 1
+        leg["participant_settlement"]["block_height"] = 1
+
+    def mismatch_proposal_route(leg: Dict[str, Any]) -> None:
+        leg["participant_proposal"]["descriptor"]["lane_id"] = 99
+
+    def mismatch_proposal_height(leg: Dict[str, Any]) -> None:
+        leg["participant_proposal"]["descriptor"]["proposal_height"] = 11
+
+    def mismatch_settlement_hash(leg: Dict[str, Any]) -> None:
+        leg["participant_settlement_hash"] = _canonical_hash(0x79)
+
+    def mismatch_settlement_route(leg: Dict[str, Any]) -> None:
+        leg["participant_settlement"]["lane_id"] = 99
+
+    def nonzero_participant_effect(leg: Dict[str, Any]) -> None:
+        leg["participant_settlement"]["total_local_micro"] = "1"
+
+    def mismatch_settlement_source(leg: Dict[str, Any]) -> None:
+        leg["participant_settlement"]["receipts"][0]["source_id"] = "EF" * 32
+
+    def duplicate_settlement_source(leg: Dict[str, Any]) -> None:
+        leg["participant_settlement"]["receipts"][1]["source_id"] = "AB" * 32
+
+    def wrong_settlement_tx_count(leg: Dict[str, Any]) -> None:
+        leg["participant_settlement"]["tx_count"] = 1
+
+    def empty_settlement(leg: Dict[str, Any]) -> None:
+        leg["participant_settlement"]["tx_count"] = 0
+        leg["participant_settlement"]["receipts"] = []
+
+    def oversized_settlement(leg: Dict[str, Any]) -> None:
+        receipt = copy.deepcopy(leg["participant_settlement"]["receipts"][0])
+        leg["participant_settlement"]["tx_count"] = 4097
+        leg["participant_settlement"]["receipts"] = [receipt] * 4097
+
+    def recursive_settlement(leg: Dict[str, Any]) -> None:
+        leg["participant_settlement"]["native_amx_receipts"] = [{}]
+
+    mutations = (
+        extra_leg_field,
+        missing_settlement_hash,
+        wrong_proposal_type,
+        wrong_settlement_hash_type,
+        set_phase_string,
+        missing_body_field,
+        extra_body_field,
+        wrong_body_type,
+        mismatch_commit_identity,
+        mismatch_proposal_hash,
+        add_payload_hint,
+        missing_descriptor_field,
+        extra_descriptor_field,
+        missing_predecessor,
+        null_non_genesis_predecessor,
+        nonnull_genesis_predecessor,
+        explicit_null_genesis_descriptor,
+        mismatch_proposal_route,
+        mismatch_proposal_height,
+        mismatch_settlement_hash,
+        mismatch_settlement_route,
+        nonzero_participant_effect,
+        mismatch_settlement_source,
+        duplicate_settlement_source,
+        wrong_settlement_tx_count,
+        empty_settlement,
+        oversized_settlement,
+        recursive_settlement,
+    )
+    for mutate in mutations:
+        payload = _sumeragi_v2_status_payload()
+        settlement = _lane_settlement_payload()
+        native = _native_amx_receipt_payload()
+        mutate(native["legs"][0])
+        settlement["native_amx_receipts"] = [native]
+        payload["lane_settlement_commitments"] = [settlement]
+        with pytest.raises(RuntimeError, match="."):
+            _get_sumeragi_status(payload)
 
 
 @pytest.mark.parametrize("invalid", [7, "01", str(1 << 128)])
@@ -4518,11 +4804,40 @@ def test_trigger_registration_deletion_and_query() -> None:
     }
 
 
+def _offline_active_transfer_verifier(**overrides: Any) -> Dict[str, Any]:
+    verifier = {
+        "id": {"backend": "halo2-ipa-pasta", "name": "transfer-v2"},
+        "version": 7,
+        "circuit_id": "confidential-transfer-v2",
+        "commitment": "44" * 32,
+        "public_inputs_schema_hash": "55" * 32,
+        "max_proof_bytes": 4096,
+        "activation_height": 1,
+        "withdrawal_height": None,
+    }
+    verifier.update(overrides)
+    return verifier
+
+
+def _offline_active_topup_shield_verifier(**overrides: Any) -> Dict[str, Any]:
+    verifier = _offline_active_transfer_verifier(
+        id={"backend": "halo2-ipa-pasta", "name": "topup-shield-v2"},
+        circuit_id="kagemusha-topup-shield-v2",
+        commitment="66" * 32,
+        public_inputs_schema_hash="77" * 32,
+    )
+    verifier.update(overrides)
+    return verifier
+
+
 def _offline_readiness_payload(**overrides: Any) -> Dict[str, Any]:
     payload = {
         "asset_definition_id": CANONICAL_ASSET_DEFINITION_ID,
+        "asset_scale": 4,
         "evaluated_block_height": 42,
         "evaluated_block_hash": "ab" * 32,
+        "active_transfer_verifier": _offline_active_transfer_verifier(),
+        "active_topup_shield_verifier": _offline_active_topup_shield_verifier(),
         "ready": True,
         "blockers": [],
     }
@@ -4622,15 +4937,54 @@ def _offline_top_up_anchor(**overrides: Any) -> Dict[str, Any]:
     return anchor
 
 
+def _offline_top_up_finality_proof(
+    anchor: Optional[Mapping[str, Any]] = None,
+    *,
+    finalized_height: int = 12,
+    **overrides: Any,
+) -> Dict[str, Any]:
+    bound_anchor = anchor if anchor is not None else _offline_top_up_anchor()
+    proof = {
+        "version": 1,
+        "anchor": {
+            "topup_operation_id": list(
+                bound_anchor.get("topup_operation_id", OFFLINE_OPERATION_BYTES)
+            ),
+            "anchor_digest": list(
+                bound_anchor.get("anchor_digest", _offline_fixed_bytes(0x71))
+            ),
+        },
+        "commit_qc": {
+            "height_context": {
+                "height": finalized_height,
+                "opaque_context": {"protocol_version": 2},
+            },
+            "certificate": {
+                "round": {"height": finalized_height, "view": 0},
+                "opaque_certificate": [1, 2, 3],
+            },
+        },
+        "anchor_path": {"leaf_index": 0, "leaf_count": 1, "siblings": []},
+    }
+    proof.update(overrides)
+    return proof
+
+
 def _offline_applied_top_up_status(
     anchor: Optional[Mapping[str, Any]] = None,
     **result_overrides: Any,
 ) -> Dict[str, Any]:
+    finalized_height = result_overrides.get("finalized_block_height", 12)
+    bound_anchor = dict(anchor if anchor is not None else _offline_top_up_anchor())
     result = {
         "transaction_hash": OFFLINE_TRANSACTION_HASH,
-        "finalized_block_height": 12,
+        "finalized_block_height": finalized_height,
         "server_time_ms": 13,
-        "anchor": dict(anchor if anchor is not None else _offline_top_up_anchor()),
+        "anchor": bound_anchor,
+        "finality_proof": _offline_top_up_finality_proof(
+            bound_anchor,
+            finalized_height=finalized_height,
+        ),
     }
     result.update(result_overrides)
     return {
@@ -4680,8 +5034,14 @@ def test_get_offline_readiness_sends_exact_asset_selector_and_parses_blockers() 
     readiness = client.get_offline_readiness(CANONICAL_ASSET_DEFINITION_ID)
 
     assert readiness.asset_definition_id == CANONICAL_ASSET_DEFINITION_ID
+    assert readiness.asset_scale == 4
     assert readiness.evaluated_block_height == 42
     assert readiness.evaluated_block_hash == "ab" * 32
+    assert readiness.active_transfer_verifier is not None
+    assert readiness.active_transfer_verifier.id.backend == "halo2-ipa-pasta"
+    assert readiness.active_transfer_verifier.max_proof_bytes == 4096
+    assert readiness.active_topup_shield_verifier is not None
+    assert readiness.active_topup_shield_verifier.id.name == "topup-shield-v2"
     assert readiness.ready is False
     assert readiness.blockers[0].code == "proof_backend_unavailable"
     call = session.calls[0]
@@ -4691,10 +5051,27 @@ def test_get_offline_readiness_sends_exact_asset_selector_and_parses_blockers() 
     assert call["headers"]["Accept"] == "application/json"
 
 
+def test_get_offline_readiness_resolves_alias_to_canonical_asset_id() -> None:
+    session = RecordingSession()
+    session.queue(StubResponse(payload=_offline_readiness_payload()))
+    readiness = ToriiClient("http://node.test", session=session).get_offline_readiness(
+        "xor#sora"
+    )
+
+    assert readiness.asset_definition_id == CANONICAL_ASSET_DEFINITION_ID
+    assert session.calls[0]["params"] == {"asset_definition_id": "xor#sora"}
+
+
 def test_get_offline_readiness_rejects_invalid_selector_before_network() -> None:
     session = RecordingSession()
     client = ToriiClient("http://node.test", session=session)
-    for asset in ("", f" {CANONICAL_ASSET_DEFINITION_ID}", f"{CANONICAL_ASSET_DEFINITION_ID} "):
+    for asset in (
+        "",
+        "different-asset",
+        "XOR#sora",
+        f" {CANONICAL_ASSET_DEFINITION_ID}",
+        f"{CANONICAL_ASSET_DEFINITION_ID} ",
+    ):
         with pytest.raises(RuntimeError, match="asset_definition_id"):
             client.get_offline_readiness(asset)
     assert session.calls == []
@@ -4703,8 +5080,17 @@ def test_get_offline_readiness_rejects_invalid_selector_before_network() -> None
 def test_get_offline_readiness_rejects_adversarial_snapshots() -> None:
     missing_hash = _offline_readiness_payload()
     missing_hash.pop("evaluated_block_hash")
+    missing_scale = _offline_readiness_payload()
+    missing_scale.pop("asset_scale")
+    missing_verifier = _offline_readiness_payload()
+    missing_verifier.pop("active_transfer_verifier")
+    missing_topup_shield_verifier = _offline_readiness_payload()
+    missing_topup_shield_verifier.pop("active_topup_shield_verifier")
     payloads = [
         missing_hash,
+        missing_scale,
+        missing_verifier,
+        missing_topup_shield_verifier,
         _offline_readiness_payload(asset_definition_id="different-asset"),
         _offline_readiness_payload(
             ready=True,
@@ -4712,6 +5098,7 @@ def test_get_offline_readiness_rejects_adversarial_snapshots() -> None:
         ),
         _offline_readiness_payload(ready=False, blockers=[]),
         _offline_readiness_payload(evaluated_block_height=-1),
+        _offline_readiness_payload(evaluated_block_height=1 << 64),
         _offline_readiness_payload(evaluated_block_hash="AB" * 32),
         _offline_readiness_payload(evaluated_block_hash="ab" * 31),
         _offline_readiness_payload(blockers=[{"code": "NOT-CANONICAL", "message": "no"}]),
@@ -4723,6 +5110,58 @@ def test_get_offline_readiness_rejects_adversarial_snapshots() -> None:
         ),
         _offline_readiness_payload(
             ready=False, blockers=[{"code": "not_ready", "message": "line\nbreak"}]
+        ),
+        _offline_readiness_payload(asset_scale=-1),
+        _offline_readiness_payload(asset_scale=1 << 32),
+        _offline_readiness_payload(asset_scale=29),
+        _offline_readiness_payload(
+            asset_scale=None,
+            ready=False,
+            blockers=[{"code": "not_ready", "message": "missing scale"}],
+        ),
+        _offline_readiness_payload(active_transfer_verifier=None),
+        _offline_readiness_payload(active_topup_shield_verifier=None),
+        _offline_readiness_payload(
+            active_transfer_verifier=_offline_active_transfer_verifier(
+                max_proof_bytes=0
+            )
+        ),
+        _offline_readiness_payload(
+            active_transfer_verifier=_offline_active_transfer_verifier(
+                activation_height=43
+            )
+        ),
+        _offline_readiness_payload(
+            active_transfer_verifier=_offline_active_transfer_verifier(
+                withdrawal_height=42
+            )
+        ),
+        _offline_readiness_payload(
+            active_transfer_verifier=_offline_active_transfer_verifier(
+                commitment="AA" * 32
+            )
+        ),
+        _offline_readiness_payload(
+            active_topup_shield_verifier=_offline_active_topup_shield_verifier(
+                max_proof_bytes=0
+            )
+        ),
+        _offline_readiness_payload(
+            active_topup_shield_verifier=_offline_active_topup_shield_verifier(
+                activation_height=43
+            )
+        ),
+        _offline_readiness_payload(
+            active_topup_shield_verifier=_offline_active_topup_shield_verifier(
+                withdrawal_height=42
+            )
+        ),
+        _offline_readiness_payload(
+            ready=False,
+            blockers=[
+                {"code": "not_ready", "message": "one"},
+                {"code": "not_ready", "message": "two"},
+            ],
         ),
     ]
     for payload in payloads:
@@ -4749,6 +5188,68 @@ def test_offline_readiness_uses_finite_codes_and_strips_unknown_members() -> Non
     )
     assert readiness.blockers[0].code == "1_future_code"
     assert not hasattr(readiness, "unknown_member")
+
+    exact_numeric_session = RecordingSession()
+    exact_numeric_json = json.dumps(_offline_readiness_payload())[:-1]
+    exact_numeric_json += ',"future_numeric":[1.25,1e400]}'
+    exact_numeric_session.queue(
+        StubResponse(
+            text=exact_numeric_json,
+            headers={"Content-Type": "application/json"},
+        )
+    )
+    exact_numeric = ToriiClient(
+        "http://node.test", session=exact_numeric_session
+    ).get_offline_readiness(CANONICAL_ASSET_DEFINITION_ID)
+    assert exact_numeric.asset_definition_id == CANONICAL_ASSET_DEFINITION_ID
+
+    expected_unavailable_session = RecordingSession()
+    expected_unavailable_session.queue(
+        StubResponse(
+            payload=_offline_readiness_payload(
+                asset_scale=29,
+                active_transfer_verifier=_offline_active_transfer_verifier(
+                    ignored_verifier_field=True
+                ),
+                ready=False,
+                blockers=[
+                    {
+                        "code": "asset_scale_unsupported",
+                        "message": "unsupported scale",
+                    }
+                ],
+            )
+        )
+    )
+    expected_unavailable = ToriiClient(
+        "http://node.test", session=expected_unavailable_session
+    ).get_offline_readiness(CANONICAL_ASSET_DEFINITION_ID)
+    assert expected_unavailable.asset_scale == 29
+    assert expected_unavailable.active_transfer_verifier is not None
+    assert not hasattr(
+        expected_unavailable.active_transfer_verifier,
+        "ignored_verifier_field",
+    )
+
+    topup_unavailable_session = RecordingSession()
+    topup_unavailable_session.queue(
+        StubResponse(
+            payload=_offline_readiness_payload(
+                active_topup_shield_verifier=None,
+                ready=False,
+                blockers=[
+                    {
+                        "code": "topup_shield_verifier_unavailable",
+                        "message": "top-up shield verifier unavailable",
+                    }
+                ],
+            )
+        )
+    )
+    topup_unavailable = ToriiClient(
+        "http://node.test", session=topup_unavailable_session
+    ).get_offline_readiness(CANONICAL_ASSET_DEFINITION_ID)
+    assert topup_unavailable.active_topup_shield_verifier is None
 
     for code in ("", "_leading_underscore", "a" * 65):
         invalid_session = RecordingSession()
@@ -4899,6 +5400,7 @@ def test_get_offline_operation_status_parses_all_tagged_states() -> None:
                             "finalized_block_height": 12,
                             "server_time_ms": 13,
                             "anchor": _offline_top_up_anchor(),
+                            "finality_proof": _offline_top_up_finality_proof(),
                         },
                     },
                 },
@@ -4950,6 +5452,92 @@ def test_offline_top_up_anchor_is_closed_typed_and_cross_checked() -> None:
     assert typed_anchor.transfer_verifier_id.backend == "halo2/ipa"
     assert typed_anchor.topup_operation_id == tuple(OFFLINE_OPERATION_BYTES)
     assert not hasattr(typed_anchor, "unknown_member")
+
+
+def test_offline_top_up_finality_proof_is_direct_typed_and_preserves_opaque_internals() -> None:
+    proof = _offline_top_up_finality_proof()
+    proof["commit_qc"]["future_qc_field"] = {"opaque": [7, 8, 9]}
+    proof["anchor_path"]["future_path_field"] = "preserved"
+    session = RecordingSession()
+    session.queue(
+        StubResponse(payload=_offline_applied_top_up_status(finality_proof=proof))
+    )
+
+    status = ToriiClient(
+        "http://node.test", session=session
+    ).get_offline_operation_status(OFFLINE_OPERATION_ID)
+
+    assert isinstance(status, OfflineAppliedOperation)
+    assert status.result.kind == "top_up"
+    typed_proof = status.result.result.finality_proof
+    assert isinstance(typed_proof, OfflineTopUpFinalityProof)
+    assert typed_proof.version == 1
+    assert typed_proof.anchor.topup_operation_id == tuple(OFFLINE_OPERATION_BYTES)
+    assert typed_proof.anchor.anchor_digest == tuple(_offline_fixed_bytes(0x71))
+    assert typed_proof.commit_qc["future_qc_field"] == {"opaque": [7, 8, 9]}
+    assert typed_proof.anchor_path["future_path_field"] == "preserved"
+
+    proof["commit_qc"]["future_qc_field"]["opaque"][0] = 255
+    assert typed_proof.commit_qc["future_qc_field"] == {"opaque": [7, 8, 9]}
+
+
+def test_offline_top_up_finality_proof_rejects_missing_mismatched_and_type_confused_fields() -> None:
+    missing = _offline_applied_top_up_status()
+    del missing["value"]["result"]["result"]["finality_proof"]
+
+    def mutated(*path_and_value: Any) -> Dict[str, Any]:
+        *path, value = path_and_value
+        proof = copy.deepcopy(_offline_top_up_finality_proof())
+        cursor: Dict[str, Any] = proof
+        for component in path[:-1]:
+            cursor = cursor[component]
+        cursor[path[-1]] = value
+        return _offline_applied_top_up_status(finality_proof=proof)
+
+    invalid = [
+        missing,
+        _offline_applied_top_up_status(finality_proof="bm90LWEtZGlyZWN0LXByb29m"),
+        mutated("version", 2),
+        mutated("anchor", "topup_operation_id", _offline_fixed_bytes(0x12)),
+        mutated("anchor", "anchor_digest", _offline_fixed_bytes(0x72)),
+        mutated("commit_qc", []),
+        mutated("commit_qc", "height_context", []),
+        mutated("commit_qc", "height_context", "height", 11),
+        mutated("commit_qc", "certificate", []),
+        mutated("commit_qc", "certificate", "round", []),
+        mutated("commit_qc", "certificate", "round", "height", 13),
+        mutated("anchor_path", []),
+    ]
+    for payload in invalid:
+        session = RecordingSession()
+        session.queue(StubResponse(payload=payload))
+        with pytest.raises(RuntimeError):
+            ToriiClient(
+                "http://node.test", session=session
+            ).get_offline_operation_status(OFFLINE_OPERATION_ID)
+
+
+def test_offline_redeem_result_rejects_every_top_up_only_field() -> None:
+    for field in ("anchor", "finality_proof"):
+        result = {
+            "transaction_hash": OFFLINE_TRANSACTION_HASH,
+            "finalized_block_height": 12,
+            "server_time_ms": 13,
+            field: {},
+        }
+        payload = {
+            "state": "applied",
+            "value": {
+                "operation_id": OFFLINE_OPERATION_ID,
+                "result": {"kind": "redeem", "result": result},
+            },
+        }
+        session = RecordingSession()
+        session.queue(StubResponse(payload=payload))
+        with pytest.raises(RuntimeError, match=field):
+            ToriiClient(
+                "http://node.test", session=session
+            ).get_offline_operation_status(OFFLINE_OPERATION_ID)
 
 
 def test_offline_top_up_anchor_preserves_full_width_amounts_and_heights() -> None:
@@ -5066,8 +5654,13 @@ def test_offline_applied_status_rejects_zero_finality_fields() -> None:
             }
             result[field] = 0
             if kind == "top_up":
-                result["anchor"] = _offline_top_up_anchor(
+                anchor = _offline_top_up_anchor(
                     finalized_height=result["finalized_block_height"]
+                )
+                result["anchor"] = anchor
+                result["finality_proof"] = _offline_top_up_finality_proof(
+                    anchor,
+                    finalized_height=result["finalized_block_height"],
                 )
             payload = {
                 "state": "applied",

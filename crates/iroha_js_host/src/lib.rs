@@ -111,6 +111,9 @@ use iroha_data_model::{
             ForceTransferRwa, FreezeRwa, HoldRwa, MergeRwas, RedeemRwa, RegisterRwa, ReleaseRwa,
             RwaInstructionBox, SetRwaControls, TransferRwa, UnfreezeRwa,
         },
+        settlement::{
+            DvpIsi, PvpIsi, SetFxCorridorPolicy, SettleFxCorridor, SettlementInstructionBox,
+        },
         smart_contract_code::{
             ActivateContractInstance, DeactivateContractInstance, RegisterSmartContractBytes,
             RegisterSmartContractCode, RemoveSmartContractBytes,
@@ -6681,6 +6684,13 @@ fn multi_source_js_error(error: MultiSourceError) -> napi::Error {
 
     let message = format!("{error}");
     let payload = match error {
+        InvalidPlan(reason) => norito_json!({
+            "kind": "multi_source",
+            "code": "invalid_plan",
+            "message": message,
+            "details": reason.to_string(),
+            "retryable": false,
+        }),
         NoProviders => norito_json!({
             "kind": "multi_source",
             "code": "no_providers",
@@ -8408,6 +8418,18 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                     .map_err(norito_to_napi)?;
                 return Ok(InstructionBox::from(SetParameter::new(parameter)));
             }
+            if let Some(settlement_value) = map.remove("Settlement") {
+                if !map.is_empty() {
+                    return Err(napi::Error::new(
+                        napi::Status::InvalidArg,
+                        format!(
+                            "Settlement instruction envelope contains unexpected field(s): {}",
+                            map.keys().cloned().collect::<Vec<_>>().join(", ")
+                        ),
+                    ));
+                }
+                return settlement_instruction_from_json(settlement_value);
+            }
             if let Some(batch_value) = map.remove("TransferAssetBatch") {
                 return transfer_asset_batch_from_json(batch_value);
             }
@@ -9893,9 +9915,86 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
     }
 }
 
+fn settlement_instruction_from_json(value: json::Value) -> napi::Result<InstructionBox> {
+    let json::Value::Object(mut variants) = value else {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "Settlement instruction must be an object containing exactly one variant",
+        ));
+    };
+    if variants.len() != 1 {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "Settlement instruction must contain exactly one of Dvp, Pvp, SetFxCorridorPolicy, or SettleFxCorridor",
+        ));
+    }
+
+    let (variant, payload) = variants
+        .pop_first()
+        .expect("length checked settlement variant");
+    let instruction = match variant.as_str() {
+        "Dvp" => SettlementInstructionBox::Dvp(
+            json::from_value::<DvpIsi>(payload).map_err(norito_to_napi)?,
+        ),
+        "Pvp" => SettlementInstructionBox::Pvp(
+            json::from_value::<PvpIsi>(payload).map_err(norito_to_napi)?,
+        ),
+        "SetFxCorridorPolicy" => {
+            let set = json::from_value::<SetFxCorridorPolicy>(payload).map_err(norito_to_napi)?;
+            if let Some(error) = set.policy.invariant_error() {
+                return Err(napi::Error::new(napi::Status::InvalidArg, error));
+            }
+            SettlementInstructionBox::SetFxCorridorPolicy(set)
+        }
+        "SettleFxCorridor" => {
+            let settle = json::from_value::<SettleFxCorridor>(payload).map_err(norito_to_napi)?;
+            if settle.source_amount.is_zero() || settle.source_amount.mantissa().is_negative() {
+                return Err(napi::Error::new(
+                    napi::Status::InvalidArg,
+                    "SettleFxCorridor.source_amount must be positive",
+                ));
+            }
+            SettlementInstructionBox::SettleFxCorridor(settle)
+        }
+        _ => {
+            return Err(napi::Error::new(
+                napi::Status::InvalidArg,
+                format!("unsupported Settlement instruction variant `{variant}`"),
+            ));
+        }
+    };
+    Ok(InstructionBox::from(instruction))
+}
+
 #[allow(clippy::too_many_lines)] // mirrors `value_to_instruction` for full roundtrips
 fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json::Value> {
     let instruction_ref: &dyn InstructionTrait = &**instruction;
+    if let Some(settlement) = instruction_ref
+        .as_any()
+        .downcast_ref::<SettlementInstructionBox>()
+    {
+        let (variant, payload) = match settlement {
+            SettlementInstructionBox::Dvp(value) => {
+                ("Dvp", json::to_value(value).map_err(norito_to_napi)?)
+            }
+            SettlementInstructionBox::Pvp(value) => {
+                ("Pvp", json::to_value(value).map_err(norito_to_napi)?)
+            }
+            SettlementInstructionBox::SetFxCorridorPolicy(value) => (
+                "SetFxCorridorPolicy",
+                json::to_value(value).map_err(norito_to_napi)?,
+            ),
+            SettlementInstructionBox::SettleFxCorridor(value) => (
+                "SettleFxCorridor",
+                json::to_value(value).map_err(norito_to_napi)?,
+            ),
+        };
+        let mut variants = json::Map::new();
+        variants.insert(variant.to_owned(), payload);
+        let mut outer = json::Map::new();
+        outer.insert("Settlement".to_owned(), json::Value::Object(variants));
+        return Ok(json::Value::Object(outer));
+    }
     if let Some(register_box) = instruction_ref.as_any().downcast_ref::<RegisterBox>() {
         let mut register_map = json::Map::new();
         match register_box {
@@ -15410,8 +15509,8 @@ mod tests {
         let source = r#"
 seiyaku Privacy {
   kotoage fn commit() authorize("CanCommitPrivateInput") {
-    let value: Secret<i64> = crypto::private_input(0);
-    let blinding: Secret<i64> = crypto::private_input(1);
+    let Secret<int> value = crypto::private_input(0);
+    let Secret<int> blinding = crypto::private_input(1);
     let nullifier = crypto::valcom(left: value, right: blinding);
     crypto::use_nullifier(nullifier);
     crypto::commit_output();
@@ -23810,6 +23909,32 @@ seiyaku Privacy {
     }
 
     #[test]
+    fn multi_source_invalid_plan_has_stable_js_payload() {
+        let error = multi_source_js_error(MultiSourceError::InvalidPlan(
+            sorafs_car::CarPlanError::EmptyInput,
+        ));
+        let payload: Value =
+            json::from_str(&error.reason).expect("multi-source error must be JSON");
+
+        assert_eq!(
+            payload.get("kind").and_then(Value::as_str),
+            Some("multi_source")
+        );
+        assert_eq!(
+            payload.get("code").and_then(Value::as_str),
+            Some("invalid_plan")
+        );
+        assert_eq!(
+            payload.get("details").and_then(Value::as_str),
+            Some("input payload is empty")
+        );
+        assert_eq!(
+            payload.get("retryable").and_then(Value::as_bool),
+            Some(false)
+        );
+    }
+
+    #[test]
     fn sorafs_multi_fetch_local_executes_plan() {
         let tempdir = tempdir().expect("tempdir");
         let payload: Vec<u8> = (0..(6 * 1024_usize))
@@ -26555,6 +26680,54 @@ seiyaku Privacy {
         assert_eq!(first.len(), 32);
         assert_eq!(second.len(), 32);
         assert_ne!(first.as_ref(), second.as_ref());
+    }
+
+    #[test]
+    fn settlement_instruction_json_is_explicit_and_canonical() {
+        let settle = SettleFxCorridor {
+            policy_id: "aed_pkr".parse().expect("policy name"),
+            expected_policy_revision: 3,
+            settlement_id: "fx_1".parse().expect("settlement id"),
+            recipient: AccountId::new(
+                KeyPair::random_with_algorithm(Algorithm::Ed25519)
+                    .public_key()
+                    .clone(),
+            ),
+            source_amount: Numeric::from(5_u32),
+        };
+        let input = norito::json!({
+            "Settlement": {
+                "SettleFxCorridor": json::to_value(&settle).expect("settle JSON")
+            }
+        });
+        let instruction = value_to_instruction(input.clone()).expect("parse settlement");
+        assert!(
+            instruction
+                .as_any()
+                .downcast_ref::<SettlementInstructionBox>()
+                .is_some()
+        );
+        assert_eq!(
+            instruction_to_json_value(&instruction).expect("render settlement"),
+            input
+        );
+
+        let multiple = norito::json!({
+            "Settlement": {
+                "SettleFxCorridor": json::to_value(&settle).expect("settle JSON"),
+                "Dvp": {}
+            }
+        });
+        assert!(value_to_instruction(multiple).is_err());
+
+        let mut invalid = settle;
+        invalid.source_amount = Numeric::from(-1_i32);
+        let negative = norito::json!({
+            "Settlement": {
+                "SettleFxCorridor": json::to_value(&invalid).expect("negative settle JSON")
+            }
+        });
+        assert!(value_to_instruction(negative).is_err());
     }
 
     #[test]

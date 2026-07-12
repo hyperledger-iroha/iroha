@@ -1,13 +1,18 @@
 # Roadmap
 
-Last updated: 2026-07-11
+Last updated: 2026-07-12
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 The detailed engineering backlog lives in
 [`docs/source/engineering_backlog.md`](./docs/source/engineering_backlog.md),
 and completed history lives in [`status.md`](./status.md).
 
-Kagemusha V2 admission is fail-closed for the first release.
+Kagemusha V2 transport and proof admission are fail-closed for the first release.
+The only public product selector is `recursive_spend_v2`; it requires exact
+bridge ABI 18 and the governed
+`kagemusha.offline.recursive_spend.artifact_manifest.v3` manifest with the V3
+atomic artifact lifecycle. ABI-6/ABI-7 fixtures and unsuffixed recursive-spend
+helpers are not first-release compatibility surfaces.
 `KAGEMUSHA_RECURSIVE_SPEND_V2_PROOF_BACKEND_AVAILABLE = false` is the
 authoritative release state: Core top-up execution and every proof-gated
 init/append/redeem-change/verify/redeem path remain unavailable. Record-backed
@@ -105,6 +110,16 @@ or length verification before runtime construction; and gateway fetch always
 retrieves the manifest and verifies the assembled payload against it. The
 orchestrator tuning docs, plan docs, signed gateway-fetch fixtures, and rollout
 contract pin the fail-closed fetch path.
+
+SFM-1 local delegated routing now derives HTTP Routing V1 content and peer
+lookups directly from approved pin manifests, completed canonical replication
+orders, and current admission-bound provider adverts. Pending/expired orders,
+retired/future pins, stale adverts, malformed identifiers and filters,
+non-canonical order payloads, and provider peer-key equivocation fail closed;
+JSON/NDJSON results are deterministic and bounded. Remaining SFM-1 work is
+generated OpenAPI/SDK publication plus signed multi-region load, revocation,
+failover, latency, and operational-review evidence; the local implementation
+does not substitute for those deployment gates.
 `sorafs_fetch` operator numerics are also canonical at the first-release
 boundary: provider spec `#concurrency` and `@weight` fields plus
 `--max-parallel`, `--max-peers`, retry-budget aliases, provider-failure
@@ -669,8 +684,10 @@ proofs. Remaining work is four-or-more-peer V2 Nexus validation and operator
 rollout evidence covering global view changes, exact-view merge-carrier
 failover, Kura-before-WSV and certificate-before-receipt restart boundaries,
 and lane retire/recreate/reset cycles, not a second direct lane-state
-application design. `lane_block_view` remains intentionally coupled to the
-locked global proposal view; independently paced lane views are future work.
+application design. Every fresh lane height starts at `lane_block_view = 0`;
+the locked global proposal view remains authenticated separately in the payload
+hint, while lane-local NewView certificates advance only the durable synthetic
+retransmission cursor and never change the immutable certification subject.
 
 Kagemusha online-to-offline top-up and redemption now use the typed V2 wire
 requests directly at `/v1/offline/top-up` and `/v1/offline/redeem`. Torii has no
@@ -763,8 +780,8 @@ scan limited to repository policy text plus intentional guard-test fixtures.
 
 ## SCCP Launch Scope
 
-**Status:** exact V1 implementation complete; integrated validation and live
-deployment evidence pending.
+**Status:** exact V1 implementation and local release-fixture validation
+complete; audited live deployment evidence pending.
 
 The first release has exactly three production remote profiles: Ethereum
 mainnet, BNB Smart Chain mainnet, and TRON mainnet, each paired with SORA Taira
@@ -831,32 +848,47 @@ Multisig authorities use preparation followed by the multisig workflow, never
 the direct detached-signature shortcut. The unified response uses
 `route_configuration_hash_hex`; the retired manifest alias is not accepted.
 
-The remaining SCCP release work is final integrated validation plus external
-evidence:
+Successful outbound messages use one dense, zero-based `commitment_index` in
+block execution order, with a fixed maximum of 512 messages per block and 4,096
+canonical payload bytes per message. Kura persists the immutable canonical
+header and root-authenticated SCCP archive before finality publication or body
+eviction, so proof, proof-request, and recent-message reconstruction do not read
+historical bodies or mutable WSV payload copies. Recent discovery uses the
+compound `{ from, after_index }` cursor and cannot skip the remainder of a full
+same-height page.
 
-- complete the clean-build Core/Torii/CLI, production-validator, consolidated
-  cross-SDK, and four-peer admission matrix; the full SCCP library suite and
-  pinned EVM/Ethereum/BSC/TRON contract corridor are green, as are the Swift,
-  Python, JavaScript, Kotlin/JVM, and Android Java exact-schema/padding suites,
-  while Windows .NET execution still requires its host runtime;
+Bulky pending WSV state is jointly bounded by
+`zk.sccp.max_pending_outbound_messages` and
+`zk.sccp.max_pending_outbound_payload_bytes` (defaults 65,536 and 268,435,456).
+Accepted destination proofs immediately replace the pending payload with a
+fixed terminal descriptor while retaining its locator and ordered index.
+Terminal replay/index records and immutable Kura history intentionally grow for
+permanent replay protection and proof history; immutable sidecars count in
+total/operator disk usage but are excluded from the evictable-body budget. No
+total-state bound is claimed.
+
+The remaining SCCP release work is external, independently verifiable evidence:
+
 - obtain independently audited, reproducible semantic circuit, witness
   generator, proving key, verifying key, toolchain, and audit-report artifacts
   for all three production profiles;
-- deploy the exact contracts and native source-verifier material, authenticate
-  finalized readbacks, and confirm every governed runtime/key/policy hash;
+- deploy the exact contracts and native source-verifier material, obtain
+  authenticated finalized verifier/runtime readbacks, and confirm every
+  governed runtime/key/policy hash;
 - apply the typed governance actions, run successful value-moving canaries in
   both directions, and confirm replay, stale-revision, wrong-route, and
-  unavailable-ingress failures remain closed; and
+  unavailable-ingress failures remain closed;
+- run the release SCCP .NET suite on Windows `.NET 8` and retain the direct
+  VSTest TRX plus OS/RID/architecture and native bridge-DLL evidence; and
 - publish a signed production release-evidence bundle accepted by the Rust
   validator and independently reproduced by release engineering and security.
 
 No fixture key, signal-binding circuit, synthetic receipt, unavailable lane,
 or self-consistent proof-controlled roster counts as production evidence.
 
-Any SCCP implementation-history paragraphs elsewhere in this file that mention
-Solana, TON, route manifests, generic proof jobs/artifacts, an external token
-constructor argument, or token-address precomputation are superseded by this
-launch-scope section and are not current roadmap work.
+SCCP V1 is only Taira↔Ethereum, Taira↔BSC, and Taira↔TRON. Solana, TON,
+generic proof jobs/artifacts, and retired route-manifest workflows are excluded
+from the first release and must not appear as launch blockers or evidence rows.
 
 ## Release and Stabilization
 
@@ -4401,12 +4433,13 @@ launch-scope section and are not current roadmap work.
   event suppression, and the localhost Torii mock-server harness pinned in the
   focused JVM gate and parity inventory.
   Kotlin/JVM and Android Java SCCP runner coverage must stay pinned in the
-  same focused JVM gate for EVM-family, TRON, TON, Solana, and shared source
-  proof-hash helpers. The runner and parity inventory must keep deterministic
-  proof-request/result wrapping, callback request snapshots, route-canary
-  hashes, source verifier material hashes, destination-binding hashes,
-  malformed Groth16 proof rejection, noncanonical TON bundle rejection, Solana
-  deployment binding, and EVM/BSC inbound drift checks visible to SDK CI.
+  same focused JVM gate for EVM-family, TRON, and the shared eleven-signal,
+  38-word, mandatory-policy proof helpers. The runner and parity inventory must
+  keep deterministic proof-request/result wrapping, callback request snapshots,
+  both outbound-policy hashes, route-canary hashes, source verifier material
+  hashes, destination-binding hashes, malformed Groth16 proof rejection, and
+  EVM/BSC inbound drift checks visible to SDK CI. Solana and TON are not SCCP
+  V1 runner or parity requirements.
   Kotlin/JVM and Android Java recursive-spend request codecs must keep
   init/append/verify/redeem archive schemas, compact request payload layouts,
   raw embedded archive payloads, Norito `Option` child-length framing, Rust
@@ -10418,21 +10451,28 @@ launch-scope section and are not current roadmap work.
   activate bounded governance policy revisions; admit authority-bound appeals
   with independent single-use proof-token and deposit-lock replay indexes;
   pin exact active PoP root, revocation, issuer-policy, and audit snapshots;
-  verify private Halo2 eligibility proofs; deterministically select unique
-  primary/waitlist jurors by per-credential appeal nullifier; record assignment
+  verify private Halo2 eligibility proofs against those immutable historical
+  publications after ordinary active-registry advancement while an emergency
+  registry pause still freezes pending use; deterministically
+  freeze the latest committed parent hash after registration closes through a
+  non-appellant governance finalizer and select
+  unique primary/waitlist jurors by per-credential appeal nullifier; record assignment
   acceptance; and activate a policy-digest-bound case with deterministic
   no-show replacement. Insufficient pools and exhausted failover are terminal,
   replay-safe states, and the direct case-opening instruction has been removed.
   The existing
   authority-bound canonical commitments/reveals, payload-free challenges, and
   finalization then record decisions, contested ties, missed-quorum outcomes,
-  accepted-challenge outcomes, and distinct missing-commit or unrevealed-commit
-  penalties. Typed queries expose policy, appeal, permissioned eligibility,
+  accepted-challenge outcomes, unresolved-challenge fail-safe expiry without
+  juror penalties, and distinct missing-commit or unrevealed-commit penalties.
+  Late challenge resolution cannot reopen an elapsed reveal phase or strand a
+  case. Typed queries expose policy, appeal, permissioned eligibility,
   case, commitment, reveal, challenge, outcome, no-show, and counter state
   through the existing generic Torii query surface;
   `CanManageSorafsModeration` gates privileged transitions while native
-  execution independently enforces permissions, block-time phases, active-root
-  freshness, exact-canonical bounded payloads, monotonic lifecycle state,
+  execution independently enforces permissions (including the same explicit
+  genesis semantics as the default executor), block-time phases, pinned-root
+  integrity and audit ancestry, exact-canonical bounded payloads, monotonic lifecycle state,
   deterministic roster recomputation, and preflighted atomic writes.
   The SFM-4b moderation-panel rollout
   evidence gate now validates payload-free appeal intake, sortition roster,
@@ -11134,24 +11174,22 @@ launch-scope section and are not current roadmap work.
   block/head/CAR/checkpoint/response flags to `false`,
   validates each generated artifact through the SF-12 checker, and
   writes atomically without following output symlinks. The
-	  rollout-gate static contract pins the SF-12 plan's IPFS/IPNS, live-head,
-  public-checkpoint, runtime mirror-service, and runtime/IPFS dashboard work as
-  explicitly unshipped with reusable matchers and segment-aware negative
-  controls while preserving local dashboard/head, block/node, publish-index,
-  CAR queue, runtime signed-DAG query routes, local `sorafs_cli governance dag`
-  commands, telemetry, and payload-free canary evidence labels. It also scans
-  CLI sources for nested `governance dag
-  live-head|fetch-head|checkpoint-publish|ipfs-publish|ipns-publish` spellings
-  so live public operator commands cannot land accidentally while local
-  checkpoint/mirror commands remain allowed, but SF-12 still
-  needs the always-on ingest/publisher services,
-  IPFS/IPNS publication, runtime RocksDB/IPLD mirror datastore and query service,
-  live-head/public-checkpoint publication and recovery operator commands,
-  runtime/IPFS-backed dashboard API, live public IPFS/IPNS head and pin/mirror
-  metric emission, IPFS-backed tests, and staged/live publication evidence that
-  passes this gate.
-  Prioritize signed service boundaries before adding public rollout evidence
-  for those lanes.
+	  The always-on `sorafs_governance_dag` service now closes the SF-12 public
+  service boundary: it revalidates the signed runtime chain, performs verified
+  IPFS add/pin/readback, publishes the signed head through authenticated HTTP or
+  IPNS compare-and-swap, recovers partial publication from authenticated
+  checkpoint/intent state, and serves bounded mirror/head/block/node/checkpoint,
+  health, and Prometheus APIs. Mock adversarial tests cover pin/readback drift,
+  CAS conflicts, response bounds, SSRF policy, rollback/fork, checkpoint/intent
+  corruption, restart recovery, and mirror tamper; an opt-in real-Kubo lane
+  covers IPNS restart/tamper behavior. The rollout static contract continues to
+  reject ad-hoc Torii mutation routes and CLI commands that would bypass this
+  signed service boundary while preserving offline archive/checkpoint tooling.
+  Remaining SF-12 work is deployment packaging with runtime-only governed keys,
+  a measured decision on whether the bounded JSON mirror needs an optional
+  RocksDB/IPLD backend, any operator convenience wrappers justified by the
+  deployment, and staged/live public publication, recovery, dashboard, and
+  alert evidence that passes the gate.
 - SoraFS repair auditor submission wiring now accepts JSON or Norito
   `SignedAuditorRequestV1` envelopes on the existing `/report` and `/slash`
   endpoints, validates envelope version, non-zero nonce, auditor-account match,
@@ -11473,9 +11511,10 @@ launch-scope section and are not current roadmap work.
   This does not close the live deployment gaps above; it prevents
   production promotion from being claimed until those lane gates all pass
   together for the same deployment.
-- SCCP launch scope is limited to Ethereum, BSC, Solana, TON, and TRON. Proof
-  manifests, checked encoders, verifier dispatch, Torii public discovery, SDK
-  helpers, and production readiness surfaces must stay limited to those lanes.
+- SCCP V1 production launch scope is limited to Ethereum, BSC, and TRON. Proof
+  policies, checked encoders, verifier dispatch, Torii public discovery, SDK
+  helpers, and production readiness surfaces must stay limited to those lanes;
+  Solana and TON are rejected first-release profiles, not deferred launch work.
   Retired runtime-network families outside that launch scope are explicitly
   unsupported for now.
   SCCP will not support Sub&#115;trate/Pol&#107;adot networks for now.
@@ -12157,10 +12196,13 @@ launch-scope section and are not current roadmap work.
   witness and total-weight overflow details, including witness indexes and raw
   overflow weights, cannot appear in public summaries, and the release
   public-scalar inventory pins those regressions.
+- The current SCCP release-evidence matrix enumerates only Ethereum, BSC, and
+  TRON. Solana/TON clauses retained in the pre-release implementation history
+  below are non-normative and cannot satisfy or block SCCP V1 readiness.
 - SCCP source-material evidence must reject built-in template verifier hashes as
   a release gate, not only as local script behavior. The
   `source_material_template_rejection_gate` source inventory pins ETH, BSC,
-  Solana, TON, and TRON evidence-script guards plus negative tests so
+  and TRON evidence-script guards plus negative tests so
   template-derived source verifier material cannot satisfy production readiness
   silently. The aggregate all-lanes evidence validator also rejects copied
   source-material records that replay those built-in template component hashes
@@ -12173,7 +12215,7 @@ launch-scope section and are not current roadmap work.
   preflight now rejects the same source-record template replay for ready and
   not-ready summaries before emitting public JSON. Copied source-adapter gate
   hashes and audit verifier hashes for
-  ETH, BSC, Solana, TON, and TRON are rejected at the same boundary if they
+  ETH, BSC, and TRON are rejected at the same boundary if they
   replay built-in source-material template component hashes, and strict
   release-bundle public JSON validation rejects the same replay in copied
   cryptographic-evidence rows and all-lanes source-adapter gate summaries. The
@@ -12195,7 +12237,7 @@ launch-scope section and are not current roadmap work.
   evidence is checked. The
   all-lanes release checklist now rejects copied source-adapter gate hashes and
   audit hashes that replay the same built-in template material across ETH, BSC,
-  Solana, TON, and TRON before governed deployment readiness can pass. The
+  and TRON before governed deployment readiness can pass. The
   source-gate audit-key emission controls must also stay exact booleans before
   bundle-builder or strict-verifier helper paths can suppress audit-key shape
   diagnostics. The source-material role validation release inventory now also
@@ -12206,7 +12248,7 @@ launch-scope section and are not current roadmap work.
   while BSC's material-only envelope profile stays fail-closed. Rust source-adapter
   readiness now also
   tests material-only admission across every active remote launch lane, so
-  deployed source material for ETH, BSC, Solana, TON, or TRON can be recognized
+  deployed source material for ETH, BSC, or TRON can be recognized
   as well-shaped without opening production readiness until the external
   consensus, inclusion, and trust-anchor engines are ready. The BSC fixture in
   that guard uses source bridge network/owner/config-bound deployed material
@@ -12221,7 +12263,7 @@ launch-scope section and are not current roadmap work.
   admission or mint/match a governed deployment descriptor. Release-readiness
   and strict-bundle source inventories must pin those all-lane and BSC
   fail-closed/config-bound readiness markers before
-  production evidence can pass. ETH, BSC, Solana, TON, and TRON source
+  production evidence can pass. ETH, BSC, and TRON source
   bridge/state evidence must also keep wrong
   source/target lane-domain diagnostics tied to named `SCCP_DOMAIN_*` and
   `SCCP_DOMAIN_SORA` constants, with readiness and strict-bundle source
@@ -12245,7 +12287,7 @@ launch-scope section and are not current roadmap work.
   audit hash profile explicitly, so structurally inspectable full-light-client
   audit descriptors with changed role hashes cannot open readiness. Full lane
   production-readiness coverage now also rebuilds production-shaped destination
-  rollout and route-canary records for Ethereum, BSC, Solana, TON, and TRON, then
+  rollout and route-canary records for Ethereum, BSC, and TRON, then
   proves replayed source-adapter deployment receipt drift and shape-valid
   route-canary evidence drift both keep the route allowlist closed at the
   canonical lane-evidence join. The Python all-lanes evidence regression now also
@@ -26484,8 +26526,9 @@ operator-provided rollout bundles.
   generation and wallet/liteserver packaging. Because SCCP launch support
   excludes retired runtime-network families for now, the SDKs ship no builders,
   prover facades, or retired codec runtime-call submission helpers for them.
-  Torii and the SDK release checks now keep the production SCCP surface limited
-  to ETH, BSC, Solana, TON, and TRON explicitly.
+  The surrounding Solana/TON SDK notes are retained pre-release history and do
+  not describe exported SCCP V1 APIs. Torii and the SDK release checks keep the
+  production SCCP surface limited to ETH, BSC, and TRON explicitly.
   The package root also re-exports the SCCP source-adapter OpenVerify circuit id, FastPQ
   parameter-set id, and verifier VK hash helper used by portal evidence
   checks, keeping declared TypeScript imports runtime-available.
@@ -27529,11 +27572,12 @@ operator-provided rollout bundles.
 - Keep live-network signing inputs runtime-only and continue using generated
   per-validator deployment bundles rather than hand-edited production configs.
 
-**Next checkpoints:** continue replacing remaining SCCP source-chain verifier
-placeholders behind the typed adapter variants so ETH/BSC/Solana/TON/TRON
-consensus/finality and receipt/message inclusion are checked against external
-chain rules. Rust SCCP adversarial coverage now starts from production-ready
-source-verifier material for every active launch lane and replays each built-in
+**Next checkpoints:** obtain independently audited deployment and source-chain
+evidence for Ethereum, BSC, and TRON, then complete bidirectional live canaries
+against the exact governed hashes. Solana/TON verifier work in the pre-release
+history below is not SCCP V1 work. Rust SCCP adversarial coverage now starts
+from production-ready source-verifier material for every active launch lane and
+replays each built-in
 placeholder role field one at a time, proving the placeholder detector itself
 classifies required source-state, source-bridge emitter, and source-bridge
 config sentinel replays into otherwise deployment-bound material before the
@@ -27547,7 +27591,7 @@ trust-anchor, consensus, message-inclusion, finality-policy, source-state,
 source-bridge emitter, or source-bridge config sentinels remains fail-closed
 even when verifier evidence and adapter OpenVerify are rebuilt around the
 forged descriptor. The descriptor-only replay regression now also runs across
-ETH, BSC, Solana, TON, and TRON, proving standalone shape,
+ETH, BSC, and TRON, proving standalone shape,
 material/deployment matching, and readiness all reject template role replay for
 every active launch lane. That regression now also mutates built-in placeholder
 IDs and hashes in the standalone deployment descriptor itself, proving shape,
@@ -27565,7 +27609,7 @@ role hashes remain valid.
 That rejection now scans every active launch lane's profile-template component
 hashes, including Solana and TON full-light-client audit descriptor fields, so a
 foreign lane template hash cannot be repackaged as governed audit material.
-Python ETH, BSC, Solana, TON, and TRON source-material evidence scripts now use
+Python ETH, BSC, and TRON source-material evidence scripts now use
 a shared active-template denylist and mirror that rule before source-material,
 source-adapter deployment, or Solana/TON audit hashes are rendered, so generated
 operator evidence fails closed on cross-role or cross-lane template hash replay
@@ -27609,11 +27653,11 @@ OpenVerify rebuild regressions now distinguish malformed evidence that is
 rejected before a rebuildable FastPQ statement from evidence that rebuilds and is
 then rejected by the verifier-commitment helper. The detailed
 readiness regression now also pins the exact external source-verifier blocker
-for ETH, BSC, Solana, TON, and TRON so the remaining governed deployment work
+for ETH, BSC, and TRON so the remaining governed deployment work
 cannot be collapsed into a generic source-adapter failure or silently omitted
 from a launch lane while default placeholder material keeps readiness closed.
 Generated readiness Markdown now also carries those exact lane blockers in the
-Required Release Evidence section for ETH, BSC, Solana, TON, and TRON; strict
+Required Release Evidence section for ETH, BSC, and TRON; strict
 bundle verification treats replacing a lane-specific blocker with generic
 source-verifier wording as Markdown drift. Strict Required Release Evidence
 verification now also pins the sentence that offline placeholder or

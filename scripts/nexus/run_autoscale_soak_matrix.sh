@@ -238,10 +238,14 @@ for run in $(seq 1 "$RUNS"); do
   fi
 
   echo "[autoscale-soak-matrix] run ${run}/${RUNS} seed=${seed}"
+  if [[ "$USE_CARGO_FAST" == true ]]; then
+    cargo_command=("${cargo_runner[@]}" -- test)
+  else
+    cargo_command=("${cargo_runner[@]}" test)
+  fi
+  cargo_command+=(--locked --offline -p integration_tests --test nexus_and_streaming "$TEST_FILTER" -- --ignored --nocapture --test-threads="$TEST_THREADS")
   set +e
-  env "${env_vars[@]}" \
-    "${cargo_runner[@]}" -- test --locked --offline -p integration_tests --test nexus_and_streaming "$TEST_FILTER" -- --ignored --nocapture --test-threads="$TEST_THREADS" \
-    >"$log_path" 2>&1
+  env "${env_vars[@]}" "${cargo_command[@]}" >"$log_path" 2>&1
   exit_code=$?
   set -e
 

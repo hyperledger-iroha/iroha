@@ -68,6 +68,8 @@ pub enum Listener {
 pub enum AuthenticationPolicy {
     /// The listener's configured API-token policy applies.
     ToriiDefault,
+    /// The route requires a request signature bound to the submitted identity.
+    IdentityBoundSignature,
     /// The route additionally requires an operator signature.
     OperatorSignature,
     /// The operator credential exchange authenticates inside the handler.
@@ -820,8 +822,15 @@ fn validate_path(route: &RouteDescriptor) -> Result<(), &'static str> {
             if !valid_kebab_segment(segment) {
                 return Err("static path segments must use lowercase kebab-case");
             }
-            if matches!(segment, "get" | "list" | "json" | "sse") {
-                return Err("static path segment uses a forbidden transport or CRUD word");
+            if matches!(segment, "json" | "sse") {
+                return Err("static path segment uses a forbidden transport word");
+            }
+            if matches!(segment, "get" | "list")
+                && !is_terminal_post_read_operation(route, segment, index, segment_count)
+            {
+                return Err(
+                    "CRUD read operation segments require a matching POST route id and must appear last",
+                );
             }
             if segment.strip_prefix('v').is_some_and(|suffix| {
                 !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_digit())
@@ -832,6 +841,23 @@ fn validate_path(route: &RouteDescriptor) -> Result<(), &'static str> {
     }
 
     validate_wildcard_shape(path, route.route_match)
+}
+
+fn is_terminal_post_read_operation(
+    route: &RouteDescriptor,
+    segment: &str,
+    index: usize,
+    segment_count: usize,
+) -> bool {
+    if route.method != HttpMethod::Post || index + 1 != segment_count {
+        return false;
+    }
+
+    match segment {
+        "get" => route.stable_route_id.ends_with("_get_post"),
+        "list" => route.stable_route_id.ends_with("_list_post"),
+        _ => false,
+    }
 }
 
 fn validate_wildcard_shape(path: &str, route_match: RouteMatch) -> Result<(), &'static str> {
@@ -2815,6 +2841,26 @@ pub mod sorafs {
         public_get(stable_route_id, path, RouteProjections::NONE)
     }
 
+    const fn delegated_routing_get(
+        stable_route_id: &'static str,
+        path: &'static str,
+    ) -> RouteDescriptor {
+        RouteDescriptor::new(
+            stable_route_id,
+            HttpMethod::Get,
+            path,
+            ApiSurface::Public,
+            Listener::Torii,
+        )
+        .with_feature_gate(FeatureGate::Feature("app_api"))
+        .with_projections(RouteProjections::OPENAPI_AND_SDK)
+        .with_path_policy(PathPolicy::ProtocolException {
+            reason: "vendor-neutral HTTP Routing V1 interoperability endpoint",
+        })
+        .with_implicit_head(true)
+        .with_cors_options(true)
+    }
+
     const fn stream_get(stable_route_id: &'static str, path: &'static str) -> RouteDescriptor {
         RouteDescriptor::new(
             stable_route_id,
@@ -2859,6 +2905,16 @@ pub mod sorafs {
     pub const PROVIDER_ADVERT: RouteDescriptor = documented_post(
         "sorafs.provider_advert.submit",
         "/v1/sorafs/providers/advert",
+    );
+    /// Resolve admitted providers assigned to one approved content root.
+    pub const ROUTING_PROVIDERS: RouteDescriptor = delegated_routing_get(
+        "sorafs.delegated_routing.providers",
+        "/routing/v1/providers/{cid}",
+    );
+    /// Resolve one admitted and actively assigned provider peer.
+    pub const ROUTING_PEERS: RouteDescriptor = delegated_routing_get(
+        "sorafs.delegated_routing.peers",
+        "/routing/v1/peers/{peer_id}",
     );
     /// Read the local SoraFS capacity state.
     pub const CAPACITY_STATE: RouteDescriptor =
@@ -3142,12 +3198,50 @@ pub mod sorafs {
     /// Build a bounded proof-stream payload.
     pub const PROOF_STREAM: RouteDescriptor =
         documented_post("sorafs.proof_stream.build", "/v1/sorafs/proof/stream");
+    const fn authenticated_deal_post(
+        stable_route_id: &'static str,
+        path: &'static str,
+        authentication: AuthenticationPolicy,
+    ) -> RouteDescriptor {
+        documented_post(stable_route_id, path).with_authentication(authentication)
+    }
+
+    /// Fund a provider's SoraFS deal escrow.
+    pub const DEAL_FUND_PROVIDER: RouteDescriptor = authenticated_deal_post(
+        "sorafs.deal.provider_fund",
+        "/v1/sorafs/deal/fund-provider",
+        AuthenticationPolicy::IdentityBoundSignature,
+    );
+    /// Fund a client's SoraFS deal escrow.
+    pub const DEAL_FUND_CLIENT: RouteDescriptor = authenticated_deal_post(
+        "sorafs.deal.client_fund",
+        "/v1/sorafs/deal/fund-client",
+        AuthenticationPolicy::OperatorSignature,
+    );
+    /// Open a funded SoraFS deal.
+    pub const DEAL_OPEN: RouteDescriptor = authenticated_deal_post(
+        "sorafs.deal.open",
+        "/v1/sorafs/deal/open",
+        AuthenticationPolicy::OperatorSignature,
+    );
+    /// Cancel a SoraFS deal.
+    pub const DEAL_CANCEL: RouteDescriptor = authenticated_deal_post(
+        "sorafs.deal.cancel",
+        "/v1/sorafs/deal/cancel",
+        AuthenticationPolicy::OperatorSignature,
+    );
     /// Submit a SoraFS deal-usage report.
-    pub const DEAL_USAGE: RouteDescriptor =
-        documented_post("sorafs.deal_usage.submit", "/v1/sorafs/deal/usage");
+    pub const DEAL_USAGE: RouteDescriptor = authenticated_deal_post(
+        "sorafs.deal_usage.submit",
+        "/v1/sorafs/deal/usage",
+        AuthenticationPolicy::IdentityBoundSignature,
+    );
     /// Submit a SoraFS deal settlement.
-    pub const DEAL_SETTLE: RouteDescriptor =
-        documented_post("sorafs.deal_settlement.submit", "/v1/sorafs/deal/settle");
+    pub const DEAL_SETTLE: RouteDescriptor = authenticated_deal_post(
+        "sorafs.deal_settlement.submit",
+        "/v1/sorafs/deal/settle",
+        AuthenticationPolicy::OperatorSignature,
+    );
 
     /// Read the manifest selected by the request's SoraFS site binding.
     pub const SITE_MANIFEST: RouteDescriptor = protocol_get(
@@ -3176,6 +3270,8 @@ pub mod sorafs {
         STORAGE_PEERS,
         PROVIDERS,
         PROVIDER_ADVERT,
+        ROUTING_PROVIDERS,
+        ROUTING_PEERS,
         CAPACITY_STATE,
         GOVERNANCE_DAG_DASHBOARD,
         GOVERNANCE_DAG_HEAD,
@@ -3236,6 +3332,10 @@ pub mod sorafs {
         STORAGE_CHUNK,
         STORAGE_POR_SAMPLE,
         PROOF_STREAM,
+        DEAL_FUND_PROVIDER,
+        DEAL_FUND_CLIENT,
+        DEAL_OPEN,
+        DEAL_CANCEL,
         DEAL_USAGE,
         DEAL_SETTLE,
         SITE_MANIFEST,
@@ -3678,12 +3778,8 @@ pub mod contracts_and_verification_keys {
         MULTISIG_APPROVE_POST => app_post("contracts.multisig_approve_post", "/v1/multisig/approve");
         MULTISIG_CANCEL_POST => app_post("contracts.multisig_cancel_post", "/v1/multisig/cancel");
         MULTISIG_SPEC_POST => app_post("contracts.multisig_spec_post", "/v1/multisig/spec");
-        MULTISIG_PROPOSALS_QUERY_POST => app_post("contracts.multisig_proposals_query_post", "/v1/multisig/proposals/query");
-        MULTISIG_PROPOSALS_LOOKUP_POST => app_post("contracts.multisig_proposals_lookup_post", "/v1/multisig/proposals/lookup");
-        MULTISIG_APPROVALS_QUERY_POST => app_post("contracts.multisig_approvals_query_post", "/v1/multisig/approvals/query");
-        MULTISIG_APPROVALS_LOOKUP_POST => app_post("contracts.multisig_approvals_lookup_post", "/v1/multisig/approvals/lookup");
-        MULTISIG_APPROVALS_QUERY_FOR_AUTHORITY_POST => app_post("contracts.multisig_approvals_query_for_authority_post", "/v1/multisig/approvals/query-for-authority");
-        MULTISIG_APPROVALS_LOOKUP_FOR_AUTHORITY_POST => app_post("contracts.multisig_approvals_lookup_for_authority_post", "/v1/multisig/approvals/lookup-for-authority");
+        MULTISIG_PROPOSALS_LIST_POST => app_post("contracts.multisig_proposals_list_post", "/v1/multisig/proposals/list");
+        MULTISIG_PROPOSALS_GET_POST => app_post("contracts.multisig_proposals_get_post", "/v1/multisig/proposals/get");
         CONTROLS_ASSET_TRANSFER_QUERY_POST => app_post("contracts.controls_asset_transfer_query_post", "/v1/controls/asset-transfer/query");
         ZK_VK_REGISTER_POST => app_sdk_post("contracts.zk_vk_register_post", "/v1/zk/vk/register");
         ZK_VK_UPDATE_POST => app_sdk_post("contracts.zk_vk_update_post", "/v1/zk/vk/update");
@@ -4105,6 +4201,8 @@ pub const CATALOGED_ROUTES: &[RouteDescriptor] = &[
     sorafs::STORAGE_PEERS,
     sorafs::PROVIDERS,
     sorafs::PROVIDER_ADVERT,
+    sorafs::ROUTING_PROVIDERS,
+    sorafs::ROUTING_PEERS,
     sorafs::CAPACITY_STATE,
     sorafs::GOVERNANCE_DAG_DASHBOARD,
     sorafs::GOVERNANCE_DAG_HEAD,
@@ -4165,6 +4263,10 @@ pub const CATALOGED_ROUTES: &[RouteDescriptor] = &[
     sorafs::STORAGE_CHUNK,
     sorafs::STORAGE_POR_SAMPLE,
     sorafs::PROOF_STREAM,
+    sorafs::DEAL_FUND_PROVIDER,
+    sorafs::DEAL_FUND_CLIENT,
+    sorafs::DEAL_OPEN,
+    sorafs::DEAL_CANCEL,
     sorafs::DEAL_USAGE,
     sorafs::DEAL_SETTLE,
     sorafs::SITE_MANIFEST,
@@ -4391,12 +4493,8 @@ pub const CATALOGED_ROUTES: &[RouteDescriptor] = &[
     contracts_and_verification_keys::MULTISIG_APPROVE_POST,
     contracts_and_verification_keys::MULTISIG_CANCEL_POST,
     contracts_and_verification_keys::MULTISIG_SPEC_POST,
-    contracts_and_verification_keys::MULTISIG_PROPOSALS_QUERY_POST,
-    contracts_and_verification_keys::MULTISIG_PROPOSALS_LOOKUP_POST,
-    contracts_and_verification_keys::MULTISIG_APPROVALS_QUERY_POST,
-    contracts_and_verification_keys::MULTISIG_APPROVALS_LOOKUP_POST,
-    contracts_and_verification_keys::MULTISIG_APPROVALS_QUERY_FOR_AUTHORITY_POST,
-    contracts_and_verification_keys::MULTISIG_APPROVALS_LOOKUP_FOR_AUTHORITY_POST,
+    contracts_and_verification_keys::MULTISIG_PROPOSALS_LIST_POST,
+    contracts_and_verification_keys::MULTISIG_PROPOSALS_GET_POST,
     contracts_and_verification_keys::CONTROLS_ASSET_TRANSFER_QUERY_POST,
     contracts_and_verification_keys::ZK_VK_REGISTER_POST,
     contracts_and_verification_keys::ZK_VK_UPDATE_POST,
@@ -4672,6 +4770,23 @@ mod tests {
         assert_eq!(sorafs::CID_ROOT.path(), "/sorafs/cid/{cid}");
         assert_eq!(sorafs::CID_ROOT.route_match(), RouteMatch::Exact);
         assert_eq!(sorafs::CID_PATH.route_match(), RouteMatch::Wildcard);
+        for route in [sorafs::DEAL_FUND_PROVIDER, sorafs::DEAL_USAGE] {
+            assert_eq!(
+                route.authentication(),
+                AuthenticationPolicy::IdentityBoundSignature
+            );
+        }
+        for route in [
+            sorafs::DEAL_FUND_CLIENT,
+            sorafs::DEAL_OPEN,
+            sorafs::DEAL_CANCEL,
+            sorafs::DEAL_SETTLE,
+        ] {
+            assert_eq!(
+                route.authentication(),
+                AuthenticationPolicy::OperatorSignature
+            );
+        }
 
         for invalid_path in [
             "/v1/sorafs//providers",
@@ -4760,8 +4875,12 @@ mod tests {
         }
 
         for unsupported_path in [
-            "/v1/multisig/proposals/list",
-            "/v1/multisig/proposals/get",
+            "/v1/multisig/proposals/query",
+            "/v1/multisig/proposals/lookup",
+            "/v1/multisig/approvals/query",
+            "/v1/multisig/approvals/lookup",
+            "/v1/multisig/approvals/query-for-authority",
+            "/v1/multisig/approvals/lookup-for-authority",
             "/v1/multisig/approvals/list",
             "/v1/multisig/approvals/get",
             "/v1/multisig/approvals/list_for_authority",
@@ -4779,12 +4898,8 @@ mod tests {
         }
 
         for canonical_path in [
-            "/v1/multisig/proposals/query",
-            "/v1/multisig/proposals/lookup",
-            "/v1/multisig/approvals/query",
-            "/v1/multisig/approvals/lookup",
-            "/v1/multisig/approvals/query-for-authority",
-            "/v1/multisig/approvals/lookup-for-authority",
+            "/v1/multisig/proposals/list",
+            "/v1/multisig/proposals/get",
             "/v1/controls/asset-transfer/query",
             "/v1/nexus/public-lanes/{lane_id}/validators",
         ] {
@@ -4821,7 +4936,7 @@ mod tests {
             RouteMatch::Wildcard
         );
         assert!(
-            contracts_and_verification_keys::MULTISIG_PROPOSALS_QUERY_POST
+            contracts_and_verification_keys::MULTISIG_PROPOSALS_LIST_POST
                 .projections()
                 .openapi()
         );
@@ -5121,6 +5236,81 @@ mod tests {
             assert!(
                 validate_catalog(&[descriptor]).is_err(),
                 "path should be rejected: {path}"
+            );
+        }
+    }
+
+    #[test]
+    fn canonical_path_grammar_limits_body_bearing_read_operation_segments() {
+        for descriptor in [
+            RouteDescriptor::new(
+                "test.resources_list_post",
+                HttpMethod::Post,
+                "/v1/tests/resources/list",
+                ApiSurface::Public,
+                Listener::Torii,
+            ),
+            RouteDescriptor::new(
+                "test.resources_get_post",
+                HttpMethod::Post,
+                "/v1/tests/resources/get",
+                ApiSurface::Public,
+                Listener::Torii,
+            ),
+        ] {
+            assert_eq!(validate_path(&descriptor), Ok(()));
+        }
+
+        for descriptor in [
+            RouteDescriptor::new(
+                "test.resources_list_get",
+                HttpMethod::Get,
+                "/v1/tests/resources/list",
+                ApiSurface::Public,
+                Listener::Torii,
+            ),
+            RouteDescriptor::new(
+                "test.resources_list_post",
+                HttpMethod::Post,
+                "/v1/tests/resources/list/details",
+                ApiSurface::Public,
+                Listener::Torii,
+            ),
+            RouteDescriptor::new(
+                "test.resources_query_post",
+                HttpMethod::Post,
+                "/v1/tests/resources/list",
+                ApiSurface::Public,
+                Listener::Torii,
+            ),
+        ] {
+            assert_eq!(
+                validate_path(&descriptor),
+                Err(
+                    "CRUD read operation segments require a matching POST route id and must appear last"
+                )
+            );
+        }
+
+        for descriptor in [
+            RouteDescriptor::new(
+                "test.resources_json_post",
+                HttpMethod::Post,
+                "/v1/tests/resources/json",
+                ApiSurface::Public,
+                Listener::Torii,
+            ),
+            RouteDescriptor::new(
+                "test.resources_sse_post",
+                HttpMethod::Post,
+                "/v1/tests/resources/sse",
+                ApiSurface::Public,
+                Listener::Torii,
+            ),
+        ] {
+            assert_eq!(
+                validate_path(&descriptor),
+                Err("static path segment uses a forbidden transport word")
             );
         }
     }

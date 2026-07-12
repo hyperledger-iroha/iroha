@@ -333,6 +333,13 @@ isi! {
         /// Exact pinned PoP snapshot digest expected by the operator.
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
         pub pop_snapshot_digest: [u8; 32],
+        /// Exact latest committed parent hash expected to seed the draw.
+        ///
+        /// Native execution requires this anchor to match consensus state after
+        /// registration closes, preventing applicants or candidates from
+        /// precomputing and selectively entering a favorable draw.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub randomness_anchor: [u8; 32],
         /// Proposed primary roster; execution recomputes and rejects biased input.
         pub proposed_jurors: Vec<AccountId>,
         /// Proposed failover order; execution recomputes and rejects biased input.
@@ -695,6 +702,7 @@ impl FinalizeSorafsModerationSortition {
         case_id: String,
         round_id: String,
         pop_snapshot_digest: [u8; 32],
+        randomness_anchor: [u8; 32],
         proposed_jurors: Vec<AccountId>,
         proposed_waitlist: Vec<AccountId>,
     ) -> Self {
@@ -702,6 +710,7 @@ impl FinalizeSorafsModerationSortition {
             case_id,
             round_id,
             pop_snapshot_digest,
+            randomness_anchor,
             proposed_jurors,
             proposed_waitlist,
         }
@@ -968,6 +977,7 @@ impl_sorafs_decode_from_slice!(FinalizeSorafsModerationSortition {
     case_id: String,
     round_id: String,
     pop_snapshot_digest: [u8; 32],
+    randomness_anchor: [u8; 32],
     proposed_jurors: Vec<AccountId>,
     proposed_waitlist: Vec<AccountId>,
 });
@@ -1299,13 +1309,16 @@ mod tests {
             "round-1".to_owned(),
             vec![0x01, 0x02],
         ));
-        assert_slice_roundtrip(FinalizeSorafsModerationSortition::new(
+        let finalize_sortition = FinalizeSorafsModerationSortition::new(
             "appeal-1".to_owned(),
             "round-1".to_owned(),
             [0x65; 32],
+            [0x64; 32],
             vec![owner()],
             Vec::new(),
-        ));
+        );
+        assert_eq!(finalize_sortition.randomness_anchor, [0x64; 32]);
+        assert_slice_roundtrip(finalize_sortition);
         assert_slice_roundtrip(AcceptSorafsModerationJurorAssignment::new(
             "appeal-1".to_owned(),
             "round-1".to_owned(),
@@ -1430,6 +1443,7 @@ mod tests {
                 "appeal-1".to_owned(),
                 "round-1".to_owned(),
                 [0x65; 32],
+                [0x64; 32],
                 vec![owner()],
                 Vec::new(),
             ),

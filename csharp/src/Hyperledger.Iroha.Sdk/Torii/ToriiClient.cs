@@ -1528,7 +1528,9 @@ public sealed partial class ToriiClient : IDisposable
         string assetDefinitionId,
         CancellationToken cancellationToken = default)
     {
-        var exactAssetDefinitionId = NormalizeExactValue(assetDefinitionId, nameof(assetDefinitionId));
+        var exactAssetDefinitionId = OfflineApiValidation.RequireAssetSelector(
+            assetDefinitionId,
+            nameof(assetDefinitionId));
         var query = BuildQueryString(
         [
             new KeyValuePair<string, string?>("asset_definition_id", exactAssetDefinitionId),
@@ -1541,7 +1543,17 @@ public sealed partial class ToriiClient : IDisposable
             accept: "application/json",
             cancellationToken: cancellationToken);
         RequireResponseMediaType(response, "application/json", "Offline readiness");
-        return await DeserializeAsync<OfflineReadiness>(response, cancellationToken);
+        var readiness = await DeserializeAsync<OfflineReadiness>(response, cancellationToken);
+        if (!exactAssetDefinitionId.Contains('#')
+            && !string.Equals(
+                readiness.AssetDefinitionId,
+                exactAssetDefinitionId,
+                StringComparison.Ordinal))
+        {
+            throw new InvalidDataException(
+                "Offline readiness response asset_definition_id does not match the requested asset definition.");
+        }
+        return readiness;
     }
 
     /// <summary>Submit a canonical top-up request as a direct typed Norito body.</summary>
@@ -2558,7 +2570,10 @@ public sealed partial class ToriiClient : IDisposable
         string context,
         CancellationToken cancellationToken)
     {
-        var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
+        var document = await JsonDocument.ParseAsync(
+            stream,
+            new JsonDocumentOptions { MaxDepth = 128 },
+            cancellationToken);
         try
         {
             ToriiIdentifierJson.RejectDuplicateProperties(document.RootElement, context);
@@ -5447,6 +5462,10 @@ public sealed partial class ToriiClient : IDisposable
         ArgumentNullException.ThrowIfNull(baseOptions);
 
         var options = new JsonSerializerOptions(baseOptions);
+        if (options.MaxDepth == 0)
+        {
+            options.MaxDepth = 128;
+        }
         IList<IJsonTypeInfoResolver> resolverChain = options.TypeInfoResolverChain;
         if (!resolverChain.Contains(ToriiJsonSerializerContext.Default))
         {

@@ -290,10 +290,12 @@ impl V2IoHandle {
         self.finish_control(protocol, deadline, "shutdown")
     }
 
+    #[cfg(test)]
     fn retire(self, receipt: KuraV2CommitReceipt) -> Result<(), String> {
         self.retire_with_timeout(receipt, V2_IO_CONTROL_TIMEOUT)
     }
 
+    #[cfg(test)]
     fn retire_with_timeout(
         mut self,
         receipt: KuraV2CommitReceipt,
@@ -360,6 +362,7 @@ impl V2IoHandle {
         }
     }
 
+    #[cfg(test)]
     fn request_retirement_until(
         &self,
         receipt: KuraV2CommitReceipt,

@@ -733,7 +733,6 @@ fn assert_lane_rebroadcast_cooldown_skips_without_progress(
     let last_sent = actor
         .last_lane_block_rebroadcast
         .expect("the first periodic lane retry should record its send time");
-    let cursor = actor.lane_block_rebroadcast_cursor;
     assert!(
         !actor.broadcast_ready_local_lane_block_votes(),
         "an immediate periodic retry must not report false tick progress"
@@ -743,7 +742,6 @@ fn assert_lane_rebroadcast_cooldown_skips_without_progress(
         "an immediate retry inside the cooldown must not schedule transport work"
     );
     assert_eq!(actor.last_lane_block_rebroadcast, Some(last_sent));
-    assert_eq!(actor.lane_block_rebroadcast_cursor, cursor);
     let next_due = actor
         .lane_block_rebroadcast_next_due(Instant::now())
         .expect("unresolved lane work should keep an idle wakeup deadline");
@@ -857,6 +855,12 @@ fn native_amx_v2_fixture(
         participant_lane_id,
         participant_dataspace_id,
         participant_lane_incarnation: Hash::prehashed([seed.wrapping_add(5); Hash::LENGTH]),
+        participant_previous_block_height: 0,
+        participant_previous_block_descriptor_hash: None,
+        participant_lane_block_height: 1,
+        participant_lane_block_view: 0,
+        participant_proposal_hash: Hash::prehashed([0; Hash::LENGTH]),
+        participant_settlement_commitment: Hash::prehashed([0; Hash::LENGTH]),
         participant_validator_set_hash: HashOf::new(&validator_set),
         participant_validator_count: 1,
         participant_min_quorum: 1,
@@ -897,10 +901,44 @@ fn native_amx_v2_fixture(
     };
     coordinator_proposal.proposal_hash = coordinator_proposal.computed_proposal_hash();
     body.coordinator_proposal_hash = coordinator_proposal.proposal_hash;
+    let mut participant_descriptor = iroha_data_model::block::consensus::LaneBlockDescriptorV1 {
+        lane_id: participant_lane_id,
+        dataspace_id: participant_dataspace_id,
+        lane_incarnation: body.participant_lane_incarnation,
+        proposal_height: body.authority_context_height,
+        previous_lane_block_height: body.participant_previous_block_height,
+        previous_lane_block_descriptor_hash: body.participant_previous_block_descriptor_hash,
+        lane_block_height: body.participant_lane_block_height,
+        lane_block_view: body.participant_lane_block_view,
+        subject_hash: Hash::new(b"native-amx-v2-fixture-participant-subject"),
+        payload_ownership_hash: Hash::new(b"native-amx-v2-fixture-participant-ownership"),
+        rbc_instance_hash: Hash::new(b"native-amx-v2-fixture-participant-rbc"),
+        accepted_candidate_indices: vec![0],
+        accepted_transaction_hashes: vec![Hash::from(body.tx_entrypoint_hash)],
+        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+        validator_set_hash: HashOf::new(&validator_set),
+        validator_set: validator_set.clone(),
+        validator_count: body.participant_validator_count,
+        min_quorum: body.participant_min_quorum,
+        qc_mode_tag: format!("permissioned:native-amx-v2-participant-fixture:{seed}"),
+        descriptor_hash: Hash::prehashed([0; Hash::LENGTH]),
+    };
+    participant_descriptor.descriptor_hash = participant_descriptor.computed_descriptor_hash();
+    let mut participant_proposal = iroha_data_model::block::consensus::LaneBlockProposalV1 {
+        descriptor: participant_descriptor,
+        proposal_hash: Hash::prehashed([0; Hash::LENGTH]),
+        payload_block_hint: None,
+    };
+    participant_proposal.proposal_hash = participant_proposal.computed_proposal_hash();
+    body.participant_proposal_hash = participant_proposal.proposal_hash;
+    body.participant_settlement_commitment = body.computed_participant_settlement_commitment();
+    let participant_settlement = body.computed_participant_settlement();
     let request = crate::native_amx::NativeAmxAttestationRequestV2 {
         body,
         plan_legs: plan.legs(),
         coordinator_proposal,
+        participant_proposal,
+        participant_settlement,
     };
     request
         .validate_plan_binding()
@@ -218821,6 +218859,12 @@ fn autonomous_committed_lane_block_queue_fixture(
     proposal.descriptor.accepted_transaction_hashes = vec![Hash::from(entrypoint.hash())];
     proposal.descriptor.descriptor_hash = proposal.descriptor.computed_descriptor_hash();
     proposal.proposal_hash = proposal.computed_proposal_hash();
+    kura.install_lane_incarnation_marker_for_test(
+        lane_entry,
+        proposal.descriptor.lane_incarnation,
+        0,
+    )
+    .expect("install autonomous committed queue incarnation marker");
 
     let accepted =
         crate::tx::AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(entrypoint.clone()));

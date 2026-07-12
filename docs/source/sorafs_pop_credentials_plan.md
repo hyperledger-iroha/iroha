@@ -194,13 +194,18 @@ registry, juror client, or deployed verifier service.
   fingerprints, exact expected challenge/context, expiry, replay cache, and
   cryptographic proof. The retired transcript-digest proof variant and policy
   verifier have been removed rather than retained as a compatibility surface.
-- The native SoraFS moderation appeal lifecycle consumes the exact active
-  registry publications, verifies private membership proofs locally, and uses
+- The native SoraFS moderation appeal lifecycle snapshots the exact active
+  registry publications at intake, revalidates those immutable historical
+  root/list/audit records after later registry advancement, verifies private
+  membership proofs locally, and uses
   the deterministic per-credential appeal nullifier as the only candidate
   material in its domain-separated sortition score. Randomized proof bytes and
   caller-selected account strings cannot grind rank. Accepted proof payloads,
   credential bodies, witness paths, holder secrets, and revocation nonces are
-  not retained; nullifier replay and active-publication rotation fail closed.
+  not retained. Nullifier replay, missing or mutated snapshot records, and
+  detached audit anchors fail closed; valid later root/list rotations cannot
+  rewrite or brick an already-admitted appeal. An active emergency registry
+  pause still fails closed for pending appeals until governance resumes it.
 - `sorafs_manifest::validate_pop_payload_bytes` and `sorafs-validate pop`
   validate Norito-encoded PoP credentials, commitment roots, revocation lists,
   issued-credential bundles, enrollment requests, renewal requests, and

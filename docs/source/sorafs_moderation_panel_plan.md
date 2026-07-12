@@ -77,25 +77,38 @@ workflow, or reviewed deployment evidence described in the original plan.
   native PoP root/revocation/audit snapshot, deduplicates case, proof-token,
   and deposit-lock digests, and fixes bounded registration, acceptance,
   commit/challenge/reveal windows. Private Halo2 membership proofs are verified
-  against that exact snapshot while only their digest, appeal nullifier,
-  eligibility class, expiry, and account binding are retained. Sortition uses a
-  domain-separated, hardware-independent BLAKE3 score over the immutable seed
-  and deterministic per-credential appeal nullifier, rejects duplicate people
-  and accounts, recomputes the proposed roster, and persists an immutable
-  waitlist. Primary assignment acceptance and deterministic waitlist failover
+  against that exact historical snapshot while only their digest, appeal
+  nullifier, eligibility class, expiry, and account binding are retained.
+  Ordinary later issuer-policy, commitment-root, revocation-list, and audit-head
+  advancement cannot rewrite or strand an admitted appeal: every historical
+  publication and audit link is revalidated from consensus state. An emergency
+  registry pause intentionally freezes both new and pending moderation use until
+  governance resumes it. Sortition
+  freezes the latest committed parent hash only after registration closes,
+  rejects the appellant even when that account also holds the management
+  permission, and requires the independent operator instruction to name that
+  exact anchor. It then uses a
+  domain-separated, hardware-independent BLAKE3 score over the frozen seed and
+  deterministic per-credential appeal nullifier, rejects duplicate people and
+  accounts, recomputes the proposed roster, and persists the anchor plus an
+  immutable waitlist. Primary assignment acceptance and deterministic waitlist failover
   activate the existing commit/reveal case atomically or record a terminal
   insufficient-pool/failover-exhausted state. Governance policy snapshots also
   bound panel/window/challenge resources and distinct
   missing-commit/unrevealed-commit penalties; block time controls every phase;
   juror transactions are authority-bound; payload-free challenges block unsafe
-  progress; and finalization atomically persists the appeal and ballot outcome
-  plus any no-show records. These instructions and queries use Iroha's existing
+  progress; accepted challenges close without juror penalties; and challenges
+  left unresolved through reveal close are atomically marked `expired` and
+  force the same fail-safe challenged outcome rather than deadlocking the case
+  or retroactively creating no-show penalties. Finalization atomically persists
+  the appeal and ballot outcome plus any valid no-show records. These instructions and queries use Iroha's existing
   signed transaction and generic Torii query APIs.
 - `iroha_data_model::sorafs::pop_registry`, its permissioned issuer ISIs, and
   public typed queries now provide the consensus-owned active credential root,
   revocation root/list version, payload-free credential/revocation commitments,
-  and audit head consumed by the moderation snapshot. Pending appeals fail
-  closed if any pinned publication or audit anchor is no longer active; raw
+  and audit head consumed by the moderation snapshot. Pending appeals read and
+  verify those immutable historical anchors even after the active registry
+  advances; missing, mutated, or non-ancestral pinned state still fails closed. Raw
   credential, witness, nonce, and proof payloads are never persisted in the
   moderation ledger.
 - `sorafs_node::ModerationBallotRuntime` is wired through `NodeHandle` as a

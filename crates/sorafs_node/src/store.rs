@@ -4817,7 +4817,7 @@ mod tests {
     };
 
     use blake3;
-    use sorafs_car::{CarPlanError, FileEntry};
+    use sorafs_car::{CarPlanError, FileEntry, compute_chunk_plan_digest_sha3};
     use sorafs_manifest::{DagCodecId, ManifestBuilder, PinPolicy};
     use tempfile::TempDir;
 
@@ -4848,6 +4848,10 @@ mod tests {
         CarBuildPlan::single_file(bytes)
     }
 
+    fn manifest_builder_for_plan(plan: &CarBuildPlan) -> ManifestBuilder {
+        ManifestBuilder::new().chunk_digest_sha3_256(compute_chunk_plan_digest_sha3(&plan.chunks))
+    }
+
     fn empty_file_plan() -> CarBuildPlan {
         let plan = CarBuildPlan {
             chunk_profile: ChunkProfile::DEFAULT,
@@ -4866,7 +4870,7 @@ mod tests {
     }
 
     fn test_manifest(payload: &[u8], plan: &CarBuildPlan, root_byte: u8) -> ManifestV1 {
-        ManifestBuilder::new()
+        manifest_builder_for_plan(plan)
             .root_cid(vec![root_byte; 8])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -5257,7 +5261,7 @@ mod tests {
         let payload = b"Hello deterministic SoraFS!";
         let plan = single_file_plan(payload).expect("plan");
 
-        let manifest = ManifestBuilder::new()
+        let manifest = manifest_builder_for_plan(&plan)
             .root_cid(vec![0x01, 0x02, 0x03])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -5323,7 +5327,7 @@ mod tests {
             CarBuildPlan::from_files_with_profile(files, sorafs_chunker::ChunkProfile::DEFAULT)
                 .expect("directory plan");
 
-        let manifest = ManifestBuilder::new()
+        let manifest = manifest_builder_for_plan(&plan)
             .root_cid(vec![0x42; 16])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -5379,7 +5383,7 @@ mod tests {
         let payload = b"this payload is definitely longer than sixteen bytes";
         let plan = single_file_plan(payload).expect("plan");
 
-        let manifest = ManifestBuilder::new()
+        let manifest = manifest_builder_for_plan(&plan)
             .root_cid(vec![0x0A, 0x0B])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -5413,7 +5417,7 @@ mod tests {
         let payload = b"The five boxing wizards jump quickly";
         let plan = single_file_plan(payload).expect("plan");
 
-        let manifest = ManifestBuilder::new()
+        let manifest = manifest_builder_for_plan(&plan)
             .root_cid(vec![0xAB; 32])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -5446,7 +5450,7 @@ mod tests {
         let payload = vec![0xAA; 64 * 3];
         let plan = single_file_plan(&payload).expect("plan");
 
-        let manifest = ManifestBuilder::new()
+        let manifest = manifest_builder_for_plan(&plan)
             .root_cid(vec![0x44; 16])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -5484,7 +5488,7 @@ mod tests {
 
         let payload = b"stripe layout payload";
         let plan = single_file_plan(payload).expect("plan");
-        let manifest = ManifestBuilder::new()
+        let manifest = manifest_builder_for_plan(&plan)
             .root_cid(vec![0xAA, 0xBB])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -5546,7 +5550,7 @@ mod tests {
 
         let payload = b"role length check";
         let plan = single_file_plan(payload).expect("plan");
-        let manifest = ManifestBuilder::new()
+        let manifest = manifest_builder_for_plan(&plan)
             .root_cid(vec![0xFF, 0xEE])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -5663,7 +5667,7 @@ mod tests {
         let payload = vec![0xBB; 128];
         let plan = single_file_plan(&payload).expect("plan");
 
-        let manifest = ManifestBuilder::new()
+        let manifest = manifest_builder_for_plan(&plan)
             .root_cid(vec![0x55; 16])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -5697,7 +5701,7 @@ mod tests {
         let payload = b"manifest payload round trip bytes";
         let plan = single_file_plan(payload).expect("plan");
 
-        let manifest = ManifestBuilder::new()
+        let manifest = manifest_builder_for_plan(&plan)
             .root_cid(vec![0x77; 16])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -5731,7 +5735,7 @@ mod tests {
         let mut policy = PinPolicy::default();
         policy.retention_epoch = 200;
 
-        let manifest = ManifestBuilder::new()
+        let manifest = manifest_builder_for_plan(&plan)
             .root_cid(vec![0xFA, 0xCE])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -5849,7 +5853,7 @@ mod tests {
 
         let payload = b"last access persistence";
         let plan = single_file_plan(payload).expect("plan");
-        let manifest = ManifestBuilder::new()
+        let manifest = manifest_builder_for_plan(&plan)
             .root_cid(vec![0x11, 0x22])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -5892,7 +5896,7 @@ mod tests {
 
         let payload = b"payload for eviction";
         let plan = single_file_plan(payload).expect("plan");
-        let manifest = ManifestBuilder::new()
+        let manifest = manifest_builder_for_plan(&plan)
             .root_cid(vec![0x10, 0x20, 0x30])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -6034,7 +6038,7 @@ mod tests {
         let payload = vec![0xCC; 96];
         let plan = single_file_plan(&payload).expect("plan");
 
-        let manifest = ManifestBuilder::new()
+        let manifest = manifest_builder_for_plan(&plan)
             .root_cid(vec![0x99; 16])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -6090,7 +6094,7 @@ mod tests {
         let payload = b"SoraFS deterministic sampling data for PoR";
         let plan = single_file_plan(payload).expect("plan");
 
-        let manifest = ManifestBuilder::new()
+        let manifest = manifest_builder_for_plan(&plan)
             .root_cid(vec![0xCD; 16])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -6130,7 +6134,7 @@ mod tests {
         let payload = b"deterministic chunk access";
         let plan = single_file_plan(payload).expect("plan");
 
-        let manifest = ManifestBuilder::new()
+        let manifest = manifest_builder_for_plan(&plan)
             .root_cid(vec![0xEE; 8])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -6167,7 +6171,7 @@ mod tests {
         let payload = b"missing chunk digests";
         let plan = single_file_plan(payload).expect("plan");
 
-        let manifest = ManifestBuilder::new()
+        let manifest = manifest_builder_for_plan(&plan)
             .root_cid(vec![0xAA; 4])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -6208,7 +6212,7 @@ mod tests {
         let payload = b"stream chunk payload";
         let plan = single_file_plan(payload).expect("plan");
 
-        let manifest = ManifestBuilder::new()
+        let manifest = manifest_builder_for_plan(&plan)
             .root_cid(vec![0xBB; 6])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -7037,7 +7041,7 @@ mod tests {
 
         let payload = b"Persistent storage test payload";
         let plan = single_file_plan(payload).expect("plan");
-        let manifest = ManifestBuilder::new()
+        let manifest = manifest_builder_for_plan(&plan)
             .root_cid(vec![0xEF; 8])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(

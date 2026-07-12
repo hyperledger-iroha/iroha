@@ -3354,6 +3354,10 @@ fn build_multi_fetch_error_payload(py: Python<'_>, err: MultiSourceError) -> PyR
     let payload = PyDict::new(py);
     payload.set_item("message", err.to_string())?;
     match err {
+        MultiSourceError::InvalidPlan(reason) => {
+            payload.set_item("kind", "invalid_plan")?;
+            payload.set_item("reason", reason.to_string())?;
+        }
         MultiSourceError::NoProviders => {
             payload.set_item("kind", "no_providers")?;
         }
@@ -17380,6 +17384,34 @@ mod tests {
                 parse_repo_governance(dict.as_any()).expect("repo governance should parse");
             assert_eq!(governance.haircut_bps(), 250);
             assert_eq!(governance.margin_frequency_secs(), 60);
+        });
+    }
+
+    #[test]
+    fn multi_source_invalid_plan_has_stable_python_payload() {
+        ensure_python();
+        Python::attach(|py| {
+            let payload = build_multi_fetch_error_payload(
+                py,
+                MultiSourceError::InvalidPlan(sorafs_car::CarPlanError::EmptyInput),
+            )
+            .expect("build invalid-plan payload");
+            let payload = payload.bind(py);
+
+            let kind: String = payload
+                .get_item("kind")
+                .expect("kind lookup")
+                .expect("kind field")
+                .extract()
+                .expect("kind string");
+            let reason: String = payload
+                .get_item("reason")
+                .expect("reason lookup")
+                .expect("reason field")
+                .extract()
+                .expect("reason string");
+            assert_eq!(kind, "invalid_plan");
+            assert_eq!(reason, "input payload is empty");
         });
     }
 

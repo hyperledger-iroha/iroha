@@ -340,6 +340,15 @@ extension NoritoNativeBridge {
         )
     }
 
+    func kagemushaTopUpShieldBuildUnsignedV2(
+        requestArchive: Data
+    ) throws -> Data? {
+        try callKagemushaV2Archive(
+            symbol: "connect_norito_kagemusha_topup_shield_build_unsigned_v2",
+            archive: requestArchive
+        )
+    }
+
     func kagemushaRecursiveSpendTopUpFinalizeRequestV2(
         unsignedArchive: Data,
         authorizationArchive: Data

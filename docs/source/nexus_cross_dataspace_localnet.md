@@ -46,6 +46,24 @@ scripts/run_nexus_cross_dataspace_atomic_swap.sh --all-nexus
 - `--keep-dirs` keeps temporary peer directories (`IROHA_TEST_NETWORK_KEEP_DIRS=1`) for forensics.
 - `--all-nexus` runs `mod nexus::` (full Nexus integration subset), not just the proof test.
 
+## Native AMX fault soak
+
+The same wrapper can run the ignored four-peer Native AMX fault corridor:
+
+```bash
+scripts/run_nexus_cross_dataspace_atomic_swap.sh \
+  --native-amx-fault-soak \
+  --native-amx-iterations 10
+```
+
+Each iteration rotates one validator fully offline before submission, requires the remaining three
+validators to produce independently verifiable, lane-bound prepare and commit attestation QCs for
+both participant legs, and proves that the offline validator's signer bit is absent. The validator
+is then restarted and must recover the byte-identical coordinator block, Native AMX receipt,
+participant QCs, settlement commitment, and relay before the next fault is injected. The bounded
+override accepts `1..100`; invalid values fail in the wrapper, while a direct invalid environment
+override falls back to the ten-iteration default.
+
 ## CI Gate
 
 CI helper:
@@ -79,6 +97,15 @@ Full Nexus subset:
 ```bash
 IROHA_TEST_SKIP_BUILD=1 NORITO_SKIP_BINDINGS_SYNC=1 \
   cargo test --locked --offline -p integration_tests --test nexus_and_streaming nexus:: -- --nocapture --test-threads=1
+```
+
+Native AMX rotating-validator fault soak:
+
+```bash
+IROHA_NATIVE_AMX_SOAK_ITERATIONS=10 IROHA_TEST_SKIP_BUILD=1 NORITO_SKIP_BINDINGS_SYNC=1 \
+  cargo test --locked --offline -p integration_tests --test native_amx_routing \
+  native_amx_rotating_validator_fault_soak_preserves_independent_participant_qcs \
+  -- --ignored --nocapture --test-threads=1
 ```
 
 ## Expected Proof Signals

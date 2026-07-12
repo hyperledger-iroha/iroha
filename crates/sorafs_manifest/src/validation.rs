@@ -69,16 +69,16 @@ pub fn decode_manifest_v1_canonical(bytes: &[u8]) -> Result<ManifestV1, Manifest
         MAX_MANIFEST_DECODE_ALLOCATED_BYTES,
         MAX_MANIFEST_DECODE_DEPTH,
     );
-    let manifest: ManifestV1 = norito::decode_from_bytes_with_limits(bytes, limits).map_err(
-        |error| ManifestDecodeError::Decode {
+    let manifest: ManifestV1 =
+        norito::decode_from_bytes_with_limits(bytes, limits).map_err(|error| {
+            ManifestDecodeError::Decode {
+                reason: error.to_string(),
+            }
+        })?;
+    let canonical =
+        norito::to_bytes(&manifest).map_err(|error| ManifestDecodeError::CanonicalEncoding {
             reason: error.to_string(),
-        },
-    )?;
-    let canonical = norito::to_bytes(&manifest).map_err(|error| {
-        ManifestDecodeError::CanonicalEncoding {
-            reason: error.to_string(),
-        }
-    })?;
+        })?;
     if canonical != bytes {
         return Err(ManifestDecodeError::NonCanonicalEncoding);
     }

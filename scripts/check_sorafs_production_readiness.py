@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import re
 import sys
 from collections import Counter
@@ -190,9 +192,78 @@ from check_sorafs_transparency_rollout_evidence import (  # noqa: E402
     KIND_BY_NAME as TRANSPARENCY_KIND_BY_NAME,
     SOURCE_BOUND_KINDS as TRANSPARENCY_SOURCE_BOUND_KINDS,
 )
+from sccp_release_common import verify_ed25519  # noqa: E402
 
 
 SUMMARY_SCHEMA = "sorafs.production_readiness.aggregate_gate.v1"
+FOUNDATIONAL_PREREQUISITE_SCHEMA = (
+    "sorafs.production_readiness.foundational_prerequisites.v1"
+)
+FOUNDATIONAL_PREREQUISITE_SIGNATURE_DOMAIN = (
+    b"iroha:sorafs:production-readiness:foundational-prerequisites:v1\x00"
+)
+FOUNDATIONAL_PREREQUISITE_IDS = (
+    "SFM-1",
+    "SF-1",
+    "SF-2",
+    "SF-2c",
+    "SF-3",
+    "SF-4",
+    "SF-5b",
+    "SF-6",
+    "SF-8a",
+)
+MAX_FOUNDATIONAL_RELEASE_SEQUENCE = (1 << 63) - 1
+FOUNDATIONAL_PREREQUISITE_FIELDS = frozenset(
+    {
+        "schema",
+        "status",
+        "deployment",
+        "generated_at_unix",
+        "release_sequence",
+        "previous_envelope_sha256",
+        "prerequisites",
+        "signature",
+    }
+)
+FOUNDATIONAL_PREREQUISITE_DEPLOYMENT_FIELDS = frozenset(
+    {"deployment_id", "environment"}
+)
+FOUNDATIONAL_PREREQUISITE_ROW_FIELDS = frozenset(
+    {
+        "id",
+        "status",
+        "evidence_anchor_sha256",
+        "evidence_generated_at_unix",
+    }
+)
+FOUNDATIONAL_PREREQUISITE_SIGNATURE_FIELDS = frozenset(
+    {"algorithm", "public_key_fingerprint_sha256", "signature_hex"}
+)
+AGGREGATE_FOUNDATIONAL_PREREQUISITE_ROW_FIELDS = frozenset(
+    {
+        "schema",
+        "present",
+        "valid",
+        "required_ids",
+        "prerequisite_count",
+        "generated_at_unix",
+        "oldest_evidence_generated_at_unix",
+        "newest_evidence_generated_at_unix",
+        "deployment_id",
+        "environment",
+        "release_sequence",
+        "previous_envelope_sha256",
+        "signer_public_key_fingerprint_sha256",
+        "evidence_anchor_sha256",
+        "path",
+        "sha256",
+        "errors",
+    }
+)
+AGGREGATE_MISSING_FOUNDATIONAL_PREREQUISITE_ROW_FIELDS = frozenset(
+    {"schema", "present", "valid", "errors"}
+)
 POP_CREDENTIALS_ROOT_BOUND_FINGERPRINT_FIELDS = tuple(
     (
         kind_name,
@@ -991,6 +1062,7 @@ AGGREGATE_SUMMARY_FIELDS = frozenset(
         "summary_file_count",
         "recognized_summary_count",
         "deployment",
+        "foundational_prerequisites",
         "required",
         "errors",
     }
@@ -1118,6 +1190,9 @@ class ValidationOptions:
     max_summary_artifact_age_secs: int
     deployment_id: str | None
     environment: str | None
+    foundational_signer_public_key: bytes | None = None
+    foundational_release_sequence: int | None = None
+    foundational_previous_envelope_sha256: str | None = None
 
 
 def canonical_string(value: Any) -> str | None:
@@ -1781,6 +1856,368 @@ def canonical_lower_hex(value: Any, expected_hex_length: int) -> str | None:
     ):
         return value
     return None
+
+
+def foundational_signing_payload(payload: dict[str, Any]) -> bytes:
+    """Return the canonical, domain-separated prerequisite signature payload."""
+
+    unsigned = dict(payload)
+    signature = unsigned.get("signature")
+    if isinstance(signature, dict):
+        unsigned_signature = dict(signature)
+        unsigned_signature.pop("signature_hex", None)
+        unsigned["signature"] = unsigned_signature
+    return FOUNDATIONAL_PREREQUISITE_SIGNATURE_DOMAIN + json.dumps(
+        unsigned,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+        allow_nan=False,
+    ).encode("ascii")
+
+
+def parse_foundational_signer_public_key(
+    value: Any,
+    errors: list[str],
+    *,
+    path: str,
+) -> bytes | None:
+    """Decode one exact, non-zero Ed25519 public key without echoing it."""
+
+    public_key_hex = canonical_lower_hex(value, 64)
+    if public_key_hex is None:
+        errors.append(f"{path} must be exactly 32 bytes of lowercase hex")
+        return None
+    public_key = bytes.fromhex(public_key_hex)
+    if not any(public_key):
+        errors.append(f"{path} must not be the all-zero key")
+        return None
+    return public_key
+
+
+def validate_foundational_exact_fields(
+    value: Any,
+    expected_fields: frozenset[str],
+    path: str,
+    errors: list[str],
+) -> dict[str, Any] | None:
+    """Require one schema-closed object and sanitize unknown-key diagnostics."""
+
+    if not isinstance(value, dict):
+        errors.append(f"{path} must be an object")
+        return None
+    observed_fields = set(value)
+    if observed_fields != expected_fields:
+        errors.append(f"{path} fields must match the schema-closed contract")
+    for key in value:
+        key_label = canonical_string(key)
+        if key_label is None:
+            errors.append(f"{path} keys must be canonical strings")
+        elif key_label not in expected_fields:
+            errors.append(
+                f"{path}.{payload_free_diagnostic_key_label(key_label)} is not allowed"
+            )
+    return value
+
+
+def validate_foundational_timestamp(
+    value: Any,
+    path: str,
+    options: ValidationOptions,
+    errors: list[str],
+) -> int | None:
+    """Validate one reviewed prerequisite timestamp against the aggregate clock."""
+
+    if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+        errors.append(f"{path} must be a positive integer")
+        return None
+    if value > options.now_unix:
+        errors.append(f"{path} must not be future")
+    elif options.now_unix - value > options.max_summary_artifact_age_secs:
+        errors.append(f"{path} exceeds max summary artifact age")
+    return value
+
+
+def validate_foundational_prerequisite_summary(
+    payload: dict[str, Any],
+    options: ValidationOptions,
+) -> tuple[dict[str, Any], list[str], tuple[str, str] | None]:
+    """Validate the signed, payload-free foundational prerequisite envelope."""
+
+    errors: list[str] = []
+    visit_sensitive_fields(
+        payload,
+        "",
+        errors,
+        sensitive_keys=SENSITIVE_KEYS,
+        evidence_label="SoraFS foundational prerequisite summary",
+    )
+    validate_foundational_exact_fields(
+        payload,
+        FOUNDATIONAL_PREREQUISITE_FIELDS,
+        "foundational prerequisite summary",
+        errors,
+    )
+
+    if payload.get("schema") != FOUNDATIONAL_PREREQUISITE_SCHEMA:
+        errors.append("foundational prerequisite schema must match the contract")
+    if payload.get("status") != "verified":
+        errors.append("foundational prerequisite status must be `verified`")
+
+    deployment = validate_foundational_exact_fields(
+        payload.get("deployment"),
+        FOUNDATIONAL_PREREQUISITE_DEPLOYMENT_FIELDS,
+        "foundational prerequisite deployment",
+        errors,
+    )
+    deployment_id: str | None = None
+    environment: str | None = None
+    if deployment is not None:
+        deployment_field_errors: list[str] = []
+        candidate_deployment_id = require_production_deployment_id_value(
+            deployment.get("deployment_id"),
+            deployment_field_errors,
+            "foundational prerequisite deployment_id",
+        )
+        errors.extend(deployment_field_errors)
+        candidate_environment = canonical_string(deployment.get("environment"))
+        if candidate_environment is None:
+            errors.append(
+                "foundational prerequisite environment must be a canonical string"
+            )
+        elif not is_production_ready_environment(candidate_environment):
+            errors.append("foundational prerequisite environment must be production")
+        if candidate_deployment_id:
+            deployment_id = candidate_deployment_id
+        if candidate_environment is not None:
+            environment = candidate_environment
+        if (
+            deployment_id is not None
+            and options.deployment_id is not None
+            and deployment_id != options.deployment_id
+        ):
+            errors.append(
+                "foundational prerequisite deployment_id must match --deployment-id"
+            )
+        if (
+            environment is not None
+            and options.environment is not None
+            and environment != options.environment
+        ):
+            errors.append(
+                "foundational prerequisite environment must match --environment"
+            )
+
+    generated_at_unix = validate_foundational_timestamp(
+        payload.get("generated_at_unix"),
+        "foundational prerequisite generated_at_unix",
+        options,
+        errors,
+    )
+
+    release_sequence_value = payload.get("release_sequence")
+    release_sequence: int | None = None
+    if (
+        not isinstance(release_sequence_value, int)
+        or isinstance(release_sequence_value, bool)
+        or release_sequence_value <= 0
+        or release_sequence_value > MAX_FOUNDATIONAL_RELEASE_SEQUENCE
+    ):
+        errors.append(
+            "foundational prerequisite release_sequence must be an integer in 1..2^63-1"
+        )
+    else:
+        release_sequence = release_sequence_value
+        if options.foundational_release_sequence is None:
+            errors.append(
+                "foundational prerequisite release_sequence requires an operator-reviewed expected value"
+            )
+        elif release_sequence != options.foundational_release_sequence:
+            errors.append(
+                "foundational prerequisite release_sequence must match the operator-reviewed expected value"
+            )
+
+    previous_envelope_sha256 = canonical_lower_hex(
+        payload.get("previous_envelope_sha256"),
+        64,
+    )
+    if previous_envelope_sha256 is None:
+        errors.append(
+            "foundational prerequisite previous_envelope_sha256 must be canonical lowercase SHA-256"
+        )
+    else:
+        is_zero_predecessor = not any(bytes.fromhex(previous_envelope_sha256))
+        if release_sequence == 1 and not is_zero_predecessor:
+            errors.append(
+                "foundational prerequisite sequence 1 must use the zero predecessor"
+            )
+        if release_sequence is not None and release_sequence > 1 and is_zero_predecessor:
+            errors.append(
+                "foundational prerequisite sequence after 1 must use a non-zero predecessor"
+            )
+        expected_predecessor = options.foundational_previous_envelope_sha256
+        if expected_predecessor is None:
+            errors.append(
+                "foundational prerequisite predecessor requires an operator-reviewed expected digest"
+            )
+        elif previous_envelope_sha256 != expected_predecessor:
+            errors.append(
+                "foundational prerequisite previous_envelope_sha256 must match the operator-reviewed expected digest"
+            )
+
+    prerequisites = payload.get("prerequisites")
+    prerequisite_ids: list[str] = []
+    anchors: list[str] = []
+    evidence_generated_times: list[int] = []
+    if not isinstance(prerequisites, list):
+        errors.append("foundational prerequisites must be an array")
+    else:
+        for index, item in enumerate(prerequisites):
+            path = f"foundational prerequisites[{index}]"
+            row = validate_foundational_exact_fields(
+                item,
+                FOUNDATIONAL_PREREQUISITE_ROW_FIELDS,
+                path,
+                errors,
+            )
+            if row is None:
+                continue
+            prerequisite_id = canonical_string(row.get("id"))
+            if prerequisite_id is None:
+                errors.append(f"{path}.id must be a canonical string")
+            else:
+                prerequisite_ids.append(prerequisite_id)
+            if row.get("status") != "verified":
+                errors.append(f"{path}.status must be `verified`")
+            anchor = canonical_lower_hex(row.get("evidence_anchor_sha256"), 64)
+            if anchor is None:
+                errors.append(
+                    f"{path}.evidence_anchor_sha256 must be canonical lowercase SHA-256"
+                )
+            elif not any(bytes.fromhex(anchor)):
+                errors.append(f"{path}.evidence_anchor_sha256 must not be zero")
+            else:
+                anchors.append(anchor)
+            evidence_generated_at = validate_foundational_timestamp(
+                row.get("evidence_generated_at_unix"),
+                f"{path}.evidence_generated_at_unix",
+                options,
+                errors,
+            )
+            if evidence_generated_at is not None:
+                evidence_generated_times.append(evidence_generated_at)
+                if (
+                    generated_at_unix is not None
+                    and evidence_generated_at > generated_at_unix
+                ):
+                    errors.append(
+                        f"{path}.evidence_generated_at_unix must not be later than the signed envelope"
+                    )
+
+    expected_prerequisite_ids = list(FOUNDATIONAL_PREREQUISITE_IDS)
+    if prerequisite_ids != expected_prerequisite_ids:
+        errors.append(
+            "foundational prerequisites must match the exact required set and canonical order"
+        )
+        if len(set(prerequisite_ids)) != len(prerequisite_ids):
+            errors.append("foundational prerequisites must not contain duplicate ids")
+        if set(expected_prerequisite_ids) - set(prerequisite_ids):
+            errors.append("foundational prerequisites are missing required ids")
+        if set(prerequisite_ids) - set(expected_prerequisite_ids):
+            errors.append("foundational prerequisites contain unknown ids")
+    if len(set(anchors)) != len(anchors):
+        errors.append("foundational prerequisites must use unique evidence anchors")
+
+    signature = validate_foundational_exact_fields(
+        payload.get("signature"),
+        FOUNDATIONAL_PREREQUISITE_SIGNATURE_FIELDS,
+        "foundational prerequisite signature",
+        errors,
+    )
+    signer_fingerprint: str | None = None
+    trusted_public_key = options.foundational_signer_public_key
+    if (
+        not isinstance(trusted_public_key, bytes)
+        or len(trusted_public_key) != 32
+        or not any(trusted_public_key)
+    ):
+        errors.append(
+            "foundational prerequisite signature requires an operator-trusted Ed25519 public key"
+        )
+        trusted_public_key = None
+    else:
+        signer_fingerprint = hashlib.sha256(trusted_public_key).hexdigest()
+    signature_bytes: bytes | None = None
+    if signature is not None:
+        if signature.get("algorithm") != "ed25519":
+            errors.append(
+                "foundational prerequisite signature algorithm must be `ed25519`"
+            )
+        declared_fingerprint = canonical_lower_hex(
+            signature.get("public_key_fingerprint_sha256"),
+            64,
+        )
+        if declared_fingerprint is None:
+            errors.append(
+                "foundational prerequisite signer fingerprint must be canonical lowercase SHA-256"
+            )
+        elif (
+            signer_fingerprint is not None
+            and declared_fingerprint != signer_fingerprint
+        ):
+            errors.append(
+                "foundational prerequisite signer fingerprint must match the operator-trusted key"
+            )
+        signature_hex = canonical_lower_hex(signature.get("signature_hex"), 128)
+        if signature_hex is None:
+            errors.append(
+                "foundational prerequisite signature must be a non-zero canonical Ed25519 signature"
+            )
+        elif not any(bytes.fromhex(signature_hex)):
+            errors.append(
+                "foundational prerequisite signature must be a non-zero canonical Ed25519 signature"
+            )
+        else:
+            signature_bytes = bytes.fromhex(signature_hex)
+    if trusted_public_key is not None and signature_bytes is not None:
+        try:
+            signature_valid = verify_ed25519(
+                trusted_public_key,
+                signature_bytes,
+                foundational_signing_payload(payload),
+            )
+        except (TypeError, ValueError):
+            signature_valid = False
+        if not signature_valid:
+            errors.append("foundational prerequisite signature verification failed")
+
+    context = (
+        (deployment_id, environment)
+        if deployment_id is not None and environment is not None
+        else None
+    )
+    summary = {
+        "schema": FOUNDATIONAL_PREREQUISITE_SCHEMA,
+        "present": True,
+        "valid": not errors,
+        "required_ids": expected_prerequisite_ids,
+        "prerequisite_count": len(prerequisite_ids),
+        "generated_at_unix": generated_at_unix,
+        "oldest_evidence_generated_at_unix": (
+            min(evidence_generated_times) if evidence_generated_times else None
+        ),
+        "newest_evidence_generated_at_unix": (
+            max(evidence_generated_times) if evidence_generated_times else None
+        ),
+        "deployment_id": deployment_id,
+        "environment": environment,
+        "release_sequence": release_sequence,
+        "previous_envelope_sha256": previous_envelope_sha256,
+        "signer_public_key_fingerprint_sha256": signer_fingerprint,
+        "evidence_anchor_sha256": anchors,
+        "errors": errors,
+    }
+    return summary, errors, context
 
 
 def payload_free_summary_artifact_fingerprints(
@@ -4613,6 +5050,166 @@ def validate_aggregate_required_row_output(
     )
 
 
+def validate_aggregate_foundational_prerequisite_output(
+    row: Any,
+    errors: list[str],
+) -> None:
+    """Validate the payload-free foundational row emitted by the aggregate gate."""
+
+    path = "aggregate foundational prerequisites"
+    if not isinstance(row, dict):
+        errors.append(f"{path} must be an object")
+        return
+    present = row.get("present")
+    valid = row.get("valid")
+    expected_fields = (
+        AGGREGATE_FOUNDATIONAL_PREREQUISITE_ROW_FIELDS
+        if present is True
+        else AGGREGATE_MISSING_FOUNDATIONAL_PREREQUISITE_ROW_FIELDS
+    )
+    row_fields = set(row)
+    if row_fields != expected_fields:
+        errors.append(f"{path} fields must match the schema-closed output contract")
+    for key in row:
+        key_label = canonical_string(key)
+        if key_label is None:
+            errors.append(f"{path} keys must be canonical strings")
+        elif key_label not in expected_fields:
+            errors.append(
+                f"{path} {payload_free_diagnostic_key_label(key_label)} is not allowed"
+            )
+    if row.get("schema") != FOUNDATIONAL_PREREQUISITE_SCHEMA:
+        errors.append(f"{path} schema must match the prerequisite contract")
+    if not isinstance(present, bool):
+        errors.append(f"{path} present must be boolean")
+    if not isinstance(valid, bool):
+        errors.append(f"{path} valid must be boolean")
+    if present is not True:
+        if valid is not False:
+            errors.append(f"{path} missing row valid must be false")
+        validate_aggregate_row_error_list(
+            row.get("errors"),
+            f"{path} missing row errors",
+            errors,
+            require_non_empty=True,
+        )
+        return
+
+    required_ids = row.get("required_ids")
+    if required_ids != list(FOUNDATIONAL_PREREQUISITE_IDS):
+        errors.append(f"{path} required_ids must match the exact prerequisite set")
+    prerequisite_count = row.get("prerequisite_count")
+    if (
+        not isinstance(prerequisite_count, int)
+        or isinstance(prerequisite_count, bool)
+        or prerequisite_count < 0
+    ):
+        errors.append(f"{path} prerequisite_count must be a non-negative integer")
+    elif valid is True and prerequisite_count != len(FOUNDATIONAL_PREREQUISITE_IDS):
+        errors.append(f"{path} prerequisite_count must match the prerequisite set")
+
+    timestamp_fields = (
+        "generated_at_unix",
+        "oldest_evidence_generated_at_unix",
+        "newest_evidence_generated_at_unix",
+    )
+    for field in timestamp_fields:
+        value = row.get(field)
+        if value is None and valid is not True:
+            continue
+        if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+            errors.append(f"{path} {field} must be a positive integer")
+    oldest = row.get("oldest_evidence_generated_at_unix")
+    newest = row.get("newest_evidence_generated_at_unix")
+    generated = row.get("generated_at_unix")
+    if (
+        isinstance(oldest, int)
+        and not isinstance(oldest, bool)
+        and isinstance(newest, int)
+        and not isinstance(newest, bool)
+        and newest < oldest
+    ):
+        errors.append(f"{path} newest evidence timestamp must be >= oldest")
+    if (
+        isinstance(newest, int)
+        and not isinstance(newest, bool)
+        and isinstance(generated, int)
+        and not isinstance(generated, bool)
+        and newest > generated
+    ):
+        errors.append(f"{path} evidence timestamps must not exceed envelope time")
+
+    deployment_id = row.get("deployment_id")
+    environment = row.get("environment")
+    if deployment_id is not None or valid is True:
+        require_production_deployment_id_value(
+            deployment_id,
+            errors,
+            f"{path} deployment_id",
+        )
+    if environment is not None or valid is True:
+        if canonical_string(environment) is None:
+            errors.append(f"{path} environment must be canonical")
+        elif not is_production_ready_environment(environment):
+            errors.append(f"{path} environment must be production")
+
+    release_sequence = row.get("release_sequence")
+    if release_sequence is not None or valid is True:
+        if (
+            not isinstance(release_sequence, int)
+            or isinstance(release_sequence, bool)
+            or release_sequence <= 0
+            or release_sequence > MAX_FOUNDATIONAL_RELEASE_SEQUENCE
+        ):
+            errors.append(f"{path} release_sequence must be in 1..2^63-1")
+    previous_digest = row.get("previous_envelope_sha256")
+    if previous_digest is not None or valid is True:
+        if canonical_lower_hex(previous_digest, 64) is None:
+            errors.append(
+                f"{path} previous_envelope_sha256 must be canonical lowercase SHA-256"
+            )
+    signer_fingerprint = row.get("signer_public_key_fingerprint_sha256")
+    if signer_fingerprint is not None or valid is True:
+        if canonical_lower_hex(signer_fingerprint, 64) is None:
+            errors.append(
+                f"{path} signer fingerprint must be canonical lowercase SHA-256"
+            )
+
+    anchors = row.get("evidence_anchor_sha256")
+    if not isinstance(anchors, list):
+        errors.append(f"{path} evidence anchors must be a list")
+    else:
+        canonical_anchors = [
+            anchor
+            for anchor in anchors
+            if canonical_lower_hex(anchor, 64) is not None
+            and any(bytes.fromhex(anchor))
+        ]
+        if len(canonical_anchors) != len(anchors):
+            errors.append(f"{path} evidence anchors must be non-zero lowercase SHA-256")
+        if len(set(canonical_anchors)) != len(canonical_anchors):
+            errors.append(f"{path} evidence anchors must be unique")
+        if valid is True and len(anchors) != len(FOUNDATIONAL_PREREQUISITE_IDS):
+            errors.append(f"{path} evidence anchors must cover every prerequisite")
+
+    artifact_path = row.get("path")
+    if canonical_string(artifact_path) is None:
+        errors.append(f"{path} path must be canonical")
+    elif not is_archive_portable_artifact_path(artifact_path):
+        errors.append(f"{path} path must be archive-relative and portable")
+    if canonical_lower_hex(row.get("sha256"), 64) is None:
+        errors.append(f"{path} sha256 must be canonical lowercase SHA-256")
+
+    validate_aggregate_row_error_list(
+        row.get("errors"),
+        f"{path} errors",
+        errors,
+        require_non_empty=valid is not True,
+    )
+    if valid is True and row.get("errors") != []:
+        errors.append(f"{path} valid row errors must be empty")
+
+
 def validate_aggregate_summary_output(
     summary: dict[str, Any],
     required_gates: tuple[str, ...],
@@ -4790,6 +5387,34 @@ def validate_aggregate_summary_output(
                         errors.append(
                             f"{gate_name_label} aggregate required row environment must match aggregate environment"
                         )
+    foundational_prerequisites = summary.get("foundational_prerequisites")
+    validate_aggregate_foundational_prerequisite_output(
+        foundational_prerequisites,
+        errors,
+    )
+    if isinstance(foundational_prerequisites, dict):
+        foundational_deployment_id = canonical_string(
+            foundational_prerequisites.get("deployment_id")
+        )
+        foundational_environment = canonical_string(
+            foundational_prerequisites.get("environment")
+        )
+        if (
+            aggregate_deployment_id is not None
+            and foundational_deployment_id is not None
+            and foundational_deployment_id != aggregate_deployment_id
+        ):
+            errors.append(
+                "aggregate foundational prerequisite deployment_id must match aggregate deployment_id"
+            )
+        if (
+            aggregate_environment is not None
+            and foundational_environment is not None
+            and foundational_environment != aggregate_environment
+        ):
+            errors.append(
+                "aggregate foundational prerequisite environment must match aggregate environment"
+            )
     if summary.get("status") == "ready":
         if not isinstance(deployment, dict) or set(deployment) != allowed_deployment_fields:
             errors.append(
@@ -4818,6 +5443,14 @@ def validate_aggregate_summary_output(
             for row in required.values()
         ):
             errors.append("aggregate summary ready rows must all be present and valid")
+        if (
+            not isinstance(foundational_prerequisites, dict)
+            or foundational_prerequisites.get("present") is not True
+            or foundational_prerequisites.get("valid") is not True
+        ):
+            errors.append(
+                "aggregate summary ready foundational prerequisites must be present and valid"
+            )
     error_values = summary.get("errors")
     if not isinstance(error_values, list):
         errors.append("aggregate summary errors must be a list")
@@ -5107,8 +5740,16 @@ def build_summary(
         }
         for name in required_gates
     }
+    foundational_prerequisites: dict[str, Any] = {
+        "schema": FOUNDATIONAL_PREREQUISITE_SCHEMA,
+        "present": False,
+        "valid": False,
+        "errors": ["missing required foundational prerequisite summary"],
+    }
     summary_contexts: set[tuple[str, str]] = set()
     recognized_summaries = 0
+    foundational_file_count = 0
+    duplicate_foundational_summary = False
     duplicate_summary_gates: set[str] = set()
     duplicate_summary_count = 0
     unknown_schema_count = 0
@@ -5124,6 +5765,46 @@ def build_summary(
             continue
         payload, digest = loaded
         schema = payload.get("schema")
+        if schema == FOUNDATIONAL_PREREQUISITE_SCHEMA:
+            foundational_file_count += 1
+            if foundational_prerequisites.get("present") is True:
+                if not duplicate_foundational_summary:
+                    duplicate_foundational_summary = True
+                    duplicate_error = (
+                        "duplicate foundational prerequisite summary"
+                    )
+                    foundational_prerequisites["valid"] = False
+                    row_errors = foundational_prerequisites.setdefault("errors", [])
+                    if duplicate_error not in row_errors:
+                        row_errors.append(duplicate_error)
+                    errors.append(duplicate_error)
+                continue
+            (
+                foundation_summary,
+                foundation_errors,
+                foundation_context,
+            ) = validate_foundational_prerequisite_summary(payload, options)
+            foundation_summary["path"] = aggregate_summary_path_label(
+                path,
+                evidence_dirs,
+            )
+            foundation_summary["sha256"] = digest
+            if foundation_summary.get("valid") is True:
+                foundation_output_errors: list[str] = []
+                validate_aggregate_foundational_prerequisite_output(
+                    foundation_summary,
+                    foundation_output_errors,
+                )
+                if foundation_output_errors:
+                    foundation_summary["valid"] = False
+                    foundation_summary["errors"].extend(foundation_output_errors)
+                    foundation_errors.extend(foundation_output_errors)
+            foundational_prerequisites = foundation_summary
+            for error in foundation_errors:
+                errors.append(f"foundational prerequisites: {error}")
+            if foundation_context is not None:
+                summary_contexts.add(foundation_context)
+            continue
         gate = SCHEMA_TO_GATE.get(schema)
         if gate is None:
             unknown_schema_count += 1
@@ -5170,6 +5851,10 @@ def build_summary(
             errors.extend(row.get("errors", []))
         elif row.get("valid") is not True:
             errors.append(f"{name} production readiness summary is invalid")
+    if foundational_prerequisites.get("present") is False:
+        errors.extend(foundational_prerequisites.get("errors", []))
+    elif foundational_prerequisites.get("valid") is not True:
+        errors.append("foundational prerequisite summary is invalid")
 
     if options.deployment_id is None or options.environment is None:
         errors.append(
@@ -5213,9 +5898,10 @@ def build_summary(
         "thresholds": {
             "max_summary_artifact_age_secs": options.max_summary_artifact_age_secs,
         },
-        "summary_file_count": len(files),
+        "summary_file_count": len(files) - foundational_file_count,
         "recognized_summary_count": recognized_summaries,
         "deployment": deployment,
+        "foundational_prerequisites": foundational_prerequisites,
         "required": required,
         "errors": errors,
     }
@@ -5276,6 +5962,32 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
             "summary artifact before production readiness can pass."
         ),
     )
+    parser.add_argument(
+        "--foundational-prerequisite-signer-public-key-hex",
+        dest="foundational_signer_public_key_hex",
+        help=(
+            "Required operator-trusted 32-byte Ed25519 public key for the signed "
+            "foundational prerequisite envelope. The key is runtime-only input "
+            "and is not copied into the aggregate summary."
+        ),
+    )
+    parser.add_argument(
+        "--foundational-prerequisite-release-sequence",
+        dest="foundational_release_sequence",
+        type=positive_int_arg,
+        help=(
+            "Required operator-reviewed monotonic release sequence expected in "
+            "the foundational prerequisite envelope."
+        ),
+    )
+    parser.add_argument(
+        "--foundational-prerequisite-previous-envelope-sha256",
+        dest="foundational_previous_envelope_sha256",
+        help=(
+            "Required operator-reviewed lowercase SHA-256 of the preceding "
+            "foundational envelope (all zeroes only for sequence 1)."
+        ),
+    )
     raw_args = sys.argv[1:] if argv is None else argv
     try:
         expanded_args = expand_response_args(raw_args, parser)
@@ -5322,6 +6034,41 @@ def main(argv: list[str] | None = None) -> int:
         emit_checker_error_lines(["--environment must be production for this gate"])
         return 2
 
+    foundational_signer_public_key: bytes | None = None
+    if args.foundational_signer_public_key_hex is not None:
+        foundational_key_errors: list[str] = []
+        foundational_signer_public_key = parse_foundational_signer_public_key(
+            args.foundational_signer_public_key_hex,
+            foundational_key_errors,
+            path="--foundational-prerequisite-signer-public-key-hex",
+        )
+        if foundational_key_errors:
+            emit_checker_error_lines(foundational_key_errors)
+            return 2
+    foundational_previous_envelope_sha256 = None
+    if (
+        args.foundational_release_sequence is not None
+        and args.foundational_release_sequence > MAX_FOUNDATIONAL_RELEASE_SEQUENCE
+    ):
+        emit_checker_error_lines(
+            [
+                "--foundational-prerequisite-release-sequence must be in 1..2^63-1"
+            ]
+        )
+        return 2
+    if args.foundational_previous_envelope_sha256 is not None:
+        foundational_previous_envelope_sha256 = canonical_lower_hex(
+            args.foundational_previous_envelope_sha256,
+            64,
+        )
+        if foundational_previous_envelope_sha256 is None:
+            emit_checker_error_lines(
+                [
+                    "--foundational-prerequisite-previous-envelope-sha256 must be canonical lowercase SHA-256"
+                ]
+            )
+            return 2
+
     preflight_errors = validate_checker_preflight(args)
     if preflight_errors:
         emit_checker_error_lines(preflight_errors)
@@ -5332,6 +6079,11 @@ def main(argv: list[str] | None = None) -> int:
         max_summary_artifact_age_secs=args.max_summary_artifact_age_secs,
         deployment_id=args.deployment_id,
         environment=args.environment,
+        foundational_signer_public_key=foundational_signer_public_key,
+        foundational_release_sequence=args.foundational_release_sequence,
+        foundational_previous_envelope_sha256=(
+            foundational_previous_envelope_sha256
+        ),
     )
     summary, errors = build_summary(
         args.evidence_dir,
@@ -5349,7 +6101,8 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     emit_checker_notice(
         "SoraFS production readiness validated for "
-        f"{len(required_gates)} required gate(s)."
+        f"{len(required_gates)} required gate(s) and "
+        f"{len(FOUNDATIONAL_PREREQUISITE_IDS)} foundational prerequisite(s)."
     )
     return 0
 

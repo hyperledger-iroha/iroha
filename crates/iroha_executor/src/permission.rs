@@ -349,42 +349,39 @@ mod smart_contract {
         }
     }
 
-    impl CanInvokeContractEntrypoint {
-        fn validate_payload(&self) -> Result {
-            let entrypoint = self.entrypoint.as_str();
-            if entrypoint.is_empty() || entrypoint.trim() != entrypoint {
-                return Err(ValidationFail::NotPermitted(
-                    "contract entrypoint permission must use a non-empty canonical selector"
-                        .to_owned(),
-                ));
-            }
-            Ok(())
+    fn validate_contract_entrypoint_payload(permission: &CanInvokeContractEntrypoint) -> Result {
+        let entrypoint = permission.entrypoint.as_str();
+        if entrypoint.is_empty() || entrypoint.trim() != entrypoint {
+            return Err(ValidationFail::NotPermitted(
+                "contract entrypoint permission must use a non-empty canonical selector".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn validate_contract_entrypoint_delegation(
+        permission: &CanInvokeContractEntrypoint,
+        authority: &AccountId,
+        context: &Context,
+        host: &Iroha,
+    ) -> Result {
+        validate_contract_entrypoint_payload(permission)?;
+        if context.curr_block.is_genesis()
+            || permission.contract.subject_id() == *authority
+            || CanRegisterSmartContractCode.is_owned_by(authority, host)
+        {
+            return Ok(());
         }
 
-        fn validate_delegation(
-            &self,
-            authority: &AccountId,
-            context: &Context,
-            host: &Iroha,
-        ) -> Result {
-            self.validate_payload()?;
-            if context.curr_block.is_genesis()
-                || self.contract.subject_id() == *authority
-                || CanRegisterSmartContractCode.is_owned_by(authority, host)
-            {
-                return Ok(());
-            }
-
-            Err(ValidationFail::NotPermitted(
-                "only genesis, the deployed contract subject, or a smart-contract registrar may delegate an exact contract entrypoint permission"
-                    .to_owned(),
-            ))
-        }
+        Err(ValidationFail::NotPermitted(
+            "only genesis, the deployed contract subject, or a smart-contract registrar may delegate an exact contract entrypoint permission"
+                .to_owned(),
+        ))
     }
 
     impl ValidateGrantRevoke for CanInvokeContractEntrypoint {
         fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
-            self.validate_delegation(authority, context, host)
+            validate_contract_entrypoint_delegation(self, authority, context, host)
         }
 
         fn validate_revoke(
@@ -393,7 +390,7 @@ mod smart_contract {
             context: &Context,
             host: &Iroha,
         ) -> Result {
-            self.validate_delegation(authority, context, host)
+            validate_contract_entrypoint_delegation(self, authority, context, host)
         }
     }
 }

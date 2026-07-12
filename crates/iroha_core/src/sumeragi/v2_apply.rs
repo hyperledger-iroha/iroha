@@ -254,6 +254,8 @@ impl V2ApplyService {
         let receipt = self.kura.store_v2_finality_artifact(&artifact)?;
         self.kura
             .promote_kagemusha_topup_finality_sidecar(&artifact, &receipt)?;
+        self.kura
+            .persist_native_amx_participant_application_receipts(&body)?;
         Ok(DurableApplyCompletion::new(task.id(), receipt, artifact))
     }
 
@@ -476,13 +478,14 @@ impl V2ApplyService {
     ) -> Result<(), V2ApplyError> {
         let block_hash = task.subject().block_hash;
         let checkpoint = crate::snapshot::canonical_state_snapshot_hash(self.state.as_ref());
+        let execution_commitment = task.validated_receipt().execution_commitment();
         self.kura
             .store_wsv_checkpoint(context.height, block_hash, checkpoint)?;
         let manifest = CommitManifest::new(
             context.height,
             block_hash,
-            None,
-            None,
+            Some(execution_commitment.parent_state_root),
+            Some(execution_commitment.post_state_root),
             checkpoint,
             Some(Hash::new(task.certificate().encode())),
         );
@@ -509,10 +512,7 @@ pub(crate) enum V2ApplyError {
     /// Kura persistence or canonical association failed.
     #[error(transparent)]
     Kura(#[from] crate::kura::Error),
-    /// NPoS stake snapshot could not be frozen exactly.
-    #[error(transparent)]
-    Stake(#[from] super::stake_snapshot::StrictV2StakeSnapshotError),
-    /// Authenticated NPoS VRF record validation failed.
+    /// Authenticated NPoS candidate records failed deterministic validation.
     #[error(transparent)]
     Npos(#[from] super::v2_npos::V2NposError),
     /// Apply task and frozen context do not identify one exact decision.
@@ -571,12 +571,6 @@ pub(crate) enum V2ApplyError {
     /// The durable merge carrier does not match the merge effects published in WSV.
     #[error(transparent)]
     MergeSettlement(#[from] MergeLedgerCommitError),
-    /// Epoch arithmetic overflowed.
-    #[error("Sumeragi v2 epoch number overflowed")]
-    EpochOverflow,
-    /// NPoS boundary lacks a finalized election roster.
-    #[error("Sumeragi v2 NPoS epoch boundary lacks a finalized next-epoch roster")]
-    MissingFinalizedEpochRoster,
 }
 
 impl BodyValidationError for V2ApplyError {

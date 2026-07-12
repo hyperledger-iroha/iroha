@@ -4,9 +4,9 @@ direction: ltr
 source: docs/source/sorafs_gateway_fixtures.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 86d85849252661a6703f1160d8f6235a779ee114553425616d136ac325ce3136
-source_last_modified: "2025-11-21T13:40:07.390645+00:00"
-translation_last_reviewed: "2026-01-30"
+source_hash: 0556bce32ac9d3e9eeaa4000cb38aba86deb8f04d2577e22bf2edc83499888f2
+source_last_modified: "2026-07-12T00:00:00+04:00"
+translation_last_reviewed: 2026-07-12
 ---
 
 # Governance de fixtures del gateway SoraFS
@@ -24,10 +24,10 @@ metadata de release y expectativas operativas para esos fixtures.
 | Perfil | `sf1` |
 | Released | 2026-02-12 00:00:00Z (`1770854400` Unix seconds) |
 | Digests |
-| | `fixtures_digest_blake3_hex = 9360535b58c5f5e5be3d251a3c0bbc9e5b65131ccae739bf10fa35ae4819274d` |
-| | `manifest_blake3_hex = d5a2ad60ba513cd856926e90ab15bf4db10e1f37a7d270cf1509f04a3bcaaf30` |
+| | `fixtures_digest_blake3_hex = 72cca987eed784529d8994ddbe5b8a8388b61c478afb4779267eb5b3b86c0edf` |
+| | `manifest_blake3_hex = ffba180af64c6bf2004d4bfa09b48a8150d4051d31c3152b4377ad60765e2fcb` |
 | | `chunk_digest_sha3_256_hex = 8691566595375437a5bb0dfa28c135ee48a7237e7ef915ef999771a10b75431c` |
-| | `council_envelope_blake3_hex = c8aaebfe60b9f099feb31f4a3a0cc4829b228ad79ebdd15444c9295ef0a1a1dc` |
+| | `council_envelope_blake3_hex = 1275b4f17440c8d29791b0bfca1d3b2292fd773351128dac05a7836eafc58e39` |
 | | `payload_blake3_hex = 91275991d58858bdc7ce3eb4472b61c5289dec3ecc6cf43c6411db772c1888a8` |
 | | `car_blake3_hex = ce50a9aadf84e57559208d39201621262fd1b1887ae490ca54470e2a00153f27` |
 

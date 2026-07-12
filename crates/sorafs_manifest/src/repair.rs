@@ -244,6 +244,52 @@ pub struct RepairPorFailureCauseV1 {
     pub proof_digest: Option<[u8; 32]>,
 }
 
+/// Stable PDP failure category used by repair automation and governance archives.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    NoritoSerialize,
+    NoritoDeserialize,
+    JsonSerialize,
+    JsonDeserialize,
+)]
+#[norito(tag = "kind", content = "value")]
+pub enum RepairPdpFailureKindV1 {
+    /// The provider did not submit a proof before the governed deadline.
+    #[norito(rename = "deadline_expired")]
+    DeadlineExpired,
+    /// An authenticated provider submission failed PDP binding or witness verification.
+    #[norito(rename = "invalid_proof")]
+    InvalidProof,
+    /// Governance revoked or otherwise removed the provider admission while pending.
+    #[norito(rename = "admission_revoked")]
+    AdmissionRevoked,
+    /// The admitted provider could not read the locally retained payload safely.
+    #[norito(rename = "storage_unavailable")]
+    StorageUnavailable,
+}
+
+/// Proof-of-data-possession failure details handed to the repair scheduler.
+#[derive(
+    Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
+)]
+pub struct RepairPdpFailureCauseV1 {
+    /// PDP challenge identifier (BLAKE3-256 digest).
+    pub challenge_id: [u8; 32],
+    /// Challenge epoch whose hot replica failed validation.
+    pub epoch_id: u64,
+    /// Number of challenged hot leaves considered failed.
+    pub failed_samples: u16,
+    /// Optional digest of the authenticated offending proof.
+    #[norito(default)]
+    pub proof_digest: Option<[u8; 32]>,
+    /// Stable machine-readable failure category.
+    pub failure_kind: RepairPdpFailureKindV1,
+}
+
 /// Latency SLA breach cause details.
 #[derive(
     Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
@@ -284,6 +330,9 @@ pub enum RepairCauseV1 {
     /// Proof-of-retrievability failure exceeding the allowed threshold.
     #[norito(rename = "por_failure")]
     PorFailure(RepairPorFailureCauseV1),
+    /// Proof-of-data-possession failure for a hot replica.
+    #[norito(rename = "pdp_failure")]
+    PdpFailure(RepairPdpFailureCauseV1),
     /// Latency SLA breach for proof-of-time-to-retrieval sampling.
     #[norito(rename = "latency_sla")]
     LatencySla(RepairLatencySlaCauseV1),
@@ -302,6 +351,12 @@ impl RepairCauseV1 {
             Self::PorFailure(cause) => {
                 ensure_digest(&cause.challenge_id, "challenge_id")?;
                 if cause.failed_samples == 0 {
+                    return Err(RepairValidationError::InvalidSamples);
+                }
+            }
+            Self::PdpFailure(cause) => {
+                ensure_digest(&cause.challenge_id, "challenge_id")?;
+                if cause.epoch_id == 0 || cause.failed_samples == 0 {
                     return Err(RepairValidationError::InvalidSamples);
                 }
             }
@@ -1601,6 +1656,42 @@ mod tests {
         let bytes = norito::to_bytes(&evidence).expect("encode evidence");
         let decoded: RepairEvidenceV1 = norito::decode_from_bytes(&bytes).expect("decode evidence");
         assert_eq!(decoded, evidence);
+    }
+
+    #[test]
+    fn pdp_failure_evidence_is_typed_bounded_and_roundtrips() {
+        let evidence = RepairEvidenceV1 {
+            version: REPAIR_EVIDENCE_VERSION_V1,
+            manifest_digest: manifest_digest(),
+            provider_id: provider_id(),
+            por_history_id: None,
+            cause: RepairCauseV1::PdpFailure(RepairPdpFailureCauseV1 {
+                challenge_id: [0xCD; 32],
+                epoch_id: 7,
+                failed_samples: 4,
+                proof_digest: Some([0xCE; 32]),
+                failure_kind: RepairPdpFailureKindV1::InvalidProof,
+            }),
+            evidence_json: None,
+            notes: Some("pdp_failure".to_owned()),
+        };
+        evidence.validate().expect("valid PDP failure evidence");
+        let encoded = norito::to_bytes(&evidence).expect("encode PDP failure evidence");
+        let decoded: RepairEvidenceV1 =
+            norito::decode_from_bytes(&encoded).expect("decode PDP failure evidence");
+        assert_eq!(decoded, evidence);
+
+        for (index, mut invalid) in [evidence.clone(), evidence.clone()].into_iter().enumerate() {
+            let RepairCauseV1::PdpFailure(cause) = &mut invalid.cause else {
+                unreachable!();
+            };
+            if index == 0 {
+                cause.epoch_id = 0;
+            } else {
+                cause.failed_samples = 0;
+            }
+            assert!(invalid.validate().is_err());
+        }
     }
 
     #[test]

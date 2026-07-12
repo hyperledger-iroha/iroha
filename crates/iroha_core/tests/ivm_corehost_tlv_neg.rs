@@ -1,6 +1,7 @@
 //! Host-level negative tests for typed TLV decoding via `CoreHost`.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 use iroha_core::smartcontracts::ivm::host::CoreHost;
+use iroha_data_model::isi::smart_contract_code::RegisterSmartContractBytes;
 use iroha_data_model::prelude::*;
 use iroha_test_samples::ALICE_ID;
 use ivm::{IVM, IVMHost, Memory, PointerType, ProgramMetadata, syscalls};
@@ -156,4 +157,122 @@ fn mint_asset_rejects_unknown_typeid() {
     vm.set_register(12, p_amount);
     let res = host.syscall(syscalls::SYSCALL_MINT_ASSET, &mut vm);
     assert!(matches!(res, Err(ivm::VMError::NoritoInvalid)));
+}
+
+#[test]
+fn register_contract_bytes_enforces_tlv_provenance_type_hash_and_payload() {
+    use iroha_crypto::Hash;
+
+    let authority = ALICE_ID.clone();
+    let request = RegisterSmartContractBytes {
+        code_hash: Hash::new(b"provenance-checked-contract"),
+        code: vec![0xAA, 0xBB, 0xCC],
+    };
+    let payload = norito::to_bytes(&request).expect("encode register-bytes request");
+    let tlv = build_tlv(PointerType::NoritoBytes as u16, 1, &payload, false);
+
+    let mut heap_vm = IVM::new(1_000);
+    let heap_pointer = heap_vm
+        .alloc_heap(u64::try_from(tlv.len()).expect("TLV length fits u64"))
+        .expect("allocate owned HEAP envelope");
+    heap_vm
+        .store_bytes(heap_pointer, &tlv)
+        .expect("store owned HEAP envelope");
+    heap_vm.set_register(10, heap_pointer);
+    assert!(
+        CoreHost::new(authority.clone())
+            .syscall(
+                syscalls::SYSCALL_REGISTER_SMART_CONTRACT_BYTES,
+                &mut heap_vm
+            )
+            .is_ok(),
+        "an allocated HEAP envelope is valid V1 pointer provenance"
+    );
+
+    for (label, pointer) in [
+        ("unallocated HEAP", Memory::HEAP_START),
+        ("OUTPUT", Memory::OUTPUT_START),
+        ("stack", Memory::STACK_START),
+    ] {
+        let mut vm = IVM::new(1_000);
+        vm.store_bytes(pointer, &tlv)
+            .unwrap_or_else(|error| panic!("store {label} fixture: {error:?}"));
+        vm.set_register(10, pointer);
+        assert_eq!(
+            CoreHost::new(authority.clone())
+                .syscall(syscalls::SYSCALL_REGISTER_SMART_CONTRACT_BYTES, &mut vm),
+            Err(ivm::VMError::NoritoInvalid),
+            "{label} must fail provenance validation"
+        );
+    }
+
+    let mut code_vm = IVM::new(1_000);
+    let mut code = ivm::encoding::wide::encode_halt().to_le_bytes().to_vec();
+    let code_pointer = u64::try_from(code.len()).expect("code offset fits u64");
+    code.extend_from_slice(&tlv);
+    code_vm
+        .load_code(&code)
+        .expect("load non-literal code bytes");
+    code_vm.set_register(10, code_pointer);
+    assert_eq!(
+        CoreHost::new(authority.clone()).syscall(
+            syscalls::SYSCALL_REGISTER_SMART_CONTRACT_BYTES,
+            &mut code_vm,
+        ),
+        Err(ivm::VMError::NoritoInvalid),
+        "an arbitrary code offset is not a loader-authenticated literal"
+    );
+
+    let mut partial_vm = IVM::new(1_000);
+    let owned_bytes = tlv
+        .len()
+        .checked_sub(8)
+        .expect("TLV exceeds one HEAP allocation unit");
+    let partial_pointer = partial_vm
+        .alloc_heap(u64::try_from(owned_bytes).expect("partial length fits u64"))
+        .expect("allocate partial HEAP ownership");
+    partial_vm
+        .store_bytes(partial_pointer, &tlv)
+        .expect("store bytes beyond the owned HEAP range");
+    partial_vm.set_register(10, partial_pointer);
+    assert_eq!(
+        CoreHost::new(authority.clone()).syscall(
+            syscalls::SYSCALL_REGISTER_SMART_CONTRACT_BYTES,
+            &mut partial_vm,
+        ),
+        Err(ivm::VMError::NoritoInvalid),
+        "the complete envelope must be inside one owned HEAP allocation"
+    );
+
+    let mut corrupted = tlv.clone();
+    *corrupted.last_mut().expect("TLV has a digest") ^= 1;
+    for (label, envelope, expected) in [
+        (
+            "wrong nominal pointer type",
+            build_tlv(PointerType::Blob as u16, 1, &payload, false),
+            ivm::VMError::NoritoInvalid,
+        ),
+        (
+            "corrupted payload digest",
+            corrupted,
+            ivm::VMError::NoritoInvalid,
+        ),
+        (
+            "malformed Norito request",
+            build_tlv(PointerType::NoritoBytes as u16, 1, b"not a request", false),
+            ivm::VMError::DecodeError,
+        ),
+    ] {
+        let mut vm = IVM::new(1_000);
+        let pointer = vm
+            .alloc_host_tlv(&envelope)
+            .unwrap_or_else(|error| panic!("allocate {label} fixture: {error:?}"));
+        vm.set_register(10, pointer);
+        assert_eq!(
+            CoreHost::new(authority.clone())
+                .syscall(syscalls::SYSCALL_REGISTER_SMART_CONTRACT_BYTES, &mut vm),
+            Err(expected),
+            "{label} must fail closed"
+        );
+    }
 }

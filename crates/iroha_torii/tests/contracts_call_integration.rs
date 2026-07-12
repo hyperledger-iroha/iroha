@@ -3,7 +3,7 @@
 #![cfg(all(feature = "app_api", feature = "ws_integration_tests"))]
 #![allow(unexpected_cfgs, clippy::too_many_lines)]
 
-use std::{num::NonZeroU64, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 
 use axum::{Router, routing::post};
 use base64::Engine as _;
@@ -17,17 +17,9 @@ use iroha_core::{
 };
 use iroha_crypto::Signature;
 use iroha_data_model::{
-    DomainId, Registrable,
-    account::Account,
-    asset::AssetDefinitionId,
-    block::BlockHeader,
-    isi::{Grant, Register},
-    name::Name,
-    permission::Permission,
-    smart_contract::ContractAddress,
+    DomainId, asset::AssetDefinitionId, name::Name, smart_contract::ContractAddress,
     transaction::SignedTransaction,
 };
-use iroha_primitives::json::Json;
 use ivm::kotodama::session::{CompileRequest, CompilerSession};
 use mv::storage::StorageReadOnly;
 use norito::json;
@@ -402,40 +394,6 @@ seiyaku ContractCallConfigureAccountMapTest {
     ivm::KotodamaCompiler::new()
         .compile_source(src)
         .expect("compile contract call configure account-map test program")
-}
-
-fn grant_named_contract_permission(
-    state: &Arc<State>,
-    authority: &iroha_data_model::prelude::AccountId,
-    destination: iroha_data_model::prelude::AccountId,
-    permission_name: &str,
-) {
-    let height = u64::try_from(state.view().height())
-        .expect("test block height must fit in u64")
-        .saturating_add(1);
-    let header = BlockHeader::new(
-        NonZeroU64::new(height).expect("next test block height must be non-zero"),
-        None,
-        None,
-        None,
-        0,
-        0,
-    );
-    let mut block = state.block(header);
-    let mut transaction = block.transaction();
-    if transaction.world.account(&destination).is_err() {
-        Register::account(Account::new(destination.clone()))
-            .execute(authority, &mut transaction)
-            .expect("register contract permission holder");
-    }
-    Grant::account_permission(
-        Permission::new(permission_name.to_owned(), Json::new(())),
-        destination,
-    )
-    .execute(authority, &mut transaction)
-    .expect("grant named contract permission");
-    transaction.apply();
-    block.commit().expect("commit contract permission grant");
 }
 
 fn contract_test_app(

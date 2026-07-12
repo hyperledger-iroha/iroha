@@ -1,5 +1,6 @@
 package org.hyperledger.iroha.android.client;
 
+import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -14,6 +15,8 @@ import java.util.Map;
  */
 public final class JsonParser {
 
+  private static final int MAX_NESTING_DEPTH = 128;
+
   private final String input;
   private int index;
 
@@ -24,7 +27,7 @@ public final class JsonParser {
   public static Object parse(final String json) {
     final JsonParser parser = new JsonParser(json);
     parser.skipWhitespace();
-    final Object value = parser.parseValue();
+    final Object value = parser.parseValue(0);
     parser.skipWhitespace();
     if (parser.index != parser.input.length()) {
       throw new IllegalStateException("Trailing characters after JSON payload");
@@ -32,15 +35,18 @@ public final class JsonParser {
     return value;
   }
 
-  private Object parseValue() {
+  private Object parseValue(final int depth) {
+    if (depth > MAX_NESTING_DEPTH) {
+      throw new IllegalStateException("JSON exceeds maximum nesting depth");
+    }
     skipWhitespace();
     if (index >= input.length()) {
       throw new IllegalStateException("Unexpected end of JSON input");
     }
     final char c = input.charAt(index);
     return switch (c) {
-      case '{' -> parseObject();
-      case '[' -> parseArray();
+      case '{' -> parseObject(depth);
+      case '[' -> parseArray(depth);
       case '"' -> parseString();
       case 't' -> {
         consumeLiteral("true");
@@ -58,7 +64,7 @@ public final class JsonParser {
     };
   }
 
-  private Map<String, Object> parseObject() {
+  private Map<String, Object> parseObject(final int depth) {
     expect('{');
     skipWhitespace();
     final Map<String, Object> map = new LinkedHashMap<>();
@@ -74,7 +80,7 @@ public final class JsonParser {
       skipWhitespace();
       expect(':');
       skipWhitespace();
-      map.put(key, parseValue());
+      map.put(key, parseValue(depth + 1));
       skipWhitespace();
       if (peek('}')) {
         index++;
@@ -85,7 +91,7 @@ public final class JsonParser {
     }
   }
 
-  private List<Object> parseArray() {
+  private List<Object> parseArray(final int depth) {
     expect('[');
     skipWhitespace();
     final List<Object> list = new ArrayList<>();
@@ -94,7 +100,7 @@ public final class JsonParser {
       return list;
     }
     while (true) {
-      list.add(parseValue());
+      list.add(parseValue(depth + 1));
       skipWhitespace();
       if (peek(']')) {
         index++;
@@ -128,20 +134,57 @@ public final class JsonParser {
           case 'r' -> builder.append('\r');
           case 't' -> builder.append('\t');
           case 'u' -> {
-            if (index + 4 > input.length()) {
-              throw new IllegalStateException("Invalid unicode escape");
+            final char high = parseUnicodeEscapeUnit();
+            if (Character.isHighSurrogate(high)) {
+              if (index + 2 > input.length()
+                  || input.charAt(index) != '\\'
+                  || input.charAt(index + 1) != 'u') {
+                throw new IllegalStateException("Invalid unicode surrogate pair");
+              }
+              index += 2;
+              final char low = parseUnicodeEscapeUnit();
+              if (!Character.isLowSurrogate(low)) {
+                throw new IllegalStateException("Invalid unicode surrogate pair");
+              }
+              builder.append(high).append(low);
+            } else if (Character.isLowSurrogate(high)) {
+              throw new IllegalStateException("Invalid unicode surrogate pair");
+            } else {
+              builder.append(high);
             }
-            final String hex = input.substring(index, index + 4);
-            index += 4;
-            builder.append((char) Integer.parseInt(hex, 16));
           }
           default -> throw new IllegalStateException("Unsupported escape: \\" + esc);
         }
       } else {
-        builder.append(c);
+        if (c < 0x20) {
+          throw new IllegalStateException("Unescaped control character in JSON string");
+        }
+        if (Character.isHighSurrogate(c)) {
+          if (index >= input.length() || !Character.isLowSurrogate(input.charAt(index))) {
+            throw new IllegalStateException("Invalid unicode surrogate pair");
+          }
+          builder.append(c).append(input.charAt(index++));
+        } else if (Character.isLowSurrogate(c)) {
+          throw new IllegalStateException("Invalid unicode surrogate pair");
+        } else {
+          builder.append(c);
+        }
       }
     }
     throw new IllegalStateException("Unterminated string literal");
+  }
+
+  private char parseUnicodeEscapeUnit() {
+    if (index + 4 > input.length()) {
+      throw new IllegalStateException("Invalid unicode escape");
+    }
+    final String hex = input.substring(index, index + 4);
+    index += 4;
+    try {
+      return (char) Integer.parseInt(hex, 16);
+    } catch (NumberFormatException error) {
+      throw new IllegalStateException("Invalid unicode escape", error);
+    }
   }
 
   private Number parseNumber() {
@@ -209,11 +252,7 @@ public final class JsonParser {
           return new BigInteger(token);
         }
       }
-      final double value = Double.parseDouble(token);
-      if (!Double.isFinite(value)) {
-        throw new IllegalStateException("Invalid number: " + token);
-      }
-      return value;
+      return new BigDecimal(token);
     } catch (NumberFormatException ex) {
       throw new IllegalStateException("Invalid number: " + token, ex);
     }

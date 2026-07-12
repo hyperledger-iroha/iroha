@@ -30,17 +30,21 @@ pub const CONFIDENTIAL_UNSHIELD_V2_CIRCUIT_ID: &str =
     "halo2/pasta/ipa/anon-unshield-merkle16-poseidon-diversified";
 pub const CONFIDENTIAL_UNSHIELD_V3_CIRCUIT_ID: &str =
     "halo2/pasta/ipa/anon-unshield-2in-1change-merkle16-poseidon-diversified";
+pub const KAGEMUSHA_TOPUP_SHIELD_V2_CIRCUIT_ID: &str =
+    "halo2/pasta/ipa/kagemusha-topup-shield-merkle16-poseidon-diversified-v2";
 pub const ASSET_HIDDEN_TRANSFER_V1_CIRCUIT_ID: &str =
     "halo2/pasta/ipa/asset-hidden-transfer-public-v1";
 pub const CONFIDENTIAL_TRANSFER_V2_IPA_K: u32 = 7;
 pub const CONFIDENTIAL_UNSHIELD_V2_IPA_K: u32 = 7;
 pub const CONFIDENTIAL_UNSHIELD_V3_IPA_K: u32 = 7;
+pub const KAGEMUSHA_TOPUP_SHIELD_V2_IPA_K: u32 = 7;
 pub const ASSET_HIDDEN_TRANSFER_V1_IPA_K: u32 = 6;
 pub const CONFIDENTIAL_TREE_DEPTH_V2: usize = 16;
 pub const CONFIDENTIAL_TREE_CAPACITY_V2: usize = 1 << CONFIDENTIAL_TREE_DEPTH_V2;
 pub const CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1: &[u8] = br#"{"schema":"confidential_transfer_v2","public_inputs":["input_commitment_0","input_commitment_1","nullifier_0","nullifier_1","output_commitment_0","output_commitment_1","root","asset_tag","chain_tag"]}"#;
 pub const CONFIDENTIAL_UNSHIELD_V2_PUBLIC_INPUTS_SCHEMA_V1: &[u8] = br#"{"schema":"confidential_unshield_v2","public_inputs":["input_commitment_0","input_commitment_1","nullifier_0","nullifier_1","root","public_amount","asset_tag","chain_tag"]}"#;
 pub const CONFIDENTIAL_UNSHIELD_V3_PUBLIC_INPUTS_SCHEMA_V1: &[u8] = br#"{"schema":"confidential_unshield_v3","public_inputs":["input_commitment_0","input_commitment_1","nullifier_0","nullifier_1","change_commitment_0","root","public_amount","asset_tag","chain_tag"]}"#;
+pub const KAGEMUSHA_TOPUP_SHIELD_V2_PUBLIC_INPUTS_SCHEMA_V1: &[u8] = br#"{"schema":"kagemusha_topup_shield_v2","public_inputs":["output_commitment","spend_nullifier","initial_root","finalized_root","atomic_amount","asset_scale","leaf_index","asset_tag","chain_tag","payer_tag","operation_tag"]}"#;
 pub const ASSET_HIDDEN_TRANSFER_V1_PUBLIC_INPUTS_SCHEMA_V1: &[u8] = br#"{"schema":"asset_hidden_transfer_v1","public_inputs":["pool_id","asset_set_root","input_commitment_0","input_commitment_1","nullifier_0","nullifier_1","output_commitment_0","output_commitment_1","root","chain_tag"]}"#;
 pub const CONFIDENTIAL_V2_MAX_PROOF_BYTES: u32 = 192 * 1024;
 
@@ -76,6 +80,32 @@ pub struct ConfidentialTransferProofV2 {
     pub output_commitments: Vec<[u8; 32]>,
     pub root: [u8; 32],
     pub proof: ProofBox,
+}
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+#[derive(Debug, Clone)]
+pub struct KagemushaTopUpShieldProofV2 {
+    pub output_commitment: [u8; 32],
+    pub spend_nullifier: [u8; 32],
+    pub initial_root: [u8; 32],
+    pub finalized_root: [u8; 32],
+    pub leaf_index: u32,
+    pub proof: ProofBox,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct KagemushaTopUpShieldPublicInputsV2 {
+    pub output_commitment: [u8; 32],
+    pub spend_nullifier: [u8; 32],
+    pub initial_root: [u8; 32],
+    pub finalized_root: [u8; 32],
+    pub atomic_amount: [u8; 32],
+    pub asset_scale: [u8; 32],
+    pub leaf_index: [u8; 32],
+    pub asset_tag: [u8; 32],
+    pub chain_tag: [u8; 32],
+    pub payer_tag: [u8; 32],
+    pub operation_tag: [u8; 32],
 }
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
@@ -221,6 +251,10 @@ pub fn is_confidential_transfer_v2_circuit_id(raw: &str) -> bool {
     normalize_confidential_circuit_id(raw) == CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID
 }
 
+pub fn is_kagemusha_topup_shield_v2_circuit_id(raw: &str) -> bool {
+    normalize_confidential_circuit_id(raw) == KAGEMUSHA_TOPUP_SHIELD_V2_CIRCUIT_ID
+}
+
 pub fn is_confidential_unshield_v2_circuit_id(raw: &str) -> bool {
     normalize_confidential_circuit_id(raw) == CONFIDENTIAL_UNSHIELD_V2_CIRCUIT_ID
 }
@@ -293,6 +327,53 @@ pub fn confidential_transfer_v2_vk_box() -> Result<VerifyingKeyBox, String> {
             )
         })
         .clone()
+}
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+pub fn kagemusha_topup_shield_v2_vk_box() -> Result<VerifyingKeyBox, String> {
+    static CACHE: std::sync::OnceLock<Result<VerifyingKeyBox, String>> = std::sync::OnceLock::new();
+
+    CACHE
+        .get_or_init(|| {
+            build_confidential_v2_vk_box(
+                KAGEMUSHA_TOPUP_SHIELD_V2_IPA_K,
+                KAGEMUSHA_TOPUP_SHIELD_V2_CIRCUIT_ID,
+                &KagemushaTopUpShieldCircuitV2::<CONFIDENTIAL_TREE_DEPTH_V2>::default(),
+            )
+        })
+        .clone()
+}
+
+pub fn ensure_kagemusha_topup_shield_v2_canonical_vk_box(
+    vk_box: &VerifyingKeyBox,
+) -> Result<(), String> {
+    if vk_box.backend.as_str() != super::ZK_BACKEND_HALO2_IPA {
+        return Err(format!(
+            "Kagemusha top-up shield v2 verifier key backend `{}` is not `{}`",
+            vk_box.backend,
+            super::ZK_BACKEND_HALO2_IPA
+        ));
+    }
+    if vk_box.bytes.is_empty() {
+        return Err("Kagemusha top-up shield v2 verifier key must be non-empty".to_owned());
+    }
+    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+    {
+        ensure_confidential_v2_vk_box_shape(
+            vk_box,
+            KAGEMUSHA_TOPUP_SHIELD_V2_CIRCUIT_ID,
+            KAGEMUSHA_TOPUP_SHIELD_V2_IPA_K,
+            "Kagemusha top-up shield v2",
+        )?;
+        let canonical = kagemusha_topup_shield_v2_vk_box()?;
+        if super::hash_vk(vk_box) != super::hash_vk(&canonical) || vk_box.bytes != canonical.bytes {
+            return Err(
+                "Kagemusha top-up shield v2 verifier key must match the canonical issuance circuit key"
+                    .to_owned(),
+            );
+        }
+    }
+    Ok(())
 }
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
@@ -509,6 +590,20 @@ pub fn confidential_transfer_v2_vk_record(
 }
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+pub fn kagemusha_topup_shield_v2_vk_record(
+    name: &str,
+    version: u32,
+) -> Result<VerifyingKeyRecord, String> {
+    confidential_v2_vk_record(
+        name,
+        version,
+        KAGEMUSHA_TOPUP_SHIELD_V2_CIRCUIT_ID,
+        KAGEMUSHA_TOPUP_SHIELD_V2_PUBLIC_INPUTS_SCHEMA_V1,
+        kagemusha_topup_shield_v2_vk_box()?,
+    )
+}
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 pub fn confidential_unshield_v2_vk_record(
     name: &str,
     version: u32,
@@ -570,6 +665,32 @@ pub fn parse_transfer_public_inputs(
         columns[7][0],
         columns[8][0],
     ))
+}
+
+pub fn parse_kagemusha_topup_shield_public_inputs_v2(
+    proof_bytes: &[u8],
+) -> Result<KagemushaTopUpShieldPublicInputsV2, String> {
+    let columns = extract_confidential_public_columns(proof_bytes)
+        .ok_or_else(|| "failed to decode Kagemusha top-up shield public inputs".to_owned())?;
+    if columns.len() != 11 || columns.iter().any(|column| column.len() != 1) {
+        return Err(
+            "Kagemusha top-up shield proof must expose exactly 11 single-row instance columns"
+                .to_owned(),
+        );
+    }
+    Ok(KagemushaTopUpShieldPublicInputsV2 {
+        output_commitment: columns[0][0],
+        spend_nullifier: columns[1][0],
+        initial_root: columns[2][0],
+        finalized_root: columns[3][0],
+        atomic_amount: columns[4][0],
+        asset_scale: columns[5][0],
+        leaf_index: columns[6][0],
+        asset_tag: columns[7][0],
+        chain_tag: columns[8][0],
+        payer_tag: columns[9][0],
+        operation_tag: columns[10][0],
+    })
 }
 
 pub fn parse_unshield_public_inputs(
@@ -806,6 +927,27 @@ pub fn derive_confidential_chain_tag_v2(chain_id: &str) -> [u8; 32] {
         b"iroha.confidential.v2.chain_tag",
         &[chain_id.trim().as_bytes()],
     ))
+}
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+pub fn derive_kagemusha_topup_payer_tag_v2(payer: &str) -> [u8; 32] {
+    scalar_to_repr_bytes(hash_to_scalar(
+        b"iroha.kagemusha.topup.payer.v2",
+        &[payer.as_bytes()],
+    ))
+}
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+pub fn derive_kagemusha_topup_operation_tag_v2(operation_id: &[u8; 32]) -> [u8; 32] {
+    scalar_to_repr_bytes(hash_to_scalar(
+        b"iroha.kagemusha.topup.operation.v2",
+        &[operation_id],
+    ))
+}
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+pub fn encode_kagemusha_topup_u32_v2(value: u32) -> [u8; 32] {
+    scalar_to_repr_bytes(Scalar::from(u64::from(value)))
 }
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
@@ -1860,6 +2002,572 @@ impl<const DEPTH: usize> Circuit<Scalar> for ConfidentialTransferCircuitV2<DEPTH
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 #[derive(Clone, Debug)]
+struct KagemushaTopUpShieldWitnessV2 {
+    amount: u128,
+    asset_scale: u32,
+    leaf_index: u32,
+    rho: [u8; 32],
+    spend_scalar: [u8; 32],
+    diversifier: [u8; 32],
+    asset_tag: [u8; 32],
+    chain_tag: [u8; 32],
+    payer_tag: [u8; 32],
+    operation_tag: [u8; 32],
+    zero_path: ConfidentialMerklePathV2,
+    output_nodes: Vec<[u8; 32]>,
+}
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+impl Zeroize for KagemushaTopUpShieldWitnessV2 {
+    fn zeroize(&mut self) {
+        self.amount.zeroize();
+        self.asset_scale.zeroize();
+        self.leaf_index.zeroize();
+        self.rho.zeroize();
+        self.spend_scalar.zeroize();
+        self.diversifier.zeroize();
+        self.asset_tag.zeroize();
+        self.chain_tag.zeroize();
+        self.payer_tag.zeroize();
+        self.operation_tag.zeroize();
+        self.zero_path.zeroize();
+        self.output_nodes.zeroize();
+    }
+}
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+impl Drop for KagemushaTopUpShieldWitnessV2 {
+    fn drop(&mut self) {
+        self.zeroize();
+    }
+}
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+#[derive(Clone, Default)]
+struct KagemushaTopUpShieldCircuitV2<const DEPTH: usize> {
+    witness: Option<KagemushaTopUpShieldWitnessV2>,
+}
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+impl<const DEPTH: usize> Zeroize for KagemushaTopUpShieldCircuitV2<DEPTH> {
+    fn zeroize(&mut self) {
+        if let Some(witness) = &mut self.witness {
+            witness.zeroize();
+        }
+        self.witness = None;
+    }
+}
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+impl<const DEPTH: usize> Drop for KagemushaTopUpShieldCircuitV2<DEPTH> {
+    fn drop(&mut self) {
+        self.zeroize();
+    }
+}
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+#[derive(Clone)]
+struct KagemushaTopUpShieldConfigV2 {
+    amount: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+    amount_inverse: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+    output_commitment_inverse: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+    spend_nullifier_inverse: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+    note_field_difference_inverse: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+    initial_root_inverse: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+    finalized_root_inverse: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+    root_difference_inverse: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+    asset_scale: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+    leaf_index: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+    rho: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+    spend_scalar: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+    diversifier: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+    owner_tag: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+    owner_asset: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+    rho_owner_asset: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+    asset_chain: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+    rho_asset_chain: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+    payer_tag: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+    operation_tag: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+    siblings: Vec<halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>>,
+    directions: Vec<halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>>,
+    zero_nodes: Vec<halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>>,
+    output_nodes: Vec<halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>>,
+    index_quotients: Vec<halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>>,
+    selector: Selector,
+}
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+impl<const DEPTH: usize> Circuit<Scalar> for KagemushaTopUpShieldCircuitV2<DEPTH> {
+    type Config = KagemushaTopUpShieldConfigV2;
+    type FloorPlanner = SimpleFloorPlanner;
+    type Params = ();
+
+    fn without_witnesses(&self) -> Self {
+        Self::default()
+    }
+
+    fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
+        let amount = meta.advice_column();
+        let amount_inverse = meta.advice_column();
+        let output_commitment_inverse = meta.advice_column();
+        let spend_nullifier_inverse = meta.advice_column();
+        let note_field_difference_inverse = meta.advice_column();
+        let initial_root_inverse = meta.advice_column();
+        let finalized_root_inverse = meta.advice_column();
+        let root_difference_inverse = meta.advice_column();
+        let asset_scale = meta.advice_column();
+        let leaf_index = meta.advice_column();
+        let rho = meta.advice_column();
+        let spend_scalar = meta.advice_column();
+        let diversifier = meta.advice_column();
+        let owner_tag = meta.advice_column();
+        let owner_asset = meta.advice_column();
+        let rho_owner_asset = meta.advice_column();
+        let asset_chain = meta.advice_column();
+        let rho_asset_chain = meta.advice_column();
+        let payer_tag = meta.advice_column();
+        let operation_tag = meta.advice_column();
+        let siblings = (0..DEPTH).map(|_| meta.advice_column()).collect::<Vec<_>>();
+        let directions = (0..DEPTH).map(|_| meta.advice_column()).collect::<Vec<_>>();
+        let zero_nodes = (0..DEPTH).map(|_| meta.advice_column()).collect::<Vec<_>>();
+        let output_nodes = (0..DEPTH).map(|_| meta.advice_column()).collect::<Vec<_>>();
+        let index_quotients = (0..=DEPTH)
+            .map(|_| meta.advice_column())
+            .collect::<Vec<_>>();
+        let instances: [halo2_proofs::plonk::Column<halo2_proofs::plonk::Instance>; 11] =
+            std::array::from_fn(|_| meta.instance_column());
+        let selector = meta.selector();
+
+        let gate_siblings = siblings.clone();
+        let gate_directions = directions.clone();
+        let gate_zero_nodes = zero_nodes.clone();
+        let gate_output_nodes = output_nodes.clone();
+        let gate_index_quotients = index_quotients.clone();
+        meta.create_gate("kagemusha_topup_shield_v2", move |meta| {
+            let enabled = meta.query_selector(selector);
+            let amount_value = meta.query_advice(amount, Rotation::cur());
+            let amount_inverse_value = meta.query_advice(amount_inverse, Rotation::cur());
+            let output_commitment_inverse_value =
+                meta.query_advice(output_commitment_inverse, Rotation::cur());
+            let spend_nullifier_inverse_value =
+                meta.query_advice(spend_nullifier_inverse, Rotation::cur());
+            let note_field_difference_inverse_value =
+                meta.query_advice(note_field_difference_inverse, Rotation::cur());
+            let initial_root_inverse_value =
+                meta.query_advice(initial_root_inverse, Rotation::cur());
+            let finalized_root_inverse_value =
+                meta.query_advice(finalized_root_inverse, Rotation::cur());
+            let root_difference_inverse_value =
+                meta.query_advice(root_difference_inverse, Rotation::cur());
+            let scale_value = meta.query_advice(asset_scale, Rotation::cur());
+            let leaf_index_value = meta.query_advice(leaf_index, Rotation::cur());
+            let rho_value = meta.query_advice(rho, Rotation::cur());
+            let spend_value = meta.query_advice(spend_scalar, Rotation::cur());
+            let diversifier_value = meta.query_advice(diversifier, Rotation::cur());
+            let owner_value = meta.query_advice(owner_tag, Rotation::cur());
+            let owner_asset_value = meta.query_advice(owner_asset, Rotation::cur());
+            let rho_owner_asset_value = meta.query_advice(rho_owner_asset, Rotation::cur());
+            let asset_chain_value = meta.query_advice(asset_chain, Rotation::cur());
+            let rho_asset_chain_value = meta.query_advice(rho_asset_chain, Rotation::cur());
+            let payer_value = meta.query_advice(payer_tag, Rotation::cur());
+            let operation_value = meta.query_advice(operation_tag, Rotation::cur());
+            let public = instances.map(|column| meta.query_instance(column, Rotation::cur()));
+            let one = halo2_proofs::plonk::Expression::Constant(Scalar::ONE);
+            let two = halo2_proofs::plonk::Expression::Constant(Scalar::from(2u64));
+            let poseidon =
+                |lhs: halo2_proofs::plonk::Expression<Scalar>,
+                 rhs: halo2_proofs::plonk::Expression<Scalar>| {
+                    let lhs = lhs + halo2_proofs::plonk::Expression::Constant(Scalar::from(7u64));
+                    let rhs = rhs + halo2_proofs::plonk::Expression::Constant(Scalar::from(13u64));
+                    let lhs_sq = lhs.clone() * lhs.clone();
+                    let lhs_fourth = lhs_sq.clone() * lhs_sq;
+                    let rhs_sq = rhs.clone() * rhs.clone();
+                    let rhs_fourth = rhs_sq.clone() * rhs_sq;
+                    halo2_proofs::plonk::Expression::Constant(Scalar::from(2u64))
+                        * (lhs_fourth * lhs)
+                        + halo2_proofs::plonk::Expression::Constant(Scalar::from(3u64))
+                            * (rhs_fourth * rhs)
+                };
+
+            let mut constraints = vec![
+                enabled.clone() * (amount_value.clone() * amount_inverse_value - one.clone()),
+                enabled.clone()
+                    * (public[0].clone() * output_commitment_inverse_value - one.clone()),
+                enabled.clone() * (public[1].clone() * spend_nullifier_inverse_value - one.clone()),
+                enabled.clone()
+                    * ((public[0].clone() - public[1].clone())
+                        * note_field_difference_inverse_value
+                        - one.clone()),
+                enabled.clone() * (public[2].clone() * initial_root_inverse_value - one.clone()),
+                enabled.clone() * (public[3].clone() * finalized_root_inverse_value - one.clone()),
+                enabled.clone()
+                    * ((public[3].clone() - public[2].clone()) * root_difference_inverse_value
+                        - one.clone()),
+                enabled.clone() * (amount_value.clone() - public[4].clone()),
+                enabled.clone() * (scale_value - public[5].clone()),
+                enabled.clone() * (leaf_index_value - public[6].clone()),
+                enabled.clone() * (payer_value - public[9].clone()),
+                enabled.clone() * (operation_value - public[10].clone()),
+                enabled.clone()
+                    * (owner_value.clone() - poseidon(spend_value.clone(), diversifier_value)),
+                enabled.clone()
+                    * (owner_asset_value.clone() - poseidon(owner_value, public[7].clone())),
+                enabled.clone()
+                    * (rho_owner_asset_value.clone()
+                        - poseidon(rho_value.clone(), owner_asset_value)),
+                enabled.clone()
+                    * (public[0].clone() - poseidon(amount_value, rho_owner_asset_value)),
+                enabled.clone()
+                    * (asset_chain_value.clone() - poseidon(public[7].clone(), public[8].clone())),
+                enabled.clone()
+                    * (rho_asset_chain_value.clone() - poseidon(rho_value, asset_chain_value)),
+                enabled.clone()
+                    * (public[1].clone() - poseidon(spend_value, rho_asset_chain_value)),
+                enabled.clone()
+                    * (meta.query_advice(gate_index_quotients[0], Rotation::cur())
+                        - public[6].clone()),
+            ];
+
+            let mut zero_previous = halo2_proofs::plonk::Expression::Constant(Scalar::ZERO);
+            let mut output_previous = public[0].clone();
+            for level in 0..DEPTH {
+                let sibling = meta.query_advice(gate_siblings[level], Rotation::cur());
+                let direction = meta.query_advice(gate_directions[level], Rotation::cur());
+                let zero_node = meta.query_advice(gate_zero_nodes[level], Rotation::cur());
+                let output_node = meta.query_advice(gate_output_nodes[level], Rotation::cur());
+                let index_current = meta.query_advice(gate_index_quotients[level], Rotation::cur());
+                let index_next =
+                    meta.query_advice(gate_index_quotients[level + 1], Rotation::cur());
+                constraints
+                    .push(enabled.clone() * direction.clone() * (direction.clone() - one.clone()));
+                constraints.push(
+                    enabled.clone()
+                        * (index_current - direction.clone() - two.clone() * index_next),
+                );
+                let zero_forward = poseidon(zero_previous.clone(), sibling.clone());
+                let zero_reverse = poseidon(sibling.clone(), zero_previous.clone());
+                constraints.push(
+                    enabled.clone()
+                        * (zero_node.clone()
+                            - ((one.clone() - direction.clone()) * zero_forward
+                                + direction.clone() * zero_reverse)),
+                );
+                let output_forward = poseidon(output_previous.clone(), sibling.clone());
+                let output_reverse = poseidon(sibling, output_previous.clone());
+                constraints.push(
+                    enabled.clone()
+                        * (output_node.clone()
+                            - ((one.clone() - direction.clone()) * output_forward
+                                + direction * output_reverse)),
+                );
+                zero_previous = zero_node;
+                output_previous = output_node;
+            }
+            constraints.push(
+                enabled.clone() * meta.query_advice(gate_index_quotients[DEPTH], Rotation::cur()),
+            );
+            constraints.push(enabled.clone() * (zero_previous - public[2].clone()));
+            constraints.push(enabled * (output_previous - public[3].clone()));
+            constraints
+        });
+
+        KagemushaTopUpShieldConfigV2 {
+            amount,
+            amount_inverse,
+            output_commitment_inverse,
+            spend_nullifier_inverse,
+            note_field_difference_inverse,
+            initial_root_inverse,
+            finalized_root_inverse,
+            root_difference_inverse,
+            asset_scale,
+            leaf_index,
+            rho,
+            spend_scalar,
+            diversifier,
+            owner_tag,
+            owner_asset,
+            rho_owner_asset,
+            asset_chain,
+            rho_asset_chain,
+            payer_tag,
+            operation_tag,
+            siblings,
+            directions,
+            zero_nodes,
+            output_nodes,
+            index_quotients,
+            selector,
+        }
+    }
+
+    fn synthesize(
+        &self,
+        config: Self::Config,
+        mut layouter: impl Layouter<Scalar>,
+    ) -> Result<(), PlonkError> {
+        let witness = self.witness.clone();
+        layouter.assign_region(
+            || "kagemusha_topup_shield_v2",
+            |mut region| {
+                config.selector.enable(&mut region, 0)?;
+                let scalar_value = |value: Option<[u8; 32]>| {
+                    value
+                        .and_then(scalar_from_repr)
+                        .map_or(Value::unknown(), Value::known)
+                };
+                let amount_value = witness.as_ref().map(|value| scalar_from_u128(value.amount));
+                let rho_value = witness
+                    .as_ref()
+                    .map(|value| hash_to_scalar(b"iroha.confidential.v2.note_rho", &[&value.rho]));
+                let owner_value = witness.as_ref().and_then(|value| {
+                    Some(poseidon_pair(
+                        scalar_from_repr(value.spend_scalar)?,
+                        scalar_from_repr(value.diversifier)?,
+                    ))
+                });
+                let owner_asset_value = witness.as_ref().and_then(|value| {
+                    Some(poseidon_pair(
+                        owner_value?,
+                        scalar_from_repr(value.asset_tag)?,
+                    ))
+                });
+                let rho_owner_asset_value = witness
+                    .as_ref()
+                    .and_then(|_| Some(poseidon_pair(rho_value?, owner_asset_value?)));
+                let asset_chain_value = witness.as_ref().and_then(|value| {
+                    Some(poseidon_pair(
+                        scalar_from_repr(value.asset_tag)?,
+                        scalar_from_repr(value.chain_tag)?,
+                    ))
+                });
+                let rho_asset_chain_value = witness
+                    .as_ref()
+                    .and_then(|_| Some(poseidon_pair(rho_value?, asset_chain_value?)));
+                let output_commitment_value = witness
+                    .as_ref()
+                    .and_then(|_| Some(poseidon_pair(amount_value?, rho_owner_asset_value?)));
+                let spend_nullifier_value = witness.as_ref().and_then(|value| {
+                    Some(poseidon_pair(
+                        scalar_from_repr(value.spend_scalar)?,
+                        rho_asset_chain_value?,
+                    ))
+                });
+                let note_field_difference_value = witness
+                    .as_ref()
+                    .and_then(|_| Some(output_commitment_value? - spend_nullifier_value?));
+                let initial_root_value = witness
+                    .as_ref()
+                    .and_then(|value| scalar_from_repr(value.zero_path.root));
+                let finalized_root_value = witness.as_ref().and_then(|value| {
+                    value
+                        .output_nodes
+                        .last()
+                        .copied()
+                        .and_then(scalar_from_repr)
+                });
+                let root_difference_value = witness
+                    .as_ref()
+                    .and_then(|_| Some(finalized_root_value? - initial_root_value?));
+                let inverse =
+                    |value: Option<Scalar>| value.and_then(|value| Option::from(value.invert()));
+                let assign_scalar = |region: &mut halo2_proofs::circuit::Region<'_, Scalar>,
+                                     label: &'static str,
+                                     column,
+                                     value: Option<Scalar>|
+                 -> Result<(), PlonkError> {
+                    super::assign_advice_compat(
+                        region,
+                        || label,
+                        column,
+                        0,
+                        || value.map_or(Value::unknown(), Value::known),
+                    )
+                    .map(|_| ())
+                };
+                assign_scalar(&mut region, "amount", config.amount, amount_value)?;
+                assign_scalar(
+                    &mut region,
+                    "amount_inverse",
+                    config.amount_inverse,
+                    inverse(amount_value),
+                )?;
+                assign_scalar(
+                    &mut region,
+                    "output_commitment_inverse",
+                    config.output_commitment_inverse,
+                    inverse(output_commitment_value),
+                )?;
+                assign_scalar(
+                    &mut region,
+                    "spend_nullifier_inverse",
+                    config.spend_nullifier_inverse,
+                    inverse(spend_nullifier_value),
+                )?;
+                assign_scalar(
+                    &mut region,
+                    "note_field_difference_inverse",
+                    config.note_field_difference_inverse,
+                    inverse(note_field_difference_value),
+                )?;
+                assign_scalar(
+                    &mut region,
+                    "initial_root_inverse",
+                    config.initial_root_inverse,
+                    inverse(initial_root_value),
+                )?;
+                assign_scalar(
+                    &mut region,
+                    "finalized_root_inverse",
+                    config.finalized_root_inverse,
+                    inverse(finalized_root_value),
+                )?;
+                assign_scalar(
+                    &mut region,
+                    "root_difference_inverse",
+                    config.root_difference_inverse,
+                    inverse(root_difference_value),
+                )?;
+                assign_scalar(
+                    &mut region,
+                    "asset_scale",
+                    config.asset_scale,
+                    witness
+                        .as_ref()
+                        .map(|value| Scalar::from(u64::from(value.asset_scale))),
+                )?;
+                assign_scalar(
+                    &mut region,
+                    "leaf_index",
+                    config.leaf_index,
+                    witness
+                        .as_ref()
+                        .map(|value| Scalar::from(u64::from(value.leaf_index))),
+                )?;
+                assign_scalar(&mut region, "rho", config.rho, rho_value)?;
+                super::assign_advice_compat(
+                    &mut region,
+                    || "spend_scalar",
+                    config.spend_scalar,
+                    0,
+                    || scalar_value(witness.as_ref().map(|value| value.spend_scalar)),
+                )?;
+                super::assign_advice_compat(
+                    &mut region,
+                    || "diversifier",
+                    config.diversifier,
+                    0,
+                    || scalar_value(witness.as_ref().map(|value| value.diversifier)),
+                )?;
+                assign_scalar(&mut region, "owner_tag", config.owner_tag, owner_value)?;
+                assign_scalar(
+                    &mut region,
+                    "owner_asset",
+                    config.owner_asset,
+                    owner_asset_value,
+                )?;
+                assign_scalar(
+                    &mut region,
+                    "rho_owner_asset",
+                    config.rho_owner_asset,
+                    rho_owner_asset_value,
+                )?;
+                assign_scalar(
+                    &mut region,
+                    "asset_chain",
+                    config.asset_chain,
+                    asset_chain_value,
+                )?;
+                assign_scalar(
+                    &mut region,
+                    "rho_asset_chain",
+                    config.rho_asset_chain,
+                    rho_asset_chain_value,
+                )?;
+                super::assign_advice_compat(
+                    &mut region,
+                    || "payer_tag",
+                    config.payer_tag,
+                    0,
+                    || scalar_value(witness.as_ref().map(|value| value.payer_tag)),
+                )?;
+                super::assign_advice_compat(
+                    &mut region,
+                    || "operation_tag",
+                    config.operation_tag,
+                    0,
+                    || scalar_value(witness.as_ref().map(|value| value.operation_tag)),
+                )?;
+
+                for level in 0..DEPTH {
+                    super::assign_advice_compat(
+                        &mut region,
+                        || format!("sibling_{level}"),
+                        config.siblings[level],
+                        0,
+                        || {
+                            scalar_value(
+                                witness
+                                    .as_ref()
+                                    .and_then(|value| value.zero_path.siblings.get(level).copied()),
+                            )
+                        },
+                    )?;
+                    assign_scalar(
+                        &mut region,
+                        "direction",
+                        config.directions[level],
+                        witness.as_ref().and_then(|value| {
+                            value
+                                .zero_path
+                                .directions
+                                .get(level)
+                                .map(|direction| Scalar::from(u64::from(*direction)))
+                        }),
+                    )?;
+                    super::assign_advice_compat(
+                        &mut region,
+                        || format!("zero_node_{level}"),
+                        config.zero_nodes[level],
+                        0,
+                        || {
+                            scalar_value(witness.as_ref().and_then(|value| {
+                                value.zero_path.witness_nodes.get(level).copied()
+                            }))
+                        },
+                    )?;
+                    super::assign_advice_compat(
+                        &mut region,
+                        || format!("output_node_{level}"),
+                        config.output_nodes[level],
+                        0,
+                        || {
+                            scalar_value(
+                                witness
+                                    .as_ref()
+                                    .and_then(|value| value.output_nodes.get(level).copied()),
+                            )
+                        },
+                    )?;
+                }
+                for level in 0..=DEPTH {
+                    assign_scalar(
+                        &mut region,
+                        "index_quotient",
+                        config.index_quotients[level],
+                        witness
+                            .as_ref()
+                            .map(|value| Scalar::from(u64::from(value.leaf_index >> level))),
+                    )?;
+                }
+                Ok(())
+            },
+        )
+    }
+}
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+#[derive(Clone, Debug)]
 struct ConfidentialUnshieldWitnessV2 {
     include_input_1: bool,
     input_0_amount: u128,
@@ -2813,6 +3521,32 @@ fn parse_vk_for_transfer(
 }
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+fn parse_vk_for_kagemusha_topup_shield_v2(
+    circuit_id: &str,
+    vk_box: &VerifyingKeyBox,
+) -> Result<(super::PastaParams, ConfidentialV2VerifyingKey), String> {
+    if vk_box.backend.as_str() != super::ZK_BACKEND_HALO2_IPA {
+        return Err(
+            "Kagemusha top-up shield v2 proving requires a halo2/ipa verifying key".to_owned(),
+        );
+    }
+    if !is_kagemusha_topup_shield_v2_circuit_id(circuit_id) {
+        return Err(format!(
+            "unsupported Kagemusha top-up shield verifier circuit `{circuit_id}`"
+        ));
+    }
+    let params = super::zkparse::params_any(vk_box.bytes.as_slice())
+        .ok_or_else(|| "missing/invalid IPAK parameters in verifying key envelope".to_owned())?;
+    let parsed = super::zkparse::vk_from_bytes::<
+        KagemushaTopUpShieldCircuitV2<CONFIDENTIAL_TREE_DEPTH_V2>,
+    >(vk_box.bytes.as_slice(), &params)
+    .ok_or_else(|| {
+        "missing/invalid H2VK payload for Kagemusha top-up shield verifying key".to_owned()
+    })?;
+    Ok((params, parsed))
+}
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 fn parse_vk_for_unshield_v2(
     circuit_id: &str,
     vk_box: &VerifyingKeyBox,
@@ -2916,6 +3650,28 @@ fn cached_confidential_transfer_v2_proving_key() -> Result<&'static Confidential
             parsed_vk,
             &ConfidentialTransferCircuitV2::<CONFIDENTIAL_TREE_DEPTH_V2>::default(),
             "transfer",
+        )
+    }) {
+        Ok(proving_key) => Ok(proving_key),
+        Err(err) => Err(err.clone()),
+    }
+}
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+fn cached_kagemusha_topup_shield_v2_proving_key()
+-> Result<&'static ConfidentialV2ProvingKey, String> {
+    static CACHE: std::sync::OnceLock<Result<ConfidentialV2ProvingKey, String>> =
+        std::sync::OnceLock::new();
+
+    match CACHE.get_or_init(|| {
+        let vk_box = kagemusha_topup_shield_v2_vk_box()?;
+        let (params, parsed_vk) =
+            parse_vk_for_kagemusha_topup_shield_v2(KAGEMUSHA_TOPUP_SHIELD_V2_CIRCUIT_ID, &vk_box)?;
+        derive_confidential_v2_proving_key(
+            &params,
+            parsed_vk,
+            &KagemushaTopUpShieldCircuitV2::<CONFIDENTIAL_TREE_DEPTH_V2>::default(),
+            "Kagemusha top-up shield v2",
         )
     }) {
         Ok(proving_key) => Ok(proving_key),
@@ -3032,6 +3788,228 @@ fn encode_halo2_envelope(
         super::ZK_BACKEND_HALO2_IPA.to_owned(),
         encoded,
     ))
+}
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+fn kagemusha_topup_output_path_nodes_v2(
+    output_commitment: [u8; 32],
+    path: &ConfidentialMerklePathV2,
+) -> Result<Vec<[u8; 32]>, String> {
+    let mut node = scalar_from_repr(output_commitment)
+        .ok_or_else(|| "output commitment must be a canonical Pasta scalar".to_owned())?;
+    let mut nodes = Vec::with_capacity(CONFIDENTIAL_TREE_DEPTH_V2);
+    for level in 0..CONFIDENTIAL_TREE_DEPTH_V2 {
+        let sibling = scalar_from_repr(path.siblings[level]).ok_or_else(|| {
+            format!("top-up zero path sibling[{level}] must be a canonical Pasta scalar")
+        })?;
+        node = match path.directions[level] {
+            0 => poseidon_pair(node, sibling),
+            1 => poseidon_pair(sibling, node),
+            _ => {
+                return Err(format!(
+                    "top-up zero path direction[{level}] must be 0 or 1"
+                ));
+            }
+        };
+        nodes.push(scalar_to_repr_bytes(node));
+    }
+    Ok(nodes)
+}
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+fn validate_kagemusha_topup_shield_statement_v2(
+    output_commitment: [u8; 32],
+    spend_nullifier: [u8; 32],
+    initial_root: [u8; 32],
+    finalized_root: [u8; 32],
+) -> Result<(), String> {
+    if output_commitment == [0; 32] {
+        return Err("Kagemusha top-up output commitment must be non-zero".to_owned());
+    }
+    if spend_nullifier == [0; 32] {
+        return Err("Kagemusha top-up spend nullifier must be non-zero".to_owned());
+    }
+    if output_commitment == spend_nullifier {
+        return Err(
+            "Kagemusha top-up output commitment and spend nullifier must be distinct".to_owned(),
+        );
+    }
+    if initial_root == [0; 32] {
+        return Err("Kagemusha top-up initial root must be non-zero".to_owned());
+    }
+    if finalized_root == [0; 32] {
+        return Err("Kagemusha top-up finalized root must be non-zero".to_owned());
+    }
+    if initial_root == finalized_root {
+        return Err("Kagemusha top-up output must change the confidential root".to_owned());
+    }
+    Ok(())
+}
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+#[allow(clippy::too_many_arguments)]
+pub fn build_kagemusha_topup_shield_proof_v2(
+    chain_id: &ChainId,
+    asset_definition_id: &str,
+    payer: &str,
+    operation_id: [u8; 32],
+    atomic_amount: u128,
+    asset_scale: u32,
+    spend_key: &[u8],
+    rho: [u8; 32],
+    diversifier: [u8; 32],
+    leaf_index: u32,
+    zero_path: &ConfidentialMerklePathV2,
+    circuit_id: &str,
+    vk_box: &VerifyingKeyBox,
+) -> Result<KagemushaTopUpShieldProofV2, String> {
+    if asset_definition_id.is_empty() || asset_definition_id.trim() != asset_definition_id {
+        return Err("Kagemusha top-up asset definition must be exact and non-empty".to_owned());
+    }
+    if payer.is_empty() || payer.trim() != payer {
+        return Err("Kagemusha top-up payer must be exact and non-empty".to_owned());
+    }
+    if operation_id == [0; 32] {
+        return Err("Kagemusha top-up operation_id must be non-zero".to_owned());
+    }
+    if atomic_amount == 0 {
+        return Err("Kagemusha top-up atomic amount must be positive".to_owned());
+    }
+    if asset_scale > iroha_data_model::offline::KAGEMUSHA_SCALED_AMOUNT_MAX_SCALE_V2 {
+        return Err("Kagemusha top-up asset scale exceeds the protocol maximum".to_owned());
+    }
+    if spend_key.len() != 32 || spend_key.iter().all(|byte| *byte == 0) {
+        return Err("Kagemusha top-up spend key must be exactly 32 non-zero bytes".to_owned());
+    }
+    if rho == [0; 32] {
+        return Err("Kagemusha top-up rho must be non-zero".to_owned());
+    }
+    let diversifier_scalar = scalar_from_repr(diversifier)
+        .filter(|value| *value != Scalar::ZERO)
+        .ok_or_else(|| "Kagemusha top-up diversifier must be a non-zero Pasta scalar".to_owned())?;
+    let leaf_index_usize = usize::try_from(leaf_index)
+        .map_err(|_| "Kagemusha top-up leaf_index does not fit usize".to_owned())?;
+    if leaf_index_usize >= CONFIDENTIAL_TREE_CAPACITY_V2 {
+        return Err(format!(
+            "Kagemusha top-up leaf_index must be < {CONFIDENTIAL_TREE_CAPACITY_V2}"
+        ));
+    }
+
+    ensure_kagemusha_topup_shield_v2_canonical_vk_box(vk_box)?;
+    let (params, parsed_vk) = parse_vk_for_kagemusha_topup_shield_v2(circuit_id, vk_box)?;
+    let initial_root = zero_path.root;
+    let normalized_zero_path = normalize_supplied_confidential_merkle_path_v2(
+        [0; 32],
+        Some(leaf_index_usize),
+        zero_path,
+        initial_root,
+        "Kagemusha top-up zero path",
+    )?;
+    let spend_scalar = hash_to_scalar(b"iroha.confidential.v2.spend_scalar", &[spend_key]);
+    let owner_tag = poseidon_pair(spend_scalar, diversifier_scalar);
+    let asset_tag = derive_confidential_asset_tag_v2(asset_definition_id);
+    let chain_tag = derive_confidential_chain_tag_v2(chain_id.as_str());
+    let rho_scalar = hash_to_scalar(b"iroha.confidential.v2.note_rho", &[&rho]);
+    let output_commitment = scalar_to_repr_bytes(note_commitment_scalar(
+        scalar_from_u128(atomic_amount),
+        rho_scalar,
+        owner_tag,
+        scalar_from_repr(asset_tag).expect("derived asset tag is canonical"),
+    ));
+    let spend_nullifier = scalar_to_repr_bytes(nullifier_scalar(
+        spend_scalar,
+        rho_scalar,
+        scalar_from_repr(asset_tag).expect("derived asset tag is canonical"),
+        scalar_from_repr(chain_tag).expect("derived chain tag is canonical"),
+    ));
+    let output_nodes =
+        kagemusha_topup_output_path_nodes_v2(output_commitment, &normalized_zero_path)?;
+    let finalized_root = output_nodes
+        .last()
+        .copied()
+        .ok_or_else(|| "Kagemusha top-up path must not be empty".to_owned())?;
+    validate_kagemusha_topup_shield_statement_v2(
+        output_commitment,
+        spend_nullifier,
+        initial_root,
+        finalized_root,
+    )?;
+    let payer_tag = derive_kagemusha_topup_payer_tag_v2(payer);
+    let operation_tag = derive_kagemusha_topup_operation_tag_v2(&operation_id);
+    let witness = KagemushaTopUpShieldWitnessV2 {
+        amount: atomic_amount,
+        asset_scale,
+        leaf_index,
+        rho,
+        spend_scalar: scalar_to_repr_bytes(spend_scalar),
+        diversifier,
+        asset_tag,
+        chain_tag,
+        payer_tag,
+        operation_tag,
+        zero_path: normalized_zero_path,
+        output_nodes,
+    };
+    let circuit = KagemushaTopUpShieldCircuitV2::<CONFIDENTIAL_TREE_DEPTH_V2> {
+        witness: Some(witness),
+    };
+    let instance_columns = vec![
+        vec![scalar_from_repr(output_commitment).expect("output commitment is canonical")],
+        vec![scalar_from_repr(spend_nullifier).expect("spend nullifier is canonical")],
+        vec![
+            scalar_from_repr(initial_root)
+                .ok_or_else(|| "initial root must be a canonical Pasta scalar".to_owned())?,
+        ],
+        vec![scalar_from_repr(finalized_root).expect("finalized root is canonical")],
+        vec![scalar_from_u128(atomic_amount)],
+        vec![Scalar::from(u64::from(asset_scale))],
+        vec![Scalar::from(u64::from(leaf_index))],
+        vec![scalar_from_repr(asset_tag).expect("asset tag is canonical")],
+        vec![scalar_from_repr(chain_tag).expect("chain tag is canonical")],
+        vec![scalar_from_repr(payer_tag).expect("payer tag is canonical")],
+        vec![scalar_from_repr(operation_tag).expect("operation tag is canonical")],
+    ];
+    let instance_refs = instance_columns
+        .iter()
+        .map(Vec::as_slice)
+        .collect::<Vec<_>>();
+    let instance_wrapper = vec![instance_refs.as_slice()];
+    let proof_raw = create_confidential_v2_proof(
+        &params,
+        cached_kagemusha_topup_shield_v2_proving_key()?,
+        circuit,
+        &instance_wrapper,
+        "Kagemusha top-up shield v2",
+    )?;
+    {
+        let proofs_instances = [&instance_refs[..]];
+        super::halo2_backend::verify_ipa_proof(
+            &params,
+            &parsed_vk,
+            proof_raw.as_slice(),
+            &proofs_instances,
+        )
+        .map_err(|error| {
+            format!(
+                "generated Kagemusha top-up shield proof failed local self-verification: {error}"
+            )
+        })?;
+    }
+    let proof = encode_halo2_envelope(
+        KAGEMUSHA_TOPUP_SHIELD_V2_CIRCUIT_ID,
+        vk_box,
+        KAGEMUSHA_TOPUP_SHIELD_V2_PUBLIC_INPUTS_SCHEMA_V1.to_vec(),
+        &instance_columns,
+        proof_raw,
+    )?;
+    Ok(KagemushaTopUpShieldProofV2 {
+        output_commitment,
+        spend_nullifier,
+        initial_root,
+        finalized_root,
+        leaf_index,
+        proof,
+    })
 }
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
@@ -4617,6 +5595,273 @@ mod tests {
         assert!(
             duplicate_nullifier.contains("duplicate nullifier"),
             "unexpected duplicate-nullifier error: {duplicate_nullifier}"
+        );
+    }
+
+    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+    #[test]
+    fn kagemusha_topup_shield_v2_binds_every_public_field_and_rejects_substitution() {
+        let chain_id = iroha_data_model::ChainId::from("kagemusha-topup-shield-test");
+        let asset_definition_id = "pkr#sbp";
+        let payer = "ed0120AABBCC@sbp";
+        let operation_id = [0x41_u8; 32];
+        let spend_key = [0x42_u8; 32];
+        let rho = [0x43_u8; 32];
+        let diversifier = super::derive_confidential_diversifier_v2(b"topup-owner");
+        let atomic_amount = 10_750_000_000_u128;
+        let asset_scale = 9;
+        let tree_commitments = vec![
+            super::scalar_to_repr_bytes(super::scalar_from_u128(0x51)),
+            super::scalar_to_repr_bytes(super::scalar_from_u128(0x52)),
+        ];
+        let leaf_index = u32::try_from(tree_commitments.len()).expect("fixture index");
+        let zero_path =
+            super::compute_confidential_merkle_path_v2(&tree_commitments, leaf_index as usize)
+                .expect("next-zero path");
+        let vk_box = super::kagemusha_topup_shield_v2_vk_box().expect("canonical shield vk");
+        let result = super::build_kagemusha_topup_shield_proof_v2(
+            &chain_id,
+            asset_definition_id,
+            payer,
+            operation_id,
+            atomic_amount,
+            asset_scale,
+            &spend_key,
+            rho,
+            diversifier,
+            leaf_index,
+            &zero_path,
+            super::KAGEMUSHA_TOPUP_SHIELD_V2_CIRCUIT_ID,
+            &vk_box,
+        )
+        .expect("build Kagemusha top-up shield proof");
+        assert!(crate::zk::verify_backend(
+            crate::zk::ZK_BACKEND_HALO2_IPA,
+            &result.proof,
+            Some(&vk_box)
+        ));
+        let public = super::parse_kagemusha_topup_shield_public_inputs_v2(&result.proof.bytes)
+            .expect("parse shield public inputs");
+        assert_eq!(public.output_commitment, result.output_commitment);
+        assert_eq!(public.spend_nullifier, result.spend_nullifier);
+        assert_eq!(public.initial_root, result.initial_root);
+        assert_eq!(public.finalized_root, result.finalized_root);
+        assert_eq!(
+            public.atomic_amount,
+            super::encode_confidential_amount_v2(atomic_amount)
+        );
+        assert_eq!(
+            public.asset_scale,
+            super::encode_kagemusha_topup_u32_v2(asset_scale)
+        );
+        assert_eq!(
+            public.leaf_index,
+            super::encode_kagemusha_topup_u32_v2(leaf_index)
+        );
+        assert_eq!(
+            public.asset_tag,
+            super::derive_confidential_asset_tag_v2(asset_definition_id)
+        );
+        assert_eq!(
+            public.chain_tag,
+            super::derive_confidential_chain_tag_v2(chain_id.as_str())
+        );
+        assert_eq!(
+            public.payer_tag,
+            super::derive_kagemusha_topup_payer_tag_v2(payer)
+        );
+        assert_eq!(
+            public.operation_tag,
+            super::derive_kagemusha_topup_operation_tag_v2(&operation_id)
+        );
+
+        let envelope: iroha_data_model::zk::OpenVerifyEnvelope =
+            norito::decode_from_bytes(&result.proof.bytes).expect("outer proof envelope");
+        let (transcript, columns) = crate::zk::zkparse::proof_and_instances(&envelope.proof_bytes)
+            .expect("inner proof and instances");
+        assert_eq!(columns.len(), 11);
+        let spend_scalar =
+            super::hash_to_scalar(b"iroha.confidential.v2.spend_scalar", &[&spend_key]);
+        let output_nodes =
+            super::kagemusha_topup_output_path_nodes_v2(result.output_commitment, &zero_path)
+                .expect("output path nodes");
+        let circuit = super::KagemushaTopUpShieldCircuitV2::<{ super::CONFIDENTIAL_TREE_DEPTH_V2 }> {
+            witness: Some(super::KagemushaTopUpShieldWitnessV2 {
+                amount: atomic_amount,
+                asset_scale,
+                leaf_index,
+                rho,
+                spend_scalar: super::scalar_to_repr_bytes(spend_scalar),
+                diversifier,
+                asset_tag: super::derive_confidential_asset_tag_v2(asset_definition_id),
+                chain_tag: super::derive_confidential_chain_tag_v2(chain_id.as_str()),
+                payer_tag: super::derive_kagemusha_topup_payer_tag_v2(payer),
+                operation_tag: super::derive_kagemusha_topup_operation_tag_v2(&operation_id),
+                zero_path: zero_path.clone(),
+                output_nodes,
+            }),
+        };
+        halo2_proofs::dev::MockProver::run(
+            super::KAGEMUSHA_TOPUP_SHIELD_V2_IPA_K,
+            &circuit,
+            columns.clone(),
+        )
+        .expect("canonical Kagemusha top-up shield mock prover")
+        .assert_satisfied();
+        for substituted_column in 0..columns.len() {
+            let mut substituted = columns.clone();
+            substituted[substituted_column][0] += super::Scalar::from(1_u64);
+            let substituted_mock = halo2_proofs::dev::MockProver::run(
+                super::KAGEMUSHA_TOPUP_SHIELD_V2_IPA_K,
+                &circuit,
+                substituted.clone(),
+            )
+            .expect("substituted Kagemusha top-up shield mock prover");
+            assert!(
+                substituted_mock.verify().is_err(),
+                "fixed witness must reject substituted public input column {substituted_column}"
+            );
+            let mut inner = crate::zk::zk1::wrap_start();
+            crate::zk::zk1::wrap_append_proof(&mut inner, &transcript);
+            let refs: Vec<&[super::Scalar]> = substituted.iter().map(Vec::as_slice).collect();
+            crate::zk::zk1::wrap_append_instances_pasta_fp_cols(&refs, &mut inner);
+            let mut substituted_envelope = envelope.clone();
+            substituted_envelope.proof_bytes = inner;
+            let substituted_proof = iroha_data_model::proof::ProofBox::new(
+                crate::zk::ZK_BACKEND_HALO2_IPA.to_owned(),
+                norito::to_bytes(&substituted_envelope).expect("encode substituted envelope"),
+            );
+            assert!(
+                !crate::zk::verify_backend(
+                    crate::zk::ZK_BACKEND_HALO2_IPA,
+                    &substituted_proof,
+                    Some(&vk_box),
+                ),
+                "substituting public input column {substituted_column} must invalidate the proof"
+            );
+        }
+    }
+
+    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+    #[test]
+    fn kagemusha_topup_shield_v2_statement_rejects_zero_and_colliding_fields() {
+        let commitment = super::scalar_to_repr_bytes(super::scalar_from_u128(1));
+        let nullifier = super::scalar_to_repr_bytes(super::scalar_from_u128(2));
+        let initial_root = super::scalar_to_repr_bytes(super::scalar_from_u128(3));
+        let finalized_root = super::scalar_to_repr_bytes(super::scalar_from_u128(4));
+
+        for (output, nullifier, initial, finalized, expected) in [
+            (
+                [0; 32],
+                nullifier,
+                initial_root,
+                finalized_root,
+                "output commitment must be non-zero",
+            ),
+            (
+                commitment,
+                [0; 32],
+                initial_root,
+                finalized_root,
+                "spend nullifier must be non-zero",
+            ),
+            (
+                commitment,
+                commitment,
+                initial_root,
+                finalized_root,
+                "must be distinct",
+            ),
+            (
+                commitment,
+                nullifier,
+                [0; 32],
+                finalized_root,
+                "initial root must be non-zero",
+            ),
+            (
+                commitment,
+                nullifier,
+                initial_root,
+                [0; 32],
+                "finalized root must be non-zero",
+            ),
+            (
+                commitment,
+                nullifier,
+                initial_root,
+                initial_root,
+                "must change the confidential root",
+            ),
+        ] {
+            let error = super::validate_kagemusha_topup_shield_statement_v2(
+                output, nullifier, initial, finalized,
+            )
+            .expect_err("invalid Kagemusha top-up statement must reject");
+            assert!(
+                error.contains(expected),
+                "unexpected statement validation error `{error}`; expected `{expected}`"
+            );
+        }
+    }
+
+    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+    #[test]
+    fn kagemusha_topup_shield_v2_builder_rejects_zero_amount_bad_path_and_key_substitution() {
+        let chain_id = iroha_data_model::ChainId::from("kagemusha-topup-negative-test");
+        let commitments = vec![super::scalar_to_repr_bytes(super::scalar_from_u128(0x61))];
+        let zero_path =
+            super::compute_confidential_merkle_path_v2(&commitments, 1).expect("next-zero path");
+        let vk_box = super::kagemusha_topup_shield_v2_vk_box().expect("canonical shield vk");
+        let build = |amount, operation_id, path: &super::ConfidentialMerklePathV2, vk| {
+            super::build_kagemusha_topup_shield_proof_v2(
+                &chain_id,
+                "pkr#sbp",
+                "payer@sbp",
+                operation_id,
+                amount,
+                9,
+                &[0x62; 32],
+                [0x63; 32],
+                super::derive_confidential_diversifier_v2(b"negative-topup"),
+                1,
+                path,
+                super::KAGEMUSHA_TOPUP_SHIELD_V2_CIRCUIT_ID,
+                vk,
+            )
+        };
+        assert!(
+            build(0, [0x64; 32], &zero_path, &vk_box)
+                .expect_err("zero amount")
+                .contains("must be positive")
+        );
+        assert!(
+            build(1, [0; 32], &zero_path, &vk_box)
+                .expect_err("zero operation")
+                .contains("operation_id must be non-zero")
+        );
+
+        let mut bad_direction = zero_path.clone();
+        bad_direction.directions[0] ^= 1;
+        assert!(
+            build(1, [0x64; 32], &bad_direction, &vk_box)
+                .expect_err("path/index substitution")
+                .contains("direction[0] does not match leaf_index")
+        );
+        let mut bad_root = zero_path.clone();
+        bad_root.root[0] ^= 1;
+        assert!(
+            build(1, [0x64; 32], &bad_root, &vk_box)
+                .expect_err("root substitution")
+                .contains("does not prove the supplied root_hint")
+        );
+
+        let transfer_vk = super::confidential_transfer_v2_vk_box().expect("transfer vk");
+        let key_error = build(1, [0x64; 32], &zero_path, &transfer_vk)
+            .expect_err("cross-circuit verifier substitution");
+        assert!(
+            key_error.contains("Kagemusha top-up shield v2 verifier key"),
+            "unexpected key-substitution error: {key_error}"
         );
     }
 

@@ -5545,14 +5545,23 @@ inside block execution-context validation:
   must match the transaction and routing plan,
 - participant legs must match the native AMX plan exactly, with no missing,
   unexpected, or duplicate participant records,
+- every participant leg carries its own lane-local height, lane-local view,
+  proposal hash, and settlement commitment hash; those coordinates are not
+  aliases of the coordinator slot,
+- a signer cannot accept a second proposal or settlement for the same
+  participant slot, and Commit must repeat the exact participant identity
+  prepared for that slot,
 - prepare/commit QC bodies must match the receipt, participant leg, expected
   phase, entrypoint hash, plan digest, coordinator, and planned height,
 - validator-set hash/version, dataspace committee size, signer bitmap bounds,
   BLS signer eligibility, live proof-of-possession state, quorum, and aggregate
-  BLS signature validation all fail closed.
+  BLS signature validation all fail closed,
+- the participant lane frontier cannot advance until the exact certified
+  participant application is durable.
 `NativeAmxReceiptValidationExactness` groups those obligations into acceptance,
-context/presence, header, participant-leg, QC-body, validator-set, signer
-bitmap, and quorum/signature checks for the fast mode.
+context/presence, header, participant-leg and slot identity, QC-body,
+validator-set, signer bitmap, quorum/signature, and durable application-order
+checks for the fast mode.
 `NativeAmxReceiptValidationCorrectnessEnvelope` composes that aggregate with
 the type invariant.
 
@@ -9270,6 +9279,14 @@ verification, and full networking details.
 - `SumeragiNativeAmxReceiptValidation_bug_accept_missing_signature.cfg`: expected-failure missing aggregate signature acceptance mutation.
 - `SumeragiNativeAmxReceiptValidation_bug_accept_invalid_signature.cfg`: expected-failure invalid aggregate signature acceptance mutation.
 - `SumeragiNativeAmxReceiptValidation_bug_reject_valid_native.cfg`: expected-failure valid native receipt rejection mutation.
+- `SumeragiNativeAmxReceiptValidation_bug_accept_participant_height_mismatch.cfg`: expected-failure participant-local height mismatch acceptance mutation.
+- `SumeragiNativeAmxReceiptValidation_bug_accept_participant_view_mismatch.cfg`: expected-failure participant-local view mismatch acceptance mutation.
+- `SumeragiNativeAmxReceiptValidation_bug_accept_participant_proposal_hash_mismatch.cfg`: expected-failure participant proposal-hash mismatch acceptance mutation.
+- `SumeragiNativeAmxReceiptValidation_bug_accept_participant_settlement_hash_mismatch.cfg`: expected-failure participant settlement-hash mismatch acceptance mutation.
+- `SumeragiNativeAmxReceiptValidation_bug_accept_participant_proposal_slot_conflict.cfg`: expected-failure conflicting same-slot participant proposal acceptance mutation.
+- `SumeragiNativeAmxReceiptValidation_bug_accept_participant_settlement_slot_conflict.cfg`: expected-failure conflicting same-slot participant settlement acceptance mutation.
+- `SumeragiNativeAmxReceiptValidation_bug_accept_prepare_commit_identity_mismatch.cfg`: expected-failure participant Prepare/Commit identity drift mutation.
+- `SumeragiNativeAmxReceiptValidation_bug_advance_frontier_before_application.cfg`: expected-failure participant frontier-before-application mutation.
 - `SumeragiNativeAmxIngressGate.tla`: native AMX control-plane ingress model.
 - `SumeragiNativeAmxIngressGate_fast.cfg`: CI-friendly native AMX ingress correctness-envelope check.
 - `SumeragiNativeAmxIngressGate_bug_reply_wrong_prepare_phase.cfg`: expected-failure wrong prepare-request phase reply mutation.
@@ -15655,6 +15672,25 @@ implementation surfaces it abstracts:
 | `unsupportedVersionIgnored` | Replay ignores records whose `version` is not `QUEUE_PLAN_JOURNAL_VERSION`. |
 | `compactionKeepsLive`, `compactionDropsRemoved` | `compact_if_needed()` replays the journal and rewrites only live `Put` frames. |
 | `tornPayloadTailPreservesPrior`, `tornLengthTailPreservesPrior` | `QueuePlanJournal::open()` calls `repair_incomplete_tail(...)`, preserving complete prefix frames while truncating incomplete tails. Bridge coverage includes `journal_open_truncates_torn_payload_tail_before_append`. |
+
+The native AMX receipt-validation model is intentionally finite. These are
+the participant-finality surfaces it abstracts:
+
+| Model concept | Implementation surface |
+| --- | --- |
+| `ValidDistinctParticipantSlots`, `ParticipantSlot`, `CoordinatorSlot` | Every participant finality leg owns its lane-local block height and view plus its proposal and settlement hashes; coordinator height/view/proposal/settlement values cannot stand in for those fields. |
+| `ParticipantHeightMismatch`, `ParticipantViewMismatch`, `ParticipantProposalHashMismatch`, `ParticipantSettlementHashMismatch` | Receipt and QC admission recomputes and compares all four participant slot fields before accepting a leg. |
+| `ParticipantProposalSlotConflict`, `ParticipantSettlementSlotConflict` | The durable signing claim rejects a second proposal or settlement value for an already claimed participant lane slot. |
+| `PrepareCommitIdentityMismatch` | Commit is admissible only for the exact participant height, view, proposal hash, and settlement hash certified by Prepare. |
+| `participantApplicationDurable`, `participantFrontierHeight`, `ParticipantApplicationPrecedesFrontier` | The exact participant application receipt is persisted before the participant lane frontier moves from its predecessor to the certified height. Participant finality is control-only and does not execute the transaction a second time. |
+| `NativeAmxReceiptValidationExactness` | The aggregate invariant ties receipt admission, participant-local slot identity, conflict rejection, phase identity, cryptographic checks, and application-before-frontier ordering together for all thirty-nine bounded candidates. |
+
+The TLC and Apalache runners expose `native-amx-receipt-fast` and every
+`native-amx-receipt-bug-*` mutation; the CI expected-failure inventory executes
+the mutation set with Apalache. The eight participant-finality mutations
+independently demonstrate that omitting any participant slot field, permitting
+same-slot equivocation, changing identity between Prepare and Commit, or moving
+the frontier before durable application violates the aggregate safety envelope.
 
 The vNext chain-order helper model is intentionally finite. These are the
 implementation surfaces it abstracts:
@@ -29064,6 +29100,14 @@ bash scripts/formal/sumeragi_apalache.sh native-amx-receipt-bug-accept-under-quo
 bash scripts/formal/sumeragi_apalache.sh native-amx-receipt-bug-accept-missing-signature
 bash scripts/formal/sumeragi_apalache.sh native-amx-receipt-bug-accept-invalid-signature
 bash scripts/formal/sumeragi_apalache.sh native-amx-receipt-bug-reject-valid-native
+bash scripts/formal/sumeragi_apalache.sh native-amx-receipt-bug-accept-participant-height-mismatch
+bash scripts/formal/sumeragi_apalache.sh native-amx-receipt-bug-accept-participant-view-mismatch
+bash scripts/formal/sumeragi_apalache.sh native-amx-receipt-bug-accept-participant-proposal-hash-mismatch
+bash scripts/formal/sumeragi_apalache.sh native-amx-receipt-bug-accept-participant-settlement-hash-mismatch
+bash scripts/formal/sumeragi_apalache.sh native-amx-receipt-bug-accept-participant-proposal-slot-conflict
+bash scripts/formal/sumeragi_apalache.sh native-amx-receipt-bug-accept-participant-settlement-slot-conflict
+bash scripts/formal/sumeragi_apalache.sh native-amx-receipt-bug-accept-prepare-commit-identity-mismatch
+bash scripts/formal/sumeragi_apalache.sh native-amx-receipt-bug-advance-frontier-before-application
 bash scripts/formal/sumeragi_apalache.sh native-amx-ingress-bug-reply-wrong-prepare-phase
 bash scripts/formal/sumeragi_apalache.sh native-amx-ingress-bug-reply-wrong-commit-phase
 bash scripts/formal/sumeragi_apalache.sh native-amx-ingress-bug-reply-local-non-bls

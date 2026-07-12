@@ -1089,57 +1089,21 @@ Alias binding payload approved alongside a manifest.
 
 ## `iroha_data_model::isi::sorafs::RegisterPinManifest`
 
-> Schema summary: struct fields: digest: ManifestDigest, chunker: ChunkerProfileHandle, chunk_digest_sha3_256: Array<u8, 32>, content_length: u64, policy: PinPolicy, submitted_epoch: u64, alias: Option<ManifestAliasBinding>, successor_of: Option<ManifestDigest>.
+> Schema summary: struct fields: manifest_payload: Vec<u8>, submitted_epoch: u64, alias: Option<ManifestAliasBinding>, successor_of: Option<ManifestDigest>.
 
 - Rust type: `iroha_data_model::isi::sorafs::RegisterPinManifest`
-- Schema hash: `7fa6a5b7e48dcdaa7fa6a5b7e48dcdaa`
+- Schema hash: `61eb8eda15dad63ec8e3b35b58cfaa36`
 
 **Layout:** `struct`
 
 | Field | Type |
 |-------|------|
-| `digest` | `ManifestDigest` |
-| `chunker` | `ChunkerProfileHandle` |
-| `chunk_digest_sha3_256` | `Array<u8, 32>` |
-| `content_length` | `u64` |
-| `policy` | `PinPolicy` |
+| `manifest_payload` | `Vec<u8>` |
 | `submitted_epoch` | `u64` |
 | `alias` | `Option<ManifestAliasBinding>` |
 | `successor_of` | `Option<ManifestDigest>` |
 
 ### Manifest field details
-
-#### ChunkerProfileHandle fields
-
-Registry descriptor describing the chunking profile used to build the CAR.
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `profile_id` | `u32` | Numeric profile identifier (`ProfileId`). |
-| `namespace` | `String` | Registry namespace (typically `sorafs`). |
-| `name` | `String` | Human-readable profile name (for example `sf1`). |
-| `semver` | `String` | Semantic version string of the parameter set. |
-| `multihash_code` | `u64` | Multihash code used when deriving chunk digests. |
-
-#### PinPolicy fields
-
-Storage replication policy negotiated with the pin registry.
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `min_replicas` | `u16` | Minimum replica count required by governance. |
-| `storage_class` | `StorageClass` | Requested storage tier (`Hot`, `Warm`, `Cold`). |
-| `retention_epoch` | `u64` | Inclusive epoch through which the manifest must remain pinned. |
-
-#### StorageClass variants
-
-Storage tier classification for `SoraFS` replicas.
-
-| Variant | Description |
-|---------|-------------|
-| `Hot` | Low-latency replicas for developer workflows. |
-| `Warm` | Cost-optimised replicas with relaxed latency. |
-| `Cold` | Archival replicas retained for compliance. |
 
 #### ManifestAliasBinding fields
 
@@ -1147,9 +1111,9 @@ Alias binding payload approved alongside a manifest.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `name` | `String` | Alias label (e.g., `docs`). |
-| `namespace` | `String` | Alias namespace (e.g., `sora`). |
-| `proof` | `Vec<u8>` | Norito-encoded alias proof bytes (base64 in JSON). |
+| `name` | `String` | Canonical ASCII alias label matching `[a-z0-9._-]{1,128}`. |
+| `namespace` | `String` | Canonical ASCII alias namespace matching `[a-z0-9._-]{1,128}`. |
+| `proof` | `Vec<u8>` | Non-empty canonical Norito alias proof bytes (canonical padded base64 in JSON; decoded size at most 1 MiB). |
 
 ## `iroha_data_model::isi::sorafs::RetirePinManifest`
 

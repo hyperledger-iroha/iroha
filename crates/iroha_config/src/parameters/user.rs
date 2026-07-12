@@ -3963,6 +3963,12 @@ impl Zk {
 /// every validator must obtain the same values from its configuration file.
 #[derive(Debug, ReadConfig, Clone, Copy)]
 pub struct Sccp {
+    /// Maximum payload-bearing outbound messages awaiting destination proof acceptance.
+    #[config(default = "defaults::zk::sccp::MAX_PENDING_OUTBOUND_MESSAGES")]
+    pub max_pending_outbound_messages: NonZeroU64,
+    /// Maximum canonical outbound payload bytes awaiting destination proof acceptance.
+    #[config(default = "defaults::zk::sccp::MAX_PENDING_OUTBOUND_PAYLOAD_BYTES")]
+    pub max_pending_outbound_payload_bytes: NonZeroU64,
     /// Maximum closed SCCP proofs in one transaction.
     #[config(default = "defaults::zk::sccp::MAX_PROOFS_PER_TRANSACTION")]
     pub max_proofs_per_transaction: NonZeroU32,
@@ -4025,6 +4031,9 @@ pub struct Sccp {
 impl Default for Sccp {
     fn default() -> Self {
         Self {
+            max_pending_outbound_messages: defaults::zk::sccp::MAX_PENDING_OUTBOUND_MESSAGES,
+            max_pending_outbound_payload_bytes:
+                defaults::zk::sccp::MAX_PENDING_OUTBOUND_PAYLOAD_BYTES,
             max_proofs_per_transaction: defaults::zk::sccp::MAX_PROOFS_PER_TRANSACTION,
             max_proofs_per_block: defaults::zk::sccp::MAX_PROOFS_PER_BLOCK,
             max_proof_bytes_per_proof: defaults::zk::sccp::MAX_PROOF_BYTES_PER_PROOF,
@@ -4082,6 +4091,14 @@ impl Sccp {
             );
         }
 
+        require_json_safe(
+            self.max_pending_outbound_messages,
+            "max_pending_outbound_messages",
+        );
+        require_json_safe(
+            self.max_pending_outbound_payload_bytes,
+            "max_pending_outbound_payload_bytes",
+        );
         require_json_safe(self.max_proof_bytes_per_proof, "max_proof_bytes_per_proof");
         require_json_safe(
             self.max_proof_bytes_per_transaction,
@@ -4157,6 +4174,8 @@ impl Sccp {
         );
 
         actual::Sccp {
+            max_pending_outbound_messages: self.max_pending_outbound_messages,
+            max_pending_outbound_payload_bytes: self.max_pending_outbound_payload_bytes,
             max_proofs_per_transaction: self.max_proofs_per_transaction,
             max_proofs_per_block: self.max_proofs_per_block,
             max_proof_bytes_per_proof: self.max_proof_bytes_per_proof,
@@ -4196,6 +4215,14 @@ mod sccp_limit_tests {
             actual.max_proof_bytes_per_proof,
             defaults::zk::sccp::MAX_PROOF_BYTES_PER_PROOF
         );
+        assert_eq!(
+            actual.max_pending_outbound_messages,
+            defaults::zk::sccp::MAX_PENDING_OUTBOUND_MESSAGES
+        );
+        assert_eq!(
+            actual.max_pending_outbound_payload_bytes,
+            defaults::zk::sccp::MAX_PENDING_OUTBOUND_PAYLOAD_BYTES
+        );
         assert!(actual.max_proofs_per_transaction <= actual.max_proofs_per_block);
         assert!(actual.max_proof_bytes_per_proof <= actual.max_proof_bytes_per_transaction);
         assert!(actual.max_proof_bytes_per_transaction <= actual.max_proof_bytes_per_block);
@@ -4213,6 +4240,8 @@ mod sccp_limit_tests {
         let exact = NonZeroU64::new(maximum).expect("JSON-safe maximum is nonzero");
         let over = NonZeroU64::new(maximum + 1).expect("one above maximum is nonzero");
         let mut boundary = Sccp::default();
+        boundary.max_pending_outbound_messages = exact;
+        boundary.max_pending_outbound_payload_bytes = exact;
         boundary.max_proof_bytes_per_proof = exact;
         boundary.max_proof_bytes_per_transaction = exact;
         boundary.max_proof_bytes_per_block = exact;
@@ -4220,7 +4249,9 @@ mod sccp_limit_tests {
         boundary.max_native_header_bytes_per_block = exact;
         let _ = boundary.parse();
 
-        let mutations: [fn(&mut Sccp, NonZeroU64); 5] = [
+        let mutations: [fn(&mut Sccp, NonZeroU64); 7] = [
+            |value, limit| value.max_pending_outbound_messages = limit,
+            |value, limit| value.max_pending_outbound_payload_bytes = limit,
             |value, limit| value.max_proof_bytes_per_proof = limit,
             |value, limit| value.max_proof_bytes_per_transaction = limit,
             |value, limit| value.max_proof_bytes_per_block = limit,
@@ -16075,10 +16106,14 @@ pub struct Torii {
     /// Maximum proof request payload size (bytes).
     #[config(default = "defaults::torii::PROOF_MAX_BODY_BYTES")]
     pub proof_max_body_bytes: Bytes<u64>,
-    /// Maximum proof request bodies buffered concurrently before handler admission.
+    /// Maximum proof-bearing request bodies buffered concurrently before handler admission.
+    ///
+    /// This aggregate gate also covers SCCP bridge proof/message submissions.
     #[config(default = "defaults::torii::PROOF_BODY_MAX_INFLIGHT")]
     pub proof_body_max_inflight: NonZeroUsize,
-    /// Absolute deadline for reading one admitted proof request body (milliseconds).
+    /// Absolute deadline for reading one admitted proof-bearing request body (milliseconds).
+    ///
+    /// This deadline also applies to SCCP bridge proof/message submissions.
     #[config(
         default = "DurationMs(std::time::Duration::from_millis(defaults::torii::PROOF_BODY_READ_TIMEOUT_MS))"
     )]
@@ -19531,6 +19566,9 @@ pub struct SorafsStorage {
     /// Aggregate in-memory budget for canonical PDP tree indexes.
     #[config(default = "defaults::sorafs::storage::PDP_TREE_MEMORY_LIMIT_BYTES")]
     pub pdp_tree_memory_limit_bytes: Bytes<u64>,
+    /// Durable admission-bound PDP provider protocol policy.
+    #[config(nested)]
+    pub pdp_provider: SorafsPdpProviderPolicy,
     /// Retention and checkpoint bounds for auxiliary embedded runtime state.
     #[config(nested)]
     pub runtime: SorafsRuntimeRetentionConfig,
@@ -19596,6 +19634,7 @@ impl Default for SorafsStorage {
             por_sample_interval_secs: defaults::sorafs::storage::POR_SAMPLE_INTERVAL_SECS,
             pdp_sample_window: defaults::sorafs::storage::PDP_SAMPLE_WINDOW,
             pdp_tree_memory_limit_bytes: defaults::sorafs::storage::PDP_TREE_MEMORY_LIMIT_BYTES,
+            pdp_provider: SorafsPdpProviderPolicy::default(),
             runtime: SorafsRuntimeRetentionConfig::default(),
             alias: defaults::sorafs::storage::alias(),
             adverts: SorafsAdvertOverrides::default(),
@@ -19643,6 +19682,7 @@ impl SorafsStorage {
             por_sample_interval_secs: self.por_sample_interval_secs,
             pdp_sample_window: self.pdp_sample_window,
             pdp_tree_memory_limit_bytes: self.pdp_tree_memory_limit_bytes,
+            pdp_provider: self.pdp_provider.parse(emitter),
             runtime: self.runtime.parse(),
             alias: self.alias.or_else(super::defaults::sorafs::storage::alias),
             adverts: self.adverts.parse(),
@@ -20073,6 +20113,112 @@ allow_private_head_endpoint = false
         assert_eq!(view.service.head_mode, "signed_http");
         assert!(view.service.allow_private_ipfs_endpoint);
         assert!(!view.service.allow_private_head_endpoint);
+    }
+}
+
+/// Durable admission-bound PDP provider protocol policy.
+#[derive(Debug, ReadConfig, Clone, Copy, norito::JsonDeserialize)]
+pub struct SorafsPdpProviderPolicy {
+    /// Maximum pending challenges retained by the provider runtime.
+    #[config(default = "defaults::sorafs::storage::pdp_provider::MAX_PENDING_RECORDS")]
+    pub max_pending_records: u32,
+    /// Maximum compact terminal replay records retained by the provider runtime.
+    #[config(default = "defaults::sorafs::storage::pdp_provider::MAX_TERMINAL_RECORDS")]
+    pub max_terminal_records: u32,
+    /// Maximum canonical durable checkpoint size.
+    #[config(default = "defaults::sorafs::storage::pdp_provider::CHECKPOINT_MAX_BYTES")]
+    pub checkpoint_max_bytes: Bytes<u64>,
+    /// Maximum canonical challenge payload size.
+    #[config(default = "defaults::sorafs::storage::pdp_provider::CHALLENGE_MAX_BYTES")]
+    pub challenge_max_bytes: Bytes<u64>,
+    /// Maximum canonical proof payload size.
+    #[config(default = "defaults::sorafs::storage::pdp_provider::PROOF_MAX_BYTES")]
+    pub proof_max_bytes: Bytes<u64>,
+    /// Minimum governed challenge response window in seconds.
+    #[config(default = "defaults::sorafs::storage::pdp_provider::MIN_RESPONSE_WINDOW_SECS")]
+    pub min_response_window_secs: u64,
+    /// Maximum governed challenge response window in seconds.
+    #[config(default = "defaults::sorafs::storage::pdp_provider::MAX_RESPONSE_WINDOW_SECS")]
+    pub max_response_window_secs: u64,
+    /// Maximum provider timestamp skew ahead of server time in seconds.
+    #[config(default = "defaults::sorafs::storage::pdp_provider::MAX_FUTURE_SKEW_SECS")]
+    pub max_future_skew_secs: u64,
+    /// Minimum age of compact terminal replay records before pruning, in seconds.
+    #[config(default = "defaults::sorafs::storage::pdp_provider::TERMINAL_RETENTION_SECS")]
+    pub terminal_retention_secs: u64,
+}
+
+impl Default for SorafsPdpProviderPolicy {
+    fn default() -> Self {
+        use defaults::sorafs::storage::pdp_provider as pdp;
+
+        Self {
+            max_pending_records: pdp::MAX_PENDING_RECORDS,
+            max_terminal_records: pdp::MAX_TERMINAL_RECORDS,
+            checkpoint_max_bytes: pdp::CHECKPOINT_MAX_BYTES,
+            challenge_max_bytes: pdp::CHALLENGE_MAX_BYTES,
+            proof_max_bytes: pdp::PROOF_MAX_BYTES,
+            min_response_window_secs: pdp::MIN_RESPONSE_WINDOW_SECS,
+            max_response_window_secs: pdp::MAX_RESPONSE_WINDOW_SECS,
+            max_future_skew_secs: pdp::MAX_FUTURE_SKEW_SECS,
+            terminal_retention_secs: pdp::TERMINAL_RETENTION_SECS,
+        }
+    }
+}
+
+impl SorafsPdpProviderPolicy {
+    fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::SorafsPdpProviderPolicy {
+        use defaults::sorafs::storage::pdp_provider as pdp;
+
+        if self.max_pending_records == 0 || self.max_terminal_records == 0 {
+            emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(
+                "torii.sorafs.storage.pdp_provider record limits must be greater than zero",
+            ));
+        }
+        if self.challenge_max_bytes.0 == 0
+            || self.challenge_max_bytes.0 > pdp::CHALLENGE_MAX_BYTES.0
+        {
+            emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(format!(
+                "torii.sorafs.storage.pdp_provider.challenge_max_bytes must be within 1..={}, got {}",
+                pdp::CHALLENGE_MAX_BYTES.0,
+                self.challenge_max_bytes.0
+            )));
+        }
+        if self.proof_max_bytes.0 == 0 || self.proof_max_bytes.0 > pdp::PROOF_MAX_BYTES.0 {
+            emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(format!(
+                "torii.sorafs.storage.pdp_provider.proof_max_bytes must be within 1..={}, got {}",
+                pdp::PROOF_MAX_BYTES.0,
+                self.proof_max_bytes.0
+            )));
+        }
+        let minimum_checkpoint_bytes = self
+            .challenge_max_bytes
+            .0
+            .checked_add(self.proof_max_bytes.0);
+        if minimum_checkpoint_bytes.is_none_or(|minimum| self.checkpoint_max_bytes.0 < minimum) {
+            emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(
+                "torii.sorafs.storage.pdp_provider.checkpoint_max_bytes must fit one maximum challenge and proof",
+            ));
+        }
+        if self.min_response_window_secs == 0
+            || self.max_response_window_secs < self.min_response_window_secs
+            || self.terminal_retention_secs < self.max_response_window_secs
+        {
+            emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(
+                "torii.sorafs.storage.pdp_provider response and terminal-retention windows are inconsistent",
+            ));
+        }
+        actual::SorafsPdpProviderPolicy {
+            max_pending_records: self.max_pending_records,
+            max_terminal_records: self.max_terminal_records,
+            checkpoint_max_bytes: self.checkpoint_max_bytes,
+            challenge_max_bytes: self.challenge_max_bytes,
+            proof_max_bytes: self.proof_max_bytes,
+            min_response_window_secs: self.min_response_window_secs,
+            max_response_window_secs: self.max_response_window_secs,
+            max_future_skew_secs: self.max_future_skew_secs,
+            terminal_retention_secs: self.terminal_retention_secs,
+        }
     }
 }
 
@@ -23023,6 +23169,17 @@ hedging_feed_trust_policy_path = "/run/iroha/sorafs-hedging-policy.to"
 [storage]
 pdp_sample_window = 37
 pdp_tree_memory_limit_bytes = 8388608
+
+[storage.pdp_provider]
+max_pending_records = 31
+max_terminal_records = 47
+checkpoint_max_bytes = 33554432
+challenge_max_bytes = 262144
+proof_max_bytes = 8388608
+min_response_window_secs = 120
+max_response_window_secs = 480
+max_future_skew_secs = 3
+terminal_retention_secs = 7200
 ",
         )
         .expect("parse SoraFS PDP policy");
@@ -23032,6 +23189,15 @@ pdp_tree_memory_limit_bytes = 8388608
         let storage = actual.torii.sorafs_storage;
         assert_eq!(storage.pdp_sample_window, 37);
         assert_eq!(storage.pdp_tree_memory_limit_bytes.0, 8_388_608);
+        assert_eq!(storage.pdp_provider.max_pending_records, 31);
+        assert_eq!(storage.pdp_provider.max_terminal_records, 47);
+        assert_eq!(storage.pdp_provider.checkpoint_max_bytes.0, 33_554_432);
+        assert_eq!(storage.pdp_provider.challenge_max_bytes.0, 262_144);
+        assert_eq!(storage.pdp_provider.proof_max_bytes.0, 8_388_608);
+        assert_eq!(storage.pdp_provider.min_response_window_secs, 120);
+        assert_eq!(storage.pdp_provider.max_response_window_secs, 480);
+        assert_eq!(storage.pdp_provider.max_future_skew_secs, 3);
+        assert_eq!(storage.pdp_provider.terminal_retention_secs, 7_200);
     }
 
     #[test]
@@ -23055,6 +23221,47 @@ pdp_tree_memory_limit_bytes = 8388608
             let error = load_user_root(table)
                 .parse()
                 .expect_err("invalid PDP policy must fail config parsing");
+            let report = format!("{error:?}");
+            assert!(report.contains(expected), "{report}");
+        }
+    }
+
+    #[test]
+    fn sorafs_storage_pdp_provider_policy_rejects_adversarial_bounds() {
+        for (policy, expected) in [
+            (
+                "max_pending_records = 0",
+                "record limits must be greater than zero",
+            ),
+            (
+                "challenge_max_bytes = 524289",
+                "challenge_max_bytes must be within",
+            ),
+            (
+                "proof_max_bytes = 16777217",
+                "proof_max_bytes must be within",
+            ),
+            (
+                "checkpoint_max_bytes = 1024",
+                "checkpoint_max_bytes must fit one maximum challenge and proof",
+            ),
+            (
+                "min_response_window_secs = 601\nmax_response_window_secs = 600",
+                "response and terminal-retention windows are inconsistent",
+            ),
+            (
+                "max_response_window_secs = 90000",
+                "response and terminal-retention windows are inconsistent",
+            ),
+        ] {
+            let mut table = base_table();
+            let sorafs: Table = toml::from_str(&format!("[storage.pdp_provider]\n{policy}\n"))
+                .expect("parse invalid SoraFS PDP provider policy fixture");
+            table.insert("sorafs".into(), Value::Table(sorafs));
+
+            let error = load_user_root(table)
+                .parse()
+                .expect_err("invalid PDP provider policy must fail config parsing");
             let report = format!("{error:?}");
             assert!(report.contains(expected), "{report}");
         }

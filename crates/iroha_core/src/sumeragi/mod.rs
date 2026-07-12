@@ -611,6 +611,7 @@ pub(crate) fn resolve_npos_activation_lag_blocks(
 
 /// Resolve `NPoS` activation lag for VRF penalties from on-chain parameters or config
 /// using a world snapshot.
+#[cfg(test)]
 pub(crate) fn resolve_npos_activation_lag_blocks_from_world(
     world: &impl WorldReadOnly,
     fallback: &SumeragiNpos,

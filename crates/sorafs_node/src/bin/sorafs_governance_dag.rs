@@ -1256,6 +1256,7 @@ fn payload_kind(payload: &GovernanceLogPayloadV1) -> String {
         GovernanceLogPayloadV1::ReplicationOrder(_) => "replication_order".to_owned(),
         GovernanceLogPayloadV1::PorChallenge(_) => "por_challenge".to_owned(),
         GovernanceLogPayloadV1::PorProof(_) => "por_proof".to_owned(),
+        GovernanceLogPayloadV1::PdpArchive(_) => "pdp_archive".to_owned(),
         GovernanceLogPayloadV1::AuditVerdict(_) => "audit_verdict".to_owned(),
         GovernanceLogPayloadV1::DealSettlement(_) => "deal_settlement".to_owned(),
         GovernanceLogPayloadV1::SignedReputationSnapshot(_) => "reputation_snapshot".to_owned(),

@@ -11,7 +11,8 @@ use std::{
 use iroha_crypto::{Algorithm, Hash, HashOf, PublicKey, Signature};
 use iroha_data_model::{
     block::consensus::{
-        LaneBlockProposalV1, NativeAmxAttestationBodyV2, NativeAmxAttestationQcV2, NativeAmxPhase,
+        LaneBlockCommitment, LaneBlockProposalV1, NativeAmxAttestationBodyV2,
+        NativeAmxAttestationQcV2, NativeAmxPhase,
     },
     block::consensus_v2::{ConsensusRound, HeightContextId},
     consensus::VALIDATOR_SET_HASH_VERSION_V1,
@@ -31,9 +32,9 @@ use std::{
 use crate::queue::{RouteLeg, RouteLegRole, RoutingDecision, RoutingPlan, RoutingPlan::NativeAmx};
 
 const DEFAULT_SESSION_BODY_BUCKET_MAX: usize = 256;
-const NATIVE_AMX_SIGNING_GUARD_VERSION: u8 = 2;
+const NATIVE_AMX_SIGNING_GUARD_VERSION: u8 = 3;
 #[cfg(unix)]
-const NATIVE_AMX_SIGNING_GUARD_DIRECTORY: &str = "native-amx-v2-signing-guard-v2";
+const NATIVE_AMX_SIGNING_GUARD_DIRECTORY: &str = "native-amx-v2-signing-guard-v3";
 const NATIVE_AMX_SIGNING_GUARD_RECORD_EXTENSION: &str = "norito";
 const NATIVE_AMX_SIGNING_GUARD_TEMP_EXTENSION: &str = "norito.tmp";
 const NATIVE_AMX_SIGNING_GUARD_LOCK_FILE: &str = "owner.lock";
@@ -41,9 +42,9 @@ const NATIVE_AMX_SIGNING_GUARD_ANCHOR_FILE: &str = "chain-anchor.norito";
 const NATIVE_AMX_SIGNING_GUARD_ANCHOR_TEMP: &str = "chain-anchor.norito.tmp";
 #[cfg(unix)]
 const NATIVE_AMX_SIGNER_DIRECTORY_DOMAIN: &[u8] = b"iroha:native-amx:v2:signer-directory:v1\0";
-const NATIVE_AMX_SIGNING_BODY_DOMAIN: &[u8] = b"iroha:native-amx:v2:signing-body:v2\0";
-const NATIVE_AMX_SIGNING_RECORD_DOMAIN: &[u8] = b"iroha:native-amx:v2:record-chain:v2\0";
-const NATIVE_AMX_SIGNING_GENESIS_DOMAIN: &[u8] = b"iroha:native-amx:v2:record-genesis:v2\0";
+const NATIVE_AMX_SIGNING_BODY_DOMAIN: &[u8] = b"iroha:native-amx:v2:signing-body:v3\0";
+const NATIVE_AMX_SIGNING_RECORD_DOMAIN: &[u8] = b"iroha:native-amx:v2:record-chain:v3\0";
+const NATIVE_AMX_SIGNING_GENESIS_DOMAIN: &[u8] = b"iroha:native-amx:v2:record-genesis:v3\0";
 /// Absolute bound for durable Native AMX signing decisions retained at one height.
 pub(crate) const MAX_NATIVE_AMX_SIGNING_GUARD_RECORDS_HARD: usize = 1_048_576;
 const MAX_NATIVE_AMX_SIGNING_GUARD_RECORD_BYTES: usize = 16 * 1024;
@@ -58,6 +59,9 @@ pub(crate) const MAX_NATIVE_AMX_PLAN_LEGS: usize = 256;
 pub(crate) const MAX_NATIVE_AMX_PARTICIPANT_LEGS: usize = MAX_NATIVE_AMX_PLAN_LEGS - 1;
 /// Hard protocol cap for one native AMX participant committee.
 pub(crate) const MAX_NATIVE_AMX_VALIDATORS: usize = 128;
+/// Hard protocol cap for sources sharing one participant-control commitment.
+pub(crate) const MAX_NATIVE_AMX_PARTICIPANT_CONTROL_SOURCES: usize =
+    crate::lane_consensus::MAX_LANE_EXECUTABLE_ENTRYPOINTS;
 /// Canonical compressed BLS-normal signature/proof size.
 pub(crate) const NATIVE_AMX_BLS_PROOF_BYTES: usize = 96;
 
@@ -88,6 +92,57 @@ impl NativeAmxSigningKeyV2 {
             participant_dataspace_id: body.participant_dataspace_id,
             phase: body.phase,
             signer: signer.clone(),
+        }
+    }
+}
+
+/// One signer-local participant lane slot, deliberately excluding the global
+/// round view so a view-change replay cannot authorize a different proposal at
+/// the same lane-local height/view (ABA equivocation).
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode)]
+struct NativeAmxSigningSlotV3 {
+    chain_id_hash: Hash,
+    context_id: HeightContextId,
+    epoch: u64,
+    authority_context_height: u64,
+    participant_lane_id: LaneId,
+    participant_dataspace_id: DataSpaceId,
+    participant_lane_incarnation: Hash,
+    participant_lane_block_height: u64,
+    participant_lane_block_view: u64,
+    phase: NativeAmxPhase,
+    signer: PeerId,
+}
+
+impl NativeAmxSigningSlotV3 {
+    fn from_body(body: &NativeAmxAttestationBodyV2, signer: &PeerId) -> Self {
+        Self {
+            chain_id_hash: body.chain_id_hash,
+            context_id: body.round.context_id,
+            epoch: body.epoch,
+            authority_context_height: body.authority_context_height,
+            participant_lane_id: body.participant_lane_id,
+            participant_dataspace_id: body.participant_dataspace_id,
+            participant_lane_incarnation: body.participant_lane_incarnation,
+            participant_lane_block_height: body.participant_lane_block_height,
+            participant_lane_block_view: body.participant_lane_block_view,
+            phase: body.phase,
+            signer: signer.clone(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
+struct NativeAmxSigningSlotClaimV3 {
+    participant_proposal_hash: Hash,
+    participant_settlement_commitment: Hash,
+}
+
+impl NativeAmxSigningSlotClaimV3 {
+    fn from_body(body: &NativeAmxAttestationBodyV2) -> Self {
+        Self {
+            participant_proposal_hash: body.participant_proposal_hash,
+            participant_settlement_commitment: body.participant_settlement_commitment,
         }
     }
 }
@@ -205,6 +260,7 @@ struct NativeAmxSigningGuardInner {
     records: BTreeMap<NativeAmxSigningKeyV2, NativeAmxSigningRecordV2>,
     record_identities: BTreeMap<NativeAmxSigningKeyV2, (PathBuf, NativeAmxFileIdentity)>,
     source_plan_claims: BTreeMap<[u8; Hash::LENGTH], Hash>,
+    slot_claims: BTreeMap<NativeAmxSigningSlotV3, NativeAmxSigningSlotClaimV3>,
     poisoned: Option<String>,
 }
 
@@ -212,6 +268,7 @@ struct NativeAmxSigningGuardInner {
 struct LoadedNativeAmxJournal {
     records: BTreeMap<NativeAmxSigningKeyV2, NativeAmxSigningRecordV2>,
     source_plan_claims: BTreeMap<[u8; Hash::LENGTH], Hash>,
+    slot_claims: BTreeMap<NativeAmxSigningSlotV3, NativeAmxSigningSlotClaimV3>,
     anchored_paths: Vec<PathBuf>,
 }
 
@@ -225,6 +282,7 @@ pub(crate) enum NativeAmxSigningGuardError {
     #[error("native AMX signing guard is poisoned: {0}")]
     Poisoned(String),
     /// This platform cannot provide the required filesystem identity and permission checks.
+    #[cfg(not(unix))]
     #[error("native AMX signing guard requires a Unix filesystem")]
     UnsupportedPlatform,
     /// The caller supplied a height below the durable active-height high-water.
@@ -281,6 +339,9 @@ pub(crate) enum NativeAmxSigningGuardError {
     /// The same source transaction attempted a second plan at this height.
     #[error("native AMX source transaction conflicts with its durable routing-plan claim")]
     PlanEquivocation,
+    /// One lane-local signing slot attempted a different proposal or settlement.
+    #[error("native AMX participant slot conflicts with its durable proposal/settlement claim")]
+    SlotEquivocation,
     /// The exact signing key already authorizes a different full body.
     #[error("native AMX body conflicts with the durable signing decision")]
     Equivocation,
@@ -408,12 +469,12 @@ impl NativeAmxSigningGuard {
             max_records: max_records_u32,
         };
         let durable_anchor = Self::read_anchor(&directory, owner_uid)?;
-        let (anchor, records, source_plan_claims) = match durable_anchor {
+        let (anchor, records, source_plan_claims, slot_claims) = match durable_anchor {
             None => {
                 Self::ensure_empty_uninitialized_directory(&directory)?;
                 let anchor = NativeAmxSigningAnchorV2::empty(supplied_binding)?;
                 Self::persist_anchor(&directory, &directory_handle, owner_uid, &anchor)?;
-                (anchor, BTreeMap::new(), BTreeMap::new())
+                (anchor, BTreeMap::new(), BTreeMap::new(), BTreeMap::new())
             }
             Some(anchor) => {
                 if anchor.binding.chain_id_hash != chain_id_hash || anchor.binding.signer != signer
@@ -439,7 +500,12 @@ impl NativeAmxSigningGuard {
                     {
                         return Err(NativeAmxSigningGuardError::ContextMismatch);
                     }
-                    (anchor, loaded.records, loaded.source_plan_claims)
+                    (
+                        anchor,
+                        loaded.records,
+                        loaded.source_plan_claims,
+                        loaded.slot_claims,
+                    )
                 } else {
                     let Some(next_height) = anchor.binding.active_height.checked_add(1) else {
                         return Err(NativeAmxSigningGuardError::HeightJump {
@@ -463,7 +529,12 @@ impl NativeAmxSigningGuard {
                             .map_err(|error| native_amx_unsafe_journal(&path, error.to_string()))?;
                     }
                     native_amx_sync_directory_handle(&directory, &directory_handle)?;
-                    (next_anchor, BTreeMap::new(), BTreeMap::new())
+                    (
+                        next_anchor,
+                        BTreeMap::new(),
+                        BTreeMap::new(),
+                        BTreeMap::new(),
+                    )
                 }
             }
         };
@@ -508,6 +579,7 @@ impl NativeAmxSigningGuard {
                 records,
                 record_identities,
                 source_plan_claims,
+                slot_claims,
                 poisoned: None,
             }),
         })
@@ -702,6 +774,7 @@ impl NativeAmxSigningGuard {
         let mut head = anchor.binding.genesis_head()?;
         let mut records = BTreeMap::new();
         let mut source_plan_claims = BTreeMap::new();
+        let mut slot_claims = BTreeMap::new();
         let mut anchored_paths = Vec::with_capacity(expected_count);
         let mut highest_view = None::<u64>;
         for sequence in 1..=anchor.record_count {
@@ -725,6 +798,17 @@ impl NativeAmxSigningGuard {
                 return Err(native_amx_unsafe_journal(
                     &path,
                     "one source has conflicting anchored plans",
+                ));
+            }
+            let slot = NativeAmxSigningSlotV3::from_body(&record.body, &record.key.signer);
+            let slot_claim = NativeAmxSigningSlotClaimV3::from_body(&record.body);
+            if slot_claims
+                .insert(slot, slot_claim)
+                .is_some_and(|claimed| claimed != slot_claim)
+            {
+                return Err(native_amx_unsafe_journal(
+                    &path,
+                    "one participant slot has conflicting anchored proposal/settlement claims",
                 ));
             }
             if highest_view.is_some_and(|view| record.body.round.view < view) {
@@ -771,6 +855,8 @@ impl NativeAmxSigningGuard {
                 .remove(&tail_sequence)
                 .expect("tail membership checked");
             Self::validate_record_binding(&tail_path, &tail, anchor)?;
+            let tail_slot = NativeAmxSigningSlotV3::from_body(&tail.body, &tail.key.signer);
+            let tail_slot_claim = NativeAmxSigningSlotClaimV3::from_body(&tail.body);
             if tail.previous_head != anchor.head_hash
                 || anchor.record_count >= anchor.binding.max_records
                 || anchor
@@ -780,6 +866,9 @@ impl NativeAmxSigningGuard {
                 || source_plan_claims
                     .get(&tail.body.source_id)
                     .is_some_and(|plan| *plan != tail.body.plan_digest)
+                || slot_claims
+                    .get(&tail_slot)
+                    .is_some_and(|claim| *claim != tail_slot_claim)
             {
                 return Err(native_amx_unsafe_journal(
                     &tail_path,
@@ -798,6 +887,7 @@ impl NativeAmxSigningGuard {
         Ok(LoadedNativeAmxJournal {
             records,
             source_plan_claims,
+            slot_claims,
             anchored_paths,
         })
     }
@@ -953,6 +1043,15 @@ impl NativeAmxSigningGuard {
         {
             return Err(NativeAmxSigningGuardError::PlanEquivocation);
         }
+        let slot = NativeAmxSigningSlotV3::from_body(body, &binding.signer);
+        let slot_claim = NativeAmxSigningSlotClaimV3::from_body(body);
+        if inner
+            .slot_claims
+            .get(&slot)
+            .is_some_and(|claim| *claim != slot_claim)
+        {
+            return Err(NativeAmxSigningGuardError::SlotEquivocation);
+        }
         if inner
             .anchor
             .highest_view
@@ -1073,6 +1172,7 @@ impl NativeAmxSigningGuard {
             .source_plan_claims
             .entry(body.source_id)
             .or_insert(body.plan_digest);
+        inner.slot_claims.entry(slot).or_insert(slot_claim);
         Ok(())
     }
 
@@ -1770,6 +1870,10 @@ pub struct NativeAmxAttestationRequestV2 {
     /// coordinates, committee, predecessor, and transaction hashes, but does
     /// not include the native AMX receipt assembled from the resulting votes.
     pub coordinator_proposal: LaneBlockProposalV1,
+    /// Exact control-only participant proposal whose result is supplied by the coordinator.
+    pub participant_proposal: LaneBlockProposalV1,
+    /// Deterministic participant-local settlement committed by that proposal.
+    pub participant_settlement: LaneBlockCommitment,
 }
 
 /// Failure while validating a full-plan native AMX attestation request.
@@ -1796,12 +1900,15 @@ pub enum NativeAmxRequestError {
     /// The supplied coordinator proposal is malformed.
     #[error("native AMX request coordinator proposal is malformed")]
     InvalidCoordinatorProposal,
+    /// The supplied participant proposal is malformed.
+    #[error("native AMX request participant proposal is malformed")]
+    InvalidParticipantProposal,
     /// The attestation body does not bind the supplied coordinator proposal.
     #[error("native AMX request coordinator proposal binding mismatch")]
     CoordinatorProposalMismatch,
-    /// Source id and transaction entrypoint hash do not identify the same transaction.
-    #[error("native AMX request source and entrypoint hashes differ")]
-    SourceEntrypointMismatch,
+    /// The participant proposal or settlement differs from the signed body.
+    #[error("native AMX request participant finality binding mismatch")]
+    ParticipantProposalMismatch,
 }
 
 impl NativeAmxAttestationRequestV2 {
@@ -1825,6 +1932,8 @@ impl NativeAmxAttestationRequestV2 {
                 .accepted_candidate_indices
                 .len()
                 > crate::lane_consensus::MAX_LANE_EXECUTABLE_ENTRYPOINTS
+            || self.participant_settlement.receipts.len()
+                > MAX_NATIVE_AMX_PARTICIPANT_CONTROL_SOURCES
         {
             return Err(NativeAmxRequestError::ResourceLimitExceeded);
         }
@@ -1868,9 +1977,6 @@ impl NativeAmxAttestationRequestV2 {
         if expected.digest() != body.plan_digest {
             return Err(NativeAmxRequestError::PlanDigestMismatch);
         }
-        if body.tx_entrypoint_hash.as_ref() != body.source_id.as_slice() {
-            return Err(NativeAmxRequestError::SourceEntrypointMismatch);
-        }
         crate::lane_consensus::validate_lane_block_proposal(&self.coordinator_proposal)
             .map_err(|_| NativeAmxRequestError::InvalidCoordinatorProposal)?;
         let descriptor = &self.coordinator_proposal.descriptor;
@@ -1892,57 +1998,101 @@ impl NativeAmxAttestationRequestV2 {
         {
             return Err(NativeAmxRequestError::CoordinatorProposalMismatch);
         }
+        crate::lane_consensus::validate_lane_block_proposal(&self.participant_proposal)
+            .map_err(|_| NativeAmxRequestError::InvalidParticipantProposal)?;
+        let participant_descriptor = &self.participant_proposal.descriptor;
+        let settlement_hash =
+            iroha_data_model::nexus::compute_settlement_hash(&self.participant_settlement)
+                .map_err(|_| NativeAmxRequestError::ParticipantProposalMismatch)?;
+        let participant_is_coordinator = body.participant_lane_id == body.coordinator_lane_id
+            && body.participant_dataspace_id == body.coordinator_dataspace_id
+            && body.participant_lane_incarnation == body.coordinator_lane_incarnation;
+        let participant_work_matches = if participant_is_coordinator {
+            self.participant_proposal
+                .same_consensus_identity(&self.coordinator_proposal)
+        } else {
+            true
+        };
+        let settlement_receipts = &self.participant_settlement.receipts;
+        let participant_entrypoint_position = participant_descriptor
+            .accepted_transaction_hashes
+            .iter()
+            .position(|hash| *hash == entrypoint_hash);
+        let participant_entrypoint_count = participant_descriptor
+            .accepted_transaction_hashes
+            .iter()
+            .filter(|hash| **hash == entrypoint_hash)
+            .count();
+        let settlement_sources_are_canonical = !settlement_receipts.is_empty()
+            && settlement_receipts
+                .iter()
+                .map(|receipt| receipt.source_id)
+                .collect::<std::collections::BTreeSet<_>>()
+                .len()
+                == settlement_receipts.len()
+            && settlement_receipts.iter().all(|receipt| {
+                receipt.local_amount_micro == 0
+                    && receipt.xor_due_micro == 0
+                    && receipt.xor_after_haircut_micro == 0
+                    && receipt.xor_variance_micro == 0
+                    && receipt.timestamp_ms == body.authority_context_height
+            })
+            && settlement_receipts
+                .iter()
+                .filter(|receipt| receipt.source_id == body.source_id)
+                .count()
+                == 1
+            && (participant_entrypoint_count == 0
+                || (participant_entrypoint_count == 1
+                    && participant_descriptor.accepted_candidate_indices.len()
+                    == settlement_receipts.len()
+                    && participant_descriptor.accepted_transaction_hashes.len()
+                        == settlement_receipts.len()
+                    && participant_entrypoint_position.is_some_and(|position| {
+                        settlement_receipts
+                            .get(position)
+                            .is_some_and(|receipt| receipt.source_id == body.source_id)
+                    })));
+        if self.participant_proposal.payload_block_hint.is_some()
+            || participant_descriptor.lane_id != body.participant_lane_id
+            || participant_descriptor.dataspace_id != body.participant_dataspace_id
+            || participant_descriptor.lane_incarnation != body.participant_lane_incarnation
+            || participant_descriptor.proposal_height != body.authority_context_height
+            || participant_descriptor.previous_lane_block_height
+                != body.participant_previous_block_height
+            || participant_descriptor.previous_lane_block_descriptor_hash
+                != body.participant_previous_block_descriptor_hash
+            || participant_descriptor.lane_block_height != body.participant_lane_block_height
+            || participant_descriptor.lane_block_view != body.participant_lane_block_view
+            || self.participant_proposal.proposal_hash != body.participant_proposal_hash
+            || !participant_work_matches
+            || participant_entrypoint_count > 1
+            || (participant_is_coordinator && participant_entrypoint_count != 1)
+            || participant_descriptor.validator_set_hash_version != VALIDATOR_SET_HASH_VERSION_V1
+            || participant_descriptor.validator_set_hash != body.participant_validator_set_hash
+            || participant_descriptor.validator_set_hash
+                != HashOf::new(&participant_descriptor.validator_set)
+            || participant_descriptor.validator_count != body.participant_validator_count
+            || participant_descriptor.min_quorum != body.participant_min_quorum
+            || self.participant_settlement.block_height != body.participant_lane_block_height
+            || self.participant_settlement.lane_id != body.participant_lane_id
+            || self.participant_settlement.dataspace_id != body.participant_dataspace_id
+            || self.participant_settlement.lane_incarnation != body.participant_lane_incarnation
+            || self.participant_settlement.tx_count
+                != u64::try_from(settlement_receipts.len()).unwrap_or(u64::MAX)
+            || self.participant_settlement.total_local_micro != 0
+            || self.participant_settlement.total_xor_due_micro != 0
+            || self.participant_settlement.total_xor_after_haircut_micro != 0
+            || self.participant_settlement.total_xor_variance_micro != 0
+            || self.participant_settlement.swap_metadata.is_some()
+            || !self.participant_settlement.nexus_fee_receipts.is_empty()
+            || !self.participant_settlement.native_amx_receipts.is_empty()
+            || !settlement_sources_are_canonical
+            || Hash::from(settlement_hash) != body.participant_settlement_commitment
+        {
+            return Err(NativeAmxRequestError::ParticipantProposalMismatch);
+        }
         Ok(())
-    }
-}
-
-/// Build a decode-only full-plan envelope for message-routing tests.
-#[cfg(test)]
-pub(crate) fn decode_only_full_plan_request_for_test(
-    mut body: NativeAmxAttestationBodyV2,
-) -> NativeAmxAttestationRequestV2 {
-    let coordinator = RoutingDecision::new(body.coordinator_lane_id, body.coordinator_dataspace_id);
-    let participant = RoutingDecision::new(body.participant_lane_id, body.participant_dataspace_id);
-    let plan = RoutingPlan::native_amx(
-        coordinator,
-        vec![RouteLeg::new(participant, RouteLegRole::Participant)],
-    );
-    body.plan_digest = plan.digest();
-    let validator_set = Vec::new();
-    let mut descriptor = iroha_data_model::block::consensus::LaneBlockDescriptorV1 {
-        lane_id: body.coordinator_lane_id,
-        dataspace_id: body.coordinator_dataspace_id,
-        lane_incarnation: body.coordinator_lane_incarnation,
-        proposal_height: body.authority_context_height,
-        previous_lane_block_height: body.planned_coordinator_block_height.saturating_sub(1),
-        previous_lane_block_descriptor_hash: None,
-        lane_block_height: body.planned_coordinator_block_height,
-        lane_block_view: body.coordinator_lane_block_view,
-        subject_hash: Hash::new(b"native-amx-decode-only-subject"),
-        payload_ownership_hash: Hash::new(b"native-amx-decode-only-ownership"),
-        rbc_instance_hash: Hash::new(b"native-amx-decode-only-rbc"),
-        accepted_candidate_indices: vec![0],
-        accepted_transaction_hashes: vec![Hash::from(body.tx_entrypoint_hash)],
-        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-        validator_set_hash: HashOf::new(&validator_set),
-        validator_set,
-        validator_count: 0,
-        min_quorum: 0,
-        qc_mode_tag: "decode-only:native-amx-v2".to_owned(),
-        descriptor_hash: Hash::prehashed([0; Hash::LENGTH]),
-    };
-    descriptor.descriptor_hash = descriptor.computed_descriptor_hash();
-    let mut coordinator_proposal = LaneBlockProposalV1 {
-        descriptor,
-        proposal_hash: Hash::prehashed([0; Hash::LENGTH]),
-        payload_block_hint: None,
-    };
-    coordinator_proposal.proposal_hash = coordinator_proposal.computed_proposal_hash();
-    body.coordinator_proposal_hash = coordinator_proposal.proposal_hash;
-    NativeAmxAttestationRequestV2 {
-        body,
-        plan_legs: plan.legs(),
-        coordinator_proposal,
     }
 }
 
@@ -1970,9 +2120,7 @@ fn native_amx_body_shape_valid(body: &NativeAmxAttestationBodyV2) -> bool {
             .iter()
             .any(|byte| *byte != 0)
         && body.authority_context_height == body.round.height
-        && body.coordinator_lane_block_view == body.round.view
         && body.planned_coordinator_block_height != 0
-        && body.tx_entrypoint_hash.as_ref() == body.source_id.as_slice()
         && body.chain_id_hash.as_ref().iter().any(|byte| *byte != 0)
         && body.plan_digest.as_ref().iter().any(|byte| *byte != 0)
         && body
@@ -1982,6 +2130,24 @@ fn native_amx_body_shape_valid(body: &NativeAmxAttestationBodyV2) -> bool {
             .any(|byte| *byte != 0)
         && body
             .participant_lane_incarnation
+            .as_ref()
+            .iter()
+            .any(|byte| *byte != 0)
+        && body.participant_lane_block_height != 0
+        && body.participant_previous_block_height.checked_add(1)
+            == Some(body.participant_lane_block_height)
+        && (body.participant_previous_block_height == 0)
+            == body.participant_previous_block_descriptor_hash.is_none()
+        && body
+            .participant_previous_block_descriptor_hash
+            .is_none_or(|hash| hash.as_ref().iter().any(|byte| *byte != 0))
+        && body
+            .participant_proposal_hash
+            .as_ref()
+            .iter()
+            .any(|byte| *byte != 0)
+        && body
+            .participant_settlement_commitment
             .as_ref()
             .iter()
             .any(|byte| *byte != 0)
@@ -2363,7 +2529,6 @@ pub(crate) fn receipt_shape_matches_coordinator_payload(
     let descriptor = &coordinator_proposal.descriptor;
     if receipt.version != 2
         || receipt.source_id.as_slice() != expected_source_id
-        || receipt.source_id.as_slice() != expected_entrypoint_hash.as_ref()
         || receipt.chain_id_hash != expected_chain_id_hash
         || receipt.plan_digest != routing_plan.digest()
         || receipt.lane_id != descriptor.lane_id
@@ -2396,6 +2561,22 @@ pub(crate) fn receipt_shape_matches_coordinator_payload(
             }
             let prepare = &leg.prepare_qc;
             let commit = &leg.commit_qc;
+            let participant_request = NativeAmxAttestationRequestV2 {
+                body: prepare.body,
+                plan_legs: routing_plan.legs(),
+                coordinator_proposal: coordinator_proposal.clone(),
+                participant_proposal: leg.participant_proposal.clone(),
+                participant_settlement: leg.participant_settlement.clone(),
+            };
+            if participant_request.validate_plan_binding().is_err()
+                || iroha_data_model::nexus::compute_settlement_hash(&leg.participant_settlement)
+                    .ok()
+                    != Some(leg.participant_settlement_hash)
+                || Hash::from(leg.participant_settlement_hash)
+                    != prepare.body.participant_settlement_commitment
+            {
+                return false;
+            }
             let common_qc_shape = |qc: &NativeAmxAttestationQcV2, phase: NativeAmxPhase| {
                 let body = &qc.body;
                 let validator_count = qc.validator_set.len();
@@ -2437,6 +2618,23 @@ pub(crate) fn receipt_shape_matches_coordinator_payload(
                         .as_ref()
                         .iter()
                         .any(|byte| *byte != 0)
+                    && body.participant_previous_block_height
+                        == leg
+                            .participant_proposal
+                            .descriptor
+                            .previous_lane_block_height
+                    && body.participant_previous_block_descriptor_hash
+                        == leg
+                            .participant_proposal
+                            .descriptor
+                            .previous_lane_block_descriptor_hash
+                    && body.participant_lane_block_height
+                        == leg.participant_proposal.descriptor.lane_block_height
+                    && body.participant_lane_block_view
+                        == leg.participant_proposal.descriptor.lane_block_view
+                    && body.participant_proposal_hash == leg.participant_proposal.proposal_hash
+                    && body.participant_settlement_commitment
+                        == Hash::from(leg.participant_settlement_hash)
                     && body.authority_context_height == descriptor.proposal_height
                     && body.planned_coordinator_block_height == descriptor.lane_block_height
                     && body.coordinator_lane_block_view == descriptor.lane_block_view
@@ -2496,6 +2694,13 @@ fn native_amx_bodies_match_leg(
         && left.participant_lane_id == right.participant_lane_id
         && left.participant_dataspace_id == right.participant_dataspace_id
         && left.participant_lane_incarnation == right.participant_lane_incarnation
+        && left.participant_previous_block_height == right.participant_previous_block_height
+        && left.participant_previous_block_descriptor_hash
+            == right.participant_previous_block_descriptor_hash
+        && left.participant_lane_block_height == right.participant_lane_block_height
+        && left.participant_lane_block_view == right.participant_lane_block_view
+        && left.participant_proposal_hash == right.participant_proposal_hash
+        && left.participant_settlement_commitment == right.participant_settlement_commitment
         && left.participant_validator_set_hash == right.participant_validator_set_hash
         && left.participant_validator_count == right.participant_validator_count
         && left.participant_min_quorum == right.participant_min_quorum
@@ -2813,7 +3018,7 @@ mod tests {
     }
 
     fn body(phase: NativeAmxPhase) -> NativeAmxAttestationBodyV2 {
-        NativeAmxAttestationBodyV2 {
+        let mut body = NativeAmxAttestationBodyV2 {
             round: ConsensusRound {
                 context_id: HeightContextId(HashOf::<HeightContext>::from_untyped_unchecked(
                     Hash::new(b"native-amx-v2-test-context"),
@@ -2836,6 +3041,12 @@ mod tests {
             participant_lane_id: LaneId::new(2),
             participant_dataspace_id: DataSpaceId::new(8),
             participant_lane_incarnation: Hash::new(b"native-amx-v2-participant-incarnation"),
+            participant_previous_block_height: 0,
+            participant_previous_block_descriptor_hash: None,
+            participant_lane_block_height: 1,
+            participant_lane_block_view: 0,
+            participant_proposal_hash: Hash::new(b"native-amx-v2-participant-proposal"),
+            participant_settlement_commitment: Hash::prehashed([0; Hash::LENGTH]),
             participant_validator_set_hash: HashOf::new(&Vec::<PeerId>::new()),
             participant_validator_count: 1,
             participant_min_quorum: 1,
@@ -2843,7 +3054,9 @@ mod tests {
             planned_coordinator_block_height: 42,
             coordinator_lane_block_view: 3,
             coordinator_proposal_hash: Hash::new(b"native-amx-v2-coordinator-proposal"),
-        }
+        };
+        body.participant_settlement_commitment = body.computed_participant_settlement_commitment();
+        body
     }
 
     fn signing_guard_signer(seed: u8) -> (KeyPair, PeerId) {
@@ -2998,6 +3211,47 @@ mod tests {
         assert_eq!(
             restarted.record(&conflicting_plan),
             Err(NativeAmxSigningGuardError::PlanEquivocation)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn signing_guard_durably_rejects_participant_slot_aba_across_sources_and_views() {
+        let root = tempfile::tempdir().expect("temp dir");
+        let (_keypair, signer) = signing_guard_signer(0x8D);
+        let first = body(NativeAmxPhase::Prepare);
+        let guard =
+            open_signing_guard(root.path(), &first, signer.clone(), 8).expect("open signing guard");
+        guard.record(&first).expect("record first slot claim");
+
+        let mut conflicting_proposal = first;
+        conflicting_proposal.round.view += 1;
+        conflicting_proposal.participant_proposal_hash = Hash::new(b"slot-conflicting proposal");
+        assert_eq!(
+            guard.record(&conflicting_proposal),
+            Err(NativeAmxSigningGuardError::SlotEquivocation)
+        );
+
+        let mut conflicting = first;
+        conflicting.round.view += 1;
+        conflicting.source_id = [0xEF; Hash::LENGTH];
+        conflicting.tx_entrypoint_hash = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(
+            Hash::prehashed(conflicting.source_id),
+        );
+        conflicting.participant_settlement_commitment =
+            conflicting.computed_participant_settlement_commitment();
+        assert_eq!(
+            guard.record(&conflicting),
+            Err(NativeAmxSigningGuardError::SlotEquivocation)
+        );
+        drop(guard);
+
+        conflicting.round.view += 1;
+        let restarted =
+            open_signing_guard(root.path(), &first, signer, 8).expect("restart signing guard");
+        assert_eq!(
+            restarted.record(&conflicting),
+            Err(NativeAmxSigningGuardError::SlotEquivocation)
         );
     }
 
@@ -3765,6 +4019,7 @@ mod tests {
             .max(1),
         )
         .expect("fixture coordinator quorum fits u32");
+        let participant_validator_set = coordinator_validator_set.clone();
         let mut descriptor = iroha_data_model::block::consensus::LaneBlockDescriptorV1 {
             lane_id: body.coordinator_lane_id,
             dataspace_id: body.coordinator_dataspace_id,
@@ -3796,10 +4051,49 @@ mod tests {
         };
         coordinator_proposal.proposal_hash = coordinator_proposal.computed_proposal_hash();
         body.coordinator_proposal_hash = coordinator_proposal.proposal_hash;
+        let mut participant_descriptor =
+            iroha_data_model::block::consensus::LaneBlockDescriptorV1 {
+                lane_id: body.participant_lane_id,
+                dataspace_id: body.participant_dataspace_id,
+                lane_incarnation: body.participant_lane_incarnation,
+                proposal_height: body.authority_context_height,
+                previous_lane_block_height: body.participant_previous_block_height,
+                previous_lane_block_descriptor_hash: body
+                    .participant_previous_block_descriptor_hash,
+                lane_block_height: body.participant_lane_block_height,
+                lane_block_view: body.participant_lane_block_view,
+                subject_hash: Hash::new(b"native-amx-v2-test-participant-subject"),
+                payload_ownership_hash: Hash::new(b"native-amx-v2-test-participant-ownership"),
+                rbc_instance_hash: Hash::new(b"native-amx-v2-test-participant-rbc"),
+                accepted_candidate_indices: vec![0],
+                accepted_transaction_hashes: vec![Hash::from(body.tx_entrypoint_hash)],
+                validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+                validator_set_hash: HashOf::new(&participant_validator_set),
+                validator_set: participant_validator_set,
+                validator_count: body.participant_validator_count,
+                min_quorum: body.participant_min_quorum,
+                qc_mode_tag: "permissioned:native-amx-v2-test".to_owned(),
+                descriptor_hash: Hash::prehashed([0; Hash::LENGTH]),
+            };
+        participant_descriptor.descriptor_hash = participant_descriptor.computed_descriptor_hash();
+        let mut participant_proposal = LaneBlockProposalV1 {
+            descriptor: participant_descriptor,
+            proposal_hash: Hash::prehashed([0; Hash::LENGTH]),
+            payload_block_hint: None,
+        };
+        participant_proposal.proposal_hash = participant_proposal.computed_proposal_hash();
+        body.participant_proposal_hash = participant_proposal.proposal_hash;
+        let participant_settlement = body.computed_participant_settlement();
+        body.participant_settlement_commitment = Hash::from(
+            iroha_data_model::nexus::compute_settlement_hash(&participant_settlement)
+                .expect("fixture participant settlement hashes"),
+        );
         NativeAmxAttestationRequestV2 {
             body,
             plan_legs: routing_plan.legs(),
             coordinator_proposal,
+            participant_proposal,
+            participant_settlement,
         }
     }
 
@@ -3855,6 +4149,30 @@ mod tests {
             coordinator_participates.body.coordinator_dataspace_id;
         coordinator_participates.body.participant_lane_incarnation =
             coordinator_participates.body.coordinator_lane_incarnation;
+        coordinator_participates
+            .body
+            .participant_previous_block_height = coordinator_participates
+            .coordinator_proposal
+            .descriptor
+            .previous_lane_block_height;
+        coordinator_participates
+            .body
+            .participant_previous_block_descriptor_hash = coordinator_participates
+            .coordinator_proposal
+            .descriptor
+            .previous_lane_block_descriptor_hash;
+        coordinator_participates.body.participant_lane_block_height = coordinator_participates
+            .coordinator_proposal
+            .descriptor
+            .lane_block_height;
+        coordinator_participates.body.participant_lane_block_view = coordinator_participates
+            .coordinator_proposal
+            .descriptor
+            .lane_block_view;
+        coordinator_participates.participant_proposal =
+            coordinator_participates.coordinator_proposal.clone();
+        coordinator_participates.body.participant_proposal_hash =
+            coordinator_participates.participant_proposal.proposal_hash;
         let coordinator_route = RoutingDecision::new(
             coordinator_participates.body.coordinator_lane_id,
             coordinator_participates.body.coordinator_dataspace_id,
@@ -3865,6 +4183,17 @@ mod tests {
         );
         coordinator_participates.body.plan_digest = overlapping_plan.digest();
         coordinator_participates.plan_legs = overlapping_plan.legs();
+        coordinator_participates.participant_settlement = coordinator_participates
+            .body
+            .computed_participant_settlement();
+        coordinator_participates
+            .body
+            .participant_settlement_commitment = Hash::from(
+            iroha_data_model::nexus::compute_settlement_hash(
+                &coordinator_participates.participant_settlement,
+            )
+            .expect("overlapping participant settlement hashes"),
+        );
         assert_eq!(
             coordinator_participates.validate_plan_binding(),
             Ok(()),

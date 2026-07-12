@@ -5196,6 +5196,7 @@ fn repair_task_status(state: &RepairTaskStateV1) -> RepairTaskStatusV1 {
 fn repair_severity_score(cause: &RepairCauseV1) -> (u8, u64) {
     match cause {
         RepairCauseV1::PorFailure(cause) => (3, u64::from(cause.failed_samples)),
+        RepairCauseV1::PdpFailure(cause) => (3, u64::from(cause.failed_samples)),
         RepairCauseV1::ReplicaShortfall(cause) => (2, u64::from(cause.missing_chunks)),
         RepairCauseV1::LatencySla(cause) => (1, u64::from(cause.observed_latency_ms)),
         RepairCauseV1::Manual(_) => (0, 0),

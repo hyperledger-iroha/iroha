@@ -261,11 +261,22 @@ class HttpClientTransport(
 
     /** Fetch newest-first exact-context SCCP outbound messages. */
     @JvmOverloads
-    fun getSccpRecentMessages(from: Long? = null, limit: Int? = null): CompletableFuture<SccpRecentMessages> {
-        require(from == null || from > 0) { "from must be a positive height" }
+    fun getSccpRecentMessages(
+        from: BigInteger? = null,
+        afterIndex: Int? = null,
+        limit: Int? = null,
+    ): CompletableFuture<SccpRecentMessages> {
+        require(from == null || (from.signum() > 0 && from.bitLength() <= 64)) {
+            "from must be a positive u64 height"
+        }
+        require(afterIndex == null || from != null) { "afterIndex requires the paired from height" }
+        require(afterIndex == null || afterIndex in 0 until SCCP_OUTBOUND_MESSAGES_MAX_PER_BLOCK_V1) {
+            "afterIndex must be between 0 and ${SCCP_OUTBOUND_MESSAGES_MAX_PER_BLOCK_V1 - 1}"
+        }
         require(limit == null || limit in 1..50) { "limit must be between 1 and 50" }
         val query = linkedMapOf<String, String>()
         from?.let { query["from"] = it.toString() }
+        afterIndex?.let { query["after_index"] = it.toString() }
         limit?.let { query["limit"] = it.toString() }
         return fetchSccpJson(
             buildJsonGetRequest(
@@ -277,6 +288,14 @@ class HttpClientTransport(
             "SCCP recent messages",
         )
     }
+
+    /** Continue newest-first SCCP discovery from an exact server-issued cursor. */
+    @JvmOverloads
+    fun getSccpRecentMessages(
+        cursor: SccpRecentCursor,
+        limit: Int? = null,
+    ): CompletableFuture<SccpRecentMessages> =
+        getSccpRecentMessages(cursor.from, cursor.afterIndex, limit)
 
     fun getIdentifierClaimByReceiptHash(receiptHash: String): CompletableFuture<Optional<IdentifierClaimRecord>> {
         val normalizedReceiptHash = normalizeHex32(receiptHash, "receiptHash")

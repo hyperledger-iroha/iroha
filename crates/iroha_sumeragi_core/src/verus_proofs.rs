@@ -9,10 +9,241 @@
 //! tokens needed to justify signing and application effects.
 //!
 //! The definitions and proof bodies contain no proof escape hatches.  See
-//! `VERIFICATION.md` for the mechanical source-link and tool-execution work
-//! that remains before this can be called a verification of production code.
+//! `VERIFICATION.md` for pinned execution evidence and the residual
+//! collection-extraction, adapter-contract, WAL-byte, cross-tool, and liveness
+//! boundaries that remain before a complete production-correctness claim.
 
 use vstd::prelude::*;
+
+// These expressions are instantiated both as specifications and as executable
+// Verus functions.  The PrepareIntent WAL guard below is derived directly from
+// primitive vote and frozen-context fields.  The remaining projected WAL
+// certificate/proposal predicates are called out explicitly in
+// `VERIFICATION.md` until they are migrated to the same representation.
+macro_rules! same_certificate_body {
+    ($left:expr, $right:expr) => {{
+        $left.present == $right.present
+            && (!$left.present
+                || ($left.context == $right.context
+                    && $left.height == $right.height
+                    && $left.prepare == $right.prepare
+                    && $left.view == $right.view
+                    && $left.subject == $right.subject))
+    }};
+}
+
+macro_rules! certificate_shape_body {
+    ($certificate:expr, $prepare:expr) => {{
+        $certificate.present
+            && $certificate.prepare == $prepare
+            && 0 <= $certificate.height
+            && $certificate.height <= 18_446_744_073_709_551_615int
+            && 0 <= $certificate.view
+            && $certificate.view <= 18_446_744_073_709_551_615int
+            && 0 <= $certificate.signer_count
+            && 0 <= $certificate.signer_power
+    }};
+}
+
+macro_rules! certificate_valid_for_body {
+    ($state:expr, $certificate:expr, $prepare:expr) => {{
+        certificate_shape_body!($certificate, $prepare)
+            && $certificate.context == $state.context
+            && $certificate.height == $state.height
+            && 0 < $state.validator_count
+            && 0 < $state.total_power
+            && $certificate.signer_count <= $state.validator_count
+            && $certificate.signer_power <= $state.total_power
+            && $certificate.signer_count * 3 > $state.validator_count * 2
+            && $certificate.signer_power * 3 > $state.total_power * 2
+    }};
+}
+
+macro_rules! compatible_highest_update_body {
+    ($current:expr, $incoming:expr) => {{
+        certificate_shape_body!($incoming, true)
+            && (!$current.present
+                || $incoming.view != $current.view
+                || $incoming.subject == $current.subject)
+    }};
+}
+
+macro_rules! timeout_certificate_valid_for_body {
+    ($state:expr, $certificate:expr) => {{
+        $certificate.context == $state.context
+            && $certificate.height == $state.height
+            && 0 <= $certificate.view
+            && $certificate.view < 18_446_744_073_709_551_615int
+            && 0 < $state.validator_count
+            && 0 < $state.total_power
+            && 0 <= $certificate.signer_count
+            && $certificate.signer_count <= $state.validator_count
+            && 0 <= $certificate.signer_power
+            && $certificate.signer_power <= $state.total_power
+            && $certificate.signer_count * 3 > $state.validator_count * 2
+            && $certificate.signer_power * 3 > $state.total_power * 2
+            && (!$certificate.selected_prepare.present
+                || (certificate_valid_for_body!($state, $certificate.selected_prepare, true)
+                    && $certificate.selected_prepare.view <= $certificate.view))
+    }};
+}
+
+macro_rules! wal_guard_context_body {
+    ($state:expr) => {{
+        0 <= $state.height
+            && $state.height <= 18_446_744_073_709_551_615int
+            && 0 <= $state.view
+            && $state.view <= 18_446_744_073_709_551_615int
+            && 0 < $state.validator_count
+            && 0 < $state.total_power
+            && 0 <= $state.leader_start
+            && $state.leader_start < $state.validator_count
+            && -1 <= $state.local_validator
+            && $state.local_validator < $state.validator_count
+            && (!$state.parent_commit.present
+                || certificate_shape_body!($state.parent_commit, false))
+    }};
+}
+
+macro_rules! proposal_justification_body {
+    ($state:expr, $view:expr, $subject:expr, $justification:expr) => {{
+        match $justification {
+            ProposalJustificationProjection::ParentCommit { certificate } => {
+                $view == 0 && same_certificate_body!(certificate, $state.parent_commit)
+            }
+            ProposalJustificationProjection::Timeout { certificate } => {
+                $view > 0
+                    && timeout_certificate_valid_for_body!($state, certificate)
+                    && certificate.view + 1 == $view
+                    && (!certificate.selected_prepare.present
+                        || certificate.selected_prepare.subject == $subject)
+            }
+        }
+    }};
+}
+
+macro_rules! proposal_lock_body {
+    ($state:expr, $subject:expr, $justification:expr) => {{
+        if !$state.locked.present || $state.locked.subject == $subject {
+            true
+        } else {
+            match $justification {
+                ProposalJustificationProjection::Timeout { certificate } => {
+                    certificate.selected_prepare.present
+                        && certificate.selected_prepare.prepare
+                        && certificate.selected_prepare.subject == $subject
+                        && certificate.selected_prepare.view > $state.locked.view
+                }
+                ProposalJustificationProjection::ParentCommit { .. } => false,
+            }
+        }
+    }};
+}
+
+macro_rules! wal_record_guard_body {
+    ($state:expr, $record:expr) => {{
+        wal_guard_context_body!($state)
+            && match $record {
+                WalRecordProjection::ProposalIntent {
+                    context,
+                    height,
+                    view,
+                    subject,
+                    proposer,
+                    justification,
+                } => {
+                    context == $state.context
+                        && height == $state.height
+                        && view == $state.view
+                        && proposer == $state.local_validator
+                        && 0 <= proposer
+                        && proposer < $state.validator_count
+                        && proposer == ($state.leader_start + view) % $state.validator_count
+                        && proposal_justification_body!($state, view, subject, justification)
+                        && proposal_lock_body!($state, subject, justification)
+                }
+                WalRecordProjection::PrepareIntent {
+                    context,
+                    height,
+                    view,
+                    signer,
+                    prepare,
+                    ..
+                } => {
+                    context == $state.context
+                        && height == $state.height
+                        && view == $state.view
+                        && prepare
+                        && signer == $state.local_validator
+                        && 0 <= signer
+                        && signer < $state.validator_count
+                }
+                WalRecordProjection::ObservePrepare { certificate } => {
+                    certificate_valid_for_body!($state, certificate, true)
+                        && certificate.view <= $state.view
+                        && compatible_highest_update_body!($state.highest_prepare, certificate)
+                }
+                WalRecordProjection::LockAndCommit {
+                    prepare,
+                    vote_context,
+                    vote_height,
+                    vote_view,
+                    vote_subject,
+                    vote_signer,
+                    vote_prepare,
+                } => {
+                    certificate_valid_for_body!($state, prepare, true)
+                        && vote_context == $state.context
+                        && vote_height == $state.height
+                        && vote_view == $state.view
+                        && !vote_prepare
+                        && vote_signer == $state.local_validator
+                        && 0 <= vote_signer
+                        && vote_signer < $state.validator_count
+                        && vote_view == prepare.view
+                        && vote_subject == prepare.subject
+                        && compatible_highest_update_body!($state.highest_prepare, prepare)
+                        && (!$state.locked.present
+                            || prepare.view > $state.locked.view
+                            || (prepare.view == $state.locked.view
+                                && prepare.subject == $state.locked.subject))
+                }
+                WalRecordProjection::TimeoutIntent {
+                    context,
+                    height,
+                    view,
+                    signer,
+                    highest_prepare,
+                } => {
+                    context == $state.context
+                        && height == $state.height
+                        && view == $state.view
+                        && signer == $state.local_validator
+                        && 0 <= signer
+                        && signer < $state.validator_count
+                        && same_certificate_body!(highest_prepare, $state.highest_prepare)
+                }
+                WalRecordProjection::InstallTimeout { certificate } => {
+                    timeout_certificate_valid_for_body!($state, certificate)
+                        && certificate.view >= $state.view
+                        && (!certificate.selected_prepare.present
+                            || compatible_highest_update_body!(
+                                $state.highest_prepare,
+                                certificate.selected_prepare
+                            ))
+                        && (!certificate.selected_prepare.present
+                            || !$state.locked.present
+                            || certificate.selected_prepare.view != $state.locked.view
+                            || certificate.selected_prepare.subject == $state.locked.subject)
+                }
+                WalRecordProjection::Decision { certificate } => {
+                    certificate_valid_for_body!($state, certificate, false)
+                        && (!$state.decision.present
+                            || same_certificate_body!($state.decision, certificate))
+                }
+            }
+    }};
+}
 
 verus! {
 
@@ -30,21 +261,33 @@ pub open spec fn machine_u64_max() -> int {
 pub struct CertificateProjection {
     /// Whether a certificate is present.
     pub present: bool,
+    /// Frozen height-context identity carried by the certificate.
+    pub context: int,
+    /// Frozen block height carried by the certificate.
+    pub height: int,
     /// Prepare when true and Commit when false.
     pub prepare: bool,
     /// Certificate view at the frozen height.
     pub view: int,
     /// Certified subject identity.
     pub subject: int,
+    /// Number of canonical distinct voting-validator signers.
+    pub signer_count: int,
+    /// Voting power represented by those signers.
+    pub signer_power: int,
 }
 
 /// The absent certificate value.  Its remaining fields are canonicalized.
 pub open spec fn absent_certificate() -> CertificateProjection {
     CertificateProjection {
         present: false,
+        context: 0,
+        height: 0,
         prepare: true,
         view: 0,
         subject: 0,
+        signer_count: 0,
+        signer_power: 0,
     }
 }
 
@@ -53,25 +296,17 @@ pub open spec fn same_certificate(
     left: CertificateProjection,
     right: CertificateProjection,
 ) -> bool {
-    left.present == right.present
-        && (!left.present
-            || (left.prepare == right.prepare
-                && left.view == right.view
-                && left.subject == right.subject))
+    same_certificate_body!(left, right)
 }
 
 /// A well-formed projected PrepareQC.
 pub open spec fn valid_prepare(certificate: CertificateProjection) -> bool {
-    certificate.present
-        && certificate.prepare
-        && 0 <= certificate.view <= machine_u64_max()
+    certificate_shape_body!(certificate, true)
 }
 
 /// A well-formed projected CommitQC.
 pub open spec fn valid_commit(certificate: CertificateProjection) -> bool {
-    certificate.present
-        && !certificate.prepare
-        && 0 <= certificate.view <= machine_u64_max()
+    certificate_shape_body!(certificate, false)
 }
 
 /// Equal-view certificates do not conflict and a higher one may replace one.
@@ -79,10 +314,7 @@ pub open spec fn compatible_highest_update(
     current: CertificateProjection,
     incoming: CertificateProjection,
 ) -> bool {
-    valid_prepare(incoming)
-        && (!current.present
-            || incoming.view != current.view
-            || incoming.subject == current.subject)
+    compatible_highest_update_body!(current, incoming)
 }
 
 /// Production `update_highest`: install only a strictly higher PrepareQC.
@@ -178,12 +410,18 @@ pub enum WalRecordProjection {
     },
     /// `WalRecord::PrepareIntent`.
     PrepareIntent {
+        /// Frozen height-context identity carried by the vote.
+        context: int,
+        /// Vote height.
+        height: int,
         /// Vote view.
         view: int,
         /// Vote subject.
         subject: int,
-        /// Projection of context, height, phase, signer, and roster checks.
-        local_vote_valid: bool,
+        /// Frozen-roster index of the vote signer.
+        signer: int,
+        /// Prepare when true and Commit when false.
+        prepare: bool,
     },
     /// `WalRecord::ObservePrepare`.
     ObservePrepare {
@@ -244,12 +482,16 @@ pub struct WalFrameProjection {
     pub record: WalRecordProjection,
 }
 
-/// Safety-relevant `DurableState` fields reconstructed by WAL replay.
+/// Safety-relevant durable fields plus frozen inputs supplied to WAL replay.
 pub struct WalStateProjection {
     /// Frozen context identity.
     pub context: int,
     /// Frozen height.
     pub height: int,
+    /// Number of validators in the frozen ordered voting roster.
+    pub validator_count: int,
+    /// Frozen-roster index of the local validator, or `-1` for an observer.
+    pub local_validator: int,
     /// Persisted current view.
     pub view: int,
     /// Last complete frame number.
@@ -279,6 +521,8 @@ pub open spec fn wal_states_equivalent(
 ) -> bool {
     left.context == right.context
         && left.height == right.height
+        && left.validator_count == right.validator_count
+        && left.local_validator == right.local_validator
         && left.view == right.view
         && left.last_id == right.last_id
         && left.proposal_intents =~= right.proposal_intents
@@ -295,6 +539,8 @@ pub open spec fn wal_states_equivalent(
 pub open spec fn wal_invariant(state: WalStateProjection) -> bool {
     0 <= state.height <= machine_u64_max()
         && 0 <= state.view <= machine_u64_max()
+        && 0 < state.validator_count
+        && -1 <= state.local_validator < state.validator_count
         && state.last_id <= machine_u64_max()
         && state.last_timeout_view < state.view
         && (!state.highest_prepare.present
@@ -343,11 +589,19 @@ pub open spec fn wal_frame_admissible(
                     && unique_insert_allowed(before.proposal_intents, view, subject)
             }
             WalRecordProjection::PrepareIntent {
+                context,
+                height,
                 view,
                 subject,
-                local_vote_valid,
+                signer,
+                prepare,
             } => {
-                local_vote_valid
+                context == before.context
+                    && height == before.height
+                    && prepare
+                    && signer == before.local_validator
+                    && 0 <= signer
+                    && signer < before.validator_count
                     && view == before.view
                     && !before.timeout_intents.dom().contains(view)
                     && unique_insert_allowed(before.prepare_intents, view, subject)
@@ -429,6 +683,8 @@ pub open spec fn same_wal_identity_and_intents(
 ) -> bool {
     after.context == before.context
         && after.height == before.height
+        && after.validator_count == before.validator_count
+        && after.local_validator == before.local_validator
 }
 
 /// Exact transition relation for the safety projection of
@@ -810,6 +1066,39 @@ pub proof fn proposal_intent_branch_postcondition(
     }
 }
 
+/// PrepareIntent admissibility is computed from vote primitives and frozen
+/// replay inputs; no caller-supplied validity bit can authorize the record.
+pub proof fn prepare_intent_guard_is_derived_from_vote_and_frozen_context(
+    before: WalStateProjection,
+    frame: WalFrameProjection,
+)
+    requires
+        wal_frame_admissible(before, frame),
+    ensures
+        match frame.record {
+            WalRecordProjection::PrepareIntent {
+                context,
+                height,
+                signer,
+                prepare,
+                ..
+            } => {
+                context == before.context
+                    && height == before.height
+                    && prepare
+                    && signer == before.local_validator
+                    && 0 <= signer
+                    && signer < before.validator_count
+            }
+            _ => true,
+        },
+{
+    match frame.record {
+        WalRecordProjection::PrepareIntent { .. } => {},
+        _ => {},
+    }
+}
+
 /// PrepareIntent installs exactly one Prepare subject while its view is open.
 pub proof fn prepare_intent_branch_postcondition(
     before: WalStateProjection,
@@ -1010,6 +1299,8 @@ pub enum EventProjection {
     TimeoutElapsed { view: int },
     /// `Event::RetransmitElapsed`.
     RetransmitElapsed,
+    /// `Event::ResumeAfterReplay`.
+    ResumeAfterReplay,
     /// `Event::BodyAvailable`.
     BodyAvailable { view: int, subject: int },
     /// `Event::BodyStored`.
@@ -1109,6 +1400,8 @@ pub struct ReducerProjection {
     pub applied: bool,
     /// Applied subject when `applied` is true.
     pub applied_subject: int,
+    /// Whether the sole recovery-resumption transition was consumed.
+    pub replay_resumed: bool,
 }
 
 /// Reducer source branches at the safety projection boundary.
@@ -1128,6 +1421,8 @@ pub enum ReducerPathProjection {
     AcknowledgePersistence,
     /// `on_application_completed` accepted the exact decided subject.
     CompleteApplication,
+    /// `on_resume_after_replay` consumed the recovery-pending transition.
+    ResumeAfterReplay,
 }
 
 /// Durable-state equality used by all non-acknowledgement reducer branches.
@@ -1410,8 +1705,9 @@ pub open spec fn is_persistence_completion(event: EventProjection) -> bool {
     }
 }
 
-/// The `NoDurableChange` branch may retransmit Apply only on the timer path and
-/// may request the next already-authorized signature only after Signed.
+/// The `NoDurableChange` branch enforces the recovery and pending-write fences,
+/// may retransmit Apply only on the timer path, and may request the next
+/// already-authorized signature only after Signed.
 pub open spec fn no_change_effects_match_input(
     before: ReducerProjection,
     input: ReducerInputProjection,
@@ -1420,6 +1716,7 @@ pub open spec fn no_change_effects_match_input(
 ) -> bool {
     if !input_tag_matches(before, input)
         || (before.pending && !is_persistence_completion(input.event))
+        || (!before.replay_resumed && input.event != EventProjection::ResumeAfterReplay)
     {
         no_safety_effect(effects)
     } else {
@@ -1454,6 +1751,34 @@ pub open spec fn same_reducer_projection(
         && before.application_ready =~= after.application_ready
         && before.applied == after.applied
         && (!before.applied || before.applied_subject == after.applied_subject)
+        && before.replay_resumed == after.replay_resumed
+}
+
+/// Exact safety projection of the one replay-resumption event.  The complete
+/// production effect vector is checked separately by the executable gate;
+/// this projection retains the persistence/sign/application fences.
+pub open spec fn replay_resume_transition(
+    before: ReducerProjection,
+    input: ReducerInputProjection,
+    effects: EffectProjection,
+    after: ReducerProjection,
+) -> bool {
+    input_tag_matches(before, input)
+        && input.event == EventProjection::ResumeAfterReplay
+        && !before.replay_resumed
+        && after.replay_resumed
+        && same_wal_state(before.durable, after.durable)
+        && before.generation == after.generation
+        && !before.pending
+        && !after.pending
+        && after.durable_bodies =~= before.durable_bodies
+        && after.validated_bodies =~= before.validated_bodies
+        && after.application_ready =~= before.application_ready
+        && before.applied == after.applied
+        && (!before.applied || before.applied_subject == after.applied_subject)
+        && non_persist_effects_safe(after, effects)
+        && !effects.apply
+        && !effects.enter_view
 }
 
 /// Exact safety-effect behavior after acknowledgement of each continuation.
@@ -1520,6 +1845,7 @@ pub open spec fn reducer_step_refines(
             }
                 && same_wal_state(before.durable, after.durable)
                 && before.generation == after.generation
+                && before.replay_resumed == after.replay_resumed
                 && !before.pending
                 && !after.pending
                 && body_history_transition(before, input.event, after)
@@ -1544,6 +1870,7 @@ pub open spec fn reducer_step_refines(
                 && continuation_matches(frame.record, continuation)
                 && same_wal_state(before.durable, after.durable)
                 && before.generation == after.generation
+                && before.replay_resumed == after.replay_resumed
                 && after.pending
                 && after.pending_frame.id == frame.id
                 && after.pending_frame.context == frame.context
@@ -1575,6 +1902,7 @@ pub open spec fn reducer_step_refines(
             }
                 && wal_apply(before.durable, before.pending_frame, after.durable)
                 && !after.pending
+                && before.replay_resumed == after.replay_resumed
                 && after.durable_bodies =~= before.durable_bodies
                 && after.validated_bodies =~= before.validated_bodies
                 && (match before.continuation {
@@ -1602,6 +1930,7 @@ pub open spec fn reducer_step_refines(
             }
                 && same_wal_state(before.durable, after.durable)
                 && before.generation == after.generation
+                && before.replay_resumed == after.replay_resumed
                 && !before.pending
                 && !after.pending
                 && after.durable_bodies =~= before.durable_bodies
@@ -1611,6 +1940,9 @@ pub open spec fn reducer_step_refines(
                 && !effects.sign.present
                 && !effects.apply
                 && !effects.enter_view
+        }
+        ReducerPathProjection::ResumeAfterReplay => {
+            replay_resume_transition(before, input, effects, after)
         }
     }
 }
@@ -1659,6 +1991,7 @@ pub proof fn reducer_step_preserves_invariant(
             );
         },
         ReducerPathProjection::CompleteApplication => {},
+        ReducerPathProjection::ResumeAfterReplay => {},
     }
 }
 
@@ -1691,7 +2024,8 @@ pub proof fn reducer_step_preserves_effect_ordering(
         ReducerPathProjection::NoDurableChange
         | ReducerPathProjection::BodyProgress
         | ReducerPathProjection::StartPersistence { .. }
-        | ReducerPathProjection::CompleteApplication => {},
+        | ReducerPathProjection::CompleteApplication
+        | ReducerPathProjection::ResumeAfterReplay => {},
     }
 }
 
@@ -1730,7 +2064,8 @@ pub proof fn reducer_step_preserves_vote_uniqueness(
         ReducerPathProjection::NoDurableChange
         | ReducerPathProjection::BodyProgress
         | ReducerPathProjection::StartPersistence { .. }
-        | ReducerPathProjection::CompleteApplication => {},
+        | ReducerPathProjection::CompleteApplication
+        | ReducerPathProjection::ResumeAfterReplay => {},
     }
 }
 
@@ -1768,7 +2103,8 @@ pub proof fn reducer_step_preserves_lock_and_decision(
         ReducerPathProjection::NoDurableChange
         | ReducerPathProjection::BodyProgress
         | ReducerPathProjection::StartPersistence { .. }
-        | ReducerPathProjection::CompleteApplication => {},
+        | ReducerPathProjection::CompleteApplication
+        | ReducerPathProjection::ResumeAfterReplay => {},
     }
 }
 
@@ -1786,6 +2122,7 @@ pub open spec fn crash_recovery(
         && after.validated_bodies =~= before.validated_bodies
         && after.application_ready =~= Set::empty()
         && !after.applied
+        && !after.replay_resumed
 }
 
 /// Replay preserves all safety invariants; application acknowledgement is
@@ -1803,6 +2140,7 @@ pub proof fn crash_recovery_preserves_safety(
         after.validated_bodies.subset_of(after.durable_bodies),
         after.application_ready.subset_of(after.validated_bodies),
         !after.applied,
+        !after.replay_resumed,
 {
 }
 
@@ -1810,28 +2148,60 @@ pub proof fn crash_recovery_preserves_safety(
 // Exact executable production commit gate
 // ---------------------------------------------------------------------------
 
+/// Verus-side shape of one fixed-width effect capability key.
+#[derive(Copy, Clone)]
+pub struct ProductionTagProjection {
+    pub height: u64,
+    pub view: u64,
+    pub generation: u64,
+}
+
+/// Verus-side shape of a concrete requested/granted effect capability.
+#[derive(Copy, Clone)]
+pub struct ProductionEffectCapabilityKeyProjection {
+    pub kind: u8,
+    pub tag: ProductionTagProjection,
+    pub context_id: int,
+    pub height: u64,
+    pub view: u64,
+    pub phase: u8,
+    pub subject: int,
+    pub actor: int,
+    pub persistence_id: u64,
+    pub record_kind: u8,
+    pub auxiliary_context_id: int,
+    pub auxiliary_height: u64,
+    pub auxiliary_view: u64,
+    pub auxiliary_phase: u8,
+    pub auxiliary_subject: int,
+    pub manifest_payload: int,
+    pub manifest_chunks: int,
+    pub manifest_len: u64,
+    pub manifest_count: u64,
+}
+
+/// Verus-side shape of one effect vector slot.
+#[derive(Copy, Clone)]
+pub struct ProductionEffectSlotProjection {
+    pub kind: u8,
+    pub requested: ProductionEffectCapabilityKeyProjection,
+    pub granted: ProductionEffectCapabilityKeyProjection,
+}
+
 /// Verus-side shape of the fixed production effect trace.  This mirrors the
 /// private `refinement::EffectTrace`; the decision expression below is shared
 /// textually with production through `production_transition_gate_body!`.
 #[derive(Copy, Clone)]
 pub struct ProductionEffectTraceProjection {
     pub len: u8,
-    pub kind0: u8,
-    pub authorized0: bool,
-    pub kind1: u8,
-    pub authorized1: bool,
-    pub kind2: u8,
-    pub authorized2: bool,
-    pub kind3: u8,
-    pub authorized3: bool,
-    pub kind4: u8,
-    pub authorized4: bool,
-    pub kind5: u8,
-    pub authorized5: bool,
-    pub kind6: u8,
-    pub authorized6: bool,
-    pub kind7: u8,
-    pub authorized7: bool,
+    pub slot0: ProductionEffectSlotProjection,
+    pub slot1: ProductionEffectSlotProjection,
+    pub slot2: ProductionEffectSlotProjection,
+    pub slot3: ProductionEffectSlotProjection,
+    pub slot4: ProductionEffectSlotProjection,
+    pub slot5: ProductionEffectSlotProjection,
+    pub slot6: ProductionEffectSlotProjection,
+    pub slot7: ProductionEffectSlotProjection,
 }
 
 /// Verus-side shape of `refinement::VolatileSummary`.
@@ -1854,19 +2224,114 @@ pub struct ProductionVolatileSummaryProjection {
     pub replay_resumed: bool,
 }
 
+/// Verus-side optional validator identity.
+#[derive(Copy, Clone)]
+pub struct ProductionValidatorProjection {
+    pub present: bool,
+    pub id: int,
+}
+
+/// Verus-side optional subject identity.
+#[derive(Copy, Clone)]
+pub struct ProductionSubjectProjection {
+    pub present: bool,
+    pub subject: int,
+}
+
+/// Verus-side concrete invariant violation counters.
+#[derive(Copy, Clone)]
+pub struct ProductionSafetyProjection {
+    pub durable_identity_mismatches: u64,
+    pub asynchronous_fence_conflicts: u64,
+    pub invalid_highest_prepare: u64,
+    pub invalid_lock: u64,
+    pub invalid_timeout: u64,
+    pub invalid_decision: u64,
+    pub invalid_pending_append: u64,
+    pub unauthorized_signables: u64,
+    pub invalid_application: u64,
+}
+
+/// Verus-side safety identity of one pending WAL append.
+#[derive(Copy, Clone)]
+pub struct ProductionPendingProjection {
+    pub record_kind: u8,
+    pub continuation: u8,
+    pub persistence_id: u64,
+    pub context_id: int,
+    pub height: u64,
+    pub view: u64,
+    pub subject: int,
+}
+
+/// Verus-side durable-boundary capability key.
+#[derive(Copy, Clone)]
+pub struct ProductionBoundaryCapabilityKeyProjection {
+    pub kind: u8,
+    pub record_kind: u8,
+    pub continuation: u8,
+    pub replay_effect_kind: u8,
+    pub persistence_id: u64,
+    pub context_id: int,
+    pub tag: ProductionTagProjection,
+    pub subject: ProductionSubjectProjection,
+}
+
+/// Verus-side primitive projection supplied to the exact production kernel.
+///
+/// Whole reducer and durable-state identities are mathematical values here;
+/// production supplies direct references and the shared derivation compares
+/// their concrete `Eq` identities before committing the transition.
+#[derive(Copy, Clone)]
+pub struct ProductionTransitionProjection {
+    pub before_state: int,
+    pub after_state: int,
+    pub durable_before: int,
+    pub durable_after: int,
+    pub safety_before: ProductionSafetyProjection,
+    pub safety_after: ProductionSafetyProjection,
+    pub context_before: int,
+    pub context_after: int,
+    pub local_before: ProductionValidatorProjection,
+    pub local_after: ProductionValidatorProjection,
+    pub event_tag: ProductionTagProjection,
+    pub height_before: u64,
+    pub view_before: u64,
+    pub generation_before: u64,
+    pub generation_after: u64,
+    pub pending_state_before: int,
+    pub pending_state_after: int,
+    pub pending_before: ProductionPendingProjection,
+    pub awaiting_before: bool,
+    pub replay_before: bool,
+    pub application_before: ProductionSubjectProjection,
+    pub application_after: ProductionSubjectProjection,
+    pub event_kind: u8,
+    pub awaiting_message_kind: u8,
+    pub validator_count: u64,
+    pub volatile_before: ProductionVolatileSummaryProjection,
+    pub volatile_after: ProductionVolatileSummaryProjection,
+    pub boundary_claimed: ProductionBoundaryCapabilityKeyProjection,
+    pub boundary_granted: ProductionBoundaryCapabilityKeyProjection,
+    pub effects: ProductionEffectTraceProjection,
+}
+
 /// Verus-side shape of the facts extracted by the production reducer before
-/// committing a candidate transition.
+/// committing a candidate transition.  These booleans are internal derived
+/// values; production callers cannot provide them to the kernel.
 #[derive(Copy, Clone)]
 pub struct ProductionTransitionFactsProjection {
     pub before_invariant: bool,
     pub after_invariant: bool,
     pub context_unchanged: bool,
+    pub whole_state_unchanged: bool,
     pub tag_matches: bool,
     pub busy_fence_open: bool,
     pub event_kind: u8,
     pub action_kind: u8,
     pub wal_record_kind: u8,
     pub signed_message_kind: u8,
+    pub replay_effect_kind: u8,
     pub validator_count: u64,
     pub volatile_before: ProductionVolatileSummaryProjection,
     pub volatile_after: ProductionVolatileSummaryProjection,
@@ -1879,6 +2344,24 @@ pub struct ProductionTransitionFactsProjection {
     pub application_transition_exact: bool,
     pub acknowledgement_continuation: u8,
     pub effects: ProductionEffectTraceProjection,
+}
+
+/// Exact fact derivation shared with the executable production kernel.
+pub open spec fn production_facts_from_projection(
+    projection: ProductionTransitionProjection,
+) -> ProductionTransitionFactsProjection {
+    transition_facts_from_projection_body!(projection, ProductionTransitionFactsProjection)
+}
+
+/// Executable fact derivation used to prove that action and authorization
+/// booleans cannot be supplied independently of their primitive witnesses.
+pub fn verified_facts_from_projection(
+    projection: ProductionTransitionProjection,
+) -> (facts: ProductionTransitionFactsProjection)
+    ensures
+        facts == production_facts_from_projection(projection),
+{
+    transition_facts_from_projection_body!(projection, ProductionTransitionFactsProjection)
 }
 
 /// Names of the TLA+ `SumeragiV2Core` actions represented at the reducer's
@@ -1920,6 +2403,9 @@ pub enum TlaActionNameProjection {
     FormPrepareQC,
     FormCommitQC,
     FormTC,
+    ResumeProposal,
+    ResumeVote,
+    ResumeTimeout,
     ApplyDecision,
 }
 
@@ -1949,6 +2435,13 @@ pub open spec fn production_source_tla_action(
             1 => TlaActionNameProjection::CompleteProposalSignature,
             2 | 3 => TlaActionNameProjection::CompleteVoteSignature,
             4 => TlaActionNameProjection::CompleteTimeoutSignature,
+            _ => TlaActionNameProjection::NoAction,
+        },
+        15 => match facts.replay_effect_kind {
+            1 => TlaActionNameProjection::ResumeProposal,
+            2 | 3 => TlaActionNameProjection::ResumeVote,
+            4 => TlaActionNameProjection::ResumeTimeout,
+            5 => TlaActionNameProjection::FetchBody,
             _ => TlaActionNameProjection::NoAction,
         },
         _ => TlaActionNameProjection::NoAction,
@@ -2083,7 +2576,10 @@ pub open spec fn production_tla_boundary_delta(
         | TlaActionNameProjection::CompleteTimeoutSignature
         | TlaActionNameProjection::FormPrepareQC
         | TlaActionNameProjection::FormCommitQC
-        | TlaActionNameProjection::FormTC => true,
+        | TlaActionNameProjection::FormTC
+        | TlaActionNameProjection::ResumeProposal
+        | TlaActionNameProjection::ResumeVote
+        | TlaActionNameProjection::ResumeTimeout => true,
     }
 }
 
@@ -2095,6 +2591,14 @@ pub open spec fn production_effect_slots_authorized(
     trace: ProductionEffectTraceProjection,
 ) -> bool {
     effect_slots_authorized_body!(trace)
+}
+
+/// One active slot is authorized only by equality of its complete requested
+/// and independently granted capability keys.
+pub open spec fn production_effect_slot_authorized(
+    slot: ProductionEffectSlotProjection,
+) -> bool {
+    active_effect_slot_body!(slot)
 }
 
 /// Exact boundedness relation enforced for each concrete volatile summary.
@@ -2169,6 +2673,13 @@ pub closed spec fn production_complete_application_action_relation(
     complete_application_action_body!(facts)
 }
 
+/// Exact replay-resumption action relation enforced by production.
+pub closed spec fn production_resume_after_replay_action_relation(
+    facts: ProductionTransitionFactsProjection,
+) -> bool {
+    resume_after_replay_action_body!(facts, production_effect_count)
+}
+
 /// Exact action-discriminant relation enforced by production.
 pub closed spec fn production_action_kind_relation(
     facts: ProductionTransitionFactsProjection,
@@ -2181,6 +2692,7 @@ pub closed spec fn production_action_kind_relation(
         production_body_progress_action_relation,
         production_volatile_protocol_action_relation,
         production_complete_application_action_relation,
+        production_resume_after_replay_action_relation,
     )
 }
 
@@ -2323,7 +2835,10 @@ pub proof fn production_action_has_named_tla_mapping(
         ),
         production_tla_macro_step(facts).boundary
                 == TlaActionNameProjection::NoAction
-            ==> facts.action_kind == 3 || facts.action_kind == 4,
+            ==> facts.action_kind == 3 || facts.action_kind == 4 || facts.action_kind == 6,
+        facts.action_kind == 6 && facts.replay_effect_kind != 0
+            ==> production_tla_macro_step(facts).source
+                != TlaActionNameProjection::NoAction,
 {
     reveal(production_transition_action_relation);
     reveal(production_named_action_relation);
@@ -2334,6 +2849,7 @@ pub proof fn production_action_has_named_tla_mapping(
     reveal(production_body_progress_action_relation);
     reveal(production_volatile_protocol_action_relation);
     reveal(production_complete_application_action_relation);
+    reveal(production_resume_after_replay_action_relation);
     match facts.action_kind {
         0 => {},
         1 | 2 => {
@@ -2343,6 +2859,12 @@ pub proof fn production_action_has_named_tla_mapping(
             }
         },
         3 | 4 | 5 => {},
+        6 => {
+            match facts.replay_effect_kind {
+                0 | 1 | 2 | 3 | 4 | 5 => {},
+                _ => {},
+            }
+        },
         _ => {},
     }
 }
@@ -2371,7 +2893,7 @@ pub proof fn production_action_preserves_volatile_bounds(
                 < facts.volatile_after.durable_signable_limit,
         facts.action_kind == 2 && facts.wal_record_kind == 6
             ==> !facts.volatile_after.candidate_present
-                && facts.volatile_after.body_work == 0
+                && facts.volatile_after.body_work <= 1
                 && facts.volatile_after.pending_prepare == 0
                 && facts.volatile_after.vote_pools == 0
                 && facts.volatile_after.vote_entries == 0
@@ -2508,6 +3030,20 @@ pub fn verified_complete_application_action_gate(
     accepted
 }
 
+/// Exact executable replay-resumption checker used by production.
+pub fn verified_resume_after_replay_action_gate(
+    facts: ProductionTransitionFactsProjection,
+) -> (accepted: bool)
+    ensures
+        accepted ==> production_resume_after_replay_action_relation(facts),
+{
+    let accepted = resume_after_replay_action_body!(facts, verified_effect_count_gate);
+    proof {
+        reveal(production_resume_after_replay_action_relation);
+    }
+    accepted
+}
+
 /// Exact executable action-discriminant checker used by production.
 pub fn verified_action_kind_gate(
     facts: ProductionTransitionFactsProjection,
@@ -2523,6 +3059,7 @@ pub fn verified_action_kind_gate(
         verified_body_progress_action_gate,
         verified_volatile_protocol_action_gate,
         verified_complete_application_action_gate,
+        verified_resume_after_replay_action_gate,
     );
     proof {
         reveal(production_action_kind_relation);
@@ -2703,6 +3240,67 @@ pub fn verified_production_transition_gate(
     accepted
 }
 
+/// Safety relation of the exact primitive production kernel.
+pub closed spec fn production_kernel_relation(
+    projection: ProductionTransitionProjection,
+) -> bool {
+    production_transition_action_relation(production_facts_from_projection(projection))
+}
+
+/// Exact executable kernel called conceptually by `refinement::accepts`:
+/// derive facts from concrete primitives first, then evaluate the established
+/// transition gate.  No authorization or action-exactness boolean is an input.
+pub fn verified_production_kernel(
+    projection: ProductionTransitionProjection,
+) -> (accepted: bool)
+    ensures
+        accepted ==> production_kernel_relation(projection),
+{
+    let facts = verified_facts_from_projection(projection);
+    let accepted = verified_production_transition_gate(facts);
+    proof {
+        reveal(production_kernel_relation);
+    }
+    accepted
+}
+
+/// A nonzero invariant-violation counter cannot be hidden by the fact
+/// derivation and therefore cannot pass the production kernel.
+pub proof fn production_kernel_rejects_invalid_before_state(
+    projection: ProductionTransitionProjection,
+)
+    requires
+        projection.safety_before.durable_identity_mismatches > 0
+            || projection.safety_before.asynchronous_fence_conflicts > 0
+            || projection.safety_before.invalid_highest_prepare > 0
+            || projection.safety_before.invalid_lock > 0
+            || projection.safety_before.invalid_timeout > 0
+            || projection.safety_before.invalid_decision > 0
+            || projection.safety_before.invalid_pending_append > 0
+            || projection.safety_before.unauthorized_signables > 0
+            || projection.safety_before.invalid_application > 0,
+    ensures
+        !production_kernel_relation(projection),
+{
+    reveal(production_kernel_relation);
+    reveal(production_transition_action_relation);
+}
+
+/// A counterfeit grant whose primitive key differs from the requested key in
+/// any active slot cannot authorize the effect vector.
+pub proof fn production_effect_slot_rejects_counterfeit_grant(
+    slot: ProductionEffectSlotProjection,
+)
+    requires
+        1 <= slot.kind <= 9,
+        slot.requested.kind == slot.kind,
+        slot.granted.kind == slot.kind,
+        !capability_key_equal_body!(slot.requested, slot.granted),
+    ensures
+        !production_effect_slot_authorized(slot),
+{
+}
+
 /// Acceptance refines to the production action relation and exposes the
 /// durable invariants and complete per-slot effect authorization on which the
 /// reducer's commit depends.
@@ -2724,29 +3322,31 @@ pub proof fn accepted_production_transition_refines_action(
             facts.validator_count,
         ),
         production_named_action_relation(facts),
+        (!facts.tag_matches || !facts.busy_fence_open)
+            ==> facts.whole_state_unchanged,
         facts.effects.len <= 8,
-        facts.effects.len > 0 ==> facts.effects.authorized0,
-        facts.effects.len > 1 ==> facts.effects.authorized1,
-        facts.effects.len > 2 ==> facts.effects.authorized2,
-        facts.effects.len > 3 ==> facts.effects.authorized3,
-        facts.effects.len > 4 ==> facts.effects.authorized4,
-        facts.effects.len > 5 ==> facts.effects.authorized5,
-        facts.effects.len > 6 ==> facts.effects.authorized6,
-        facts.effects.len > 7 ==> facts.effects.authorized7,
+        facts.effects.len > 0 ==> production_effect_slot_authorized(facts.effects.slot0),
+        facts.effects.len > 1 ==> production_effect_slot_authorized(facts.effects.slot1),
+        facts.effects.len > 2 ==> production_effect_slot_authorized(facts.effects.slot2),
+        facts.effects.len > 3 ==> production_effect_slot_authorized(facts.effects.slot3),
+        facts.effects.len > 4 ==> production_effect_slot_authorized(facts.effects.slot4),
+        facts.effects.len > 5 ==> production_effect_slot_authorized(facts.effects.slot5),
+        facts.effects.len > 6 ==> production_effect_slot_authorized(facts.effects.slot6),
+        facts.effects.len > 7 ==> production_effect_slot_authorized(facts.effects.slot7),
         effect_count_body!(facts.effects, 1u8) > 0
             ==> effect_count_body!(facts.effects, 5u8) == 0
                 && effect_count_body!(facts.effects, 7u8) == 0
                 && effect_count_body!(facts.effects, 8u8) == 0,
         effect_count_body!(facts.effects, 5u8) > 0
             ==> match facts.effects.len {
-                1 => facts.effects.kind0 == 5,
-                2 => facts.effects.kind1 == 5,
-                3 => facts.effects.kind2 == 5,
-                4 => facts.effects.kind3 == 5,
-                5 => facts.effects.kind4 == 5,
-                6 => facts.effects.kind5 == 5,
-                7 => facts.effects.kind6 == 5,
-                8 => facts.effects.kind7 == 5,
+                1 => facts.effects.slot0.kind == 5,
+                2 => facts.effects.slot1.kind == 5,
+                3 => facts.effects.slot2.kind == 5,
+                4 => facts.effects.slot3.kind == 5,
+                5 => facts.effects.slot4.kind == 5,
+                6 => facts.effects.slot5.kind == 5,
+                7 => facts.effects.slot6.kind == 5,
+                8 => facts.effects.slot7.kind == 5,
                 _ => false,
             },
         effect_count_body!(facts.effects, 8u8) > 0

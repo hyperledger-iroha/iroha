@@ -4,7 +4,11 @@ use std::path::{Path, PathBuf};
 
 use iroha_config::parameters::actual;
 
-use crate::{metering::SmoothingConfig, transparency::PrivacyAggregateScheduleConfig};
+use crate::{
+    metering::SmoothingConfig,
+    pdp_provider::{PDP_PROVIDER_POLICY_VERSION_V1, PdpProviderProtocolPolicyV1},
+    transparency::PrivacyAggregateScheduleConfig,
+};
 
 /// Convenience wrapper around the Torii-level SoraFS storage configuration.
 #[derive(Debug, Clone)]
@@ -17,6 +21,7 @@ pub struct StorageConfig {
     por_sample_interval_secs: u64,
     pdp_sample_window: u16,
     pdp_tree_memory_limit_bytes: iroha_config::base::util::Bytes<u64>,
+    pdp_provider: PdpProviderProtocolPolicyV1,
     runtime_retention: RuntimeRetentionPolicy,
     alias: Option<String>,
     adverts: AdvertOverrides,
@@ -88,6 +93,12 @@ impl StorageConfig {
     #[must_use]
     pub fn pdp_tree_memory_limit_bytes(&self) -> iroha_config::base::util::Bytes<u64> {
         self.pdp_tree_memory_limit_bytes
+    }
+
+    /// Durable admission-bound PDP provider protocol policy.
+    #[must_use]
+    pub fn pdp_provider_policy(&self) -> PdpProviderProtocolPolicyV1 {
+        self.pdp_provider
     }
 
     /// Safety ceilings for auxiliary runtime state and replay histories.
@@ -222,6 +233,20 @@ impl StorageConfig {
             por_sample_interval_secs: storage.por_sample_interval_secs,
             pdp_sample_window: storage.pdp_sample_window,
             pdp_tree_memory_limit_bytes: storage.pdp_tree_memory_limit_bytes,
+            pdp_provider: PdpProviderProtocolPolicyV1 {
+                version: PDP_PROVIDER_POLICY_VERSION_V1,
+                max_pending_records: storage.pdp_provider.max_pending_records,
+                max_terminal_records: storage.pdp_provider.max_terminal_records,
+                checkpoint_max_bytes: storage.pdp_provider.checkpoint_max_bytes.0,
+                challenge_max_bytes: u32::try_from(storage.pdp_provider.challenge_max_bytes.0)
+                    .unwrap_or(u32::MAX),
+                proof_max_bytes: u32::try_from(storage.pdp_provider.proof_max_bytes.0)
+                    .unwrap_or(u32::MAX),
+                min_response_window_secs: storage.pdp_provider.min_response_window_secs,
+                max_response_window_secs: storage.pdp_provider.max_response_window_secs,
+                max_future_skew_secs: storage.pdp_provider.max_future_skew_secs,
+                terminal_retention_secs: storage.pdp_provider.terminal_retention_secs,
+            },
             runtime_retention: RuntimeRetentionPolicy::from(storage.runtime),
             alias: storage.alias.clone(),
             adverts: AdvertOverrides::from(&storage.adverts),
@@ -317,6 +342,13 @@ impl StorageConfigBuilder {
         bytes: iroha_config::base::util::Bytes<u64>,
     ) -> Self {
         self.inner.pdp_tree_memory_limit_bytes = bytes;
+        self
+    }
+
+    /// Override the durable admission-bound PDP provider protocol policy.
+    #[must_use]
+    pub fn pdp_provider_policy(mut self, policy: PdpProviderProtocolPolicyV1) -> Self {
+        self.inner.pdp_provider = policy;
         self
     }
 
@@ -1097,6 +1129,20 @@ mod tests {
             iroha_config::parameters::defaults::sorafs::storage::PDP_SAMPLE_WINDOW
                 <= iroha_config::parameters::defaults::sorafs::storage::PDP_SAMPLE_WINDOW_MAX
         );
+        assert_eq!(
+            usize::try_from(
+                iroha_config::parameters::defaults::sorafs::storage::pdp_provider::CHALLENGE_MAX_BYTES.0,
+            )
+            .expect("challenge cap fits usize"),
+            sorafs_manifest::PDP_CHALLENGE_MAX_CANONICAL_BYTES_V1
+        );
+        assert_eq!(
+            usize::try_from(
+                iroha_config::parameters::defaults::sorafs::storage::pdp_provider::PROOF_MAX_BYTES.0,
+            )
+            .expect("proof cap fits usize"),
+            sorafs_manifest::PDP_PROOF_MAX_CANONICAL_BYTES_V1
+        );
     }
 
     #[test]
@@ -1110,6 +1156,17 @@ mod tests {
         actual.por_sample_interval_secs = 42;
         actual.pdp_sample_window = 37;
         actual.pdp_tree_memory_limit_bytes = iroha_config::base::util::Bytes(8_388_608);
+        actual.pdp_provider = actual::SorafsPdpProviderPolicy {
+            max_pending_records: 31,
+            max_terminal_records: 47,
+            checkpoint_max_bytes: iroha_config::base::util::Bytes(33_554_432),
+            challenge_max_bytes: iroha_config::base::util::Bytes(262_144),
+            proof_max_bytes: iroha_config::base::util::Bytes(8_388_608),
+            min_response_window_secs: 120,
+            max_response_window_secs: 480,
+            max_future_skew_secs: 3,
+            terminal_retention_secs: 7_200,
+        };
         actual.runtime = actual::SorafsRuntimeRetention {
             event_history_limit: 17,
             state_entry_limit: 23,
@@ -1159,6 +1216,21 @@ mod tests {
         assert_eq!(cfg.por_sample_interval_secs(), 42);
         assert_eq!(cfg.pdp_sample_window(), 37);
         assert_eq!(cfg.pdp_tree_memory_limit_bytes().0, 8_388_608);
+        assert_eq!(
+            cfg.pdp_provider_policy(),
+            PdpProviderProtocolPolicyV1 {
+                version: PDP_PROVIDER_POLICY_VERSION_V1,
+                max_pending_records: 31,
+                max_terminal_records: 47,
+                checkpoint_max_bytes: 33_554_432,
+                challenge_max_bytes: 262_144,
+                proof_max_bytes: 8_388_608,
+                min_response_window_secs: 120,
+                max_response_window_secs: 480,
+                max_future_skew_secs: 3,
+                terminal_retention_secs: 7_200,
+            }
+        );
         assert_eq!(
             cfg.runtime_retention(),
             RuntimeRetentionPolicy::new(17, 23, 4_096)

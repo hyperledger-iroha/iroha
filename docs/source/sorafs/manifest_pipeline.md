@@ -84,6 +84,18 @@ the manifest and CAR artifacts. When you receive an envelope from an external
 signer, add `--manifest-signatures-in=<path>` to have the CLI confirm the digests
 and verify each Ed25519 signature against the freshly computed manifest digest.
 
+For controlled local fixture generation, `--council-signing-key-file=<path>`
+accepts exactly one raw 32-byte Ed25519 seed and signs the canonical unsigned
+manifest digest before encoding the completed manifest. This file-only option
+is mutually exclusive with every detached council-signature/public-key input;
+the CLI rejects symlinked files or parents, non-regular files, hard links,
+non-exact lengths, and any Unix mode that grants group or other access. The
+completed signature is verified before any manifest or report is written.
+Keep real council keys outside the repository and pass them only through a
+mode-`0600` runtime file. The Android codegen replay uses a documented public
+TEST-ONLY seed created inside its private temporary directory and deletes it
+with that directory; it is never included in generated reports or fixtures.
+
 When submitting through Torii, pass the exact canonical Norito-encoded
 `ManifestV1` as base64 in `manifest_payload` on
 `POST /v1/sorafs/pin/register` to run the same full manifest

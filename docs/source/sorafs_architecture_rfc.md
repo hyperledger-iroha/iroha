@@ -6,13 +6,16 @@ artifact pipeline. It defines the primitives that client/host implementations
 must share so that nodes, gateways, and governance tooling can interoperate
 without bespoke configuration.
 
-> Status: Ratified by council (2025-10-29). Minutes: [`docs/source/sorafs/council_minutes_2025-10-29.md`](sorafs/council_minutes_2025-10-29.md).
+> Status: first-release specification implemented in the repository and under
+> production-readiness validation. Council ratification and deployment evidence
+> are external release inputs; this repository does not contain council minutes
+> for the previously claimed 2025-10-29 review.
 
-The immediate deliverable for SF-1 is a ratified specification that downstream
-teams (storage, networking, smart contracts, devrel) can implement against. The
-scope deliberately focuses on single-shard correctness and governance controls;
-distributed incentives (SF-8), PoR automation (SF-9), and API ergonomics (SF-6)
-are covered in later tasks but inherit the data formats described here.
+SF-1 defines the first-release contract that storage, networking, smart-contract,
+and developer tooling must implement consistently. Hosted promotion additionally
+requires the signed, deployment-bound evidence enforced by
+`scripts/check_sorafs_production_readiness.py`; repository implementation alone
+does not prove that a production fleet has been deployed or reviewed.
 
 ## Goals
 
@@ -27,7 +30,9 @@ are covered in later tasks but inherit the data formats described here.
 4. **Security-first posture** – the spec must embed threat considerations (DoS,
    alias hijack, stale/poisoned chunks) and assign clear responsibilities to
    manifests, gateways, and governance registries.
-5. **Migration-ready** – it must be possible to dual-publish docs/artifacts over
+5. **Single first-release path** – publication and retrieval use the canonical
+   V1 manifest, Pin Registry, and alias-proof contracts. Pre-release envelope-only
+   or caller-summary paths are not accepted.
 
 ## Non-goals
 
@@ -124,7 +129,7 @@ struct SoraFsManifestV1 {
     root_cid: [u8; 36],            // Multibase-decoded CID bytes (CIDv1).
     dag_codec: DagCodecId,         // 0x71 for dag-cbor roots, 0x0129 for dag-json, etc.
     chunking: ChunkingProfileV1,   // Captures CDC parameters + multihash codes.
-    chunk_digest_sha3_256: [u8; 32], // SHA3-256 of ordered chunk offsets/lengths/BLAKE3 digests.
+    chunk_digest_sha3_256: [u8; 32], // SHA3-256 of ordered LE64 offsets, LE64 lengths, and BLAKE3 digests.
     content_length: u64,           // Total bytes represented by the DAG.
     car_digest: [u8; 32],          // BLAKE3-256 of the CAR payload section.
     car_size: u64,                 // Bytes of the CAR file (payload + index).
@@ -175,9 +180,11 @@ The Norito payload is realised by
 [`ProviderAdvertV1`](../../crates/sorafs_manifest/src/provider_advert.rs) and
 the corresponding builder/validation helpers.
 
-Manifest digests feed directly into the Pin Registry contract (SF-4). The seed
-for the digest is `"sorafs-manifest-v1" || canonical_bytes` to keep future
-versions distinct.
+Manifest digests feed directly into the Pin Registry contract (SF-4). The
+digest input is the exact canonical Norito `ManifestV1` byte sequence, hashed
+with BLAKE3 as implemented by `ManifestV1::digest`. Version separation is
+carried inside those signed bytes by `version = 1`; validators must not prepend
+an undocumented domain string and thereby derive a different registry key.
 
 ## Protocol Flows
 
@@ -224,8 +231,8 @@ flowchart LR
 2. Client requests the CAR (or a subset) from a gateway.
 3. Gateway validates the CAR digest and ensures chunk multihashes match manifest
    expectations before serving.
-4. Optional: Client verifies alias proof bundle to guarantee the alias was bound
-   to this manifest.
+4. Client verifies the alias proof bundle against the current registry root to
+   guarantee that the alias is bound to this manifest.
 
 ```mermaid
 flowchart LR
@@ -277,9 +284,11 @@ map to an active registry entry. Admission proceeds as follows:
    and `sorafs-node` processes drop adverts whenever the envelope hash, handle,
    or expiry does not match the active registry entry.
 5. Providers must renew before the resolved retention epoch (minimum of pin
-   policy, deal end, and governance cap). When a record lapses, nodes enter
-   drain mode, stop accepting new pin allocations from that provider, and gossip
-   a `provider_unregistered` event so operators can rotate capacity.
+   policy, deal end, and governance cap). An expired record is ineligible for
+   new allocations. Production qualification must prove that the deployed
+   orchestrator drains the provider, schedules replacement capacity, and emits
+   the required operational evidence; this repository does not claim a
+   `provider_unregistered` gossip message that is absent from the implementation.
 
 `RegisterPinManifest` carries the complete canonical Norito `ManifestV1`, not
 caller-provided summaries. Consensus decodes it under explicit resource limits,
@@ -309,53 +318,33 @@ All manifests currently point at the `sorafs.sf1@1.0.0` descriptor (numeric
    via `profile_aliases`.
 2. Tooling WG runs the deterministic fuzz/diff suite and extends
    `crates/sorafs_car/src/chunker_registry_data.rs` with a new descriptor id.
-   IDs are monotonically increasing; existing profile IDs and handles never
-   change.
+   IDs are monotonically increasing within the first-release registry snapshot.
 3. Council members review the proposal, sign the
    `chunker_profile_digest = blake3("sorafs-chunker-profile-v1" || canonical_bytes)`,
    and publish a `ChunkerProfileEnvelope` JSON next to the fixture manifest
    signatures.
 4. Once the envelope lands, the registry crate ships the new descriptor, docs
    update `docs/source/sorafs/chunker_registry.md`, and the CLI/gateway tooling
-   gated by `--chunker-profile` gains opt-in support. Existing manifests remain
-   valid and continue pointing at `sorafs.sf1@1.0.0` until they are rebuilt
-   against the new profile.
-5. After two successful release trains, governance may mark the previous
-   metadata; consumers must still accept historical manifests, but CI warns when
+   gains support only after its conformance fixtures pass. Because this is the
+   first release, a profile replacement may invalidate pre-release manifests;
+   the release bundle and registry snapshot must be regenerated atomically.
+5. Governance selects exactly one admitted first-release profile set. CI rejects
+   manifests that reference a profile absent from that signed registry snapshot.
 
-### Hybrid Envelope Migration Plan
+### Registry and Audit-Envelope Contract
 
-During SF-1 the manifest digest is attested both on-chain and via JSON envelopes
-so downstream consumers can verify artifacts even before the governance
-contracts reach mainnet. The migration plan keeps both paths alive while the
-Pin Registry rolls out:
+The first release has one admission path. `sorafs_manifest_stub` emits
+`manifest_signatures.json` containing the manifest digest, chunk digest
+SHA3-256 commitment, and governance signatures. Publication records the same
+canonical manifest and signature-envelope commitment in the Pin Registry.
+Storage nodes accept a pin only when the active registry entry, canonical
+manifest, and signature bundle agree. The JSON envelope remains an immutable
+offline audit and provenance artifact; it is never an alternative authority.
 
-- **H0 — Dual publication (current).** `sorafs_manifest_stub` emits `manifest_signatures.json` containing the manifest
-  digest, chunk digest SHA3-256 summary, and council signatures. The envelope is
-  stored next to the CAR and manifest in SoraFS and mirrored in
-  `fixtures/sorafs_chunker`. Off-chain consumers verify artifacts exclusively
-  with the envelope.
-- **H1 — Pin Registry integration.** Once the Pin Registry contract is
-  deployed, the same digest and envelope hash are recorded on-chain. Governance
-  automation verifies that the on-chain digest matches the envelope before
-  marking a manifest as `Approved`. Storage nodes accept pins if either
-  (a) the registry entry is live, or (b) the envelope verifies under the current
-  council key set and the entry is within the migration grace window.
-- **H2 — Envelope as audit trail.** After two registry releases with parity
-  checks, manifest publication always records the digest on-chain, but the
-  envelope continues shipping for offline audit and provenance. CI jobs
-  (`ci/check_sorafs_fixtures.sh` and the nightly `sorafs-fixtures` verification
-  workflow) fail if a manifest is missing either the registry entry or the
-  envelope signature bundle.
-- **H3 — Full registry enforcement.** When governance declares the migration
-  complete, new manifests must have an active registry entry; envelopes remain
-  as immutable audit records but are no longer sufficient on their own. Older
-  manifests stay grandfathered and can be served as long as their envelope
-  verifies.
-
-The hybrid approach allows documentation pipelines and SDK consumers to adopt
-SoraFS gradually without losing the determinism guarantees already provided by
-the signed envelopes.
+There is no grace window, envelope-only fallback, or grandfathered pre-release
+manifest. CI verifies the checked-in fixture bundles, and the production gate
+requires deployment-bound evidence from the authoritative registry before a
+release can be marked ready.
 
 #### Hybrid Payload Envelope V1 (Groundwork)
 
@@ -399,61 +388,48 @@ decryptors can round-trip without bespoke logic.
 The envelope schema is the first release (`version = 1`) and does not carry a
 legacy path: decryptors reject the old pre-release bare suite label.
 
-## Migration Roadmap
+## First-Release Rollout Contract
 
-deterministic SoraFS pinning, and alias discovery in sync. Each subsection
-below details the expected owner actions and success criteria so downstream
-teams can execute in parallel without blocking the rollout.
+The retained migration documents describe deployment sequencing, not wire-format
+compatibility. Every environment must use the canonical V1 pin, provider, and
+alias contracts from its first accepted manifest.
 
 ### Deterministic Pinning Adoption
 
-- **Stage (M0).** Storage operators follow the `sorafs_chunker` fixtures and
-  publish weekly dry-run reports in `docs/source/sorafs/reports/determinism.md`
-  confirming their chunk digests match the canonical vectors.
-- **Enforce (M1).** CI blocks merges when `ci/check_sorafs_fixtures.sh` or the
-  nightly `sorafs-fixtures` workflow detects unsigned manifests. Operators must
-  document deviations and attach governance waivers before proceeding.
-- **Registry-first (M2).** Pin requests are enqueued through the registry
-  contract; manual envelope approval becomes a fallback path that expires after
-  14 days. The storage CLI defaults to `--require-registry`.
-- **Audit (M3).** Observability dashboards emit parity alerts comparing live
-  chunk inventories with the manifests recorded in the registry. Operators must
-  resolve discrepancies within one publishing window (24 hours) or fail over to
-  the contingency providers listed in the pin policy.
+- **Local conformance.** `ci/check_sorafs_fixtures.sh` verifies deterministic,
+  signed fixture output; CLI and SDK guards reject retired duplicate summaries
+  and require the exact canonical manifest payload.
+- **Authoritative admission.** Pin requests enter through the registry-backed
+  transaction path. Direct ISI and Torii submissions apply the same validation
+  and authority checks, with no manual-envelope bypass.
+- **Deployment qualification.** Operators exercise alias proofs, provider
+  adverts, multi-provider retrieval, repair, proofs, settlement, moderation,
+  and observability in the reviewed production deployment. Evidence is stored
+  outside source control and summarized through the per-lane readiness checkers.
+- **Promotion.** `scripts/check_sorafs_production_readiness.py` must emit a
+  deployment-bound `ready` aggregate for a final `prod` or `production`
+  environment. Missing lanes or evidence keep promotion blocked.
 
-### Alias Transition Timeline
+### Alias Admission
 
-| Phase | Alias Source | Gateway Behaviour | Operator Action |
-|-------|--------------|-------------------|-----------------|
+Aliases are registry-owned from first release. Gateways serve an alias only with
+a fresh proof against the active registry root, and clients verify the proof
+before accepting the resolved manifest. Raw content-CID retrieval remains
+available where policy permits, but it conveys no alias authority.
 
-### Downstream Change Log
+Deployment-sequencing changes are mirrored in
+`docs/source/sorafs/migration_ledger.md` so SDK and operator teams can subscribe
+to updates. Future adjustments MUST update the ledger and this section
+simultaneously to maintain a single source of truth.
 
-- **M0:** Teams consume new chunker fixtures; pipelines emit CAR + manifest
-- **M1:** CI enforces deterministic fixtures; alias proofs published in staging;
-  docs tooling gains expectation flags on `sorafs_manifest_stub` (`--car-digest`,
-  `--car-size`, `--root-cid`, etc.).
-- **M2:** Assets switch to read-only; gateways prefer registry proofs over envelopes.
-- **M3:** Alias-only access enforced; observability alerts on registry parity;
+### Governance Review & Publication
 
-The change log above is mirrored in `docs/source/sorafs/migration_ledger.md` so
-SDK and operator teams can subscribe to updates. Future adjustments MUST update
-the ledger and this section simultaneously to maintain a single source of
-truth.
-
-### Council Review & Publication
-
-The council reviewed and ratified this RFC on 2025-10-29. The review outcome and
-attestation steps are recorded in
-[`docs/source/sorafs/council_minutes_2025-10-29.md`](sorafs/council_minutes_2025-10-29.md).
-Artifacts validated during the session:
-
-1. The rendered RFC (Markdown/PDF) and the latest
-   `manifest_signatures.json`.
-2. Provider admission and chunker profile envelopes used by governance tooling.
-3. CI gates ensuring fixture signatures remain in sync (`ci/check_sorafs_fixtures.sh`).
-
-Future revisions must update the minutes and status log when additional
-governance decisions modify SF-1 requirements.
+Release operators must attach the reviewed RFC digest, canonical fixture and
+manifest-signature hashes, provider-admission and chunker-profile envelope
+hashes, deployment identifier, and signed approval record to the external
+production evidence archive. This repository deliberately does not invent or
+backfill council minutes. Until those external artifacts pass the aggregate
+production-readiness gate, hosted promotion remains blocked.
 
 ## Appendix A: Threat Model & Mitigations
 
@@ -466,8 +442,8 @@ defend against:
 - **Poisoned providers** — storage nodes that attempt to serve corrupted chunks,
   deny service selectively, or pollute manifests during publication.
 - **Replayed manifest operators** — actors who replay stale manifests, chunker
-  profiles, or governance envelopes in order to pin clients to superseded data or bypass
-  revocation.
+  profiles, or governance envelopes in order to pin clients to superseded data
+  or bypass revocation.
 - **Store-now-decrypt-later observers** — parties that archive encrypted payload
   envelopes today with the intent of decrypting them once post-quantum attacks
   on classical primitives become practical.
@@ -508,22 +484,24 @@ artifacts or forging timestamps.
 
 **Mitigations.**
 
-- The manifest contains `pin_policy.retention_epoch` and `alias_version`. Torii
-  APIs and gateways reject payloads that fall outside the active governance
-  window or present stale alias versions. Optional metadata caps
-  (`sorafs.retention.deal_end_epoch`, `sorafs.retention.governance_cap_epoch`)
-  bound the effective retention used by storage nodes.
+- The manifest contains `pin_policy.retention_epoch`; alias authority comes from
+  the separate active registry proof, not a nonexistent `alias_version`
+  manifest field. Torii APIs and gateways reject expired policy and stale alias
+  proofs. Optional metadata caps (`sorafs.retention.deal_end_epoch`,
+  `sorafs.retention.governance_cap_epoch`) bound the effective retention used by
+  storage nodes.
 - Alias proofs include a Merkle path against the on-chain registry. Clients
   verify the proof hash against the current registry root fetched from Torii,
   preventing stale manifests from gaining alias authority.
-- Governance envelopes carry monotonically increasing `revision` numbers. Nodes
-  MUST cache the latest revision and refuse envelopes that do not advance the
-  sequence.
+- Registry state supplies the authoritative alias and admission revision. A
+  deployed cache MUST retain a durable high-water mark and refuse rollback to
+  an older registry state.
 - CI pipelines regenerate fixtures on every publish; `ci/check_sorafs_fixtures.sh`
   fails if manifests do not match the signed baseline, so stale artefacts never
   enter release bundles.
-- Gossip `manifest_superseded` events and require clients to drop cached
-  manifests whose sequence does not match the latest registry pointer.
+- Cached manifests have no independent alias authority. Clients re-resolve the
+  active registry pointer and drop a cached alias binding when its proof no
+  longer matches that pointer.
 
 ### Store-Now-Decrypt-Later Observers
 
@@ -534,10 +512,11 @@ revealing sensitive data retroactively.
 **Mitigations.**
 
 - Manifest digests do not expose plaintext; sensitive blobs remain in chunk
-  payloads. Even so, SF-4b introduces hybrid KEM/DEM (X25519 + ML-KEM-768 over
-  ChaCha20-Poly1305) envelopes so that payloads remain confidential under PQ
-- Governance policy documents rotation intervals for hybrid envelopes; new
-  manifests require explicit council waivers.
+  payloads. SF-4b hybrid KEM/DEM envelopes combine X25519 and ML-KEM-768 with
+  ChaCha20-Poly1305 so confidentiality does not rely only on a classical KEM.
+- Governance policy defines rotation intervals for hybrid envelopes. Payloads
+  marked as requiring an envelope are rejected if the canonical suite metadata
+  or envelope is absent, malformed, or inconsistent.
 - Manifests carry classification metadata (`sensitivity`) and optional
   retention caps so CLI and SDK tooling can warn when ciphertext sits beyond
   its approved cryptoperiod.
@@ -562,42 +541,21 @@ Operational expectations:
   `--car-size=<bytes>`, `--root-cid=<hex>`, etc.) so build pipelines can pin
   exact outputs and detect tampering automatically.
 
-## Migration Plan (M0 → M3)
+## Release Decisions
 
-- **M0 (completed):**
-  - Completed: reference chunker profiles and the Norito manifest schema now live in the workspace.
-  - Completed: `sorafs_manifest_stub` emits CAR v2, manifest, digest, and signature artifacts for CI and release pipelines.
-  - Completed: Torii SoraFS APIs, local node storage, and the fixture-backed gateway conformance harness cover the single-node serving path.
-- **M1 (Weeks 7–12):**
-  - Completed locally: fixture verification and expectation-flag tooling enforce
-    deterministic CAR, manifest, digest, and root-CID outputs.
-  - Completed locally: Pin Registry register paths enforce shared
-    chunker/policy validation via `sorafs_manifest` helpers.
-  - External rollout evidence: staging alias proofs and governance sign-off
-    remain attached to the governance archive rather than this repo.
-- **M2 (Weeks 13–20):**
-  - Hook observability exporters (Prometheus + Grafana dashboards) to storage
-    nodes and gateways.
-  - Integrate preliminary deal engine skeleton so governance can schedule
-    replicas per storage class.
-- **M3 (Week 21+):**
-  - Roll out probabilistic payments and PoR automation (handoff to SF-8/SF-9).
-  - Anycast the gateway fleet and finish rollout of alias-only access for docs.
-
-## Open Questions
-
-1. Do we need a compact multi-alias proof format to reduce gateway header size?
-2. Should CAR signatures live inside the manifest or remain separate artifacts
-   for Sigstore/Supply-chain tooling?
-3. How aggressively should gateways cache manifests given governance update
-   cadence? (Current strawman: 10-minute TTL with backoff.)
-
-These questions are tracked in the roadmap hot list; answers will update this
-RFC before SF-1 is marked complete.
+- Alias proofs use the canonical V1 proof representation. A compact replacement
+  requires an explicit first-release schema change and regenerated fixtures; it
+  is not negotiated dynamically.
+- Governance signatures remain in the manifest signature bundle and are bound
+  to the on-chain registry entry. They are not embedded as an unverifiable CAR
+  trailer or accepted as an envelope-only authority.
+- Gateways derive cache validity from the active registry revision and policy
+  limits. A fixed TTL must never extend an entry past revocation or expiry.
 
 ## Next Steps
 
 - Keep `docs/source/sorafs/migration_roadmap.md` and the migration ledger
   aligned as hosted rollout evidence lands.
-- Socialise the new CLI sample (`docs/source/examples/sorafs_manifest/cli_end_to_end.md`) with release engineering and expand with SDK-driven retrieval examples.
+- Keep the CLI and SDK examples aligned with the canonical V1 payload and
+  multi-provider retrieval contract.
 - Keep Torii's required canonical `manifest_payload` admission, structured error labels, and SDK request builders aligned with `docs/source/sorafs/pin_registry_validation_plan.md`; reject retired duplicate summary fields.

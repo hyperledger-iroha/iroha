@@ -4783,6 +4783,7 @@ mod tests {
                     sorafs_chunker::ChunkProfile::DEFAULT,
                     BLAKE3_256_MULTIHASH_CODE,
                 )
+                .chunk_digest_sha3_256(sorafs_car::compute_chunk_plan_digest_sha3(&plan.chunks))
                 .content_length(plan.content_length)
                 .car_digest(digest.into())
                 .car_size(plan.content_length)

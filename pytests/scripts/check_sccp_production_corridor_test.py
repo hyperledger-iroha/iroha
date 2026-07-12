@@ -25,6 +25,7 @@ PHASES = (
     "contract-smoke",
     "tvm-contract-smoke",
     "core-admission",
+    "runtime-api",
 )
 RETIRED_STEMS = (
     "source_bridge_evidence",
@@ -175,6 +176,27 @@ def test_core_phase_runs_exact_governance_and_four_peer_admission() -> None:
     ):
         assert expected in trace
     assert "sccp_route_manifest" not in trace
+
+
+def test_runtime_api_phase_covers_durable_finality_router_cli_and_generated_spec() -> None:
+    trace = dry_run("runtime-api").stdout
+    for expected in (
+        "cargo test --locked -p iroha_core --lib kura::tests::v2_finality -- --nocapture",
+        "kura::tests::finalized_top_block_rejects_replacement_without_mutation",
+        "kura::tests::pruning_across_durable_v2_finality_is_atomic_and_rejected",
+        "kura::tests::startup_corruption_recovery_cannot_prune_finalized_block_bytes",
+        "cargo test --locked -p iroha_core --lib sumeragi::v2_apply::tests:: -- --nocapture",
+        "cargo test --locked -p iroha_core --lib sumeragi::v2_effects::tests:: -- --nocapture",
+        "cargo test --locked -p iroha_torii --lib sccp_ -- --nocapture",
+        "cargo test --locked -p iroha_torii --lib bridge_finality_ -- --nocapture",
+        "generated_openapi_has_only_resolvable_component_schema_refs",
+        "cargo test --locked -p iroha_torii --test bridge_finality_endpoint -- --nocapture",
+        "cargo test --locked -p iroha_cli sccp_ -- --nocapture",
+        "bash ci/check_openapi_spec.sh",
+    ):
+        assert expected in trace
+    for bypass in ("--ignored", "--no-run", "test-fixtures", "|| true"):
+        assert bypass not in trace
 
 
 def test_sdk_phases_use_only_exact_first_release_v1_suites() -> None:

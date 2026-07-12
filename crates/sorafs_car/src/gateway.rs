@@ -2269,10 +2269,10 @@ mod tests {
             )
             .expect("decode fixture manifest");
         manifest_bytes.push(0xA5);
-        trailing
-            .as_object_mut()
-            .expect("object")
-            .insert("manifest_b64".to_owned(), Value::String(STANDARD.encode(manifest_bytes)));
+        trailing.as_object_mut().expect("object").insert(
+            "manifest_b64".to_owned(),
+            Value::String(STANDARD.encode(manifest_bytes)),
+        );
         let body = json::to_vec(&trailing).expect("response JSON");
         assert!(matches!(
             parse_manifest_response("alpha", &expected_manifest_id, &body, None),
@@ -2282,10 +2282,9 @@ mod tests {
         let mut oversized = canonical;
         oversized.as_object_mut().expect("object").insert(
             "manifest_b64".to_owned(),
-            Value::String(STANDARD.encode(vec![
-                0_u8;
-                sorafs_manifest::MAX_MANIFEST_ENCODED_BYTES + 1
-            ])),
+            Value::String(
+                STANDARD.encode(vec![0_u8; sorafs_manifest::MAX_MANIFEST_ENCODED_BYTES + 1]),
+            ),
         );
         let body = json::to_vec(&oversized).expect("response JSON");
         assert!(matches!(

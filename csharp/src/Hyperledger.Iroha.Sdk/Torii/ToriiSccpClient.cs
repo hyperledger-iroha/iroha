@@ -118,6 +118,7 @@ public sealed partial class ToriiClient
     /// <summary>Fetch newest-first committed outbound SCCP messages.</summary>
     public async Task<SccpRecentMessages> GetSccpRecentMessagesAsync(
         ulong? from = null,
+        uint? afterIndex = null,
         uint? limit = null,
         CancellationToken cancellationToken = default)
     {
@@ -131,10 +132,26 @@ public sealed partial class ToriiClient
             throw new ArgumentOutOfRangeException(nameof(limit), "limit must be in 1..50.");
         }
 
+        if (afterIndex is not null && from is null)
+        {
+            throw new ArgumentException("afterIndex requires from.", nameof(afterIndex));
+        }
+
+        if (afterIndex is > 511)
+        {
+            throw new ArgumentOutOfRangeException(nameof(afterIndex), "afterIndex must be in 0..511.");
+        }
+
         var fields = new List<string>();
         if (from is { } fromValue)
         {
             fields.Add($"from={fromValue.ToString(System.Globalization.CultureInfo.InvariantCulture)}");
+        }
+
+        if (afterIndex is { } afterIndexValue)
+        {
+            fields.Add(
+                $"after_index={afterIndexValue.ToString(System.Globalization.CultureInfo.InvariantCulture)}");
         }
 
         if (limit is { } limitValue)

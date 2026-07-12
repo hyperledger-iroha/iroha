@@ -331,6 +331,7 @@ internal sealed class OfflineReadinessJsonConverter : JsonConverter<OfflineReadi
         ulong evaluatedBlockHeight = 0;
         string? evaluatedBlockHash = null;
         OfflineActiveTransferVerifier? activeTransferVerifier = null;
+        OfflineActiveTransferVerifier? activeTopUpShieldVerifier = null;
         bool ready = false;
         List<OfflineReadinessBlocker>? blockers = null;
         while (reader.Read())
@@ -344,6 +345,7 @@ internal sealed class OfflineReadinessJsonConverter : JsonConverter<OfflineReadi
                     "evaluated_block_height",
                     "evaluated_block_hash",
                     "active_transfer_verifier",
+                    "active_topup_shield_verifier",
                     "ready",
                     "blockers",
                 })
@@ -362,6 +364,7 @@ internal sealed class OfflineReadinessJsonConverter : JsonConverter<OfflineReadi
                         evaluatedBlockHeight,
                         evaluatedBlockHash!,
                         activeTransferVerifier,
+                        activeTopUpShieldVerifier,
                         ready,
                         blockers!);
                 }
@@ -418,6 +421,13 @@ internal sealed class OfflineReadinessJsonConverter : JsonConverter<OfflineReadi
                             ?? throw new JsonException(
                                 "Offline readiness response.active_transfer_verifier must not decode to null.");
                     break;
+                case "active_topup_shield_verifier":
+                    activeTopUpShieldVerifier = reader.TokenType == JsonTokenType.Null
+                        ? null
+                        : JsonSerializer.Deserialize<OfflineActiveTransferVerifier>(ref reader, options)
+                            ?? throw new JsonException(
+                                "Offline readiness response.active_topup_shield_verifier must not decode to null.");
+                    break;
                 case "ready":
                     if (reader.TokenType is not (JsonTokenType.True or JsonTokenType.False))
                     {
@@ -453,7 +463,23 @@ internal sealed class OfflineReadinessJsonConverter : JsonConverter<OfflineReadi
         writer.WriteNumber("evaluated_block_height", value.EvaluatedBlockHeight);
         writer.WriteString("evaluated_block_hash", value.EvaluatedBlockHash);
         writer.WritePropertyName("active_transfer_verifier");
-        JsonSerializer.Serialize(writer, value.ActiveTransferVerifier, options);
+        if (value.ActiveTransferVerifier is null)
+        {
+            writer.WriteNullValue();
+        }
+        else
+        {
+            JsonSerializer.Serialize(writer, value.ActiveTransferVerifier, options);
+        }
+        writer.WritePropertyName("active_topup_shield_verifier");
+        if (value.ActiveTopUpShieldVerifier is null)
+        {
+            writer.WriteNullValue();
+        }
+        else
+        {
+            JsonSerializer.Serialize(writer, value.ActiveTopUpShieldVerifier, options);
+        }
         writer.WriteBoolean("ready", value.Ready);
         writer.WritePropertyName("blockers");
         writer.WriteStartArray();

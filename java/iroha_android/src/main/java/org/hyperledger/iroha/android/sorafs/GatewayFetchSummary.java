@@ -5,6 +5,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import org.hyperledger.iroha.android.client.JsonNumbers;
 import java.util.Objects;
 import org.hyperledger.iroha.android.client.JsonParser;
 
@@ -172,10 +173,11 @@ public final class GatewayFetchSummary {
   private static long requireLong(final Map<String, Object> map, final String key) {
     final Object value = map.get(key);
     if (value instanceof Number number) {
-      if (number instanceof Float || number instanceof Double) {
-        throw new SorafsStorageException("Expected integer for `" + key + "`");
+      try {
+        return JsonNumbers.asLong(number, key);
+      } catch (final IllegalStateException error) {
+        throw new SorafsStorageException("Expected integer for `" + key + "`", error);
       }
-      return number.longValue();
     }
     throw new SorafsStorageException("Expected number for `" + key + "`");
   }

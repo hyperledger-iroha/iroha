@@ -245,17 +245,19 @@ api_tokens = ["example-token-value"]
 proof_rate_per_minute = 120           # steady-state tokens/min (None to disable rate limiting)
 proof_burst = 60                      # burst tokens per endpoint key
 proof_max_body_bytes = 8_388_608      # maximum submission payload size (bytes)
-proof_body_max_inflight = 8           # aggregate pre-parse body admission
-proof_body_read_timeout_ms = 15000    # absolute deadline for each admitted body
+proof_body_max_inflight = 8           # aggregate pre-parse proof/SCCP body admission
+proof_body_read_timeout_ms = 15000    # absolute deadline for each admitted proof/SCCP body
 proof_max_list_limit = 200            # maximum allowed `limit` for proofs list
 proof_request_timeout_ms = 1000       # wall-clock timeout for list/count
 proof_cache_max_age_secs = 30         # Cache-Control max-age for proof fetches
 proof_retry_after_secs = 1            # Retry-After value returned on throttling
 proof_egress_bytes_per_sec = 8_388_608 # optional steady-state egress budget (bytes/sec)
-proof_egress_burst_bytes = 33_554_432 # optional egress burst budget (32 MiB)
+proof_egress_burst_bytes = 67_108_864 # optional egress burst budget (64 MiB; covers worst-case SCCP JSON expansion)
 ```
 
 Configuration must be set via `iroha_config` files. Environment variable overrides exist for developer tooling but are not intended for operator-facing deployments.
+
+The body-admission count and read deadline are shared with the proof-bearing SCCP bridge submission routes. SCCP retains its stricter endpoint-specific byte ceilings; the shared gate prevents slow or concurrent uploads from reserving heavy verification capacity before their bounded bodies are complete.
 
 When the worker exhausts the byte or time budget, it stops scheduling new attachments, increments `torii_zk_prover_budget_exhausted_total{reason="bytes|time"}`, and leaves the remainder queued for the next scan. Live gauges expose the current workload via `torii_zk_prover_inflight` (attachments in progress), `torii_zk_prover_pending` (attachments yet to be scheduled), and the most recent cycle statistics: `torii_zk_prover_last_scan_bytes` and `torii_zk_prover_last_scan_ms`.
 

@@ -108,6 +108,9 @@ fn has_permission(
     authority: &AccountId,
     permission: &str,
 ) -> bool {
+    if state_transaction._curr_block.is_genesis() {
+        return true;
+    }
     let direct = state_transaction
         .world
         .account_permissions
@@ -378,6 +381,72 @@ pub(super) struct ActivePopPublicationsV1 {
     pub(super) issuer_policy_digest: [u8; 32],
     pub(super) root: PopCommitmentRootV1,
     pub(super) revocations: PopRevocationListV1,
+}
+
+/// Fully validated historical publications fixed by an admitted moderation appeal.
+///
+/// Registry advancement must not rewrite the eligibility snapshot of an
+/// already-admitted appeal. The audit link and publication records remain
+/// consensus-owned, so consumers can validate the exact historical root/list
+/// pair without requiring it to remain the active pair.
+pub(super) struct PinnedPopPublicationsV1 {
+    pub(super) root: PopCommitmentRootV1,
+    pub(super) revocations: PopRevocationListV1,
+}
+
+/// Load a historical root/list/audit tuple exactly as captured by an appeal.
+pub(super) fn read_pinned_publications(
+    world: &impl WorldReadOnly,
+    issuer_policy_digest: [u8; 32],
+    commitment_root: [u8; 32],
+    commitment_tree_version: u64,
+    revocation_root: [u8; 32],
+    revocation_list_version: u64,
+    registry_audit_sequence: u64,
+    registry_audit_head: [u8; 32],
+) -> Result<PinnedPopPublicationsV1, InstructionExecutionError> {
+    let current_policy = read_policy(world)?
+        .ok_or_else(|| corrupt_state("pinned PoP publications have no issuer policy"))?;
+    if current_policy.policy.paused {
+        return Err(invalid_parameter(
+            "active PoP issuer policy is paused for moderation eligibility",
+        ));
+    }
+    let status = read_status(world)?
+        .ok_or_else(|| corrupt_state("pinned PoP publications have no registry status"))?;
+    if status.audit_sequence < registry_audit_sequence {
+        return Err(corrupt_state(
+            "pinned PoP audit sequence is later than the registry head",
+        ));
+    }
+    let audit = read_audit(world, registry_audit_sequence)?
+        .ok_or_else(|| corrupt_state("pinned PoP registry audit link is missing"))?;
+    if audit.audit_digest != registry_audit_head {
+        return Err(corrupt_state(
+            "pinned PoP registry audit digest does not match its historical link",
+        ));
+    }
+
+    let root_record = read_root(world, commitment_tree_version)?
+        .ok_or_else(|| corrupt_state("pinned PoP commitment-root record is missing"))?;
+    let revocation_record = read_revocation_publication(world, revocation_list_version)?
+        .ok_or_else(|| corrupt_state("pinned PoP revocation publication is missing"))?;
+    if root_record.root_digest != commitment_root
+        || root_record.admitted_policy_digest != issuer_policy_digest
+        || revocation_record.commitment_root != commitment_root
+        || revocation_record.revocation_root != revocation_root
+        || revocation_record.admitted_policy_digest != issuer_policy_digest
+        || root_record.audit_sequence > registry_audit_sequence
+        || revocation_record.audit_sequence > registry_audit_sequence
+    {
+        return Err(corrupt_state(
+            "pinned PoP root/list records disagree with the admitted snapshot",
+        ));
+    }
+    let root = decode_root_payload(&root_record.canonical_root_payload, true)?;
+    let revocations =
+        decode_revocation_payload(&revocation_record.canonical_revocation_list_payload, true)?;
+    Ok(PinnedPopPublicationsV1 { root, revocations })
 }
 
 /// Load the exact signed active PoP root and revocation snapshot.
@@ -879,6 +948,16 @@ impl Execute for SetSorafsPopIssuerPolicy {
         self.policy
             .validate()
             .map_err(|error| invalid_parameter(format!("invalid SoraFS PoP policy: {error}")))?;
+        if state_transaction
+            .world
+            .accounts
+            .get(&self.policy.issuer_account)
+            .is_none()
+        {
+            return Err(invalid_parameter(
+                "SoraFS PoP issuer policy account is not registered",
+            ));
+        }
         let now = block_time_epoch(state_transaction)?;
         let digest = self.policy.digest().map_err(|error| {
             invalid_parameter(format!("failed to digest SoraFS PoP policy: {error}"))
@@ -1783,6 +1862,10 @@ mod tests {
         BlockHeader::new(nonzero!(1_u64), None, None, None, NOW * 1_000, 0)
     }
 
+    fn non_genesis_block_header() -> BlockHeader {
+        BlockHeader::new(nonzero!(2_u64), None, None, None, NOW * 1_000, 0)
+    }
+
     fn state(operator: &KeyPair, others: &[&KeyPair]) -> State {
         let mut world = World::new();
         for keypair in std::iter::once(operator).chain(others.iter().copied()) {
@@ -1844,7 +1927,7 @@ mod tests {
     fn policy_batch_queries_and_audit_chain_are_authoritative() {
         let operator = keypair(0x11);
         let state = state(&operator, &[]);
-        let mut block = state.block(block_header());
+        let mut block = state.block(non_genesis_block_header());
         let mut stx = block.transaction();
         let authority = activate(&operator, &mut stx);
         commit_initial(&operator, &authority, &mut stx);
@@ -1881,12 +1964,45 @@ mod tests {
     }
 
     #[test]
+    fn genesis_permission_bypass_matches_executor_but_policy_requires_registered_issuer() {
+        let operator = keypair(0x18);
+        let genesis_authority = keypair(0x19);
+        let state = state(&operator, &[&genesis_authority]);
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+        let genesis_authority_id = account(&genesis_authority);
+        SetSorafsPopIssuerPolicy::new(policy(&operator))
+            .execute(&genesis_authority_id, &mut stx)
+            .expect("genesis policy activation follows executor permission semantics");
+        assert_eq!(
+            FindSorafsPopIssuerPolicy
+                .execute(&stx)
+                .expect("genesis policy")
+                .activated_by,
+            genesis_authority_id
+        );
+
+        let unknown_issuer = keypair(0x1A);
+        let state = state(&operator, &[]);
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+        let mut invalid_policy = policy(&operator);
+        invalid_policy.issuer_account = account(&unknown_issuer);
+        assert!(
+            SetSorafsPopIssuerPolicy::new(invalid_policy)
+                .execute(&account(&operator), &mut stx)
+                .is_err()
+        );
+        assert!(FindSorafsPopIssuerPolicy.execute(&stx).is_err());
+    }
+
+    #[test]
     fn unauthorized_governance_and_issuer_accounts_are_rejected() {
         let operator = keypair(0x21);
         let intruder = keypair(0x22);
         let intruder_id = account(&intruder);
         let state = state(&operator, &[&intruder]);
-        let mut block = state.block(block_header());
+        let mut block = state.block(non_genesis_block_header());
         let mut stx = block.transaction();
 
         assert!(

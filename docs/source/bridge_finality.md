@@ -49,24 +49,32 @@ verifier to choose between competing copies of the same consensus fact.
 ## Durable production source
 
 The Sumeragi-v2 apply service constructs the artifact from the frozen height
-context, exact decided subject, and exact CommitQC, validates it, and stores it
-as an immutable Kura sidecar after applying the block. Before accepting a new
-sidecar, Kura validates its structure and exact canonical-header association
-(height, hash, predecessor, and view), then verifies every roster-aligned PoP,
-both quorum thresholds, and the CommitQC aggregate signature. The write is
-idempotent; Kura rejects a conflicting artifact at the same height. Restart
-recovery can finish a missing sidecar without re-executing an already applied
-block.
+context, exact decided subject, and exact CommitQC and validates it. Before
+publishing finality, Kura durably creates an immutable retained-block record
+containing the exact canonical header and the block's canonical SCCP outbox
+archive in commitment-index order. The same retained record must exist before
+Kura may evict the historical block body. Kura then stores the validated
+artifact in a separate immutable finality record with the same header. Both
+writes are idempotent no-clobber operations; a conflicting record at the same
+height is rejected.
 
-`build_finality_proof` reads the canonical block and its sidecar by height,
-requires the same complete header association, and obtains an artifact that
-Kura has cryptographically verified for the exact immutable sidecar identity.
-Historical verification reads the PoPs embedded in the sidecar; it never
-substitutes keys or PoPs from mutable current world state, reconstructs
-historical consensus evidence, or projects a retired certificate format. Proof
-availability follows the durable block and sidecar; it is not a recent
-in-memory certificate window. Missing, corrupt, conflicting, or unverifiable
-sidecars fail closed.
+Before accepting or returning finality, Kura validates the complete
+canonical-header association (height, hash, predecessor, and view), then
+verifies every roster-aligned PoP, both quorum thresholds, and the CommitQC
+aggregate signature. Restart inventory also validates the retained header,
+archive, finality record, and durable block-hash association. Recovery can
+finish a missing finality record from the retained header without re-executing
+an already applied block or restoring its body.
+
+`build_finality_proof` reads the retained canonical header and verified finality
+record by height. It never reads a historical block body. Historical
+verification reads the PoPs embedded in the artifact; it never substitutes
+keys or PoPs from mutable current world state, reconstructs historical
+consensus evidence, or projects a retired certificate format. Proof
+availability follows the immutable retained-header/finality records and the
+durable canonical hash journal, not body-cache residency or a recent in-memory
+certificate window. Missing, corrupt, conflicting, or unverifiable records fail
+closed.
 
 ## Canonical verification
 
@@ -177,7 +185,8 @@ governed finality anchor.
   default or Norito JSON through `Accept` negotiation.
 - `GET /v1/bridge/finality/bundle/{height}` returns `BridgeFinalityBundle`.
 
-Both endpoints fail closed when the block or exact durable v2 artifact is
-absent or invalid. First-release consumers must reject unknown fields,
-unsupported proof/artifact versions, and any retired proof shape; there is no
-compatibility fallback.
+Both endpoints fail closed when the retained canonical header or exact durable
+v2 artifact is absent or invalid. Historical block-body eviction does not make
+an otherwise valid proof unavailable. First-release consumers must reject
+unknown fields, unsupported proof/artifact versions, and any retired proof
+shape; there is no compatibility fallback.

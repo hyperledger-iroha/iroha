@@ -8629,6 +8629,8 @@ pub struct SorafsStorage {
     pub pdp_sample_window: u16,
     /// Aggregate in-memory budget for canonical PDP tree indexes.
     pub pdp_tree_memory_limit_bytes: Bytes<u64>,
+    /// Durable admission-bound PDP provider protocol policy.
+    pub pdp_provider: SorafsPdpProviderPolicy,
     /// Retention and checkpoint bounds for auxiliary embedded runtime state.
     pub runtime: SorafsRuntimeRetention,
     /// Optional human-friendly alias advertised in telemetry.
@@ -8762,6 +8764,29 @@ pub struct SorafsRuntimeRetention {
     pub checkpoint_max_bytes: Bytes<u64>,
 }
 
+/// Durable admission-bound PDP provider protocol policy.
+#[derive(Debug, Clone, Copy)]
+pub struct SorafsPdpProviderPolicy {
+    /// Maximum pending challenges retained by the provider runtime.
+    pub max_pending_records: u32,
+    /// Maximum compact terminal replay records retained by the provider runtime.
+    pub max_terminal_records: u32,
+    /// Maximum canonical durable checkpoint size.
+    pub checkpoint_max_bytes: Bytes<u64>,
+    /// Maximum canonical challenge payload size.
+    pub challenge_max_bytes: Bytes<u64>,
+    /// Maximum canonical proof payload size.
+    pub proof_max_bytes: Bytes<u64>,
+    /// Minimum governed challenge response window in seconds.
+    pub min_response_window_secs: u64,
+    /// Maximum governed challenge response window in seconds.
+    pub max_response_window_secs: u64,
+    /// Maximum provider timestamp skew ahead of server time in seconds.
+    pub max_future_skew_secs: u64,
+    /// Minimum age of compact terminal replay records before pruning, in seconds.
+    pub terminal_retention_secs: u64,
+}
+
 /// SoraFS local orderbook admission policy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SorafsOrderbook {
@@ -8830,6 +8855,7 @@ impl Default for SorafsStorage {
             por_sample_interval_secs: defaults::sorafs::storage::POR_SAMPLE_INTERVAL_SECS,
             pdp_sample_window: defaults::sorafs::storage::PDP_SAMPLE_WINDOW,
             pdp_tree_memory_limit_bytes: defaults::sorafs::storage::PDP_TREE_MEMORY_LIMIT_BYTES,
+            pdp_provider: SorafsPdpProviderPolicy::default(),
             runtime: SorafsRuntimeRetention::default(),
             alias: defaults::sorafs::storage::alias(),
             adverts: SorafsAdvertOverrides::default(),
@@ -8893,6 +8919,24 @@ impl Default for SorafsRuntimeRetention {
             event_history_limit: defaults::sorafs::storage::RUNTIME_EVENT_HISTORY_LIMIT,
             state_entry_limit: defaults::sorafs::storage::RUNTIME_STATE_ENTRY_LIMIT,
             checkpoint_max_bytes: defaults::sorafs::storage::RUNTIME_CHECKPOINT_MAX_BYTES,
+        }
+    }
+}
+
+impl Default for SorafsPdpProviderPolicy {
+    fn default() -> Self {
+        use defaults::sorafs::storage::pdp_provider as pdp;
+
+        Self {
+            max_pending_records: pdp::MAX_PENDING_RECORDS,
+            max_terminal_records: pdp::MAX_TERMINAL_RECORDS,
+            checkpoint_max_bytes: pdp::CHECKPOINT_MAX_BYTES,
+            challenge_max_bytes: pdp::CHALLENGE_MAX_BYTES,
+            proof_max_bytes: pdp::PROOF_MAX_BYTES,
+            min_response_window_secs: pdp::MIN_RESPONSE_WINDOW_SECS,
+            max_response_window_secs: pdp::MAX_RESPONSE_WINDOW_SECS,
+            max_future_skew_secs: pdp::MAX_FUTURE_SKEW_SECS,
+            terminal_retention_secs: pdp::TERMINAL_RETENTION_SECS,
         }
     }
 }
@@ -9939,6 +9983,10 @@ pub struct Zk {
 /// SCCP proof-admission and deterministic verifier-work limits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Sccp {
+    /// Maximum payload-bearing outbound messages awaiting destination proof acceptance.
+    pub max_pending_outbound_messages: NonZeroU64,
+    /// Maximum canonical outbound payload bytes awaiting destination proof acceptance.
+    pub max_pending_outbound_payload_bytes: NonZeroU64,
     /// Maximum closed SCCP proofs in one transaction.
     pub max_proofs_per_transaction: NonZeroU32,
     /// Maximum closed SCCP proofs committed in one block.
@@ -9982,6 +10030,9 @@ pub struct Sccp {
 impl Default for Sccp {
     fn default() -> Self {
         Self {
+            max_pending_outbound_messages: defaults::zk::sccp::MAX_PENDING_OUTBOUND_MESSAGES,
+            max_pending_outbound_payload_bytes:
+                defaults::zk::sccp::MAX_PENDING_OUTBOUND_PAYLOAD_BYTES,
             max_proofs_per_transaction: defaults::zk::sccp::MAX_PROOFS_PER_TRANSACTION,
             max_proofs_per_block: defaults::zk::sccp::MAX_PROOFS_PER_BLOCK,
             max_proof_bytes_per_proof: defaults::zk::sccp::MAX_PROOF_BYTES_PER_PROOF,

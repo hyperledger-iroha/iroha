@@ -85,6 +85,25 @@ pub struct ChunkDigest {
     pub digest: [u8; 32],
 }
 
+/// Compute the canonical SHA3-256 commitment for an ordered chunk plan.
+///
+/// Each entry contributes its little-endian 64-bit offset, little-endian
+/// 64-bit length, and 32-byte BLAKE3 content digest, in that order. Including
+/// the content digest ensures that changing bytes without changing chunk
+/// boundaries also changes the plan commitment.
+#[must_use]
+pub fn compute_chunk_plan_digest_sha3(
+    chunks: impl IntoIterator<Item = (u64, u64, [u8; 32])>,
+) -> [u8; 32] {
+    let mut hasher = Sha3_256::new();
+    for (offset, length, digest) in chunks {
+        hasher.update(offset.to_le_bytes());
+        hasher.update(length.to_le_bytes());
+        hasher.update(digest);
+    }
+    hasher.finalize().into()
+}
+
 /// Chunking configuration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ChunkProfile {
@@ -423,9 +442,9 @@ impl Chunker {
 
 /// Canonical fixtures for the SoraFS chunker.
 pub mod fixtures {
-    use sha3::{Digest, Sha3_256};
-
-    use super::{ChunkDigest, ChunkProfile, chunk_bytes_with_digests_profile};
+    use super::{
+        ChunkDigest, ChunkProfile, chunk_bytes_with_digests_profile, compute_chunk_plan_digest_sha3,
+    };
 
     /// Parameters for the deterministic pseudo-random generator.
     #[derive(Debug, Clone, Copy)]
@@ -558,15 +577,11 @@ pub mod fixtures {
     }
 
     fn sha3_digest(chunks: &[ChunkDigest]) -> [u8; 32] {
-        let mut hasher = Sha3_256::new();
-        for chunk in chunks {
-            hasher.update((chunk.offset as u64).to_le_bytes());
-            hasher.update((chunk.length as u64).to_le_bytes());
-        }
-        let digest = hasher.finalize();
-        let mut out = [0u8; 32];
-        out.copy_from_slice(&digest);
-        out
+        compute_chunk_plan_digest_sha3(
+            chunks
+                .iter()
+                .map(|chunk| (chunk.offset as u64, chunk.length as u64, chunk.digest)),
+        )
     }
 
     /// Converts bytes to a lowercase hexadecimal string.
@@ -594,6 +609,30 @@ mod tests {
             out.push((state >> 32) as u8);
         }
         out
+    }
+
+    #[test]
+    fn chunk_plan_digest_commits_to_content_with_unchanged_boundaries() {
+        let original = [(0_u64, 4_u64, [0x11; 32]), (4_u64, 4_u64, [0x22; 32])];
+        let mut content_changed = original;
+        content_changed[1].2[31] ^= 1;
+
+        let digest = compute_chunk_plan_digest_sha3(original);
+        assert_eq!(digest, compute_chunk_plan_digest_sha3(original));
+        assert_ne!(digest, compute_chunk_plan_digest_sha3(content_changed));
+    }
+
+    #[test]
+    fn chunk_plan_digest_commits_to_order_and_boundaries() {
+        let first = (0_u64, 4_u64, [0x11; 32]);
+        let second = (4_u64, 4_u64, [0x22; 32]);
+        let digest = compute_chunk_plan_digest_sha3([first, second]);
+
+        assert_ne!(digest, compute_chunk_plan_digest_sha3([second, first]));
+        assert_ne!(
+            digest,
+            compute_chunk_plan_digest_sha3([(0, 3, first.2), (3, 5, second.2)])
+        );
     }
 
     #[test]

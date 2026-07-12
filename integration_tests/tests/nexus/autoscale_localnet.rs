@@ -29,6 +29,7 @@ use iroha::{
                 COMMITTED_LANE_STATUS_STATE_APPLIED_BY_DIRECT_EXECUTION,
                 committed_lane_block_status_counts_as_progress,
             },
+            consensus_v2::ConsensusMode,
         },
         consensus::VALIDATOR_SET_HASH_VERSION_V1,
         events::{
@@ -40,7 +41,7 @@ use iroha::{
         isi::{Log, SetKeyValue},
         merge::{LaneDrainCertificateV1, MAX_MERGE_LEDGER_ENTRY_BYTES, MergeLedgerEntry},
         metadata::Metadata,
-        nexus::{DataSpaceId, LaneId},
+        nexus::{DataSpaceId, LaneId, LaneLifecycleIncarnationEntry, LaneLifecycleParameterV1},
         prelude::{
             FindAccountById, HashOf, Name, QueryBuilderExt, SignedTransaction,
             TransactionEntrypoint,
@@ -54,14 +55,14 @@ use iroha::{
 use iroha_core::{
     lane_consensus::{validate_lane_block_proposal, validate_lane_block_qc_aggregate},
     merge::{
-        MergeLedgerCandidate, merge_chain_id_digest, merge_execution_batch_commitments_match,
-        merge_qc_message_digest,
+        MergeLedgerCandidate, merge_activation_root, merge_chain_id_digest,
+        merge_execution_batch_commitments_match, merge_qc_message_digest,
     },
     merge_sidecar::{
         MergeCandidateAdvertV1, canonical_merge_candidate_bytes, decode_certified_merge_sidecar,
         decode_merge_candidate_body,
     },
-    sumeragi::network_topology::commit_quorum_from_len,
+    sumeragi::network_topology::{Topology, commit_quorum_from_len},
 };
 use iroha_primitives::json::Json;
 use iroha_test_network::{NetworkBuilder, NetworkPeer};
@@ -2193,6 +2194,151 @@ fn validate_authoritative_status_tips(snapshot: &[PeerStatusSnapshot]) -> Result
     Ok(())
 }
 
+fn wait_for_stable_authoritative_tip(
+    network: &sandbox::SerializedNetwork,
+    stable_for: Duration,
+    timeout: Duration,
+    context: &str,
+) -> Result<(u64, HashOf<Header>)> {
+    let started = Instant::now();
+    let mut candidate = None::<(u64, HashOf<Header>)>;
+    let mut candidate_since = Instant::now();
+    let mut last_tips = Vec::new();
+    let mut last_error = None;
+
+    while started.elapsed() <= timeout {
+        last_tips.clear();
+        last_error = None;
+        for (index, peer) in network.peers().iter().enumerate() {
+            match peer_client_with_timeout(peer).get_sumeragi_v2_status() {
+                Ok(status) => {
+                    let authoritative = status.authoritative;
+                    let Some(subject) = authoritative.last_committed_subject else {
+                        last_error = Some(format!(
+                            "peer {index} omitted its committed subject at height {}",
+                            authoritative.last_committed_height
+                        ));
+                        break;
+                    };
+                    last_tips.push((authoritative.last_committed_height, subject.block_hash));
+                }
+                Err(err) => {
+                    last_error = Some(format!("peer {index} status failed: {err}"));
+                    break;
+                }
+            }
+        }
+
+        let converged = last_error.is_none()
+            && last_tips.len() == network.peers().len()
+            && last_tips
+                .first()
+                .is_some_and(|first| last_tips.iter().all(|tip| tip == first));
+        if converged {
+            let tip = last_tips[0];
+            if candidate.as_ref() != Some(&tip) {
+                candidate = Some(tip);
+                candidate_since = Instant::now();
+            } else if candidate_since.elapsed() >= stable_for {
+                return Ok(tip);
+            }
+        } else {
+            candidate = None;
+        }
+        thread::sleep(LANE_POLL_INTERVAL);
+    }
+
+    Err(eyre!(
+        "{context}: authoritative tip did not converge and remain stable for {stable_for:?}; last tips={last_tips:?}; last error={last_error:?}"
+    ))
+}
+
+fn resolve_npos_round_leader(
+    network: &sandbox::SerializedNetwork,
+    epoch_seed: [u8; 32],
+    height: u64,
+    view: u64,
+) -> Result<NetworkPeer> {
+    let mut roster = network
+        .peers()
+        .iter()
+        .map(NetworkPeer::id)
+        .collect::<Vec<_>>();
+    roster.sort();
+    roster.dedup();
+    ensure!(
+        roster.len() == network.peers().len(),
+        "NPoS leader resolution requires one unique validator identity per peer"
+    );
+    let topology = Topology::new(roster);
+    let leader_index = topology.leader_index_prf(epoch_seed, height, view);
+    let leader = topology
+        .as_ref()
+        .get(leader_index)
+        .ok_or_else(|| eyre!("NPoS leader index {leader_index} is outside the test roster"))?;
+    network
+        .peers()
+        .iter()
+        .find(|peer| peer.id() == *leader)
+        .cloned()
+        .ok_or_else(|| eyre!("NPoS leader for height {height} view {view} is absent"))
+}
+
+fn v2_view_change_install_totals(network: &sandbox::SerializedNetwork) -> Result<Vec<u64>> {
+    network
+        .peers()
+        .iter()
+        .enumerate()
+        .map(|(index, peer)| {
+            peer_client_with_timeout(peer)
+                .get_sumeragi_v2_status()
+                .map(|status| status.operator.view_change_install_total)
+                .map_err(|err| eyre!("fetch peer {index} v2 view-change total: {err}"))
+        })
+        .collect()
+}
+
+fn wait_for_running_view_change_install_advance(
+    network: &sandbox::SerializedNetwork,
+    baseline: &[u64],
+    expected_running: usize,
+    timeout: Duration,
+    context: &str,
+) -> Result<()> {
+    let started = Instant::now();
+    let mut last_advanced = 0_usize;
+    let mut last_running = 0_usize;
+    let mut last_errors = Vec::new();
+    while started.elapsed() <= timeout {
+        last_advanced = 0;
+        last_running = 0;
+        last_errors.clear();
+        for (index, peer) in network.peers().iter().enumerate() {
+            if !peer.is_running() {
+                continue;
+            }
+            last_running = last_running.saturating_add(1);
+            match peer_client_with_timeout(peer).get_sumeragi_v2_status() {
+                Ok(status)
+                    if status.operator.view_change_install_total
+                        > baseline.get(index).copied().unwrap_or_default() =>
+                {
+                    last_advanced = last_advanced.saturating_add(1);
+                }
+                Ok(_) => {}
+                Err(err) => last_errors.push((index, err.to_string())),
+            }
+        }
+        if last_running == expected_running && last_advanced == expected_running {
+            return Ok(());
+        }
+        thread::sleep(LANE_POLL_INTERVAL);
+    }
+    Err(eyre!(
+        "{context}: view-change installation did not advance on every running peer; advanced={last_advanced}/{last_running}, expected running={expected_running}, errors={last_errors:?}"
+    ))
+}
+
 fn wait_for_active_lane_incarnation_on_all_peers(
     network: &sandbox::SerializedNetwork,
     lane_id: LaneId,
@@ -2434,6 +2580,9 @@ fn latest_lane_relay_evidence(peer: &PeerStatusSnapshot, lane_id: u32) -> LaneRe
     let mut latest = None::<&LaneRelaySnapshot>;
     let mut latest_is_ambiguous = false;
     let active_incarnation = peer_lane_incarnation(peer, lane_id);
+    if active_incarnation.is_none() && !peer.lane_incarnations.is_empty() {
+        return LaneRelayEvidence::Missing;
+    }
 
     for relay in peer.lane_relay.iter().filter(|relay| {
         relay.lane_id == lane_id
@@ -2621,10 +2770,14 @@ fn peer_committed_lane_block_snapshot(
     peer: &PeerStatusSnapshot,
     lane_id: u32,
 ) -> Option<&CommittedLaneBlockSnapshot> {
+    let active_incarnation = peer_lane_incarnation(peer, lane_id);
+    if active_incarnation.is_none() && !peer.lane_incarnations.is_empty() {
+        return None;
+    }
     latest_unambiguous_committed_lane_block_snapshot(
         peer,
         lane_id,
-        peer_lane_incarnation(peer, lane_id),
+        active_incarnation,
         committed_lane_block_is_certified,
     )
 }
@@ -2633,10 +2786,14 @@ fn peer_direct_applied_committed_lane_block_snapshot(
     peer: &PeerStatusSnapshot,
     lane_id: u32,
 ) -> Option<&CommittedLaneBlockSnapshot> {
+    let active_incarnation = peer_lane_incarnation(peer, lane_id);
+    if active_incarnation.is_none() && !peer.lane_incarnations.is_empty() {
+        return None;
+    }
     latest_unambiguous_committed_lane_block_snapshot(
         peer,
         lane_id,
-        peer_lane_incarnation(peer, lane_id),
+        active_incarnation,
         committed_lane_block_is_direct_applied,
     )
 }
@@ -4576,6 +4733,78 @@ fn read_peer_merge_ledger_entries(peer: &NetworkPeer) -> Result<Vec<MergeLedgerE
     Ok(entries_by_epoch.into_values().collect())
 }
 
+fn validate_merge_entry_incarnation_context_evidence(entry: &MergeLedgerEntry) -> Result<()> {
+    ensure!(
+        entry
+            .lane_catalog_hash
+            .as_ref()
+            .iter()
+            .any(|byte| *byte != 0),
+        "merge entry has a zero lane-catalog commitment"
+    );
+    ensure!(
+        !entry.active_lanes.is_empty()
+            && entry
+                .active_lanes
+                .windows(2)
+                .all(|pair| pair[0].lane_id < pair[1].lane_id),
+        "merge entry active-lane bindings are empty, duplicated, or non-canonical"
+    );
+    let mut unique_incarnations = BTreeSet::new();
+    for binding in &entry.active_lanes {
+        ensure!(
+            binding.incarnation.as_ref().iter().any(|byte| *byte != 0)
+                && binding
+                    .lane_config_hash
+                    .as_ref()
+                    .iter()
+                    .any(|byte| *byte != 0)
+                && binding.activation_height > 0
+                && unique_incarnations.insert(binding.incarnation),
+            "merge entry lane {} has a zero/duplicate incarnation, zero configuration commitment, or zero activation height",
+            binding.lane_id
+        );
+    }
+    let incarnations = entry
+        .active_lanes
+        .iter()
+        .map(|binding| LaneLifecycleIncarnationEntry {
+            lane_id: binding.lane_id,
+            incarnation: binding.incarnation,
+        })
+        .collect::<Vec<_>>();
+    ensure!(
+        entry.incarnation_root == LaneLifecycleParameterV1::incarnation_root(&incarnations),
+        "merge entry incarnation root does not bind its exact active set"
+    );
+    ensure!(
+        entry.activation_root == merge_activation_root(&entry.active_lanes),
+        "merge entry activation root does not bind its exact active set"
+    );
+    Ok(())
+}
+
+fn validate_merge_entry_active_lane_binding_evidence(
+    entry: &MergeLedgerEntry,
+    lane_id: LaneId,
+    dataspace_id: DataSpaceId,
+    lane_incarnation: Hash,
+) -> Result<()> {
+    validate_merge_entry_incarnation_context_evidence(entry)?;
+    let binding = entry
+        .active_lanes
+        .iter()
+        .find(|binding| binding.lane_id == lane_id)
+        .ok_or_else(|| eyre!("merge entry omitted active binding for lane {lane_id}"))?;
+    ensure!(
+        binding.dataspace_id == dataspace_id && binding.incarnation == lane_incarnation,
+        "merge entry rebound lane {lane_id} from dataspace {dataspace_id} incarnation {lane_incarnation} to dataspace {} incarnation {}",
+        binding.dataspace_id,
+        binding.incarnation
+    );
+    Ok(())
+}
+
 fn validate_lane_drain_certificate_evidence(
     chain_id: &ChainId,
     lane_id: LaneId,
@@ -4763,6 +4992,12 @@ fn validate_lane_drain_merge_entry(
     );
     validate_lane_drain_certificate_evidence(chain_id, lane_id, certificate)?;
     validate_merge_qc_evidence(chain_id, entry)?;
+    validate_merge_entry_active_lane_binding_evidence(
+        entry,
+        lane_id,
+        certificate.body.intent.dataspace_id,
+        certificate.body.intent.lane_incarnation,
+    )?;
     ensure!(
         certificate.body.intent.close_global_height == intent_log.close_global_height
             && certificate.body.intent.initial_merged_lane_height
@@ -5537,6 +5772,7 @@ fn certified_lane_execution_entry(
         };
         let Some(execution) = batch.lanes.iter().find(|execution| {
             execution.proposal.descriptor.lane_id == lane_id
+                && execution.proposal.descriptor.dataspace_id == DataSpaceId::UNIVERSAL
                 && execution.proposal.descriptor.lane_incarnation == lane_incarnation
                 && execution
                     .entrypoints
@@ -5550,6 +5786,12 @@ fn certified_lane_execution_entry(
             "entrypoint {entrypoint_hash} appears in multiple certified merge carriers"
         );
         validate_merge_qc_evidence(chain_id, &entry)?;
+        validate_merge_entry_active_lane_binding_evidence(
+            &entry,
+            lane_id,
+            DataSpaceId::UNIVERSAL,
+            lane_incarnation,
+        )?;
         ensure!(
             merge_execution_batch_commitments_match(batch),
             "certified lane execution batch commitments are inconsistent"
@@ -5563,6 +5805,7 @@ fn certified_lane_execution_entry(
         );
         ensure!(
             execution.origin_proposal.descriptor.lane_id == lane_id
+                && execution.origin_proposal.descriptor.dataspace_id == DataSpaceId::UNIVERSAL
                 && execution.origin_proposal.descriptor.lane_incarnation == lane_incarnation,
             "certified current proposal was rebound from another lane incarnation"
         );
@@ -5667,12 +5910,12 @@ fn block_with_merge_reference(
 
 #[test]
 #[allow(clippy::too_many_lines)]
-fn nexus_autoscale_certified_merge_recovers_missing_sidecar_after_restart() -> Result<()> {
+fn nexus_autoscale_certified_merge_fails_over_and_recovers_sidecar_after_restart() -> Result<()> {
     const TARGET_LANE: LaneId = LaneId::new(ELASTIC_LANE_ID);
     const MERGE_WAIT: Duration = Duration::from_secs(180);
 
     let context =
-        stringify!(nexus_autoscale_certified_merge_recovers_missing_sidecar_after_restart);
+        stringify!(nexus_autoscale_certified_merge_fails_over_and_recovers_sidecar_after_restart);
     let _test_guard = AUTOSCALE_LOCALNET_TEST_MUTEX
         .lock()
         .expect("autoscale localnet test mutex poisoned");
@@ -5742,16 +5985,78 @@ fn nexus_autoscale_certified_merge_recovers_missing_sidecar_after_restart() -> R
         STRICT_SCALE_OUT_WAIT_TIMEOUT,
     )?;
 
-    let lagging_peer = network
+    let (forced_parent_height, forced_parent_hash) = wait_for_stable_authoritative_tip(
+        &network,
+        Duration::from_secs(2),
+        QUORUM_DISCOVERY_TIMEOUT,
+        "certified merge failover parent",
+    )?;
+    let forced_carrier_height = forced_parent_height.saturating_add(1);
+    let leader_status = submitters[0].get_sumeragi_v2_status()?;
+    let leader_height_context = leader_status.authoritative.height_context;
+    ensure!(
+        leader_height_context.mode == ConsensusMode::Npos,
+        "certified merge failover must exercise the NPoS leader schedule"
+    );
+    ensure!(
+        leader_status.authoritative.last_committed_height == forced_parent_height
+            && leader_status
+                .authoritative
+                .last_committed_subject
+                .is_some_and(|subject| subject.block_hash == forced_parent_hash),
+        "leader schedule was resolved from a stale authoritative parent"
+    );
+    ensure!(
+        usize::try_from(leader_height_context.validator_count) == Ok(TOTAL_PEERS)
+            && leader_height_context.epoch_end_height >= forced_carrier_height,
+        "forced carrier height is not governed by the exact four-validator NPoS context"
+    );
+    for (index, client) in submitters.iter().enumerate().skip(1) {
+        let status = client.get_sumeragi_v2_status()?;
+        ensure!(
+            status.authoritative.last_committed_height == forced_parent_height
+                && status
+                    .authoritative
+                    .last_committed_subject
+                    .is_some_and(|subject| subject.block_hash == forced_parent_hash)
+                && status.authoritative.height_context == leader_height_context,
+            "peer {index} disagrees on the exact parent or frozen NPoS context used to resolve the failed carrier leader"
+        );
+    }
+    let baseline_view_change_installs = v2_view_change_install_totals(&network)?;
+    let lagging_peer = resolve_npos_round_leader(
+        &network,
+        leader_height_context.epoch_seed,
+        forced_carrier_height,
+        0,
+    )?;
+    ensure!(
+        lagging_peer.is_running(),
+        "resolved view-0 merge/carrier leader is not running before failover"
+    );
+    let lagging_peer_index = network
         .peers()
-        .get(TOTAL_PEERS - 1)
-        .cloned()
-        .ok_or_else(|| eyre!("missing lagging peer"))?;
+        .iter()
+        .position(|peer| peer.id() == lagging_peer.id())
+        .ok_or_else(|| eyre!("resolved merge/carrier leader is absent from network peers"))?;
     let config_layers = network.config_layers().collect::<Vec<_>>();
     let lagging_merge_bytes_before = merge_log_total_bytes(&lagging_peer)?;
     rt.block_on(lagging_peer.shutdown());
+    ensure!(
+        network
+            .peers()
+            .iter()
+            .filter(|peer| peer.is_running())
+            .count()
+            == TOTAL_PEERS - 1,
+        "merge leader shutdown must leave exactly a three-validator live quorum"
+    );
 
-    let submitter = submitters[0].clone();
+    let submitter = submitters
+        .iter()
+        .enumerate()
+        .find_map(|(index, client)| (index != lagging_peer_index).then(|| client.clone()))
+        .ok_or_else(|| eyre!("merge leader shutdown left no running submitter"))?;
     let marker_key: Name = "certified_merge_recovery_marker".parse()?;
     let (target, marker_value) = (0_u64..512)
         .find_map(|nonce| {
@@ -5789,8 +6094,11 @@ fn nexus_autoscale_certified_merge_recovers_missing_sidecar_after_restart() -> R
 
     let target_entry = rt.block_on(async {
         let heartbeat_client = submitter.clone();
+        // Give the three live validators time to certify the lane payload while
+        // the exact view-0 carrier leader is offline. The heartbeat is only a
+        // liveness fallback after the failover candidate should be available.
         let mut heartbeat = tokio::time::interval_at(
-            tokio::time::Instant::now() + Duration::from_secs(1),
+            tokio::time::Instant::now() + Duration::from_secs(10),
             Duration::from_secs(1),
         );
         let wait = async {
@@ -5874,6 +6182,30 @@ fn nexus_autoscale_certified_merge_recovers_missing_sidecar_after_restart() -> R
         result
     })?;
 
+    let failover_carrier_leader = resolve_npos_round_leader(
+        &network,
+        leader_height_context.epoch_seed,
+        forced_carrier_height,
+        target_entry.merge_qc.view,
+    )?;
+    ensure!(
+        target_entry.merge_qc.carrier_height == forced_carrier_height
+            && target_entry.merge_qc.carrier_parent_hash == forced_parent_hash
+            && target_entry.merge_qc.view > 0
+            && failover_carrier_leader.is_running()
+            && failover_carrier_leader.id() != lagging_peer.id(),
+        "certified merge did not fail over from the stopped view-0 leader at exact carrier height {forced_carrier_height}: observed height={}, parent={}, view={}",
+        target_entry.merge_qc.carrier_height,
+        target_entry.merge_qc.carrier_parent_hash,
+        target_entry.merge_qc.view,
+    );
+    wait_for_running_view_change_install_advance(
+        &network,
+        &baseline_view_change_installs,
+        TOTAL_PEERS - 1,
+        MERGE_WAIT,
+        "certified merge carrier failover",
+    )?;
     validate_merge_qc_evidence(&network.chain_id(), &target_entry)?;
     let batch = target_entry
         .execution_batch
@@ -5963,6 +6295,13 @@ fn nexus_autoscale_certified_merge_recovers_missing_sidecar_after_restart() -> R
         validate_merge_qc_evidence(&network.chain_id(), &forged_merge_entry).is_err(),
         "forged merge QC aggregate was accepted"
     );
+    let abandoned_view = 0_u64;
+    let mut stale_view_entry = target_entry.clone();
+    stale_view_entry.merge_qc.view = abandoned_view;
+    ensure!(
+        validate_merge_qc_evidence(&network.chain_id(), &stale_view_entry).is_err(),
+        "exact failover merge QC was accepted after rebinding it to abandoned view {abandoned_view}"
+    );
 
     let candidate = MergeLedgerCandidate::from(&target_entry);
     let (candidate_bytes, candidate_hash) = canonical_merge_candidate_bytes(&candidate);
@@ -5982,11 +6321,11 @@ fn nexus_autoscale_certified_merge_recovers_missing_sidecar_after_restart() -> R
         "canonical leader candidate body did not round-trip"
     );
     let mut mismatched_candidate = candidate.clone();
-    mismatched_candidate.view = mismatched_candidate.view.saturating_add(1);
+    mismatched_candidate.view = abandoned_view;
     ensure!(
         decode_merge_candidate_body(&candidate_advert, &mismatched_candidate.canonical_bytes())
             .is_err(),
-        "candidate body from another round was accepted under the leader advert"
+        "candidate body from abandoned view {abandoned_view} was accepted under the exact failover advert"
     );
     let mut corrupted_candidate_bytes = candidate_bytes;
     let candidate_last = corrupted_candidate_bytes
@@ -6070,12 +6409,19 @@ fn nexus_autoscale_certified_merge_recovers_missing_sidecar_after_restart() -> R
         let mut wrong_height = reference.clone();
         wrong_height.merge_qc.carrier_height =
             wrong_height.merge_qc.carrier_height.saturating_add(1);
-        let mut wrong_view = reference.clone();
-        wrong_view.merge_qc.view = wrong_view.merge_qc.view.saturating_add(1);
+        let mut future_view = reference.clone();
+        future_view.merge_qc.view = future_view.merge_qc.view.saturating_add(1);
+        let mut abandoned_view_reference = reference.clone();
+        abandoned_view_reference.merge_qc.view = abandoned_view;
         let mut wrong_parent = reference.clone();
         wrong_parent.merge_qc.carrier_parent_hash =
             HashOf::from_untyped_unchecked(Hash::new(b"wrong-carrier-parent"));
-        [wrong_height, wrong_view, wrong_parent]
+        [
+            wrong_height,
+            future_view,
+            abandoned_view_reference,
+            wrong_parent,
+        ]
     } {
         let wrong_carrier = block_with_merge_reference(&carrier, wrong_reference);
         let mut rebound = committed.clone();
@@ -6687,6 +7033,17 @@ fn nexus_autoscale_recreates_same_lane_without_incarnation_aba_after_restart_imp
         second_incarnation != first_incarnation,
         "recreated numeric lane reused its retired incarnation commitment"
     );
+    let mut rebound_first_certificate = first_certificate.clone();
+    rebound_first_certificate.body.intent.lane_incarnation = second_incarnation;
+    ensure!(
+        validate_lane_drain_certificate_evidence(
+            &network.chain_id(),
+            TARGET_LANE,
+            &rebound_first_certificate,
+        )
+        .is_err(),
+        "retired-incarnation drain signatures were accepted after rebinding to the recreated lane"
+    );
     submit_load_round_robin(&submitters, EXPANSION_REINFORCE_TX_COUNT)?;
     for (index, peer) in network.peers().iter().enumerate() {
         ensure!(
@@ -6760,6 +7117,11 @@ fn nexus_autoscale_recreates_same_lane_without_incarnation_aba_after_restart_imp
         committed_target.verify_certified_merge_inclusion_in_block(&second_work_carrier),
         "recreated-lane transaction proof did not verify against its exact merge carrier"
     );
+    let (first_drain_carrier, _) = query_merge_carrier(&submitters[0], &first_drain_entry)?;
+    ensure!(
+        !committed_target.verify_certified_merge_inclusion_in_block(&first_drain_carrier),
+        "recreated-lane transaction proof was accepted against the retired incarnation's drain carrier"
+    );
     for index in QUORUM_PEERS {
         validate_closed_lane_has_no_post_close_work(
             &network.peers()[index],
@@ -6789,6 +7151,22 @@ fn nexus_autoscale_recreates_same_lane_without_incarnation_aba_after_restart_imp
             && second_certificate.body.intent.lane_incarnation
                 != first_certificate.body.intent.lane_incarnation,
         "recreated drain certificate was rebound to the retired incarnation"
+    );
+    ensure!(
+        first_drain_entry.canonical_hash() != second_drain_entry.canonical_hash()
+            && first_drain_entry.merge_qc.carrier_height
+                != second_drain_entry.merge_qc.carrier_height,
+        "recreated lane reused the retired incarnation's certified drain carrier"
+    );
+    ensure!(
+        validate_lane_drain_merge_entry(
+            &network.chain_id(),
+            TARGET_LANE,
+            second_intent,
+            &first_drain_entry,
+        )
+        .is_err(),
+        "retired-incarnation drain evidence was accepted as the recreated incarnation's drain"
     );
     ensure!(
         first_retirement_height < second_intent.close_global_height
@@ -7535,7 +7913,7 @@ mod tests {
     use eyre::Result;
     use iroha::{
         client::TxConfirmationStatus,
-        crypto::Hash,
+        crypto::{Hash, HashOf},
         data_model::{
             block::consensus::{
                 COMMITTED_LANE_STATUS_APPLICATION_RECEIPT_CONFLICTS_WITH_PREFLIGHT,
@@ -8018,6 +8396,41 @@ mod tests {
             "same-height status from two incarnations must be ambiguous without an active incarnation key"
         );
 
+        let mut stale_direct_block = status.committed_lane_blocks[0].clone();
+        stale_direct_block.execution_status =
+            COMMITTED_LANE_STATUS_STATE_APPLIED_BY_DIRECT_EXECUTION.to_owned();
+        let inactive_with_stale_status = PeerStatusSnapshot {
+            lane_incarnations: vec![LaneIncarnationSnapshot {
+                lane_id: 0,
+                incarnation: Hash::new(b"autoscale-status-active-base-incarnation"),
+            }],
+            lane_relay: vec![relay_snapshot(
+                1,
+                DataSpaceId::UNIVERSAL.as_u64(),
+                7,
+                Some(Hash::new(b"autoscale-status-stale-relay-descriptor")),
+                true,
+            )],
+            committed_lane_blocks: vec![stale_direct_block],
+            ..PeerStatusSnapshot::default()
+        };
+        assert!(
+            peer_committed_lane_block_snapshot(&inactive_with_stale_status, 1).is_none(),
+            "a validated lifecycle snapshot that omits a retired lane must suppress stale committed-block rows"
+        );
+        assert!(
+            peer_direct_applied_committed_lane_block_snapshot(&inactive_with_stale_status, 1)
+                .is_none(),
+            "a validated lifecycle snapshot that omits a retired lane must suppress stale direct-application rows"
+        );
+        assert!(
+            matches!(
+                super::latest_lane_relay_evidence(&inactive_with_stale_status, 1),
+                super::LaneRelayEvidence::Missing
+            ),
+            "a validated lifecycle snapshot that omits a retired lane must suppress stale relay rows"
+        );
+
         let duplicate_lifecycle = PeerStatusSnapshot {
             lane_incarnations: vec![
                 LaneIncarnationSnapshot {
@@ -8029,11 +8442,16 @@ mod tests {
                     incarnation: second_incarnation,
                 },
             ],
+            committed_lane_blocks: vec![status.committed_lane_blocks[1].clone()],
             ..PeerStatusSnapshot::default()
         };
         assert!(
             peer_lane_incarnation(&duplicate_lifecycle, 1).is_none(),
             "duplicate active incarnation rows must fail closed"
+        );
+        assert!(
+            peer_committed_lane_block_snapshot(&duplicate_lifecycle, 1).is_none(),
+            "ambiguous lifecycle incarnation rows must not authorize committed-block evidence"
         );
     }
 

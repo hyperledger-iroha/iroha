@@ -5419,12 +5419,12 @@ async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
         let (view_change_avg, view_change_max) = rate_summary(
             steady_start_sumeragi
                 .iter()
-                .map(|status| status.view_change_install_total)
+                .map(|status| status.operator.view_change_install_total)
                 .collect::<Vec<u64>>()
                 .as_slice(),
             after_sumeragi
                 .iter()
-                .map(|status| status.view_change_install_total)
+                .map(|status| status.operator.view_change_install_total)
                 .collect::<Vec<u64>>()
                 .as_slice(),
             steady_elapsed,
@@ -5432,12 +5432,12 @@ async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
         let (backpressure_avg, backpressure_max) = rate_summary(
             steady_start_sumeragi
                 .iter()
-                .map(|status| status.pacemaker_backpressure_deferrals_total)
+                .map(|status| status.operator.busy_deferral_total)
                 .collect::<Vec<u64>>()
                 .as_slice(),
             after_sumeragi
                 .iter()
-                .map(|status| status.pacemaker_backpressure_deferrals_total)
+                .map(|status| status.operator.busy_deferral_total)
                 .collect::<Vec<u64>>()
                 .as_slice(),
             steady_elapsed,
@@ -6065,12 +6065,12 @@ async fn npos_localnet_throughput_10k_tps() -> Result<()> {
         let (view_change_avg, view_change_max) = rate_summary(
             steady_start_sumeragi
                 .iter()
-                .map(|status| status.view_change_install_total)
+                .map(|status| status.operator.view_change_install_total)
                 .collect::<Vec<u64>>()
                 .as_slice(),
             after_sumeragi
                 .iter()
-                .map(|status| status.view_change_install_total)
+                .map(|status| status.operator.view_change_install_total)
                 .collect::<Vec<u64>>()
                 .as_slice(),
             steady_elapsed,
@@ -6078,12 +6078,12 @@ async fn npos_localnet_throughput_10k_tps() -> Result<()> {
         let (backpressure_avg, backpressure_max) = rate_summary(
             steady_start_sumeragi
                 .iter()
-                .map(|status| status.pacemaker_backpressure_deferrals_total)
+                .map(|status| status.operator.busy_deferral_total)
                 .collect::<Vec<u64>>()
                 .as_slice(),
             after_sumeragi
                 .iter()
-                .map(|status| status.pacemaker_backpressure_deferrals_total)
+                .map(|status| status.operator.busy_deferral_total)
                 .collect::<Vec<u64>>()
                 .as_slice(),
             steady_elapsed,

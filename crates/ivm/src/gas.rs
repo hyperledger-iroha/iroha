@@ -513,8 +513,8 @@ pub fn cost_of_with_params(instr: u32, vector_len: usize, htm_retries: u32) -> O
     cost_from_parts(cost_of(instr), wide_op, vector_len, htm_retries)
 }
 
-const GAS_SCHEDULE_DOMAIN: &str = "iroha.ivm.gas-schedule.v2";
-const GAS_SCHEDULE_DESCRIPTOR_VERSION: u16 = 2;
+const GAS_SCHEDULE_DOMAIN: &str = "iroha.ivm.gas-schedule.v3";
+const GAS_SCHEDULE_DESCRIPTOR_VERSION: u16 = 3;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct GasParameter {
@@ -534,11 +534,18 @@ struct SyscallMeteringRecord {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+struct SyscallMeteringPhaseRecord {
+    name: &'static str,
+    tag: u8,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct GasScheduleDescriptor {
     domain: &'static str,
     version: u16,
     opcodes: Vec<(u8, u64)>,
     parameters: Vec<GasParameter>,
+    staged_phases: Vec<SyscallMeteringPhaseRecord>,
     syscalls: Vec<SyscallMeteringRecord>,
 }
 
@@ -803,11 +810,19 @@ fn canonical_gas_schedule_descriptor() -> GasScheduleDescriptor {
             minimum_gas: spec.minimum_gas,
         })
         .collect();
+    let staged_phases = crate::syscall_metering::SyscallMeteringPhase::ALL
+        .into_iter()
+        .map(|phase| SyscallMeteringPhaseRecord {
+            name: phase.descriptor_name(),
+            tag: phase.tag(),
+        })
+        .collect();
     GasScheduleDescriptor {
         domain: GAS_SCHEDULE_DOMAIN,
         version: GAS_SCHEDULE_DESCRIPTOR_VERSION,
         opcodes,
         parameters: canonical_gas_parameters(),
+        staged_phases,
         syscalls,
     }
 }
@@ -831,6 +846,11 @@ fn encode_gas_schedule_descriptor(descriptor: &GasScheduleDescriptor) -> Vec<u8>
         push_field(&mut buffer, parameter.name.as_bytes());
         buffer.extend_from_slice(&parameter.value.to_le_bytes());
     }
+    buffer.extend_from_slice(&(descriptor.staged_phases.len() as u64).to_le_bytes());
+    for phase in &descriptor.staged_phases {
+        push_field(&mut buffer, phase.name.as_bytes());
+        buffer.push(phase.tag);
+    }
     buffer.extend_from_slice(&(descriptor.syscalls.len() as u64).to_le_bytes());
     for syscall in &descriptor.syscalls {
         buffer.extend_from_slice(&syscall.number.to_le_bytes());
@@ -846,8 +866,10 @@ fn encode_gas_schedule_descriptor(descriptor: &GasScheduleDescriptor) -> Vec<u8>
 
 /// Deterministic digest of the canonical gas schedule.
 ///
-/// The digest is derived from the opcode → cost table used by the interpreter so
-/// validators can assert the active schedule matches consensus configuration.
+/// The descriptor binds the opcode-cost table, every named formula parameter,
+/// every staged-metering phase name/tag, and the exhaustive ABI-v1 syscall
+/// metering registry so validators can assert the active schedule matches
+/// consensus configuration.
 #[must_use]
 pub fn schedule_hash() -> Hash {
     Hash::new(encode_gas_schedule_descriptor(
@@ -895,6 +917,32 @@ mod tests {
             });
         }
         assert_descriptor_mutation_changes_hash(|changed| changed.parameters.swap(0, 1));
+    }
+
+    #[test]
+    fn schedule_hash_binds_every_staged_metering_phase_name_tag_and_order() {
+        let canonical = canonical_gas_schedule_descriptor();
+        assert_eq!(
+            canonical.staged_phases.len(),
+            crate::syscall_metering::SyscallMeteringPhase::COUNT
+        );
+        for (index, phase) in canonical.staged_phases.iter().enumerate() {
+            assert_eq!(usize::from(phase.tag), index);
+            assert_eq!(
+                phase.name,
+                crate::syscall_metering::SyscallMeteringPhase::ALL[index].descriptor_name()
+            );
+            assert_descriptor_mutation_changes_hash(|changed| {
+                changed.staged_phases[index].name = "MutatedPhase";
+            });
+            assert_descriptor_mutation_changes_hash(|changed| {
+                changed.staged_phases[index].tag ^= 0x80;
+            });
+        }
+        assert_descriptor_mutation_changes_hash(|changed| changed.staged_phases.swap(0, 1));
+        assert_descriptor_mutation_changes_hash(|changed| {
+            let _ = changed.staged_phases.pop();
+        });
     }
 
     #[test]

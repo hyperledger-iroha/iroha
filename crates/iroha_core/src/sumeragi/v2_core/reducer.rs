@@ -11,16 +11,18 @@ use super::{
     SignedTimeoutVote, SignedVote, Subject, TimeoutCertificate, TimeoutSignatureGroup, TimeoutVote,
     ValidatorId, Vote, WalEntry, WalRecord,
     refinement::{
-        self, ACTION_ACKNOWLEDGE_WAL, ACTION_BEGIN_WAL, ACTION_BODY_PROGRESS,
-        ACTION_COMPLETE_APPLICATION, ACTION_STUTTER, ACTION_VOLATILE_PROTOCOL, CONTINUATION_DECIDE,
-        CONTINUATION_INSTALL_TIMEOUT, CONTINUATION_NONE, CONTINUATION_SIGN, EFFECT_APPLY,
-        EFFECT_BROADCAST, EFFECT_ENTER_VIEW, EFFECT_FETCH, EFFECT_PERSIST, EFFECT_REPORT,
-        EFFECT_SIGN, EFFECT_STORE, EFFECT_VALIDATE, EVENT_BODY_AVAILABLE, EVENT_BODY_STORED,
-        EVENT_PERSISTED, EVENT_SIGNED, EffectTrace, SIGNED_MESSAGE_COMMIT, SIGNED_MESSAGE_NONE,
-        SIGNED_MESSAGE_PREPARE, SIGNED_MESSAGE_PROPOSAL, SIGNED_MESSAGE_TIMEOUT, TransitionFacts,
-        VolatileSummary, WAL_RECORD_DECISION, WAL_RECORD_INSTALL_TIMEOUT,
-        WAL_RECORD_LOCK_AND_COMMIT, WAL_RECORD_NONE, WAL_RECORD_OBSERVE_PREPARE,
-        WAL_RECORD_PREPARE_INTENT, WAL_RECORD_PROPOSAL_INTENT, WAL_RECORD_TIMEOUT_INTENT,
+        self, BoundaryCapabilityKey, CONTINUATION_DECIDE, CONTINUATION_INSTALL_TIMEOUT,
+        CONTINUATION_NONE, CONTINUATION_SIGN, EFFECT_APPLY, EFFECT_BROADCAST, EFFECT_ENTER_VIEW,
+        EFFECT_FETCH, EFFECT_PERSIST, EFFECT_REPORT, EFFECT_SIGN, EFFECT_STORE, EFFECT_VALIDATE,
+        EVENT_BODY_AVAILABLE, EVENT_BODY_STORED, EVENT_PERSISTED, EVENT_RESUME_AFTER_REPLAY,
+        EVENT_SIGNED, EffectCapabilityKey, EffectTrace, PendingProjection, REPLAY_EFFECT_COMMIT,
+        REPLAY_EFFECT_DECISION, REPLAY_EFFECT_NONE, REPLAY_EFFECT_PREPARE, REPLAY_EFFECT_PROPOSAL,
+        REPLAY_EFFECT_TIMEOUT, SIGNED_MESSAGE_COMMIT, SIGNED_MESSAGE_NONE, SIGNED_MESSAGE_PREPARE,
+        SIGNED_MESSAGE_PROPOSAL, SIGNED_MESSAGE_TIMEOUT, SafetyProjection, SubjectProjection,
+        TagProjection, TransitionProjection, ValidatorProjection, VolatileSummary,
+        WAL_RECORD_DECISION, WAL_RECORD_INSTALL_TIMEOUT, WAL_RECORD_LOCK_AND_COMMIT,
+        WAL_RECORD_OBSERVE_PREPARE, WAL_RECORD_PREPARE_INTENT, WAL_RECORD_PROPOSAL_INTENT,
+        WAL_RECORD_TIMEOUT_INTENT,
     },
 };
 
@@ -299,6 +301,16 @@ impl FinalizedHeight {
 /// Authenticated input or asynchronous adapter completion.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Event {
+    /// Resume effects authorized by complete safety-WAL replay.
+    ///
+    /// This event is accepted exactly once by a reducer returned from
+    /// [`Reducer::recover`]. The recovery-pending bit authenticates the local
+    /// lifecycle transition; the full tag prevents an event from another
+    /// height, view, or process generation from consuming it.
+    ResumeAfterReplay {
+        /// Exact tag of the recovered reducer incarnation.
+        tag: EventTag,
+    },
     /// Submit a locally built body that is already durable and validated.
     LocalProposalReady {
         /// Current reducer tag assigned by the local builder adapter.
@@ -414,7 +426,8 @@ pub enum Event {
 impl Event {
     fn tag(&self) -> EventTag {
         match self {
-            Self::LocalProposalReady { tag, .. }
+            Self::ResumeAfterReplay { tag }
+            | Self::LocalProposalReady { tag, .. }
             | Self::ProposalReceived { tag, .. }
             | Self::VoteReceived { tag, .. }
             | Self::QuorumCertificateReceived { tag, .. }
@@ -477,6 +490,9 @@ pub enum IgnoreReason {
     ViewClosed,
     /// A finalized decision makes this input irrelevant.
     AlreadyDecided,
+    /// WAL replay completed, but its one authorized resumption event has not
+    /// yet crossed the reducer commit gate.
+    RecoveryPending,
     /// The certificate or vote is from a view that cannot affect local state.
     IrrelevantView,
 }
@@ -537,8 +553,9 @@ struct BodyWork {
     state: BodyState,
 }
 
+/// Exact in-memory WAL append and the continuation fenced behind its fsync.
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct PendingPersistence {
+pub struct PendingPersistence {
     entry: WalEntry,
     continuation: Continuation,
 }
@@ -605,10 +622,16 @@ impl Reducer {
         generation: Generation,
     ) -> Result<Self, ReducerError> {
         let durable = DurableState::new(&context);
-        Self::from_durable(context, local_validator, generation, durable)
+        // A fresh reducer has no replay lifecycle transition to consume.
+        Self::from_durable(context, local_validator, generation, durable, true)
     }
 
     /// Reconstructs a reducer from complete WAL frames.
+    ///
+    /// The returned reducer accepts only a matching
+    /// [`Event::ResumeAfterReplay`] until that event crosses [`Self::step`].
+    /// This keeps replay-authorized effects behind the same commit gate as
+    /// every other production transition.
     ///
     /// # Errors
     ///
@@ -621,7 +644,8 @@ impl Reducer {
         entries: impl IntoIterator<Item = WalEntry>,
     ) -> Result<Self, ReducerError> {
         let durable = DurableState::replay(&context, local_validator, entries)?;
-        Self::from_durable(context, local_validator, generation, durable)
+        // Only successful WAL replay creates an unconsumed recovery event.
+        Self::from_durable(context, local_validator, generation, durable, false)
     }
 
     fn from_durable(
@@ -629,6 +653,7 @@ impl Reducer {
         local_validator: Option<ValidatorId>,
         generation: Generation,
         durable: DurableState,
+        replay_resumed: bool,
     ) -> Result<Self, ReducerError> {
         if local_validator.is_some_and(|id| context.validator(&id).is_none()) {
             return Err(ReducerError::LocalValidatorNotInRoster);
@@ -677,7 +702,7 @@ impl Reducer {
             pending_persistence: None,
             awaiting_signature: None,
             signature_queue: VecDeque::new(),
-            replay_resumed: false,
+            replay_resumed,
             applied_subject: None,
         })
     }
@@ -784,20 +809,13 @@ impl Reducer {
         })
     }
 
-    /// Resumes safe effects after WAL replay.
-    ///
-    /// The WAL intent is the authorization boundary. Replay may reconstruct
-    /// and retransmit an already-authorized Prepare or Commit signature even
-    /// after a later timeout intent, but it never creates a new vote intent.
-    /// A durable decision is fetched or applied instead.
-    #[must_use]
-    pub fn resume_after_replay(&mut self) -> Vec<Effect> {
+    fn on_resume_after_replay(&mut self) -> StepOutcome {
         if self.replay_resumed {
-            return Vec::new();
+            return StepOutcome::ignored(IgnoreReason::Duplicate);
         }
         self.replay_resumed = true;
         if let Some(decision) = self.durable.decision().cloned() {
-            return self.decision_effects(decision);
+            return StepOutcome::applied(self.decision_effects(decision));
         }
         let round = Round::new(self.context.height(), self.durable.current_view());
         if let Some(timeout) = self.durable.timeout_intent(round) {
@@ -813,7 +831,7 @@ impl Reducer {
         for vote in self.durable.commit_intents() {
             self.signature_queue.push_back(SignableMessage::Vote(vote));
         }
-        self.drive_signature()
+        StepOutcome::applied(self.drive_signature())
     }
 
     /// Applies one input to the serialized state machine.
@@ -851,18 +869,30 @@ impl Reducer {
         if let Some(reason) = self.reject_tag(event.tag()) {
             return Ok(StepOutcome::ignored(reason));
         }
+        if !self.replay_resumed && !matches!(event, Event::ResumeAfterReplay { .. }) {
+            return Ok(StepOutcome::ignored(IgnoreReason::RecoveryPending));
+        }
+        // A duplicate replay-resume event is a pure idempotent stutter even
+        // if an effect emitted by the first event is still outstanding.
+        let replay_duplicate =
+            self.replay_resumed && matches!(event, Event::ResumeAfterReplay { .. });
         if self.pending_persistence.is_some()
             && !matches!(
                 event,
                 Event::Persisted { .. } | Event::PersistenceFailed { .. }
             )
+            && !replay_duplicate
         {
             return Ok(StepOutcome::ignored(IgnoreReason::Busy));
         }
-        if self.awaiting_signature.is_some() && !matches!(event, Event::Signed { .. }) {
+        if self.awaiting_signature.is_some()
+            && !matches!(event, Event::Signed { .. })
+            && !replay_duplicate
+        {
             return Ok(StepOutcome::ignored(IgnoreReason::Busy));
         }
         match event {
+            Event::ResumeAfterReplay { .. } => Ok(self.on_resume_after_replay()),
             Event::LocalProposalReady { manifest, .. } => self.on_local_proposal_ready(manifest),
             Event::ProposalReceived { proposal, .. } => self.on_proposal(&proposal),
             Event::VoteReceived { vote, .. } => self.on_vote(vote),
@@ -893,115 +923,61 @@ impl Reducer {
     }
 
     fn transition_refines(&self, event: &Event, after: &Self, effects: &[Effect]) -> bool {
-        let tag_matches = self.reject_tag(event.tag()).is_none();
-        let persistence_completion = matches!(
-            event,
-            Event::Persisted { .. } | Event::PersistenceFailed { .. }
-        );
-        let signing_completion = matches!(event, Event::Signed { .. });
-        let busy_fence_open = (self.pending_persistence.is_none() || persistence_completion)
-            && (self.awaiting_signature.is_none() || signing_completion);
+        refinement::accepts(self.transition_projection(event, after, effects))
+    }
+
+    fn transition_projection<'a>(
+        &'a self,
+        event: &Event,
+        after: &'a Self,
+        effects: &[Effect],
+    ) -> TransitionProjection<'a> {
         let trace = self.effect_trace(event, after, effects);
-
-        let begin_persist_exact = self.begin_persist_is_exact(event, after);
-        let acknowledge_persist_exact = self.acknowledgement_is_exact(event, after);
-        let application_unchanged = self.applied_subject == after.applied_subject;
-        let action_kind = if begin_persist_exact {
-            ACTION_BEGIN_WAL
-        } else if acknowledge_persist_exact {
-            ACTION_ACKNOWLEDGE_WAL
-        } else if self == after && effects.is_empty() {
-            ACTION_STUTTER
-        } else if !application_unchanged {
-            ACTION_COMPLETE_APPLICATION
-        } else if matches!(
-            event,
-            Event::BodyAvailable { .. }
-                | Event::BodyStored { .. }
-                | Event::ValidationCompleted { .. }
-        ) {
-            ACTION_BODY_PROGRESS
-        } else {
-            ACTION_VOLATILE_PROTOCOL
-        };
-        let wal_record_kind = if begin_persist_exact {
-            after
-                .pending_persistence
-                .as_ref()
-                .map_or(WAL_RECORD_NONE, |pending| {
-                    Self::wal_record_kind(pending.entry.record())
-                })
-        } else if acknowledge_persist_exact {
-            self.pending_persistence
-                .as_ref()
-                .map_or(WAL_RECORD_NONE, |pending| {
-                    Self::wal_record_kind(pending.entry.record())
-                })
-        } else {
-            WAL_RECORD_NONE
-        };
-        let signed_message_kind = if action_kind == ACTION_STUTTER
-            || !matches!(event, Event::Signed { .. })
-        {
-            SIGNED_MESSAGE_NONE
-        } else {
-            self.awaiting_signature
-                .as_ref()
-                .map_or(SIGNED_MESSAGE_NONE, |message| match message {
-                    SignableMessage::Proposal(_) => SIGNED_MESSAGE_PROPOSAL,
-                    SignableMessage::Vote(vote) => match vote.phase() {
-                        Phase::Prepare => SIGNED_MESSAGE_PREPARE,
-                        Phase::Commit => SIGNED_MESSAGE_COMMIT,
-                    },
-                    SignableMessage::TimeoutVote(_) => SIGNED_MESSAGE_TIMEOUT,
-                })
-        };
-        let acknowledgement_continuation = if acknowledge_persist_exact {
-            self.pending_persistence
-                .as_ref()
-                .map_or(CONTINUATION_NONE, |pending| match pending.continuation {
-                    Continuation::None => CONTINUATION_NONE,
-                    Continuation::Sign(_) => CONTINUATION_SIGN,
-                    Continuation::InstallTimeout { .. } => CONTINUATION_INSTALL_TIMEOUT,
-                    Continuation::Decide { .. } => CONTINUATION_DECIDE,
-                })
-        } else {
-            CONTINUATION_NONE
-        };
-
-        refinement::accepts(TransitionFacts {
-            before_invariant: self.production_safety_invariant(),
-            after_invariant: after.production_safety_invariant(),
-            context_unchanged: self.context == after.context
-                && self.local_validator == after.local_validator,
-            tag_matches,
-            busy_fence_open,
+        let boundary_claimed = self.boundary_claim(event, after, effects);
+        let boundary_granted = self.boundary_grant(event, after, effects, boundary_claimed);
+        TransitionProjection {
+            before_state: self,
+            after_state: after,
+            durable_before: &self.durable,
+            durable_after: &after.durable,
+            safety_before: self.production_safety_projection(),
+            safety_after: after.production_safety_projection(),
+            context_before: &self.context,
+            context_after: &after.context,
+            local_before: Self::validator_projection(self.local_validator),
+            local_after: Self::validator_projection(after.local_validator),
+            event_tag: Self::tag_projection(event.tag()),
+            height_before: self.context.height(),
+            view_before: self.durable.current_view(),
+            generation_before: self.generation.get(),
+            generation_after: after.generation.get(),
+            pending_state_before: self.pending_persistence.as_ref(),
+            pending_state_after: after.pending_persistence.as_ref(),
+            pending_before: self.pending_projection(),
+            awaiting_before: self.awaiting_signature.is_some(),
+            replay_before: self.replay_resumed,
+            application_before: Self::subject_projection(self.applied_subject),
+            application_after: Self::subject_projection(after.applied_subject),
             event_kind: Self::event_kind(event),
-            action_kind,
-            wal_record_kind,
-            signed_message_kind,
+            awaiting_message_kind: self
+                .awaiting_signature
+                .as_ref()
+                .map_or(SIGNED_MESSAGE_NONE, Self::signable_message_kind),
             validator_count: Self::cardinality(self.context.roster().len()),
             volatile_before: self.volatile_summary(),
             volatile_after: after.volatile_summary(),
-            durable_unchanged: self.durable == after.durable,
-            pending_unchanged: self.pending_persistence == after.pending_persistence,
-            generation_unchanged: self.generation == after.generation,
-            application_unchanged,
-            begin_persist_exact,
-            acknowledge_persist_exact,
-            application_transition_exact: self.application_transition_is_exact(event, after),
-            acknowledgement_continuation,
+            boundary_claimed,
+            boundary_granted,
             effects: trace,
-        })
+        }
     }
 
     fn effect_trace(&self, event: &Event, after: &Self, effects: &[Effect]) -> EffectTrace {
         let mut trace = EffectTrace::empty();
         for effect in effects {
-            if !trace.push(
-                Self::effect_kind(effect),
-                self.effect_is_authorized(event, after, effect),
-            ) {
+            let requested = Self::effect_capability(effect);
+            let granted = self.granted_effect_capability(event, after, effect);
+            if !trace.push(requested, granted) {
                 // A non-canonical length is rejected by the verified kernel.
                 trace.len = u8::try_from(refinement::MAX_EFFECTS_PER_STEP + 1)
                     .expect("the fixed effect bound fits in u8");
@@ -1011,26 +987,17 @@ impl Reducer {
         trace
     }
 
-    fn production_safety_invariant(&self) -> bool {
+    fn production_safety_projection(&self) -> SafetyProjection {
         let durable_context_id = self.durable.context_id();
         let expected_context_id = self.context.id();
         let durable_height = self.durable.height();
         let expected_height = self.context.height();
-        let durable_identity_matches =
-            durable_context_id == expected_context_id && durable_height == expected_height;
-        let async_fences_are_exclusive =
-            self.pending_persistence.is_none() || self.awaiting_signature.is_none();
-        if !durable_identity_matches || !async_fences_are_exclusive {
-            return false;
-        }
-        if self.durable.highest_prepare().is_some_and(|certificate| {
+        let invalid_highest_prepare = self.durable.highest_prepare().is_some_and(|certificate| {
             certificate.phase() != Phase::Prepare
                 || certificate.round().view() > self.durable.current_view()
                 || certificate.validate(&self.context).is_err()
-        }) {
-            return false;
-        }
-        if self.durable.locked().is_some_and(|locked| {
+        });
+        let invalid_lock = self.durable.locked().is_some_and(|locked| {
             locked.phase() != Phase::Prepare
                 || locked.round().view() > self.durable.current_view()
                 || locked.validate(&self.context).is_err()
@@ -1039,56 +1006,59 @@ impl Reducer {
                         || (highest.round().view() == locked.round().view()
                             && highest.subject() != locked.subject())
                 })
-        }) {
-            return false;
-        }
-        if self.durable.last_timeout().is_some_and(|certificate| {
+        });
+        let invalid_timeout = self.durable.last_timeout().is_some_and(|certificate| {
             certificate.validate(&self.context).is_err()
                 || certificate.round().view().checked_add(1) != Some(self.durable.current_view())
-        }) {
-            return false;
-        }
-        if self.durable.decision().is_some_and(|certificate| {
+        });
+        let invalid_decision = self.durable.decision().is_some_and(|certificate| {
             certificate.phase() != Phase::Commit || certificate.validate(&self.context).is_err()
-        }) {
-            return false;
-        }
-        if let Some(pending) = &self.pending_persistence {
-            if self.durable.next_id() != Ok(pending.entry.id())
-                || !Self::continuation_matches_record(pending.entry.record(), &pending.continuation)
-            {
-                return false;
-            }
+        });
+        let invalid_pending_append = self.pending_persistence.as_ref().is_some_and(|pending| {
+            let structurally_invalid = self.durable.next_id() != Ok(pending.entry.id())
+                || !Self::continuation_matches_record(
+                    pending.entry.record(),
+                    &pending.continuation,
+                );
             let mut expected = self.durable.clone();
-            if expected
-                .apply(&self.context, self.local_validator, &pending.entry)
-                .is_err()
-            {
-                return false;
-            }
+            structurally_invalid
+                || expected
+                    .apply(&self.context, self.local_validator, &pending.entry)
+                    .is_err()
+        });
+        let awaiting_unauthorized = usize::from(
+            self.awaiting_signature
+                .as_ref()
+                .is_some_and(|message| !self.signable_is_durably_authorized(message)),
+        );
+        let queued_unauthorized = self
+            .signature_queue
+            .iter()
+            .filter(|message| !self.signable_is_durably_authorized(message))
+            .count();
+        let invalid_application = self.applied_subject.is_some_and(|subject| {
+            self.durable.decision().is_none_or(|decision| {
+                decision.subject() != subject
+                    || self.body_state(decision.round(), subject) != BodyState::Validated
+            })
+        });
+        SafetyProjection {
+            durable_identity_mismatches: u64::from(
+                durable_context_id != expected_context_id || durable_height != expected_height,
+            ),
+            asynchronous_fence_conflicts: u64::from(
+                self.pending_persistence.is_some() && self.awaiting_signature.is_some(),
+            ),
+            invalid_highest_prepare: u64::from(invalid_highest_prepare),
+            invalid_lock: u64::from(invalid_lock),
+            invalid_timeout: u64::from(invalid_timeout),
+            invalid_decision: u64::from(invalid_decision),
+            invalid_pending_append: u64::from(invalid_pending_append),
+            unauthorized_signables: Self::cardinality(
+                awaiting_unauthorized.saturating_add(queued_unauthorized),
+            ),
+            invalid_application: u64::from(invalid_application),
         }
-        if self
-            .awaiting_signature
-            .as_ref()
-            .is_some_and(|message| !self.signable_is_durably_authorized(message))
-            || self
-                .signature_queue
-                .iter()
-                .any(|message| !self.signable_is_durably_authorized(message))
-        {
-            return false;
-        }
-        if let Some(subject) = self.applied_subject {
-            let Some(decision) = self.durable.decision() else {
-                return false;
-            };
-            if decision.subject() != subject
-                || self.body_state(decision.round(), subject) != BodyState::Validated
-            {
-                return false;
-            }
-        }
-        true
     }
 
     fn continuation_matches_record(record: &WalRecord, continuation: &Continuation) -> bool {
@@ -1136,8 +1106,208 @@ impl Reducer {
                 }
             },
             SignableMessage::TimeoutVote(vote) => {
-                self.durable.timeout_intent(vote.round()) == Some(*vote)
+                self.durable.timeout_intent(vote.round()) == Some(vote.clone())
             }
+        }
+    }
+
+    fn tag_projection(tag: EventTag) -> TagProjection {
+        TagProjection {
+            height: tag.height(),
+            view: tag.view(),
+            generation: tag.generation().get(),
+        }
+    }
+
+    fn validator_projection(validator: Option<ValidatorId>) -> ValidatorProjection {
+        ValidatorProjection {
+            present: validator.is_some(),
+            id: validator.unwrap_or_default(),
+        }
+    }
+
+    fn subject_projection(subject: Option<Subject>) -> SubjectProjection {
+        SubjectProjection {
+            present: subject.is_some(),
+            subject: subject.unwrap_or_default(),
+        }
+    }
+
+    fn pending_projection(&self) -> PendingProjection {
+        self.pending_persistence
+            .as_ref()
+            .map_or_else(PendingProjection::default, |pending| {
+                let (round, subject) = Self::wal_record_round_subject(pending.entry.record());
+                PendingProjection {
+                    record_kind: Self::wal_record_kind(pending.entry.record()),
+                    continuation: Self::continuation_kind(&pending.continuation),
+                    persistence_id: pending.entry.id().get(),
+                    context_id: pending.entry.record().context_id(),
+                    height: round.height(),
+                    view: round.view(),
+                    subject,
+                }
+            })
+    }
+
+    fn wal_record_round_subject(record: &WalRecord) -> (Round, Subject) {
+        match record {
+            WalRecord::ProposalIntent(proposal) => {
+                (proposal.round(), proposal.manifest().subject())
+            }
+            WalRecord::PrepareIntent(vote) => (vote.round(), vote.subject()),
+            WalRecord::ObservePrepare(certificate) | WalRecord::Decision(certificate) => {
+                (certificate.round(), certificate.subject())
+            }
+            WalRecord::LockAndCommit { prepare, .. } => (prepare.round(), prepare.subject()),
+            WalRecord::TimeoutIntent(vote) => (vote.round(), Subject::default()),
+            WalRecord::InstallTimeout(certificate) => {
+                let subject = certificate
+                    .highest_prepare()
+                    .map_or_else(Subject::default, QuorumCertificate::subject);
+                (certificate.round(), subject)
+            }
+        }
+    }
+
+    const fn continuation_kind(continuation: &Continuation) -> u8 {
+        match continuation {
+            Continuation::None => CONTINUATION_NONE,
+            Continuation::Sign(_) => CONTINUATION_SIGN,
+            Continuation::InstallTimeout { .. } => CONTINUATION_INSTALL_TIMEOUT,
+            Continuation::Decide { .. } => CONTINUATION_DECIDE,
+        }
+    }
+
+    fn boundary_for_pending(
+        kind: u8,
+        pending: &PendingPersistence,
+        tag: EventTag,
+    ) -> BoundaryCapabilityKey {
+        let (_, subject) = Self::wal_record_round_subject(pending.entry.record());
+        BoundaryCapabilityKey {
+            kind,
+            record_kind: Self::wal_record_kind(pending.entry.record()),
+            continuation: Self::continuation_kind(&pending.continuation),
+            replay_effect_kind: REPLAY_EFFECT_NONE,
+            persistence_id: pending.entry.id().get(),
+            context_id: pending.entry.record().context_id(),
+            tag: Self::tag_projection(tag),
+            subject: Self::subject_projection(Some(subject)),
+        }
+    }
+
+    fn boundary_claim(
+        &self,
+        event: &Event,
+        after: &Self,
+        effects: &[Effect],
+    ) -> BoundaryCapabilityKey {
+        if self.pending_persistence.is_none()
+            && let Some(pending) = &after.pending_persistence
+        {
+            return Self::boundary_for_pending(
+                refinement::BOUNDARY_BEGIN_WAL,
+                pending,
+                after.current_tag(),
+            );
+        }
+        if let Some(pending) = &self.pending_persistence
+            && after.pending_persistence.is_none()
+            && matches!(event, Event::Persisted { .. })
+        {
+            return Self::boundary_for_pending(
+                refinement::BOUNDARY_ACKNOWLEDGE_WAL,
+                pending,
+                after.current_tag(),
+            );
+        }
+        if self.applied_subject != after.applied_subject {
+            return BoundaryCapabilityKey {
+                kind: refinement::BOUNDARY_COMPLETE_APPLICATION,
+                context_id: after.context.id(),
+                tag: Self::tag_projection(after.current_tag()),
+                subject: Self::subject_projection(after.applied_subject),
+                ..BoundaryCapabilityKey::none()
+            };
+        }
+        if !self.replay_resumed
+            && after.replay_resumed
+            && matches!(event, Event::ResumeAfterReplay { .. })
+        {
+            return BoundaryCapabilityKey {
+                kind: refinement::BOUNDARY_RESUME_AFTER_REPLAY,
+                replay_effect_kind: Self::replay_effect_kind(after, effects),
+                persistence_id: after.durable.last_id().get(),
+                context_id: after.context.id(),
+                tag: Self::tag_projection(after.current_tag()),
+                subject: Self::subject_projection(
+                    after.durable.decision().map(QuorumCertificate::subject),
+                ),
+                ..BoundaryCapabilityKey::none()
+            };
+        }
+        BoundaryCapabilityKey::none()
+    }
+
+    fn boundary_grant(
+        &self,
+        event: &Event,
+        after: &Self,
+        effects: &[Effect],
+        claimed: BoundaryCapabilityKey,
+    ) -> BoundaryCapabilityKey {
+        match claimed.kind {
+            refinement::BOUNDARY_BEGIN_WAL if self.begin_persist_is_exact(event, after) => after
+                .pending_persistence
+                .as_ref()
+                .map_or_else(BoundaryCapabilityKey::none, |pending| {
+                    Self::boundary_for_pending(
+                        refinement::BOUNDARY_BEGIN_WAL,
+                        pending,
+                        after.current_tag(),
+                    )
+                }),
+            refinement::BOUNDARY_ACKNOWLEDGE_WAL if self.acknowledgement_is_exact(event, after) => {
+                self.pending_persistence.as_ref().map_or_else(
+                    BoundaryCapabilityKey::none,
+                    |pending| {
+                        Self::boundary_for_pending(
+                            refinement::BOUNDARY_ACKNOWLEDGE_WAL,
+                            pending,
+                            after.current_tag(),
+                        )
+                    },
+                )
+            }
+            refinement::BOUNDARY_COMPLETE_APPLICATION
+                if self.applied_subject != after.applied_subject
+                    && self.application_transition_is_exact(event, after) =>
+            {
+                BoundaryCapabilityKey {
+                    kind: refinement::BOUNDARY_COMPLETE_APPLICATION,
+                    context_id: after.context.id(),
+                    tag: Self::tag_projection(after.current_tag()),
+                    subject: Self::subject_projection(after.applied_subject),
+                    ..BoundaryCapabilityKey::none()
+                }
+            }
+            refinement::BOUNDARY_RESUME_AFTER_REPLAY
+                if self.resume_after_replay_is_exact(event, after, effects) =>
+            {
+                BoundaryCapabilityKey {
+                    kind: refinement::BOUNDARY_RESUME_AFTER_REPLAY,
+                    replay_effect_kind: Self::replay_effect_kind(after, effects),
+                    persistence_id: after.durable.last_id().get(),
+                    context_id: after.context.id(),
+                    tag: Self::tag_projection(after.current_tag()),
+                    subject: Self::subject_projection(
+                        after.durable.decision().map(QuorumCertificate::subject),
+                    ),
+                    ..BoundaryCapabilityKey::none()
+                }
+            }
+            _ => BoundaryCapabilityKey::none(),
         }
     }
 
@@ -1335,8 +1505,15 @@ impl Reducer {
                 self.generation.next() == Some(after.generation)
                     && after.durable.last_timeout() == Some(certificate)
                     && after.candidate.is_none()
-                    && after.body_work.is_empty()
                     && after.pending_prepare.is_empty()
+                    && after.durable.locked().map_or_else(
+                        || after.body_work.is_empty(),
+                        |locked| {
+                            after.body_work.len() == 1
+                                && after.body_state(locked.round(), locked.subject())
+                                    == BodyState::Missing
+                        },
+                    )
             }
             Continuation::Decide { certificate, .. } => {
                 self.generation == after.generation && after.durable.decision() == Some(certificate)
@@ -1362,8 +1539,85 @@ impl Reducer {
         })
     }
 
+    fn resume_after_replay_is_exact(
+        &self,
+        event: &Event,
+        after: &Self,
+        effects: &[Effect],
+    ) -> bool {
+        if self.replay_resumed || !matches!(event, Event::ResumeAfterReplay { .. }) {
+            return false;
+        }
+        let mut expected = self.clone();
+        let outcome = expected.on_resume_after_replay();
+        let actual_effect_kind = Self::replay_effect_kind(&expected, outcome.effects());
+        outcome.disposition() == StepDisposition::Applied
+            && expected == *after
+            && outcome.effects() == effects
+            && actual_effect_kind == self.expected_replay_effect_kind()
+    }
+
+    fn expected_replay_effect_kind(&self) -> u8 {
+        if self.durable.decision().is_some() {
+            return REPLAY_EFFECT_DECISION;
+        }
+        let round = Round::new(self.context.height(), self.durable.current_view());
+        if self.durable.timeout_intent(round).is_some() {
+            return REPLAY_EFFECT_TIMEOUT;
+        }
+        if self.durable.proposal_intent(round).is_some() {
+            return REPLAY_EFFECT_PROPOSAL;
+        }
+        if self.durable.prepare_intents().next().is_some() {
+            return REPLAY_EFFECT_PREPARE;
+        }
+        if self.durable.commit_intents().next().is_some() {
+            return REPLAY_EFFECT_COMMIT;
+        }
+        REPLAY_EFFECT_NONE
+    }
+
+    fn signable_message_kind(message: &SignableMessage) -> u8 {
+        match message {
+            SignableMessage::Proposal(_) => SIGNED_MESSAGE_PROPOSAL,
+            SignableMessage::Vote(vote) => match vote.phase() {
+                Phase::Prepare => SIGNED_MESSAGE_PREPARE,
+                Phase::Commit => SIGNED_MESSAGE_COMMIT,
+            },
+            SignableMessage::TimeoutVote(_) => SIGNED_MESSAGE_TIMEOUT,
+        }
+    }
+
+    fn replay_effect_kind(after: &Self, effects: &[Effect]) -> u8 {
+        match effects {
+            [] => REPLAY_EFFECT_NONE,
+            [Effect::Sign { message, .. }] => match message {
+                SignableMessage::Proposal(_) => REPLAY_EFFECT_PROPOSAL,
+                SignableMessage::Vote(vote) => match vote.phase() {
+                    Phase::Prepare => REPLAY_EFFECT_PREPARE,
+                    Phase::Commit => REPLAY_EFFECT_COMMIT,
+                },
+                SignableMessage::TimeoutVote(_) => REPLAY_EFFECT_TIMEOUT,
+            },
+            [
+                Effect::FetchBody {
+                    certificate: Some(certificate),
+                    ..
+                },
+            ] if after
+                .durable
+                .decision()
+                .is_some_and(|decision| decision == certificate) =>
+            {
+                REPLAY_EFFECT_DECISION
+            }
+            _ => u8::MAX,
+        }
+    }
+
     const fn event_kind(event: &Event) -> u8 {
         match event {
+            Event::ResumeAfterReplay { .. } => EVENT_RESUME_AFTER_REPLAY,
             Event::LocalProposalReady { .. } => 0,
             Event::ProposalReceived { .. } => 1,
             Event::VoteReceived { .. } => 2,
@@ -1445,144 +1699,480 @@ impl Reducer {
         }
     }
 
-    #[allow(clippy::too_many_lines)]
-    fn effect_is_authorized(&self, event: &Event, after: &Self, effect: &Effect) -> bool {
+    const fn phase_code(phase: Phase) -> u8 {
+        match phase {
+            Phase::Prepare => 1,
+            Phase::Commit => 2,
+        }
+    }
+
+    fn apply_primary_certificate(key: &mut EffectCapabilityKey, reference: CertificateRef) {
+        key.context_id = reference.context_id();
+        key.height = reference.round().height();
+        key.view = reference.round().view();
+        key.phase = Self::phase_code(reference.phase());
+        key.subject = reference.subject();
+    }
+
+    fn apply_auxiliary_certificate(key: &mut EffectCapabilityKey, reference: CertificateRef) {
+        key.auxiliary_context_id = reference.context_id();
+        key.auxiliary_height = reference.round().height();
+        key.auxiliary_view = reference.round().view();
+        key.auxiliary_phase = Self::phase_code(reference.phase());
+        key.auxiliary_subject = reference.subject();
+    }
+
+    fn apply_manifest(key: &mut EffectCapabilityKey, manifest: PayloadManifest) {
+        key.subject = manifest.subject();
+        key.manifest_payload = manifest.payload_hash();
+        key.manifest_chunks = manifest.chunk_root();
+        key.manifest_len = manifest.byte_len();
+        key.manifest_count = u64::from(manifest.chunk_count());
+    }
+
+    fn apply_proposal(key: &mut EffectCapabilityKey, proposal: &Proposal) {
+        key.context_id = proposal.context_id();
+        key.height = proposal.round().height();
+        key.view = proposal.round().view();
+        key.actor = proposal.proposer();
+        Self::apply_manifest(key, *proposal.manifest());
+        let justification = match proposal.justification() {
+            ProposalJustification::ParentCommit(parent) => *parent,
+            ProposalJustification::Timeout(certificate) => certificate
+                .highest_prepare()
+                .map(QuorumCertificate::reference),
+        };
+        if let Some(reference) = justification {
+            Self::apply_auxiliary_certificate(key, reference);
+        }
+    }
+
+    fn apply_vote(key: &mut EffectCapabilityKey, vote: Vote) {
+        key.context_id = vote.context_id();
+        key.height = vote.round().height();
+        key.view = vote.round().view();
+        key.phase = Self::phase_code(vote.phase());
+        key.subject = vote.subject();
+        key.actor = vote.signer();
+    }
+
+    fn apply_timeout_vote(key: &mut EffectCapabilityKey, vote: &TimeoutVote) {
+        key.context_id = vote.context_id();
+        key.height = vote.round().height();
+        key.view = vote.round().view();
+        key.actor = vote.signer();
+        if let Some(reference) = vote.highest_prepare_ref() {
+            Self::apply_auxiliary_certificate(key, reference);
+        }
+    }
+
+    fn apply_timeout_certificate(key: &mut EffectCapabilityKey, certificate: &TimeoutCertificate) {
+        key.context_id = certificate.context_id();
+        key.height = certificate.round().height();
+        key.view = certificate.round().view();
+        if let Some(reference) = certificate
+            .highest_prepare()
+            .map(QuorumCertificate::reference)
+        {
+            Self::apply_auxiliary_certificate(key, reference);
+        }
+    }
+
+    fn apply_wal_record(key: &mut EffectCapabilityKey, record: &WalRecord) {
+        key.record_kind = Self::wal_record_kind(record);
+        match record {
+            WalRecord::ProposalIntent(proposal) => Self::apply_proposal(key, proposal),
+            WalRecord::PrepareIntent(vote) => Self::apply_vote(key, *vote),
+            WalRecord::ObservePrepare(certificate) | WalRecord::Decision(certificate) => {
+                Self::apply_primary_certificate(key, certificate.reference());
+            }
+            WalRecord::LockAndCommit { prepare, vote } => {
+                Self::apply_vote(key, *vote);
+                Self::apply_auxiliary_certificate(key, prepare.reference());
+            }
+            WalRecord::TimeoutIntent(vote) => Self::apply_timeout_vote(key, vote),
+            WalRecord::InstallTimeout(certificate) => {
+                Self::apply_timeout_certificate(key, certificate);
+            }
+        }
+    }
+
+    fn apply_signable(key: &mut EffectCapabilityKey, message: &SignableMessage) {
+        match message {
+            SignableMessage::Proposal(proposal) => Self::apply_proposal(key, proposal),
+            SignableMessage::Vote(vote) => Self::apply_vote(key, *vote),
+            SignableMessage::TimeoutVote(vote) => Self::apply_timeout_vote(key, vote),
+        }
+    }
+
+    fn apply_consensus_message(key: &mut EffectCapabilityKey, message: &ConsensusMessageV2) {
+        match message {
+            ConsensusMessageV2::Proposal(proposal) => {
+                Self::apply_proposal(key, proposal.proposal());
+            }
+            ConsensusMessageV2::Vote(vote) => Self::apply_vote(key, vote.vote()),
+            ConsensusMessageV2::QuorumCertificate(certificate) => {
+                Self::apply_primary_certificate(key, certificate.reference());
+            }
+            ConsensusMessageV2::TimeoutVote(vote) => {
+                Self::apply_timeout_vote(key, &vote.vote());
+            }
+            ConsensusMessageV2::TimeoutCertificate(certificate) => {
+                Self::apply_timeout_certificate(key, certificate);
+            }
+            ConsensusMessageV2::BodyRequest(subject) => key.subject = *subject,
+            ConsensusMessageV2::BodyChunk(chunk) => key.subject = chunk.subject(),
+        }
+    }
+
+    fn effect_capability(effect: &Effect) -> EffectCapabilityKey {
+        let mut key = EffectCapabilityKey {
+            kind: Self::effect_kind(effect),
+            ..EffectCapabilityKey::none()
+        };
         match effect {
             Effect::Persist { tag, entry } => {
-                *tag == after.current_tag()
-                    && after
-                        .pending_persistence
-                        .as_ref()
-                        .is_some_and(|pending| pending.entry == *entry)
-                    && self.event_may_start_record(event, entry.record())
+                key.tag = Self::tag_projection(*tag);
+                key.persistence_id = entry.id().get();
+                Self::apply_wal_record(&mut key, entry.record());
             }
             Effect::FetchBody {
                 tag,
                 round,
                 subject,
                 manifest,
-                certified_sources,
                 certificate,
+                ..
             } => {
-                if *tag != after.current_tag()
-                    || round.height() != after.context.height()
-                    || after.body_work.get(&(*round, *subject)).is_none_or(|work| {
-                        manifest.is_some_and(|manifest| work.manifest != Some(manifest))
-                    })
-                {
-                    return false;
+                key.tag = Self::tag_projection(*tag);
+                key.height = round.height();
+                key.view = round.view();
+                key.subject = *subject;
+                if let Some(manifest) = manifest {
+                    Self::apply_manifest(&mut key, *manifest);
                 }
-                certificate
-                    .as_ref()
-                    .map_or(certified_sources.is_empty(), |certificate| {
-                        certificate.round() == *round
-                            && certificate.subject() == *subject
-                            && certificate.validate(&after.context).is_ok()
-                            && certified_sources
-                                == &certificate
-                                    .signatures()
-                                    .iter()
-                                    .map(SignatureShare::signer)
-                                    .collect::<Vec<_>>()
-                    })
+                if let Some(certificate) = certificate {
+                    Self::apply_auxiliary_certificate(&mut key, certificate.reference());
+                }
             }
             Effect::StoreBody {
                 tag,
                 round,
                 subject,
-            } => {
-                *tag == after.current_tag()
-                    && matches!(
-                        event,
-                        Event::BodyAvailable {
-                            round: event_round,
-                            subject: event_subject,
-                            ..
-                        } if event_round == round && event_subject == subject
-                    )
-                    && after.body_state(*round, *subject) == BodyState::Available
             }
-            Effect::ValidateBody {
+            | Effect::ValidateBody {
                 tag,
                 round,
                 subject,
             } => {
-                *tag == after.current_tag()
-                    && matches!(
-                        event,
-                        Event::BodyStored {
-                            round: event_round,
-                            subject: event_subject,
-                            ..
-                        } if event_round == round && event_subject == subject
-                    )
-                    && after.body_state(*round, *subject) == BodyState::Durable
+                key.tag = Self::tag_projection(*tag);
+                key.height = round.height();
+                key.view = round.view();
+                key.subject = *subject;
             }
             Effect::Sign { tag, message } => {
-                *tag == after.current_tag()
-                    && after.awaiting_signature.as_ref() == Some(message)
-                    && after.signable_is_durably_authorized(message)
+                key.tag = Self::tag_projection(*tag);
+                Self::apply_signable(&mut key, message);
             }
-            Effect::Broadcast(message) => match message {
-                ConsensusMessageV2::Proposal(signed) => {
-                    after.durable.proposal_intent(signed.proposal().round())
-                        == Some(signed.proposal())
-                }
-                ConsensusMessageV2::Vote(signed) => {
-                    let vote = signed.vote();
-                    match vote.phase() {
-                        Phase::Prepare => after.durable.prepare_intent(vote.round()) == Some(vote),
-                        Phase::Commit => {
-                            after.durable.commit_intent(vote.round()) == Some(vote)
-                                && after.durable.locked().is_some_and(|locked| {
-                                    locked.round() == vote.round()
-                                        && locked.subject() == vote.subject()
-                                })
-                        }
-                    }
-                }
-                ConsensusMessageV2::QuorumCertificate(certificate) => {
-                    certificate.validate(&after.context).is_ok()
-                        && (certificate.phase() == Phase::Prepare
-                            || after.durable.decision().is_some_and(|decision| {
-                                decision.reference() == certificate.reference()
-                            }))
-                }
-                ConsensusMessageV2::TimeoutVote(signed) => {
-                    after.durable.timeout_intent(signed.vote().round()) == Some(signed.vote())
-                }
-                ConsensusMessageV2::TimeoutCertificate(certificate) => {
-                    after.durable.last_timeout() == Some(certificate)
-                }
-                ConsensusMessageV2::BodyRequest(_) | ConsensusMessageV2::BodyChunk(_) => false,
-            },
+            Effect::Broadcast(message) => Self::apply_consensus_message(&mut key, message),
             Effect::Apply {
                 tag,
                 subject,
                 certificate,
             } => {
-                *tag == after.current_tag()
-                    && certificate.phase() == Phase::Commit
-                    && after.durable.decision() == Some(certificate)
-                    && certificate.subject() == *subject
-                    && after.body_state(certificate.round(), *subject) == BodyState::Validated
+                key.tag = Self::tag_projection(*tag);
+                Self::apply_primary_certificate(&mut key, certificate.reference());
+                key.subject = *subject;
             }
             Effect::EnterView { tag, certificate } => {
-                *tag == after.current_tag()
-                    && after.durable.last_timeout() == Some(certificate)
-                    && certificate.round().view().checked_add(1)
-                        == Some(after.durable.current_view())
+                key.tag = Self::tag_projection(*tag);
+                Self::apply_timeout_certificate(&mut key, certificate);
             }
-            Effect::ReportEquivocation { evidence } => evidence.is_conflict_in(&after.context),
+            Effect::ReportEquivocation { evidence } => {
+                let round = evidence.round();
+                key.actor = evidence.offender();
+                key.height = round.height();
+                key.view = round.view();
+                key.phase = match evidence.kind() {
+                    EquivocationKind::Vote => 1,
+                    EquivocationKind::Timeout => 2,
+                    EquivocationKind::Proposal => 3,
+                };
+            }
             Effect::ReportInvalidCertifiedBody {
                 subject,
                 certificate,
             } => {
-                certificate.phase() == Phase::Prepare
-                    && certificate.subject() == *subject
-                    && certificate.validate(&after.context).is_ok()
+                Self::apply_primary_certificate(&mut key, certificate.reference());
+                key.subject = *subject;
             }
         }
+        key
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn granted_effect_capability(
+        &self,
+        event: &Event,
+        after: &Self,
+        effect: &Effect,
+    ) -> EffectCapabilityKey {
+        let granted = match effect {
+            Effect::Persist { entry, .. } => {
+                after.pending_persistence.as_ref().and_then(|pending| {
+                    (pending.entry == *entry
+                        && self.event_may_start_record(event, pending.entry.record()))
+                    .then(|| {
+                        let mut key = EffectCapabilityKey {
+                            kind: EFFECT_PERSIST,
+                            tag: Self::tag_projection(after.current_tag()),
+                            persistence_id: pending.entry.id().get(),
+                            ..EffectCapabilityKey::none()
+                        };
+                        Self::apply_wal_record(&mut key, pending.entry.record());
+                        key
+                    })
+                })
+            }
+            Effect::FetchBody {
+                round,
+                subject,
+                certified_sources,
+                certificate,
+                ..
+            } => {
+                let work = after.body_work.get(&(*round, *subject));
+                let certificate_valid =
+                    certificate
+                        .as_ref()
+                        .map_or(certified_sources.is_empty(), |certificate| {
+                            certificate.round() == *round
+                                && certificate.subject() == *subject
+                                && certificate.validate(&after.context).is_ok()
+                                && certified_sources
+                                    == &certificate
+                                        .signatures()
+                                        .iter()
+                                        .map(SignatureShare::signer)
+                                        .collect::<Vec<_>>()
+                        });
+                if round.height() != after.context.height() || !certificate_valid {
+                    None
+                } else {
+                    work.map(|work| {
+                        let mut key = EffectCapabilityKey {
+                            kind: EFFECT_FETCH,
+                            tag: Self::tag_projection(after.current_tag()),
+                            height: round.height(),
+                            view: round.view(),
+                            subject: *subject,
+                            ..EffectCapabilityKey::none()
+                        };
+                        if let Some(manifest) = work.manifest {
+                            Self::apply_manifest(&mut key, manifest);
+                        }
+                        if let Some(certificate) = certificate {
+                            Self::apply_auxiliary_certificate(&mut key, certificate.reference());
+                        }
+                        key
+                    })
+                }
+            }
+            Effect::StoreBody { .. } => match event {
+                Event::BodyAvailable { round, subject, .. }
+                    if after.body_state(*round, *subject) == BodyState::Available =>
+                {
+                    Some(EffectCapabilityKey {
+                        kind: EFFECT_STORE,
+                        tag: Self::tag_projection(after.current_tag()),
+                        height: round.height(),
+                        view: round.view(),
+                        subject: *subject,
+                        ..EffectCapabilityKey::none()
+                    })
+                }
+                _ => None,
+            },
+            Effect::ValidateBody { .. } => match event {
+                Event::BodyStored { round, subject, .. }
+                    if after.body_state(*round, *subject) == BodyState::Durable =>
+                {
+                    Some(EffectCapabilityKey {
+                        kind: EFFECT_VALIDATE,
+                        tag: Self::tag_projection(after.current_tag()),
+                        height: round.height(),
+                        view: round.view(),
+                        subject: *subject,
+                        ..EffectCapabilityKey::none()
+                    })
+                }
+                _ => None,
+            },
+            Effect::Sign {
+                message: requested, ..
+            } => after.awaiting_signature.as_ref().and_then(|message| {
+                (message == requested && after.signable_is_durably_authorized(message)).then(|| {
+                    let mut key = EffectCapabilityKey {
+                        kind: EFFECT_SIGN,
+                        tag: Self::tag_projection(after.current_tag()),
+                        ..EffectCapabilityKey::none()
+                    };
+                    Self::apply_signable(&mut key, message);
+                    key
+                })
+            }),
+            Effect::Broadcast(message) => match message {
+                ConsensusMessageV2::Proposal(signed) => after
+                    .durable
+                    .proposal_intent(signed.proposal().round())
+                    .filter(|proposal| *proposal == signed.proposal())
+                    .map(|proposal| {
+                        let mut key = EffectCapabilityKey {
+                            kind: EFFECT_BROADCAST,
+                            ..EffectCapabilityKey::none()
+                        };
+                        Self::apply_proposal(&mut key, proposal);
+                        key
+                    }),
+                ConsensusMessageV2::Vote(signed) => {
+                    let vote = signed.vote();
+                    let durable_vote = match vote.phase() {
+                        Phase::Prepare => after.durable.prepare_intent(vote.round()),
+                        Phase::Commit => after.durable.commit_intent(vote.round()).filter(|vote| {
+                            after.durable.locked().is_some_and(|locked| {
+                                locked.round() == vote.round() && locked.subject() == vote.subject()
+                            })
+                        }),
+                    };
+                    durable_vote.map(|vote| {
+                        let mut key = EffectCapabilityKey {
+                            kind: EFFECT_BROADCAST,
+                            ..EffectCapabilityKey::none()
+                        };
+                        Self::apply_vote(&mut key, vote);
+                        key
+                    })
+                }
+                ConsensusMessageV2::QuorumCertificate(certificate) => {
+                    let source = if certificate.phase() == Phase::Prepare
+                        && certificate.validate(&after.context).is_ok()
+                    {
+                        Some(certificate)
+                    } else {
+                        after.durable.decision().filter(|decision| {
+                            decision.reference() == certificate.reference()
+                                && certificate.validate(&after.context).is_ok()
+                        })
+                    };
+                    source.map(|certificate| {
+                        let mut key = EffectCapabilityKey {
+                            kind: EFFECT_BROADCAST,
+                            ..EffectCapabilityKey::none()
+                        };
+                        Self::apply_primary_certificate(&mut key, certificate.reference());
+                        key
+                    })
+                }
+                ConsensusMessageV2::TimeoutVote(signed) => after
+                    .durable
+                    .timeout_intent(signed.vote().round())
+                    .filter(|vote| *vote == signed.vote())
+                    .map(|vote| {
+                        let mut key = EffectCapabilityKey {
+                            kind: EFFECT_BROADCAST,
+                            ..EffectCapabilityKey::none()
+                        };
+                        Self::apply_timeout_vote(&mut key, &vote);
+                        key
+                    }),
+                ConsensusMessageV2::TimeoutCertificate(requested) => after
+                    .durable
+                    .last_timeout()
+                    .filter(|certificate| *certificate == requested)
+                    .map(|certificate| {
+                        let mut key = EffectCapabilityKey {
+                            kind: EFFECT_BROADCAST,
+                            ..EffectCapabilityKey::none()
+                        };
+                        Self::apply_timeout_certificate(&mut key, certificate);
+                        key
+                    }),
+                ConsensusMessageV2::BodyRequest(_) | ConsensusMessageV2::BodyChunk(_) => None,
+            },
+            Effect::Apply {
+                subject,
+                certificate: requested,
+                ..
+            } => after.durable.decision().and_then(|decision| {
+                (decision == requested
+                    && decision.phase() == Phase::Commit
+                    && decision.subject() == *subject
+                    && after.body_state(decision.round(), *subject) == BodyState::Validated)
+                    .then(|| {
+                        let mut key = EffectCapabilityKey {
+                            kind: EFFECT_APPLY,
+                            tag: Self::tag_projection(after.current_tag()),
+                            ..EffectCapabilityKey::none()
+                        };
+                        Self::apply_primary_certificate(&mut key, decision.reference());
+                        key.subject = *subject;
+                        key
+                    })
+            }),
+            Effect::EnterView {
+                certificate: requested,
+                ..
+            } => after.durable.last_timeout().and_then(|certificate| {
+                (certificate == requested
+                    && certificate.round().view().checked_add(1)
+                        == Some(after.durable.current_view()))
+                .then(|| {
+                    let mut key = EffectCapabilityKey {
+                        kind: EFFECT_ENTER_VIEW,
+                        tag: Self::tag_projection(after.current_tag()),
+                        ..EffectCapabilityKey::none()
+                    };
+                    Self::apply_timeout_certificate(&mut key, certificate);
+                    key
+                })
+            }),
+            Effect::ReportEquivocation { evidence } => {
+                evidence.is_conflict_in(&after.context).then(|| {
+                    let round = evidence.round();
+                    let kind = evidence.kind();
+                    let offender = evidence.offender();
+                    let mut key = EffectCapabilityKey {
+                        kind: EFFECT_REPORT,
+                        actor: offender,
+                        height: round.height(),
+                        view: round.view(),
+                        ..EffectCapabilityKey::none()
+                    };
+                    key.phase = match kind {
+                        EquivocationKind::Vote => 1,
+                        EquivocationKind::Timeout => 2,
+                        EquivocationKind::Proposal => 3,
+                    };
+                    key
+                })
+            }
+            Effect::ReportInvalidCertifiedBody {
+                subject,
+                certificate,
+            } => (certificate.phase() == Phase::Prepare
+                && certificate.subject() == *subject
+                && certificate.validate(&after.context).is_ok())
+            .then(|| {
+                let mut key = EffectCapabilityKey {
+                    kind: EFFECT_REPORT,
+                    ..EffectCapabilityKey::none()
+                };
+                Self::apply_primary_certificate(&mut key, certificate.reference());
+                key.subject = *subject;
+                key
+            }),
+        };
+        granted.unwrap_or_else(EffectCapabilityKey::none)
     }
 
     fn reject_tag(&self, tag: EventTag) -> Option<IgnoreReason> {
@@ -1645,14 +2235,23 @@ impl Reducer {
                 state: BodyState::Missing,
             });
         if self.body_state(round, subject) == BodyState::Missing {
-            Ok(StepOutcome::applied(vec![Effect::FetchBody {
-                tag: self.current_tag(),
-                round,
-                subject,
-                manifest: Some(*proposal.manifest()),
-                certified_sources: Vec::new(),
-                certificate: None,
-            }]))
+            let key = CertificateRef::new(self.context.id(), round, Phase::Prepare, subject);
+            let fetch = if let Some(certificate) = self.pending_prepare.get(&key).cloned() {
+                // A PrepareQC may race ahead of its proposal. Preserve its
+                // certified sources when the proposal later contributes the
+                // manifest so acquisition can be monotonically upgraded.
+                self.ensure_body_fetch(&certificate)
+            } else {
+                Effect::FetchBody {
+                    tag: self.current_tag(),
+                    round,
+                    subject,
+                    manifest: Some(*proposal.manifest()),
+                    certified_sources: Vec::new(),
+                    certificate: None,
+                }
+            };
+            Ok(StepOutcome::applied(vec![fetch]))
         } else {
             Ok(StepOutcome::applied(Vec::new()))
         }
@@ -2061,10 +2660,12 @@ impl Reducer {
             return Ok(StepOutcome::ignored(IgnoreReason::IrrelevantView));
         }
         let reference = certificate.reference();
-        self.known_prepare
+        let certificate = self
+            .pending_prepare
             .entry(reference)
-            .or_insert_with(|| certificate.clone());
-        self.pending_prepare
+            .or_insert_with(|| certificate.clone())
+            .clone();
+        self.known_prepare
             .entry(reference)
             .or_insert_with(|| certificate.clone());
         self.remember_control(ConsensusMessageV2::QuorumCertificate(certificate.clone()));
@@ -2194,6 +2795,13 @@ impl Reducer {
             return StepOutcome::applied(effects);
         }
 
+        if let Some(locked) = self.durable.locked().cloned()
+            && self.body_state(locked.round(), locked.subject()) == BodyState::Missing
+        {
+            effects.push(self.ensure_body_fetch(&locked));
+            return StepOutcome::applied(effects);
+        }
+
         if let Some(proposal) = self.candidate.clone()
             && self.body_state(proposal.round(), proposal.manifest().subject())
                 == BodyState::Missing
@@ -2267,12 +2875,10 @@ impl Reducer {
             self.context.id(),
             round,
             signer,
-            self.durable
-                .highest_prepare()
-                .map(QuorumCertificate::reference),
+            self.durable.highest_prepare().cloned(),
         );
         let effect = self.start_persistence(
-            WalRecord::TimeoutIntent(timeout),
+            WalRecord::TimeoutIntent(timeout.clone()),
             Continuation::Sign(SignableMessage::TimeoutVote(timeout)),
         )?;
         Ok(StepOutcome::applied(vec![effect]))
@@ -2292,17 +2898,18 @@ impl Reducer {
         if vote.round().view() != self.durable.current_view() {
             return Ok(StepOutcome::ignored(IgnoreReason::IrrelevantView));
         }
-        if let Some(reference) = vote.highest_prepare()
-            && (reference.phase() != Phase::Prepare
-                || reference.context_id() != self.context.id()
-                || reference.round().height() != self.context.height()
-                || reference.round().view() > vote.round().view())
+        if let Some(certificate) = vote.highest_prepare()
+            && (certificate.phase() != Phase::Prepare
+                || certificate.reference().context_id() != self.context.id()
+                || certificate.round().height() != self.context.height()
+                || certificate.round().view() > vote.round().view()
+                || certificate.validate(&self.context).is_err())
         {
             return Err(ReducerError::InvalidTimeoutVote);
         }
         let pool = self.timeout_votes.entry(vote.round()).or_default();
         if let Some(existing) = pool.get(&vote.signer()) {
-            if existing.vote().highest_prepare() == vote.highest_prepare() {
+            if existing.vote().highest_prepare_ref() == vote.highest_prepare_ref() {
                 return Ok(StepOutcome::ignored(IgnoreReason::Duplicate));
             }
             return Ok(StepOutcome::applied(vec![Effect::ReportEquivocation {
@@ -2336,18 +2943,16 @@ impl Reducer {
         if !quorum.satisfies(&self.context) {
             return Ok(None);
         }
-        let mut grouped: BTreeMap<Option<CertificateRef>, Vec<SignatureShare>> = BTreeMap::new();
+        let mut grouped: BTreeMap<
+            Option<CertificateRef>,
+            (Option<QuorumCertificate>, Vec<SignatureShare>),
+        > = BTreeMap::new();
         for signed in pool.values() {
             let vote = signed.vote();
-            if vote
-                .highest_prepare()
-                .is_some_and(|reference| !self.known_prepare.contains_key(&reference))
-            {
-                return Ok(None);
-            }
             grouped
-                .entry(vote.highest_prepare())
-                .or_default()
+                .entry(vote.highest_prepare_ref())
+                .or_insert_with(|| (vote.highest_prepare().cloned(), Vec::new()))
+                .1
                 .push(SignatureShare::new(
                     vote.signer(),
                     signed.signature().clone(),
@@ -2355,11 +2960,8 @@ impl Reducer {
         }
         let groups = grouped
             .into_iter()
-            .map(|(reference, signatures)| {
-                TimeoutSignatureGroup::new(
-                    reference.and_then(|key| self.known_prepare.get(&key).cloned()),
-                    signatures,
-                )
+            .map(|(_, (certificate, signatures))| {
+                TimeoutSignatureGroup::new(certificate, signatures)
             })
             .collect();
         let certificate = TimeoutCertificate::new(self.context.id(), round, groups);
@@ -2438,14 +3040,10 @@ impl Reducer {
             } => {
                 let message = ConsensusMessageV2::TimeoutCertificate(certificate.clone());
                 self.remember_control(message.clone());
+                let mut install_effects = Vec::new();
                 if broadcast {
-                    vec![Effect::Broadcast(message)]
-                } else {
-                    Vec::new()
+                    install_effects.push(Effect::Broadcast(message));
                 }
-            }
-            .into_iter()
-            .chain({
                 self.generation = self
                     .generation
                     .next()
@@ -2475,12 +3073,15 @@ impl Reducer {
                             | OutboundControlClass::TimeoutCertificate
                     )
                 });
-                [Effect::EnterView {
+                install_effects.push(Effect::EnterView {
                     tag: self.current_tag(),
                     certificate,
-                }]
-            })
-            .collect(),
+                });
+                if let Some(locked) = self.durable.locked().cloned() {
+                    install_effects.push(self.ensure_body_fetch(&locked));
+                }
+                install_effects
+            }
             Continuation::Decide {
                 certificate,
                 broadcast,
@@ -2592,16 +3193,24 @@ impl Reducer {
     fn decision_effects(&mut self, certificate: QuorumCertificate) -> Vec<Effect> {
         let round = certificate.round();
         let subject = certificate.subject();
-        if self.body_state(round, subject) == BodyState::Validated
-            && self.applied_subject != Some(subject)
-        {
-            return vec![Effect::Apply {
-                tag: self.current_tag(),
-                subject,
-                certificate,
-            }];
+        match self.body_state(round, subject) {
+            BodyState::Missing => vec![self.ensure_body_fetch(&certificate)],
+            BodyState::Validated if self.applied_subject != Some(subject) => {
+                vec![Effect::Apply {
+                    tag: self.current_tag(),
+                    subject,
+                    certificate,
+                }]
+            }
+            // Store and validation completions are already generation-tagged
+            // continuations of the exact body pipeline. Starting a second
+            // fetch here would race that retained work and can exhaust the
+            // bounded executor without making PendingApply progress.
+            BodyState::Available
+            | BodyState::Durable
+            | BodyState::Validated
+            | BodyState::Invalid => Vec::new(),
         }
-        vec![self.ensure_body_fetch(&certificate)]
     }
 }
 
@@ -2739,5 +3348,99 @@ impl From<QuorumError> for ReducerError {
 impl From<ReplayError> for ReducerError {
     fn from(error: ReplayError) -> Self {
         Self::Replay(error)
+    }
+}
+
+#[cfg(test)]
+mod source_link_tests {
+    use super::super::{ChainId, ContextId, Digest, Validator, VotingMode, VotingPower};
+    use super::*;
+
+    fn reducer() -> Reducer {
+        let validators = (1_u8..=4)
+            .map(|byte| Validator::new(ValidatorId::repeat(byte), VotingPower::new(1)))
+            .collect();
+        let context = HeightContext::new(
+            ContextId::repeat(0x91),
+            ChainId::repeat(0x92),
+            2,
+            Some(CertificateRef::new(
+                ContextId::repeat(0x90),
+                Round::new(1, 0),
+                Phase::Commit,
+                Subject::repeat(0x93),
+            )),
+            0,
+            validators,
+            VotingMode::Permissioned,
+            Digest::repeat(0x94),
+            Digest::repeat(0x95),
+            Digest::repeat(0x96),
+        )
+        .expect("source-link fixture context");
+        Reducer::new(context, Some(ValidatorId::repeat(1)), Generation::new(7))
+            .expect("source-link fixture reducer")
+    }
+
+    #[test]
+    fn primitive_projection_cannot_hide_a_safety_violation() {
+        let before = reducer();
+        let after = before.clone();
+        let event = Event::RetransmitElapsed {
+            tag: before.current_tag(),
+        };
+        let mut projection = before.transition_projection(&event, &after, &[]);
+        assert!(refinement::accepts(projection));
+
+        projection.safety_before.invalid_pending_append = 1;
+        assert!(!refinement::accepts(projection));
+    }
+
+    #[test]
+    fn counterfeit_effect_grant_with_a_different_primitive_key_fails_closed() {
+        let before = reducer();
+        let after = before.clone();
+        let event = Event::RetransmitElapsed {
+            tag: before.current_tag(),
+        };
+        let mut projection = before.transition_projection(&event, &after, &[]);
+        let requested = EffectCapabilityKey {
+            kind: EFFECT_BROADCAST,
+            persistence_id: 41,
+            ..EffectCapabilityKey::none()
+        };
+        let granted = EffectCapabilityKey {
+            persistence_id: 42,
+            ..requested
+        };
+        projection.effects.len = 1;
+        projection.effects.slot0 = refinement::EffectSlotProjection {
+            kind: EFFECT_BROADCAST,
+            requested,
+            granted,
+        };
+        assert!(!refinement::accepts(projection));
+    }
+
+    #[test]
+    fn counterfeit_boundary_capability_cannot_invent_a_wal_transition() {
+        let before = reducer();
+        let after = before.clone();
+        let event = Event::RetransmitElapsed {
+            tag: before.current_tag(),
+        };
+        let mut projection = before.transition_projection(&event, &after, &[]);
+        let counterfeit = BoundaryCapabilityKey {
+            kind: refinement::BOUNDARY_BEGIN_WAL,
+            record_kind: WAL_RECORD_PREPARE_INTENT,
+            continuation: CONTINUATION_SIGN,
+            persistence_id: 1,
+            context_id: before.context.id(),
+            tag: Reducer::tag_projection(before.current_tag()),
+            ..BoundaryCapabilityKey::none()
+        };
+        projection.boundary_claimed = counterfeit;
+        projection.boundary_granted = counterfeit;
+        assert!(!refinement::accepts(projection));
     }
 }

@@ -323,7 +323,10 @@ async fn sumeragi_status_endpoint_exposes_complete_v2_json_shape() {
         .get("phase")
         .and_then(norito::json::Value::as_object)
         .expect("tagged v2 phase");
-    assert_eq!(phase.get("phase").and_then(norito::json::Value::as_str), Some("prepare"));
+    assert_eq!(
+        phase.get("phase").and_then(norito::json::Value::as_str),
+        Some("prepare")
+    );
     assert_eq!(phase.get("details"), Some(&norito::json::Value::Null));
     let context = root
         .get("height_context")

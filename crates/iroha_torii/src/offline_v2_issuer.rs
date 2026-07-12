@@ -26,8 +26,8 @@ use iroha_data_model::{
 use iroha_primitives::numeric::Numeric;
 use iroha_torii_shared::offline_api::{
     OfflineOperationKind, OfflineOperationReference, OfflineOperationResult, OfflineOperationState,
-    OfflineOperationStatus, OfflineRedeemRequest, OfflineRedeemResult, OfflineTopUpRequest,
-    OfflineTopUpResult,
+    OfflineOperationStatus, OfflineRedeemRequest, OfflineRedeemResult, OfflineTopUpFinalityProof,
+    OfflineTopUpRequest, OfflineTopUpResult,
 };
 use mv::storage::StorageReadOnly;
 use tokio::sync::watch;
@@ -175,7 +175,7 @@ pub(crate) async fn handle_top_up(
     ));
     let tx = issuer.sign_transaction(transaction, "offline_top_up_transaction")?;
     let tx_hash = tx.hash();
-    routing::handle_transaction_with_metrics(
+    let admission = routing::handle_transaction_with_metrics(
         app.chain_id.clone(),
         app.queue.clone(),
         app.state.clone(),
@@ -183,7 +183,16 @@ pub(crate) async fn handle_top_up(
         app.telemetry.clone(),
         PATH_OFFLINE_TOP_UP,
     )
-    .await?;
+    .await;
+    if let Err(error) = admission {
+        return reconcile_duplicate_queue_admission(
+            &app,
+            &issuer,
+            requested,
+            &requested_binding,
+            error,
+        );
+    }
     let record = submission.accept(tx_hash)?;
     offline_operation_reference_for_admitted_record(&record)
 }
@@ -253,7 +262,7 @@ pub(crate) async fn handle_redeem(
     ));
     let tx = issuer.sign_transaction(transaction, "offline_redeem_transaction")?;
     let tx_hash = tx.hash();
-    routing::handle_transaction_with_metrics(
+    let admission = routing::handle_transaction_with_metrics(
         app.chain_id.clone(),
         app.queue.clone(),
         app.state.clone(),
@@ -261,13 +270,22 @@ pub(crate) async fn handle_redeem(
         app.telemetry.clone(),
         PATH_OFFLINE_REDEEM,
     )
-    .await?;
+    .await;
+    if let Err(error) = admission {
+        return reconcile_duplicate_queue_admission(
+            &app,
+            &issuer,
+            requested,
+            &requested_binding,
+            error,
+        );
+    }
     let record = submission.accept(tx_hash)?;
     offline_operation_reference_for_admitted_record(&record)
 }
 
-fn kagemusha_v2_snapshot_time_ms(app: &SharedAppState) -> u64 {
-    app.state.view().latest_block().map_or(0, |block| {
+fn kagemusha_v2_snapshot_time_ms(state: &impl StateReadOnly) -> u64 {
+    state.latest_block().map_or(0, |block| {
         u64::try_from(block.header().creation_time().as_millis()).unwrap_or(u64::MAX)
     })
 }
@@ -283,7 +301,8 @@ fn validate_kagemusha_v2_topup_snapshot(
             "Offline top-up request targets a different chain.",
         ));
     }
-    let world = app.state.world_view();
+    let state = app.state.view();
+    let world = state.world();
     let definition = world
         .asset_definition(request.asset.definition())
         .map_err(|_| {
@@ -304,8 +323,79 @@ fn validate_kagemusha_v2_topup_snapshot(
             "Offline top-up amount scale differs from the live asset scale.",
         ));
     }
+    let zk_state = world
+        .zk_assets()
+        .get(request.asset.definition())
+        .ok_or_else(|| {
+            validation(
+                "offline_confidential_state_unavailable",
+                "Offline top-up asset has no confidential tree state.",
+            )
+        })?;
+    let shield_binding = zk_state.vk_shield.as_ref().ok_or_else(|| {
+        validation(
+            "offline_topup_shield_verifier_unavailable",
+            "Offline top-up asset has no bound shield verifier.",
+        )
+    })?;
+    if request.shield_evidence.proof.vk_ref != shield_binding.id
+        || request.shield_evidence.proof.vk_commitment != Some(shield_binding.commitment)
+    {
+        return Err(validation(
+            "offline_topup_shield_verifier_mismatch",
+            "Offline top-up proof does not use the asset-bound shield verifier.",
+        ));
+    }
+    let authoritative_initial_root =
+        iroha_core::zk::confidential_v2::compute_confidential_root_v2(&zk_state.commitments)
+            .map_err(|error| {
+                validation_owned(
+                    "offline_confidential_state_invalid",
+                    format!("Offline confidential tree is invalid: {error}"),
+                )
+            })?;
+    let authoritative_leaf_index = u32::try_from(zk_state.commitments.len()).map_err(|_| {
+        validation(
+            "offline_topup_tree_full",
+            "Offline confidential tree position exceeds the protocol index.",
+        )
+    })?;
+    if authoritative_leaf_index
+        >= iroha_data_model::offline::KAGEMUSHA_TOPUP_SHIELD_TREE_CAPACITY_V2
+        || zk_state
+            .commitments
+            .contains(&request.current_note.note_commitment)
+        || zk_state
+            .nullifiers
+            .contains(&request.current_note.spend_nullifier)
+    {
+        return Err(validation(
+            "offline_topup_state_conflict",
+            "Offline top-up note conflicts with existing confidential state.",
+        ));
+    }
+    let mut commitments_after = zk_state.commitments.clone();
+    commitments_after.push(request.current_note.note_commitment);
+    let authoritative_finalized_root =
+        iroha_core::zk::confidential_v2::compute_confidential_root_v2(&commitments_after).map_err(
+            |error| {
+                validation_owned(
+                    "offline_confidential_state_invalid",
+                    format!("Offline confidential tree is invalid after append: {error}"),
+                )
+            },
+        )?;
+    if request.shield_evidence.initial_root != authoritative_initial_root
+        || request.shield_evidence.finalized_root != authoritative_finalized_root
+        || request.shield_evidence.leaf_index != authoritative_leaf_index
+    {
+        return Err(validation(
+            "offline_topup_snapshot_stale",
+            "Offline top-up root or leaf index is stale at the evaluated snapshot.",
+        ));
+    }
     request
-        .validate_authorization_at(kagemusha_v2_snapshot_time_ms(app))
+        .validate_authorization_at(kagemusha_v2_snapshot_time_ms(&state))
         .map_err(|err| {
             validation_owned(
                 "offline_authorization_invalid",
@@ -325,7 +415,8 @@ fn validate_kagemusha_v2_redeem_snapshot(
             "Offline redemption request targets a different chain.",
         ));
     }
-    let world = app.state.world_view();
+    let state = app.state.view();
+    let world = state.world();
     let definition = world
         .asset_definition(&request.bundle.statement.asset)
         .map_err(|_| {
@@ -347,7 +438,7 @@ fn validate_kagemusha_v2_redeem_snapshot(
         ));
     }
     request
-        .validate_authorization_at(kagemusha_v2_snapshot_time_ms(app))
+        .validate_authorization_at(kagemusha_v2_snapshot_time_ms(&state))
         .map_err(|err| {
             validation_owned(
                 "offline_authorization_invalid",
@@ -462,10 +553,9 @@ fn canonical_offline_request_digest(
         OfflineOperationRequest::TopUp(request) => norito::to_bytes(request),
         OfflineOperationRequest::Redeem(request) => norito::to_bytes(request),
     }
-    .map_err(|source| {
-        Error::Query(ValidationFail::InternalError(format!(
-            "failed to encode canonical offline request binding: {source}"
-        )))
+    .map_err(|source| Error::SerializationFailure {
+        context: "offline_request_binding",
+        source: Box::new(source),
     })?;
     Ok(Hash::new(canonical).into())
 }
@@ -1008,6 +1098,34 @@ fn find_existing_offline_operation(
     .map(Some)
 }
 
+fn is_duplicate_queue_admission_error(error: &Error) -> bool {
+    matches!(
+        error,
+        Error::PushIntoQueue { source, .. }
+            if matches!(
+                source.as_ref(),
+                iroha_core::queue::Error::InBlockchain | iroha_core::queue::Error::IsInQueue
+            )
+    )
+}
+
+fn reconcile_duplicate_queue_admission(
+    app: &SharedAppState,
+    issuer: &OfflineV2IssuerRuntime,
+    requested: OfflineOperationRequestRef<'_>,
+    requested_binding: &OfflineOperationRequestBinding,
+    admission_error: Error,
+) -> Result<AxResponse, Error> {
+    if !is_duplicate_queue_admission_error(&admission_error) {
+        return Err(admission_error);
+    }
+
+    match find_existing_offline_operation(app, issuer, requested, requested_binding)? {
+        Some(response) => Ok(response),
+        None => Err(admission_error),
+    }
+}
+
 fn find_terminal_offline_operation_by_id(
     app: &SharedAppState,
     issuer_authority: &AccountId,
@@ -1193,11 +1311,18 @@ fn offline_operation_status_response(
                     &record.transaction_hash,
                     finalized_block_height,
                 )?;
+                let finality_proof = load_finalized_kagemusha_v2_topup_proof(
+                    app,
+                    finalized_block_height,
+                    operation_id,
+                    &anchor,
+                )?;
                 OfflineOperationResult::TopUp(OfflineTopUpResult {
                     transaction_hash: record.transaction_hash.to_string(),
                     finalized_block_height,
                     server_time_ms,
                     anchor,
+                    finality_proof,
                 })
             }
             KagemushaV2OperationKind::Redeem => {
@@ -1280,8 +1405,9 @@ fn offline_operation_status_response(
             false,
         );
     } else {
+        let state = app.state.view();
         ensure_unproven_pending_window_is_live(
-            kagemusha_v2_snapshot_time_ms(app),
+            kagemusha_v2_snapshot_time_ms(&state),
             record.request.authorization().expires_at_ms,
         )?;
         pending_offline_operation_status(
@@ -1347,8 +1473,9 @@ fn admitted_offline_operation_status_response(
         return offline_operation_status_response(app, issuer, &record, Some(&finality), false);
     }
 
+    let state = app.state.view();
     ensure_unproven_pending_window_is_live(
-        kagemusha_v2_snapshot_time_ms(app),
+        kagemusha_v2_snapshot_time_ms(&state),
         admitted.binding.expires_at_ms,
     )?;
     let status = pending_offline_operation_status(
@@ -1597,6 +1724,33 @@ fn load_finalized_kagemusha_v2_anchor(
     Ok(anchor)
 }
 
+fn load_finalized_kagemusha_v2_topup_proof(
+    app: &SharedAppState,
+    finalized_block_height: u64,
+    operation_id: [u8; 32],
+    anchor: &KagemushaRecursiveSpendTopUpAnchorV2,
+) -> Result<OfflineTopUpFinalityProof, Error> {
+    let proof = app
+        .kura
+        .kagemusha_topup_finality_proof_v2(finalized_block_height, operation_id)
+        .map_err(|_| offline_topup_finality_proof_unavailable())?
+        .ok_or_else(offline_topup_finality_proof_unavailable)?;
+    let anchor_ref = anchor
+        .compact_ref()
+        .map_err(|_| offline_topup_finality_proof_unavailable())?;
+    if proof.anchor != anchor_ref || proof.validate_structure().is_err() {
+        return Err(offline_topup_finality_proof_unavailable());
+    }
+    Ok(proof)
+}
+
+fn offline_topup_finality_proof_unavailable() -> Error {
+    Error::AppServiceUnavailable {
+        code: "offline_topup_finality_proof_unavailable",
+        message: "The finalized top-up proof is not available yet.".to_owned(),
+    }
+}
+
 fn require_issuer(app: &AppState) -> Result<Arc<OfflineV2IssuerRuntime>, Error> {
     app.offline_v2_issuer
         .clone()
@@ -1666,9 +1820,9 @@ mod tests {
         domain::DomainId,
         offline::{
             KagemushaRequestAuthorizationV2, KagemushaScaledAmountV2,
-            KagemushaSpendableNoteDescriptorV2, KagemushaVerifiedFoldBundle,
-            KagemushaVerifiedFoldRecordBundle,
+            KagemushaSpendableNoteDescriptorV2, KagemushaTopUpShieldEvidenceV2,
         },
+        proof::{ProofAttachment, ProofBox, VerifyingKeyId},
         trigger::DataTriggerSequence,
     };
 
@@ -1722,15 +1876,21 @@ mod tests {
                 spend_nullifier: [0x62; 32],
                 amount,
             },
-            record_bundle: KagemushaVerifiedFoldRecordBundle {
-                bundle: KagemushaVerifiedFoldBundle {
-                    chain_id,
-                    asset: definition,
-                    steps: Vec::new(),
+            shield_evidence: KagemushaTopUpShieldEvidenceV2 {
+                initial_root: [0x65; 32],
+                finalized_root: [0x66; 32],
+                leaf_index: 0,
+                proof: {
+                    let backend = "halo2/ipa";
+                    let mut attachment = ProofAttachment::new_ref(
+                        backend.into(),
+                        ProofBox::new(backend.to_owned(), vec![0x67]),
+                        VerifyingKeyId::new(backend, "kagemusha-topup-shield-v2"),
+                    );
+                    attachment.vk_commitment = Some([0x68; 32]);
+                    attachment
                 },
-                verifier_records: Vec::new(),
             },
-            pallas_open_envelopes_archive: Vec::new(),
             artifact_generation: "submission-coordinator-fixture".to_owned(),
             operation_id,
             authorization: KagemushaRequestAuthorizationV2 {
@@ -2457,6 +2617,37 @@ mod tests {
     }
 
     #[test]
+    fn only_duplicate_queue_outcomes_enter_idempotent_recovery() {
+        for source in [
+            iroha_core::queue::Error::InBlockchain,
+            iroha_core::queue::Error::IsInQueue,
+        ] {
+            let error = Error::PushIntoQueue {
+                source: Box::new(source),
+                backpressure: iroha_core::queue::BackpressureState::default(),
+            };
+            assert!(is_duplicate_queue_admission_error(&error));
+        }
+
+        for source in [
+            iroha_core::queue::Error::Full,
+            iroha_core::queue::Error::LatencySaturated,
+            iroha_core::queue::Error::MaximumTransactionsPerUser,
+            iroha_core::queue::Error::Expired,
+        ] {
+            let error = Error::PushIntoQueue {
+                source: Box::new(source),
+                backpressure: iroha_core::queue::BackpressureState::default(),
+            };
+            assert!(
+                !is_duplicate_queue_admission_error(&error),
+                "non-duplicate queue failure must retain its original semantics: {error}"
+            );
+        }
+        assert!(!is_duplicate_queue_admission_error(&operation_id_conflict()));
+    }
+
+    #[test]
     fn operation_binding_covers_the_full_typed_request_and_route() {
         #[derive(Clone, Copy, PartialEq, Eq)]
         struct RequestFixture {
@@ -2525,11 +2716,11 @@ mod tests {
         );
 
         let mut request = submission_test_request(0x44);
-        request.pallas_open_envelopes_archive = vec![0xA5; 2 * 1024 * 1024];
+        request.shield_evidence.proof.proof.bytes = vec![0xA5; 2 * 1024 * 1024];
         let original =
             OfflineOperationRequestBinding::from_request(OfflineOperationRequest::TopUp(&request))
                 .expect("canonical large request binding");
-        request.pallas_open_envelopes_archive[1_048_576] ^= 0xFF;
+        request.shield_evidence.proof.proof.bytes[1_048_576] ^= 0xFF;
         let changed =
             OfflineOperationRequestBinding::from_request(OfflineOperationRequest::TopUp(&request))
                 .expect("canonical changed request binding");

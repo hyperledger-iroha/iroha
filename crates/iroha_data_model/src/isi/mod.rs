@@ -3974,10 +3974,12 @@ pub mod prelude {
             RwaInstructionBox, SetRwaControls, TransferRwa, UnfreezeRwa,
         },
         settlement::{
-            DvpIsi, PvpIsi, SettlementAtomicity, SettlementExecutionOrder, SettlementFailureRecord,
-            SettlementInstructionBox, SettlementKind, SettlementLedger, SettlementLedgerEntry,
-            SettlementLeg, SettlementLegRole, SettlementLegSnapshot, SettlementOutcomeRecord,
-            SettlementPlan, SettlementSuccessRecord,
+            DvpIsi, FxCorridorPolicy, FxCorridorPolicyRegistry, FxCorridorSettlementDetails,
+            PvpIsi, SetFxCorridorPolicy, SettleFxCorridor, SettlementAtomicity,
+            SettlementExecutionOrder, SettlementFailureRecord, SettlementInstructionBox,
+            SettlementKind, SettlementLedger, SettlementLedgerEntry, SettlementLeg,
+            SettlementLegRole, SettlementLegSnapshot, SettlementOutcomeRecord, SettlementPlan,
+            SettlementSuccessRecord,
         },
         sns::{
             FreezeSnsName, RegisterSnsName, RenewSnsName, TransferSnsName, UnfreezeSnsName,

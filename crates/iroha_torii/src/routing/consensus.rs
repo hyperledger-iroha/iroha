@@ -1863,6 +1863,13 @@ fn native_amx_phase_label(phase: NativeAmxPhase) -> &'static str {
     }
 }
 
+fn native_amx_phase_json(phase: NativeAmxPhase) -> Value {
+    json_object(vec![
+        json_entry("phase", native_amx_phase_label(phase)),
+        json_entry("detail", Value::Null),
+    ])
+}
+
 fn native_amx_attestation_body_json(body: &NativeAmxAttestationBodyV2) -> Value {
     json_object(vec![
         json_entry(
@@ -1880,11 +1887,36 @@ fn native_amx_attestation_body_json(body: &NativeAmxAttestationBodyV2) -> Value 
             hash_with_prefix(body.tx_entrypoint_hash),
         ),
         json_entry("plan_digest", hash_with_prefix(body.plan_digest)),
-        json_entry("phase", native_amx_phase_label(body.phase)),
+        json_entry("phase", native_amx_phase_json(body.phase)),
         json_entry("coordinator_lane_id", body.coordinator_lane_id),
         json_entry("coordinator_dataspace_id", body.coordinator_dataspace_id),
         json_entry("participant_lane_id", body.participant_lane_id),
         json_entry("participant_dataspace_id", body.participant_dataspace_id),
+        json_entry(
+            "participant_previous_block_height",
+            body.participant_previous_block_height,
+        ),
+        json_entry(
+            "participant_previous_block_descriptor_hash",
+            body.participant_previous_block_descriptor_hash
+                .map(hash_with_prefix),
+        ),
+        json_entry(
+            "participant_lane_block_height",
+            body.participant_lane_block_height,
+        ),
+        json_entry(
+            "participant_lane_block_view",
+            body.participant_lane_block_view,
+        ),
+        json_entry(
+            "participant_proposal_hash",
+            hash_with_prefix(body.participant_proposal_hash),
+        ),
+        json_entry(
+            "participant_settlement_commitment",
+            hash_with_prefix(body.participant_settlement_commitment),
+        ),
         json_entry(
             "planned_coordinator_block_height",
             body.planned_coordinator_block_height,
@@ -2005,6 +2037,18 @@ fn native_amx_leg_json(leg: &NativeAmxLegRecordV2) -> Value {
     json_object(vec![
         json_entry("lane_id", leg.lane_id),
         json_entry("dataspace_id", leg.dataspace_id),
+        json_entry(
+            "participant_proposal",
+            json_value(&leg.participant_proposal),
+        ),
+        json_entry(
+            "participant_settlement",
+            json_value(&leg.participant_settlement),
+        ),
+        json_entry(
+            "participant_settlement_hash",
+            hash_with_prefix(leg.participant_settlement_hash),
+        ),
         json_entry(
             "prepare_qc",
             native_amx_attestation_qc_json(&leg.prepare_qc),
@@ -4932,9 +4976,8 @@ mod status_tests {
     fn status_snapshot_json_serializes_native_amx_receipts_in_lane_settlement_commitments() {
         let source_id = [0xCE; 32];
         let plan_digest = Hash::new(b"consensus-status-native-amx-plan");
-        let tx_entrypoint_hash = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(
-            Hash::prehashed([0x44; Hash::LENGTH]),
-        );
+        let tx_entrypoint_hash =
+            HashOf::<TransactionEntrypoint>::from_untyped_unchecked(Hash::prehashed(source_id));
         let coordinator_lane_id = LaneId::new(4);
         let coordinator_dataspace_id = DataSpaceId::new(11);
         let participant_lane_id = LaneId::new(5);
@@ -4942,6 +4985,8 @@ mod status_tests {
         let chain_id_hash = Hash::new(b"consensus-status-native-amx-chain");
         let coordinator_lane_incarnation =
             Hash::new(b"consensus-status-native-amx-coordinator-incarnation");
+        let participant_lane_incarnation =
+            Hash::new(b"consensus-status-native-amx-participant-incarnation");
         let coordinator_proposal_hash =
             Hash::new(b"consensus-status-native-amx-coordinator-proposal");
         let validators = vec![
@@ -4949,40 +4994,103 @@ mod status_tests {
             checked_status_peer(0xA2, "derive native AMX status fixture peer key 2"),
         ];
         let validator_set_hash = HashOf::new(&validators);
-        let native_amx_qc =
-            |phase: NativeAmxPhase| NativeAmxAttestationQcV2 {
-                body:
-                    NativeAmxAttestationBodyV2 {
-                        round:
-                            iroha_data_model::block::consensus_v2::ConsensusRound {
-                                context_id:
-                                    iroha_data_model::block::consensus_v2::HeightContextId(
-                                        HashOf::<
-                                            iroha_data_model::block::consensus_v2::HeightContext,
-                                        >::from_untyped_unchecked(
-                                            Hash::new(b"torii-consensus-native-amx-context"),
-                                        ),
-                                    ),
-                                height: 77,
-                                view: 3,
-                            },
-                        epoch: 7,
-                        source_id,
-                        tx_entrypoint_hash,
-                        plan_digest,
-                        phase,
-                        coordinator_lane_id,
-                        coordinator_dataspace_id,
-                        participant_lane_id,
-                        participant_dataspace_id,
-                        planned_coordinator_block_height: 77,
-                    },
+        let validator_count = u32::try_from(validators.len()).expect("fixture validator count");
+        let participant_min_quorum = u32::try_from(validators.len().saturating_mul(2) / 3 + 1)
+            .expect("fixture validator quorum");
+        let participant_previous_block_height = 76;
+        let participant_previous_block_descriptor_hash =
+            Some(Hash::new(b"consensus-status-native-amx-participant-parent"));
+        let native_amx_qc = |phase: NativeAmxPhase| {
+            let mut body = NativeAmxAttestationBodyV2 {
+                round: iroha_data_model::block::consensus_v2::ConsensusRound {
+                    context_id: iroha_data_model::block::consensus_v2::HeightContextId(
+                        HashOf::<
+                            iroha_data_model::block::consensus_v2::HeightContext,
+                        >::from_untyped_unchecked(Hash::new(
+                            b"torii-consensus-native-amx-context",
+                        )),
+                    ),
+                    height: 70,
+                    view: 3,
+                },
+                epoch: 7,
+                chain_id_hash,
+                source_id,
+                tx_entrypoint_hash,
+                plan_digest,
+                phase,
+                coordinator_lane_id,
+                coordinator_dataspace_id,
+                coordinator_lane_incarnation,
+                participant_lane_id,
+                participant_dataspace_id,
+                participant_lane_incarnation,
+                participant_previous_block_height,
+                participant_previous_block_descriptor_hash,
+                participant_lane_block_height: 77,
+                participant_lane_block_view: 0,
+                participant_proposal_hash: Hash::new(
+                    b"consensus-status-native-amx-participant-proposal",
+                ),
+                participant_settlement_commitment: Hash::prehashed([0; Hash::LENGTH]),
+                participant_validator_set_hash: validator_set_hash,
+                participant_validator_count: validator_count,
+                participant_min_quorum,
+                authority_context_height: 70,
+                planned_coordinator_block_height: 77,
+                coordinator_lane_block_view: 3,
+                coordinator_proposal_hash,
+            };
+            body.participant_settlement_commitment =
+                body.computed_participant_settlement_commitment();
+            NativeAmxAttestationQcV2 {
+                body,
                 validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
                 validator_set_hash,
                 validator_set: validators.clone(),
+                validator_set_pops: vec![vec![0x5A; 96]; validators.len()],
                 signers_bitmap: vec![0b0000_0011],
                 bls_aggregate_signature: vec![0xA5; 96],
-            };
+            }
+        };
+        let mut prepare_qc = native_amx_qc(NativeAmxPhase::Prepare);
+        let mut commit_qc = native_amx_qc(NativeAmxPhase::Commit);
+        let body = prepare_qc.body;
+        let mut descriptor = LaneBlockDescriptorV1 {
+            lane_id: body.participant_lane_id,
+            dataspace_id: body.participant_dataspace_id,
+            lane_incarnation: body.participant_lane_incarnation,
+            proposal_height: body.authority_context_height,
+            previous_lane_block_height: body.participant_previous_block_height,
+            previous_lane_block_descriptor_hash: body.participant_previous_block_descriptor_hash,
+            lane_block_height: body.participant_lane_block_height,
+            lane_block_view: body.participant_lane_block_view,
+            subject_hash: Hash::new(b"consensus-status-native-amx-participant-subject"),
+            payload_ownership_hash: Hash::new(b"consensus-status-native-amx-participant-ownership"),
+            rbc_instance_hash: Hash::new(b"consensus-status-native-amx-participant-rbc"),
+            accepted_candidate_indices: vec![0],
+            accepted_transaction_hashes: vec![Hash::from(body.tx_entrypoint_hash)],
+            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set_hash: body.participant_validator_set_hash,
+            validator_set: validators.clone(),
+            validator_count: body.participant_validator_count,
+            min_quorum: body.participant_min_quorum,
+            qc_mode_tag: "permissioned:native-amx-consensus-status".to_owned(),
+            descriptor_hash: Hash::prehashed([0; Hash::LENGTH]),
+        };
+        descriptor.descriptor_hash = descriptor.computed_descriptor_hash();
+        let mut participant_proposal = LaneBlockProposalV1 {
+            descriptor,
+            proposal_hash: Hash::prehashed([0; Hash::LENGTH]),
+            payload_block_hint: None,
+        };
+        participant_proposal.proposal_hash = participant_proposal.computed_proposal_hash();
+        prepare_qc.body.participant_proposal_hash = participant_proposal.proposal_hash;
+        commit_qc.body.participant_proposal_hash = participant_proposal.proposal_hash;
+        let participant_settlement = prepare_qc.body.computed_participant_settlement();
+        let participant_settlement_hash =
+            iroha_data_model::nexus::compute_settlement_hash(&participant_settlement)
+                .expect("fixture participant settlement hashes");
         let receipt = NativeAmxReceipt {
             version: 2,
             source_id,
@@ -4998,8 +5106,11 @@ mod status_tests {
             legs: vec![NativeAmxLegRecordV2 {
                 lane_id: participant_lane_id,
                 dataspace_id: participant_dataspace_id,
-                prepare_qc: native_amx_qc(NativeAmxPhase::Prepare),
-                commit_qc: native_amx_qc(NativeAmxPhase::Commit),
+                participant_proposal,
+                participant_settlement,
+                participant_settlement_hash,
+                prepare_qc,
+                commit_qc,
             }],
         };
         let commitment = LaneBlockCommitment {
@@ -5069,10 +5180,16 @@ mod status_tests {
             .get("body")
             .and_then(Value::as_object)
             .expect("prepare body object");
+        let prepare_phase = prepare_body
+            .get("phase")
+            .and_then(Value::as_object)
+            .expect("tagged prepare phase object");
+        assert_eq!(prepare_phase.len(), 2);
         assert_eq!(
-            prepare_body.get("phase").and_then(Value::as_str),
+            prepare_phase.get("phase").and_then(Value::as_str),
             Some("prepare")
         );
+        assert!(prepare_phase.get("detail").is_some_and(Value::is_null));
         assert_eq!(prepare_body.get("epoch").and_then(Value::as_u64), Some(7));
         assert_eq!(
             prepare_body
@@ -5106,8 +5223,14 @@ mod status_tests {
             .and_then(|qc| qc.get("body"))
             .and_then(Value::as_object)
             .and_then(|body| body.get("phase"))
-            .and_then(Value::as_str);
-        assert_eq!(commit_phase, Some("commit"));
+            .and_then(Value::as_object)
+            .expect("tagged commit phase object");
+        assert_eq!(commit_phase.len(), 2);
+        assert_eq!(
+            commit_phase.get("phase").and_then(Value::as_str),
+            Some("commit")
+        );
+        assert!(commit_phase.get("detail").is_some_and(Value::is_null));
     }
 
     #[test]

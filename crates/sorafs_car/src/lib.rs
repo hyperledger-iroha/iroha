@@ -37,7 +37,6 @@ use iroha_data_model::{
 #[cfg(feature = "manifest")]
 use norito::json::{self, Value};
 use norito::{NoritoDeserialize, NoritoSerialize};
-use sha3::{Digest, Sha3_256};
 pub use sorafs_chunker;
 use sorafs_chunker::{ChunkDigest, ChunkProfile};
 #[cfg(feature = "manifest")]
@@ -90,19 +89,18 @@ pub fn compute_chunk_digest(payload: &[u8]) -> [u8; 32] {
     blake3::hash(payload).into()
 }
 
-/// Compute the SHA3-256 digest of a deterministic CAR chunk plan.
+/// Compute the SHA3-256 commitment of a deterministic CAR chunk plan.
+///
+/// The canonical transcript is the ordered concatenation of each chunk's
+/// little-endian 64-bit offset, little-endian 64-bit length, and 32-byte
+/// BLAKE3 content digest.
 #[must_use]
 pub fn compute_chunk_plan_digest_sha3(chunks: &[CarChunk]) -> [u8; 32] {
-    let mut hasher = Sha3_256::new();
-    for chunk in chunks {
-        hasher.update(chunk.offset.to_le_bytes());
-        hasher.update(u64::from(chunk.length).to_le_bytes());
-        hasher.update(chunk.digest);
-    }
-    let digest = hasher.finalize();
-    let mut out = [0u8; 32];
-    out.copy_from_slice(digest.as_ref());
-    out
+    sorafs_chunker::compute_chunk_plan_digest_sha3(
+        chunks
+            .iter()
+            .map(|chunk| (chunk.offset, u64::from(chunk.length), chunk.digest)),
+    )
 }
 
 /// Identifier assigned to registered chunking profiles.
@@ -6764,8 +6762,21 @@ mod tests {
         let repeated = compute_chunk_plan_digest_sha3(&[first.clone(), second.clone()]);
         let reordered = compute_chunk_plan_digest_sha3(&[second, first]);
 
+        let mut content_changed = first;
+        content_changed.digest[0] ^= 1;
+        let content_changed = compute_chunk_plan_digest_sha3(&[
+            content_changed,
+            CarChunk {
+                offset: 4,
+                length: 4,
+                digest: [2; 32],
+                taikai_segment_hint: None,
+            },
+        ]);
+
         assert_eq!(digest, repeated);
         assert_ne!(digest, reordered);
+        assert_ne!(digest, content_changed);
     }
 
     #[cfg(feature = "manifest")]

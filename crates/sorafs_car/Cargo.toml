@@ -46,7 +46,6 @@ iroha_data_model = { workspace = true, optional = true }
 iroha_config = { workspace = true, optional = true }
 iroha_primitives = { workspace = true, optional = true, features = ["simd-accel"] }
 ivm = { workspace = true, optional = true }
-sha3 = { version = "0.10.8" }
 eyre = { workspace = true, optional = true }
 clap = { workspace = true, features = ["derive"], optional = true }
 hex = "0.4.3"

@@ -7413,6 +7413,14 @@ bash scripts/formal/sumeragi_apalache.sh native-amx-receipt-bug-accept-under-quo
 bash scripts/formal/sumeragi_apalache.sh native-amx-receipt-bug-accept-missing-signature
 bash scripts/formal/sumeragi_apalache.sh native-amx-receipt-bug-accept-invalid-signature
 bash scripts/formal/sumeragi_apalache.sh native-amx-receipt-bug-reject-valid-native
+bash scripts/formal/sumeragi_apalache.sh native-amx-receipt-bug-accept-participant-height-mismatch
+bash scripts/formal/sumeragi_apalache.sh native-amx-receipt-bug-accept-participant-view-mismatch
+bash scripts/formal/sumeragi_apalache.sh native-amx-receipt-bug-accept-participant-proposal-hash-mismatch
+bash scripts/formal/sumeragi_apalache.sh native-amx-receipt-bug-accept-participant-settlement-hash-mismatch
+bash scripts/formal/sumeragi_apalache.sh native-amx-receipt-bug-accept-participant-proposal-slot-conflict
+bash scripts/formal/sumeragi_apalache.sh native-amx-receipt-bug-accept-participant-settlement-slot-conflict
+bash scripts/formal/sumeragi_apalache.sh native-amx-receipt-bug-accept-prepare-commit-identity-mismatch
+bash scripts/formal/sumeragi_apalache.sh native-amx-receipt-bug-advance-frontier-before-application
 bash scripts/formal/sumeragi_apalache.sh native-amx-ingress-bug-reply-wrong-prepare-phase
 bash scripts/formal/sumeragi_apalache.sh native-amx-ingress-bug-reply-wrong-commit-phase
 bash scripts/formal/sumeragi_apalache.sh native-amx-ingress-bug-reply-local-non-bls

@@ -28,6 +28,7 @@ from pathlib import Path
 repo_root = Path(sys.argv[1])
 target_dir = Path(sys.argv[2])
 output_path = sys.argv[3]
+resolved_output = Path(output_path).resolve() if output_path else None
 
 if not target_dir.exists():
     raise SystemExit(f"hash_tree: target directory not found: {target_dir}")
@@ -35,6 +36,11 @@ if not target_dir.exists():
 entries = []
 for entry in sorted(target_dir.rglob("*")):
     if not entry.is_file():
+        continue
+    # An output inside the target must not hash its previous incarnation into
+    # the next tree; excluding it makes repeated generation deterministic and
+    # keeps every listed digest independently verifiable.
+    if resolved_output is not None and entry.resolve() == resolved_output:
         continue
     # Ignore temporary files that should never ship in docs artefacts.
     if entry.name in {".DS_Store"}:

@@ -2715,6 +2715,7 @@ pub(crate) struct LaneBlockCommitVoteRequest {
 }
 
 /// Bounded periodic transport work for one unresolved lane-block session.
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct LaneBlockRebroadcastBundle {
     /// Stable session key used by the actor's round-robin cursor.
@@ -3130,12 +3131,15 @@ impl LaneBlockSessionCache {
     /// Return whether an admissible unresolved session has periodic transport work.
     pub(crate) fn has_periodic_rebroadcast_work(
         &self,
-        signer: &PeerId,
+        _signer: &PeerId,
         admissible: impl Fn(&LaneBlockProposalV1) -> bool,
     ) -> bool {
-        self.sessions.iter().any(|(key, session)| {
-            rebroadcast_bundle_for_session(*key, session, signer)
-                .is_some_and(|bundle| admissible(&bundle.proposal))
+        self.sessions.values().any(|session| {
+            !session.committed_session_drained
+                && session
+                    .proposal
+                    .as_ref()
+                    .is_some_and(|proposal| admissible(proposal))
         })
     }
 
@@ -3143,6 +3147,7 @@ impl LaneBlockSessionCache {
     ///
     /// The cursor is a stable session key instead of a vector index so concurrent
     /// insertion and pruning cannot repeatedly select the first cached sibling.
+    #[cfg(test)]
     pub(crate) fn periodic_rebroadcast_bundles_after(
         &self,
         signer: &PeerId,
@@ -4450,6 +4455,7 @@ fn session_proposal_height(session: &LaneBlockSession) -> Option<u64> {
         .or_else(|| session.commit_qc.as_ref().map(|qc| qc.body.proposal_height))
 }
 
+#[cfg(test)]
 fn rebroadcast_bundle_for_session(
     key: LaneBlockSessionKey,
     session: &LaneBlockSession,

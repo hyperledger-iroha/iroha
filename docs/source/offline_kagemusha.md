@@ -6,6 +6,13 @@ sender change use the canonical first-release
 backend is intentionally fail-closed until branch lineage is proven in-circuit;
 retired pre-release wire shapes are not accepted as compatibility inputs.
 
+The sole first-release product selector is `recursive_spend_v2`. It requires
+exact native bridge ABI 18 and the governed
+`kagemusha.offline.recursive_spend.artifact_manifest.v3` manifest. Artifact
+streaming, validation, atomic six-file installation, readiness, and uninstall
+use only the V3 lifecycle; ABI-6/ABI-7 fixtures and unsuffixed bridge helpers
+are not compatibility surfaces.
+
 > **Release blocker:** the current Reserved-lineage prototype does not verify
 > an inner Kagemusha proof. It opens a fixed `1..n` polynomial that is unrelated
 > to the confidential-transfer, unshield, or previous recursive proof. Binding
@@ -604,13 +611,15 @@ runs. The Swift App Attest verifier also requires exact iOS team id, bundle id,
 and `production`/`development` environment strings, so case-changed or
 whitespace-normalized metadata cannot select the wrong RP ID or AAGUID. The
 pre-attestation challenge does not include `assertion_public_key`: a fresh App
-Attest key exposes that key only inside the attestation response. The challenge
-still binds the generated key id, app and device identity, note public key,
-assertion profile, recent block height/hash, and expiry. On-chain admission
-then requires the report's COSE credential key and leaf-certificate key to
-equal the registration's assertion key and checks the credential id/key-id
-binding before issuing a key certificate. Swift exposes
-`preAttestationChallengeHash(...)` for this first phase and an unsigned
+Attest or KeyMint key exposes that key only after key generation. The iOS
+schema still binds the App Attest credential key id. Android uses a distinct
+Norito preimage that also omits `key_id`, because the canonical Android key id
+is the lowercase SHA-256 of the KeyMint public key that does not exist until
+the challenge is supplied. On-chain admission then requires the report's COSE
+credential key or leaf-certificate key to equal the registration's assertion
+key and checks the platform credential-id/key-id binding before issuing a key
+certificate. Swift exposes `preAttestationChallengeHash(...)` for iOS and
+`androidPreKeyGenerationChallengeHash(...)` for Android, plus an unsigned
 registration transaction whose signing hash can be passed to an external
 signing service without exporting the account key. Swift
 `OfflineDeviceAttestationRegistration` and the Kotlin/JVM plus Android Java
@@ -3552,8 +3561,8 @@ lineage-witness assembly helpers, before probing those symbols with malformed
 Norito archives. Swift reports native compact-token, recursive-aggregation, and
 recursive-spend Kagemusha provers as available only when the loaded bridge
 returns the expected Kagemusha rejection without output bytes, and the Swift
-recursive-spend wrapper refuses to select `recursive_spend_v1` unless the full
-ABI-6-or-later surface passes that probe.
+recursive-spend wrapper refuses to select `recursive_spend_v2` unless the exact
+ABI-18 surface and proof-backend capability pass that probe.
 Native bridge ABI 7 exposes fail-closed reserved symbols for
 `connect_norito_kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes`
 plus
@@ -3707,24 +3716,21 @@ A partial or permissive native bridge cannot emit an init or append bundle
 without the witness helpers needed for later redemption.
 The Swift wrapper also exports the same ABI-6 requirement for wallet-side
 capability checks.
-JavaScript/Node and Python now require an ABI-6-or-later native version probe
-before reporting recursive spend as available or selecting `recursive_spend_v1`;
+JavaScript/Node and Python require an exact ABI-18 native version probe
+before reporting recursive spend as available or selecting `recursive_spend_v2`;
 the Node NAPI host exports `connectNoritoBridgeAbiVersion`, while the Python
 PyO3 extension exports `kagemusha_recursive_spend_native_bridge_abi_version`.
 Kotlin/JVM and Java Android also call the native bridge ABI-version JNI probe and
 probe the verify plus both lineage-witness JNI symbols before reporting
-recursive spend as available or defaulting to `recursive_spend_v1`. C#
-publishes the same ABI-6-or-later requirement and probes verify plus both
+recursive spend as available or defaulting to `recursive_spend_v2`. C#
+publishes the same exact ABI-18 requirement and probes verify plus both
 lineage-witness P/Invoke symbols before its optional wrapper calls the bridge.
-All SDKs expose the same default spend-mode choice:
-`recursive_compact_v1` is selected when the ABI-7 compact prover/verifier
-surface is available, `recursive_spend_v1` is selected when only the recursive
-spend ABI-6-or-later surface is available, and no preferred production mode is
-returned when neither recursive surface is available. Checked pre-fold labels
-remain internal aggregation/fixture material only; first-release selectors must not fall
-back to them or export a checked pre-fold spend mode. C# follows the same compact-first selector policy;
-its explicit selector also requires both compact and recursive-spend capability
-booleans.
+All SDKs expose the same default spend-mode choice: `recursive_spend_v2` is selected only when the exact ABI-18
+recursive-spend surface is available, and no preferred production mode is returned otherwise. Compact and checked pre-fold
+labels remain internal aggregation/fixture material only; first-release selectors must not fall
+back to them or export a checked pre-fold spend mode. Every maintained SDK's
+explicit selector accepts only the single Pasta-cycle V3 backend capability;
+compact projection availability is not a selector input.
 Verifier records for chain-side transfers, recursive final redeem/unshield,
 record-backed compact-token proving, and final folded-token record verification
 must live in the canonical `offline_kagemusha` namespace and publish the

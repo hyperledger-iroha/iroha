@@ -80,12 +80,20 @@ production orchestration, service deployment, and public rollout evidence.
   `SubmitSorafsModerationReveal`, and `FinalizeSorafsModerationCase` implement
   the consensus-owned lifecycle. There is no direct-open instruction that can
   bypass intake or sortition.
-  Block time is the only phase clock; commit and reveal timestamps are
+  Block time is the only phase clock. The sortition instruction explicitly
+  binds the latest committed parent hash after registration closes, rejects an
+  appellant finalizer even when that account also holds management permission,
+  and native execution rejects stale, zero, applicant-selected, or otherwise mismatched
+  anchors before recomputing the complete roster. Commit and reveal timestamps are
   normalized to block time; canonical juror accounts are bound to transaction
   authority; policy revisions and case policy digests are race-checked; and
   every transition preflights counters and canonical state encoding before any
-  mutation. Finalization persists a `quorum_not_met` outcome instead of leaving
-  failed-quorum ballots open and atomically emits policy-bound no-show records.
+  mutation. Accepted challenges and challenges still unresolved when the reveal
+  window closes both terminate fail-safe without no-show penalties. The latter
+  are durably marked `expired`, so a late resolver cannot reopen an elapsed
+  reveal window, penalize every blocked juror, or leave the case permanently
+  open. Other finalization persists a `quorum_not_met` outcome instead of
+  leaving failed-quorum ballots open and atomically emits policy-bound no-show records.
 - Typed `FindSorafsModeration*` queries expose the active policy, appeal,
   permissioned juror-eligibility summary, case, commitment, reveal, challenge,
   outcome, no-show, and ledger status through

@@ -223,6 +223,47 @@ pub struct DataAvailabilityLayout {
     pub max_chunk_count: u32,
 }
 
+impl DataAvailabilityLayout {
+    /// Validate that every non-empty payload within the signed size bound can
+    /// be encoded within the signed chunk-count bound.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ValidationError::InvalidDataAvailabilityLayout`] when a limit
+    /// is zero, the encoding profile is malformed, or the largest permitted
+    /// payload cannot be represented by the configured chunk geometry.
+    pub fn validate(self) -> Result<(), ValidationError> {
+        if self.chunk_size_bytes == 0
+            || self.max_payload_size_bytes == 0
+            || self.max_chunk_count == 0
+        {
+            return Err(ValidationError::InvalidDataAvailabilityLayout);
+        }
+        match self.encoding {
+            PayloadEncoding::Plain if self.data_shards != 0 || self.parity_shards != 0 => {
+                return Err(ValidationError::InvalidDataAvailabilityLayout);
+            }
+            PayloadEncoding::ReedSolomon16
+                if self.data_shards == 0
+                    || self.parity_shards == 0
+                    || u32::from(self.data_shards) + u32::from(self.parity_shards)
+                        > u32::from(u16::MAX)
+                    || !self.chunk_size_bytes.is_multiple_of(2) =>
+            {
+                return Err(ValidationError::InvalidDataAvailabilityLayout);
+            }
+            PayloadEncoding::Plain | PayloadEncoding::ReedSolomon16 => {}
+        }
+        let worst_case_chunk_count =
+            expected_encoded_chunk_count(self.max_payload_size_bytes, self)
+                .map_err(|_| ValidationError::InvalidDataAvailabilityLayout)?;
+        if worst_case_chunk_count > self.max_chunk_count {
+            return Err(ValidationError::InvalidDataAvailabilityLayout);
+        }
+        Ok(())
+    }
+}
+
 /// Payload encoding used by v2 data dissemination.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -290,26 +331,10 @@ impl SumeragiV2GenesisContextParameters {
     /// # Errors
     ///
     /// Returns [`ValidationError::InvalidDataAvailabilityLayout`] for a zero
-    /// limit or an encoding/shard mismatch.
+    /// limit, an unusable encoding profile, or bounds which cannot encode the
+    /// largest permitted payload.
     pub fn validate(&self) -> Result<(), ValidationError> {
-        let layout = self.da_layout;
-        if layout.chunk_size_bytes == 0
-            || layout.max_payload_size_bytes == 0
-            || layout.max_chunk_count == 0
-        {
-            return Err(ValidationError::InvalidDataAvailabilityLayout);
-        }
-        match layout.encoding {
-            PayloadEncoding::Plain if layout.data_shards != 0 || layout.parity_shards != 0 => {
-                Err(ValidationError::InvalidDataAvailabilityLayout)
-            }
-            PayloadEncoding::ReedSolomon16
-                if layout.data_shards == 0 || layout.parity_shards == 0 =>
-            {
-                Err(ValidationError::InvalidDataAvailabilityLayout)
-            }
-            PayloadEncoding::Plain | PayloadEncoding::ReedSolomon16 => Ok(()),
-        }
+        self.da_layout.validate()
     }
 }
 
@@ -453,25 +478,7 @@ impl HeightContext {
             }
             require_aggregate_signature(&parent.aggregate_signature)?;
         }
-        if self.da_layout.chunk_size_bytes == 0
-            || self.da_layout.max_payload_size_bytes == 0
-            || self.da_layout.max_chunk_count == 0
-        {
-            return Err(ValidationError::InvalidDataAvailabilityLayout);
-        }
-        match self.da_layout.encoding {
-            PayloadEncoding::Plain
-                if self.da_layout.data_shards != 0 || self.da_layout.parity_shards != 0 =>
-            {
-                return Err(ValidationError::InvalidDataAvailabilityLayout);
-            }
-            PayloadEncoding::ReedSolomon16
-                if self.da_layout.data_shards == 0 || self.da_layout.parity_shards == 0 =>
-            {
-                return Err(ValidationError::InvalidDataAvailabilityLayout);
-            }
-            PayloadEncoding::Plain | PayloadEncoding::ReedSolomon16 => {}
-        }
+        self.da_layout.validate()?;
         Ok(())
     }
 
@@ -3006,6 +3013,88 @@ mod tests {
         assert!(
             norito::json::from_str::<SumeragiV2GenesisContextParameters>(&obsolete).is_err(),
             "the unreleased misleading field name must not remain an accepted live schema"
+        );
+    }
+
+    #[test]
+    fn data_availability_layout_rejects_encoder_incompatible_geometry() {
+        let recommended = SumeragiV2GenesisContextParameters::recommended().da_layout;
+        assert_eq!(recommended.validate(), Ok(()));
+
+        let odd_rs16_chunk = DataAvailabilityLayout {
+            chunk_size_bytes: 3,
+            ..recommended
+        };
+        assert_eq!(
+            odd_rs16_chunk.validate(),
+            Err(ValidationError::InvalidDataAvailabilityLayout)
+        );
+
+        let exact_two_stripes = DataAvailabilityLayout {
+            encoding: PayloadEncoding::ReedSolomon16,
+            chunk_size_bytes: 4,
+            data_shards: 2,
+            parity_shards: 1,
+            max_payload_size_bytes: 9,
+            max_chunk_count: 6,
+        };
+        assert_eq!(exact_two_stripes.validate(), Ok(()));
+        let undersized_rs16_bound = DataAvailabilityLayout {
+            max_chunk_count: 5,
+            ..exact_two_stripes
+        };
+        assert_eq!(
+            undersized_rs16_bound.validate(),
+            Err(ValidationError::InvalidDataAvailabilityLayout)
+        );
+
+        let below_one_stripe = DataAvailabilityLayout {
+            max_payload_size_bytes: 1,
+            max_chunk_count: 2,
+            ..exact_two_stripes
+        };
+        assert_eq!(
+            below_one_stripe.validate(),
+            Err(ValidationError::InvalidDataAvailabilityLayout)
+        );
+
+        let field_too_narrow = DataAvailabilityLayout {
+            data_shards: 40_000,
+            parity_shards: 30_000,
+            max_payload_size_bytes: 1,
+            max_chunk_count: 70_000,
+            ..exact_two_stripes
+        };
+        assert_eq!(
+            field_too_narrow.validate(),
+            Err(ValidationError::InvalidDataAvailabilityLayout)
+        );
+
+        let undersized_plain_bound = DataAvailabilityLayout {
+            encoding: PayloadEncoding::Plain,
+            chunk_size_bytes: 4,
+            data_shards: 0,
+            parity_shards: 0,
+            max_payload_size_bytes: 9,
+            max_chunk_count: 2,
+        };
+        assert_eq!(
+            undersized_plain_bound.validate(),
+            Err(ValidationError::InvalidDataAvailabilityLayout)
+        );
+
+        let mut genesis = SumeragiV2GenesisContextParameters::recommended();
+        genesis.da_layout = odd_rs16_chunk;
+        assert_eq!(
+            genesis.validate(),
+            Err(ValidationError::InvalidDataAvailabilityLayout)
+        );
+
+        let mut height_context = context(&[1, 1, 1, 1]);
+        height_context.da_layout = odd_rs16_chunk;
+        assert_eq!(
+            height_context.validate(),
+            Err(ValidationError::InvalidDataAvailabilityLayout)
         );
     }
 

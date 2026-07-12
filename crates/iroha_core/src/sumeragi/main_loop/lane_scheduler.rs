@@ -20,7 +20,7 @@ use iroha_data_model::{
 };
 use thiserror::Error;
 
-use crate::state::State;
+use crate::{kura::Kura, state::State};
 
 /// Return true when proposal assembly should look beyond the remaining block
 /// slots to discover work from other currently routable lanes.
@@ -2304,6 +2304,54 @@ fn v2_known_lane_tips(state: &State, proposal_height: u64) -> Vec<LaneBlockTip> 
             ),
     );
     tips
+}
+
+/// Resolve the exact latest lane-local frontier for a participant-only AMX proposal.
+pub(crate) fn v2_known_lane_tip_for_route(
+    state: &State,
+    kura: &Kura,
+    proposal_height: u64,
+    lane_id: LaneId,
+    dataspace_id: DataSpaceId,
+    lane_incarnation: Hash,
+) -> Option<(u64, Option<Hash>)> {
+    let mut matching = v2_known_lane_tips(state, proposal_height)
+        .into_iter()
+        .filter(|tip| {
+            tip.lane_id == lane_id
+                && tip.dataspace_id == dataspace_id
+                && tip.lane_incarnation == lane_incarnation
+        })
+        .collect::<Vec<_>>();
+    if let Some(receipt) = kura.latest_native_amx_participant_application_receipt_matching(
+        lane_id,
+        dataspace_id,
+        lane_incarnation,
+        |receipt| receipt.application_block_height < proposal_height,
+    ) {
+        let descriptor = &receipt.participant_proposal.descriptor;
+        matching.push(LaneBlockTip {
+            lane_id: descriptor.lane_id,
+            dataspace_id: descriptor.dataspace_id,
+            lane_incarnation: descriptor.lane_incarnation,
+            latest_lane_block_height: descriptor.lane_block_height,
+            latest_lane_block_descriptor_hash: Some(descriptor.descriptor_hash),
+        });
+    }
+    if matching.is_empty() {
+        return Some((0, None));
+    }
+    matching.sort_by_key(|tip| tip.latest_lane_block_height);
+    let latest_height = matching.last()?.latest_lane_block_height;
+    let mut hashes = matching
+        .iter()
+        .filter(|tip| tip.latest_lane_block_height == latest_height)
+        .filter_map(|tip| tip.latest_lane_block_descriptor_hash)
+        .collect::<BTreeSet<_>>();
+    if hashes.len() > 1 {
+        return None;
+    }
+    Some((latest_height, hashes.pop_first()))
 }
 
 fn v2_lane_payload_ownership(

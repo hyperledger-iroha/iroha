@@ -1,27 +1,29 @@
 ---
 title: Governance DAG Publishing Pipeline
-summary: SF-12 implementation status for governance log schemas, local filesystem publishers, validation tooling, and remaining IPFS/IPNS DAG rollout.
+summary: SF-12 implementation status for the always-on IPFS/IPNS publisher, authenticated recovery, bounded public mirror, and remaining deployment evidence.
 ---
 
 # Governance DAG Publishing Pipeline
 
 ## Status
-SF-12 is partially implemented. The workspace ships governance-log payloads,
+SF-12 is implemented locally through the public publishing boundary. The
+workspace ships governance-log payloads,
 signature validation, reference validation tooling, and local filesystem
 publishers for several SoraFS evidence streams. It also ships a local
-`sorafs_cli governance dag` operator surface for pre-IPFS archive inspection,
+`sorafs_cli governance dag` operator surface for offline archive inspection,
 validation, export, signed block/head snapshot verification, and local CARv2
 segment emission. Local mirror index build/query tooling is also available for
 signed block/head snapshots, local signed-head rebuild can recover a head
 manifest from an existing block snapshot, and local checkpoint metadata can bind
 verified heads to optional CAR and mirror-index artifacts for handoff.
 Checkpoint verification and recovery can replay those local bindings and rebuild
-a local mirror index before public recovery tooling exists. Torii can expose a
+a local mirror index independently of the network publisher. Torii can expose a
 read-only local dashboard/query API over a configured mirror index. Filesystem
 governance publishers also maintain a local `publish-index.json` as runtime
 artifacts are materialized, and Torii exposes read-only publish-index queries,
-giving operators a deterministic publication feed before a RocksDB/IPLD mirror
-exists. The filesystem publisher also assembles a runtime-local `car-queue.json`
+giving operators a deterministic publication feed without requiring the
+optional RocksDB/IPLD backend. The filesystem publisher also assembles a
+runtime-local `car-queue.json`
 with per-publication deterministic CARv2 segments for the canonical `.to`
 payload, JSON mirror, and BLAKE3 sidecars, and Torii exposes read-only queue
 and segment lookup endpoints for that local queue. When configured with a
@@ -33,8 +35,20 @@ publisher also appends supported published payloads to a local signed
 read-only runtime index/head/block/node/digest/kind queries over that local
 index. Publish-index, CAR queue, and runtime digest/kind lookup responses keep
 full match counts visible while bounding returned `entries`, `segments`, or
-`blocks` arrays through `limit` (default 50, max 500). It does not yet ship the
-full IPFS/IPNS governance DAG pipeline described by the roadmap.
+`blocks` arrays through `limit` (default 50, max 500).
+
+The `sorafs_governance_dag` binary is the always-on production service. It
+loads its policy from `iroha_config`, validates the complete signed local DAG,
+uploads and recursively pins every new block plus the signed head through a
+pinned IPFS API, verifies pin state, reads every object back, and publishes the
+head with either authenticated HTTP compare-and-swap or IPNS resolve/publish/
+resolve compare-and-swap. An authenticated checkpoint and write-ahead publish
+intent make restart recovery fail closed across partial block, head, and mirror
+publication. The same process serves a bounded public mirror, head, block,
+node, checkpoint, health, and Prometheus surface. What remains for SF-12 is
+deployment/package integration, optional RocksDB/IPLD storage if the JSON
+mirror cannot meet deployment scale, and captured multi-instance public
+rollout evidence—not an unimplemented IPFS/IPNS publisher.
 
 Implemented foundations include:
 - `GovernanceLogNodeV1`, `GovernanceLogPayloadV1`,
@@ -218,22 +232,24 @@ Implemented foundations include:
   `dashboards/alerts/sorafs_governance_dag_rules.yml` alert pack.
 
 Still outstanding:
-- Ingest, DAG-builder, and publisher services that persist and publish the
-  shipped public block/head schemas.
-- IPFS Cluster pinning and IPNS head publication for the signed runtime DAG.
-- Runtime RocksDB/IPLD mirror datastore and query service.
-- IPFS/IPNS-backed `sorafs governance dag` operations for live heads, public
-  checkpoint publication, and public checkpoint recovery.
-- Runtime/IPFS-backed dashboard REST/GraphQL API for live DAG queries.
-- Live IPFS/IPNS publisher metrics, public-head dashboards, and alert routing
-  evidence beyond the local filesystem publication telemetry.
-- End-to-end tests with local IPFS/IPNS infrastructure and live rollout evidence.
+- Package and supervise `sorafs_governance_dag` in the supported deployment
+  bundles, provision runtime-only checkpoint/signing credentials, and capture
+  multi-instance rollout/rollback evidence.
+- Decide from measured production scale whether the bounded authenticated JSON
+  mirror is sufficient; add a RocksDB/IPLD backend only if the governed
+  deployment profile requires it.
+- Publish operator-facing live-head/checkpoint convenience commands over the
+  already shipped service API where they materially improve operations.
+- Capture public IPFS/IPNS, dashboard, alert-routing, and disaster-recovery
+  evidence that passes the SF-12 rollout gate.
 
 ## Goals & Scope
 - Capture governance artifacts such as adverts, replication orders, PoR events, repairs, settlements, reputation snapshots, verdicts, and reports in append-only evidence.
 - Preserve deterministic validation through Norito payloads and publisher signatures.
-- Provide a future verifiable DAG head so operators, SDKs, and auditors can retrieve current governance state.
-- Keep local filesystem evidence compatible with a later IPFS/IPNS publisher rather than treating local files as the final public archive.
+- Provide a verifiable public DAG head so operators, SDKs, and auditors can retrieve current governance state.
+- Keep local filesystem evidence byte-compatible with the shipped IPFS/IPNS
+  publisher while treating authenticated public checkpoints as the durable
+  cross-operator recovery boundary.
 
 ## Current Data Model
 The shipped canonical governance log node is `GovernanceLogNodeV1`. Its fields
@@ -320,20 +336,22 @@ archive or ingest:
 - Configuration exposes governance output directories through the SoraFS storage
   and PoR configuration trees.
 
-These publishers are local materialization hooks. They do not pin content to
-IPFS, publish IPNS heads, emit a public DAG head event, or provide historical
-DAG queries. The optional runtime DAG signer writes local signed block/head
-bytes only for payload variants already represented by `GovernanceLogPayloadV1`.
+These filesystem publishers are local materialization hooks. The separate
+`sorafs_governance_dag` service consumes their verified signed runtime chain,
+pins content to IPFS, publishes a signed HTTP or IPNS head, and exposes bounded
+historical queries. The optional runtime DAG signer writes local signed
+block/head bytes only for payload variants already represented by
+`GovernanceLogPayloadV1`.
 
 ## Target Architecture
 | Component | Responsibility | Current workspace status |
 |-----------|----------------|--------------------------|
-| Ingest service | Subscribe to Torii/governance evidence, load full payloads, and verify signatures. | Not shipped. |
-| DAG builder | Wrap validated payloads into DAG blocks, compute parent linkage, and assemble CAR segments. | Local filesystem builder, build-output verifier, and optional CARv2 segment emission are shipped for validated node archives and signed block/head snapshots. Runtime-local CAR queueing, per-publication CARv2 segment assembly, and config-backed local signed runtime block/head assembly are shipped for supported filesystem-published governance artifacts; the always-on ingest/publisher service boundary is not shipped. |
-| Publisher | Pin CAR/block data to IPFS Cluster and publish a signed IPNS/head manifest. | Not shipped. |
-| Mirror datastore | Maintain queryable block and payload indexes. | Local JSON mirror index build/query commands are shipped for signed snapshot roots, filesystem publishers maintain runtime-local `publish-index.json`, `car-queue.json`, and `runtime-dag-index.json` feeds for materialized governance artifacts, and Torii exposes read-only publish-index, CAR queue, and runtime DAG lookup endpoints; the runtime RocksDB/IPLD mirror datastore and query service are not shipped. |
-| Dashboard/API backend | Serve governance history, block lookup, snapshots, and proof queries. | Torii read-only local mirror, publish-index, CAR queue, and runtime DAG endpoints are shipped for configured filesystem state; the runtime/IPFS-backed dashboard backend is not shipped. |
-| Operator CLI | Inspect heads, list/fetch blocks, export snapshots, verify chains, and rebuild heads. | Local archive list/show/verify/export/build/verify-build/rebuild-head/checkpoint/checkpoint-verify/checkpoint-recover/mirror-build/mirror-query is shipped for `.to` governance nodes and block/head snapshots, and `sorafs-validate governance` validates local block/head Norito payloads; live IPFS/IPNS head, fetch, public checkpoint publication/recovery, and runtime mirror-service commands are not shipped. |
+| Ingest service | Subscribe to Torii/governance evidence, load full payloads, and verify signatures. | Shipped: filesystem publishers materialize typed payloads and a signed runtime chain; `sorafs_governance_dag` revalidates the bounded source snapshot and rejects rollback, forks, unsupported payload kinds, or signature drift before publication. |
+| DAG builder | Wrap validated payloads into DAG blocks, compute parent linkage, and assemble CAR segments. | Shipped: local builders, CARv2 segments, signed runtime blocks/heads, source-chain validation, and deterministic replay are implemented. |
+| Publisher | Pin CAR/block data to IPFS and publish a signed public head. | Shipped: verified IPFS add/pin/list/cat plus signed-HTTP or IPNS compare-and-swap publication, with SSRF controls, bounded responses, and authenticated restart intent recovery. |
+| Mirror datastore | Maintain queryable block and payload indexes. | Shipped as a bounded authenticated JSON mirror and runtime indexes. RocksDB/IPLD remains an optional scale backend rather than a prerequisite for protocol correctness. |
+| Dashboard/API backend | Serve governance history, block lookup, snapshots, and proof queries. | Shipped: the always-on service exposes bounded mirror/head/block/node/checkpoint, health, and metrics routes; Torii also exposes local pre-publication indexes. |
+| Operator CLI | Inspect heads, list/fetch blocks, export snapshots, verify chains, and rebuild heads. | Local archive list/show/verify/export/build/verify-build/rebuild-head/checkpoint/checkpoint-verify/checkpoint-recover/mirror-build/mirror-query is shipped for `.to` governance nodes and block/head snapshots. Direct convenience wrappers for the public service can be added without changing the protocol boundary. |
 
 ## Target Publishing Workflow
 1. Ingest validates a Norito payload and deduplicates it by digest.
@@ -343,9 +361,10 @@ bytes only for payload variants already represented by `GovernanceLogPayloadV1`.
 5. Torii or the dashboard backend announces the new head for subscribers.
 6. Clients resolve the head, verify signatures and digests, and replay blocks back to a trusted checkpoint.
 
-The local filesystem publisher now performs step 2 for supported payloads when a
-runtime DAG signer is configured. The end-to-end public workflow remains target
-design until IPFS/IPNS publishing services and tests are present.
+The local filesystem publisher performs steps 1-2 for supported payloads when a
+runtime DAG signer is configured. `sorafs_governance_dag` performs steps 3-5,
+and the public mirror/checkpoint API supplies step 6. Production rollout still
+has to prove this workflow against the governed public deployment.
 
 ## Security & Verification Requirements
 - All payloads must remain Norito-first; JSON should be a presentation format only.
@@ -369,17 +388,21 @@ materialization:
 - `sorafs_governance_dag_backlog{sink}` reports the local CAR queue pending
   segment count for the filesystem sink when `car-queue.json` is built or
   refreshed.
-- `sorafs_governance_dag_head_age_seconds{sink}` reports the local signed
+- `sorafs_governance_dag_head_age_seconds{sink}` reports the signed
   runtime DAG head age for the filesystem sink when runtime DAG state is
-  written or refreshed. Public IPFS/IPNS head-age emission remains future work.
+  written or refreshed.
+- The always-on service exports IPFS publish success/failure and byte counters,
+  backlog, head age, IPFS pin lag, IPNS update success/failure, last successful
+  IPNS update time, and mirror drift.
 - `dashboards/grafana/sorafs_governance_dag.json` visualizes local publication
   outcomes, published bytes, backlog, head age, and publish age.
 - `dashboards/alerts/sorafs_governance_dag_rules.yml` alerts on local
   publication failures, backlog, stale heads, and missing recent publications.
 
-Still-required live signals include block count by payload kind, publish
-duration, IPNS/head update results, validation failures, CAR queue depth, pin
-lag, mirror/index drift, and last successful public IPNS head.
+Still-required rollout evidence must demonstrate block count by payload kind,
+publish duration/SLOs, validation failures, and alert delivery alongside the
+already exported IPNS/head, queue, pin-lag, mirror-drift, and public-head
+signals.
 
 Required live alerts include no new public block for the configured SLA,
 validation failure, pin lag, IPNS/head update failure, and mirror/index drift.
@@ -428,15 +451,20 @@ coverage verifies local CAR queue backlog counting and signed runtime-head age
 saturation.
 
 Required before rollout:
-- Integration tests with a local IPFS/IPNS-compatible environment.
+- Run the opt-in real-Kubo IPNS restart/tamper lane in the governed release
+  environment and archive its output.
 - End-to-end replay of fixtures from `fixtures/sorafs_manifest/governance/`, PoR, repair, settlement, and reputation evidence.
 - Snapshot/export/import tests that preserve block hashes.
 - Failure tests for pinning outage, publisher key failure, invalid parent, duplicate payload, and mirror recovery.
 
 Implemented local unit tests now cover DAG block creation, CID derivation,
 signature-payload stability, parent linkage, missing-parent failure, signed head
-manifest validation, and head block-count mismatch rejection. The remaining
-tests above require the runtime builder/publisher and IPFS/IPNS stack.
+manifest validation, and head block-count mismatch rejection. The always-on
+service additionally has mock-IPFS/IPNS adversarial coverage for pin/readback,
+CAS conflicts, response bounds, SSRF policy, checkpoint/intent corruption,
+restart recovery, mirror tamper, rollback, and fork rejection. Its opt-in Kubo
+lane covers real IPNS restart and tamper behavior. Remaining work is governed
+release-environment execution and captured deployment evidence.
 
 The rollout evidence scripts have focused Python coverage in:
 
@@ -448,14 +476,14 @@ The rollout evidence scripts have focused Python coverage in:
 - Use `sorafs-validate governance --block <block.to>` and `sorafs-validate
   governance --head <head.to> --block <block.to>...` for local
   `GovernanceDagBlockV1` and signed-head chain verification.
-- Use `sorafs_cli governance dag list|show|verify|export` for pre-IPFS local
+- Use `sorafs_cli governance dag list|show|verify|export` for offline local
   archive inspection and evidence handoff. Treat exported snapshots as local
   verification bundles, not public IPNS heads.
-- Use `sorafs_cli governance dag build` when a local archive needs a signed
-  `GovernanceDagBlockV1`/`GovernanceDagHeadV1` snapshot before the runtime
-  builder and IPFS/IPNS publisher exist. Keep `--key-hex` and `--key` inputs
-  runtime-only. Add `--car-out <path>` when downstream tests or handoff jobs
-  need a deterministic CARv2 segment for the generated snapshot payloads.
+- Use `sorafs_cli governance dag build` when an offline archive needs a signed
+  `GovernanceDagBlockV1`/`GovernanceDagHeadV1` snapshot independent of the
+  always-on publisher. Keep `--key-hex` and `--key` inputs runtime-only. Add
+  `--car-out <path>` when downstream tests or handoff jobs need a deterministic
+  CARv2 segment for the generated snapshot payloads.
 - Use `sorafs_cli governance dag verify-build` before handing a local
   block/head snapshot to downstream tests or operators; it verifies decoded
   block/head linkage and catches sidecar or tampering drift in the builder
@@ -465,8 +493,8 @@ The rollout evidence scripts have focused Python coverage in:
   `--key-hex` and `--key` inputs runtime-only.
 - Use `sorafs_cli governance dag checkpoint` when a verified local block/head
   snapshot needs a JSON handoff manifest that binds the head to optional CARv2
-  and mirror-index artifacts. Treat this as local checkpoint metadata until the
-  IPFS/IPNS publisher exists.
+  and mirror-index artifacts. This is the offline handoff form; the always-on
+  service exposes its authenticated public checkpoint through the service API.
 - Use `sorafs_cli governance dag checkpoint-verify` before trusting or handing
   off local checkpoint metadata; it verifies the signed snapshot and recorded
   artifact digests, and can point at recovered artifact paths with `--root`,
@@ -607,13 +635,21 @@ shapes. Use the
 canary builder for reviewed SF-12 promotion evidence so public-head binding,
 freshness thresholds,
 payload-free inclusion flags, and checker prevalidation stay consistent with the
-rollout gate. This does not replace the missing always-on ingest/publisher
-services, public IPFS/IPNS publication, runtime RocksDB/IPLD mirror, or
-runtime/IPFS-backed dashboard API.
+rollout gate. This evidence must be collected from the shipped always-on
+publisher rather than synthesized from the pre-publication filesystem hooks.
 
 ## Rollout Status
 - Done: governance log schema, public DAG block/head schemas, deterministic node-CID/block-CID derivation, block/head signature helpers, parent-chain and signed-head validation, payload validation including appeal finance reports, weekly rollups, and settlement receipts, Ed25519/ML-DSA signature verification, reference validation hooks for nodes/blocks/heads, governance log-node FFI hooks, fixtures, local filesystem publishing hooks with local `publish-index.json` including appeal finance reports, weekly rollups, and settlement receipts, appeal-finance rollup summaries embedded in local SoraFS reconciliation reports, runtime-local `car-queue.json` and CARv2 segment assembly for filesystem-published artifacts, config-backed local signed runtime block/head assembly for supported filesystem-published payloads, Torii publish-index, CAR queue, and runtime signed-DAG query APIs with `limit`-bounded top-level/lookup arrays and full total counts, PoR report/challenge filesystem publication, Taikai cache bundle generation, local Governance DAG operator inventory/verify/export/build/verify-build/rebuild-head/checkpoint/checkpoint-verify/checkpoint-recover/mirror-build/mirror-query commands, local CARv2 segment emission for signed snapshots, Torii local mirror dashboard/query API, local filesystem backlog/head-age metric emission, local Governance DAG publication metrics/dashboard/alerts, fail-closed rollout evidence gate, collection planner with dry-run evidence-contract export and schema-closed plan validation, payload-free canary builder for all SF-12 evidence kinds, operator argfile templates, and focused tests.
 - Done addendum: valid SF-12 operator-recovery evidence now surfaces
   `valid_checkpoint_digests`, and aggregate readiness validates those checkpoint
   digests as payload-free metadata tied to recognized artifact fingerprints.
-- Remaining: implement the always-on ingest/publisher services, IPFS/IPNS publication, runtime RocksDB/IPLD mirror datastore and query service, live-head/public-checkpoint publication and recovery operator commands, runtime/IPFS-backed dashboard API, live public IPFS/IPNS head and pin/mirror metric emission, IPFS-backed tests, and staged/live publication evidence that passes the SF-12 gate.
+- Done addendum: `sorafs_governance_dag` provides the always-on validated source
+  ingest, verified IPFS add/pin/readback, signed-HTTP/IPNS CAS head publication,
+  authenticated checkpoint and publish-intent recovery, bounded public mirror,
+  health/checkpoint APIs, and IPFS/IPNS/mirror metrics with mock-adversarial and
+  opt-in real-Kubo coverage.
+- Remaining: package and deploy that service with runtime-only governed keys,
+  decide whether production scale requires the optional RocksDB/IPLD mirror,
+  add any operator convenience commands required by deployment practice, and
+  capture staged/live publication, recovery, dashboard, and alert evidence that
+  passes the SF-12 gate.

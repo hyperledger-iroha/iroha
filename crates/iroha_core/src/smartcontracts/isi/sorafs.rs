@@ -32,7 +32,7 @@ use iroha_executor_data_model::permission::sorafs::CanOperateSorafsRepair;
 use iroha_primitives::{json::Json, numeric::Numeric};
 use mv::storage::{StorageReadOnly, Transaction as StorageTransaction};
 use norito::{
-    DecodeLimits, decode_from_bytes, decode_from_bytes_with_limits,
+    DecodeLimits, decode_from_bytes_with_limits,
     json::{self, Value},
 };
 use sorafs_manifest::{
@@ -359,28 +359,6 @@ fn ensure_provider_owner_registered(
 
     Err(invalid_parameter(format!(
         "provider {provider:?} has no registered owner"
-    )))
-}
-
-fn ensure_registered_owner_matches_authority(
-    state_transaction: &StateTransaction<'_, '_>,
-    provider: &ProviderId,
-    authority: &AccountId,
-    context: &str,
-) -> Result<(), InstructionExecutionError> {
-    if let Some(owner) = state_transaction.world.provider_owners.get(provider) {
-        if same_account_subject(owner, authority) {
-            return Ok(());
-        }
-        return Err(invalid_parameter(format!(
-            "{context}: provider {} is owned by {owner}, not {authority}",
-            hex::encode(provider.as_bytes())
-        )));
-    }
-
-    Err(invalid_parameter(format!(
-        "{context}: provider {} has no registered owner",
-        hex::encode(provider.as_bytes())
     )))
 }
 
@@ -5160,8 +5138,8 @@ mod sorafs_tests {
         assert_eq!(order.issued_epoch, 5);
         assert_eq!(order.deadline_epoch, 6);
 
-        let decoded =
-            decode_from_bytes::<ReplicationOrderV1>(&order.canonical_order).expect("decode order");
+        let decoded = norito::decode_from_bytes::<ReplicationOrderV1>(&order.canonical_order)
+            .expect("decode order");
         assert_eq!(decoded.target_replicas, 1);
         assert_eq!(decoded.assignments.len(), 1);
         assert_eq!(decoded.assignments[0].provider_id, *provider.as_bytes());
@@ -7641,8 +7619,8 @@ mod sorafs_tests {
         assert_eq!(record.canonical_order, payload);
         assert!(matches!(record.status, ReplicationOrderStatus::Pending));
 
-        let decoded =
-            decode_from_bytes::<ReplicationOrderV1>(&record.canonical_order).expect("decode order");
+        let decoded = norito::decode_from_bytes::<ReplicationOrderV1>(&record.canonical_order)
+            .expect("decode order");
         assert_eq!(decoded.order_id, *order_id.as_bytes());
     }
 

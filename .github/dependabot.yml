@@ -23,6 +23,7 @@ updates:
     target-branch: "main"
     directories:
       - /pytests/*
+      - /scripts
     schedule:
       interval: "daily"
     commit-message:

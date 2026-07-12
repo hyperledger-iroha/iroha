@@ -197,6 +197,18 @@ ret = "u64=0"
 gas = "G_revoke_perm"
 
 [[syscall]]
+number = "0x36"
+args = "r10=&AccountId, r11=&Blob(entrypoint)"
+ret = "u64=0"
+gas = "G_grant_perm"
+
+[[syscall]]
+number = "0x37"
+args = "r10=&AccountId, r11=&Blob(entrypoint)"
+ret = "u64=0"
+gas = "G_revoke_perm"
+
+[[syscall]]
 number = "0x40"
 args = "r10=&Json(spec)"
 ret = "u64=0"
@@ -309,12 +321,6 @@ number = "0x53"
 args = "r10=&NoritoBytes(Norito-framed i64)"
 ret = "r10=i64"
 gas = "G_numeric + bytes"
-
-[[syscall]]
-number = "0x54"
-args = "r10=&Name(base), r11=key:i64"
-ret = "r10=ptr (&Name)"
-gas = "G_path + bytes"
 
 [[syscall]]
 number = "0x55"
@@ -1037,6 +1043,48 @@ number = "0x010026"
 args = "r10=&NoritoBytes(EntrypointArgumentRecordV1), r11=&NoritoBytes(EntrypointArgumentSchemaV1)"
 ret = "r10=ptr (&Blob(pad:u8 then [u64; word_count]))"
 gas = "G_argument_decode + record + schema + output"
+
+[[syscall]]
+number = "0x010027"
+args = "-"
+ret = "r10=ptr (&AccountId(contract subject))"
+gas = "G_sysvar + bytes"
+
+[[syscall]]
+number = "0x010200"
+args = "r10=&AccountId, r11=&AssetDefinitionId, r12=frozen:0/1"
+ret = "u64=0"
+gas = "G_sci + bytes"
+
+[[syscall]]
+number = "0x010201"
+args = "r10=&AccountId, r11=&AssetDefinitionId, r12=&Quantity or 0"
+ret = "u64=0"
+gas = "G_sci + bytes"
+
+[[syscall]]
+number = "0x010210"
+args = "r10=&Blob(alias), r11=&AccountId(replacement)"
+ret = "u64=0"
+gas = "G_sci + bytes"
+
+[[syscall]]
+number = "0x010211"
+args = "r10=&Blob(alias)"
+ret = "u64=0"
+gas = "G_sci + bytes"
+
+[[syscall]]
+number = "0x010212"
+args = "r10=&Blob(alias)"
+ret = "u64=0"
+gas = "G_sci + bytes"
+
+[[syscall]]
+number = "0x010213"
+args = "r10=&Blob(alias)"
+ret = "u64=0"
+gas = "G_sci + bytes"
 
 # Kotodama V1 exact integer syscalls. Checked arithmetic reserves r11..r13 so
 # the public argument window remains contiguous through r14=failure_mode.

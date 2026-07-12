@@ -21,6 +21,10 @@ import org.hyperledger.iroha.android.crypto.IrohaHash;
 public final class SumeragiV2Wire {
   /** Live Sumeragi protocol revision. */
   public static final int PROTOCOL_VERSION = 2;
+  /** Maximum number of real Kagemusha top-up leaves committed by one block. */
+  public static final long MAX_KAGEMUSHA_TOPUP_ANCHORS_PER_BLOCK = 16;
+  private static final byte[] KAGEMUSHA_TOPUP_POST_STATE_ROOT_DOMAIN =
+      "iroha:kagemusha:v2:post-state-root".getBytes(StandardCharsets.UTF_8);
 
   private SumeragiV2Wire() {}
 
@@ -233,11 +237,97 @@ public final class SumeragiV2Wire {
     }
   }
 
+  /** Deterministic state-transition result authenticated by votes and certificates. */
+  public static final class ExecutionCommitment extends WireValue {
+    public final Hash32 parentStateRoot;
+    public final Hash32 postStateRoot;
+    public final Hash32 ordinaryWritesRoot;
+    public final Hash32 topupAnchorRoot;
+    public final long topupAnchorCount;
+
+    public ExecutionCommitment(
+        Hash32 parentStateRoot,
+        Hash32 postStateRoot,
+        Hash32 ordinaryWritesRoot,
+        Hash32 topupAnchorRoot,
+        long topupAnchorCount) {
+      this.parentStateRoot = nonNull(parentStateRoot, "parentStateRoot");
+      this.postStateRoot = nonNull(postStateRoot, "postStateRoot");
+      this.ordinaryWritesRoot = nonNull(ordinaryWritesRoot, "ordinaryWritesRoot");
+      requireU32(topupAnchorCount, "topupAnchorCount");
+      this.topupAnchorRoot = topupAnchorRoot;
+      this.topupAnchorCount = topupAnchorCount;
+      if (topupAnchorCount == 0) {
+        require(topupAnchorRoot == null, "zero top-up count must not carry an anchor root");
+      } else {
+        require(topupAnchorRoot != null, "non-zero top-up count requires an anchor root");
+        require(
+            topupAnchorCount <= MAX_KAGEMUSHA_TOPUP_ANCHORS_PER_BLOCK,
+            "top-up anchor count exceeds the consensus bound");
+        require(
+            postStateRoot.equals(
+                topupPostStateRoot(topupAnchorCount, ordinaryWritesRoot, topupAnchorRoot)),
+            "post-state root does not bind the top-up anchor projection");
+      }
+    }
+
+    /** Construct an execution commitment for a block with no Kagemusha top-ups. */
+    public static ExecutionCommitment withoutTopups(
+        Hash32 parentStateRoot, Hash32 postStateRoot, Hash32 ordinaryWritesRoot) {
+      return new ExecutionCommitment(
+          parentStateRoot, postStateRoot, ordinaryWritesRoot, null, 0);
+    }
+
+    /** Derive the canonical post-state root for a non-empty top-up tree. */
+    public static Hash32 topupPostStateRoot(
+        long topupAnchorCount, Hash32 ordinaryWritesRoot, Hash32 topupAnchorRoot) {
+      require(
+          topupAnchorCount > 0
+              && topupAnchorCount <= MAX_KAGEMUSHA_TOPUP_ANCHORS_PER_BLOCK,
+          "top-up anchor count must fit the non-empty consensus bound");
+      nonNull(ordinaryWritesRoot, "ordinaryWritesRoot");
+      nonNull(topupAnchorRoot, "topupAnchorRoot");
+      ByteArrayOutputStream preimage = new ByteArrayOutputStream();
+      append(preimage, KAGEMUSHA_TOPUP_POST_STATE_ROOT_DOMAIN);
+      preimage.write(0);
+      append(preimage, u32(topupAnchorCount));
+      append(preimage, ordinaryWritesRoot.bytes());
+      append(preimage, topupAnchorRoot.bytes());
+      return new Hash32(IrohaHash.prehash(preimage.toByteArray()));
+    }
+
+    @Override
+    public byte[] encode() {
+      return struct(
+          parentStateRoot.bytes(),
+          postStateRoot.bytes(),
+          ordinaryWritesRoot.bytes(),
+          option(topupAnchorRoot == null ? null : topupAnchorRoot.bytes()),
+          u32(topupAnchorCount));
+    }
+
+    static ExecutionCommitment decode(byte[] bytes) {
+      Reader reader = new Reader(bytes);
+      ExecutionCommitment value =
+          new ExecutionCommitment(
+              new Hash32(reader.field("execution parent state", SumeragiV2Wire::decodeHash)),
+              new Hash32(reader.field("execution post state", SumeragiV2Wire::decodeHash)),
+              new Hash32(reader.field("execution ordinary writes", SumeragiV2Wire::decodeHash)),
+              reader.field(
+                  "execution top-up root",
+                  payload -> decodeOption(payload, data -> new Hash32(decodeHash(data)))),
+              reader.field("execution top-up count", SumeragiV2Wire::decodeU32));
+      reader.finish("execution commitment");
+      return value;
+    }
+  }
+
   /** Prepare or Commit vote. */
   public static final class Vote extends WireValue {
     public final ConsensusRound round;
     public final GlobalPhase phase;
     public final BlockSubject subject;
+    public final ExecutionCommitment executionCommitment;
     public final long signer;
     private final byte[] signature;
 
@@ -245,11 +335,13 @@ public final class SumeragiV2Wire {
         ConsensusRound round,
         GlobalPhase phase,
         BlockSubject subject,
+        ExecutionCommitment executionCommitment,
         long signer,
         byte[] signature) {
       this.round = nonNull(round, "round");
       this.phase = nonNull(phase, "phase");
       this.subject = nonNull(subject, "subject");
+      this.executionCommitment = nonNull(executionCommitment, "executionCommitment");
       requireU32(signer, "signer");
       this.signer = signer;
       this.signature = copy(signature, "signature");
@@ -261,7 +353,13 @@ public final class SumeragiV2Wire {
 
     @Override
     public byte[] encode() {
-      return struct(round.encode(), phase.encode(), subject.encode(), u32(signer), byteVector(signature));
+      return struct(
+          round.encode(),
+          phase.encode(),
+          subject.encode(),
+          executionCommitment.encode(),
+          u32(signer),
+          byteVector(signature));
     }
 
     static Vote decode(byte[] bytes) {
@@ -271,6 +369,7 @@ public final class SumeragiV2Wire {
               reader.field("vote round", ConsensusRound::decode),
               reader.field("vote phase", GlobalPhase::decode),
               reader.field("vote subject", BlockSubject::decode),
+              reader.field("vote execution commitment", ExecutionCommitment::decode),
               reader.field("vote signer", SumeragiV2Wire::decodeU32),
               reader.field("vote signature", SumeragiV2Wire::decodeByteVector));
       reader.finish("vote");
@@ -283,16 +382,22 @@ public final class SumeragiV2Wire {
     public final ConsensusRound round;
     public final GlobalPhase phase;
     public final BlockSubject subject;
+    public final ExecutionCommitment executionCommitment;
 
-    public QuorumCertificateRef(ConsensusRound round, GlobalPhase phase, BlockSubject subject) {
+    public QuorumCertificateRef(
+        ConsensusRound round,
+        GlobalPhase phase,
+        BlockSubject subject,
+        ExecutionCommitment executionCommitment) {
       this.round = nonNull(round, "round");
       this.phase = nonNull(phase, "phase");
       this.subject = nonNull(subject, "subject");
+      this.executionCommitment = nonNull(executionCommitment, "executionCommitment");
     }
 
     @Override
     public byte[] encode() {
-      return struct(round.encode(), phase.encode(), subject.encode());
+      return struct(round.encode(), phase.encode(), subject.encode(), executionCommitment.encode());
     }
 
     static QuorumCertificateRef decode(byte[] bytes) {
@@ -301,7 +406,8 @@ public final class SumeragiV2Wire {
           new QuorumCertificateRef(
               reader.field("qc ref round", ConsensusRound::decode),
               reader.field("qc ref phase", GlobalPhase::decode),
-              reader.field("qc ref subject", BlockSubject::decode));
+              reader.field("qc ref subject", BlockSubject::decode),
+              reader.field("qc ref execution commitment", ExecutionCommitment::decode));
       reader.finish("quorum certificate ref");
       return value;
     }
@@ -312,6 +418,7 @@ public final class SumeragiV2Wire {
     public final ConsensusRound round;
     public final GlobalPhase phase;
     public final BlockSubject subject;
+    public final ExecutionCommitment executionCommitment;
     public final List<Long> signers;
     private final byte[] aggregateSignature;
 
@@ -319,11 +426,13 @@ public final class SumeragiV2Wire {
         ConsensusRound round,
         GlobalPhase phase,
         BlockSubject subject,
+        ExecutionCommitment executionCommitment,
         List<Long> signers,
         byte[] aggregateSignature) {
       this.round = nonNull(round, "round");
       this.phase = nonNull(phase, "phase");
       this.subject = nonNull(subject, "subject");
+      this.executionCommitment = nonNull(executionCommitment, "executionCommitment");
       this.signers = immutable(signers, "signers");
       requireIncreasing(this.signers, "quorum certificate signers");
       this.aggregateSignature = copy(aggregateSignature, "aggregateSignature");
@@ -334,7 +443,7 @@ public final class SumeragiV2Wire {
     }
 
     public QuorumCertificateRef reference() {
-      return new QuorumCertificateRef(round, phase, subject);
+      return new QuorumCertificateRef(round, phase, subject, executionCommitment);
     }
 
     @Override
@@ -343,6 +452,7 @@ public final class SumeragiV2Wire {
           round.encode(),
           phase.encode(),
           subject.encode(),
+          executionCommitment.encode(),
           vector(signers, SumeragiV2Wire::u32),
           byteVector(aggregateSignature));
     }
@@ -354,6 +464,7 @@ public final class SumeragiV2Wire {
               reader.field("qc round", ConsensusRound::decode),
               reader.field("qc phase", GlobalPhase::decode),
               reader.field("qc subject", BlockSubject::decode),
+              reader.field("qc execution commitment", ExecutionCommitment::decode),
               reader.field("qc signers", data -> decodeVector(data, SumeragiV2Wire::decodeU32)),
               reader.field("qc signature", SumeragiV2Wire::decodeByteVector));
       reader.finish("quorum certificate");

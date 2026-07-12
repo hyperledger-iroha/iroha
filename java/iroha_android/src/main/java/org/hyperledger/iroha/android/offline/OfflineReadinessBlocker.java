@@ -9,7 +9,7 @@ public final class OfflineReadinessBlocker {
 
   public OfflineReadinessBlocker(final String code, final String message) {
     this.code = OfflineOperationCodec.requireStableErrorCode(code, "code");
-    this.message = requireExactText(message, "message");
+    this.message = OfflineReadinessText.requireBounded(message, "message", 1024);
   }
 
   public String code() {
@@ -37,11 +37,4 @@ public final class OfflineReadinessBlocker {
     return Objects.hash(code, message);
   }
 
-  private static String requireExactText(final String value, final String field) {
-    Objects.requireNonNull(value, field);
-    if (value.isEmpty() || !value.equals(value.trim())) {
-      throw new IllegalArgumentException(field + " must be exact non-empty text");
-    }
-    return value;
-  }
 }

@@ -11,6 +11,9 @@ Runs the Nexus cross-dataspace atomic swap localnet proof test:
 Options:
   --release               Run tests with --release
   --all-nexus             Run the full Nexus integration subset (nexus:: filter)
+  --native-amx-fault-soak Run the ignored rotating-validator Native AMX fault soak
+  --native-amx-iterations <N>
+                          Native AMX soak iterations, 1..100 (default: 10)
   --target-dir <PATH>     Set CARGO_TARGET_DIR for the test run
   --fast                  Run cargo via scripts/cargo_fast.sh when available
   --fast-zero-debug       With --fast, set CARGO_PROFILE_{DEV,TEST}_DEBUG=0
@@ -35,6 +38,7 @@ require_option_value() {
 
 PROFILE="debug"
 RUN_SCOPE="case"
+NATIVE_AMX_ITERATIONS=""
 KEEP_DIRS=false
 SKIP_BUILD=true
 NO_CAPTURE=false
@@ -53,8 +57,25 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     --all-nexus)
+      if [[ "$RUN_SCOPE" == "native-amx" ]]; then
+        echo "--all-nexus cannot be combined with --native-amx-fault-soak" >&2
+        exit 2
+      fi
       RUN_SCOPE="nexus"
       shift
+      ;;
+    --native-amx-fault-soak)
+      if [[ "$RUN_SCOPE" == "nexus" ]]; then
+        echo "--native-amx-fault-soak cannot be combined with --all-nexus" >&2
+        exit 2
+      fi
+      RUN_SCOPE="native-amx"
+      shift
+      ;;
+    --native-amx-iterations)
+      require_option_value "--native-amx-iterations" "${2-}"
+      NATIVE_AMX_ITERATIONS="$2"
+      shift 2
       ;;
     --target-dir)
       require_option_value "--target-dir" "${2-}"
@@ -111,6 +132,18 @@ if [[ ! "$TEST_THREADS" =~ ^[0-9]+$ ]] || [[ "$TEST_THREADS" -lt 1 ]]; then
   echo "Invalid --test-threads value: $TEST_THREADS (expected positive integer)" >&2
   exit 2
 fi
+if [[ -n "$NATIVE_AMX_ITERATIONS" ]]; then
+  if [[ "$RUN_SCOPE" != "native-amx" ]]; then
+    echo "--native-amx-iterations requires --native-amx-fault-soak" >&2
+    exit 2
+  fi
+  if [[ ! "$NATIVE_AMX_ITERATIONS" =~ ^[0-9]+$ ]] \
+    || [[ "$NATIVE_AMX_ITERATIONS" -lt 1 ]] \
+    || [[ "$NATIVE_AMX_ITERATIONS" -gt 100 ]]; then
+    echo "Invalid --native-amx-iterations value: $NATIVE_AMX_ITERATIONS (expected 1..100)" >&2
+    exit 2
+  fi
+fi
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")"/.. && pwd)"
 cargo_runner=(cargo)
@@ -150,25 +183,43 @@ fi
 if [[ -n "$PERMIT_DIR_OVERRIDE" ]]; then
   ENV_VARS+=("IROHA_TEST_NETWORK_PERMIT_DIR=${PERMIT_DIR_OVERRIDE}")
 fi
+if [[ -n "$NATIVE_AMX_ITERATIONS" ]]; then
+  ENV_VARS+=("IROHA_NATIVE_AMX_SOAK_ITERATIONS=${NATIVE_AMX_ITERATIONS}")
+fi
 for extra in ${EXTRA_ENV[@]+"${EXTRA_ENV[@]}"}; do
   ENV_VARS+=("$extra")
 done
 
 if [[ "$USE_CARGO_FAST" == true ]]; then
-  CMD=("${cargo_runner[@]}" -- test -p integration_tests)
+  CMD=("${cargo_runner[@]}" -- test)
 else
-  CMD=("${cargo_runner[@]}" test -p integration_tests)
+  CMD=("${cargo_runner[@]}" test)
 fi
 if [[ "$PROFILE" == "release" ]]; then
   CMD+=("--release")
 fi
-CMD+=("--test" "nexus_and_streaming")
-if [[ "$RUN_SCOPE" == "case" ]]; then
-  CMD+=("nexus::cross_dataspace_localnet::cross_dataspace_atomic_swap_is_all_or_nothing")
+CMD+=("--locked" "--offline")
+if [[ "$RUN_SCOPE" == "native-amx" ]]; then
+  CMD+=(
+    "-p"
+    "integration_tests"
+    "--test"
+    "native_amx_routing"
+    "native_amx_rotating_validator_fault_soak_preserves_independent_participant_qcs"
+  )
 else
-  CMD+=("nexus::")
+  CMD+=("-p" "integration_tests" "--test" "nexus_and_streaming")
+  if [[ "$RUN_SCOPE" == "case" ]]; then
+    CMD+=("nexus::cross_dataspace_localnet::cross_dataspace_atomic_swap_is_all_or_nothing")
+  else
+    CMD+=("nexus::")
+  fi
 fi
-CMD+=("--" "--test-threads=${TEST_THREADS}")
+CMD+=("--")
+if [[ "$RUN_SCOPE" == "native-amx" ]]; then
+  CMD+=("--ignored")
+fi
+CMD+=("--test-threads=${TEST_THREADS}")
 
 if [[ "$NO_CAPTURE" == false ]]; then
   CMD+=("--nocapture")

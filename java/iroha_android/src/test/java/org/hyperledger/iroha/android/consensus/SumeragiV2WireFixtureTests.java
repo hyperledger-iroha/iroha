@@ -157,6 +157,7 @@ public final class SumeragiV2WireFixtureTests {
             response.certificate.round,
             response.certificate.phase,
             changedSubject,
+            response.certificate.executionCommitment,
             response.certificate.signers,
             response.certificate.aggregateSignature());
     SumeragiV2Wire.CommitCertificateResponse changedSubjectResponse =
@@ -168,6 +169,95 @@ public final class SumeragiV2WireFixtureTests {
     if (Arrays.equals(response.signaturePreimage(), changedSubjectResponse.signaturePreimage())) {
       throw new AssertionError("commit response signature preimage did not bind QC subject");
     }
+
+    byte[] changedParentState = response.certificate.executionCommitment.parentStateRoot.bytes();
+    changedParentState[0] ^= 1;
+    SumeragiV2Wire.ExecutionCommitment changedExecutionCommitment =
+        SumeragiV2Wire.ExecutionCommitment.withoutTopups(
+            new SumeragiV2Wire.Hash32(changedParentState),
+            response.certificate.executionCommitment.postStateRoot,
+            response.certificate.executionCommitment.ordinaryWritesRoot);
+    SumeragiV2Wire.QuorumCertificate changedExecutionCertificate =
+        new SumeragiV2Wire.QuorumCertificate(
+            response.certificate.round,
+            response.certificate.phase,
+            response.certificate.subject,
+            changedExecutionCommitment,
+            response.certificate.signers,
+            response.certificate.aggregateSignature());
+    SumeragiV2Wire.CommitCertificateResponse changedExecutionResponse =
+        new SumeragiV2Wire.CommitCertificateResponse(
+            response.requestHash,
+            changedExecutionCertificate,
+            response.responder,
+            response.signature());
+    if (Arrays.equals(response.signaturePreimage(), changedExecutionResponse.signaturePreimage())) {
+      throw new AssertionError(
+          "commit response signature preimage did not bind the execution commitment");
+    }
+  }
+
+  @Test
+  public void executionCommitmentsRejectNonCanonicalTopupBindings() throws Exception {
+    FixtureRow responseMessage = fixtureRow("message", "commit_certificate_response");
+    SumeragiV2Wire.ConsensusPayload.CommitCertificateResponseMessage responsePayload =
+        (SumeragiV2Wire.ConsensusPayload.CommitCertificateResponseMessage)
+            SumeragiV2Wire.ConsensusMessageV2.decodeCanonical(
+                    hexBytes(responseMessage.hex))
+                .payload;
+    SumeragiV2Wire.ExecutionCommitment base =
+        responsePayload.value.certificate.executionCommitment;
+    SumeragiV2Wire.Hash32 topupRoot = base.parentStateRoot;
+
+    assertThrows(
+        IllegalArgumentException.class,
+        () ->
+            new SumeragiV2Wire.ExecutionCommitment(
+                base.parentStateRoot,
+                base.postStateRoot,
+                base.ordinaryWritesRoot,
+                topupRoot,
+                0));
+    assertThrows(
+        IllegalArgumentException.class,
+        () ->
+            new SumeragiV2Wire.ExecutionCommitment(
+                base.parentStateRoot,
+                base.postStateRoot,
+                base.ordinaryWritesRoot,
+                null,
+                1));
+    assertThrows(
+        IllegalArgumentException.class,
+        () ->
+            new SumeragiV2Wire.ExecutionCommitment(
+                base.parentStateRoot,
+                base.postStateRoot,
+                base.ordinaryWritesRoot,
+                topupRoot,
+                SumeragiV2Wire.MAX_KAGEMUSHA_TOPUP_ANCHORS_PER_BLOCK + 1));
+    assertThrows(
+        IllegalArgumentException.class,
+        () ->
+            new SumeragiV2Wire.ExecutionCommitment(
+                base.parentStateRoot,
+                base.postStateRoot,
+                base.ordinaryWritesRoot,
+                topupRoot,
+                1));
+
+    SumeragiV2Wire.Hash32 canonicalPostState =
+        SumeragiV2Wire.ExecutionCommitment.topupPostStateRoot(
+            1, base.ordinaryWritesRoot, topupRoot);
+    SumeragiV2Wire.ExecutionCommitment valid =
+        new SumeragiV2Wire.ExecutionCommitment(
+            base.parentStateRoot,
+            canonicalPostState,
+            base.ordinaryWritesRoot,
+            topupRoot,
+            1);
+    assertArrayEquals(
+        valid.encode(), SumeragiV2Wire.ExecutionCommitment.decode(valid.encode()).encode());
   }
 
   @Test

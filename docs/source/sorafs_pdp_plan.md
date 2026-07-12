@@ -12,9 +12,10 @@ builds the canonical trees, generates byte-backed witnesses, verifies both
 commitment roots, enforces exact governed coverage and deadlines, and verifies
 provider signatures against council-verified admission records. The deployed
 provider protocol is not production-ready yet: Torii therefore rejects PDP
-proof-stream requests with `400 Bad Request` until persisted-node proof
-generation, signed challenge/proof transport, governance archival, and repair
-handoff are wired end to end.
+proof-stream requests with `400 Bad Request` until signed challenge/proof
+transport, admission-bound live submission, governance archival, and repair
+handoff are wired end to end. Persisted storage already retains canonical PDP
+trees and produces witnesses through verified no-follow chunk reads.
 `scripts/check_sorafs_pdp_rollout_evidence.py` now provides the fail-closed
 SF-13 rollout evidence gate for deployed PDP promotion, and
 `scripts/run_sorafs_pdp_rollout_evidence.py` provides the matching
@@ -133,6 +134,11 @@ Implemented locally:
   and arbitrary CAR chunk splits produce the same PDP roots as a contiguous
   payload. Plan validation applies a checked heap estimate before allocation or
   source/sink I/O.
+- `sorafs_node::StorageBackend` persists the commitment and bounded retained
+  tree, rehydrates them on restart, and generates exact challenge witnesses
+  while holding the manifest read lease. Integration and adversarial tests
+  cover restart parity, corrupted chunks, short/mutating reads, symlink and
+  hard-link replacement, out-of-range/duplicate samples, and eviction races.
 - `ProofStreamRequestV1` and the CLI request layer understand
   `proof_kind=pdp` as a sample-count proof kind, allowing external PDP-capable
   gateways to be exercised by `sorafs_cli proof stream --proof-kind=pdp`.
@@ -286,8 +292,6 @@ Implemented:
 
 Required before production enablement:
 
-- Storage-node integration tests that generate PDP proofs from persisted
-  payloads and validate them against commitment roots.
 - Torii endpoint tests for challenge issuance, proof submission, governance
   archival, repair handoff, and telemetry counters.
 - SDK parity tests that verify the same PDP fixture bundle across Rust,
@@ -314,6 +318,8 @@ Completed local foundations:
 - Define PDP commitment, challenge, sample, and proof schemas.
 - Add structural validators and unit tests.
 - Derive PDP hot/segment commitment roots from stored payload trees.
+- Generate PDP witnesses from persisted storage with restart, corruption,
+  filesystem-race, exact-read, and eviction adversarial coverage.
 - Reserve proof-stream request and telemetry labels.
 - Generate canonical PDP fixture bundle and expanded negative fixtures.
 - Add reference validator and `sorafs-validate pdp` coverage for PDP binding.
@@ -336,7 +342,8 @@ Completed local foundations:
 Remaining production gates:
 
 - Implement provider challenge/proof transport.
-- Verify provider signatures and PDP inclusion witnesses.
+- Route live proof submissions through the existing admission-bound provider
+  signature and PDP inclusion-witness verifier.
 - Archive PDP verdicts/failures in Governance DAG and wire repair handoff.
 - Collect deployed provider-transport, proof-generation, validator-replay,
   governance/repair, observability, and governed-approval evidence that passes

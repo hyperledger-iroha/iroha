@@ -161,6 +161,7 @@ impl PagedQueryContinuation {
     }
 
     /// Construct a paged continuation that reports exact remaining-item counts.
+    #[cfg(test)]
     pub(crate) fn new_counted<F>(
         expected_cursor: NonZeroU64,
         remaining_items: u64,

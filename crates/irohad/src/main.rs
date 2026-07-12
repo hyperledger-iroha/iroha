@@ -1347,20 +1347,12 @@ enum RelayControlClass {
     Auxiliary,
 }
 
-enum RelayControlAdmission {
-    General,
-    Reserved(RelayControlReplayToken),
-    Drop(RelayControlDropReason),
-}
+type RelayControlAdmission = Result<Option<RelayControlReplayToken>, RelayControlDropReason>;
 
-enum RelayControlInspection<'a> {
-    General,
-    Drop(RelayControlDropReason),
-    Reserved {
-        message: &'a iroha_core::sumeragi::message::BlockMessage,
-        round: Option<iroha_data_model::block::consensus_v2::ConsensusRound>,
-        class: RelayControlClass,
-    },
+struct ReservedRelayControlInspection<'a> {
+    message: &'a iroha_core::sumeragi::message::BlockMessage,
+    round: Option<iroha_data_model::block::consensus_v2::ConsensusRound>,
+    class: RelayControlClass,
 }
 
 #[derive(Default)]
@@ -1439,12 +1431,14 @@ impl RelayControlIngressGate {
         Self::new(RELAY_CONTROL_REPLAY_CAP, RELAY_CONTROL_REPLAY_TTL)
     }
 
-    fn inspect(msg: &iroha_core::NetworkMessage) -> RelayControlInspection<'_> {
+    fn inspect(
+        msg: &iroha_core::NetworkMessage,
+    ) -> Result<Option<ReservedRelayControlInspection<'_>>, RelayControlDropReason> {
         use iroha_core::sumeragi::message::{BlockMessage, V2IngressClass};
         use iroha_data_model::block::consensus_v2::ConsensusMessageV2Payload as Payload;
 
         let iroha_core::NetworkMessage::SumeragiBlock(wire) = msg else {
-            return RelayControlInspection::General;
+            return Ok(None);
         };
         let message = wire.as_ref().as_ref();
         match message {
@@ -1455,9 +1449,7 @@ impl RelayControlIngressGate {
                 ) =>
             {
                 if envelope.validate_version().is_err() {
-                    return RelayControlInspection::Drop(
-                        RelayControlDropReason::UnsupportedVersion,
-                    );
+                    return Err(RelayControlDropReason::UnsupportedVersion);
                 }
                 let round = match &envelope.payload {
                     Payload::Proposal(proposal) => proposal.round,
@@ -1471,14 +1463,14 @@ impl RelayControlIngressGate {
                     | Payload::CertifiedBodyRequest(_)
                     | Payload::CertifiedBodyResponse(_)
                     | Payload::CommitCertificateRequest(_) => {
-                        return RelayControlInspection::General;
+                        return Ok(None);
                     }
                 };
-                RelayControlInspection::Reserved {
+                Ok(Some(ReservedRelayControlInspection {
                     message,
                     round: Some(round),
                     class: RelayControlClass::GlobalV2,
-                }
+                }))
             }
             BlockMessage::VrfCommit(_)
             | BlockMessage::VrfReveal(_)
@@ -1486,12 +1478,12 @@ impl RelayControlIngressGate {
             | BlockMessage::LaneBlockNewViewVote(_)
             | BlockMessage::LaneBlockNewViewCertificate(_)
             | BlockMessage::LaneBlockVote(_)
-            | BlockMessage::LaneBlockQc(_) => RelayControlInspection::Reserved {
+            | BlockMessage::LaneBlockQc(_) => Ok(Some(ReservedRelayControlInspection {
                 message,
                 round: None,
                 class: RelayControlClass::Auxiliary,
-            },
-            _ => RelayControlInspection::General,
+            })),
+            _ => Ok(None),
         }
     }
 
@@ -1504,23 +1496,23 @@ impl RelayControlIngressGate {
     where
         F: FnOnce() -> Option<iroha_data_model::block::consensus_v2::SumeragiV2Status>,
     {
-        let (message, round, class) = match Self::inspect(msg) {
-            RelayControlInspection::Reserved {
-                message,
-                round,
-                class,
-            } => (message, round, class),
-            RelayControlInspection::Drop(reason) => return RelayControlAdmission::Drop(reason),
-            RelayControlInspection::General => return RelayControlAdmission::General,
+        let ReservedRelayControlInspection {
+            message,
+            round,
+            class,
+        } = match Self::inspect(msg) {
+            Ok(Some(inspection)) => inspection,
+            Err(reason) => return Err(reason),
+            Ok(None) => return Ok(None),
         };
         if let Some(round) = round
             && let Some(status) = status()
         {
             if round.height != status.height {
-                return RelayControlAdmission::Drop(RelayControlDropReason::WrongHeight);
+                return Err(RelayControlDropReason::WrongHeight);
             }
             if round.context_id != status.height_context_id {
-                return RelayControlAdmission::Drop(RelayControlDropReason::WrongContext);
+                return Err(RelayControlDropReason::WrongContext);
             }
         }
         let artifact_hash = Hash::new(message.encode());
@@ -1531,7 +1523,7 @@ impl RelayControlIngressGate {
         replay.prune(now, self.ttl);
         replay
             .insert(artifact_hash, now, self.capacity, class)
-            .map_or_else(RelayControlAdmission::Drop, RelayControlAdmission::Reserved)
+            .map(Some)
     }
 
     fn admit(&self, msg: &iroha_core::NetworkMessage, now: Instant) -> RelayControlAdmission {
@@ -2569,7 +2561,7 @@ fn try_enqueue_relay_work(
     shared: Option<&NetworkRelayShared>,
 ) -> Result<(), RelayIngressLoopExit> {
     let admission = control_gate.admit(&msg.payload, Instant::now());
-    if let RelayControlAdmission::Reserved(_) = &admission
+    if let Ok(Some(_)) = &admission
         && shared.is_some_and(|shared| {
             shared.should_drop_consensus_ingress(&msg.peer, &msg.payload, msg.payload_bytes)
         })
@@ -2594,7 +2586,7 @@ fn rollback_relay_control_admission(
     control_gate: &RelayControlIngressGate,
     admission: &RelayControlAdmission,
 ) {
-    if let RelayControlAdmission::Reserved(token) = admission {
+    if let Ok(Some(token)) = admission {
         control_gate.rollback(token);
     }
 }
@@ -2611,8 +2603,8 @@ fn try_enqueue_relay_work_with_admission(
     admission: RelayControlAdmission,
 ) -> Result<(), RelayIngressLoopExit> {
     let (target, target_kind, work) = match admission {
-        RelayControlAdmission::General => (tx, kind, RelayQueuedWork::general(msg)),
-        RelayControlAdmission::Reserved(token) => match token.class {
+        Ok(None) => (tx, kind, RelayQueuedWork::general(msg)),
+        Ok(Some(token)) => match token.class {
             RelayControlClass::GlobalV2 => (
                 work_control_tx,
                 RelayReceiverKind::Control,
@@ -2624,7 +2616,7 @@ fn try_enqueue_relay_work_with_admission(
                 RelayQueuedWork::reserved(msg, Arc::clone(control_gate), token),
             ),
         },
-        RelayControlAdmission::Drop(reason) => {
+        Err(reason) => {
             *drops = drops.saturating_add(1);
             if *drops == 1 || (*drops).is_multiple_of(1024) {
                 iroha_logger::debug!(
@@ -3219,10 +3211,7 @@ impl NetworkRelayShared {
     async fn handle_message(&self, peer: Peer, msg: iroha_core::NetworkMessage, size_bytes: usize) {
         use iroha_core::NetworkMessage::*;
 
-        let reserved_control = matches!(
-            RelayControlIngressGate::inspect(&msg),
-            RelayControlInspection::Reserved { .. }
-        );
+        let reserved_control = matches!(RelayControlIngressGate::inspect(&msg), Ok(Some(_)));
         if !reserved_control && self.should_drop_consensus_ingress(&peer, &msg, size_bytes) {
             return;
         }
@@ -3911,11 +3900,11 @@ mod network_relay_tests {
     use super::{
         BucketConfig, ConsensusIngressDropReason, ConsensusIngressLimiter, IngressRateClass,
         LowPriorityIngressDropReason, LowPriorityIngressLimiter, NetworkRelayShared, PenaltyConfig,
-        RELAY_SAFETY_BURST, RelayControlAdmission, RelayControlDropReason, RelayControlIngressGate,
-        RelayIngressLoopExit, RelayQueuedWork, RelayReceiverKind, RelayWorkItem,
-        drive_network_relay_ingress, enqueue_sumeragi_block_message, pow_update_payload,
-        relay_safety_turn_available, rollback_relay_control_admission,
-        try_enqueue_relay_work_with_admission, try_recv_relay_worker_background_after_high_burst,
+        RELAY_SAFETY_BURST, RelayControlDropReason, RelayControlIngressGate, RelayIngressLoopExit,
+        RelayQueuedWork, RelayReceiverKind, RelayWorkItem, drive_network_relay_ingress,
+        enqueue_sumeragi_block_message, pow_update_payload, relay_safety_turn_available,
+        rollback_relay_control_admission, try_enqueue_relay_work_with_admission,
+        try_recv_relay_worker_background_after_high_burst,
     };
 
     fn dummy_accepted_transaction() -> AcceptedTransaction<'static> {
@@ -4449,7 +4438,7 @@ mod network_relay_tests {
 
         assert!(matches!(
             gate.admit_with_status(&unsupported, Instant::now(), || Some(status.clone())),
-            RelayControlAdmission::Drop(RelayControlDropReason::UnsupportedVersion)
+            Err(RelayControlDropReason::UnsupportedVersion)
         ));
         assert!(matches!(
             gate.admit_with_status(
@@ -4457,7 +4446,7 @@ mod network_relay_tests {
                 Instant::now(),
                 || Some(status.clone()),
             ),
-            RelayControlAdmission::Drop(RelayControlDropReason::WrongHeight)
+            Err(RelayControlDropReason::WrongHeight)
         ));
         assert!(matches!(
             gate.admit_with_status(
@@ -4465,17 +4454,17 @@ mod network_relay_tests {
                 Instant::now(),
                 || Some(status.clone()),
             ),
-            RelayControlAdmission::Drop(RelayControlDropReason::WrongContext)
+            Err(RelayControlDropReason::WrongContext)
         ));
 
         let current = v2_vote_msg(context_id, 12, 4, 0, 0x53);
         assert!(matches!(
             gate.admit_with_status(&current, Instant::now(), || Some(status.clone())),
-            RelayControlAdmission::Reserved(_)
+            Ok(Some(_))
         ));
         assert!(matches!(
             gate.admit_with_status(&current, Instant::now(), || Some(status)),
-            RelayControlAdmission::Drop(RelayControlDropReason::Replay)
+            Err(RelayControlDropReason::Replay)
         ));
     }
 
@@ -4489,14 +4478,14 @@ mod network_relay_tests {
         let control = v2_vote_msg(context_id, 14, 2, 0, 0x54);
 
         let limited = gate.admit_with_status(&control, Instant::now(), || Some(status.clone()));
-        assert!(matches!(&limited, RelayControlAdmission::Reserved(_)));
+        assert!(matches!(&limited, Ok(Some(_))));
         rollback_relay_control_admission(&gate, &limited);
         let queued = gate.admit_with_status(&control, Instant::now(), || Some(status.clone()));
-        assert!(matches!(&queued, RelayControlAdmission::Reserved(_)));
+        assert!(matches!(&queued, Ok(Some(_))));
         rollback_relay_control_admission(&gate, &queued);
         assert!(matches!(
             gate.admit_with_status(&control, Instant::now(), || Some(status)),
-            RelayControlAdmission::Reserved(_)
+            Ok(Some(_))
         ));
     }
 
@@ -4512,23 +4501,20 @@ mod network_relay_tests {
 
         let first_admission =
             gate.admit_with_status(&first, Instant::now(), || Some(status.clone()));
-        assert!(matches!(
-            &first_admission,
-            RelayControlAdmission::Reserved(_)
-        ));
+        assert!(matches!(&first_admission, Ok(Some(_))));
         assert!(matches!(
             gate.admit_with_status(&newcomer, Instant::now(), || Some(status.clone())),
-            RelayControlAdmission::Drop(RelayControlDropReason::Saturated)
+            Err(RelayControlDropReason::Saturated)
         ));
         assert!(matches!(
             gate.admit_with_status(&first, Instant::now(), || Some(status.clone())),
-            RelayControlAdmission::Drop(RelayControlDropReason::Replay)
+            Err(RelayControlDropReason::Replay)
         ));
 
         rollback_relay_control_admission(&gate, &first_admission);
         assert!(matches!(
             gate.admit_with_status(&newcomer, Instant::now(), || Some(status)),
-            RelayControlAdmission::Reserved(_)
+            Ok(Some(_))
         ));
     }
 
@@ -4544,7 +4530,7 @@ mod network_relay_tests {
         let now = Instant::now();
         let first_message = v2_vote_msg(context_id, 16, 1, 0, 0x57);
         let first_admission = gate.admit_with_status(&first_message, now, || Some(status.clone()));
-        let RelayControlAdmission::Reserved(first_token) = first_admission else {
+        let Ok(Some(first_token)) = first_admission else {
             panic!("first control generation must be admitted");
         };
         let first_work = RelayQueuedWork::reserved(
@@ -4557,15 +4543,12 @@ mod network_relay_tests {
         let retry_message = v2_vote_msg(context_id, 16, 1, 0, 0x57);
         let second_admission =
             gate.admit_with_status(&retry_message, later, || Some(status.clone()));
-        assert!(matches!(
-            &second_admission,
-            RelayControlAdmission::Reserved(_)
-        ));
+        assert!(matches!(&second_admission, Ok(Some(_))));
 
         drop(first_work);
         assert!(matches!(
             gate.admit_with_status(&retry_message, later, || Some(status)),
-            RelayControlAdmission::Drop(RelayControlDropReason::Replay)
+            Err(RelayControlDropReason::Replay)
         ));
         rollback_relay_control_admission(&gate, &second_admission);
     }
@@ -4764,7 +4747,7 @@ mod network_relay_tests {
         assert_eq!(puzzle.lanes, 2);
     }
 
-    fn sample_peer() -> Peer {
+    pub(super) fn sample_peer() -> Peer {
         let keypair = KeyPair::random();
         Peer::new(
             "127.0.0.1:0".parse().expect("socket address"),
@@ -4844,7 +4827,7 @@ mod network_relay_tests {
         }
     }
 
-    fn relay_work(peer: &Peer, payload: iroha_core::NetworkMessage) -> RelayWorkItem {
+    pub(super) fn relay_work(peer: &Peer, payload: iroha_core::NetworkMessage) -> RelayWorkItem {
         RelayWorkItem {
             peer: peer.clone(),
             payload_bytes: payload.encode().len(),
@@ -5227,7 +5210,7 @@ mod network_relay_tests {
         iroha_core::NetworkMessage::SumeragiControlFlow(Box::new(ControlFlow::Evidence(evidence)))
     }
 
-    fn block_sync_update_msg() -> iroha_core::NetworkMessage {
+    pub(super) fn block_sync_update_msg() -> iroha_core::NetworkMessage {
         let signed = signed_block_for_test();
         let update = BlockSyncUpdate::from(&signed);
         sumeragi_msg(BlockMessage::BlockSyncUpdate(update))
@@ -5415,7 +5398,7 @@ mod network_relay_tests {
         sumeragi_msg(BlockMessage::RbcDeliver(deliver))
     }
 
-    fn rbc_chunk_msg(tag: u8, height: u64, view: u64) -> iroha_core::NetworkMessage {
+    pub(super) fn rbc_chunk_msg(tag: u8, height: u64, view: u64) -> iroha_core::NetworkMessage {
         let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([tag; 32]));
         let chunk = iroha_core::sumeragi::consensus::RbcChunk {
             block_hash,
@@ -7238,13 +7221,16 @@ impl Iroha {
         // Compute consensus handshake caps for gating peers
         // Use WSV Sumeragi parameters (canonical JSON) so fingerprint is stable across peers
         let (computed_mode_tag, computed_bls_domain, consensus_caps, confidential_features) = {
-            let world = state.world_view();
-            let height = u64::try_from(state.committed_height()).expect("height fits into u64");
-            let zk = state.zk_snapshot();
-            let confidential_features =
-                iroha_core::state::compute_confidential_feature_digest(&world, &zk, height);
+            let view = state.view();
+            let height = u64::try_from(view.block_hashes().len()).expect("height fits into u64");
+            let confidential_features = iroha_core::state::compute_confidential_feature_digest(
+                view.world(),
+                &view.zk,
+                view.sccp_registry.as_ref(),
+                height,
+            );
             let (mode_tag, bls_domain, caps) = compute_consensus_handshake_caps(
-                &world,
+                view.world(),
                 height,
                 &config,
                 &config_caps,
@@ -12426,6 +12412,9 @@ mod tests {
     }
 
     mod relay_fairness {
+        use super::super::network_relay_tests::{
+            block_sync_update_msg, rbc_chunk_msg, relay_work, sample_peer,
+        };
         use super::*;
         use tokio::sync::mpsc;
         use tokio::sync::mpsc::error::TryRecvError;

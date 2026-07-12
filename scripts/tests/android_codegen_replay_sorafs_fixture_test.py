@@ -305,6 +305,150 @@ def test_write_json_rejects_symlinked_parent_before_create(
         raise AssertionError("symlinked Android fixture output parent was accepted")
 
 
+def test_test_council_signing_seed_is_ephemeral_private_and_exact(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    output = tmp_path / "council-signing.seed"
+    original_open = os.open
+    opened: dict[str, int] = {}
+
+    def open_path(path: Path, flags: int, mode: int = 0o777, *args, **kwargs):
+        if path == output:
+            opened["flags"] = flags
+            opened["mode"] = mode
+        return original_open(path, flags, mode, *args, **kwargs)
+
+    monkeypatch.setattr(MODULE.os, "open", open_path)
+
+    MODULE.write_test_council_signing_seed(output)
+
+    assert output.read_bytes() == MODULE.ANDROID_CODEGEN_TEST_COUNCIL_SIGNING_SEED
+    assert len(output.read_bytes()) == 32
+    assert opened["flags"] == MODULE.signing_key_write_open_flags()
+    assert opened["flags"] & os.O_EXCL
+    assert opened["mode"] == 0o600
+    assert output.stat().st_mode & 0o077 == 0
+
+
+def test_test_council_signing_seed_rejects_symlink_and_existing_output(
+    tmp_path: Path,
+) -> None:
+    existing = tmp_path / "existing.seed"
+    existing.write_bytes(b"unchanged")
+    try:
+        MODULE.write_test_council_signing_seed(existing)
+    except ValueError as error:
+        assert "failed to write Android codegen test-only council signing seed" in str(
+            error
+        )
+    else:
+        raise AssertionError("existing test signing seed was overwritten")
+    assert existing.read_bytes() == b"unchanged"
+
+    target = tmp_path / "target.seed"
+    target.write_bytes(b"target")
+    linked = tmp_path / "linked.seed"
+    linked.symlink_to(target)
+    try:
+        MODULE.write_test_council_signing_seed(linked)
+    except ValueError as error:
+        assert "must not be a symlink" in str(error)
+    else:
+        raise AssertionError("symlinked test signing seed was accepted")
+    assert target.read_bytes() == b"target"
+
+
+def test_manifest_stub_receives_only_ephemeral_signing_key_path(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    calls: list[tuple[list[str], bool, Path]] = []
+
+    def run(command: list[str], *, check: bool, cwd: Path) -> None:
+        calls.append((command, check, cwd))
+
+    monkeypatch.setattr(MODULE.subprocess, "run", run)
+    key_path = tmp_path / "council-signing.seed"
+    MODULE.run_manifest_stub(
+        "cargo",
+        tmp_path / "payload.bin",
+        tmp_path / "plan.json",
+        "sorafs.sf1@1.0.0",
+        3,
+        "hot",
+        1_725_086_400,
+        key_path,
+        tmp_path / "report.json",
+        tmp_path / "manifest.to",
+    )
+
+    assert len(calls) == 1
+    command, check, cwd = calls[0]
+    assert f"--council-signing-key-file={key_path}" in command
+    assert MODULE.ANDROID_CODEGEN_TEST_COUNCIL_SIGNING_SEED.hex() not in " ".join(
+        command
+    )
+    assert check is True
+    assert cwd == MODULE.REPO_ROOT
+
+
+def test_generated_manifest_requires_one_canonical_council_signature() -> None:
+    canonical = {
+        "manifest": {
+            "council_signatures": [
+                {"signer_hex": "11" * 32, "signature_hex": "22" * 64}
+            ]
+        }
+    }
+    MODULE.require_generated_council_signature(canonical)
+
+    invalid_reports = [
+        {},
+        {"manifest": {"council_signatures": []}},
+        {
+            "manifest": {
+                "council_signatures": [
+                    {"signer_hex": "11" * 32, "signature_hex": "22" * 64},
+                    {"signer_hex": "33" * 32, "signature_hex": "44" * 64},
+                ]
+            }
+        },
+        {
+            "manifest": {
+                "council_signatures": [
+                    {"signer_hex": "11" * 31, "signature_hex": "22" * 64}
+                ]
+            }
+        },
+        {
+            "manifest": {
+                "council_signatures": [
+                    {"signer_hex": "AA" * 32, "signature_hex": "22" * 64}
+                ]
+            }
+        },
+        {
+            "manifest": {
+                "council_signatures": [
+                    {
+                        "signer_hex": "11" * 32,
+                        "signature_hex": "22" * 64,
+                        "seed": "must-not-appear",
+                    }
+                ]
+            }
+        },
+    ]
+    for report in invalid_reports:
+        try:
+            MODULE.require_generated_council_signature(report)
+        except ValueError as error:
+            assert "generated Android manifest" in str(error)
+        else:
+            raise AssertionError("malformed generated council signature was accepted")
+
+
 def test_ensure_codegen_directory_mkdir_error_is_sanitized(
     tmp_path: Path,
     monkeypatch,

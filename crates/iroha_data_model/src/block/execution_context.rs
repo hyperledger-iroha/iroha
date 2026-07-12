@@ -60,7 +60,7 @@ impl ExternalExecutionRouteLeg {
 }
 
 /// Routing context used to execute one external block entrypoint.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -224,7 +224,7 @@ impl CertifiedMergeLedgerReference {
 }
 
 /// Ordered execution context for external entrypoints in a block payload.
-#[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)

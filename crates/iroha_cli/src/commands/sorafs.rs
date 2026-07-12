@@ -13027,7 +13027,9 @@ impl Run for ToolkitPackArgs {
         }
 
         let mut chunk_store = ChunkStore::with_profile(descriptor.profile);
-        chunk_store.ingest_plan(&payload, &plan);
+        chunk_store
+            .ingest_plan(&payload, &plan)
+            .wrap_err("failed to ingest the validated CAR plan into the PoR chunk store")?;
         if chunk_store.por_tree().chunks().len() != plan.chunks.len() {
             return Err(eyre!("chunk store PoR layout diverged from CAR plan"));
         }

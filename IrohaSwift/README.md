@@ -20,10 +20,15 @@ Features:
 `IrohaSwift` replaced the older ad-hoc Swift package names; make sure your dependency
 graph points at the renamed module.
 
+The remote coordinates below are the immutable first-release target. Do not
+advertise them until the signed `0.1.0` SwiftPM tag and
+`iroha-swift-v0.1.0` monorepo tag have passed the public package canary. Before
+that cutover, use the local-package form documented below.
+
 ### Swift Package Manager (Xcode UI)
 1. In Xcode select **File → Add Package Dependencies…**
-2. Enter `https://github.com/hyperledger/iroha-swift` and pick the desired branch/tag
-   (the `main` branch tracks the latest SDK snapshots in this repository).
+2. Enter `https://github.com/hyperledger/iroha-swift` and select the exact
+   first-release version `0.1.0`.
 3. Add the `IrohaSwift` library product to your application target.
 
 ### Swift Package Manager (`Package.swift`)
@@ -33,7 +38,7 @@ graph points at the renamed module.
 dependencies: [
     .package(
         url: "https://github.com/hyperledger/iroha-swift",
-        branch: "main"
+        exact: "0.1.0"
     )
 ],
 targets: [
@@ -72,7 +77,7 @@ CI runs `.github/workflows/swift-packaging.yml` (see `ci/check_swift_spm_validat
 ### CocoaPods
 
 ```ruby
-pod 'IrohaSwift', :podspec => 'https://raw.githubusercontent.com/hyperledger/iroha/main/IrohaSwift/IrohaSwift.podspec'
+pod 'IrohaSwift', :podspec => 'https://raw.githubusercontent.com/hyperledger-iroha/iroha/iroha-swift-v0.1.0/IrohaSwift/IrohaSwift.podspec'
 ```
 
 The podspec pulls sources from this repository and requires `dist/NoritoBridge.xcframework`
@@ -685,10 +690,6 @@ top-up results expose `OfflineTopUpAnchor`, which validates and retains the
 canonical anchor archive without publishing an internal versioned wire type.
 Classic note issue, redemption, audit, and defund models are fixture-only;
 production offline payments use Kagemusha transaction builders.
-The stricter attestation-aware fixture codec is named
-`AttestedOfflineNoteDecoding`, with `AttestedOfflineNote*` models and
-`Halo2AttestedOfflineNoteProver`; its internal Norito schema labels remain
-unchanged.
 Swift exposes `OfflineNoteIssue`, `OfflineNoteRedeem`, and `OfflineNoteAuditBundle`
 models plus retired `buildIssueOfflineNote`, `buildRedeemOfflineNote`,
 `buildAuditOfflineNote`, and `buildDefundOfflineNote` methods on `IrohaSDK`.
@@ -704,11 +705,11 @@ offline payments use Kagemusha flows. When an injected test issuer path is
 used, `load` records issued notes as `.issuePending` until `sync()`
 observes matching `IssueOfflineNote` finality; rejected issue outcomes cancel
 the pending note.
-The first release exposes one Kagemusha production mode:
-`recursive_spend_v1`. Selection requires the exact native bridge ABI 18
+The first release exposes one Kagemusha production mode: `recursive_spend_v2`.
+Selection requires the exact native bridge ABI 18
 capability archive, a validated `proof_backend_available` value, and the full
 native symbol inventory. `KagemushaRecursiveSpendProver.preferredMode` returns
-`.recursiveSpendV1` only when that ABI-18 backend is ready; otherwise it returns
+`.recursiveSpend` only when that ABI-18 backend is ready; otherwise it returns
 `nil`. Older proof modes and symbol-presence probes are not release fallbacks.
 
 `KagemushaRecursiveSpend` consumes the canonical V3 release manifest and its
@@ -730,18 +731,19 @@ before ingesting any payload. JSON is an operator view, not a trust anchor. For
 each of the six `KRV3KEY\0` files, begin a manifest-bound streaming ingest with
 `KagemushaRecursiveSpendArtifactInstallSessionV3.beginArtifact`, write bounded
 chunks, finalize only after the complete file has been validated, and cancel
-the session on every error path.
+the handle on every error path.
 The native begin/write/finalize/cancel operations bind the manifest digest,
 artifact digest, framing header, descriptor, payload size, and payload digest.
-Successful ingestion alone does not advertise proof readiness. Use
-`KagemushaRecursiveSpendArtifactInstallSessionV3` to collect exactly one
-finalized handle for each of the six manifest roles and install them as one
-generation. Installation revalidates every anonymous file, normalizes caller
-order to manifest profile/role order, and consumes either all six handles or
-none. `isInstalled()` checks the exact canonical manifest, while `uninstall()`
-is digest-guarded so a stale session cannot remove a replacement generation;
-operations already holding the prior generation keep its file descriptors
-alive until their native call returns.
+Successful ingestion alone does not advertise proof readiness. The six finalized
+streams must be installed atomically through
+`KagemushaRecursiveSpendArtifactInstallSessionV3`; partial generations remain
+unavailable and failed installation retains the prior active generation.
+The SDK also exposes the recursive-spend compact projection verifier for raw
+Norito compact-token and verifier-record archives. Call
+`verifyRecursiveSpendCompactPaymentTokenProjection(compactTokenArchive:verifierRecordArchive:blockHeight:)`
+and require its native boolean receiver result; use
+`isProjectionVerifierNativeAvailable` to probe that verifier surface before
+dispatch.
 
 Top-up admission also requires the manifest-bound finality roster and a final
 committed Torii result. An accepted submission, an unknown operation state, or
@@ -760,10 +762,10 @@ from a native recursive redeem request before signing. These builders require
 valid Norito archives, reject empty, malformed, tampered, or wrong-type
 instruction archives, and keep recursive top-up/redeem derivation inside the
 native bridge. Experimental helper symbols are not compatibility inputs to the
-first-release ABI-18 DTOs and cannot be selected as a release mode.
+first-release ABI-18/V2 DTOs and cannot be selected as a release mode.
 
-The first-release recursive-spend surface uses the flat,
-`KagemushaRecursiveSpendInitRequest` contract instead. Its five fields are the
+The first-release V2 surface uses the flat,
+`KagemushaRecursiveSpendInitRequestV2` contract instead. Its five fields are the
 finalized top-up anchor, checked one-hop record bundle, Pallas opening archive,
 lineage mode, and optional Reserved-lineage artifact. Amount, current note,
 operation id, artifact generation, and verifier lifecycle height are derived
@@ -777,7 +779,7 @@ those tags as `[Data]`, while canonical Norito concatenates them into one
 `depth * 24` byte `Vec<u8>` with no nested per-tag vectors. The recipient-only
 peer-payment wire contains only its proof-bearing recipient bundle; operation id
 and recipient-request digest are derived from that bundle's recipient
-`PeerSplit` transition and are never duplicated beside it. A split accepts
+`PeerSplit` transition and are never duplicated beside it. A V2 split accepts
 one or two canonical parents; semantic redemption carries the bounded canonical
 lineage DAG needed to verify cross-top-up joins.
 For protocol preflight, the append-boundary helper
@@ -855,25 +857,35 @@ builder; Pallas opening evidence is required to validate every hop.
 
 For confidential-unshield redemption, fetch the exact verifier record from
 Torii and keep it bound to the native proof through the complete
-request-to-redeem flow. The high-level helper performs the fetch, canonical
-Norito archive conversion, proof construction, and local proof verification:
-
-Native proof-helper DTOs use explicit `KagemushaRecursiveProof*` names so they
-cannot be confused with the first-release top-up and redeem command DTOs; their
-versioned Norito wire labels remain internal to the codecs.
+request-to-redeem flow. The first-release API keeps each trust boundary
+explicit: `ToriiClient.getVerifyingKey` rejects a response whose identifier
+does not match the requested key, the exact canonical record archive is carried
+forward unchanged, and the attachment builder verifies the native proof before
+returning an attachment:
 
 ```swift
 let unshieldVerifierKeyId = try ToriiVerifyingKeyId(
     backend: "halo2/ipa",
     name: "vk_unshield"
 )
-let redeemProof = try await sdk
-    .buildKagemushaConfidentialUnshieldRedeemProofAttachment(
-        witness: unshieldWitness,
-        verifierKeyId: unshieldVerifierKeyId,
+let verifierDetail = try await torii.getVerifyingKey(
+    backend: unshieldVerifierKeyId.backend,
+    name: unshieldVerifierKeyId.name
+)
+let verifierRecord = try verifierDetail
+    .asKagemushaRecursiveSpendVerifierRecordRef()
+let proofRequest = try PrivacyConfidentialWitnessCodecs
+    .buildConfidentialUnshieldProofRequestV2(witness: unshieldWitness)
+let proofOutput = try PrivacyNativeBridge.buildConfidentialUnshieldProofV3(
+    requestArchive: proofRequest
+)
+let redeemProof = try KagemushaRecursiveSpendRequestCodecs
+    .buildRedeemProofAttachment(
+        unshieldProofOutputArchive: proofOutput,
+        unshieldVerifierRecord: verifierRecord,
         blockHeight: currentBlockHeight
     )
-let redeemRequest = try KagemushaRecursiveProofRedemptionRequest(
+let redeemRequest = try KagemushaRecursiveSpendRedeemRequest(
     bundle: recursiveBundle,
     recipient: recipient,
     publicAmount: publicAmount,
@@ -888,12 +900,8 @@ let redeemRequestArchive = try KagemushaRecursiveSpendRequestCodecs
     .encodeRedeemRequest(redeemRequest)
 ```
 
-For lower-level integrations, fetch with
-`ToriiClient.getVerifyingKey(backend:name:)`, then call
-`ToriiVerifyingKeyDetail.asKagemushaRecursiveSpendVerifierRecordRef()` before
-passing the result to `buildRedeemProofAttachment`. Torii's
-`record_norito_base64` is the authoritative record archive; the SDK does not
-reconstruct it from the JSON projection.
+Torii's `record_norito_base64` is the authoritative record archive; the SDK
+does not reconstruct it from the JSON projection.
 
 The unshield witness builder rejects transfer outputs, permits zero or one
 private change output, accepts every canonical `u128` public amount, and binds

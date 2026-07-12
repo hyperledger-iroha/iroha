@@ -471,10 +471,9 @@ mod tests {
             finality::{FinalizedNextEpochSnapshot, V2FinalityArtifact},
         },
         offline::{
-            KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1,
             KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V3,
             KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_VERSION_V3,
-            KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3,
+            KAGEMUSHA_RECURSIVE_SPEND_MODE_V2, KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3,
             KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1,
             KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_IPA_K_V1,
             KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V1,
@@ -607,11 +606,11 @@ mod tests {
             amount: note.amount,
             initial_root: [0x11; 32],
             finalized_root: [0x12; 32],
-            topup_anchor_nullifiers: vec![[0x13; 32]],
+            shield_leaf_index: 3,
             current_note: note,
             topup_operation_id: operation_id,
-            transfer_verifier_id: VerifyingKeyId::new("halo2/ipa", "transfer-v2"),
-            transfer_verifier_commitment: [0x14; 32],
+            shield_verifier_id: VerifyingKeyId::new("halo2/ipa", "topup-shield-v2"),
+            shield_verifier_commitment: [0x14; 32],
             artifact_generation: "release-generation-1".to_owned(),
             finalized_height: height,
             finalized_tx_hash: [0x15; 32],
@@ -780,7 +779,7 @@ mod tests {
             schema: KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V3.to_owned(),
             version: KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_VERSION_V3,
             bridge_abi_version: KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3,
-            mode: KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1.to_owned(),
+            mode: KAGEMUSHA_RECURSIVE_SPEND_MODE_V2.to_owned(),
             proof_backend: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1.to_owned(),
             transcript_profile: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V1.to_owned(),
             generation: "release-generation-1".to_owned(),
@@ -840,41 +839,99 @@ mod tests {
         }
     }
 
+    fn verify(
+        verifier: &KagemushaTopUpFinalityVerifier,
+        fixture: &Fixture,
+    ) -> Result<VerifiedKagemushaTopUpFinalityV2, KagemushaTopUpFinalityVerifyError> {
+        verifier.verify(
+            &fixture.proof,
+            &fixture.roster,
+            &fixture.anchor,
+            &fixture.manifest,
+            fixture.manifest_digest,
+        )
+    }
+
     fn epoch_boundary_proof(
         fixture: &Fixture,
-        corrupt_next_epoch_pop: bool,
+        mutate_next_epoch_pop: bool,
     ) -> KagemushaTopUpFinalityProofV2 {
-        let mut proof = fixture.proof.clone();
-        let next_roster = fixture.finality_artifact.height_context.roster.clone();
-        let mut next_pops = fixture.finality_artifact.validator_set_pops.clone();
-        if corrupt_next_epoch_pop {
+        let window = &fixture.roster.windows[0];
+        let mut context = fixture
+            .proof
+            .commit_qc
+            .height_context
+            .reconstruct_for_roster_window(window)
+            .expect("fixture height context");
+        let next_keys = (0x61_u8..=0x64)
+            .map(|seed| {
+                KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                    .expect("deterministic next-epoch BLS key")
+            })
+            .collect::<Vec<_>>();
+        let mut next_entries = next_keys
+            .iter()
+            .map(|key| {
+                let pop =
+                    iroha_crypto::bls_normal_pop_prove(key.private_key()).expect("next-epoch PoP");
+                (
+                    ValidatorPower {
+                        validator: PeerId::new(key.public_key().clone()),
+                        power: 1,
+                    },
+                    pop,
+                )
+            })
+            .collect::<Vec<_>>();
+        next_entries.sort_by(|left, right| left.0.validator.cmp(&right.0.validator));
+        let next_roster = next_entries
+            .iter()
+            .map(|(entry, _)| entry.clone())
+            .collect::<Vec<_>>();
+        let mut next_pops = next_entries
+            .into_iter()
+            .map(|(_, pop)| pop)
+            .collect::<Vec<_>>();
+        if mutate_next_epoch_pop {
             next_pops[0][0] ^= 1;
         }
-        let snapshot = FinalizedNextEpochSnapshot {
-            epoch: fixture.finality_artifact.height_context.epoch + 1,
-            epoch_end_height: fixture
-                .finality_artifact
-                .height_context
-                .epoch_end_height
-                .saturating_add(100),
-            mode: fixture.finality_artifact.height_context.mode,
+        context.epoch_end_height = context.height;
+        context.next_epoch_snapshot = Some(FinalizedNextEpochSnapshot {
+            epoch: context
+                .epoch
+                .checked_add(1)
+                .expect("fixture epoch has a successor"),
+            epoch_end_height: context
+                .height
+                .checked_add(100)
+                .expect("fixture next epoch end height"),
+            mode: context.mode,
             quorum: DualQuorum::from_roster(&next_roster).expect("next-epoch quorum"),
             roster: next_roster,
             validator_set_pops: next_pops,
-            leader_seed: [0x93; 32],
-        };
-        proof.commit_qc.height_context.next_epoch_snapshot = Some(snapshot.clone());
-
-        let mut complete_context = fixture.finality_artifact.height_context.clone();
-        complete_context.next_epoch_snapshot = Some(snapshot);
-        complete_context
+            leader_seed: [0x62; 32],
+        });
+        context
             .validate()
-            .expect("structurally valid epoch-boundary context");
-        let context_id = complete_context.id();
-        proof.commit_qc.height_context.context_id = context_id;
-        proof.commit_qc.certificate.round.context_id = context_id;
+            .expect("epoch-boundary context is structurally valid");
 
+        let mut proof = fixture.proof.clone();
+        proof.commit_qc.height_context = KagemushaTopUpFinalityHeightContextV2 {
+            context_id: context.id(),
+            chain_id: context.chain_id.clone(),
+            protocol_version: context.protocol_version,
+            height: context.height,
+            epoch: context.epoch,
+            epoch_end_height: context.epoch_end_height,
+            next_epoch_snapshot: context.next_epoch_snapshot.clone(),
+            mode: context.mode,
+            parent_commit_qc: context.parent_commit_qc.clone(),
+            nexus_amx_context_hash: context.nexus_amx_context_hash,
+            da_layout: context.da_layout,
+            leader_seed: context.leader_seed,
+        };
         let certificate = &mut proof.commit_qc.certificate;
+        certificate.round.context_id = context.id();
         let preimage = Vote {
             round: certificate.round,
             phase: certificate.phase,
@@ -887,15 +944,12 @@ mod tests {
         let signatures = certificate
             .signers
             .iter()
-            .map(|signer| {
-                Signature::try_new(
-                    fixture.signing_keys[usize::try_from(*signer).expect("signer index")]
-                        .private_key(),
-                    &preimage,
-                )
-                .expect("epoch-boundary vote signature")
-                .payload()
-                .to_vec()
+            .map(|index| {
+                let index = usize::try_from(*index).expect("fixture signer index fits usize");
+                Signature::try_new(fixture.signing_keys[index].private_key(), &preimage)
+                    .expect("epoch-boundary vote signature")
+                    .payload()
+                    .to_vec()
             })
             .collect::<Vec<_>>();
         certificate.aggregate_signature = iroha_crypto::bls_normal_aggregate_signatures(
@@ -903,19 +957,6 @@ mod tests {
         )
         .expect("epoch-boundary aggregate signature");
         proof
-    }
-
-    fn verify(
-        verifier: &KagemushaTopUpFinalityVerifier,
-        fixture: &Fixture,
-    ) -> Result<VerifiedKagemushaTopUpFinalityV2, KagemushaTopUpFinalityVerifyError> {
-        verifier.verify(
-            &fixture.proof,
-            &fixture.roster,
-            &fixture.anchor,
-            &fixture.manifest,
-            fixture.manifest_digest,
-        )
     }
 
     #[test]
@@ -1407,6 +1448,22 @@ mod tests {
                 )
                 .unwrap_err(),
             KagemushaTopUpFinalityVerifyError::InvalidNextEpochCryptography
+        );
+
+        let mut invalid_qc_and_pop = epoch_boundary_proof(&fixture, true);
+        invalid_qc_and_pop.commit_qc.certificate.aggregate_signature[0] ^= 1;
+        assert_eq!(
+            verifier
+                .verify(
+                    &invalid_qc_and_pop,
+                    &fixture.roster,
+                    &fixture.anchor,
+                    &fixture.manifest,
+                    fixture.manifest_digest,
+                )
+                .unwrap_err(),
+            KagemushaTopUpFinalityVerifyError::InvalidAggregateSignature,
+            "the current Commit QC must authenticate the next-epoch snapshot before its PoPs are trusted"
         );
     }
 

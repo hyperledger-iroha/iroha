@@ -13,19 +13,24 @@ embedded via CocoaPods or XCFramework ZIPs.
 ## Installing IrohaSwift
 
 The package formerly published under ad-hoc names has been renamed to `IrohaSwift`.
-Point your dependency manager at the new Git URL to pick up the latest snapshots from
-this repository.
+First-release consumers must select the immutable `0.1.0` release rather than a
+moving branch.
+
+These remote coordinates are release targets, not evidence that the tags are
+already public. Keep public installation instructions behind the release gate
+until the signed SwiftPM `0.1.0` tag, monorepo `iroha-swift-v0.1.0` tag, and
+package canary are verified; local development uses the relative package path.
 
 - **Xcode SPM UI:** `File → Add Package Dependencies…` →
-  `https://github.com/hyperledger/iroha-swift` (select the `main` branch or a tagged
-  release) → add the `IrohaSwift` product to your targets.
+  `https://github.com/hyperledger/iroha-swift` (select exact version `0.1.0`) →
+  add the `IrohaSwift` product to your targets.
 - **`Package.swift`:**
 
   ```swift
   dependencies: [
       .package(
           url: "https://github.com/hyperledger/iroha-swift",
-          branch: "main"
+          exact: "0.1.0"
       )
   ],
   targets: [
@@ -38,7 +43,7 @@ this repository.
   ]
   ```
 
-- **CocoaPods:** `pod 'IrohaSwift', :podspec => 'https://raw.githubusercontent.com/hyperledger/iroha/main/IrohaSwift/IrohaSwift.podspec'`
+- **CocoaPods:** `pod 'IrohaSwift', :podspec => 'https://raw.githubusercontent.com/hyperledger-iroha/iroha/iroha-swift-v0.1.0/IrohaSwift/IrohaSwift.podspec'`
 
 When developing from a checked-out workspace you can keep using the relative path variant
 (`.package(name: "IrohaSwift", path: "../../IrohaSwift")`) to avoid fetching over the
@@ -228,7 +233,10 @@ Torii exposes `GET /v1/offline/readiness?asset_definition_id=...`,
 JSON or Norito request and return an `OfflineOperationReference`; follow its
 status URI until the tagged `OfflineOperationStatus` is applied or rejected.
 A `200` readiness response may legitimately contain `ready: false`; `503`
-means Torii could not evaluate readiness.
+means Torii could not evaluate readiness. The response carries required
+nullable `activeTransferVerifier` and `activeTopUpShieldVerifier` snapshots;
+each is null exactly with its matching unavailable blocker, and `ready: true`
+requires both roles to be active at the evaluated block.
 
 ### Offline audit logging
 

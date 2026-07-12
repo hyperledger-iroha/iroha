@@ -32,20 +32,20 @@ use iroha_data_model::{
             SoraFsModerationVoteChoice,
         },
         moderation_ledger::{
-            MODERATION_LEDGER_MAX_IDENTIFIER_BYTES_V1, MODERATION_LEDGER_MAX_NONCE_BYTES_V1,
-            MODERATION_LEDGER_MAX_PANEL_SIZE_V1, MODERATION_LEDGER_MAX_REASON_BYTES_V1,
-            MODERATION_LEDGER_MAX_WAITLIST_SIZE_V1, ModerationAppealRecordV1,
-            ModerationAppealStatusV1, ModerationCaseRecordV1, ModerationCaseSpecV1,
-            ModerationCaseStatusV1, ModerationChallengeDecisionV1, ModerationChallengeRecordV1,
-            ModerationCommitRecordV1, ModerationJurorEligibilityClassV1,
-            ModerationJurorEligibilityRecordV1, ModerationJurorReplacementV1,
-            ModerationLedgerPolicyRecord, ModerationLedgerStatusV1, ModerationNoShowKindV1,
-            ModerationNoShowRecordV1, ModerationOutcomeKindV1, ModerationOutcomeRecordV1,
-            ModerationPanelSelectionV1, ModerationPoPRegistrySnapshotV1, ModerationRevealRecordV1,
-            ModerationSortitionError, ModerationVoteCountsV1,
-            sorafs_moderation_panel_roster_hash_v1, sorafs_moderation_pop_challenge_v1,
-            sorafs_moderation_pop_verifier_context_v1, sorafs_moderation_select_panel_v1,
-            sorafs_moderation_sortition_digest_v1, sorafs_moderation_sortition_seed_v1,
+            MODERATION_LEDGER_MAX_NONCE_BYTES_V1, MODERATION_LEDGER_MAX_PANEL_SIZE_V1,
+            MODERATION_LEDGER_MAX_REASON_BYTES_V1, MODERATION_LEDGER_MAX_WAITLIST_SIZE_V1,
+            ModerationAppealRecordV1, ModerationAppealStatusV1, ModerationCaseRecordV1,
+            ModerationCaseSpecV1, ModerationCaseStatusV1, ModerationChallengeDecisionV1,
+            ModerationChallengeRecordV1, ModerationCommitRecordV1,
+            ModerationJurorEligibilityClassV1, ModerationJurorEligibilityRecordV1,
+            ModerationJurorReplacementV1, ModerationLedgerPolicyRecord, ModerationLedgerStatusV1,
+            ModerationNoShowKindV1, ModerationNoShowRecordV1, ModerationOutcomeKindV1,
+            ModerationOutcomeRecordV1, ModerationPanelSelectionV1, ModerationPoPRegistrySnapshotV1,
+            ModerationRevealRecordV1, ModerationSortitionError, ModerationVoteCountsV1,
+            is_canonical_moderation_identifier_v1, sorafs_moderation_panel_roster_hash_v1,
+            sorafs_moderation_pop_challenge_v1, sorafs_moderation_pop_verifier_context_v1,
+            sorafs_moderation_select_panel_v1, sorafs_moderation_sortition_digest_v1,
+            sorafs_moderation_sortition_seed_v1,
         },
     },
 };
@@ -59,7 +59,9 @@ use sorafs_manifest::pop_credentials::{
 use super::*;
 use crate::{
     smartcontracts::ValidSingularQuery,
-    smartcontracts::isi::sorafs_pop_registry::read_active_publications,
+    smartcontracts::isi::sorafs_pop_registry::{
+        read_active_publications, read_pinned_publications,
+    },
     state::{StateTransaction, WorldReadOnly},
 };
 
@@ -129,6 +131,9 @@ fn require_manage_permission(
     state_transaction: &StateTransaction<'_, '_>,
     authority: &AccountId,
 ) -> Result<(), InstructionExecutionError> {
+    if state_transaction._curr_block.is_genesis() {
+        return Ok(());
+    }
     let direct = state_transaction
         .world
         .account_permissions
@@ -181,13 +186,6 @@ fn active_pop_snapshot(
     let active = read_active_publications(state_transaction.world())?.ok_or_else(|| {
         invalid_parameter("active SoraFS PoP root and revocation publication are required")
     })?;
-    let randomness_anchor = state_transaction
-        .block_hashes()
-        .last()
-        .map(|hash| *hash.as_ref())
-        .ok_or_else(|| {
-            invalid_parameter("moderation appeal intake requires an already committed parent block")
-        })?;
     let registry_audit_head = active.status.audit_head.ok_or_else(|| {
         corrupt_state("active PoP registry status is missing its audit-chain head")
     })?;
@@ -200,7 +198,6 @@ fn active_pop_snapshot(
         registry_audit_sequence: active.status.audit_sequence,
         registry_audit_head,
         captured_at_unix_ms: now,
-        randomness_anchor,
     };
     snapshot.validate().map_err(|error| {
         corrupt_state(format!("active PoP registry snapshot is invalid: {error}"))
@@ -208,29 +205,40 @@ fn active_pop_snapshot(
     Ok((snapshot, active))
 }
 
-fn require_active_pop_snapshot(
+fn require_pinned_pop_snapshot(
     state_transaction: &StateTransaction<'_, '_>,
     snapshot: &ModerationPoPRegistrySnapshotV1,
-) -> Result<super::sorafs_pop_registry::ActivePopPublicationsV1, InstructionExecutionError> {
-    let active = read_active_publications(state_transaction.world())?.ok_or_else(|| {
-        invalid_parameter("active SoraFS PoP root and revocation publication are required")
-    })?;
-    let audit_head = active.status.audit_head.ok_or_else(|| {
-        corrupt_state("active PoP registry status is missing its audit-chain head")
-    })?;
-    if active.issuer_policy_digest != snapshot.issuer_policy_digest
-        || active.root.root_digest != snapshot.commitment_root
-        || active.root.tree_version != snapshot.commitment_tree_version
-        || active.revocations.revocation_root != snapshot.revocation_root
-        || active.revocations.list_version != snapshot.revocation_list_version
-        || active.status.audit_sequence != snapshot.registry_audit_sequence
-        || audit_head != snapshot.registry_audit_head
-    {
-        return Err(invalid_parameter(
-            "moderation appeal PoP snapshot is stale or differs from the active registry roots",
+) -> Result<super::sorafs_pop_registry::PinnedPopPublicationsV1, InstructionExecutionError> {
+    read_pinned_publications(
+        state_transaction.world(),
+        snapshot.issuer_policy_digest,
+        snapshot.commitment_root,
+        snapshot.commitment_tree_version,
+        snapshot.revocation_root,
+        snapshot.revocation_list_version,
+        snapshot.registry_audit_sequence,
+        snapshot.registry_audit_head,
+    )
+}
+
+fn latest_parent_randomness_anchor(
+    state_transaction: &StateTransaction<'_, '_>,
+) -> Result<[u8; 32], InstructionExecutionError> {
+    let anchor = state_transaction
+        .block_hashes()
+        .last()
+        .map(|hash| *hash.as_ref())
+        .ok_or_else(|| {
+            invalid_parameter(
+                "moderation sortition requires an already committed post-registration parent block",
+            )
+        })?;
+    if anchor == [0; 32] {
+        return Err(corrupt_state(
+            "moderation sortition parent-block randomness anchor is zero",
         ));
     }
-    Ok(active)
+    Ok(anchor)
 }
 
 fn eligibility_class(class: PopEligibilityClassV1) -> ModerationJurorEligibilityClassV1 {
@@ -269,18 +277,24 @@ fn validate_lookup_identifiers(
     round_id: &str,
 ) -> Result<(), InstructionExecutionError> {
     for (field, value) in [("case_id", case_id), ("round_id", round_id)] {
-        if value.is_empty()
-            || value.len() > MODERATION_LEDGER_MAX_IDENTIFIER_BYTES_V1
-            || !value.is_ascii()
-            || !value.bytes().all(|byte| {
-                byte.is_ascii_alphanumeric()
-                    || matches!(byte, b'-' | b'_' | b'.' | b':' | b'/' | b'@')
-            })
-        {
+        if !is_canonical_moderation_identifier_v1(value) {
             return Err(invalid_parameter(format!(
                 "invalid moderation {field} identifier"
             )));
         }
+    }
+    Ok(())
+}
+
+fn validate_challenge_reason(reason: &str) -> Result<(), InstructionExecutionError> {
+    if reason.trim().is_empty()
+        || reason != reason.trim()
+        || reason.len() > MODERATION_LEDGER_MAX_REASON_BYTES_V1
+        || reason.chars().any(char::is_control)
+    {
+        return Err(invalid_parameter(
+            "moderation challenge reason is empty, padded, contains control characters, or is too long",
+        ));
     }
     Ok(())
 }
@@ -557,6 +571,16 @@ fn unique_account_list(accounts: &[AccountId]) -> bool {
         .all(|account| seen.insert(account.to_string()))
 }
 
+fn canonical_identifier_list(values: &[String]) -> bool {
+    let mut previous: Option<&str> = None;
+    values.iter().all(|value| {
+        let valid = is_canonical_moderation_identifier_v1(value)
+            && previous.is_none_or(|candidate| candidate < value.as_str());
+        previous = Some(value);
+        valid
+    })
+}
+
 fn read_appeal(
     world: &impl WorldReadOnly,
     case_id: &str,
@@ -622,12 +646,13 @@ fn read_appeal(
         ));
     }
     if let Some(selection) = &record.selection {
-        if selection.seed_digest == [0; 32]
+        if selection.randomness_anchor == [0; 32]
+            || selection.seed_digest == [0; 32]
             || selection.seed_digest
                 != sorafs_moderation_sortition_seed_v1(
                     record.intake_digest,
                     record.pop_snapshot_digest,
-                    record.pop_snapshot.randomness_anchor,
+                    selection.randomness_anchor,
                 )
             || selection.jurors.len() != usize::from(record.intake.panel_size)
             || selection.waitlist.len() > usize::from(record.intake.waitlist_size)
@@ -930,6 +955,8 @@ fn read_case(
         .map_err(|error| corrupt_state(format!("failed to digest stored case policy: {error}")))?;
     let roster_size = u32::try_from(record.spec.jurors.len())
         .map_err(|_| corrupt_state("stored moderation roster length does not fit u32"))?;
+    let challenge_id_count = u32::try_from(record.challenge_ids.len())
+        .map_err(|_| corrupt_state("stored moderation challenge-id count does not fit u32"))?;
     let total_window = record
         .spec
         .reveal_deadline_unix_ms
@@ -945,11 +972,15 @@ fn read_case(
         || record.commitment_count > roster_size
         || record.reveal_count > record.commitment_count
         || record.challenge_count > u32::from(record.policy.max_challenges_per_case)
+        || record.challenge_count != challenge_id_count
+        || !canonical_identifier_list(&record.challenge_ids)
         || record.pending_challenge_count > record.challenge_count
         || record.accepted_challenge_count > record.challenge_count
+        || record.expired_challenge_count > record.challenge_count
         || record
             .pending_challenge_count
             .checked_add(record.accepted_challenge_count)
+            .and_then(|count| count.checked_add(record.expired_challenge_count))
             .is_none_or(|resolved_or_pending| resolved_or_pending > record.challenge_count)
     {
         return Err(corrupt_state(
@@ -957,7 +988,8 @@ fn read_case(
         ));
     }
     match record.status {
-        ModerationCaseStatusV1::Open if record.accepted_challenge_count == 0 => {}
+        ModerationCaseStatusV1::Open
+            if record.accepted_challenge_count == 0 && record.expired_challenge_count == 0 => {}
         ModerationCaseStatusV1::Challenged if record.accepted_challenge_count > 0 => {}
         ModerationCaseStatusV1::Finalized => {}
         _ => {
@@ -975,7 +1007,8 @@ fn read_case(
                 && outcome.votes_total == record.reveal_count
                 && record.pending_challenge_count == 0
                 && matches!(outcome.kind, ModerationOutcomeKindV1::Challenged)
-                    == (record.accepted_challenge_count > 0)
+                    == (record.accepted_challenge_count > 0
+                        || record.expired_challenge_count > 0)
                 && (matches!(outcome.kind, ModerationOutcomeKindV1::Challenged)
                     && outcome.no_show_count == 0
                     || !matches!(outcome.kind, ModerationOutcomeKindV1::Challenged)
@@ -1106,37 +1139,27 @@ fn read_challenge(
     if record.case_id != case_id
         || record.round_id != round_id
         || record.challenge_id != challenge_id
-        || record.challenge_id.trim().is_empty()
-        || record.challenge_id != record.challenge_id.trim()
-        || record.challenge_id.len() > MODERATION_LEDGER_MAX_IDENTIFIER_BYTES_V1
+        || !is_canonical_moderation_identifier_v1(&record.challenge_id)
         || record.evidence_digest == [0; 32]
         || record.raised_at_unix_ms == 0
         || record.reason.trim().is_empty()
         || record.reason != record.reason.trim()
         || record.reason.len() > MODERATION_LEDGER_MAX_REASON_BYTES_V1
+        || record.reason.chars().any(char::is_control)
         || record.kind.requires_target_juror() && record.target_juror.is_none()
     {
         return Err(corrupt_state(
             "stored moderation challenge metadata is inconsistent",
         ));
     }
-    match (
-        record.decision,
-        record.resolved_by.as_ref(),
-        record.resolved_at_unix_ms,
-    ) {
-        (None, None, None) => {}
-        (Some(_), Some(_), Some(resolved_at)) if resolved_at >= record.raised_at_unix_ms => {}
-        _ => {
-            return Err(corrupt_state(
-                "stored moderation challenge resolution is inconsistent",
-            ));
-        }
-    }
     let case = read_case(world, case_id, round_id)?
         .ok_or_else(|| corrupt_state("stored moderation challenge has no authoritative case"))?;
     if record.raised_at_unix_ms <= case.spec.commit_deadline_unix_ms
         || record.raised_at_unix_ms > case.spec.challenge_deadline_unix_ms
+        || case
+            .challenge_ids
+            .binary_search_by(|candidate| candidate.as_str().cmp(challenge_id))
+            .is_err()
         || record
             .target_juror
             .as_ref()
@@ -1144,6 +1167,30 @@ fn read_challenge(
     {
         return Err(corrupt_state(
             "stored moderation challenge does not match authoritative case state",
+        ));
+    }
+    let resolution_valid = match (
+        record.decision,
+        record.resolved_by.as_ref(),
+        record.resolved_at_unix_ms,
+    ) {
+        (None, None, None) => true,
+        (
+            Some(ModerationChallengeDecisionV1::Rejected | ModerationChallengeDecisionV1::Accepted),
+            Some(_),
+            Some(resolved_at),
+        ) => {
+            resolved_at >= record.raised_at_unix_ms
+                && resolved_at <= case.spec.challenge_deadline_unix_ms
+        }
+        (Some(ModerationChallengeDecisionV1::Expired), Some(_), Some(resolved_at)) => {
+            resolved_at > case.spec.reveal_deadline_unix_ms
+        }
+        _ => false,
+    };
+    if !resolution_valid {
+        return Err(corrupt_state(
+            "stored moderation challenge resolution is inconsistent",
         ));
     }
     Ok(Some(record))
@@ -1585,7 +1632,7 @@ impl Execute for RegisterSorafsModerationJurorEligibility {
                 "moderation juror eligibility was already registered",
             ));
         }
-        let active = require_active_pop_snapshot(state_transaction, &appeal.pop_snapshot)?;
+        let pinned = require_pinned_pop_snapshot(state_transaction, &appeal.pop_snapshot)?;
         let proof = decode_membership_proof(&self.membership_proof_payload)?;
         if read_nullifier(state_transaction.world(), proof.nullifier)?.is_some() {
             return Err(invalid_parameter(
@@ -1598,8 +1645,8 @@ impl Execute for RegisterSorafsModerationJurorEligibility {
         let verifier_context = sorafs_moderation_pop_verifier_context_v1(appeal.intake_digest);
         verify_pop_membership_proof_v1(
             &proof,
-            &active.root,
-            &active.revocations,
+            &pinned.root,
+            &pinned.revocations,
             challenge,
             &verifier_context,
             now_epoch,
@@ -1685,11 +1732,21 @@ impl Execute for FinalizeSorafsModerationSortition {
                 "proposed moderation roster or waitlist exceeds hard bounds",
             ));
         }
+        if self.pop_snapshot_digest == [0; 32] || self.randomness_anchor == [0; 32] {
+            return Err(invalid_parameter(
+                "moderation sortition snapshot and randomness anchors must be non-zero",
+            ));
+        }
         let now = block_time_ms(state_transaction)?;
         let mut appeal = required_appeal(state_transaction.world(), &self.case_id, &self.round_id)?;
         if appeal.status != ModerationAppealStatusV1::RegisteringJurors {
             return Err(invalid_parameter(
                 "moderation appeal sortition is not in the registration phase",
+            ));
+        }
+        if authority == &appeal.intake.appellant {
+            return Err(invalid_parameter(
+                "moderation appeal appellant cannot finalize its own panel sortition",
             ));
         }
         if now <= appeal.intake.registration_deadline_unix_ms {
@@ -1707,7 +1764,7 @@ impl Execute for FinalizeSorafsModerationSortition {
                 "moderation sortition PoP snapshot digest does not match the admitted appeal",
             ));
         }
-        require_active_pop_snapshot(state_transaction, &appeal.pop_snapshot)?;
+        require_pinned_pop_snapshot(state_transaction, &appeal.pop_snapshot)?;
         let mut candidates = Vec::with_capacity(appeal.eligible_jurors.len());
         for juror in &appeal.eligible_jurors {
             candidates.push(
@@ -1722,10 +1779,16 @@ impl Execute for FinalizeSorafsModerationSortition {
                 })?,
             );
         }
+        let randomness_anchor = latest_parent_randomness_anchor(state_transaction)?;
+        if self.randomness_anchor != randomness_anchor {
+            return Err(invalid_parameter(
+                "moderation sortition randomness anchor does not match the latest committed parent block",
+            ));
+        }
         let selection = sorafs_moderation_select_panel_v1(
             appeal.intake_digest,
             appeal.pop_snapshot_digest,
-            appeal.pop_snapshot.randomness_anchor,
+            randomness_anchor,
             &candidates,
             appeal.intake.panel_size,
             appeal.intake.waitlist_size,
@@ -1776,6 +1839,7 @@ impl Execute for FinalizeSorafsModerationSortition {
             ));
         }
         appeal.selection = Some(ModerationPanelSelectionV1 {
+            randomness_anchor,
             seed_digest,
             jurors,
             waitlist,
@@ -1820,7 +1884,7 @@ impl Execute for AcceptSorafsModerationJurorAssignment {
                 "moderation juror assignment acceptance window is closed",
             ));
         }
-        require_active_pop_snapshot(state_transaction, &appeal.pop_snapshot)?;
+        require_pinned_pop_snapshot(state_transaction, &appeal.pop_snapshot)?;
         let selection = appeal
             .selection
             .as_ref()
@@ -1892,7 +1956,7 @@ impl Execute for ActivateSorafsModerationCase {
                 "moderation case activation missed the commit window",
             ));
         }
-        require_active_pop_snapshot(state_transaction, &appeal.pop_snapshot)?;
+        require_pinned_pop_snapshot(state_transaction, &appeal.pop_snapshot)?;
         let selection = appeal
             .selection
             .as_ref()
@@ -1980,8 +2044,10 @@ impl Execute for ActivateSorafsModerationCase {
             commitment_count: 0,
             reveal_count: 0,
             challenge_count: 0,
+            challenge_ids: Vec::new(),
             pending_challenge_count: 0,
             accepted_challenge_count: 0,
+            expired_challenge_count: 0,
         };
         appeal.status = ModerationAppealStatusV1::BallotOpen;
         appeal.replacements = replacements;
@@ -2119,33 +2185,23 @@ impl Execute for RaiseSorafsModerationChallenge {
         authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), InstructionExecutionError> {
-        for (field, value) in [
-            ("case_id", self.case_id.as_str()),
-            ("round_id", self.round_id.as_str()),
-            ("challenge_id", self.challenge_id.as_str()),
-        ] {
-            if value.trim().is_empty()
-                || value != value.trim()
-                || value.len() > MODERATION_LEDGER_MAX_IDENTIFIER_BYTES_V1
-            {
-                return Err(invalid_parameter(format!(
-                    "moderation challenge {field} is empty, padded, or too long"
-                )));
-            }
+        validate_lookup_identifiers(&self.case_id, &self.round_id)?;
+        if !is_canonical_moderation_identifier_v1(&self.challenge_id) {
+            return Err(invalid_parameter(
+                "moderation challenge challenge_id is not bounded canonical ASCII",
+            ));
+        }
+        if state_transaction.world.accounts.get(authority).is_none() {
+            return Err(invalid_parameter(
+                "moderation challenger authority is not a registered account",
+            ));
         }
         if self.evidence_digest == [0; 32] {
             return Err(invalid_parameter(
                 "moderation challenge evidence digest must be non-zero",
             ));
         }
-        if self.reason.trim().is_empty()
-            || self.reason != self.reason.trim()
-            || self.reason.len() > MODERATION_LEDGER_MAX_REASON_BYTES_V1
-        {
-            return Err(invalid_parameter(
-                "moderation challenge reason is empty, padded, or too long",
-            ));
-        }
+        validate_challenge_reason(&self.reason)?;
         if self.kind.requires_target_juror() && self.target_juror.is_none() {
             return Err(invalid_parameter(
                 "juror-scoped moderation challenge requires target_juror",
@@ -2192,6 +2248,15 @@ impl Execute for RaiseSorafsModerationChallenge {
             .challenge_count
             .checked_add(1)
             .ok_or_else(|| corrupt_state("moderation case challenge counter overflow"))?;
+        let challenge_position = case
+            .challenge_ids
+            .binary_search_by(|candidate| candidate.as_str().cmp(&self.challenge_id))
+            .map_or_else(
+                |position| position,
+                |_| unreachable!("duplicate challenge record check keeps id index unique"),
+            );
+        case.challenge_ids
+            .insert(challenge_position, self.challenge_id.clone());
         case.pending_challenge_count = case
             .pending_challenge_count
             .checked_add(1)
@@ -2242,6 +2307,17 @@ impl Execute for ResolveSorafsModerationChallenge {
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), InstructionExecutionError> {
         require_manage_permission(state_transaction, authority)?;
+        validate_lookup_identifiers(&self.case_id, &self.round_id)?;
+        if !is_canonical_moderation_identifier_v1(&self.challenge_id) {
+            return Err(invalid_parameter(
+                "moderation challenge challenge_id is not bounded canonical ASCII",
+            ));
+        }
+        if self.decision == ModerationChallengeDecisionV1::Expired {
+            return Err(invalid_parameter(
+                "expired moderation challenges are derived only by terminal finalization",
+            ));
+        }
         let now = block_time_ms(state_transaction)?;
         let appeal = required_appeal(state_transaction.world(), &self.case_id, &self.round_id)?;
         if appeal.status != ModerationAppealStatusV1::BallotOpen {
@@ -2253,6 +2329,11 @@ impl Execute for ResolveSorafsModerationChallenge {
         if case.status == ModerationCaseStatusV1::Finalized {
             return Err(invalid_parameter(
                 "finalized moderation case cannot resolve challenges",
+            ));
+        }
+        if now > case.spec.challenge_deadline_unix_ms {
+            return Err(invalid_parameter(
+                "moderation challenge resolution window is closed",
             ));
         }
         if case.reveal_count != 0 {
@@ -2451,6 +2532,7 @@ impl Execute for FinalizeSorafsModerationCase {
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), InstructionExecutionError> {
         require_manage_permission(state_transaction, authority)?;
+        validate_lookup_identifiers(&self.case_id, &self.round_id)?;
         let now = block_time_ms(state_transaction)?;
         let mut appeal = required_appeal(state_transaction.world(), &self.case_id, &self.round_id)?;
         if appeal.status != ModerationAppealStatusV1::BallotOpen {
@@ -2470,13 +2552,45 @@ impl Execute for FinalizeSorafsModerationCase {
                 case.spec.reveal_deadline_unix_ms
             )));
         }
+        let mut expired_challenge_writes = Vec::new();
         if case.pending_challenge_count != 0 {
-            return Err(invalid_parameter(
-                "pending moderation challenges must be resolved before finalization",
-            ));
+            for challenge_id in &case.challenge_ids {
+                let mut challenge = read_challenge(
+                    state_transaction.world(),
+                    &self.case_id,
+                    &self.round_id,
+                    challenge_id,
+                )?
+                .ok_or_else(|| {
+                    corrupt_state("moderation case challenge index references a missing record")
+                })?;
+                if challenge.decision.is_some() {
+                    continue;
+                }
+                challenge.decision = Some(ModerationChallengeDecisionV1::Expired);
+                challenge.resolved_by = Some(authority.clone());
+                challenge.resolved_at_unix_ms = Some(now);
+                expired_challenge_writes.push((
+                    challenge_key(&self.case_id, &self.round_id, challenge_id),
+                    encode_state(&challenge, "expired moderation challenge")?,
+                ));
+            }
+            let expired_count = u32::try_from(expired_challenge_writes.len()).map_err(|_| {
+                corrupt_state("expired moderation challenge count does not fit u32")
+            })?;
+            if expired_count != case.pending_challenge_count {
+                return Err(corrupt_state(
+                    "moderation pending-challenge counter disagrees with indexed records",
+                ));
+            }
+            case.expired_challenge_count = case
+                .expired_challenge_count
+                .checked_add(expired_count)
+                .ok_or_else(|| corrupt_state("moderation expired-challenge counter overflow"))?;
+            case.pending_challenge_count = 0;
         }
 
-        let challenged = case.accepted_challenge_count != 0;
+        let challenged = case.accepted_challenge_count != 0 || case.expired_challenge_count != 0;
         let mut counts = ModerationVoteCountsV1::default();
         let mut no_shows = Vec::new();
         if !challenged {
@@ -2608,6 +2722,12 @@ impl Execute for FinalizeSorafsModerationCase {
             .world
             .smart_contract_state
             .insert(appeal_key(&self.case_id, &self.round_id), encoded_appeal);
+        for (key, encoded) in expired_challenge_writes {
+            state_transaction
+                .world
+                .smart_contract_state
+                .insert(key, encoded);
+        }
         for (key, encoded) in encoded_no_shows {
             state_transaction
                 .world
@@ -3234,19 +3354,19 @@ mod tests {
     }
 
     fn panel_intake(
-        manager: &KeyPair,
+        appellant: &KeyPair,
         case_id: &str,
         panel_size: u16,
         waitlist_size: u16,
         quorum: u16,
         deposit_byte: u8,
     ) -> ModerationAppealIntakeV1 {
-        let manager_id = account(manager);
+        let appellant_id = account(appellant);
         ModerationAppealIntakeV1 {
             version: MODERATION_APPEAL_INTAKE_VERSION_V1,
             case_id: case_id.to_owned(),
             round_id: "round-1".to_owned(),
-            appellant: manager_id.clone(),
+            appellant: appellant_id.clone(),
             appealed_decision_digest: [0x31; 32],
             proof_token_digest: [0x32; 32],
             evidence_bundle_digest: [0x33; 32],
@@ -3257,7 +3377,7 @@ mod tests {
             panel_size,
             waitlist_size,
             quorum,
-            exclusions: vec![manager_id],
+            exclusions: vec![appellant_id],
             registration_deadline_unix_ms: 1_003_000,
             acceptance_deadline_unix_ms: 1_005_000,
             commit_deadline_unix_ms: 1_007_000,
@@ -3269,6 +3389,7 @@ mod tests {
 
     struct PanelFixture {
         manager: KeyPair,
+        appellant: KeyPair,
         juror: KeyPair,
         outsider: KeyPair,
         state: State,
@@ -3278,13 +3399,23 @@ mod tests {
     impl PanelFixture {
         fn new() -> Self {
             let manager = keypair(0x51);
+            let appellant = keypair(0x52);
             let juror = keypair(0x61);
             let outsider = keypair(0x71);
             let manager_id = account(&manager);
-            let mut state = state(&[&manager, &juror, &outsider], &manager_id);
+            let appellant_id = account(&appellant);
+            let mut state = state(&[&manager, &appellant, &juror, &outsider], &manager_id);
+            let mut appellant_permissions = Permissions::new();
+            appellant_permissions
+                .insert(Permission::new(MANAGE_PERMISSION.to_owned(), Json::new(())));
+            state
+                .world
+                .account_permissions
+                .insert(appellant_id, appellant_permissions);
             setup_panel_foundations(&mut state, &manager, shared_pop_material());
             Self {
                 manager,
+                appellant,
                 juror,
                 outsider,
                 state,
@@ -3294,6 +3425,10 @@ mod tests {
 
         fn manager_id(&self) -> AccountId {
             account(&self.manager)
+        }
+
+        fn appellant_id(&self) -> AccountId {
+            account(&self.appellant)
         }
 
         fn juror_id(&self) -> AccountId {
@@ -3311,8 +3446,11 @@ mod tests {
                 &mut StateTransaction<'_, '_>,
             ) -> Result<(), InstructionExecutionError>,
         ) -> Result<(), InstructionExecutionError> {
-            let result = transact(&mut self.state, self.next_height, now, operation);
+            let height = self.next_height;
+            let result = transact(&mut self.state, height, now, operation);
             if result.is_ok() {
+                self.state
+                    .push_block_hash_for_testing(iroha_crypto::HashOf::new(&header(height, now)));
                 self.next_height += 1;
             }
             result
@@ -3320,16 +3458,16 @@ mod tests {
 
         fn submit(&mut self, panel_size: u16, waitlist_size: u16, quorum: u16) {
             let intake = panel_intake(
-                &self.manager,
+                &self.appellant,
                 "panel-case",
                 panel_size,
                 waitlist_size,
                 quorum,
                 0x91,
             );
-            let manager = self.manager_id();
+            let appellant = self.appellant_id();
             self.run(1_001_000, |transaction| {
-                SubmitSorafsModerationAppeal::new(intake).execute(&manager, transaction)
+                SubmitSorafsModerationAppeal::new(intake).execute(&appellant, transaction)
             })
             .expect("submit panel appeal");
         }
@@ -3359,10 +3497,12 @@ mod tests {
             let juror = self.juror_id();
             let snapshot_digest = self.appeal().pop_snapshot_digest;
             self.run(1_004_000, |transaction| {
+                let randomness_anchor = latest_parent_randomness_anchor(transaction)?;
                 FinalizeSorafsModerationSortition::new(
                     "panel-case".to_owned(),
                     "round-1".to_owned(),
                     snapshot_digest,
+                    randomness_anchor,
                     vec![juror],
                     Vec::new(),
                 )
@@ -3392,7 +3532,6 @@ mod tests {
             registry_audit_sequence: 1,
             registry_audit_head: [0x84; 32],
             captured_at_unix_ms: 700,
-            randomness_anchor: [0x85; 32],
         };
         let intake = iroha_data_model::sorafs::moderation_ledger::ModerationAppealIntakeV1 {
             version:
@@ -3427,7 +3566,12 @@ mod tests {
         let pop_snapshot_digest = pop_snapshot
             .digest()
             .map_err(|error| corrupt_state(format!("fixture snapshot digest: {error}")))?;
-        let seed_digest = [0x91; 32];
+        let randomness_anchor = [0x85; 32];
+        let seed_digest = sorafs_moderation_sortition_seed_v1(
+            intake_digest,
+            pop_snapshot_digest,
+            randomness_anchor,
+        );
         let sortition_digest = sorafs_moderation_sortition_digest_v1(
             pop_snapshot_digest,
             seed_digest,
@@ -3446,6 +3590,7 @@ mod tests {
             submitted_at_unix_ms: 700,
             eligible_jurors: eligible_jurors.clone(),
             selection: Some(ModerationPanelSelectionV1 {
+                randomness_anchor,
                 seed_digest,
                 jurors: spec.jurors.clone(),
                 waitlist: Vec::new(),
@@ -3467,8 +3612,10 @@ mod tests {
             commitment_count: 0,
             reveal_count: 0,
             challenge_count: 0,
+            challenge_ids: Vec::new(),
             pending_challenge_count: 0,
             accepted_challenge_count: 0,
+            expired_challenge_count: 0,
         };
         let mut status = status_for_mutation(transaction.world(), OPENED_AT)?;
         status.appeal_intakes = 1;
@@ -3763,6 +3910,52 @@ mod tests {
                 })
                 .is_err()
         );
+        for (challenge_id, reason) in [
+            ("challenge\nbad", "canonical reason"),
+            ("challengé", "canonical reason"),
+            ("challenge-control", "line\nbreak"),
+        ] {
+            assert!(
+                fixture
+                    .run(2_500, |transaction| {
+                        RaiseSorafsModerationChallenge::new(
+                            "case-1".to_owned(),
+                            "round-1".to_owned(),
+                            challenge_id.to_owned(),
+                            ModerationChallengeKindV1::EvidenceMismatch,
+                            None,
+                            [0x50; 32],
+                            reason.to_owned(),
+                        )
+                        .execute(&challenger, transaction)
+                    })
+                    .is_err()
+            );
+        }
+        let unregistered_challenger = account(&keypair(0x7F));
+        assert!(
+            fixture
+                .run(2_500, |transaction| {
+                    RaiseSorafsModerationChallenge::new(
+                        "case-1".to_owned(),
+                        "round-1".to_owned(),
+                        "challenge-unregistered".to_owned(),
+                        ModerationChallengeKindV1::EvidenceMismatch,
+                        None,
+                        [0x50; 32],
+                        "canonical reason".to_owned(),
+                    )
+                    .execute(&unregistered_challenger, transaction)
+                })
+                .is_err()
+        );
+        assert_eq!(
+            FindSorafsModerationCase::new("case-1".to_owned(), "round-1".to_owned())
+                .execute(&fixture.state.view())
+                .unwrap()
+                .challenge_count,
+            0
+        );
         fixture
             .run(2_500, |transaction| {
                 RaiseSorafsModerationChallenge::new(
@@ -3815,7 +4008,7 @@ mod tests {
         );
         let manager = fixture.manager_id();
         fixture
-            .run(3_500, |transaction| {
+            .run(2_900, |transaction| {
                 ResolveSorafsModerationChallenge::new(
                     "case-1".to_owned(),
                     "round-1".to_owned(),
@@ -3838,6 +4031,109 @@ mod tests {
                     .execute(&manager, transaction)
             })
             .unwrap();
+        let outcome = FindSorafsModerationOutcome::new("case-1".to_owned(), "round-1".to_owned())
+            .execute(&fixture.state.view())
+            .unwrap();
+        assert_eq!(outcome.kind, ModerationOutcomeKindV1::Challenged);
+        assert_eq!(outcome.no_show_count, 0);
+        assert_eq!(
+            FindSorafsModerationStatus
+                .execute(&fixture.state.view())
+                .unwrap()
+                .no_shows,
+            0
+        );
+    }
+
+    #[test]
+    fn unresolved_challenge_expires_fail_safe_without_deadlock_or_no_show_penalties() {
+        let mut fixture = Fixture::new(1);
+        let juror = fixture.juror_id(0);
+        let challenger = account(&fixture.outsider);
+        let reveal = reveal(
+            &fixture.spec,
+            &juror,
+            SoraFsModerationVoteChoice::Uphold,
+            0x44,
+        );
+        fixture
+            .run(1_500, |transaction| {
+                SubmitSorafsModerationCommit::new(encode(&commit(&reveal)))
+                    .execute(&juror, transaction)
+            })
+            .unwrap();
+        fixture
+            .run(2_500, |transaction| {
+                RaiseSorafsModerationChallenge::new(
+                    "case-1".to_owned(),
+                    "round-1".to_owned(),
+                    "challenge-unresolved".to_owned(),
+                    ModerationChallengeKindV1::EvidenceMismatch,
+                    None,
+                    [0x72; 32],
+                    "awaiting adjudication".to_owned(),
+                )
+                .execute(&challenger, transaction)
+            })
+            .unwrap();
+        let manager = fixture.manager_id();
+        assert!(
+            fixture
+                .run(2_600, |transaction| {
+                    ResolveSorafsModerationChallenge::new(
+                        "case-1".to_owned(),
+                        "round-1".to_owned(),
+                        "challenge-unresolved".to_owned(),
+                        ModerationChallengeDecisionV1::Expired,
+                    )
+                    .execute(&manager, transaction)
+                })
+                .is_err()
+        );
+        assert!(
+            fixture
+                .run(3_500, |transaction| {
+                    ResolveSorafsModerationChallenge::new(
+                        "case-1".to_owned(),
+                        "round-1".to_owned(),
+                        "challenge-unresolved".to_owned(),
+                        ModerationChallengeDecisionV1::Rejected,
+                    )
+                    .execute(&manager, transaction)
+                })
+                .is_err()
+        );
+        assert!(
+            fixture
+                .run(3_500, |transaction| {
+                    SubmitSorafsModerationReveal::new(encode(&reveal)).execute(&juror, transaction)
+                })
+                .is_err()
+        );
+        fixture
+            .run(4_001, |transaction| {
+                FinalizeSorafsModerationCase::new("case-1".to_owned(), "round-1".to_owned())
+                    .execute(&manager, transaction)
+            })
+            .unwrap();
+
+        let case = FindSorafsModerationCase::new("case-1".to_owned(), "round-1".to_owned())
+            .execute(&fixture.state.view())
+            .unwrap();
+        assert_eq!(case.pending_challenge_count, 0);
+        assert_eq!(case.expired_challenge_count, 1);
+        let challenge = FindSorafsModerationChallenge::new(
+            "case-1".to_owned(),
+            "round-1".to_owned(),
+            "challenge-unresolved".to_owned(),
+        )
+        .execute(&fixture.state.view())
+        .unwrap();
+        assert_eq!(
+            challenge.decision,
+            Some(ModerationChallengeDecisionV1::Expired)
+        );
+        assert_eq!(challenge.resolved_by, Some(manager));
         let outcome = FindSorafsModerationOutcome::new("case-1".to_owned(), "round-1".to_owned())
             .execute(&fixture.state.view())
             .unwrap();
@@ -4019,7 +4315,7 @@ mod tests {
         let outsider = account(&outsider_pair);
         let mut state = state(&[&manager_pair, &outsider_pair], &manager);
         assert!(
-            transact(&mut state, 1, OPENED_AT, |transaction| {
+            transact(&mut state, 2, OPENED_AT, |transaction| {
                 SetSorafsModerationPolicy::new(policy()).execute(&outsider, transaction)
             })
             .is_err()
@@ -4091,20 +4387,41 @@ mod tests {
     }
 
     #[test]
+    fn genesis_moderation_permission_bypass_matches_executor_policy() {
+        let manager_pair = keypair(0x45);
+        let genesis_authority_pair = keypair(0x46);
+        let manager = account(&manager_pair);
+        let genesis_authority = account(&genesis_authority_pair);
+        let mut state = state(&[&manager_pair, &genesis_authority_pair], &manager);
+        transact(&mut state, 1, OPENED_AT, |transaction| {
+            SetSorafsModerationPolicy::new(policy()).execute(&genesis_authority, transaction)
+        })
+        .expect("genesis policy activation follows executor permission semantics");
+        assert_eq!(
+            FindSorafsModerationPolicy
+                .execute(&state.view())
+                .unwrap()
+                .activated_by,
+            genesis_authority
+        );
+    }
+
+    #[test]
     fn appeal_intake_is_authority_bound_replay_safe_and_transaction_atomic() {
         let mut fixture = PanelFixture::new();
         let manager = fixture.manager_id();
+        let appellant = fixture.appellant_id();
         let outsider = fixture.outsider_id();
-        let mut malformed = panel_intake(&fixture.manager, "panel-case", 1, 0, 1, 0x91);
+        let mut malformed = panel_intake(&fixture.appellant, "panel-case", 1, 0, 1, 0x91);
         malformed.proof_token_digest = [0; 32];
         assert!(
             fixture
                 .run(1_001_000, |transaction| {
-                    SubmitSorafsModerationAppeal::new(malformed).execute(&manager, transaction)
+                    SubmitSorafsModerationAppeal::new(malformed).execute(&appellant, transaction)
                 })
                 .is_err()
         );
-        let intake = panel_intake(&fixture.manager, "panel-case", 1, 0, 1, 0x91);
+        let intake = panel_intake(&fixture.appellant, "panel-case", 1, 0, 1, 0x91);
         assert!(
             fixture
                 .run(1_001_000, |transaction| {
@@ -4118,7 +4435,7 @@ mod tests {
             fixture
                 .run(1_001_000, |transaction| {
                     SubmitSorafsModerationAppeal::new(intake.clone())
-                        .execute(&manager, transaction)?;
+                        .execute(&appellant, transaction)?;
                     RegisterSorafsModerationJurorEligibility::new(
                         "panel-case".to_owned(),
                         "round-1".to_owned(),
@@ -4145,26 +4462,27 @@ mod tests {
         assert!(
             fixture
                 .run(1_001_001, |transaction| {
-                    SubmitSorafsModerationAppeal::new(intake.clone()).execute(&manager, transaction)
+                    SubmitSorafsModerationAppeal::new(intake.clone())
+                        .execute(&appellant, transaction)
                 })
                 .is_err()
         );
-        let replayed_deposit = panel_intake(&fixture.manager, "different-case", 1, 0, 1, 0x91);
+        let replayed_deposit = panel_intake(&fixture.appellant, "different-case", 1, 0, 1, 0x91);
         assert!(
             fixture
                 .run(1_001_001, |transaction| {
                     SubmitSorafsModerationAppeal::new(replayed_deposit)
-                        .execute(&manager, transaction)
+                        .execute(&appellant, transaction)
                 })
                 .is_err()
         );
         let replayed_proof_token =
-            panel_intake(&fixture.manager, "proof-replay-case", 1, 0, 1, 0x92);
+            panel_intake(&fixture.appellant, "proof-replay-case", 1, 0, 1, 0x92);
         assert!(
             fixture
                 .run(1_001_001, |transaction| {
                     SubmitSorafsModerationAppeal::new(replayed_proof_token)
-                        .execute(&manager, transaction)
+                        .execute(&appellant, transaction)
                 })
                 .is_err()
         );
@@ -4175,15 +4493,15 @@ mod tests {
         assert_eq!(status.eligibility_proofs, 0);
 
         let mut excluded = PanelFixture::new();
-        let excluded_manager = excluded.manager_id();
+        let excluded_appellant = excluded.appellant_id();
         let excluded_juror = excluded.juror_id();
-        let mut excluded_intake = panel_intake(&excluded.manager, "panel-case", 1, 0, 1, 0x91);
+        let mut excluded_intake = panel_intake(&excluded.appellant, "panel-case", 1, 0, 1, 0x91);
         excluded_intake.exclusions.push(excluded_juror.clone());
         excluded_intake.exclusions.sort_by_key(ToString::to_string);
         excluded
             .run(1_001_000, |transaction| {
                 SubmitSorafsModerationAppeal::new(excluded_intake)
-                    .execute(&excluded_manager, transaction)
+                    .execute(&excluded_appellant, transaction)
             })
             .unwrap();
         assert!(
@@ -4249,6 +4567,7 @@ mod tests {
         );
         let snapshot_digest = fixture.appeal().pop_snapshot_digest;
         let manager = fixture.manager_id();
+        let appellant = fixture.appellant_id();
         assert!(
             fixture
                 .run(1_003_000, |transaction| {
@@ -4256,6 +4575,7 @@ mod tests {
                         "panel-case".to_owned(),
                         "round-1".to_owned(),
                         snapshot_digest,
+                        latest_parent_randomness_anchor(transaction)?,
                         vec![juror.clone()],
                         Vec::new(),
                     )
@@ -4270,6 +4590,52 @@ mod tests {
                         "panel-case".to_owned(),
                         "round-1".to_owned(),
                         snapshot_digest,
+                        latest_parent_randomness_anchor(transaction)?,
+                        vec![juror.clone()],
+                        Vec::new(),
+                    )
+                    .execute(&appellant, transaction)
+                })
+                .is_err()
+        );
+        assert!(
+            fixture
+                .run(1_004_000, |transaction| {
+                    FinalizeSorafsModerationSortition::new(
+                        "panel-case".to_owned(),
+                        "round-1".to_owned(),
+                        snapshot_digest,
+                        [0; 32],
+                        vec![juror.clone()],
+                        Vec::new(),
+                    )
+                    .execute(&manager, transaction)
+                })
+                .is_err()
+        );
+        assert!(
+            fixture
+                .run(1_004_000, |transaction| {
+                    FinalizeSorafsModerationSortition::new(
+                        "panel-case".to_owned(),
+                        "round-1".to_owned(),
+                        snapshot_digest,
+                        [0xFF; 32],
+                        vec![juror.clone()],
+                        Vec::new(),
+                    )
+                    .execute(&manager, transaction)
+                })
+                .is_err()
+        );
+        assert!(
+            fixture
+                .run(1_004_000, |transaction| {
+                    FinalizeSorafsModerationSortition::new(
+                        "panel-case".to_owned(),
+                        "round-1".to_owned(),
+                        snapshot_digest,
+                        latest_parent_randomness_anchor(transaction)?,
                         vec![juror.clone()],
                         Vec::new(),
                     )
@@ -4284,6 +4650,7 @@ mod tests {
                         "panel-case".to_owned(),
                         "round-1".to_owned(),
                         snapshot_digest,
+                        latest_parent_randomness_anchor(transaction)?,
                         vec![outsider.clone()],
                         Vec::new(),
                     )
@@ -4298,6 +4665,7 @@ mod tests {
                         "panel-case".to_owned(),
                         "round-1".to_owned(),
                         snapshot_digest,
+                        latest_parent_randomness_anchor(transaction)?,
                         vec![juror.clone(), juror.clone()],
                         Vec::new(),
                     )
@@ -4467,6 +4835,7 @@ mod tests {
                     "panel-case".to_owned(),
                     "round-1".to_owned(),
                     snapshot_digest,
+                    latest_parent_randomness_anchor(transaction)?,
                     Vec::new(),
                     Vec::new(),
                 )
@@ -4489,6 +4858,7 @@ mod tests {
                         "panel-case".to_owned(),
                         "round-1".to_owned(),
                         snapshot_digest,
+                        latest_parent_randomness_anchor(transaction)?,
                         Vec::new(),
                         Vec::new(),
                     )
@@ -4543,11 +4913,12 @@ mod tests {
     #[test]
     fn primary_no_show_uses_next_unique_waitlist_juror_atomically() {
         let mut fixture = PanelFixture::new();
-        let intake = panel_intake(&fixture.manager, "panel-case", 1, 1, 1, 0x92);
+        let intake = panel_intake(&fixture.appellant, "panel-case", 1, 1, 1, 0x92);
         let manager = fixture.manager_id();
+        let appellant = fixture.appellant_id();
         fixture
             .run(1_001_000, |transaction| {
-                SubmitSorafsModerationAppeal::new(intake).execute(&manager, transaction)
+                SubmitSorafsModerationAppeal::new(intake).execute(&appellant, transaction)
             })
             .unwrap();
         let mut appeal = fixture.appeal();
@@ -4606,29 +4977,35 @@ mod tests {
                 Ok(())
             })
             .unwrap();
-        let (expected_jurors, expected_waitlist, _, _) = sorafs_moderation_select_panel_v1(
-            appeal.intake_digest,
-            appeal.pop_snapshot_digest,
-            appeal.pop_snapshot.randomness_anchor,
-            &records,
-            1,
-            1,
-            1,
-        )
-        .unwrap();
         let snapshot_digest = appeal.pop_snapshot_digest;
+        let mut expected_selection = None;
         fixture
             .run(1_004_000, |transaction| {
+                let randomness_anchor = latest_parent_randomness_anchor(transaction)?;
+                let (expected_jurors, expected_waitlist, _, _) = sorafs_moderation_select_panel_v1(
+                    appeal.intake_digest,
+                    appeal.pop_snapshot_digest,
+                    randomness_anchor,
+                    &records,
+                    1,
+                    1,
+                    1,
+                )
+                .map_err(|error| corrupt_state(format!("fixture sortition failed: {error}")))?;
+                expected_selection = Some((expected_jurors.clone(), expected_waitlist.clone()));
                 FinalizeSorafsModerationSortition::new(
                     "panel-case".to_owned(),
                     "round-1".to_owned(),
                     snapshot_digest,
+                    randomness_anchor,
                     expected_jurors.clone(),
                     expected_waitlist.clone(),
                 )
                 .execute(&manager, transaction)
             })
             .unwrap();
+        let (expected_jurors, expected_waitlist) =
+            expected_selection.expect("fixture captured deterministic selection");
         let sortition_digest = fixture
             .appeal()
             .selection
@@ -4666,7 +5043,7 @@ mod tests {
     }
 
     #[test]
-    fn active_pop_root_rotation_invalidates_pending_appeal_snapshot() {
+    fn later_pop_revocation_rotation_does_not_rewrite_or_brick_admitted_snapshot() {
         let mut fixture = PanelFixture::new();
         fixture.submit(1, 0, 1);
         let manager = fixture.manager_id();
@@ -4702,25 +5079,51 @@ mod tests {
             .unwrap();
         let proof = proof_for_appeal(&fixture.appeal());
         let juror = fixture.juror_id();
-        assert!(
-            fixture
-                .run(1_002_000, |transaction| {
-                    RegisterSorafsModerationJurorEligibility::new(
-                        "panel-case".to_owned(),
-                        "round-1".to_owned(),
-                        encode(&proof),
-                    )
-                    .execute(&juror, transaction)
-                })
-                .is_err()
+        fixture
+            .run(1_002_000, |transaction| {
+                RegisterSorafsModerationJurorEligibility::new(
+                    "panel-case".to_owned(),
+                    "round-1".to_owned(),
+                    encode(&proof),
+                )
+                .execute(&juror, transaction)
+            })
+            .unwrap();
+        let admitted = fixture.appeal();
+        assert_eq!(admitted.eligible_jurors, vec![juror.clone()]);
+        assert_eq!(admitted.pop_snapshot.revocation_list_version, 1);
+        assert_eq!(admitted.pop_snapshot.registry_audit_sequence, 2);
+        let sortition_digest = fixture.finalize_single_juror_sortition();
+        fixture
+            .run(1_004_001, |transaction| {
+                AcceptSorafsModerationJurorAssignment::new(
+                    "panel-case".to_owned(),
+                    "round-1".to_owned(),
+                    sortition_digest,
+                )
+                .execute(&juror, transaction)
+            })
+            .unwrap();
+        fixture
+            .run(1_006_000, |transaction| {
+                ActivateSorafsModerationCase::new(
+                    "panel-case".to_owned(),
+                    "round-1".to_owned(),
+                    sortition_digest,
+                )
+                .execute(&manager, transaction)
+            })
+            .unwrap();
+        assert_eq!(
+            fixture.appeal().status,
+            ModerationAppealStatusV1::BallotOpen
         );
-        assert!(fixture.appeal().eligible_jurors.is_empty());
         assert_eq!(
             FindSorafsModerationStatus
                 .execute(&fixture.state.view())
                 .unwrap()
                 .eligibility_proofs,
-            0
+            1
         );
     }
 }

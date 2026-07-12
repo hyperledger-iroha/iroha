@@ -84,23 +84,25 @@ expired cannot receive new offline cash until it refreshes while online.
 
 ## Lifecycle binding
 
-The current first-release Torii operation response returns the finalized top-up
-anchor; it does not publish `KagemushaTopUpFinalityProofV2`. Core nevertheless
-constructs the proof material on the real commit path. Before either the block
-log or WSV advances, Kura durably stages the bounded witness-derived top-up tree
-and paths. After the exact cryptographically verified `V2FinalityArtifact` is
+The first-release Torii applied top-up result returns both the typed finalized
+anchor and the typed `KagemushaTopUpFinalityProofV2`. It never reports an
+applied top-up from a height and anchor alone. Before either the block log or
+WSV advances, Kura durably stages the bounded witness-derived top-up tree and
+paths. After the exact cryptographically verified `V2FinalityArtifact` is
 durable, Kura promotes that stage to an immutable final sidecar bound to the
 artifact hash. Publication uses no-clobber atomic files, directory sync, stable
 file-identity checks, bounded decode limits, and idempotent exact retries;
-conflicting or missing crash-recovery state fails closed. Kura can then build a
-canonical proof for an exact `(height, operation_id)`.
+conflicting or missing crash-recovery state fails closed. Kura then builds the
+canonical proof for the exact `(height, operation_id)` while serving the
+canonical operation-status resource.
 
-No Torii retrieval route is mounted while the recursive proof backend remains
-unavailable and the authenticated release-envelope gate is outstanding. This
-keeps durable proof production testable without advertising a spendable
-first-release path. The local `initSpend` proof binds the anchor digest, and
-redemption resolves compact anchor references from chain state before crediting
-value.
+There is no parallel finality-proof retrieval route and no base64 wrapper. If
+the local durable artifact or sidecar cannot produce the exact proof, Torii
+returns `503 offline_topup_finality_proof_unavailable`; the wallet retries the
+same operation status URI and must not run `initSpend`. The local init proof
+binds the verified anchor digest, and redemption resolves compact anchor
+references from chain state before crediting value. The native verifier remains
+fail-closed until the authenticated release-envelope trust root is available.
 
 `KagemushaRecursiveSpendPeerPaymentV2` intentionally contains only the
 recipient bundle. A future finality package must therefore remain a
@@ -138,7 +140,10 @@ The C/Swift verification boundary accepts five logical inputs: the canonical
 proof, canonical roster artifact, complete canonical top-up anchor, canonical
 V3 manifest, and the manifest's expected non-zero SHA-256. Native ingress
 applies separate proof, roster, anchor, and manifest byte caps before copying
-or decoding.
+or decoding. The public symbol currently returns the unavailable error before
+decoding otherwise valid inputs: a content address is not a release trust root,
+and recursive init does not yet consume a verified-finality capability. Both
+gates must be implemented before this boundary can become callable.
 
 Current size goldens cover the canonical peer-payment wire at depths 1, 2, 4,
 8, and 64 with one or two branch claims. Provenance remains a deduplicated

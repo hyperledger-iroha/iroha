@@ -9,7 +9,7 @@ plugins {
 group = "org.hyperledger.iroha.sdk"
 version = providers.gradleProperty("irohaSdkVersion")
     .orElse(providers.environmentVariable("IROHA_SDK_VERSION"))
-    .orElse("0.1-SNAPSHOT")
+    .orElse("0.1.0")
     .get()
 
 val mobileSdkRepoDir = providers.gradleProperty("irohaSdkRepoDir")

@@ -49,6 +49,24 @@ private func nativeAmxTestHash(_ seed: UInt8) -> String {
     return "hash:\(body)#\(String(format: "%04X", checksum))"
 }
 
+private func canonicalKagemushaVerifierRecordArchive(
+    seed: UInt8,
+    verifierKeyLength: Int = 96
+) throws -> Data {
+    guard verifierKeyLength > 0 else {
+        throw NSError(
+            domain: "ToriiClientTests",
+            code: -1,
+            userInfo: [NSLocalizedDescriptionKey: "verifierKeyLength must be positive"]
+        )
+    }
+    return noritoEncode(
+        typeName: KagemushaRecursiveSpend.verifyingKeyRecordWireName,
+        payload: Data(repeating: seed, count: verifierKeyLength),
+        flags: NoritoHeader.compactLen
+    )
+}
+
 private func nativeAmxStatusPayload(
     preparePhase: String = "prepare",
     signature: [UInt8] = [UInt8](repeating: 0x9A, count: 96),
@@ -68,16 +86,21 @@ private func nativeAmxStatusPayload(
     let coordinatorIncarnation = nativeAmxTestHash(0x89)
     let coordinatorProposalHash = nativeAmxTestHash(0x55)
     let validators = ["validator-0", "validator-1", "validator-2", "validator-3"]
-    func qc(_ phase: String, lane: Int, dataspace: Int, entrypointHash: String) -> [String: Any] {
-        let participantIncarnation = lane == 7
-            ? coordinatorIncarnation
-            : nativeAmxTestHash(0xB1)
+    func qc(
+        _ phase: String,
+        lane: Int,
+        dataspace: Int,
+        entrypointHash: String,
+        participantIncarnation: String,
+        participantProposalHash: String,
+        participantSettlementHash: String
+    ) -> [String: Any] {
         return [
             "body": [
                 "round": [
                     "context_id": [contextHash],
                     "height": authorityContextHeight,
-                    "view": 6,
+                    "view": 17,
                 ],
                 "epoch": 2,
                 "chain_id_hash": chainIdHash,
@@ -91,6 +114,12 @@ private func nativeAmxStatusPayload(
                 "participant_lane_id": lane,
                 "participant_dataspace_id": dataspace,
                 "participant_lane_incarnation": participantIncarnation,
+                "participant_previous_block_height": 7,
+                "participant_previous_block_descriptor_hash": nativeAmxTestHash(0x5D),
+                "participant_lane_block_height": 8,
+                "participant_lane_block_view": 9,
+                "participant_proposal_hash": participantProposalHash,
+                "participant_settlement_commitment": participantSettlementHash,
                 "participant_validator_set_hash": validatorHash,
                 "participant_validator_count": validators.count,
                 "participant_min_quorum": 3,
@@ -111,14 +140,86 @@ private func nativeAmxStatusPayload(
         ]
     }
     func leg(_ lane: Int, _ dataspace: Int, _ entrypointHash: String) -> [String: Any] {
-        [
+        let laneSeed = UInt8(truncatingIfNeeded: lane)
+        let participantIncarnation = lane == 7
+            ? coordinatorIncarnation
+            : nativeAmxTestHash(laneSeed ^ 0xB1)
+        let participantProposalHash = nativeAmxTestHash(laneSeed ^ 0x69)
+        let participantSettlementHash = nativeAmxTestHash(laneSeed ^ 0x6B)
+        let participantProposal: [String: Any] = [
+            "descriptor": [
+                "lane_id": lane,
+                "dataspace_id": dataspace,
+                "lane_incarnation": participantIncarnation,
+                "proposal_height": authorityContextHeight,
+                "previous_lane_block_height": 7,
+                "previous_lane_block_descriptor_hash": nativeAmxTestHash(0x5D),
+                "lane_block_height": 8,
+                "lane_block_view": 9,
+                "subject_hash": nativeAmxTestHash(laneSeed ^ 0x71),
+                "payload_ownership_hash": nativeAmxTestHash(laneSeed ^ 0x73),
+                "rbc_instance_hash": nativeAmxTestHash(laneSeed ^ 0x75),
+                "accepted_candidate_indices": [0],
+                "accepted_transaction_hashes": [entrypointHash],
+                "validator_set_hash_version": 1,
+                "validator_set_hash": validatorHash,
+                "validator_set": validators,
+                "validator_count": validators.count,
+                "min_quorum": 3,
+                "qc_mode_tag": "iroha2-consensus::permissioned-sumeragi@v2",
+                "descriptor_hash": nativeAmxTestHash(laneSeed ^ 0x77),
+            ],
+            "proposal_hash": participantProposalHash,
+        ]
+        let participantSettlement: [String: Any] = [
+            "block_height": 8,
+            "lane_id": lane,
+            "lane_incarnation": participantIncarnation,
+            "dataspace_id": dataspace,
+            "tx_count": 1,
+            "total_local_micro": "0",
+            "total_xor_due_micro": "0",
+            "total_xor_after_haircut_micro": "0",
+            "total_xor_variance_micro": "0",
+            "swap_metadata": NSNull(),
+            "receipts": [[
+                "source_id": source,
+                "local_amount_micro": "0",
+                "xor_due_micro": "0",
+                "xor_after_haircut_micro": "0",
+                "xor_variance_micro": "0",
+                "timestamp_ms": authorityContextHeight,
+            ]],
+            "nexus_fee_receipts": [],
+            "native_amx_receipts": [],
+        ]
+        return [
             "lane_id": lane,
             "dataspace_id": dataspace,
-            "prepare_qc": qc(preparePhase, lane: lane, dataspace: dataspace, entrypointHash: entrypointHash),
-            "commit_qc": qc("commit", lane: lane, dataspace: dataspace, entrypointHash: entrypointHash),
+            "participant_proposal": participantProposal,
+            "participant_settlement": participantSettlement,
+            "participant_settlement_hash": participantSettlementHash,
+            "prepare_qc": qc(
+                preparePhase,
+                lane: lane,
+                dataspace: dataspace,
+                entrypointHash: entrypointHash,
+                participantIncarnation: participantIncarnation,
+                participantProposalHash: participantProposalHash,
+                participantSettlementHash: participantSettlementHash
+            ),
+            "commit_qc": qc(
+                "commit",
+                lane: lane,
+                dataspace: dataspace,
+                entrypointHash: entrypointHash,
+                participantIncarnation: participantIncarnation,
+                participantProposalHash: participantProposalHash,
+                participantSettlementHash: participantSettlementHash
+            ),
         ]
     }
-    let firstLeg = leg(7, 11, entrypoint)
+    let firstLeg = leg(9, 13, entrypoint)
     let secondLeg = duplicateLeg
         ? firstLeg
         : leg(8, 12, secondEntrypointHash ?? entrypoint)
@@ -266,6 +367,33 @@ private func mutatedNativeAmxStatusPayload(
     }
     try mutate(&payload)
     return try JSONSerialization.data(withJSONObject: payload)
+}
+
+private func mutateFirstNativeAmxLeg(
+    in root: inout [String: Any],
+    _ mutate: (inout [String: Any]) -> Void
+) {
+    var commitments = root["lane_settlement_commitments"] as! [[String: Any]]
+    var receipts = commitments[0]["native_amx_receipts"] as! [[String: Any]]
+    var legs = receipts[0]["legs"] as! [[String: Any]]
+    mutate(&legs[0])
+    receipts[0]["legs"] = legs
+    commitments[0]["native_amx_receipts"] = receipts
+    root["lane_settlement_commitments"] = commitments
+}
+
+private func mutateFirstNativeAmxQcBody(
+    in root: inout [String: Any],
+    qcKey: String,
+    _ mutate: (inout [String: Any]) -> Void
+) {
+    mutateFirstNativeAmxLeg(in: &root) { leg in
+        var qc = leg[qcKey] as! [String: Any]
+        var body = qc["body"] as! [String: Any]
+        mutate(&body)
+        qc["body"] = body
+        leg[qcKey] = qc
+    }
 }
 
 #if os(macOS)
@@ -9500,7 +9628,7 @@ final class ToriiClientTests: XCTestCase {
     func testGetOfflineReadinessParsesExactContract() async throws {
         let payload = """
         {
-          "asset_definition_id": "xor#wonderland",
+          "asset_definition_id": "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
           "asset_scale": 9,
           "evaluated_block_height": 18446744073709551615,
           "evaluated_block_hash": "abababababababababababababababababababababababababababababababab",
@@ -9511,6 +9639,16 @@ final class ToriiClientTests: XCTestCase {
             "commitment": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
             "public_inputs_schema_hash": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
             "max_proof_bytes": 4096,
+            "activation_height": 0,
+            "withdrawal_height": null
+          },
+          "active_topup_shield_verifier": {
+            "id": {"backend": "halo2/ipa", "name": "kagemusha-topup-shield-v2"},
+            "version": 3,
+            "circuit_id": "kagemusha-topup-shield-v2",
+            "commitment": "1212121212121212121212121212121212121212121212121212121212121212",
+            "public_inputs_schema_hash": "3434343434343434343434343434343434343434343434343434343434343434",
+            "max_proof_bytes": 196608,
             "activation_height": 0,
             "withdrawal_height": null
           },
@@ -9535,7 +9673,7 @@ final class ToriiClientTests: XCTestCase {
         let readiness = try await makeClient().getOfflineReadiness(
             assetDefinitionId: "xor#wonderland"
         )
-        XCTAssertEqual(readiness.assetDefinitionId, "xor#wonderland")
+        XCTAssertEqual(readiness.assetDefinitionId, "7EAD8EFYUx1aVKZPUU1fyKvr8dF1")
         XCTAssertEqual(readiness.assetScale, 9)
         XCTAssertEqual(readiness.evaluatedBlockHeight, UInt64.max)
         XCTAssertEqual(readiness.evaluatedBlockHash, String(repeating: "ab", count: 32))
@@ -9545,6 +9683,11 @@ final class ToriiClientTests: XCTestCase {
         XCTAssertEqual(readiness.activeTransferVerifier?.version, 7)
         XCTAssertEqual(readiness.activeTransferVerifier?.maxProofBytes, 4096)
         XCTAssertNil(readiness.activeTransferVerifier?.withdrawalHeight)
+        XCTAssertEqual(
+            readiness.activeTopUpShieldVerifier?.id.name,
+            "kagemusha-topup-shield-v2"
+        )
+        XCTAssertEqual(readiness.activeTopUpShieldVerifier?.maxProofBytes, 196608)
         XCTAssertFalse(readiness.ready)
         XCTAssertEqual(readiness.blockers.count, 1)
         XCTAssertEqual(readiness.blockers[0].code, "offline_disabled")
@@ -9552,12 +9695,109 @@ final class ToriiClientTests: XCTestCase {
     }
 
     @available(iOS 15.0, macOS 12.0, *)
+    func testGetOfflineReadinessBindsCanonicalSelectorsButResolvesAliases() async throws {
+        let requestedID = "61CtjvNd9T3THAR65GsMVHr82Bjc"
+        let returnedID = "7EAD8EFYUx1aVKZPUU1fyKvr8dF1"
+        let payload = """
+        {
+          "asset_definition_id": "\(returnedID)",
+          "asset_scale": 9,
+          "evaluated_block_height": 7,
+          "evaluated_block_hash": "abababababababababababababababababababababababababababababababab",
+          "active_transfer_verifier": {
+            "id": {"backend": "halo2/ipa", "name": "offline-transfer"},
+            "version": 7,
+            "circuit_id": "halo2/pasta/ipa/offline-transfer",
+            "commitment": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+            "public_inputs_schema_hash": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+            "max_proof_bytes": 4096,
+            "activation_height": 0,
+            "withdrawal_height": null
+          },
+          "active_topup_shield_verifier": {
+            "id": {"backend": "halo2/ipa", "name": "kagemusha-topup-shield-v2"},
+            "version": 3,
+            "circuit_id": "kagemusha-topup-shield-v2",
+            "commitment": "1212121212121212121212121212121212121212121212121212121212121212",
+            "public_inputs_schema_hash": "3434343434343434343434343434343434343434343434343434343434343434",
+            "max_proof_bytes": 196608,
+            "activation_height": 0,
+            "withdrawal_height": null
+          },
+          "ready": true,
+          "blockers": []
+        }
+        """.data(using: .utf8)!
+
+        StubURLProtocol.handler = { request in
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            return (response, payload)
+        }
+
+        let resolved = try await makeClient().getOfflineReadiness(
+            assetDefinitionId: "xor#wonderland"
+        )
+        XCTAssertEqual(resolved.assetDefinitionId, returnedID)
+
+        do {
+            _ = try await makeClient().getOfflineReadiness(assetDefinitionId: requestedID)
+            XCTFail("expected canonical selector mismatch to fail")
+        } catch {
+            XCTAssertTrue(
+                String(describing: error).contains(
+                    "offline readiness response is not bound to the requested asset definition"
+                )
+            )
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testGetOfflineReadinessRejectsMalformedSelectorsBeforeTransport() async throws {
+        StubURLProtocol.handler = { request in
+            XCTFail("malformed readiness selector reached transport: \(request)")
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 500,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            return (response, Data())
+        }
+
+        for selector in [
+            "",
+            " xor#wonderland",
+            "xor#wonderland ",
+            "XOR#wonderland",
+            "xor##wonderland",
+            "xor..coin#wonderland",
+            "xor#wonder_land",
+            "xor#world..land",
+            "xor\u{0001}#wonderland",
+            "61CtjvNd9T3THAR65GsMVHr82Bjc ",
+        ] {
+            do {
+                _ = try await makeClient().getOfflineReadiness(assetDefinitionId: selector)
+                XCTFail("expected malformed readiness selector to fail: \(selector)")
+            } catch {
+                XCTAssertTrue(String(describing: error).contains("assetDefinitionId"))
+            }
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
     func testGetOfflineReadinessRejectsNonCanonicalFields() async throws {
         func payload(extra: String = "",
-                     assetDefinitionId: String = "\"xor#wonderland\"",
+                     assetDefinitionId: String = "\"7EAD8EFYUx1aVKZPUU1fyKvr8dF1\"",
                      assetScale: String = "9",
                      blockHash: String = "\"abababababababababababababababababababababababababababababababab\"",
                      activeTransferVerifier: String? = nil,
+                     activeTopUpShieldVerifier: String? = nil,
                      ready: String = "true",
                      blockers: String = "[]") -> Data {
             let verifier = activeTransferVerifier ?? """
@@ -9572,7 +9812,19 @@ final class ToriiClientTests: XCTestCase {
               "withdrawal_height": null
             }
             """
+            let topUpShieldVerifier = activeTopUpShieldVerifier ?? """
+            {
+              "id": {"backend": "halo2/ipa", "name": "kagemusha-topup-shield-v2"},
+              "version": 3,
+              "circuit_id": "kagemusha-topup-shield-v2",
+              "commitment": "1212121212121212121212121212121212121212121212121212121212121212",
+              "public_inputs_schema_hash": "3434343434343434343434343434343434343434343434343434343434343434",
+              "max_proof_bytes": 196608,
+              "activation_height": 0,
+              "withdrawal_height": null
+            }
             """
+            return """
             {
               \(extra)
               "asset_definition_id": \(assetDefinitionId),
@@ -9580,6 +9832,7 @@ final class ToriiClientTests: XCTestCase {
               "evaluated_block_height": 7,
               "evaluated_block_hash": \(blockHash),
               "active_transfer_verifier": \(verifier),
+              "active_topup_shield_verifier": \(topUpShieldVerifier),
               "ready": \(ready),
               "blockers": \(blockers)
             }
@@ -9588,8 +9841,12 @@ final class ToriiClientTests: XCTestCase {
 
         let cases: [(Data, String)] = [
             (
+                payload(assetDefinitionId: "\"rose#wonderland\""),
+                "asset_definition_id must be a canonical unprefixed Base58 asset definition id"
+            ),
+            (
                 payload(assetDefinitionId: "\" xor#wonderland\""),
-                "asset_definition_id must be exact non-empty text without whitespace"
+                "asset_definition_id must be a canonical unprefixed Base58 asset definition id"
             ),
             (
                 payload(blockHash: "\"ABababababababababababababababababababababababababababababababab\""),
@@ -9618,6 +9875,187 @@ final class ToriiClientTests: XCTestCase {
             (
                 payload(activeTransferVerifier: "null"),
                 "active_transfer_verifier must be null exactly when transfer_verifier_unavailable is blocked"
+            ),
+            (
+                payload(activeTopUpShieldVerifier: "null"),
+                "active_topup_shield_verifier must be null exactly when topup_shield_verifier_unavailable is blocked"
+            ),
+            (
+                payload(activeTopUpShieldVerifier: """
+                {
+                  "id": {"backend": "halo2/ipa", "name": "kagemusha-topup-shield-v2"},
+                  "version": 3,
+                  "circuit_id": "kagemusha-topup-shield-v2",
+                  "commitment": "1212121212121212121212121212121212121212121212121212121212121212",
+                  "public_inputs_schema_hash": "3434343434343434343434343434343434343434343434343434343434343434",
+                  "max_proof_bytes": 196608,
+                  "activation_height": 8,
+                  "withdrawal_height": null
+                }
+                """),
+                "active_topup_shield_verifier must be active at evaluated_block_height"
+            ),
+            (
+                payload(activeTransferVerifier: """
+                {
+                  "id": {"backend": "halo2/ipa", "name": "Offline-Transfer"},
+                  "version": 7,
+                  "circuit_id": "halo2/pasta/ipa/offline-transfer",
+                  "commitment": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+                  "public_inputs_schema_hash": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+                  "max_proof_bytes": 4096,
+                  "activation_height": 0,
+                  "withdrawal_height": null
+                }
+                """),
+                "id must use bounded portable verifier-registry syntax"
+            ),
+            (
+                payload(activeTransferVerifier: """
+                {
+                  "id": {"backend": "halo2/ipa", "name": "offline-transfer"},
+                  "version": 7,
+                  "circuit_id": "halo2//offline-transfer",
+                  "commitment": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+                  "public_inputs_schema_hash": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+                  "max_proof_bytes": 4096,
+                  "activation_height": 0,
+                  "withdrawal_height": null
+                }
+                """),
+                "circuit_id must use the portable OpenVerify grammar"
+            ),
+            (
+                payload(activeTransferVerifier: """
+                {
+                  "id": {"backend": "halo2/ipa", "name": "offline-transfer"},
+                  "version": 7,
+                  "circuit_id": "halo2/pasta/ipa/offline-transfer",
+                  "commitment": "0000000000000000000000000000000000000000000000000000000000000000",
+                  "public_inputs_schema_hash": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+                  "max_proof_bytes": 4096,
+                  "activation_height": 0,
+                  "withdrawal_height": null
+                }
+                """),
+                "verifier commitment and public-input schema hash must be nonzero"
+            ),
+            (
+                payload(activeTransferVerifier: """
+                {
+                  "id": {"backend": "halo2/ipa", "name": "offline-transfer"},
+                  "version": 7,
+                  "circuit_id": "halo2/pasta/ipa/offline-transfer",
+                  "commitment": "CDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCD",
+                  "public_inputs_schema_hash": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+                  "max_proof_bytes": 4096,
+                  "activation_height": 0,
+                  "withdrawal_height": null
+                }
+                """),
+                "commitment must be exact lowercase 32-byte hexadecimal"
+            ),
+            (
+                payload(activeTransferVerifier: """
+                {
+                  "id": {"backend": "halo2/ipa", "name": "offline-transfer"},
+                  "version": 7,
+                  "circuit_id": "halo2/pasta/ipa/offline-transfer",
+                  "commitment": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+                  "public_inputs_schema_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+                  "max_proof_bytes": 4096,
+                  "activation_height": 0,
+                  "withdrawal_height": null
+                }
+                """),
+                "verifier commitment and public-input schema hash must be nonzero"
+            ),
+            (
+                payload(activeTransferVerifier: """
+                {
+                  "id": {"backend": "halo2/ipa", "name": "offline-transfer"},
+                  "version": 7,
+                  "circuit_id": "halo2/pasta/ipa/offline-transfer",
+                  "commitment": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+                  "public_inputs_schema_hash": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+                  "max_proof_bytes": 0,
+                  "activation_height": 0,
+                  "withdrawal_height": null
+                }
+                """),
+                "max_proof_bytes must be greater than zero"
+            ),
+            (
+                payload(activeTransferVerifier: """
+                {
+                  "id": {"backend": "halo2/ipa", "name": "offline-transfer"},
+                  "version": 7,
+                  "circuit_id": "halo2/pasta/ipa/offline-transfer",
+                  "commitment": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+                  "public_inputs_schema_hash": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+                  "max_proof_bytes": 4096,
+                  "activation_height": 8,
+                  "withdrawal_height": null
+                }
+                """),
+                "active_transfer_verifier must be active at evaluated_block_height"
+            ),
+            (
+                payload(activeTransferVerifier: """
+                {
+                  "id": {"backend": "halo2/ipa", "name": "offline-transfer"},
+                  "version": 7,
+                  "circuit_id": "halo2/pasta/ipa/offline-transfer",
+                  "commitment": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+                  "public_inputs_schema_hash": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+                  "max_proof_bytes": 4096,
+                  "activation_height": 7,
+                  "withdrawal_height": 7
+                }
+                """),
+                "withdrawal_height must be greater than activation_height"
+            ),
+            (
+                payload(
+                    ready: "false",
+                    blockers: "[{\"code\":\"asset_scale_unavailable\",\"message\":\"no\"}]"
+                ),
+                "supported asset_scale must not have an asset scale blocker"
+            ),
+            (
+                payload(
+                    ready: "false",
+                    blockers: "[{\"code\":\"transfer_verifier_unavailable\",\"message\":\"no\"}]"
+                ),
+                "active_transfer_verifier must be null exactly when transfer_verifier_unavailable is blocked"
+            ),
+            (
+                payload(
+                    ready: "false",
+                    blockers: "[{\"code\":\"topup_shield_verifier_unavailable\",\"message\":\"no\"}]"
+                ),
+                "active_topup_shield_verifier must be null exactly when topup_shield_verifier_unavailable is blocked"
+            ),
+            (
+                payload(
+                    ready: "false",
+                    blockers: "[{\"code\":\"blocked\",\"message\":\"no\\u0001control\"}]"
+                ),
+                "message must be exact non-empty text of at most 1024 Unicode characters"
+            ),
+            (
+                payload(
+                    ready: "false",
+                    blockers: "[{\"code\":\"blocked\",\"message\":\"\(String(repeating: "x", count: 1025))\"}]"
+                ),
+                "message must be exact non-empty text of at most 1024 Unicode characters"
+            ),
+            (
+                payload(
+                    ready: "false",
+                    blockers: "[{\"code\":\"blocked\",\"message\":\"one\"},{\"code\":\"blocked\",\"message\":\"two\"}]"
+                ),
+                "blocker codes must be unique"
             )
         ]
 
@@ -9644,21 +10082,153 @@ final class ToriiClientTests: XCTestCase {
                 )
             }
         }
+
+        let numericBoundaryCases = [
+            payload(assetScale: "-1"),
+            payload(assetScale: "4294967296"),
+            payload(activeTransferVerifier: """
+            {
+              "id": {"backend": "halo2/ipa", "name": "offline-transfer"},
+              "version": 4294967296,
+              "circuit_id": "halo2/pasta/ipa/offline-transfer",
+              "commitment": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+              "public_inputs_schema_hash": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+              "max_proof_bytes": 4096,
+              "activation_height": 0,
+              "withdrawal_height": null
+            }
+            """),
+            payload(extra: "\"future\": true,", activeTransferVerifier: """
+            {
+              "id": {"backend": "halo2/ipa", "name": "offline-transfer"},
+              "version": 7,
+              "circuit_id": "halo2/pasta/ipa/offline-transfer",
+              "commitment": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+              "public_inputs_schema_hash": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+              "max_proof_bytes": 4096,
+              "activation_height": 18446744073709551616,
+              "withdrawal_height": null
+            }
+            """)
+        ]
+        for body in numericBoundaryCases {
+            StubURLProtocol.handler = { request in
+                let response = HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "application/json"]
+                )!
+                return (response, body)
+            }
+            do {
+                _ = try await makeClient().getOfflineReadiness(
+                    assetDefinitionId: "xor#wonderland"
+                )
+                XCTFail("expected out-of-range readiness integer to fail")
+            } catch {}
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testGetOfflineReadinessRequiresExplicitNullableSnapshotFields() async throws {
+        let valid = """
+        {
+          "asset_definition_id": "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
+          "asset_scale": 9,
+          "evaluated_block_height": 7,
+          "evaluated_block_hash": "abababababababababababababababababababababababababababababababab",
+          "active_transfer_verifier": {
+            "id": {"backend": "halo2/ipa", "name": "offline-transfer"},
+            "version": 7,
+            "circuit_id": "halo2/pasta/ipa/offline-transfer",
+            "commitment": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+            "public_inputs_schema_hash": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+            "max_proof_bytes": 4096,
+            "activation_height": 0,
+            "withdrawal_height": null
+          },
+          "active_topup_shield_verifier": {
+            "id": {"backend": "halo2/ipa", "name": "kagemusha-topup-shield-v2"},
+            "version": 3,
+            "circuit_id": "kagemusha-topup-shield-v2",
+            "commitment": "1212121212121212121212121212121212121212121212121212121212121212",
+            "public_inputs_schema_hash": "3434343434343434343434343434343434343434343434343434343434343434",
+            "max_proof_bytes": 196608,
+            "activation_height": 0,
+            "withdrawal_height": null
+          },
+          "ready": true,
+          "blockers": []
+        }
+        """
+        let cases: [(String, String)] = [
+            (
+                valid.replacingOccurrences(of: "  \"asset_scale\": 9,\n", with: ""),
+                "asset_scale is required"
+            ),
+            (
+                valid.replacingOccurrences(
+                    of: #"  "active_transfer_verifier": {"#,
+                    with: #"  "omitted_transfer_verifier": {"#
+                ),
+                "active_transfer_verifier is required"
+            ),
+            (
+                valid.replacingOccurrences(
+                    of: #"  "active_topup_shield_verifier": {"#,
+                    with: #"  "omitted_topup_shield_verifier": {"#
+                ),
+                "active_topup_shield_verifier is required"
+            ),
+            (
+                valid.replacingOccurrences(
+                    of: ",\n    \"withdrawal_height\": null",
+                    with: ""
+                ),
+                "withdrawal_height is required"
+            )
+        ]
+
+        for (json, expectedMessage) in cases {
+            StubURLProtocol.handler = { request in
+                let response = HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "application/json"]
+                )!
+                return (response, Data(json.utf8))
+            }
+            do {
+                _ = try await makeClient().getOfflineReadiness(
+                    assetDefinitionId: "xor#wonderland"
+                )
+                XCTFail("expected omitted readiness field to fail")
+            } catch {
+                XCTAssertTrue(
+                    String(describing: error).contains(expectedMessage),
+                    "expected \(expectedMessage), got \(error)"
+                )
+            }
+        }
     }
 
     @available(iOS 15.0, macOS 12.0, *)
     func testGetOfflineReadinessAcceptsUnsupportedScaleAndUnavailableVerifierBlockers() async throws {
         let payload = """
         {
-          "asset_definition_id": "xor#wonderland",
+          "asset_definition_id": "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
           "asset_scale": 29,
           "evaluated_block_height": 7,
           "evaluated_block_hash": "abababababababababababababababababababababababababababababababab",
           "active_transfer_verifier": null,
+          "active_topup_shield_verifier": null,
           "ready": false,
           "blockers": [
             {"code": "asset_scale_unsupported", "message": "The asset scale is unsupported"},
-            {"code": "transfer_verifier_unavailable", "message": "The verifier is unavailable"}
+            {"code": "transfer_verifier_unavailable", "message": "The verifier is unavailable"},
+            {"code": "topup_shield_verifier_unavailable", "message": "The top-up shield verifier is unavailable"}
           ]
         }
         """.data(using: .utf8)!
@@ -9678,6 +10248,7 @@ final class ToriiClientTests: XCTestCase {
         )
         XCTAssertEqual(readiness.assetScale, 29)
         XCTAssertNil(readiness.activeTransferVerifier)
+        XCTAssertNil(readiness.activeTopUpShieldVerifier)
         XCTAssertFalse(readiness.ready)
     }
 
@@ -9685,7 +10256,7 @@ final class ToriiClientTests: XCTestCase {
     func testGetOfflineReadinessIgnoresIndependentUnknownMembers() async throws {
         let payload = """
         {
-          "asset_definition_id": "xor#wonderland",
+          "asset_definition_id": "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
           "asset_scale": 9,
           "evaluated_block_height": 7,
           "evaluated_block_hash": "abababababababababababababababababababababababababababababababab",
@@ -9700,6 +10271,17 @@ final class ToriiClientTests: XCTestCase {
             "withdrawal_height": null,
             "future_verifier_metadata": true
           },
+          "active_topup_shield_verifier": {
+            "id": {"backend": "halo2/ipa", "name": "kagemusha-topup-shield-v2"},
+            "version": 3,
+            "circuit_id": "kagemusha-topup-shield-v2",
+            "commitment": "1212121212121212121212121212121212121212121212121212121212121212",
+            "public_inputs_schema_hash": "3434343434343434343434343434343434343434343434343434343434343434",
+            "max_proof_bytes": 196608,
+            "activation_height": 0,
+            "withdrawal_height": null,
+            "future_verifier_metadata": true
+          },
           "ready": false,
           "blockers": [
             {
@@ -9708,7 +10290,7 @@ final class ToriiClientTests: XCTestCase {
               "future_blocker_metadata": {"opaque": 1}
             }
           ],
-          "future_snapshot_metadata": [1, 2, 3]
+          "future_snapshot_metadata": [1.25, -2e3, 6E+2]
         }
         """.data(using: .utf8)!
 
@@ -9727,6 +10309,61 @@ final class ToriiClientTests: XCTestCase {
         )
         XCTAssertFalse(readiness.ready)
         XCTAssertEqual(readiness.blockers.map(\.code), ["offline_disabled"])
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testGetOfflineReadinessAcceptsMaximumHumanBlockerMessage() async throws {
+        let message = String(repeating: "x", count: 1023) + "\u{200E}"
+        let encodedMessage = try XCTUnwrap(
+            String(data: JSONEncoder().encode(message), encoding: .utf8)
+        )
+        let payload = """
+        {
+          "asset_definition_id": "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
+          "asset_scale": 9,
+          "evaluated_block_height": 7,
+          "evaluated_block_hash": "abababababababababababababababababababababababababababababababab",
+          "active_transfer_verifier": {
+            "id": {"backend": "halo2/ipa", "name": "offline-transfer"},
+            "version": 7,
+            "circuit_id": "halo2/pasta/ipa/offline-transfer",
+            "commitment": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+            "public_inputs_schema_hash": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+            "max_proof_bytes": 4096,
+            "activation_height": 0,
+            "withdrawal_height": null
+          },
+          "active_topup_shield_verifier": {
+            "id": {"backend": "halo2/ipa", "name": "kagemusha-topup-shield-v2"},
+            "version": 3,
+            "circuit_id": "kagemusha-topup-shield-v2",
+            "commitment": "1212121212121212121212121212121212121212121212121212121212121212",
+            "public_inputs_schema_hash": "3434343434343434343434343434343434343434343434343434343434343434",
+            "max_proof_bytes": 196608,
+            "activation_height": 0,
+            "withdrawal_height": null
+          },
+          "ready": false,
+          "blockers": [{"code":"offline_disabled","message":\(encodedMessage)}]
+        }
+        """.data(using: .utf8)!
+
+        StubURLProtocol.handler = { request in
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            return (response, payload)
+        }
+
+        let readiness = try await makeClient().getOfflineReadiness(
+            assetDefinitionId: "xor#wonderland"
+        )
+        XCTAssertEqual(readiness.blockers.count, 1)
+        XCTAssertEqual(readiness.blockers[0].message, message)
+        XCTAssertEqual(readiness.blockers[0].message.unicodeScalars.count, 1024)
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -9755,7 +10392,12 @@ final class ToriiClientTests: XCTestCase {
         }
         """.data(using: .utf8)!
 
-        for body in [duplicateRoot, duplicateNested, Data([0xff, 0xfe])] {
+        let deeplyNested = Data(
+            (String(repeating: "[", count: 129)
+                + "0"
+                + String(repeating: "]", count: 129)).utf8
+        )
+        for body in [duplicateRoot, duplicateNested, deeplyNested, Data([0xff, 0xfe])] {
             StubURLProtocol.handler = { request in
                 let response = HTTPURLResponse(
                     url: request.url!,
@@ -10622,6 +11264,57 @@ final class ToriiClientHeaderTests: XCTestCase {
         XCTAssertEqual(detail.recordNorito, recordNorito)
     }
 
+    @available(iOS 15.0, macOS 12.0, *)
+    func testGetVerifyingKeyRejectsCrossWiredDetail() async throws {
+        let recordNorito = try canonicalKagemushaVerifierRecordArchive(seed: 0x64)
+        let payload = """
+        {
+          "id": { "backend": "halo2/ipa", "name": "different-vk" },
+          "record_norito_base64": "\(recordNorito.base64EncodedString())",
+          "record": {
+            "version": 3,
+            "circuit_id": "halo2/pasta/ipa/anon-unshield-2in-1change-merkle16-poseidon-diversified",
+            "owner_manifest_id": "confidential-v3",
+            "namespace": "offline_kagemusha",
+            "backend": "halo2/ipa",
+            "curve": "pallas",
+            "public_inputs_schema_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "commitment": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "vk_len": 96,
+            "max_proof_bytes": 196608,
+            "status": "Active"
+          }
+        }
+        """.data(using: .utf8)!
+
+        StubURLProtocol.handler = { request in
+            XCTAssertTrue(request.url!.absoluteString.contains("/v1/zk/vk/halo2%2Fipa/unshield-v3"))
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            return (response, payload)
+        }
+
+        do {
+            _ = try await makeClient().getVerifyingKey(
+                backend: "halo2/ipa",
+                name: "unshield-v3"
+            )
+            XCTFail("cross-wired verifier detail must be rejected")
+        } catch let error as ToriiClientError {
+            guard case let .invalidPayload(reason) = error else {
+                return XCTFail("unexpected Torii error: \(error)")
+            }
+            XCTAssertEqual(
+                reason,
+                "verifying-key detail identifier does not match the requested verifier key"
+            )
+        }
+    }
+
     func testVerifyingKeyDetailConvertsExactNoritoRecordForKagemusha() throws {
         let recordNorito = try canonicalKagemushaVerifierRecordArchive(seed: 0x71)
         let payload = """
@@ -10654,7 +11347,7 @@ final class ToriiClientHeaderTests: XCTestCase {
     func testVerifyingKeyDetailRejectsNoncanonicalRecordNoritoBase64() throws {
         let recordNorito = try canonicalKagemushaVerifierRecordArchive(
             seed: 0x79,
-            verifierKeyLength: 95
+            verifierKeyLength: 96
         )
         let canonical = recordNorito.base64EncodedString()
         XCTAssertTrue(canonical.hasSuffix("="))
@@ -13713,6 +14406,31 @@ data: {"event":"Transaction","hash":"deadbeef","status":"Applied","block_height"
             4
         )
         XCTAssertEqual(commitment.nativeAmxReceipts.first?.legs.first?.prepareQc.signersBitmap, [7])
+        let firstLeg = try XCTUnwrap(commitment.nativeAmxReceipts.first?.legs.first)
+        XCTAssertEqual(firstLeg.prepareQc.body.round.view, 17)
+        XCTAssertEqual(firstLeg.prepareQc.body.coordinatorLaneBlockView, 6)
+        XCTAssertEqual(firstLeg.prepareQc.body.participantLaneBlockView, 9)
+        XCTAssertEqual(firstLeg.prepareQc.body.participantPreviousBlockHeight, 7)
+        XCTAssertEqual(
+            firstLeg.prepareQc.body.participantPreviousBlockDescriptorHash,
+            nativeAmxTestHash(0x5D)
+        )
+        XCTAssertEqual(firstLeg.prepareQc.body.participantLaneBlockHeight, 8)
+        XCTAssertEqual(
+            firstLeg.participantProposal.proposalHash,
+            firstLeg.prepareQc.body.participantProposalHash
+        )
+        XCTAssertEqual(
+            firstLeg.participantSettlementHash,
+            firstLeg.prepareQc.body.participantSettlementCommitment
+        )
+        XCTAssertEqual(firstLeg.participantSettlement.transactionCount, 1)
+        XCTAssertEqual(firstLeg.participantSettlement.receipts.first?.sourceId, String(repeating: "AB", count: 32))
+        XCTAssertNotEqual(
+            firstLeg.prepareQc.body.sourceId,
+            String(firstLeg.prepareQc.body.transactionEntrypointHash.dropFirst(5).prefix(64))
+        )
+        XCTAssertFalse(firstLeg.requiresMixedRoleAnchorValidation)
         XCTAssertEqual(snapshot.laneRelayEnvelopes.first?.manifestRoot, String(repeating: "EF", count: 32))
         XCTAssertEqual(snapshot.laneRelayEnvelopes.first?.fastpqProof?.verifiedAtHeight, 43)
         XCTAssertEqual(
@@ -14068,6 +14786,261 @@ data: {"event":"Transaction","hash":"deadbeef","status":"Applied","block_height"
                 )
             )
         )
+    }
+
+    func testSumeragiStatusAcceptsGroupedNativeAmxParticipantSettlement() throws {
+        let otherEntrypoint = nativeAmxTestHash(0x79)
+        let payload = try mutatedNativeAmxStatusPayload { root in
+            mutateFirstNativeAmxLeg(in: &root) { leg in
+                var proposal = leg["participant_proposal"] as! [String: Any]
+                var descriptor = proposal["descriptor"] as! [String: Any]
+                let currentEntrypoint = (descriptor["accepted_transaction_hashes"] as! [String])[0]
+                descriptor["accepted_candidate_indices"] = [0, 1]
+                descriptor["accepted_transaction_hashes"] = [currentEntrypoint, otherEntrypoint]
+                proposal["descriptor"] = descriptor
+                leg["participant_proposal"] = proposal
+
+                var settlement = leg["participant_settlement"] as! [String: Any]
+                var receipts = settlement["receipts"] as! [[String: Any]]
+                receipts.append([
+                    "source_id": String(repeating: "CD", count: 32),
+                    "local_amount_micro": "0",
+                    "xor_due_micro": "0",
+                    "xor_after_haircut_micro": "0",
+                    "xor_variance_micro": "0",
+                    "timestamp_ms": 40,
+                ])
+                settlement["tx_count"] = 2
+                settlement["receipts"] = receipts
+                leg["participant_settlement"] = settlement
+            }
+        }
+
+        let snapshot = try JSONDecoder().decode(ToriiSumeragiStatusSnapshot.self, from: payload)
+        let leg = try XCTUnwrap(
+            snapshot.laneSettlementCommitments.first?.nativeAmxReceipts.first?.legs.first
+        )
+        XCTAssertEqual(leg.participantSettlement.transactionCount, 2)
+        XCTAssertEqual(leg.participantSettlement.receipts.count, 2)
+        XCTAssertFalse(leg.requiresMixedRoleAnchorValidation)
+    }
+
+    func testSumeragiStatusMarksDeferredNativeAmxMixedRoleAnchor() throws {
+        let payload = try mutatedNativeAmxStatusPayload { root in
+            mutateFirstNativeAmxLeg(in: &root) { leg in
+                var proposal = leg["participant_proposal"] as! [String: Any]
+                var descriptor = proposal["descriptor"] as! [String: Any]
+                descriptor["accepted_transaction_hashes"] = [nativeAmxTestHash(0x7B)]
+                proposal["descriptor"] = descriptor
+                leg["participant_proposal"] = proposal
+            }
+        }
+
+        let snapshot = try JSONDecoder().decode(ToriiSumeragiStatusSnapshot.self, from: payload)
+        let leg = try XCTUnwrap(
+            snapshot.laneSettlementCommitments.first?.nativeAmxReceipts.first?.legs.first
+        )
+        XCTAssertTrue(leg.requiresMixedRoleAnchorValidation)
+    }
+
+    func testSumeragiStatusAcceptsNativeAmxGenesisParticipantPredecessor() throws {
+        let payload = try mutatedNativeAmxStatusPayload { root in
+            for qcKey in ["prepare_qc", "commit_qc"] {
+                mutateFirstNativeAmxQcBody(in: &root, qcKey: qcKey) { body in
+                    body["participant_previous_block_height"] = 0
+                    body["participant_previous_block_descriptor_hash"] = NSNull()
+                    body["participant_lane_block_height"] = 1
+                }
+            }
+            mutateFirstNativeAmxLeg(in: &root) { leg in
+                var proposal = leg["participant_proposal"] as! [String: Any]
+                var descriptor = proposal["descriptor"] as! [String: Any]
+                descriptor["previous_lane_block_height"] = 0
+                descriptor.removeValue(forKey: "previous_lane_block_descriptor_hash")
+                descriptor["lane_block_height"] = 1
+                proposal["descriptor"] = descriptor
+                leg["participant_proposal"] = proposal
+                var settlement = leg["participant_settlement"] as! [String: Any]
+                settlement["block_height"] = 1
+                leg["participant_settlement"] = settlement
+            }
+        }
+
+        let snapshot = try JSONDecoder().decode(ToriiSumeragiStatusSnapshot.self, from: payload)
+        let leg = try XCTUnwrap(
+            snapshot.laneSettlementCommitments.first?.nativeAmxReceipts.first?.legs.first
+        )
+        XCTAssertEqual(leg.participantProposal.descriptor.previousLaneBlockHeight, 0)
+        XCTAssertNil(leg.participantProposal.descriptor.previousLaneBlockDescriptorHash)
+        XCTAssertNil(leg.prepareQc.body.participantPreviousBlockDescriptorHash)
+    }
+
+    func testSumeragiStatusRejectsNativeAmxParticipantProposalShapeDrift() throws {
+        let cases: [Data] = try [
+            mutatedNativeAmxStatusPayload { root in
+                mutateFirstNativeAmxLeg(in: &root) { leg in
+                    var proposal = leg["participant_proposal"] as! [String: Any]
+                    proposal["payload_block_hint"] = NSNull()
+                    leg["participant_proposal"] = proposal
+                }
+            },
+            mutatedNativeAmxStatusPayload { root in
+                mutateFirstNativeAmxLeg(in: &root) { leg in
+                    var proposal = leg["participant_proposal"] as! [String: Any]
+                    var descriptor = proposal["descriptor"] as! [String: Any]
+                    descriptor["future_descriptor_field"] = 1
+                    proposal["descriptor"] = descriptor
+                    leg["participant_proposal"] = proposal
+                }
+            },
+            mutatedNativeAmxStatusPayload { root in
+                mutateFirstNativeAmxLeg(in: &root) { leg in
+                    var proposal = leg["participant_proposal"] as! [String: Any]
+                    var descriptor = proposal["descriptor"] as! [String: Any]
+                    descriptor.removeValue(forKey: "subject_hash")
+                    proposal["descriptor"] = descriptor
+                    leg["participant_proposal"] = proposal
+                }
+            },
+            mutatedNativeAmxStatusPayload { root in
+                mutateFirstNativeAmxLeg(in: &root) { leg in
+                    var proposal = leg["participant_proposal"] as! [String: Any]
+                    var descriptor = proposal["descriptor"] as! [String: Any]
+                    descriptor["previous_lane_block_height"] = 0
+                    proposal["descriptor"] = descriptor
+                    leg["participant_proposal"] = proposal
+                }
+            },
+            mutatedNativeAmxStatusPayload { root in
+                mutateFirstNativeAmxLeg(in: &root) { leg in
+                    var proposal = leg["participant_proposal"] as! [String: Any]
+                    var descriptor = proposal["descriptor"] as! [String: Any]
+                    descriptor["lane_id"] = 99
+                    proposal["descriptor"] = descriptor
+                    leg["participant_proposal"] = proposal
+                }
+            },
+            mutatedNativeAmxStatusPayload { root in
+                mutateFirstNativeAmxQcBody(in: &root, qcKey: "commit_qc") { body in
+                    body["participant_proposal_hash"] = nativeAmxTestHash(0x7D)
+                }
+            },
+        ]
+        for payload in cases {
+            XCTAssertThrowsError(
+                try JSONDecoder().decode(ToriiSumeragiStatusSnapshot.self, from: payload)
+            )
+        }
+    }
+
+    func testSumeragiStatusRejectsNativeAmxParticipantSettlementTampering() throws {
+        let cases: [Data] = try [
+            mutatedNativeAmxStatusPayload { root in
+                mutateFirstNativeAmxLeg(in: &root) { leg in
+                    var settlement = leg["participant_settlement"] as! [String: Any]
+                    settlement["total_local_micro"] = "1"
+                    leg["participant_settlement"] = settlement
+                }
+            },
+            mutatedNativeAmxStatusPayload { root in
+                mutateFirstNativeAmxLeg(in: &root) { leg in
+                    var settlement = leg["participant_settlement"] as! [String: Any]
+                    settlement["tx_count"] = 2
+                    leg["participant_settlement"] = settlement
+                }
+            },
+            mutatedNativeAmxStatusPayload { root in
+                mutateFirstNativeAmxLeg(in: &root) { leg in
+                    var settlement = leg["participant_settlement"] as! [String: Any]
+                    var receipts = settlement["receipts"] as! [[String: Any]]
+                    receipts[0]["source_id"] = String(repeating: "CD", count: 32)
+                    settlement["receipts"] = receipts
+                    leg["participant_settlement"] = settlement
+                }
+            },
+            mutatedNativeAmxStatusPayload { root in
+                mutateFirstNativeAmxLeg(in: &root) { leg in
+                    var settlement = leg["participant_settlement"] as! [String: Any]
+                    var receipts = settlement["receipts"] as! [[String: Any]]
+                    receipts.append(receipts[0])
+                    settlement["tx_count"] = 2
+                    settlement["receipts"] = receipts
+                    leg["participant_settlement"] = settlement
+                }
+            },
+            mutatedNativeAmxStatusPayload { root in
+                mutateFirstNativeAmxLeg(in: &root) { leg in
+                    leg["participant_settlement_hash"] = nativeAmxTestHash(0x7F)
+                }
+            },
+            mutatedNativeAmxStatusPayload { root in
+                mutateFirstNativeAmxLeg(in: &root) { leg in
+                    var proposal = leg["participant_proposal"] as! [String: Any]
+                    var descriptor = proposal["descriptor"] as! [String: Any]
+                    let currentEntrypoint =
+                        (descriptor["accepted_transaction_hashes"] as! [String])[0]
+                    descriptor["accepted_candidate_indices"] = [0, 1]
+                    descriptor["accepted_transaction_hashes"] = [
+                        currentEntrypoint, nativeAmxTestHash(0x81),
+                    ]
+                    proposal["descriptor"] = descriptor
+                    leg["participant_proposal"] = proposal
+                    var settlement = leg["participant_settlement"] as! [String: Any]
+                    var receipts = settlement["receipts"] as! [[String: Any]]
+                    var other = receipts[0]
+                    other["source_id"] = String(repeating: "CD", count: 32)
+                    receipts = [other, receipts[0]]
+                    settlement["tx_count"] = 2
+                    settlement["receipts"] = receipts
+                    leg["participant_settlement"] = settlement
+                }
+            },
+        ]
+        for payload in cases {
+            XCTAssertThrowsError(
+                try JSONDecoder().decode(ToriiSumeragiStatusSnapshot.self, from: payload)
+            )
+        }
+    }
+
+    func testSumeragiStatusRejectsNativeAmxExactShapeAndPredecessorTampering() throws {
+        let cases: [Data] = try [
+            mutatedNativeAmxStatusPayload { root in
+                mutateFirstNativeAmxQcBody(in: &root, qcKey: "prepare_qc") { body in
+                    body["future_field"] = true
+                }
+            },
+            mutatedNativeAmxStatusPayload { root in
+                mutateFirstNativeAmxQcBody(in: &root, qcKey: "prepare_qc") { body in
+                    body.removeValue(forKey: "participant_previous_block_descriptor_hash")
+                }
+            },
+            mutatedNativeAmxStatusPayload { root in
+                mutateFirstNativeAmxQcBody(in: &root, qcKey: "prepare_qc") { body in
+                    body["participant_previous_block_height"] = 0
+                    body["participant_previous_block_descriptor_hash"] = NSNull()
+                }
+            },
+            mutatedNativeAmxStatusPayload { root in
+                mutateFirstNativeAmxLeg(in: &root) { leg in
+                    leg["future_leg_field"] = true
+                }
+            },
+            mutatedNativeAmxStatusPayload { root in
+                mutateFirstNativeAmxLeg(in: &root) { leg in
+                    var settlement = leg["participant_settlement"] as! [String: Any]
+                    var receipts = settlement["receipts"] as! [[String: Any]]
+                    receipts[0]["future_receipt_field"] = true
+                    settlement["receipts"] = receipts
+                    leg["participant_settlement"] = settlement
+                }
+            },
+        ]
+        for payload in cases {
+            XCTAssertThrowsError(
+                try JSONDecoder().decode(ToriiSumeragiStatusSnapshot.self, from: payload)
+            )
+        }
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -15059,6 +16032,9 @@ data: {"event":"Transaction","hash":"deadbeef","status":"Applied","block_height"
             #"{"seiyaku_name":" Ledger "}"#,
             #"{"seiyaku_name":"seiyaku"}"#,
             #"{"seiyaku_name":"match"}"#,
+            #"{"seiyaku_name":"__kotodama_quantity_ratio_round"}"#,
+            #"{"seiyaku_name":"__kotodama_decimal_to_int_trunc"}"#,
+            #"{"seiyaku_name":"__kotodama_decimal_to_int_round"}"#,
             #"{"code_hash":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}"#,
             #"{"code_hash":"hash:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb#ABA2"}"#,
             #"{"code_hash":"hash:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB#0000"}"#,
@@ -16195,25 +17171,40 @@ data: {"event":"Transaction","hash":"deadbeef","status":"Applied","block_height"
         let proposalId = String(repeating: "d", count: 64)
         let approverId = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"
         StubURLProtocol.handler = { request in
-            XCTAssertEqual(request.url?.path, "/v1/multisig/proposals/query")
+            XCTAssertEqual(request.url?.path, "/v1/multisig/proposals/list")
+            guard let body = self.bodyData(from: request),
+                  let json = try? JSONSerialization.jsonObject(with: body) as? [String: Any] else {
+                XCTFail("missing JSON body")
+                throw NSError(domain: "stub", code: -1)
+            }
+            XCTAssertEqual(json["status"] as? [String], ["FINALIZED"])
+            XCTAssertEqual(json["cursor"] as? String, "page-1")
+            XCTAssertEqual(json["limit"] as? Int, 25)
             let response = HTTPURLResponse(url: request.url!,
                                            statusCode: 200,
                                            httpVersion: nil,
                                            headerFields: ["Content-Type": "application/json"])!
             let bodyData = """
-            {"resolved_multisig_account_id":"sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB","proposals":[{"proposal_id":"\(proposalId)","instructions_hash":"\(proposalId)","proposal":{"approvals":["\(approverId)"]}}]}
+            {"resolved_multisig_account_id":"sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB","proposals":[{"proposal_id":"\(proposalId)","instructions_hash":"\(proposalId)","operation_type":"TRANSFER","intent":{"asset_definition_id":"pkr#sbp"},"proposal":{"approvals":["\(approverId)"]},"status":"FINALIZED","terminal_at_ms":123}],"next_cursor":"page-2"}
             """.data(using: .utf8)!
             return (response, bodyData)
         }
 
         let request = ToriiMultisigProposalsListRequest(
-            selector: ToriiMultisigAccountSelector(multisigAccountAlias: "cbdc@banka")
+            selector: ToriiMultisigAccountSelector(multisigAccountAlias: "cbdc@banka"),
+            status: [.finalized],
+            cursor: "page-1",
+            limit: 25
         )
         makeClient().listMultisigProposals(request) { result in
             switch result {
             case .success(let response):
                 XCTAssertEqual(response.proposals.count, 1)
                 XCTAssertEqual(response.proposals.first?.proposalId, proposalId)
+                XCTAssertEqual(response.proposals.first?.operationType, "TRANSFER")
+                XCTAssertEqual(response.proposals.first?.status, .finalized)
+                XCTAssertEqual(response.proposals.first?.terminalAtMs, 123)
+                XCTAssertEqual(response.nextCursor, "page-2")
             case .failure(let error):
                 XCTFail("unexpected error: \(error)")
             }
@@ -16222,13 +17213,13 @@ data: {"event":"Transaction","hash":"deadbeef","status":"Applied","block_height"
         waitForExpectations(timeout: 1)
     }
 
-    func testGetMultisigProposalDecodesProposalLookup() {
+    func testGetMultisigProposalDecodesProposalGetResponse() {
         let expectation = expectation(description: "multisig proposal get")
         let proposalId = String(repeating: "e", count: 64)
         let approverOne = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"
         let approverTwo = "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"
         StubURLProtocol.handler = { request in
-            XCTAssertEqual(request.url?.path, "/v1/multisig/proposals/lookup")
+            XCTAssertEqual(request.url?.path, "/v1/multisig/proposals/get")
             guard let body = self.bodyData(from: request),
                   let json = try? JSONSerialization.jsonObject(with: body) as? [String: Any] else {
                 XCTFail("missing JSON body")
@@ -16240,7 +17231,7 @@ data: {"event":"Transaction","hash":"deadbeef","status":"Applied","block_height"
                                            httpVersion: nil,
                                            headerFields: ["Content-Type": "application/json"])!
             let bodyData = """
-            {"resolved_multisig_account_id":"sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB","proposal_id":"\(proposalId)","instructions_hash":"\(proposalId)","proposal":{"approvals":["\(approverOne)","\(approverTwo)"]}}
+            {"resolved_multisig_account_id":"sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB","proposal_id":"\(proposalId)","instructions_hash":"\(proposalId)","operation_type":"TRANSFER","intent":null,"proposal":{"approvals":["\(approverOne)","\(approverTwo)"]},"status":"COLLECTING_SIGNATURES","terminal_at_ms":null}
             """.data(using: .utf8)!
             return (response, bodyData)
         }
@@ -16254,12 +17245,46 @@ data: {"event":"Transaction","hash":"deadbeef","status":"Applied","block_height"
             case .success(let response):
                 XCTAssertEqual(response.proposalId, proposalId)
                 XCTAssertEqual(response.instructionsHash, proposalId)
+                XCTAssertEqual(response.operationType, "TRANSFER")
+                XCTAssertEqual(response.status, .collectingSignatures)
+                XCTAssertNil(response.terminalAtMs)
             case .failure(let error):
                 XCTFail("unexpected error: \(error)")
             }
             expectation.fulfill()
         }
         waitForExpectations(timeout: 1)
+    }
+
+    func testListMultisigProposalsRejectsInvalidPaginationAndDuplicateStatuses() throws {
+        let selector = ToriiMultisigAccountSelector(multisigAccountAlias: "cbdc@banka")
+        for request in [
+            ToriiMultisigProposalsListRequest(
+                selector: selector,
+                status: [.finalized, .finalized]
+            ),
+            ToriiMultisigProposalsListRequest(selector: selector, cursor: " "),
+            ToriiMultisigProposalsListRequest(selector: selector, limit: 0),
+            ToriiMultisigProposalsListRequest(
+                selector: selector,
+                cursor: String(repeating: "x", count: 513)
+            )
+        ] {
+            XCTAssertThrowsError(try JSONEncoder().encode(request))
+        }
+    }
+
+    func testMultisigProposalResponseRejectsMissingCurrentContractFields() throws {
+        let proposalId = String(repeating: "f", count: 64)
+        let missingStatus = """
+        {"resolved_multisig_account_id":"sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB","proposal_id":"\(proposalId)","instructions_hash":"\(proposalId)","operation_type":"TRANSFER","proposal":{}}
+        """.data(using: .utf8)!
+        XCTAssertThrowsError(try JSONDecoder().decode(ToriiMultisigProposalGetResponse.self, from: missingStatus))
+
+        let unknownStatus = """
+        {"resolved_multisig_account_id":"sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB","proposal_id":"\(proposalId)","instructions_hash":"\(proposalId)","operation_type":"TRANSFER","intent":null,"proposal":{},"status":"READY_TO_SUBMIT","terminal_at_ms":null}
+        """.data(using: .utf8)!
+        XCTAssertThrowsError(try JSONDecoder().decode(ToriiMultisigProposalGetResponse.self, from: unknownStatus))
     }
 
     func testMultisigSelectorRejectsBothAccountIdAndAlias() throws {
@@ -16809,7 +17834,10 @@ data: {"event":"Transaction","hash":"deadbeef","status":"Applied","block_height"
                 headerFields: ["x-iroha-reject-code": "build_claim_missing"]
             )!
             let body = """
-            {"message":"missing build claim for transaction status"}
+            {
+              "code":"body_fallback_must_not_override_header",
+              "message":"missing build claim for transaction status"
+            }
             """.data(using: .utf8)!
             return (response, body)
         }
@@ -16824,6 +17852,41 @@ data: {"event":"Transaction","hash":"deadbeef","status":"Applied","block_height"
             XCTAssertEqual(code, 400)
             XCTAssertEqual(rejectCode, "build_claim_missing")
             XCTAssertEqual(message, "missing build claim for transaction status")
+        } catch {
+            XCTFail("unexpected error: \(error)")
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testGetTransactionStatusHttpErrorUsesTopLevelEnvelopeCodeFallback() async throws {
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/pipeline/transactions/status")
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 503,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            let body = """
+            {
+              "code": "offline_topup_finality_proof_unavailable",
+              "message": "The finalized proof is not available yet.",
+              "details": {"retry_after_ms": 250}
+            }
+            """.data(using: .utf8)!
+            return (response, body)
+        }
+
+        do {
+            _ = try await makeClient().getTransactionStatus(hashHex: "deadbeef")
+            XCTFail("expected status failure")
+        } catch let error as ToriiClientError {
+            guard case let .httpStatus(code, message, rejectCode) = error else {
+                return XCTFail("unexpected error: \(error)")
+            }
+            XCTAssertEqual(code, 503)
+            XCTAssertEqual(rejectCode, "offline_topup_finality_proof_unavailable")
+            XCTAssertEqual(message, "The finalized proof is not available yet.")
         } catch {
             XCTFail("unexpected error: \(error)")
         }
@@ -16992,7 +18055,7 @@ data: {"event":"Transaction","hash":"deadbeef","status":"Applied","block_height"
                 return XCTFail("unexpected error: \(error)")
             }
             XCTAssertEqual(code, 500)
-            XCTAssertNil(rejectCode)
+            XCTAssertEqual(rejectCode, "E123")
             XCTAssertEqual(message, #"{"code":"E123","status":"invalid"}"#)
         } catch {
             XCTFail("unexpected error: \(error)")
@@ -17200,8 +18263,8 @@ data: {"event":"Transaction","hash":"deadbeef","status":"Applied","block_height"
             submittedEpoch: 42,
             gasAssetId: " xor#universal ",
             alias: ToriiSoraFsPinAlias(
-                namespace: " docs ",
-                name: " main ",
+                namespace: "docs",
+                name: "main",
                 proofBase64: Data("alias-proof".utf8).base64EncodedString()
             ),
             successorOfHex: successorOfHex
@@ -17347,6 +18410,9 @@ data: {"event":"Transaction","hash":"deadbeef","status":"Applied","block_height"
         let oversizedManifest = Data(repeating: 0xA5, count: 512 * 1024 + 1)
             .base64EncodedString()
         let encodedLengthBoundaryOverflow = String(repeating: "A", count: 699_052)
+        let oversizedAliasProof = Data(repeating: 0xA5, count: 1024 * 1024 + 1)
+            .base64EncodedString()
+        let aliasProofEncodedLengthBoundaryOverflow = String(repeating: "A", count: 1_398_104)
         let invalidRequests: [ToriiSoraFsPinRegisterRequest] = [
             mutatedSoraFsPinRequest { $0.authority = nil },
             mutatedSoraFsPinRequest { $0.authority = " " },
@@ -17372,11 +18438,22 @@ data: {"event":"Transaction","hash":"deadbeef","status":"Applied","block_height"
             mutatedSoraFsPinRequest { $0.gasAssetId = " " },
             mutatedSoraFsAlias { $0.namespace = "" },
             mutatedSoraFsAlias { $0.name = nil },
+            mutatedSoraFsAlias { $0.namespace = " docs" },
+            mutatedSoraFsAlias { $0.namespace = "Docs" },
+            mutatedSoraFsAlias { $0.namespace = "doc s" },
+            mutatedSoraFsAlias { $0.namespace = "døcs" },
+            mutatedSoraFsAlias { $0.namespace = String(repeating: "a", count: 129) },
+            mutatedSoraFsAlias { $0.name = "main/next" },
             mutatedSoraFsAlias { $0.proofBase64 = nil },
             mutatedSoraFsAlias { $0.proofBase64 = "not base64!" },
             mutatedSoraFsAlias { $0.proofBase64 = Data().base64EncodedString() },
+            mutatedSoraFsAlias { $0.proofBase64 = "YR==" },
             mutatedSoraFsAlias {
                 $0.proofBase64 = Data("alias-proof".utf8).base64EncodedString() + "\n"
+            },
+            mutatedSoraFsAlias { $0.proofBase64 = oversizedAliasProof },
+            mutatedSoraFsAlias {
+                $0.proofBase64 = aliasProofEncodedLengthBoundaryOverflow
             },
         ]
 

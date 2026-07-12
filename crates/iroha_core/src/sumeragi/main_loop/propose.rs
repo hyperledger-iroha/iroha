@@ -3095,37 +3095,6 @@ impl Actor {
         scheduled
     }
 
-    fn requeue_accepted_transaction(
-        &self,
-        tx: AcceptedTransaction<'static>,
-        routing_plan: crate::queue::RoutingPlan,
-        warn_context: &'static str,
-    ) {
-        let tx_hash = tx.as_ref().hash();
-        if let Err(err) =
-            self.queue
-                .push_requeued_with_routing_plan(tx, routing_plan, self.state.as_ref())
-        {
-            match err.err {
-                crate::queue::Error::IsInQueue => {
-                    trace!(
-                        tx = %tx_hash,
-                        "transaction already in queue during proposal requeue"
-                    );
-                }
-                crate::queue::Error::InBlockchain => {
-                    trace!(
-                        tx = %tx_hash,
-                        "transaction already committed during proposal requeue"
-                    );
-                }
-                err => {
-                    warn!(?err, "{warn_context}");
-                }
-            }
-        }
-    }
-
     fn nudge_proposal_guard_return_retry(&mut self) {
         self.subsystems.propose.pacemaker.next_deadline = Instant::now();
         if let Some(wake) = self.wake_tx.as_ref() {
@@ -6092,7 +6061,12 @@ impl Actor {
                         &routing_batch,
                         &nexus,
                         proposal_height,
-                        |key| world_view.sccp_outbound_messages().get(key).is_some(),
+                        |key| {
+                            world_view
+                                .sccp_outbound_message_locator()
+                                .get(&key.message_id)
+                                .is_some()
+                        },
                     )?
                     .is_empty()
                 };

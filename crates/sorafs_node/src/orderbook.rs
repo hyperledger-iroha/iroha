@@ -8,13 +8,13 @@ use sorafs_manifest::orderbook::OrderbookOwnerNonceHighWaterV1;
 use sorafs_manifest::{
     OrderBookEntryV1, OrderCancelReasonV1, OrderCancelV1, OrderFillOutcomeV1, OrderRequestV1,
     OrderSideV1, OrderbookRuntimeSnapshotV1, OrderbookValidationError, SettlementChannelV1,
-    SettlementReceiptV1, TradeEventV1, apply_settlement_receipt_v1, match_order_book_v1,
+    SettlementReceiptV1, TradeEventV1, apply_settlement_receipt_v1,
+    derive_orderbook_settlement_channel_id_v1, match_order_book_v1,
     open_settlement_channel_for_trade_v1, verify_order_cancel_signature_v1,
     verify_order_request_signature_v1, verify_settlement_receipt_signature_v1,
 };
 use thiserror::Error;
 
-const ORDERBOOK_CHANNEL_ID_DOMAIN_V1: &[u8] = b"sorafs.orderbook.local.channel-id.v1";
 const ORDERBOOK_PROVIDER_ID_DOMAIN_V1: &[u8] = b"sorafs.orderbook.local.provider-id.v1";
 
 /// Derive the local orderbook provider id from canonical provider owner-account bytes.
@@ -717,19 +717,12 @@ fn settlement_channel_for_fill(
     };
     open_settlement_channel_for_trade_v1(
         &fill.trade,
-        channel_id_for_trade(&fill.trade),
+        derive_orderbook_settlement_channel_id_v1(&fill.trade)?,
         buyer.owner_account.clone(),
         provider_id_for_order(provider),
         now_unix,
     )
     .map_err(OrderbookRuntimeError::Validation)
-}
-
-fn channel_id_for_trade(trade: &TradeEventV1) -> [u8; 32] {
-    let mut hasher = Hasher::new();
-    hasher.update(ORDERBOOK_CHANNEL_ID_DOMAIN_V1);
-    hasher.update(&trade.trade_id);
-    nonzero_digest(*hasher.finalize().as_bytes())
 }
 
 fn provider_id_for_order(order: &OrderRequestV1) -> [u8; 32] {

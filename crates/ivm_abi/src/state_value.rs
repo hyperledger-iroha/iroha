@@ -7,8 +7,14 @@
 use iroha_crypto::Hash;
 use norito::{Decode, Encode};
 
+use crate::pointer_abi::PointerType;
+
 /// Domain separator for hashes binding stored records to exact state schemas.
 pub const STATE_VALUE_SCHEMA_HASH_DOMAIN_V1: &[u8] = b"KOTODAMA_STATE_VALUE_SCHEMA_V1\0";
+/// Nominal Norito schema name for compiler-emitted durable-value schemas.
+pub const STATE_VALUE_SCHEMA_NAME_V1: &str = "iroha.kotodama.StateValueSchemaV1";
+/// Nominal Norito schema name for canonical durable-value records.
+pub const STATE_VALUE_RECORD_NAME_V1: &str = "iroha.kotodama.StateValueRecordV1";
 
 /// Hash an exact encoded V1 schema with its dedicated domain separator.
 #[must_use]
@@ -41,50 +47,120 @@ pub const DECODED_STATE_VALUE_WORD_BYTES: i16 = 8;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 pub enum StateValueKindV1 {
     /// Canonical Kotodama signed 512-bit integer pointer.
+    #[codec(index = 0)]
     Int,
     /// Canonical exact bounded decimal pointer.
+    #[codec(index = 1)]
     Decimal,
     /// Canonical nominal non-negative quantity pointer.
+    #[codec(index = 2)]
     Quantity,
     /// Boolean scalar restricted to zero or one in the VM word table.
+    #[codec(index = 3)]
     Bool,
     /// UTF-8 source string carried in a Blob pointer.
+    #[codec(index = 4)]
     String,
     /// Canonical JSON pointer.
+    #[codec(index = 5)]
     Json,
     /// Source-level `bytes`, represented by a Blob pointer in the ABI.
+    #[codec(index = 6)]
     Bytes,
     /// Universal account identifier.
+    #[codec(index = 7)]
     AccountId,
     /// Asset-definition identifier.
+    #[codec(index = 8)]
     AssetDefinitionId,
     /// Asset identifier.
+    #[codec(index = 9)]
     AssetId,
     /// Domain identifier.
+    #[codec(index = 10)]
     DomainId,
     /// NFT identifier.
+    #[codec(index = 11)]
     NftId,
     /// Validated Iroha name.
+    #[codec(index = 12)]
     Name,
     /// Dataspace identifier.
+    #[codec(index = 13)]
     DataSpaceId,
     /// AXT descriptor.
+    #[codec(index = 14)]
     AxtDescriptor,
     /// AXT asset handle.
+    #[codec(index = 15)]
     AssetHandle,
     /// AXT proof blob.
+    #[codec(index = 16)]
     ProofBlob,
     /// Soracloud host request envelope.
+    #[codec(index = 17)]
     SoracloudRequest,
     /// Soracloud host response envelope.
+    #[codec(index = 18)]
     SoracloudResponse,
 }
 
 impl StateValueKindV1 {
+    /// Return the stable Norito enum discriminant used by ABI V1.
+    #[must_use]
+    pub const fn tag(self) -> u32 {
+        match self {
+            Self::Int => 0,
+            Self::Decimal => 1,
+            Self::Quantity => 2,
+            Self::Bool => 3,
+            Self::String => 4,
+            Self::Json => 5,
+            Self::Bytes => 6,
+            Self::AccountId => 7,
+            Self::AssetDefinitionId => 8,
+            Self::AssetId => 9,
+            Self::DomainId => 10,
+            Self::NftId => 11,
+            Self::Name => 12,
+            Self::DataSpaceId => 13,
+            Self::AxtDescriptor => 14,
+            Self::AssetHandle => 15,
+            Self::ProofBlob => 16,
+            Self::SoracloudRequest => 17,
+            Self::SoracloudResponse => 18,
+        }
+    }
+
+    /// Return the exact pointer-ABI type for this leaf, or `None` for inline booleans.
+    #[must_use]
+    pub const fn pointer_type(self) -> Option<PointerType> {
+        Some(match self {
+            Self::Bool => return None,
+            Self::Int => PointerType::Int,
+            Self::Decimal => PointerType::Decimal,
+            Self::Quantity => PointerType::Quantity,
+            Self::String | Self::Bytes => PointerType::Blob,
+            Self::Json => PointerType::Json,
+            Self::AccountId => PointerType::AccountId,
+            Self::AssetDefinitionId => PointerType::AssetDefinitionId,
+            Self::AssetId => PointerType::AssetId,
+            Self::DomainId => PointerType::DomainId,
+            Self::NftId => PointerType::NftId,
+            Self::Name => PointerType::Name,
+            Self::DataSpaceId => PointerType::DataSpaceId,
+            Self::AxtDescriptor => PointerType::AxtDescriptor,
+            Self::AssetHandle => PointerType::AssetHandle,
+            Self::ProofBlob => PointerType::ProofBlob,
+            Self::SoracloudRequest => PointerType::SoracloudRequest,
+            Self::SoracloudResponse => PointerType::SoracloudResponse,
+        })
+    }
+
     /// Return whether the value occupies a pointer word rather than an inline scalar.
     #[must_use]
     pub const fn is_pointer(self) -> bool {
-        !matches!(self, Self::Bool)
+        self.pointer_type().is_some()
     }
 
     /// Return whether this leaf is a non-copyable resource handle.
@@ -98,6 +174,7 @@ impl StateValueKindV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub enum StateValueNodeV1 {
     /// Named product type. Children immediately follow in field order.
+    #[codec(index = 0)]
     Struct {
         /// Source type name, included in schema identity.
         name: String,
@@ -105,15 +182,19 @@ pub enum StateValueNodeV1 {
         fields: Vec<String>,
     },
     /// Positional product type. Children immediately follow in index order.
+    #[codec(index = 1)]
     Tuple {
         /// Number of tuple children.
         arity: u16,
     },
     /// Optional value carried by one active-only compiler-owned sum handle.
+    #[codec(index = 2)]
     Option,
     /// Result value carried by one active-only compiler-owned sum handle.
+    #[codec(index = 3)]
     Result,
     /// Bounded contiguous list represented by one schema-bound sequence pointer.
+    #[codec(index = 4)]
     List {
         /// Exact recursive element schema.
         element: Box<StateValueSchemaV1>,
@@ -121,11 +202,41 @@ pub enum StateValueNodeV1 {
         capacity: u8,
     },
     /// Scalar or pointer leaf consuming one VM word.
+    #[codec(index = 5)]
     Leaf(StateValueKindV1),
+}
+
+impl StateValueNodeV1 {
+    /// Stable Norito discriminant for [`Self::Struct`].
+    pub const STRUCT_TAG: u32 = 0;
+    /// Stable Norito discriminant for [`Self::Tuple`].
+    pub const TUPLE_TAG: u32 = 1;
+    /// Stable Norito discriminant for [`Self::Option`].
+    pub const OPTION_TAG: u32 = 2;
+    /// Stable Norito discriminant for [`Self::Result`].
+    pub const RESULT_TAG: u32 = 3;
+    /// Stable Norito discriminant for [`Self::List`].
+    pub const LIST_TAG: u32 = 4;
+    /// Stable Norito discriminant for [`Self::Leaf`].
+    pub const LEAF_TAG: u32 = 5;
+
+    /// Return this node's stable Norito enum discriminant.
+    #[must_use]
+    pub const fn tag(&self) -> u32 {
+        match self {
+            Self::Struct { .. } => Self::STRUCT_TAG,
+            Self::Tuple { .. } => Self::TUPLE_TAG,
+            Self::Option => Self::OPTION_TAG,
+            Self::Result => Self::RESULT_TAG,
+            Self::List { .. } => Self::LIST_TAG,
+            Self::Leaf(_) => Self::LEAF_TAG,
+        }
+    }
 }
 
 /// Compiler-owned schema for one aggregate durable-state type.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[norito(schema_name = "iroha.kotodama.StateValueSchemaV1")]
 pub struct StateValueSchemaV1 {
     /// Preorder aggregate layout.
     pub nodes: Vec<StateValueNodeV1>,
@@ -460,17 +571,44 @@ pub enum StateValueWordKindV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub enum StateValueAtomV1 {
     /// Option/Result tag.
+    #[codec(index = 0)]
     Tag(bool),
     /// Boolean value.
+    #[codec(index = 1)]
     Bool(bool),
     /// Complete validated pointer-ABI TLV envelope.
+    #[codec(index = 2)]
     Pointer(Vec<u8>),
     /// Canonical bounded sequence; each item is one active-only element atom stream.
+    #[codec(index = 3)]
     List(Vec<Vec<StateValueAtomV1>>),
+}
+
+impl StateValueAtomV1 {
+    /// Stable Norito discriminant for [`Self::Tag`].
+    pub const TAG_TAG: u32 = 0;
+    /// Stable Norito discriminant for [`Self::Bool`].
+    pub const BOOL_TAG: u32 = 1;
+    /// Stable Norito discriminant for [`Self::Pointer`].
+    pub const POINTER_TAG: u32 = 2;
+    /// Stable Norito discriminant for [`Self::List`].
+    pub const LIST_TAG: u32 = 3;
+
+    /// Return this atom's stable Norito enum discriminant.
+    #[must_use]
+    pub const fn tag(&self) -> u32 {
+        match self {
+            Self::Tag(_) => Self::TAG_TAG,
+            Self::Bool(_) => Self::BOOL_TAG,
+            Self::Pointer(_) => Self::POINTER_TAG,
+            Self::List(_) => Self::LIST_TAG,
+        }
+    }
 }
 
 /// Canonical Norito value stored under one aggregate durable-state key.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[norito(schema_name = "iroha.kotodama.StateValueRecordV1")]
 pub struct StateValueRecordV1 {
     /// Domain-separated hash of the exact encoded schema.
     pub schema_hash: [u8; 32],
@@ -482,8 +620,109 @@ pub struct StateValueRecordV1 {
 mod tests {
     use super::*;
 
+    fn assert_norito_discriminant<T: norito::codec::Encode>(value: &T, expected: u32) {
+        let encoded = norito::codec::Encode::encode(value);
+        assert!(encoded.len() >= 4, "enum encoding must contain a u32 tag");
+        assert_eq!(
+            u32::from_le_bytes(encoded[..4].try_into().expect("four-byte tag")),
+            expected
+        );
+    }
+
+    #[test]
+    fn durable_state_enum_tags_match_the_pinned_wire_discriminants() {
+        let kinds = [
+            StateValueKindV1::Int,
+            StateValueKindV1::Decimal,
+            StateValueKindV1::Quantity,
+            StateValueKindV1::Bool,
+            StateValueKindV1::String,
+            StateValueKindV1::Json,
+            StateValueKindV1::Bytes,
+            StateValueKindV1::AccountId,
+            StateValueKindV1::AssetDefinitionId,
+            StateValueKindV1::AssetId,
+            StateValueKindV1::DomainId,
+            StateValueKindV1::NftId,
+            StateValueKindV1::Name,
+            StateValueKindV1::DataSpaceId,
+            StateValueKindV1::AxtDescriptor,
+            StateValueKindV1::AssetHandle,
+            StateValueKindV1::ProofBlob,
+            StateValueKindV1::SoracloudRequest,
+            StateValueKindV1::SoracloudResponse,
+        ];
+        let pointer_types = [
+            Some(PointerType::Int),
+            Some(PointerType::Decimal),
+            Some(PointerType::Quantity),
+            None,
+            Some(PointerType::Blob),
+            Some(PointerType::Json),
+            Some(PointerType::Blob),
+            Some(PointerType::AccountId),
+            Some(PointerType::AssetDefinitionId),
+            Some(PointerType::AssetId),
+            Some(PointerType::DomainId),
+            Some(PointerType::NftId),
+            Some(PointerType::Name),
+            Some(PointerType::DataSpaceId),
+            Some(PointerType::AxtDescriptor),
+            Some(PointerType::AssetHandle),
+            Some(PointerType::ProofBlob),
+            Some(PointerType::SoracloudRequest),
+            Some(PointerType::SoracloudResponse),
+        ];
+        for (expected, (kind, pointer_type)) in kinds.into_iter().zip(pointer_types).enumerate() {
+            assert_eq!(kind.tag(), u32::try_from(expected).expect("kind tag"));
+            assert_eq!(kind.pointer_type(), pointer_type);
+            assert_norito_discriminant(&kind, kind.tag());
+        }
+
+        let int_schema = StateValueSchemaV1 {
+            nodes: vec![StateValueNodeV1::Leaf(StateValueKindV1::Int)],
+        };
+        let nodes = [
+            StateValueNodeV1::Struct {
+                name: "S".into(),
+                fields: vec!["field".into()],
+            },
+            StateValueNodeV1::Tuple { arity: 2 },
+            StateValueNodeV1::Option,
+            StateValueNodeV1::Result,
+            StateValueNodeV1::List {
+                element: Box::new(int_schema),
+                capacity: 1,
+            },
+            StateValueNodeV1::Leaf(StateValueKindV1::Int),
+        ];
+        for (expected, node) in nodes.into_iter().enumerate() {
+            assert_eq!(node.tag(), u32::try_from(expected).expect("node tag"));
+            assert_norito_discriminant(&node, node.tag());
+        }
+
+        let atoms = [
+            StateValueAtomV1::Tag(false),
+            StateValueAtomV1::Bool(false),
+            StateValueAtomV1::Pointer(Vec::new()),
+            StateValueAtomV1::List(Vec::new()),
+        ];
+        for (expected, atom) in atoms.into_iter().enumerate() {
+            assert_eq!(atom.tag(), u32::try_from(expected).expect("atom tag"));
+            assert_norito_discriminant(&atom, atom.tag());
+        }
+    }
+
     #[test]
     fn schema_and_record_roundtrip_deterministically() {
+        assert_eq!(
+            <StateValueSchemaV1 as norito::NoritoSerialize>::schema_hash(),
+            norito::core::schema_hash_for_name(STATE_VALUE_SCHEMA_NAME_V1)
+        );
+        assert_eq!(
+            <StateValueRecordV1 as norito::NoritoSerialize>::schema_hash(),
+            norito::core::schema_hash_for_name(STATE_VALUE_RECORD_NAME_V1)
+        );
         let schema = StateValueSchemaV1 {
             nodes: vec![
                 StateValueNodeV1::Struct {

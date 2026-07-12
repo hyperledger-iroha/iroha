@@ -1708,9 +1708,9 @@ mod tests {
     #[test]
     fn rejects_tampered_and_oversized_inputs() {
         let root = tempdir().expect("root");
-        let artifact = artifact([1; 16], 1);
+        let model = artifact([1; 16], 1);
         let (fingerprint, mut bytes) =
-            fingerprint_model_artifact("model.norito", &artifact, None).expect("fingerprint");
+            fingerprint_model_artifact("model.norito", &model, None).expect("fingerprint");
         bytes[0] ^= 1;
         fs::write(root.path().join("model.norito"), bytes).expect("write model");
         assert!(matches!(
@@ -1723,9 +1723,9 @@ mod tests {
         ));
 
         let root = tempdir().expect("root");
-        let artifact = artifact([1; 16], 1);
+        let model = artifact([1; 16], 1);
         let (fingerprint, bytes) =
-            fingerprint_model_artifact("model.norito", &artifact, None).expect("fingerprint");
+            fingerprint_model_artifact("model.norito", &model, None).expect("fingerprint");
         fs::write(root.path().join("model.norito"), bytes).expect("write model");
         let runner = LoadedModerationRunnerV1::load_verified(
             signed_manifest(vec![fingerprint]),

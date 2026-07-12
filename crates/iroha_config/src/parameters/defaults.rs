@@ -1169,6 +1169,29 @@ pub mod sorafs {
         pub const PDP_SAMPLE_WINDOW_MAX: u16 = 500;
         /// Aggregate in-memory budget for canonical PDP tree indexes.
         pub const PDP_TREE_MEMORY_LIMIT_BYTES: Bytes<u64> = Bytes(512 * 1024 * 1024);
+        /// Defaults for the durable admission-bound PDP provider protocol.
+        pub mod pdp_provider {
+            use iroha_config_base::util::Bytes;
+
+            /// Maximum pending challenges retained by one provider runtime.
+            pub const MAX_PENDING_RECORDS: u32 = 4_096;
+            /// Maximum compact terminal replay records retained by one provider runtime.
+            pub const MAX_TERMINAL_RECORDS: u32 = 65_536;
+            /// Maximum canonical durable checkpoint size.
+            pub const CHECKPOINT_MAX_BYTES: Bytes<u64> = Bytes(128 * 1024 * 1024);
+            /// Maximum canonical challenge payload size.
+            pub const CHALLENGE_MAX_BYTES: Bytes<u64> = Bytes(512 * 1024);
+            /// Maximum canonical proof payload size.
+            pub const PROOF_MAX_BYTES: Bytes<u64> = Bytes(16 * 1024 * 1024);
+            /// Minimum governed response window in seconds.
+            pub const MIN_RESPONSE_WINDOW_SECS: u64 = 4 * 60;
+            /// Maximum governed response window in seconds.
+            pub const MAX_RESPONSE_WINDOW_SECS: u64 = 10 * 60;
+            /// Maximum provider timestamp skew ahead of server time in seconds.
+            pub const MAX_FUTURE_SKEW_SECS: u64 = 5;
+            /// Minimum compact terminal replay retention in seconds.
+            pub const TERMINAL_RETENTION_SECS: u64 = 24 * 60 * 60;
+        }
         /// Maximum replay events retained for each embedded runtime event stream.
         pub const RUNTIME_EVENT_HISTORY_LIMIT: usize = 4_096;
         /// Maximum entries retained in each auxiliary runtime state index.
@@ -1621,17 +1644,17 @@ pub mod torii {
     pub const PROOF_BURST: Option<u32> = Some(60);
     /// Maximum proof request payload size (bytes).
     pub const PROOF_MAX_BODY_BYTES: Bytes<u64> = Bytes(8 * 1024 * 1024); // 8 MiB
-    /// Maximum proof request bodies buffered concurrently before handler admission.
+    /// Maximum proof-bearing request bodies buffered concurrently before handler admission.
     pub const PROOF_BODY_MAX_INFLIGHT: NonZeroUsize = nonzero!(8usize);
-    /// Absolute deadline for reading one admitted proof request body.
+    /// Absolute deadline for reading one admitted proof-bearing request body.
     pub const PROOF_BODY_READ_TIMEOUT_MS: u64 = 15_000;
     /// Steady-state egress budget for proof responses (bytes/sec). None disables.
     pub const PROOF_EGRESS_BYTES_PER_SEC: Option<u64> = Some(8 * 1024 * 1024); // 8 MiB/s
     /// Burst egress budget for proof responses (bytes).
     ///
-    /// The 32 MiB default accommodates the canonical IVM job response ceiling:
-    /// a 16 MiB encoded proved payload plus an 8 MiB proof encoded as base64.
-    pub const PROOF_EGRESS_BURST_BYTES: Option<u64> = Some(32 * 1024 * 1024); // 32 MiB
+    /// The 64 MiB default accommodates both the canonical IVM job response ceiling
+    /// and worst-case first-release SCCP JSON expansion of a 16 MiB binary envelope.
+    pub const PROOF_EGRESS_BURST_BYTES: Option<u64> = Some(64 * 1024 * 1024); // 64 MiB
     /// Aggregate memory budget for retained `/v1/zk/ivm/prove` job state.
     pub const ZK_IVM_PROVE_JOB_MAX_RETAINED_BYTES: Bytes<u64> = Bytes(128 * 1024 * 1024); // 128 MiB
     /// Maximum page size accepted by proof listing endpoints.
@@ -2921,6 +2944,16 @@ pub mod zk {
 
         /// Maximum closed SCCP proofs in one transaction.
         pub const MAX_PROOFS_PER_TRANSACTION: NonZeroU32 = nonzero!(1_u32);
+        /// Maximum payload-bearing outbound messages awaiting destination proof acceptance.
+        ///
+        /// This covers 128 completely full 512-message SCCP blocks, providing explicit relay
+        /// outage headroom while hard-bounding consensus-state map overhead.
+        pub const MAX_PENDING_OUTBOUND_MESSAGES: NonZeroU64 = nonzero!(65_536_u64);
+        /// Maximum canonical payload bytes awaiting destination proof acceptance.
+        ///
+        /// The 256 MiB allowance likewise covers 128 full blocks at the fixed 2 MiB/block V1
+        /// payload ceiling. Accepted payloads move immediately to Kura's immutable archive.
+        pub const MAX_PENDING_OUTBOUND_PAYLOAD_BYTES: NonZeroU64 = nonzero!(256_u64 * 1024 * 1024);
         /// Maximum closed SCCP proofs committed in one block.
         pub const MAX_PROOFS_PER_BLOCK: NonZeroU32 = nonzero!(4_u32);
         /// Maximum canonical bytes retained for one closed SCCP bridge proof.

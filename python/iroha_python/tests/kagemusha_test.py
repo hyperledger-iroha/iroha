@@ -2109,7 +2109,7 @@ class _Native:
             raise ValueError(f"invalid Kagemusha {context} probe archive")
 
     def kagemusha_recursive_spend_native_bridge_abi_version(self) -> int:
-        return kagemusha.KAGEMUSHA_RECURSIVE_SPEND_TOPUP_REQUIRED_NATIVE_BRIDGE_ABI_VERSION
+        return kagemusha.KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_NATIVE_BRIDGE_ABI_VERSION
 
     def kagemusha_prove_verified_compact_payment_token_with_records(
         self,
@@ -2535,38 +2535,52 @@ def test_recursive_kagemusha_helpers_probe_and_delegate(monkeypatch: pytest.Monk
     assert kagemusha.is_kagemusha_recursive_compact_payment_token_verifier_available() is False
     assert kagemusha.is_kagemusha_recursive_spend_available() is True
     assert (
-        kagemusha.preferred_kagemusha_offline_spend_mode_for_capabilities(True, True)
-        == kagemusha.KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1
+        kagemusha.preferred_kagemusha_offline_spend_mode(
+            pasta_cycle_v3_backend_available=True
+        )
+        == kagemusha.KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V2
     )
     assert (
-        kagemusha.preferred_kagemusha_offline_spend_mode_for_capabilities(False, True)
-        == kagemusha.KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1
+        kagemusha.preferred_kagemusha_offline_spend_mode(
+            pasta_cycle_v3_backend_available=False
+        )
+        is None
     )
     assert not hasattr(kagemusha, "KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1")
     assert "checked_prefold_v1" not in kagemusha.KagemushaOfflineSpendMode.__args__
+    assert "recursive_compact_v1" not in kagemusha.KagemushaOfflineSpendMode.__args__
+    assert kagemusha.is_kagemusha_spend_again_mode("recursive_spend_v2") is True
+    assert kagemusha.is_kagemusha_spend_again_mode("recursive_spend_v1") is False
+    assert kagemusha.is_kagemusha_spend_again_mode("recursive_compact_v1") is False
     assert (
         kagemusha.preferred_kagemusha_offline_spend_mode(
-            recursive_compact_available=False,
-            recursive_spend_available=True,
+            pasta_cycle_v3_backend_available=True,
         )
-        == kagemusha.KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1
+        == kagemusha.KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V2
     )
     assert (
         kagemusha.preferred_kagemusha_offline_spend_mode(
-            recursive_compact_available=False,
-            recursive_spend_available=False,
+            pasta_cycle_v3_backend_available=False,
         )
         is None
     )
     with pytest.raises(TypeError):
         kagemusha.preferred_kagemusha_offline_spend_mode(True)
-    with pytest.raises(ValueError, match="requires either no capability arguments or both"):
+    with pytest.raises(TypeError):
         kagemusha.preferred_kagemusha_offline_spend_mode(
-            recursive_spend_available=True
+            recursive_spend_available=True  # type: ignore[call-arg]
         )
+    for invalid_capability in (None, 0, 1, "true", object()):
+        with pytest.raises(
+            TypeError,
+            match="pasta_cycle_v3_backend_available must be a boolean when provided",
+        ):
+            kagemusha.preferred_kagemusha_offline_spend_mode(
+                pasta_cycle_v3_backend_available=invalid_capability,
+            )
     assert (
         kagemusha.preferred_kagemusha_offline_spend_mode()
-        == kagemusha.KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1
+        == kagemusha.KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V2
     )
     assert (
         kagemusha.kagemusha_prove_verified_compact_payment_token_with_records(
@@ -2622,7 +2636,7 @@ def test_recursive_kagemusha_helpers_probe_and_delegate(monkeypatch: pytest.Monk
     assert kagemusha.is_kagemusha_recursive_compact_payment_token_verifier_available() is False
     assert (
         kagemusha.preferred_kagemusha_offline_spend_mode()
-        == kagemusha.KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1
+        == kagemusha.KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V2
     )
     with pytest.raises(RuntimeError, match="recursive compact Kagemusha payment-token prover"):
         getattr(kagemusha, RECURSIVE_COMPACT_METHOD)(
@@ -2670,7 +2684,7 @@ def test_recursive_kagemusha_helpers_probe_and_delegate(monkeypatch: pytest.Monk
     assert kagemusha.is_kagemusha_recursive_compact_payment_token_verifier_available() is True
     assert (
         kagemusha.preferred_kagemusha_offline_spend_mode()
-        == kagemusha.KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1
+        == kagemusha.KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V2
     )
 
     def unavailable_recursive_compact(
@@ -2765,7 +2779,6 @@ def test_recursive_kagemusha_helpers_probe_and_delegate(monkeypatch: pytest.Monk
         ("recursive_aggregation", record_bundle + b"|" + pallas_open_envelopes),
         ("pallas_open_envelope_builder", record_bundle),
         ("previous_proof_open_envelope_builder", previous_bundle),
-        ("permissive_recursive_compact", b"\x00|\x00|\x00"),
         ("permissive_recursive_compact", b"\x00|\x00|\x00"),
         ("permissive_recursive_compact", b"\x00|\x00|\x00"),
         (
@@ -3294,10 +3307,10 @@ def test_recursive_kagemusha_shared_abi6_fixture_matches_sdk_surface() -> None:
         kagemusha.KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1
         == "kagemusha-recursive-compact-v1"
     )
-    assert (
-        manifest["native_bridge_abi_version"]
-        == kagemusha.KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_NATIVE_BRIDGE_ABI_VERSION
-    )
+    # The shared archive is a historical ABI-6 fixture; production recursive
+    # spend intentionally requires the exact first-release ABI-18 surface.
+    assert manifest["native_bridge_abi_version"] == 6
+    assert kagemusha.KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_NATIVE_BRIDGE_ABI_VERSION == 18
     assert manifest["operation_count"] == 9
 
     operations = manifest["operations"]
@@ -4772,6 +4785,8 @@ def test_recursive_kagemusha_redeem_request_rejects_retired_lengthless_public_ke
         kagemusha.load_crypto_extension()
     except RuntimeError as exc:
         pytest.skip(f"native extension unavailable: {exc}")
+    if not kagemusha.is_kagemusha_recursive_spend_available():
+        pytest.skip("exact native bridge ABI-18 recursive-spend surface unavailable")
 
     with pytest.raises(ValueError, match="invalid Kagemusha recursive spend redeem archive"):
         kagemusha.kagemusha_recursive_spend_redeem(malformed_archive)
@@ -6755,7 +6770,7 @@ def test_recursive_kagemusha_lineage_key_artifacts_validate_inputs() -> None:
 
 
 def test_recursive_kagemusha_exports_stable_circuit_ids() -> None:
-    assert kagemusha.KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_NATIVE_BRIDGE_ABI_VERSION == 6
+    assert kagemusha.KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_NATIVE_BRIDGE_ABI_VERSION == 18
     assert kagemusha.KAGEMUSHA_RECURSIVE_SPEND_TOPUP_REQUIRED_NATIVE_BRIDGE_ABI_VERSION == 15
     assert (
         kagemusha.KAGEMUSHA_RECURSIVE_TOPUP_REQUEST_WIRE_NAME
@@ -7301,15 +7316,16 @@ def test_recursive_kagemusha_exports_stable_circuit_ids() -> None:
         )
 
 
-def test_recursive_kagemusha_availability_requires_bridge_abi_6(
+def test_recursive_kagemusha_availability_requires_exact_bridge_abi_18(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     for abi_version in (
-        5,
+        17,
+        19,
         True,
-        "6",
+        "18",
         -1,
-        6.5,
+        18.5,
         0x1_0000_0000,
         10**100,
     ):
@@ -7334,7 +7350,7 @@ def test_recursive_kagemusha_availability_requires_bridge_abi_6(
             kagemusha.preferred_kagemusha_offline_spend_mode()
             is None
         )
-        with pytest.raises(RuntimeError, match="native bridge ABI 6"):
+        with pytest.raises(RuntimeError, match="native bridge ABI 18"):
             kagemusha.kagemusha_recursive_spend_init(_kagemusha_input_archive(0x70))
 
 
@@ -7351,7 +7367,7 @@ def test_recursive_kagemusha_availability_rejects_broken_abi_probe(
 
     assert kagemusha.is_kagemusha_recursive_spend_available() is False
     assert kagemusha.preferred_kagemusha_offline_spend_mode() is None
-    with pytest.raises(RuntimeError, match="native bridge ABI 6"):
+    with pytest.raises(RuntimeError, match="native bridge ABI 18"):
         kagemusha.kagemusha_recursive_spend_init(_kagemusha_input_archive(0x71))
 
 
@@ -7362,7 +7378,7 @@ def test_recursive_kagemusha_topup_availability_requires_abi_15_and_symbol(
     native.kagemusha_recursive_spend_native_bridge_abi_version = lambda: 14
     monkeypatch.setattr(kagemusha, "load_crypto_extension", lambda: native)
 
-    assert kagemusha.is_kagemusha_recursive_spend_available() is True
+    assert kagemusha.is_kagemusha_recursive_spend_available() is False
     assert kagemusha.is_kagemusha_recursive_spend_topup_available() is False
     with pytest.raises(RuntimeError, match="native bridge ABI 15"):
         kagemusha.kagemusha_recursive_spend_topup(_kagemusha_input_archive(0x74))
@@ -7388,7 +7404,7 @@ def test_recursive_kagemusha_helpers_require_complete_abi_surface(
 ) -> None:
     class PartialNative:
         def kagemusha_recursive_spend_native_bridge_abi_version(self) -> int:
-            return 6
+            return 18
 
         def kagemusha_recursive_spend_init(self, request: bytes) -> bytes:
             return b"init"
@@ -7419,7 +7435,7 @@ def test_recursive_kagemusha_helpers_require_complete_abi_surface(
 
     assert kagemusha.is_kagemusha_recursive_spend_available() is False
     assert kagemusha.preferred_kagemusha_offline_spend_mode() is None
-    with pytest.raises(RuntimeError, match="complete native bridge ABI 6 surface"):
+    with pytest.raises(RuntimeError, match="complete native bridge ABI 18 surface"):
         kagemusha.kagemusha_recursive_spend_init(_kagemusha_input_archive(0x72))
 
 
@@ -7433,7 +7449,7 @@ def test_recursive_kagemusha_helpers_reject_each_missing_abi_method(
     monkeypatch.setattr(kagemusha, "load_crypto_extension", lambda: native)
 
     assert kagemusha.is_kagemusha_recursive_spend_available() is False
-    with pytest.raises(RuntimeError, match="complete native bridge ABI 6 surface"):
+    with pytest.raises(RuntimeError, match="complete native bridge ABI 18 surface"):
         kagemusha.kagemusha_recursive_spend_verify(_kagemusha_input_archive(0x73))
 
 

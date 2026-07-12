@@ -2517,11 +2517,9 @@ async fn sorafs_storage_endpoints_round_trip() {
     let app = harness.app.clone();
 
     let payload = b"torii sorafs storage round-trip payload";
-    let plan = CarBuildPlan::single_file_with_profile(
-        payload,
-        sorafs_chunker::ChunkProfile::DEFAULT,
-    )
-    .expect("derive storage manifest chunk plan");
+    let plan =
+        CarBuildPlan::single_file_with_profile(payload, sorafs_chunker::ChunkProfile::DEFAULT)
+            .expect("derive storage manifest chunk plan");
     let manifest = ManifestBuilder::new()
         .root_cid(sorafs_manifest::canonical_manifest_root_cid(
             *blake3::hash(payload).as_bytes(),
@@ -2841,11 +2839,9 @@ async fn sorafs_storage_pin_uses_configured_torii_body_limit() {
     // This payload expands past Axum's default body cap once base64-encoded, so
     // the request only succeeds when the route honors `torii.max_content_len`.
     let payload = vec![0x5Au8; 2_200_000];
-    let plan = CarBuildPlan::single_file_with_profile(
-        &payload,
-        sorafs_chunker::ChunkProfile::DEFAULT,
-    )
-    .expect("derive large storage manifest chunk plan");
+    let plan =
+        CarBuildPlan::single_file_with_profile(&payload, sorafs_chunker::ChunkProfile::DEFAULT)
+            .expect("derive large storage manifest chunk plan");
     let manifest = ManifestBuilder::new()
         .root_cid(sorafs_manifest::canonical_manifest_root_cid(
             *blake3::hash(&payload).as_bytes(),

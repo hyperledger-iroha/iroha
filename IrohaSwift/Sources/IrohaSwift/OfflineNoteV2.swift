@@ -285,12 +285,12 @@ public struct OfflineDeviceAttestationRegistration: Equatable, Sendable {
         )
     }
 
-    /// Build the platform challenge before App Attest reveals its assertion public key.
+    /// Build the canonical platform challenge before its assertion public key is available.
     ///
-    /// Chain admission later requires the credential and certificate keys in
-    /// the returned attestation report to equal the registration's
-    /// `assertionPublicKey`, so excluding that not-yet-known key here does not
-    /// weaken the final key binding.
+    /// Android uses a separate Norito schema that also excludes `keyId`, because
+    /// KeyMint generates the public key from which that identifier is derived
+    /// while processing this challenge. Chain admission still binds the returned
+    /// certificate key to the final lowercase SHA-256 key id.
     public static func preAttestationChallengeHash(
         version: UInt16 = AttestedOfflineNoteConstants.keyCertificateVersion,
         platform: String,
@@ -347,6 +347,82 @@ public struct OfflineDeviceAttestationRegistration: Equatable, Sendable {
             version: version,
             platform: platform,
             keyId: keyId,
+            deviceId: deviceId,
+            accountId: accountId,
+            assetDefinitionId: assetDefinitionId,
+            iosTeamId: iosTeamId,
+            iosBundleId: iosBundleId,
+            iosEnvironment: iosEnvironment,
+            androidPackageName: androidPackageName,
+            androidSigningCertificateSha256: androidSigningCertificateSha256,
+            publicKey: publicKey,
+            assertionScheme: assertionScheme,
+            assertionKeyAlgorithm: assertionKeyAlgorithm,
+            assertionUsageCountLimit: assertionUsageCountLimit,
+            oneUse: oneUse,
+            recentBlockHeight: recentBlockHeight,
+            recentBlockHash: recentBlockHash,
+            expiresAtMs: expiresAtMs
+        )
+    }
+
+    /// Build the Android KeyMint challenge before KeyMint generates the attested key.
+    ///
+    /// This canonical preimage has no key id or assertion public key. Final
+    /// registration validation derives and checks both values from the returned
+    /// certificate chain.
+    public static func androidPreKeyGenerationChallengeHash(
+        version: UInt16 = AttestedOfflineNoteConstants.keyCertificateVersion,
+        deviceId: String,
+        accountId: String,
+        assetDefinitionId: String? = nil,
+        iosTeamId: String? = nil,
+        iosBundleId: String? = nil,
+        iosEnvironment: String? = nil,
+        androidPackageName: String,
+        androidSigningCertificateSha256: Data,
+        publicKey: Data,
+        assertionScheme: String = AttestedOfflineNoteConstants.androidKeyMintAssertionScheme,
+        assertionKeyAlgorithm: String = AttestedOfflineNoteConstants.androidKeyMintAssertionKeyAlgorithm,
+        assertionUsageCountLimit: UInt32? = 1,
+        oneUse: Bool = true,
+        recentBlockHeight: UInt64,
+        recentBlockHash: Data,
+        expiresAtMs: UInt64
+    ) throws -> Data {
+        try AttestedOfflineNoteValidation.validateCertificateCore(
+            version: version,
+            accountId: accountId,
+            publicKey: publicKey,
+            oneUse: oneUse
+        )
+        try AttestedOfflineNoteValidation.validateAttestationDeviceId(deviceId)
+        try AttestedOfflineNoteValidation.validateOptionalAttestationMetadata(
+            iosTeamId: iosTeamId,
+            iosBundleId: iosBundleId,
+            iosEnvironment: iosEnvironment,
+            androidPackageName: androidPackageName
+        )
+        if let assetDefinitionId, AssetDefinitionAddress.decode(assetDefinitionId) == nil {
+            throw OfflineNoritoError.invalidAssetId(assetDefinitionId)
+        }
+        guard androidSigningCertificateSha256.count == 32 else {
+            throw AttestedOfflineNoteError.invalidDigestLength(
+                field: "android_signing_certificate_sha256",
+                expected: 32,
+                actual: androidSigningCertificateSha256.count
+            )
+        }
+        guard assertionScheme == AttestedOfflineNoteConstants.androidKeyMintAssertionScheme,
+              assertionKeyAlgorithm == AttestedOfflineNoteConstants.androidKeyMintAssertionKeyAlgorithm,
+              assertionUsageCountLimit == 1 else {
+            throw AttestedOfflineNoteError.unsupportedDeviceAttestationProfile(
+                "Android KeyMint pre-key challenge requires the canonical one-use P-256 assertion profile"
+            )
+        }
+        try AttestedOfflineNoteValidation.validateHash(recentBlockHash, field: "recent_block_hash")
+        return try computeAndroidKeyMintChallengeHash(
+            version: version,
             deviceId: deviceId,
             accountId: accountId,
             assetDefinitionId: assetDefinitionId,
@@ -466,10 +542,72 @@ public struct OfflineDeviceAttestationRegistration: Equatable, Sendable {
                                              recentBlockHeight: UInt64,
                                              recentBlockHash: Data,
                                              expiresAtMs: UInt64) throws -> Data {
+        if platform == AttestedOfflineNoteConstants.androidKeyMintPlatform {
+            return try computeAndroidKeyMintChallengeHash(
+                version: version,
+                deviceId: deviceId,
+                accountId: accountId,
+                assetDefinitionId: assetDefinitionId,
+                iosTeamId: iosTeamId,
+                iosBundleId: iosBundleId,
+                iosEnvironment: iosEnvironment,
+                androidPackageName: androidPackageName,
+                androidSigningCertificateSha256: androidSigningCertificateSha256,
+                publicKey: publicKey,
+                assertionScheme: assertionScheme,
+                assertionKeyAlgorithm: assertionKeyAlgorithm,
+                assertionUsageCountLimit: assertionUsageCountLimit,
+                oneUse: oneUse,
+                recentBlockHeight: recentBlockHeight,
+                recentBlockHash: recentBlockHash,
+                expiresAtMs: expiresAtMs
+            )
+        }
         let preimage = OfflineDeviceAttestationChallengePreimage(
             version: version,
             platform: platform,
             keyId: keyId,
+            deviceId: deviceId,
+            accountId: accountId,
+            assetDefinitionId: assetDefinitionId,
+            iosTeamId: iosTeamId,
+            iosBundleId: iosBundleId,
+            iosEnvironment: iosEnvironment,
+            androidPackageName: androidPackageName,
+            androidSigningCertificateSha256: androidSigningCertificateSha256,
+            publicKey: publicKey,
+            assertionScheme: assertionScheme,
+            assertionKeyAlgorithm: assertionKeyAlgorithm,
+            assertionUsageCountLimit: assertionUsageCountLimit,
+            oneUse: oneUse,
+            recentBlockHeight: recentBlockHeight,
+            recentBlockHash: recentBlockHash,
+            expiresAtMs: expiresAtMs
+        )
+        return IrohaHash.hash(try preimage.noritoEncoded())
+    }
+
+    private static func computeAndroidKeyMintChallengeHash(
+        version: UInt16,
+        deviceId: String,
+        accountId: String,
+        assetDefinitionId: String?,
+        iosTeamId: String?,
+        iosBundleId: String?,
+        iosEnvironment: String?,
+        androidPackageName: String?,
+        androidSigningCertificateSha256: Data?,
+        publicKey: Data,
+        assertionScheme: String,
+        assertionKeyAlgorithm: String,
+        assertionUsageCountLimit: UInt32?,
+        oneUse: Bool,
+        recentBlockHeight: UInt64,
+        recentBlockHash: Data,
+        expiresAtMs: UInt64
+    ) throws -> Data {
+        let preimage = OfflineAndroidKeyMintChallengePreimage(
+            version: version,
             deviceId: deviceId,
             accountId: accountId,
             assetDefinitionId: assetDefinitionId,
@@ -516,6 +654,33 @@ fileprivate struct OfflineDeviceAttestationChallengePreimage {
         try AttestedOfflineNoteEncoding.wrap(
             typeName: AttestedOfflineNoteTypeNames.deviceAttestationChallengePreimage,
             payload: AttestedOfflineNoteEncoding.encodeDeviceAttestationChallengePreimage(self)
+        )
+    }
+}
+
+fileprivate struct OfflineAndroidKeyMintChallengePreimage {
+    let version: UInt16
+    let deviceId: String
+    let accountId: String
+    let assetDefinitionId: String?
+    let iosTeamId: String?
+    let iosBundleId: String?
+    let iosEnvironment: String?
+    let androidPackageName: String?
+    let androidSigningCertificateSha256: Data?
+    let publicKey: Data
+    let assertionScheme: String
+    let assertionKeyAlgorithm: String
+    let assertionUsageCountLimit: UInt32?
+    let oneUse: Bool
+    let recentBlockHeight: UInt64
+    let recentBlockHash: Data
+    let expiresAtMs: UInt64
+
+    func noritoEncoded() throws -> Data {
+        try AttestedOfflineNoteEncoding.wrap(
+            typeName: AttestedOfflineNoteTypeNames.androidKeyMintChallengePreimage,
+            payload: AttestedOfflineNoteEncoding.encodeAndroidKeyMintChallengePreimage(self)
         )
     }
 }
@@ -1258,6 +1423,8 @@ enum AttestedOfflineNoteTypeNames {
         "iroha_data_model::offline::OfflineDeviceAttestationRegistration"
     static let deviceAttestationChallengePreimage =
         "iroha_data_model::offline::OfflineDeviceAttestationChallengePreimage"
+    static let androidKeyMintChallengePreimage =
+        "iroha_data_model::offline::OfflineAndroidKeyMintChallengePreimage"
     static let keyCertificate = "iroha_data_model::offline::model::OfflineNoteKeyCertificate"
     static let keyCertificatePayload = "iroha_data_model::offline::model::OfflineNoteKeyCertificatePayload"
     static let recursiveProof = "iroha_data_model::offline::model::OfflineNoteRecursiveProof"
@@ -1340,7 +1507,6 @@ enum AttestedOfflineNoteValidation {
 
     static func validateAttestationIdentity(keyId: String, deviceId: String) throws {
         let trimmedKeyId = keyId.trimmingCharacters(in: .whitespacesAndNewlines)
-        let trimmedDeviceId = deviceId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedKeyId.isEmpty else {
             throw AttestedOfflineNoteError.unsupportedDeviceAttestationProfile("attestation key_id must not be empty")
         }
@@ -1349,6 +1515,11 @@ enum AttestedOfflineNoteValidation {
                 "attestation key_id must not contain surrounding whitespace"
             )
         }
+        try validateAttestationDeviceId(deviceId)
+    }
+
+    static func validateAttestationDeviceId(_ deviceId: String) throws {
+        let trimmedDeviceId = deviceId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedDeviceId.isEmpty else {
             throw AttestedOfflineNoteError.unsupportedDeviceAttestationProfile("attestation device_id must not be empty")
         }
@@ -1569,6 +1740,57 @@ enum AttestedOfflineNoteEncoding {
         writer.writeField(OfflineCompactNorito.encodeUInt16(preimage.version))
         writer.writeField(OfflineCompactNorito.encodeString(preimage.platform))
         writer.writeField(OfflineCompactNorito.encodeString(preimage.keyId))
+        writer.writeField(OfflineCompactNorito.encodeString(preimage.deviceId))
+        writer.writeField(try encodeAccountId(preimage.accountId))
+        writer.writeField(try OfflineCompactNorito.encodeOption(
+            preimage.assetDefinitionId,
+            encode: encodeAssetDefinitionId
+        ))
+        writer.writeField(try OfflineCompactNorito.encodeOption(
+            preimage.iosTeamId,
+            encode: OfflineCompactNorito.encodeString
+        ))
+        writer.writeField(try OfflineCompactNorito.encodeOption(
+            preimage.iosBundleId,
+            encode: OfflineCompactNorito.encodeString
+        ))
+        writer.writeField(try OfflineCompactNorito.encodeOption(
+            preimage.iosEnvironment,
+            encode: OfflineCompactNorito.encodeString
+        ))
+        writer.writeField(try OfflineCompactNorito.encodeOption(
+            preimage.androidPackageName,
+            encode: OfflineCompactNorito.encodeString
+        ))
+        writer.writeField(try OfflineCompactNorito.encodeOption(
+            preimage.androidSigningCertificateSha256,
+            encode: encodeBytesVec
+        ))
+        writer.writeField(encodeBytesVec(preimage.publicKey))
+        writer.writeField(OfflineCompactNorito.encodeString(preimage.assertionScheme))
+        writer.writeField(OfflineCompactNorito.encodeString(preimage.assertionKeyAlgorithm))
+        writer.writeField(try OfflineCompactNorito.encodeOption(
+            preimage.assertionUsageCountLimit,
+            encode: OfflineCompactNorito.encodeUInt32
+        ))
+        writer.writeField(OfflineNorito.encodeBool(preimage.oneUse))
+        writer.writeField(OfflineCompactNorito.encodeUInt64(preimage.recentBlockHeight))
+        writer.writeField(try OfflineCompactNorito.encodeHash(preimage.recentBlockHash))
+        writer.writeField(OfflineCompactNorito.encodeUInt64(preimage.expiresAtMs))
+        return writer.data
+    }
+
+    fileprivate static func encodeAndroidKeyMintChallengePreimage(
+        _ preimage: OfflineAndroidKeyMintChallengePreimage
+    ) throws -> Data {
+        var writer = OfflineCompactNoritoWriter()
+        writer.writeField(OfflineCompactNorito.encodeString(
+            AttestedOfflineNoteConstants.deviceAttestationChallengeDomain
+        ))
+        writer.writeField(OfflineCompactNorito.encodeUInt16(preimage.version))
+        writer.writeField(OfflineCompactNorito.encodeString(
+            AttestedOfflineNoteConstants.androidKeyMintPlatform
+        ))
         writer.writeField(OfflineCompactNorito.encodeString(preimage.deviceId))
         writer.writeField(try encodeAccountId(preimage.accountId))
         writer.writeField(try OfflineCompactNorito.encodeOption(
