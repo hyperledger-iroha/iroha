@@ -32,6 +32,7 @@ const REQUIRED_KAGEMUSHA_V2_PROOF_SYMBOLS = Object.freeze([
 const REQUIRED_KAGEMUSHA_V2_PROTOCOL_SYMBOLS = Object.freeze([
   "connect_norito_kagemusha_recursive_spend_capabilities_v1",
   "connect_norito_kagemusha_topup_finality_verify_v2",
+  "connect_norito_kagemusha_topup_shield_build_unsigned_v2",
   "connect_norito_kagemusha_recursive_spend_topup_v2",
   "connect_norito_kagemusha_recursive_spend_topup_unsigned_payload_digest_v2",
   "connect_norito_kagemusha_recursive_spend_topup_finalize_request_v2",
@@ -97,12 +98,11 @@ const ADDITIVE_ABI18_V3_C_SYMBOLS = Object.freeze([
 ]);
 
 const CURRENT_C_SYMBOLS = Object.freeze([
-  ...REQUIRED_C_SYMBOLS,
   ...ABI18_V2_C_SYMBOLS,
   ...ADDITIVE_ABI18_V3_C_SYMBOLS,
 ]);
 
-const REQUIRED_RECURSIVE_COMPACT_C_SYMBOLS = Object.freeze([
+const RETIRED_RECURSIVE_COMPACT_C_SYMBOLS = Object.freeze([
   "connect_norito_kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes",
   "connect_norito_kagemusha_verify_recursive_compact_payment_token",
   "connect_norito_kagemusha_recursive_spend_compact_payment_token_from_bundle",
@@ -684,7 +684,7 @@ test("recursive Kagemusha ABI-18 native host and SDK method names stay in parity
     ...swiftV2ProofInventory,
     ...swiftV2ProtocolInventory,
   ];
-  const kagemushaV2InventoryFamily = String.raw`connect_norito_kagemusha_(?:topup_finality_verify_v2|receiver_key_reference_v2|recipient_output_derive_v2|recipient_payment_request_(?:signing_bytes|create|verify)_v2|request_authorization_(?:signing_bytes|create)_v2|receiver_acknowledgement_(?:payload|signing_bytes|create|verify)_v2|recursive_spend_(?:capabilities_v1|(?:init|topup|append|redeem_change|verify|redeem|topup_unsigned_payload_digest|topup_finalize_request|redeem_unsigned_payload_digest|redeem_finalize_request|peer_payment_from_split|peer_payment_validate|bundle_summary|build_split_intent|build_redemption_intent)_v2|artifact_(?:begin|write|finalize|cancel|set_(?:install|is_installed|uninstall))_v3))`;
+  const kagemushaV2InventoryFamily = String.raw`connect_norito_kagemusha_(?:topup_(?:finality_verify|shield_build_unsigned)_v2|receiver_key_reference_v2|recipient_output_derive_v2|recipient_payment_request_(?:signing_bytes|create|verify)_v2|request_authorization_(?:signing_bytes|create)_v2|receiver_acknowledgement_(?:payload|signing_bytes|create|verify)_v2|recursive_spend_(?:capabilities_v1|(?:init|topup|append|redeem_change|verify|redeem|topup_unsigned_payload_digest|topup_finalize_request|redeem_unsigned_payload_digest|redeem_finalize_request|peer_payment_from_split|peer_payment_validate|bundle_summary|build_split_intent|build_redemption_intent)_v2|artifact_(?:begin|write|finalize|cancel|set_(?:install|is_installed|uninstall))_v3))`;
   const rustV2Inventory = new Set(
     namesFromMatches(
       rustBridge,
@@ -708,8 +708,8 @@ test("recursive Kagemusha ABI-18 native host and SDK method names stay in parity
   );
   assert.equal(
     REQUIRED_KAGEMUSHA_V2_PROTOCOL_SYMBOLS.length,
-    30,
-    "ABI-18 must pin exactly thirty Kagemusha V2 protocol symbols",
+    31,
+    "ABI-18 must pin exactly thirty-one Kagemusha V2 protocol symbols",
   );
   assert.equal(
     new Set(swiftV2NativeInventory).size,
@@ -742,7 +742,7 @@ test("recursive Kagemusha ABI-18 native host and SDK method names stay in parity
     "Swift V2 availability inventory must combine proof and protocol symbols",
   );
   const swiftV2Availability = swiftNativeBridgeCore.slice(
-    swiftNativeBridgeCore.indexOf("public var hasKagemushaRecursiveSpendContractSymbols"),
+    swiftNativeBridgeCore.indexOf("public var isKagemushaRecursiveSpendV2StubAvailable"),
     swiftNativeBridgeCore.indexOf("public var isPrivacyNativeAvailable"),
   );
   assert.match(
@@ -777,8 +777,13 @@ test("recursive Kagemusha ABI-18 native host and SDK method names stay in parity
   );
   assert.equal(
     REQUIRED_KAGEMUSHA_V2_NATIVE_SYMBOLS.length,
-    35,
-    "ABI-18 must pin the complete five-proof and thirty-protocol inventory",
+    36,
+    "ABI-18 must pin the complete five-proof and thirty-one-protocol inventory",
+  );
+  assert.match(
+    headerGuard,
+    /len\(required_kagemusha_v2_proof_exports\) != 5[\s\S]*len\(required_kagemusha_v2_protocol_exports\) != 31[\s\S]*len\(required_kagemusha_native_exports\) != 36[\s\S]*set\(expected_kagemusha_v2_signatures\) != required_kagemusha_native_exports[\s\S]*set\(expected_kagemusha_v2_rust_signatures\) != required_kagemusha_native_exports/u,
+    "NoritoBridge header guard must pin exact ABI-18 proof, protocol, total, and signature inventories",
   );
   assert.match(
     headerGuard,
@@ -961,6 +966,33 @@ test("recursive Kagemusha ABI-18 native host and SDK method names stay in parity
   );
 });
 
+test("ABI-18 checker rejects partial hybrids and stale ABI-17 assumptions", () => {
+  const cases = [
+    [
+      "--negative-control-bad-abi18-capabilities-rust-signature",
+      "Rust ABI-18 Kagemusha V2 export has wrong signature: connect_norito_kagemusha_recursive_spend_capabilities_v1",
+    ],
+    [
+      "--negative-control-missing-swift-abi18-symbol",
+      "Swift ABI-18 Kagemusha V2 requiredProtocolSymbols inventory drifted",
+    ],
+    [
+      "--negative-control-stale-abi17-export",
+      "retired ABI-17 unsuffixed Rust exports reintroduced: connect_norito_kagemusha_recursive_spend_init",
+    ],
+  ];
+
+  for (const [mode, expected] of cases) {
+    const result = spawnSync(
+      "bash",
+      ["ci/check_connect_norito_bridge_header.sh", mode],
+      { cwd: REPO_ROOT, encoding: "utf8" },
+    );
+    assert.equal(result.status, 0, `${mode}: ${result.stderr}`);
+    assert.match(result.stdout, new RegExp(escapeRegExp(expected), "u"), mode);
+  }
+});
+
 test("Kagemusha Kotlin recursive spend JNI declarations stay static", () => {
   const kotlinRecursive = source(
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt",
@@ -1047,12 +1079,12 @@ test("Kagemusha mobile compact-token native output guards require Norito archive
   ]) {
     assert.match(
       text,
-      /KagemushaCompactPaymentTokenProver\.isValidNoritoArchive/u,
+      /NoritoArchiveValidation\.isValidNoritoArchive/u,
       `${label} must reuse the shared Norito archive validator`,
     );
     assert.match(
       text,
-      /KagemushaCompactPaymentTokenProver\.hasNonEmptyNoritoPayload/u,
+      /NoritoArchiveValidation\.hasNonEmptyNoritoPayload/u,
       `${label} must require non-empty Norito native output payloads`,
     );
     assert.match(text, /requireNativeInput/u, `${label} must preflight native input archives`);
@@ -1606,7 +1638,7 @@ test("Kagemusha Swift and C# recursive spend inputs require Norito archives", ()
       ".invalidBundleArchive",
       "testProjectionRejectsMalformedBundleArchiveBeforeBridgeCall",
       "testNativeArchiveLimitMatchesSharedKagemushaCap",
-      "KagemushaRecursiveCompactPaymentTokenProver.nativeArchiveMaxBytes",
+      "KagemushaRecursiveSpendProver.nativeArchiveMaxBytes",
       "KagemushaRecursiveSpendProver.nativeArchiveMaxBytes",
       "256 * 1024 * 1024",
     ],
@@ -2578,18 +2610,29 @@ test("Kagemusha Python instruction transaction builder stays wired", () => {
 test("recursive Kagemusha ABI-7 compact verifier surface stays in parity", () => {
   const rustBridge = source("crates/connect_norito_bridge/src/lib.rs");
   const header = source("crates/connect_norito_bridge/include/connect_norito_bridge.h");
-  assertContainsAll(rustBridge, REQUIRED_RECURSIVE_COMPACT_C_SYMBOLS, "Rust recursive compact C bridge");
-  assertContainsAll(header, REQUIRED_RECURSIVE_COMPACT_C_SYMBOLS, "C header recursive compact bridge");
-  assertContainsAll(
-    header,
-    [
-      "uint8_t* out_valid",
-      "Input 2: Norito-archive bytes of `KagemushaRecursiveCompactVerifierKeysV1`.",
-      "Proof payloads below the ABI-7 compact floor return ERR_KAGEMUSHA_PROVE.",
-      "Preverified tokens with cryptographically invalid proof bodies return success",
-    ],
-    "C header recursive compact verifier contract",
-  );
+  for (const symbol of RETIRED_RECURSIVE_COMPACT_C_SYMBOLS) {
+    assert.doesNotMatch(
+      header,
+      new RegExp(`\\b${escapeRegExp(symbol)}\\b`, "u"),
+      `ABI-18 C header must not restore retired compact export ${symbol}`,
+    );
+    assert.doesNotMatch(
+      rustBridge,
+      new RegExp(
+        `#\\[unsafe\\(no_mangle\\)\\]\\s*pub unsafe extern "C" fn ${escapeRegExp(symbol)}\\b`,
+        "u",
+      ),
+      `ABI-18 Rust bridge must not restore retired compact export ${symbol}`,
+    );
+    assert.match(
+      rustBridge,
+      new RegExp(
+        `\\blegacy_test_only_${escapeRegExp(symbol.replace(/^connect_norito_/u, ""))}\\b`,
+        "u",
+      ),
+      `Rust bridge must retain test-only compact coverage for ${symbol}`,
+    );
+  }
   assertContainsAll(
     rustBridge,
     [

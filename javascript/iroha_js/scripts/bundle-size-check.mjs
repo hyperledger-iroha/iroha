@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { readFile } from "node:fs/promises";
+import { spawn } from "node:child_process";
 import process from "node:process";
 import { join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -18,9 +19,10 @@ export const BUNDLE_TARGETS = Object.freeze([
     platform: "node",
     target: "node18",
     // This direct entrypoint intentionally exposes the complete Torii surface. The audited
-    // security-hardening baseline is 853,208 bytes with pinned esbuild; 840 KiB (860,160
-    // bytes) leaves 6,952 bytes, or 0.81%, of regression headroom.
-    limitKb: 840,
+    // security-hardening baseline is 877,656 bytes with pinned esbuild; 864 KiB (884,736
+    // bytes) leaves 7,080 bytes, or 0.81%, of regression headroom. The increase from the
+    // former 840 KiB ceiling is bound to the typed offline-operation API added to Torii.
+    limitKb: 864,
   }),
   Object.freeze({
     label: "transactionCodec.js (browser)",
@@ -83,9 +85,10 @@ export const BUNDLE_TARGETS = Object.freeze([
     entryPoint: join(ROOT, "dist", "browser.js"),
     platform: "browser",
     target: "es2020",
-    // The browser-clean public aggregate is 303,924 bytes (296.8 KiB) with
-    // pinned esbuild, leaving 3,276 bytes (1.08%) for the complete namespace.
-    limitKb: 300,
+    // The browser-clean public aggregate is 328,676 bytes (321.0 KiB) with
+    // pinned esbuild; 328 KiB leaves 7,196 bytes (2.19%) for the complete
+    // namespace after the typed offline-operation API was added to Torii.
+    limitKb: 328,
     forbidNodeInputs: true,
     forbidGlobalBuffer: true,
   }),
@@ -93,16 +96,88 @@ export const BUNDLE_TARGETS = Object.freeze([
 
 const NODE_ONLY_BROWSER_INPUT_PATTERNS = Object.freeze([
   /^node:/u,
-  /[/\\](?:src|dist)[/\\]crypto\.js$/u,
-  /[/\\](?:src|dist)[/\\]cryptoHash\.js$/u,
-  /[/\\](?:src|dist)[/\\]native\.js$/u,
-  /[/\\](?:src|dist)[/\\]toriiClient\.js$/u,
+  /(?:^|[/\\])(?:src|dist)[/\\]crypto\.js$/u,
+  /(?:^|[/\\])(?:src|dist)[/\\]cryptoHash\.js$/u,
+  /(?:^|[/\\])(?:src|dist)[/\\]native\.js$/u,
+  /(?:^|[/\\])(?:src|dist)[/\\]toriiClient\.js$/u,
+]);
+
+const GLOBAL_BUFFER_MUTATION_PATTERNS = Object.freeze([
+  /(?:globalThis|window|global|self)(?:\.Buffer|\[["']Buffer["']\])\s*(?:=|\|\|=|\?\?=|&&=|\+=|-=|\*=|\/=|%=|\*\*=|<<=|>>=|>>>=|&=|\^=|\|=|\+\+|--)/u,
+  /(?:\+\+|--)(?:globalThis|window|global|self)(?:\.Buffer|\[["']Buffer["']\])/u,
+  /(?:Object|Reflect)\.defineProperty\(\s*(?:globalThis|window|global|self)\s*,\s*["']Buffer["']/u,
+  /Object\.defineProperties\(\s*(?:globalThis|window|global|self)\s*,\s*\{[^}]{0,512}(?:["']Buffer["']|Buffer)\s*:/u,
+  /Object\.assign\(\s*(?:globalThis|window|global|self)\s*,\s*\{[^}]{0,512}(?:["']Buffer["']|Buffer)\s*:/u,
 ]);
 
 export function findForbiddenBrowserInputs(inputs) {
   return inputs.filter((input) =>
     NODE_ONLY_BROWSER_INPUT_PATTERNS.some((pattern) => pattern.test(input)),
   );
+}
+
+export function hasForbiddenGlobalBufferMutation(source) {
+  return GLOBAL_BUFFER_MUTATION_PATTERNS.some((pattern) => pattern.test(source));
+}
+
+const BUFFER_RUNTIME_PROBE = [
+  'import { readFileSync } from "node:fs";',
+  'const source = readFileSync(0, "utf8");',
+  '// Initialize Node\'s lazy Fetch/Undici globals while its own Buffer is still present.',
+  'void globalThis.fetch; void globalThis.Headers; void globalThis.Request; void globalThis.Response;',
+  'if (!Reflect.deleteProperty(globalThis, "Buffer")) {',
+  '  throw new Error("runtime probe could not remove global Buffer");',
+  '}',
+  'await import("data:text/javascript;charset=utf-8," + encodeURIComponent(source) + "#iroha-buffer-probe");',
+  'if (Object.prototype.hasOwnProperty.call(globalThis, "Buffer")) {',
+  '  throw new Error("browser bundle installed global Buffer");',
+  '}',
+].join("\n");
+
+async function assertNoRuntimeGlobalBufferInstall(source, label) {
+  await new Promise((resolvePromise, rejectPromise) => {
+    const child = spawn(
+      process.execPath,
+      ["--input-type=module", "--eval", BUFFER_RUNTIME_PROBE],
+      {
+        stdio: ["pipe", "ignore", "pipe"],
+        env: {},
+      },
+    );
+    let stderr = "";
+    const timeout = setTimeout(() => {
+      child.kill("SIGKILL");
+    }, 15_000);
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk) => {
+      if (stderr.length < 8_192) {
+        stderr += chunk.slice(0, 8_192 - stderr.length);
+      }
+    });
+    child.once("error", (error) => {
+      clearTimeout(timeout);
+      rejectPromise(
+        new Error(`${label} browser runtime Buffer probe failed to start`, {
+          cause: error,
+        }),
+      );
+    });
+    child.once("close", (code, signal) => {
+      clearTimeout(timeout);
+      if (code === 0) {
+        resolvePromise();
+        return;
+      }
+      const diagnostic = stderr.replace(/\s+/gu, " ").trim().slice(0, 500);
+      rejectPromise(
+        new Error(
+          `${label} installs a forbidden global Buffer shim at runtime` +
+            `${signal ? ` (${signal})` : ""}${diagnostic ? `: ${diagnostic}` : ""}`,
+        ),
+      );
+    });
+    child.stdin.end(source, "utf8");
+  });
 }
 
 async function loadRequiredEsbuild(loadEsbuild) {
@@ -140,8 +215,13 @@ async function checkBundle(esbuild, target, log) {
   }
   const bytes = output.contents?.byteLength ?? Buffer.byteLength(output.text ?? "", "utf8");
   const kb = (bytes / 1024).toFixed(1);
-  log(`Bundled ${target.label}: ${kb} KiB (limit ${target.limitKb} KiB)`);
-  if (bytes > target.limitKb * 1024) {
+  const hasSizeLimit = Number.isFinite(target.limitKb);
+  log(
+    hasSizeLimit
+      ? `Bundled ${target.label}: ${kb} KiB (limit ${target.limitKb} KiB)`
+      : `Audited ${target.label}: ${kb} KiB browser graph`,
+  );
+  if (hasSizeLimit && bytes > target.limitKb * 1024) {
     throw new Error(
       `${target.label} bundle size ${kb} KiB exceeds limit ${target.limitKb} KiB`,
     );
@@ -156,11 +236,58 @@ async function checkBundle(esbuild, target, log) {
       );
     }
   }
-  if (
-    target.forbidGlobalBuffer === true &&
-    /(?:globalThis|window|global)\.Buffer\s*=/u.test(output.text ?? "")
-  ) {
+  const outputText = output.text ?? Buffer.from(output.contents ?? []).toString("utf8");
+  if (target.forbidGlobalBuffer === true && hasForbiddenGlobalBufferMutation(outputText)) {
     throw new Error(`${target.label} installs a forbidden global Buffer shim`);
+  }
+  if (target.runtimeNoGlobalBuffer === true) {
+    await assertNoRuntimeGlobalBufferInstall(outputText, target.label);
+  }
+}
+
+export function listExplicitBrowserExports(pkg) {
+  const grouped = new Map();
+  for (const [subpath, configured] of Object.entries(pkg?.exports ?? {})) {
+    if (
+      configured === null ||
+      typeof configured !== "object" ||
+      !Object.prototype.hasOwnProperty.call(configured, "browser")
+    ) {
+      continue;
+    }
+    const target = configured.browser;
+    if (typeof target !== "string" || !target.startsWith("./dist/")) {
+      throw new Error(
+        `${subpath} explicit browser export should point to built dist artifacts`,
+      );
+    }
+    const subpaths = grouped.get(target) ?? [];
+    subpaths.push(subpath);
+    grouped.set(target, subpaths);
+  }
+  return Array.from(grouped, ([target, subpaths]) =>
+    Object.freeze({
+      target,
+      subpaths: Object.freeze(subpaths.slice()),
+    }),
+  );
+}
+
+async function checkExplicitBrowserExportGraphs(esbuild, pkg, log) {
+  for (const { target, subpaths } of listExplicitBrowserExports(pkg)) {
+    await checkBundle(
+      esbuild,
+      {
+        label: `${subpaths.join(", ")} explicit browser export`,
+        entryPoint: resolve(ROOT, target),
+        platform: "browser",
+        target: "es2020",
+        forbidNodeInputs: true,
+        forbidGlobalBuffer: true,
+        runtimeNoGlobalBuffer: true,
+      },
+      log,
+    );
   }
 }
 
@@ -196,6 +323,7 @@ export async function runBundleSizeCheck({
   }
 
   const pkg = JSON.parse(await readFile(join(ROOT, "package.json"), "utf8"));
+  await checkExplicitBrowserExportGraphs(esbuild, pkg, log);
   await checkDistExport(pkg, "./torii", "import");
   await checkDistExport(pkg, "./transaction-codec", "browser");
   await checkDistExport(pkg, "./nexus-app", "browser");

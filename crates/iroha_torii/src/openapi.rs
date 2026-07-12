@@ -18281,12 +18281,22 @@ mod tests {
     }
 
     fn nullable_property_ref<'a>(schemas: &'a Map, owner: &str, property: &str) -> &'a str {
-        let variants = component_properties(schemas, owner)
+        let schema = component_properties(schemas, owner)
             .get(property)
             .and_then(Value::as_object)
-            .and_then(|schema| schema.get("oneOf"))
-            .and_then(Value::as_array)
-            .unwrap_or_else(|| panic!("{owner}.{property} nullable oneOf"));
+            .unwrap_or_else(|| panic!("{owner}.{property} property schema"));
+        let one_of = schema.get("oneOf").and_then(Value::as_array);
+        let any_of = schema.get("anyOf").and_then(Value::as_array);
+        assert!(
+            one_of.is_some() ^ any_of.is_some(),
+            "{owner}.{property} must use exactly one nullable union keyword"
+        );
+        let variants = one_of.or(any_of).expect("checked nullable union");
+        assert_eq!(
+            variants.len(),
+            2,
+            "{owner}.{property} nullable union must have exactly two variants"
+        );
         assert_eq!(
             variants
                 .get(1)
@@ -20454,7 +20464,7 @@ mod tests {
     }
 
     #[test]
-    fn generated_spec_documents_direct_offline_dtos_and_operation_states() {
+    fn generated_spec_documents_strict_typed_offline_request_schemas_and_states() {
         let doc = generate_spec();
         let schemas = doc
             .get("components")
@@ -20481,6 +20491,11 @@ mod tests {
                 Some(false),
                 "direct request JSON must reject retired and unknown fields"
             );
+            assert_eq!(schema.get("type").and_then(Value::as_str), Some("object"));
+            assert!(
+                !schema.contains_key("oneOf") && !schema.contains_key("anyOf"),
+                "a direct typed request must not regain a wrapper or compatibility union"
+            );
             assert!(!schema.contains_key("x-iroha-norito-type"));
             assert_eq!(
                 schema.get("x-iroha-norito-schema").and_then(Value::as_str),
@@ -20493,6 +20508,42 @@ mod tests {
             assert!(!properties.contains_key("topup_request_norito_base64"));
             assert!(!properties.contains_key("redeem_request_norito_base64"));
         }
+        assert_eq!(
+            component_required(schemas, "OfflineTopUpRequest"),
+            [
+                "asset",
+                "amount",
+                "current_note",
+                "shield_evidence",
+                "artifact_generation",
+                "operation_id",
+                "authorization",
+            ],
+            "top-up transport fields must exactly match the current typed V2 request"
+        );
+        assert_eq!(
+            component_required(schemas, "OfflineRedeemRequest"),
+            [
+                "bundle",
+                "recipient",
+                "amount",
+                "redeem_proof",
+                "redemption",
+                "lineage_verifier_record",
+                "block_height",
+                "operation_id",
+                "authorization",
+            ],
+            "redeem transport fields must exactly match the current typed V2 request"
+        );
+        assert_eq!(
+            nullable_property_ref(schemas, "OfflineRedeemRequest", "lineage_witness"),
+            "#/components/schemas/OfflineLineageWitness"
+        );
+        assert_eq!(
+            nullable_property_ref(schemas, "OfflineRedeemRequest", "offline_change"),
+            "#/components/schemas/OfflineRedeemChangeBranch"
+        );
         let readiness = schemas
             .get("OfflineReadiness")
             .and_then(Value::as_object)
@@ -20671,8 +20722,7 @@ mod tests {
                 "asset",
                 "amount",
                 "current_note",
-                "record_bundle",
-                "pallas_open_envelopes_archive",
+                "shield_evidence",
                 "artifact_generation",
                 "operation_id",
                 "authorization",
@@ -20683,8 +20733,8 @@ mod tests {
             "#/components/schemas/OfflineSpendableNoteDescriptor"
         );
         assert_eq!(
-            property_ref(schemas, "OfflineTopUpRequest", "record_bundle"),
-            "#/components/schemas/OfflineVerifiedFoldRecordBundle"
+            property_ref(schemas, "OfflineTopUpRequest", "shield_evidence"),
+            "#/components/schemas/OfflineTopUpShieldEvidence"
         );
         assert_eq!(
             property_ref(schemas, "OfflineTopUpRequest", "authorization"),
@@ -20792,17 +20842,32 @@ mod tests {
                 .and_then(Value::as_u64),
             Some(28)
         );
-        let anchor_nullifiers = top_up_anchor
-            .get("topup_anchor_nullifiers")
-            .and_then(Value::as_object)
-            .expect("top-up anchor nullifier list schema");
         assert_eq!(
-            anchor_nullifiers.get("minItems").and_then(Value::as_u64),
-            Some(1)
+            component_required(schemas, "OfflineTopUpAnchor"),
+            [
+                "version",
+                "chain_id",
+                "payer",
+                "asset",
+                "asset_scale",
+                "amount",
+                "initial_root",
+                "finalized_root",
+                "shield_leaf_index",
+                "current_note",
+                "topup_operation_id",
+                "shield_verifier_id",
+                "shield_verifier_commitment",
+                "artifact_generation",
+                "finalized_height",
+                "finalized_tx_hash",
+                "anchor_digest",
+            ],
+            "top-up anchor must expose the current shield-bound V2 shape"
         );
-        assert_eq!(
-            anchor_nullifiers.get("maxItems").and_then(Value::as_u64),
-            Some(2)
+        assert!(
+            !top_up_anchor.contains_key("topup_anchor_nullifiers"),
+            "the retired aggregate nullifier list must not reappear beside the typed current note"
         );
         assert_eq!(
             component_properties(schemas, "OfflineScaledAmount")
