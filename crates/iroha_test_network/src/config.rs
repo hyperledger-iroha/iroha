@@ -462,8 +462,8 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
         wonderland_domain.clone(),
         alice_id.clone(),
     ));
-    builder = builder.append_instruction(Mint::asset_numeric(13u32, rose_asset_id));
-    builder = builder.append_instruction(Mint::asset_numeric(44u32, cabbage_asset_id));
+    builder = builder.append_instruction(Mint::asset_quantity(13u32, rose_asset_id));
+    builder = builder.append_instruction(Mint::asset_quantity(44u32, cabbage_asset_id));
 
     builder = builder.next_transaction();
 
@@ -604,11 +604,11 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
             .with_name("soracloud_hf_lease".to_owned()),
     ));
     for account_id in soracloud_bootstrap_accounts {
-        builder = builder.append_instruction(Mint::asset_numeric(
+        builder = builder.append_instruction(Mint::asset_quantity(
             500_000_u32,
             AssetId::new(agent_wallet_asset_definition.clone(), account_id.clone()),
         ));
-        builder = builder.append_instruction(Mint::asset_numeric(
+        builder = builder.append_instruction(Mint::asset_quantity(
             500_000_u32,
             AssetId::new(hf_shared_lease_asset_definition.clone(), account_id),
         ));
@@ -1770,7 +1770,7 @@ mod tests {
                     .with_name(__asset_definition_id.name().to_string())
             })
             .into(),
-            Mint::asset_numeric(
+            Mint::asset_quantity(
                 10_u32,
                 AssetId::new(stake_asset_id.clone(), validator_id.clone()),
             )

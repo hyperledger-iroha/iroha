@@ -26,6 +26,8 @@ use iroha_core::{
     sumeragi::network_topology::Topology,
 };
 use iroha_crypto::KeyPair;
+#[cfg(feature = "bench")]
+use iroha_crypto::{Algorithm, Hash, Signature, bls_normal_pop_prove};
 use iroha_data_model::prelude::*;
 use iroha_test_samples::gen_account_in;
 use tokio::runtime::Builder;
@@ -55,6 +57,128 @@ impl BenchBlocks {
         let block = Arc::new(block);
         self.prev_block = Some(Arc::clone(&block));
         block
+    }
+}
+
+#[cfg(feature = "bench")]
+fn store_signed_complete_wire_finality_for_eviction_bench(
+    kura: &iroha_core::kura::Kura,
+    blocks: &[Arc<SignedBlock>],
+) {
+    use iroha_data_model::block::consensus_v2::{
+        BlockSubject, ConsensusMode, ConsensusRound, DataAvailabilityLayout, DualQuorum,
+        ExecutionCommitment, GlobalPhase, HeightContext, PROTOCOL_VERSION, PayloadEncoding,
+        QuorumCertificate, ValidatorPower, finality::V2FinalityArtifact,
+    };
+
+    let mut keypairs = (0_u8..4)
+        .map(|index| {
+            KeyPair::try_from_seed(
+                vec![0xC0_u8.saturating_add(index); 32],
+                Algorithm::BlsNormal,
+            )
+            .expect("derive deterministic eviction-benchmark BLS key")
+        })
+        .collect::<Vec<_>>();
+    keypairs.sort_by(|left, right| {
+        PeerId::new(left.public_key().clone()).cmp(&PeerId::new(right.public_key().clone()))
+    });
+    let roster = keypairs
+        .iter()
+        .map(|keypair| ValidatorPower {
+            validator: PeerId::new(keypair.public_key().clone()),
+            power: 1,
+        })
+        .collect::<Vec<_>>();
+    let validator_set_pops = keypairs
+        .iter()
+        .map(|keypair| {
+            bls_normal_pop_prove(keypair.private_key())
+                .expect("derive eviction-benchmark validator PoP")
+        })
+        .collect::<Vec<_>>();
+    let execution_commitment = ExecutionCommitment::new(
+        Hash::new(b"eviction bench parent state"),
+        Hash::new(b"eviction bench post state"),
+        Hash::new(b"eviction bench ordinary writes"),
+        None,
+        0,
+    )
+    .expect("eviction-benchmark execution commitment");
+    let mut parent: Option<V2FinalityArtifact> = None;
+    for block in blocks {
+        let height = block.header().height().get();
+        let context = HeightContext {
+            chain_id: ChainId::from("kura-eviction-benchmark"),
+            protocol_version: PROTOCOL_VERSION,
+            height,
+            epoch: 0,
+            epoch_end_height: u64::try_from(blocks.len())
+                .expect("benchmark chain length fits u64")
+                .saturating_add(1),
+            next_epoch_snapshot: None,
+            mode: ConsensusMode::Permissioned,
+            parent_commit_qc: parent.as_ref().map(|artifact| artifact.commit_qc.clone()),
+            quorum: DualQuorum::from_roster(&roster).expect("eviction-benchmark quorum"),
+            roster: roster.clone(),
+            nexus_amx_context_hash: Hash::new(b"eviction bench nexus context"),
+            da_layout: DataAvailabilityLayout {
+                encoding: PayloadEncoding::Plain,
+                chunk_size_bytes: 1024,
+                data_shards: 0,
+                parity_shards: 0,
+                max_payload_size_bytes: 4096,
+                max_chunk_count: 4,
+            },
+            leader_seed: [0x42; 32],
+        };
+        let subject = BlockSubject {
+            parent_block_hash: block.header().prev_block_hash(),
+            block_hash: block.hash(),
+            payload_hash: Hash::new(block.encode_wire().expect("canonical benchmark block wire")),
+        };
+        let mut commit_qc = QuorumCertificate {
+            round: ConsensusRound {
+                context_id: context.id(),
+                height,
+                view: block.header().view_change_index(),
+            },
+            phase: GlobalPhase::Commit,
+            subject,
+            execution_commitment,
+            signers: vec![0, 1, 2],
+            aggregate_signature: vec![1],
+        };
+        let preimage = commit_qc
+            .signer_preimage(&context, 0)
+            .expect("eviction-benchmark signer preimage");
+        let signatures = commit_qc
+            .signers
+            .iter()
+            .map(|index| {
+                Signature::try_new(
+                    keypairs[usize::try_from(*index).expect("benchmark signer index")]
+                        .private_key(),
+                    &preimage,
+                )
+                .expect("sign eviction-benchmark finality vote")
+                .payload()
+                .to_vec()
+            })
+            .collect::<Vec<_>>();
+        let signature_refs = signatures.iter().map(Vec::as_slice).collect::<Vec<_>>();
+        commit_qc.aggregate_signature =
+            iroha_crypto::bls_normal_aggregate_signatures(&signature_refs)
+                .expect("aggregate eviction-benchmark finality votes");
+        let artifact =
+            V2FinalityArtifact::new(context, subject, commit_qc, validator_set_pops.clone());
+        artifact
+            .verify()
+            .expect("eviction-benchmark finality fixture verifies");
+        let _ = kura
+            .store_v2_finality_artifact(&artifact)
+            .expect("persist eviction-benchmark signed complete-wire finality");
+        parent = Some(artifact);
     }
 }
 
@@ -102,11 +226,17 @@ fn seeded_eviction_bench(
     let persisted_blocks = 1_usize
         .saturating_add(evictable_history)
         .saturating_add(retained_tail);
+    let mut canonical_blocks = Vec::with_capacity(persisted_blocks);
     for _ in 0..persisted_blocks {
         let block = blocks.next();
-        kura.persist_block_immediate_for_bench(&block)
+        kura.store_block(Arc::clone(&block))
             .expect("persist eviction benchmark block");
+        canonical_blocks.push(block);
     }
+    store_signed_complete_wire_finality_for_eviction_bench(
+        &kura,
+        &canonical_blocks[..evictable_history.saturating_add(1)],
+    );
 
     let mut bytes_needed = 0_u64;
     for height in 2..=evictable_history.saturating_add(1) {
@@ -158,9 +288,9 @@ fn measure_block_size_for_n_executors(n_executors: u32) {
         "xor".parse().unwrap(),
     );
     let alice_xor_id = AssetId::new(xor_id, alice_id.clone());
-    let transfer = Transfer::asset_numeric(
+    let transfer = Transfer::asset_quantity(
         alice_xor_id,
-        iroha_primitives::numeric::Numeric::new(10, 0),
+        10_u32,
         bob_id,
     );
     let tx = TransactionBuilder::new(chain_id.clone(), alice_id.clone())

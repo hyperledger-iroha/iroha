@@ -142,7 +142,7 @@ fn setup_asset_and_balance(state: &mut BenchState) {
     let ad = bench_asset_definition_id();
     let asset_id = AssetId::of(ad, state.ctx.authority.clone());
     state.apply_instrs([
-        iroha_data_model::isi::Mint::asset_numeric(Numeric::new(10, 0), asset_id).into(),
+        iroha_data_model::isi::Mint::asset_quantity(10_u32, asset_id).into(),
     ]);
 }
 
@@ -254,14 +254,14 @@ fn run_benchmarks(c: &mut Criterion) {
     bench_isi(c, "MintAsset", setup_asset_definition, |ctx| {
         let ad = bench_asset_definition_id();
         let id = AssetId::of(ad, ctx.authority.clone());
-        iroha_data_model::isi::Mint::asset_numeric(Numeric::new(1, 0), id).into()
+        iroha_data_model::isi::Mint::asset_quantity(1_u32, id).into()
     });
     bench_isi(c, "TransferAsset", setup_asset_and_balance, |ctx| {
         let ad = bench_asset_definition_id();
         let id = AssetId::of(ad, ctx.authority.clone());
-        iroha_data_model::isi::Transfer::asset_numeric(
+        iroha_data_model::isi::Transfer::asset_quantity(
             id,
-            Numeric::new(1, 0),
+            1_u32,
             ctx.recipient.clone(),
         )
         .into()

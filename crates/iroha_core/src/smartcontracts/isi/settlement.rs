@@ -315,6 +315,7 @@ fn resolve_settlement_leg_source_asset_id(
             && asset_id.account() == leg.from()
             && balance
                 .as_ref()
+                .as_numeric()
                 .clone()
                 .checked_sub(leg.quantity().clone())
                 .is_some_and(|remaining| !remaining.mantissa().is_negative()))
@@ -348,7 +349,9 @@ fn ensure_leg_funding(stx: &StateTransaction<'_, '_>, leg: &SettlementLeg) -> Re
         .world
         .assets
         .get(&asset_id)
-        .map_or_else(Numeric::zero, |balance| balance.as_ref().clone());
+        .map_or_else(Numeric::zero, |balance| {
+            balance.as_ref().as_numeric().clone()
+        });
     let remaining = available
         .clone()
         .checked_sub(leg.quantity().clone())
@@ -414,19 +417,17 @@ fn withdraw_numeric_asset_exact(
     id: &AssetId,
     amount: &Numeric,
 ) -> Result<(), Error> {
+    let amount = Quantity::from_canonical_numeric(amount.clone())
+        .map_err(|_| MathError::NegativeValue)?;
     let asset = stx
         .world
         .assets
         .get_mut(id)
         .ok_or_else(|| FindError::Asset(id.clone().into()))?;
-    let quantity: &mut Numeric = &mut *asset;
+    let quantity: &mut Quantity = &mut *asset;
     let candidate = quantity
-        .clone()
-        .checked_sub(amount.clone())
-        .ok_or(MathError::NotEnoughQuantity)?;
-    if candidate.mantissa().is_negative() {
-        return Err(MathError::NotEnoughQuantity.into());
-    }
+        .checked_sub(&amount)
+        .map_err(|_| MathError::NotEnoughQuantity)?;
     *quantity = candidate;
     if (**asset).is_zero() {
         assert!(stx.world.remove_asset_and_metadata(id).is_some());
@@ -439,13 +440,14 @@ fn deposit_numeric_asset_exact(
     id: &AssetId,
     amount: &Numeric,
 ) -> Result<(), Error> {
+    let amount = Quantity::from_canonical_numeric(amount.clone())
+        .map_err(|_| MathError::NegativeValue)?;
     let is_nonzero = {
-        let dst = stx.world.asset_or_insert_exact(id, Numeric::zero())?;
-        let quantity: &mut Numeric = &mut *dst;
+        let dst = stx.world.asset_or_insert_exact(id, Quantity::zero())?;
+        let quantity: &mut Quantity = &mut *dst;
         *quantity = quantity
-            .clone()
-            .checked_add(amount.clone())
-            .ok_or(MathError::Overflow)?;
+            .checked_add(&amount)
+            .map_err(|_| MathError::Overflow)?;
         !quantity.is_zero()
     };
     if is_nonzero {

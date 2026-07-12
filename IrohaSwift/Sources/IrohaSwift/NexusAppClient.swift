@@ -259,7 +259,7 @@ extension ToriiClient: NexusToriiSubmitting {
     public func waitForNexusTransactionStatus(hashHex: String,
                                               options: PipelineStatusPollOptions) async throws -> String {
         let status = try await waitForTransactionStatus(hashHex: hashHex, pollOptions: options)
-        return status.content.status.kind
+        return status.status.kind
     }
 }
 
@@ -275,7 +275,8 @@ public struct SwiftNexusTransactionCodec: NexusTransactionCodec {
     }
 
     public func buildTransferInstructionBox(input: NexusTransferInput) throws -> Data {
-        if let parsed = OfflineNorito.parsePublicAssetIdLiteral(input.sourceAssetID) {
+        let quantity = try KotodamaNumericV1Codec.decodeQuantityJSON(input.quantity).canonicalString
+        if let parsed = CanonicalNorito.parsePublicAssetIdLiteral(input.sourceAssetID) {
             let nativeAssetDefinitionId: String
             if let dataspaceId = parsed.dataspaceId {
                 nativeAssetDefinitionId = "\(parsed.assetDefinitionId)#dataspace:\(dataspaceId)"
@@ -285,18 +286,30 @@ public struct SwiftNexusTransactionCodec: NexusTransactionCodec {
             if let nativeInstruction = try NoritoNativeBridge.shared.encodeTransferInstructionBox(
                 authority: parsed.accountId,
                 assetDefinitionId: nativeAssetDefinitionId,
-                quantity: input.quantity,
+                quantity: quantity,
                 destination: input.destinationAccountID
             ) {
                 return nativeInstruction
             }
         }
-        return try SwiftNexusTransferPayloadEncoder.encodeInstructionBox(input: input)
+        return try SwiftNexusTransferPayloadEncoder.encodeInstructionBox(
+            input: NexusTransferInput(
+                sourceAssetID: input.sourceAssetID,
+                quantity: quantity,
+                destinationAccountID: input.destinationAccountID,
+                authority: input.authority,
+                signingPublicKey: input.signingPublicKey,
+                creationTimeMs: input.creationTimeMs,
+                ttlMs: input.ttlMs,
+                nonce: input.nonce,
+                metadata: input.metadata
+            )
+        )
     }
 
     public func finalizeSignedTransaction(signable: NexusSignableTransaction,
                                           signature: NexusWalletSignature) throws -> SignedTransactionEnvelope {
-        var signedTransaction = OfflineCompactNoritoWriter()
+        var signedTransaction = CompactNoritoWriter()
         signedTransaction.writeField(Self.encodeSignatureOf(signature.signature))
         signedTransaction.writeField(signable.payloadBytes)
         signedTransaction.writeField(Data([0]))
@@ -312,20 +325,20 @@ public struct SwiftNexusTransactionCodec: NexusTransactionCodec {
     }
 
     private static func encodeTransactionEntrypoint(_ signedTransaction: Data) -> Data {
-        var entrypoint = OfflineCompactNoritoWriter()
+        var entrypoint = CompactNoritoWriter()
         entrypoint.writeUInt32LE(0)
         entrypoint.writeField(signedTransaction)
         return entrypoint.data
     }
 
     private static func encodeSignatureOf(_ signature: Data) -> Data {
-        var writer = OfflineCompactNoritoWriter()
+        var writer = CompactNoritoWriter()
         writer.writeField(encodeSignature(signature))
         return writer.data
     }
 
     private static func encodeSignature(_ signature: Data) -> Data {
-        var writer = OfflineCompactNoritoWriter()
+        var writer = CompactNoritoWriter()
         writer.writeUInt64LE(UInt64(signature.count))
         for byte in signature {
             writer.writeLength(1)
@@ -393,7 +406,19 @@ public final class NexusAppClient {
                                 message: "Signing public key is required for an externally signed transfer.")
         }
         try validateEd25519PublicKey(signingPublicKey)
-        let normalized = input.with(authority: authority, signingPublicKey: signingPublicKey)
+        let quantity = try KotodamaNumericV1Codec
+            .decodeQuantityJSON(input.quantity).canonicalString
+        let normalized = NexusTransferInput(
+            sourceAssetID: input.sourceAssetID,
+            quantity: quantity,
+            destinationAccountID: input.destinationAccountID,
+            authority: authority,
+            signingPublicKey: signingPublicKey,
+            creationTimeMs: input.creationTimeMs,
+            ttlMs: input.ttlMs,
+            nonce: input.nonce,
+            metadata: input.metadata
+        )
         let payloadBytes = try transactionCodec.buildTransferPayload(input: normalized,
                                                                      config: config,
                                                                      authority: authority)
@@ -505,9 +530,10 @@ private enum SwiftNexusTransferPayloadEncoder {
     static func encode(input: NexusTransferInput,
                        chainId: String,
                        authority: String) throws -> Data {
+        let quantity = try KotodamaNumericV1Codec.decodeQuantityJSON(input.quantity).canonicalString
         let instruction = TransferInstructionInput(
             sourceAssetID: input.sourceAssetID,
-            quantity: input.quantity,
+            quantity: quantity,
             destinationAccountID: input.destinationAccountID
         )
         return try encodePayload(
@@ -541,15 +567,19 @@ private enum SwiftNexusTransferPayloadEncoder {
             assetDefinitionID: feeAssetDefinitionID,
             authority: authority
         )
+        let principalQuantity = try KotodamaNumericV1Codec
+            .decodeQuantityJSON(request.principal.quantity).canonicalString
+        let feeQuantity = try KotodamaNumericV1Codec
+            .decodeQuantityJSON(request.feeQuantity).canonicalString
         let instructions = [
             TransferInstructionInput(
                 sourceAssetID: principalAssetID,
-                quantity: request.principal.quantity,
+                quantity: principalQuantity,
                 destinationAccountID: destinationAccountID
             ),
             TransferInstructionInput(
                 sourceAssetID: feeAssetID,
-                quantity: request.feeQuantity,
+                quantity: feeQuantity,
                 destinationAccountID: treasuryAccountID
             ),
         ]
@@ -591,23 +621,23 @@ private enum SwiftNexusTransferPayloadEncoder {
             throw NexusAppError(code: "empty_transfer_instructions",
                                 message: "At least one transfer instruction is required.")
         }
-        var instructions = OfflineCompactNoritoWriter()
+        var instructions = CompactNoritoWriter()
         instructions.writeUInt64LE(UInt64(instructionInputs.count))
         for input in instructionInputs {
             instructions.writeField(try encodeTransferInstruction(input: input))
         }
 
-        var executable = OfflineCompactNoritoWriter()
+        var executable = CompactNoritoWriter()
         executable.writeUInt32LE(0)
         executable.writeField(instructions.data)
 
-        var payload = OfflineCompactNoritoWriter()
+        var payload = CompactNoritoWriter()
         payload.writeField(encodeChainId(chainId))
         payload.writeField(try encodeAccountId(authority))
-        payload.writeField(OfflineCompactNorito.encodeUInt64(creationTimeMs))
+        payload.writeField(CompactNorito.encodeUInt64(creationTimeMs))
         payload.writeField(executable.data)
-        payload.writeField(try OfflineCompactNorito.encodeOption(ttlMs, encode: OfflineCompactNorito.encodeUInt64))
-        payload.writeField(try OfflineCompactNorito.encodeOption(nonce, encode: OfflineCompactNorito.encodeUInt32))
+        payload.writeField(try CompactNorito.encodeOption(ttlMs, encode: CompactNorito.encodeUInt64))
+        payload.writeField(try CompactNorito.encodeOption(nonce, encode: CompactNorito.encodeUInt32))
         payload.writeField(try encodeMetadata(metadata))
         return payload.data
     }
@@ -623,27 +653,27 @@ private enum SwiftNexusTransferPayloadEncoder {
     }
 
     private static func encodeTransferInstruction(input: TransferInstructionInput) throws -> Data {
-        var transfer = OfflineCompactNoritoWriter()
+        var transfer = CompactNoritoWriter()
         transfer.writeField(try encodeAssetId(input.sourceAssetID))
         transfer.writeField(try encodeNumeric(input.quantity))
         transfer.writeField(try encodeAccountId(input.destinationAccountID))
 
-        var transferBox = OfflineCompactNoritoWriter()
+        var transferBox = CompactNoritoWriter()
         transferBox.writeUInt32LE(transferBoxAssetDiscriminant)
         transferBox.writeField(transfer.data)
         let framedTransfer = noritoEncode(typeName: transferBoxTypeName,
                                           payload: transferBox.data,
                                           flags: NoritoHeader.compactLen)
 
-        var instruction = OfflineCompactNoritoWriter()
-        instruction.writeField(OfflineCompactNorito.encodeString(instructionWireName))
-        instruction.writeField(OfflineNorito.encodeBytesVec(framedTransfer))
+        var instruction = CompactNoritoWriter()
+        instruction.writeField(CompactNorito.encodeString(instructionWireName))
+        instruction.writeField(CanonicalNorito.encodeBytesVec(framedTransfer))
         return instruction.data
     }
 
     private static func encodeChainId(_ value: String) -> Data {
-        var writer = OfflineCompactNoritoWriter()
-        writer.writeField(OfflineCompactNorito.encodeString(value))
+        var writer = CompactNoritoWriter()
+        writer.writeField(CompactNorito.encodeString(value))
         return writer.data
     }
 
@@ -653,16 +683,16 @@ private enum SwiftNexusTransferPayloadEncoder {
             let address = try AccountAddress.parseEncoded(trimmed, expectedPrefix: 0x02F1)
             return try address.compactNoritoAccountControllerPayload()
         } catch {
-            throw OfflineNoritoError.invalidAccountId(value)
+            throw CanonicalNoritoError.invalidAccountId(value)
         }
     }
 
     private static func encodeAssetId(_ assetId: String) throws -> Data {
-        guard let parsed = OfflineNorito.parsePublicAssetIdLiteral(assetId),
+        guard let parsed = CanonicalNorito.parsePublicAssetIdLiteral(assetId),
               let definitionBytes = AssetDefinitionAddress.decode(parsed.assetDefinitionId) else {
-            throw OfflineNoritoError.invalidAssetId(assetId)
+            throw CanonicalNoritoError.invalidAssetId(assetId)
         }
-        var writer = OfflineCompactNoritoWriter()
+        var writer = CompactNoritoWriter()
         writer.writeField(try encodeAccountId(parsed.accountId))
         writer.writeField(encodeAssetDefinitionAddress(definitionBytes))
         writer.writeField(encodeAssetBalanceScope(dataspaceId: parsed.dataspaceId))
@@ -670,7 +700,7 @@ private enum SwiftNexusTransferPayloadEncoder {
     }
 
     private static func encodeAssetDefinitionAddress(_ bytes: Data) -> Data {
-        var writer = OfflineCompactNoritoWriter()
+        var writer = CompactNoritoWriter()
         for byte in bytes {
             writer.writeLength(1)
             writer.writeUInt8(byte)
@@ -679,33 +709,34 @@ private enum SwiftNexusTransferPayloadEncoder {
     }
 
     private static func encodeAssetBalanceScope(dataspaceId: UInt64?) -> Data {
-        var writer = OfflineCompactNoritoWriter()
+        var writer = CompactNoritoWriter()
         guard let dataspaceId else {
             writer.writeUInt32LE(0)
             return writer.data
         }
         writer.writeUInt32LE(1)
-        var dataspaceWriter = OfflineCompactNoritoWriter()
+        var dataspaceWriter = CompactNoritoWriter()
         dataspaceWriter.writeUInt64LE(dataspaceId)
         writer.writeField(dataspaceWriter.data)
         return writer.data
     }
 
     private static func encodeNumeric(_ value: String) throws -> Data {
-        let numeric = try OfflineNorito.parseNumeric(value)
-        let mantissaBytes = try numeric.mantissaBytes(maxBytes: OfflineNorito.maxBigIntBytes)
-        var bigintWriter = OfflineCompactNoritoWriter()
+        let canonical = try KotodamaNumericV1Codec.decodeQuantityJSON(value).canonicalString
+        let numeric = try CanonicalNorito.parseNumeric(canonical)
+        let mantissaBytes = try numeric.mantissaBytes(maxBytes: CanonicalNorito.maxBigIntBytes)
+        var bigintWriter = CompactNoritoWriter()
         bigintWriter.writeUInt32LE(UInt32(mantissaBytes.count))
         bigintWriter.writeBytes(mantissaBytes)
 
-        var writer = OfflineCompactNoritoWriter()
+        var writer = CompactNoritoWriter()
         writer.writeField(bigintWriter.data)
-        writer.writeField(OfflineCompactNorito.encodeUInt32(numeric.scale))
+        writer.writeField(CompactNorito.encodeUInt32(numeric.scale))
         return writer.data
     }
 
     private static func encodeMetadata(_ metadata: [String: ToriiJSONValue]) throws -> Data {
-        var writer = OfflineCompactNoritoWriter()
+        var writer = CompactNoritoWriter()
         let keys = metadata.keys.sorted()
         writer.writeUInt64LE(UInt64(keys.count))
         for key in keys {
@@ -716,11 +747,11 @@ private enum SwiftNexusTransferPayloadEncoder {
     }
 
     private static func encodeMetadataEntry(key: String, value: ToriiJSONValue) throws -> Data {
-        var entry = OfflineCompactNoritoWriter()
-        entry.writeField(OfflineCompactNorito.encodeString(key))
-        let jsonString = try OfflineNorito.jsonString(from: value)
-        var jsonField = OfflineCompactNoritoWriter()
-        jsonField.writeField(OfflineCompactNorito.encodeString(jsonString))
+        var entry = CompactNoritoWriter()
+        entry.writeField(CompactNorito.encodeString(key))
+        let jsonString = try CanonicalNorito.jsonString(from: value)
+        var jsonField = CompactNoritoWriter()
+        jsonField.writeField(CompactNorito.encodeString(jsonString))
         entry.writeField(jsonField.data)
         return entry.data
     }
@@ -739,7 +770,7 @@ private enum SwiftNexusTransferPayloadEncoder {
         } else {
             candidate = "\(assetDefinitionID)#\(authority)"
         }
-        return try OfflineNorito.canonicalAssetIdLiteral(candidate)
+        return try CanonicalNorito.canonicalAssetIdLiteral(candidate)
     }
 
 }
@@ -830,6 +861,10 @@ extension SwiftTransactionEncoder {
         let feeSponsor = try principal.feeSponsor.map {
             try TransactionInputValidator.sanitizeAccountId($0, field: "feeSponsor")
         }
+        let principalQuantity = try KotodamaNumericV1Codec
+            .decodeQuantityJSON(principal.quantity).canonicalString
+        let feeQuantity = try KotodamaNumericV1Codec
+            .decodeQuantityJSON(request.feeQuantity).canonicalString
         var metadata = request.transactionMetadata
         metadata[IrohaValidationFeeTransactionMetadataKey.policyVersion] =
             .number(Double(request.policyVersion))
@@ -852,10 +887,10 @@ extension SwiftTransactionEncoder {
             ttlMs: principal.ttlMs,
             nonce: principal.nonce,
             principalAssetDefinitionId: principalAssetDefinitionID,
-            principalQuantity: principal.quantity,
+            principalQuantity: principalQuantity,
             destination: destination,
             feeAssetDefinitionId: feeAssetDefinitionID,
-            feeQuantity: request.feeQuantity,
+            feeQuantity: feeQuantity,
             treasury: treasury,
             policyVersion: request.policyVersion,
             policyHashHex: normalizedPolicyHash,

@@ -181,6 +181,9 @@ pub(super) fn spawn_vote_verify_workers(
         let spawn_result = crate::sumeragi::sumeragi_thread_builder(name).spawn(move || {
             let mut batch = Vec::with_capacity(VOTE_VERIFY_BATCH_MAX);
             'worker: while let Ok(work) = work_rx.recv() {
+                if crate::sumeragi::consensus_fail_stop_active() {
+                    continue;
+                }
                 batch.clear();
                 batch.push(work);
                 let mut disconnected = false;
@@ -528,9 +531,23 @@ pub(super) fn spawn_vote_verify_workers(
                     }
                 }
 
+                if crate::sumeragi::consensus_fail_stop_active() {
+                    continue;
+                }
                 for result in results {
-                    if result_tx.send(result).is_err() {
-                        break 'worker;
+                    let mut result = result;
+                    loop {
+                        if crate::sumeragi::consensus_fail_stop_active() {
+                            continue 'worker;
+                        }
+                        match result_tx.try_send(result) {
+                            Ok(()) => break,
+                            Err(mpsc::TrySendError::Full(pending)) => {
+                                result = pending;
+                                std::thread::yield_now();
+                            }
+                            Err(mpsc::TrySendError::Disconnected(_)) => break 'worker,
+                        }
                     }
                 }
                 if let Some(wake) = wake_tx.as_ref() {
@@ -553,7 +570,7 @@ pub(super) fn spawn_vote_verify_workers(
 
 impl Actor {
     pub(in crate::sumeragi) fn poll_vote_verify_results(&mut self) -> bool {
-        if self.kura_recovery_required() {
+        if self.consensus_participation_halted() || self.kura_recovery_required() {
             return false;
         }
         let mut progress = self.process_pending_vote_validation();

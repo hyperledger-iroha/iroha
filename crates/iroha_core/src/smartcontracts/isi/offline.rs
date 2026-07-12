@@ -216,22 +216,17 @@ fn withdraw_numeric_asset_exact(
     if amount.mantissa().is_negative() {
         return Err(MathError::NegativeValue.into());
     }
+    let amount = Quantity::from_canonical_numeric(amount.clone())
+        .map_err(|_| MathError::NegativeValue)?;
     let asset = state_transaction
         .world
         .assets
         .get_mut(id)
         .ok_or_else(|| FindError::Asset(id.clone().into()))?;
-    let quantity: &mut Numeric = &mut *asset;
-    if quantity.mantissa().is_negative() {
-        return Err(MathError::NegativeValue.into());
-    }
+    let quantity: &mut Quantity = &mut *asset;
     let candidate = quantity
-        .clone()
-        .checked_sub(amount.clone())
-        .ok_or(MathError::NotEnoughQuantity)?;
-    if candidate.mantissa().is_negative() {
-        return Err(MathError::NotEnoughQuantity.into());
-    }
+        .checked_sub(&amount)
+        .map_err(|_| MathError::NotEnoughQuantity)?;
     *quantity = candidate;
     if (**asset).is_zero() {
         assert!(
@@ -252,18 +247,16 @@ fn deposit_numeric_asset_exact(
     if amount.mantissa().is_negative() {
         return Err(MathError::NegativeValue.into());
     }
+    let amount = Quantity::from_canonical_numeric(amount.clone())
+        .map_err(|_| MathError::NegativeValue)?;
     let is_nonzero = {
         let dst = state_transaction
             .world
-            .asset_or_insert_exact(id, Numeric::zero())?;
-        let quantity: &mut Numeric = &mut *dst;
-        if quantity.mantissa().is_negative() {
-            return Err(MathError::NegativeValue.into());
-        }
+            .asset_or_insert_exact(id, Quantity::zero())?;
+        let quantity: &mut Quantity = &mut *dst;
         *quantity = quantity
-            .clone()
-            .checked_add(amount.clone())
-            .ok_or(MathError::Overflow)?;
+            .checked_add(&amount)
+            .map_err(|_| MathError::Overflow)?;
         !quantity.is_zero()
     };
     if is_nonzero {
@@ -328,7 +321,7 @@ fn credit_from_offline_note_escrow(
             .world
             .assets
             .get(&recipient_asset)
-            .map(|asset| asset.as_ref().clone())
+            .map(|asset| asset.as_ref().as_numeric().clone())
             .unwrap_or_else(Numeric::zero);
         current_balance
             .checked_add(amount.clone())
@@ -3671,7 +3664,7 @@ pub mod isi {
             .world
             .assets
             .get(&escrow_asset)
-            .map(|asset| asset.as_ref().clone())
+            .map(|asset| asset.as_ref().as_numeric().clone())
             .ok_or_else(|| FindError::Asset(escrow_asset.clone().into()))?;
         escrow_balance
             .checked_sub(amount.clone())
@@ -3681,7 +3674,7 @@ pub mod isi {
             .world
             .assets
             .get(&recipient_asset)
-            .map(|asset| asset.as_ref().clone())
+            .map(|asset| asset.as_ref().as_numeric().clone())
             .unwrap_or_else(Numeric::zero)
             .checked_add(amount.clone())
             .ok_or(MathError::Overflow)?;
@@ -7016,7 +7009,7 @@ pub mod isi {
         if let Some(transition) = policy.pending_transition
             && block_height >= transition.effective_height()
             && transition.new_mode() == ConfidentialPolicyMode::ShieldedOnly
-            && state_transaction.world.asset_total_amount(definition_id)? > Numeric::zero()
+            && state_transaction.world.asset_total_amount(definition_id)? > Quantity::zero()
         {
             // `apply_policy_if_due` aborts a due ShieldedOnly transition while
             // transparent supply remains and restores the previous mode.
@@ -7750,8 +7743,8 @@ pub mod isi {
             }
             state_transaction.world.zk_assets.remove(def_id.clone());
             state_transaction.world.zk_assets.insert(def_id.clone(), st);
-            let mint = Mint::asset_numeric(
-                Numeric::new(self.public_amount, 0),
+            let mint = Mint::asset_quantity(
+                Quantity::from(self.public_amount),
                 AssetId::of(def_id, self.recipient),
             );
             mint.execute(authority, state_transaction)

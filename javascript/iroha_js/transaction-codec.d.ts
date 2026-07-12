@@ -1,8 +1,14 @@
-import type { Buffer } from "buffer";
 import type { NexusTransactionCodec } from "./nexus-app.js";
 
+/** Browser-safe structural view of the runtime KotodamaQuantity class. */
+export interface BrowserKotodamaQuantity {
+  readonly mantissa: bigint;
+  readonly scale: number;
+  toString(): string;
+}
+
 export type BrowserTransactionBytes =
-  | Buffer
+  | Uint8Array
   | ArrayBuffer
   | ArrayBufferView;
 
@@ -23,7 +29,7 @@ export interface BrowserTransferInput {
   sourceAssetHoldingId?: string;
   sourceAssetId?: string;
   /** Positive canonical decimal, scale <= 28, and value <= 2^511 - 1. */
-  quantity: bigint | number | string;
+  quantity: BrowserKotodamaQuantity | bigint | string;
   destinationAccountId: string;
   metadata?: string | { readonly [key: string]: BrowserTransactionMetadataValue } | null;
   creationTimeMs?: BrowserTransactionUnsigned;
@@ -47,10 +53,10 @@ export interface BrowserTransactionSignableConstraints {
 }
 
 export interface ValidatedBrowserTransactionSignable {
-  payloadBytes: Buffer;
+  payloadBytes: Uint8Array;
   payloadHashHex: string;
   authority: string;
-  signingPublicKey: Buffer;
+  signingPublicKey: Uint8Array;
   signatureAlgorithm: "ed25519";
 }
 
@@ -67,8 +73,8 @@ export type BrowserTransactionSignature =
   | BrowserTransactionSignatureObject;
 
 export interface BrowserFinalizedSignedTransaction {
-  signedTransaction: Buffer;
-  hash: Buffer;
+  signedTransaction: Uint8Array;
+  hash: Uint8Array;
   hashHex: string;
 }
 
@@ -76,7 +82,7 @@ export class BrowserTransactionCodecError extends TypeError {
   readonly code: string;
 }
 
-export function buildBrowserTransferPayload(input: BrowserTransferInput): Buffer;
+export function buildBrowserTransferPayload(input: BrowserTransferInput): Uint8Array;
 
 export function browserTransactionPayloadHashHex(
   payloadBytes: BrowserTransactionBytes,

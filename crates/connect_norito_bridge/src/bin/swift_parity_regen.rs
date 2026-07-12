@@ -16,7 +16,7 @@ use iroha_data_model::{
         Executable, IvmBytecode, SignedTransaction, TransactionBuilder, signed::TransactionPayload,
     },
 };
-use iroha_primitives::{json::Json, numeric::Numeric};
+use iroha_primitives::{json::Json, numeric::Quantity};
 use norito::{
     codec::Encode,
     core::NoritoSerialize,
@@ -173,14 +173,12 @@ impl InstructionSpec {
                     .get("destination")
                     .ok_or_else(|| "missing 'destination' argument".to_string())?;
                 let asset_definition = parse_asset_definition_argument(asset_definition)?;
-                let quantity: Numeric = quantity
-                    .parse()
-                    .map_err(|err| format!("invalid quantity '{quantity}': {err}"))?;
+                let quantity = parse_canonical_quantity(quantity)?;
                 let destination: AccountId = AccountId::parse_encoded(destination)
                     .map(iroha_data_model::account::ParsedAccountId::into_account_id)
                     .map_err(|_| format!("invalid destination account '{destination}'"))?;
                 let asset_id = AssetId::new(asset_definition, authority.clone());
-                Ok(Transfer::asset_numeric(asset_id, quantity, destination).into())
+                Ok(Transfer::asset_quantity(asset_id, quantity, destination).into())
             }
             "MintAsset" => {
                 if self.kind != "Mint" {
@@ -202,14 +200,12 @@ impl InstructionSpec {
                     .get("destination")
                     .ok_or_else(|| "missing 'destination' argument".to_string())?;
                 let asset_definition = parse_asset_definition_argument(asset_definition)?;
-                let quantity: Numeric = quantity
-                    .parse()
-                    .map_err(|err| format!("invalid quantity '{quantity}': {err}"))?;
+                let quantity = parse_canonical_quantity(quantity)?;
                 let destination: AccountId = AccountId::parse_encoded(destination)
                     .map(iroha_data_model::account::ParsedAccountId::into_account_id)
                     .map_err(|_| format!("invalid destination account '{destination}'"))?;
                 let asset_id = AssetId::new(asset_definition, destination);
-                Ok(Mint::asset_numeric(quantity, asset_id).into())
+                Ok(Mint::asset_quantity(quantity, asset_id).into())
             }
             "BurnAsset" => {
                 if self.kind != "Burn" {
@@ -231,18 +227,26 @@ impl InstructionSpec {
                     .get("destination")
                     .ok_or_else(|| "missing 'destination' argument".to_string())?;
                 let asset_definition = parse_asset_definition_argument(asset_definition)?;
-                let quantity: Numeric = quantity
-                    .parse()
-                    .map_err(|err| format!("invalid quantity '{quantity}': {err}"))?;
+                let quantity = parse_canonical_quantity(quantity)?;
                 let destination: AccountId = AccountId::parse_encoded(destination)
                     .map(iroha_data_model::account::ParsedAccountId::into_account_id)
                     .map_err(|_| format!("invalid destination account '{destination}'"))?;
                 let asset_id = AssetId::new(asset_definition, destination);
-                Ok(Burn::asset_numeric(quantity, asset_id).into())
+                Ok(Burn::asset_quantity(quantity, asset_id).into())
             }
             other => Err(format!("unsupported instruction action '{other}'")),
         }
     }
+}
+
+fn parse_canonical_quantity(input: &str) -> Result<Quantity, String> {
+    let quantity: Quantity = input
+        .parse()
+        .map_err(|err| format!("invalid quantity '{input}': {err}"))?;
+    if quantity.to_string() != input {
+        return Err(format!("noncanonical quantity '{input}'"));
+    }
+    Ok(quantity)
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -442,7 +446,7 @@ mod tests {
             "asset".into(),
             "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#alice@banka.dataspace".into(),
         );
-        args.insert("quantity".into(), "1.2500".into());
+        args.insert("quantity".into(), "1.25".into());
         args.insert("destination".into(), account_literal(&destination));
         let instruction = InstructionSpec {
             kind: "Transfer".into(),
@@ -470,7 +474,7 @@ mod tests {
             "asset_definition_id".into(),
             asset_definition_literal("wonderland", "rose"),
         );
-        args.insert("quantity".into(), "1.2500".into());
+        args.insert("quantity".into(), "1.25".into());
         args.insert("destination".into(), account_literal(&destination));
         let payload = PayloadSpec {
             chain: "00000042".into(),
@@ -506,6 +510,14 @@ mod tests {
             Executable::Instructions(instructions) => assert_eq!(instructions.len(), 1),
             _ => panic!("expected instruction executable"),
         }
+    }
+
+    #[test]
+    fn quantity_parser_rejects_noncanonical_text() {
+        assert_eq!(
+            parse_canonical_quantity("1.2500"),
+            Err("noncanonical quantity '1.2500'".to_owned())
+        );
     }
 
     #[test]

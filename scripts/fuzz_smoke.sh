@@ -140,25 +140,26 @@ fi
 
 # Run IVM fuzz smoke if available.
 IVM_FUZZ_DIR="$ROOT_DIR/crates/ivm/fuzz"
-if [ -d "$IVM_FUZZ_DIR" ]; then
-  pushd "$IVM_FUZZ_DIR" >/dev/null
-  if ((NUMERIC_V1_ONLY)); then
-    ivm_targets=(numeric_v1)
-  else
-    ivm_targets=(
-      tlv_validate
-      kotodama_lower
-      numeric_v1
-    )
-  fi
-  for t in "${ivm_targets[@]}"; do
-    echo "[fuzz-smoke] running ivm::$t for $RUNS runs"
-    "${fuzz_run[@]}" --fuzz-dir "$IVM_FUZZ_DIR" "$t" -- "${fuzzer_args[@]}" || {
-      echo "[fuzz-smoke] ivm target $t failed" >&2
-      exit 1
-    }
-  done
-  popd >/dev/null
+if [ ! -d "$IVM_FUZZ_DIR" ]; then
+  skip_or_fail "IVM fuzz directory not found at $IVM_FUZZ_DIR"
 fi
+pushd "$IVM_FUZZ_DIR" >/dev/null
+if ((NUMERIC_V1_ONLY)); then
+  ivm_targets=(numeric_v1)
+else
+  ivm_targets=(
+    tlv_validate
+    kotodama_lower
+    numeric_v1
+  )
+fi
+for t in "${ivm_targets[@]}"; do
+  echo "[fuzz-smoke] running ivm::$t for $RUNS runs"
+  "${fuzz_run[@]}" --fuzz-dir "$IVM_FUZZ_DIR" "$t" -- "${fuzzer_args[@]}" || {
+    echo "[fuzz-smoke] ivm target $t failed" >&2
+    exit 1
+  }
+done
+popd >/dev/null
 
 echo "[fuzz-smoke] all targets passed"

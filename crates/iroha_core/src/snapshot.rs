@@ -50,7 +50,7 @@ use crate::{
         SnapshotPublicLaneRewardClaim, SnapshotSpaceDirectoryManifestSet, State,
         ZkConfigInstallError, deserialize::KuraSeed, lane_incarnation_lineage_root,
         public_lane_reward_record_matches_key, public_lane_stake_share_matches_key,
-        public_lane_validator_record_matches_key, storage_transactions::TransactionsBlockError,
+        public_lane_validator_record_matches_key,
     },
 };
 
@@ -1219,13 +1219,11 @@ fn reconcile_snapshot_hash_height_with_kura(
 }
 
 fn reconcile_snapshot_hashes_with_kura(
-    state: &mut State,
     snapshot_hashes: &[HashOf<BlockHeader>],
     kura: &Arc<Kura>,
     hard_fork_snapshot_bootstrap: bool,
     hash_override_after_height: Option<usize>,
 ) -> Result<(), TryReadError> {
-    let snapshot_height = snapshot_hashes.len();
     for (idx, snapshot_block_hash) in snapshot_hashes.iter().copied().enumerate() {
         let height = idx + 1;
         let height_nz = NonZeroUsize::new(height).expect("iterating from 1");
@@ -1251,34 +1249,11 @@ fn reconcile_snapshot_hashes_with_kura(
             continue;
         }
 
-        if hard_fork_snapshot_bootstrap || height != snapshot_height {
-            return Err(TryReadError::MismatchedHash {
-                height,
-                snapshot_block_hash,
-                kura_block_hash,
-            });
-        }
-
-        let kura_block = kura
-            .get_block(height_nz)
-            .ok_or(TryReadError::MissingBlock { height })?;
-        iroha_logger::warn!(
-            "Snapshot has incorrect latest block hash, discarding changes made by this block"
-        );
-        let rollback_height = height.saturating_sub(1);
-        let latest_header_after_rollback = NonZeroUsize::new(rollback_height)
-            .and_then(|height| kura.get_block(height))
-            .map(|block| block.header().clone());
-        state
-            .block_and_revert(kura_block.header())
-            .commit()
-            .map_err(TryReadError::StateCommit)?;
-        state.revert_latest_block_metadata_for_snapshot_reconcile(latest_header_after_rollback);
-        let rollback_height = u64::try_from(rollback_height)
-            .map_err(crate::kura::Error::from)
-            .map_err(TryReadError::Kura)?;
-        kura.prune_to_height(rollback_height)
-            .map_err(TryReadError::Kura)?;
+        return Err(TryReadError::MismatchedHash {
+            height,
+            snapshot_block_hash,
+            kura_block_hash,
+        });
     }
 
     Ok(())
@@ -1397,6 +1372,8 @@ where
     // pruning, or legacy recovery. A rejected configuration therefore leaves
     // durable storage untouched.
     initialize_state(&mut state)?;
+    crate::state::validate_sccp_snapshot_revert_candidate(&state)
+        .map_err(TryReadError::InvalidSccpRevert)?;
     let hash_override_after_height = hard_fork_snapshot_bootstrap_hash_override_after_height(
         block_count,
         hard_fork_snapshot_bootstrap,
@@ -1411,7 +1388,6 @@ where
     )?;
     let hash_reconcile_started_at = Instant::now();
     reconcile_snapshot_hashes_with_kura(
-        &mut state,
         &snapshot_hashes,
         kura,
         hard_fork_snapshot_bootstrap,
@@ -2247,6 +2223,8 @@ pub enum TryReadError {
     },
     /// Snapshot contains an invalid governed SCCP registry (`{0}`)
     InvalidSccpRegistry(String),
+    /// Snapshot contains invalid SCCP state in its one-block MV revert candidate (`{0}`)
+    InvalidSccpRevert(String),
     /// Snapshot state is incompatible with runtime ZK configuration: {0}
     ZkConfigInstall(#[source] ZkConfigInstallError),
     /// Snapshot is in a non-consistent state. Snapshot has greater height (`{snapshot_height}`) than kura block store (`{kura_height}`)
@@ -2282,8 +2260,6 @@ pub enum TryReadError {
     },
     /// Failed to reconcile snapshot block hashes with Kura
     Kura(#[source] KuraError),
-    /// Failed to reconcile snapshot state with Kura while committing a block revert
-    StateCommit(TransactionsBlockError),
 }
 
 fn merkle_err_to_try_read(err: SnapshotMerkleError, path: PathBuf) -> TryReadError {
@@ -2379,7 +2355,7 @@ mod tests {
             },
         },
     };
-    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature, bls_normal_pop_prove};
     use iroha_data_model::{
         ChainId, Level,
         account::{AccountDetails, AccountId, AccountValue},
@@ -2431,6 +2407,124 @@ mod tests {
     fn checked_random_snapshot_bls_keypair() -> KeyPair {
         KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
             .expect("snapshot BLS fixture key generation should succeed")
+    }
+
+    fn store_signed_complete_wire_finality_for_snapshot_eviction(
+        kura: &Kura,
+        chain_id: &ChainId,
+        blocks: &[Arc<SignedBlock>],
+    ) {
+        use iroha_data_model::block::consensus_v2::{
+            BlockSubject, ConsensusMode, ConsensusRound, DataAvailabilityLayout, DualQuorum,
+            ExecutionCommitment, GlobalPhase, HeightContext, PROTOCOL_VERSION, PayloadEncoding,
+            QuorumCertificate, ValidatorPower, finality::V2FinalityArtifact,
+        };
+
+        let mut keypairs = (0_u8..4)
+            .map(|index| {
+                checked_seeded_keypair(0xB0_u8.saturating_add(index), Algorithm::BlsNormal)
+            })
+            .collect::<Vec<_>>();
+        keypairs.sort_by(|left, right| {
+            PeerId::new(left.public_key().clone()).cmp(&PeerId::new(right.public_key().clone()))
+        });
+        let roster = keypairs
+            .iter()
+            .map(|keypair| ValidatorPower {
+                validator: PeerId::new(keypair.public_key().clone()),
+                power: 1,
+            })
+            .collect::<Vec<_>>();
+        let validator_set_pops = keypairs
+            .iter()
+            .map(|keypair| {
+                bls_normal_pop_prove(keypair.private_key())
+                    .expect("derive snapshot-eviction validator PoP")
+            })
+            .collect::<Vec<_>>();
+        let execution_commitment = ExecutionCommitment::new(
+            Hash::new(b"snapshot eviction parent state"),
+            Hash::new(b"snapshot eviction post state"),
+            Hash::new(b"snapshot eviction ordinary writes"),
+            None,
+            0,
+        )
+        .expect("snapshot-eviction execution commitment");
+        let mut parent: Option<V2FinalityArtifact> = None;
+        for block in blocks {
+            let height = block.header().height().get();
+            let context = HeightContext {
+                chain_id: chain_id.clone(),
+                protocol_version: PROTOCOL_VERSION,
+                height,
+                epoch: 0,
+                epoch_end_height: 100,
+                next_epoch_snapshot: None,
+                mode: ConsensusMode::Permissioned,
+                parent_commit_qc: parent.as_ref().map(|artifact| artifact.commit_qc.clone()),
+                quorum: DualQuorum::from_roster(&roster).expect("snapshot-eviction fixture quorum"),
+                roster: roster.clone(),
+                nexus_amx_context_hash: Hash::new(b"snapshot eviction nexus context"),
+                da_layout: DataAvailabilityLayout {
+                    encoding: PayloadEncoding::Plain,
+                    chunk_size_bytes: 1024,
+                    data_shards: 0,
+                    parity_shards: 0,
+                    max_payload_size_bytes: 4 * 1024 * 1024,
+                    max_chunk_count: 4096,
+                },
+                leader_seed: [0x42; 32],
+            };
+            let subject = BlockSubject {
+                parent_block_hash: block.header().prev_block_hash(),
+                block_hash: block.hash(),
+                payload_hash: Hash::new(
+                    block.encode_wire().expect("canonical snapshot block wire"),
+                ),
+            };
+            let mut commit_qc = QuorumCertificate {
+                round: ConsensusRound {
+                    context_id: context.id(),
+                    height,
+                    view: block.header().view_change_index(),
+                },
+                phase: GlobalPhase::Commit,
+                subject,
+                execution_commitment,
+                signers: vec![0, 1, 2],
+                aggregate_signature: vec![1],
+            };
+            let preimage = commit_qc
+                .signer_preimage(&context, 0)
+                .expect("snapshot-eviction signer preimage");
+            let signatures = commit_qc
+                .signers
+                .iter()
+                .map(|index| {
+                    Signature::try_new(
+                        keypairs[usize::try_from(*index).expect("fixture signer index")]
+                            .private_key(),
+                        &preimage,
+                    )
+                    .expect("sign snapshot-eviction finality vote")
+                    .payload()
+                    .to_vec()
+                })
+                .collect::<Vec<_>>();
+            let signature_refs = signatures.iter().map(Vec::as_slice).collect::<Vec<_>>();
+            commit_qc.aggregate_signature =
+                iroha_crypto::bls_normal_aggregate_signatures(&signature_refs)
+                    .expect("aggregate snapshot-eviction finality votes");
+            let artifact =
+                V2FinalityArtifact::new(context, subject, commit_qc, validator_set_pops.clone());
+            artifact
+                .verify()
+                .expect("snapshot-eviction finality fixture verifies");
+            let _ = kura
+                .store_v2_finality_artifact(&artifact)
+                .expect("persist snapshot-eviction complete-wire finality");
+            parent = Some(artifact);
+        }
     }
 
     #[test]
@@ -2679,7 +2773,7 @@ mod tests {
             commitment_index: 0,
         };
         state
-            .insert_sccp_outbound_message_for_testing(key, record.clone())
+            .insert_sccp_outbound_message_for_testing(key.clone(), record.clone())
             .expect("insert canonical SCCP outbound snapshot fixture");
         (state, key, record)
     }
@@ -3302,6 +3396,11 @@ mod tests {
             Some(block2.as_ref()),
         );
         store_block_and_mark_state_height(&mut state, &kura, block3);
+        store_signed_complete_wire_finality_for_snapshot_eviction(
+            &kura,
+            &state.chain_id,
+            &[Arc::clone(&block1), Arc::clone(&block2)],
+        );
 
         let historical_validator = checked_random_snapshot_bls_keypair();
         let expected_pop =
@@ -3504,6 +3603,75 @@ mod tests {
     }
 
     #[test]
+    async fn signed_snapshot_rejects_unknown_root_and_world_fields() {
+        for (scope, expected_field) in [
+            ("root", "state.future_snapshot_field"),
+            ("world", "world.sccp_registry_v2"),
+        ] {
+            let tmp_root = tempdir().expect("temporary snapshot root");
+            let store_dir = tmp_root.path().join("snapshot");
+            let kura = Kura::blank_kura_for_testing();
+            let state = state_factory_with_kura(Arc::clone(&kura));
+            let mut serialized = String::new();
+            serialize_state_snapshot(&state, &mut serialized, true);
+            let mut snapshot: json::Value =
+                json::from_str(&serialized).expect("valid baseline snapshot JSON");
+            let json::Value::Object(snapshot_object) = &mut snapshot else {
+                panic!("snapshot root must be an object");
+            };
+            match scope {
+                "root" => {
+                    assert!(
+                        snapshot_object
+                            .insert(
+                                "future_snapshot_field".to_owned(),
+                                json::Value::Null,
+                            )
+                            .is_none()
+                    );
+                }
+                "world" => {
+                    let Some(json::Value::Object(world)) = snapshot_object.get_mut("world") else {
+                        panic!("snapshot world must be an object");
+                    };
+                    assert!(
+                        world
+                            .insert("sccp_registry_v2".to_owned(), json::Value::Null)
+                            .is_none()
+                    );
+                }
+                _ => unreachable!("closed test scope"),
+            }
+            serialized = json::to_json(&snapshot).expect("mutated snapshot JSON encodes");
+            let key_pair = checked_random_snapshot_keypair();
+            write_snapshot_bundle_from_bytes(&store_dir, serialized.as_bytes(), &key_pair);
+
+            let error = match try_read_snapshot(
+                &store_dir,
+                &kura,
+                LiveQueryStore::start_test,
+                BlockCount(0),
+                TEST_CHUNK_SIZE,
+                key_pair.public_key(),
+                &state.chain_id,
+                &crate::state::default_zk_config(),
+                #[cfg(feature = "telemetry")]
+                StateTelemetry::new(<_>::default(), true),
+            ) {
+                Ok(_) => panic!("signed snapshot with an unknown field must fail closed"),
+                Err(error) => error,
+            };
+            match error {
+                TryReadError::Serialization(json::Error::InvalidField { field, message }) => {
+                    assert_eq!(field, expected_field);
+                    assert!(message.contains("unknown field"), "{message}");
+                }
+                other => panic!("unexpected unknown-field rejection: {other:?}"),
+            }
+        }
+    }
+
+    #[test]
     async fn signed_hostile_sccp_registry_snapshots_are_rejected_before_acceptance() {
         enum RegistryCellMutation {
             Replace {
@@ -3687,6 +3855,233 @@ mod tests {
             },
             "non-curve",
         );
+    }
+
+    #[test]
+    async fn signed_hostile_sccp_revert_stores_are_rejected_without_mutation() {
+        #[derive(Clone, Copy, Debug)]
+        enum RevertMutation {
+            PendingUsage,
+            PendingMessages,
+            MessageLocator,
+            OrderedIndex,
+            TerminalProofs,
+            InboundMessages,
+            InboundHighWater,
+        }
+
+        fn envelope_mut<'a>(
+            world: &'a mut json::Map,
+            field: &str,
+        ) -> &'a mut json::Map {
+            let Some(json::Value::Object(envelope)) = world.get_mut(field) else {
+                panic!("{field} must be one MV envelope");
+            };
+            envelope
+        }
+
+        fn storage_blocks<K, V>(entries: impl IntoIterator<Item = (K, V)>) -> json::Value
+        where
+            K: mv::Key + mv::json::JsonKeyCodec,
+            V: mv::Value + json::JsonSerialize,
+        {
+            let storage: Storage<K, V> = entries.into_iter().collect();
+            let json::Value::Object(mut envelope) =
+                json::to_value(&storage).expect("typed hostile storage encodes")
+            else {
+                panic!("typed hostile storage must encode as an envelope");
+            };
+            envelope
+                .remove("blocks")
+                .expect("storage envelope contains blocks")
+        }
+
+        for mutation in [
+            RevertMutation::PendingUsage,
+            RevertMutation::PendingMessages,
+            RevertMutation::MessageLocator,
+            RevertMutation::OrderedIndex,
+            RevertMutation::TerminalProofs,
+            RevertMutation::InboundMessages,
+            RevertMutation::InboundHighWater,
+        ] {
+            let tmp_root = tempdir().expect("temporary snapshot root");
+            let store_dir = tmp_root.path().join("snapshot");
+            let kura = Kura::blank_kura_for_testing();
+            let (state, key, pending_record) =
+                state_with_exact_pending_sccp_snapshot_fixture(Arc::clone(&kura));
+            let mut serialized = String::new();
+            serialize_state_snapshot(&state, &mut serialized, true);
+            let mut snapshot: json::Value =
+                json::from_str(&serialized).expect("valid baseline snapshot JSON");
+            let json::Value::Object(snapshot_object) = &mut snapshot else {
+                panic!("snapshot root must be an object");
+            };
+            let Some(json::Value::Object(world)) = snapshot_object.get_mut("world") else {
+                panic!("snapshot world must be an object");
+            };
+
+            match mutation {
+                RevertMutation::PendingUsage => {
+                    let current = envelope_mut(world, "sccp_outbound_pending_usage")
+                        .get("blocks")
+                        .cloned()
+                        .expect("usage envelope contains blocks");
+                    envelope_mut(world, "sccp_outbound_pending_usage")
+                        .insert("revert".to_owned(), current);
+                }
+                RevertMutation::PendingMessages => {
+                    envelope_mut(world, "sccp_outbound_pending_messages").insert(
+                        "revert".to_owned(),
+                        json::Value::Object(json::Map::new()),
+                    );
+                }
+                RevertMutation::MessageLocator => {
+                    envelope_mut(world, "sccp_outbound_message_locator").insert(
+                        "revert".to_owned(),
+                        json::Value::Object(json::Map::new()),
+                    );
+                }
+                RevertMutation::OrderedIndex => {
+                    envelope_mut(world, "sccp_outbound_message_index").insert(
+                        "revert".to_owned(),
+                        json::Value::Object(json::Map::new()),
+                    );
+                }
+                RevertMutation::TerminalProofs => {
+                    let terminal =
+                        iroha_data_model::bridge::SccpOutboundProofRecordV1 {
+                            payload_hash: pending_record.payload_hash,
+                            destination_binding_hash: pending_record.destination_binding_hash,
+                            route_configuration_hash: pending_record.route_configuration_hash,
+                            finality_block_hash: [0xA1; 32],
+                            destination_proof_commitment: [0xA2; 32],
+                            finality_height: pending_record.recorded_at_height,
+                            commitment_index: pending_record.commitment_index,
+                            accepted_at_height: pending_record.recorded_at_height,
+                        };
+                    assert!(terminal.is_well_formed_for_key(&key));
+                    envelope_mut(world, "sccp_outbound_proofs").insert(
+                        "revert".to_owned(),
+                        storage_blocks([(key, terminal)]),
+                    );
+                }
+                RevertMutation::InboundMessages | RevertMutation::InboundHighWater => {
+                    let (native, source_identity, trust_anchor) =
+                        iroha_sccp::sccp_native_ethereum_transfer_inbound_test_fixture_v1();
+                    let validated = iroha_sccp::verify_sccp_native_inbound_message_proof_v1(
+                        &native,
+                        &source_identity,
+                        trust_anchor,
+                    )
+                    .expect("native hostile-revert fixture verifies");
+                    let route = iroha_sccp::sccp_exact_evm_governed_route_test_fixture_v1(
+                        iroha_data_model::bridge::SccpNetworkV1::EthereumMainnet,
+                        iroha_data_model::bridge::SccpRouteActivationV1::Active,
+                    );
+                    let inbound_record =
+                        iroha_data_model::bridge::SccpInboundMessageRecordV1 {
+                            payload_hash: validated.payload_hash,
+                            source_identity_hash: validated.source_identity_hash,
+                            route_configuration_hash: route
+                                .route_configuration_hash()
+                                .expect("fixture route configuration"),
+                            trust_anchor: validated.trust_anchor,
+                            anchor_interval_height: validated.anchor_interval_height,
+                            source_finality_height: validated.source_finality.height,
+                            source_finality_hash: validated.source_finality.block_hash,
+                            source_proof_commitment: [0xA3; 32],
+                            admitted_at_height: 1,
+                        };
+                    assert!(
+                        inbound_record.is_well_formed_for_lane(validated.message_key.lane)
+                    );
+                    if matches!(mutation, RevertMutation::InboundMessages) {
+                        envelope_mut(world, "sccp_inbound_messages").insert(
+                            "revert".to_owned(),
+                            storage_blocks([(validated.message_key, inbound_record)]),
+                        );
+                    } else {
+                        let high_water_key = iroha_data_model::bridge::
+                            SccpInboundAnchorHighWaterKeyV1::new(
+                                validated.message_key.lane,
+                                validated.trust_anchor.anchor_hash,
+                            )
+                            .expect("validated native fixture forms high-water key");
+                        envelope_mut(world, "sccp_inbound_anchor_high_water").insert(
+                            "revert".to_owned(),
+                            storage_blocks([(
+                                high_water_key,
+                                validated.anchor_interval_height,
+                            )]),
+                        );
+                    }
+                }
+            }
+
+            serialized = json::to_json(&snapshot).expect("mutated snapshot JSON encodes");
+            let key_pair = checked_random_snapshot_keypair();
+            write_snapshot_bundle_from_bytes(&store_dir, serialized.as_bytes(), &key_pair);
+            let canonical_hash = kura
+                .block_hash_at_height(nonzero!(1_usize))
+                .expect("canonical Kura hash");
+            let body_before = kura
+                .get_block(nonzero!(1_usize))
+                .expect("canonical Kura body");
+            let retained_before = kura
+                .v2_finality_artifact_with_archive(1)
+                .expect("read exact retained SCCP material")
+                .expect("exact retained SCCP material exists");
+
+            let error = match try_read_snapshot(
+                &store_dir,
+                &kura,
+                LiveQueryStore::start_test,
+                BlockCount(1),
+                TEST_CHUNK_SIZE,
+                key_pair.public_key(),
+                &state.chain_id,
+                &state.zk_snapshot(),
+                #[cfg(feature = "telemetry")]
+                StateTelemetry::new(<_>::default(), true),
+            ) {
+                Ok(_) => panic!("hostile {mutation:?} revert must fail closed"),
+                Err(error) => error,
+            };
+            assert!(
+                matches!(error, TryReadError::InvalidSccpRevert(_)),
+                "unexpected {mutation:?} rejection: {error:?}"
+            );
+            assert_eq!(kura.blocks_count(), 1, "{mutation:?} rejection pruned Kura");
+            assert_eq!(kura.durable_blocks_count(), 1);
+            assert_eq!(
+                kura.block_hash_at_height(nonzero!(1_usize)),
+                Some(canonical_hash)
+            );
+            assert_eq!(
+                kura.get_block(nonzero!(1_usize)),
+                Some(body_before),
+                "{mutation:?} rejection changed the canonical block body"
+            );
+            assert_eq!(
+                kura.v2_finality_artifact_with_archive(1)
+                    .expect("read retained material after rejection")
+                    .expect("retained material still exists"),
+                retained_before,
+                "{mutation:?} rejection changed retained SCCP evidence"
+            );
+            for temp_name in [
+                SNAPSHOT_TMP_FILE_NAME,
+                SNAPSHOT_DIGEST_TMP_FILE_NAME,
+                SNAPSHOT_SIGNATURE_TMP_FILE_NAME,
+                SNAPSHOT_MERKLE_TMP_FILE_NAME,
+            ] {
+                assert!(
+                    !store_dir.join(temp_name).exists(),
+                    "{mutation:?} rejection promoted or created {temp_name}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -4348,9 +4743,17 @@ mod tests {
         );
         store_block_and_mark_state_height(&mut state, &kura, Arc::clone(&block3));
         let expected_snapshot = canonical_state_snapshot_bytes_for_tests(&state);
+        let expected_chain_id = state.chain_id.clone();
+        store_signed_complete_wire_finality_for_snapshot_eviction(
+            &kura,
+            &state.chain_id,
+            &[Arc::clone(&block1), Arc::clone(&block2)],
+        );
 
         try_write_snapshot(&state, &snapshot_store_dir, &key_pair, TEST_CHUNK_SIZE)
             .expect("snapshot write");
+        drop(state);
+        drop(kura);
 
         let (kura, block_count) = Kura::new(&kura_config, &lane_config).expect("kura reopen");
         let historical_height = nonzero!(2_usize);
@@ -4388,7 +4791,7 @@ mod tests {
             block_count,
             TEST_CHUNK_SIZE,
             key_pair.public_key(),
-            &state.chain_id,
+            &expected_chain_id,
             &crate::state::default_zk_config(),
             #[cfg(feature = "telemetry")]
             StateTelemetry::new(<_>::default(), true),
@@ -4422,9 +4825,8 @@ mod tests {
         snapshot_hashes[1] =
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x44; 32]));
 
-        let err =
-            reconcile_snapshot_hashes_with_kura(&mut state, &snapshot_hashes, &kura, false, None)
-                .expect_err("non-latest hash mismatch must reject snapshot");
+        let err = reconcile_snapshot_hashes_with_kura(&snapshot_hashes, &kura, false, None)
+            .expect_err("non-latest hash mismatch must reject snapshot");
         assert!(matches!(
             err,
             TryReadError::MismatchedHash { height: 2, .. }
@@ -4433,7 +4835,7 @@ mod tests {
     }
 
     #[test]
-    async fn snapshot_hash_reconcile_rolls_back_latest_mismatch() {
+    async fn snapshot_hash_reconcile_rejects_latest_mismatch_without_mutation() {
         let kura = Kura::blank_kura_for_testing();
         let mut state = state_factory_with_kura(Arc::clone(&kura));
         let block1 = signed_block_after_transaction(accepted_log_transaction("first"), None);
@@ -4448,15 +4850,28 @@ mod tests {
         snapshot_hashes[1] =
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x55; 32]));
 
-        reconcile_snapshot_hashes_with_kura(&mut state, &snapshot_hashes, &kura, false, None)
-            .expect("latest hash mismatch should preserve rollback behavior");
+        let state_height_before = state.committed_height();
+        let state_hash_before = state.latest_block_hash_fast();
+        let kura_height_before = kura.durable_blocks_count();
+        let error = reconcile_snapshot_hashes_with_kura(&snapshot_hashes, &kura, false, None)
+            .expect_err("latest hash mismatch must reject instead of trusting snapshot undo state");
+        assert!(matches!(
+            error,
+            TryReadError::MismatchedHash { height: 2, .. }
+        ));
 
-        assert_eq!(state.committed_height(), 1);
+        assert_eq!(state.committed_height(), state_height_before);
         assert_eq!(
             state.latest_block_hash_fast(),
-            Some(block1.hash()),
-            "latest mismatch rollback should discard the snapshot tip"
+            state_hash_before,
+            "latest mismatch rejection must leave the snapshot WSV untouched"
         );
+        assert_eq!(
+            kura.durable_blocks_count(),
+            kura_height_before,
+            "latest mismatch rejection must not prune Kura"
+        );
+        assert_eq!(state.latest_block_hash_fast(), Some(block2.hash()));
     }
 
     #[test]
@@ -4482,15 +4897,14 @@ mod tests {
         snapshot_hashes[2] =
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x77; 32]));
 
-        let err =
-            reconcile_snapshot_hashes_with_kura(&mut state, &snapshot_hashes, &kura, true, Some(2))
-                .expect_err("mismatch at the configured legacy boundary must still fail");
+        let err = reconcile_snapshot_hashes_with_kura(&snapshot_hashes, &kura, true, Some(2))
+            .expect_err("mismatch at the configured legacy boundary must still fail");
         assert!(matches!(
             err,
             TryReadError::MismatchedHash { height: 2, .. }
         ));
 
-        reconcile_snapshot_hashes_with_kura(&mut state, &snapshot_hashes, &kura, true, Some(1))
+        reconcile_snapshot_hashes_with_kura(&snapshot_hashes, &kura, true, Some(1))
             .expect("post-boundary mismatches are accepted for digest-pinned bootstrap recovery");
         assert_eq!(state.committed_height(), 3);
     }

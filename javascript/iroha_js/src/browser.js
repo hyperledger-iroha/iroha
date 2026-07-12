@@ -13,6 +13,14 @@ export {
 } from "./instructionBuilders.js";
 
 export {
+  KotodamaDecimal,
+  KotodamaInt,
+  KotodamaQuantity,
+  NumericV1,
+  NumericV1Error,
+} from "./numericV1.js";
+
+export {
   computeIvmArtifactHashes,
   IVM_ARTIFACT_MAX_BYTES,
   IVM_PROGRAM_HEADER_LENGTH,

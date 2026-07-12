@@ -4904,10 +4904,10 @@ mod tests {
             SetKeyValue::domain(domain_id.clone(), key.clone(), Json::new(1u32)).into(),
             RemoveKeyValue::domain(domain_id.clone(), key.clone()).into(),
             // Mint/Burn asset
-            Mint::asset_numeric(10_u32, asset_id.clone()).into(),
-            Burn::asset_numeric(5_u32, asset_id.clone()).into(),
+            Mint::asset_quantity(10_u32, asset_id.clone()).into(),
+            Burn::asset_quantity(5_u32, asset_id.clone()).into(),
             // Transfer asset
-            Transfer::asset_numeric(asset_id.clone(), 1_u32, account_id.clone()).into(),
+            Transfer::asset_quantity(asset_id.clone(), 1_u32, account_id.clone()).into(),
             // NFT register + transfer
             Register::nft(Nft::new(nft_id.clone(), Metadata::default())).into(),
             Transfer::nft(account_id.clone(), nft_id.clone(), account_id.clone()).into(),
@@ -5033,9 +5033,9 @@ mod tests {
         let mut instrs = vec![
             Register::domain(Domain::new(domain_id.clone())).into(),
             Grant::account_role(role_id.clone(), account_id.clone()).into(),
-            Mint::asset_numeric(5_u32, asset_id.clone()).into(),
-            Transfer::asset_numeric(asset_id.clone(), 1_u32, account_id.clone()).into(),
-            Burn::asset_numeric(1_u32, asset_id.clone()).into(),
+            Mint::asset_quantity(5_u32, asset_id.clone()).into(),
+            Transfer::asset_quantity(asset_id.clone(), 1_u32, account_id.clone()).into(),
+            Burn::asset_quantity(1_u32, asset_id.clone()).into(),
             Unregister::domain(domain_id.clone()).into(),
             Log::new(Level::INFO, "x".into()).into(),
         ];
@@ -5106,7 +5106,7 @@ mod tests {
             Transfer::domain(account_a.clone(), domain_id.clone(), account_b.clone()).into(),
             Transfer::asset_definition(account_a.clone(), asset_def_id.clone(), account_b.clone())
                 .into(),
-            Transfer::asset_numeric(asset_id.clone(), 7_u32, account_b.clone()).into(),
+            Transfer::asset_quantity(asset_id.clone(), 7_u32, account_b.clone()).into(),
             Transfer::nft(account_a.clone(), nft_id.clone(), account_b.clone()).into(),
             // Grants and revokes for permission and role targets
             Grant::account_permission(perm.clone(), account_a.clone()).into(),

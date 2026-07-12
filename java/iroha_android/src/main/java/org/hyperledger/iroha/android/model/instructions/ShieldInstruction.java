@@ -1,5 +1,6 @@
 package org.hyperledger.iroha.android.model.instructions;
 
+import java.math.BigInteger;
 import java.util.Base64;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -104,7 +105,8 @@ public final class ShieldInstruction implements InstructionTemplate {
       return this;
     }
 
-    public Builder setAmount(final Number amount) {
+    /** Sets the exact unsigned amount without converting through a lossy host number. */
+    public Builder setAmount(final BigInteger amount) {
       return setAmount(amount == null ? null : amount.toString());
     }
 

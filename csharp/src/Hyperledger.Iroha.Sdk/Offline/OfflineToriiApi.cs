@@ -40,8 +40,8 @@ public sealed class OfflineTopUpRequest
         var canonical = OfflineOperationCodec.RequireCanonicalRequest(
             noritoArchive,
             OfflineOperationCodec.TopUpRequestSchema,
-            operationIdFieldIndex: 6,
-            fieldCount: 8);
+            operationIdFieldIndex: 5,
+            fieldCount: 7);
         archive = canonical.Archive;
         OperationId = canonical.OperationId;
     }

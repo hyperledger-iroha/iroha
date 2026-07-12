@@ -1,5 +1,7 @@
 package org.hyperledger.iroha.sdk.nexus
 
+import org.hyperledger.iroha.sdk.numeric.KotodamaQuantity
+
 /** Immutable view over `/v1/accounts/{uaid}/portfolio` responses. */
 class UaidPortfolioResponse(
     @JvmField val uaid: String,
@@ -40,5 +42,9 @@ class UaidPortfolioResponse(
         @JvmField val assetId: String,
         @JvmField val assetDefinitionId: String,
         @JvmField val quantity: String,
-    )
+    ) {
+        init {
+            KotodamaQuantity.parseCanonical(quantity)
+        }
+    }
 }

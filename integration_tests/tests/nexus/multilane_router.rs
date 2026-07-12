@@ -169,16 +169,7 @@ fn install_state_nexus(
     autoscale_range: Option<(u32, u32)>,
 ) -> Result<State> {
     let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
-    #[cfg(feature = "telemetry")]
-    let state = State::new(
-        World::default(),
-        kura,
-        query,
-        iroha_core::telemetry::StateTelemetry::default(),
-    );
-    #[cfg(not(feature = "telemetry"))]
-    let state = State::new(World::default(), kura, query);
+    let mut state = new_state(kura);
     let mut nexus = iroha_config::parameters::actual::Nexus {
         enabled: true,
         routing_policy: policy,
@@ -196,6 +187,20 @@ fn install_state_nexus(
     }
     *state.nexus.write() = nexus;
     Ok(state)
+}
+
+fn new_state(kura: Arc<Kura>) -> State {
+    let query = LiveQueryStore::start_test();
+    #[cfg(feature = "telemetry")]
+    let state = State::new(
+        World::default(),
+        kura,
+        query,
+        iroha_core::telemetry::StateTelemetry::default(),
+    );
+    #[cfg(not(feature = "telemetry"))]
+    let state = State::new(World::default(), kura, query);
+    state
 }
 
 fn seed_committed_height(state: &mut State, height: u64) {
@@ -266,8 +271,21 @@ fn multilane_router_provisions_storage_and_routes_rules() -> Result<()> {
             iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
     };
 
-    let (kura, block_count) = Kura::new(&kura_cfg, &lane_config)?;
+    let (kura, block_count) =
+        Kura::new_with_configured_lane_catalog(&kura_cfg, &lane_config, &lane_catalog)?;
     assert_eq!(block_count.0, 0, "fresh store should be empty");
+    let mut state = new_state(Arc::clone(&kura));
+    state.prepare_configured_primary_geometry_anchor(&lane_catalog)?;
+    state.restore_kura_lane_segments_before_startup_replay()?;
+    state.set_nexus_from_config(iroha_config::parameters::actual::Nexus {
+        enabled: true,
+        lane_catalog: lane_catalog.clone(),
+        configured_lane_catalog: lane_catalog.clone(),
+        lane_config: lane_config.clone(),
+        dataspace_catalog: dataspace_catalog.clone(),
+        routing_policy: policy.clone(),
+        ..Default::default()
+    })?;
 
     for entry in lane_config.entries() {
         let blocks_dir = entry.blocks_dir(&store_dir);
@@ -312,7 +330,7 @@ fn multilane_router_provisions_storage_and_routes_rules() -> Result<()> {
         &chain_id,
         &authority,
         &keypair,
-        vec![InstructionBox::from(Mint::asset_numeric(
+        vec![InstructionBox::from(Mint::asset_quantity(
             1_u32,
             AssetId::new(
                 AssetDefinitionId::new(DomainId::try_new("nexus", "zk")?, "xor".parse()?),
@@ -383,7 +401,7 @@ fn multilane_router_shards_default_route_over_autoscale_elastic_lanes() -> Resul
         &chain_id,
         &authority,
         &keypair,
-        vec![InstructionBox::from(Mint::asset_numeric(
+        vec![InstructionBox::from(Mint::asset_quantity(
             1_u32,
             AssetId::new(
                 AssetDefinitionId::new(DomainId::try_new("nexus", "zk")?, "xor".parse()?),

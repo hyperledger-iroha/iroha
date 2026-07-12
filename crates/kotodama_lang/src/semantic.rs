@@ -1,5 +1,5 @@
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     collections::{BTreeMap, HashMap, HashSet},
     sync::Arc,
 };
@@ -133,25 +133,44 @@ fn is_list_intrinsic(name: &str) -> bool {
     )
 }
 
-fn is_sum_type_intrinsic(name: &str) -> bool {
-    matches!(
-        name,
-        "is_some" | "is_none" | "is_ok" | "is_err" | "unwrap_or" | "unwrap_err_or"
-    )
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CompilerIntrinsicKind {
+    StateMap,
+    List,
+    Numeric,
+    Sum,
 }
 
-fn is_lowered_intrinsic(name: &str) -> bool {
-    name == STATE_MAP_GET_INTRINSIC
-        || is_list_intrinsic(name)
-        || is_sum_type_intrinsic(name)
-        || matches!(
-            name,
-            DECIMAL_DIV_ROUND_INTRINSIC
-                | QUANTITY_DIV_ROUND_INTRINSIC
-                | QUANTITY_RATIO_ROUND_INTRINSIC
-                | DECIMAL_TO_INT_TRUNC_INTRINSIC
-                | DECIMAL_TO_INT_ROUND_INTRINSIC
-        )
+/// Classify calls owned by typed semantic lowering rather than by the source
+/// function graph or the public builtin surface.
+///
+/// Keeping this registry at the semantic boundary makes production projection
+/// validate the same internal call vocabulary that semantic analysis emits.
+/// It also prevents source declarations from shadowing compiler-owned calls.
+fn compiler_intrinsic_kind(name: &str) -> Option<CompilerIntrinsicKind> {
+    if name == STATE_MAP_GET_INTRINSIC {
+        return Some(CompilerIntrinsicKind::StateMap);
+    }
+    if is_list_intrinsic(name) {
+        return Some(CompilerIntrinsicKind::List);
+    }
+    if matches!(
+        name,
+        DECIMAL_DIV_ROUND_INTRINSIC
+            | QUANTITY_DIV_ROUND_INTRINSIC
+            | QUANTITY_RATIO_ROUND_INTRINSIC
+            | DECIMAL_TO_INT_TRUNC_INTRINSIC
+            | DECIMAL_TO_INT_ROUND_INTRINSIC
+    ) {
+        return Some(CompilerIntrinsicKind::Numeric);
+    }
+    if matches!(
+        name,
+        "is_some" | "is_none" | "is_ok" | "is_err" | "unwrap_or" | "unwrap_err_or"
+    ) {
+        return Some(CompilerIntrinsicKind::Sum);
+    }
+    None
 }
 
 fn is_canonical_type_spelling(name: &str) -> bool {
@@ -169,8 +188,9 @@ fn is_canonical_type_spelling(name: &str) -> bool {
 /// Return whether a source declaration collides with compiler-owned names.
 pub fn is_reserved_source_declaration(name: &str, is_function: bool) -> bool {
     name.starts_with(LINKED_SYMBOL_PREFIX)
-        || is_lowered_intrinsic(name)
+        || compiler_intrinsic_kind(name).is_some()
         || is_canonical_type_spelling(name)
+        || (is_function && name == crate::metadata::KOTO_TEST_RETURN_ENTRYPOINT)
         || (is_function
             && (Builtin::from_name(name).is_some() || Builtin::from_source_name(name).is_some()))
 }
@@ -824,6 +844,7 @@ pub struct SemanticContext {
     typed_hir_nodes: RefCell<BTreeMap<HirId, Type>>,
     pending_diagnostic: RefCell<Option<crate::semantic_diagnostics::SemanticDiagnostic>>,
     required_list_capacity: RefCell<Option<u8>>,
+    next_synthetic_binding: Cell<usize>,
 }
 
 impl SemanticContext {
@@ -1612,6 +1633,18 @@ impl SemanticContext {
         self.pending_diagnostic.borrow_mut().take();
     }
 
+    fn fresh_aggregate_capture(&self) -> String {
+        let index = self.next_synthetic_binding.get();
+        self.next_synthetic_binding.set(
+            index
+                .checked_add(1)
+                .expect("aggregate capture counter must not overflow"),
+        );
+        // NUL cannot occur in a source identifier, so this compiler-owned
+        // binding cannot collide with a user local in any nested scope.
+        format!("\0aggregate_capture#{index}")
+    }
+
     /// Check whether one expression can initialize `expected` without letting
     /// a speculative error replace the diagnostic for the enclosing invalid
     /// construct. Typed expression analysis is otherwise side-effect free; a
@@ -1656,6 +1689,7 @@ impl SemanticContext {
         self.typed_hir_nodes.borrow_mut().clear();
         self.pending_diagnostic.borrow_mut().take();
         self.required_list_capacity.borrow_mut().take();
+        self.next_synthetic_binding.set(0);
     }
 }
 
@@ -2417,11 +2451,6 @@ fn validate_production_projection_expr(
                     }
                     _ => {}
                 }
-            } else if is_lowered_intrinsic(name) {
-                // Member operations and exact numeric helpers are lowered into
-                // compiler-owned calls before the test target is projected.
-                // They do not have source declarations and must survive the
-                // production-call-graph validation as intrinsic leaves.
             } else if removed.contains(name) {
                 return Err(SemanticError {
                     code: "E_TEST_ONLY_PRODUCTION",
@@ -2429,7 +2458,7 @@ fn validate_production_projection_expr(
                         "retained function `{owner}` calls removed test function `{name}`"
                     ),
                 });
-            } else if !retained.contains(name) {
+            } else if !retained.contains(name) && compiler_intrinsic_kind(name).is_none() {
                 return Err(SemanticError {
                     code: "K2002",
                     message: format!(
@@ -4952,9 +4981,16 @@ fn bind_struct_fields_rec(
     let resolved_ty = resolve_struct_type(ty);
     if let Type::Struct { fields, .. } = resolved_ty {
         for (i, (_fname, fty)) in fields.iter().enumerate() {
+            // `base_expr` has already been captured by the synthetic binding
+            // named `base_name`. Project from that binding so an effectful
+            // aggregate expression is never evaluated once per field.
+            let captured = TypedExpr {
+                expr: ExprKind::Ident(base_name.to_owned()),
+                ty: base_expr.ty.clone(),
+            };
             let member = TypedExpr {
                 expr: ExprKind::Member {
-                    object: Box::new(base_expr.clone()),
+                    object: Box::new(captured),
                     field: i.to_string(),
                 },
                 ty: resolve_struct_type(fty),
@@ -4984,26 +5020,19 @@ fn bind_tuple_fields_rec(
     if let Type::Tuple(elements) = resolve_struct_type(ty) {
         for (idx, elem_ty) in elements.iter().enumerate() {
             let resolved_elem_ty = resolve_struct_type(elem_ty);
-            let element_expr = if let ExprKind::Tuple(items) = base_expr.kind() {
-                if let Some(item) = items.get(idx) {
-                    item.clone()
-                } else {
-                    TypedExpr {
-                        expr: ExprKind::Member {
-                            object: Box::new(base_expr.clone()),
-                            field: idx.to_string(),
-                        },
-                        ty: resolved_elem_ty.clone(),
-                    }
-                }
-            } else {
-                TypedExpr {
-                    expr: ExprKind::Member {
-                        object: Box::new(base_expr.clone()),
-                        field: idx.to_string(),
-                    },
-                    ty: resolved_elem_ty.clone(),
-                }
+            // Tuple literals and calls are both evaluated by the parent
+            // binding. Synthetic flattened names only project that captured
+            // value; cloning a literal item here would also duplicate calls
+            // nested inside the literal.
+            let element_expr = TypedExpr {
+                expr: ExprKind::Member {
+                    object: Box::new(TypedExpr {
+                        expr: ExprKind::Ident(base_name.to_owned()),
+                        ty: base_expr.ty.clone(),
+                    }),
+                    field: idx.to_string(),
+                },
+                ty: resolved_elem_ty.clone(),
             };
             let child_name = format!("{base_name}#{idx}");
             vars.insert(child_name.clone(), resolved_elem_ty.clone());
@@ -5843,22 +5872,17 @@ fn analyze_statement_inner(
                             bind_tuple_fields_rec(&mut out, vars, name, &expr, &expr.ty);
                         }
                         Type::Struct { fields, .. } => {
-                            for (i, (fname, fty)) in fields.iter().enumerate() {
-                                let direct = match expr.kind() {
-                                    ExprKind::Tuple(values) => values.get(i),
-                                    ExprKind::StructLiteral { fields, .. } => fields
-                                        .iter()
-                                        .find(|(field, _)| field == fname)
-                                        .map(|(_, value)| value),
-                                    _ => None,
-                                };
-                                let val_expr = direct.cloned().unwrap_or_else(|| TypedExpr {
+                            for (i, (_fname, fty)) in fields.iter().enumerate() {
+                                let val_expr = TypedExpr {
                                     expr: ExprKind::Member {
-                                        object: Box::new(expr.clone()),
+                                        object: Box::new(TypedExpr {
+                                            expr: ExprKind::Ident(name.clone()),
+                                            ty: expr.ty.clone(),
+                                        }),
                                         field: i.to_string(),
                                     },
                                     ty: fty.clone(),
-                                });
+                                };
                                 let sname = format!("{name}#{i}");
                                 let field_ty = resolve_struct_type(fty);
                                 vars.insert(sname.clone(), field_ty.clone());
@@ -5905,12 +5929,22 @@ fn analyze_statement_inner(
                                     ),
                                 });
                             }
+                            let capture_name = context.fresh_aggregate_capture();
+                            let captured = TypedExpr {
+                                expr: ExprKind::Ident(capture_name.clone()),
+                                ty: expr.ty.clone(),
+                            };
+                            vars.insert(capture_name.clone(), expr.ty.clone());
+                            out.push(TypedStatement::Let {
+                                name: capture_name,
+                                value: expr.clone(),
+                            });
                             // Destructure by emitting member-access typed expressions for each field.
                             for (i, name) in names.iter().enumerate() {
                                 let ti = ts.get(i).cloned().expect("tuple arity already validated");
                                 let member = TypedExpr {
                                     expr: ExprKind::Member {
-                                        object: Box::new(expr.clone()),
+                                        object: Box::new(captured.clone()),
                                         field: i.to_string(),
                                     },
                                     ty: ti.clone(),
@@ -5942,26 +5976,28 @@ fn analyze_statement_inner(
                                     ),
                                 });
                             }
+                            let capture_name = context.fresh_aggregate_capture();
+                            let captured = TypedExpr {
+                                expr: ExprKind::Ident(capture_name.clone()),
+                                ty: expr.ty.clone(),
+                            };
+                            vars.insert(capture_name.clone(), expr.ty.clone());
+                            out.push(TypedStatement::Let {
+                                name: capture_name,
+                                value: expr.clone(),
+                            });
                             for (i, name) in names.iter().enumerate() {
-                                let (fname, ti) = fields
+                                let (_fname, ti) = fields
                                     .get(i)
                                     .cloned()
                                     .expect("struct arity already validated");
-                                let direct = match expr.kind() {
-                                    ExprKind::Tuple(values) => values.get(i),
-                                    ExprKind::StructLiteral { fields, .. } => fields
-                                        .iter()
-                                        .find(|(field, _)| field == &fname)
-                                        .map(|(_, value)| value),
-                                    _ => None,
-                                };
-                                let val_expr = direct.cloned().unwrap_or_else(|| TypedExpr {
+                                let val_expr = TypedExpr {
                                     expr: ExprKind::Member {
-                                        object: Box::new(expr.clone()),
+                                        object: Box::new(captured.clone()),
                                         field: i.to_string(),
                                     },
                                     ty: resolve_struct_type(&ti),
-                                });
+                                };
                                 let field_ty = resolve_struct_type(&ti);
                                 if name != "_" {
                                     vars.insert(name.clone(), field_ty.clone());
@@ -15078,6 +15114,116 @@ mod tests {
     use crate::parser::parse_test_fragment as parse;
 
     #[test]
+    fn compiler_owned_test_return_selector_is_reserved_for_functions() {
+        assert!(is_reserved_source_declaration(
+            crate::metadata::KOTO_TEST_RETURN_ENTRYPOINT,
+            true
+        ));
+        assert!(!is_reserved_source_declaration(
+            crate::metadata::KOTO_TEST_RETURN_ENTRYPOINT,
+            false
+        ));
+    }
+
+    #[test]
+    fn production_projection_accepts_registered_intrinsics_and_rejects_fabricated_calls() {
+        let retained = HashSet::new();
+        let removed = HashSet::new();
+        let registered = [
+            STATE_MAP_GET_INTRINSIC,
+            LIST_LEN_INTRINSIC,
+            LIST_GET_INTRINSIC,
+            LIST_TRY_SET_INTRINSIC,
+            LIST_TRY_PUSH_INTRINSIC,
+            LIST_POP_INTRINSIC,
+            LIST_CONTAINS_INTRINSIC,
+            LIST_TAKE_INTRINSIC,
+            LIST_ENUMERATE_INTRINSIC,
+            DECIMAL_DIV_ROUND_INTRINSIC,
+            QUANTITY_DIV_ROUND_INTRINSIC,
+            QUANTITY_RATIO_ROUND_INTRINSIC,
+            DECIMAL_TO_INT_TRUNC_INTRINSIC,
+            DECIMAL_TO_INT_ROUND_INTRINSIC,
+            "is_some",
+            "is_none",
+            "is_ok",
+            "is_err",
+            "unwrap_or",
+            "unwrap_err_or",
+        ];
+        for name in registered {
+            assert!(
+                compiler_intrinsic_kind(name).is_some(),
+                "missing compiler intrinsic registry entry for {name}"
+            );
+            assert!(
+                is_reserved_source_declaration(name, true),
+                "compiler intrinsic {name} must not be shadowable by a source function"
+            );
+            let expression = TypedExpr {
+                expr: ExprKind::Call {
+                    name: name.to_owned(),
+                    args: Vec::new(),
+                },
+                ty: Type::Int,
+            };
+            validate_production_projection_expr(
+                &expression,
+                "retained_helper",
+                &retained,
+                &removed,
+                false,
+            )
+            .unwrap_or_else(|error| panic!("registered intrinsic {name} was rejected: {error:?}"));
+        }
+
+        let fabricated = TypedExpr {
+            expr: ExprKind::Call {
+                name: "__fabricated_projection_escape".to_owned(),
+                args: Vec::new(),
+            },
+            ty: Type::Int,
+        };
+        assert!(compiler_intrinsic_kind("__fabricated_projection_escape").is_none());
+        assert!(!is_reserved_source_declaration(
+            "__fabricated_projection_escape",
+            true
+        ));
+        let error = validate_production_projection_expr(
+            &fabricated,
+            "retained_helper",
+            &retained,
+            &removed,
+            false,
+        )
+        .expect_err("unregistered typed calls must fail closed");
+        assert_eq!(error.code, "K2002");
+        assert!(error.message.contains("__fabricated_projection_escape"));
+    }
+
+    #[test]
+    fn removed_test_function_cannot_hide_behind_an_intrinsic_name() {
+        let retained = HashSet::new();
+        let removed = HashSet::from(["is_some".to_owned()]);
+        let expression = TypedExpr {
+            expr: ExprKind::Call {
+                name: "is_some".to_owned(),
+                args: Vec::new(),
+            },
+            ty: Type::Bool,
+        };
+        let error = validate_production_projection_expr(
+            &expression,
+            "retained_helper",
+            &retained,
+            &removed,
+            false,
+        )
+        .expect_err("removed test calls must take precedence over intrinsic classification");
+        assert_eq!(error.code, "E_TEST_ONLY_PRODUCTION");
+    }
+
+    #[test]
     fn pending_diagnostic_fills_first_spanless_failure_without_masking_structured_failure() {
         let source = crate::source::SourceId(9);
         let structured = crate::semantic_diagnostics::SemanticDiagnostic {
@@ -16366,14 +16512,24 @@ mod tests {
                 .unwrap_or_else(|| panic!("missing binding `{suffix}`"))
         };
 
-        assert!(
-            matches!(binding("pair#0").expr, ExprKind::IntLiteral(ref value) if value == &BigInt::from(1_i64))
-        );
-        assert!(matches!(binding("pair#1").expr, ExprKind::String(ref value) if value == "two"));
-        assert!(
-            matches!(binding("left").expr, ExprKind::IntLiteral(ref value) if value == &BigInt::from(3_i64))
-        );
-        assert!(matches!(binding("right").expr, ExprKind::String(ref value) if value == "four"));
+        let is_projection = |value: &TypedExpr, base: Option<&str>, index: &str| {
+            matches!(
+                &value.expr,
+                ExprKind::Member { object, field }
+                    if field == index
+                        && matches!(
+                            object.kind(),
+                            ExprKind::Ident(name)
+                                if base.is_none_or(|base| {
+                                    name.rsplit("::").next() == Some(base)
+                                })
+                        )
+            )
+        };
+        assert!(is_projection(binding("pair#0"), Some("pair"), "0"));
+        assert!(is_projection(binding("pair#1"), Some("pair"), "1"));
+        assert!(is_projection(binding("left"), None, "0"));
+        assert!(is_projection(binding("right"), None, "1"));
     }
 
     #[test]
@@ -17636,13 +17792,22 @@ mod tests {
 
     #[test]
     fn public_entrypoints_reject_zk_verify_without_permission() {
-        let program = parse(
-            "seiyaku Demo { kotoage fn verify(bytes payload) { crypto::zk::verify_unshield(payload); } }",
+        let mut program = parse(
+            "seiyaku Demo { kotoage fn verify(bytes payload) authorize(\"Verify\") { crypto::zk::verify_unshield(payload); } }",
         )
         .expect("parse public zk verify");
+        let function = program
+            .items
+            .iter_mut()
+            .find_map(|item| match item {
+                Item::Function(function) if function.name == "verify" => Some(function),
+                _ => None,
+            })
+            .expect("verify function");
+        function.modifiers.permission = None;
         let err = SemanticContext::with_zk_enabled(true)
             .analyze(&program)
-            .expect_err("public zk verify should require permission");
+            .expect_err("a fabricated public zk verifier AST should require permission");
         assert!(
             err.message
                 .contains("kotoage function `verify` requires `authorize(\"Permission\")`"),
@@ -17778,11 +17943,21 @@ mod tests {
 
     #[test]
     fn public_entrypoints_reject_state_mutation_without_permission() {
-        let program = parse(
-            "seiyaku Demo { state int counter; hajimari() { counter = 0; } kotoage fn set() { counter = 1; } }",
+        let mut program = parse(
+            "seiyaku Demo { state int counter; hajimari() { counter = 0; } kotoage fn set() authorize(\"Set\") { counter = 1; } }",
         )
         .expect("parse public state mutation");
-        let err = analyze(&program).expect_err("public state mutation should require permission");
+        let function = program
+            .items
+            .iter_mut()
+            .find_map(|item| match item {
+                Item::Function(function) if function.name == "set" => Some(function),
+                _ => None,
+            })
+            .expect("set function");
+        function.modifiers.permission = None;
+        let err = analyze(&program)
+            .expect_err("a fabricated public state-mutation AST should require permission");
         assert!(
             err.message
                 .contains("kotoage function `set` requires `authorize(\"Permission\")`"),

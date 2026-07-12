@@ -4,7 +4,10 @@ use std::{string::String, vec::Vec};
 
 use getset::Getters;
 use iroha_data_model_derive::{EventSet, HasOrigin, model};
-use iroha_primitives::{json::Json, numeric::Numeric};
+use iroha_primitives::{
+    json::Json,
+    numeric::{Numeric, Quantity},
+};
 #[allow(unused_imports)]
 #[cfg(feature = "json")]
 use norito::json::{self, JsonDeserialize, JsonSerialize};
@@ -440,7 +443,7 @@ mod asset {
         #[cfg_attr(not(feature = "json"), norito(reuse_archived))]
         pub struct AssetChanged {
             pub asset: AssetId,
-            pub amount: Numeric,
+            pub amount: Quantity,
         }
 
         /// [`Self`] represents updated total asset quantity.
@@ -450,7 +453,7 @@ mod asset {
         #[cfg_attr(not(feature = "json"), norito(reuse_archived))]
         pub struct AssetDefinitionTotalQuantityChanged {
             pub asset_definition: AssetDefinitionId,
-            pub total_amount: Numeric,
+            pub total_amount: Quantity,
         }
 
         /// [`Self`] represents updated total asset quantity.
@@ -476,7 +479,7 @@ mod asset {
             /// Id of the asset definition that flipped to `Not`.
             pub asset_definition: AssetDefinitionId,
             /// Amount minted in the flipping transaction.
-            pub minted_amount: Numeric,
+            pub minted_amount: Quantity,
             /// Account that performed the mint.
             pub authority: AccountId,
         }

@@ -141,7 +141,10 @@ pub(super) fn spawn_validation_workers(
         let name = format!("sumeragi-validate-{idx}");
         let join_handle = crate::sumeragi::sumeragi_thread_builder(name)
             .spawn(move || {
-                while let Ok(work) = work_rx.recv() {
+                'worker: while let Ok(work) = work_rx.recv() {
+                    if crate::sumeragi::consensus_fail_stop_active() {
+                        continue;
+                    }
                     let ValidationWork {
                         id,
                         hash,
@@ -163,20 +166,31 @@ pub(super) fn spawn_validation_workers(
                         &mut voting_block,
                     );
                     let duration = validation_start.elapsed();
-                    if result_tx
-                        .send(ValidationResult {
-                            id,
-                            hash,
-                            height,
-                            view,
-                            frontier_generation,
-                            commit_topology,
-                            duration,
-                            outcome,
-                        })
-                        .is_err()
-                    {
-                        break;
+                    if crate::sumeragi::consensus_fail_stop_active() {
+                        continue;
+                    }
+                    let mut result = ValidationResult {
+                        id,
+                        hash,
+                        height,
+                        view,
+                        frontier_generation,
+                        commit_topology,
+                        duration,
+                        outcome,
+                    };
+                    loop {
+                        if crate::sumeragi::consensus_fail_stop_active() {
+                            continue 'worker;
+                        }
+                        match result_tx.try_send(result) {
+                            Ok(()) => break,
+                            Err(mpsc::TrySendError::Full(pending)) => {
+                                result = pending;
+                                std::thread::yield_now();
+                            }
+                            Err(mpsc::TrySendError::Disconnected(_)) => break 'worker,
+                        }
                     }
                     if let Some(wake) = wake_tx.as_ref() {
                         let _ = wake.try_send(());
@@ -1228,7 +1242,7 @@ impl Actor {
     }
 
     pub(in crate::sumeragi) fn poll_validation_results(&mut self) -> bool {
-        if self.kura_recovery_required() {
+        if self.consensus_participation_halted() || self.kura_recovery_required() {
             return false;
         }
         let Some(result_rx) = self.subsystems.validation.result_rx.take() else {

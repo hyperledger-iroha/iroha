@@ -146,7 +146,7 @@ use iroha_data_model::{
         },
     },
 };
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::{Numeric, Quantity};
 use norito::{NoritoSerialize, decode_from_bytes};
 
 #[allow(dead_code)]
@@ -6544,7 +6544,10 @@ impl Run for IncentivesServiceRecordArgs {
             require_budget_approval_id(state.reward_config.budget_approval_id.as_ref())?;
         ensure_instruction_budget_approval(&instruction, &budget_approval_id)?;
 
-        let transfer_instruction = service.payout_ledger().to_transfer(&instruction);
+        let transfer_instruction = service
+            .payout_ledger()
+            .to_transfer(&instruction)
+            .map_err(|err| eyre!("invalid relay payout quantity: {err}"))?;
         if self.submit_transfer
             && !instruction.is_zero_amount()
             && let Some(transfer) = transfer_instruction.as_ref()
@@ -21281,10 +21284,12 @@ fn append_transfer_instruction(
         return Ok(());
     }
     let numeric_amount = xor_amount_to_numeric(amount)?;
+    let quantity = Quantity::try_from_numeric(numeric_amount)
+        .wrap_err("reserve projection produced a negative asset quantity")?;
     let asset_id = AssetId::new(asset_definition.clone(), source_account.clone());
-    let transfer = InstructionBox::from(Transfer::asset_numeric(
+    let transfer = InstructionBox::from(Transfer::asset_quantity(
         asset_id,
-        numeric_amount,
+        quantity,
         destination_account.clone(),
     ));
     let value = norito::json::to_value(&transfer)
@@ -29704,7 +29709,7 @@ mod tests {
         let TransferBox::Asset(transfer) = transfer_box else {
             panic!("expected asset transfer, found {transfer_box:?}");
         };
-        assert_eq!(transfer.object, Numeric::from(25_u32));
+        assert_eq!(transfer.object.as_numeric(), &Numeric::from(25_u32));
         assert_eq!(transfer.destination, sample_account_id("beneficiary"));
         assert_eq!(transfer.source.account, sample_account_id("treasury"));
     }

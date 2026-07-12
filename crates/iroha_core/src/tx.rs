@@ -1102,7 +1102,7 @@ fn effective_confidential_policy_mode_for_admission(
         let transparent_total = world
             .asset_total_amount(asset_def_id)
             .map_err(|err| TransactionRejectionReason::Validation(ValidationFail::from(err)))?;
-        if transparent_total > Numeric::zero() {
+        if transparent_total > Quantity::zero() {
             return Ok(transition.previous_mode());
         }
     }
@@ -12939,7 +12939,7 @@ pub mod tests {
         dest: &'a str,
     ) -> impl IntoIterator<Item = InstructionBox> + 'a {
         (0..N_INSTRUCTIONS).map(move |_| {
-            Transfer::asset_numeric(
+            Transfer::asset_quantity(
                 asset(src),
                 quantity_per_instruction,
                 ACCOUNT[dest].id.clone(),
@@ -13384,7 +13384,7 @@ pub mod tests {
             let trigger = Trigger::new(
                 format!("data-{src}-{dest}-{label}").parse().unwrap(),
                 Action::new(
-                    [InstructionBox::from(Transfer::asset_numeric(
+                    [InstructionBox::from(Transfer::asset_quantity(
                         asset(src),
                         amount,
                         ACCOUNT[dest].id.clone(),

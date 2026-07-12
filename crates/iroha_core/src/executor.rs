@@ -30,7 +30,7 @@ use iroha_data_model::{
     isi::{
         CustomInstruction, GrantBox, InstructionBox, InstructionBox as DMInstructionBox,
         RemoveKeyValueBox, RevokeBox, SetKeyValueBox, TransferBox,
-        error::{InstructionExecutionError, MathError},
+        error::InstructionExecutionError,
         mint_burn::MintBox,
         register::RegisterBox,
     },
@@ -56,7 +56,7 @@ use iroha_executor_data_model::{
 use iroha_logger::{debug, trace, warn};
 use iroha_primitives::{
     json::Json,
-    numeric::{Numeric, NumericSpec},
+    numeric::{Numeric, NumericSpec, Quantity},
 };
 use ivm::runtime::IvmConfig;
 use ivm::{IVM, Memory, RuntimeTemplate, VMError};
@@ -232,15 +232,6 @@ impl FixtureExecutorKind {
     }
 }
 
-fn ensure_detached_asset_quantity_non_negative(quantity: &Numeric) -> Result<(), ValidationFail> {
-    if quantity.mantissa().is_negative() {
-        return Err(ValidationFail::InstructionFailed(
-            InstructionExecutionError::Math(MathError::NegativeValue),
-        ));
-    }
-    Ok(())
-}
-
 /// Execute a single instruction in a detached overlay, recording only the state deltas.
 ///
 /// This helper is used by the parallel validator to pre-apply side-effect-free
@@ -311,8 +302,7 @@ pub(crate) fn execute_instruction_detached(
         match mb {
             MintBox::Asset(m) => {
                 let asset_id = m.destination.clone();
-                let qty = m.object.clone();
-                ensure_detached_asset_quantity_non_negative(&qty)?;
+                let qty = m.object.clone().into_numeric();
                 // Record per-account balance increase and total supply increase
                 delta.add_asset_add(asset_id.clone(), qty.clone());
                 delta.add_total_add(asset_id.definition().clone(), qty);
@@ -331,8 +321,7 @@ pub(crate) fn execute_instruction_detached(
         match bb {
             BurnBox::Asset(b) => {
                 let asset_id = b.destination.clone();
-                let qty = b.object.clone();
-                ensure_detached_asset_quantity_non_negative(&qty)?;
+                let qty = b.object.clone().into_numeric();
                 // Record per-account balance decrease and total supply decrease
                 delta.add_asset_sub(asset_id.clone(), qty.clone());
                 delta.add_total_sub(asset_id.definition().clone(), qty);
@@ -368,8 +357,7 @@ pub(crate) fn execute_instruction_detached(
         match tb {
             TransferBox::Asset(t) => {
                 let src = t.source.clone();
-                let qty = t.object.clone();
-                ensure_detached_asset_quantity_non_negative(&qty)?;
+                let qty = t.object.clone().into_numeric();
                 delta.transfer_asset(src, t.destination.clone(), qty);
             }
             TransferBox::Domain(t) => {
@@ -751,7 +739,7 @@ fn successful_claim_fee_exempt_instructions(
         MintBox::Asset(mint) => {
             mint.destination.account() == &recipient
                 && mint.destination.definition() == &asset_def
-                && mint.object.clone() > Numeric::zero()
+                && !mint.object.is_zero()
         }
         MintBox::TriggerRepetitions(_) => false,
     }
@@ -918,7 +906,9 @@ fn redeem_funded_nexus_fee_capacity(
     let existing_balance = world
         .assets()
         .get(&payer_asset)
-        .map_or_else(Numeric::zero, |balance| (**balance).clone());
+        .map_or_else(Numeric::zero, |balance| {
+            balance.as_ref().as_numeric().clone()
+        });
     let capacity = checked_nexus_fee_add(
         existing_balance,
         redeemed_amount,
@@ -986,7 +976,9 @@ fn check_redeem_funded_lane_relay_fee_balance(
     let available = world
         .assets()
         .get(&payer_asset)
-        .map_or_else(Numeric::zero, |balance| (**balance).clone());
+        .map_or_else(Numeric::zero, |balance| {
+            balance.as_ref().as_numeric().clone()
+        });
     let unsettled = unsettled_verified_nexus_fee_amount(world, payer, cfg.fee_asset_id.as_str())?;
     let required = checked_nexus_fee_add(fee.clone(), unsettled, "unsettled receipts")?;
     let required = checked_nexus_fee_add(required, in_flight_fees, "in-flight receipts")?;
@@ -1564,6 +1556,58 @@ pub(crate) fn parse_gas_limit(metadata: &Metadata) -> Result<Option<u64>, Valida
         .map_err(|err| ValidationFail::NotPermitted(err.to_string()))
 }
 
+fn overlay_build_error_to_validation_fail(
+    error: crate::pipeline::overlay::OverlayBuildError,
+) -> ValidationFail {
+    match error {
+        crate::pipeline::overlay::OverlayBuildError::HeaderPolicy(error) => {
+            ValidationFail::IvmAdmission(error)
+        }
+        crate::pipeline::overlay::OverlayBuildError::AxtReject(context) => {
+            ValidationFail::AxtReject(context)
+        }
+        other => ValidationFail::NotPermitted(other.to_string()),
+    }
+}
+
+/// Apply the canonical first-release IVM admission policy to an already prepared program.
+///
+/// Preparation authenticates and predecodes the image, while this check binds execution to the
+/// live node/governance limits. Keeping it shared prevents direct, trigger, and proved dispatch
+/// from assigning different meaning to the same ABI V1 header.
+pub(crate) fn validate_prepared_ivm_execution_policy<R: StateReadOnly>(
+    state: &R,
+    metadata: &ivm::ProgramMetadata,
+    code_offset: usize,
+    bytecode: &[u8],
+) -> Result<std::num::NonZeroU64, ValidationFail> {
+    crate::pipeline::overlay::validate_header_policy(metadata)
+        .map_err(ValidationFail::IvmAdmission)?;
+    if metadata.mode & ivm::ivm_mode::ZK != 0
+        && !(state.zk().halo2.enabled || state.zk().stark.enabled)
+    {
+        return Err(ValidationFail::IvmAdmission(
+            iroha_data_model::executor::IvmAdmissionError::UnsupportedFeatureBits(
+                ivm::ivm_mode::ZK,
+            ),
+        ));
+    }
+    let effective_cycles = crate::smartcontracts::ivm::validate_cycle_limits(
+        metadata,
+        state.pipeline().ivm_max_cycles_upper_bound,
+        state.world().parameters().smart_contract().fuel(),
+    )
+    .map_err(ValidationFail::IvmAdmission)?;
+    crate::pipeline::overlay::enforce_pre_execution_policy(
+        state.pipeline().ivm_max_cycles_upper_bound,
+        metadata,
+        code_offset,
+        bytecode,
+    )
+    .map_err(overlay_build_error_to_validation_fail)?;
+    Ok(effective_cycles)
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct ContractRuntimeExecutionContext {
     #[allow(dead_code)]
@@ -1973,37 +2017,6 @@ fn resolve_callable_contract_entrypoint(
     ))
 }
 
-#[cfg(test)]
-fn resolve_nested_contract_entrypoint(
-    bytecode: &[u8],
-    selector: &str,
-) -> Result<ResolvedContractEntrypoint, ValidationFail> {
-    let parsed = ivm::ProgramMetadata::parse(bytecode).map_err(|err| {
-        ValidationFail::NotPermitted(format!(
-            "invalid contract artifact for nested contract dispatch: {err}"
-        ))
-    })?;
-    let prefix_len = parsed.prefix_len() as u64;
-    let contract_interface = parsed.contract_interface.as_ref().ok_or_else(|| {
-        ValidationFail::NotPermitted(
-            "nested contract call requires a self-describing contract artifact".to_owned(),
-        )
-    })?;
-    let descriptor = contract_interface
-        .entrypoints
-        .iter()
-        .find(|candidate| candidate.name == selector)
-        .ok_or_else(|| {
-            ValidationFail::NotPermitted(format!("unknown contract entrypoint `{selector}`"))
-        })?;
-    let permission = nested_contract_entrypoint_permission(descriptor, selector)?;
-    Ok((
-        prefix_len + descriptor.entry_pc,
-        permission,
-        descriptor.argument_schema.clone(),
-    ))
-}
-
 fn resolve_raw_contract_entrypoint(
     bytecode: &[u8],
     selector: &str,
@@ -2050,6 +2063,52 @@ fn resolve_prepared_contract_entrypoint(
     Ok((
         entrypoint_pc,
         permission,
+        descriptor.argument_schema.clone(),
+    ))
+}
+
+fn resolve_prepared_nested_contract_entrypoint(
+    contract: &ivm::PreparedContract,
+    selector: &str,
+) -> Result<ResolvedContractEntrypoint, ValidationFail> {
+    let descriptor = contract.entrypoint_descriptor(selector).ok_or_else(|| {
+        ValidationFail::NotPermitted(format!("unknown contract entrypoint `{selector}`"))
+    })?;
+    let entrypoint_pc = contract.entrypoint_pc(selector).ok_or_else(|| {
+        ValidationFail::NotPermitted(format!(
+            "contract entrypoint `{selector}` has no validated program counter"
+        ))
+    })?;
+    let permission = nested_contract_entrypoint_permission(descriptor, selector)?;
+    Ok((
+        entrypoint_pc,
+        permission,
+        descriptor.argument_schema.clone(),
+    ))
+}
+
+fn resolve_prepared_contract_view_entrypoint(
+    contract: &ivm::PreparedContract,
+    selector: &str,
+) -> Result<ResolvedContractEntrypoint, ValidationFail> {
+    use iroha_data_model::smart_contract::manifest::EntryPointKind;
+
+    let descriptor = contract.entrypoint_descriptor(selector).ok_or_else(|| {
+        ValidationFail::NotPermitted(format!("unknown contract entrypoint `{selector}`"))
+    })?;
+    if descriptor.kind != EntryPointKind::View {
+        return Err(ValidationFail::NotPermitted(format!(
+            "contract entrypoint `{selector}` is not a read-only view"
+        )));
+    }
+    let entrypoint_pc = contract.entrypoint_pc(selector).ok_or_else(|| {
+        ValidationFail::NotPermitted(format!(
+            "contract entrypoint `{selector}` has no validated program counter"
+        ))
+    })?;
+    Ok((
+        entrypoint_pc,
+        descriptor.permission.clone(),
         descriptor.argument_schema.clone(),
     ))
 }
@@ -2539,47 +2598,55 @@ pub(crate) fn parse_contract_invocation_execution_context(
     })
 }
 
-#[cfg(test)]
-pub(crate) fn parse_nested_contract_invocation_execution_context(
-    invocation: &ContractInvocation,
-    bytecode: &[u8],
-    contract_alias: Option<iroha_data_model::smart_contract::ContractAlias>,
-    contract_subject: AccountId,
-) -> Result<ContractCallExecutionContext, ValidationFail> {
-    let selector = invocation.entrypoint.trim();
-    if selector.is_empty() {
-        return Err(ValidationFail::NotPermitted(
-            "nested contract entrypoint must not be empty".to_owned(),
-        ));
-    }
-
-    let (entrypoint_pc, entrypoint_permission, argument_schema) =
-        resolve_nested_contract_entrypoint(bytecode, selector)?;
-    let args = Json::default();
-    let argument_record = prepare_validated_contract_argument_record(
-        argument_schema.as_ref(),
-        invocation.arguments.as_deref(),
-        u64::MAX,
-    )?;
-
-    Ok(ContractCallExecutionContext {
-        contract_address: Some(invocation.contract_address.clone()),
-        contract_subject: Some(contract_subject),
-        contract_alias,
-        entrypoint: Some(selector.to_owned()),
-        entrypoint_pc: Some(entrypoint_pc),
-        entrypoint_permission,
-        args,
-        argument_record,
-    })
-}
-
 pub(crate) fn parse_prepared_contract_invocation_execution_context(
     invocation: &ContractInvocation,
     contract: &ivm::PreparedContract,
     contract_alias: Option<iroha_data_model::smart_contract::ContractAlias>,
     contract_subject: AccountId,
     gas_limit: u64,
+) -> Result<ContractCallExecutionContext, ValidationFail> {
+    parse_prepared_contract_invocation_execution_context_with_resolver(
+        invocation,
+        contract,
+        contract_alias,
+        contract_subject,
+        gas_limit,
+        resolve_prepared_contract_entrypoint,
+    )
+}
+
+/// Resolve a prepared ordinary nested call using the nested entrypoint policy.
+///
+/// Unlike top-level transaction dispatch, nested calls may enter read-only
+/// views. Lifecycle entrypoints remain reserved for their dedicated state
+/// transition machinery.
+pub(crate) fn parse_prepared_nested_contract_invocation_execution_context(
+    invocation: &ContractInvocation,
+    contract: &ivm::PreparedContract,
+    contract_alias: Option<iroha_data_model::smart_contract::ContractAlias>,
+    contract_subject: AccountId,
+    gas_limit: u64,
+) -> Result<ContractCallExecutionContext, ValidationFail> {
+    parse_prepared_contract_invocation_execution_context_with_resolver(
+        invocation,
+        contract,
+        contract_alias,
+        contract_subject,
+        gas_limit,
+        resolve_prepared_nested_contract_entrypoint,
+    )
+}
+
+fn parse_prepared_contract_invocation_execution_context_with_resolver(
+    invocation: &ContractInvocation,
+    contract: &ivm::PreparedContract,
+    contract_alias: Option<iroha_data_model::smart_contract::ContractAlias>,
+    contract_subject: AccountId,
+    gas_limit: u64,
+    resolve_entrypoint: fn(
+        &ivm::PreparedContract,
+        &str,
+    ) -> Result<ResolvedContractEntrypoint, ValidationFail>,
 ) -> Result<ContractCallExecutionContext, ValidationFail> {
     let selector = invocation.entrypoint.trim();
     if selector.is_empty() {
@@ -2589,7 +2656,7 @@ pub(crate) fn parse_prepared_contract_invocation_execution_context(
     }
 
     let (entrypoint_pc, entrypoint_permission, argument_schema) =
-        resolve_prepared_contract_entrypoint(contract, selector)?;
+        resolve_entrypoint(contract, selector)?;
     let args = Json::default();
     let argument_record = prepare_validated_contract_argument_record(
         argument_schema.as_ref(),
@@ -2837,7 +2904,7 @@ pub(crate) fn check_external_nexus_fee_admission(
         )));
     };
 
-    let available = (**balance).clone();
+    let available = balance.as_ref().as_numeric().clone();
     if available < fee {
         return Err(NexusFeeAdmissionError::Rejected(format!(
             "fee balance for payer `{payer}` is insufficient: requires {fee}, available {available}"
@@ -3271,14 +3338,12 @@ impl Executor {
             ),
         };
         let payer_asset = AssetId::with_scope(asset_definition_id.clone(), payer, payer_scope);
-        let qty = Numeric::try_new(fee_u128, 0).map_err(|_| {
-            ValidationFail::NotPermitted("fee amount exceeds supported numeric bounds".to_owned())
-        })?;
+        let qty = Quantity::from(fee_u128);
         let transfer = iroha_data_model::isi::Transfer::<
             Asset,
-            Numeric,
+            Quantity,
             iroha_data_model::account::Account,
-        >::asset_numeric(payer_asset, qty, tech_account);
+        >::asset_quantity(payer_asset, qty, tech_account);
         let instr: DMInstructionBox = transfer.into();
         execute_gas_fee_transfer_instruction(&definition, instr, authority, state_transaction)
             .map_err(|err| {
@@ -3548,7 +3613,12 @@ impl Executor {
             return Ok(());
         }
 
-        let burn = Burn::asset_numeric(fee.clone(), payer_asset);
+        let fee_quantity = Quantity::try_from_numeric(fee.clone()).map_err(|error| {
+            ValidationFail::InternalError(format!(
+                "validated nexus fee left the asset quantity domain: {error}"
+            ))
+        })?;
+        let burn = Burn::asset_quantity(fee_quantity, payer_asset);
         let instr: DMInstructionBox = burn.into();
         let previous_tx_dataspace_id = state_transaction.current_dataspace_id;
         let previous_world_dataspace_id = state_transaction.world.current_dataspace_id;
@@ -4383,19 +4453,6 @@ impl Executor {
                 ));
             }
 
-            let map_overlay_error =
-                |err: crate::pipeline::overlay::OverlayBuildError| -> ValidationFail {
-                    match err {
-                        crate::pipeline::overlay::OverlayBuildError::HeaderPolicy(e) => {
-                            ValidationFail::IvmAdmission(e)
-                        }
-                        crate::pipeline::overlay::OverlayBuildError::AxtReject(ctx) => {
-                            ValidationFail::AxtReject(ctx)
-                        }
-                        other => ValidationFail::NotPermitted(other.to_string()),
-                    }
-                };
-
             let summary = ivm_cache
                 .summarize_program(proved.bytecode.as_ref())
                 .map_err(|e| ValidationFail::InternalError(e.to_string()))?;
@@ -4420,14 +4477,14 @@ impl Executor {
                 summary.code_offset,
                 proved.bytecode.as_ref(),
             )
-            .map_err(map_overlay_error)?;
+            .map_err(overlay_build_error_to_validation_fail)?;
 
             crate::pipeline::overlay::validate_contract_binding(
                 state_transaction,
                 &transaction,
                 &summary,
             )
-            .map_err(map_overlay_error)?;
+            .map_err(overlay_build_error_to_validation_fail)?;
 
             let selector = requested_contract_entrypoint(transaction.metadata())?.ok_or_else(|| {
                 ValidationFail::NotPermitted(
@@ -4468,7 +4525,7 @@ impl Executor {
                 &transaction,
                 summary.code_hash,
             )
-            .map_err(map_overlay_error)?;
+            .map_err(overlay_build_error_to_validation_fail)?;
 
             let replay = crate::pipeline::overlay::verify_ivm_proved_execution(
                 state_transaction,
@@ -4476,7 +4533,7 @@ impl Executor {
                 proved,
                 &summary,
             )
-            .map_err(map_overlay_error)?;
+            .map_err(overlay_build_error_to_validation_fail)?;
             Some(replay)
         } else {
             None
@@ -4571,23 +4628,54 @@ impl Executor {
                         identity.contract_address
                     ))
                 })?;
+                let code_bytes = state_transaction
+                    .world
+                    .contract_code()
+                    .get(&identity.code_hash)
+                    .ok_or_else(|| {
+                        ValidationFail::NotPermitted(format!(
+                            "contract bytecode `{}` not found in WSV",
+                            identity.code_hash
+                        ))
+                    })?;
                 let summary = if let Some(summary) = ivm_cache
                     .cached_program_summary(identity.code_hash)
                     .map_err(|error| ValidationFail::InternalError(error.to_string()))?
                 {
                     summary
                 } else {
-                    code::with_code_bytes(state_transaction, &identity.code_hash, |bytecode| {
-                        ivm_cache.summarize_program_with_hash(identity.code_hash, bytecode)
-                    })
+                    ivm_cache
+                        .summarize_program_with_hash(identity.code_hash, code_bytes.as_ref())
+                        .map_err(|error| ValidationFail::InternalError(error.to_string()))?
+                };
+                if summary.prepared_contract().artifact() != code_bytes.as_slice() {
+                    return Err(ValidationFail::NotPermitted(format!(
+                        "cached contract bytecode `{}` does not match live WSV",
+                        identity.code_hash
+                    )));
+                }
+                let effective_cycles = validate_prepared_ivm_execution_policy(
+                    state_transaction,
+                    &summary.metadata,
+                    summary.code_offset,
+                    code_bytes.as_ref(),
+                )?;
+                let manifest = state_transaction
+                    .world
+                    .contract_manifests()
+                    .get(&identity.code_hash)
                     .ok_or_else(|| {
                         ValidationFail::NotPermitted(format!(
-                            "contract bytecode `{}` not found in WSV",
-                            identity.code_hash
+                            "contract instance `{}` has no manifest",
+                            identity.contract_address
                         ))
-                    })?
-                    .map_err(|error| ValidationFail::InternalError(error.to_string()))?
-                };
+                    })?;
+                crate::smartcontracts::ivm::validate_manifest_hashes(
+                    manifest,
+                    summary.code_hash,
+                    summary.abi_hash,
+                )
+                .map_err(ValidationFail::IvmAdmission)?;
                 let lifecycle_transition = validate_prepared_contract_lifecycle_call(
                     &state_transaction.world,
                     &call.contract_address,
@@ -4612,6 +4700,7 @@ impl Executor {
                 let mut runtime = summary
                     .checkout_runtime(effective_limit)
                     .map_err(|e| ValidationFail::InternalError(e.to_string()))?;
+                runtime.set_max_cycles(effective_cycles.get());
                 runtime.set_gas_limit(effective_limit);
                 if let Some(argument_record) = contract_call_context.argument_record.as_ref() {
                     argument_record
@@ -4730,28 +4819,17 @@ impl Executor {
                 let summary = match admitted {
                     ExecutableProgramSummary::Contract(summary) => summary,
                     ExecutableProgramSummary::Generic(summary) => {
-                        crate::smartcontracts::ivm::validate_generic_execution_metadata(&md)?;
-                        if summary.metadata.mode & ivm::ivm_mode::ZK != 0
-                            && !(state_transaction.zk.halo2.enabled
-                                || state_transaction.zk.stark.enabled)
-                        {
-                            return Err(ValidationFail::IvmAdmission(
-                                iroha_data_model::executor::IvmAdmissionError::UnsupportedFeatureBits(
-                                    ivm::ivm_mode::ZK,
-                                ),
-                            ));
-                        }
-                        let effective_cycles = crate::smartcontracts::ivm::validate_cycle_limits(
+                        crate::smartcontracts::ivm::validate_generic_execution_context(
+                            &state_transaction.world,
+                            &md,
+                            summary.code_hash,
+                        )?;
+                        let effective_cycles = validate_prepared_ivm_execution_policy(
+                            state_transaction,
                             &summary.metadata,
-                            state_transaction.pipeline.ivm_max_cycles_upper_bound,
-                            state_transaction
-                                .world
-                                .parameters
-                                .get()
-                                .smart_contract()
-                                .fuel(),
-                        )
-                        .map_err(ValidationFail::IvmAdmission)?;
+                            summary.code_offset,
+                            summary.program(),
+                        )?;
 
                         let prepared_contract_cache = ivm_cache.prepared_contract_cache();
                         let amx_analysis =
@@ -4859,12 +4937,18 @@ impl Executor {
                         return Ok(());
                     }
                 };
+                let effective_cycles = validate_prepared_ivm_execution_policy(
+                    state_transaction,
+                    &summary.metadata,
+                    summary.code_offset,
+                    bytes.as_ref(),
+                )?;
                 crate::pipeline::overlay::validate_contract_binding(
                     state_transaction,
                     &transaction_for_fee,
                     &summary,
                 )
-                .map_err(|error| ValidationFail::NotPermitted(error.to_string()))?;
+                .map_err(overlay_build_error_to_validation_fail)?;
                 let selector = requested_contract_entrypoint(&md)?.ok_or_else(|| {
                     ValidationFail::NotPermitted(
                         "self-describing raw-IVM contract dispatch requires explicit contract_entrypoint metadata"
@@ -4922,6 +5006,7 @@ impl Executor {
                 let mut runtime = summary
                     .checkout_runtime(effective_limit)
                     .map_err(|e| ValidationFail::InternalError(e.to_string()))?;
+                runtime.set_max_cycles(effective_cycles.get());
                 runtime.set_gas_limit(effective_limit);
                 if let Some(argument_record) = contract_call_context
                     .as_ref()
@@ -6244,7 +6329,7 @@ fn execute_multisig_custom_instruction_if_present(
 #[derive(Debug, Clone, norito::derive::JsonDeserialize, norito::derive::JsonSerialize)]
 struct FixtureMintAssetForAllAccounts {
     asset_definition: AssetDefinitionId,
-    quantity: Numeric,
+    quantity: Quantity,
 }
 
 #[derive(Debug, Clone)]
@@ -6406,7 +6491,7 @@ fn execute_fixture_simple_custom_instruction(
         .collect();
     for account_id in account_ids {
         let asset_id = AssetId::new(instruction.asset_definition.clone(), account_id);
-        iroha_data_model::isi::Mint::asset_numeric(instruction.quantity.clone(), asset_id)
+        iroha_data_model::isi::Mint::asset_quantity(instruction.quantity.clone(), asset_id)
             .execute(authority, state_transaction)
             .map_err(ValidationFail::from)?;
     }
@@ -6613,7 +6698,7 @@ fn evaluate_fixture_numeric_query_value(
                 .world
                 .assets
                 .get(&asset_id)
-                .map(|value| value.as_ref().clone())
+                .map(|value| value.as_ref().as_numeric().clone())
                 .unwrap_or_else(Numeric::zero))
         }
         "FindTotalAssetQuantityByAssetDefinitionId" => {
@@ -6626,6 +6711,7 @@ fn evaluate_fixture_numeric_query_value(
             state_transaction
                 .world
                 .asset_total_amount(&asset_definition_id)
+                .map(Quantity::into_numeric)
                 .map_err(ValidationFail::from)
         }
         _ => Err(ValidationFail::InternalError(format!(
@@ -6695,9 +6781,9 @@ fn extract_account_metadata_target(instruction: &InstructionBox) -> Option<Accou
 
 fn extract_transfer_asset(
     instruction: &InstructionBox,
-) -> Option<Transfer<Asset, Numeric, Account>> {
+) -> Option<Transfer<Asset, Quantity, Account>> {
     let instr_any = instruction.as_any();
-    if let Some(transfer) = instr_any.downcast_ref::<Transfer<Asset, Numeric, Account>>() {
+    if let Some(transfer) = instr_any.downcast_ref::<Transfer<Asset, Quantity, Account>>() {
         return Some(transfer.clone());
     }
     if let Some(transfer_box) = instr_any.downcast_ref::<TransferBox>() {
@@ -6706,13 +6792,13 @@ fn extract_transfer_asset(
             _ => None,
         };
     }
-    if !instruction_has_concrete_type::<Transfer<Asset, Numeric, Account>>(instruction) {
+    if !instruction_has_concrete_type::<Transfer<Asset, Quantity, Account>>(instruction) {
         return None;
     }
     let bytes = instruction.dyn_encode();
     std::panic::catch_unwind(|| {
         let mut slice = &bytes[..];
-        Transfer::<Asset, Numeric, Account>::decode(&mut slice).ok()
+        Transfer::<Asset, Quantity, Account>::decode(&mut slice).ok()
     })
     .ok()
     .flatten()
@@ -6874,6 +6960,31 @@ pub(crate) fn authorize_prepared_contract_selector(
     Ok(snapshot)
 }
 
+/// Authorize a prepared deployed-contract read-only selector and capture its immutable snapshot.
+pub(crate) fn authorize_prepared_contract_view_selector(
+    world: &impl WorldReadOnly,
+    authority: &AccountId,
+    contract: &ivm::PreparedContract,
+    selector: &str,
+    identity: &code::BoundContractIdentity,
+) -> Result<ContractEntrypointAuthorizationSnapshot, ValidationFail> {
+    let selector = selector.trim();
+    if selector.is_empty() {
+        return Err(ValidationFail::NotPermitted(
+            "contract entrypoint must not be empty".to_owned(),
+        ));
+    }
+    let (_, permission, _) = resolve_prepared_contract_view_entrypoint(contract, selector)?;
+    let snapshot = ContractEntrypointAuthorizationSnapshot::new(
+        authority.clone(),
+        selector.to_owned(),
+        permission,
+        identity,
+    );
+    snapshot.validate(world)?;
+    Ok(snapshot)
+}
+
 /// Authorize a prepared raw-IVM selector and capture its immutable apply snapshot.
 pub(crate) fn authorize_prepared_raw_contract_selector(
     world: &impl WorldReadOnly,
@@ -6972,23 +7083,32 @@ where
                         call.contract_address
                     ))
                 })?;
+            let code_bytes = state
+                .world()
+                .contract_code()
+                .get(&identity.code_hash)
+                .ok_or_else(|| {
+                    ValidationFail::NotPermitted(format!(
+                        "contract bytecode `{}` not found in WSV",
+                        identity.code_hash
+                    ))
+                })?;
             let summary = if let Some(summary) = ivm_cache
                 .cached_program_summary(identity.code_hash)
                 .map_err(|error| ValidationFail::InternalError(error.to_string()))?
             {
                 summary
             } else {
-                code::with_code_bytes(state, &identity.code_hash, |bytecode| {
-                    ivm_cache.summarize_program_with_hash(identity.code_hash, bytecode)
-                })
-                .ok_or_else(|| {
-                    ValidationFail::NotPermitted(format!(
-                        "contract bytecode `{}` not found in WSV",
-                        identity.code_hash
-                    ))
-                })?
-                .map_err(|error| ValidationFail::InternalError(error.to_string()))?
+                ivm_cache
+                    .summarize_program_with_hash(identity.code_hash, code_bytes.as_ref())
+                    .map_err(|error| ValidationFail::InternalError(error.to_string()))?
             };
+            if summary.prepared_contract().artifact() != code_bytes.as_slice() {
+                return Err(ValidationFail::NotPermitted(format!(
+                    "cached contract bytecode `{}` does not match live WSV",
+                    identity.code_hash
+                )));
+            }
             authorize_prepared_contract_selector(
                 state.world(),
                 authority,
@@ -6996,16 +7116,46 @@ where
                 &call.entrypoint,
                 &identity,
             )
-            .map(drop)
+            .map(drop)?;
+            validate_prepared_ivm_execution_policy(
+                state,
+                &summary.metadata,
+                summary.code_offset,
+                code_bytes.as_ref(),
+            )?;
+            let manifest = state
+                .world()
+                .contract_manifests()
+                .get(&identity.code_hash)
+                .ok_or_else(|| {
+                    ValidationFail::NotPermitted(format!(
+                        "contract instance `{}` has no manifest",
+                        identity.contract_address
+                    ))
+                })?;
+            crate::smartcontracts::ivm::validate_manifest_hashes(
+                manifest,
+                summary.code_hash,
+                summary.abi_hash,
+            )
+            .map_err(ValidationFail::IvmAdmission)
         }
         Executable::Ivm(bytecode) => {
             let admitted = ivm_cache
                 .summarize_executable(bytecode.as_ref())
                 .map_err(crate::smartcontracts::ivm::program_admission_error)?;
             let summary = match admitted {
-                ExecutableProgramSummary::Generic(_) => {
-                    crate::smartcontracts::ivm::validate_generic_execution_metadata(
+                ExecutableProgramSummary::Generic(summary) => {
+                    crate::smartcontracts::ivm::validate_generic_execution_context(
+                        state.world(),
                         transaction.metadata(),
+                        summary.code_hash,
+                    )?;
+                    validate_prepared_ivm_execution_policy(
+                        state,
+                        &summary.metadata,
+                        summary.code_offset,
+                        summary.program(),
                     )?;
                     return Ok(());
                 }
@@ -7029,6 +7179,14 @@ where
                 &selector,
                 &identity,
             )?;
+            validate_prepared_ivm_execution_policy(
+                state,
+                &summary.metadata,
+                summary.code_offset,
+                bytecode.as_ref(),
+            )?;
+            crate::pipeline::overlay::validate_contract_binding(state, transaction, &summary)
+                .map_err(overlay_build_error_to_validation_fail)?;
             Ok(())
         }
         Executable::IvmProved(proved) => {
@@ -7053,6 +7211,14 @@ where
                 &selector,
                 &identity,
             )?;
+            validate_prepared_ivm_execution_policy(
+                state,
+                &summary.metadata,
+                summary.code_offset,
+                proved.bytecode.as_ref(),
+            )?;
+            crate::pipeline::overlay::validate_contract_binding(state, transaction, &summary)
+                .map_err(overlay_build_error_to_validation_fail)?;
             Ok(())
         }
     }
@@ -7163,7 +7329,7 @@ fn can_transfer_asset(
     world: &impl WorldReadOnly,
     authority: &AccountId,
     contract_runtime_context: Option<&ContractRuntimeExecutionContext>,
-    transfer: &Transfer<Asset, Numeric, Account>,
+    transfer: &Transfer<Asset, Quantity, Account>,
 ) -> Result<bool, ValidationFail> {
     if transfer.source().account() == authority {
         return Ok(true);
@@ -8715,30 +8881,9 @@ mod tests {
     }
 
     #[test]
-    fn detached_asset_instructions_reject_negative_quantities_before_recording() {
-        let definition_id = AssetDefinitionId::new(
-            DomainId::try_new("detached_negative", "universal").expect("domain id"),
-            "coin".parse().expect("asset name"),
-        );
-        let asset_id = AssetId::new(definition_id, alice());
+    fn detached_asset_instructions_cannot_be_constructed_with_negative_quantities() {
         let negative = Numeric::new(-1_i32, 0);
-        let instructions: [InstructionBox; 3] = [
-            Mint::asset_numeric(negative.clone(), asset_id.clone()).into(),
-            Burn::asset_numeric(negative.clone(), asset_id.clone()).into(),
-            Transfer::asset_numeric(asset_id, negative, BOB_ID.clone()).into(),
-        ];
-
-        for instruction in instructions {
-            let mut delta = crate::state::DetachedStateTransactionDelta::default();
-            let error = execute_instruction_detached(&alice(), &instruction, &mut delta)
-                .expect_err("negative detached asset quantity must be rejected");
-            assert!(matches!(
-                error,
-                ValidationFail::InstructionFailed(InstructionExecutionError::Math(
-                    MathError::NegativeValue
-                ))
-            ));
-        }
+        assert!(Quantity::try_from_numeric(negative).is_err());
     }
 
     #[test]
@@ -9528,7 +9673,7 @@ mod tests {
             ),
             user1.clone(),
         );
-        let instruction = InstructionBox::from(Transfer::asset_numeric(
+        let instruction = InstructionBox::from(Transfer::asset_quantity(
             transfer_asset_id,
             1_u32,
             user2.clone(),
@@ -9582,7 +9727,7 @@ mod tests {
             ),
             user1.clone(),
         );
-        let instruction = InstructionBox::from(Transfer::asset_numeric(
+        let instruction = InstructionBox::from(Transfer::asset_quantity(
             transfer_asset_id,
             1_u32,
             user2.clone(),
@@ -9658,7 +9803,7 @@ mod tests {
         let mut block = state.block(header);
 
         let executor = super::Executor::Initial;
-        let instruction = InstructionBox::from(Transfer::asset_numeric(
+        let instruction = InstructionBox::from(Transfer::asset_quantity(
             transfer_asset_id,
             1_u32,
             user2.clone(),
@@ -9740,7 +9885,7 @@ mod tests {
         let mut block = state.block(header);
 
         let executor = super::Executor::Initial;
-        let instruction = InstructionBox::from(Transfer::asset_numeric(
+        let instruction = InstructionBox::from(Transfer::asset_quantity(
             transfer_asset_id,
             1_u32,
             user2.clone(),
@@ -12437,7 +12582,7 @@ mod tests {
             .build(&payer_id);
         let payer_asset = Asset::new(
             AssetId::of(asset_def_id.clone(), payer_id.clone()),
-            Numeric::from(1_u32),
+            1_u32,
         );
         let world = World::with_assets([domain], [payer], [asset_definition], [payer_asset], []);
         let kura = Kura::blank_kura_for_testing();
@@ -12913,7 +13058,7 @@ mod tests {
             Json::new(recipient_id.to_string()),
         );
         let instruction: InstructionBox =
-            Mint::asset_numeric(3_u32, AssetId::of(asset_def_id, recipient_id)).into();
+            Mint::asset_quantity(3_u32, AssetId::of(asset_def_id, recipient_id)).into();
         let chain: ChainId = "test-chain".parse().unwrap();
         let tx = TransactionBuilder::new(chain, authority_id)
             .with_metadata(metadata)
@@ -12971,7 +13116,7 @@ mod tests {
             Json::new(recipient_id.to_string()),
         );
         let instruction: InstructionBox =
-            Mint::asset_numeric(3_u32, AssetId::of(asset_def_id, recipient_id)).into();
+            Mint::asset_quantity(3_u32, AssetId::of(asset_def_id, recipient_id)).into();
         let chain: ChainId = "test-chain".parse().unwrap();
         let tx = TransactionBuilder::new(chain, authority_id)
             .with_metadata(metadata)
@@ -13117,9 +13262,9 @@ mod tests {
             nexus.fees.burn_from_unix_timestamp_ms = 0;
         }
 
-        let instruction: InstructionBox = Transfer::asset_numeric(
+        let instruction: InstructionBox = Transfer::asset_quantity(
             AssetId::of(asset_def_id.clone(), payer_id.clone()),
-            Numeric::from(1_u32),
+            1_u32,
             recipient_id.clone(),
         )
         .into();
@@ -13483,7 +13628,7 @@ mod tests {
     fn prepared_parameterized_trigger_contract() -> ivm::PreparedContract {
         let source = r#"
 seiyaku TriggerArguments {
-  kotoage fn run(Quantity val) authorize("Admin") {
+  kotoage fn run(quantity val) authorize("Admin") {
     let _val = val;
   }
 }
@@ -13644,6 +13789,65 @@ seiyaku GuardedValue {
             .cloned()
             .expect("authorized direct call writes its metadata marker");
 
+        let live_code = state_tx
+            .world
+            .contract_code
+            .remove(code_hash)
+            .expect("remove live bytecode for warm-cache adversarial check");
+        ivm::reset_argument_record_decode_count();
+        let missing_code = super::Executor::Initial
+            .execute_transaction(
+                &mut state_tx,
+                &authority,
+                transaction.clone(),
+                &mut ivm_cache,
+            )
+            .expect_err("a warm cache must not substitute for missing live bytecode");
+        assert!(missing_code.to_string().contains("not found in WSV"));
+        assert_eq!(ivm::argument_record_decode_count(), 0);
+        assert_eq!(
+            state_tx
+                .world
+                .account(&authority)
+                .expect("authority account")
+                .metadata()
+                .get(&metadata_marker),
+            Some(&authorized_marker),
+            "missing live bytecode must apply no queued effect"
+        );
+        state_tx.world.contract_code.insert(code_hash, live_code);
+
+        let live_manifest = state_tx
+            .world
+            .contract_manifests
+            .remove(code_hash)
+            .expect("remove live manifest for warm-cache adversarial check");
+        ivm::reset_argument_record_decode_count();
+        let missing_manifest = super::Executor::Initial
+            .execute_transaction(
+                &mut state_tx,
+                &authority,
+                transaction.clone(),
+                &mut ivm_cache,
+            )
+            .expect_err("a warm cache must not substitute for a missing live manifest");
+        assert!(missing_manifest.to_string().contains("has no manifest"));
+        assert_eq!(ivm::argument_record_decode_count(), 0);
+        assert_eq!(
+            state_tx
+                .world
+                .account(&authority)
+                .expect("authority account")
+                .metadata()
+                .get(&metadata_marker),
+            Some(&authorized_marker),
+            "missing live manifest must apply no queued effect"
+        );
+        state_tx
+            .world
+            .contract_manifests
+            .insert(code_hash, live_manifest);
+
         Revoke::account_permission(entrypoint_permission.clone(), authority.clone())
             .execute(&authority, &mut state_tx)
             .expect("revoke direct-call entrypoint permission");
@@ -13716,8 +13920,8 @@ seiyaku GuardedValue {
             .compile_source(
                 r#"
 seiyaku IdentityRequired {
-  kotoage fn write(int value) {
-    let _value = value;
+  view fn write(int value) -> int {
+    return value;
   }
 }
 "#,
@@ -13862,8 +14066,13 @@ seiyaku IdentityRequired {
     fn nested_contract_dispatch_accepts_view_without_relaxing_top_level_calls() {
         use iroha_data_model::smart_contract::manifest::EntryPointKind;
 
-        let (program, expected_entrypoint_pc) =
-            contract_program_with_entrypoint_kind("configuration", EntryPointKind::View, None);
+        let (program, expected_entrypoint_pc) = contract_program_with_entrypoint_kind(
+            "configuration",
+            EntryPointKind::View,
+            Some("CanInspectConfiguration"),
+        );
+        let prepared = ivm::prepare_contract(Arc::<[u8]>::from(program))
+            .expect("prepare nested-view contract");
         let contract_address = ContractAddress::derive(
             iroha_data_model::smart_contract::CHAIN_DISCRIMINANT_MAINNET,
             &ALICE_ID,
@@ -13877,11 +14086,12 @@ seiyaku IdentityRequired {
             arguments: None,
         };
 
-        let top_level_err = parse_contract_invocation_execution_context(
+        let top_level_err = parse_prepared_contract_invocation_execution_context(
             &invocation,
-            &program,
+            &prepared,
             None,
             contract_address.subject_id(),
+            u64::MAX,
         )
         .expect_err("top-level transaction dispatch must remain public-only");
         assert!(matches!(
@@ -13889,16 +14099,91 @@ seiyaku IdentityRequired {
             ValidationFail::NotPermitted(message) if message.contains("read-only")
         ));
 
-        let nested = parse_nested_contract_invocation_execution_context(
+        let nested = parse_prepared_nested_contract_invocation_execution_context(
             &invocation,
-            &program,
+            &prepared,
             None,
             contract_address.subject_id(),
+            u64::MAX,
         )
         .expect("nested dispatch should accept a declared view");
         assert_eq!(nested.entrypoint.as_deref(), Some("configuration"));
         assert_eq!(nested.entrypoint_pc(), Some(expected_entrypoint_pc));
-        assert_eq!(nested.entrypoint_permission(), None);
+        assert_eq!(
+            nested.entrypoint_permission(),
+            Some("CanInspectConfiguration")
+        );
+
+        for (selector, kind) in [
+            ("hajimari", EntryPointKind::Hajimari),
+            ("始まり", EntryPointKind::Hajimari),
+            ("kaizen", EntryPointKind::Kaizen),
+            ("改善", EntryPointKind::Kaizen),
+        ] {
+            let (program, _) = contract_program_with_entrypoint_kind(selector, kind, None);
+            let prepared = ivm::prepare_contract(Arc::<[u8]>::from(program))
+                .expect("prepare lifecycle contract");
+            let invocation = ContractInvocation {
+                contract_address: contract_address.clone(),
+                entrypoint: selector.to_owned(),
+                arguments: None,
+            };
+            let error = parse_prepared_nested_contract_invocation_execution_context(
+                &invocation,
+                &prepared,
+                None,
+                contract_address.subject_id(),
+                u64::MAX,
+            )
+            .expect_err("nested dispatch must reject lifecycle entrypoints");
+            assert!(
+                matches!(error, ValidationFail::NotPermitted(ref message) if message.contains("cannot be invoked by a nested call")),
+                "unexpected {kind:?} nested-dispatch error: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn prepared_view_resolver_accepts_only_views_and_preserves_exact_permission() {
+        use iroha_data_model::smart_contract::manifest::EntryPointKind;
+
+        let (program, expected_pc) = contract_program_with_entrypoint_kind(
+            "inspect",
+            EntryPointKind::View,
+            Some("CanInspectContract"),
+        );
+        let prepared =
+            ivm::prepare_contract(Arc::<[u8]>::from(program)).expect("prepare view contract");
+        let (pc, permission, arguments) =
+            resolve_prepared_contract_view_entrypoint(&prepared, "inspect")
+                .expect("declared view resolves");
+        assert_eq!(pc, expected_pc);
+        assert_eq!(permission.as_deref(), Some("CanInspectContract"));
+        assert!(arguments.is_none());
+        assert!(
+            resolve_prepared_contract_entrypoint(&prepared, "inspect").is_err(),
+            "transaction resolution must continue to reject read-only views"
+        );
+
+        for (selector, kind) in [
+            ("write", EntryPointKind::Kotoage),
+            ("hajimari", EntryPointKind::Hajimari),
+            ("始まり", EntryPointKind::Hajimari),
+            ("kaizen", EntryPointKind::Kaizen),
+            ("改善", EntryPointKind::Kaizen),
+        ] {
+            let permission =
+                (kind == EntryPointKind::Kotoage).then_some("CanInvokeContractEntrypoint");
+            let (program, _) = contract_program_with_entrypoint_kind(selector, kind, permission);
+            let prepared = ivm::prepare_contract(Arc::<[u8]>::from(program))
+                .expect("prepare non-view contract");
+            let error = resolve_prepared_contract_view_entrypoint(&prepared, selector)
+                .expect_err("the view boundary must reject every non-view entrypoint kind");
+            assert!(
+                matches!(error, ValidationFail::NotPermitted(ref message) if message.contains("not a read-only view")),
+                "unexpected {kind:?} view-resolution error: {error}"
+            );
+        }
     }
 
     #[test]
@@ -14010,6 +14295,134 @@ seiyaku IdentityRequired {
             .expect("parse generic raw ivm context");
 
         assert!(context.is_none());
+    }
+
+    #[test]
+    fn direct_generic_ivm_remains_reachable_and_rejects_contract_metadata() {
+        let chain_id = ChainId::from("generic-direct-ivm");
+        let authority = ALICE_ID.clone();
+        let domain = Domain::new(DomainId::try_new("wonderland", "universal").expect("domain id"))
+            .build(&authority);
+        let account = Account::new(authority.clone()).build(&authority);
+        let state = State::new_with_chain(
+            World::with([domain], [account], []),
+            Kura::blank_kura_for_testing(),
+            query::store::LiveQueryStore::start_test(),
+            chain_id.clone(),
+        );
+        let mut program = ivm::ProgramMetadata {
+            max_cycles: 100,
+            ..ivm::ProgramMetadata::default()
+        }
+        .encode();
+        program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+        let generic_code_hash = ivm::contract_code_hash(&program);
+        let executable = Executable::Ivm(IvmBytecode::from_compiled(program));
+        let transaction = |metadata: Metadata| {
+            TransactionBuilder::new(chain_id.clone(), authority.clone())
+                .with_metadata(metadata)
+                .with_executable(executable.clone())
+                .sign(ALICE_KEYPAIR.private_key())
+        };
+        let mut gas_metadata = Metadata::default();
+        gas_metadata.insert(
+            "gas_limit".parse().expect("gas-limit metadata key"),
+            Json::new(1_000_000_u64),
+        );
+        let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+        let mut state_transaction = block.transaction();
+        let mut ivm_cache = IvmCache::new();
+
+        super::Executor::Initial
+            .execute_transaction(
+                &mut state_transaction,
+                &authority,
+                transaction(gas_metadata.clone()),
+                &mut ivm_cache,
+            )
+            .expect("contract-less generic IVM must execute at pc zero");
+
+        let mut reserved_metadata = gas_metadata;
+        reserved_metadata.insert(
+            "contract_manifest"
+                .parse()
+                .expect("contract-manifest metadata key"),
+            Json::from_string_unchecked("malformed-reserved-value".to_owned()),
+        );
+        let error = super::Executor::Initial
+            .execute_transaction(
+                &mut state_transaction,
+                &authority,
+                transaction(reserved_metadata),
+                &mut ivm_cache,
+            )
+            .expect_err("generic IVM must not accept contract metadata");
+        assert!(
+            error.to_string().contains("reserved `contract_manifest`"),
+            "unexpected generic-metadata rejection: {error}"
+        );
+
+        state_transaction.world.contract_manifests.insert(
+            generic_code_hash,
+            iroha_data_model::smart_contract::manifest::ContractManifest {
+                seiyaku_name: None,
+                code_hash: Some(generic_code_hash),
+                abi_hash: Some(Hash::prehashed(ivm::syscalls::compute_abi_hash(
+                    ivm::SyscallPolicy::AbiV1,
+                ))),
+                compiler_fingerprint: None,
+                features_bitmap: None,
+                access_set_hints: None,
+                entrypoints: None,
+                states: None,
+                kotoba: None,
+                error_codes: None,
+                provenance: None,
+            },
+        );
+        let error = super::Executor::Initial
+            .execute_transaction(
+                &mut state_transaction,
+                &authority,
+                transaction({
+                    let mut metadata = Metadata::default();
+                    metadata.insert(
+                        "gas_limit".parse().expect("gas-limit metadata key"),
+                        Json::new(1_000_000_u64),
+                    );
+                    metadata
+                }),
+                &mut ivm_cache,
+            )
+            .expect_err("a manifest-bound hash must not execute as generic IVM");
+        assert!(error.to_string().contains("contract manifest"));
+        state_transaction
+            .world
+            .contract_manifests
+            .remove(generic_code_hash);
+
+        state_transaction.pipeline.ivm_max_cycles_upper_bound = nonzero!(50_u64);
+        let error = super::Executor::Initial
+            .execute_transaction(
+                &mut state_transaction,
+                &authority,
+                transaction({
+                    let mut metadata = Metadata::default();
+                    metadata.insert(
+                        "gas_limit".parse().expect("gas-limit metadata key"),
+                        Json::new(1_000_000_u64),
+                    );
+                    metadata
+                }),
+                &mut ivm_cache,
+            )
+            .expect_err("direct generic IVM must honor the live cycle ceiling");
+        assert!(matches!(
+            error,
+            ValidationFail::IvmAdmission(
+                iroha_data_model::executor::IvmAdmissionError::MaxCyclesExceedsUpperBound(_)
+            )
+        ));
     }
 
     #[test]

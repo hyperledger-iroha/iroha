@@ -1,10 +1,12 @@
 //! Kotodama DEX demo: compile and run a simple XYK pool on IVM.
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
-use iroha_data_model::DomainId;
-use iroha_primitives::numeric::Numeric;
+use iroha_crypto::Hash;
+use iroha_data_model::{DomainId, prelude::Name};
+use iroha_primitives::{json::Json, numeric::Numeric, numeric_abi::QuantityValueV1};
 use ivm::{
-    AccountId, AssetDefinitionId, IVM, MockWorldStateView, PermissionToken,
+    AccountId, AssetDefinitionId, IVM, MockWorldStateView, PermissionToken, PointerType,
+    ProgramMetadata, encode_argument_record_from_json,
     kotodama::compiler::Compiler as KotodamaCompiler, mock_wsv::WsvHost,
 };
 
@@ -12,11 +14,36 @@ fn fixture_account(hex_public_key: &str) -> AccountId {
     AccountId::new(hex_public_key.parse().expect("public key"))
 }
 
+fn tlv(pointer_type: PointerType, payload: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(7 + payload.len() + Hash::LENGTH);
+    out.extend_from_slice(&(pointer_type as u16).to_be_bytes());
+    out.push(1);
+    out.extend_from_slice(
+        &u32::try_from(payload.len())
+            .expect("argument record length fits u32")
+            .to_be_bytes(),
+    );
+    out.extend_from_slice(payload);
+    out.extend_from_slice(Hash::new(payload).as_ref());
+    out
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 1) Compile the Kotodama sample to IVM bytecode
     let src = include_str!("../../kotodama_lang/src/samples/dex_simple.ko");
     let compiler = KotodamaCompiler::new();
     let bytecode = compiler.compile_source(src).expect("compile dex_simple");
+    let metadata = ProgramMetadata::parse(&bytecode).expect("parse dex_simple metadata");
+    let swap = metadata
+        .contract_interface
+        .as_ref()
+        .expect("dex_simple contract interface")
+        .entrypoints
+        .iter()
+        .find(|entrypoint| entrypoint.name == "swap")
+        .expect("swap entrypoint descriptor");
+    let entrypoint_pc =
+        u64::try_from(metadata.prefix_len()).expect("program prefix fits u64") + swap.entry_pc;
 
     // 2) Prepare a tiny world with Alice (trader), Pool account, and two assets
     let alice =
@@ -32,10 +59,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "eth".parse()?,
     );
 
-    // Initial balances: Alice has 1_000 USDC, pool has 10_000 USDC and 100 ETH
+    // Initial balances: Alice has 1_000 USDC, pool has 997 USDC and 100 ETH.
+    // These reserves make the post-fee share exactly 0.5, so the mock ledger's
+    // scale-zero quantity policy can apply the quoted output without rounding.
     let wsv = MockWorldStateView::with_balances(&[
         ((alice.clone(), asset_a.clone()), Numeric::from(1_000_u64)),
-        ((pool.clone(), asset_a.clone()), Numeric::from(10_000_u64)),
+        ((pool.clone(), asset_a.clone()), Numeric::from(997_u64)),
         ((pool.clone(), asset_b.clone()), Numeric::from(100_u64)),
     ]);
     let mut wsv = wsv;
@@ -46,44 +75,52 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     wsv.grant_permission(&alice, PermissionToken::ReadAccountAssets(pool.clone()));
     let alice_subject = alice.clone();
 
-    // 3) Map small integers used by the program to account subjects in the host
-    let mut account_map = HashMap::new();
-    account_map.insert(1u64, alice_subject.clone());
-    account_map.insert(2u64, pool.clone());
-    let mut asset_map = HashMap::new();
-    asset_map.insert(1u64, asset_a.clone()); // input
-    asset_map.insert(2u64, asset_b.clone()); // output
+    // 3) Encode the Torii boundary payload as the schema-bound V1 argument record.
+    let amount_in = 1_000_u64;
+    let arguments = Json::from(norito::json!({
+        "trader": (alice.to_string()),
+        "pool_account": (pool.to_string()),
+        "input_asset": (asset_a.canonical_address()),
+        "output_asset": (asset_b.canonical_address()),
+        "amount_in": (amount_in.to_string()),
+        "reserve_in": "997",
+        "reserve_out": "100",
+    }));
+    let schema = swap
+        .argument_schema
+        .as_ref()
+        .expect("swap entrypoint argument schema");
+    let record = encode_argument_record_from_json(schema, &arguments)
+        .expect("encode canonical swap argument record");
+    let input_name: Name = "trigger_event_json"
+        .parse()
+        .expect("public input key is a Name");
+    let host =
+        WsvHost::new_with_subject(wsv, alice_subject, Default::default()).with_public_inputs(
+            BTreeMap::from([(input_name, tlv(PointerType::NoritoBytes, &record))]),
+        );
 
-    let host = WsvHost::new_with_subject_map(wsv, alice_subject, account_map, asset_map);
-
-    // 4) Create the VM, attach host, load program
-    let mut vm = IVM::new(1_000_000);
+    // 4) Create the VM, attach the host, and select the public wrapper.
+    let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
     vm.load_program(&bytecode).expect("load program");
+    vm.set_program_counter(entrypoint_pc)
+        .expect("select swap entrypoint");
 
-    // 5) Set up arguments in r10.. (trader, pool, asset_in, asset_out, amount_in, reserve_in, reserve_out)
-    // trader=1 (alice), pool=2, asset_in=1 (usdc), asset_out=2 (eth)
-    vm.set_register(10, 1);
-    vm.set_register(11, 2);
-    vm.set_register(12, 1);
-    vm.set_register(13, 2);
-    let amount_in = 500u64; // Alice sells 500 USDC
-    vm.set_register(14, amount_in);
-    // current pool reserves (usdc, eth)
-    vm.set_register(15, 10_000);
-    vm.set_register(16, 100);
-
-    // 6) Run the program and read return value from r10
+    // 5) Run the program and decode the pointer-backed quantity in r10.
     vm.run().expect("run VM");
-    let amount_out = vm.register(10);
+    let result = vm
+        .validate_tlv(vm.register(10))
+        .expect("swap returned a quantity TLV");
+    assert_eq!(result.type_id, PointerType::Quantity);
+    let amount_out = QuantityValueV1::decode_frame(result.payload)
+        .expect("decode canonical swap quantity")
+        .into_quantity();
 
-    // 7) Inspect balances (via host's WSV)
-    // Pull the host back out to access WSV (unsafe: we clone the VM and recover host),
-    // but for simplicity in this demo, re-create expected balances via calculation.
+    // 6) Report the typed result. The host retains the updated mock balances.
     println!("Swap result: sold {amount_in} USDC for {amount_out} ETH (quoted)");
-    // Note: moving host out of vm is not exposed; for demo, we print expected keys and remind to check logs.
-    println!("Accounts mapped: trader=1 -> {alice} ; pool=2 -> {pool}");
-    println!("Assets mapped: 1 -> {asset_a} ; 2 -> {asset_b}");
+    println!("Accounts: trader={alice} ; pool={pool}");
+    println!("Assets: input={asset_a} ; output={asset_b}");
     println!("Done.");
     Ok(())
 }

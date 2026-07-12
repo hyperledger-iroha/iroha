@@ -484,6 +484,35 @@ struct PreparedVerifyingKey {
     ipa_k: Option<u32>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum HostExecutionClass {
+    Generic,
+    Contract,
+    View,
+    IvmProvedContract,
+}
+
+impl HostExecutionClass {
+    fn ensure_syscall_allowed(self, number: u32) -> Result<(), ivm::VMError> {
+        if matches!(self, Self::Generic)
+            && !crate::smartcontracts::ivm::cache::is_generic_syscall_allowed(number)
+        {
+            return Err(ivm::VMError::GenericSyscallNotAllowed { syscall: number });
+        }
+        if matches!(self, Self::View)
+            && matches!(
+                ivm::syscalls::syscall_access(number),
+                ivm::syscalls::SyscallAccess::StateWrite
+                    | ivm::syscalls::SyscallAccess::LedgerWrite
+                    | ivm::syscalls::SyscallAccess::Dynamic
+            )
+        {
+            return Err(ivm::VMError::PermissionDenied);
+        }
+        Ok(())
+    }
+}
+
 /// Core host adapter used by Iroha to run IVM bytecode.
 ///
 /// Stateful operations must be translated into ISIs and executed via the
@@ -491,8 +520,7 @@ struct PreparedVerifyingKey {
 /// overlay when access logging is enabled for prepass execution.
 pub struct CoreHostImpl<QS> {
     authority: AccountId,
-    generic_execution: bool,
-    ivm_proved_execution: bool,
+    execution_class: HostExecutionClass,
     current_contract_runtime_context: Option<ContractRuntimeExecutionContext>,
     current_entrypoint_authorization: Option<ContractEntrypointAuthorizationSnapshot>,
     nested_contract_call_depth: usize,
@@ -2139,6 +2167,7 @@ enum NestedContractCallOutcome {
 
 struct NestedContractCallHostSnapshot {
     authority: AccountId,
+    execution_class: HostExecutionClass,
     current_contract_runtime_context: Option<ContractRuntimeExecutionContext>,
     current_entrypoint_authorization: Option<ContractEntrypointAuthorizationSnapshot>,
     args: Option<iroha_primitives::json::Json>,
@@ -2247,6 +2276,11 @@ impl HostExecutionArtifacts {
                 )));
             }
             if let Some(authorization) = authorization {
+                if !authorization.owns_durable_state_path(path) {
+                    return Err(ValidationFail::NotPermitted(format!(
+                        "durable state path `{path}` does not belong to its contract authorization snapshot"
+                    )));
+                }
                 authorization.validate(world)?;
             }
         }
@@ -2607,8 +2641,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         let crypto = Arc::new(default_crypto);
         Self {
             authority,
-            generic_execution: false,
-            ivm_proved_execution: false,
+            execution_class: HostExecutionClass::Generic,
             current_contract_runtime_context: None,
             current_entrypoint_authorization: None,
             nested_contract_call_depth: 0,
@@ -2733,8 +2766,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         let crypto = Arc::new(default_crypto);
         Self {
             authority,
-            generic_execution: false,
-            ivm_proved_execution: false,
+            execution_class: HostExecutionClass::Generic,
             current_contract_runtime_context: None,
             current_entrypoint_authorization: None,
             nested_contract_call_depth: 0,
@@ -2819,8 +2851,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         let crypto = Arc::new(default_crypto);
         Self {
             authority,
-            generic_execution: false,
-            ivm_proved_execution: false,
+            execution_class: HostExecutionClass::Generic,
             current_contract_runtime_context: None,
             current_entrypoint_authorization: None,
             nested_contract_call_depth: 0,
@@ -2921,10 +2952,11 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         &mut self,
         contract_runtime_context: Option<ContractRuntimeExecutionContext>,
     ) {
-        self.ivm_proved_execution = false;
-        if contract_runtime_context.is_some() {
-            self.generic_execution = false;
-        }
+        self.execution_class = if contract_runtime_context.is_some() {
+            HostExecutionClass::Contract
+        } else {
+            HostExecutionClass::Generic
+        };
         self.current_contract_runtime_context = contract_runtime_context;
         self.current_entrypoint_authorization = None;
     }
@@ -2936,8 +2968,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     /// discriminator because hosts are also assembled before contract binding.
     pub(crate) fn set_generic_execution(&mut self) {
         debug_assert!(self.current_contract_runtime_context.is_none());
-        self.generic_execution = true;
-        self.ivm_proved_execution = false;
+        self.execution_class = HostExecutionClass::Generic;
         self.current_entrypoint_authorization = None;
     }
 
@@ -2950,10 +2981,12 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     pub(crate) fn enable_sccp_recording_for_ivm_proved_execution(
         &mut self,
     ) -> Result<(), ivm::VMError> {
-        if self.generic_execution || !self.has_root_contract_execution_context() {
+        if !matches!(self.execution_class, HostExecutionClass::Contract)
+            || !self.has_root_contract_execution_context()
+        {
             return Err(ivm::VMError::PermissionDenied);
         }
-        self.ivm_proved_execution = true;
+        self.execution_class = HostExecutionClass::IvmProvedContract;
         Ok(())
     }
 
@@ -2962,8 +2995,14 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         &mut self,
         authorization: Option<ContractEntrypointAuthorizationSnapshot>,
     ) {
-        if authorization.is_none() {
-            self.ivm_proved_execution = false;
+        if authorization.is_none()
+            && matches!(self.execution_class, HostExecutionClass::IvmProvedContract)
+        {
+            self.execution_class = if self.current_contract_runtime_context.is_some() {
+                HostExecutionClass::Contract
+            } else {
+                HostExecutionClass::Generic
+            };
         }
         if let (Some(context), Some(authorization)) = (
             self.current_contract_runtime_context.as_ref(),
@@ -3017,8 +3056,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         contract_subject: AccountId,
         authorization: ContractEntrypointAuthorizationSnapshot,
     ) {
-        self.generic_execution = false;
-        self.ivm_proved_execution = false;
+        self.execution_class = HostExecutionClass::Contract;
         self.current_contract_runtime_context = Some(ContractRuntimeExecutionContext {
             contract_address: authorization.contract_address.clone(),
             contract_subject,
@@ -3028,40 +3066,40 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         self.current_entrypoint_authorization = Some(authorization);
     }
 
-    /// Resolve and bind an authenticated deployed-contract runtime context.
-    ///
-    /// The live state remains authoritative for the contract subject, alias, code binding, and
-    /// selected entrypoint permission. This keeps API-side view and simulation execution from
-    /// manufacturing the private authorization snapshot retained by queued effects.
-    ///
-    /// # Errors
-    /// Returns an error when the contract binding is absent or stale, the prepared artifact does
-    /// not match the live code hash, the entrypoint is invalid, or the host authority lacks the
-    /// entrypoint's live permission.
-    pub fn bind_deployed_contract_runtime_context<R: StateReadOnly>(
-        &mut self,
-        state: &R,
+    fn clear_contract_runtime_binding(&mut self) {
+        self.execution_class = HostExecutionClass::Generic;
+        self.current_contract_runtime_context = None;
+        self.current_entrypoint_authorization = None;
+    }
+
+    fn verified_deployed_contract_runtime_identity(
+        &self,
+        state: &impl StateReadOnly,
         contract_address: &ContractAddress,
-        expected_code_hash: Hash,
-        prepared_contract: &ivm::PreparedContract,
-        selector: &str,
-    ) -> Result<(), ValidationFail> {
-        let selector = selector.trim();
-        if selector.is_empty() {
-            return Err(ValidationFail::NotPermitted(
-                "contract entrypoint must not be empty".to_owned(),
-            ));
-        }
+        expected_alias: Option<&ContractAlias>,
+        contract: &ivm::PreparedContract,
+    ) -> Result<
+        (
+            crate::smartcontracts::code::BoundContractIdentity,
+            AccountId,
+        ),
+        ValidationFail,
+    > {
         let identity =
             crate::smartcontracts::code::fetch_bound_contract_identity(state, contract_address)
                 .ok_or_else(|| {
                     ValidationFail::NotPermitted(format!(
-                        "contract instance `{contract_address}` has no valid live binding"
+                        "contract instance `{contract_address}` has no valid live identity binding"
                     ))
                 })?;
-        if identity.code_hash != expected_code_hash {
+        if identity.contract_alias.as_ref() != expected_alias {
             return Err(ValidationFail::NotPermitted(format!(
-                "contract instance `{contract_address}` is not bound to prepared code `{expected_code_hash}`"
+                "contract instance `{contract_address}` alias changed before runtime binding"
+            )));
+        }
+        if identity.code_hash != contract.code_hash() {
+            return Err(ValidationFail::NotPermitted(format!(
+                "contract instance `{contract_address}` code binding changed before runtime binding"
             )));
         }
         let contract_subject =
@@ -3071,37 +3109,96 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                         "contract instance `{contract_address}` has no valid subject binding"
                     ))
                 })?;
-        let descriptor = prepared_contract
-            .entrypoint_descriptor(selector)
-            .ok_or_else(|| {
-                ValidationFail::NotPermitted(format!("unknown contract entrypoint `{selector}`"))
-            })?;
-        let authorization = if descriptor.kind
-            == iroha_data_model::smart_contract::manifest::EntryPointKind::View
-        {
-            prepared_contract.entrypoint_pc(selector).ok_or_else(|| {
-                ValidationFail::NotPermitted(format!(
-                    "contract entrypoint `{selector}` has no validated program counter"
-                ))
-            })?;
-            let authorization = ContractEntrypointAuthorizationSnapshot::new(
-                self.authority.clone(),
-                selector.to_owned(),
-                descriptor.permission.clone(),
-                &identity,
-            );
-            authorization.validate(state.world())?;
-            authorization
-        } else {
-            crate::executor::authorize_prepared_contract_selector(
-                state.world(),
-                &self.authority,
-                prepared_contract,
-                selector,
-                &identity,
-            )?
-        };
+        Ok((identity, contract_subject))
+    }
+
+    /// Revalidate and bind a transaction-capable deployed contract runtime against one immutable
+    /// state view.
+    ///
+    /// App-facing simulation paths use this boundary instead of constructing runtime provenance
+    /// from caller-supplied address, alias, code hash, subject, or permission fields. Read-only
+    /// selectors are deliberately rejected here and must use the view-specific boundary below.
+    /// A rejected rebind clears any earlier provenance so callers cannot accidentally execute
+    /// under a stale authorization snapshot.
+    ///
+    /// # Errors
+    /// Returns an error if the live identity, alias, subject, or code binding is absent or changed;
+    /// if the selector is not a transaction-capable entrypoint; if its lifecycle is unavailable;
+    /// or if the host authority lacks its state-derived permission.
+    pub fn bind_authorized_deployed_contract_runtime_context(
+        &mut self,
+        state: &impl StateReadOnly,
+        contract_address: &ContractAddress,
+        expected_alias: Option<&ContractAlias>,
+        contract: &ivm::PreparedContract,
+        selector: &str,
+    ) -> Result<(), ValidationFail> {
+        self.clear_contract_runtime_binding();
+        let (identity, contract_subject) = self.verified_deployed_contract_runtime_identity(
+            state,
+            contract_address,
+            expected_alias,
+            contract,
+        )?;
+        let authorization = crate::executor::authorize_prepared_contract_selector(
+            state.world(),
+            &self.authority,
+            contract,
+            selector,
+            &identity,
+        )?;
+        let descriptor = contract.entrypoint_descriptor(selector).ok_or_else(|| {
+            ValidationFail::NotPermitted(format!("unknown contract entrypoint `{selector}`"))
+        })?;
+        crate::smartcontracts::code::ensure_contract_entrypoint_lifecycle(
+            state.world(),
+            contract_address,
+            identity.code_hash,
+            descriptor.kind,
+        )?;
         self.bind_contract_runtime_context(contract_subject, authorization);
+        Ok(())
+    }
+
+    /// Revalidate and bind a read-only deployed contract view against one immutable state view.
+    ///
+    /// This boundary captures the same live identity and subject provenance as transaction
+    /// simulation while requiring the selected artifact entrypoint to be declared as `view`.
+    /// Rejection clears any previously bound runtime provenance.
+    ///
+    /// # Errors
+    /// Returns an error if the live identity, alias, subject, or code binding is absent or changed;
+    /// if the selector is not a read-only view; if the lifecycle blocks views; or if the host
+    /// authority lacks its state-derived permission.
+    pub fn bind_authorized_deployed_contract_view_runtime_context(
+        &mut self,
+        state: &impl StateReadOnly,
+        contract_address: &ContractAddress,
+        expected_alias: Option<&ContractAlias>,
+        contract: &ivm::PreparedContract,
+        selector: &str,
+    ) -> Result<(), ValidationFail> {
+        self.clear_contract_runtime_binding();
+        let (identity, contract_subject) = self.verified_deployed_contract_runtime_identity(
+            state,
+            contract_address,
+            expected_alias,
+            contract,
+        )?;
+        let authorization = crate::executor::authorize_prepared_contract_view_selector(
+            state.world(),
+            &self.authority,
+            contract,
+            selector,
+            &identity,
+        )?;
+        crate::smartcontracts::code::ensure_contract_ready_for_view(
+            state.world(),
+            contract_address,
+            identity.code_hash,
+        )?;
+        self.bind_contract_runtime_context(contract_subject, authorization);
+        self.execution_class = HostExecutionClass::View;
         Ok(())
     }
 
@@ -4317,6 +4414,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         Ok((env, prepared))
     }
 
+    #[cfg(test)]
     fn enforce_zk_envelope(
         &self,
         payload: &[u8],
@@ -5128,11 +5226,13 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         16_u64.saturating_add(u64::try_from(payload_len).unwrap_or(u64::MAX))
     }
 
+    #[cfg(test)]
     fn state_keys_gas(examined_count: usize, payload_len: usize) -> u64 {
         Self::state_query_gas(payload_len)
             .saturating_add(u64::try_from(examined_count).unwrap_or(u64::MAX))
     }
 
+    #[cfg(test)]
     fn state_count_gas(examined_count: usize) -> u64 {
         16_u64.saturating_add(u64::try_from(examined_count).unwrap_or(u64::MAX))
     }
@@ -5506,18 +5606,15 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         }
     }
 
-    fn validate_quantity_numeric(amount: &Numeric) -> Result<(), ivm::VMError> {
-        Quantity::from_canonical_numeric(amount.clone())
-            .map(drop)
+    fn decode_quantity(vm: &IVM, ptr: u64) -> Result<Quantity, ivm::VMError> {
+        let tlv = Self::decode_pointer_tlv(vm, ptr, PointerType::Quantity)?;
+        QuantityValueV1::decode_frame(tlv.payload)
+            .map(QuantityValueV1::into_quantity)
             .map_err(|_| ivm::VMError::DecodeError)
     }
 
     fn decode_amount(vm: &IVM, ptr: u64) -> Result<Numeric, ivm::VMError> {
-        let tlv = Self::decode_pointer_tlv(vm, ptr, PointerType::Quantity)?;
-        QuantityValueV1::decode_frame(tlv.payload)
-            .map(QuantityValueV1::into_quantity)
-            .map(Quantity::into_numeric)
-            .map_err(|_| ivm::VMError::DecodeError)
+        Self::decode_quantity(vm, ptr).map(Quantity::into_numeric)
     }
 
     fn decode_optional_amount(vm: &IVM, ptr: u64) -> Result<Option<Numeric>, ivm::VMError> {
@@ -6230,9 +6327,10 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             .push(NestedContractCallJournal {
                 state_writes_len: self.state_access_log.state_writes.len(),
                 ..NestedContractCallJournal::default()
-            });
+        });
         NestedContractCallHostSnapshot {
             authority: self.authority.clone(),
+            execution_class: self.execution_class,
             current_contract_runtime_context: self.current_contract_runtime_context.clone(),
             current_entrypoint_authorization: self.current_entrypoint_authorization.clone(),
             args: self.args.take(),
@@ -6272,6 +6370,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     ) -> Result<(), ivm::VMError> {
         let NestedContractCallHostSnapshot {
             authority,
+            execution_class,
             current_contract_runtime_context,
             current_entrypoint_authorization,
             args,
@@ -6311,6 +6410,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             .ok_or(ivm::VMError::DecodeError)?;
 
         self.authority = authority;
+        self.execution_class = execution_class;
         self.current_contract_runtime_context = current_contract_runtime_context;
         self.current_entrypoint_authorization = current_entrypoint_authorization;
         self.args = args;
@@ -6745,14 +6845,15 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             arguments,
         };
         let entrypoint_name = invocation.entrypoint.clone();
-        let call_context = crate::executor::parse_prepared_contract_invocation_execution_context(
-            &invocation,
-            prepared_contract.as_ref(),
-            identity.contract_alias.clone(),
-            contract_subject,
-            child_gas_limit,
-        )
-        .map_err(|err| ivm::VMError::metered(request_gas, map_validation_fail(&err)))?;
+        let call_context =
+            crate::executor::parse_prepared_nested_contract_invocation_execution_context(
+                &invocation,
+                prepared_contract.as_ref(),
+                identity.contract_alias.clone(),
+                contract_subject,
+                child_gas_limit,
+            )
+            .map_err(|err| ivm::VMError::metered(request_gas, map_validation_fail(&err)))?;
         let callee_context = call_context
             .runtime_context()
             .ok_or_else(|| ivm::VMError::metered(request_gas, ivm::VMError::PermissionDenied))?;
@@ -6790,6 +6891,11 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
 
         let mut snapshot = Some(self.snapshot_nested_contract_call());
         self.authority = caller_context.contract_subject.clone();
+        self.execution_class = if entrypoint_is_view {
+            HostExecutionClass::View
+        } else {
+            HostExecutionClass::Contract
+        };
         self.current_contract_runtime_context = Some(callee_context);
         self.current_entrypoint_authorization = Some(callee_authorization);
         self.args = None;
@@ -7374,11 +7480,14 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         };
         if can_pay {
             if !amount.is_zero() {
+                let quantity = Quantity::from_canonical_numeric(amount.clone())
+                    .map_err(|_| ivm::VMError::NoritoInvalid)?;
                 let asset_id = AssetId::of(
                     charge_asset_def.id.clone(),
                     subscription_state.subscriber.clone(),
                 );
-                let isi = Transfer::asset_numeric(asset_id, amount.clone(), plan.provider.clone());
+                let isi =
+                    Transfer::asset_quantity(asset_id, quantity, plan.provider.clone());
                 let instr = InstructionBox::from(TransferBox::from(isi));
                 gas = gas.saturating_add(self.queue_instruction(instr));
             }
@@ -7636,7 +7745,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             );
             state.world().asset(&asset_id).map_or_else(
                 |_| Numeric::zero(),
-                |entry| entry.value().clone().into_inner(),
+                |entry| entry.value().as_ref().as_numeric().clone(),
             )
         };
 
@@ -7926,10 +8035,8 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         norito::to_bytes(value).map_err(|_| ivm::VMError::NoritoInvalid)
     }
 
-    fn encode_amount_payload(value: &Numeric) -> Result<Vec<u8>, ivm::VMError> {
-        let quantity = Quantity::from_canonical_numeric(value.clone())
-            .map_err(|_| ivm::VMError::DecodeError)?;
-        QuantityValueV1::new(quantity)
+    fn encode_amount_payload(value: &Quantity) -> Result<Vec<u8>, ivm::VMError> {
+        QuantityValueV1::new(value.clone())
             .encode_frame()
             .map_err(|_| ivm::VMError::NoritoInvalid)
     }
@@ -7944,7 +8051,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     fn project_asset(asset: Asset) -> Result<AssetView, ivm::VMError> {
         Ok(AssetView {
             id: asset.id,
-            amount: QuantityV1::canonicalize(asset.value).map_err(|_| ivm::VMError::DecodeError)?,
+            amount: asset.value.into(),
         })
     }
 
@@ -7956,8 +8063,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             name: definition.name,
             description: definition.description,
             owned_by: definition.owned_by,
-            total_quantity: QuantityV1::canonicalize(definition.total_quantity)
-                .map_err(|_| ivm::VMError::DecodeError)?,
+            total_quantity: definition.total_quantity.into(),
             metadata: Json::new(definition.metadata),
         })
     }
@@ -8682,8 +8788,10 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     }
 
     fn can_record_sccp_message(&self) -> bool {
-        !self.generic_execution
-            && self.ivm_proved_execution
+        matches!(
+            self.execution_class,
+            HostExecutionClass::IvmProvedContract
+        )
             && self.has_root_contract_execution_context()
     }
 
@@ -8803,7 +8911,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
 
     fn decode_transfer_v1_args(
         vm: &IVM,
-    ) -> Result<(AccountId, AccountId, AssetDefinitionId, Numeric), ivm::VMError> {
+    ) -> Result<(AccountId, AccountId, AssetDefinitionId, Quantity), ivm::VMError> {
         let from_ptr = vm.register(10);
         let to_ptr = vm.register(11);
         let asset_def_ptr = vm.register(12);
@@ -8812,7 +8920,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         let to: AccountId = Self::decode_tlv_typed(vm, to_ptr, PointerType::AccountId)?;
         let asset_def: AssetDefinitionId =
             Self::decode_tlv_typed(vm, asset_def_ptr, PointerType::AssetDefinitionId)?;
-        let amount = Self::decode_amount(vm, amount_ptr)?;
+        let amount = Self::decode_quantity(vm, amount_ptr)?;
         Ok((from, to, asset_def, amount))
     }
 
@@ -8822,7 +8930,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         }
         let (from, to, asset_def, amount) = Self::decode_transfer_v1_args(vm)?;
         let asset_id = AssetId::of(asset_def.clone(), from.clone());
-        let isi = Transfer::asset_numeric(asset_id, amount.clone(), to.clone());
+        let isi = Transfer::asset_quantity(asset_id, amount.clone(), to.clone());
         let instruction = InstructionBox::from(TransferBox::from(isi));
         let gas = crate::gas::meter_instruction(&instruction);
         if self.try_reserve_serialized_output(&instruction, 1) {
@@ -8844,7 +8952,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             state_ref.legacy_transfer_v1_source_scope(&asset_def)?
         };
         let asset_id = AssetId::with_scope(asset_def, from, source_scope);
-        let isi = Transfer::asset_numeric(asset_id, amount, to);
+        let isi = Transfer::asset_quantity(asset_id, amount, to);
         Ok(self.queue_instruction(InstructionBox::from(TransferBox::from(isi))))
     }
 
@@ -8874,9 +8982,6 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             decode_from_bytes(tlv.payload).map_err(|_| ivm::VMError::DecodeError)?;
         if batch.entries().is_empty() {
             return Err(ivm::VMError::DecodeError);
-        }
-        for entry in batch.entries() {
-            Self::validate_quantity_numeric(entry.amount())?;
         }
         let instr = InstructionBox::from(batch);
         Ok(self.queue_instruction(instr))
@@ -9959,11 +10064,7 @@ impl<QS> CoreHostImpl<QS> {
 impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
     fn prepare_syscall(&self, number: u32, vm: &IVM) -> Result<u64, ivm::VMError> {
         let metering = ivm::host::require_host_syscall_metering_spec(vm.syscall_policy(), number)?;
-        if self.generic_execution
-            && !crate::smartcontracts::ivm::cache::is_generic_syscall_allowed(number)
-        {
-            return Err(ivm::VMError::GenericSyscallNotAllowed { syscall: number });
-        }
+        self.execution_class.ensure_syscall_allowed(number)?;
         if self.lifecycle_hook_is_running()
             && matches!(
                 number,
@@ -10225,11 +10326,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
         // Enforce both ABI policy and exhaustive metering classification for
         // direct host calls as well as VM-dispatched execution.
         ivm::host::require_host_syscall_metering_spec(vm.syscall_policy(), number)?;
-        if self.generic_execution
-            && !crate::smartcontracts::ivm::cache::is_generic_syscall_allowed(number)
-        {
-            return Err(ivm::VMError::GenericSyscallNotAllowed { syscall: number });
-        }
+        self.execution_class.ensure_syscall_allowed(number)?;
         if self.lifecycle_hook_is_running()
             && matches!(
                 number,
@@ -10364,9 +10461,9 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                     Self::decode_tlv_typed(vm, account_ptr, PointerType::AccountId)?;
                 let asset_def: AssetDefinitionId =
                     Self::decode_tlv_typed(vm, asset_def_ptr, PointerType::AssetDefinitionId)?;
-                let amount = Self::decode_amount(vm, amount_ptr)?;
+                let amount = Self::decode_quantity(vm, amount_ptr)?;
                 let asset_id = AssetId::of(asset_def, account);
-                let isi = Mint::asset_numeric(amount, asset_id);
+                let isi = Mint::asset_quantity(amount, asset_id);
                 let instr = InstructionBox::from(MintBox::from(isi));
                 Ok(self.queue_instruction(instr))
             }
@@ -10378,9 +10475,9 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                     Self::decode_tlv_typed(vm, account_ptr, PointerType::AccountId)?;
                 let asset_def: AssetDefinitionId =
                     Self::decode_tlv_typed(vm, asset_def_ptr, PointerType::AssetDefinitionId)?;
-                let amount = Self::decode_amount(vm, amount_ptr)?;
+                let amount = Self::decode_quantity(vm, amount_ptr)?;
                 let asset_id = AssetId::of(asset_def, account);
-                let isi = Burn::asset_numeric(amount, asset_id);
+                let isi = Burn::asset_quantity(amount, asset_id);
                 let instr = InstructionBox::from(BurnBox::from(isi));
                 Ok(self.queue_instruction(instr))
             }
@@ -10403,7 +10500,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 let to: AccountId = Self::decode_tlv_typed(vm, to_ptr, PointerType::AccountId)?;
                 let asset_def: AssetDefinitionId =
                     Self::decode_tlv_typed(vm, asset_def_ptr, PointerType::AssetDefinitionId)?;
-                let amount = Self::decode_amount(vm, amount_ptr)?;
+                let amount = Self::decode_quantity(vm, amount_ptr)?;
                 let dataspace: DataSpaceId =
                     Self::decode_tlv_typed(vm, dataspace_ptr, PointerType::DataSpaceId)?;
                 let scope = {
@@ -10419,7 +10516,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                     }
                 };
                 let asset_id = AssetId::with_scope(asset_def, from, scope);
-                let isi = Transfer::asset_numeric(asset_id, amount, to);
+                let isi = Transfer::asset_quantity(asset_id, amount, to);
                 let instr = InstructionBox::from(TransferBox::from(isi));
                 Ok(self.queue_instruction(instr))
             }
@@ -11947,7 +12044,8 @@ mod pointer_abi_tests {
 
     use super::{
         tests::{
-            begin_axt_envelope, fixture_public_key_from_seed, make_policy_snapshot, norito_blob,
+            begin_axt_envelope, contract_test_state, fixture_public_key_from_seed,
+            grant_named_permission_to_account, install_contract, make_policy_snapshot, norito_blob,
             proof_blob_for, quantity_frame, store_quantity, store_tlv,
         },
         *,
@@ -12033,6 +12131,186 @@ mod pointer_abi_tests {
     }
 
     #[test]
+    fn authorized_deployed_binders_capture_exact_state_backed_root_authorization() {
+        crate::test_alias::ensure();
+        let authority = ALICE_ID.clone();
+        let state = contract_test_state(&authority);
+        let contract_address = install_contract(
+            &state,
+            &authority,
+            r#"
+seiyaku StateBackedBinding {
+  kotoage fn execute() -> int authorize("CanExecuteContract") {
+    return 7;
+  }
+
+  view fn inspect() -> int authorize("CanInspectContract") {
+    return 8;
+  }
+}
+"#,
+            43,
+        );
+        grant_named_permission_to_account(
+            &state,
+            &authority,
+            authority.clone(),
+            "CanExecuteContract",
+        );
+        grant_named_permission_to_account(
+            &state,
+            &authority,
+            authority.clone(),
+            "CanInspectContract",
+        );
+        let view = state.view();
+        let record =
+            crate::smartcontracts::code::fetch_bound_contract_record(&view, &contract_address)
+                .expect("installed contract record");
+        let prepared = ivm::prepare_contract(Arc::<[u8]>::from(record.code_bytes.clone()))
+            .expect("prepare installed contract");
+        let mut host = CoreHost::new(authority.clone());
+
+        host.bind_authorized_deployed_contract_runtime_context(
+            &view,
+            &contract_address,
+            None,
+            &prepared,
+            "execute",
+        )
+        .expect("bind authorized transaction entrypoint");
+        assert_eq!(host.execution_class, HostExecutionClass::Contract);
+
+        let context = host
+            .current_contract_runtime_context
+            .as_ref()
+            .expect("runtime context");
+        assert_eq!(context.contract_address, contract_address);
+        assert_eq!(context.contract_subject, record.contract_subject);
+        assert_eq!(context.contract_alias, record.contract_alias);
+        assert_eq!(context.entrypoint, "execute");
+        let authorization = host
+            .current_entrypoint_authorization
+            .as_ref()
+            .expect("root authorization");
+        assert!(authorization.is_root());
+        assert_eq!(authorization.authority, authority);
+        assert_eq!(authorization.contract_address, contract_address);
+        assert_eq!(authorization.contract_alias, record.contract_alias);
+        assert_eq!(authorization.code_hash, record.code_hash);
+        assert_eq!(authorization.entrypoint, "execute");
+        assert_eq!(
+            authorization.permission.as_deref(),
+            Some("CanExecuteContract")
+        );
+
+        host.bind_authorized_deployed_contract_view_runtime_context(
+            &view,
+            &contract_address,
+            record.contract_alias.as_ref(),
+            &prepared,
+            "inspect",
+        )
+        .expect("bind authorized view entrypoint");
+        assert_eq!(host.execution_class, HostExecutionClass::View);
+        let context = host
+            .current_contract_runtime_context
+            .as_ref()
+            .expect("view runtime context");
+        assert_eq!(context.contract_address, contract_address);
+        assert_eq!(context.contract_subject, record.contract_subject);
+        assert_eq!(context.contract_alias, record.contract_alias);
+        assert_eq!(context.entrypoint, "inspect");
+        let authorization = host
+            .current_entrypoint_authorization
+            .as_ref()
+            .expect("view root authorization");
+        assert!(authorization.is_root());
+        assert_eq!(authorization.authority, authority);
+        assert_eq!(authorization.contract_address, contract_address);
+        assert_eq!(authorization.contract_alias, record.contract_alias);
+        assert_eq!(authorization.code_hash, record.code_hash);
+        assert_eq!(authorization.entrypoint, "inspect");
+        assert_eq!(
+            authorization.permission.as_deref(),
+            Some("CanInspectContract")
+        );
+    }
+
+    #[test]
+    fn authorized_view_binding_rejects_effect_syscalls_before_input_decode() {
+        crate::test_alias::ensure();
+        let authority = ALICE_ID.clone();
+        let state = contract_test_state(&authority);
+        let contract_address = install_contract(
+            &state,
+            &authority,
+            r#"
+seiyaku ReadOnlyBinding {
+  view fn inspect() -> int authorize("CanInspectContract") {
+    return 8;
+  }
+}
+"#,
+            46,
+        );
+        grant_named_permission_to_account(
+            &state,
+            &authority,
+            authority.clone(),
+            "CanInspectContract",
+        );
+        let view = state.view();
+        let record =
+            crate::smartcontracts::code::fetch_bound_contract_record(&view, &contract_address)
+                .expect("installed contract record");
+        let prepared = ivm::prepare_contract(Arc::<[u8]>::from(record.code_bytes.clone()))
+            .expect("prepare installed contract");
+        let mut host = CoreHost::new(authority);
+        host.bind_authorized_deployed_contract_view_runtime_context(
+            &view,
+            &contract_address,
+            record.contract_alias.as_ref(),
+            &prepared,
+            "inspect",
+        )
+        .expect("bind authorized view entrypoint");
+
+        for syscall in [
+            ivm_sys::SYSCALL_STATE_SET,
+            ivm_sys::SYSCALL_REGISTER_DOMAIN,
+            ivm_sys::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION,
+            ivm_sys::SYSCALL_CALL_CONTRACT,
+        ] {
+            let vm = IVM::new(1_000_000);
+            assert_eq!(
+                host.prepare_syscall(syscall, &vm),
+                Err(ivm::VMError::PermissionDenied),
+                "view preparation must reject effect syscall 0x{syscall:02x} before pointer decoding"
+            );
+
+            let mut vm = IVM::new(1_000_000);
+            assert_eq!(
+                host.syscall(syscall, &mut vm),
+                Err(ivm::VMError::PermissionDenied),
+                "direct view dispatch must reject effect syscall 0x{syscall:02x} before pointer decoding"
+            );
+        }
+
+        let mut vm = IVM::new(1_000_000);
+        let missing_path: Name = "missing".parse().expect("valid state path");
+        let path_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&missing_path));
+        vm.set_register(10, path_ptr);
+        host.prepare_syscall(ivm_sys::SYSCALL_STATE_GET, &vm)
+            .expect("view preparation permits durable-state reads");
+        host.syscall(ivm_sys::SYSCALL_STATE_GET, &mut vm)
+            .expect("view dispatch permits durable-state reads");
+        assert_eq!(vm.register(10), 0, "missing state returns a null pointer");
+        assert!(host.queued.is_empty());
+        assert!(host.durable_state_overlay.is_empty());
+    }
+
+    #[test]
     fn prevalidated_runtime_binding_captures_exact_root_authorization() {
         let authority = ALICE_ID.clone();
         let contract = ContractAddress::derive(
@@ -12078,6 +12356,169 @@ mod pointer_abi_tests {
             authorization.permission.as_deref(),
             Some("CanInspectContract")
         );
+    }
+
+    #[test]
+    fn authorized_deployed_binders_reject_forgery_and_clear_stale_provenance() {
+        crate::test_alias::ensure();
+        let authority = ALICE_ID.clone();
+        let state = contract_test_state(&authority);
+        let legitimate_address = install_contract(
+            &state,
+            &authority,
+            r#"
+seiyaku LegitimateBinding {
+  kotoage fn execute() -> int authorize("CanExecuteContract") {
+    return 1;
+  }
+
+  view fn inspect() -> int authorize("CanInspectContract") {
+    return 2;
+  }
+}
+"#,
+            44,
+        );
+        let privileged_address = install_contract(
+            &state,
+            &authority,
+            r#"
+seiyaku PrivilegedBinding {
+  kotoage fn administer() -> int authorize("CanAdministerContract") {
+    return 3;
+  }
+}
+"#,
+            45,
+        );
+        grant_named_permission_to_account(
+            &state,
+            &authority,
+            authority.clone(),
+            "CanExecuteContract",
+        );
+        grant_named_permission_to_account(
+            &state,
+            &authority,
+            authority.clone(),
+            "CanInspectContract",
+        );
+        let view = state.view();
+        let legitimate =
+            crate::smartcontracts::code::fetch_bound_contract_record(&view, &legitimate_address)
+                .expect("legitimate contract record");
+        let privileged =
+            crate::smartcontracts::code::fetch_bound_contract_record(&view, &privileged_address)
+                .expect("privileged contract record");
+        let legitimate_prepared =
+            ivm::prepare_contract(Arc::<[u8]>::from(legitimate.code_bytes.clone()))
+                .expect("prepare legitimate contract");
+        let privileged_prepared =
+            ivm::prepare_contract(Arc::<[u8]>::from(privileged.code_bytes.clone()))
+                .expect("prepare privileged contract");
+        let mut host = CoreHost::new(authority.clone());
+
+        let bind_legitimate = |host: &mut CoreHost| {
+            host.bind_authorized_deployed_contract_runtime_context(
+                &view,
+                &legitimate_address,
+                legitimate.contract_alias.as_ref(),
+                &legitimate_prepared,
+                "execute",
+            )
+            .expect("bind legitimate entrypoint");
+        };
+        let assert_cleared = |host: &CoreHost| {
+            assert!(
+                host.current_contract_runtime_context.is_none(),
+                "a rejected rebind must remove stale runtime identity"
+            );
+            assert!(
+                host.current_entrypoint_authorization.is_none(),
+                "a rejected rebind must remove stale authorization"
+            );
+        };
+
+        bind_legitimate(&mut host);
+        let forged_alias: ContractAlias = "forged::universal"
+            .parse()
+            .expect("syntactically valid forged alias");
+        assert!(matches!(
+            host.bind_authorized_deployed_contract_runtime_context(
+                &view,
+                &legitimate_address,
+                Some(&forged_alias),
+                &legitimate_prepared,
+                "execute",
+            ),
+            Err(ValidationFail::NotPermitted(_))
+        ));
+        assert_cleared(&host);
+
+        bind_legitimate(&mut host);
+        assert!(matches!(
+            host.bind_authorized_deployed_contract_runtime_context(
+                &view,
+                &legitimate_address,
+                legitimate.contract_alias.as_ref(),
+                &privileged_prepared,
+                "administer",
+            ),
+            Err(ValidationFail::NotPermitted(_))
+        ));
+        assert_cleared(&host);
+
+        bind_legitimate(&mut host);
+        assert!(matches!(
+            host.bind_authorized_deployed_contract_runtime_context(
+                &view,
+                &privileged_address,
+                privileged.contract_alias.as_ref(),
+                &privileged_prepared,
+                "administer",
+            ),
+            Err(ValidationFail::NotPermitted(_))
+        ));
+        assert_cleared(&host);
+
+        bind_legitimate(&mut host);
+        assert!(matches!(
+            host.bind_authorized_deployed_contract_runtime_context(
+                &view,
+                &legitimate_address,
+                legitimate.contract_alias.as_ref(),
+                &legitimate_prepared,
+                "inspect",
+            ),
+            Err(ValidationFail::NotPermitted(_))
+        ));
+        assert_cleared(&host);
+
+        bind_legitimate(&mut host);
+        assert!(matches!(
+            host.bind_authorized_deployed_contract_view_runtime_context(
+                &view,
+                &legitimate_address,
+                legitimate.contract_alias.as_ref(),
+                &legitimate_prepared,
+                "execute",
+            ),
+            Err(ValidationFail::NotPermitted(_))
+        ));
+        assert_cleared(&host);
+
+        bind_legitimate(&mut host);
+        assert!(matches!(
+            host.bind_authorized_deployed_contract_runtime_context(
+                &view,
+                &legitimate_address,
+                legitimate.contract_alias.as_ref(),
+                &legitimate_prepared,
+                "forged_selector",
+            ),
+            Err(ValidationFail::NotPermitted(_))
+        ));
+        assert_cleared(&host);
     }
 
     #[test]
@@ -15154,7 +15595,7 @@ mod pointer_abi_tests {
             .syscall(ivm::syscalls::SYSCALL_MINT_ASSET, &mut vm)
             .expect("mint syscall");
         let asset_id = AssetId::of(asset_def, authority);
-        let isi = Mint::asset_numeric(5u64, asset_id);
+        let isi = Mint::asset_quantity(5u64, asset_id);
         let expected = crate::gas::meter_instruction(&InstructionBox::from(MintBox::from(isi)));
         assert_eq!(gas, expected);
     }
@@ -15194,7 +15635,10 @@ mod pointer_abi_tests {
             .expect("mint with heap-backed quantity");
 
         let asset_id = AssetId::of(asset_def, authority);
-        let expected = InstructionBox::from(MintBox::from(Mint::asset_numeric(amount, asset_id)));
+        let expected = InstructionBox::from(MintBox::from(Mint::asset_quantity(
+            Quantity::try_from_numeric(amount).expect("non-negative fixture quantity"),
+            asset_id,
+        )));
         assert_eq!(host.queued, vec![expected]);
     }
 
@@ -15652,16 +16096,23 @@ mod tests {
         panic!("unsupported fixture signing authority: {authority}");
     }
 
-    fn contract_test_state(authority: &AccountId) -> State {
+    pub(super) fn contract_test_state(authority: &AccountId) -> State {
         let domain = Domain::new(fixture_domain_id()).build(authority);
         let account = build_fixture_account(authority, authority);
         let world = World::with([domain], [account], []);
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
-        State::new_for_testing(world, kura, query)
+        let state = State::new_for_testing(world, kura, query);
+        grant_named_permission_to_account(
+            &state,
+            authority,
+            authority.clone(),
+            iroha_data_model::smart_contract::CONTRACT_HAJIMARI_PERMISSION_NAME,
+        );
+        state
     }
 
-    fn install_contract(
+    pub(super) fn install_contract(
         state: &State,
         authority: &AccountId,
         source: &str,
@@ -15768,34 +16219,63 @@ mod tests {
             &authority,
             r#"
 seiyaku RuntimeBinding {
-  kotoage fn update() {}
+  kotoage fn update() authorize("CanUpdateContract") {}
   view fn inspect() -> int { return 1; }
 }
 "#,
             0,
         );
+        let stale_contract_address = install_contract(
+            &state,
+            &authority,
+            r#"
+seiyaku StaleRuntimeBinding {
+  kotoage fn update() authorize("CanUpdateContract") {}
+}
+"#,
+            1,
+        );
+        grant_named_permission_to_account(
+            &state,
+            &authority,
+            authority.clone(),
+            "CanUpdateContract",
+        );
         let view = state.view();
         let identity =
             crate::smartcontracts::code::fetch_bound_contract_identity(&view, &contract_address)
                 .expect("installed contract identity");
+        let stale_identity = crate::smartcontracts::code::fetch_bound_contract_identity(
+            &view,
+            &stale_contract_address,
+        )
+        .expect("stale contract identity");
         let code = view
             .world()
             .contract_code()
             .get(&identity.code_hash)
             .expect("installed contract bytecode");
+        let stale_code = view
+            .world()
+            .contract_code()
+            .get(&stale_identity.code_hash)
+            .expect("stale contract bytecode");
         let mut cache = crate::smartcontracts::ivm::cache::IvmCache::new();
         let summary = cache
             .summarize_program_with_hash(identity.code_hash, code.as_ref())
             .expect("prepare installed contract");
+        let stale_summary = cache
+            .summarize_program_with_hash(stale_identity.code_hash, stale_code.as_ref())
+            .expect("prepare stale contract");
         let expected_subject =
             crate::smartcontracts::code::fetch_bound_contract_subject(&view, &contract_address)
                 .expect("installed contract subject");
         let mut host = CoreHost::new(authority.clone());
 
-        host.bind_deployed_contract_runtime_context(
+        host.bind_authorized_deployed_contract_runtime_context(
             &view,
             &contract_address,
-            identity.code_hash,
+            identity.contract_alias.as_ref(),
             summary.prepared_contract(),
             "update",
         )
@@ -15813,11 +16293,19 @@ seiyaku RuntimeBinding {
                 .code_hash,
             identity.code_hash
         );
+        assert_eq!(
+            host.current_entrypoint_authorization
+                .as_ref()
+                .expect("call authorization")
+                .permission
+                .as_deref(),
+            Some("CanUpdateContract")
+        );
 
-        host.bind_deployed_contract_runtime_context(
+        host.bind_authorized_deployed_contract_view_runtime_context(
             &view,
             &contract_address,
-            identity.code_hash,
+            identity.contract_alias.as_ref(),
             summary.prepared_contract(),
             "inspect",
         )
@@ -15831,25 +16319,23 @@ seiyaku RuntimeBinding {
         );
 
         let error = host
-            .bind_deployed_contract_runtime_context(
+            .bind_authorized_deployed_contract_runtime_context(
                 &view,
                 &contract_address,
-                Hash::new(b"stale prepared contract"),
-                summary.prepared_contract(),
+                identity.contract_alias.as_ref(),
+                stale_summary.prepared_contract(),
                 "update",
             )
             .expect_err("stale prepared code must fail closed");
-        assert!(error.to_string().contains("not bound to prepared code"));
-        assert_eq!(
-            host.current_contract_runtime_context
-                .as_ref()
-                .expect("failed rebinding preserves prior context")
-                .entrypoint,
-            "inspect"
+        assert!(
+            matches!(error, ValidationFail::NotPermitted(_)),
+            "a cross-artifact substitution must be rejected as unauthorized"
         );
+        assert!(host.current_contract_runtime_context.is_none());
+        assert!(host.current_entrypoint_authorization.is_none());
     }
 
-    fn grant_named_permission_to_account(
+    pub(super) fn grant_named_permission_to_account(
         state: &State,
         authority: &AccountId,
         account_id: AccountId,
@@ -16378,7 +16864,7 @@ seiyaku TypedPoolViews {
   state AssetDefinitionId QuoteAsset;
   state AccountId PoolAccount;
 
-  kotoage fn bind(AssetDefinitionId quote_asset, AccountId pool_account) {
+  kotoage fn bind(AssetDefinitionId quote_asset, AccountId pool_account) authorize("AssetOps") {
     QuoteAsset = quote_asset;
     PoolAccount = pool_account;
   }
@@ -16399,11 +16885,12 @@ seiyaku TypedPoolViews {
             authority,
             r#"
 seiyaku OuterCaller {
-  kotoage fn main() -> int { return 0; }
+  view fn main() -> int { return 0; }
 }
 "#,
             1,
         );
+        grant_asset_ops_to_account(state, authority, authority.clone());
         grant_asset_ops_to_account(state, authority, outer_caller.subject_id());
 
         let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
@@ -16419,6 +16906,7 @@ seiyaku OuterCaller {
             contract_invocation_from_json(state, pool_contract.clone(), "bind", &pool_bind_payload),
             &mut ivm_cache,
         );
+
         let view = state.view();
         let persisted = |suffix: &str| {
             view.world()
@@ -16485,11 +16973,14 @@ seiyaku OuterCaller {
     fn execute_query_rejects_oversized_singular_response_before_output_allocation() {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("oversized-query-authority");
-        let mut account = build_fixture_account(&authority, &authority);
-        account.metadata.insert(
+        let mut metadata = Metadata::default();
+        metadata.insert(
             "oversized".parse().expect("metadata key"),
             Json::new("x".repeat(128 * 1024)),
         );
+        let account = Account::new(authority.clone())
+            .with_metadata(metadata)
+            .build(&authority);
         let state = State::new_for_testing(
             World::with([], [account], []),
             Kura::blank_kura_for_testing(),
@@ -17482,6 +17973,13 @@ seiyaku OuterCaller {
         let out_ptr = vm.register(10);
         let tlv = vm.memory.validate_tlv(out_ptr).expect("output tlv");
         assert_eq!(tlv.type_id, PointerType::NoritoBytes);
+        let response: QueryResponse =
+            norito::decode_from_bytes(tlv.payload).expect("decode response");
+        let QueryResponse::Iterable(output) = response else {
+            panic!("expected iterable query response");
+        };
+        assert_eq!(output.batch.len(), 1);
+        assert_eq!(output.remaining_items, Some(0));
 
         let expected = CoreHost::query_gas_cost(
             &gas_ctx,
@@ -17757,9 +18255,9 @@ seiyaku OuterCaller {
         expected_state.failure_count = 0;
         expected_state.status = SubscriptionStatus::Active;
 
-        let expected_transfer = InstructionBox::from(Transfer::asset_numeric(
+        let expected_transfer = InstructionBox::from(Transfer::asset_quantity(
             asset_id,
-            amount.clone(),
+            Quantity::try_from_numeric(amount.clone()).expect("non-negative subscription charge"),
             provider.clone(),
         ));
         let expected_set = InstructionBox::from(SetKeyValue::nft(
@@ -19103,8 +19601,8 @@ seiyaku BurnWithMemo {
         vm.run_with_host(&mut host)
             .expect("bytes-bearing burn entrypoint should run");
 
-        let burn = InstructionBox::from(BurnBox::from(Burn::asset_numeric(
-            Numeric::new(1_u32, 0),
+        let burn = InstructionBox::from(BurnBox::from(Burn::asset_quantity(
+            1_u32,
             AssetId::of(settlement_asset_def, authority),
         )));
         assert_eq!(host.queued, vec![burn]);
@@ -19443,7 +19941,7 @@ seiyaku OpaqueInstructionSubmission {
                 .expect("over-limit batch entry remains metered");
         }
         let asset_id = AssetId::of(asset_def, from.clone());
-        let isi = Transfer::asset_numeric(asset_id, amount, to);
+        let isi = Transfer::asset_quantity(asset_id, amount, to);
         let expected = crate::gas::meter_instruction(&InstructionBox::from(TransferBox::from(isi)));
         assert_eq!(gas, expected);
         assert!(host.queued.is_empty());
@@ -19531,9 +20029,9 @@ seiyaku OpaqueInstructionSubmission {
         host.syscall(ivm_sys::SYSCALL_TRANSFER_ASSET_SCOPED, &mut vm)
             .expect("global transfer should enqueue");
 
-        let expected = InstructionBox::from(TransferBox::from(Transfer::asset_numeric(
+        let expected = InstructionBox::from(TransferBox::from(Transfer::asset_quantity(
             AssetId::of(asset_def, authority),
-            amount,
+            Quantity::try_from_numeric(amount).expect("non-negative fixture quantity"),
             destination,
         )));
         assert_eq!(host.queued, vec![expected]);
@@ -19567,9 +20065,9 @@ seiyaku OpaqueInstructionSubmission {
         host.syscall(ivm_sys::SYSCALL_TRANSFER_V1, &mut vm)
             .expect("legacy global transfer should enqueue");
 
-        let expected = InstructionBox::from(TransferBox::from(Transfer::asset_numeric(
+        let expected = InstructionBox::from(TransferBox::from(Transfer::asset_quantity(
             AssetId::of(asset_def, authority),
-            amount,
+            Quantity::try_from_numeric(amount).expect("non-negative fixture quantity"),
             destination,
         )));
         assert_eq!(host.queued, vec![expected]);
@@ -19608,9 +20106,9 @@ seiyaku OpaqueInstructionSubmission {
         host.syscall(ivm_sys::SYSCALL_TRANSFER_V1, &mut vm)
             .expect("legacy restricted transfer should infer definition home dataspace");
 
-        let expected = InstructionBox::from(TransferBox::from(Transfer::asset_numeric(
+        let expected = InstructionBox::from(TransferBox::from(Transfer::asset_quantity(
             AssetId::with_scope(asset_def, authority, AssetBalanceScope::Dataspace(paynet)),
-            amount,
+            Quantity::try_from_numeric(amount).expect("non-negative fixture quantity"),
             destination,
         )));
         assert_eq!(host.queued, vec![expected]);
@@ -19645,13 +20143,13 @@ seiyaku OpaqueInstructionSubmission {
         host.syscall(ivm_sys::SYSCALL_TRANSFER_ASSET_SCOPED, &mut vm)
             .expect("restricted transfer should enqueue");
 
-        let expected = InstructionBox::from(TransferBox::from(Transfer::asset_numeric(
+        let expected = InstructionBox::from(TransferBox::from(Transfer::asset_quantity(
             AssetId::with_scope(
                 asset_def,
                 authority,
                 AssetBalanceScope::Dataspace(dataspace),
             ),
-            amount,
+            Quantity::try_from_numeric(amount).expect("non-negative fixture quantity"),
             destination,
         )));
         assert_eq!(host.queued, vec![expected]);
@@ -19728,15 +20226,44 @@ seiyaku OpaqueInstructionSubmission {
 
     #[test]
     fn fastpq_batch_apply_rejects_noncanonical_amount() {
+        #[derive(norito::Encode)]
+        struct NonCanonicalNumeric {
+            #[codec(compact)]
+            mantissa: iroha_primitives::bigint::BigInt,
+            #[codec(compact)]
+            scale: u32,
+        }
+
+        #[derive(norito::Encode)]
+        struct ForgedTransferAssetBatchEntry {
+            from: AccountId,
+            to: AccountId,
+            asset_definition: AssetDefinitionId,
+            amount: NonCanonicalNumeric,
+        }
+
+        #[derive(norito::Encode)]
+        struct ForgedTransferAssetBatch {
+            entries: Vec<ForgedTransferAssetBatchEntry>,
+        }
+
         let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::new(authority.clone());
         let mut vm = IVM::new(1_000);
-        let batch = TransferAssetBatch::new(vec![TransferAssetBatchEntry::new(
-            authority,
-            fixture_account("bob"),
-            AssetDefinitionId::new(fixture_domain_id(), "xor".parse().unwrap()),
-            Numeric::new(10_u32, 1),
-        )]);
+        let batch = ForgedTransferAssetBatch {
+            entries: vec![ForgedTransferAssetBatchEntry {
+                from: authority,
+                to: fixture_account("bob"),
+                asset_definition: AssetDefinitionId::new(
+                    fixture_domain_id(),
+                    "xor".parse().unwrap(),
+                ),
+                amount: NonCanonicalNumeric {
+                    mantissa: 10_u32.into(),
+                    scale: 1,
+                },
+            }],
+        };
         let payload = norito::to_bytes(&batch).expect("encode batch");
         let ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &payload);
         vm.set_register(10, ptr);
@@ -20592,8 +21119,11 @@ seiyaku Callee {
             panic!("exact Int return must contain one canonical pointer atom");
         };
         let expected_envelope = ivm::numeric_tlv::encode_int(&BigInt::from_i128(42))
-            .expect("encode canonical V1 int return");
-        assert_eq!(envelope, &expected_envelope);
+            .expect("encode canonical V1 int atom");
+        assert_eq!(
+            envelope, &expected_envelope,
+            "nested Int returns must preserve the exact canonical pointer envelope"
+        );
         assert_eq!(
             ivm::numeric_tlv::decode_int_bytes(envelope).expect("decode returned Int"),
             iroha_primitives::bigint::BigInt::from_i128(42),
@@ -21570,7 +22100,7 @@ seiyaku Callee {
             &authority,
             r#"
 seiyaku ViewCaller {
-  kotoage fn main() -> int { return 0; }
+  kotoage fn main() -> int authorize("NestedView") { return 0; }
 }
 "#,
             0,
@@ -21582,11 +22112,11 @@ seiyaku ViewCaller {
 seiyaku EffectfulView {
   state int Counter;
 
-  kotoage fn seed(int value) {
+  kotoage fn seed(int value) authorize("NestedView") {
     Counter = value;
   }
 
-  kotoage fn increment_then_return() -> int {
+  kotoage fn increment_then_return() -> int authorize("NestedView") {
     Counter = Counter + 1;
     return Counter;
   }
@@ -21594,6 +22124,8 @@ seiyaku EffectfulView {
 "#,
             1,
         );
+        grant_named_permission_to_account(&state, &authority, authority.clone(), "NestedView");
+        grant_named_permission_to_account(&state, &authority, caller.subject_id(), "NestedView");
         let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
         let seed_payload = Json::from_str_norito(r#"{"value":"5"}"#).expect("seed payload");
         execute_contract_call_transaction(
@@ -24559,7 +25091,7 @@ seiyaku AliasPayout {
 
         let artifacts = HostExecutionArtifacts {
             queued: vec![QueuedInstruction {
-                instruction: InstructionBox::from(Transfer::asset_numeric(
+                instruction: InstructionBox::from(Transfer::asset_quantity(
                     source_asset_id.clone(),
                     1_u32,
                     recipient.clone(),
@@ -24599,6 +25131,73 @@ seiyaku AliasPayout {
             .clone();
         assert_eq!(source_balance.as_ref(), &Numeric::new(4_u32, 0));
         assert_eq!(recipient_balance.as_ref(), &Numeric::new(1_u32, 0));
+    }
+
+    #[test]
+    fn host_execution_artifacts_reject_foreign_durable_path_before_any_write() {
+        crate::test_alias::ensure();
+        let authority = fixture_account("alice");
+        let state = contract_test_state(&authority);
+        let contract_address = install_contract(
+            &state,
+            &authority,
+            r#"
+seiyaku DurableOwner {
+  view fn inspect() -> int { return 0; }
+}
+"#,
+            411,
+        );
+        let identity = crate::smartcontracts::code::fetch_bound_contract_identity(
+            &state.view(),
+            &contract_address,
+        )
+        .expect("installed contract identity");
+        let authorization = ContractEntrypointAuthorizationSnapshot::new(
+            authority.clone(),
+            "inspect".to_owned(),
+            None,
+            &identity,
+        );
+        let foreign_digest = hex::encode(Hash::new(b"foreign durable owner").as_ref());
+        let foreign_path: Name = format!("sc/{foreign_digest}/counter")
+            .parse()
+            .expect("foreign durable path");
+        assert!(!authorization.owns_durable_state_path(&foreign_path));
+
+        let artifacts = HostExecutionArtifacts {
+            queued: Vec::new(),
+            entrypoint_authorization: Some(authorization.clone()),
+            confidential_gas_delta: 0,
+            completed_axt: Vec::new(),
+            durable_state_overlay: BTreeMap::from([(foreign_path.clone(), Some(vec![1]))]),
+            durable_state_authorizations: BTreeMap::from([(
+                foreign_path.clone(),
+                Some(authorization),
+            )]),
+        };
+        let next_height = u64::try_from(state.view().height() + 1)
+            .ok()
+            .and_then(core::num::NonZeroU64::new)
+            .expect("next block height");
+        let mut block = state.block(BlockHeader::new(next_height, None, None, None, 0, 0));
+        let mut transaction = block.transaction();
+
+        let error = artifacts
+            .apply_to_transaction(&mut transaction, &authority)
+            .expect_err("foreign durable path must fail closed");
+        assert!(
+            error.to_string().contains("does not belong"),
+            "unexpected durable ownership error: {error}"
+        );
+        assert!(
+            transaction
+                .world
+                .smart_contract_state
+                .get(&foreign_path)
+                .is_none(),
+            "foreign durable authorization must apply zero writes"
+        );
     }
 
     #[test]
@@ -26252,11 +26851,8 @@ seiyaku AliasPayout {
             .get(&path)
             .and_then(Option::as_ref)
             .expect("unscoped overlay entry");
-        let stored_tlv =
-            ivm::pointer_abi::validate_tlv_bytes(stored).expect("stored unscoped overlay tlv");
-        assert_eq!(stored_tlv.type_id, PointerType::NoritoBytes);
         let stored_value: u64 =
-            norito::decode_from_bytes(stored_tlv.payload).expect("decode stored overlay state");
+            norito::decode_from_bytes(stored).expect("decode raw persisted overlay state");
         assert_eq!(stored_value, 22);
     }
 
@@ -26732,11 +27328,8 @@ seiyaku AliasPayout {
             .get(&scoped_path)
             .and_then(Option::as_ref)
             .expect("scoped overlay entry");
-        let stored_tlv =
-            ivm::pointer_abi::validate_tlv_bytes(stored).expect("stored scoped overlay tlv");
-        assert_eq!(stored_tlv.type_id, PointerType::NoritoBytes);
         let stored_value: u64 =
-            norito::decode_from_bytes(stored_tlv.payload).expect("decode stored overlay state");
+            norito::decode_from_bytes(stored).expect("decode raw persisted overlay state");
         assert_eq!(stored_value, 22);
     }
 

@@ -17,7 +17,9 @@ use iroha_config::{
 use iroha_config_base::WithOrigin;
 use iroha_core::{
     kura::Kura,
+    query::store::LiveQueryStore,
     queue::{ConfigLaneRouter, LaneRouter, RoutingDecision},
+    state::{State, World},
     tx::AcceptedTransaction,
 };
 use iroha_data_model::{
@@ -145,8 +147,30 @@ fn multilane_catalog_sets_up_storage_and_routing() -> Result<()> {
             iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
     };
 
-    let (_kura, block_count) = Kura::new(&kura_cfg, &lane_config)?;
+    let (kura, block_count) =
+        Kura::new_with_configured_lane_catalog(&kura_cfg, &lane_config, &lane_catalog)?;
     assert_eq!(block_count.0, 0, "fresh Kura should have no blocks");
+    let query = LiveQueryStore::start_test();
+    #[cfg(feature = "telemetry")]
+    let mut state = State::new(
+        World::default(),
+        Arc::clone(&kura),
+        query,
+        iroha_core::telemetry::StateTelemetry::default(),
+    );
+    #[cfg(not(feature = "telemetry"))]
+    let mut state = State::new(World::default(), Arc::clone(&kura), query);
+    state.prepare_configured_primary_geometry_anchor(&lane_catalog)?;
+    state.restore_kura_lane_segments_before_startup_replay()?;
+    state.set_nexus_from_config(iroha_config::parameters::actual::Nexus {
+        enabled: true,
+        lane_catalog: lane_catalog.clone(),
+        configured_lane_catalog: lane_catalog.clone(),
+        lane_config: lane_config.clone(),
+        dataspace_catalog: dataspace_catalog.clone(),
+        routing_policy: LaneRoutingPolicy::default(),
+        ..Default::default()
+    })?;
 
     for entry in lane_config.entries() {
         let blocks_dir = entry.blocks_dir(temp.path());

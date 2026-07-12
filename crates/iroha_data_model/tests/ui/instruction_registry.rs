@@ -5,11 +5,11 @@ fn main() {
         Log,
         Register<Domain>,
         Unregister<Domain>,
-        Mint<Numeric, Asset>,
-        Burn<Numeric, Asset>,
+        Mint<Quantity, Asset>,
+        Burn<Quantity, Asset>,
         SetParameter,
         SetKeyValue<Domain>,
         RemoveKeyValue<Domain>,
-        Transfer<Asset, Numeric, Account>,
+        Transfer<Asset, Quantity, Account>,
     );
 }

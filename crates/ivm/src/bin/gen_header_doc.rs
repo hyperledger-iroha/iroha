@@ -109,10 +109,7 @@ fn main() {
         let policy_end = text
             .find(POLICY_END)
             .expect("policy end marker survives layout replacement");
-        text.replace_range(
-            policy_beg..policy_end + POLICY_END.len(),
-            &expected_policy,
-        );
+        text.replace_range(policy_beg..policy_end + POLICY_END.len(), &expected_policy);
         fs::write(&path, text).expect("write ivm_header.md");
         eprintln!("updated: {}", path.display());
         return;

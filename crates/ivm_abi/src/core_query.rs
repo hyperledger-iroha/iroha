@@ -175,6 +175,12 @@ impl TryFrom<Numeric> for QuantityV1 {
     }
 }
 
+impl From<Quantity> for QuantityV1 {
+    fn from(value: Quantity) -> Self {
+        Self(value)
+    }
+}
+
 impl From<QuantityV1> for Quantity {
     fn from(value: QuantityV1) -> Self {
         value.into_quantity()
@@ -868,8 +874,7 @@ mod tests {
             name: full.name.clone(),
             description: full.description.clone(),
             owned_by: full.owned_by.clone(),
-            total_quantity: QuantityV1::canonicalize(full.total_quantity.clone())
-                .expect("ledger quantity is valid"),
+            total_quantity: full.total_quantity.clone().into(),
             metadata: Json::new(full.metadata.clone()),
         };
 

@@ -102,6 +102,8 @@ use iroha_telemetry::metrics::{
 };
 // Deterministic parallel execution utilities.
 pub mod parallel;
+/// Canonical host-independent builders for generated executor fixtures.
+pub mod prebuilt_fixtures;
 pub mod tx_parallel;
 // Test/fixture helpers (public for tests and dev tools)
 pub mod predecoder_fixtures;

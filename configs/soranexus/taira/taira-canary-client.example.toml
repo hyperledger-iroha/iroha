@@ -5,8 +5,10 @@
 # `check_mcp_rollout.sh` rewrites `torii_url` to the chosen local/public target,
 # so only `chain`, `basic_auth` (optional), and `[account]` are required here.
 # The rollout scripts now auto-generate and onboard this runtime-only signer
-# when the file is missing or still contains placeholders, so keeping this file
-# as a template is enough unless you want to pre-seed a specific signer.
+# when the file is missing or still contains placeholders. Onboarding must
+# return HTTP 202 with a QUEUED receipt, which the bootstrap follows through
+# `/v1/pipeline/transactions/status` before the signer is used. The first-release
+# `/v1` API does not use an `x-iroha-api-version` request header.
 
 chain = "fc56984b-2be7-431d-840e-21514d1883f0"
 

@@ -6053,9 +6053,9 @@ public sealed class ToriiClientTests
                   "entrypoints": [
                     {
                       "name": "main",
-                      "kind": "Execute",
+                      "kind": "kotoage",
                       "params": [
-                        { "name": "amount", "type_name": "u64" }
+                        { "name": "amount", "type_name": "int" }
                       ],
                       "return_type": "bool",
                       "permission": "CanTransferUserAssets",
@@ -6080,7 +6080,7 @@ public sealed class ToriiClientTests
                   },
                   "warnings": ["historical bytes"],
                   "rendered_source_kind": "pseudo_source",
-                  "rendered_source_text": "public fn main() {}",
+                  "rendered_source_text": "seiyaku Demo { kotoage fn main(int amount) -> bool authorize(\"CanTransferUserAssets\") {} }",
                   "verified_source_ref": {
                     "language": "kotodama",
                     "source_name": "demo.ko",
@@ -13683,7 +13683,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     public async Task SubmitTransactionAsyncPostsNoritoPayload()
     {
         var transaction = new TransactionBuilder("00000042", "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53")
-            .TransferAsset("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", "15.7500", "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53")
+            .TransferAsset("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", "15.75", "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53")
             .SetCreationTimeMilliseconds(1736000000000)
             .SetTimeToLiveMilliseconds(3500)
             .SetNonce(17)
@@ -19961,7 +19961,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                     "submitted_at": "2026-03-29T13:00:01Z",
                     "manifest_id_hex": "{{VerifiedSourceManifestIdHex}}",
                     "payload_digest_hex": "{{VerifiedSourcePayloadDigestHex}}",
-                    "content_length": 22
+                    "content_length": 54
                   }
                 }
                 """),
@@ -19976,12 +19976,12 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             {
                 Language = "kotodama",
                 SourceName = "demo.ko",
-                SourceText = "public fn main() {}",
+                SourceText = "seiyaku Demo { kotoage fn main() authorize(\"Run\") {} }",
             }, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal("job-1", job.JobId);
         Assert.Equal("verified", job.Status);
-        Assert.Equal((ulong)22, job.VerifiedSourceReference!.ContentLength);
+        Assert.Equal((ulong)54, job.VerifiedSourceReference!.ContentLength);
         Assert.Equal($"/v1/contracts/code/{codeHash}/verified-source/jobs", handler.LastRequest!.RequestUri!.AbsolutePath);
     }
 
@@ -31744,7 +31744,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         {
             Language = "kotodama",
             SourceName = "demo.ko",
-            SourceText = "public fn main() {}",
+            SourceText = "seiyaku Demo { kotoage fn main() authorize(\"Run\") {} }",
         };
     }
 

@@ -361,7 +361,7 @@ async fn subscription_usage_arrears_billing_charges_usage_scenario(
                 let client = client.clone();
                 let asset_id = asset_id.clone();
                 let amount = initial_balance.clone();
-                move || client.submit_blocking(Mint::asset_numeric(amount, asset_id))
+                move || client.submit_blocking(Mint::asset_quantity(amount, asset_id))
             })
             .await??;
             let bob_client = network
@@ -633,7 +633,7 @@ async fn subscription_fixed_advance_billing_charges_future_period_scenario(
                 let client = client.clone();
                 let asset_id = asset_id.clone();
                 let amount = initial_balance.clone();
-                move || client.submit_blocking(Mint::asset_numeric(amount, asset_id))
+                move || client.submit_blocking(Mint::asset_quantity(amount, asset_id))
             })
             .await??;
             let bob_client = network
@@ -854,7 +854,7 @@ async fn subscription_retry_grace_failure_marks_past_due_scenario(
                 let client = client.clone();
                 let asset_id = asset_id.clone();
                 let amount = initial_balance.clone();
-                move || client.submit_blocking(Mint::asset_numeric(amount, asset_id))
+                move || client.submit_blocking(Mint::asset_quantity(amount, asset_id))
             })
             .await??;
 

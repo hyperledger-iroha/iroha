@@ -26,6 +26,7 @@ use iroha_data_model::{
         ReleaseAnonymousAssetEscrow, ReleaseAssetEscrow, ResolveAnonymousEscrowDispute,
         ResolveEscrowDispute,
     },
+    isi::error::MathError,
     permission::Permission,
     prelude::*,
     proof::ProofAttachment,
@@ -223,14 +224,16 @@ fn transfer_numeric_asset_for_escrow(
         .telemetry
         .observe_tx_amount(amount.clone().to_f64());
 
+    let quantity = Quantity::from_canonical_numeric(amount.clone())
+        .map_err(|_| MathError::NegativeValue)?;
     state_transaction.world.emit_events([
         AssetEvent::Removed(AssetChanged {
             asset: source_id,
-            amount: amount.clone(),
+            amount: quantity.clone(),
         }),
         AssetEvent::Added(AssetChanged {
             asset: destination_id,
-            amount: amount.clone(),
+            amount: quantity,
         }),
     ]);
 
@@ -4488,13 +4491,13 @@ mod tests {
         let record = escrow_record(&tx, &escrow_id);
         let custody_asset = AssetId::of(asset_definition.clone(), record.custody.clone());
         assert!(
-            Transfer::asset_numeric(custody_asset.clone(), Numeric::new(1_u32, 0), buyer.clone())
+            Transfer::asset_quantity(custody_asset.clone(), 1_u32, buyer.clone())
                 .execute(&seller, &mut tx)
                 .is_err(),
             "generic asset transfer must not drain active native escrow custody"
         );
         assert!(
-            Burn::asset_numeric(Numeric::new(1_u32, 0), custody_asset.clone())
+            Burn::asset_quantity(1_u32, custody_asset.clone())
                 .execute(&seller, &mut tx)
                 .is_err(),
             "generic asset burn must not drain active native escrow custody"
@@ -4516,13 +4519,13 @@ mod tests {
         );
 
         assert!(
-            Transfer::asset_numeric(custody_asset.clone(), Numeric::new(1_u32, 0), buyer)
+            Transfer::asset_quantity(custody_asset.clone(), 1_u32, buyer)
                 .execute(&seller, &mut tx)
                 .is_err(),
             "generic asset transfer must not drain recorded native escrow custody after close"
         );
         assert!(
-            Burn::asset_numeric(Numeric::new(1_u32, 0), custody_asset.clone())
+            Burn::asset_quantity(1_u32, custody_asset.clone())
                 .execute(&seller, &mut tx)
                 .is_err(),
             "generic asset burn must not drain recorded native escrow custody after close"
@@ -4559,9 +4562,9 @@ mod tests {
         let record = escrow_record(&tx, &escrow_id);
         let custody_asset = AssetId::of(asset_definition.clone(), record.custody.clone());
         assert!(
-            Transfer::asset_numeric(
+            Transfer::asset_quantity(
                 custody_asset.clone(),
-                Numeric::new(1_u32, 0),
+                1_u32,
                 destination.clone()
             )
             .execute(&source, &mut tx)
@@ -4569,7 +4572,7 @@ mod tests {
             "generic asset transfer must not drain active native lock custody"
         );
         assert!(
-            Burn::asset_numeric(Numeric::new(1_u32, 0), custody_asset.clone())
+            Burn::asset_quantity(1_u32, custody_asset.clone())
                 .execute(&source, &mut tx)
                 .is_err(),
             "generic asset burn must not drain active native lock custody"
@@ -4585,9 +4588,9 @@ mod tests {
         );
 
         assert!(
-            Transfer::asset_numeric(
+            Transfer::asset_quantity(
                 custody_asset.clone(),
-                Numeric::new(1_u32, 0),
+                1_u32,
                 destination.clone()
             )
             .execute(&source, &mut tx)
@@ -4595,7 +4598,7 @@ mod tests {
             "generic asset transfer must not drain recorded native lock custody after close"
         );
         assert!(
-            Burn::asset_numeric(Numeric::new(1_u32, 0), custody_asset.clone())
+            Burn::asset_quantity(1_u32, custody_asset.clone())
                 .execute(&source, &mut tx)
                 .is_err(),
             "generic asset burn must not drain recorded native lock custody after close"

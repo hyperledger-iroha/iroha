@@ -111,7 +111,7 @@ fn local_test_declarations_and_attributes_are_structural_nodes() {
 fn hostile_recovery_is_lossless_and_inserts_specific_missing_tokens() {
     let text = r#"seiyaku Broken {
         #[test(fixture="actors")
-        fn bad(value: int {
+        fn bad(int value {
             let int first = @
             if true { return }
             for i in range(2) { continue; }

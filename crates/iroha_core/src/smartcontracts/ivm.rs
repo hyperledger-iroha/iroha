@@ -95,6 +95,26 @@ pub(crate) fn validate_generic_execution_metadata(
     Ok(())
 }
 
+/// Reject every contract identity shape for a contract-less generic program.
+///
+/// Metadata and the content-addressed manifest registry are checked together so the same hash
+/// cannot execute as generic bytecode on direct/trigger paths while overlay admission classifies
+/// it as deployed contract code. Values remain unparsed: mere presence of reserved metadata fails
+/// closed.
+pub(crate) fn validate_generic_execution_context(
+    world: &impl WorldReadOnly,
+    metadata: &Metadata,
+    code_hash: Hash,
+) -> Result<(), ValidationFail> {
+    validate_generic_execution_metadata(metadata)?;
+    if world.contract_manifests().get(&code_hash).is_some() {
+        return Err(ValidationFail::NotPermitted(
+            "generic IVM program hash is bound to a contract manifest in live state".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
 /// Validate the first-release runtime-upgrade ABI surface against this binary.
 ///
 /// Runtime records are persisted consensus state. A node must fail closed when
@@ -343,11 +363,14 @@ pub fn map_vm_error_with_context_to_validation(
 mod tests {
     use super::*;
     use iroha_data_model::{
+        metadata::Metadata,
+        name::Name,
         runtime::{
             RuntimeUpgradeId, RuntimeUpgradeManifest, RuntimeUpgradeRecord, RuntimeUpgradeStatus,
         },
         smart_contract::manifest::ContractManifest,
     };
+    use iroha_primitives::json::Json;
 
     fn manifest_with_hashes(code_hash: Option<Hash>, abi_hash: Option<Hash>) -> ContractManifest {
         ContractManifest {
@@ -379,6 +402,49 @@ mod tests {
             slsa_attestation: Vec::new(),
             provenance: Vec::new(),
         }
+    }
+
+    #[test]
+    fn generic_programs_reject_every_contract_metadata_shape_without_decoding_values() {
+        for key in [
+            "contract_manifest",
+            "gov_contract_address",
+            "gov_manifest_approvers",
+            "contract_address",
+            "contract_alias",
+            "contract_entrypoint",
+            "contract_payload",
+        ] {
+            let mut metadata = Metadata::default();
+            metadata.insert(
+                key.parse::<Name>().expect("static metadata key"),
+                Json::from_string_unchecked("malformed-reserved-value".to_owned()),
+            );
+
+            let error = validate_generic_execution_metadata(&metadata)
+                .expect_err("generic programs must reject contract/deployment metadata");
+            assert!(
+                matches!(error, ValidationFail::NotPermitted(ref message) if message.contains(key)),
+                "unexpected rejection for `{key}`: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn generic_program_hash_rejects_live_manifest_binding() {
+        let code_hash = Hash::new(b"generic-binding-probe");
+        let metadata = Metadata::default();
+        let mut world = crate::state::World::new();
+        validate_generic_execution_context(&world.view(), &metadata, code_hash)
+            .expect("unbound generic program is valid");
+
+        world.contract_manifests.insert(
+            code_hash,
+            manifest_with_hashes(Some(code_hash), Some(Hash::new(b"generic-abi"))),
+        );
+        let error = validate_generic_execution_context(&world.view(), &metadata, code_hash)
+            .expect_err("a manifest-bound hash is not generic");
+        assert!(error.to_string().contains("contract manifest"));
     }
 
     #[test]

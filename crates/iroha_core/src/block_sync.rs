@@ -2254,6 +2254,9 @@ impl BlockSynchronizer {
 
     /// Sends requests for the latest blocks to a subset of online peers
     async fn request_block(&mut self) {
+        if crate::sumeragi::consensus_fail_stop_active() {
+            return;
+        }
         let now = std::time::Instant::now();
         let now_height = u64::try_from(self.state.committed_height()).unwrap_or_else(|_| {
             warn!("block sync: state height exceeds u64::MAX; saturating");
@@ -5798,6 +5801,9 @@ pub mod message {
         /// Handles the incoming message.
         #[iroha_futures::telemetry_future]
         pub(super) async fn handle_message(&self, block_sync: &mut BlockSynchronizer) {
+            if crate::sumeragi::consensus_fail_stop_active() {
+                return;
+            }
             match self {
                 Message::GetBlocksAfter(GetBlocksAfter {
                     peer_id,
@@ -6296,6 +6302,10 @@ pub mod message {
             peer: PeerId,
             priority: iroha_p2p::Priority,
         ) {
+            let Some(_consensus_output_guard) = crate::sumeragi::consensus_output_guard() else {
+                debug!(%peer, "dropping block-sync output: consensus fail-stop active");
+                return;
+            };
             let data = NetworkMessage::BlockSync(Box::new(self));
             network.post(iroha_p2p::Post {
                 data,

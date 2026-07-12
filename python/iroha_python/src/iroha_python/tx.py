@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import time
 from dataclasses import dataclass
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Mapping, Optional, Sequence, Union
 
 from .crypto import (
@@ -16,6 +16,7 @@ from .crypto import (
     _normalize_lane_privacy_attachment,
     build_signed_transaction,
 )
+from .numeric_v1 import KotodamaQuantity, NumericV1Codec
 from .settlement import SettlementLeg, SettlementPlan
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -28,12 +29,42 @@ __all__ = [
 ]
 
 
-NumericLike = Union[str, int, float, Decimal]
+QuantityLike = Union[KotodamaQuantity, str, int, Decimal]
 PositiveU128Like = Union[str, int]
 MetadataLike = Optional[Mapping[str, Any]]
 FixedBytesLike = Union[str, bytes, bytearray, memoryview]
 VerifyingKeyLike = Union[str, Mapping[str, Any]]
 _U128_MAX = (1 << 128) - 1
+_MAX_CANONICAL_QUANTITY_TEXT_LENGTH = 155
+
+
+def _quantity_from_decimal(value: Decimal) -> KotodamaQuantity:
+    """Convert a finite ``Decimal`` without context rounding or exponent expansion."""
+
+    if not value.is_finite():
+        raise ValueError("quantity must be a finite decimal value")
+    if value.is_zero():
+        return KotodamaQuantity(0, 0)
+
+    parts = value.as_tuple()
+    digits = list(parts.digits)
+    exponent = int(parts.exponent)
+    while exponent < 0 and digits[-1] == 0:
+        digits.pop()
+        exponent += 1
+
+    significant_digits = len(digits) + max(exponent, 0)
+    if significant_digits > 154:
+        raise ValueError("quantity mantissa is outside the signed 512-bit domain")
+    if exponent < -28:
+        raise ValueError("canonical quantity scale exceeds 28")
+
+    mantissa = "".join(str(digit) for digit in digits)
+    if exponent > 0:
+        mantissa += "0" * exponent
+    if parts.sign:
+        mantissa = f"-{mantissa}"
+    return KotodamaQuantity(mantissa, max(-exponent, 0))
 
 
 def _require_non_empty_string(value: Any, context: str) -> str:
@@ -68,40 +99,38 @@ def _ensure_creation_time_ms(config: TransactionConfig) -> int:
     return int(config.creation_time_ms or int(time.time() * 1000))
 
 
-def _normalize_quantity(quantity: NumericLike) -> str:
-    """Convert numeric inputs to the canonical string representation expected by Norito."""
+def _normalize_quantity(quantity: QuantityLike) -> str:
+    """Return one exact, canonical, non-negative V1 asset quantity.
 
-    if isinstance(quantity, Decimal):
-        value = quantity
-    elif isinstance(quantity, int):
-        value = Decimal(quantity)
-    elif isinstance(quantity, float):
-        # Convert through repr to preserve precision expectations.
-        value = Decimal(str(quantity))
-    elif isinstance(quantity, str):
-        try:
-            value = Decimal(quantity)
-        except InvalidOperation as exc:  # pragma: no cover - handled in tests
-            raise ValueError(f"quantity '{quantity}' is not a valid decimal string") from exc
-    else:
-        raise TypeError(f"unsupported quantity type: {type(quantity)!r}")
+    Strings are already a wire-facing representation and therefore must be
+    canonical. Python ``int`` and ``Decimal`` inputs are lossless host values;
+    unlike ``float``, they can be checked without first rounding through a
+    host floating-point representation.
+    """
 
-    if value.is_nan() or value.is_infinite():
-        raise ValueError("quantity must be a finite decimal value")
-
-    # `normalize()` removes trailing zeros but may produce scientific notation; format with `f`.
-    normalized = value.normalize()
-    return format(normalized, "f")
+    if type(quantity) is KotodamaQuantity:
+        return str(quantity)
+    if type(quantity) is str:
+        if len(quantity) > _MAX_CANONICAL_QUANTITY_TEXT_LENGTH:
+            raise ValueError("quantity text exceeds the canonical V1 bound")
+        return str(NumericV1Codec.decode_quantity_json(quantity))
+    if type(quantity) is int:
+        return str(KotodamaQuantity(quantity, 0))
+    if type(quantity) is Decimal:
+        return str(_quantity_from_decimal(quantity))
+    raise TypeError(
+        "quantity must be KotodamaQuantity, canonical string, int, or Decimal"
+    )
 
 
-def _normalize_u128_quantity(quantity: NumericLike, context: str) -> str:
+def _normalize_u128_quantity(quantity: QuantityLike, context: str) -> str:
     value = Decimal(_normalize_quantity(quantity))
-    if value < 0 or value != value.to_integral_value():
-        raise ValueError(f"{context} must be a non-negative whole number")
+    if value < 0 or value != value.to_integral_value() or value > _U128_MAX:
+        raise ValueError(f"{context} must be a non-negative whole number within u128")
     return str(int(value))
 
 
-def _normalize_positive_quantity(quantity: NumericLike, context: str) -> str:
+def _normalize_positive_quantity(quantity: QuantityLike, context: str) -> str:
     normalized = _normalize_quantity(quantity)
     if Decimal(normalized) <= 0:
         raise ValueError(f"{context} must be positive")
@@ -152,6 +181,41 @@ def _normalize_mapping_payload(payload: Mapping[str, Any], context: str) -> Dict
     if not isinstance(normalized, dict):  # pragma: no cover - json.loads object contract
         raise TypeError(f"{context} must serialize to a JSON object")
     return normalized
+
+
+def _normalize_rwa_quantity_fields(
+    payload: Mapping[str, Any],
+    context: str,
+    *,
+    top_level_quantity: bool,
+) -> Dict[str, Any]:
+    """Normalize only the nominal quantity fields in one RWA input payload."""
+
+    if not isinstance(payload, Mapping):
+        raise TypeError(f"{context} must be a mapping")
+    normalized_input: Dict[str, Any] = dict(payload)
+    if top_level_quantity and "quantity" in normalized_input:
+        normalized_input["quantity"] = _normalize_quantity(normalized_input["quantity"])
+
+    parents = normalized_input.get("parents")
+    if parents is not None:
+        if isinstance(parents, (str, bytes, bytearray, memoryview)) or not isinstance(
+            parents, Sequence
+        ):
+            raise TypeError(f"{context}.parents must be a sequence")
+        normalized_parents: List[Any] = []
+        for index, parent in enumerate(parents):
+            if not isinstance(parent, Mapping):
+                raise TypeError(f"{context}.parents[{index}] must be a mapping")
+            normalized_parent = dict(parent)
+            if "quantity" in normalized_parent:
+                normalized_parent["quantity"] = _normalize_quantity(
+                    normalized_parent["quantity"]
+                )
+            normalized_parents.append(normalized_parent)
+        normalized_input["parents"] = normalized_parents
+
+    return _normalize_mapping_payload(normalized_input, context)
 
 
 class TransactionDraft:
@@ -310,11 +374,15 @@ class TransactionDraft:
     ) -> TransactionDraft:
         """Append a `RegisterRwa` instruction."""
 
-        rwa_payload = _normalize_mapping_payload(rwa, "rwa")
+        rwa_payload = _normalize_rwa_quantity_fields(
+            rwa,
+            "rwa",
+            top_level_quantity=True,
+        )
         self.add_instruction(Instruction.register_rwa(rwa_payload))
         return self
 
-    def register_asset_definition_numeric(
+    def register_asset_definition(
         self,
         definition_id: str,
         owner: str,
@@ -328,7 +396,7 @@ class TransactionDraft:
         confidential_policy: Optional[str] = None,
         metadata: MetadataLike = None,
     ) -> TransactionDraft:
-        """Append a `RegisterAssetDefinition` instruction for numeric assets."""
+        """Append a `RegisterAssetDefinition` instruction for quantity assets."""
 
         normalized_scale: Optional[int]
         if scale is None:
@@ -346,7 +414,7 @@ class TransactionDraft:
         metadata_payload = _normalize_metadata(metadata)
 
         self.add_instruction(
-            Instruction.register_asset_definition_numeric(
+            Instruction.register_asset_definition(
                 definition_id,
                 owner,
                 name=name,
@@ -495,7 +563,7 @@ class TransactionDraft:
         self,
         asset_definition_id: str,
         from_account_id: str,
-        amount: NumericLike,
+        amount: QuantityLike,
         *,
         note_commitment: FixedBytesLike,
         ephemeral_public_key: FixedBytesLike,
@@ -560,7 +628,7 @@ class TransactionDraft:
         self,
         asset_definition_id: str,
         to_account_id: str,
-        public_amount: NumericLike,
+        public_amount: QuantityLike,
         *,
         inputs: Iterable[FixedBytesLike],
         proof: Mapping[str, Any],
@@ -646,31 +714,31 @@ class TransactionDraft:
         )
         return self
 
-    def mint_asset_numeric(self, asset_id: str, quantity: NumericLike) -> TransactionDraft:
-        """Append a numeric `MintAsset` instruction."""
+    def mint_asset_quantity(self, asset_id: str, quantity: QuantityLike) -> TransactionDraft:
+        """Append a nominal-quantity `MintAsset` instruction."""
 
         normalized_quantity = _normalize_quantity(quantity)
-        self.add_instruction(Instruction.mint_asset_numeric(asset_id, normalized_quantity))
+        self.add_instruction(Instruction.mint_asset_quantity(asset_id, normalized_quantity))
         return self
 
-    def burn_asset_numeric(self, asset_id: str, quantity: NumericLike) -> TransactionDraft:
-        """Append a numeric `BurnAsset` instruction."""
+    def burn_asset_quantity(self, asset_id: str, quantity: QuantityLike) -> TransactionDraft:
+        """Append a nominal-quantity `BurnAsset` instruction."""
 
         normalized_quantity = _normalize_quantity(quantity)
-        self.add_instruction(Instruction.burn_asset_numeric(asset_id, normalized_quantity))
+        self.add_instruction(Instruction.burn_asset_quantity(asset_id, normalized_quantity))
         return self
 
-    def transfer_asset_numeric(
+    def transfer_asset_quantity(
         self,
         asset_id: str,
-        quantity: NumericLike,
+        quantity: QuantityLike,
         destination: str,
     ) -> TransactionDraft:
-        """Append a numeric `TransferAsset` instruction."""
+        """Append a nominal-quantity `TransferAsset` instruction."""
 
         normalized_quantity = _normalize_quantity(quantity)
         self.add_instruction(
-            Instruction.transfer_asset_numeric(
+            Instruction.transfer_asset_quantity(
                 asset_id,
                 normalized_quantity,
                 destination,
@@ -683,7 +751,7 @@ class TransactionDraft:
         escrow_id: str,
         asset_definition_id: str,
         destination: str,
-        amount: NumericLike,
+        amount: QuantityLike,
         *,
         release_authority: Optional[str] = None,
         expires_at_ms: Optional[int] = None,
@@ -711,7 +779,7 @@ class TransactionDraft:
     def drawdown_asset_lock(
         self,
         escrow_id: str,
-        amount: NumericLike,
+        amount: QuantityLike,
     ) -> TransactionDraft:
         """Append a `DrawdownAssetLock` instruction."""
 
@@ -938,7 +1006,7 @@ class TransactionDraft:
         self,
         rwa_id: str,
         *,
-        quantity: NumericLike,
+        quantity: QuantityLike,
         destination: str,
         source: Optional[str] = None,
     ) -> TransactionDraft:
@@ -957,7 +1025,11 @@ class TransactionDraft:
     ) -> TransactionDraft:
         """Append a `MergeRwas` instruction."""
 
-        merge_payload = _normalize_mapping_payload(merge, "merge")
+        merge_payload = _normalize_rwa_quantity_fields(
+            merge,
+            "merge",
+            top_level_quantity=False,
+        )
         self.add_instruction(Instruction.merge_rwas(merge_payload))
         return self
 
@@ -965,7 +1037,7 @@ class TransactionDraft:
         self,
         rwa_id: str,
         *,
-        quantity: NumericLike,
+        quantity: QuantityLike,
     ) -> TransactionDraft:
         """Append a `RedeemRwa` instruction."""
 
@@ -989,7 +1061,7 @@ class TransactionDraft:
         self,
         rwa_id: str,
         *,
-        quantity: NumericLike,
+        quantity: QuantityLike,
     ) -> TransactionDraft:
         """Append a `HoldRwa` instruction."""
 
@@ -1001,7 +1073,7 @@ class TransactionDraft:
         self,
         rwa_id: str,
         *,
-        quantity: NumericLike,
+        quantity: QuantityLike,
     ) -> TransactionDraft:
         """Append a `ReleaseRwa` instruction."""
 
@@ -1013,7 +1085,7 @@ class TransactionDraft:
         self,
         rwa_id: str,
         *,
-        quantity: NumericLike,
+        quantity: QuantityLike,
         destination: str,
     ) -> TransactionDraft:
         """Append a `ForceTransferRwa` instruction."""

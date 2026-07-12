@@ -1176,8 +1176,10 @@ fn generate_localnet_with_line<T: Write>(
         .first()
         .expect("localnet always has at least one peer");
     let bootstrap_kura_dir = out_dir.join("storage").join("peer0");
-    let bootstrap_tiered_state_dir = bootstrap_kura_dir.join("tiered_state");
-    let bootstrap_da_store_dir = bootstrap_kura_dir.join("da_wsv_snapshots");
+    let bootstrap_peer_state_dir = out_dir.join("state").join("peer0");
+    let bootstrap_runtime_state_dir = bootstrap_peer_state_dir.join("soracloud_runtime");
+    let bootstrap_tiered_state_dir = bootstrap_peer_state_dir.join("tiered_state");
+    let bootstrap_da_store_dir = bootstrap_peer_state_dir.join("da_wsv_snapshots");
     let bootstrap_config = render_peer_config(
         bootstrap_peer,
         &trusted,
@@ -1186,6 +1188,7 @@ fn generate_localnet_with_line<T: Write>(
         &genesis_signed_path,
         &bls_entries,
         &bootstrap_kura_dir,
+        &bootstrap_runtime_state_dir,
         &bootstrap_tiered_state_dir,
         &bootstrap_da_store_dir,
         &chain_id,
@@ -1245,14 +1248,22 @@ fn generate_localnet_with_line<T: Write>(
         let kura_dir = out_dir.join("storage").join(format!("peer{idx}"));
         fs::create_dir_all(&kura_dir)
             .wrap_err_with(|| format!("failed to create kura dir {}", kura_dir.display()))?;
-        let tiered_state_dir = kura_dir.join("tiered_state");
+        let peer_state_dir = out_dir.join("state").join(format!("peer{idx}"));
+        fs::create_dir_all(&peer_state_dir).wrap_err_with(|| {
+            format!(
+                "failed to create peer state dir {}",
+                peer_state_dir.display()
+            )
+        })?;
+        let runtime_state_dir = peer_state_dir.join("soracloud_runtime");
+        let tiered_state_dir = peer_state_dir.join("tiered_state");
         fs::create_dir_all(&tiered_state_dir).wrap_err_with(|| {
             format!(
                 "failed to create tiered state dir {}",
                 tiered_state_dir.display()
             )
         })?;
-        let da_store_dir = kura_dir.join("da_wsv_snapshots");
+        let da_store_dir = peer_state_dir.join("da_wsv_snapshots");
         fs::create_dir_all(&da_store_dir).wrap_err_with(|| {
             format!(
                 "failed to create DA WSV snapshot dir {}",
@@ -1267,6 +1278,7 @@ fn generate_localnet_with_line<T: Write>(
             &genesis_signed_path,
             &bls_entries,
             &kura_dir,
+            &runtime_state_dir,
             &tiered_state_dir,
             &da_store_dir,
             &chain_id,
@@ -1799,6 +1811,7 @@ fn render_peer_config(
     genesis_signed_path: &Path,
     bls_entries: &[BlsEntry],
     kura_store_dir: &Path,
+    runtime_state_root: &Path,
     tiered_state_root: &Path,
     da_store_root: &Path,
     chain_id: &str,
@@ -1890,12 +1903,7 @@ fn render_peer_config(
     let mut soracloud_runtime = Table::new();
     soracloud_runtime.insert(
         "state_dir".into(),
-        Value::String(
-            kura_store_dir
-                .join("soracloud_runtime")
-                .to_string_lossy()
-                .into_owned(),
-        ),
+        Value::String(runtime_state_root.to_string_lossy().into_owned()),
     );
     root.insert("soracloud_runtime".into(), Value::Table(soracloud_runtime));
 
@@ -2663,7 +2671,7 @@ fn extend_genesis(
             ));
         }
         if asset.quantity > 0 {
-            builder = builder.append_instruction(Mint::asset_numeric(
+            builder = builder.append_instruction(Mint::asset_quantity(
                 asset.quantity,
                 AssetId::new(asset_def.clone(), asset.mint_to.clone()),
             ));
@@ -3164,11 +3172,11 @@ fn append_localnet_npos_bootstrap(
                 builder.append_instruction(Register::account(Account::new(validator_id.clone())));
             registrations.accounts.insert(validator_id.clone());
         }
-        builder = builder.append_instruction(Mint::asset_numeric(
+        builder = builder.append_instruction(Mint::asset_quantity(
             stake_mint_amount,
             AssetId::new(stake_asset_id.clone(), validator_id.clone()),
         ));
-        builder = builder.append_instruction(Mint::asset_numeric(
+        builder = builder.append_instruction(Mint::asset_quantity(
             stake_amount,
             AssetId::new(fee_asset_id.clone(), validator_id.clone()),
         ));
@@ -3178,7 +3186,7 @@ fn append_localnet_npos_bootstrap(
             builder.append_instruction(Register::account(Account::new(client_account_id.clone())));
         registrations.accounts.insert(client_account_id.clone());
     }
-    builder = builder.append_instruction(Mint::asset_numeric(
+    builder = builder.append_instruction(Mint::asset_quantity(
         LOCALNET_FAUCET_AUTHORITY_BALANCE,
         AssetId::new(fee_asset_id, client_account_id),
     ));
@@ -3504,7 +3512,7 @@ fn write_start_script(
     writeln!(start_file, "for i in $(seq 0 {}); do", peers - 1)?;
     writeln!(
         start_file,
-        "  SNAPSHOT_STORE_DIR=\"$DIR/storage/peer${{i}}/snapshot\""
+        "  SNAPSHOT_STORE_DIR=\"$DIR/state/peer${{i}}/snapshot\""
     )?;
     writeln!(start_file, "  PIDFILE=\"$DIR/peer${{i}}.pid\"")?;
     writeln!(start_file, "  if [ -f \"$PIDFILE\" ]; then")?;
@@ -7910,9 +7918,16 @@ mod tests {
             Path::new(soracloud_runtime_path).is_absolute(),
             "soracloud runtime state_dir should be absolute"
         );
+        let peer_state_path = Path::new(kura_path)
+            .parent()
+            .and_then(Path::parent)
+            .expect("Kura path lives below the localnet output root")
+            .join("state")
+            .join("peer0");
         assert!(
-            Path::new(soracloud_runtime_path).starts_with(Path::new(kura_path)),
-            "soracloud runtime state_dir should be isolated under the peer store"
+            Path::new(soracloud_runtime_path).starts_with(&peer_state_path)
+                && !Path::new(soracloud_runtime_path).starts_with(Path::new(kura_path)),
+            "soracloud runtime state_dir must remain outside the pristine Kura root"
         );
         assert!(
             Path::new(tiered_root).is_absolute(),
@@ -7921,6 +7936,20 @@ mod tests {
         assert!(
             Path::new(da_root).is_absolute(),
             "tiered_state da_store_root should be absolute"
+        );
+        assert!(
+            Path::new(tiered_root).starts_with(&peer_state_path)
+                && Path::new(da_root).starts_with(&peer_state_path)
+                && !Path::new(tiered_root).starts_with(Path::new(kura_path))
+                && !Path::new(da_root).starts_with(Path::new(kura_path)),
+            "auxiliary state roots must remain outside the pristine Kura root"
+        );
+        assert!(
+            fs::read_dir(kura_path)
+                .expect("read pristine Kura root")
+                .next()
+                .is_none(),
+            "generated localnet must leave the Kura root pristine for catalog binding"
         );
     }
 
@@ -8020,6 +8049,10 @@ mod tests {
         assert!(
             start_contents.contains("nohup env SNAPSHOT_STORE_DIR="),
             "start script should keep a nohup fallback for minimal shells"
+        );
+        assert!(
+            start_contents.contains("SNAPSHOT_STORE_DIR=\"$DIR/state/peer${i}/snapshot\""),
+            "snapshot state must remain outside the pristine Kura root"
         );
         assert!(
             start_contents.contains("peer$i already running with pid $existing_pid"),

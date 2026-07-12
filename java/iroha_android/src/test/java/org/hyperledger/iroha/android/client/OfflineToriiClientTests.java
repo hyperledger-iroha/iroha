@@ -473,13 +473,19 @@ public final class OfflineToriiClientTests {
         () ->
             new OfflineTopUpRequest(
                 canonicalRequestArchive(
-                    TOP_UP_REQUEST_SCHEMA, 9, 6, operationId, new byte[0])),
+                    TOP_UP_REQUEST_SCHEMA, 7, 4, operationId, new byte[0])),
+        "top-up must reject an operation_id in the wrong field");
+    assertRejects(
+        () ->
+            new OfflineTopUpRequest(
+                canonicalRequestArchive(
+                    TOP_UP_REQUEST_SCHEMA, 8, 5, operationId, new byte[0])),
         "top-up must reject trailing fields");
     assertRejects(
         () ->
             new OfflineTopUpRequest(
                 canonicalRequestArchive(
-                    TOP_UP_REQUEST_SCHEMA, 8, 6, operationId, new byte[] {0x7F})),
+                    TOP_UP_REQUEST_SCHEMA, 7, 5, operationId, new byte[] {0x7F})),
         "top-up must reject trailing bytes");
     assertRejects(
         () ->
@@ -491,7 +497,7 @@ public final class OfflineToriiClientTests {
         () ->
             new OfflineTopUpRequest(
                 canonicalRequestArchive(
-                    TOP_UP_REQUEST_SCHEMA, 8, 6, operationId, new byte[0], 0)),
+                    TOP_UP_REQUEST_SCHEMA, 7, 5, operationId, new byte[0], 0)),
         "top-up must reject non-canonical fixed-width field framing");
     assertRejects(
         () -> new OfflineTopUpRequest(withHeaderPadding(topUpRequestArchive(operationId))),
@@ -811,7 +817,7 @@ public final class OfflineToriiClientTests {
 
   private static byte[] topUpRequestArchive(final byte[] operationId) {
     return canonicalRequestArchive(
-        TOP_UP_REQUEST_SCHEMA, 8, 6, operationId, new byte[0]);
+        TOP_UP_REQUEST_SCHEMA, 7, 5, operationId, new byte[0]);
   }
 
   private static String canonicalReadinessBody(final String assetDefinitionId) {

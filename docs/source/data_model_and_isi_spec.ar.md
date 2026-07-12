@@ -183,8 +183,8 @@ translator: machine-google-reviewed
 
 ---## أمثلة عملية
 - السك والنقل:
-  - `Mint::asset_numeric(10, asset_id)` → يضيف 10 إذا سمحت المواصفات/قابلية التعدين؛ الأحداث: `AssetEvent::Added`.
-  - `Transfer::asset_numeric(asset_id, 5, to_account)` → التحركات 5؛ أحداث للإزالة/الإضافة.
+  - `Mint::asset_quantity(10, asset_id)` → يضيف 10 إذا سمحت المواصفات/قابلية التعدين؛ الأحداث: `AssetEvent::Added`.
+  - `Transfer::asset_quantity(asset_id, 5, to_account)` → التحركات 5؛ أحداث للإزالة/الإضافة.
 - تحديثات البيانات الوصفية:
   - `SetKeyValue::account(account_id, "avatar".parse()?, json)` → upsert؛ الإزالة عبر `RemoveKeyValue::account(...)`.
 - إدارة الدور/الإذن:

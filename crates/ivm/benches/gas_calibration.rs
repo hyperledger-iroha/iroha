@@ -313,8 +313,18 @@ fn bench_numeric_limb_work(c: &mut Criterion) {
         let frame_bytes = envelope.len() - 39;
         let validation_work =
             ivm::numeric_gas::numeric_frame_validation_work(frame_bytes).expect("validation work");
-        let input_gas = u64::try_from(envelope.len() + frame_bytes).expect("bounded byte work")
-            + ivm::numeric_gas::work_gas(validation_work).expect("validation gas");
+        let input_gas = u64::try_from(envelope.len())
+            .expect("bounded envelope bytes")
+            .checked_add(
+                ivm::numeric_gas::payload_hash_gas(frame_bytes)
+                    .expect("bounded payload authentication"),
+            )
+            .and_then(|bytes| {
+                bytes.checked_add(
+                    ivm::numeric_gas::work_gas(validation_work).expect("validation gas"),
+                )
+            })
+            .expect("bounded input pipeline gas");
         group.bench_with_input(
             BenchmarkId::new(
                 "input_envelope_pipeline",

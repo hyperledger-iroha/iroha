@@ -263,7 +263,7 @@ impl RelayPayoutService {
         let instruction =
             self.reward_engine
                 .compute_reward(metrics, bond_entry, beneficiary, metadata);
-        let transfer = instruction.to_transfer_instruction(self.treasury_account());
+        let transfer = instruction.to_transfer_instruction(self.treasury_account())?;
         let snapshot = self
             .ledger
             .record_reward(instruction.clone(), transfer.clone())
@@ -281,7 +281,7 @@ impl RelayPayoutService {
         &mut self,
         instruction: RelayRewardInstructionV1,
     ) -> Result<(), PayoutServiceError> {
-        let transfer = instruction.to_transfer_instruction(self.treasury_account());
+        let transfer = instruction.to_transfer_instruction(self.treasury_account())?;
         self.ledger
             .record_reward(instruction, transfer)
             .map(|_| ())
@@ -400,8 +400,11 @@ impl RelayPayoutService {
                         .map_err(PayoutServiceError::Ledger)?;
 
                     let asset = AssetId::new(asset_def.clone(), self.treasury_account().clone());
+                    let quantity = iroha_primitives::numeric::Quantity::try_from_numeric(
+                        amount.clone(),
+                    )?;
                     let transfer: InstructionBox =
-                        Transfer::asset_numeric(asset, amount.clone(), beneficiary.clone()).into();
+                        Transfer::asset_quantity(asset, quantity, beneficiary.clone()).into();
 
                     (
                         snapshot,
@@ -435,9 +438,12 @@ impl RelayPayoutService {
                         .map_err(PayoutServiceError::Ledger)?;
 
                     let asset = AssetId::new(asset_def, beneficiary.clone());
-                    let transfer: InstructionBox = Transfer::asset_numeric(
-                        asset,
+                    let quantity = iroha_primitives::numeric::Quantity::try_from_numeric(
                         amount.clone(),
+                    )?;
+                    let transfer: InstructionBox = Transfer::asset_quantity(
+                        asset,
+                        quantity,
                         self.treasury_account().clone(),
                     )
                     .into();
@@ -821,6 +827,9 @@ impl EarningsRow {
 /// Errors surfaced by the payout service.
 #[derive(Debug, Error)]
 pub enum PayoutServiceError {
+    /// Reward arithmetic produced a value outside the non-negative asset domain.
+    #[error("invalid payout quantity: {0}")]
+    InvalidPayoutQuantity(#[from] iroha_primitives::numeric::NumericOperationError),
     /// Dispute registry rejected the operation.
     #[error("dispute registry error: {0}")]
     Registry(#[from] DisputeRegistryError),
@@ -1173,7 +1182,7 @@ impl PayoutRecord {
             epoch,
             source_asset: transfer.source.clone(),
             destination: transfer.destination.clone(),
-            amount: transfer.object.clone(),
+            amount: transfer.object.as_numeric().clone(),
         })
     }
 }
@@ -1799,7 +1808,7 @@ mod tests {
         };
         assert_eq!(transfer.source, AssetId::new(asset_id(), treasury));
         assert_eq!(transfer.destination, beneficiary);
-        assert_eq!(transfer.object, numeric(25));
+        assert_eq!(transfer.object.as_numeric(), &numeric(25));
     }
 
     #[test]
@@ -1847,7 +1856,7 @@ mod tests {
         };
         assert_eq!(transfer.source, AssetId::new(asset_id(), beneficiary));
         assert_eq!(transfer.destination, treasury);
-        assert_eq!(transfer.object, numeric(40));
+        assert_eq!(transfer.object.as_numeric(), &numeric(40));
     }
 
     #[test]

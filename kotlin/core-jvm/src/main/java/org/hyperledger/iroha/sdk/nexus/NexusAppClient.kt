@@ -11,6 +11,7 @@ import org.hyperledger.iroha.sdk.core.model.JsonValue
 import org.hyperledger.iroha.sdk.core.model.TransactionPayload
 import org.hyperledger.iroha.sdk.core.model.instructions.TransferWirePayloadEncoder
 import org.hyperledger.iroha.sdk.crypto.IrohaHash
+import org.hyperledger.iroha.sdk.numeric.KotodamaQuantity
 import org.hyperledger.iroha.sdk.tx.SignedTransaction
 import org.hyperledger.iroha.sdk.tx.SignedTransactionHasher
 import org.hyperledger.iroha.sdk.tx.norito.NoritoCodecAdapter
@@ -75,7 +76,18 @@ data class NexusTransferInput @JvmOverloads constructor(
     @JvmField val ttlMs: Long? = null,
     @JvmField val nonce: Int? = null,
     @JvmField val metadata: Map<String, String> = emptyMap(),
-)
+) {
+    init {
+        KotodamaQuantity.parseCanonical(quantity)
+    }
+
+    /** Construct the minimal transfer input from a lossless validated quantity value. */
+    constructor(
+        sourceAssetId: String,
+        quantity: KotodamaQuantity,
+        destinationAccountId: String,
+    ) : this(sourceAssetId, quantity.toString(), destinationAccountId)
+}
 
 /** Canonical transaction payload to be signed by a wallet. */
 data class NexusSignableTransaction(

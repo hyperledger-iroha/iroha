@@ -62,7 +62,7 @@ fn parallel_apply_matches_sequential_for_log_and_mint() {
     // Two independent transactions: a mint and a log. Mint will take the standard path,
     // log is handled by detached path; overall results should match sequential mode.
     let tx1 = tx_builder(&chain_id, &alice_id)
-        .with_instructions([Mint::asset_numeric(
+        .with_instructions([Mint::asset_quantity(
             10_u32,
             AssetId::of(
                 iroha_data_model::asset::AssetDefinitionId::new(
@@ -391,13 +391,13 @@ fn events_snapshot_mint_burn_transfer_match_between_modes() {
 
     // Build three transactions: mint to Alice, burn from Bob, transfer Alice->Bob
     let tx_mint = tx_builder(&chain_id, &alice_id)
-        .with_instructions([Mint::asset_numeric(7_u32, a_coin.clone())])
+        .with_instructions([Mint::asset_quantity(7_u32, a_coin.clone())])
         .sign(iroha_test_samples::ALICE_KEYPAIR.private_key());
     let tx_burn = tx_builder(&chain_id, &alice_id)
-        .with_instructions([Burn::asset_numeric(3_u32, b_coin.clone())])
+        .with_instructions([Burn::asset_quantity(3_u32, b_coin.clone())])
         .sign(iroha_test_samples::ALICE_KEYPAIR.private_key());
     let tx_xfer = tx_builder(&chain_id, &alice_id)
-        .with_instructions([Transfer::asset_numeric(
+        .with_instructions([Transfer::asset_quantity(
             a_coin.clone(),
             5_u32,
             bob_id.clone(),

@@ -5,10 +5,11 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import org.hyperledger.iroha.android.client.JsonNumbers;
 import java.util.Objects;
 import org.hyperledger.iroha.android.client.JsonEncoder;
+import org.hyperledger.iroha.android.client.JsonNumbers;
 import org.hyperledger.iroha.android.client.JsonParser;
+import org.hyperledger.iroha.android.numeric.NumericV1;
 import org.hyperledger.iroha.android.nexus.UaidManifestsResponse.UaidManifestLifecycle;
 import org.hyperledger.iroha.android.nexus.UaidManifestsResponse.UaidManifestRecord;
 import org.hyperledger.iroha.android.nexus.UaidManifestsResponse.UaidManifestRevocation;
@@ -75,7 +76,7 @@ public final class UaidJsonParser {
                 new UaidPortfolioAsset(
                     asString(pick(asset, "asset_id", "assetId"), assetPath + ".asset_id"),
                     asString(assetDefinition, assetPath + ".asset_definition_id"),
-                    asString(asset.get("quantity"), assetPath + ".quantity")));
+                    NumericV1.decodeQuantityJsonValue(asset.get("quantity")).toString()));
             continue;
           }
           assets.add(
@@ -86,9 +87,7 @@ public final class UaidJsonParser {
                   asString(
                       asset.get("scope"),
                       assetPath + ".scope"),
-                  asString(
-                      asset.get("quantity"),
-                      assetPath + ".quantity")));
+                  NumericV1.decodeQuantityJsonValue(asset.get("quantity")).toString()));
         }
         accountsList.add(new UaidPortfolioAccount(accountId, label, assets));
       }

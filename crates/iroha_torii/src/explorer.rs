@@ -21,7 +21,7 @@ use iroha_data_model::{
         RevokeBox, SetAssetKeyValue, SetKeyValueBox, SetParameter, TransferAssetBatch, TransferBox,
         UnregisterBox, Upgrade,
         mint_burn::BurnBox,
-        offline::{AuditOfflineNote, IssueOfflineNote, RedeemOfflineNote, TopUpKagemushaRecursive},
+        offline::{RedeemKagemushaRecursiveV2, TopUpKagemushaRecursiveV2},
         runtime_upgrade::{ActivateRuntimeUpgrade, CancelRuntimeUpgrade, ProposeRuntimeUpgrade},
         zk::{Shield, Unshield, ZkTransfer},
     },
@@ -698,10 +698,8 @@ pub(crate) enum ExplorerInstructionKind {
     Shield,
     ZkTransfer,
     Unshield,
-    IssueOfflineNote,
-    TopUpKagemushaRecursive,
-    RedeemOfflineNote,
-    AuditOfflineNote,
+    KagemushaTopUp,
+    KagemushaRedeem,
     Custom,
 }
 
@@ -724,10 +722,8 @@ impl ExplorerInstructionKind {
             Self::Shield => "Shield",
             Self::ZkTransfer => "ZkTransfer",
             Self::Unshield => "Unshield",
-            Self::IssueOfflineNote => "IssueOfflineNote",
-            Self::TopUpKagemushaRecursive => "TopUpKagemushaRecursive",
-            Self::RedeemOfflineNote => "RedeemOfflineNote",
-            Self::AuditOfflineNote => "AuditOfflineNote",
+            Self::KagemushaTopUp => "KagemushaTopUp",
+            Self::KagemushaRedeem => "KagemushaRedeem",
             Self::Custom => "Custom",
         }
     }
@@ -754,12 +750,8 @@ impl std::str::FromStr for ExplorerInstructionKind {
             "shield" => Ok(Self::Shield),
             "zktransfer" | "zk_transfer" => Ok(Self::ZkTransfer),
             "unshield" => Ok(Self::Unshield),
-            "issueofflinenote" | "issue_offline_note" => Ok(Self::IssueOfflineNote),
-            "topupkagemusharecursive" | "top_up_kagemusha_recursive" => {
-                Ok(Self::TopUpKagemushaRecursive)
-            }
-            "redeemofflinenote" | "redeem_offline_note" => Ok(Self::RedeemOfflineNote),
-            "auditofflinenote" | "audit_offline_note" => Ok(Self::AuditOfflineNote),
+            "kagemushatopup" | "kagemusha_top_up" => Ok(Self::KagemushaTopUp),
+            "kagemusharedeem" | "kagemusha_redeem" => Ok(Self::KagemushaRedeem),
             "custom" => Ok(Self::Custom),
             _ => Err(()),
         }
@@ -872,14 +864,10 @@ pub(crate) fn instruction_kind(instruction: &InstructionBox) -> ExplorerInstruct
                 ExplorerInstructionKind::ZkTransfer
             } else if any.downcast_ref::<Unshield>().is_some() {
                 ExplorerInstructionKind::Unshield
-            } else if any.downcast_ref::<IssueOfflineNote>().is_some() {
-                ExplorerInstructionKind::IssueOfflineNote
-            } else if any.downcast_ref::<TopUpKagemushaRecursive>().is_some() {
-                ExplorerInstructionKind::TopUpKagemushaRecursive
-            } else if any.downcast_ref::<RedeemOfflineNote>().is_some() {
-                ExplorerInstructionKind::RedeemOfflineNote
-            } else if any.downcast_ref::<AuditOfflineNote>().is_some() {
-                ExplorerInstructionKind::AuditOfflineNote
+            } else if any.downcast_ref::<TopUpKagemushaRecursiveV2>().is_some() {
+                ExplorerInstructionKind::KagemushaTopUp
+            } else if any.downcast_ref::<RedeemKagemushaRecursiveV2>().is_some() {
+                ExplorerInstructionKind::KagemushaRedeem
             } else {
                 ExplorerInstructionKind::Custom
             }
@@ -1000,10 +988,8 @@ fn structured_instruction_payload(
         ExplorerInstructionKind::Shield => zk_payload(instruction, "Shield"),
         ExplorerInstructionKind::ZkTransfer => zk_payload(instruction, "ZkTransfer"),
         ExplorerInstructionKind::Unshield => zk_payload(instruction, "Unshield"),
-        ExplorerInstructionKind::IssueOfflineNote => issue_offline_note_payload(instruction),
-        ExplorerInstructionKind::TopUpKagemushaRecursive => topup_kagemusha_payload(instruction),
-        ExplorerInstructionKind::RedeemOfflineNote => redeem_offline_note_payload(instruction),
-        ExplorerInstructionKind::AuditOfflineNote => audit_offline_note_payload(instruction),
+        ExplorerInstructionKind::KagemushaTopUp => kagemusha_top_up_payload(instruction),
+        ExplorerInstructionKind::KagemushaRedeem => kagemusha_redeem_payload(instruction),
         ExplorerInstructionKind::Custom => custom_payload(instruction),
     }
     .unwrap_or_else(|| fallback_structured_payload(instruction))
@@ -1183,128 +1169,72 @@ fn log_payload(instruction: &InstructionBox) -> Option<Value> {
     Some(instruction_variant_value("Log", value))
 }
 
-fn issue_offline_note_payload(instruction: &InstructionBox) -> Option<Value> {
-    let isi = instruction.as_any().downcast_ref::<IssueOfflineNote>()?;
-    let issue = &isi.issue;
+fn kagemusha_top_up_payload(instruction: &InstructionBox) -> Option<Value> {
+    let isi = instruction
+        .as_any()
+        .downcast_ref::<TopUpKagemushaRecursiveV2>()?;
+    let request = &isi.request;
+    let mut value = Map::new();
+    value.insert(
+        "asset".to_string(),
+        json::to_value(&request.asset).unwrap_or(Value::Null),
+    );
+    value.insert(
+        "amount_atomic_units".to_string(),
+        Value::String(request.amount.atomic_units.to_string()),
+    );
+    value.insert(
+        "asset_scale".to_string(),
+        Value::Number(u64::from(request.amount.scale).into()),
+    );
+    value.insert(
+        "note_commitment".to_string(),
+        Value::String(hex::encode(request.current_note.note_commitment)),
+    );
+    value.insert(
+        "operation_id".to_string(),
+        Value::String(hex::encode(request.operation_id)),
+    );
+    Some(instruction_variant_value(
+        "KagemushaTopUp",
+        Value::Object(value),
+    ))
+}
+
+fn kagemusha_redeem_payload(instruction: &InstructionBox) -> Option<Value> {
+    let isi = instruction
+        .as_any()
+        .downcast_ref::<RedeemKagemushaRecursiveV2>()?;
+    let request = &isi.request;
     let mut value = Map::new();
     value.insert(
         "note_commitment".to_string(),
-        Value::String(issue.note_commitment.to_string()),
-    );
-    value.insert(
-        "account".to_string(),
-        Value::String(issue.key_certificate.account_id.to_string()),
-    );
-    value.insert(
-        "asset".to_string(),
-        json::to_value(&issue.asset).unwrap_or(Value::Null),
-    );
-    value.insert(
-        "amount".to_string(),
-        Value::String(issue.amount.to_string()),
-    );
-    Some(instruction_variant_value(
-        "IssueOfflineNote",
-        Value::Object(value),
-    ))
-}
-
-fn topup_kagemusha_payload(instruction: &InstructionBox) -> Option<Value> {
-    let isi = instruction
-        .as_any()
-        .downcast_ref::<TopUpKagemushaRecursive>()?;
-    let mut value = Map::new();
-    value.insert(
-        "asset".to_string(),
-        json::to_value(&isi.asset).unwrap_or(Value::Null),
-    );
-    value.insert("amount".to_string(), Value::String(isi.amount.to_string()));
-    value.insert(
-        "input_nullifier_count".to_string(),
-        Value::Number(
-            (isi.init_request
-                .record_bundle
-                .bundle
-                .steps
-                .first()
-                .map_or(0, |step| step.input_nullifiers.len()) as u64)
-                .into(),
-        ),
-    );
-    value.insert(
-        "output_commitment_count".to_string(),
-        Value::Number(
-            (isi.init_request
-                .record_bundle
-                .bundle
-                .steps
-                .first()
-                .map_or(0, |step| step.output_commitments.len()) as u64)
-                .into(),
-        ),
-    );
-    Some(instruction_variant_value(
-        "TopUpKagemushaRecursive",
-        Value::Object(value),
-    ))
-}
-
-fn redeem_offline_note_payload(instruction: &InstructionBox) -> Option<Value> {
-    let isi = instruction.as_any().downcast_ref::<RedeemOfflineNote>()?;
-    let redemption = &isi.redemption;
-    let mut value = Map::new();
-    value.insert(
-        "source_note_commitment".to_string(),
-        Value::String(redemption.source_note_commitment.to_string()),
+        Value::String(hex::encode(
+            request.bundle.statement.current_note.note_commitment,
+        )),
     );
     value.insert(
         "recipient".to_string(),
-        Value::String(redemption.recipient.to_string()),
+        Value::String(request.recipient.to_string()),
     );
     value.insert(
         "asset".to_string(),
-        json::to_value(&redemption.asset).unwrap_or(Value::Null),
+        json::to_value(&request.bundle.statement.asset).unwrap_or(Value::Null),
     );
     value.insert(
-        "amount".to_string(),
-        Value::String(redemption.amount.to_string()),
+        "amount_atomic_units".to_string(),
+        Value::String(request.amount.atomic_units.to_string()),
     );
     value.insert(
-        "input_nullifier_count".to_string(),
-        Value::Number((redemption.input_nullifiers.len() as u64).into()),
+        "asset_scale".to_string(),
+        Value::Number(u64::from(request.amount.scale).into()),
+    );
+    value.insert(
+        "operation_id".to_string(),
+        Value::String(hex::encode(request.operation_id)),
     );
     Some(instruction_variant_value(
-        "RedeemOfflineNote",
-        Value::Object(value),
-    ))
-}
-
-fn audit_offline_note_payload(instruction: &InstructionBox) -> Option<Value> {
-    let isi = instruction.as_any().downcast_ref::<AuditOfflineNote>()?;
-    let audit = &isi.audit;
-    let mut value = Map::new();
-    value.insert(
-        "token_id".to_string(),
-        Value::String(audit.token_id.to_string()),
-    );
-    value.insert(
-        "account".to_string(),
-        Value::String(audit.sender_key_certificate.account_id.to_string()),
-    );
-    value.insert(
-        "input_nullifier_count".to_string(),
-        Value::Number((audit.input_nullifiers.len() as u64).into()),
-    );
-    value.insert(
-        "input_claim_count".to_string(),
-        Value::Number((audit.input_claims.len() as u64).into()),
-    );
-    value.insert(
-        "output_commitment_count".to_string(),
-        Value::Number((audit.output_commitments.len() as u64).into()),
-    );
-    Some(instruction_variant_value(
-        "AuditOfflineNote",
+        "KagemushaRedeem",
         Value::Object(value),
     ))
 }
@@ -2033,42 +1963,30 @@ mod tests {
     use super::*;
 
     #[test]
-    fn instruction_kind_filter_accepts_offline_camelcase_and_snake_case() {
+    fn instruction_kind_filter_accepts_kagemusha_camelcase_and_snake_case() {
         assert_eq!(
-            "IssueOfflineNote"
+            "KagemushaTopUp"
                 .parse::<ExplorerInstructionKind>()
-                .expect("issue offline kind"),
-            ExplorerInstructionKind::IssueOfflineNote
+                .expect("Kagemusha top-up kind"),
+            ExplorerInstructionKind::KagemushaTopUp
         );
         assert_eq!(
-            "issue_offline_note"
+            "kagemusha_top_up"
                 .parse::<ExplorerInstructionKind>()
-                .expect("issue offline kind"),
-            ExplorerInstructionKind::IssueOfflineNote
+                .expect("Kagemusha top-up kind"),
+            ExplorerInstructionKind::KagemushaTopUp
         );
         assert_eq!(
-            "RedeemOfflineNote"
+            "KagemushaRedeem"
                 .parse::<ExplorerInstructionKind>()
-                .expect("redeem offline kind"),
-            ExplorerInstructionKind::RedeemOfflineNote
+                .expect("Kagemusha redeem kind"),
+            ExplorerInstructionKind::KagemushaRedeem
         );
         assert_eq!(
-            "redeem_offline_note"
+            "kagemusha_redeem"
                 .parse::<ExplorerInstructionKind>()
-                .expect("redeem offline kind"),
-            ExplorerInstructionKind::RedeemOfflineNote
-        );
-        assert_eq!(
-            "AuditOfflineNote"
-                .parse::<ExplorerInstructionKind>()
-                .expect("audit offline kind"),
-            ExplorerInstructionKind::AuditOfflineNote
-        );
-        assert_eq!(
-            "audit_offline_note"
-                .parse::<ExplorerInstructionKind>()
-                .expect("audit offline kind"),
-            ExplorerInstructionKind::AuditOfflineNote
+                .expect("Kagemusha redeem kind"),
+            ExplorerInstructionKind::KagemushaRedeem
         );
     }
 
@@ -2805,7 +2723,7 @@ mod tests {
             "rose".parse().unwrap(),
         );
         let asset_id = AssetId::new(asset_def.clone(), ALICE_ID.clone());
-        let transfer = Transfer::asset_numeric(asset_id, 1u32, BOB_ID.clone());
+        let transfer = Transfer::asset_quantity(asset_id, 1u32, BOB_ID.clone());
         let transfer_box: InstructionBox = transfer.into();
         assert_eq!(
             instruction_kind(&transfer_box),

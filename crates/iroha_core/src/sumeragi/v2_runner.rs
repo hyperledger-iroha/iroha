@@ -125,8 +125,9 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
         background_rx,
         wake_rx,
         shutdown_signal,
-        // The following fields belong to retained block-sync/lane adapters or
-        // the legacy actor and are deliberately not consulted by global v2.
+        // The following fields belong to retained ingress/block-sync/lane
+        // adapters or retired configuration inputs and are deliberately not
+        // consulted by global v2.
         consensus_frame_cap: _,
         consensus_payload_frame_cap: _,
         peers_gossiper: _,
@@ -143,7 +144,6 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
         frontier_block_sync_hint: _,
         ingress_ready,
         wake_tx: _,
-        rbc_status_handle: _,
     } = worker;
 
     let GenesisWithPubKey {
@@ -260,6 +260,9 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
         )?;
         executor.consume_effects(startup_effects, &mut services)?;
         let startup_directive = executor.local_proposal_directive()?;
+        // Adapter construction is deliberately merge-silent. Only the exact
+        // reducer/WAL recovery directive may unlock candidate signing for its
+        // recovered view; a lock or Decision keeps it disabled.
         lane_work.retain_merge_sidecars_for_global_view(
             startup_directive.tag().view(),
             startup_directive.locked_subject(),

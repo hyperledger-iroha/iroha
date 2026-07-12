@@ -183,8 +183,8 @@ ID-ууд нь `Display`/`FromStr` хоёр талын аялалтай тогт
 
 ---## Практик жишээнүүд
 - Цутгах, шилжүүлэх:
-  - `Mint::asset_numeric(10, asset_id)` → техникийн үзүүлэлт/зөвшөөрөгдсөн тохиолдолд 10 нэмнэ; үйл явдал: `AssetEvent::Added`.
-  - `Transfer::asset_numeric(asset_id, 5, to_account)` → 5 шилжих; хасах/нэмэх үйл явдлууд.
+  - `Mint::asset_quantity(10, asset_id)` → техникийн үзүүлэлт/зөвшөөрөгдсөн тохиолдолд 10 нэмнэ; үйл явдал: `AssetEvent::Added`.
+  - `Transfer::asset_quantity(asset_id, 5, to_account)` → 5 шилжих; хасах/нэмэх үйл явдлууд.
 - Мета өгөгдлийн шинэчлэлтүүд:
   - `SetKeyValue::account(account_id, "avatar".parse()?, json)` → дээш оруулах; `RemoveKeyValue::account(...)`-ээр дамжуулан устгах.
 - Үүрэг/зөвшөөрлийн удирдлага:

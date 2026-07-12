@@ -137,15 +137,15 @@ fn main() -> Result<(), Box<dyn Error>> {
     let b_coin = AssetId::of(rose.clone(), bob_id.clone());
     let tx_mint = sign_fixture_transaction(
         TransactionBuilder::new(chain_id.clone(), alice_id.clone())
-            .with_instructions([Mint::asset_numeric(7_u32, a_coin.clone())]),
+            .with_instructions([Mint::asset_quantity(7_u32, a_coin.clone())]),
     )?;
     let tx_burn = sign_fixture_transaction(
         TransactionBuilder::new(chain_id.clone(), alice_id.clone())
-            .with_instructions([Burn::asset_numeric(3_u32, b_coin.clone())]),
+            .with_instructions([Burn::asset_quantity(3_u32, b_coin.clone())]),
     )?;
     let tx_xfer = sign_fixture_transaction(
         TransactionBuilder::new(chain_id.clone(), alice_id.clone()).with_instructions([
-            Transfer::asset_numeric(a_coin.clone(), 5_u32, bob_id.clone()),
+            Transfer::asset_quantity(a_coin.clone(), 5_u32, bob_id.clone()),
         ]),
     )?;
     let (events_seq, _state_seq) = run_block_and_events(

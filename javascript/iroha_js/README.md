@@ -17,6 +17,12 @@ npm install
 npm run build:native
 ```
 
+When upgrading a source checkout from a revision that tracked the checksum
+manifest but ignored the generated binary, Git can remove the manifest while
+leaving an old `native/iroha_js_host.node`. The publisher intentionally rejects
+that binary-only state. Remove that unverified leftover and rerun
+`npm run build:native`; never manufacture a replacement checksum by hand.
+
 The registry tarball intentionally contains no platform-specific `.node`
 binary, Cargo workspace, install hook, or implicit downloader. Consequently,
 `npm run build:native` is a source-checkout command, not a supported operation
@@ -104,7 +110,7 @@ is a proof-composition reservation: a missing packaged key, the generic
 compact-token reservation, and the multi-hop verifier-batch reservation remain
 reserved ABI-7 state. The `recursive_compact_v1` identifier describes an
 admission-neutral projection and is never a spend-again product selector.
-`preferredKagemushaOfflineSpendMode()` selects `recursive_spend_v2`
+`preferredKagemushaOfflineSpendMode()` selects `recursive_spend_v1`
 when the native host reports native bridge ABI 18 exactly and every required
 recursive-spend method rejects the malformed availability probe, and otherwise
 returns `null` rather than falling back to archived checked-prefold fixtures:
@@ -117,9 +123,9 @@ lineage-witness helpers, `kagemushaRecursiveSpendVerify`, and
 `kagemushaRecursiveSpendRedeem`. Explicit capability selection must pass both
 `recursiveCompactAvailable` and `recursiveSpendAvailable`; single-argument
 selectors are not shipped.
-`isKagemushaSpendAgainMode(...)` accepts only the first-release
-`recursive_spend_v2` label and rejects the retired `recursive_spend_v1` and the
-compact projection.
+`isKagemushaSpendAgainMode(...)` accepts only the first-release public
+`recursive_spend_v1` label and rejects the internal artifact mode
+`recursive_spend_v2` and the compact projection.
 
 Typed Node callers can build the ABI-18 recursive spend request archives without
 hand-framing Norito payloads. Use
@@ -467,6 +473,20 @@ services must use HTTPS; loopback HTTP is accepted for local development. The
 service receives the complete source, so use only an endpoint you trust. Node
 and browser adapters reject source larger than the canonical 1 MiB UTF-8 limit
 before invoking the native binding or making a network request.
+Validated service URLs and Fetch implementations are kept in immutable private
+client state, so later property mutation cannot redirect source. Responses must
+be HTTP 200 with exact `application/json`, absent/identity content encoding, and
+consistent byte framing. Successful artifacts are bounded to the ledger's exact
+1 MiB post-header IVM code-memory limit and must carry canonical IVM 1.1/ABI-1
+metadata, a checksummed CNTR Norito interface whose identity/capabilities and
+collection counts match the manifest, fully framed ABI-1 indexed literals, and
+a non-empty word-aligned instruction stream. These JavaScript framing checks do
+not replace Rust instruction decoding or its control-flow, syscall, entrypoint,
+access-claim, and other semantic admission checks. The service must therefore be
+a trusted canonical Rust compiler endpoint; the ledger remains the final
+authority on whether an artifact is deployable.
+The first release accepts only `provenance: null`; signed provenance remains
+disabled until its exact message and public-key algorithm can be verified.
 The native binding and service receive the same canonical JSON-shaped request,
 `{ source, sourceName?, zk }`. `sourceName` is limited to 4096 UTF-8 bytes and
 must not contain control characters. Unknown options—including ABI, vector,
@@ -1534,54 +1554,26 @@ TypeScript consumers do not need ambient Node types.
 > `ISO_ALIAS_INDEX` so ISO bridge gate jobs can confirm deterministic account
 > bindings without writing bespoke tooling.
 
-Sumeragi consensus status now exposes deterministic membership hashes. Inspecting
-the `membership` block is a quick way to verify roster alignment across peers:
+`/v1/sumeragi/status` is the protocol-v2 reducer snapshot. The typed helper
+requires the compact v2 schema and rejects retired actor, RBC, collector, and
+missing-QC recovery fields:
 
 ```js
-const status = await torii.getSumeragiStatus();
-if (status.membership) {
-  const { height, view, epoch, view_hash: hash } = status.membership;
-  console.log(`membership ${height}/${view}/${epoch} hash=${hash}`);
+const status = await torii.getSumeragiStatusTyped();
+console.log(
+  `height=${status.height} view=${status.view} phase=${status.phase.phase} ` +
+  `leader=${status.leader} committed=${status.last_committed_height}`,
+);
+console.log(
+  `build=${status.build_fingerprint} config=${status.config_fingerprint} ` +
+  `context=${status.height_context_id[0]}`,
+);
+console.log(`body=${status.body_state.state}`);
+if (status.pending_persistence_id !== null) {
+  console.log(`waiting for WAL acknowledgement ${status.pending_persistence_id}`);
 }
-
-if (status.lane_governance) {
-  for (const lane of status.lane_governance) {
-    const manifest = lane.manifest_ready ? "ready" : "missing";
-    console.log(`lane ${lane.alias} manifest ${manifest}; validators=${lane.validator_ids.join(",")}`);
-    for (const commitment of lane.privacy_commitments) {
-      if (commitment.scheme === "merkle" && commitment.merkle) {
-        console.log(`  merkle commitment ${commitment.id} root=${commitment.merkle.root}`);
-      } else if (commitment.scheme === "snark" && commitment.snark) {
-        console.log(`  snark commitment ${commitment.id} circuit=${commitment.snark.circuit_id}`);
-      }
-    }
-  }
-}
-if (typeof status.lane_governance_sealed_total === "number") {
-  console.log(`sealed lanes remaining: ${status.lane_governance_sealed_total}`);
-}
-if (Array.isArray(status.lane_governance_sealed_aliases) && status.lane_governance_sealed_aliases.length > 0) {
-  console.log(`sealed aliases: ${status.lane_governance_sealed_aliases.join(", ")}`);
-}
-
-if (status.lane_commitments) {
-  for (const lane of status.lane_commitments) {
-    console.log(
-      `lane ${lane.lane_id} committed ${lane.teu_total} TEU across ${lane.tx_count} transactions`,
-    );
-  }
-}
-
-if (typeof status.da_reschedule_total === "number") {
-  console.log(`DA reschedules so far: ${status.da_reschedule_total}`);
-}
-
-if (status.dataspace_commitments) {
-  for (const dataspace of status.dataspace_commitments) {
-    console.log(
-      `lane ${dataspace.lane_id} dataspace ${dataspace.dataspace_id} accounted for ${dataspace.teu_total} TEU`,
-    );
-  }
+if (status.last_timeout_certificate !== null) {
+  console.log(`last certified timeout view=${status.last_timeout_certificate.round.view}`);
 }
 ```
 
@@ -1593,14 +1585,16 @@ const abortController = new AbortController();
 const status = await torii.getSumeragiStatus({ signal: abortController.signal });
 ```
 
-When you prefer fully-normalized lane data (numeric IDs and the sealed-lane
-summary), call `getSumeragiStatusTyped()` instead; it reuses the same endpoint
-but runs the Nexus parsers internally:
+The raw `getSumeragiStatus()` method returns Torii JSON unchanged. Prefer
+`getSumeragiStatusTyped()` for rollout and operator checks because it validates
+the protocol version, tagged phase/body state, certificate references, durable
+height ordering, and optional Nexus settlement/relay records:
 
 ```js
 const typed = await torii.getSumeragiStatusTyped();
-console.log(typed.lane_governance_sealed_total);
-console.log(typed.lane_governance_sealed_aliases.join(", "));
+for (const commitment of typed.lane_settlement_commitments) {
+  console.log(commitment.lane_id, commitment.total_xor_after_haircut_micro);
+}
 ```
 
 ## Advanced Sumeragi Telemetry
@@ -3547,12 +3541,16 @@ plain object. Passing primitives, arrays, or class instances throws a
 `TypeError` before any HTTP call, keeping the JS-04 validation guarantees aligned
 with the Rust/Python SDKs.
 
-All pagination knobs (`limit`, `offset`, `pageSize`, `maxItems`, `fetch_size`) accept the
-`NumericLike` inputs used across the transaction builders (`number`, `string`, or `bigint`).
-They are normalised via the same unsigned-integer validators before any request fires
+All pagination knobs (`limit`, `offset`, `pageSize`, `maxItems`, `fetch_size`) accept
+`number`, `string`, or `bigint`. They are normalised via unsigned-integer validators before any request fires
 (integers only, up to `Number.MAX_SAFE_INTEGER`), so passing `"25"` or `10n` behaves
 exactly like `25` while still surfacing a `TypeError` when the value is negative,
 fractional, NaN, or otherwise invalid.
+
+Asset and RWA quantities use the stricter `QuantityInput` surface:
+`KotodamaQuantity`, an exact canonical quantity string, or `bigint`. JavaScript
+`number` is deliberately rejected, and strings are never trimmed or rewritten;
+for example `"1"` is valid while `" 1"`, `"01"`, `"+1"`, and `"1.0"` are not.
 
 The first-release Offline HTTP surface is a sharp `/v1` contract: asset-scoped
 readiness, asynchronous top-up and redemption commands, and one pollable

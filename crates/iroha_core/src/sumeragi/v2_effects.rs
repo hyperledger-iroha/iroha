@@ -331,6 +331,7 @@ impl ApplyTask {
     }
 
     /// Original reducer incarnation tag.
+    #[cfg(test)]
     pub(crate) const fn tag(&self) -> EventTag {
         self.tag
     }
@@ -1609,6 +1610,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
 
     /// Fail closed when the asynchronous body-store/validation worker cannot
     /// complete a still-pending exact task.
+    #[cfg(test)]
     pub(crate) fn body_service_failed<S: V2EffectServices>(
         &mut self,
         work_id: EffectWorkId,
@@ -1825,6 +1827,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
     }
 
     /// Borrow the durable finality values returned by Kura after application.
+    #[cfg(test)]
     pub(crate) fn durable_finality(
         &self,
     ) -> Option<(&KuraV2CommitReceipt, &wire::finality::V2FinalityArtifact)> {
@@ -4027,7 +4030,7 @@ mod tests {
     }
 
     #[test]
-    fn view_change_cancels_only_non_durable_store_work() {
+    fn view_change_cancels_non_durable_store_and_unprotected_validation() {
         let fixture = Fixture::new();
         let mut executor = fixture.executor(EffectQueueConfig::new(1, 2, 1_048_576, 1));
         let mut services = fixture.services();
@@ -4082,8 +4085,16 @@ mod tests {
                 }],
                 &mut services,
             )
-            .expect("reinstall view for validation retention");
-        assert_eq!(executor.pending_validations.len(), 1);
+            .expect("reinstall view for validation cancellation");
+        assert!(
+            executor.pending_validations.is_empty(),
+            "a durable body remains reusable, but its stale validation survives only when the TC protects its exact high PrepareQC"
+        );
+        assert!(
+            executor
+                .durable_bodies
+                .contains_key(&(fixture.manifest.round, fixture.manifest.subject))
+        );
         assert_eq!(services.cancelled_stores, vec![store_id]);
     }
 

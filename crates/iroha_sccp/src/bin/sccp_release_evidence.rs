@@ -79,7 +79,7 @@ const SEMANTIC_ARTIFACT_ROLES: [(&str, &str, &str); 7] = [
     ("honest-witness", "honest-witness", "honest-witness.bin"),
     ("honest-proof", "honest-proof", "honest-proof.norito"),
 ];
-const FORBIDDEN_FIXTURE_PUBLIC_KEYS: [&str; 51] = [
+const FORBIDDEN_FIXTURE_PUBLIC_KEYS: [&str; 55] = [
     "3908a9df4eb45c2c3eb744f5a5fde5af87f346a59a4995378e95c3895b9e2d5d",
     "4baed4d3a15b3269ab5e710393de6f01944c3af9691dc7a8661474ced9a033f2",
     "0ffb0e0e942b1f2250eb5674aa5674334cb0e84a7374369cc9d9ec636392198e",
@@ -113,6 +113,8 @@ const FORBIDDEN_FIXTURE_PUBLIC_KEYS: [&str; 51] = [
     "073fb6ce0ac504252d2fe848ad7cbf6afe92bc727a340667f9d2ca56e3331ad7",
     "f34444167e0c2810cf4072d1c34b7175d380de2e0efdf48b762247b8bfd5d04b",
     "0666855cf4012140b0cea429d456f14cfbdc53982eab592af675f918d435947c",
+    "b38b424605d0a3d4a4718f497dde90932444e7f96f48539a7f5a9b6ad8ef0fdd",
+    "4fceb3bc8a659bce4beba05fe63c79671a4430a112c4c5448e69deeec1d52770",
     "38861629012e021d8fcfc202ae485b431adff8aa87d5b0b3b8c92048461c1779",
     "330dde2b028c8853134e29aa3ae92832df2ecbe1a5d36f4d800a233fd7e8f4ae",
     "dbbcfd7c3b1c494e9bf8e52d76c4d388d45a4f62da5b36dead40a852e7693bb3",
@@ -131,6 +133,8 @@ const FORBIDDEN_FIXTURE_PUBLIC_KEYS: [&str; 51] = [
     "a38817b53f5d49f0c95057ac0f0ac0896c9b31a60dada241a3e68c9f0e6a7f01",
     "428cbad36d48107627a178faf4678967ed56a453698a8c41a102ed8176dbc316",
     "a916597e070ce70ae69a4a3bbb564714a9b95559ed941eb3b2edfb6568fb6bf3",
+    "ed8eaa772bf3ad767d0d0781267f008a064d12f6ce9d3cb92ccc5c895db253ec",
+    "767d5f1d8bc1af4f98ff6d3ec5ee44875ed6204d10a0dec3183f081f61604e41",
 ];
 const REQUIRED_PHASES: [&str; 12] = [
     "rust-sccp",

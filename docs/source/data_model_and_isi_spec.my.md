@@ -183,8 +183,8 @@ Execution ကို `iroha_core::smartcontracts::isi` တွင် `Execute for 
 
 ---## လက်တွေ့ဥပမာများ
 - Minting နှင့်လွှဲပြောင်း:
-  - `Mint::asset_numeric(10, asset_id)` → spec/mintability အရ ခွင့်ပြုပါက 10 ထပ်ထည့်ပါ။ ဖြစ်ရပ်များ- `AssetEvent::Added`။
-  - `Transfer::asset_numeric(asset_id, 5, to_account)` → ရွှေ့ခြင်း 5; ဖယ်ရှားခြင်း/ထပ်တိုးခြင်းအတွက် ဖြစ်ရပ်များ။
+  - `Mint::asset_quantity(10, asset_id)` → spec/mintability အရ ခွင့်ပြုပါက 10 ထပ်ထည့်ပါ။ ဖြစ်ရပ်များ- `AssetEvent::Added`။
+  - `Transfer::asset_quantity(asset_id, 5, to_account)` → ရွှေ့ခြင်း 5; ဖယ်ရှားခြင်း/ထပ်တိုးခြင်းအတွက် ဖြစ်ရပ်များ။
 - မက်တာဒေတာ အပ်ဒိတ်များ-
   - `SetKeyValue::account(account_id, "avatar".parse()?, json)` → upsert; `RemoveKeyValue::account(...)` မှတဆင့်ဖယ်ရှားခြင်း။
 - အခန်းကဏ္ဍ/ခွင့်ပြုချက်စီမံခန့်ခွဲမှု-

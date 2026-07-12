@@ -10,6 +10,12 @@ pub(super) fn dispatch_background_request(
     request: BackgroundRequest,
     telemetry: &Telemetry,
 ) -> Result<(), Box<BackgroundRequest>> {
+    if super::status::consensus_safety_halt_active()
+        || super::status::consensus_recovery_required_active()
+    {
+        trace!("dropping background request: consensus fail-stop active");
+        return Ok(());
+    }
     let allow_blocking = background_request_allows_blocking(&request);
     let (kind, peer_for_metrics, post) = match request {
         BackgroundRequest::Post { peer, msg } => (
@@ -122,6 +128,12 @@ pub(super) fn dispatch_background_request(
     tx_opt: Option<&mpsc::SyncSender<BackgroundPost>>,
     request: BackgroundRequest,
 ) -> Result<(), Box<BackgroundRequest>> {
+    if super::status::consensus_safety_halt_active()
+        || super::status::consensus_recovery_required_active()
+    {
+        trace!("dropping background request: consensus fail-stop active");
+        return Ok(());
+    }
     let allow_blocking = background_request_allows_blocking(&request);
     let (kind, post) = match request {
         BackgroundRequest::Post { peer, msg } => (
@@ -226,6 +238,9 @@ pub(super) fn background_request_allows_blocking(request: &BackgroundRequest) ->
 
 impl Actor {
     pub(super) fn rebroadcast_highest_pending_block(&mut self, now: Instant) {
+        if self.consensus_participation_halted() || self.kura_recovery_required() {
+            return;
+        }
         let Some((hash, block, height, view)) = self
             .pending
             .pending_blocks

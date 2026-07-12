@@ -16,14 +16,16 @@ mod nexus_dataspaces_summary;
 mod nexus_lifecycle_endpoint;
 #[path = "../nexus_public_lanes.rs"]
 mod nexus_public_lanes;
+#[path = "../offline_api_contract.rs"]
+mod offline_api_contract;
+#[path = "../offline_operation_contract.rs"]
+mod offline_operation_contract;
 #[path = "../offline_readiness_smoke.rs"]
 mod offline_readiness_smoke;
-#[path = "../offline_v2_kagemusha_redeem_smoke.rs"]
-mod offline_v2_kagemusha_redeem_smoke;
-#[path = "../offline_v2_kagemusha_topup_smoke.rs"]
-mod offline_v2_kagemusha_topup_smoke;
-#[path = "../offline_v2_readiness_smoke.rs"]
-mod offline_v2_readiness_smoke;
+#[path = "../offline_redeem_contract.rs"]
+mod offline_redeem_contract;
+#[path = "../offline_top_up_contract.rs"]
+mod offline_top_up_contract;
 #[path = "../push_bridge.rs"]
 mod push_bridge;
 #[path = "../sns_registrar.rs"]

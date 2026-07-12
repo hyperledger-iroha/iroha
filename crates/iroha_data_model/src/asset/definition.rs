@@ -6,7 +6,7 @@ use derive_more::Display;
 use getset::{CopyGetters, Getters};
 use iroha_crypto::Hash;
 use iroha_data_model_derive::{IdEqOrdHash, RegistrableBuilder, model};
-use iroha_primitives::numeric::{Numeric, NumericSpec};
+use iroha_primitives::numeric::{NumericSpec, Quantity};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 #[cfg(feature = "json")]
@@ -222,8 +222,8 @@ mod model {
         pub owned_by: AccountId,
         /// The total amount of this asset in existence (sum of all asset values).
         #[getset(get = "pub")]
-        #[registrable_builder(skip, init = Numeric::zero())]
-        pub total_quantity: Numeric,
+        #[registrable_builder(skip, init = Quantity::zero())]
+        pub total_quantity: Quantity,
         /// Confidential asset policy controlling shielded operations.
         #[getset(get = "pub")]
         #[registrable_builder(default = AssetConfidentialPolicy::default())]

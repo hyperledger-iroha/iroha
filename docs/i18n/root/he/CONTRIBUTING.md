@@ -36,7 +36,7 @@ translator: machine-google-reviewed
 - הקפד לעקוב אחר [מדריכי הסגנון](#style-guides) שלנו לקוד ותיעוד.
 - כתוב [בדיקות](https://doc.rust-lang.org/cargo/commands/cargo-test.html). ודא שכולם עוברים (`cargo test --workspace`). אם אתה נוגע בערימת ההצפנה SM, הפעל גם את `cargo test -p iroha_crypto --features "sm sm_proptest"` כדי לבצע את רתמת ה-fuzz/רכוש האופציונלית.
   - הערה: בדיקות המפעילות את ה-executor IVM יסנתזו אוטומטית קוד ביצוע מינימלי ודטרמיניסטי אם `defaults/executor.to` אינו קיים. לא נדרש שלב מקדים להפעלת בדיקות. כדי ליצור את קוד הבתים הקנוני עבור זוגיות, אתה יכול להריץ:
-    - `cargo run --manifest-path scripts/generate_executor_to/Cargo.toml`
+    - `cargo run --locked -p ivm --bin ivm_fixture_export -- --write`
     - `cargo run --manifest-path scripts/regenerate_codec_samples/Cargo.toml`
 - אם תשנה ארגזי נגזר/פרוק-מאקרו, הפעל את חבילות ממשק המשתמש trybuild באמצעות
   `make check-proc-macro-ui` (או

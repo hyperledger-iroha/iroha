@@ -84,13 +84,17 @@ fn deeply_nested_type_hits_depth_budget_without_recursive_parsing() {
     for _ in 0..available {
         ty = format!("Option<{ty}>");
     }
-    let boundary_text = format!("seiyaku Demo {{ state value: {ty}; }}");
+    let boundary_text = format!("seiyaku Demo {{ state {ty} value; }}");
     let boundary = SourceFile::new(SourceId(8), "type-boundary.ko", boundary_text);
     let boundary_output = parse(&boundary, FrontendBudget::v1());
-    assert!(!has_code(&boundary_output.diagnostics.diagnostics, "K0003"));
+    assert!(
+        boundary_output.diagnostics.diagnostics.is_empty(),
+        "accepted depth boundary emitted diagnostics: {:?}",
+        boundary_output.diagnostics.diagnostics
+    );
 
     ty = format!("Option<{ty}>");
-    let text = format!("seiyaku Demo {{ state value: {ty}; }}");
+    let text = format!("seiyaku Demo {{ state {ty} value; }}");
     let source = SourceFile::new(SourceId(9), "type-depth.ko", text);
     let output = parse(&source, FrontendBudget::v1());
 

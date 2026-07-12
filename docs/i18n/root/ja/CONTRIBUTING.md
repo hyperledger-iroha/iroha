@@ -30,7 +30,7 @@ Iroha 2 への貢献を検討してくださりありがとうございます。
 - コード／ドキュメントは [スタイルガイド](#スタイルガイド) に従う
 - `cargo test --workspace` でテストを実行（必要なテストも追加）
   - IVM executor を扱うテストは `defaults/executor.to` が存在しなくても最小構成のバイトコードを自動生成します。整合性を取りたい場合は
-    - `cargo run --manifest-path scripts/generate_executor_to/Cargo.toml`
+    - `cargo run --locked -p ivm --bin ivm_fixture_export -- --write`
     - `cargo run --manifest-path scripts/regenerate_codec_samples/Cargo.toml`
     を実行するとカノニカルなバイトコードを再生成できます。
 - プッシュ前に `make guards` を実行し、Norito 以外での `serde_json` 利用などをガード

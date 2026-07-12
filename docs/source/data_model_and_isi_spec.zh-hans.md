@@ -183,8 +183,8 @@ ID 具有稳定的字符串形式，可进行 `Display`/`FromStr` 往返。名�
 
 ---## 实际例子
 - 铸造和转让：
-  - `Mint::asset_numeric(10, asset_id)` → 如果规格/可铸造性允许，则增加 10；事件：`AssetEvent::Added`。
-  - `Transfer::asset_numeric(asset_id, 5, to_account)` → 移动 5；删除/添加事件。
+  - `Mint::asset_quantity(10, asset_id)` → 如果规格/可铸造性允许，则增加 10；事件：`AssetEvent::Added`。
+  - `Transfer::asset_quantity(asset_id, 5, to_account)` → 移动 5；删除/添加事件。
 - 元数据更新：
   - `SetKeyValue::account(account_id, "avatar".parse()?, json)` → 更新插入；通过 `RemoveKeyValue::account(...)` 删除。
 - 角色/权限管理：

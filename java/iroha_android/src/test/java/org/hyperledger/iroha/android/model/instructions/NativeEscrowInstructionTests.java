@@ -1,7 +1,50 @@
 package org.hyperledger.iroha.android.model.instructions;
 
+import java.util.LinkedHashMap;
+import java.util.Map;
+import org.hyperledger.iroha.android.numeric.NumericV1;
+
 /** Regression coverage for Android native escrow instruction builders. */
 public final class NativeEscrowInstructionTests {
+
+  @org.junit.Test
+  public void nativeEscrowAmountsAreCanonicalQuantities() {
+    for (final String amount : new String[] {" ", "+1", "01", "1e0", "-1", "1.0", "1.2300"}) {
+      expectIllegalArgument(
+          () ->
+              NativeEscrowInstructions.openAssetEscrow(
+                  "escrow", "asset", amount, NativeEscrowInstructions.evidenceHashes()));
+      expectIllegalArgument(
+          () ->
+              NativeEscrowInstructions.resolveEscrowDispute(
+                  "escrow", amount, "0", NativeEscrowInstructions.evidenceHashes()));
+    }
+
+    final Map<String, String> openArguments = new LinkedHashMap<>();
+    openArguments.put("escrow_id", "escrow");
+    openArguments.put("asset_definition", "asset");
+    openArguments.put("amount", "1.0");
+    expectIllegalArgument(
+        () -> NativeEscrowInstructions.OpenAssetEscrow.fromArguments(openArguments));
+
+    final Map<String, String> resolveArguments = new LinkedHashMap<>();
+    resolveArguments.put("escrow_id", "escrow");
+    resolveArguments.put("buyer_amount", "1");
+    resolveArguments.put("seller_amount", "0.0");
+    expectIllegalArgument(
+        () -> NativeEscrowInstructions.ResolveEscrowDispute.fromArguments(resolveArguments));
+
+    final NumericV1.QuantityValue quantity = NumericV1.QuantityValue.parseCanonical("1.25");
+    assert "1.25".equals(
+        NativeEscrowInstructions.openAssetEscrow(
+                "escrow", "asset", quantity, NativeEscrowInstructions.evidenceHashes())
+            .amount());
+    final NativeEscrowInstructions.ResolveEscrowDispute resolve =
+        NativeEscrowInstructions.resolveEscrowDispute(
+            "escrow", quantity, quantity, NativeEscrowInstructions.evidenceHashes());
+    assert "1.25".equals(resolve.buyerAmount());
+    assert "1.25".equals(resolve.sellerAmount());
+  }
 
   @org.junit.Test
   public void openAssetEscrowUsesNativeEscrowArgumentSchema() {
@@ -131,6 +174,16 @@ public final class NativeEscrowInstructionTests {
     assert resolve.equals(
         NativeEscrowInstructions.AnonymousEscrowInstruction.fromArguments(resolve.toArguments()))
         : "resolve anonymous roundtrip mismatch";
+  }
+
+  private static void expectIllegalArgument(final Runnable action) {
+    boolean threw = false;
+    try {
+      action.run();
+    } catch (final IllegalArgumentException expected) {
+      threw = true;
+    }
+    assert threw : "expected IllegalArgumentException";
   }
 
   @org.junit.Test

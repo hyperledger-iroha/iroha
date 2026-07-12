@@ -200,11 +200,14 @@ public sealed class KagemushaRecursiveSpendNativeTests
             KagemushaRecursiveSpendNative.PreferredMode(true));
         Assert.Null(KagemushaRecursiveSpendNative.PreferredMode(false));
         Assert.Equal(
-            "recursive_spend_v2",
+            "recursive_spend_v1",
             KagemushaOfflineSpendMode.RecursiveSpend.WireName());
-        Assert.True(KagemushaRecursiveSpendNative.IsSpendAgainMode("recursive_spend_v2"));
-        Assert.False(KagemushaRecursiveSpendNative.IsSpendAgainMode("recursive_spend_v1"));
+        Assert.True(KagemushaRecursiveSpendNative.IsSpendAgainMode("recursive_spend_v1"));
+        Assert.False(KagemushaRecursiveSpendNative.IsSpendAgainMode("recursive_spend_v2"));
         Assert.False(KagemushaRecursiveSpendNative.IsSpendAgainMode("recursive_compact_v1"));
+        Assert.False(KagemushaRecursiveSpendNative.IsSpendAgainMode(" recursive_spend_v1"));
+        Assert.False(KagemushaRecursiveSpendNative.IsSpendAgainMode("RECURSIVE_SPEND_V1"));
+        Assert.False(KagemushaRecursiveSpendNative.IsSpendAgainMode(null));
         Assert.DoesNotContain(
             "checked_prefold_v1",
             Enum.GetValues<KagemushaOfflineSpendMode>().Select(mode => mode.WireName()));

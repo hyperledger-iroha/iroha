@@ -183,8 +183,8 @@ Enveloppe commune : `InstructionExecutionError` avec des variantes pour les err
 
 ---## Exemples pratiques
 - Frappe et transfert :
-  - `Mint::asset_numeric(10, asset_id)` → ajoute 10 si la spécification/la mintabilité le permet ; événements : `AssetEvent::Added`.
-  - `Transfer::asset_numeric(asset_id, 5, to_account)` → coups 5 ; événements à supprimer/ajouter.
+  - `Mint::asset_quantity(10, asset_id)` → ajoute 10 si la spécification/la mintabilité le permet ; événements : `AssetEvent::Added`.
+  - `Transfer::asset_quantity(asset_id, 5, to_account)` → coups 5 ; événements à supprimer/ajouter.
 - Mises à jour des métadonnées :
   - `SetKeyValue::account(account_id, "avatar".parse()?, json)` → insertion ; suppression via `RemoveKeyValue::account(...)`.
 - Gestion des rôles/autorisations :

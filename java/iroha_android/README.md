@@ -1252,8 +1252,10 @@ still fail as `IllegalArgumentException` before they can be confused with that
 reserved state.
 `KagemushaRecursiveSpendProver` exposes the exact ABI-18 spend-again-offline
 cash surface. Preferred mode selection returns `RECURSIVE_SPEND` only when the
-ABI probe is exactly 18 and the Pasta-cycle backend is available; its stable
-wire value is exactly `recursive_spend_v2`. Other mode labels and permissive
+ABI probe is exactly 18 and the Pasta-cycle backend is available; its public
+wire value is exactly `recursive_spend_v1`. The internal ABI-18/V3 artifact
+manifest mode remains `recursive_spend_v2`; it is not a product selector. Other
+mode labels and permissive
 symbol-presence fallbacks are not release inputs.
 The Android StrongBox/offline-payments lab gate is tracked in
 `docs/source/sdk/android/readiness/android_strongbox_device_matrix.md`; rows

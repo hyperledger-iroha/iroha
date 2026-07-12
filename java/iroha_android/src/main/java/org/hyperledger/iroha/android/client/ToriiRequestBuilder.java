@@ -113,11 +113,7 @@ final class ToriiRequestBuilder {
       final Duration timeout,
       final Map<String, String> extraHeaders) {
     Objects.requireNonNull(baseUri, "baseUri");
-    final String normalizedHash =
-        Objects.requireNonNull(hashHex, "hashHex").trim();
-    if (normalizedHash.isEmpty()) {
-      throw new IllegalArgumentException("hashHex must not be blank");
-    }
+    final String normalizedHash = Objects.requireNonNull(hashHex, "hashHex");
     if (!normalizedHash.matches("[0-9a-f]{64}")) {
       throw new IllegalArgumentException(
           "hashHex must be a canonical lowercase 32-byte transaction hash");

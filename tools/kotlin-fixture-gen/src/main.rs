@@ -21,7 +21,7 @@ use iroha_data_model::isi::register::{Register, RegisterBox};
 use iroha_data_model::isi::transfer::{Transfer, TransferBox};
 use iroha_data_model::name::Name;
 use iroha_data_model::nexus::{DataSpaceId, UniversalAccountId};
-use iroha_data_model::prelude::Numeric;
+use iroha_data_model::prelude::Quantity;
 use iroha_data_model::ram_lfe::{
     RamLfeExecutionReceiptPayload, RamLfeOutputOpening, RamLfeOutputOpeningPayload,
     RamLfeProgramId, RamLfeReceiptAttestation,
@@ -78,10 +78,10 @@ fn emit_transfer_asset() {
     let name: Name = "rose".parse().unwrap();
     let asset_def_id = AssetDefinitionId::new(domain, name);
     let asset_id = AssetId::new(asset_def_id.clone(), account_id.clone());
-    let amount = Numeric::new(100_i64, 0);
+    let amount = Quantity::from(100_u64);
     let destination = account_id.clone();
 
-    let transfer = Transfer::asset_numeric(asset_id, amount, destination);
+    let transfer = Transfer::asset_quantity(asset_id, amount, destination);
     let transfer_box: TransferBox = transfer.into();
     let encoded = norito::to_bytes(&transfer_box).expect("encode TransferBox");
 
@@ -105,10 +105,10 @@ fn emit_transfer_asset_scoped() {
         account_id.clone(),
         AssetBalanceScope::Dataspace(DataSpaceId::new(42)),
     );
-    let amount = Numeric::new(100_i64, 0);
+    let amount = Quantity::from(100_u64);
     let destination = account_id.clone();
 
-    let transfer = Transfer::asset_numeric(asset_id, amount, destination);
+    let transfer = Transfer::asset_quantity(asset_id, amount, destination);
     let transfer_box: TransferBox = transfer.into();
     let encoded = norito::to_bytes(&transfer_box).expect("encode scoped TransferBox");
 

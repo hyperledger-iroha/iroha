@@ -1,6 +1,6 @@
 import {
   KotodamaCompilerClient,
-  selectCompilerRequestOptions,
+  selectCompilerCallOptions,
   validateCompilerOptions,
   validateCompilerSource,
 } from "./client.js";
@@ -16,8 +16,10 @@ export async function compileKotodamaProgram(source, options = {}) {
       "browser Kotodama compilation requires compilerUrl; offline compilation is unsupported",
     );
   }
-  return new KotodamaCompilerClient(options.compilerUrl, options).compile(
+  return new KotodamaCompilerClient(options.compilerUrl, {
+    ...(options.fetchImpl === undefined ? {} : { fetchImpl: options.fetchImpl }),
+  }).compile(
     source,
-    selectCompilerRequestOptions(options),
+    selectCompilerCallOptions(options),
   );
 }

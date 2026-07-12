@@ -7256,6 +7256,44 @@ mod tests {
         }
     }
 
+    struct LatchedRefreshingActor {
+        recovery_checks: Arc<AtomicUsize>,
+        refresh_count: Arc<AtomicUsize>,
+        tick_count: Arc<AtomicUsize>,
+    }
+
+    impl WorkerActor for LatchedRefreshingActor {
+        fn recovery_required(&self) -> bool {
+            self.recovery_checks.fetch_add(1, Ordering::Relaxed);
+            true
+        }
+
+        fn on_block_message(&mut self, _msg: InboundBlockMessage) -> Result<()> {
+            Ok(())
+        }
+
+        fn on_consensus_control(&mut self, _msg: ControlFlow) -> Result<()> {
+            Ok(())
+        }
+
+        fn on_lane_relay(&mut self, _message: LaneRelayMessage) -> Result<()> {
+            Ok(())
+        }
+
+        fn on_background_request(&mut self, _request: BackgroundRequest) -> Result<()> {
+            Ok(())
+        }
+
+        fn refresh_worker_loop_config(&mut self, _cfg: &mut WorkerLoopConfig) {
+            self.refresh_count.fetch_add(1, Ordering::Relaxed);
+        }
+
+        fn tick(&mut self) -> bool {
+            self.tick_count.fetch_add(1, Ordering::Relaxed);
+            true
+        }
+    }
+
     #[derive(Default)]
     struct CommitPollingActor {
         poll_calls: usize,
@@ -10156,6 +10194,28 @@ mod tests {
     }
 
     #[test]
+    fn public_ingress_rejects_before_queue_mutation_after_recovery_latch() {
+        status::reset_commit_certs_for_tests();
+        let (handle, block_rx) = test_sumeragi_handle(1);
+        status::activate_consensus_recovery_required();
+        let message = BlockMessage::ConsensusParams(message::ConsensusParamsAdvert {
+            collectors_k: 1,
+            redundant_send_r: 1,
+            membership: None,
+        });
+
+        assert!(!handle.try_incoming_block_message(message));
+        assert!(matches!(
+            block_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        assert!(consensus_fail_stop_active());
+        assert!(consensus_output_guard().is_none());
+
+        status::reset_commit_certs_for_tests();
+    }
+
+    #[test]
     fn run_worker_iteration_preserves_queued_work_after_result_latches_recovery() {
         status::reset_worker_loop_snapshot_for_tests();
 
@@ -11939,6 +11999,65 @@ mod tests {
     }
 
     #[test]
+    fn run_worker_loop_parks_without_refresh_or_tick_after_recovery_latch() {
+        let (_vote_tx, vote_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_block_payload_tx, block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_rbc_chunk_tx, rbc_chunk_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_block_tx, block_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_consensus_tx, consensus_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_lane_tx, lane_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_background_tx, background_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (wake_tx, wake_rx) = mpsc::sync_channel::<()>(WORKER_WAKE_CHANNEL_CAP);
+        let recovery_checks = Arc::new(AtomicUsize::new(0));
+        let refresh_count = Arc::new(AtomicUsize::new(0));
+        let tick_count = Arc::new(AtomicUsize::new(0));
+        let mut actor = LatchedRefreshingActor {
+            recovery_checks: Arc::clone(&recovery_checks),
+            refresh_count: Arc::clone(&refresh_count),
+            tick_count: Arc::clone(&tick_count),
+        };
+        let now = Instant::now();
+        let state = WorkerLoopState {
+            last_tick: now,
+            last_served: [now; PRIORITY_TIER_COUNT],
+            mailbox: WorkerMailboxState::new(),
+        };
+        let shutdown_signal = ShutdownSignal::new();
+        let shutdown_worker = shutdown_signal.clone();
+
+        let join = std::thread::spawn(move || {
+            run_worker_loop(
+                &mut actor,
+                recovery_worker_test_config(),
+                state,
+                vote_rx,
+                block_payload_rx,
+                rbc_chunk_rx,
+                block_rx,
+                consensus_rx,
+                lane_rx,
+                background_rx,
+                wake_rx,
+                shutdown_worker,
+            );
+        });
+
+        let deadline = Instant::now()
+            .checked_add(Duration::from_secs(1))
+            .unwrap_or_else(Instant::now);
+        while recovery_checks.load(Ordering::Relaxed) == 0 && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(recovery_checks.load(Ordering::Relaxed) > 0);
+        shutdown_signal.send();
+        let _ = wake_tx.send(());
+        join.join().expect("recovery-parked worker loop thread");
+
+        assert_eq!(refresh_count.load(Ordering::Relaxed), 0);
+        assert_eq!(tick_count.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
     fn drain_queue_batch_drains_follow_up_messages_up_to_limit() {
         let _guard = status::worker_queue_test_guard();
         status::reset_worker_loop_snapshot_for_tests();
@@ -13041,6 +13160,44 @@ mod tests {
     }
 
     #[test]
+    fn spawn_tick_worker_parks_without_refresh_or_tick_after_recovery_latch() {
+        let recovery_checks = Arc::new(AtomicUsize::new(0));
+        let refresh_count = Arc::new(AtomicUsize::new(0));
+        let tick_count = Arc::new(AtomicUsize::new(0));
+        let actor = LatchedRefreshingActor {
+            recovery_checks: Arc::clone(&recovery_checks),
+            refresh_count: Arc::clone(&refresh_count),
+            tick_count: Arc::clone(&tick_count),
+        };
+        let gate = Arc::new(ActorGate::new(actor));
+        let active = Arc::new(AtomicUsize::new(0));
+        let (wake_tx, wake_rx) = mpsc::sync_channel::<()>(WORKER_WAKE_CHANNEL_CAP);
+        let shutdown_signal = ShutdownSignal::new();
+        let shutdown_worker = shutdown_signal.clone();
+        let join = spawn_tick_worker(
+            Arc::clone(&gate),
+            active,
+            recovery_worker_test_config(),
+            wake_rx,
+            shutdown_worker,
+        );
+
+        let deadline = Instant::now()
+            .checked_add(Duration::from_secs(1))
+            .unwrap_or_else(Instant::now);
+        while recovery_checks.load(Ordering::Relaxed) == 0 && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(recovery_checks.load(Ordering::Relaxed) > 0);
+        shutdown_signal.send();
+        let _ = wake_tx.send(());
+        join.join().expect("recovery-parked tick worker thread");
+
+        assert_eq!(refresh_count.load(Ordering::Relaxed), 0);
+        assert_eq!(tick_count.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
     fn run_parallel_worker_exits_when_shutdown_is_sent() {
         let (_vote_tx, vote_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
         let (_block_payload_tx, block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
@@ -13202,9 +13359,11 @@ pub(crate) mod v2_runtime;
 pub(crate) mod v2_transport;
 pub(crate) mod v2_worker;
 pub(crate) mod vnext;
+pub(crate) mod vote_lock;
 pub mod witness;
 pub use evidence::EvidenceValidationContext;
 pub use evidence::evidence_subject_height_view;
+pub(crate) use main_loop::qc::AuthenticatedCommitRoster;
 
 /// Validate an evidence payload using the canonical rules.
 ///
@@ -13228,12 +13387,40 @@ pub fn new_view_snapshot_counts() -> Vec<(u64, u64, u64)> {
     new_view_stats::snapshot_counts()
 }
 
+/// Guard serializing a fail-stop-sensitive consensus side effect with fail-stop activation.
+pub use status::ConsensusOutputGuard;
 /// Public snapshot of leader index and `HighestQC` tuple for status endpoints.
 pub use status::StatusSnapshot;
 
 /// Return the latest consensus status snapshot (leader, QCs, drop counters).
 pub fn status_snapshot() -> StatusSnapshot {
     status::snapshot()
+}
+
+/// Return whether this process has fail-closed consensus participation.
+#[must_use]
+pub fn consensus_safety_halt_active() -> bool {
+    status::consensus_safety_halt_active()
+}
+
+/// Return whether fatal canonical persistence requires process restart recovery.
+#[must_use]
+pub fn consensus_recovery_required_active() -> bool {
+    status::consensus_recovery_required_active()
+}
+
+/// Return whether this process must suppress all consensus participation and side effects.
+#[must_use]
+pub fn consensus_fail_stop_active() -> bool {
+    consensus_safety_halt_active() || consensus_recovery_required_active()
+}
+
+/// Acquire permission for one externally visible or durable background consensus side effect.
+///
+/// The returned guard must be retained until the side effect is complete.
+#[must_use]
+pub fn consensus_output_guard() -> Option<ConsensusOutputGuard> {
+    status::consensus_output_guard()
 }
 
 use self::message::*;
@@ -13273,6 +13460,10 @@ pub struct RbcStoreConfig {
 }
 
 /// Background posting tasks issued by Sumeragi.
+///
+/// Consumers must acquire and retain [`consensus_output_guard`] through the corresponding network
+/// post or broadcast. This final admission fence prevents queued work from escaping after a
+/// process fail-stop latch.
 #[derive(Debug, Clone)]
 pub enum BackgroundPost {
     /// Post a consensus message to a specific peer.
@@ -14534,6 +14725,9 @@ impl SumeragiHandle {
         sender: Option<PeerId>,
         mode: IngressMode,
     ) -> bool {
+        if consensus_fail_stop_active() {
+            return false;
+        }
         if !self.ingress_is_ready() {
             iroha_logger::debug!(
                 "rejecting Sumeragi ingress until context and safety WAL replay complete"
@@ -15377,6 +15571,9 @@ impl SumeragiHandle {
         msg: ControlFlow,
         mode: IngressMode,
     ) -> bool {
+        if consensus_fail_stop_active() {
+            return false;
+        }
         if !self.ingress_policy.admits_legacy_internal_queue() {
             iroha_logger::debug!(
                 "rejecting retired consensus-control traffic on authoritative v2 ingress"
@@ -15445,6 +15642,9 @@ impl SumeragiHandle {
         envelope: LaneRelayEnvelope,
         mode: IngressMode,
     ) -> bool {
+        if consensus_fail_stop_active() {
+            return false;
+        }
         if !self.ingress_is_ready() {
             return false;
         }
@@ -15507,6 +15707,9 @@ impl SumeragiHandle {
         signature: MergeCommitteeSignature,
         mode: IngressMode,
     ) -> bool {
+        if consensus_fail_stop_active() {
+            return false;
+        }
         if !self.ingress_is_ready() {
             return false;
         }
@@ -15565,6 +15768,9 @@ impl SumeragiHandle {
         sender: PeerId,
         message: CertifiedMergeSidecarMessage,
     ) -> bool {
+        if consensus_fail_stop_active() || !self.ingress_is_ready() {
+            return false;
+        }
         let relay = LaneRelayMessage::CertifiedMergeSidecar { sender, message };
         match self.lane_relay.try_send(relay) {
             Ok(()) => {
@@ -15595,6 +15801,9 @@ impl SumeragiHandle {
         sender: PeerId,
         message: MergeCandidateMessage,
     ) -> bool {
+        if consensus_fail_stop_active() || !self.ingress_is_ready() {
+            return false;
+        }
         let relay = LaneRelayMessage::MergeCandidate { sender, message };
         match self.lane_relay.try_send(relay) {
             Ok(()) => {
@@ -15637,6 +15846,9 @@ impl SumeragiHandle {
         message: crate::native_amx::NativeAmxMessage,
         mode: IngressMode,
     ) -> bool {
+        if consensus_fail_stop_active() {
+            return false;
+        }
         if !self.ingress_is_ready() {
             return false;
         }
@@ -15686,6 +15898,9 @@ impl SumeragiHandle {
 
     /// Schedule a high-priority consensus message to be posted to a specific peer.
     pub fn post_to_peer(&self, peer: PeerId, msg: BlockMessage) {
+        if consensus_fail_stop_active() {
+            return;
+        }
         if !self.ingress_policy.admits_legacy_internal_queue() {
             iroha_logger::debug!(
                 "rejecting retired background post path on authoritative v2 runtime"
@@ -15714,6 +15929,9 @@ impl SumeragiHandle {
 
     /// Schedule a consensus broadcast to all peers.
     pub fn broadcast(&self, msg: BlockMessage) {
+        if consensus_fail_stop_active() {
+            return;
+        }
         if !self.ingress_policy.admits_legacy_internal_queue() {
             iroha_logger::debug!(
                 "rejecting retired background broadcast path on authoritative v2 runtime"
@@ -15741,6 +15959,9 @@ impl SumeragiHandle {
 
     /// Schedule a control-flow broadcast to all peers.
     pub fn broadcast_control_flow(&self, frame: ControlFlow) {
+        if consensus_fail_stop_active() {
+            return;
+        }
         if !self.ingress_policy.admits_legacy_internal_queue() {
             iroha_logger::debug!(
                 "rejecting retired background control-flow path on authoritative v2 runtime"
@@ -16269,9 +16490,6 @@ impl SumeragiStartArgs {
         let frontier_block_sync_hint = handle.frontier_block_sync_hint();
         frontier_block_sync_hint.set_initialized(false);
 
-        let rbc_status_handle = rbc_status::register_handle();
-        rbc_status::set_active(&rbc_status_handle);
-
         let actor = SumeragiWorker {
             config,
             common_config,
@@ -16306,7 +16524,6 @@ impl SumeragiStartArgs {
             wake_tx,
             wake_rx,
             shutdown_signal,
-            rbc_status_handle,
         };
 
         let join_handle = tokio::task::spawn(spawn_os_thread_as_future(
@@ -16355,7 +16572,6 @@ struct SumeragiWorker {
     wake_tx: mpsc::SyncSender<()>,
     wake_rx: mpsc::Receiver<()>,
     shutdown_signal: ShutdownSignal,
-    rbc_status_handle: rbc_status::Handle,
 }
 
 fn is_authoritative_v2_protocol(protocol_version: u32) -> bool {
@@ -17058,6 +17274,9 @@ fn poll_worker_results<A: WorkerActor>(actor: &mut A) -> bool {
 }
 
 fn dispatch_block_message<A: WorkerActor>(actor: &mut A, msg: InboundBlockMessage) -> Result<()> {
+    if actor.recovery_required() {
+        return Ok(());
+    }
     if actor.should_drop_block_message_before_dispatch(&msg) {
         return Ok(());
     }
@@ -18071,6 +18290,17 @@ fn run_worker_loop<A: WorkerActor>(
             break;
         }
 
+        if actor.recovery_required() {
+            status::set_worker_stage(status::WorkerLoopStage::Idle);
+            match wake_rx.recv_timeout(Duration::from_millis(IDLE_SHUTDOWN_POLL_MS)) {
+                Ok(()) | Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    std::thread::sleep(Duration::from_millis(IDLE_SHUTDOWN_POLL_MS));
+                }
+            }
+            continue;
+        }
+
         actor.refresh_worker_loop_config(&mut cfg);
         let iter_start = Instant::now();
         let stats = run_worker_iteration(
@@ -18302,46 +18532,55 @@ fn spawn_tick_worker<A: WorkerActor + Send + 'static>(
                 let (next_deadline, tick_gap, bypass_tick_gap) = {
                     let mut guard = gate.enter(GatePriority::Urgent);
                     status::set_worker_stage(status::WorkerLoopStage::Tick);
-                    guard.actor_mut().refresh_worker_loop_config(&mut cfg);
-                    let now = Instant::now();
-                    poll_worker_results(guard.actor_mut());
                     if guard.actor_mut().recovery_required() {
                         status::record_worker_iteration(
                             u64::try_from(iter_start.elapsed().as_millis()).unwrap_or(u64::MAX),
                         );
                         (None, cfg.tick_min_gap, false)
                     } else {
-                        let queue_depths = status::worker_queue_depth_snapshot();
-                        let tick_gap = if has_pending_queue_depths(queue_depths) {
-                            cfg.tick_busy_gap
-                        } else {
-                            cfg.tick_min_gap
-                        };
-                        let next_deadline = guard.actor_mut().next_tick_deadline(now);
-                        let ticked = next_deadline.is_some_and(|deadline| deadline <= now)
-                            && (guard.actor_mut().should_bypass_tick_gap()
-                                || should_run_tick(now, last_tick, tick_gap));
-                        if ticked {
-                            let _ = guard.actor_mut().tick();
-                            last_tick = now;
-                        }
+                        guard.actor_mut().refresh_worker_loop_config(&mut cfg);
+                        let now = Instant::now();
+                        poll_worker_results(guard.actor_mut());
                         if guard.actor_mut().recovery_required() {
                             status::record_worker_iteration(
                                 u64::try_from(iter_start.elapsed().as_millis()).unwrap_or(u64::MAX),
                             );
                             (None, cfg.tick_min_gap, false)
                         } else {
+                            let queue_depths = status::worker_queue_depth_snapshot();
+                            let tick_gap = if has_pending_queue_depths(queue_depths) {
+                                cfg.tick_busy_gap
+                            } else {
+                                cfg.tick_min_gap
+                            };
+                            let next_deadline = guard.actor_mut().next_tick_deadline(now);
+                            let ticked = next_deadline.is_some_and(|deadline| deadline <= now)
+                                && (guard.actor_mut().should_bypass_tick_gap()
+                                    || should_run_tick(now, last_tick, tick_gap));
                             if ticked {
-                                guard.actor_mut().sync_external_hints();
+                                let _ = guard.actor_mut().tick();
+                                last_tick = now;
                             }
-                            status::record_worker_iteration(
-                                u64::try_from(iter_start.elapsed().as_millis()).unwrap_or(u64::MAX),
-                            );
-                            (
-                                next_deadline,
-                                tick_gap,
-                                guard.actor_mut().should_bypass_tick_gap(),
-                            )
+                            if guard.actor_mut().recovery_required() {
+                                status::record_worker_iteration(
+                                    u64::try_from(iter_start.elapsed().as_millis())
+                                        .unwrap_or(u64::MAX),
+                                );
+                                (None, cfg.tick_min_gap, false)
+                            } else {
+                                if ticked {
+                                    guard.actor_mut().sync_external_hints();
+                                }
+                                status::record_worker_iteration(
+                                    u64::try_from(iter_start.elapsed().as_millis())
+                                        .unwrap_or(u64::MAX),
+                                );
+                                (
+                                    next_deadline,
+                                    tick_gap,
+                                    guard.actor_mut().should_bypass_tick_gap(),
+                                )
+                            }
                         }
                     }
                 };
@@ -18662,7 +18901,6 @@ impl SumeragiWorker {
             wake_tx,
             wake_rx,
             shutdown_signal,
-            rbc_status_handle,
             consensus_frame_cap,
             consensus_payload_frame_cap,
             config,
@@ -18755,6 +18993,7 @@ impl SumeragiWorker {
             startup_trace_started_at,
         );
         let actor_state = Arc::clone(&state);
+        let rbc_status_handle = rbc_status::register_handle();
         let mut actor = match crate::sumeragi::main_loop::Actor::new_with_block_sync_hint(
             config,
             common_config,

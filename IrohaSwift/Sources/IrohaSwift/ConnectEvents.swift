@@ -143,6 +143,13 @@ extension ConnectBalanceAsset {
               let quantity = json["quantity"] as? String else {
             throw ConnectEnvelopeError.invalidPayload
         }
+        let canonicalQuantity: String
+        do {
+            canonicalQuantity = try KotodamaNumericV1Codec
+                .decodeQuantityJSON(quantity).canonicalString
+        } catch {
+            throw ConnectEnvelopeError.invalidPayload
+        }
         let definition = json["asset_definition_id"] as? String
         let precisionValue: Int?
         if let precisionRaw = json["precision"] {
@@ -155,7 +162,7 @@ extension ConnectBalanceAsset {
         }
         self.init(assetId: assetId,
                   assetDefinitionId: definition,
-                  quantity: quantity,
+                  quantity: canonicalQuantity,
                   precision: precisionValue)
     }
 }

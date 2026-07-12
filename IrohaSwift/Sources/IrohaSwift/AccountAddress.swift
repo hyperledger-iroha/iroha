@@ -1383,7 +1383,7 @@ extension AccountAddressError {
 
 extension AccountAddress {
     func noritoAccountControllerPayload() throws -> Data {
-        var writer = OfflineNoritoWriter()
+        var writer = CanonicalNoritoWriter()
         switch controller {
         case .singleKey(let curve, let publicKey):
             let keyPayload = try noritoPublicKeyPayload(curve: curve, publicKey: publicKey)
@@ -1402,7 +1402,7 @@ extension AccountAddress {
     }
 
     func compactNoritoAccountControllerPayload() throws -> Data {
-        var writer = OfflineCompactNoritoWriter()
+        var writer = CompactNoritoWriter()
         switch controller {
         case .singleKey(let curve, let publicKey):
             let keyPayload = try compactNoritoPublicKeyPayload(curve: curve, publicKey: publicKey)
@@ -1422,14 +1422,14 @@ extension AccountAddress {
         let algorithm = try noritoSigningAlgorithm(for: curve)
         var bytes = Data([algorithm.noritoDiscriminant])
         bytes.append(publicKey)
-        return OfflineNorito.encodeConstVec(bytes)
+        return CanonicalNorito.encodeConstVec(bytes)
     }
 
     private func compactNoritoPublicKeyPayload(curve: CurveId, publicKey: Data) throws -> Data {
         let algorithm = try noritoSigningAlgorithm(for: curve)
         var bytes = Data([algorithm.noritoDiscriminant])
         bytes.append(publicKey)
-        var writer = OfflineCompactNoritoWriter()
+        var writer = CompactNoritoWriter()
         writer.writeUInt64LE(UInt64(bytes.count))
         for byte in bytes {
             writer.writeLength(1)
@@ -1443,14 +1443,14 @@ extension AccountAddress {
         threshold: UInt16,
         members: [ControllerPayload.MultisigMember]
     ) throws -> Data {
-        var writer = OfflineNoritoWriter()
-        writer.writeField(OfflineNorito.encodeUInt8(version))
-        writer.writeField(OfflineNorito.encodeUInt16(threshold))
-        let membersPayload = try OfflineNorito.encodeVec(members) { member in
-            var memberWriter = OfflineNoritoWriter()
+        var writer = CanonicalNoritoWriter()
+        writer.writeField(CanonicalNorito.encodeUInt8(version))
+        writer.writeField(CanonicalNorito.encodeUInt16(threshold))
+        let membersPayload = try CanonicalNorito.encodeVec(members) { member in
+            var memberWriter = CanonicalNoritoWriter()
             let keyPayload = try noritoPublicKeyPayload(curve: member.curve, publicKey: member.publicKey)
             memberWriter.writeField(keyPayload)
-            memberWriter.writeField(OfflineNorito.encodeUInt16(member.weight))
+            memberWriter.writeField(CanonicalNorito.encodeUInt16(member.weight))
             return memberWriter.data
         }
         writer.writeField(membersPayload)
@@ -1462,16 +1462,16 @@ extension AccountAddress {
         threshold: UInt16,
         members: [ControllerPayload.MultisigMember]
     ) throws -> Data {
-        var writer = OfflineCompactNoritoWriter()
-        writer.writeField(OfflineCompactNorito.encodeUInt8(version))
-        writer.writeField(OfflineCompactNorito.encodeUInt16(threshold))
-        var membersPayload = OfflineCompactNoritoWriter()
+        var writer = CompactNoritoWriter()
+        writer.writeField(CompactNorito.encodeUInt8(version))
+        writer.writeField(CompactNorito.encodeUInt16(threshold))
+        var membersPayload = CompactNoritoWriter()
         membersPayload.writeUInt64LE(UInt64(members.count))
         for member in members {
-            var memberWriter = OfflineCompactNoritoWriter()
+            var memberWriter = CompactNoritoWriter()
             let keyPayload = try compactNoritoPublicKeyPayload(curve: member.curve, publicKey: member.publicKey)
             memberWriter.writeField(keyPayload)
-            memberWriter.writeField(OfflineCompactNorito.encodeUInt16(member.weight))
+            memberWriter.writeField(CompactNorito.encodeUInt16(member.weight))
             membersPayload.writeField(memberWriter.data)
         }
         writer.writeField(membersPayload.data)

@@ -163,7 +163,7 @@ fn apply_queued_isis_from_corehost_transfer_asset() {
             iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
         );
     let reg_asset_def = RegisterBox::from(Register::asset_definition(new_asset_def));
-    let mint = MintBox::from(Mint::asset_numeric(
+    let mint = MintBox::from(Mint::asset_quantity(
         1000u64,
         AssetId::with_scope(
             asset_def.clone(),
@@ -345,7 +345,7 @@ fn apply_queued_isis_from_corehost_transfer_asset_with_env_encoded_ids() {
     let reg_asset_def = RegisterBox::from(Register::asset_definition(
         AssetDefinition::numeric(asset_def.clone()).with_name(asset_def.to_string()),
     ));
-    let mint = MintBox::from(Mint::asset_numeric(
+    let mint = MintBox::from(Mint::asset_quantity(
         1000u64,
         AssetId::with_scope(
             asset_def.clone(),
@@ -414,7 +414,7 @@ fn apply_queued_isis_from_compiled_json_driven_double_transfer() {
           kotoage fn main() authorize("TransferAsset") {{
             let ev = Json::parse("{{\"kind\":\"asset_change\",\"op\":\"added\",\"asset_definition_id\":\"{aed}\",\"account_domain\":\"{domain}\",\"account_id\":\"{dst}\",\"amount\":\"1\"}}");
             let recipient = ev.get_account_id(Name::parse("account_id")).unwrap_or(AccountId::parse("{dst}"));
-            let amount = ev.get_quantity(Name::parse("amount")).unwrap_or(0);
+            let quantity amount = ev.get_quantity(Name::parse("amount")).unwrap_or(0);
             ledger::asset::transfer(source: recipient, destination: AccountId::parse("{reserve}"), asset_definition: AssetDefinitionId::parse("{aed}"), amount: amount, dataspace: DataSpaceId::parse("0"));
             ledger::asset::transfer(source: AccountId::parse("{reserve}"), destination: recipient, asset_definition: AssetDefinitionId::parse("{cbdc}"), amount: amount * {ratio}, dataspace: DataSpaceId::parse("0"));
           }}
@@ -459,11 +459,11 @@ fn apply_queued_isis_from_compiled_json_driven_double_transfer() {
     let reg_cbdc = RegisterBox::from(Register::asset_definition(
         AssetDefinition::numeric(cbdc_asset_def.clone()).with_name("cbdc".to_owned()),
     ));
-    let mint_aed = MintBox::from(Mint::asset_numeric(
+    let mint_aed = MintBox::from(Mint::asset_quantity(
         1u64,
         AssetId::of(aed_asset_def.clone(), dst.clone()),
     ));
-    let mint_cbdc = MintBox::from(Mint::asset_numeric(
+    let mint_cbdc = MintBox::from(Mint::asset_quantity(
         ratio * 2,
         AssetId::of(cbdc_asset_def.clone(), reserve.clone()),
     ));

@@ -841,12 +841,13 @@ pub(crate) mod test_fixtures {
     const TEST_ASSET_ID: &str = "xor#universal";
 
     fn path_witness(path: ConfidentialMerklePathV2) -> PrivacyConfidentialMerklePathWitnessV2 {
+        let (siblings, directions, _witness_nodes, root) = path.into_parts();
         PrivacyConfidentialMerklePathWitnessV2 {
-            siblings: path.siblings.into_iter().map(Vec::from).collect(),
-            directions: path.directions,
+            siblings: siblings.into_iter().map(Vec::from).collect(),
+            directions,
             // Match the compact SDK V2 wire: native recomputes these nodes.
             witness_nodes: Vec::new(),
-            root: path.root.to_vec(),
+            root: root.to_vec(),
         }
     }
 

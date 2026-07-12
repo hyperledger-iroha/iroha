@@ -74,7 +74,7 @@ fn pipeline_warning_emitted_on_dag_mismatch() {
     );
     let a_coin = AssetId::of(rose.clone(), alice_id.clone());
     let tx1 = TransactionBuilder::new(chain_id.clone(), alice_id.clone())
-        .with_instructions([Mint::asset_numeric(5_u32, a_coin.clone())])
+        .with_instructions([Mint::asset_quantity(5_u32, a_coin.clone())])
         .sign(iroha_test_samples::ALICE_KEYPAIR.private_key());
     let tx2 = TransactionBuilder::new(chain_id.clone(), bob_id.clone())
         .with_instructions([SetKeyValue::account(
@@ -199,7 +199,7 @@ fn pipeline_warning_ignored_for_stale_sidecar() {
     );
     let a_coin = AssetId::of(rose.clone(), alice_id.clone());
     let tx1 = TransactionBuilder::new(chain_id.clone(), alice_id.clone())
-        .with_instructions([Mint::asset_numeric(5_u32, a_coin.clone())])
+        .with_instructions([Mint::asset_quantity(5_u32, a_coin.clone())])
         .sign(iroha_test_samples::ALICE_KEYPAIR.private_key());
     let tx2 = TransactionBuilder::new(chain_id.clone(), bob_id.clone())
         .with_instructions([SetKeyValue::account(

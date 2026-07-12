@@ -1,6 +1,6 @@
 //! Asset-related instruction type aliases.
 
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::Quantity;
 
 use super::{definition::AssetDefinition, id::AssetDefinitionId, value::Asset};
 use crate::{
@@ -18,10 +18,10 @@ pub type UnregisterAssetDefinition = Unregister<AssetDefinition>;
 pub type TransferAssetDefinition = Transfer<Account, AssetDefinitionId, Account>;
 
 /// Transfer a quantity of [`Asset`] to another [`Account`].
-pub type TransferAsset = Transfer<Asset, Numeric, Account>;
+pub type TransferAsset = Transfer<Asset, Quantity, Account>;
 
 /// Mint a quantity of [`Asset`].
-pub type MintAsset = Mint<Numeric, Asset>;
+pub type MintAsset = Mint<Quantity, Asset>;
 
 /// Burn a quantity of [`Asset`].
-pub type BurnAsset = Burn<Numeric, Asset>;
+pub type BurnAsset = Burn<Quantity, Asset>;

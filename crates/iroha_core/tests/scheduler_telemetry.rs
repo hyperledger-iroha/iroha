@@ -73,10 +73,10 @@ fn scheduler_layer_metrics_and_utilization_populated() {
     );
     let a_coin = AssetId::of(rose.clone(), alice_id.clone());
     let tx1 = TransactionBuilder::new(chain_id.clone(), alice_id.clone())
-        .with_instructions([Mint::asset_numeric(10_u32, a_coin.clone())])
+        .with_instructions([Mint::asset_quantity(10_u32, a_coin.clone())])
         .sign(iroha_test_samples::ALICE_KEYPAIR.private_key());
     let tx2 = TransactionBuilder::new(chain_id.clone(), alice_id.clone())
-        .with_instructions([Transfer::asset_numeric(
+        .with_instructions([Transfer::asset_quantity(
             a_coin.clone(),
             5_u32,
             bob_id.clone(),

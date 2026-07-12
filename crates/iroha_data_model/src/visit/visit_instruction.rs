@@ -1,7 +1,5 @@
 //! Visitor helper functions for instructions.
 
-use iroha_primitives::numeric::Numeric;
-
 use super::Visit;
 use crate::{
     isi::{
@@ -387,7 +385,7 @@ pub fn visit_unregister<V: Visit + ?Sized>(visitor: &mut V, isi: &UnregisterBox)
 /// Dispatch mint variants to the appropriate hook.
 pub fn visit_mint<V: Visit + ?Sized>(visitor: &mut V, isi: &MintBox) {
     match isi {
-        MintBox::Asset(obj) => visitor.visit_mint_asset_numeric(obj),
+        MintBox::Asset(obj) => visitor.visit_mint_asset_quantity(obj),
         MintBox::TriggerRepetitions(obj) => visitor.visit_mint_trigger_repetitions(obj),
     }
 }
@@ -395,7 +393,7 @@ pub fn visit_mint<V: Visit + ?Sized>(visitor: &mut V, isi: &MintBox) {
 /// Dispatch burn variants to the appropriate hook.
 pub fn visit_burn<V: Visit + ?Sized>(visitor: &mut V, isi: &BurnBox) {
     match isi {
-        BurnBox::Asset(obj) => visitor.visit_burn_asset_numeric(obj),
+        BurnBox::Asset(obj) => visitor.visit_burn_asset_quantity(obj),
         BurnBox::TriggerRepetitions(obj) => visitor.visit_burn_trigger_repetitions(obj),
     }
 }
@@ -405,7 +403,7 @@ pub fn visit_transfer<V: Visit + ?Sized>(visitor: &mut V, isi: &TransferBox) {
     match isi {
         TransferBox::Domain(obj) => visitor.visit_transfer_domain(obj),
         TransferBox::AssetDefinition(obj) => visitor.visit_transfer_asset_definition(obj),
-        TransferBox::Asset(obj) => visitor.visit_transfer_asset_numeric(obj),
+        TransferBox::Asset(obj) => visitor.visit_transfer_asset_quantity(obj),
         TransferBox::Nft(obj) => visitor.visit_transfer_nft(obj),
     }
 }
@@ -477,9 +475,9 @@ macro_rules! instruction_visitors {
             visit_remove_account_key_value(&RemoveKeyValue<Account>),
             visit_register_nft(&Register<Nft>),
             visit_unregister_nft(&Unregister<Nft>),
-            visit_mint_asset_numeric(&Mint<Numeric, Asset>),
-            visit_burn_asset_numeric(&Burn<Numeric, Asset>),
-            visit_transfer_asset_numeric(&Transfer<Asset, Numeric, Account>),
+            visit_mint_asset_quantity(&Mint<Quantity, Asset>),
+            visit_burn_asset_quantity(&Burn<Quantity, Asset>),
+            visit_transfer_asset_quantity(&Transfer<Asset, Quantity, Account>),
             visit_transfer_nft(&Transfer<Account, NftId, Account>),
             visit_set_nft_key_value(&SetKeyValue<Nft>),
             visit_remove_nft_key_value(&RemoveKeyValue<Nft>),

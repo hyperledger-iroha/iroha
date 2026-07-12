@@ -635,11 +635,11 @@ impl From<DataSpaceId> for u64 {
     }
 }
 
-impl core::str::FromStr for DataSpaceId {
-    type Err = core::num::ParseIntError;
+impl FromStr for DataSpaceId {
+    type Err = std::num::ParseIntError;
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
-        value.parse::<u64>().map(Self::new)
+        value.parse::<u64>().map(Self)
     }
 }
 
@@ -1399,6 +1399,9 @@ impl LaneCatalog {
         lane_count: NonZeroU32,
         mut lanes: Vec<LaneConfig>,
     ) -> Result<Self, LaneCatalogError> {
+        if lanes.is_empty() {
+            return Err(LaneCatalogError::EmptyCatalog);
+        }
         let mut seen_ids = BTreeSet::new();
         let mut seen_aliases = BTreeSet::new();
 
@@ -1736,6 +1739,11 @@ mod tests {
         let decoded = DataSpaceId::decode_all(&mut slice).expect("decode DataSpaceId");
         assert_eq!(decoded, original);
         assert_eq!(DataSpaceId::UNIVERSAL.as_u64(), 0);
+        assert_eq!(
+            "7".parse::<DataSpaceId>().expect("parse DataSpaceId"),
+            original
+        );
+        assert!("-1".parse::<DataSpaceId>().is_err());
     }
 
     #[test]
@@ -2395,6 +2403,13 @@ mod tests {
             err,
             LaneCatalogError::DuplicateLaneAlias(alias) if alias == "beta"
         ));
+    }
+
+    #[test]
+    fn lane_catalog_constructor_rejects_empty_catalog() {
+        let error = LaneCatalog::new(NonZeroU32::new(1).expect("non-zero bound"), Vec::new())
+            .expect_err("validated catalogs must never be empty");
+        assert_eq!(error, LaneCatalogError::EmptyCatalog);
     }
 }
 

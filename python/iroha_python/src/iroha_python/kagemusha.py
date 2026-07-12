@@ -13,15 +13,14 @@ from typing import Any, Literal, Mapping, Optional, Union
 from ._native import load_crypto_extension
 
 BytesLike = Union[bytes, bytearray, memoryview]
-KagemushaOfflineSpendMode = Literal["recursive_spend_v2"]
+KagemushaOfflineSpendMode = Literal["recursive_spend_v1"]
 KagemushaInstructionArchiveType = Literal[
     "KagemushaTransfer",
     "RedeemKagemushaRecursive",
     "TopUpKagemushaRecursive",
 ]
 
-KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1 = "recursive_compact_v1"
-KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V2 = "recursive_spend_v2"
+KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1 = "recursive_spend_v1"
 KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPE_TRANSFER = "KagemushaTransfer"
 KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPE_REDEEM_RECURSIVE = "RedeemKagemushaRecursive"
 KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPE_TOPUP_RECURSIVE = "TopUpKagemushaRecursive"
@@ -168,8 +167,7 @@ _RECURSIVE_SPEND_COMPACT_TOKEN_PROJECTION_VERIFY_AT_HEIGHT_METHOD = (
 )
 
 __all__ = [
-    "KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1",
-    "KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V2",
+    "KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1",
     "KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPE_TRANSFER",
     "KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPE_REDEEM_RECURSIVE",
     "KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPE_TOPUP_RECURSIVE",
@@ -1041,14 +1039,14 @@ def preferred_kagemusha_offline_spend_mode(
             "pasta_cycle_v3_backend_available must be a boolean when provided"
         )
     if available:
-        return KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V2
+        return KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1
     return None
 
 
 def is_kagemusha_spend_again_mode(value: object) -> bool:
     """Return whether *value* is the sole first-release cash selector."""
 
-    return value == KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V2
+    return value == KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1
 
 
 def can_redeem_kagemusha_recursive_spend_witnessless(

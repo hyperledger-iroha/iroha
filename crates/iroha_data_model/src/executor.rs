@@ -396,7 +396,7 @@ pub mod prelude {
 mod tests {
     use super::*;
     use crate::transaction::executable::IvmBytecode;
-    use norito::codec::{Decode, Encode};
+    use norito::codec::{DecodeAll, Encode};
 
     #[test]
     fn bytecode_getter_returns_inner_bytecode() {

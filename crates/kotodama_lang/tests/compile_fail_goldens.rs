@@ -77,7 +77,55 @@ const CASES: &[CompileFailCase] = &[
         source: "seiyaku UntypedParameter {\nfn run(value) {}\n}",
         phase: DiagnosticPhase::Parse,
         code: "K1001",
-        message: "expected Colon",
+        message: "expected identifier but found RParen",
+        line: 2,
+    },
+    CompileFailCase {
+        name: "missing-kotoage-authorization",
+        source: "seiyaku MissingAuthorization {\nkotoage fn run() {}\n}",
+        phase: DiagnosticPhase::Parse,
+        code: "K1001",
+        message: "kotoage function `run` requires `authorize(\"Permission\")` before its body",
+        line: 2,
+    },
+    CompileFailCase {
+        name: "retired-parameter-order",
+        source: "seiyaku RetiredParameterOrder {\nfn run(value: int) {}\n}",
+        phase: DiagnosticPhase::Parse,
+        code: "E_RETIRED_DECLARATION_ORDER",
+        message: "parameters are type-first: write `int value`",
+        line: 2,
+    },
+    CompileFailCase {
+        name: "retired-state-order",
+        source: "seiyaku RetiredStateOrder {\nstate value: int;\n}",
+        phase: DiagnosticPhase::Parse,
+        code: "E_RETIRED_DECLARATION_ORDER",
+        message: "state declarations are type-first: write `state int value;`",
+        line: 2,
+    },
+    CompileFailCase {
+        name: "retired-const-order",
+        source: "seiyaku RetiredConstOrder {\nconst limit: int = 1;\n}",
+        phase: DiagnosticPhase::Parse,
+        code: "E_RETIRED_DECLARATION_ORDER",
+        message: "constants are type-first: write `const int limit = 1;`",
+        line: 2,
+    },
+    CompileFailCase {
+        name: "retired-struct-field-order",
+        source: "seiyaku RetiredStructFieldOrder {\nstruct Pair { value: int; }\n}",
+        phase: DiagnosticPhase::Parse,
+        code: "E_RETIRED_DECLARATION_ORDER",
+        message: "struct fields are type-first: write `int field;`",
+        line: 2,
+    },
+    CompileFailCase {
+        name: "retired-local-order",
+        source: "seiyaku RetiredLocalOrder {\nfn run() { let value: int = 1; }\n}",
+        phase: DiagnosticPhase::Parse,
+        code: "E_RETIRED_DECLARATION_ORDER",
+        message: "typed locals are type-first: write `let int value = ...;`",
         line: 2,
     },
     CompileFailCase {
@@ -131,9 +179,9 @@ const CASES: &[CompileFailCase] = &[
     CompileFailCase {
         name: "numeric-prefix-identifier",
         source: "seiyaku 1Invalid {\nfn run() {}\n}",
-        phase: DiagnosticPhase::Parse,
-        code: "K1001",
-        message: "expected identifier but found Number(1)",
+        phase: DiagnosticPhase::Lex,
+        code: "E_RETIRED_NUMERIC_SUFFIX",
+        message: "numeric literal suffixes are not part of Kotodama V1",
         line: 1,
     },
     CompileFailCase {
@@ -432,7 +480,7 @@ fn public_session_compile_fail_diagnostics_are_stable() {
 #[test]
 fn multi_error_renderers_preserve_identical_semantic_records_and_exact_spans() {
     let source = r#"seiyaku Broken {
-  fn first() { let quantity amount = 1; }
+  fn first() { let quantity amount = true; }
   fn second() { let value = 1; value = 2; }
 }"#;
     let source_name = "multi-error-renderers.ko";

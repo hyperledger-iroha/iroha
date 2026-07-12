@@ -2076,25 +2076,6 @@ impl Actor {
         cached
     }
 
-    fn lane_block_artifact_has_matching_application_receipt(
-        kura: &crate::kura::Kura,
-        artifact: &crate::kura::LaneBlockArtifact,
-    ) -> bool {
-        let ownership = &artifact.ownership;
-        let Some(receipt) = kura
-            .read_lane_block_application_receipt(ownership.lane_id, ownership.lane_block_height)
-        else {
-            return false;
-        };
-        let descriptor = &receipt.proposal.descriptor;
-        descriptor.lane_id == ownership.lane_id
-            && descriptor.dataspace_id == ownership.dataspace_id
-            && descriptor.lane_block_height == ownership.lane_block_height
-            && descriptor.lane_block_view == ownership.lane_block_view
-            && Some(descriptor.descriptor_hash) == ownership.lane_block_descriptor_hash
-            && receipt.artifact.ownership == *ownership
-    }
-
     pub(super) fn shared_lane_block_authority_for_ingress(
         &self,
         target_height: u64,
@@ -2260,6 +2241,9 @@ impl Actor {
         msg: BlockMessage,
         validator_set: &[PeerId],
     ) -> usize {
+        if self.consensus_participation_halted() || self.kura_recovery_required() {
+            return 0;
+        }
         if let Some((kind, key)) = lane_block_rebroadcast_identity(&msg) {
             let cooldown = self.lane_block_rebroadcast_cooldown();
             self.lane_block_rebroadcast_log
@@ -2285,6 +2269,9 @@ impl Actor {
         &self,
         proposal: &crate::sumeragi::consensus::LaneBlockProposalV1,
     ) -> Option<crate::lane_consensus::LaneBlockVoteV1> {
+        if self.consensus_participation_halted_now() {
+            return None;
+        }
         let local_peer = self.common_config.peer.id();
         if !proposal.descriptor.validator_set.contains(local_peer) {
             return None;
@@ -2435,6 +2422,9 @@ impl Actor {
         &mut self,
         proposal: &crate::sumeragi::consensus::LaneBlockProposalV1,
     ) -> bool {
+        if self.consensus_participation_halted() || self.kura_recovery_required() {
+            return false;
+        }
         let local_peer = self.common_config.peer.id().clone();
         if !self
             .subsystems
@@ -2830,6 +2820,9 @@ impl Actor {
     }
 
     pub(super) fn broadcast_ready_local_lane_block_votes(&mut self) -> bool {
+        if self.consensus_participation_halted() || self.kura_recovery_required() {
+            return false;
+        }
         let pruned_finalized = self.prune_durably_finalized_lane_block_state();
         let recovered_autonomous_proposals = self.cache_unapplied_autonomous_lane_block_proposals();
         let produced_autonomous_payloads = self.produce_ready_autonomous_lane_payloads();
@@ -2982,7 +2975,10 @@ impl Actor {
         }))
     }
 
-    fn rebroadcast_cached_lane_block_bundles_if_due(&mut self, now: Instant) -> usize {
+    pub(super) fn rebroadcast_cached_lane_block_bundles_if_due(&mut self, now: Instant) -> usize {
+        if self.consensus_participation_halted() || self.kura_recovery_required() {
+            return 0;
+        }
         let _ = self.prune_durably_finalized_lane_block_state();
         if self.last_lane_block_rebroadcast.is_some_and(|last| {
             now.saturating_duration_since(last) < self.legacy_lane_block_rebroadcast_cooldown()
@@ -3076,6 +3072,9 @@ impl Actor {
     }
 
     fn broadcast_due_lane_block_new_view_votes(&mut self) -> usize {
+        if self.consensus_participation_halted() || self.kura_recovery_required() {
+            return 0;
+        }
         let local_peer = self.common_config.peer.id().clone();
         if local_peer.public_key() != self.common_config.key_pair.public_key()
             || !matches!(
@@ -3435,6 +3434,9 @@ impl Actor {
         &self,
         proposal: &crate::sumeragi::consensus::LaneBlockProposalV1,
     ) -> Option<crate::lane_consensus::LaneBlockVoteV1> {
+        if self.consensus_participation_halted_now() {
+            return None;
+        }
         let local_peer = self.common_config.peer.id();
         if !proposal.descriptor.validator_set.contains(local_peer) {
             return None;
@@ -3579,6 +3581,9 @@ impl Actor {
     }
 
     pub(super) fn broadcast_lane_block_commit_votes_for_prepared_sessions(&mut self) -> usize {
+        if self.consensus_participation_halted() || self.kura_recovery_required() {
+            return 0;
+        }
         let local_peer = self.common_config.peer.id().clone();
         let requests = self
             .subsystems
@@ -3616,6 +3621,9 @@ impl Actor {
     }
 
     pub(super) fn broadcast_newly_sealed_lane_block_qcs(&mut self) {
+        if self.consensus_participation_halted() || self.kura_recovery_required() {
+            return;
+        }
         for qc in self.subsystems.lane_blocks.drain_newly_sealed_qcs() {
             if !self.lane_block_route_accepts_ingress(
                 qc.body.lane_id,

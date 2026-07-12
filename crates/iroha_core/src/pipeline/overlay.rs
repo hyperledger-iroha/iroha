@@ -1441,6 +1441,7 @@ impl TxOverlay {
         }
     }
 
+    #[cfg(test)]
     fn from_ivm_proved_instructions(
         instrs: Vec<InstructionBox>,
         _authority: &AccountId,
@@ -2063,19 +2064,12 @@ fn validate_generic_program_context<R: StateReadOnly>(
     tx: &SignedTransaction,
     summary: &GenericProgramSummary,
 ) -> Result<(), OverlayBuildError> {
-    crate::smartcontracts::ivm::validate_generic_execution_metadata(tx.metadata())
-        .map_err(|error| OverlayBuildError::ContractCall(error.to_string()))?;
-    if state_ro
-        .world()
-        .contract_manifests()
-        .get(&summary.code_hash)
-        .is_some()
-    {
-        return Err(OverlayBuildError::ContractCall(
-            "generic IVM program hash is bound to a contract manifest in state".to_owned(),
-        ));
-    }
-    Ok(())
+    crate::smartcontracts::ivm::validate_generic_execution_context(
+        state_ro.world(),
+        tx.metadata(),
+        summary.code_hash,
+    )
+    .map_err(|error| OverlayBuildError::ContractCall(error.to_string()))
 }
 
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
@@ -2686,6 +2680,8 @@ pub fn build_overlay_for_transaction_with_accounts(
             )?;
             let tx_gas_limit = require_tx_gas_limit(tx)?;
             reject_raw_contract_without_state(bytecode.as_ref())?;
+            crate::smartcontracts::ivm::validate_generic_execution_metadata(tx.metadata())
+                .map_err(|error| OverlayBuildError::ContractCall(error.to_string()))?;
             let mut vm = ivm::IVM::new(tx_gas_limit);
             let contract_call_context = parse_raw_contract_call_execution_context(
                 tx.metadata(),
@@ -2704,6 +2700,7 @@ pub fn build_overlay_for_transaction_with_accounts(
                     Arc::new(accounts.to_vec()),
                 )
             };
+            host.set_generic_execution();
             apply_streaming_metadata(&mut host, StreamingOverlayMetadata::default());
             vm.set_host(host);
             vm.load_program(bytecode.as_ref())
@@ -4231,6 +4228,111 @@ mod tests_overlay_manifest {
         program
     }
 
+    fn minimal_generic_program_with_syscall(syscall: u32) -> Vec<u8> {
+        let mut program = ivm::ProgramMetadata {
+            max_cycles: 100,
+            ..ivm::ProgramMetadata::default()
+        }
+        .encode();
+        program.extend_from_slice(
+            &ivm::encoding::wide::encode_sys(
+                ivm::instruction::wide::system::SCALL,
+                u8::try_from(syscall).expect("test syscall fits in the V1 encoding"),
+            )
+            .to_le_bytes(),
+        );
+        program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+        program
+    }
+
+    fn state_free_generic_transaction(
+        authority: AccountId,
+        keypair: &iroha_crypto::KeyPair,
+        program: Vec<u8>,
+        metadata: Metadata,
+    ) -> SignedTransaction {
+        TransactionBuilder::new(ChainId::from("state-free-generic-overlay"), authority)
+            .with_metadata(metadata)
+            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(program)))
+            .sign(keypair.private_key())
+    }
+
+    #[test]
+    fn state_free_generic_overlay_enforces_contract_only_syscall_profile() {
+        let (authority, keypair) = gen_account_in("wonderland");
+
+        for syscall in [
+            ivm::syscalls::SYSCALL_STATE_GET,
+            ivm::syscalls::SYSCALL_STATE_SET,
+            ivm::syscalls::SYSCALL_CALL_CONTRACT,
+        ] {
+            let mut metadata = Metadata::default();
+            insert_gas_limit(&mut metadata);
+            let transaction = state_free_generic_transaction(
+                authority.clone(),
+                &keypair,
+                minimal_generic_program_with_syscall(syscall),
+                metadata,
+            );
+
+            let error = build_overlay_for_transaction_with_accounts(&transaction, &[])
+                .expect_err("state-free execution must apply the generic syscall profile");
+            assert_eq!(
+                error,
+                OverlayBuildError::IvmRun(ivm::VMError::GenericSyscallNotAllowed { syscall })
+            );
+        }
+    }
+
+    #[test]
+    fn state_free_generic_overlay_rejects_reserved_contract_metadata_before_execution() {
+        let (authority, keypair) = gen_account_in("wonderland");
+        for reserved_key in ["contract_entrypoint", "contract_payload", "contract_address"] {
+            let mut metadata = Metadata::default();
+            insert_gas_limit(&mut metadata);
+            metadata.insert(
+                reserved_key.parse().expect("reserved metadata key"),
+                Json::new("malformed-or-forged"),
+            );
+            let transaction = state_free_generic_transaction(
+                authority.clone(),
+                &keypair,
+                minimal_generic_program(),
+                metadata,
+            );
+
+            let error = build_overlay_for_transaction_with_accounts(&transaction, &[])
+                .expect_err("generic execution must reject contract provenance metadata");
+            assert!(
+                matches!(
+                    error,
+                    OverlayBuildError::ContractCall(message)
+                        if message.contains("generic IVM programs cannot carry")
+                            && message.contains(reserved_key)
+                ),
+                "unexpected rejection for `{reserved_key}`: {error:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn state_free_generic_overlay_still_accepts_stateless_programs() {
+        let (authority, keypair) = gen_account_in("wonderland");
+        let mut metadata = Metadata::default();
+        insert_gas_limit(&mut metadata);
+        let transaction = state_free_generic_transaction(
+            authority,
+            &keypair,
+            minimal_generic_program(),
+            metadata,
+        );
+
+        let overlay = build_overlay_for_transaction_with_accounts(&transaction, &[])
+            .expect("stateless generic HALT must remain executable");
+        assert_eq!(overlay.instruction_count(), 0);
+        assert!(overlay.durable_state_overlay.is_empty());
+    }
+
     #[test]
     fn full_state_overlay_executes_authenticated_generic_programs() {
         let (authority, keypair) = gen_account_in("wonderland");
@@ -4462,8 +4564,8 @@ seiyaku ProtectedStateFreeOverlay {
             .compile_source(
                 r#"
 seiyaku PermissionlessStateFreeOverlay {
-  kotoage fn write(int value) {
-    let _value = value;
+  view fn write(int value) -> int {
+    return value;
   }
 }
 "#,
@@ -8006,7 +8108,7 @@ seiyaku ProtectedProved {
                 argument_schema: None,
                 return_type: None,
                 return_schema: None,
-                permission: None,
+                permission: Some("CanInvokeOverlayFixture".to_owned()),
                 read_keys: Vec::new(),
                 write_keys: Vec::new(),
                 access_hints_complete: Some(true),

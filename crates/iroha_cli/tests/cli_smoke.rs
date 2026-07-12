@@ -2594,7 +2594,7 @@ fn sorafs_incentives_service_cli_roundtrip() {
     let TransferBox::Asset(transfer) = transfer_box else {
         panic!("expected asset transfer, got {transfer_box:?}");
     };
-    assert_eq!(transfer.object, Numeric::from(25_u32));
+    assert_eq!(transfer.object.as_numeric(), &Numeric::from(25_u32));
     assert_eq!(transfer.destination, account_id("beneficiary"));
     assert_eq!(transfer.source.account, treasury);
 

@@ -99,7 +99,7 @@ fn sse_smoke_scenarios() -> Result<()> {
         let register = Register::trigger(Trigger::new(
             trigger_id.clone(),
             Action::new(
-                vec![InstructionBox::from(Mint::asset_numeric(1_u32, asset_id))],
+                vec![InstructionBox::from(Mint::asset_quantity(1_u32, asset_id))],
                 Repeats::Indefinitely,
                 ALICE_ID.clone(),
                 ExecuteTriggerEventFilter::new()

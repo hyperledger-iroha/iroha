@@ -64,43 +64,13 @@ THEOREM InitialStateEstablishesInductiveInvariant ==
 PROOF
   <1>1. ASSUME Init
          PROVE InductiveInvariant
-    <2>1. TypeInvariant
-      BY <1>1, Isa
-         DEF Init, TypeInvariant, Heights, Views, Generations, Ranks,
-             ContextRecords, ContextRecord, ExpectedEpoch
-    <2>2. OnePendingPersistencePerNode
-      BY <1>1, Isa DEF Init, OnePendingPersistencePerNode
-    <2>3. /\ ProposalSigningRequiresIntent
-          /\ PrepareSigningRequiresIntent
-          /\ CommitSigningRequiresIntent
-          /\ TimeoutSigningRequiresIntent
-      BY <1>1, Isa
-         DEF Init, ProposalSigningRequiresIntent,
-             PrepareSigningRequiresIntent, CommitSigningRequiresIntent,
-             TimeoutSigningRequiresIntent
-    <2>4. /\ HonestPrepareUniqueness
-          /\ HonestCommitUniqueness
-          /\ HonestTimeoutUniqueness
-          /\ DecisionAgreement
-          /\ AppliedRequiresDecision
-      BY <1>1, Isa
-         DEF Init, HonestPrepareUniqueness, HonestCommitUniqueness,
-             HonestTimeoutUniqueness, DecisionAgreement,
-             AppliedRequiresDecision
-    <2>5. LockBelowHighest
-      BY <1>1 DEF Init, LockBelowHighest, NoRank
-    <2>6. Safety
-      BY <2>1, <2>2, <2>3, <2>4, <2>5 DEF Safety
-    <2>7. ContextIdentityBindsFrozenEpoch
-      BY ContextRecordCarriesFrozenEpoch
-         DEF ContextIdentityBindsFrozenEpoch, ContextRecords,
-             ContextRecord
-    <2>8. OldContextCertificateRejected
-      BY <1>1, Isa DEF Init, OldContextCertificateRejected
-    <2>9. ContextParentWasApplied
-      BY <1>1, Isa DEF Init, ContextParentWasApplied, ContextRecord,
-                            ExpectedEpoch
-    <2> QED BY <2>6, <2>7, <2>8, <2>9 DEF InductiveInvariant
+    <2>1. Safety
+      BY <1>1, InitEstablishesReleaseSafety
+    <2>2. /\ ContextIdentityBindsFrozenEpoch
+          /\ OldContextCertificateRejected
+          /\ ContextParentWasApplied
+      BY <1>1, InitEstablishesContextSafety
+    <2> QED BY <2>1, <2>2 DEF InductiveInvariant
   <1> QED BY <1>1 DEF InitialStateObligation
 
 ActionPreservationObligation ==
@@ -122,17 +92,20 @@ LockMonotonicityObligation ==
   InductiveInvariant /\ [NextV2]_vars => LockMonotonicityAction
 
 THEOREM PersistLockCommitIsLockMonotone ==
-  \A request \in LockCommitWalSet:
-    TypeInvariant /\ PersistLockCommit(request)
+  \A request:
+    TypeInvariant /\ PendingVoteWritesAuthorized
+      /\ PersistLockCommit(request)
       => LockMonotonicityAction
-BY SMT DEF PersistLockCommit, LockMonotonicityAction
+BY SMT
+   DEF TypeInvariant, PendingVoteWritesAuthorized, PersistLockCommit,
+       LockMonotonicityAction, LockCommitWalSet, QcRecordSet, Views, Ranks
 
 THEOREM PersistInstallTCIsLockMonotone ==
   \A request:
     TypeInvariant /\ PersistInstallTC(request)
       => LockMonotonicityAction
-BY SMT DEF PersistInstallTC, LockMonotonicityAction,
-           TcHighRank, HighestTimeoutVote
+BY SMT
+   DEF TypeInvariant, PersistInstallTC, LockMonotonicityAction, Ranks
 
 PrepareCertificateAvailability ==
   \A qc \in prepareQCs:

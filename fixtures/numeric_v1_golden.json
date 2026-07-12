@@ -52,6 +52,20 @@
       "input": "frame"
     },
     {
+      "decode_as": "quantity",
+      "expected": "noncanonical_decimal",
+      "hex": "4e5254300000e4769984c81ce0e8b678f2eb06274ee30005000000000000005abfe4ed619eca78000000000001",
+      "id": "quantity_zero_nonzero_scale",
+      "input": "frame"
+    },
+    {
+      "decode_as": "quantity",
+      "expected": "noncanonical_decimal",
+      "hex": "4e5254300000e4769984c81ce0e8b678f2eb06274ee30006000000000000006aa6756bf87e6e3a00010000000a01",
+      "id": "quantity_removable_zero",
+      "input": "frame"
+    },
+    {
       "decode_as": "int",
       "expected": "frame_too_large",
       "hex": "4e525430000007c039457363b9e1d36bbd31d93dec4a004500000000000000b84bd38e10be6d3a00410000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000008000",
@@ -63,6 +77,34 @@
       "expected": "frame_too_large",
       "hex": "4e525430000007c039457363b9e1d36bbd31d93dec4a0045000000000000007cb3f53be043001e0041000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7fff",
       "id": "negative_mantissa_overflow",
+      "input": "frame"
+    },
+    {
+      "decode_as": "int",
+      "expected": "frame_too_short",
+      "hex": "4e525430000007c039457363b9e1d36bbd31d93dec4a000500000000000000049f20de01e9e724",
+      "id": "frame_too_short",
+      "input": "frame"
+    },
+    {
+      "decode_as": "int",
+      "expected": "invalid_header",
+      "hex": "4f525430000007c039457363b9e1d36bbd31d93dec4a000500000000000000049f20de01e9e724000100000001",
+      "id": "invalid_frame_header",
+      "input": "frame"
+    },
+    {
+      "decode_as": "int",
+      "expected": "length_mismatch",
+      "hex": "4e525430000007c039457363b9e1d36bbd31d93dec4a000600000000000000049f20de01e9e724000100000001",
+      "id": "declared_frame_length_mismatch",
+      "input": "frame"
+    },
+    {
+      "decode_as": "int",
+      "expected": "length_mismatch",
+      "hex": "4e525430000007c039457363b9e1d36bbd31d93dec4a000500000000000000e6ff6c8aa17090c0000200000001",
+      "id": "numeric_body_length_mismatch",
       "input": "frame"
     },
     {
@@ -155,6 +197,147 @@
       "hex": "001101000000",
       "id": "truncated_envelope",
       "input": "envelope"
+    },
+    {
+      "decode_as": "int",
+      "expected": "truncated_envelope",
+      "hex": "0011010000002c4e525430000007c039457363b9e1d36bbd31d93dec4a000500000000000000049f20de01e9e724000100000001492ea9bc5e9e70cf3d39ce3e3bb27f16eac65f9a2a5d5a98aba1aef1ff55a7bf",
+      "id": "envelope_length_mismatch",
+      "input": "envelope"
+    }
+  ],
+  "invalid_text": [
+    {
+      "expected": "invalid_text",
+      "id": "int_json_number",
+      "input": 1,
+      "kind": "int"
+    },
+    {
+      "expected": "invalid_text",
+      "id": "int_leading_zero",
+      "input": "01",
+      "kind": "int"
+    },
+    {
+      "expected": "invalid_text",
+      "id": "int_plus_sign",
+      "input": "+1",
+      "kind": "int"
+    },
+    {
+      "expected": "invalid_text",
+      "id": "int_negative_zero",
+      "input": "-0",
+      "kind": "int"
+    },
+    {
+      "expected": "mantissa_overflow",
+      "id": "int_positive_overflow",
+      "input": "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042048",
+      "kind": "int"
+    },
+    {
+      "expected": "mantissa_overflow",
+      "id": "int_negative_overflow",
+      "input": "-6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042049",
+      "kind": "int"
+    },
+    {
+      "expected": "invalid_text",
+      "id": "decimal_json_number",
+      "input": 1,
+      "kind": "decimal"
+    },
+    {
+      "expected": "invalid_text",
+      "id": "decimal_exponent",
+      "input": "1e0",
+      "kind": "decimal"
+    },
+    {
+      "expected": "invalid_text",
+      "id": "decimal_whitespace",
+      "input": " 1",
+      "kind": "decimal"
+    },
+    {
+      "expected": "invalid_text",
+      "id": "decimal_trailing_fractional_zero",
+      "input": "1.0",
+      "kind": "decimal"
+    },
+    {
+      "expected": "invalid_text",
+      "id": "decimal_zero_fraction",
+      "input": "0.0",
+      "kind": "decimal"
+    },
+    {
+      "expected": "invalid_scale",
+      "id": "decimal_scale_29",
+      "input": "0.00000000000000000000000000001",
+      "kind": "decimal"
+    },
+    {
+      "expected": "mantissa_overflow",
+      "id": "decimal_mantissa_overflow",
+      "input": "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042048",
+      "kind": "decimal"
+    },
+    {
+      "expected": "invalid_text",
+      "id": "quantity_json_number",
+      "input": 1,
+      "kind": "quantity"
+    },
+    {
+      "expected": "invalid_text",
+      "id": "quantity_leading_zero",
+      "input": "01",
+      "kind": "quantity"
+    },
+    {
+      "expected": "invalid_text",
+      "id": "quantity_trailing_fractional_zero",
+      "input": "1.0",
+      "kind": "quantity"
+    },
+    {
+      "expected": "invalid_text",
+      "id": "quantity_zero_fraction",
+      "input": "0.0",
+      "kind": "quantity"
+    },
+    {
+      "expected": "invalid_scale",
+      "id": "quantity_scale_29",
+      "input": "0.00000000000000000000000000001",
+      "kind": "quantity"
+    },
+    {
+      "expected": "mantissa_overflow",
+      "id": "quantity_mantissa_overflow",
+      "input": "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042048",
+      "kind": "quantity"
+    },
+    {
+      "expected": "invalid_text",
+      "id": "quantity_exponent",
+      "input": "1e0",
+      "kind": "quantity"
+    },
+    {
+      "expected": "invalid_text",
+      "id": "quantity_not_a_number",
+      "input": "NaN",
+      "kind": "quantity"
+    },
+    {
+      "expected": "negative_quantity",
+      "id": "quantity_negative",
+      "input": "-1",
+      "kind": "quantity"
     }
   ],
   "maximum_scale": 28,
@@ -269,6 +452,26 @@
       "scale": 0
     },
     {
+      "body_hex": "400000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000008000",
+      "canonical": "-6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042048",
+      "envelope_hex": "0012010000006d4e5254300000ba2ffed52e4d8ee16f17efefe1828524004500000000000000fdd0a9a26cc3c37f004000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000080004fca6db2bcfbceaf06bb3d697de883de66f6bb8dbd12abbe6a8d41bd563a562b",
+      "frame_hex": "4e5254300000ba2ffed52e4d8ee16f17efefe1828524004500000000000000fdd0a9a26cc3c37f00400000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000008000",
+      "id": "decimal_min",
+      "kind": "decimal",
+      "mantissa": "-6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042048",
+      "scale": 0
+    },
+    {
+      "body_hex": "40000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f00",
+      "canonical": "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042047",
+      "envelope_hex": "0012010000006d4e5254300000ba2ffed52e4d8ee16f17efefe18285240045000000000000006017e873ef9f03bb0040000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f00d60d14c5da27392c93fadcf9a97159f2d4b00a79ebe1979bc517c9ea0778c909",
+      "frame_hex": "4e5254300000ba2ffed52e4d8ee16f17efefe18285240045000000000000006017e873ef9f03bb0040000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f00",
+      "id": "decimal_max",
+      "kind": "decimal",
+      "mantissa": "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042047",
+      "scale": 0
+    },
+    {
       "body_hex": "010000008302",
       "canonical": "-1.25",
       "envelope_hex": "0012010000002e4e5254300000ba2ffed52e4d8ee16f17efefe182852400060000000000000041a3835da731f4a90001000000830204dc0bb3517ed28003bf2d8c5d853f61b7e6c14db4555d0546e40dabc7b0ebbb",
@@ -307,6 +510,26 @@
       "kind": "quantity",
       "mantissa": "125",
       "scale": 2
+    },
+    {
+      "body_hex": "40000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f00",
+      "canonical": "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042047",
+      "envelope_hex": "0013010000006d4e5254300000e4769984c81ce0e8b678f2eb06274ee30045000000000000006017e873ef9f03bb0040000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f0019751d0dcb0bbae9f2eff7526a251152bdefcc4b350b0b229698e8c218676341",
+      "frame_hex": "4e5254300000e4769984c81ce0e8b678f2eb06274ee30045000000000000006017e873ef9f03bb0040000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f00",
+      "id": "quantity_max",
+      "kind": "quantity",
+      "mantissa": "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042047",
+      "scale": 0
+    },
+    {
+      "body_hex": "01000000011c",
+      "canonical": "0.0000000000000000000000000001",
+      "envelope_hex": "0013010000002e4e5254300000e4769984c81ce0e8b678f2eb06274ee3000600000000000000e9c594cbab60b3950001000000011c0b9a832aec0dbcc17cb413c211f4a059abccdca61b688fce801adfe1577d55cb",
+      "frame_hex": "4e5254300000e4769984c81ce0e8b678f2eb06274ee3000600000000000000e9c594cbab60b3950001000000011c",
+      "id": "quantity_scale_28",
+      "kind": "quantity",
+      "mantissa": "1",
+      "scale": 28
     }
   ]
 }

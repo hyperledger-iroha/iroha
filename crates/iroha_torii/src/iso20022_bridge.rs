@@ -2246,7 +2246,7 @@ impl Iso20022BridgeRuntime {
         let asset = AssetId::new(asset_definition.clone(), debtor.clone());
         let asset_id_str = asset.to_string();
         context.asset_id = Some(asset_id_str);
-        let transfer = Transfer::asset_numeric(asset, amount, creditor);
+        let transfer = Transfer::asset_quantity(asset, amount, creditor);
 
         let mut metadata = Metadata::default();
         for (key, value) in [
@@ -2439,7 +2439,7 @@ impl Iso20022BridgeRuntime {
         let asset = AssetId::new(asset_definition.clone(), debtor.clone());
         let asset_id_str = asset.to_string();
         context.asset_id = Some(asset_id_str);
-        let transfer = Transfer::asset_numeric(asset, amount, creditor);
+        let transfer = Transfer::asset_quantity(asset, amount, creditor);
 
         let mut metadata = Metadata::default();
         for (key, value) in [

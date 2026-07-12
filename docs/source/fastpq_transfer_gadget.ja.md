@@ -112,7 +112,7 @@ fn pay(AccountId a, AccountId b, AssetDefinitionId asset, int x) {
 }
 ```
 
-`TransferAssetBatch` は、個々の `Transfer::asset_numeric` 呼び出しと同じ権限チェックと算術チェックを実行しますが、単一の `TransferTranscript` 内にすべての差分を記録します。マルチデルタ転写物では、デルタごとのコミットメントがフォローアップされるまで、ポセイドン ダイジェストが省略されます。 Kotodama ビルダーは、begin/end syscall を自動的に発行するようになり、コントラクトは Norito ペイロードを手動でエンコードしなくてもバッチ転送を展開できるようになりました。
+`TransferAssetBatch` は、個々の `Transfer::asset_quantity` 呼び出しと同じ権限チェックと算術チェックを実行しますが、単一の `TransferTranscript` 内にすべての差分を記録します。マルチデルタ転写物では、デルタごとのコミットメントがフォローアップされるまで、ポセイドン ダイジェストが省略されます。 Kotodama ビルダーは、begin/end syscall を自動的に発行するようになり、コントラクトは Norito ペイロードを手動でエンコードしなくてもバッチ転送を展開できるようになりました。
 
 ## 行数回帰ハーネス
 

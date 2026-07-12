@@ -36,7 +36,7 @@ translator: machine-google-reviewed
 - تأكد من اتباع [أدلة النمط] (#style-guides) للحصول على التعليمات البرمجية والوثائق.
 - كتابة [الاختبارات](https://doc.rust-lang.org/cargo/commands/cargo-test.html). تأكد من اجتيازهم جميعًا (`cargo test --workspace`). إذا قمت بلمس مكدس التشفير SM، فقم أيضًا بتشغيل `cargo test -p iroha_crypto --features "sm sm_proptest"` لتنفيذ مجموعة Fuzz/الخاصية الاختيارية.
   - ملاحظة: الاختبارات التي تمارس المنفذ IVM ستقوم تلقائيًا بتجميع رمز ثانوي محدد ومحدد للمنفذ في حالة عدم وجود `defaults/executor.to`. ليست هناك حاجة إلى خطوة مسبقة لإجراء الاختبارات. لإنشاء رمز البايت المتعارف عليه للتكافؤ، يمكنك تشغيل:
-    -`cargo run --manifest-path scripts/generate_executor_to/Cargo.toml`
+    -`cargo run --locked -p ivm --bin ivm_fixture_export -- --write`
     -`cargo run --manifest-path scripts/regenerate_codec_samples/Cargo.toml`
 - إذا قمت بتغيير صناديق المشتق/proc-macro، فقم بتشغيل مجموعات Trybuild UI عبر
   `make check-proc-macro-ui` (أو

@@ -10616,205 +10616,146 @@ test("getSumeragiStatus fetches consensus metrics", async () => {
   });
 });
 
-test("getSumeragiStatusTyped normalizes governance seals", async () => {
+function sumeragiV2Status(overrides = {}) {
+  return {
+    protocol_version: 2,
+    node_fingerprint: "hash:NODE#0001",
+    build_fingerprint: "hash:BUILD#0001",
+    config_fingerprint: "hash:CONFIG#0001",
+    height_context_id: ["hash:CONTEXT#0001"],
+    height: 15,
+    view: 4,
+    phase: { phase: "Prepare", details: null },
+    leader: 1,
+    body_state: { state: "Validated", details: null },
+    pending_persistence_id: null,
+    last_committed_height: 14,
+    last_committed_subject: {
+      parent_block_hash: "hash:PARENT#0001",
+      block_hash: "hash:BLOCK#0001",
+      payload_hash: "hash:PAYLOAD#0001",
+    },
+    ...overrides,
+  };
+}
+
+test("getSumeragiStatusTyped parses the authoritative v2 reducer status", async () => {
   const fetchImpl = async (url, init) => {
     assert.equal(url, `${BASE_URL}/v1/sumeragi/status`);
     assert.equal(init.headers.Accept, "application/json");
     return createResponse({
       status: 200,
-      jsonData: {
-        mode_tag: "iroha2-consensus::permissioned-sumeragi@v2",
-        staged_mode_tag: "iroha2-consensus::npos-sumeragi@v2",
-        staged_mode_activation_height: "10",
-        mode_activation_lag_blocks: 2,
-        consensus_caps: {
-          collectors_k: "2",
-          redundant_send_r: "1",
-          da_enabled: true,
-          rbc_chunk_max_bytes: "1024",
-          rbc_session_ttl_ms: 5000,
-          rbc_store_max_sessions: "64",
-          rbc_store_soft_sessions: "32",
-          rbc_store_max_bytes: "4096",
-          rbc_store_soft_bytes: "2048",
-        },
-        commit_qc: {
-          height: "41",
-          view: "2",
-          epoch: "5",
-          block_hash: "0xabc",
-          validator_set_hash: "0xdef",
-          validator_set_len: "4",
-          signatures_total: "3",
-        },
-        commit_quorum: {
-          height: "41",
-          view: "2",
-          block_hash: "0xabc",
-          signatures_present: "3",
-          signatures_counted: "3",
-          signatures_set_b: "2",
-          signatures_required: "3",
-          last_updated_ms: "1700",
-        },
-        leader_index: "5",
-        lane_commitments: [
-          {
-            block_height: "42",
-            lane_id: "7",
-            tx_count: 3,
-            total_chunks: 4,
-            rbc_bytes_total: 256,
-            teu_total: 64,
-            block_hash: "feedface",
+      jsonData: sumeragiV2Status({
+        pending_persistence_id: 17,
+        locked_prepare_qc: {
+          round: {
+            context_id: ["hash:CONTEXT#0001"],
+            height: 15,
+            view: 3,
           },
-        ],
-        dataspace_commitments: [
-          {
-            block_height: "42",
-            lane_id: "7",
-            dataspace_id: 9,
-            tx_count: 1,
-            total_chunks: 1,
-            rbc_bytes_total: 96,
-            teu_total: 16,
-            block_hash: "facedead",
+          phase: { phase: "Prepare", details: null },
+          subject: {
+            parent_block_hash: "hash:PARENT#0001",
+            block_hash: "hash:BLOCK#0001",
+            payload_hash: "hash:PAYLOAD#0001",
           },
-        ],
-        lane_governance: [
-          {
-            lane_id: "7",
-            alias: "archive",
-            dataspace_id: "9",
-            visibility: "public",
-            storage_profile: "full_replica",
-            manifest_required: true,
-            manifest_ready: false,
-            validator_ids: ["alice@test"],
-            protected_namespaces: ["finance"],
-            privacy_commitments: [
-              {
-                id: "4",
-                scheme: "merkle",
-                merkle: { root: "0xffff", max_depth: "12" },
-              },
-              {
-                id: 5,
-                scheme: "snark",
-                snark: {
-                  circuit_id: "8",
-                  verifying_key_digest: "0xaaaa",
-                  statement_hash: "0xbbbb",
-                  proof_hash: "0xcccc",
-                },
-              },
-            ],
+        },
+        last_timeout_certificate: {
+          round: {
+            context_id: ["hash:CONTEXT#0001"],
+            height: 15,
+            view: 3,
           },
-        ],
-        lane_governance_sealed_total: "2",
-        lane_governance_sealed_aliases: ["archive", "payments"],
-      },
+          highest_prepare_qc: null,
+          certificate_hash: "hash:TC#0001",
+        },
+      }),
       headers: { "content-type": "application/json" },
     });
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const payload = await client.getSumeragiStatusTyped();
-  assert.equal(payload.mode_tag, "iroha2-consensus::permissioned-sumeragi@v2");
-  assert.equal(payload.staged_mode_tag, "iroha2-consensus::npos-sumeragi@v2");
-  assert.equal(payload.staged_mode_activation_height, 10);
-  assert.equal(payload.mode_activation_lag_blocks, 2);
-  assert.ok(payload.consensus_caps);
-  assert.equal(payload.consensus_caps.collectors_k, 2);
-  assert.equal(payload.consensus_caps.rbc_chunk_max_bytes, 1024);
-  assert.deepEqual(payload.commit_qc, {
-    height: 41,
-    view: 2,
-    epoch: 5,
-    block_hash: "0xabc",
-    validator_set_hash: "0xdef",
-    validator_set_len: 4,
-    signatures_total: 3,
-  });
-  assert.deepEqual(payload.commit_quorum, {
-    height: 41,
-    view: 2,
-    block_hash: "0xabc",
-    signatures_present: 3,
-    signatures_counted: 3,
-    signatures_set_b: 2,
-    signatures_required: 3,
-    last_updated_ms: 1700,
-  });
-  assert.equal(payload.leader_index, "5");
-  assert.deepEqual(payload.lane_commitments, [
-    {
-      block_height: 42,
-      lane_id: 7,
-      tx_count: 3,
-      total_chunks: 4,
-      rbc_bytes_total: 256,
-      teu_total: 64,
-      block_hash: "feedface",
-    },
-  ]);
-  assert.deepEqual(payload.dataspace_commitments, [
-    {
-      block_height: 42,
-      lane_id: 7,
-      dataspace_id: 9,
-      tx_count: 1,
-      total_chunks: 1,
-      rbc_bytes_total: 96,
-      teu_total: 16,
-      block_hash: "facedead",
-    },
-  ]);
-  assert.deepEqual(payload.lane_governance, [
-    {
-      lane_id: 7,
-      alias: "archive",
-      dataspace_id: 9,
-      visibility: "public",
-      storage_profile: "full_replica",
-      governance: null,
-      manifest_required: true,
-      manifest_ready: false,
-      manifest_path: null,
-      validator_ids: ["alice@test"],
-      quorum: null,
-      protected_namespaces: ["finance"],
-      runtime_upgrade: null,
-      privacy_commitments: [
-        {
-          id: 4,
-          scheme: "merkle",
-          merkle: { root: "0xffff", max_depth: 12 },
-          snark: null,
+  assert.equal(payload.protocol_version, 2);
+  assert.deepEqual(payload.height_context_id, ["hash:CONTEXT#0001"]);
+  assert.equal(payload.height, 15);
+  assert.equal(payload.view, 4);
+  assert.deepEqual(payload.phase, { phase: "Prepare", details: null });
+  assert.equal(payload.locked_prepare_qc.round.view, 3);
+  assert.equal(payload.last_timeout_certificate.certificate_hash, "hash:TC#0001");
+  assert.deepEqual(payload.body_state, { state: "Validated", details: null });
+  assert.equal(payload.pending_persistence_id, 17);
+  assert.equal(payload.last_committed_height, 14);
+  assert.equal(payload.last_committed_subject.payload_hash, "hash:PAYLOAD#0001");
+});
+
+test("getSumeragiStatusTyped rejects the retired actor/RBC schema", async () => {
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () =>
+      createResponse({
+        status: 200,
+        jsonData: {
+          mode_tag: "iroha2-consensus::permissioned-sumeragi@v2",
+          commit_qc: { height: 14 },
+          pending_rbc: { sessions: 0 },
         },
-        {
-          id: 5,
-          scheme: "snark",
-          merkle: null,
-          snark: {
-            circuit_id: 8,
-            verifying_key_digest: "0xaaaa",
-            statement_hash: "0xbbbb",
-            proof_hash: "0xcccc",
-          },
-        },
-      ],
-    },
-  ]);
-  assert.equal(payload.lane_governance_sealed_total, 2);
-  assert.deepEqual(payload.lane_governance_sealed_aliases, ["archive", "payments"]);
+        headers: { "content-type": "application/json" },
+      }),
+  });
+
+  await assert.rejects(
+    () => client.getSumeragiStatusTyped(),
+    /unsupported fields: commit_qc, mode_tag, pending_rbc/,
+  );
+});
+
+test("getSumeragiStatusTyped fails closed on malformed v2 reducer state", async () => {
+  const cases = [
+    [
+      "wrong protocol",
+      sumeragiV2Status({ protocol_version: 1 }),
+      /protocol_version must be 2/,
+    ],
+    [
+      "tag payload",
+      sumeragiV2Status({ phase: { phase: "Prepare", details: {} } }),
+      /sumeragi\.phase\.details must be null/,
+    ],
+    [
+      "future commit",
+      sumeragiV2Status({ height: 13 }),
+      /last_committed_height must not exceed/,
+    ],
+    [
+      "zero persistence id",
+      sumeragiV2Status({ pending_persistence_id: 0 }),
+      /pending_persistence_id must be positive/,
+    ],
+    [
+      "retired field",
+      sumeragiV2Status({ pending_rbc: { sessions: 0 } }),
+      /unsupported fields: pending_rbc/,
+    ],
+  ];
+
+  for (const [label, jsonData, expected] of cases) {
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () =>
+        createResponse({
+          status: 200,
+          jsonData,
+          headers: { "content-type": "application/json" },
+        }),
+    });
+    // eslint-disable-next-line no-await-in-loop
+    await assert.rejects(() => client.getSumeragiStatusTyped(), expected, label);
+  }
 });
 
 test("getSumeragiStatusTyped parses settlement and relay envelopes", async () => {
   const fetchImpl = async () =>
     createResponse({
       status: 200,
-      jsonData: {
-        mode_tag: "iroha2-consensus::permissioned-sumeragi@v2",
+      jsonData: sumeragiV2Status({
         lane_settlement_commitments: [
           {
             block_height: "21",
@@ -10881,7 +10822,7 @@ test("getSumeragiStatusTyped parses settlement and relay envelopes", async () =>
             },
           },
         ],
-      },
+      }),
       headers: { "content-type": "application/json" },
     });
   const client = new ToriiClient(BASE_URL, { fetchImpl });
@@ -10898,8 +10839,7 @@ test("getSumeragiStatusTyped rejects invalid relay settlement hash", async () =>
   const fetchImpl = async () =>
     createResponse({
       status: 200,
-      jsonData: {
-        mode_tag: "iroha2-consensus::permissioned-sumeragi@v2",
+      jsonData: sumeragiV2Status({
         lane_relay_envelopes: [
           {
             lane_id: 1,
@@ -10921,7 +10861,7 @@ test("getSumeragiStatusTyped rejects invalid relay settlement hash", async () =>
             rbc_bytes_total: 0,
           },
         ],
-      },
+      }),
       headers: { "content-type": "application/json" },
     });
   const client = new ToriiClient(BASE_URL, { fetchImpl });
@@ -10932,8 +10872,7 @@ test("getSumeragiStatusTyped rejects invalid relay fastpq_proof digest", async (
   const fetchImpl = async () =>
     createResponse({
       status: 200,
-      jsonData: {
-        mode_tag: "iroha2-consensus::permissioned-sumeragi@v2",
+      jsonData: sumeragiV2Status({
         lane_relay_envelopes: [
           {
             lane_id: 1,
@@ -10956,7 +10895,7 @@ test("getSumeragiStatusTyped rejects invalid relay fastpq_proof digest", async (
             fastpq_proof: { proof_digest: 42 },
           },
         ],
-      },
+      }),
       headers: { "content-type": "application/json" },
     });
   const client = new ToriiClient(BASE_URL, { fetchImpl });
@@ -13038,6 +12977,49 @@ test("governanceSubmitPlainBallot accepts decimal Numeric amounts", async () => 
     direction: "aye",
   });
   assert.equal(capturedBody.amount, "12.500");
+});
+
+test("governanceSubmitPlainBallot enforces the signed Numeric and text bounds", async () => {
+  let fetchCalls = 0;
+  let capturedBody;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async (_url, init) => {
+      fetchCalls += 1;
+      capturedBody = JSON.parse(init.body);
+      return createResponse({
+        status: 200,
+        jsonData: cloneFixture(toriiFixtures.governance.plainBallotResponse),
+        headers: { "content-type": "application/json" },
+      });
+    },
+  });
+  const maximumAmount = (1n << 511n) - 1n;
+  const payload = {
+    authority: FIXTURE_ALICE_ID,
+    chainId: "chain-0",
+    referendumId: "ref-plain-bounds",
+    owner: FIXTURE_ALICE_ID,
+    durationBlocks: 1,
+    direction: "aye",
+  };
+
+  await client.governanceSubmitPlainBallot({ ...payload, amount: maximumAmount });
+  assert.equal(capturedBody.amount, maximumAmount.toString());
+  assert.equal(fetchCalls, 1);
+
+  await assert.rejects(
+    () => client.governanceSubmitPlainBallot({ ...payload, amount: 1n << 511n }),
+    /signed 512-bit range/u,
+  );
+  await assert.rejects(
+    () =>
+      client.governanceSubmitPlainBallot({
+        ...payload,
+        amount: "1".repeat(100_000),
+      }),
+    /bounded Numeric text length/u,
+  );
+  assert.equal(fetchCalls, 1);
 });
 
 test("governanceSubmitPlainBallot forwards AbortSignal to fetch", async () => {
@@ -15365,7 +15347,7 @@ test("listExplorerRwas encodes owner/domain filters and pagination", async () =>
             id: SAMPLE_RWA_ID,
             owned_by: SAMPLE_ACCOUNT_ID,
             quantity: "10.5",
-            held_quantity: "1.0",
+            held_quantity: "1",
             primary_reference: "vault-cert-001",
             status: "active",
             is_frozen: false,
@@ -15395,7 +15377,7 @@ test("listExplorerRwas encodes owner/domain filters and pagination", async () =>
     id: SAMPLE_RWA_ID,
     ownedBy: SAMPLE_ACCOUNT_ID,
     quantity: "10.5",
-    heldQuantity: "1.0",
+    heldQuantity: "1",
     primaryReference: "vault-cert-001",
     status: "active",
     isFrozen: false,
@@ -15404,7 +15386,7 @@ test("listExplorerRwas encodes owner/domain filters and pagination", async () =>
       id: SAMPLE_RWA_ID,
       owned_by: SAMPLE_ACCOUNT_ID,
       quantity: "10.5",
-      held_quantity: "1.0",
+      held_quantity: "1",
       primary_reference: "vault-cert-001",
       status: "active",
       is_frozen: false,
@@ -15457,6 +15439,43 @@ test("getExplorerRwaDetail encodes path and decodes response", async () => {
       metadata: {},
     },
   });
+});
+
+test("explorer RWA readbacks reject noncanonical quantity fields", async () => {
+  for (const record of [
+    {
+      id: SAMPLE_RWA_ID,
+      owned_by: SAMPLE_ACCOUNT_ID,
+      quantity: "1.0",
+      held_quantity: "0",
+      primary_reference: "vault-cert",
+      status: null,
+      is_frozen: false,
+      metadata: {},
+    },
+    {
+      id: SAMPLE_RWA_ID,
+      owned_by: SAMPLE_ACCOUNT_ID,
+      quantity: "1",
+      held_quantity: "-1",
+      primary_reference: "vault-cert",
+      status: null,
+      is_frozen: false,
+      metadata: {},
+    },
+  ]) {
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () => createResponse({
+        status: 200,
+        jsonData: { pagination: {}, items: [record] },
+        headers: { "content-type": "application/json" },
+      }),
+    });
+    await assert.rejects(
+      () => client.listExplorerRwas(),
+      /canonical non-negative Kotodama V1 quantity/u,
+    );
+  }
 });
 
 test("queryRwas posts structured envelope", async () => {
@@ -16129,6 +16148,26 @@ test("listAccountAssets enforces canonical quantity strings", async () => {
     () => client.listAccountAssets(FIXTURE_ALICE_ID),
     /account asset list response\.items\[0]\.quantity/,
   );
+});
+
+test("listAccountAssets rejects noncanonical quantity spellings", async () => {
+  for (const quantity of [-1, "01", "1.0", "1.20", " 1", "1e0"]) {
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () =>
+        createResponse({
+          status: 200,
+          jsonData: {
+            items: [{ asset_id: FIXTURE_ASSET_ID_A, quantity }],
+            total: 1,
+          },
+          headers: { "content-type": "application/json" },
+        }),
+    });
+    await assert.rejects(
+      () => client.listAccountAssets(FIXTURE_ALICE_ID),
+      /account asset list response\.items\[0\]\.quantity/,
+    );
+  }
 });
 
 test("listAccountAssets rejects camelCase assetId fields", async () => {
@@ -21077,7 +21116,7 @@ test("multisig response decoders reject non-exact resolved account ids", async (
       clientWithResponse({
         resolved_multisig_account_id: paddedAccountId,
         proposals: [],
-      }).listMultisigProposals(selector),
+      }).queryMultisigProposals(selector),
     pattern,
   );
   await assert.rejects(
@@ -21087,7 +21126,7 @@ test("multisig response decoders reject non-exact resolved account ids", async (
         proposal_id: proposalId,
         instructions_hash: proposalId,
         proposal: { approvals: [] },
-      }).getMultisigProposal({ ...selector, instructionsHash: proposalId }),
+      }).lookupMultisigProposal({ ...selector, instructionsHash: proposalId }),
     pattern,
   );
 });
@@ -21226,7 +21265,20 @@ test("getMultisigSpec posts selector and returns raw spec payload", async () => 
   assert.deepEqual(result, responsePayload);
 });
 
-test("listMultisigProposals decodes proposal entries", async () => {
+test("ToriiClient source and dist use only first-release multisig proposal routes", () => {
+  for (const relativePath of ["../src/toriiClient.js", "../dist/toriiClient.js"]) {
+    const source = readFileSync(new URL(relativePath, import.meta.url), "utf8");
+    assert.doesNotMatch(
+      source,
+      /["']\/v1\/multisig\/proposals\/(?:list|get)["']/,
+      `${relativePath} must not retain retired multisig proposal paths`,
+    );
+    assert.match(source, /["']\/v1\/multisig\/proposals\/query["']/);
+    assert.match(source, /["']\/v1\/multisig\/proposals\/lookup["']/);
+  }
+});
+
+test("queryMultisigProposals decodes proposal entries", async () => {
   let captured;
   const responsePayload = {
     resolved_multisig_account_id: FIXTURE_ALICE_ID,
@@ -21259,13 +21311,13 @@ test("listMultisigProposals decodes proposal entries", async () => {
       });
     },
   });
-  const result = await client.listMultisigProposals({
+  const result = await client.queryMultisigProposals({
     multisigAccountAlias: "cbdc@banka",
     status: ["collecting_signatures"],
     cursor: "page-1",
     limit: 25,
   });
-  assert.equal(captured.url, `${BASE_URL}/v1/multisig/proposals/list`);
+  assert.equal(captured.url, `${BASE_URL}/v1/multisig/proposals/query`);
   assert.deepEqual(JSON.parse(captured.init.body), {
     multisig_account_alias: "cbdc@banka",
     status: ["COLLECTING_SIGNATURES"],
@@ -21275,7 +21327,7 @@ test("listMultisigProposals decodes proposal entries", async () => {
   assert.deepEqual(result, responsePayload);
 });
 
-test("getMultisigProposal resolves by instructions hash", async () => {
+test("lookupMultisigProposal resolves by instructions hash", async () => {
   let captured;
   const responsePayload = {
     resolved_multisig_account_id: FIXTURE_ALICE_ID,
@@ -21299,11 +21351,11 @@ test("getMultisigProposal resolves by instructions hash", async () => {
     });
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const result = await client.getMultisigProposal({
+  const result = await client.lookupMultisigProposal({
     multisigAccountAlias: "cbdc@banka",
     instructionsHash: "e".repeat(64),
   });
-  assert.equal(captured.url, `${BASE_URL}/v1/multisig/proposals/get`);
+  assert.equal(captured.url, `${BASE_URL}/v1/multisig/proposals/lookup`);
   assert.deepEqual(JSON.parse(captured.init.body), {
     multisig_account_alias: "cbdc@banka",
     instructions_hash: "e".repeat(64),
@@ -21311,7 +21363,7 @@ test("getMultisigProposal resolves by instructions hash", async () => {
   assert.deepEqual(result, responsePayload);
 });
 
-test("listMultisigProposals rejects unsupported request and response statuses", async () => {
+test("queryMultisigProposals rejects unsupported request and response statuses", async () => {
   const noFetchClient = new ToriiClient(BASE_URL, {
     fetchImpl: async () => {
       throw new Error("fetch should not be invoked");
@@ -21319,7 +21371,7 @@ test("listMultisigProposals rejects unsupported request and response statuses", 
   });
   await assert.rejects(
     () =>
-      noFetchClient.listMultisigProposals({
+      noFetchClient.queryMultisigProposals({
         multisigAccountAlias: "cbdc@banka",
         status: ["READY_TO_SUBMIT"],
       }),
@@ -21327,7 +21379,7 @@ test("listMultisigProposals rejects unsupported request and response statuses", 
   );
   await assert.rejects(
     () =>
-      noFetchClient.listMultisigProposals({
+      noFetchClient.queryMultisigProposals({
         multisigAccountId: FIXTURE_ALICE_ID,
         multisigAccountAlias: "cbdc@banka",
       }),
@@ -21335,7 +21387,7 @@ test("listMultisigProposals rejects unsupported request and response statuses", 
   );
   await assert.rejects(
     () =>
-      noFetchClient.getMultisigProposal({
+      noFetchClient.lookupMultisigProposal({
         multisigAccountId: FIXTURE_ALICE_ID,
         proposalId: "f".repeat(64),
         instructionsHash: "f".repeat(64),
@@ -21366,10 +21418,10 @@ test("listMultisigProposals rejects unsupported request and response statuses", 
   });
   await assert.rejects(
     () =>
-      invalidResponseClient.listMultisigProposals({
+      invalidResponseClient.queryMultisigProposals({
         multisigAccountAlias: "cbdc@banka",
       }),
-    /multisig proposals list response\.proposals\[0\]\.status must be one of/,
+    /multisig proposals query response\.proposals\[0\]\.status must be one of/,
   );
 });
 
@@ -24064,6 +24116,13 @@ test("getOfflineReadiness rejects invalid selectors and contradictory snapshots"
     }),
     offlineReadinessPayload({
       active_topup_shield_verifier: offlineActiveTopUpShieldVerifier({ withdrawal_height: 42 }),
+    }),
+    offlineReadinessPayload({
+      ready: false,
+      blockers: [{
+        code: "topup_shield_verifier_unavailable",
+        message: "top-up shield verifier unavailable",
+      }],
     }),
     offlineReadinessPayload({
       ready: false,

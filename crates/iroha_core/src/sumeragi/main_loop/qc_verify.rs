@@ -101,18 +101,32 @@ pub(super) fn spawn_qc_verify_workers(
         let wake_tx = wake_tx.clone();
         let name = format!("sumeragi-qc-verify-{idx}");
         let spawn_result = crate::sumeragi::sumeragi_thread_builder(name).spawn(move || {
-            while let Ok(work) = work_rx.recv() {
+            'worker: while let Ok(work) = work_rx.recv() {
+                if crate::sumeragi::consensus_fail_stop_active() {
+                    continue;
+                }
                 let QcVerifyWork { id, key, inputs } = work;
                 let aggregate_ok = inputs.verify();
-                if result_tx
-                    .send(QcVerifyResult {
-                        id,
-                        key,
-                        aggregate_ok,
-                    })
-                    .is_err()
-                {
-                    break;
+                if crate::sumeragi::consensus_fail_stop_active() {
+                    continue;
+                }
+                let mut result = QcVerifyResult {
+                    id,
+                    key,
+                    aggregate_ok,
+                };
+                loop {
+                    if crate::sumeragi::consensus_fail_stop_active() {
+                        continue 'worker;
+                    }
+                    match result_tx.try_send(result) {
+                        Ok(()) => break,
+                        Err(mpsc::TrySendError::Full(pending)) => {
+                            result = pending;
+                            std::thread::yield_now();
+                        }
+                        Err(mpsc::TrySendError::Disconnected(_)) => break 'worker,
+                    }
                 }
                 if let Some(wake) = wake_tx.as_ref() {
                     let _ = wake.try_send(());
@@ -131,7 +145,7 @@ pub(super) fn spawn_qc_verify_workers(
 
 impl Actor {
     pub(in crate::sumeragi) fn poll_qc_verify_results(&mut self) -> bool {
-        if self.kura_recovery_required() {
+        if self.consensus_participation_halted() || self.kura_recovery_required() {
             return false;
         }
         let Some(result_rx) = self.subsystems.qc_verify.result_rx.take() else {
@@ -179,7 +193,7 @@ impl Actor {
                         }
                     }
                     progress = true;
-                    if self.kura_recovery_required() {
+                    if self.consensus_participation_halted() || self.kura_recovery_required() {
                         break;
                     }
                 }

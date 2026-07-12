@@ -54,17 +54,26 @@ The check fails unless:
   - POST /v1/sorafs/capacity/declare returns HTTP 400 for an empty JSON body
   - POST /v1/sorafs/capacity/schedule returns HTTP 400 for an empty JSON body
   - GET /v1/sorafs/capacity/state returns HTTP 200
+  - GET /v1/pipeline/transactions/status reaches the canonical typed status
+    handler (the no-hash probe returns HTTP 400), while the retired
+    /v1/transactions/status alias remains unmounted (HTTP 404)
   - a deterministic capacity declaration lands through `iroha ledger transaction stdin`
   - the declaration is visible in /v1/sorafs/capacity/state
 
 When `--write-config` is omitted, the script bootstraps a runtime-only canary
 config automatically, preferring `/run/secrets/taira-canary-client.toml` when
 that directory is writable and otherwise falling back to the local temp
-directory. The bootstrap onboards a fresh ordinary account on Taira before
-running the capacity declaration canary. When a gas asset is configured, the
-bootstrap passes that asset to onboarding and skips faucet funding by default,
-so the canary proves the sponsored-fee path directly. Set
-`ROLLOUT_CANARY_SKIP_FAUCET=0` to require an initial faucet claim.
+directory. The bootstrap posts the current universal-account DTO to
+`/v1/accounts/onboard`, requires `HTTP 202` with a `QUEUED` receipt, and follows
+that receipt through `/v1/pipeline/transactions/status` before running the
+capacity declaration canary. Onboarding fees are sponsored by the configured
+Torii onboarding authority; gas fields are not part of the onboarding request.
+When a gas asset is configured, the script skips initial faucet funding by
+default and attaches that asset only to the signed capacity transaction, so the
+canary proves the sponsored onboarding path and the normal transaction-fee path
+separately. Set `ROLLOUT_CANARY_SKIP_FAUCET=0` to require an initial faucet
+claim. Both onboarding and faucet helpers wait for their `202 QUEUED` receipts
+to reach `Applied` or `Committed` through the canonical pipeline status route.
 When `--write-config` is supplied, that runtime-only signer config is read
 as-is and is never overwritten by bootstrap.
 Use `--skip-write-canary` only for read-only validation.
@@ -365,6 +374,7 @@ http_request() {
   local payload="${3:-}"
   local body_file
   local curl_status
+  # The first-release /v1 API has no version-negotiation request header.
   local curl_cmd=(
     curl
     --silent
@@ -406,12 +416,33 @@ expect_status() {
   local url="$3"
   local expected_status="$4"
   local payload="${5:-}"
+  local expected_error_code="${6:-}"
 
   http_request "$method" "$url" "$payload"
   if [[ "$last_status" != "$expected_status" ]]; then
     echo "${label}: expected HTTP ${expected_status}, got ${last_status}" >&2
     sed -n '1,120p' "$last_body" >&2 || true
     exit 1
+  fi
+  if [[ -n "$expected_error_code" ]]; then
+    python3 - "$label" "$expected_error_code" "$last_body" <<'PY'
+import json
+import sys
+
+label, expected_code, body_path = sys.argv[1:]
+try:
+    with open(body_path, "r", encoding="utf-8") as handle:
+        payload = json.load(handle)
+except (OSError, json.JSONDecodeError) as error:
+    raise SystemExit(
+        f"{label}: response was not a typed JSON error envelope: {error}"
+    ) from error
+actual_code = payload.get("code") if isinstance(payload, dict) else None
+if actual_code != expected_code:
+    raise SystemExit(
+        f"{label}: response error code was {actual_code!r}; expected {expected_code!r}"
+    )
+PY
   fi
 }
 
@@ -422,6 +453,20 @@ probe_surface() {
   expect_status "capacity/declare" POST "${root_url}/v1/sorafs/capacity/declare" 400 '{}'
   expect_status "capacity/schedule" POST "${root_url}/v1/sorafs/capacity/schedule" 400 '{}'
   expect_status "capacity/state" GET "${root_url}/v1/sorafs/capacity/state" 200
+  expect_status \
+    "pipeline transaction status" \
+    GET \
+    "${root_url}/v1/pipeline/transactions/status" \
+    400 \
+    "" \
+    "query_validation_failed"
+  expect_status \
+    "retired transaction status alias" \
+    GET \
+    "${root_url}/v1/transactions/status" \
+    404 \
+    "" \
+    "route_not_found"
 }
 
 check_node_health() {
@@ -445,180 +490,76 @@ PY
 import json
 import sys
 
-
-def dig(obj, *path):
-    cur = obj
-    for key in path:
-        if not isinstance(cur, dict):
-            return None
-        cur = cur.get(key)
-    return cur
-
-
-def first_int(*values):
-    for value in values:
-        if isinstance(value, bool):
-            continue
-        if isinstance(value, int):
-            return value
-    return None
-
-
 with open(sys.argv[1], "r", encoding="utf-8") as handle:
-    payload = json.load(handle)
+    status = json.load(handle)
 
-commit_qc_height = first_int(
-    payload.get("commit_qc_height"),
-    dig(payload, "commit_qc", "height"),
+if not isinstance(status, dict) or status.get("protocol_version") != 2:
+    raise SystemExit(
+        "expected the Sumeragi v2 reducer status; legacy RBC/recovery status is not accepted"
+    )
+
+required = (
+    "node_fingerprint",
+    "build_fingerprint",
+    "config_fingerprint",
+    "height_context_id",
+    "phase",
+    "body_state",
 )
-highest_qc_height = first_int(
-    payload.get("highest_qc_height"),
-    dig(payload, "highest_qc", "height"),
-    dig(payload, "canonical", "highest_qc", "height"),
+missing = [name for name in required if status.get(name) in (None, "", {})]
+if missing:
+    raise SystemExit(
+        f"sumeragi/status omitted required v2 field(s): {', '.join(missing)}"
+    )
+
+def tagged_unit(value, tag, admitted, field):
+    if not isinstance(value, dict) or set(value) != {tag, "details"}:
+        raise SystemExit(f"sumeragi/status {field} is not a canonical tagged unit")
+    if value["details"] is not None or value[tag] not in admitted:
+        raise SystemExit(f"sumeragi/status {field} has an invalid variant/details payload")
+
+tagged_unit(
+    status["phase"],
+    "phase",
+    {
+        "AwaitingProposal",
+        "ReconstructingPayload",
+        "ValidatingPayload",
+        "Prepare",
+        "Commit",
+        "PendingApply",
+    },
+    "phase",
 )
-locked_qc_height = first_int(
-    payload.get("locked_qc_height"),
-    dig(payload, "locked_qc", "height"),
-    dig(payload, "canonical", "locked_qc", "height"),
-)
-canonical_height = first_int(
-    payload.get("canonical_height"),
-    dig(payload, "canonical", "height"),
-)
-canonical_phase = str(
-    dig(payload, "canonical", "phase") or payload.get("canonical_phase") or ""
-).strip().lower()
-canonical_view = first_int(
-    payload.get("canonical_view"),
-    dig(payload, "canonical", "view"),
-    dig(payload, "membership", "view"),
-)
-membership_height = first_int(
-    payload.get("membership_height"),
-    dig(payload, "membership", "height"),
-)
-worker_stage = str(
-    dig(payload, "worker_loop", "stage") or payload.get("worker_stage") or ""
-).strip().lower()
-validator_set_len = first_int(
-    payload.get("commit_qc_validator_set_len"),
-    dig(payload, "commit_qc", "validator_set_len"),
-)
-tx_queue_depth = first_int(
-    payload.get("tx_queue_depth"),
-    dig(payload, "tx_queue", "depth"),
-)
-tx_queue_capacity = first_int(
-    payload.get("tx_queue_capacity"),
-    dig(payload, "tx_queue", "capacity"),
-)
-tx_queue_saturated_by_age = payload.get("tx_queue_saturated_by_age")
-if not isinstance(tx_queue_saturated_by_age, bool):
-    tx_queue_saturated_by_age = dig(payload, "tx_queue", "saturated_by_age")
-if not isinstance(tx_queue_saturated_by_age, bool):
-    tx_queue_saturated_by_age = None
-tx_queue_oldest_queued_age_ms = first_int(
-    payload.get("tx_queue_oldest_queued_age_ms"),
-    dig(payload, "tx_queue", "oldest_queued_age_ms"),
-)
-view_change_last_cause = dig(payload, "view_change_causes", "last_cause")
-canonical_rbc_status = str(
-    dig(payload, "canonical", "rbc_status")
-    or payload.get("canonical_rbc_status")
-    or ""
-).strip().lower()
-canonical_pending_finality = (
-    dig(payload, "canonical", "pending_finality")
-    if isinstance(dig(payload, "canonical"), dict)
-    else payload.get("canonical_pending_finality")
-)
-pending_rbc_sessions = first_int(
-    payload.get("pending_rbc_sessions"),
-    dig(payload, "pending_rbc", "sessions"),
+tagged_unit(
+    status["body_state"],
+    "state",
+    {"Missing", "Reconstructing", "Stored", "Validated", "PendingApply", "Applied"},
+    "body_state",
 )
 
-if commit_qc_height is None or commit_qc_height < 1:
+for name in ("height", "view", "leader", "last_committed_height"):
+    value = status.get(name)
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        raise SystemExit(f"sumeragi/status reported invalid {name}: {value!r}")
+
+if status["last_committed_height"] > status["height"]:
     raise SystemExit(
-        f"sumeragi/status reported an unhealthy commit QC height: {commit_qc_height!r}"
+        f"sumeragi/status committed height {status['last_committed_height']} "
+        f"is ahead of reducer height {status['height']}"
     )
-if highest_qc_height is not None and highest_qc_height < commit_qc_height:
+if status["last_committed_height"] > 0 and status.get("last_committed_subject") is None:
     raise SystemExit(
-        "sumeragi/status highest QC height "
-        f"{highest_qc_height} is behind commit QC height {commit_qc_height}"
+        "sumeragi/status omitted last_committed_subject for a non-genesis commit"
     )
-if locked_qc_height is not None and locked_qc_height < commit_qc_height:
-    raise SystemExit(
-        "sumeragi/status locked QC height "
-        f"{locked_qc_height} is behind commit QC height {commit_qc_height}"
-    )
-if canonical_height is not None and canonical_height < commit_qc_height:
-    raise SystemExit(
-        "sumeragi/status canonical height "
-        f"{canonical_height} is behind commit QC height {commit_qc_height}"
-    )
-if validator_set_len is None or validator_set_len < 1:
-    raise SystemExit(
-        f"sumeragi/status reported an empty commit validator set: {validator_set_len!r}"
-    )
-if validator_set_len < 4:
-    raise SystemExit(
-        "sumeragi/status reported only "
-        f"{validator_set_len} validators in the commit QC set; Taira rollout expects at least 4"
-    )
-if (
-    membership_height is not None
-    and commit_qc_height is not None
-    and membership_height > commit_qc_height
+
+pending = status.get("pending_persistence_id")
+if pending is not None and (
+    not isinstance(pending, int) or isinstance(pending, bool) or pending < 1
 ):
-    cause = view_change_last_cause or "unknown"
-    pending_finality_present = canonical_pending_finality not in (None, False, "", "false", "0")
-    rbc_waiting = canonical_rbc_status not in (
-        "",
-        "0",
-        "false",
-        "none",
-        "null",
-        "idle",
-        "disabled",
-        "ready",
-        "complete",
-        "completed",
-        "delivered",
+    raise SystemExit(
+        f"sumeragi/status reported invalid pending persistence id: {pending!r}"
     )
-    one_ahead_prepare = (
-        canonical_phase == "prepare"
-        and canonical_height == membership_height == commit_qc_height + 1
-        and highest_qc_height == commit_qc_height
-        and locked_qc_height == commit_qc_height
-    )
-    stalled_one_ahead_idle = (
-        one_ahead_prepare
-        and worker_stage == "idle"
-        and canonical_view is not None
-        and canonical_view > 1
-    )
-    if not (
-        one_ahead_prepare
-        and not stalled_one_ahead_idle
-        and not pending_finality_present
-        and not rbc_waiting
-        and (pending_rbc_sessions in (None, 0))
-        and cause not in ("missing_qc", "quorum_timeout", "stake_quorum_timeout")
-        and tx_queue_saturated_by_age is not True
-    ):
-        raise SystemExit(
-            "sumeragi/status reports a finality fault "
-            f"({cause}) with membership height ahead of commit QC "
-            f"({membership_height} > {commit_qc_height}); "
-            f"queue depth={tx_queue_depth!r}, capacity={tx_queue_capacity!r}, "
-            f"saturated_by_age={tx_queue_saturated_by_age!r}, "
-            f"oldest_queued_age_ms={tx_queue_oldest_queued_age_ms!r}, "
-            f"phase={canonical_phase!r}, worker_stage={worker_stage!r}, "
-            f"canonical_view={canonical_view!r}, "
-            f"pending_finality={canonical_pending_finality!r}, "
-            f"rbc_status={canonical_rbc_status!r}, "
-            f"pending_rbc_sessions={pending_rbc_sessions!r}"
-        )
 PY
 }
 
@@ -1010,7 +951,8 @@ claim_faucet_for_canary() {
   echo "==> faucet bootstrap: ${account_id}" >&2
   python3 "${REPO_ROOT}/scripts/taira_faucet_canary.py" \
     --account-id "$account_id" \
-    --torii-root "$target_url"
+    --torii-root "$target_url" \
+    --status-timeout-ms "$ROLLOUT_CANARY_STATUS_TIMEOUT_MS"
 }
 
 write_canary_metadata_file() {

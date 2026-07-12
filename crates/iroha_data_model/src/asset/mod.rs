@@ -2,7 +2,7 @@
 
 use std::collections::btree_map;
 
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::Quantity;
 
 pub mod alias;
 pub mod definition;
@@ -25,8 +25,8 @@ pub use transfer_control::{
 };
 pub use value::{Asset, AssetEntry, AssetValue};
 
-/// [`AssetTotalQuantityMap`] provides an API to work with collection of key([`AssetDefinitionId`])-value([`Numeric`]) pairs.
-pub type AssetTotalQuantityMap = btree_map::BTreeMap<AssetDefinitionId, Numeric>;
+/// [`AssetTotalQuantityMap`] stores canonical non-negative totals by asset definition.
+pub type AssetTotalQuantityMap = btree_map::BTreeMap<AssetDefinitionId, Quantity>;
 
 /// The prelude re-exports most commonly used traits, structs and macros from this module.
 pub mod prelude {

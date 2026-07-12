@@ -64,8 +64,8 @@ use crate::{
         self, CONTRACT_FEATURE_BIT_VECTOR, CONTRACT_FEATURE_BIT_ZK, EmbeddedContractInterfaceV1,
         EmbeddedEntrypointDescriptor, EmbeddedFunctionBudgetReportV1, EmbeddedSourceLocation,
         EmbeddedSourceMapEntryV1, EmbeddedStateDescriptor, EmbeddedStateFieldDescriptor,
-        EmbeddedStateType, LITERAL_SECTION_MAGIC, LiteralKindV1, ProgramMetadata,
-        encode_literal_descriptor,
+        EmbeddedStateType, KOTO_TEST_RETURN_ENTRYPOINT, LITERAL_SECTION_MAGIC, LiteralKindV1,
+        ProgramMetadata, encode_literal_descriptor,
     },
     pointer_abi::PointerType,
     syscalls,
@@ -1312,6 +1312,9 @@ fn encode_pointer_tlv_bytes(kind: ir::DataRefKind, raw: &str) -> Option<Vec<u8>>
     use ir::DataRefKind as DRK;
     use iroha_primitives::json::Json;
     use norito::{decode_from_bytes, to_bytes};
+
+    let _canonical_flags =
+        norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
 
     let (type_id, payload) = match kind {
         DRK::Account => {
@@ -10079,6 +10082,30 @@ seiyaku Test {
     }
 
     #[test]
+    fn manifest_access_set_hints_use_norito_i64_for_bool_map_keys() {
+        let src = r#"
+seiyaku Test {
+  state StateMap<bool, int> Foo;
+
+  kotoage fn main()  authorize("Entry") {
+    Foo[true] = 2;
+    let _x = Foo.get(true);
+  }
+}
+"#;
+        let (_bytes, manifest) = Compiler::new()
+            .compile_source_with_manifest(src)
+            .expect("compile bool map access hints");
+        let hints = manifest.access_set_hints.expect("access hints");
+        let encoded = norito::to_bytes(&1_i64).expect("encode canonical bool map key");
+        let literal_key = format!("state:Foo/{}", hex::encode(encoded));
+        assert!(hints.read_keys.contains(&"state:Foo".to_string()));
+        assert!(hints.write_keys.contains(&"state:Foo".to_string()));
+        assert!(hints.read_keys.contains(&literal_key), "{hints:?}");
+        assert!(hints.write_keys.contains(&literal_key), "{hints:?}");
+    }
+
+    #[test]
     fn manifest_access_set_hints_support_canonical_quantity_map_keys() {
         let src = r#"
 seiyaku Test {
@@ -11839,17 +11866,28 @@ impl Compiler {
                         dataref_kind_map.insert((func_idx, *dest), DRK::Int);
                     }
                     if let ir::Instr::NumericConvert {
-                        dest, destination, ..
+                        dest,
+                        value,
+                        source,
+                        destination,
                     } = instr
                     {
-                        dataref_kind_map.insert(
-                            (func_idx, *dest),
-                            match destination {
-                                ir::WideNumericKind::Int => DRK::Int,
-                                ir::WideNumericKind::Decimal => DRK::Decimal,
-                                ir::WideNumericKind::Quantity => DRK::Quantity,
-                            },
-                        );
+                        let source_kind = match source {
+                            ir::WideNumericKind::Int => DRK::Int,
+                            ir::WideNumericKind::Decimal => DRK::Decimal,
+                            ir::WideNumericKind::Quantity => DRK::Quantity,
+                        };
+                        let destination_kind = match destination {
+                            ir::WideNumericKind::Int => DRK::Int,
+                            ir::WideNumericKind::Decimal => DRK::Decimal,
+                            ir::WideNumericKind::Quantity => DRK::Quantity,
+                        };
+                        if dataref_kind_map.get(&(func_idx, *value)) == Some(&source_kind)
+                            && let Some(raw) = string_map.get(&(func_idx, *value)).cloned()
+                        {
+                            string_map.insert((func_idx, *dest), raw);
+                        }
+                        dataref_kind_map.insert((func_idx, *dest), destination_kind);
                     }
                     if let ir::Instr::NumericTryConvert {
                         dest, destination, ..
@@ -18242,6 +18280,14 @@ impl Compiler {
                 .map_err(|_| "relaxed function end does not fit u64".to_owned())?;
         }
 
+        // Local test functions return through r1 just like ordinary private
+        // calls. Give the test driver a compiler-owned terminal return target
+        // inside the authenticated artifact instead of requiring it to append
+        // an instruction after metadata and CNTR construction.
+        if self.opts.mode == CompilerMode::Test {
+            push_word(&mut code, encoding::wide::encode_halt());
+        }
+
         uses_vector_global |= detect_vector_usage(&code);
         uses_zk_global |= detect_zk_usage(&code);
 
@@ -18617,13 +18663,39 @@ impl Compiler {
 
         let mut entrypoint_start_offsets = func_start_offsets.clone();
         entrypoint_start_offsets.extend(entrypoint_wrapper_offsets);
-        let entrypoint_descriptors = build_entrypoint_descriptors(
+        let mut entrypoint_descriptors = build_entrypoint_descriptors(
             &typed,
             &access_sets,
             &ir_prog.functions,
             &hint_reports,
             &entrypoint_start_offsets,
         )?;
+        if self.opts.mode == CompilerMode::Test {
+            // Test suites are self-describing CNTR artifacts even when the
+            // production projection has no public entrypoint. Authenticate the
+            // compiler-owned return target through a local-only view descriptor
+            // so the normal artifact verifier remains mandatory for execution.
+            let return_pc = code
+                .len()
+                .checked_sub(core::mem::size_of::<u32>())
+                .ok_or_else(|| "test artifact is missing its return HALT".to_owned())?;
+            entrypoint_descriptors.push(EmbeddedEntrypointDescriptor {
+                name: KOTO_TEST_RETURN_ENTRYPOINT.to_owned(),
+                kind: EntryPointKind::View,
+                params: Vec::new(),
+                argument_schema: None,
+                return_type: None,
+                return_schema: None,
+                permission: None,
+                read_keys: Vec::new(),
+                write_keys: Vec::new(),
+                access_hints_complete: Some(true),
+                access_hints_skipped: Vec::new(),
+                triggers: Vec::new(),
+                entry_pc: u64::try_from(return_pc)
+                    .map_err(|_| "test return PC does not fit u64".to_owned())?,
+            });
+        }
         if self.opts.mode == CompilerMode::Production
             && let Some(entrypoint) = entrypoint_descriptors.iter().find(|entrypoint| {
                 entrypoint.access_hints_complete == Some(false)

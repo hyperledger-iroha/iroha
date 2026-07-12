@@ -15,8 +15,7 @@ const {
   submitValidationFeeIvmProvedContractCall,
   validationFeePolicyHash,
   verifySignedValidationFeePolicy,
-  KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1,
-  KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V2,
+  KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1,
   KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1,
   KAGEMUSHA_RECURSIVE_COMPACT_MULTI_HOP_UNAVAILABLE_FRAGMENT,
   KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE_FRAGMENT,
@@ -1733,6 +1732,34 @@ function declarationClass(name) {
     : DECLARATIONS_TEXT.slice(start, end);
 }
 
+test("package dist quantity builders reject numbers and noncanonical strings", () => {
+  assert.equal(typeof packageExports.NumericV1?.decodeQuantityJson, "function");
+  assert.equal(typeof packageExports.KotodamaQuantity, "function");
+  const account = packageExports.AccountAddress.fromAccount({
+    publicKey: Buffer.from(
+      "B935AAF1F4E44B3DB79E5E5A9BA4569E6F3E2310C219F3DDD56D3277828D5480",
+      "hex",
+    ),
+  }).toI105();
+  const assetId = `62Fk4FPcMuLvW5QjDGNF2a4jAmjM#${account}`;
+  for (const quantity of [1, -1, "+1", "01", "1.0", "1.2300", " 1", "1e0"]) {
+    assert.throws(
+      () => packageExports.buildMintAssetInstruction({
+        assetId,
+        quantity,
+      }),
+      /canonical|JavaScript numbers/u,
+    );
+  }
+  assert.equal(
+    packageExports.buildMintAssetInstruction({
+      assetId,
+      quantity: 1n,
+    }).Mint.Asset.object,
+    "1",
+  );
+});
+
 test("package dist entrypoint imports and emits halfwidth i105 literals", () => {
   assert.equal(typeof submitIvmProvedContractCall, "function");
   assert.equal(typeof submitValidationFeeIvmProvedContractCall, "function");
@@ -2025,8 +2052,7 @@ test("package SCCP exports reject retired and diagnostic helper surfaces", () =>
 test("package dist entrypoint exports Kagemusha recursive spend helpers", () => {
   const declarationExports = declarationExportNames();
   const expected = [
-    "KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1",
-    "KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V2",
+    "KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1",
     "KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_NATIVE_BRIDGE_ABI_VERSION",
     "KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1",
     "KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE_FRAGMENT",
@@ -2137,11 +2163,15 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
       `missing declaration export ${name}`,
     );
   }
-  assert.equal(
-    KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1,
-    "recursive_compact_v1",
+  assert.equal(KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1, "recursive_spend_v1");
+  assert.ok(
+    !declarationExports.has("KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1"),
+    "compact projection must not be exported as a first-release spend mode",
   );
-  assert.equal(KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V2, "recursive_spend_v2");
+  assert.ok(
+    !declarationExports.has("KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V2"),
+    "internal V2 artifact tag must not be exported as a product mode",
+  );
   assert.ok(
     !declarationExports.has("KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1"),
     "checked-prefold must not be exported as a first-release spend mode",
@@ -3058,12 +3088,15 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
   }
   assert.equal(
     preferredKagemushaOfflineSpendMode(true),
-    KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V2,
+    KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1,
   );
   assert.equal(preferredKagemushaOfflineSpendMode(false), null);
-  assert.equal(isKagemushaSpendAgainMode("recursive_spend_v2"), true);
-  assert.equal(isKagemushaSpendAgainMode("recursive_spend_v1"), false);
+  assert.equal(isKagemushaSpendAgainMode("recursive_spend_v1"), true);
+  assert.equal(isKagemushaSpendAgainMode("recursive_spend_v2"), false);
   assert.equal(isKagemushaSpendAgainMode("recursive_compact_v1"), false);
+  assert.equal(isKagemushaSpendAgainMode(" recursive_spend_v1"), false);
+  assert.equal(isKagemushaSpendAgainMode("RECURSIVE_SPEND_V1"), false);
+  assert.equal(isKagemushaSpendAgainMode(null), false);
   assert.throws(
     () => preferredKagemushaOfflineSpendMode(false, true),
     /requires zero arguments or one boolean pastaCycleV3BackendAvailable argument/u,

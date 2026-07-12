@@ -164,7 +164,7 @@ public final class KagemushaRecursiveSpendProverTest {
     assert "kagemusha.offline.recursive_spend.artifact_manifest.v3"
         .equals(KagemushaRecursiveSpendProver.PASTA_CYCLE_V3_ARTIFACT_MANIFEST_SCHEMA);
     assert "recursive_spend_v2".equals(KagemushaRecursiveSpendProver.PASTA_CYCLE_V3_MODE);
-    assert "recursive_spend_v2".equals(KagemushaRecursiveSpendProver.MODE);
+    assert "recursive_spend_v1".equals(KagemushaRecursiveSpendProver.MODE);
     assert "halo2/ipa-pasta-cycle-v1"
         .equals(KagemushaRecursiveSpendProver.PASTA_CYCLE_V3_PROOF_BACKEND);
     assert "kagemusha-pasta-cycle-poseidon-v1"
@@ -467,14 +467,17 @@ public final class KagemushaRecursiveSpendProverTest {
         KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1, 1);
     assert !KagemushaRecursiveSpendProver.requiresPreviousProofOpenEnvelopesForAppend(null, 1);
     assert !KagemushaRecursiveSpendProver.requiresPreviousProofOpenEnvelopesForAppend("", 1);
-    assert "recursive_spend_v2"
+    assert "recursive_spend_v1"
         .equals(KagemushaRecursiveSpendProver.Mode.RECURSIVE_SPEND.wireName());
     assert KagemushaRecursiveSpendProver.Mode.values().length == 1;
     assert KagemushaRecursiveSpendProver.preferredMode(true)
         == KagemushaRecursiveSpendProver.Mode.RECURSIVE_SPEND;
     assert KagemushaRecursiveSpendProver.preferredMode(false) == null;
-    assert KagemushaRecursiveSpendProver.isSpendAgainMode("recursive_spend_v2");
-    assert !KagemushaRecursiveSpendProver.isSpendAgainMode("recursive_spend_v1");
+    assert KagemushaRecursiveSpendProver.isSpendAgainMode("recursive_spend_v1");
+    assert !KagemushaRecursiveSpendProver.isSpendAgainMode("recursive_spend_v2");
+    assert !KagemushaRecursiveSpendProver.isSpendAgainMode("recursive_compact_v1");
+    assert !KagemushaRecursiveSpendProver.isSpendAgainMode(" recursive_spend_v1");
+    assert !KagemushaRecursiveSpendProver.isSpendAgainMode("RECURSIVE_SPEND_V1");
     assert !KagemushaRecursiveSpendProver.isSpendAgainMode(null);
     assert KagemushaRecursiveCompactPaymentTokenProver.REQUIRED_NATIVE_BRIDGE_ABI_VERSION == 7;
     assert "kagemusha-recursive-compact-v1"

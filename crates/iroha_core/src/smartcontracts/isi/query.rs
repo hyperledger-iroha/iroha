@@ -5736,13 +5736,15 @@ mod tests {
     fn singular_alias_preflight_uses_the_index_and_rejects_large_account_before_clone() {
         let alias = root_account_alias("budgeted-alias");
         let account_id = ALICE_ID.clone();
-        let mut account = Account::new(account_id.clone())
-            .with_label(Some(alias.clone()))
-            .build(&account_id);
-        account.metadata.insert(
+        let mut metadata = iroha_data_model::metadata::Metadata::default();
+        metadata.insert(
             "oversized".parse().expect("metadata key"),
             Json::new("x".repeat(128 * 1024)),
         );
+        let account = Account::new(account_id.clone())
+            .with_label(Some(alias.clone()))
+            .with_metadata(metadata)
+            .build(&account_id);
         let mut world = World::with([], [account], []);
         world
             .account_aliases
@@ -8632,7 +8634,7 @@ mod tests {
         )
         .execute(&ALICE_ID, &mut stx)
         .expect("register asset definition");
-        Mint::asset_numeric(13_u32, asset_id.clone())
+        Mint::asset_quantity(13_u32, asset_id.clone())
             .execute(&ALICE_ID, &mut stx)
             .expect("mint asset");
         stx.apply();
@@ -8731,7 +8733,7 @@ mod tests {
         )
         .execute(&ALICE_ID, &mut stx)
         .expect("register asset definition");
-        Mint::asset_numeric(1_u32, asset_id.clone())
+        Mint::asset_quantity(1_u32, asset_id.clone())
             .execute(&ALICE_ID, &mut stx)
             .expect("mint asset");
         stx.apply();
@@ -8833,10 +8835,10 @@ mod tests {
             )
             .execute(&ALICE_ID, &mut stx)
             .expect("register asset definition");
-            Mint::asset_numeric(5_u32, AssetId::new(ad_id.clone(), ALICE_ID.clone()))
+            Mint::asset_quantity(5_u32, AssetId::new(ad_id.clone(), ALICE_ID.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("mint asset for ALICE");
-            Mint::asset_numeric(7_u32, AssetId::new(ad_id.clone(), BOB_ID.clone()))
+            Mint::asset_quantity(7_u32, AssetId::new(ad_id.clone(), BOB_ID.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("mint asset for BOB");
             stx.apply();

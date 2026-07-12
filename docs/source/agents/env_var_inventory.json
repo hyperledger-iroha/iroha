@@ -1354,19 +1354,19 @@
         {
           "context": "env!(\"CARGO_MANIFEST_DIR\"),",
           "line": 3711,
-          "path": "crates/iroha_torii/src/offline_v2_issuer.rs",
+          "path": "crates/iroha_torii/src/offline_commands.rs",
           "scope": "test"
         },
         {
           "context": "env!(\"CARGO_MANIFEST_DIR\"),",
           "line": 3719,
-          "path": "crates/iroha_torii/src/offline_v2_issuer.rs",
+          "path": "crates/iroha_torii/src/offline_commands.rs",
           "scope": "test"
         },
         {
           "context": "env!(\"CARGO_MANIFEST_DIR\"),",
           "line": 3740,
-          "path": "crates/iroha_torii/src/offline_v2_issuer.rs",
+          "path": "crates/iroha_torii/src/offline_commands.rs",
           "scope": "test"
         },
         {

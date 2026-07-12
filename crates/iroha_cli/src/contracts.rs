@@ -3894,9 +3894,7 @@ fn validate_local_int_json_string(value: &norito::json::Value) -> bool {
     raw.parse::<iroha_primitives::bigint::BigInt>()
         .ok()
         .filter(|parsed| parsed.to_string() == *raw)
-        .is_some_and(|parsed| {
-            iroha_primitives::numeric_abi::IntValueV1::try_new(parsed).is_ok()
-        })
+        .is_some_and(|parsed| iroha_primitives::numeric_abi::IntValueV1::try_new(parsed).is_ok())
 }
 
 fn validate_local_contract_value(
@@ -5444,7 +5442,10 @@ mod tests {
             .expect("decimal numeric string is valid");
         let err = validate_local_contract_value(&decimal_schema, &norito::json!(7_i64), "amount")
             .expect_err("JSON numeric tokens must not enter the exact decimal domain");
-        assert!(err.to_string().contains("does not match the declared schema"));
+        assert!(
+            err.to_string()
+                .contains("does not match the declared schema")
+        );
 
         let int_schema = parse_local_contract_schema_type("int").expect("int");
         for endpoint in [
@@ -5458,7 +5459,7 @@ mod tests {
             "-6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042049",
             "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042048",
         ] {
-            validate_local_contract_value(&int_schema, &norito::json!(neighbor), "value")
+            let _ = validate_local_contract_value(&int_schema, &norito::json!(neighbor), "value")
                 .expect_err("both signed-512 neighbors are invalid");
         }
     }

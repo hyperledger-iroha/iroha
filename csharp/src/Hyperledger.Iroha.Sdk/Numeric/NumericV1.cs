@@ -195,6 +195,18 @@ public static class NumericV1
             return new QuantityValue(normalized.Mantissa, normalized.Scale);
         }
 
+        /// <summary>Parses an exact non-negative quantity and rejects alternate spellings.</summary>
+        public static QuantityValue ParseCanonical(string value)
+        {
+            var decoded = Parse(value);
+            if (!string.Equals(decoded.ToString(), value, StringComparison.Ordinal))
+            {
+                Fail(ErrorCode.InvalidText, "quantity must use canonical spelling");
+            }
+
+            return decoded;
+        }
+
         /// <inheritdoc />
         public bool Equals(QuantityValue? other)
         {
@@ -331,13 +343,7 @@ public static class NumericV1
     /// <summary>Decodes a canonical quantity JSON string, rejecting alternate spellings.</summary>
     public static QuantityValue DecodeQuantityJson(string value)
     {
-        var decoded = QuantityValue.Parse(value);
-        if (!string.Equals(decoded.ToString(), value, StringComparison.Ordinal))
-        {
-            Fail(ErrorCode.InvalidText, "quantity JSON must use canonical spelling");
-        }
-
-        return decoded;
+        return QuantityValue.ParseCanonical(value);
     }
 
     /// <summary>Encodes a canonical integer Norito frame.</summary>

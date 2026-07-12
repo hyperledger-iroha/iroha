@@ -36,7 +36,7 @@ Hay muchas maneras en las que podrías contribuir a nuestro proyecto:
 - Asegúrese de seguir nuestras [guías de estilo](#style-guides) para obtener código y documentación.
 - Escribir [pruebas](https://doc.rust-lang.org/cargo/commands/cargo-test.html). Asegúrese de que todos pasen (`cargo test --workspace`). Si toca la pila de criptografía SM, ejecute también `cargo test -p iroha_crypto --features "sm sm_proptest"` para ejecutar el arnés de propiedad/fuzz opcional.
   - Nota: Las pruebas que ejercitan el ejecutor IVM sintetizarán automáticamente un código de bytes de ejecutor determinista mínimo si `defaults/executor.to` no está presente. No se requiere ningún paso previo para ejecutar pruebas. Para generar el código de bytes canónico para la paridad, puede ejecutar:
-    - `cargo run --manifest-path scripts/generate_executor_to/Cargo.toml`
+    - `cargo run --locked -p ivm --bin ivm_fixture_export -- --write`
     - `cargo run --manifest-path scripts/regenerate_codec_samples/Cargo.toml`
 - Si cambia las cajas de derivación/proc-macro, ejecute las suites de interfaz de usuario trybuild a través de
   `make check-proc-macro-ui` (o

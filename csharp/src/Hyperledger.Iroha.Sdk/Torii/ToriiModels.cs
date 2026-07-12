@@ -206,7 +206,9 @@ public sealed record class ToriiAccountFaucetResponse
     public string Amount
     {
         get => amount;
-        init => amount = ToriiOnboardingDirectMetadata.RequireExactTokenText(value, nameof(Amount));
+        init => amount = ToriiOnboardingDirectMetadata.RequireCanonicalNonNegativeNumericText(
+            value,
+            nameof(Amount));
     }
 
     [JsonPropertyName("tx_hash_hex")]
@@ -2034,6 +2036,11 @@ internal static class ToriiOnboardingDirectMetadata
         return ToriiExplorerDirectMetadata.RequireExactTokenText(value, paramName);
     }
 
+    internal static string RequireCanonicalNonNegativeNumericText(string? value, string paramName)
+    {
+        return ToriiExplorerDirectMetadata.RequireCanonicalNonNegativeNumericText(value, paramName);
+    }
+
     internal static string RequireOptionalTransactionHashHex(string? value, string paramName)
     {
         if (string.IsNullOrEmpty(value))
@@ -3539,34 +3546,17 @@ internal static class ToriiExplorerDirectMetadata
     internal static string RequireCanonicalNonNegativeNumericText(string? value, string paramName)
     {
         var exact = RequireExactNonEmptyText(value, paramName);
-        if (exact[0] == '+' || exact[0] == '-')
+        try
         {
-            throw new ArgumentException("Value must be a canonical non-negative numeric string.", paramName);
+            return Hyperledger.Iroha.Numeric.NumericV1.QuantityValue.ParseCanonical(exact).ToString();
         }
-
-        var separator = exact.IndexOf('.', StringComparison.Ordinal);
-        var integerPart = separator < 0 ? exact : exact[..separator];
-        var fractionalPart = separator < 0 ? string.Empty : exact[(separator + 1)..];
-        if (integerPart.Length == 0 || integerPart.Any(static character => character is < '0' or > '9'))
+        catch (Hyperledger.Iroha.Numeric.NumericV1.NumericException exception)
         {
-            throw new ArgumentException("Value must be a canonical non-negative numeric string.", paramName);
+            throw new ArgumentException(
+                "Value must be a canonical non-negative numeric string in the V1 quantity domain.",
+                paramName,
+                exception);
         }
-
-        if (integerPart.Length > 1 && integerPart[0] == '0')
-        {
-            throw new ArgumentException("Value must be a canonical non-negative numeric string.", paramName);
-        }
-
-        if (separator >= 0
-            && (fractionalPart.Length == 0
-                || fractionalPart.Length > 28
-                || fractionalPart.Any(static character => character is < '0' or > '9')
-                || fractionalPart[^1] == '0'))
-        {
-            throw new ArgumentException("Value must be a canonical non-negative numeric string.", paramName);
-        }
-
-        return exact;
     }
 
     internal static string? RequireOptionalCanonicalNonNegativeNumericText(string? value, string paramName)

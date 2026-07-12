@@ -605,7 +605,11 @@ pub fn record_read_from_access_key(state_block: &StateBlock<'_>, access_key: &st
     if let Some(rest) = access_key.strip_prefix("asset:")
         && let Ok(id) = iroha_data_model::asset::AssetId::parse_literal(rest)
     {
-        let pre = state_block.world.assets().get(&id).map(|v| &**v);
+        let pre = state_block
+            .world
+            .assets()
+            .get(&id)
+            .map(|v| v.as_ref().as_numeric());
         record_read_asset(&id, pre);
         // no further processing needed for asset access
     }
@@ -613,7 +617,7 @@ pub fn record_read_from_access_key(state_block: &StateBlock<'_>, access_key: &st
         && let Ok(ad) = iroha_data_model::asset::AssetDefinitionId::parse_address_literal(rest)
     {
         if let Ok(def) = state_block.world.asset_definition(&ad) {
-            record_read_asset_def_total(&ad, Some(def.total_quantity()));
+            record_read_asset_def_total(&ad, Some(def.total_quantity().as_numeric()));
         } else {
             record_read_asset_def_total(&ad, None);
         }

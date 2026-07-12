@@ -24,7 +24,7 @@ use iroha_data_model::{
 };
 use iroha_primitives::{
     json::Json,
-    numeric::{Numeric, NumericSpec},
+    numeric::{Numeric, NumericOperationError, NumericSpec},
 };
 use thiserror::Error;
 
@@ -371,12 +371,19 @@ impl RelayPayoutLedger {
     }
 
     /// Convert the reward instruction into a transfer instruction, skipping zero-amount payouts.
-    #[must_use]
-    pub fn to_transfer(&self, instruction: &RelayRewardInstructionV1) -> Option<InstructionBox> {
+    ///
+    /// # Errors
+    /// Returns an error when reward arithmetic produced a negative payout.
+    pub fn to_transfer(
+        &self,
+        instruction: &RelayRewardInstructionV1,
+    ) -> Result<Option<InstructionBox>, NumericOperationError> {
         if instruction.is_zero_amount() {
-            return None;
+            return Ok(None);
         }
-        Some(instruction.to_transfer_instruction(&self.treasury_account))
+        instruction
+            .to_transfer_instruction(&self.treasury_account)
+            .map(Some)
     }
 
     /// Create a dispute record linked to the original payout instruction.
@@ -774,7 +781,10 @@ mod tests {
             budget_approval_id: Some(budget_id()),
             metadata: Metadata::default(),
         };
-        let transfer_box = ledger.to_transfer(&instruction).expect("transfer present");
+        let transfer_box = ledger
+            .to_transfer(&instruction)
+            .expect("non-negative payout")
+            .expect("transfer present");
         let transfer = transfer_box
             .as_any()
             .downcast_ref::<TransferBox>()

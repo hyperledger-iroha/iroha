@@ -56,7 +56,12 @@ fn make_transfer_batch_tlv(
     let batch_entries = entries
         .iter()
         .map(|(from, to, asset, amount)| {
-            TransferAssetBatchEntry::new(from.clone(), to.clone(), asset.clone(), amount.clone())
+            TransferAssetBatchEntry::new(
+                from.clone(),
+                to.clone(),
+                asset.clone(),
+                Quantity::try_from_numeric(amount.clone()).expect("non-negative batch quantity"),
+            )
         })
         .collect();
     let batch = TransferAssetBatch::new(batch_entries);

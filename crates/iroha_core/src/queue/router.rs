@@ -6978,7 +6978,7 @@ mod tests {
             "xor".parse().unwrap(),
         );
         let asset_id = AssetId::of(asset_definition.clone(), alice_id.clone());
-        let mint = Mint::asset_numeric(1u32, asset_id);
+        let mint = Mint::asset_quantity(1u32, asset_id);
         let register = Register::asset_definition(
             AssetDefinition::numeric(asset_definition.clone())
                 .with_name(asset_definition.name().to_string()),
@@ -9870,7 +9870,7 @@ mod tests {
         let tx = sample_executable_transaction(
             &alice_id,
             alice_keypair.private_key(),
-            sample_proved_executable(vec![InstructionBox::from(Mint::asset_numeric(
+            sample_proved_executable(vec![InstructionBox::from(Mint::asset_quantity(
                 1_u32,
                 AssetId::of(asset_definition.clone(), alice_id.clone()),
             ))]),
@@ -10013,7 +10013,7 @@ mod tests {
             &alice_id,
             alice_keypair.private_key(),
             sample_proved_executable(vec![
-                InstructionBox::from(Mint::asset_numeric(
+                InstructionBox::from(Mint::asset_quantity(
                     1_u32,
                     AssetId::of(asset_definition.clone(), alice_id.clone()),
                 )),
@@ -10774,7 +10774,7 @@ mod tests {
             "aed".parse().unwrap(),
         );
         let asset_id = AssetId::of(asset_definition, sender_id.clone());
-        let transfer = Transfer::asset_numeric(asset_id, 1_u32, receiver_id.clone());
+        let transfer = Transfer::asset_quantity(asset_id, 1_u32, receiver_id.clone());
         let tx = sample_transaction(
             &sender_id,
             sender_keypair.private_key(),
@@ -10887,7 +10887,7 @@ mod tests {
             DomainId::try_new("cash", "paynet").expect("asset definition domain"),
             "pkr".parse().expect("asset definition name"),
         );
-        let transfer = Transfer::asset_numeric(
+        let transfer = Transfer::asset_quantity(
             AssetId::of(asset_definition, sender_id.clone()),
             1_u32,
             receiver_id,
@@ -10932,7 +10932,7 @@ mod tests {
         let opaque_asset_definition =
             AssetDefinitionId::parse_address_literal(&asset_definition.canonical_address())
                 .expect("opaque canonical asset definition id");
-        let transfer = Transfer::asset_numeric(
+        let transfer = Transfer::asset_quantity(
             AssetId::of(opaque_asset_definition, sender_id.clone()),
             1_u32,
             receiver_id,
@@ -11065,7 +11065,7 @@ mod tests {
             &transparent_asset_definition.canonical_address(),
         )
         .expect("opaque canonical asset definition id");
-        let transfer = Transfer::asset_numeric(
+        let transfer = Transfer::asset_quantity(
             AssetId::of(opaque_asset_definition.clone(), sender_id.clone()),
             1_u32,
             receiver_id,
@@ -11137,7 +11137,7 @@ mod tests {
             &transparent_asset_definition.canonical_address(),
         )
         .expect("opaque canonical asset definition id");
-        let transfer = Transfer::asset_numeric(
+        let transfer = Transfer::asset_quantity(
             AssetId::of(opaque_asset_definition.clone(), sender_id.clone()),
             1_u32,
             receiver_id.clone(),
@@ -11548,7 +11548,7 @@ mod tests {
             DomainId::try_new("cash", "universal").expect("asset definition domain"),
             "pkr".parse().expect("asset definition name"),
         );
-        let transfer = Transfer::asset_numeric(
+        let transfer = Transfer::asset_quantity(
             AssetId::of(asset_definition.clone(), sender_id.clone()),
             1_u32,
             receiver_id,
@@ -11840,7 +11840,7 @@ mod tests {
         let tx = sample_transaction(
             &alice_id,
             alice_keypair.private_key(),
-            vec![InstructionBox::from(Mint::asset_numeric(
+            vec![InstructionBox::from(Mint::asset_quantity(
                 1_u32,
                 AssetId::of(asset_definition.clone(), alice_id.clone()),
             ))],
@@ -11910,7 +11910,7 @@ mod tests {
         let tx = sample_transaction(
             &alice_id,
             alice_keypair.private_key(),
-            vec![InstructionBox::from(Mint::asset_numeric(
+            vec![InstructionBox::from(Mint::asset_quantity(
                 1_u32,
                 AssetId::of(asset_definition.clone(), alice_id.clone()),
             ))],
@@ -11981,7 +11981,7 @@ mod tests {
         let tx = sample_transaction(
             &alice_id,
             alice_keypair.private_key(),
-            vec![InstructionBox::from(Burn::asset_numeric(
+            vec![InstructionBox::from(Burn::asset_quantity(
                 1_u32,
                 AssetId::of(asset_definition.clone(), alice_id.clone()),
             ))],
@@ -12039,7 +12039,7 @@ mod tests {
         let tx = sample_transaction(
             &alice_id,
             alice_keypair.private_key(),
-            vec![InstructionBox::from(Mint::asset_numeric(
+            vec![InstructionBox::from(Mint::asset_quantity(
                 1_u32,
                 AssetId::of(asset_definition.clone(), alice_id.clone()),
             ))],
@@ -12090,7 +12090,7 @@ mod tests {
         let tx = sample_transaction(
             &alice_id,
             alice_keypair.private_key(),
-            vec![InstructionBox::from(Burn::asset_numeric(
+            vec![InstructionBox::from(Burn::asset_quantity(
                 1_u32,
                 AssetId::of(asset_definition.clone(), alice_id.clone()),
             ))],
@@ -12142,7 +12142,7 @@ mod tests {
         let tx = sample_transaction(
             &alice_id,
             alice_keypair.private_key(),
-            vec![InstructionBox::from(Transfer::asset_numeric(
+            vec![InstructionBox::from(Transfer::asset_quantity(
                 AssetId::of(asset_definition.clone(), alice_id.clone()),
                 1_u32,
                 bob_id,
@@ -12199,7 +12199,7 @@ mod tests {
         let tx = sample_transaction(
             &alice_id,
             alice_keypair.private_key(),
-            vec![InstructionBox::from(Mint::asset_numeric(
+            vec![InstructionBox::from(Mint::asset_quantity(
                 1_u32,
                 scoped_asset_id,
             ))],
@@ -12261,7 +12261,7 @@ mod tests {
         let tx = sample_transaction(
             &alice_id,
             alice_keypair.private_key(),
-            vec![InstructionBox::from(Transfer::asset_numeric(
+            vec![InstructionBox::from(Transfer::asset_quantity(
                 scoped_asset_id,
                 1_u32,
                 bob_id,
@@ -12323,7 +12323,7 @@ mod tests {
         let tx = sample_transaction(
             &alice_id,
             alice_keypair.private_key(),
-            vec![InstructionBox::from(Mint::asset_numeric(
+            vec![InstructionBox::from(Mint::asset_quantity(
                 1_u32,
                 scoped_asset_id,
             ))],
@@ -12384,7 +12384,7 @@ mod tests {
         let tx = sample_transaction(
             &alice_id,
             alice_keypair.private_key(),
-            vec![InstructionBox::from(Burn::asset_numeric(
+            vec![InstructionBox::from(Burn::asset_quantity(
                 1_u32,
                 scoped_asset_id,
             ))],
@@ -12440,7 +12440,7 @@ mod tests {
         let tx = sample_transaction(
             &alice_id,
             alice_keypair.private_key(),
-            vec![InstructionBox::from(Transfer::asset_numeric(
+            vec![InstructionBox::from(Transfer::asset_quantity(
                 scoped_asset_id,
                 1_u32,
                 bob_id,
@@ -12721,7 +12721,7 @@ mod tests {
         let tx = sample_transaction(
             &alice_id,
             alice_keypair.private_key(),
-            vec![InstructionBox::from(Mint::asset_numeric(
+            vec![InstructionBox::from(Mint::asset_quantity(
                 1_u32,
                 AssetId::with_scope(
                     asset_definition.clone(),
@@ -12770,7 +12770,7 @@ mod tests {
         let tx = sample_transaction(
             &alice_id,
             alice_keypair.private_key(),
-            vec![InstructionBox::from(Mint::asset_numeric(
+            vec![InstructionBox::from(Mint::asset_quantity(
                 1_u32,
                 AssetId::with_scope(
                     asset_definition.clone(),
@@ -12829,7 +12829,7 @@ mod tests {
         let tx = sample_transaction(
             &alice_id,
             alice_keypair.private_key(),
-            vec![InstructionBox::from(Burn::asset_numeric(
+            vec![InstructionBox::from(Burn::asset_quantity(
                 1_u32,
                 AssetId::of(asset_definition.clone(), alice_id.clone()),
             ))],
@@ -13340,7 +13340,7 @@ mod tests {
             &transparent_asset_definition.canonical_address(),
         )
         .expect("opaque canonical asset definition id");
-        let transfer = Transfer::asset_numeric(
+        let transfer = Transfer::asset_quantity(
             AssetId::of(opaque_asset_definition.clone(), sender_id.clone()),
             1_u32,
             receiver_id,
@@ -13405,7 +13405,7 @@ mod tests {
         let tx = sample_transaction(
             &sender_id,
             sender_keypair.private_key(),
-            vec![InstructionBox::from(Mint::asset_numeric(
+            vec![InstructionBox::from(Mint::asset_quantity(
                 1_u32,
                 AssetId::of(opaque_asset_definition.clone(), sender_id.clone()),
             ))],
@@ -13465,7 +13465,7 @@ mod tests {
         let tx = sample_transaction(
             &sender_id,
             sender_keypair.private_key(),
-            vec![InstructionBox::from(Mint::asset_numeric(
+            vec![InstructionBox::from(Mint::asset_quantity(
                 1_u32,
                 AssetId::of(opaque_asset_definition.clone(), sender_id.clone()),
             ))],
@@ -13547,7 +13547,7 @@ mod tests {
         let tx = sample_transaction(
             &sender_id,
             sender_keypair.private_key(),
-            vec![InstructionBox::from(Mint::asset_numeric(
+            vec![InstructionBox::from(Mint::asset_quantity(
                 1_u32,
                 AssetId::of(opaque_asset_definition.clone(), sender_id.clone()),
             ))],
@@ -13629,7 +13629,7 @@ mod tests {
         let tx = sample_transaction(
             &sender_id,
             sender_keypair.private_key(),
-            vec![InstructionBox::from(Transfer::asset_numeric(
+            vec![InstructionBox::from(Transfer::asset_quantity(
                 AssetId::of(opaque_asset_definition.clone(), sender_id.clone()),
                 1_u32,
                 receiver_id,
@@ -13711,7 +13711,7 @@ mod tests {
         let tx = sample_transaction(
             &sender_id,
             sender_keypair.private_key(),
-            vec![InstructionBox::from(Burn::asset_numeric(
+            vec![InstructionBox::from(Burn::asset_quantity(
                 1_u32,
                 AssetId::of(opaque_asset_definition.clone(), sender_id.clone()),
             ))],
@@ -13779,7 +13779,7 @@ mod tests {
             &transparent_asset_definition.canonical_address(),
         )
         .expect("opaque canonical asset definition id");
-        let transfer = Transfer::asset_numeric(
+        let transfer = Transfer::asset_quantity(
             AssetId::of(opaque_asset_definition.clone(), sender_id.clone()),
             1_u32,
             receiver_id,
@@ -13851,7 +13851,7 @@ mod tests {
             &transparent_asset_definition.canonical_address(),
         )
         .expect("opaque canonical asset definition id");
-        let transfer = Transfer::asset_numeric(
+        let transfer = Transfer::asset_quantity(
             AssetId::of(opaque_asset_definition, sender_id.clone()),
             1_u32,
             receiver_id,
@@ -13913,7 +13913,7 @@ mod tests {
             &transparent_asset_definition.canonical_address(),
         )
         .expect("opaque canonical asset definition id");
-        let transfer = Transfer::asset_numeric(
+        let transfer = Transfer::asset_quantity(
             AssetId::of(opaque_asset_definition, sender_id.clone()),
             1_u32,
             receiver_id,
@@ -13991,7 +13991,7 @@ mod tests {
             &transparent_asset_definition.canonical_address(),
         )
         .expect("opaque canonical asset definition id");
-        let transfer = Transfer::asset_numeric(
+        let transfer = Transfer::asset_quantity(
             AssetId::of(opaque_asset_definition, sender_id.clone()),
             1_u32,
             receiver_id,
@@ -14514,12 +14514,12 @@ mod tests {
             DomainId::try_new("uae", "universal").unwrap(),
             "aed".parse().unwrap(),
         );
-        let uae_transfer = Transfer::asset_numeric(
+        let uae_transfer = Transfer::asset_quantity(
             AssetId::of(asset_definition.clone(), uae_sender_id.clone()),
             1_u32,
             acme_receiver_id.clone(),
         );
-        let bank_transfer = Transfer::asset_numeric(
+        let bank_transfer = Transfer::asset_quantity(
             AssetId::of(asset_definition, bank_sender_id.clone()),
             1_u32,
             acme_receiver_id.clone(),

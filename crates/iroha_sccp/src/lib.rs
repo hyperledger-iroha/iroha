@@ -6018,12 +6018,11 @@ mod tests {
         candidate.finality_proof = to_bytes(&finality).unwrap();
         candidates.push(candidate);
         let mut candidate = fixture.bundle.clone();
-        candidate.finality_proof =
-            crate::test_fixtures::signed_finality_proof_for_message_test_fixture_v1(
-                candidate.commitment.context,
-                &candidate.payload,
-                [0xa5; 32],
-            );
+        let mut finality = decode_taira_bridge_finality_proof(&candidate.finality_proof).unwrap();
+        finality
+            .block_header
+            .set_sccp_commitment_root(Some([0xa5; 32]));
+        candidate.finality_proof = to_bytes(&finality).unwrap();
         candidates.push(candidate);
         for candidate in candidates {
             assert!(

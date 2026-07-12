@@ -27,7 +27,7 @@ Layout (current)
   - 7: `vector_length: u8`
   - 8..16: `max_cycles: u64` (little‑endian)
   - 16: `abi_version: u8`
-  - 17..49: `abi_hash: [u8; 32]` (canonical descriptor hash for `abi_version`)
+  - 17..49: `abi_hash: [u8; 32]` (canonical ABI descriptor hash for `abi_version`)
 
 Mode bits
 - `ZK = 0x01`, `VECTOR = 0x02`, `HTM = 0x04` (reserved/feature‑gated).
@@ -53,6 +53,8 @@ Durable state helpers and ABI surface
 - CoreHost wires STATE_{GET,SET,DEL} to WSV-backed durable smart-contract state; dev/test hosts may use overlays or local persistence but must preserve the same observable behavior.
 
 Validation
+- The `abi_hash` at bytes 17..49 must equal the canonical 32-byte ABI descriptor hash selected by `abi_version`. The parser validates this field before decoding `CNTR`, any other prefix section, or the instruction stream.
+- For deployable artifacts, the required `CNTR` section carries the same ABI hash. Admission requires the header's `abi_version`/`abi_hash` and the embedded `CNTR.abi_hash` to resolve to the same runtime descriptor, so both the fixed header and `CNTR` bind the artifact to the ABI.
 - Generic IVM parsing accepts `version_major = 1` with `version_minor = 0` or `1`; deployable CNTR contracts require `1.1`.
 - Contract artifacts must embed a `CNTR` section immediately after the fixed header and are rejected if that section is missing or inconsistent with the executable stream.
 - `mode` must only contain known bits: `ZK`, `VECTOR`, `HTM` (unknown bits are rejected).
@@ -78,7 +80,7 @@ The following table is generated from the implementation and lists canonical `ab
 <!-- BEGIN GENERATED ABI HASHES -->
 | Policy | abi_hash (hex) |
 |---|---|
-| ABI v1 | 1e4acdf5a13da87857a721c7a259562ec63e0295de1ea7e76793a2ca2fb0c6ef |
+| ABI v1 | e7ed1a6ebb7606d41c25f872546994499b56e7b72091ba52e8223e6de4926ad5 |
 <!-- END GENERATED ABI HASHES -->
 
 - Minor updates may add instructions behind `feature_bits` and reserved opcode space; major updates may change encodings or remove/repurpose only together with a protocol upgrade.

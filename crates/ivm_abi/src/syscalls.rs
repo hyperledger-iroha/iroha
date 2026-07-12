@@ -2346,11 +2346,11 @@ fn numeric_operator_surface_v1() -> Vec<AbiNumericOperatorSurface> {
                         ),
                         ("*", "quantity", "decimal") => (
                             "quantity",
-                            "exact-product;negative-result-is-quantity-underflow;canonical-final-domain-check",
+                            "exact-product;negative-result-is-negative-quantity;canonical-final-domain-check",
                         ),
                         ("/", "quantity", "decimal") => (
                             "quantity",
-                            "exact-terminating-division;negative-result-is-quantity-underflow",
+                            "exact-terminating-division;negative-result-is-negative-quantity",
                         ),
                         ("/", "quantity", "quantity") => {
                             ("decimal", "exact-terminating-dimensionless-ratio")

@@ -8,6 +8,8 @@ mod ivm_cache;
 mod ivm_cache_artifact;
 #[path = "../ivm_header_doc_sync.rs"]
 mod ivm_header_doc_sync;
+#[path = "../repository_ivm_artifacts.rs"]
+mod repository_ivm_artifacts;
 #[path = "../kotodama.rs"]
 mod kotodama;
 #[path = "../kotodama_call_user.rs"]

@@ -73,9 +73,11 @@ assert NumericV1Codec.decode_quantity_envelope(payload) == KotodamaQuantity(
 )
 ```
 
-Python `float` and `decimal.Decimal` inputs are rejected. Use exact strings or,
-for component construction, an arbitrary-precision integer mantissa plus an
-explicit scale.
+`NumericV1Codec` rejects Python `float` and `decimal.Decimal` inputs. Use exact
+strings or, for component construction, an arbitrary-precision integer
+mantissa plus an explicit scale. Higher-level ledger helpers additionally
+accept `Decimal` because it is a lossless host value and normalize it before
+calling the codec.
 
 ## Offline lifecycle
 
@@ -102,17 +104,18 @@ print(
     readiness.ready,
     readiness.asset_scale,
     readiness.active_transfer_verifier,
+    readiness.active_topup_shield_verifier,
     readiness.blockers,
 )
 ```
 
 The readiness decoder preserves the authoritative nullable `u32` asset scale
-and the typed, key-material-free transfer verifier from the same evaluated
-block. A scale above 28 remains decodable with
+and distinct typed, key-material-free transfer and top-up shield verifiers from
+the same evaluated block. A scale above 28 remains decodable with
 `asset_scale_unsupported`; only `ready=True` requires the supported Offline
-amount range and an active verifier. Verifier activation/withdrawal bounds,
-hashes, proof-size limits, blocker correlations, and duplicate blocker codes
-are validated before the snapshot is returned.
+amount range and both active verifier roles. Verifier activation/withdrawal
+bounds, hashes, proof-size limits, exact null/blocker correlations, and
+duplicate blocker codes are validated before the snapshot is returned.
 
 `OfflineTopUpRequest` and `OfflineRedeemRequest` are exported `TypedDict`
 contracts, and an applied top-up returns a frozen `OfflineTopUpAnchor` rather
@@ -202,7 +205,7 @@ verifier-batch reservation remain reserved ABI-7 state; unavailable compact surf
 `recursive_compact_v1` is an admission-neutral projection identifier, not a
 spend-again product mode; compact availability never wins selector choice.
 `preferred_kagemusha_offline_spend_mode()` selects
-`recursive_spend_v2` when the native extension reports native bridge ABI 18 exactly
+`recursive_spend_v1` when the native extension reports native bridge ABI 18 exactly
 and every required recursive-spend method rejects the malformed availability
 probe, and otherwise returns `None` rather than falling back to archived
 checked-prefold fixtures:
@@ -216,9 +219,9 @@ helpers, `kagemusha_recursive_spend_verify`, and
 `kagemusha_recursive_spend_redeem`. Explicit capability selection must pass both
 `recursive_compact_available` and `recursive_spend_available`; single-argument
 selectors are not shipped.
-`is_kagemusha_spend_again_mode(...)` accepts only the first-release
-`recursive_spend_v2` selector and rejects the retired `recursive_spend_v1` and
-`recursive_compact_v1`.
+`is_kagemusha_spend_again_mode(...)` accepts only the first-release public
+`recursive_spend_v1` selector and rejects the internal artifact mode
+`recursive_spend_v2` and `recursive_compact_v1`.
 
 Transaction helpers expose the same Kagemusha instruction surface without
 asking wallet code to reframe native archives. Use
@@ -608,6 +611,13 @@ client.transfer_assets_and_wait(
 )
 ```
 
+Ledger quantity helpers accept `KotodamaQuantity`, canonical quantity strings,
+Python integers, or finite `Decimal` values. `Decimal` inputs are normalized
+losslessly; strings are treated as wire values and must already use canonical
+spelling. Python `float`, JSON numbers on readback, negative quantities, and
+alternate strings such as `"01"`, `"1.0"`, or `"1e0"` are rejected before a
+transaction is encoded.
+
 ## RWA instructions
 
 `TransactionDraft` now mirrors the dedicated RWA lot family, including
@@ -790,8 +800,19 @@ if status and status.enabled:
 
 # Fetch consensus status with structured accessors
 snapshot = client.get_sumeragi_status_typed()
-print(snapshot.highest_qc.height, snapshot.tx_queue.saturated)
-print("DA reschedules:", snapshot.da_reschedule_total)
+print(
+    snapshot.height,
+    snapshot.view,
+    snapshot.phase.value,
+    snapshot.last_committed_height,
+)
+print(
+    snapshot.build_fingerprint,
+    snapshot.config_fingerprint,
+    snapshot.height_context_id.hash,
+)
+if snapshot.pending_persistence_id is not None:
+    print("Waiting for WAL acknowledgement", snapshot.pending_persistence_id)
 
 # Inspect Nexus lane commitments and governance coverage from `/v1/status`
 status_snapshot = client.get_status_snapshot_typed()
@@ -1041,14 +1062,14 @@ config = TransactionConfig(chain_id="dev-chain", authority="sorauﾛ1NcMBm2dﾌB
 draft = TransactionDraft(config)
 draft.register_domain("wonderland") \
      .register_account("sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6", metadata={"role": "admin"}) \
-     .register_asset_definition_numeric(
+     .register_asset_definition(
         "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
         owner="sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
         scale=2,
         mintable="Infinitely",
         metadata={"sym": "ROS"},
      ) \
-     .mint_asset_numeric("norito:<asset-id-hex>", 10)
+     .mint_asset_quantity("norito:<asset-id-hex>", 10)
 
 pair = Ed25519KeyPair.from_private_key(bytes([1] * 32))
 envelope = draft.sign_with_keypair(pair)
@@ -2028,7 +2049,7 @@ no environment variables need to be exported.
   transactions (bare + versioned Norito bytes) with signature/hash inspection
   helpers plus dict/JSON export/import helpers for envelopes.
 - Provide Python-friendly instruction constructors (register domain/account,
-  mint/transfer numeric assets) to assemble manifests without raw JSON, plus
+  mint/transfer quantity assets) to assemble manifests without raw JSON, plus
   `Instruction.from_json`/`Instruction.to_json` helpers for full Norito
   coverage when bespoke wrappers are unnecessary.
 - Expose typed wrappers for `DomainId`, `AccountId`, `AssetDefinitionId`, and

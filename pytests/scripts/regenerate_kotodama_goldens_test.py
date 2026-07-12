@@ -23,7 +23,11 @@ sys.modules[SPEC.name] = goldens
 SPEC.loader.exec_module(goldens)
 
 
-def artifact(mode: int = 0, suffix: bytes = b"") -> bytes:
+ABI_HASH = bytes(range(32))
+FINAL_V1_ABI_DIGEST = "E7ED1A6EBB7606D41C25F872546994499B56E7B72091BA52E8223E6DE4926AD5"
+
+
+def artifact(mode: int = 0, suffix: bytes = b"", abi_hash: bytes = ABI_HASH) -> bytes:
     """Build the minimum header shape accepted by the script validator."""
 
     return (
@@ -31,6 +35,7 @@ def artifact(mode: int = 0, suffix: bytes = b"") -> bytes:
         + bytes([1, 1, mode, 0])
         + struct.pack("<Q", goldens.MAX_CYCLES)
         + b"\x01"
+        + abi_hash
         + b"CNTR"
         + struct.pack("<I", 0)
         + suffix
@@ -40,8 +45,10 @@ def artifact(mode: int = 0, suffix: bytes = b"") -> bytes:
 def test_read_map_accepts_aliases_but_rejects_conflicts(tmp_path: Path) -> None:
     mapping = tmp_path / "goldens.tsv"
     mapping.write_text(
-        "standard\ta/demo.ko\ta/demo.to\n"
-        "standard\ta/demo.ko\tb/alias.to\n",
+        "# owner, source, artifact\n"
+        "kotodama-standard\ta/demo.ko\ta/demo.to\n"
+        "synthetic\t0\tfixtures/executor.to\n"
+        "kotodama-standard\ta/demo.ko\tb/alias.to\n",
         encoding="utf-8",
     )
     rows = goldens.read_map(mapping)
@@ -49,8 +56,8 @@ def test_read_map_accepts_aliases_but_rejects_conflicts(tmp_path: Path) -> None:
     assert len(goldens.unique_builds(rows)) == 1
 
     mapping.write_text(
-        "standard\ta/demo.ko\ta/demo.to\n"
-        "zk\ta/demo.ko\tb/alias.to\n",
+        "kotodama-standard\ta/demo.ko\ta/demo.to\n"
+        "kotodama-zk\ta/demo.ko\tb/alias.to\n",
         encoding="utf-8",
     )
     with pytest.raises(goldens.GoldenError, match="conflicting execution modes"):
@@ -120,28 +127,55 @@ def test_artifact_validation_binds_v1_budget_mode_and_debug_policy(
 ) -> None:
     path = tmp_path / "demo.to"
     path.write_bytes(artifact())
-    goldens.validate_artifact(path, "standard")
+    goldens.validate_artifact(path, "standard", ABI_HASH)
 
     path.write_bytes(artifact(goldens.ZK_MODE_BIT))
-    goldens.validate_artifact(path, "zk")
+    goldens.validate_artifact(path, "zk", ABI_HASH)
     with pytest.raises(goldens.GoldenError, match="wrong ZK execution bit"):
-        goldens.validate_artifact(path, "standard")
+        goldens.validate_artifact(path, "standard", ABI_HASH)
 
     path.write_bytes(artifact(suffix=b"DBG1"))
     with pytest.raises(goldens.GoldenError, match="forbidden debug metadata"):
-        goldens.validate_artifact(path, "standard")
+        goldens.validate_artifact(path, "standard", ABI_HASH)
 
     mutated = bytearray(artifact())
     mutated[6] = 0x80
     path.write_bytes(mutated)
     with pytest.raises(goldens.GoldenError, match="unknown execution-mode bits"):
-        goldens.validate_artifact(path, "standard")
+        goldens.validate_artifact(path, "standard", ABI_HASH)
 
     mutated = bytearray(artifact())
     mutated[7] = 8
     path.write_bytes(mutated)
     with pytest.raises(goldens.GoldenError, match="vector-length override"):
-        goldens.validate_artifact(path, "standard")
+        goldens.validate_artifact(path, "standard", ABI_HASH)
+
+    with pytest.raises(goldens.GoldenError, match="compiler ABI hash"):
+        goldens.validate_artifact(path, "standard", b"\xff" * 32)
+
+
+def test_manifest_abi_hash_requires_canonical_hash_text(tmp_path: Path) -> None:
+    assert goldens.literal_checksum("hash", FINAL_V1_ABI_DIGEST) == "6F85"
+    manifest = tmp_path / "demo.manifest.json"
+    digest = ABI_HASH.hex().upper()
+    manifest.write_text(
+        json.dumps(
+            {"abi_hash": f"hash:{digest}#{goldens.literal_checksum('hash', digest)}"}
+        ),
+        encoding="utf-8",
+    )
+    assert goldens.manifest_abi_hash(manifest) == ABI_HASH
+
+    for value in [
+        None,
+        ABI_HASH.hex(),
+        f"hash:{ABI_HASH.hex()}#abcd",
+        "hash:00#ABCD",
+        f"hash:{digest}#0000",
+    ]:
+        manifest.write_text(json.dumps({"abi_hash": value}), encoding="utf-8")
+        with pytest.raises(goldens.GoldenError, match="ABI hash"):
+            goldens.manifest_abi_hash(manifest)
 
 
 def test_atomic_publish_does_not_rewrite_equal_output(tmp_path: Path) -> None:

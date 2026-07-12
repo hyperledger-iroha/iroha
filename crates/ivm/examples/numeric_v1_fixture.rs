@@ -63,6 +63,20 @@ fn invalid(
     ])
 }
 
+fn invalid_text(
+    id: &'static str,
+    kind: &'static str,
+    input: Value,
+    expected: &'static str,
+) -> Value {
+    object([
+        ("id", Value::from(id)),
+        ("kind", Value::from(kind)),
+        ("input", input),
+        ("expected", Value::from(expected)),
+    ])
+}
+
 fn int_vector(id: &'static str, value: BigInt) -> Value {
     let frame = IntValueV1::try_new(value.clone())
         .expect("bounded fixture integer")
@@ -175,9 +189,44 @@ fn signed_endpoints() -> (BigInt, BigInt) {
     )
 }
 
+fn increment_unsigned_decimal(source: &str) -> String {
+    assert!(
+        !source.is_empty() && source.bytes().all(|byte| byte.is_ascii_digit()),
+        "fixture decimal increment accepts unsigned digits"
+    );
+    let mut digits = source.as_bytes().to_vec();
+    let mut carry = true;
+    for digit in digits.iter_mut().rev() {
+        if !carry {
+            break;
+        }
+        if *digit == b'9' {
+            *digit = b'0';
+        } else {
+            *digit += 1;
+            carry = false;
+        }
+    }
+    if carry {
+        digits.insert(0, b'1');
+    }
+    String::from_utf8(digits).expect("decimal digits are UTF-8")
+}
+
 /// Render the deterministic shared JSON fixture.
 pub fn render_fixture() -> String {
     let (minimum, maximum) = signed_endpoints();
+    let positive_overflow_text = increment_unsigned_decimal(&maximum.to_string());
+    let negative_overflow_text = format!(
+        "-{}",
+        increment_unsigned_decimal(
+            minimum
+                .to_string()
+                .strip_prefix('-')
+                .expect("minimum endpoint is negative")
+        )
+    );
+    let scale_29_text = format!("0.{}1", "0".repeat(28));
     let valid_values = vec![
         int_vector("int_zero", BigInt::zero()),
         int_vector("int_127", BigInt::from_i128(127)),
@@ -189,13 +238,25 @@ pub fn render_fixture() -> String {
             BigInt::from_i128(i128::from(i64::MAX)),
         ),
         int_vector("int_2_pow_63", BigInt::from_i128(1_i128 << 63)),
-        int_vector("int_min", minimum),
-        int_vector("int_max", maximum),
+        int_vector("int_min", minimum.clone()),
+        int_vector("int_max", maximum.clone()),
         decimal_vector("decimal_zero", Numeric::new(0, 0)),
+        decimal_vector("decimal_min", Numeric::new(minimum.clone(), 0)),
+        decimal_vector("decimal_max", Numeric::new(maximum.clone(), 0)),
         decimal_vector("decimal_neg_1_25", Numeric::new(-125, 2)),
         decimal_vector("decimal_scale_28", Numeric::new(BigInt::one(), 28)),
         quantity_vector("quantity_zero", "0".parse().expect("zero quantity")),
         quantity_vector("quantity_1_25", "1.25".parse().expect("quantity")),
+        quantity_vector(
+            "quantity_max",
+            Quantity::from_canonical_numeric(Numeric::new(maximum.clone(), 0))
+                .expect("maximum is a quantity"),
+        ),
+        quantity_vector(
+            "quantity_scale_28",
+            Quantity::from_canonical_numeric(Numeric::new(BigInt::one(), 28))
+                .expect("positive scale-28 value is a quantity"),
+        ),
     ];
 
     let redundant_zero_frame = frame(INT_SCHEMA_HASH_V1, &body(&[0], None));
@@ -205,6 +266,8 @@ pub fn render_fixture() -> String {
     let decimal_trailing_zero_frame = frame(DECIMAL_SCHEMA_HASH_V1, &body(&[10], Some(1)));
     let decimal_scale_29_frame = frame(DECIMAL_SCHEMA_HASH_V1, &body(&[1], Some(29)));
     let negative_quantity_frame = frame(QUANTITY_SCHEMA_HASH_V1, &body(&[0xff], Some(0)));
+    let quantity_zero_scale_frame = frame(QUANTITY_SCHEMA_HASH_V1, &body(&[], Some(1)));
+    let quantity_trailing_zero_frame = frame(QUANTITY_SCHEMA_HASH_V1, &body(&[10], Some(1)));
     let mut positive_overflow = vec![0_u8; MAX_MANTISSA_BYTES + 1];
     positive_overflow[MAX_MANTISSA_BYTES - 1] = 0x80;
     let positive_overflow_frame = frame(INT_SCHEMA_HASH_V1, &body(&positive_overflow, None));
@@ -230,6 +293,20 @@ pub fn render_fixture() -> String {
     bad_crc_frame[last] ^= 1;
 
     let canonical_int_envelope = numeric_tlv::encode_int(&BigInt::one()).expect("attack envelope");
+    let frame_too_short = canonical_int_frame[..NUMERIC_FRAME_HEADER_BYTES_V1 - 1].to_vec();
+    let mut invalid_header_frame = canonical_int_frame.clone();
+    invalid_header_frame[0] ^= 1;
+    let mut frame_length_mismatch = canonical_int_frame.clone();
+    let declared_body_length = u64::from_le_bytes(
+        frame_length_mismatch[23..31]
+            .try_into()
+            .expect("frame body length field"),
+    );
+    frame_length_mismatch[23..31]
+        .copy_from_slice(&(declared_body_length + 1).to_le_bytes());
+    let mut malformed_body = body(&[1], None);
+    malformed_body[..4].copy_from_slice(&2_u32.to_le_bytes());
+    let body_length_mismatch = frame(INT_SCHEMA_HASH_V1, &malformed_body);
     let mut bad_hash_envelope = canonical_int_envelope.clone();
     let last = bad_hash_envelope.len() - 1;
     bad_hash_envelope[last] ^= 1;
@@ -240,6 +317,14 @@ pub fn render_fixture() -> String {
             .expect("numeric frame bound fits u32")
             .to_be_bytes(),
     );
+    let mut envelope_length_mismatch = canonical_int_envelope.clone();
+    let declared_frame_length = u32::from_be_bytes(
+        envelope_length_mismatch[3..7]
+            .try_into()
+            .expect("envelope frame length field"),
+    );
+    envelope_length_mismatch[3..7]
+        .copy_from_slice(&(declared_frame_length - 1).to_be_bytes());
 
     let invalid_values = vec![
         invalid(
@@ -292,6 +377,20 @@ pub fn render_fixture() -> String {
             negative_quantity_frame,
         ),
         invalid(
+            "quantity_zero_nonzero_scale",
+            "frame",
+            "quantity",
+            "noncanonical_decimal",
+            quantity_zero_scale_frame,
+        ),
+        invalid(
+            "quantity_removable_zero",
+            "frame",
+            "quantity",
+            "noncanonical_decimal",
+            quantity_trailing_zero_frame,
+        ),
+        invalid(
             "positive_mantissa_overflow",
             "frame",
             "int",
@@ -304,6 +403,34 @@ pub fn render_fixture() -> String {
             "int",
             "frame_too_large",
             negative_overflow_frame,
+        ),
+        invalid(
+            "frame_too_short",
+            "frame",
+            "int",
+            "frame_too_short",
+            frame_too_short,
+        ),
+        invalid(
+            "invalid_frame_header",
+            "frame",
+            "int",
+            "invalid_header",
+            invalid_header_frame,
+        ),
+        invalid(
+            "declared_frame_length_mismatch",
+            "frame",
+            "int",
+            "length_mismatch",
+            frame_length_mismatch,
+        ),
+        invalid(
+            "numeric_body_length_mismatch",
+            "frame",
+            "int",
+            "length_mismatch",
+            body_length_mismatch,
         ),
         invalid(
             "wrong_frame_schema",
@@ -396,6 +523,13 @@ pub fn render_fixture() -> String {
             "truncated_envelope",
             canonical_int_envelope[..6].to_vec(),
         ),
+        invalid(
+            "envelope_length_mismatch",
+            "envelope",
+            "int",
+            "truncated_envelope",
+            envelope_length_mismatch,
+        ),
     ];
 
     let removable_scale_input = format!("1.{}", "0".repeat(29));
@@ -408,6 +542,120 @@ pub fn render_fixture() -> String {
         ("input", Value::from(removable_scale_input)),
         ("canonical", Value::from(removable_scale_value.to_string())),
     ])];
+    let invalid_text_values = vec![
+        invalid_text("int_json_number", "int", Value::from(1_u64), "invalid_text"),
+        invalid_text("int_leading_zero", "int", Value::from("01"), "invalid_text"),
+        invalid_text("int_plus_sign", "int", Value::from("+1"), "invalid_text"),
+        invalid_text("int_negative_zero", "int", Value::from("-0"), "invalid_text"),
+        invalid_text(
+            "int_positive_overflow",
+            "int",
+            Value::from(positive_overflow_text.clone()),
+            "mantissa_overflow",
+        ),
+        invalid_text(
+            "int_negative_overflow",
+            "int",
+            Value::from(negative_overflow_text),
+            "mantissa_overflow",
+        ),
+        invalid_text(
+            "decimal_json_number",
+            "decimal",
+            Value::from(1_u64),
+            "invalid_text",
+        ),
+        invalid_text(
+            "decimal_exponent",
+            "decimal",
+            Value::from("1e0"),
+            "invalid_text",
+        ),
+        invalid_text(
+            "decimal_whitespace",
+            "decimal",
+            Value::from(" 1"),
+            "invalid_text",
+        ),
+        invalid_text(
+            "decimal_trailing_fractional_zero",
+            "decimal",
+            Value::from("1.0"),
+            "invalid_text",
+        ),
+        invalid_text(
+            "decimal_zero_fraction",
+            "decimal",
+            Value::from("0.0"),
+            "invalid_text",
+        ),
+        invalid_text(
+            "decimal_scale_29",
+            "decimal",
+            Value::from(scale_29_text.clone()),
+            "invalid_scale",
+        ),
+        invalid_text(
+            "decimal_mantissa_overflow",
+            "decimal",
+            Value::from(positive_overflow_text.clone()),
+            "mantissa_overflow",
+        ),
+        invalid_text(
+            "quantity_json_number",
+            "quantity",
+            Value::from(1_u64),
+            "invalid_text",
+        ),
+        invalid_text(
+            "quantity_leading_zero",
+            "quantity",
+            Value::from("01"),
+            "invalid_text",
+        ),
+        invalid_text(
+            "quantity_trailing_fractional_zero",
+            "quantity",
+            Value::from("1.0"),
+            "invalid_text",
+        ),
+        invalid_text(
+            "quantity_zero_fraction",
+            "quantity",
+            Value::from("0.0"),
+            "invalid_text",
+        ),
+        invalid_text(
+            "quantity_scale_29",
+            "quantity",
+            Value::from(scale_29_text),
+            "invalid_scale",
+        ),
+        invalid_text(
+            "quantity_mantissa_overflow",
+            "quantity",
+            Value::from(positive_overflow_text),
+            "mantissa_overflow",
+        ),
+        invalid_text(
+            "quantity_exponent",
+            "quantity",
+            Value::from("1e0"),
+            "invalid_text",
+        ),
+        invalid_text(
+            "quantity_not_a_number",
+            "quantity",
+            Value::from("NaN"),
+            "invalid_text",
+        ),
+        invalid_text(
+            "quantity_negative",
+            "quantity",
+            Value::from("-1"),
+            "negative_quantity",
+        ),
+    ];
 
     let document = object([
         ("format", Value::from("iroha.numeric.v1")),
@@ -421,6 +669,7 @@ pub fn render_fixture() -> String {
         ),
         ("maximum_scale", Value::from(28_u64)),
         ("text", Value::Array(text_values)),
+        ("invalid_text", Value::Array(invalid_text_values)),
         ("valid", Value::Array(valid_values)),
         ("invalid", Value::Array(invalid_values)),
     ]);
@@ -465,4 +714,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     print!("{}", render_fixture());
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unsigned_decimal_increment_handles_carry_boundaries() {
+        assert_eq!(increment_unsigned_decimal("0"), "1");
+        assert_eq!(increment_unsigned_decimal("129"), "130");
+        assert_eq!(increment_unsigned_decimal("999"), "1000");
+    }
 }

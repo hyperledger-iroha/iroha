@@ -1779,12 +1779,12 @@ async fn repo_agreements_emit_i105_literals() -> Result<()> {
         "camomile".parse()?,
     );
     let setup_instructions: Vec<InstructionBox> = vec![
-        Mint::asset_numeric(
+        Mint::asset_quantity(
             numeric!(1500),
             AssetId::new(collateral_def_id.clone(), ALICE_ID.clone()),
         )
         .into(),
-        Mint::asset_numeric(
+        Mint::asset_quantity(
             numeric!(1500),
             AssetId::new(cash_def_id.clone(), BOB_ID.clone()),
         )

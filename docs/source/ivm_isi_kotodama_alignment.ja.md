@@ -122,8 +122,8 @@ translator: manual
 - `SYSCALL_REGISTER_DOMAIN(id: ptr DomainId)` → ISI `Register<Domain>`
 - `SYSCALL_REGISTER_ACCOUNT(id: ptr AccountId)` → ISI `Register<Account>`
 - `SYSCALL_REGISTER_ASSET(id: ptr AssetDefinitionId, mintable: u8)` → ISI `Register<AssetDefinition>`
-- `SYSCALL_MINT_ASSET(account: ptr AccountId, asset: ptr AssetDefinitionId, amount: ptr QuantityValueV1)` → ISI `Mint<Quantity, Asset>`
-- `SYSCALL_BURN_ASSET(account: ptr AccountId, asset: ptr AssetDefinitionId, amount: ptr QuantityValueV1)` → ISI `Burn<Quantity, Asset>`
+- `SYSCALL_MINT_ASSET(account: ptr AccountId, asset: ptr AssetDefinitionId, amount: ptr QuantityValueV1)` → ISI `Mint<Numeric, Asset>`
+- `SYSCALL_BURN_ASSET(account: ptr AccountId, asset: ptr AssetDefinitionId, amount: ptr QuantityValueV1)` → ISI `Burn<Numeric, Asset>`
 - `SYSCALL_TRANSFER_ASSET(from: ptr AccountId, to: ptr AccountId, asset: ptr AssetDefinitionId, amount: ptr QuantityValueV1)` → ISI `Transfer<Asset>`
 - `SYSCALL_TRANSFER_V1_BATCH_BEGIN()` / `SYSCALL_TRANSFER_V1_BATCH_END()` → ISI `TransferAssetBatch`（バッチスコープの開始/終了を宣言し、各エントリは `transfer_asset` で順次適用される）
 - `SYSCALL_TRANSFER_V1_BATCH_APPLY(&NoritoBytes<TransferAssetBatch>)` → 既に Norito でエンコードされたバッチを 1 回の呼び出しで適用

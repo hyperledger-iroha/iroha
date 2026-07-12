@@ -259,9 +259,9 @@ not a different observable algorithm.
 Rounded division requires an output scale and one of these stable modes:
 
 ```text
-decimal.div_round(divisor: decimal, scale: int, mode: rounding-mode) -> decimal
-quantity.div_round(divisor: decimal, scale: int, mode: rounding-mode) -> quantity
-quantity.ratio_round(divisor: quantity, scale: int, mode: rounding-mode) -> decimal
+decimal.div_round(decimal divisor, int scale, rounding-mode mode) -> decimal
+quantity.div_round(decimal divisor, int scale, rounding-mode mode) -> quantity
+quantity.ratio_round(quantity divisor, int scale, rounding-mode mode) -> decimal
 ```
 
 All three methods require the three argument names shown above. `rounding-mode`
@@ -336,10 +336,10 @@ modulo `2^512` and reinterpret the result in the signed domain. V1 does not
 inherit an `i64` or `u128` modulus from retired source types.
 
 ```text
-math::wrapping_neg(value: int) -> int
-math::wrapping_add(left: int, right: int) -> int
-math::wrapping_sub(left: int, right: int) -> int
-math::wrapping_mul(left: int, right: int) -> int
+math::wrapping_neg(int value) -> int
+math::wrapping_add(int left, int right) -> int
+math::wrapping_sub(int left, int right) -> int
+math::wrapping_mul(int left, int right) -> int
 ```
 
 The binary forms require the `left` and `right` argument names. These four
@@ -369,7 +369,7 @@ The schema names and 16-byte schema hashes are:
 | `decimal` | `iroha.numeric.DecimalValueV1` | `ba2ffed52e4d8ee16f17efefe1828524` |
 | `quantity` | `iroha.numeric.QuantityValueV1` | `e4769984c81ce0e8b678f2eb06274ee3` |
 
-ABI V1 descriptor format 5 embeds numeric-semantics descriptor version 2. It
+ABI V1 descriptor format 6 embeds numeric-semantics descriptor version 2. It
 binds all three value domains, exact-intermediate and result-validation rules,
 the complete operator/conversion/wrapping rules, canonicalization, integer and
 decimal division behavior, and the ordered arithmetic and validation failure
@@ -634,7 +634,7 @@ refund path.
 The successful aggregate identity is:
 
 ```text
-gas = 16
+gas = 384
     + canonical input envelope bytes
     + input frame bytes traversed by the authentication hash
     + canonical output envelope bytes
@@ -652,7 +652,7 @@ normative work is zero still pay the entry and envelope charges.
 The constants are consensus weights, not host-cycle counts. They are not
 considered release-calibrated until the required benchmark evidence is
 archived. The
-entry weight `16` covers syscall dispatch, staged-context initialization,
+entry weight `384` covers syscall dispatch, staged-context initialization,
 bounded validation of at most four control/reserved registers, and completion
 bookkeeping. Pointer traversal is excluded because every traversed envelope
 byte is charged separately. The limb-work weight `4` budgets one logical
@@ -670,7 +670,7 @@ limbs, division/remainder, scale-28 rounded division, and minimum/maximum
 input/output envelope authentication, framing, and canonical decode. A failing
 numeric syscall with an invalid zero pointer separately measures the entry,
 dispatch/control, and seven-byte pointer-header boundary without performing
-payload work. Its calibration denominator is the staged `16 + 7` gas; the
+payload work. Its calibration denominator is the staged `384 + 7` gas; the
 generic five-gas `SCALLX` instruction charge is asserted against the VM's total
 consumption but excluded from that denominator, so it cannot hide an
 underpriced numeric entry phase. For each supported
@@ -680,7 +680,7 @@ pipeline subtract the measured `EMPTY_HARNESS` cost before normalization;
 direct bigint, decimal, and frame-codec benchmarks do not contain that VM
 harness and therefore are not adjusted by it. The
 rounded-up worst ratio, plus a minimum 25% safety margin, MUST remain no greater
-than `4`; bounded dispatch/control overhead MUST remain no greater than `16`
+than `4`; bounded dispatch/control overhead MUST remain no greater than `384`
 baseline gas units. A failure requires increasing the constants, changing the
 gas-formula version/hash, and regenerating gas goldens before release—it MUST
 NOT be hidden by a hardware-specific implementation. The first-release

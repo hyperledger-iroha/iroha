@@ -1476,6 +1476,7 @@ struct ProgramLoadImage<'a> {
     code_hash: [u8; 32],
     entry_pc: u64,
     strict_return_integrity: bool,
+    allow_koto_test_syscalls: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -1567,6 +1568,9 @@ pub struct IVM {
     predecoded: Option<Arc<[crate::ivm_cache::DecodedOp]>>,
     prepared: Option<PreparedProgram>,
     prepared_required: bool,
+    /// Unforgeable local capability installed only by the crate-private
+    /// Kotodama test-suite loader.
+    allow_koto_test_syscalls: bool,
     /// Whether the loaded image is a deployable contract with protected calls.
     strict_return_integrity: bool,
     /// Host-protected return PCs for direct contract calls.
@@ -1662,6 +1666,7 @@ impl Clone for IVM {
             predecoded: self.predecoded.clone(),
             prepared: self.prepared.clone(),
             prepared_required: self.prepared_required,
+            allow_koto_test_syscalls: self.allow_koto_test_syscalls,
             strict_return_integrity: self.strict_return_integrity,
             contract_return_stack: self.contract_return_stack.clone(),
             contract_outer_return_pc: self.contract_outer_return_pc,
@@ -1994,6 +1999,7 @@ impl IVM {
             predecoded: None,
             prepared: None,
             prepared_required: false,
+            allow_koto_test_syscalls: false,
             strict_return_integrity: false,
             contract_return_stack: Vec::new(),
             contract_outer_return_pc: None,
@@ -2747,6 +2753,7 @@ impl IVM {
         self.predecoded = None;
         self.prepared = None;
         self.prepared_required = false;
+        self.allow_koto_test_syscalls = false;
         self.strict_return_integrity = false;
         self.contract_return_stack.clear();
         self.contract_outer_return_pc = None;
@@ -2815,6 +2822,7 @@ impl IVM {
             code_hash: crate::metadata::contract_code_hash(program).into(),
             entry_pc,
             strict_return_integrity,
+            allow_koto_test_syscalls: false,
         })
     }
 
@@ -2824,6 +2832,25 @@ impl IVM {
     /// prepared operations remain shared with `contract`; only the code bytes
     /// are installed into this VM's memory image.
     pub fn load_prepared(&mut self, contract: &PreparedContract) -> Result<(), VMError> {
+        self.load_prepared_with_koto_test_capability(contract, false)
+    }
+
+    /// Load a fully validated local Kotodama test-suite artifact.
+    ///
+    /// The method is crate-private so public raw/program/prepared loaders cannot
+    /// authorize the host-private Kotodama test syscall range.
+    pub(crate) fn load_koto_test_prepared(
+        &mut self,
+        contract: &PreparedContract,
+    ) -> Result<(), VMError> {
+        self.load_prepared_with_koto_test_capability(contract, true)
+    }
+
+    fn load_prepared_with_koto_test_capability(
+        &mut self,
+        contract: &PreparedContract,
+        allow_koto_test_syscalls: bool,
+    ) -> Result<(), VMError> {
         #[cfg(test)]
         {
             self.prepared_loads = self.prepared_loads.saturating_add(1);
@@ -2839,6 +2866,7 @@ impl IVM {
             code_hash: contract.code_hash().into(),
             entry_pc: contract.instruction_entry_pc(),
             strict_return_integrity: true,
+            allow_koto_test_syscalls,
         })
     }
 
@@ -2871,6 +2899,7 @@ impl IVM {
         self.predecoded = image.predecoded;
         self.prepared = image.prepared;
         self.prepared_required = true;
+        self.allow_koto_test_syscalls = image.allow_koto_test_syscalls;
         self.strict_return_integrity = image.strict_return_integrity;
         self.contract_return_stack.clear();
         self.contract_outer_return_pc = None;
@@ -4685,6 +4714,9 @@ impl IVM {
 
     #[inline]
     fn execute_syscall(&mut self, host: &mut dyn IVMHost, number: u32) -> Result<(), VMError> {
+        if crate::syscalls::is_koto_test_syscall(number) && !self.allow_koto_test_syscalls {
+            return Err(VMError::UnknownSyscall(number));
+        }
         let metering = resolve_syscall_metering(host, self.syscall_policy(), number)?;
         match metering {
             SyscallMetering::Reserved => self.execute_reserved_syscall(host, number),
@@ -8182,7 +8214,7 @@ mod tests {
     }
 
     #[test]
-    fn explicitly_allowed_host_private_syscall_uses_reserved_metering() {
+    fn explicitly_allowed_generic_host_private_syscall_uses_reserved_metering() {
         struct ToolingHost {
             prepared: Cell<bool>,
             dispatched: bool,
@@ -8190,26 +8222,19 @@ mod tests {
 
         impl IVMHost for ToolingHost {
             fn prepare_syscall(&self, number: u32, _vm: &IVM) -> Result<u64, VMError> {
-                assert_eq!(
-                    number,
-                    crate::syscalls::SYSCALL_KOTO_TEST_INVOKE_ENTRYPOINT_AS
-                );
+                assert_eq!(number, 0x00FD_0001);
                 self.prepared.set(true);
                 Ok(0)
             }
 
             fn syscall(&mut self, number: u32, _vm: &mut IVM) -> Result<u64, VMError> {
-                assert_eq!(
-                    number,
-                    crate::syscalls::SYSCALL_KOTO_TEST_INVOKE_ENTRYPOINT_AS
-                );
+                assert_eq!(number, 0x00FD_0001);
                 self.dispatched = true;
                 Ok(0)
             }
 
             fn allows_syscall(&self, policy: SyscallPolicy, number: u32) -> bool {
-                number == crate::syscalls::SYSCALL_KOTO_TEST_INVOKE_ENTRYPOINT_AS
-                    || crate::syscalls::is_syscall_allowed(policy, number)
+                number == 0x00FD_0001 || crate::syscalls::is_syscall_allowed(policy, number)
             }
 
             fn as_any(&mut self) -> &mut dyn Any
@@ -8220,11 +8245,12 @@ mod tests {
             }
         }
 
-        let number = crate::syscalls::SYSCALL_KOTO_TEST_INVOKE_ENTRYPOINT_AS;
+        let number = 0x00FD_0001;
         assert!(!crate::syscalls::is_syscall_allowed(
             SyscallPolicy::AbiV1,
             number
         ));
+        assert!(!crate::syscalls::is_koto_test_syscall(number));
         assert!(host_syscall_metering_spec(SyscallPolicy::AbiV1, number).is_none());
 
         let mut code = Vec::new();
@@ -8242,6 +8268,57 @@ mod tests {
             .expect("explicitly allowed host-private syscall must run");
         assert!(host.prepared.get());
         assert!(host.dispatched);
+    }
+
+    #[test]
+    fn permissive_host_cannot_enable_kotodama_test_syscalls_for_raw_code() {
+        struct ToolingHost {
+            prepared: Cell<bool>,
+            dispatched: bool,
+        }
+
+        impl IVMHost for ToolingHost {
+            fn prepare_syscall(&self, _number: u32, _vm: &IVM) -> Result<u64, VMError> {
+                self.prepared.set(true);
+                Ok(0)
+            }
+
+            fn syscall(&mut self, _number: u32, _vm: &mut IVM) -> Result<u64, VMError> {
+                self.dispatched = true;
+                Ok(0)
+            }
+
+            fn allows_syscall(&self, policy: SyscallPolicy, number: u32) -> bool {
+                crate::syscalls::is_koto_test_syscall(number)
+                    || crate::syscalls::is_syscall_allowed(policy, number)
+            }
+
+            fn as_any(&mut self) -> &mut dyn Any
+            where
+                Self: 'static,
+            {
+                self
+            }
+        }
+
+        let number = crate::syscalls::SYSCALL_KOTO_TEST_INVOKE_ENTRYPOINT_AS;
+        let mut code = Vec::new();
+        code.extend_from_slice(&crate::encoding::wide::encode_syscallx(number).to_le_bytes());
+        code.extend_from_slice(&crate::encoding::wide::encode_halt().to_le_bytes());
+        let mut vm = IVM::new(u64::MAX);
+        vm.load_code(&code)
+            .expect("load raw Kotodama test-syscall program");
+        let mut host = ToolingHost {
+            prepared: Cell::new(false),
+            dispatched: false,
+        };
+
+        assert_eq!(
+            vm.run_with_host(&mut host),
+            Err(VMError::UnknownSyscall(number))
+        );
+        assert!(!host.prepared.get());
+        assert!(!host.dispatched);
     }
 
     #[test]

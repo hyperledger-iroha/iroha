@@ -63,17 +63,17 @@ client = ToriiClient(
 
 # 1) Register 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ if absent
 asset_def = AssetDefinitionId.from_str("7Sp2j6zDvJFnMoscAiMaWbWHRDBZ")
-register_instruction = Instruction.register_asset_definition_numeric(asset_def)
+register_instruction = Instruction.register_asset_definition(asset_def)
 
 # 2) Mint 250 units into admin
 admin_asset = AssetId.new(asset_def, ADMIN_ACCOUNT)
-mint_instruction = Instruction.mint_asset_numeric(
+mint_instruction = Instruction.mint_asset_quantity(
     value=NumericValue.from_int(250),
     asset_id=admin_asset,
 )
 
 # 3) Transfer 50 units to receiver
-transfer_instruction = Instruction.transfer_asset_numeric(
+transfer_instruction = Instruction.transfer_asset_quantity(
     asset_id=admin_asset,
     quantity=NumericValue.from_int(50),
     destination=RECEIVER_ACCOUNT,

@@ -9,7 +9,7 @@ use std::{num::NonZeroU32, time::Duration};
 
 use iroha_crypto::{Algorithm, PublicKey};
 use iroha_data_model::{
-    prelude::{AccountId, AssetId, ChainId, Metadata, Numeric, Transfer},
+    prelude::{AccountId, AssetId, ChainId, Metadata, Quantity, Transfer},
     transaction::{SignedTransaction, TransactionBuilder},
 };
 use thiserror::Error;
@@ -181,13 +181,13 @@ pub struct NexusApprovedAccount {
     pub signing_public_key: PublicKey,
 }
 
-/// Numeric asset transfer input covered by V1.
+/// Asset quantity transfer input covered by V1.
 #[derive(Debug, Clone)]
 pub struct NexusTransferInput {
     /// Source asset holding id.
     pub source_asset_id: AssetId,
     /// Quantity to transfer.
-    pub quantity: Numeric,
+    pub quantity: Quantity,
     /// Destination account id.
     pub destination_account_id: AccountId,
     /// Transaction authority. When omitted, the facade uses config/session authority.
@@ -569,7 +569,7 @@ where
         };
 
         let mut builder = TransactionBuilder::new(self.config.chain_id.clone(), authority.clone())
-            .with_instructions([Transfer::asset_numeric(
+            .with_instructions([Transfer::asset_quantity(
                 input.source_asset_id.clone(),
                 input.quantity.clone(),
                 input.destination_account_id.clone(),
@@ -775,7 +775,7 @@ mod tests {
         ]);
         NexusTransferInput {
             source_asset_id: AssetId::new(definition, authority.clone()),
-            quantity: Numeric::new(125_u32, 2),
+            quantity: "1.25".parse().expect("quantity"),
             destination_account_id: authority.clone(),
             authority: Some(authority),
             metadata: Metadata::default(),

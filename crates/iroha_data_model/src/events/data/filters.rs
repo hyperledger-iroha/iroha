@@ -1867,11 +1867,11 @@ mod tests {
         let other_asset = AssetId::new(other_definition, account_id);
         let matching_event = AssetEvent::Added(AssetChanged {
             asset: matching_asset,
-            amount: Numeric::new(10, 0),
+            amount: 10_u32.into(),
         });
         let other_event = AssetEvent::Added(AssetChanged {
             asset: other_asset,
-            amount: Numeric::new(10, 0),
+            amount: 10_u32.into(),
         });
 
         let filter = AssetEventFilter::new()
@@ -1892,11 +1892,11 @@ mod tests {
         let other_asset = AssetId::new(definition, checked_random_account_id());
         let matching_event = AssetEvent::Added(AssetChanged {
             asset: matching_asset.clone(),
-            amount: Numeric::new(5, 0),
+            amount: 5_u32.into(),
         });
         let other_event = AssetEvent::Added(AssetChanged {
             asset: other_asset,
-            amount: Numeric::new(5, 0),
+            amount: 5_u32.into(),
         });
 
         let filter = AssetEventFilter::new()
@@ -1921,11 +1921,11 @@ mod tests {
         let mismatched_asset = AssetId::new(other_definition, account_id);
         let matching_event = AssetEvent::Added(AssetChanged {
             asset: matching_asset.clone(),
-            amount: Numeric::new(3, 0),
+            amount: 3_u32.into(),
         });
         let mismatched_event = AssetEvent::Added(AssetChanged {
             asset: mismatched_asset,
-            amount: Numeric::new(3, 0),
+            amount: 3_u32.into(),
         });
 
         let filter = AssetEventFilter::new()
@@ -1946,7 +1946,7 @@ mod tests {
         let asset_id = AssetId::new(definition.clone(), account_id);
         let added = AssetEvent::Added(AssetChanged {
             asset: asset_id,
-            amount: Numeric::new(7, 0),
+            amount: 7_u32.into(),
         });
         let created = AssetEvent::Created(Asset::new(
             AssetId::new(definition, checked_random_account_id()),

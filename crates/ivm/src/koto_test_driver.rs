@@ -6,12 +6,15 @@ use std::{
     fs,
     path::{Path, PathBuf},
     str::FromStr,
+    sync::Arc,
     time::{Duration, Instant},
 };
 
+#[cfg(test)]
+use crate::ProgramMetadata;
 use crate::{
     AccountId, AssetDefinitionId, DomainId, IVM, IVMHost, MockWorldStateView, PermissionToken,
-    PointerType, ProgramMetadata, TraceMode, WsvHost,
+    PointerType, TraceMode, WsvHost,
     kotodama::{
         ast::{Expr, FixtureAction, FixtureDecl, FunctionKind, Item, Program, SourceUnitKind},
         compiler::{CompileReport, CompilerMode, CompilerOptions},
@@ -25,9 +28,12 @@ use ed25519_dalek::{Signature as Ed25519Signature, Verifier as _};
 use ed25519_dalek::{Signer as _, SigningKey};
 use iroha_data_model::prelude::{Mintable, Name};
 use iroha_data_model::{
+    asset::{AssetBalanceScope, AssetId},
     nexus::DataSpaceId,
     smart_contract::{CHAIN_DISCRIMINANT_MAINNET, ContractAddress},
 };
+#[cfg(test)]
+use iroha_primitives::numeric_abi::QuantityValueV1;
 use iroha_primitives::{json::Json, numeric::Numeric, numeric_abi::DecimalValueV1};
 use ivm_abi::entrypoint::EntrypointArgumentSchemaV1;
 use ivm_abi::state_value::{
@@ -105,15 +111,25 @@ struct DiscoveredTestModule {
     program: Program,
 }
 
-struct CompiledSuite {
-    code: Vec<u8>,
-    runtime_code: Option<Vec<u8>>,
+struct CompiledArtifact {
+    program: crate::PreparedContract,
     report: CompileReport,
     pc_base: u64,
+}
+
+struct CompiledSuite {
+    suite: CompiledArtifact,
+    runtime: Option<CompiledArtifact>,
     runtime_entrypoints: HashMap<String, RuntimeEntrypoint>,
     tests: Vec<CompiledTestCase>,
     fixtures: HashMap<String, FixtureDecl>,
     coverage_functions: Vec<CoverageFunction>,
+}
+
+impl CompiledSuite {
+    fn profile_artifact(&self) -> &CompiledArtifact {
+        self.runtime.as_ref().unwrap_or(&self.suite)
+    }
 }
 
 #[derive(Clone)]
@@ -154,7 +170,7 @@ struct KotoTestHost {
     actors: HashMap<String, FixtureActor>,
     base_public_inputs: BTreeMap<Name, Vec<u8>>,
     entrypoints: HashMap<String, RuntimeEntrypoint>,
-    program: Option<Vec<u8>>,
+    program: Option<crate::PreparedContract>,
     contract_address: ContractAddress,
     last_test_error: Option<String>,
     supplemental_trace_pcs: Vec<u64>,
@@ -634,49 +650,68 @@ fn compile_suite(suite: &DiscoveredSuite, zk_enabled: bool) -> Result<CompiledSu
         .build_test_sources(&target, &test_modules)
         .map_err(|diagnostics| diagnostics.render_human())?;
     let test_output = outputs.suite;
-    let code = test_output.artifact;
     let test_report = test_output.report;
-    let metadata = ProgramMetadata::parse(&code)
-        .map_err(|err| format!("failed to parse compiled program metadata: {err:?}"))?;
-    let test_pc_base = metadata.prefix_len() as u64;
-    let (runtime_code, runtime_report, runtime_pc_base, runtime_entrypoints) =
-        if let Some(runtime_output) = outputs.runtime {
-            let runtime_code = runtime_output.artifact;
-            let runtime_metadata = ProgramMetadata::parse(&runtime_code)
-                .map_err(|err| format!("failed to parse runtime program metadata: {err:?}"))?;
-            let runtime_pc_base = runtime_metadata.prefix_len() as u64;
-            let runtime_entrypoints = runtime_metadata
-                .contract_interface
-                .as_ref()
-                .map(|interface| {
-                    interface
-                        .entrypoints
-                        .iter()
-                        .map(|entry| {
-                            (
-                                entry.name.clone(),
-                                RuntimeEntrypoint {
-                                    pc: runtime_pc_base.saturating_add(entry.entry_pc),
-                                    argument_schema: entry.argument_schema.clone(),
-                                    permission: entry.permission.clone(),
-                                },
-                            )
-                        })
-                        .collect::<HashMap<_, _>>()
-                })
-                .unwrap_or_default();
-            (
-                Some(runtime_code),
-                runtime_output.report,
-                runtime_pc_base,
-                runtime_entrypoints,
-            )
-        } else {
-            (None, test_report.clone(), test_pc_base, HashMap::new())
-        };
+    let suite_program =
+        crate::contract_artifact::prepare_koto_test_contract(Arc::from(test_output.artifact))
+            .map_err(|err| format!("failed to prepare compiled Kotodama test suite: {err}"))?;
+    if suite_program.code_hash() != test_report.artifact_hash {
+        return Err(format!(
+            "compiled suite artifact hash mismatch: expected {}, got {}",
+            test_report.artifact_hash,
+            suite_program.code_hash()
+        ));
+    }
+    let test_pc_base = suite_program.instruction_entry_pc();
+    let suite_artifact = CompiledArtifact {
+        program: suite_program,
+        report: test_report,
+        pc_base: test_pc_base,
+    };
+
+    let (runtime, runtime_entrypoints) = if let Some(runtime_output) = outputs.runtime {
+        let runtime_report = runtime_output.report;
+        let runtime_program = crate::prepare_contract(Arc::from(runtime_output.artifact))
+            .map_err(|err| format!("failed to prepare compiled runtime contract: {err}"))?;
+        if runtime_program.code_hash() != runtime_report.artifact_hash {
+            return Err(format!(
+                "compiled runtime artifact hash mismatch: expected {}, got {}",
+                runtime_report.artifact_hash,
+                runtime_program.code_hash()
+            ));
+        }
+        let runtime_pc_base = runtime_program.instruction_entry_pc();
+        let runtime_entrypoints = runtime_program
+            .contract_interface()
+            .entrypoints
+            .iter()
+            .map(|entry| {
+                let pc = runtime_program
+                    .entrypoint_pc(&entry.name)
+                    .expect("prepared runtime indexes every validated entrypoint");
+                (
+                    entry.name.clone(),
+                    RuntimeEntrypoint {
+                        pc,
+                        argument_schema: entry.argument_schema.clone(),
+                        permission: entry.permission.clone(),
+                    },
+                )
+            })
+            .collect::<HashMap<_, _>>();
+        (
+            Some(CompiledArtifact {
+                program: runtime_program,
+                report: runtime_report,
+                pc_base: runtime_pc_base,
+            }),
+            runtime_entrypoints,
+        )
+    } else {
+        (None, HashMap::new())
+    };
 
     let mut test_pcs = HashMap::new();
-    for entry in &test_report.budget_report {
+    for entry in &suite_artifact.report.budget_report {
         test_pcs
             .entry(entry.function_name.clone())
             .or_insert(test_pc_base.saturating_add(entry.pc_start));
@@ -699,14 +734,16 @@ fn compile_suite(suite: &DiscoveredSuite, zk_enabled: bool) -> Result<CompiledSu
         })
         .collect::<Result<Vec<_>, String>>()?;
 
-    let coverage_functions =
-        build_coverage_functions(&suite.target_program, &runtime_report, runtime_pc_base);
+    let profile_artifact = runtime.as_ref().unwrap_or(&suite_artifact);
+    let coverage_functions = build_coverage_functions(
+        &suite.target_program,
+        &profile_artifact.report,
+        profile_artifact.pc_base,
+    );
 
     Ok(CompiledSuite {
-        code,
-        runtime_code,
-        report: runtime_report,
-        pc_base: runtime_pc_base,
+        suite: suite_artifact,
+        runtime,
         runtime_entrypoints,
         tests,
         fixtures: suite.fixtures.clone(),
@@ -774,23 +811,23 @@ fn execute_suite(
     trace_mode: TraceMode,
     jobs: usize,
 ) -> Result<Vec<TestRunResult>, String> {
-    let parsed = ProgramMetadata::parse(&compiled.code)
-        .map_err(|err| format!("failed to parse compiled suite metadata: {err:?}"))?;
-    let suite_return_pc = (compiled.code.len().saturating_sub(parsed.header_len)) as u64;
-    let suite_program = with_return_halt(&compiled.code);
+    let suite_return_pc = compiled
+        .suite
+        .program
+        .entrypoint_pc(crate::metadata::KOTO_TEST_RETURN_ENTRYPOINT)
+        .ok_or_else(|| "compiled suite is missing its validated return entrypoint".to_owned())?;
     let worker_count = jobs.min(compiled.tests.len().max(1));
     if worker_count == 1 {
         return compiled
             .tests
             .iter()
-            .map(|test| execute_test(compiled, test, trace_mode, &suite_program, suite_return_pc))
+            .map(|test| execute_test(compiled, test, trace_mode, suite_return_pc))
             .collect();
     }
 
     let joined = std::thread::scope(|scope| {
         let mut workers = Vec::with_capacity(worker_count);
         for worker in 0..worker_count {
-            let suite_program = &suite_program;
             workers.push(scope.spawn(move || {
                 compiled
                     .tests
@@ -798,7 +835,7 @@ fn execute_suite(
                     .enumerate()
                     .filter(|(index, _)| index % worker_count == worker)
                     .map(|(index, test)| {
-                        execute_test(compiled, test, trace_mode, suite_program, suite_return_pc)
+                        execute_test(compiled, test, trace_mode, suite_return_pc)
                             .map(|result| (index, result))
                     })
                     .collect::<Result<Vec<_>, String>>()
@@ -822,12 +859,11 @@ fn execute_test(
     compiled: &CompiledSuite,
     test: &CompiledTestCase,
     trace_mode: TraceMode,
-    suite_program: &[u8],
     suite_return_pc: u64,
 ) -> Result<TestRunResult, String> {
     let mut host = build_host_for_fixture(compiled, test.fixture.as_deref())?;
     let mut vm = IVM::new(u64::MAX);
-    vm.load_program(suite_program)
+    vm.load_koto_test_prepared(&compiled.suite.program)
         .map_err(|err| format!("failed to load compiled suite: {err:?}"))?;
     vm.set_register(1, suite_return_pc);
     vm.set_program_counter(test.pc)
@@ -857,12 +893,6 @@ fn execute_test(
     })
 }
 
-fn with_return_halt(program: &[u8]) -> Vec<u8> {
-    let mut with_halt = program.to_vec();
-    with_halt.extend_from_slice(&crate::encoding::wide::encode_halt().to_le_bytes());
-    with_halt
-}
-
 fn build_host_for_fixture(
     compiled: &CompiledSuite,
     fixture_name: Option<&str>,
@@ -872,7 +902,10 @@ fn build_host_for_fixture(
         WsvHost::new_with_subject(MockWorldStateView::default(), caller, HashMap::new());
     let mut host = KotoTestHost::new(
         base_host,
-        compiled.runtime_code.clone(),
+        compiled
+            .runtime
+            .as_ref()
+            .map(|artifact| artifact.program.clone()),
         compiled.runtime_entrypoints.clone(),
     );
     let mut public_inputs = BTreeMap::new();
@@ -971,11 +1004,38 @@ fn apply_fixture_action(
                 .grant_permission(&contract_subject, permission);
             Ok(())
         }
+        "grant_contract_transfer_effect_permission" => {
+            expect_arg_count(action, 3)?;
+            let source = eval_fixture_account_or_actor(&action.args[0], host)?;
+            let asset_definition = eval_asset_definition_expr(&action.args[1])?;
+            let dataspace = DataSpaceId::new(eval_u64_expr(&action.args[2])?);
+            let permission = PermissionToken::TransferAssetBucket(AssetId::with_scope(
+                asset_definition,
+                source,
+                AssetBalanceScope::Dataspace(dataspace),
+            ));
+            let contract_subject = host.contract_subject();
+            host.inner_mut()
+                .wsv
+                .grant_permission(&contract_subject, permission);
+            Ok(())
+        }
         "register_account_alias" => {
-            expect_arg_count(action, 2)?;
+            if !(2..=3).contains(&action.args.len()) {
+                return Err(
+                    "fixture action `register_account_alias` expects 2 or 3 arguments".to_owned(),
+                );
+            }
             let alias = eval_string_expr(&action.args[0])?;
             let account = eval_fixture_account_or_actor(&action.args[1], host)?;
-            host.inner_mut().register_account_alias(alias, account)
+            let dataspace = action
+                .args
+                .get(2)
+                .map(eval_u64_expr)
+                .transpose()?
+                .map(DataSpaceId::new);
+            host.inner_mut()
+                .register_account_alias_with_dataspace(alias, account, dataspace)
         }
         "register_domain" => {
             expect_arg_count(action, 1)?;
@@ -1092,7 +1152,7 @@ struct KotoTestHostSnapshot {
 impl KotoTestHost {
     fn new(
         inner: WsvHost,
-        program: Option<Vec<u8>>,
+        program: Option<crate::PreparedContract>,
         entrypoints: HashMap<String, RuntimeEntrypoint>,
     ) -> Self {
         let contract_address = ContractAddress::derive(
@@ -1336,7 +1396,7 @@ impl KotoTestHost {
                 ));
             }
         }
-        let Some(program) = self.program.as_deref() else {
+        let Some(program) = self.program.as_ref() else {
             return self.fail_test(format!(
                 "runtime entrypoint `{entrypoint}` has no compiled runtime artifact"
             ));
@@ -1361,12 +1421,10 @@ impl KotoTestHost {
             .memory
             .preload_input(0, &clear)
             .map_err(|_| crate::VMError::DecodeError)?;
-        let runtime_program = with_return_halt(program);
         nested_vm
-            .load_program(&runtime_program)
+            .load_prepared(program)
             .map_err(|_| crate::VMError::DecodeError)?;
         nested_vm.set_program_counter(runtime_entrypoint.pc)?;
-        nested_vm.set_register(1, nested_vm.memory.code_len().saturating_sub(4));
         nested_vm.set_trace_mode(vm.trace_mode());
         nested_vm.set_max_cycles(0);
 
@@ -1573,6 +1631,9 @@ fn eval_actor_alias_expr(expr: &Expr) -> Result<String, String> {
 }
 
 fn eval_fixture_account_or_actor(expr: &Expr, host: &KotoTestHost) -> Result<AccountId, String> {
+    if matches!(expr, Expr::String(raw) | Expr::Ident(raw) if raw == "contract_subject") {
+        return Ok(host.contract_subject());
+    }
     if let Expr::String(raw) | Expr::Ident(raw) = expr
         && let Some(account) = host.actor_account(raw)
     {
@@ -1692,6 +1753,19 @@ fn eval_numeric_expr(expr: &Expr) -> Result<Numeric, String> {
         Expr::IntLiteral(value) => Err(format!("negative balances are not allowed: {value}")),
         other => Err(format!("expected numeric expression, got {other:?}")),
     }
+}
+
+fn eval_u64_expr(expr: &Expr) -> Result<u64, String> {
+    let raw = eval_string_expr(expr)?;
+    let value = raw
+        .parse::<u64>()
+        .map_err(|_| format!("expected canonical unsigned integer, got `{raw}`"))?;
+    if value.to_string() != raw {
+        return Err(format!(
+            "unsigned integer is not canonically encoded: `{raw}`"
+        ));
+    }
+    Ok(value)
 }
 
 fn eval_mintable_expr(expr: &Expr) -> Result<Mintable, String> {
@@ -2010,6 +2084,48 @@ fn parse_permission_token_json(raw: &str) -> Result<PermissionToken, String> {
             .and_then(Value::as_str)
             .ok_or_else(|| format!("permission json is missing `{field}`"))
     };
+    let transfer_control_scope = || -> Result<(AssetDefinitionId, Name, DataSpaceId), String> {
+        if map.len() != 4
+            || !map.contains_key("type")
+            || !map.contains_key("asset_definition")
+            || !map.contains_key("account_domain")
+            || !map.contains_key("account_dataspace")
+        {
+            return Err(
+                "transfer-control permission json requires exactly type, asset_definition, account_domain, and account_dataspace"
+                    .to_owned(),
+            );
+        }
+        let asset_literal = target("asset_definition")?;
+        let asset_definition = AssetDefinitionId::parse_address_literal(asset_literal)
+            .map_err(|_| "invalid `asset_definition` canonical id".to_owned())?;
+        let domain_literal = target("account_domain")?;
+        let account_domain = Name::from_str(domain_literal)
+            .map_err(|_| "invalid `account_domain` canonical Name".to_owned())?;
+        if account_domain.as_ref() != domain_literal {
+            return Err("`account_domain` is not canonically encoded".to_owned());
+        }
+        let account_dataspace = map
+            .get("account_dataspace")
+            .and_then(Value::as_u64)
+            .map(DataSpaceId::new)
+            .ok_or_else(|| "`account_dataspace` must be an unsigned integer".to_owned())?;
+        Ok((asset_definition, account_domain, account_dataspace))
+    };
+    let exact_transfer_bucket = || -> Result<AssetId, String> {
+        if map.len() != 2 || !map.contains_key("type") || !map.contains_key("asset") {
+            return Err(
+                "CanTransferAsset permission json requires exactly type and asset".to_owned(),
+            );
+        }
+        let literal = target("asset")?;
+        let asset = AssetId::parse_literal(literal)
+            .map_err(|_| "invalid canonical `asset` balance-bucket id".to_owned())?;
+        if asset.canonical_literal() != literal {
+            return Err("`asset` balance-bucket id is not canonically encoded".to_owned());
+        }
+        Ok(asset)
+    };
     match kind {
         "register_domain" => Ok(PermissionToken::RegisterDomain),
         "register_account" => Ok(PermissionToken::RegisterAccount),
@@ -2053,6 +2169,25 @@ fn parse_permission_token_json(raw: &str) -> Result<PermissionToken, String> {
             AssetDefinitionId::parse_address_literal(target("target")?)
                 .map_err(|_| "invalid `target` asset definition id".to_string())?,
         )),
+        "CanTransferAsset" => Ok(PermissionToken::TransferAssetBucket(
+            exact_transfer_bucket()?
+        )),
+        "CanSetAssetTransferFreeze" => {
+            let (asset_definition, account_domain, account_dataspace) = transfer_control_scope()?;
+            Ok(PermissionToken::SetAssetTransferFreeze {
+                asset_definition,
+                account_domain,
+                account_dataspace,
+            })
+        }
+        "CanSetAssetTransferDailyLimit" => {
+            let (asset_definition, account_domain, account_dataspace) = transfer_control_scope()?;
+            Ok(PermissionToken::SetAssetTransferDailyLimit {
+                asset_definition,
+                account_domain,
+                account_dataspace,
+            })
+        }
         "manage_roles" => Ok(PermissionToken::ManageRoles),
         "manage_permissions" => Ok(PermissionToken::ManagePermissions),
         "manage_triggers" => Ok(PermissionToken::ManageTriggers),
@@ -2343,11 +2478,12 @@ fn percentage(numerator: u64, denominator: u64) -> f64 {
 
 fn print_profile_report(compiled: &CompiledSuite, results: &[TestRunResult]) -> Result<(), String> {
     println!("\nprofile:");
+    let profile_artifact = compiled.profile_artifact();
     for result in results {
         for (cycle, entry) in result.delta_trace.iter().enumerate() {
-            let source = compiled.report.source_map.iter().find(|map_entry| {
-                let start = compiled.pc_base.saturating_add(map_entry.pc_start);
-                let end = compiled.pc_base.saturating_add(map_entry.pc_end);
+            let source = profile_artifact.report.source_map.iter().find(|map_entry| {
+                let start = profile_artifact.pc_base.saturating_add(map_entry.pc_start);
+                let end = profile_artifact.pc_base.saturating_add(map_entry.pc_end);
                 start <= entry.pc && entry.pc < end
             });
             let value = json::object(vec![
@@ -2518,7 +2654,7 @@ mod tests {
     #[test]
     fn pure_unit_test_suite_executes_without_runtime_artifact() {
         let compiled = compiled_suite_with_fixtures(Vec::new());
-        assert!(compiled.runtime_code.is_none());
+        assert!(compiled.runtime.is_none());
         assert!(compiled.runtime_entrypoints.is_empty());
 
         let results = execute_suite(&compiled, TraceMode::Off, 1)
@@ -2529,6 +2665,50 @@ mod tests {
             results[0].passed,
             "unexpected failure: {:?}",
             results[0].failure
+        );
+    }
+
+    #[test]
+    fn compiler_owned_test_return_sentinel_preserves_artifact_verification() {
+        let compiled = compiled_suite_with_fixtures(Vec::new());
+        let suite_program = compiled.suite.program.artifact();
+        assert_eq!(
+            compiled.suite.program.code_hash(),
+            compiled.suite.report.artifact_hash
+        );
+        let return_pc = compiled
+            .suite
+            .program
+            .entrypoint_pc(crate::metadata::KOTO_TEST_RETURN_ENTRYPOINT)
+            .expect("compiler-owned suite return sentinel");
+        let parsed = ProgramMetadata::parse(suite_program).expect("parse compiled suite");
+        assert_eq!(
+            return_pc,
+            u64::try_from(suite_program.len() - parsed.header_len - 4)
+                .expect("suite return PC fits u64")
+        );
+
+        let mut vm = IVM::new(u64::MAX);
+        vm.load_koto_test_prepared(&compiled.suite.program)
+            .expect("unmodified compiler-produced test artifact must load");
+        let production_error = crate::prepare_contract(compiled.suite.program.shared_artifact())
+            .expect_err("production admission must reject the test-suite return selector");
+        assert!(
+            production_error
+                .to_string()
+                .contains("compiler-owned Kotodama test return selector"),
+            "unexpected production-admission failure: {production_error}"
+        );
+
+        let mut post_compile_mutation = suite_program.to_vec();
+        post_compile_mutation
+            .extend_from_slice(&crate::encoding::wide::encode_halt().to_le_bytes());
+        let error =
+            crate::contract_artifact::prepare_koto_test_contract(Arc::from(post_compile_mutation))
+                .expect_err("post-compile executable mutation must remain rejected");
+        assert!(
+            error.to_string().contains("must select the terminal HALT"),
+            "unexpected mutation failure: {error}"
         );
     }
 
@@ -2569,11 +2749,13 @@ mod tests {
         };
         let compiled = compile_suite(&suite, true).expect("compile ZK test suite");
         for artifact in [
-            &compiled.code,
+            compiled.suite.program.artifact(),
             compiled
-                .runtime_code
+                .runtime
                 .as_ref()
-                .expect("lifecycle target has a runtime artifact"),
+                .expect("lifecycle target has a runtime artifact")
+                .program
+                .artifact(),
         ] {
             let metadata = ProgramMetadata::parse(artifact).expect("parse compiled metadata");
             assert_ne!(metadata.metadata.mode & crate::metadata::mode::ZK, 0);
@@ -3072,6 +3254,30 @@ mod tests {
 
         let suite = discover_suite(&test_path).expect("discover suite");
         let compiled = compile_suite(&suite, false).expect("compile suite");
+        let runtime = compiled
+            .runtime
+            .as_ref()
+            .expect("standalone contract tests require a runtime artifact");
+        assert_eq!(
+            compiled.suite.report.artifact_hash,
+            crate::metadata::contract_code_hash(compiled.suite.program.artifact()),
+            "the standalone test artifact must retain its own hash when a separate runtime artifact is present"
+        );
+        assert_eq!(
+            runtime.report.artifact_hash,
+            crate::metadata::contract_code_hash(runtime.program.artifact()),
+            "the runtime report must remain bound to the deployable runtime artifact"
+        );
+        assert_ne!(
+            compiled.suite.report.artifact_hash, runtime.report.artifact_hash,
+            "test-suite and runtime projections must retain distinct artifact identities"
+        );
+        let production_error = crate::prepare_contract(compiled.suite.program.shared_artifact())
+            .expect_err("production admission must reject host-private Kotodama test bytecode");
+        assert!(
+            production_error.to_string().contains("disallowed syscall"),
+            "unexpected production-admission failure: {production_error}"
+        );
         let results = execute_suite(&compiled, TraceMode::PcOnly, 2).expect("execute suite");
         let failures = results
             .iter()
@@ -3186,6 +3392,118 @@ mod tests {
             .map(|function| function.display_name.as_str())
             .collect::<Vec<_>>();
         assert_eq!(names, vec!["run"]);
+    }
+
+    #[test]
+    fn nested_contract_effects_use_contract_subject_while_context_keeps_invoker() {
+        let asset = AssetDefinitionId::new(
+            DomainId::try_new("effects", "universal").expect("asset domain"),
+            "unit".parse().expect("asset name"),
+        )
+        .canonical_address();
+        let target_source = format!(
+            r#"
+            seiyaku EffectIdentity {{
+                error enum EffectError {{ WrongInvoker = 9001, }}
+
+                kotoage fn mint(AccountId destination) authorize("CanInvokeContractEntrypoint") {{
+                    require(
+                        context::authority() == AccountId::parse("{DEFAULT_CALLER}"),
+                        EffectError::WrongInvoker,
+                    );
+                    ledger::asset::mint(
+                        account: destination,
+                        asset_definition: AssetDefinitionId::parse("{asset}"),
+                        amount: 1,
+                    );
+                }}
+            }}
+            "#,
+        );
+        let test_source = format!(
+            r#"
+            module EffectIdentityTests {{
+                koto_test {{ target: "effect_identity.ko" }}
+
+                fixture missing_subject_grant {{
+                    actor("app", AccountId::parse("{DEFAULT_CALLER}"));
+                    caller(AccountId::parse("{DEFAULT_CALLER}"));
+                    register_asset_definition(AssetDefinitionId::parse("{asset}"));
+                    grant_contract_entrypoint_permission("app", "mint");
+                }}
+
+                fixture app_only_effect_grant {{
+                    actor("app", AccountId::parse("{DEFAULT_CALLER}"));
+                    caller(AccountId::parse("{DEFAULT_CALLER}"));
+                    register_asset_definition(AssetDefinitionId::parse("{asset}"));
+                    grant_contract_entrypoint_permission("app", "mint");
+                    grant_permission("app", "mint_asset:{asset}");
+                }}
+
+                fixture contract_subject_effect_grant {{
+                    actor("app", AccountId::parse("{DEFAULT_CALLER}"));
+                    caller(AccountId::parse("{DEFAULT_CALLER}"));
+                    register_asset_definition(AssetDefinitionId::parse("{asset}"));
+                    grant_contract_entrypoint_permission("app", "mint");
+                    grant_contract_effect_permission("mint_asset:{asset}");
+                }}
+
+                #[test(fixture = "missing_subject_grant")]
+                fn missing_contract_subject_grant_rejects() {{
+                    test::expect_reject_as(
+                        actor: "app",
+                        entrypoint: "mint",
+                        arguments: Json::parse("{{\"destination\":\"{DEFAULT_CALLER}\"}}"),
+                    );
+                }}
+
+                #[test(fixture = "app_only_effect_grant")]
+                fn application_effect_grant_does_not_authorize_contract() {{
+                    test::expect_reject_as(
+                        actor: "app",
+                        entrypoint: "mint",
+                        arguments: Json::parse("{{\"destination\":\"{DEFAULT_CALLER}\"}}"),
+                    );
+                }}
+
+                #[test(fixture = "contract_subject_effect_grant")]
+                fn contract_subject_effect_grant_succeeds_with_invoker_context() {{
+                    test::invoke_entrypoint_as(
+                        actor: "app",
+                        entrypoint: "mint",
+                        arguments: Json::parse("{{\"destination\":\"{DEFAULT_CALLER}\"}}"),
+                    );
+                }}
+            }}
+            "#,
+        );
+        let target_program = parser::parse(&target_source).expect("parse effect target");
+        let test_program = parser::parse(&test_source).expect("parse effect tests");
+        let suite = finalize_suite(
+            PathBuf::from("/tmp/effect_identity.ko"),
+            target_source,
+            target_program,
+            vec![DiscoveredTestModule {
+                path: PathBuf::from("/tmp/effect_identity.test.ko"),
+                source: test_source,
+                program: test_program,
+            }],
+        )
+        .expect("build effect identity suite");
+        let compiled = compile_suite(&suite, false).expect("compile effect identity suite");
+        let results =
+            execute_suite(&compiled, TraceMode::Off, 1).expect("execute effect identity suite");
+        assert_eq!(results.len(), 3);
+        for result in results {
+            assert!(
+                result.passed,
+                "{} failed: {}",
+                result.name,
+                result
+                    .failure
+                    .unwrap_or_else(|| "unknown failure".to_owned()),
+            );
+        }
     }
 
     #[test]
@@ -3450,6 +3768,197 @@ mod tests {
     }
 
     #[test]
+    fn transfer_control_effects_require_exact_subject_asset_domain_and_dataspace_scope() {
+        let controller = parse_account_literal(DEFAULT_CALLER).expect("controller");
+        let target = AccountId::new(
+            iroha_crypto::KeyPair::from_seed(vec![0x92; 32], iroha_crypto::Algorithm::Ed25519)
+                .public_key()
+                .clone(),
+        );
+        let asset = AssetDefinitionId::new(
+            DomainId::try_new("currency", "sbp").expect("asset domain"),
+            "pkr".parse().expect("asset name"),
+        );
+        let asset_literal = asset.canonical_address();
+        let mut host = KotoTestHost::new(
+            WsvHost::new_with_subject(
+                MockWorldStateView::default(),
+                controller.clone(),
+                HashMap::new(),
+            ),
+            None,
+            HashMap::new(),
+        );
+        host.register_actor("controller".to_owned(), controller.clone())
+            .expect("register controller");
+        host.register_actor("target".to_owned(), target.clone())
+            .expect("register target");
+        let mut public_inputs = BTreeMap::new();
+        apply_fixture_action(
+            &FixtureAction {
+                name: "register_asset_definition".to_owned(),
+                args: vec![Expr::Call {
+                    name: "AssetDefinitionId::parse".to_owned(),
+                    args: vec![Expr::String(asset_literal.clone())],
+                    argument_names: None,
+                    implicit_receiver: false,
+                }],
+            },
+            &mut host,
+            &mut public_inputs,
+        )
+        .expect("register control asset");
+        apply_fixture_action(
+            &FixtureAction {
+                name: "register_account_alias".to_owned(),
+                args: vec![
+                    Expr::String("target@hbl.sbp".to_owned()),
+                    Expr::String("target".to_owned()),
+                    Expr::IntLiteral(10_i64.into()),
+                ],
+            },
+            &mut host,
+            &mut public_inputs,
+        )
+        .expect("register exact target alias scope");
+
+        let permission_expr = |kind: &str, domain: &str| Expr::Call {
+            name: "Json::parse".to_owned(),
+            args: vec![Expr::String(format!(
+                r#"{{"type":"{kind}","asset_definition":"{asset_literal}","account_domain":"{domain}","account_dataspace":10}}"#,
+            ))],
+            argument_names: None,
+            implicit_receiver: false,
+        };
+        apply_fixture_action(
+            &FixtureAction {
+                name: "grant_permission".to_owned(),
+                args: vec![
+                    Expr::String("controller".to_owned()),
+                    permission_expr("CanSetAssetTransferFreeze", "hbl"),
+                ],
+            },
+            &mut host,
+            &mut public_inputs,
+        )
+        .expect("grant exact freeze permission to app only");
+        apply_fixture_action(
+            &FixtureAction {
+                name: "grant_contract_effect_permission".to_owned(),
+                args: vec![permission_expr("CanSetAssetTransferFreeze", "ubl")],
+            },
+            &mut host,
+            &mut public_inputs,
+        )
+        .expect("grant wrong-domain freeze permission to subject");
+
+        host.inner
+            .bind_contract_runtime_context(
+                controller.clone(),
+                host.contract_address.clone(),
+                "apply_freeze".to_owned(),
+            )
+            .expect("bind contract runtime context");
+
+        let call_freeze = |host: &mut KotoTestHost| {
+            let mut vm = IVM::new(u64::MAX);
+            let account = norito::to_bytes(&target).expect("encode target account");
+            let asset_bytes = norito::to_bytes(&asset).expect("encode target asset");
+            let account_pointer = vm
+                .alloc_input_tlv(&make_tlv(PointerType::AccountId, &account))
+                .expect("allocate target account");
+            let asset_pointer = vm
+                .alloc_input_tlv(&make_tlv(PointerType::AssetDefinitionId, &asset_bytes))
+                .expect("allocate target asset");
+            vm.set_register(10, account_pointer);
+            vm.set_register(11, asset_pointer);
+            vm.set_register(12, 1);
+            host.inner
+                .syscall(crate::syscalls::SYSCALL_SET_ASSET_TRANSFER_FREEZE, &mut vm)
+        };
+        assert_eq!(
+            call_freeze(&mut host),
+            Err(crate::VMError::PermissionDenied),
+            "an app grant and a wrong-domain subject grant must not authorize the effect",
+        );
+        assert_eq!(host.inner.wsv.asset_transfer_freeze(&target, &asset), None);
+
+        apply_fixture_action(
+            &FixtureAction {
+                name: "grant_contract_effect_permission".to_owned(),
+                args: vec![permission_expr("CanSetAssetTransferFreeze", "hbl")],
+            },
+            &mut host,
+            &mut public_inputs,
+        )
+        .expect("grant exact freeze permission to contract subject");
+        call_freeze(&mut host).expect("exact contract-subject freeze effect succeeds");
+        assert_eq!(
+            host.inner.wsv.asset_transfer_freeze(&target, &asset),
+            Some(true)
+        );
+
+        let mut authority_vm = IVM::new(u64::MAX);
+        host.inner
+            .syscall(crate::syscalls::SYSCALL_SYSVAR_AUTHORITY, &mut authority_vm)
+            .expect("read invoker authority inside contract scope");
+        let authority_tlv = authority_vm
+            .validate_tlv(authority_vm.register(10))
+            .expect("authority TLV");
+        let observed_authority: AccountId =
+            norito::decode_from_bytes(authority_tlv.payload).expect("decode authority");
+        assert_eq!(observed_authority, controller);
+
+        apply_fixture_action(
+            &FixtureAction {
+                name: "grant_contract_effect_permission".to_owned(),
+                args: vec![permission_expr("CanSetAssetTransferDailyLimit", "hbl")],
+            },
+            &mut host,
+            &mut public_inputs,
+        )
+        .expect("grant exact daily-limit permission to contract subject");
+        let mut limit_vm = IVM::new(u64::MAX);
+        let account = norito::to_bytes(&target).expect("encode limit target account");
+        let asset_bytes = norito::to_bytes(&asset).expect("encode limit target asset");
+        let account_pointer = limit_vm
+            .alloc_input_tlv(&make_tlv(PointerType::AccountId, &account))
+            .expect("allocate limit account");
+        let asset_pointer = limit_vm
+            .alloc_input_tlv(&make_tlv(PointerType::AssetDefinitionId, &asset_bytes))
+            .expect("allocate limit asset");
+        let cap = Numeric::from(500_u64);
+        let cap_quantity = iroha_primitives::numeric::Quantity::try_from_numeric(cap.clone())
+            .expect("canonical cap quantity");
+        let cap_payload = QuantityValueV1::new(cap_quantity)
+            .encode_frame()
+            .expect("encode cap quantity frame");
+        let cap_pointer = limit_vm
+            .alloc_input_tlv(&make_tlv(PointerType::Quantity, &cap_payload))
+            .expect("allocate cap quantity");
+        let cap_option = crate::sum::allocate_words(
+            &mut limit_vm,
+            crate::sum::SumLayoutV1::option(1).expect("option layout"),
+            1,
+            &[cap_pointer],
+        )
+        .expect("allocate cap option");
+        limit_vm.set_register(10, account_pointer);
+        limit_vm.set_register(11, asset_pointer);
+        limit_vm.set_register(12, cap_option);
+        host.inner
+            .syscall(
+                crate::syscalls::SYSCALL_SET_ASSET_TRANSFER_DAILY_LIMIT,
+                &mut limit_vm,
+            )
+            .expect("exact contract-subject daily limit succeeds");
+        assert_eq!(
+            host.inner.wsv.asset_transfer_daily_limit(&target, &asset),
+            Some(Some(cap))
+        );
+    }
+
+    #[test]
     fn fixture_account_alias_registration_is_canonical_unique_and_resolvable() {
         let caller = parse_account_literal(DEFAULT_CALLER).expect("caller");
         let other = AccountId::new(
@@ -3575,6 +4084,88 @@ mod tests {
         let err = parse_permission_token_json(r#"{"target":"missing-type"}"#)
             .expect_err("missing type should fail");
         assert!(err.contains("missing `type`"));
+
+        let owner = parse_account_literal(DEFAULT_CALLER).expect("asset owner");
+        let bucket = AssetId::with_scope(
+            asset.clone(),
+            owner,
+            AssetBalanceScope::Dataspace(DataSpaceId::new(10)),
+        );
+        let token = parse_permission_token_json(&format!(
+            r#"{{"type":"CanTransferAsset","asset":"{}"}}"#,
+            bucket.canonical_literal(),
+        ))
+        .expect("parse exact transfer bucket permission");
+        assert!(matches!(token, PermissionToken::TransferAssetBucket(id) if id == bucket));
+        for invalid in [
+            format!(
+                r#"{{"type":"CanTransferAsset","asset":"{}","asset_definition":"{}"}}"#,
+                bucket.canonical_literal(),
+                asset.canonical_address(),
+            ),
+            format!(
+                r#"{{"type":"CanTransferAsset","asset":"{}#dataspace:010"}}"#,
+                AssetId::new(
+                    asset.clone(),
+                    parse_account_literal(DEFAULT_CALLER).expect("owner")
+                )
+                .canonical_literal(),
+            ),
+        ] {
+            parse_permission_token_json(&invalid)
+                .expect_err("ambiguous or non-canonical transfer bucket must fail");
+        }
+
+        for (kind, expected_daily_limit) in [
+            ("CanSetAssetTransferFreeze", false),
+            ("CanSetAssetTransferDailyLimit", true),
+        ] {
+            let payload = format!(
+                r#"{{"type":"{kind}","asset_definition":"{}","account_domain":"hbl","account_dataspace":10}}"#,
+                asset.canonical_address(),
+            );
+            let token = parse_permission_token_json(&payload)
+                .expect("parse exact transfer-control effect permission");
+            match token {
+                PermissionToken::SetAssetTransferFreeze {
+                    asset_definition,
+                    account_domain,
+                    account_dataspace,
+                } if !expected_daily_limit => {
+                    assert_eq!(asset_definition, asset);
+                    assert_eq!(account_domain.as_ref(), "hbl");
+                    assert_eq!(account_dataspace, DataSpaceId::new(10));
+                }
+                PermissionToken::SetAssetTransferDailyLimit {
+                    asset_definition,
+                    account_domain,
+                    account_dataspace,
+                } if expected_daily_limit => {
+                    assert_eq!(asset_definition, asset);
+                    assert_eq!(account_domain.as_ref(), "hbl");
+                    assert_eq!(account_dataspace, DataSpaceId::new(10));
+                }
+                other => panic!("unexpected transfer-control permission: {other:?}"),
+            }
+        }
+
+        for invalid in [
+            format!(
+                r#"{{"type":"CanSetAssetTransferFreeze","asset_definition":"{}","account_domain":"hbl"}}"#,
+                asset.canonical_address(),
+            ),
+            format!(
+                r#"{{"type":"CanSetAssetTransferFreeze","asset_definition":"{}","account_domain":"hbl","account_dataspace":"sbp"}}"#,
+                asset.canonical_address(),
+            ),
+            format!(
+                r#"{{"type":"CanSetAssetTransferFreeze","asset_definition":"{}","account_domain":"hbl","account_dataspace":10,"legacy":true}}"#,
+                asset.canonical_address(),
+            ),
+        ] {
+            parse_permission_token_json(&invalid)
+                .expect_err("legacy, ambiguous, or extra transfer-control scope must fail");
+        }
     }
 
     #[test]

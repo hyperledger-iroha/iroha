@@ -36,7 +36,7 @@ Iroha 2-ге үлес қосуға уақыт бөлгеніңіз үшін ра
 - Код пен құжаттама үшін [стиль нұсқаулығымызды](#style-guides) орындағаныңызға көз жеткізіңіз.
 - [тесттер](https://doc.rust-lang.org/cargo/commands/cargo-test.html) жазыңыз. Олардың барлығы өткеніне көз жеткізіңіз (`cargo test --workspace`). SM криптографиялық стекін түртсеңіз, қосымша айқындық/сипат белгішесін орындау үшін `cargo test -p iroha_crypto --features "sm sm_proptest"` іске қосыңыз.
   - Ескертпе: IVM орындаушысын орындайтын сынақтар `defaults/executor.to` болмаса, минималды, детерминирленген орындаушы байт кодын автоматты түрде синтездейді. Сынақтарды орындау үшін алдын ала қадам қажет емес. Тепе-теңдік үшін канондық байт кодын жасау үшін келесі әрекеттерді орындауға болады:
-    - `cargo run --manifest-path scripts/generate_executor_to/Cargo.toml`
+    - `cargo run --locked -p ivm --bin ivm_fixture_export -- --write`
     - `cargo run --manifest-path scripts/regenerate_codec_samples/Cargo.toml`
 - Егер туынды/proc-макрос жәшіктерін өзгертсеңіз, trybuild UI жиынтықтарын арқылы іске қосыңыз
   `make check-proc-macro-ui` (немесе

@@ -2155,8 +2155,8 @@ fn ensure_authority_registered(
     }
 
     if !fee_balance_exists {
-        dm::Mint::asset_numeric(
-            dm::Numeric::new(10_000_000_000_000_u128, 0),
+        dm::Mint::asset_quantity(
+            10_000_000_000_000_u128,
             dm::AssetId::new(fee_asset_id, authority.account.clone()),
         )
         .execute(&authority.account, &mut tx)

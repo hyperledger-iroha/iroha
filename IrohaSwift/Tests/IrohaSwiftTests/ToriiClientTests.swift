@@ -49,6 +49,24 @@ private func nativeAmxTestHash(_ seed: UInt8) -> String {
     return "hash:\(body)#\(String(format: "%04X", checksum))"
 }
 
+private func canonicalKagemushaVerifierRecordArchive(
+    seed: UInt8,
+    verifierKeyLength: Int = 96
+) throws -> Data {
+    guard verifierKeyLength > 0 else {
+        throw NSError(
+            domain: "ToriiClientTests",
+            code: -1,
+            userInfo: [NSLocalizedDescriptionKey: "verifierKeyLength must be positive"]
+        )
+    }
+    return noritoEncode(
+        typeName: KagemushaRecursiveSpend.verifyingKeyRecordWireName,
+        payload: Data(repeating: seed, count: verifierKeyLength),
+        flags: NoritoHeader.compactLen
+    )
+}
+
 private func nativeAmxStatusPayload(
     preparePhase: String = "prepare",
     signature: String = String(repeating: "9a", count: 96),
@@ -658,6 +676,7 @@ fileprivate func tcMakeStubProofSummary() -> ToriiDaProofSummary {
 }
 
 final class ToriiClientTests: XCTestCase {
+    private static let pipelineHash = String(repeating: "d", count: 64)
     private let encodedRoseAssetID = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
     private let roseAssetDefinitionId = "66owaQmAQMuHxPzxUN3bqZ6FJfDa"
 
@@ -1072,7 +1091,7 @@ final class ToriiClientTests: XCTestCase {
         canonicalPayloadBytes: Data? = nil
     ) throws -> (resolverPublicKey: String, signatureHex: String) {
         let privateKey = Curve25519.Signing.PrivateKey()
-        let multihash = OfflineNorito.publicKeyMultihash(
+        let multihash = CanonicalNorito.publicKeyMultihash(
             algorithm: .ed25519,
             payload: privateKey.publicKey.rawRepresentation
         )
@@ -1092,20 +1111,20 @@ final class ToriiClientTests: XCTestCase {
     }
 
     private func noritoField(_ payload: Data) -> Data {
-        var writer = OfflineCompactNoritoWriter()
+        var writer = CompactNoritoWriter()
         writer.writeField(payload)
         return writer.data
     }
 
     private func legacyFlatBytesVec(_ bytes: Data) -> Data {
-        var writer = OfflineCompactNoritoWriter()
+        var writer = CompactNoritoWriter()
         writer.writeUInt64LE(UInt64(bytes.count))
         writer.writeBytes(bytes)
         return writer.data
     }
 
     private func constVecBytes(_ bytes: Data) -> Data {
-        var writer = OfflineCompactNoritoWriter()
+        var writer = CompactNoritoWriter()
         writer.writeUInt64LE(UInt64(bytes.count))
         for byte in bytes {
             writer.writeLength(1)
@@ -2374,7 +2393,7 @@ final class ToriiClientTests: XCTestCase {
         )
         let params = MlDsaSuite.mlDsa65.parameters()
         let publicKey = Data(repeating: 0xA5, count: params.publicKeyLength)
-        let publicKeyMultihash = OfflineNorito.publicKeyMultihash(
+        let publicKeyMultihash = CanonicalNorito.publicKeyMultihash(
             algorithm: .mlDsa,
             payload: publicKey
         )
@@ -2598,7 +2617,7 @@ final class ToriiClientTests: XCTestCase {
             ("small-order", smallOrderKey),
             ("noncanonical", noncanonicalKey),
         ] {
-            let multihash = OfflineNorito.publicKeyMultihash(
+            let multihash = CanonicalNorito.publicKeyMultihash(
                 algorithm: .ed25519,
                 payload: rawPublicKey
             )
@@ -7194,19 +7213,19 @@ final class ToriiClientTests: XCTestCase {
         let address = try AccountAddress.fromAccount(publicKey: publicKey, algorithm: "ed25519")
         let accountId = try address.toI105(networkPrefix: 0x02F1)
         let literal = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#\(accountId)"
-        XCTAssertEqual(try OfflineNorito.canonicalAssetIdLiteral(literal), literal)
-        XCTAssertEqual(OfflineNorito.assetDefinitionIdFromLiteral(literal), "62Fk4FPcMuLvW5QjDGNF2a4jAmjM")
+        XCTAssertEqual(try CanonicalNorito.canonicalAssetIdLiteral(literal), literal)
+        XCTAssertEqual(CanonicalNorito.assetDefinitionIdFromLiteral(literal), "62Fk4FPcMuLvW5QjDGNF2a4jAmjM")
     }
 
     func testCanonicalAssetDefinitionLiteralRemainsCanonical() {
         XCTAssertEqual(
-            OfflineNorito.assetDefinitionIdFromLiteral("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
+            CanonicalNorito.assetDefinitionIdFromLiteral("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
             "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
         )
     }
 
     func testMalformedPublicAssetLiteralReturnsNilDefinition() {
-        XCTAssertNil(OfflineNorito.assetDefinitionIdFromLiteral("62Fk4FPcMuLvW5QjDGNF2a4jAmjM#not-an-account"))
+        XCTAssertNil(CanonicalNorito.assetDefinitionIdFromLiteral("62Fk4FPcMuLvW5QjDGNF2a4jAmjM#not-an-account"))
     }
 
     func testDecodeAccountIdReadsNoritoStringField() throws {
@@ -7215,7 +7234,7 @@ final class ToriiClientTests: XCTestCase {
         let accountId = try address.toI105(networkPrefix: 0x02F1)
         let encodedLength = withUnsafeBytes(of: UInt64(accountId.utf8.count).littleEndian) { Data($0) }
         let encoded = encodedLength + Data(accountId.utf8)
-        XCTAssertEqual(try OfflineNorito.decodeAccountId(encoded), accountId)
+        XCTAssertEqual(try CanonicalNorito.decodeAccountId(encoded), accountId)
     }
 
     func testExplorerBurnInstructionParsedAsSummary() throws {
@@ -7865,6 +7884,51 @@ final class ToriiClientTests: XCTestCase {
         XCTAssertNil(record.status)
         XCTAssertTrue(record.isFrozen)
         XCTAssertTrue(record.metadata.isEmpty)
+    }
+
+    func testAssetAndRwaReadbacksRejectNoncanonicalQuantities() throws {
+        for quantity in ["-1", "01", "1.0", "1.20", " 1", "1e0"] {
+            let assetJSON = """
+            {"asset":"62Fk4FPcMuLvW5QjDGNF2a4jAmjM","quantity":"\(quantity)"}
+            """
+            XCTAssertThrowsError(
+                try JSONDecoder().decode(ToriiAssetBalance.self, from: Data(assetJSON.utf8)),
+                "accepted asset quantity \(quantity)"
+            )
+
+            let rwaJSON = """
+            {
+              "id":"lot-001$commodities.sora",
+              "owned_by":"owner",
+              "quantity":"\(quantity)",
+              "held_quantity":"0",
+              "primary_reference":"vault://receipts/2",
+              "status":null,
+              "is_frozen":false,
+              "metadata":{}
+            }
+            """
+            XCTAssertThrowsError(
+                try JSONDecoder().decode(ToriiExplorerRwaRecord.self, from: Data(rwaJSON.utf8)),
+                "accepted RWA quantity \(quantity)"
+            )
+        }
+
+        let badHeld = """
+        {
+          "id":"lot-001$commodities.sora",
+          "owned_by":"owner",
+          "quantity":"1",
+          "held_quantity":"0.0",
+          "primary_reference":"vault://receipts/2",
+          "status":null,
+          "is_frozen":false,
+          "metadata":{}
+        }
+        """
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(ToriiExplorerRwaRecord.self, from: Data(badHeld.utf8))
+        )
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -9008,17 +9072,44 @@ final class ToriiClientTests: XCTestCase {
     }
 
     @available(iOS 15.0, macOS 12.0, *)
+    private func onboardingResponseBody(accountId: String,
+                                        uaid: String,
+                                        alias: String = "alice@universal",
+                                        status: String = "QUEUED") -> Data {
+        """
+        {
+          "account_id":"\(accountId)",
+          "uaid":"\(uaid)",
+          "tx_hash_hex":"\(String(repeating: "22", count: 31))23",
+          "status":"\(status)",
+          "lease":{
+            "alias":"\(alias)",
+            "dataspace":"universal",
+            "domain":"wonderland.universal",
+            "is_primary":true,
+            "lease_status":"active",
+            "expires_at_ms":1000,
+            "grace_expires_at_ms":2000,
+            "redemption_expires_at_ms":3000,
+            "auto_renew_enabled":true,
+            "subscription_status":"active",
+            "next_charge_ms":900,
+            "last_invoice_status":"paid",
+            "max_charge_amount":"2500"
+          }
+        }
+        """.data(using: .utf8)!
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
     func testRegisterAccountCanonicalizesUaidAndIdentityCommitment() async throws {
         let uaidHex = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
         let commitmentHex = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-        let responseBody = """
-        {
-          "account_id":"sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
-          "uaid":"uaid:\(uaidHex)",
-          "tx_hash_hex":"\(String(repeating: "22", count: 31))23",
-          "status":"accepted"
-        }
-        """.data(using: .utf8)!
+        let accountId = try canonicalOwnerLiteral()
+        let responseBody = onboardingResponseBody(
+            accountId: accountId,
+            uaid: "uaid:\(uaidHex)"
+        )
 
         StubURLProtocol.handler = { request in
             XCTAssertEqual(request.url?.path, "/v1/accounts/onboard")
@@ -9027,9 +9118,11 @@ final class ToriiClientTests: XCTestCase {
             XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/json")
             let payload = self.bodyJSON(from: request)
             XCTAssertEqual(payload["alias"] as? String, "alice@universal")
-            XCTAssertEqual(payload["account_id"] as? String, "sora-account")
+            XCTAssertEqual(payload["account_id"] as? String, accountId)
+            XCTAssertNil(payload["public_key_hex"])
             XCTAssertEqual(payload["uaid"] as? String, "uaid:\(uaidHex)")
             XCTAssertEqual(payload["identity_commitment_hex"] as? String, commitmentHex)
+            XCTAssertEqual(payload["permissions"] as? [String], ["CanFoo", "CanBar"])
             XCTAssertNil(payload["identity"])
             let response = HTTPURLResponse(url: request.url!,
                                            statusCode: 202,
@@ -9041,13 +9134,62 @@ final class ToriiClientTests: XCTestCase {
         let response = try await makeClient().registerAccount(
             ToriiAccountOnboardingRequest(
                 alias: "alice@universal",
-                accountId: "sora-account",
+                accountId: accountId,
                 uaid: "UAID:\(uaidHex.uppercased())",
-                identityCommitmentHex: "  \(commitmentHex.uppercased())  "
+                identityCommitmentHex: "  \(commitmentHex.uppercased())  ",
+                permissions: [" CanFoo ", "", "CanFoo", "CanBar"]
             )
         )
         XCTAssertEqual(response.uaid, "uaid:\(uaidHex)")
-        XCTAssertEqual(response.status, "accepted")
+        XCTAssertEqual(response.status, .queued)
+        XCTAssertEqual(response.lease.alias, "alice@universal")
+        XCTAssertEqual(response.lease.dataspace, "universal")
+        XCTAssertEqual(response.lease.domain, "wonderland.universal")
+        XCTAssertTrue(response.lease.isPrimary)
+        XCTAssertEqual(response.lease.leaseStatus, "active")
+        XCTAssertEqual(response.lease.expiresAtMs, 1000)
+        XCTAssertEqual(response.lease.graceExpiresAtMs, 2000)
+        XCTAssertEqual(response.lease.redemptionExpiresAtMs, 3000)
+        XCTAssertTrue(response.lease.autoRenewEnabled)
+        XCTAssertEqual(response.lease.subscriptionStatus, "active")
+        XCTAssertEqual(response.lease.nextChargeMs, 900)
+        XCTAssertEqual(response.lease.lastInvoiceStatus, "paid")
+        XCTAssertEqual(response.lease.maxChargeAmount, "2500")
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testRegisterAccountSupportsPublicKeyWithoutAccountId() async throws {
+        let uaid = "uaid:00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+        let publicKeyHex = String(repeating: "AB", count: 32)
+        let responseBody = onboardingResponseBody(
+            accountId: try canonicalOwnerLiteral(),
+            uaid: uaid,
+            alias: "bob@universal"
+        )
+
+        StubURLProtocol.handler = { request in
+            let payload = self.bodyJSON(from: request)
+            XCTAssertEqual(payload["alias"] as? String, "bob@universal")
+            XCTAssertNil(payload["account_id"])
+            XCTAssertEqual(payload["public_key_hex"] as? String, publicKeyHex.lowercased())
+            XCTAssertEqual(payload["uaid"] as? String, uaid)
+            XCTAssertNil(payload["permissions"])
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 202,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            return (response, responseBody)
+        }
+
+        let response = try await makeClient().registerAccount(
+            ToriiAccountOnboardingRequest(
+                alias: "bob@universal",
+                publicKeyHex: publicKeyHex,
+                uaid: uaid
+            )
+        )
+        XCTAssertEqual(response.status, .queued)
+        XCTAssertEqual(response.lease.alias, "bob@universal")
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -9062,7 +9204,7 @@ final class ToriiClientTests: XCTestCase {
             _ = try await makeClient().registerAccount(
                 ToriiAccountOnboardingRequest(
                     alias: "alice@universal",
-                    accountId: "sora-account",
+                    publicKeyHex: String(repeating: "11", count: 32),
                     uaid: invalidUaid
                 )
             )
@@ -9086,7 +9228,7 @@ final class ToriiClientTests: XCTestCase {
             _ = try await makeClient().registerAccount(
                 ToriiAccountOnboardingRequest(
                     alias: "alice@universal",
-                    accountId: "sora-account",
+                    publicKeyHex: String(repeating: "11", count: 32),
                     uaid: "uaid:\(uaidHex)",
                     identityCommitmentHex: "abcd"
                 )
@@ -9095,6 +9237,97 @@ final class ToriiClientTests: XCTestCase {
         } catch {
             guard case ToriiClientError.invalidPayload = error else {
                 return XCTFail("Expected invalidPayload error")
+            }
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testRegisterAccountRejectsInvalidPublicKeyBeforeNetwork() async {
+        StubURLProtocol.handler = { _ in
+            XCTFail("registerAccount should validate public_key_hex before dispatch")
+            throw URLError(.badURL)
+        }
+        let uaid = "uaid:00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+
+        do {
+            _ = try await makeClient().registerAccount(
+                ToriiAccountOnboardingRequest(
+                    alias: "alice@universal",
+                    publicKeyHex: "abcd",
+                    uaid: uaid
+                )
+            )
+            XCTFail("Expected invalid public key error")
+        } catch {
+            guard case ToriiClientError.invalidPayload = error else {
+                return XCTFail("Expected invalidPayload error")
+            }
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testRegisterAccountRejectsNonQueuedResponse() async throws {
+        let uaid = "uaid:00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+        let responseBody = onboardingResponseBody(
+            accountId: try canonicalOwnerLiteral(),
+            uaid: uaid,
+            status: "Applied"
+        )
+        StubURLProtocol.handler = { request in
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 202,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            return (response, responseBody)
+        }
+
+        do {
+            _ = try await makeClient().registerAccount(
+                ToriiAccountOnboardingRequest(
+                    alias: "alice@universal",
+                    publicKeyHex: String(repeating: "11", count: 32),
+                    uaid: uaid
+                )
+            )
+            XCTFail("Expected non-QUEUED response to fail decoding")
+        } catch {
+            guard case ToriiClientError.decoding = error else {
+                return XCTFail("Expected decoding error, got \(error)")
+            }
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testRegisterAccountRejectsResponseWithoutLease() async throws {
+        let uaid = "uaid:00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+        let responseBody = """
+        {
+          "account_id":"\(try canonicalOwnerLiteral())",
+          "uaid":"\(uaid)",
+          "tx_hash_hex":"\(String(repeating: "22", count: 32))",
+          "status":"QUEUED"
+        }
+        """.data(using: .utf8)!
+        StubURLProtocol.handler = { request in
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 202,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            return (response, responseBody)
+        }
+
+        do {
+            _ = try await makeClient().registerAccount(
+                ToriiAccountOnboardingRequest(
+                    alias: "alice@universal",
+                    publicKeyHex: String(repeating: "11", count: 32),
+                    uaid: uaid
+                )
+            )
+            XCTFail("Expected missing lease to fail decoding")
+        } catch {
+            guard case ToriiClientError.decoding = error else {
+                return XCTFail("Expected decoding error, got \(error)")
             }
         }
     }
@@ -9222,10 +9455,11 @@ final class ToriiClientTests: XCTestCase {
         StubURLProtocol.handler = { request in
             XCTAssertEqual(request.url?.path, "/v1/pipeline/transactions/status")
             let components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
-            XCTAssertEqual(components?.queryItems?.first?.value, "deadbeef")
+            XCTAssertEqual(components?.queryItems?.first(where: { $0.name == "hash" })?.value, Self.pipelineHash)
+            XCTAssertEqual(components?.queryItems?.first(where: { $0.name == "scope" })?.value, "auto")
             let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
             let body = """
-            {"hash":"deadbeef","status":{"kind":"Rejected","block_height":12,"rejection_reason":{"Validation":"missing permission"}},"summary":"Rejected: missing permission","diagnostics":[{"category":"validation","code":"validation","message":"missing permission","decoded_reason":"missing permission","raw_reason":"Validation(missing permission)"}],"scope":"local","resolved_from":"state"}
+            {"hash":"\(Self.pipelineHash)","status":{"kind":"Rejected","block_height":12,"rejection_reason":{"Validation":"missing permission"}},"summary":"Rejected: missing permission","diagnostics":[{"category":"validation","code":"validation","message":"missing permission","decoded_reason":"missing permission","raw_reason":"Validation(missing permission)"}],"scope":"global","resolved_from":"state"}
             """.data(using: .utf8)!
             return (response, body)
         }
@@ -9235,9 +9469,9 @@ final class ToriiClientTests: XCTestCase {
         let session = URLSession(configuration: configuration)
         let sdk = IrohaSDK(baseURL: URL(string: "https://example.test")!, session: session)
 
-        let status = try await sdk.getTransactionStatus(hashHex: "deadbeef")
-        XCTAssertEqual(status?.kind, "Transaction")
-        XCTAssertEqual(status?.content.status.kind, "Rejected")
+        let status = try await sdk.getTransactionStatus(hashHex: Self.pipelineHash)
+        XCTAssertEqual(status?.hash, Self.pipelineHash)
+        XCTAssertEqual(status?.status.kind, "Rejected")
         XCTAssertEqual(status?.primaryDiagnostic?.message, "missing permission")
     }
 
@@ -10222,7 +10456,7 @@ final class ToriiClientTests: XCTestCase {
             fieldCount: Int,
             operationIdFieldIndex: Int
         ) -> Data {
-            var payload = OfflineCompactNoritoWriter()
+            var payload = CompactNoritoWriter()
             for index in 0..<fieldCount {
                 payload.writeField(
                     index == operationIdFieldIndex
@@ -10327,7 +10561,7 @@ final class ToriiClientTests: XCTestCase {
         let submittedOperationId = String(repeating: "11", count: 32)
         let otherOperationId = String(repeating: "33", count: 32)
         let transactionHash = String(repeating: "22", count: 32)
-        var requestPayload = OfflineCompactNoritoWriter()
+        var requestPayload = CompactNoritoWriter()
         for index in 0..<8 {
             requestPayload.writeField(
                 index == 6 ? Data(repeating: 0x11, count: 32) : Data([UInt8(index + 1)])
@@ -13876,9 +14110,9 @@ data: {"code":"stream_source_closed","message":"The event source closed.","dropp
     @available(iOS 15.0, macOS 12.0, *)
     func testTransactionStatusStreamStillFiltersOrdinaryNonTransactionEvents() async throws {
         let ssePayload = """
-data: {"event":"Block","hash":"deadbeef","status":"Applied"}
+data: {"event":"Block","hash":"\(Self.pipelineHash)","status":"Applied"}
 
-data: {"event":"Transaction","hash":"deadbeef","status":"Applied","block_height":17}
+data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","block_height":17}
 
 """.data(using: .utf8)!
 
@@ -13893,7 +14127,7 @@ data: {"event":"Transaction","hash":"deadbeef","status":"Applied","block_height"
             return (response, ssePayload)
         }
 
-        var iterator = makeClient().streamTransactionStatusEvents(hashHex: "deadbeef").makeAsyncIterator()
+        var iterator = makeClient().streamTransactionStatusEvents(hashHex: Self.pipelineHash).makeAsyncIterator()
         let event = try await iterator.next()
         XCTAssertEqual(event?.event, "Transaction")
         XCTAssertEqual(event?.blockHeight, 17)
@@ -15432,7 +15666,7 @@ data: {"event":"Transaction","hash":"deadbeef","status":"Applied","block_height"
         XCTAssertEqual(response.dataspace, "universal")
         XCTAssertEqual(response.deployNonce, 7)
         XCTAssertEqual(response.txHashHex, txHash)
-        XCTAssertEqual(response.pipelineStatus?.content.status.kind, "Queued")
+        XCTAssertEqual(response.pipelineStatus?.status.kind, "Queued")
         XCTAssertEqual(response.codeHashHex, codeHash)
         XCTAssertEqual(response.abiHashHex, abiHash)
     }
@@ -15573,7 +15807,7 @@ data: {"event":"Transaction","hash":"deadbeef","status":"Applied","block_height"
                 XCTAssertEqual(response.abiHashHex, abiHash)
                 XCTAssertEqual(response.creationTimeMs, 321)
                 XCTAssertEqual(response.txHashHex, txHash)
-                XCTAssertEqual(response.pipelineStatus?.content.status.rejectionReason, #"{"Validation":"missing permission"}"#)
+                XCTAssertEqual(response.pipelineStatus?.status.rejectionReason, #"{"Validation":"missing permission"}"#)
                 XCTAssertEqual(response.pipelineStatus?.primaryDiagnostic?.decodedReason, "missing permission")
                 XCTAssertEqual(response.pipelineStatus?.isRejected, true)
                 XCTAssertEqual(response.transactionTtlMs, 60_000)
@@ -15937,13 +16171,13 @@ data: {"event":"Transaction","hash":"deadbeef","status":"Applied","block_height"
         )
         XCTAssertThrowsError(
             try JSONDecoder().decode(
-                ToriiMultisigProposalsListResponse.self,
+                ToriiMultisigProposalsQueryResponse.self,
                 from: data(#"{"resolved_multisig_account_id":"\#(paddedAccountId)","proposals":[]}"#)
             )
         )
         XCTAssertThrowsError(
             try JSONDecoder().decode(
-                ToriiMultisigProposalGetResponse.self,
+                ToriiMultisigProposalLookupResponse.self,
                 from: data(#"{"resolved_multisig_account_id":"\#(paddedAccountId)","proposal_id":"\#(proposalId)","instructions_hash":"\#(proposalId)","proposal":{"approvals":[]}}"#)
             )
         )
@@ -16307,11 +16541,11 @@ data: {"event":"Transaction","hash":"deadbeef","status":"Applied","block_height"
     }
 
     func testListMultisigProposalsDecodesEntries() {
-        let expectation = expectation(description: "multisig proposals list")
+        let expectation = expectation(description: "multisig proposals query")
         let proposalId = String(repeating: "d", count: 64)
         let approverId = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"
         StubURLProtocol.handler = { request in
-            XCTAssertEqual(request.url?.path, "/v1/multisig/proposals/list")
+            XCTAssertEqual(request.url?.path, "/v1/multisig/proposals/query")
             guard let body = self.bodyData(from: request),
                   let json = try? JSONSerialization.jsonObject(with: body) as? [String: Any] else {
                 XCTFail("missing JSON body")
@@ -16330,13 +16564,13 @@ data: {"event":"Transaction","hash":"deadbeef","status":"Applied","block_height"
             return (response, bodyData)
         }
 
-        let request = ToriiMultisigProposalsListRequest(
+        let request = ToriiMultisigProposalsQueryRequest(
             selector: ToriiMultisigAccountSelector(multisigAccountAlias: "cbdc@banka"),
             status: [.finalized],
             cursor: "page-1",
             limit: 25
         )
-        makeClient().listMultisigProposals(request) { result in
+        makeClient().queryMultisigProposals(request) { result in
             switch result {
             case .success(let response):
                 XCTAssertEqual(response.proposals.count, 1)
@@ -16354,12 +16588,12 @@ data: {"event":"Transaction","hash":"deadbeef","status":"Applied","block_height"
     }
 
     func testGetMultisigProposalDecodesProposalGetResponse() {
-        let expectation = expectation(description: "multisig proposal get")
+        let expectation = expectation(description: "multisig proposal lookup")
         let proposalId = String(repeating: "e", count: 64)
         let approverOne = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"
         let approverTwo = "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"
         StubURLProtocol.handler = { request in
-            XCTAssertEqual(request.url?.path, "/v1/multisig/proposals/get")
+            XCTAssertEqual(request.url?.path, "/v1/multisig/proposals/lookup")
             guard let body = self.bodyData(from: request),
                   let json = try? JSONSerialization.jsonObject(with: body) as? [String: Any] else {
                 XCTFail("missing JSON body")
@@ -16376,11 +16610,11 @@ data: {"event":"Transaction","hash":"deadbeef","status":"Applied","block_height"
             return (response, bodyData)
         }
 
-        let request = ToriiMultisigProposalGetRequest(
+        let request = ToriiMultisigProposalLookupRequest(
             selector: ToriiMultisigAccountSelector(multisigAccountAlias: "cbdc@banka"),
             instructionsHash: proposalId
         )
-        makeClient().getMultisigProposal(request) { result in
+        makeClient().lookupMultisigProposal(request) { result in
             switch result {
             case .success(let response):
                 XCTAssertEqual(response.proposalId, proposalId)
@@ -16399,13 +16633,13 @@ data: {"event":"Transaction","hash":"deadbeef","status":"Applied","block_height"
     func testListMultisigProposalsRejectsInvalidPaginationAndDuplicateStatuses() throws {
         let selector = ToriiMultisigAccountSelector(multisigAccountAlias: "cbdc@banka")
         for request in [
-            ToriiMultisigProposalsListRequest(
+            ToriiMultisigProposalsQueryRequest(
                 selector: selector,
                 status: [.finalized, .finalized]
             ),
-            ToriiMultisigProposalsListRequest(selector: selector, cursor: " "),
-            ToriiMultisigProposalsListRequest(selector: selector, limit: 0),
-            ToriiMultisigProposalsListRequest(
+            ToriiMultisigProposalsQueryRequest(selector: selector, cursor: " "),
+            ToriiMultisigProposalsQueryRequest(selector: selector, limit: 0),
+            ToriiMultisigProposalsQueryRequest(
                 selector: selector,
                 cursor: String(repeating: "x", count: 513)
             )
@@ -16419,12 +16653,12 @@ data: {"event":"Transaction","hash":"deadbeef","status":"Applied","block_height"
         let missingStatus = """
         {"resolved_multisig_account_id":"sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB","proposal_id":"\(proposalId)","instructions_hash":"\(proposalId)","operation_type":"TRANSFER","proposal":{}}
         """.data(using: .utf8)!
-        XCTAssertThrowsError(try JSONDecoder().decode(ToriiMultisigProposalGetResponse.self, from: missingStatus))
+        XCTAssertThrowsError(try JSONDecoder().decode(ToriiMultisigProposalLookupResponse.self, from: missingStatus))
 
         let unknownStatus = """
         {"resolved_multisig_account_id":"sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB","proposal_id":"\(proposalId)","instructions_hash":"\(proposalId)","operation_type":"TRANSFER","intent":null,"proposal":{},"status":"READY_TO_SUBMIT","terminal_at_ms":null}
         """.data(using: .utf8)!
-        XCTAssertThrowsError(try JSONDecoder().decode(ToriiMultisigProposalGetResponse.self, from: unknownStatus))
+        XCTAssertThrowsError(try JSONDecoder().decode(ToriiMultisigProposalLookupResponse.self, from: unknownStatus))
     }
 
     func testMultisigSelectorRejectsBothAccountIdAndAlias() throws {
@@ -16770,7 +17004,7 @@ data: {"event":"Transaction","hash":"deadbeef","status":"Applied","block_height"
     }
 
     func testGetGovernanceProposalDecodesRecord() {
-        let expectation = expectation(description: "proposal get")
+        let expectation = expectation(description: "proposal lookup")
         let proposalId = String(repeating: "6", count: 64)
         let codeHash = String(repeating: "7", count: 64)
         let abiHash = String(repeating: "8", count: 64)
@@ -16844,23 +17078,24 @@ data: {"event":"Transaction","hash":"deadbeef","status":"Applied","block_height"
         StubURLProtocol.handler = { request in
             XCTAssertEqual(request.url?.path, "/v1/pipeline/transactions/status")
             let components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
-            XCTAssertEqual(components?.queryItems?.first?.value, "deadbeef")
+            XCTAssertEqual(components?.queryItems?.first(where: { $0.name == "hash" })?.value, Self.pipelineHash)
+            XCTAssertEqual(components?.queryItems?.first(where: { $0.name == "scope" })?.value, "auto")
             let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
             let body = """
-            {"hash":"deadbeef","status":{"kind":"Rejected","block_height":12,"rejection_reason":{"Validation":"missing permission"}},"summary":"Rejected: missing permission","diagnostics":[{"category":"validation","code":"validation","message":"missing permission","decoded_reason":"missing permission","raw_reason":"Validation(missing permission)"}],"scope":"local","resolved_from":"state"}
+            {"hash":"\(Self.pipelineHash)","status":{"kind":"Rejected","block_height":12,"rejection_reason":{"Validation":"missing permission"}},"summary":"Rejected: missing permission","diagnostics":[{"category":"validation","code":"validation","message":"missing permission","decoded_reason":"missing permission","raw_reason":"Validation(missing permission)"}],"scope":"global","resolved_from":"state"}
             """.data(using: .utf8)!
             return (response, body)
         }
 
-        makeClient().getTransactionStatus(hashHex: "deadbeef") { result in
+        makeClient().getTransactionStatus(hashHex: Self.pipelineHash) { result in
             switch result {
             case .success(let status):
-                XCTAssertEqual(status?.kind, "Transaction")
-                XCTAssertEqual(status?.content.status.kind, "Rejected")
-                XCTAssertEqual(status?.content.status.rejectionReason, #"{"Validation":"missing permission"}"#)
+                XCTAssertEqual(status?.hash, Self.pipelineHash)
+                XCTAssertEqual(status?.status.kind, "Rejected")
+                XCTAssertEqual(status?.status.rejectionReason, #"{"Validation":"missing permission"}"#)
                 XCTAssertEqual(status?.summary, "Rejected: missing permission")
                 XCTAssertEqual(status?.primaryDiagnostic?.decodedReason, "missing permission")
-                XCTAssertEqual(status?.scope, "local")
+                XCTAssertEqual(status?.scope, "global")
                 XCTAssertEqual(status?.resolvedFrom, "state")
                 XCTAssertEqual(status?.isRejected, true)
             case .failure(let error):
@@ -16882,7 +17117,7 @@ data: {"event":"Transaction","hash":"deadbeef","status":"Applied","block_height"
             return (response, nil)
         }
 
-        makeClient().getTransactionStatus(hashHex: "deadbeef") { result in
+        makeClient().getTransactionStatus(hashHex: Self.pipelineHash) { result in
             switch result {
             case .success(let status):
                 XCTAssertNil(status)
@@ -16902,65 +17137,13 @@ data: {"event":"Transaction","hash":"deadbeef","status":"Applied","block_height"
         }
 
         do {
-            _ = try await makeClient().getTransactionStatus(hashHex: "deadbeef")
+            _ = try await makeClient().getTransactionStatus(hashHex: Self.pipelineHash)
             XCTFail("expected cancellation")
         } catch is CancellationError {
             // expected
         } catch {
             XCTFail("expected CancellationError, got \(error)")
         }
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
-    func testWaitForTerminalTransactionStatusEventUsesSSEAfterInitialStatusWithoutPollingFallback() async throws {
-        var statusCallCount = 0
-        var sseCallCount = 0
-        StubURLProtocol.handler = { request in
-            switch request.url?.path {
-            case "/v1/pipeline/transactions/status":
-                let components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
-                XCTAssertEqual(components?.queryItems?.first?.value, "deadbeef")
-                statusCallCount += 1
-                let response = HTTPURLResponse(
-                    url: request.url!,
-                    statusCode: 200,
-                    httpVersion: nil,
-                    headerFields: ["Content-Type": "application/json"]
-                )!
-                let body = """
-                {"hash":"deadbeef","resolved_from":"cache","scope":"auto","status":{"block_height":168,"kind":"Queued"}}
-                """.data(using: .utf8)!
-                return (response, body)
-            case "/v1/events/sse":
-                sseCallCount += 1
-                XCTAssertNil(request.value(forHTTPHeaderField: "Last-Event-ID"))
-                let response = HTTPURLResponse(
-                    url: request.url!,
-                    statusCode: 200,
-                    httpVersion: nil,
-                    headerFields: ["Content-Type": "text/event-stream"]
-                )!
-                let body = """
-                event: Transaction
-                data: {"event":"Transaction","hash":"deadbeef","status":"Applied","block_height":169}
-
-                """.data(using: .utf8)!
-                return (response, body)
-            default:
-                throw URLError(.unsupportedURL)
-            }
-        }
-
-        let event = try await makeClient().waitForTerminalTransactionStatusEvent(
-            hashHex: "deadbeef",
-            timeout: 2
-        )
-
-        XCTAssertEqual(event.hash, "deadbeef")
-        XCTAssertEqual(event.status, "Applied")
-        XCTAssertEqual(event.blockHeight, 169)
-        XCTAssertEqual(statusCallCount, 1)
-        XCTAssertEqual(sseCallCount, 1)
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -16983,7 +17166,7 @@ data: {"event":"Transaction","hash":"deadbeef","status":"Applied","block_height"
         }
 
         do {
-            _ = try await makeClient().getTransactionStatus(hashHex: "deadbeef")
+            _ = try await makeClient().getTransactionStatus(hashHex: Self.pipelineHash)
             XCTFail("expected status failure")
         } catch let error as ToriiClientError {
             guard case let .httpStatus(code, message, rejectCode) = error else {
@@ -17018,7 +17201,7 @@ data: {"event":"Transaction","hash":"deadbeef","status":"Applied","block_height"
         }
 
         do {
-            _ = try await makeClient().getTransactionStatus(hashHex: "deadbeef")
+            _ = try await makeClient().getTransactionStatus(hashHex: Self.pipelineHash)
             XCTFail("expected status failure")
         } catch let error as ToriiClientError {
             guard case let .httpStatus(code, message, rejectCode) = error else {
@@ -17049,7 +17232,7 @@ data: {"event":"Transaction","hash":"deadbeef","status":"Applied","block_height"
         }
 
         do {
-            _ = try await makeClient().getTransactionStatus(hashHex: "deadbeef")
+            _ = try await makeClient().getTransactionStatus(hashHex: Self.pipelineHash)
             XCTFail("expected status failure")
         } catch let error as ToriiClientError {
             guard case let .httpStatus(code, message, rejectCode) = error else {
@@ -17093,7 +17276,7 @@ data: {"event":"Transaction","hash":"deadbeef","status":"Applied","block_height"
         }
 
         do {
-            _ = try await makeClient().getTransactionStatus(hashHex: "deadbeef")
+            _ = try await makeClient().getTransactionStatus(hashHex: Self.pipelineHash)
             XCTFail("expected status failure")
         } catch let error as ToriiClientError {
             guard case let .httpStatus(code, message, rejectCode) = error else {
@@ -17121,7 +17304,7 @@ data: {"event":"Transaction","hash":"deadbeef","status":"Applied","block_height"
         }
 
         do {
-            _ = try await makeClient().getTransactionStatus(hashHex: "deadbeef")
+            _ = try await makeClient().getTransactionStatus(hashHex: Self.pipelineHash)
             XCTFail("expected status failure")
         } catch let error as ToriiClientError {
             guard case let .httpStatus(code, message, rejectCode) = error else {
@@ -17157,7 +17340,7 @@ data: {"event":"Transaction","hash":"deadbeef","status":"Applied","block_height"
         }
 
         do {
-            _ = try await makeClient().getTransactionStatus(hashHex: "deadbeef")
+            _ = try await makeClient().getTransactionStatus(hashHex: Self.pipelineHash)
             XCTFail("expected status failure")
         } catch let error as ToriiClientError {
             guard case let .httpStatus(code, message, rejectCode) = error else {
@@ -17188,7 +17371,7 @@ data: {"event":"Transaction","hash":"deadbeef","status":"Applied","block_height"
         }
 
         do {
-            _ = try await makeClient().getTransactionStatus(hashHex: "deadbeef")
+            _ = try await makeClient().getTransactionStatus(hashHex: Self.pipelineHash)
             XCTFail("expected status failure")
         } catch let error as ToriiClientError {
             guard case let .httpStatus(code, message, rejectCode) = error else {
@@ -17217,7 +17400,7 @@ data: {"event":"Transaction","hash":"deadbeef","status":"Applied","block_height"
         }
 
         do {
-            _ = try await makeClient().getTransactionStatus(hashHex: "deadbeef")
+            _ = try await makeClient().getTransactionStatus(hashHex: Self.pipelineHash)
             XCTFail("expected status failure")
         } catch let error as ToriiClientError {
             guard case let .httpStatus(code, message, rejectCode) = error else {
@@ -17266,7 +17449,7 @@ data: {"event":"Transaction","hash":"deadbeef","status":"Applied","block_height"
             }
 
             do {
-                _ = try await makeClient().getTransactionStatus(hashHex: "deadbeef")
+                _ = try await makeClient().getTransactionStatus(hashHex: Self.pipelineHash)
                 XCTFail("\(fixtureCase.id): expected status failure")
             } catch let error as ToriiClientError {
                 guard case let .httpStatus(code, message, rejectCode) = error else {
@@ -17295,22 +17478,30 @@ data: {"event":"Transaction","hash":"deadbeef","status":"Applied","block_height"
         let nestedJSON = """
         {"kind":"Transaction","content":{"hash":"deadbeef","status":{"kind":"Committed","content":null}}}
         """.data(using: .utf8)!
-        let nested = try JSONDecoder().decode(ToriiPipelineTransactionStatus.self, from: nestedJSON)
-        XCTAssertEqual(nested.kind, "Transaction")
-        XCTAssertEqual(nested.content.hash, "deadbeef")
-        XCTAssertEqual(nested.content.status.state, .committed)
-        XCTAssertTrue(nested.content.status.state.isKnownTerminalSuccess)
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(ToriiPipelineTransactionStatus.self, from: nestedJSON)
+        )
+
+        let committedJSON = """
+        {"hash":"\(Self.pipelineHash)","status":{"kind":"Committed"},"summary":"Committed","diagnostics":[],"scope":"global","resolved_from":"cache"}
+        """.data(using: .utf8)!
+        let committed = try JSONDecoder().decode(
+            ToriiPipelineTransactionStatus.self,
+            from: committedJSON
+        )
+        XCTAssertEqual(committed.status.state, .committed)
+        XCTAssertFalse(committed.status.state.isKnownTerminalSuccess)
+        XCTAssertFalse(committed.isTerminal)
         XCTAssertFalse(PipelineTransactionState.approved.isKnownTerminalSuccess)
 
         let flatJSON = """
-        {"hash":"facefeed","resolved_from":"cache","scope":"auto","status":{"block_height":64,"kind":"Applied"},"diagnostics":[]}
+        {"hash":"\(Self.pipelineHash)","resolved_from":"state","scope":"global","status":{"block_height":64,"kind":"Applied"},"summary":"Applied","diagnostics":[]}
         """.data(using: .utf8)!
         let flat = try JSONDecoder().decode(ToriiPipelineTransactionStatus.self, from: flatJSON)
-        XCTAssertEqual(flat.kind, "Transaction")
-        XCTAssertEqual(flat.content.hash, "facefeed")
-        XCTAssertEqual(flat.content.status.state, .applied)
-        XCTAssertTrue(flat.content.status.state.isTerminalSuccess)
-        XCTAssertTrue(flat.isCommitted)
+        XCTAssertEqual(flat.hash, Self.pipelineHash)
+        XCTAssertEqual(flat.status.state, .applied)
+        XCTAssertTrue(flat.status.state.isTerminalSuccess)
+        XCTAssertTrue(flat.isApplied)
 
         let other = PipelineTransactionState(kind: "CustomStatus")
         if case let .other(value) = other {
@@ -17804,10 +17995,10 @@ final class ToriiClientIntegrationTests: XCTestCase {
 
     @available(iOS 15.0, macOS 12.0, *)
     func testPipelineSubmitAndWaitSuccessAgainstMock() async throws {
-        let scenarioHash = "feedfacecafebeefcafedeadbeef0001"
+        let scenarioHash = "feedfacecafebeefcafedeadbeef000100000000000000000000000000000000"
         try await preparePipelineScenario(.success,
                                           hashHex: scenarioHash,
-                                          statusKinds: ["Queued", "Approved", "Committed"])
+                                          statusKinds: ["Queued", "Approved", "Committed", "Applied"])
         let mock = try XCTUnwrap(self.mock)
         let session = URLSession(configuration: .ephemeral)
         let client = ToriiClient(baseURL: mock.baseURL, session: session)
@@ -17818,14 +18009,14 @@ final class ToriiClientIntegrationTests: XCTestCase {
         sdk.pipelinePollOptions = PipelineStatusPollOptions(pollInterval: 0.01, timeout: 1)
         let envelope = try tcMakePipelineEnvelope(hashHex: scenarioHash, marker: 0x11)
         let status = try await sdk.submitAndWait(envelope: envelope)
-        XCTAssertEqual(status.content.hash, scenarioHash)
-        XCTAssertTrue(PipelineStatusPollOptions.defaultSuccessStates.contains(status.content.status.state))
-        XCTAssertTrue(status.content.status.state.isTerminalSuccess)
+        XCTAssertEqual(status.hash, scenarioHash)
+        XCTAssertEqual(PipelineStatusPollOptions.default.successStates, [.applied])
+        XCTAssertTrue(status.status.state.isTerminalSuccess)
     }
 
     @available(iOS 15.0, macOS 12.0, *)
     func testPipelineSubmitAndWaitFailureAgainstMock() async throws {
-        let scenarioHash = "feedfacecafebeefcafedeadbeef0002"
+        let scenarioHash = "feedfacecafebeefcafedeadbeef000200000000000000000000000000000000"
         try await preparePipelineScenario(.failure, hashHex: scenarioHash)
         let mock = try XCTUnwrap(self.mock)
         let session = URLSession(configuration: .ephemeral)
@@ -17845,8 +18036,8 @@ final class ToriiClientIntegrationTests: XCTestCase {
             }
             XCTAssertEqual(hash, scenarioHash)
             XCTAssertEqual(status, "Rejected")
-            XCTAssertEqual(payload.content.hash, scenarioHash)
-            XCTAssertEqual(payload.content.status.kind, "Rejected")
+            XCTAssertEqual(payload.hash, scenarioHash)
+            XCTAssertEqual(payload.status.kind, "Rejected")
         } catch {
             XCTFail("unexpected error: \(error)")
         }
@@ -17854,7 +18045,7 @@ final class ToriiClientIntegrationTests: XCTestCase {
 
     @available(iOS 15.0, macOS 12.0, *)
     func testPipelineSubmitAndWaitTimeoutAgainstMock() async throws {
-        let scenarioHash = "feedfacecafebeefcafedeadbeef0003"
+        let scenarioHash = "feedfacecafebeefcafedeadbeef000300000000000000000000000000000000"
         try await preparePipelineScenario(.timeout,
                                           hashHex: scenarioHash,
                                           statusKinds: ["Queued"],

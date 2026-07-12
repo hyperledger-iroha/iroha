@@ -164,6 +164,7 @@ test("NexusAppClient builds a signable transfer draft", () => {
       buildTransferPayload(input) {
         assert.equal(input.chainId, "test-chain");
         assert.equal(input.authority, "account-i105");
+        assert.equal(input.quantity, "12.5");
         assert.equal(input.destinationAccountId, "destination-i105");
         return payloadBytes;
       },
@@ -172,7 +173,7 @@ test("NexusAppClient builds a signable transfer draft", () => {
 
   const draft = client.buildTransferDraft({
     sourceAssetHoldingId: "asset#account-i105",
-    quantity: "12.50",
+    quantity: "12.5",
     destinationAccountId: "destination-i105",
   });
 
@@ -181,6 +182,38 @@ test("NexusAppClient builds a signable transfer draft", () => {
     draft.signable.payloadHashHex,
     nexusPayloadHashHex(payloadBytes),
   );
+});
+
+test("NexusAppClient validates quantities before invoking custom transaction codecs", () => {
+  let codecCalls = 0;
+  const client = new NexusAppClient({
+    chainId: "test-chain",
+    authority: "account-i105",
+    signingPublicKey: Buffer.alloc(32, 1),
+    transactionCodec: {
+      buildTransferPayload(input) {
+        codecCalls += 1;
+        assert.equal(input.quantity, "7");
+        return Buffer.from([1]);
+      },
+    },
+  });
+  const base = {
+    sourceAssetHoldingId: "asset#account-i105",
+    destinationAccountId: "destination-i105",
+  };
+
+  for (const quantity of [7, " 7", "07", "+7", "7.0", "-7"]) {
+    assert.throws(
+      () => client.buildTransferDraft({ ...base, quantity }),
+      (error) => error instanceof NexusAppError && error.code === "invalid_transfer_input",
+      String(quantity),
+    );
+  }
+  assert.equal(codecCalls, 0);
+
+  client.buildTransferDraft({ ...base, quantity: 7n });
+  assert.equal(codecCalls, 1);
 });
 
 test("NexusAppClient snapshots extension owners and invokes capabilities intrinsically", async () => {

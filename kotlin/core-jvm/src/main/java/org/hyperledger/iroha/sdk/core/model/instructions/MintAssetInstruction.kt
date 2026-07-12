@@ -1,5 +1,7 @@
 package org.hyperledger.iroha.sdk.core.model.instructions
 
+import org.hyperledger.iroha.sdk.numeric.KotodamaQuantity
+
 private const val ACTION = "MintAsset"
 
 /** Typed representation of a `MintAsset` instruction. */
@@ -10,8 +12,11 @@ class MintAssetInstruction(
 
     init {
         require(assetId.isNotBlank()) { "assetId must not be blank" }
-        require(quantity.isNotBlank()) { "quantity must not be blank" }
+        requireCanonicalQuantity(quantity)
     }
+
+    /** Construct from a lossless validated quantity value. */
+    constructor(assetId: String, quantity: KotodamaQuantity) : this(assetId, quantity.toString())
 
     override val kind: InstructionKind = InstructionKind.MINT
 

@@ -250,7 +250,7 @@ fn sorafs_pin_fee_bootstrap_instructions() -> Vec<InstructionBox> {
     vec![
         Register::account(Account::new(treasury)).into(),
         Register::asset_definition(fee_definition).into(),
-        Mint::asset_numeric(seed_amount, AssetId::new(fee_asset_id, ALICE_ID.clone())).into(),
+        Mint::asset_quantity(seed_amount, AssetId::new(fee_asset_id, ALICE_ID.clone())).into(),
     ]
 }
 
@@ -576,7 +576,7 @@ async fn restarted_peer_should_restore_its_state() -> Result<()> {
                         .with_name(__asset_definition_id.name().to_string())
                 })
                 .into(),
-                Mint::asset_numeric(
+                Mint::asset_quantity(
                     mint_quantity,
                     AssetId::new(asset_definition_clone, ALICE_ID.clone()),
                 )
@@ -794,7 +794,7 @@ async fn restarted_four_peers_rebuild_route_sensitive_state_from_kura_blocks() -
                         .with_name(definition_id.name().to_string())
                 })
                 .into(),
-                Mint::asset_numeric(submit_quantity, submit_asset).into(),
+                Mint::asset_quantity(submit_quantity, submit_asset).into(),
             ])
             .map(|_| ())
     })

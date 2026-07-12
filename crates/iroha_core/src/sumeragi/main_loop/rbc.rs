@@ -310,11 +310,32 @@ fn spawn_rbc_persist_worker(
     )?;
     let join_handle =
         crate::sumeragi::sumeragi_thread_builder("sumeragi-rbc-persist").spawn(move || {
-            while let Ok(work) = work_rx.recv() {
+            'worker: while let Ok(work) = work_rx.recv() {
+                // Serialize this durable cache write with process fail-stop activation. Work
+                // received after the latch is discarded; the actor cannot resume until restart.
+                let outcome = {
+                    let Some(_consensus_effect_guard) = status::consensus_output_guard() else {
+                        continue;
+                    };
+                    store.persist_snapshot(&work.persisted)
+                };
                 let key = work.key;
-                let outcome = store.persist_snapshot(&work.persisted);
-                if result_tx.send(RbcPersistResult { key, outcome }).is_err() {
-                    break;
+                if crate::sumeragi::consensus_fail_stop_active() {
+                    continue;
+                }
+                let mut result = RbcPersistResult { key, outcome };
+                loop {
+                    if crate::sumeragi::consensus_fail_stop_active() {
+                        continue 'worker;
+                    }
+                    match result_tx.try_send(result) {
+                        Ok(()) => break,
+                        Err(mpsc::TrySendError::Full(pending)) => {
+                            result = pending;
+                            std::thread::yield_now();
+                        }
+                        Err(mpsc::TrySendError::Disconnected(_)) => break 'worker,
+                    }
                 }
                 if let Some(wake) = wake_tx.as_ref() {
                     let _ = wake.try_send(());
@@ -339,7 +360,7 @@ fn spawn_rbc_seed_worker(wake_tx: Option<mpsc::SyncSender<()>>) -> io::Result<Rb
         let wake_tx = wake_tx.clone();
         let thread_name = format!("sumeragi-rbc-seed-{idx}");
         let handle = crate::sumeragi::sumeragi_thread_builder(thread_name).spawn(move || {
-            loop {
+            'worker: loop {
                 let work = {
                     let guard = match work_rx.lock() {
                         Ok(guard) => guard,
@@ -350,6 +371,9 @@ fn spawn_rbc_seed_worker(wake_tx: Option<mpsc::SyncSender<()>>) -> io::Result<Rb
                 let Ok(work) = work else {
                     break;
                 };
+                if crate::sumeragi::consensus_fail_stop_active() {
+                    continue;
+                }
                 let key = work.key;
                 let payload_hash = work.payload_hash;
                 let started_at = work.started_at;
@@ -360,16 +384,27 @@ fn spawn_rbc_seed_worker(wake_tx: Option<mpsc::SyncSender<()>>) -> io::Result<Rb
                     work.epoch,
                 )
                 .map_err(eyre::Report::from);
-                if result_tx
-                    .send(RbcSeedResult {
-                        key,
-                        payload_hash,
-                        outcome,
-                        elapsed: started_at.elapsed(),
-                    })
-                    .is_err()
-                {
-                    break;
+                if crate::sumeragi::consensus_fail_stop_active() {
+                    continue;
+                }
+                let mut result = RbcSeedResult {
+                    key,
+                    payload_hash,
+                    outcome,
+                    elapsed: started_at.elapsed(),
+                };
+                loop {
+                    if crate::sumeragi::consensus_fail_stop_active() {
+                        continue 'worker;
+                    }
+                    match result_tx.try_send(result) {
+                        Ok(()) => break,
+                        Err(mpsc::TrySendError::Full(pending)) => {
+                            result = pending;
+                            std::thread::yield_now();
+                        }
+                        Err(mpsc::TrySendError::Disconnected(_)) => break 'worker,
+                    }
                 }
                 if let Some(wake) = wake_tx.as_ref() {
                     let _ = wake.try_send(());
@@ -2851,6 +2886,9 @@ impl Actor {
     }
 
     pub(super) fn install_rbc_session_plan(&mut self, plan: &mut RbcSessionPlan) {
+        if self.consensus_participation_halted() || self.kura_recovery_required() {
+            return;
+        }
         let key = plan.key;
         if self.retire_exact_frontier_rbc_runtime(key, "plan_install") {
             debug!(
@@ -2884,6 +2922,9 @@ impl Actor {
     }
 
     pub(super) fn broadcast_rbc_session_plan(&mut self, plan: RbcSessionPlan) -> Result<()> {
+        if self.consensus_participation_halted() || self.kura_recovery_required() {
+            return Ok(());
+        }
         let key = plan.key;
         if self.retire_exact_frontier_rbc_runtime(key, "plan_broadcast") {
             return Ok(());
@@ -3355,6 +3396,9 @@ impl Actor {
         key: SessionKey,
         rebroadcast_missing_init: bool,
     ) -> Result<bool> {
+        if self.consensus_participation_halted() || self.kura_recovery_required() {
+            return Ok(false);
+        }
         if self.subsystems.da_rbc.rbc.sessions.contains_key(&key) {
             return Ok(true);
         }
@@ -4674,6 +4718,9 @@ impl Actor {
 
     #[allow(clippy::too_many_lines)]
     pub(super) fn handle_rbc_init(&mut self, init: RbcInit, sender: Option<PeerId>) -> Result<()> {
+        if self.consensus_participation_halted() || self.kura_recovery_required() {
+            return Ok(());
+        }
         if self.should_drop_stale_rbc_message(init.height, init.view, &init.block_hash, "RbcInit") {
             self.record_consensus_message_handling(
                 super::status::ConsensusMessageKind::RbcInit,
@@ -5447,6 +5494,9 @@ impl Actor {
         request: RbcInitRequest,
         sender: Option<PeerId>,
     ) -> Result<()> {
+        if self.consensus_participation_halted() || self.kura_recovery_required() {
+            return Ok(());
+        }
         if self.should_drop_stale_rbc_message(
             request.height,
             request.view,
@@ -5508,6 +5558,9 @@ impl Actor {
         request: RbcChunkRequest,
         sender: Option<PeerId>,
     ) -> Result<()> {
+        if self.consensus_participation_halted() || self.kura_recovery_required() {
+            return Ok(());
+        }
         if self.should_drop_stale_rbc_message(
             request.height,
             request.view,
@@ -5665,6 +5718,9 @@ impl Actor {
         chunk: RbcChunk,
         sender: Option<PeerId>,
     ) -> Result<()> {
+        if self.consensus_participation_halted() || self.kura_recovery_required() {
+            return Ok(());
+        }
         let chunk_height = chunk.height;
         let chunk_view = chunk.view;
         let chunk_idx = chunk.idx;
@@ -6157,6 +6213,9 @@ impl Actor {
 
     #[allow(clippy::too_many_lines)]
     pub(super) fn handle_rbc_ready(&mut self, ready: RbcReady) -> Result<()> {
+        if self.consensus_participation_halted() || self.kura_recovery_required() {
+            return Ok(());
+        }
         if self.should_drop_stale_rbc_message(
             ready.height,
             ready.view,
@@ -7057,6 +7116,9 @@ impl Actor {
 
     #[allow(clippy::too_many_lines)]
     pub(super) fn handle_rbc_deliver(&mut self, deliver: RbcDeliver) -> Result<()> {
+        if self.consensus_participation_halted() || self.kura_recovery_required() {
+            return Ok(());
+        }
         if self.should_drop_stale_rbc_message(
             deliver.height,
             deliver.view,
@@ -8306,7 +8368,7 @@ impl Actor {
     }
 
     pub(in crate::sumeragi) fn poll_rbc_persist_results_inner(&mut self) -> bool {
-        if self.kura_recovery_required() {
+        if self.consensus_participation_halted() || self.kura_recovery_required() {
             return false;
         }
         let Some(rx) = self.subsystems.da_rbc.rbc.persist_rx.as_ref() else {
@@ -8373,7 +8435,7 @@ impl Actor {
     }
 
     pub(in crate::sumeragi) fn poll_rbc_seed_results_inner(&mut self) -> bool {
-        if self.kura_recovery_required() {
+        if self.consensus_participation_halted() || self.kura_recovery_required() {
             return false;
         }
         let Some(rx) = self.subsystems.da_rbc.rbc.seed_rx.as_ref() else {
@@ -8574,6 +8636,9 @@ impl Actor {
     }
 
     pub(super) fn persist_rbc_session(&mut self, key: SessionKey, session: &RbcSession) {
+        if self.consensus_participation_halted() || self.kura_recovery_required() {
+            return;
+        }
         if session.is_invalid() {
             return;
         }
@@ -8611,6 +8676,9 @@ impl Actor {
     }
 
     fn enqueue_rbc_persist_snapshot(&mut self, key: SessionKey, persisted: PersistedSession) {
+        if self.consensus_participation_halted() || self.kura_recovery_required() {
+            return;
+        }
         if persisted.invalid {
             return;
         }
@@ -8711,6 +8779,12 @@ impl Actor {
         session: &RbcSession,
         session_roster: &[PeerId],
     ) {
+        if self.consensus_participation_halted() || self.kura_recovery_required() {
+            return;
+        }
+        let Some(_consensus_effect_guard) = status::consensus_output_guard() else {
+            return;
+        };
         if session.is_invalid() {
             return;
         }
@@ -8784,6 +8858,9 @@ impl Actor {
     }
 
     pub(super) fn handle_rbc_store_evictions(&mut self, removed: &[SessionKey]) {
+        if self.consensus_participation_halted() || self.kura_recovery_required() {
+            return;
+        }
         if removed.is_empty() {
             return;
         }

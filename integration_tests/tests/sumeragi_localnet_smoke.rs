@@ -380,17 +380,17 @@ fn route_multilane_genesis_post_topology_transactions(
                 .with_metadata(Metadata::default()),
         )
         .into(),
-        Mint::asset_numeric(
+        Mint::asset_quantity(
             ROUTE_VALIDATOR_FEE_SEED_AMOUNT,
             AssetId::new(fee_asset_id.clone(), ALICE_ID.clone()),
         )
         .into(),
-        Mint::asset_numeric(
+        Mint::asset_quantity(
             ROUTE_VALIDATOR_FEE_SEED_AMOUNT,
             AssetId::new(fee_asset_id.clone(), BOB_ID.clone()),
         )
         .into(),
-        Mint::asset_numeric(
+        Mint::asset_quantity(
             ROUTE_VALIDATOR_FEE_SEED_AMOUNT,
             AssetId::new(fee_asset_id.clone(), gas_account_id),
         )
@@ -402,14 +402,14 @@ fn route_multilane_genesis_post_topology_transactions(
         let validator_id = route_lane_validator_account(index);
         bootstrap_tx.push(Register::account(Account::new(validator_id.clone())).into());
         bootstrap_tx.push(
-            Mint::asset_numeric(
+            Mint::asset_quantity(
                 mint_amount,
                 AssetId::new(stake_asset_id.clone(), validator_id.clone()),
             )
             .into(),
         );
         bootstrap_tx.push(
-            Mint::asset_numeric(
+            Mint::asset_quantity(
                 ROUTE_VALIDATOR_FEE_SEED_AMOUNT,
                 AssetId::new(fee_asset_id.clone(), validator_id.clone()),
             )
@@ -608,7 +608,7 @@ fn realistic_npos_fee_funding_instruction_chunks(
             chunk
                 .iter()
                 .map(|account| {
-                    Mint::asset_numeric(
+                    Mint::asset_quantity(
                         ROUTE_VALIDATOR_FEE_SEED_AMOUNT,
                         AssetId::new(fee_asset_definition_id.clone(), account.id.clone()),
                     )
@@ -1124,9 +1124,9 @@ async fn submit_transfers_paced(
             );
             let source_asset_id =
                 AssetId::new(asset_definition_id.clone(), source_account.id.clone());
-            let instruction: InstructionBox = Transfer::asset_numeric(
+            let instruction: InstructionBox = Transfer::asset_quantity(
                 source_asset_id,
-                Numeric::from(amount),
+                amount,
                 destination_id.clone(),
             )
             .into();
@@ -3038,8 +3038,8 @@ async fn run_realistic_30tps_localnet(
             for account in &transfer_load_accounts {
                 builder = builder
                     .with_genesis_instruction(Register::account(Account::new(account.id.clone())))
-                    .with_genesis_instruction(Mint::asset_numeric(
-                        Numeric::from(transfer_initial_balance),
+                    .with_genesis_instruction(Mint::asset_quantity(
+                        transfer_initial_balance,
                         AssetId::new(transfer_asset_definition_id.clone(), account.id.clone()),
                     ));
             }
@@ -3854,6 +3854,11 @@ async fn permissioned_localnet_produces_blocks_within_bound() -> Result<()> {
     )
     .await?
     else {
+        ensure!(
+            !fail_on_sandbox_skip(),
+            "sandboxed skip surfaced and {} is enabled",
+            FAIL_ON_SANDBOX_SKIP_ENV
+        );
         return Ok(());
     };
 
@@ -3939,6 +3944,12 @@ async fn permissioned_localnet_produces_blocks_within_bound() -> Result<()> {
             max_view_changes.saturating_sub(min_view_changes) <= max_extra_view_changes,
             "view_change counters diverged across peers: {after_statuses:?}"
         );
+
+        assert_all_peers_expose_no_consensus_safety_halt(
+            &network,
+            STATUS_POLL_TIMEOUT,
+        )
+        .await?;
 
         network.shutdown().await;
         Ok(())
@@ -6357,6 +6368,62 @@ async fn collect_sumeragi_statuses(
     .await
 }
 
+async fn assert_all_peers_expose_no_consensus_safety_halt(
+    network: &Network,
+    status_timeout: Duration,
+) -> Result<()> {
+    let http = HttpClient::new();
+    try_join_all(network.peers().iter().map(|peer| {
+        let http = &http;
+        async move {
+            let url = format!(
+                "{}/v1/sumeragi/status",
+                peer.torii_url().trim_end_matches('/')
+            );
+            let response = tokio::time::timeout(status_timeout, http.get(url).send())
+                .await
+                .map_err(|_| {
+                    eyre!(
+                        "sumeragi safety-halt request timed out after {:?} for peer {}",
+                        status_timeout,
+                        peer.mnemonic()
+                    )
+                })?
+                .wrap_err_with(|| {
+                    format!(
+                        "sumeragi safety-halt request failed for peer {}",
+                        peer.mnemonic()
+                    )
+                })?;
+            let status = response.status();
+            ensure!(
+                status.is_success(),
+                "sumeragi safety-halt endpoint returned {status} for peer {}",
+                peer.mnemonic()
+            );
+            let body = response.bytes().await.wrap_err_with(|| {
+                format!("read safety-halt status for peer {}", peer.mnemonic())
+            })?;
+            let payload: Value = norito::json::from_slice(&body).wrap_err_with(|| {
+                format!("parse safety-halt status for peer {}", peer.mnemonic())
+            })?;
+            let active = payload
+                .get("safety_halt")
+                .and_then(Value::as_object)
+                .and_then(|halt| halt.get("active"))
+                .and_then(Value::as_bool);
+            ensure!(
+                active == Some(false),
+                "peer {} did not expose safety_halt.active=false: {active:?}",
+                peer.mnemonic()
+            );
+            Ok::<(), eyre::Report>(())
+        }
+    }))
+    .await?;
+    Ok(())
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct SoakPhaseSnapshot {
     propose_ms: u64,
@@ -7536,7 +7603,7 @@ fn realistic_npos_fee_funding_instruction_chunks_target_fee_asset() {
             &AssetId::new(fee_asset_definition_id.clone(), account.id.clone())
         );
         assert_eq!(
-            mint.object(),
+            mint.object().as_numeric(),
             &Numeric::from(ROUTE_VALIDATOR_FEE_SEED_AMOUNT)
         );
     }

@@ -12,6 +12,7 @@ import {
   type OfflineTopUpRequestJson,
   type OfflineVerifyingKeyRecordJson,
   type OfflineVerifiedFoldRecordBundleJson,
+  type ToriiOfflineActiveTopUpShieldVerifier,
   ToriiBrowserClient,
   ToriiClient,
 } from "../../index.js";
@@ -72,8 +73,11 @@ const nodeFlow = async (): Promise<void> => {
   const readiness = await nodeClient.getOfflineReadiness("xor#sora");
   const evaluatedHeight: number | bigint = readiness.evaluated_block_height;
   const evaluatedHash: string = readiness.evaluated_block_hash;
+  const topUpShieldVerifier: ToriiOfflineActiveTopUpShieldVerifier | null =
+    readiness.active_topup_shield_verifier;
   void evaluatedHeight;
   void evaluatedHash;
+  void topUpShieldVerifier;
   if (readiness.ready) {
     const accepted = await nodeClient.submitOfflineTopUp(topUp);
     const submittedAt: number | bigint = accepted.submitted_at_ms;

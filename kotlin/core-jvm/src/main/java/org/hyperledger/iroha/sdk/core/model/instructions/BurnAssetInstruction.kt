@@ -1,5 +1,7 @@
 package org.hyperledger.iroha.sdk.core.model.instructions
 
+import org.hyperledger.iroha.sdk.numeric.KotodamaQuantity
+
 private const val BURN_ASSET_ACTION = "BurnAsset"
 
 /** Typed representation of the `BurnAsset` instruction. */
@@ -17,9 +19,7 @@ class BurnAssetInstruction private constructor(
         assetId = assetId.also {
             require(it.isNotBlank()) { "assetId must not be blank" }
         },
-        quantity = quantity.also {
-            require(it.isNotBlank()) { "quantity must not be blank" }
-        },
+        quantity = requireCanonicalQuantity(quantity),
         _arguments = linkedMapOf(
             "action" to BURN_ASSET_ACTION,
             "asset" to assetId,
@@ -27,7 +27,8 @@ class BurnAssetInstruction private constructor(
         ),
     )
 
-    constructor(assetId: String, quantity: Number) : this(assetId, quantity.toString())
+    /** Construct from a lossless validated quantity value. */
+    constructor(assetId: String, quantity: KotodamaQuantity) : this(assetId, quantity.toString())
 
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
@@ -46,7 +47,7 @@ class BurnAssetInstruction private constructor(
         fun fromArguments(arguments: Map<String, String>): BurnAssetInstruction {
             return BurnAssetInstruction(
                 assetId = require(arguments, "asset"),
-                quantity = require(arguments, "quantity"),
+                quantity = requireCanonicalQuantity(require(arguments, "quantity")),
                 _arguments = LinkedHashMap(arguments),
             )
         }

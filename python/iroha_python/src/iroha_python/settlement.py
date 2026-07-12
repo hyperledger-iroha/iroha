@@ -7,9 +7,9 @@ from enum import Enum
 from typing import TYPE_CHECKING, Any, Dict, Mapping, Optional
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
-    from .tx import NumericLike
+    from .tx import QuantityLike
 else:  # pragma: no cover - alias for runtime to avoid circular import
-    NumericLike = Any
+    QuantityLike = Any
 
 
 def _normalize_quantity(value: Any) -> str:
@@ -65,7 +65,7 @@ class SettlementLeg:
     """One leg of a bilateral settlement."""
 
     asset_definition_id: str
-    quantity: NumericLike
+    quantity: QuantityLike
     from_account: str
     to_account: str
     metadata: Optional[Mapping[str, Any]] = None

@@ -272,9 +272,9 @@ Total references: **715** · Unique variables: **196**
 - test: crates/iroha_test_samples/src/lib.rs:301 — `let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))`
 - prod: crates/iroha_torii/src/da/tests.rs:8601 — `let base = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/da/ingest");`
 - test: crates/iroha_torii/src/identifier_resolution.rs:678 — `let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))`
-- test: crates/iroha_torii/src/offline_v2_issuer.rs:3711 — `env!("CARGO_MANIFEST_DIR"),`
-- test: crates/iroha_torii/src/offline_v2_issuer.rs:3719 — `env!("CARGO_MANIFEST_DIR"),`
-- test: crates/iroha_torii/src/offline_v2_issuer.rs:3740 — `env!("CARGO_MANIFEST_DIR"),`
+- test: crates/iroha_torii/src/offline_commands.rs:3711 — `env!("CARGO_MANIFEST_DIR"),`
+- test: crates/iroha_torii/src/offline_commands.rs:3719 — `env!("CARGO_MANIFEST_DIR"),`
+- test: crates/iroha_torii/src/offline_commands.rs:3740 — `env!("CARGO_MANIFEST_DIR"),`
 - test: crates/iroha_torii/src/soracloud.rs:14360 — `Path::new(env!("CARGO_MANIFEST_DIR"))`
 - test: crates/iroha_torii/src/sorafs/api.rs:24640 — `let matrix_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))`
 - test: crates/iroha_torii/src/sorafs/api.rs:43635 — `std::path::Path::new(env!("CARGO_MANIFEST_DIR"))`

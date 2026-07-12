@@ -1131,6 +1131,9 @@ impl ProductionV2Services {
         peer: PeerId,
         message: CertifiedMergeSidecarMessage,
     ) {
+        let Some(_consensus_output_guard) = super::consensus_output_guard() else {
+            return;
+        };
         self.network.post(Post {
             data: NetworkMessage::CertifiedMergeSidecar(Box::new(message)),
             peer_id: peer,
@@ -1144,6 +1147,9 @@ impl ProductionV2Services {
         peer: PeerId,
         message: crate::native_amx::NativeAmxMessage,
     ) {
+        let Some(_consensus_output_guard) = super::consensus_output_guard() else {
+            return;
+        };
         self.network.post(Post {
             data: NetworkMessage::NativeAmx(Box::new(message)),
             peer_id: peer,
@@ -1153,6 +1159,9 @@ impl ProductionV2Services {
 
     /// Broadcast one merge signature share to every other frozen voter.
     pub(crate) fn broadcast_merge_to_voters(&self, signature: MergeCommitteeSignature) {
+        let Some(_consensus_output_guard) = super::consensus_output_guard() else {
+            return;
+        };
         for entry in &self.context.roster {
             if entry.validator == self.local_peer {
                 continue;
@@ -1166,6 +1175,9 @@ impl ProductionV2Services {
     }
 
     fn post_block_message(&self, peer: PeerId, message: BlockMessage) {
+        let Some(_consensus_output_guard) = super::consensus_output_guard() else {
+            return;
+        };
         let block_message = Arc::new(message);
         let encoded = Arc::new(BlockMessageWire::encode_message(block_message.as_ref()));
         let data = NetworkMessage::SumeragiBlock(Box::new(BlockMessageWire::with_encoded(

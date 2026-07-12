@@ -887,7 +887,7 @@ fn seed_pin_fee_balance(
     amount: u128,
 ) {
     let asset_id = AssetId::new(tx.gov.sorafs_pin_fee_asset_id.clone(), account.clone());
-    Mint::asset_numeric(Numeric::new(amount, 0), asset_id)
+    Mint::asset_quantity(amount, asset_id)
         .execute(&alice(), tx)
         .expect("mint SoraFS public pin fee balance");
 }

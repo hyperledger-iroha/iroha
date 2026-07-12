@@ -537,22 +537,22 @@ fn npos_multilane_genesis_post_topology_transactions(
                 .with_name(__asset_definition_id.name().to_string())
         })
         .into(),
-        Mint::asset_numeric(
+        Mint::asset_quantity(
             100_u32,
             AssetId::new(ds1_asset_def.clone(), ALICE_ID.clone()),
         )
         .into(),
-        Mint::asset_numeric(
+        Mint::asset_quantity(
             NEXUS_FEE_SEED_AMOUNT,
             AssetId::new(fee_asset_id.clone(), ALICE_ID.clone()),
         )
         .into(),
-        Mint::asset_numeric(
+        Mint::asset_quantity(
             NEXUS_FEE_SEED_AMOUNT,
             AssetId::new(fee_asset_id.clone(), BOB_ID.clone()),
         )
         .into(),
-        Mint::asset_numeric(200_u32, AssetId::new(ds2_asset_def, BOB_ID.clone())).into(),
+        Mint::asset_quantity(200_u32, AssetId::new(ds2_asset_def, BOB_ID.clone())).into(),
     ];
 
     for (index, peer) in topology.iter().enumerate() {
@@ -568,7 +568,7 @@ fn npos_multilane_genesis_post_topology_transactions(
         bootstrap_tx.push(Register::account(Account::new(validator_id.clone())).into());
         if lane_index == NEXUS_LANE_INDEX {
             bootstrap_tx.push(
-                Mint::asset_numeric(
+                Mint::asset_quantity(
                     NEXUS_FEE_SEED_AMOUNT,
                     AssetId::new(fee_asset_id.clone(), validator_id.clone()),
                 )
@@ -576,14 +576,14 @@ fn npos_multilane_genesis_post_topology_transactions(
             );
         }
         bootstrap_tx.push(
-            Mint::asset_numeric(
+            Mint::asset_quantity(
                 VALIDATOR_STAKE,
                 AssetId::new(stake_asset_id.clone(), validator_id.clone()),
             )
             .into(),
         );
         bootstrap_tx.push(
-            Mint::asset_numeric(
+            Mint::asset_quantity(
                 NEXUS_FEE_SEED_AMOUNT,
                 AssetId::new(fee_asset_id.clone(), validator_id.clone()),
             )

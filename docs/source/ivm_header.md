@@ -43,6 +43,13 @@ Durable state helpers and ABI surface
 - CoreHost wires STATE_{GET,SET,DEL} to WSV-backed durable smart-contract state; dev/test hosts may use overlays or local persistence but must preserve the same observable behavior.
 
 Validation
+- The `abi_hash` at bytes 17..49 must equal the canonical 32-byte ABI
+  descriptor hash selected by `abi_version`. The parser validates this field
+  before decoding `CNTR`, any other prefix section, or the instruction stream.
+- For deployable artifacts, the required `CNTR` section carries the same ABI
+  hash. Admission requires the header's `abi_version`/`abi_hash` and the
+  embedded `CNTR.abi_hash` to resolve to the same runtime descriptor, so both
+  the fixed header and `CNTR` bind the artifact to the ABI.
 - Generic IVM parsing accepts `version_major = 1` with `version_minor = 0` or
   `1`. Deployable contract artifacts require version `1.1`.
 - Deployable contract artifacts must embed a `CNTR` section immediately after
@@ -107,7 +114,7 @@ closed.
 <!-- BEGIN GENERATED ABI HASHES -->
 | Policy | abi_hash (hex) |
 |---|---|
-| ABI v1 | 1e4acdf5a13da87857a721c7a259562ec63e0295de1ea7e76793a2ca2fb0c6ef |
+| ABI v1 | e7ed1a6ebb7606d41c25f872546994499b56e7b72091ba52e8223e6de4926ad5 |
 <!-- END GENERATED ABI HASHES -->
 
 - ABI v1 is the sole first-release policy. Its `LDLIT`, `LDI64`, `JAL`, `JMP`, and

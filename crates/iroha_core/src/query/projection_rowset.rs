@@ -5,7 +5,7 @@
 //! retrieval from DA without depending on ad hoc JSON maps or endpoint-specific
 //! response wrappers.
 
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::Quantity;
 use norito::{
     codec::{Decode, Encode},
     to_bytes,
@@ -41,7 +41,7 @@ pub struct QueryProjectionAssetHolderRow {
     /// Stable balance scope literal.
     pub scope: String,
     /// Exact aggregated quantity for `(account_id, scope)`.
-    pub quantity: Numeric,
+    pub quantity: Quantity,
     /// Primary alias literal when present.
     pub primary_alias: Option<String>,
     /// Primary alias label when present.
@@ -68,7 +68,7 @@ pub struct QueryProjectionAccountAssetRow {
     /// Stable balance scope literal.
     pub scope: String,
     /// Exact quantity held in this `(account_id, asset, scope)` row.
-    pub quantity: Numeric,
+    pub quantity: Quantity,
     /// Primary alias literal when present.
     pub primary_alias: Option<String>,
     /// Primary alias label when present.
@@ -359,7 +359,7 @@ mod tests {
                 vec![QueryProjectionAssetHolderRow {
                     account_id: "alice@wonderland".to_owned(),
                     scope: "global".to_owned(),
-                    quantity: Numeric::new(123_45, 2),
+                    quantity: "123.45".parse().expect("quantity"),
                     primary_alias: Some("alice@hbl.paynet".to_owned()),
                     primary_alias_name: Some("alice".to_owned()),
                     primary_alias_dataspace: Some("paynet".to_owned()),
@@ -385,7 +385,7 @@ mod tests {
                     asset_name: "pkr".to_owned(),
                     asset_alias: Some("pkr@paynet".to_owned()),
                     scope: "global".to_owned(),
-                    quantity: Numeric::new(42, 0),
+                    quantity: 42_u32.into(),
                     primary_alias: None,
                     primary_alias_name: None,
                     primary_alias_dataspace: None,

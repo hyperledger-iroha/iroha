@@ -83,9 +83,12 @@ export function validatePackPaths(metadata) {
   for (const required of [
     "package.json",
     "ivm-artifact.d.ts",
+    "kotodama-compiler.d.ts",
     "src/index.js",
     "dist/index.js",
     "dist/ivmArtifact.js",
+    "dist/kotodamaCompiler/browser.js",
+    "dist/kotodamaCompiler/index.js",
     "dist/nexusApp.js",
     "nexus-app.d.ts",
     "recipes/iso_bridge_builder.mjs",
@@ -165,6 +168,7 @@ async function main() {
       'import * as artifact from "@iroha/iroha-js/ivm-artifact";',
       'import * as codec from "@iroha/iroha-js/transaction-codec";',
       'import * as nexus from "@iroha/iroha-js/nexus-app";',
+      'import * as compiler from "@iroha/iroha-js/kotodama-compiler";',
       "const checks = [",
       '  ["AccountAddress", sdk.AccountAddress],',
       '  ["ToriiClient", sdk.ToriiClient],',
@@ -172,6 +176,7 @@ async function main() {
       '  ["buildCanonicalRequestHeaders", canonical.buildCanonicalRequestHeaders],',
       '  ["buildBrowserTransferPayload", codec.buildBrowserTransferPayload],',
       '  ["NexusAppClient", nexus.NexusAppClient],',
+      '  ["KotodamaCompilerClient", compiler.KotodamaCompilerClient],',
       "];",
       "for (const [name, value] of checks) {",
       '  if (typeof value !== "function") throw new Error(`missing packed export: ${name}`);',
@@ -183,6 +188,21 @@ async function main() {
     await run(process.execPath, ["--input-type=module", "--eval", smokeProgram], {
       cwd: consumerRoot,
     });
+    await run(
+      process.execPath,
+      [
+        "--conditions=browser",
+        "--input-type=module",
+        "--eval",
+        [
+          'import { compileKotodamaProgram, KotodamaCompilerClient } from "@iroha/iroha-js/kotodama-compiler";',
+          'if (typeof compileKotodamaProgram !== "function" || typeof KotodamaCompilerClient !== "function") {',
+          '  throw new Error("missing browser-conditioned Kotodama compiler exports");',
+          "}",
+        ].join("\n"),
+      ],
+      { cwd: consumerRoot },
+    );
 
     const installedRecipe = join(
       consumerRoot,

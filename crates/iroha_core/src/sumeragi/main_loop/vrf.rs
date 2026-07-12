@@ -222,6 +222,9 @@ impl Actor {
         epoch: u64,
         signer: ValidatorIndex,
     ) -> Result<([u8; 32], [u8; 32])> {
+        if self.consensus_participation_halted_now() {
+            return Err(eyre!("consensus safety halt active"));
+        }
         derive_vrf_material_from_key(
             &self.chain_hash,
             self.common_config.key_pair.private_key(),
@@ -235,6 +238,9 @@ impl Actor {
         commit: &mut crate::sumeragi::consensus::VrfCommit,
         mode_tag: &str,
     ) -> Result<()> {
+        if self.consensus_participation_halted_now() {
+            return Err(eyre!("consensus safety halt active"));
+        }
         commit.bls_sig.clear();
         let preimage = vrf_commit_preimage(&self.common_config.chain, mode_tag, commit);
         let signature = Signature::try_new(self.common_config.key_pair.private_key(), &preimage)
@@ -248,6 +254,9 @@ impl Actor {
         reveal: &mut crate::sumeragi::consensus::VrfReveal,
         mode_tag: &str,
     ) -> Result<()> {
+        if self.consensus_participation_halted_now() {
+            return Err(eyre!("consensus safety halt active"));
+        }
         reveal.bls_sig.clear();
         let preimage = vrf_reveal_preimage(&self.common_config.chain, mode_tag, reveal);
         let signature = Signature::try_new(self.common_config.key_pair.private_key(), &preimage)
@@ -1169,6 +1178,9 @@ impl Actor {
         commit: crate::sumeragi::consensus::VrfCommit,
         sender: Option<PeerId>,
     ) -> Result<()> {
+        if self.consensus_participation_halted() || self.kura_recovery_required() {
+            return Ok(());
+        }
         if !matches!(
             self.consensus_mode,
             ConsensusMode::Permissioned | ConsensusMode::Npos
@@ -1225,6 +1237,9 @@ impl Actor {
         reveal: crate::sumeragi::consensus::VrfReveal,
         sender: Option<PeerId>,
     ) -> Result<()> {
+        if self.consensus_participation_halted() || self.kura_recovery_required() {
+            return Ok(());
+        }
         if !matches!(
             self.consensus_mode,
             ConsensusMode::Permissioned | ConsensusMode::Npos
@@ -1277,6 +1292,9 @@ impl Actor {
     }
 
     fn broadcast_external_vrf_metadata(&mut self, msg: BlockMessage, topology: &[PeerId]) {
+        if self.consensus_participation_halted() || self.kura_recovery_required() {
+            return;
+        }
         let local_peer_id = self.common_config.peer.id().clone();
         let msg = Arc::new(msg);
         let encoded = Arc::new(BlockMessageWire::encode_message(msg.as_ref()));

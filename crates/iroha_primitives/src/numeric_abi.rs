@@ -929,6 +929,34 @@ mod tests {
     }
 
     #[test]
+    fn frame_validation_preserves_ambient_norito_decode_state() {
+        let frame = QuantityValueV1::new(Quantity::from(42_u32))
+            .encode_frame()
+            .expect("canonical quantity frame");
+
+        norito::core::reset_decode_state();
+        assert_eq!(norito::core::effective_decode_flags(), None);
+        QuantityValueV1::decode_frame(&frame).expect("decode without ambient state");
+        assert_eq!(
+            norito::core::effective_decode_flags(),
+            None,
+            "numeric frame validation must not publish archive-view state"
+        );
+
+        let default_flags = norito::core::default_encode_flags();
+        {
+            let _ambient = norito::core::DecodeFlagsGuard::enter(default_flags);
+            QuantityValueV1::decode_frame(&frame).expect("decode inside an outer Norito context");
+            assert_eq!(
+                norito::core::effective_decode_flags(),
+                Some(default_flags),
+                "numeric frame validation must preserve its caller's layout policy"
+            );
+        }
+        assert_eq!(norito::core::effective_decode_flags(), None);
+    }
+
+    #[test]
     fn staged_decode_places_observer_between_structure_and_canonical_value_work() {
         let valid = IntValueV1::try_new(BigInt::from_i128(42))
             .expect("bounded integer")

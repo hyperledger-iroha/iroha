@@ -1,6 +1,9 @@
 package org.hyperledger.iroha.sdk.core.model.instructions
 
 import org.hyperledger.iroha.sdk.core.model.WirePayload
+import org.hyperledger.iroha.sdk.norito.CRC64
+import org.hyperledger.iroha.sdk.norito.NoritoHeader
+import org.hyperledger.iroha.sdk.numeric.KotodamaQuantity
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -18,6 +21,36 @@ import kotlin.test.assertIs
  * - Line 4: destination account I105
  */
 class TransferWirePayloadEncoderParityTest {
+
+    @Test
+    fun `transfer asset wire codec enforces canonical quantities`() {
+        val lines = FixtureGeneratorRunner.run("transfer-asset")
+        val assetId = lines[1]
+        val destinationAccountId = lines[3]
+        listOf(" ", "+1", "01", "1e0", "-1", "1.0", "1.2300").forEach { amount ->
+            assertFailsWith<IllegalArgumentException> {
+                TransferWirePayloadEncoder.encodeAssetTransfer(assetId, amount, destinationAccountId)
+            }
+        }
+
+        val typed = TransferWirePayloadEncoder.encodeAssetTransfer(
+            assetId,
+            KotodamaQuantity.parseCanonical("10"),
+            destinationAccountId,
+        )
+        val canonicalWire = assertIs<WirePayload>(typed.payload).payloadBytes
+        val decoded = NoritoHeader.decode(canonicalWire, null)
+        decoded.header.validateChecksum(decoded.payload)
+        val payload = decoded.payload.copyOf()
+        val canonicalNumeric = byteArrayOf(5, 1, 0, 0, 0, 10, 4, 0, 0, 0, 0)
+        val numericOffset = payload.indexOfSubsequence(canonicalNumeric)
+        require(numericOffset >= 0) { "canonical transfer numeric payload was not found" }
+        payload[numericOffset + canonicalNumeric.lastIndex] = 1
+
+        assertFailsWith<IllegalArgumentException> {
+            TransferWirePayloadEncoder.decodeAssetTransferPayload(reframe(decoded.header, payload))
+        }
+    }
 
     @Test
     fun `transfer asset encoding matches Rust fixture generator`() {
@@ -68,5 +101,25 @@ class TransferWirePayloadEncoderParityTest {
         assertFailsWith<IllegalArgumentException> {
             TransferWirePayloadEncoder.decodeAssetTransferPayload(mutated)
         }
+    }
+
+    private fun reframe(header: NoritoHeader, payload: ByteArray): ByteArray {
+        val reframed = NoritoHeader(
+            schemaHash = header.schemaHash,
+            payloadLength = payload.size,
+            checksum = CRC64.compute(payload),
+            flags = header.flags,
+            compression = NoritoHeader.COMPRESSION_NONE,
+            minor = header.minor,
+        )
+        return reframed.encode() + payload
+    }
+
+    private fun ByteArray.indexOfSubsequence(needle: ByteArray): Int {
+        if (needle.isEmpty()) return 0
+        for (start in 0..size - needle.size) {
+            if (needle.indices.all { this[start + it] == needle[it] }) return start
+        }
+        return -1
     }
 }

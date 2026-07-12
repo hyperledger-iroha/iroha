@@ -50,6 +50,12 @@ Admission/host guardrails
   surfaces the failure during validation so contracts cannot rely on undefined syscalls. Allowed
   syscall numbers that are not meaningful for a specific host return a metered
   `VMError::NotImplemented` instead.
+- The five extended `0x00FE0001..=0x00FE0005` Kotodama test helpers are not ABI-v1 syscalls and do
+  not contribute to `abi_hash`. A crate-private test-artifact verifier accepts exactly those IDs
+  only in unreachable local test bodies, and the VM dispatches them only when the private
+  test-suite loader capability is present and the host opts in; the runner supplies
+  `KotoTestHost`. Production artifact admission, public raw/program/prepared loaders, adjacent
+  `0x00FE` IDs, and permissive custom hosts all fail with `VMError::UnknownSyscall`.
 - Reserved-metering host calls compute a deterministic, side-effect-free upper gas quote before
   dispatch, debit it before effects, and reconcile unused reserve afterward. Numeric V1 calls use
   staged metering instead: each phase is debited immediately before its bounded work, and no staged
@@ -193,7 +199,7 @@ Exact numeric helpers
   `nearest_toward_zero` (tag 6).
 - Numeric syscalls use Gas: `G_numeric_staged`
   (`asset:gas/G_numeric_staged@ivm.core/v2`) and quote-free staged gas:
-  `16 + input_envelope_bytes + input_hash_frame_bytes + output_envelope_bytes
+  `384 + input_envelope_bytes + input_hash_frame_bytes + output_envelope_bytes
   + 2 * output_frame_bytes + 4 * logical_limb_work` (formula version 4).
   The entry weight covers dispatch, staged bookkeeping, and at most four
   bounded control-register checks. Each logical base-`2^64` work cell receives

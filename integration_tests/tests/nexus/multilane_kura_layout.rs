@@ -5,8 +5,12 @@
 use eyre::Result;
 use iroha_config::parameters::actual::Root as Config;
 use iroha_config_base::toml::TomlSource;
-use iroha_core::kura::Kura;
-use std::path::Path;
+use iroha_core::{
+    kura::Kura,
+    query::store::LiveQueryStore,
+    state::{State, World},
+};
+use std::{path::Path, sync::Arc};
 use tempfile::tempdir;
 use toml::Table;
 
@@ -106,8 +110,25 @@ fn kura_prepares_multilane_storage_layout() -> Result<()> {
     );
 
     let lane_config = config.nexus.lane_config.clone();
-    let (_kura, _) =
-        Kura::new(&config.kura, &lane_config).expect("kura must initialise per-lane segments");
+    let (kura, _) = Kura::new_with_configured_lane_catalog(
+        &config.kura,
+        &lane_config,
+        &config.nexus.configured_lane_catalog,
+    )
+    .expect("Kura must authenticate its configured lane catalog");
+    let query = LiveQueryStore::start_test();
+    #[cfg(feature = "telemetry")]
+    let mut state = State::new(
+        World::default(),
+        Arc::clone(&kura),
+        query,
+        iroha_core::telemetry::StateTelemetry::default(),
+    );
+    #[cfg(not(feature = "telemetry"))]
+    let mut state = State::new(World::default(), Arc::clone(&kura), query);
+    state.prepare_configured_primary_geometry_anchor(&config.nexus.configured_lane_catalog)?;
+    state.restore_kura_lane_segments_before_startup_replay()?;
+    state.set_nexus_from_config(config.nexus.clone())?;
 
     let blocks_root = tmp.path().join("blocks");
     let merge_root = tmp.path().join("merge_ledger");

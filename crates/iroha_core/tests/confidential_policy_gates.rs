@@ -116,7 +116,7 @@ fn transparent_mint_rejected_for_shielded_only_policy() {
 
     // Attempt to mint transparently; should be rejected by policy gate.
     let asset_id = AssetId::new(asset_def_id.clone(), owner.clone());
-    let mint = Mint::asset_numeric(10_u32, asset_id);
+    let mint = Mint::asset_quantity(10_u32, asset_id);
     let result = stx.world.executor().clone().execute_instruction(
         &mut stx,
         &owner,
@@ -181,7 +181,7 @@ fn transparent_transfer_rejected_after_policy_switch_to_shielded_only() {
         .execute_instruction(
             &mut stx,
             &owner,
-            InstructionBox::from(Mint::asset_numeric(25_u32, asset_id.clone())),
+            InstructionBox::from(Mint::asset_quantity(25_u32, asset_id.clone())),
         )
         .expect("initial mint should succeed");
 
@@ -200,7 +200,7 @@ fn transparent_transfer_rejected_after_policy_switch_to_shielded_only() {
     }
 
     // Attempt a transparent transfer; policy gate should reject it.
-    let transfer = Transfer::asset_numeric(asset_id, 5_u32, recipient);
+    let transfer = Transfer::asset_quantity(asset_id, 5_u32, recipient);
     let result = stx.world.executor().clone().execute_instruction(
         &mut stx,
         &owner,
@@ -331,7 +331,7 @@ fn shielded_transition_aborts_when_transparent_supply_non_zero() {
         .execute_instruction(
             &mut stx,
             &owner,
-            InstructionBox::from(Mint::asset_numeric(10_u32, asset_id.clone())),
+            InstructionBox::from(Mint::asset_quantity(10_u32, asset_id.clone())),
         )
         .expect("mint should succeed");
     stx.apply();
