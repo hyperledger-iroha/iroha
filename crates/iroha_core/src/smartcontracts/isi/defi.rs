@@ -93,6 +93,13 @@ fn ensure_non_zero(value: &Numeric, label: &str) -> Result<(), Error> {
     Ok(())
 }
 
+fn ensure_non_negative(value: &Numeric, label: &str) -> Result<(), Error> {
+    if value.mantissa().is_negative() {
+        return Err(invalid(format!("{label} must be non-negative")));
+    }
+    Ok(())
+}
+
 fn ensure_bps(value: u16, label: &str) -> Result<(), Error> {
     if value > 10_000 {
         return Err(invalid(format!("{label} exceeds 10000 bps")));
@@ -328,6 +335,7 @@ impl Execute for RecordDefiOperatorHeartbeat {
             return Err(invalid("operator heartbeat must match authority"));
         }
         ensure_bps(self.health_bps, "operator health")?;
+        ensure_non_negative(&self.fees_accrued, "operator fees_accrued")?;
         write_account_record(
             state_transaction,
             self.operator.clone(),
@@ -373,6 +381,7 @@ impl Execute for RecordDefiHookExecution {
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
         ensure_non_zero(&self.amount_in, "hook amount_in")?;
+        ensure_non_zero(&self.amount_out, "hook amount_out")?;
         let key = metadata_key("amm_hook_execution", &self.order_id)?;
         ensure_account_record_missing(state_transaction, authority, &key, "DeFi hook execution")?;
         write_account_record(
@@ -481,6 +490,7 @@ impl Execute for ReportDefiRwaNav {
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
         ensure_non_zero(&self.nav_per_share, "rwa nav_per_share")?;
+        ensure_non_negative(&self.total_shares, "rwa total_shares")?;
         write_account_record(
             state_transaction,
             authority.clone(),
@@ -515,5 +525,18 @@ impl Execute for DeFiInstructionBox {
             Self::RegisterRwaMarket(isi) => isi.execute(authority, state_transaction),
             Self::ReportRwaNav(isi) => isi.execute(authority, state_transaction),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn defi_quantity_guards_reject_negative_values() {
+        let negative = Numeric::new(-1_i32, 0);
+        assert!(ensure_non_zero(&negative, "amount").is_err());
+        assert!(ensure_non_negative(&negative, "amount").is_err());
+        assert!(ensure_non_negative(&Numeric::zero(), "amount").is_ok());
     }
 }

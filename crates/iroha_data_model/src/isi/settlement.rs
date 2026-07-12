@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use derive_more::{Constructor, Display, FromStr};
 use getset::{CopyGetters, Getters};
 use iroha_crypto::HashOf;
@@ -13,6 +15,7 @@ use crate::{
     Name,
     block::BlockHeader,
     metadata::Metadata,
+    nexus::DataSpaceId,
     prelude::{AccountId, AssetDefinitionId, Numeric},
 };
 
@@ -122,6 +125,171 @@ pub struct SettlementLeg {
     pub to: AccountId,
     /// Optional metadata (e.g., ISIN, clearing reference).
     pub metadata: Metadata,
+}
+
+/// Immutable routing and pricing policy for one native FX corridor.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
+pub struct FxCorridorPolicy {
+    /// Stable policy identifier referenced by settlement instructions.
+    pub policy_id: Name,
+    /// Monotonic policy revision used to bind signed settlement intent.
+    pub revision: u64,
+    /// Dataspace holding the source currency balance.
+    pub source_dataspace: DataSpaceId,
+    /// Fixed account funding the source-currency leg.
+    pub source_account: AccountId,
+    /// Source-currency asset definition.
+    pub source_asset_definition_id: AssetDefinitionId,
+    /// Fixed sink receiving the source currency.
+    pub source_sink: AccountId,
+    /// Dataspace holding the destination reserve.
+    pub destination_dataspace: DataSpaceId,
+    /// Fixed reserve funding destination-currency payouts.
+    pub destination_reserve: AccountId,
+    /// Destination-currency asset definition.
+    pub destination_asset_definition_id: AssetDefinitionId,
+    /// Exact destination/source rate numerator.
+    pub rate_numerator: u64,
+    /// Exact destination/source rate denominator.
+    pub rate_denominator: u64,
+    /// Whether new settlements may use this policy.
+    pub enabled: bool,
+}
+
+impl FxCorridorPolicy {
+    /// Return the first static policy invariant violation, if any.
+    #[must_use]
+    pub fn invariant_error(&self) -> Option<&'static str> {
+        if self.revision == 0 {
+            return Some("FX corridor policy revision must be non-zero");
+        }
+        if self.source_dataspace == DataSpaceId::UNIVERSAL
+            || self.destination_dataspace == DataSpaceId::UNIVERSAL
+        {
+            return Some("FX corridor dataspaces must be private");
+        }
+        if self.source_dataspace == self.destination_dataspace {
+            return Some("FX corridor dataspaces must be distinct");
+        }
+        if self.source_account == self.source_sink {
+            return Some("FX corridor source account and sink must be distinct");
+        }
+        if self.source_asset_definition_id == self.destination_asset_definition_id {
+            return Some("FX corridor assets must be distinct");
+        }
+        if self.rate_numerator == 0 || self.rate_denominator == 0 {
+            return Some("FX corridor rate terms must be non-zero");
+        }
+        None
+    }
+}
+
+/// Complete governed set of native FX corridor policies.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
+pub struct FxCorridorPolicyRegistry {
+    /// Policies keyed by their stable identifier.
+    pub policies: BTreeMap<Name, FxCorridorPolicy>,
+}
+
+impl FxCorridorPolicyRegistry {
+    /// Identifier of the custom parameter carrying all FX corridor policies.
+    pub const PARAMETER_ID_STR: &'static str = "iroha:fx_corridor_policies";
+
+    /// Construct the registry custom-parameter identifier.
+    #[must_use]
+    pub fn parameter_id() -> crate::parameter::CustomParameterId {
+        Self::PARAMETER_ID_STR
+            .parse()
+            .expect("valid FX corridor policy-registry parameter identifier")
+    }
+
+    /// Return the policy registered under `policy_id`.
+    #[must_use]
+    pub fn get(&self, policy_id: &Name) -> Option<&FxCorridorPolicy> {
+        self.policies.get(policy_id)
+    }
+
+    /// Insert or replace a policy under its embedded identifier.
+    pub fn upsert(&mut self, policy: FxCorridorPolicy) {
+        self.policies.insert(policy.policy_id.clone(), policy);
+    }
+
+    /// Convert the registry into the custom parameter accepted by `SetParameter`.
+    #[cfg(feature = "json")]
+    #[must_use]
+    pub fn into_custom_parameter(self) -> crate::parameter::CustomParameter {
+        crate::parameter::CustomParameter::new(
+            Self::parameter_id(),
+            iroha_primitives::json::Json::new(self),
+        )
+    }
+
+    /// Decode a matching policy-registry custom parameter.
+    #[cfg(feature = "json")]
+    pub fn from_custom_parameter(
+        custom: &crate::parameter::CustomParameter,
+    ) -> Result<Option<Self>, norito::Error> {
+        if custom.id() != &Self::parameter_id() {
+            return Ok(None);
+        }
+        Ok(Some(custom.payload().try_into_any_norito::<Self>()?))
+    }
+}
+
+isi! {
+    /// Register or replace a native FX corridor policy.
+    pub struct SetFxCorridorPolicy {
+        /// Complete policy to persist under its stable identifier.
+        pub policy: FxCorridorPolicy,
+    }
+}
+
+isi! {
+    /// Atomically settle one policy-backed cross-dataspace FX conversion.
+    pub struct SettleFxCorridor {
+        /// Stable corridor policy identifier.
+        pub policy_id: Name,
+        /// Exact policy revision expected by the signer.
+        pub expected_policy_revision: u64,
+        /// Expected source asset, bound explicitly for admission and fee validation.
+        pub source_asset_definition_id: AssetDefinitionId,
+        /// Expected destination asset, bound explicitly for admission and fee validation.
+        pub destination_asset_definition_id: AssetDefinitionId,
+        /// Unique settlement/replay identifier.
+        pub settlement_id: SettlementId,
+        /// Recipient of the policy-derived destination currency.
+        pub recipient: AccountId,
+        /// Source-currency quantity collected from the fixed policy account.
+        pub source_amount: Numeric,
+    }
+}
+
+impl SetFxCorridorPolicy {
+    /// Stable wire identifier used by tooling that reports the concrete operation.
+    pub const WIRE_ID: &'static str = "iroha.settlement.fx_corridor.policy.set";
+}
+
+impl SettleFxCorridor {
+    /// Stable wire identifier used by tooling that reports the concrete operation.
+    pub const WIRE_ID: &'static str = "iroha.settlement.fx_corridor.settle";
+}
+
+impl core::fmt::Display for SetFxCorridorPolicy {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "SET FX CORRIDOR POLICY `{}`", self.policy.policy_id)
+    }
+}
+
+impl core::fmt::Display for SettleFxCorridor {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(
+            f,
+            "SETTLE FX CORRIDOR `{}` REVISION {} AS `{}`",
+            self.policy_id, self.expected_policy_revision, self.settlement_id
+        )
+    }
 }
 
 impl SettlementLeg {
@@ -251,6 +419,8 @@ pub enum SettlementKind {
     Dvp,
     /// Payment-versus-payment trade.
     Pvp,
+    /// Policy-backed native cross-dataspace FX conversion.
+    FxCorridor,
 }
 
 /// Enumerates the logical role played by a settlement leg.
@@ -268,6 +438,10 @@ pub enum SettlementLegRole {
     Primary,
     /// Counter leg in a payment-versus-payment trade.
     Counter,
+    /// Source-currency collection leg in an FX corridor settlement.
+    FxSource,
+    /// Destination-currency payout leg in an FX corridor settlement.
+    FxDestination,
 }
 
 /// Snapshot of a single settlement leg recorded in the ledger.
@@ -378,6 +552,8 @@ impl SettlementLedger {
 
 impl crate::seal::Instruction for DvpIsi {}
 impl crate::seal::Instruction for PvpIsi {}
+impl crate::seal::Instruction for SetFxCorridorPolicy {}
+impl crate::seal::Instruction for SettleFxCorridor {}
 
 isi_box! {
     /// Grouping enum for settlement instructions.
@@ -386,11 +562,15 @@ isi_box! {
         Dvp(DvpIsi),
         /// Payment-versus-payment settlement.
         Pvp(PvpIsi),
+        /// Register or replace a native FX corridor policy.
+        SetFxCorridorPolicy(SetFxCorridorPolicy),
+        /// Execute one policy-backed native FX settlement.
+        SettleFxCorridor(SettleFxCorridor),
     }
 }
 
 impl_into_box! {
-    DvpIsi | PvpIsi => SettlementInstructionBox
+    DvpIsi | PvpIsi | SetFxCorridorPolicy | SettleFxCorridor => SettlementInstructionBox
 }
 
 impl crate::seal::Instruction for SettlementInstructionBox {}
@@ -446,6 +626,20 @@ impl_settlement_decode_from_slice!(PvpIsi {
     metadata: Metadata,
 });
 
+impl_settlement_decode_from_slice!(SetFxCorridorPolicy {
+    policy: FxCorridorPolicy,
+});
+
+impl_settlement_decode_from_slice!(SettleFxCorridor {
+    policy_id: Name,
+    expected_policy_revision: u64,
+    source_asset_definition_id: AssetDefinitionId,
+    destination_asset_definition_id: AssetDefinitionId,
+    settlement_id: SettlementId,
+    recipient: AccountId,
+    source_amount: Numeric,
+});
+
 impl<'a> norito::core::DecodeFromSlice<'a> for SettlementInstructionBox {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = settlement_decode_flags();
@@ -465,6 +659,14 @@ impl<'a> norito::core::DecodeFromSlice<'a> for SettlementInstructionBox {
                 flags,
             )?),
             1 => Self::Pvp(super::decode_aos_slice_field::<PvpIsi>(
+                super::read_aos_field(bytes, &mut offset, flags)?,
+                flags,
+            )?),
+            2 => Self::SetFxCorridorPolicy(super::decode_aos_slice_field::<SetFxCorridorPolicy>(
+                super::read_aos_field(bytes, &mut offset, flags)?,
+                flags,
+            )?),
+            3 => Self::SettleFxCorridor(super::decode_aos_slice_field::<SettleFxCorridor>(
                 super::read_aos_field(bytes, &mut offset, flags)?,
                 flags,
             )?),

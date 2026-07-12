@@ -4,122 +4,83 @@ direction: rtl
 source: docs/source/bridge_finality.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 2e4c6ed5974f623906f51259a634bcad5df703bcec899630ae29f4669b289ab6
-source_last_modified: "2026-01-08T21:52:45.509525+00:00"
-translation_last_reviewed: 2026-01-08
+source_hash: 5e28e5c38283ad6be40a0fc48e0312797f490542a143f4cefdd209aaf8099ac5
+source_last_modified: "2026-07-11T20:38:35.470900+00:00"
+translation_last_reviewed: 2026-07-12
 ---
 
 <div dir="rtl">
-
-<!-- اردو ترجمہ برائے docs/source/bridge_finality.md -->
 
 <!--
 SPDX-License-Identifier: Apache-2.0
 -->
 
-# Bridge finality proofs
+# برج کی حتمیت کے ثبوت
 
-یہ دستاویز Iroha کے لیے bridge finality proof سطح کی ابتدائی وضاحت کرتی ہے۔
-مقصد یہ ہے کہ بیرونی چینز یا light clients یہ تصدیق کر سکیں کہ Iroha بلاک
-finalized ہے، بغیر off-chain computation یا trusted relays کے۔
+یہ دستاویز پہلے اجرا کے لیے برج کی حتمیت کا format متعین کرتی ہے۔ ثبوت Sumeragi v2
+کا تیار اور مستقل کیا ہوا عین finality evidence لے جاتا ہے۔ proof envelope کا schema
+version `1` ہے، جبکہ اس کے اندر consensus protocol version `2` ہے۔ Sumeragi v1
+certificate کا کوئی projection، decoder یا fallback راستہ موجود نہیں۔
 
-## Proof format
+## ثبوت کا عین format
 
-`BridgeFinalityProof` (Norito/JSON) میں شامل ہے:
+Norito یا Norito JSON میں encoded `BridgeFinalityProof` کے صرف تین fields ہیں:
 
-- `height`: بلاک کی height۔
-- `chain_id`: Iroha chain identifier تاکہ cross-chain replay روکا جا سکے۔
-- `block_header`: canonical `BlockHeader`۔
-- `block_hash`: header کا hash (clients دوبارہ حساب کرتے ہیں تاکہ validate ہو)۔
-- `commit_certificate`: validator set + signatures جو بلاک کو finalize کرتے ہیں۔
-- `validator_set_pops`: PoP bytes جو validator set کے ترتیب کے مطابق ہوں
-  (BLS aggregate verification کے لئے ضروری)۔
+```text
+{ version, block_header, finality_artifact }
+```
 
-Proof خود کافی ہے؛ کسی بیرونی manifests یا opaque blobs کی ضرورت نہیں۔
-Retention: Torii حالیہ commit-certificate window کیلئے finality proofs فراہم کرتا ہے
-(configured history cap سے محدود؛ ڈیفالٹ 512 entries via
-`sumeragi.commit_cert_history_cap` / `SUMERAGI_COMMIT_CERT_HISTORY_CAP`). اگر clients کو
-زیادہ طویل horizons درکار ہوں تو proofs کو cache یا anchor کریں۔
-Canonical tuple `(block_header, block_hash, commit_certificate)` ہے: header کا hash
-commit certificate کے اندر موجود hash سے match ہونا چاہیے، اور chain id proof کو
-ایک ہی ledger سے باندھتا ہے۔ جب certificate مختلف block hash کی طرف اشارہ کرے تو
-servers `CommitCertificateHashMismatch` reject اور log کرتے ہیں۔
+- `version` لازماً `1` ہو؛
+- `block_header` مطلوبہ height کا canonical `BlockHeader` ہے؛
+- `finality_artifact` اس block کے لیے محفوظ عین `V2FinalityArtifact` ہے۔ یہ اپنے
+  height-context roster کی ترتیب میں ہر validator کا BLS-normal PoP
+  (`validator_set_pops`) مستقل طور پر اپنے اندر رکھتا ہے۔
 
-## Commitment bundle
+artifact میں مکمل اور immutable `HeightContext`، عین `BlockSubject`، block hash،
+CommitQC اور roster-aligned PoP شامل ہیں۔ height context chain، epoch، roster،
+`DualQuorum`، DA layout، leader seed اور دیگر consensus data کو freeze کرتا ہے۔ epoch
+ختم کرنے والے parent block کے context میں optional `next_epoch_snapshot` بھی ہوتا ہے؛
+چونکہ یہ field context id کا حصہ ہے، parent CommitQC اسے child roster کی اجازت سے پہلے
+authenticate کرتا ہے۔ Finalized snapshot اگلے epoch parameters کے ساتھ
+`epoch_end_height` اور اگلے roster کے aligned `validator_set_pops` بھی authenticate کرتا ہے۔
 
-`BridgeFinalityBundle` (Norito/JSON) بنیادی proof کو واضح commitment اور justification
-کے ساتھ بڑھاتا ہے:
+## مستقل ذخیرہ اور verification
 
-- `commitment`: `{ chain_id, authority_set { id, validator_set, validator_set_hash, validator_set_hash_version }, block_height, block_hash, mmr_root?, mmr_leaf_index?, mmr_peaks?, next_authority_set? }`
-- `justification`: authority set کے signatures جو commitment payload پر ہوتے ہیں
-  (commit-certificate signatures دوبارہ استعمال ہوتے ہیں)۔
-- `block_header`, `commit_certificate`: بنیادی proof جیسے۔
+Sumeragi v2 apply path artifact کو verify کر کے immutable Kura sidecar کی صورت محفوظ
+کرتا ہے۔ proof builder canonical block اور اس کا sidecar پڑھتا ہے اور موجودہ mutable
+world state سے تاریخی PoP یا certificates دوبارہ نہیں بناتا۔ گم، خراب، متصادم یا ناقابل
+verification sidecar fail closed ہوتا ہے؛ دستیابی حالیہ in-memory history window تک محدود
+نہیں۔
 
-موجودہ placeholder: `mmr_root`/`mmr_peaks` کو block-hash MMR کو میموری میں دوبارہ compute
-کر کے نکالا جاتا ہے؛ inclusion proofs ابھی واپس نہیں کی جاتیں۔ Clients آج بھی commitment
-payload کے ذریعے وہی hash verify کر سکتے ہیں۔
+stateless verifier version، chain، height، header hash، header کے canonical predecessor اور
+view، context، subject اور CommitQC کو عین match کرتا اور artifact کے تمام PoP verify کرتا ہے۔
+signer indices سختی سے بڑھتے ہوئے
+اور range میں ہوں؛ CommitQC validator count اور voting power دونوں quorum پورے کرے، اور
+عین Sumeragi v2 vote preimage پر BLS aggregate signature درست ہو۔
 
-MMR peaks are ordered left to right. Recompute `mmr_root` by bagging peaks
-from right to left: `root = H(p_n, H(p_{n-1}, ... H(p_1, p_0)))`.
+## Trust anchor اور successor verification
 
-API: `GET /v1/bridge/finality/bundle/{height}` (Norito/JSON).
+ایک الگ proof صرف اپنے ساتھ موجود roster کے تحت internal consistency ثابت کرتا ہے۔
+`BridgeFinalityVerifier` پہلا proof قبول کرنے سے پہلے واضح طور پر trusted
+`HeightContextId` مانگتا ہے۔ اس کے بعد وہ صرف فوراً اگلی height قبول کرتا اور child
+context کا parent CommitQC پچھلے frozen roster اور PoP سے verify کرتا ہے۔ epoch کے اندر
+child artifact پچھلے artifact کے PoP copy کرتا ہے؛ boundary پر epoch، roster، quorum، seed
+اور PoP پچھلے parent context کے `next_epoch_snapshot` سے match ہوں، جس میں authenticated
+`epoch_end_height` بھی شامل ہے اور جسے parent CommitQC authenticate کرتا ہے۔ پرانی، چھوڑی ہوئی یا unlinked heights مسترد ہوتی ہیں۔
 
-Verification بنیادی proof جیسی ہے: header سے `block_hash` دوبارہ compute کریں، commit
-certificate signatures verify کریں، اور commitment fields کو certificate اور block hash
-کے مطابق چیک کریں۔ Bundle commitment/justification wrapper فراہم کرتا ہے اُن bridge
-protocols کیلئے جو separation کو ترجیح دیتے ہیں۔
+SCCP یہی `BridgeFinalityProof` استعمال کرتا ہے۔ message کے دیے roster کے تحت signature
+پر اکیلے بھروسا کافی نہیں؛ governed checkpoint context/artifact سے message artifact تک
+ہر فوری successor verify کرنا لازم ہے۔
 
-## Verification steps
+## Bundle اور API
 
-1. `block_header` سے `block_hash` دوبارہ compute کریں؛ mismatch پر reject کریں۔
-2. چیک کریں کہ `commit_certificate.block_hash` دوبارہ compute شدہ `block_hash` سے match کرتا ہے؛
-   mismatched header/commit certificate جوڑوں کو reject کریں۔
-3. `chain_id` کو متوقع Iroha chain سے match کریں۔
-4. `commit_certificate.validator_set` سے `validator_set_hash` دوبارہ compute کریں اور
-   اسے ریکارڈ شدہ hash/version سے match کریں۔
-5. `validator_set_pops` کی لمبائی validator set سے match کریں اور ہر PoP کو اس کے BLS public key کے
-   خلاف validate کریں۔
-6. commit certificate کی signatures کو header hash کے خلاف verify کریں، متعلقہ validator
-   public keys اور indices استعمال کرتے ہوئے؛ quorum نافذ کریں (`2f+1` جب `n>3`، ورنہ `n`)
-   اور duplicate/out-of-range indices کو reject کریں۔
-7. اختیاری طور پر trusted checkpoint سے bind کریں، validator set hash کو anchored value سے compare کر کے
-   (weak-subjectivity anchor)۔
-8. اختیاری طور پر متوقع epoch anchor سے bind کریں تاکہ پرانے/نئے epochs کے proofs تب تک reject رہیں
-   جب تک anchor کو جان بوجھ کر rotate نہ کیا جائے۔
+`BridgeFinalityBundle` عین `{ commitment, finality_proof }` ہے۔ commitment یہ ہے:
+`{ chain_id, height_context_id, block_height, block_hash }`۔
 
-`BridgeFinalityVerifier` (`iroha_data_model::bridge` میں) یہ چیکس لاگو کرتا ہے، chain-id/height
- drift، validator-set hash/version mismatches، missing/invalid PoP، duplicate/out-of-range signers،
-invalid signatures، اور unexpected epochs کو quorum گننے سے پہلے reject کرتا ہے تاکہ light clients
-ایک ہی verifier استعمال کر سکیں۔
+- `GET /v1/bridge/finality/{height}`، `BridgeFinalityProof` واپس کرتا ہے؛
+- `GET /v1/bridge/finality/bundle/{height}`، `BridgeFinalityBundle` واپس کرتا ہے۔
 
-## Reference verifier
-
-`BridgeFinalityVerifier` متوقع `chain_id` کے ساتھ optional trusted validator-set اور epoch anchors
-قبول کرتا ہے۔ یہ header/block-hash/commit-certificate tuple کو enforce کرتا ہے، validator-set
-hash/version کو validate کرتا ہے، signatures/quorum کو advertised validator roster کے خلاف
-چیک کرتا ہے، اور latest height کو track کر کے stale/skipped proofs reject کرتا ہے۔ جب anchors
-مہیا ہوں تو یہ epochs/rosters کے درمیان replays کو `UnexpectedEpoch`/`UnexpectedValidatorSet`
-errors کے ساتھ reject کرتا ہے؛ anchors کے بغیر یہ پہلی proof کے validator-set hash اور epoch کو
-اپنا لیتا ہے، پھر duplicate/out-of-range/insufficient signatures کیلئے deterministic errors
-نافذ کرتا ہے۔
-
-## API surface
-
-- `GET /v1/bridge/finality/{height}` - مطلوبہ block height کیلئے `BridgeFinalityProof` واپس کرتا ہے۔
-  `Accept` کے ذریعے content negotiation Norito یا JSON کو سپورٹ کرتی ہے۔
-- `GET /v1/bridge/finality/bundle/{height}` - مطلوبہ height کیلئے `BridgeFinalityBundle`
-  (commitment + justification + header/certificate) واپس کرتا ہے۔
-
-## Notes and follow-ups
-
-- Proofs فی الحال stored commit certificates سے derive ہوتی ہیں۔ محدود history commit certificate
-  retention window کے مطابق چلتی ہے؛ اگر طویل horizons درکار ہوں تو clients کو anchor proofs
-  cache کرنا چاہئیں۔ window سے باہر کی درخواستیں `CommitCertificateNotFound(height)` دیتی ہیں؛
-  error دکھائیں اور anchored checkpoint پر fallback کریں۔
-- Replayed یا forged proof جس میں `block_hash` mismatch ہو (header vs. certificate) اسے
-  `CommitCertificateHashMismatch` کے ساتھ reject کیا جاتا ہے؛ clients کو signature verification
-  سے پہلے وہی tuple check کرنا چاہیے اور mismatched payloads کو discard کرنا چاہیے۔
-- مستقبل میں MMR/authority-set commitment chains شامل کر کے بہت طویل histories کیلئے proof size
-  commitment envelopes میں wrap کیا جاتا ہے۔
+block یا عین مستقل v2 artifact غائب یا invalid ہو تو دونوں endpoints fail closed ہوتے ہیں۔
+نامعلوم fields، unsupported versions اور retired proof shapes لازماً مسترد کیے جائیں۔
 
 </div>

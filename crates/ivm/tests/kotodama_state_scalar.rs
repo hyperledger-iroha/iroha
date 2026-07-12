@@ -19,7 +19,7 @@ fn kotodama_state_scalar_reads_durable() {
         .expect("compile scalar state reader");
 
     let mut host = CoreHost::new();
-    host.insert_state_value("counter", common::encode_i64_state_value(42));
+    host.insert_state_value("counter", common::encode_int_state_value(42));
 
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);

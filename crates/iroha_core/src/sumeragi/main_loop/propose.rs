@@ -1151,6 +1151,7 @@ fn preflight_proposal_transaction(
             streaming_meta,
             ivm_cache,
             state_block.pipeline.dynamic_prepass,
+            None,
         )
         .map_err(|err| err.to_string())?;
     let overlay = prepared.overlay;

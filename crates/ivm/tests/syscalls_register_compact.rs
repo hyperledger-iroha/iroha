@@ -58,3 +58,19 @@ fn register_compact_proof_decodes_and_verifies() {
     let full: MerkleProof<[u8; 32]> = compact.into_full_with_index(idx as u32);
     assert!(full.verify_sha256(&leaf, &root, 32));
 }
+
+#[test]
+fn register_compact_depth_cap_uses_the_full_protocol_register() {
+    let mut vm = IVM::new(u64::MAX);
+    vm.set_register(5, 123_456_789);
+    vm.set_register(10, 5);
+    vm.set_register(11, ivm::Memory::OUTPUT_START);
+    vm.set_register(12, u64::from(u32::MAX) + 2);
+    vm.set_register(13, 0);
+
+    let prog = assemble_syscalls(&[syscalls::SYSCALL_GET_REGISTER_MERKLE_COMPACT as u8]);
+    vm.load_program(&prog).expect("load program");
+    vm.run().expect("run");
+
+    assert!(vm.register(10) > 1);
+}

@@ -14,9 +14,9 @@ import org.hyperledger.iroha.sdk.norito.NoritoEncoder;
 import org.hyperledger.iroha.sdk.norito.NoritoHeader;
 import org.hyperledger.iroha.sdk.norito.TypeAdapter;
 
-/** Pure JVM Halo2/IPA prover for Offline Note V2. */
-public final class OfflineNoteV2Halo2Prover {
-  public static final String CIRCUIT_ID = OfflineNoteV2.RECURSIVE_VERIFIER_NAME;
+/** Pure JVM Halo2/IPA prover for Attested Offline Note. */
+public final class AttestedOfflineNoteHalo2Prover {
+  public static final String CIRCUIT_ID = AttestedOfflineNote.RECURSIVE_VERIFIER_NAME;
   public static final int BACKEND_TAG = 0;
   public static final int IPA_K = 7;
   public static final int MAX_ENVELOPE_BYTES = 20 * 1024;
@@ -31,34 +31,34 @@ public final class OfflineNoteV2Halo2Prover {
       hexBytes("7db2235914292d4e825d6d51e1a880da77f107eb2c7853e3ec9c9d0dccc59813");
   private static final SecureRandom RNG = new SecureRandom();
 
-  private OfflineNoteV2Halo2Prover() {}
+  private AttestedOfflineNoteHalo2Prover() {}
 
   public static void prewarm() {
     CONTEXT.requireReady();
   }
 
-  public static OfflineNoteV2.RecursiveProofV2 proveRedeem(
-      final OfflineNoteV2.RedeemV2 redemption) {
-    return prove(OfflineNoteV2.InstanceBuilder.redeemInstanceValues(redemption));
+  public static AttestedOfflineNote.RecursiveProof proveRedeem(
+      final AttestedOfflineNote.Redeem redemption) {
+    return prove(AttestedOfflineNote.InstanceBuilder.redeemInstanceValues(redemption));
   }
 
-  public static OfflineNoteV2.RecursiveProofV2 proveAudit(
-      final OfflineNoteV2.AuditBundleV2 audit) {
-    return prove(OfflineNoteV2.InstanceBuilder.auditInstanceValues(audit));
+  public static AttestedOfflineNote.RecursiveProof proveAudit(
+      final AttestedOfflineNote.AuditBundle audit) {
+    return prove(AttestedOfflineNote.InstanceBuilder.auditInstanceValues(audit));
   }
 
-  public static OfflineNoteV2.RecursiveProofV2 prove(final OfflineNoteV2.InstanceValues values) {
+  public static AttestedOfflineNote.RecursiveProof prove(final AttestedOfflineNote.InstanceValues values) {
     final byte[] payload = proveZk1Payload(values);
     final byte[] envelope = openVerifyEnvelope(payload);
     if (envelope.length > MAX_ENVELOPE_BYTES) {
       throw new IllegalArgumentException("Offline V2 proof envelope exceeds QR budget: " + envelope.length);
     }
-    return new OfflineNoteV2.RecursiveProofV2(
+    return new AttestedOfflineNote.RecursiveProof(
         publicInputsHash(values.publicValues()),
-        new OfflineNoteV2.ProofBox(OfflineNoteV2.RECURSIVE_BACKEND, envelope));
+        new AttestedOfflineNote.ProofBox(AttestedOfflineNote.RECURSIVE_BACKEND, envelope));
   }
 
-  public static byte[] proveZk1Payload(final OfflineNoteV2.InstanceValues values) {
+  public static byte[] proveZk1Payload(final AttestedOfflineNote.InstanceValues values) {
     final Context context = CONTEXT.requireReady();
     final Params params = context.params;
     final Domain domain = context.domain;
@@ -348,7 +348,7 @@ public final class OfflineNoteV2Halo2Prover {
         child ->
             writeBytesVec(
                 child,
-                OfflineNoteV2.RECURSIVE_PUBLIC_INPUTS_SCHEMA_V1.getBytes(StandardCharsets.UTF_8)));
+                AttestedOfflineNote.RECURSIVE_PUBLIC_INPUTS_SCHEMA_V1.getBytes(StandardCharsets.UTF_8)));
     writeField(encoder, child -> writeBytesVec(child, proofPayload));
     writeField(encoder, child -> writeBytesVec(child, new byte[0]));
   }
@@ -359,7 +359,7 @@ public final class OfflineNoteV2Halo2Prover {
     if (backendTag != BACKEND_TAG) {
       return new byte[0];
     }
-    final String circuitId = readField(decoder, OfflineNoteV2Halo2Prover::readString);
+    final String circuitId = readField(decoder, AttestedOfflineNoteHalo2Prover::readString);
     if (!CIRCUIT_ID.equals(circuitId)) {
       return new byte[0];
     }
@@ -368,14 +368,14 @@ public final class OfflineNoteV2Halo2Prover {
       return new byte[0];
     }
     final byte[] publicInputSchema =
-        readField(decoder, OfflineNoteV2Halo2Prover::readBytesVec);
+        readField(decoder, AttestedOfflineNoteHalo2Prover::readBytesVec);
     if (!Arrays.equals(
-        OfflineNoteV2.RECURSIVE_PUBLIC_INPUTS_SCHEMA_V1.getBytes(StandardCharsets.UTF_8),
+        AttestedOfflineNote.RECURSIVE_PUBLIC_INPUTS_SCHEMA_V1.getBytes(StandardCharsets.UTF_8),
         publicInputSchema)) {
       return new byte[0];
     }
-    final byte[] proofPayload = readField(decoder, OfflineNoteV2Halo2Prover::readBytesVec);
-    readField(decoder, OfflineNoteV2Halo2Prover::readBytesVec);
+    final byte[] proofPayload = readField(decoder, AttestedOfflineNoteHalo2Prover::readBytesVec);
+    readField(decoder, AttestedOfflineNoteHalo2Prover::readBytesVec);
     if (decoder.remaining() != 0) {
       return new byte[0];
     }
@@ -519,7 +519,7 @@ public final class OfflineNoteV2Halo2Prover {
     writeUInt32LE(instances, 16);
     writeUInt32LE(instances, 1);
     for (final long value : publicValues) {
-      write(instances, OfflineNoteV2.instanceScalarBytes(value));
+      write(instances, AttestedOfflineNote.instanceScalarBytes(value));
     }
     appendTlv(out, "I10P", instances.toByteArray());
     return out.toByteArray();

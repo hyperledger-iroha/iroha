@@ -240,15 +240,15 @@ public struct OfflineCompactKeyCertificate: Codable, Equatable, Sendable {
         assertionKeyAlgorithm: String
     ) {
         switch platform {
-        case OfflineNoteV2Constants.androidKeyMintPlatform:
+        case AttestedOfflineNoteConstants.androidKeyMintPlatform:
             return (
-                OfflineNoteV2Constants.androidKeyMintAssertionScheme,
-                OfflineNoteV2Constants.androidKeyMintAssertionKeyAlgorithm
+                AttestedOfflineNoteConstants.androidKeyMintAssertionScheme,
+                AttestedOfflineNoteConstants.androidKeyMintAssertionKeyAlgorithm
             )
-        case OfflineNoteV2Constants.iosAppAttestPlatform:
+        case AttestedOfflineNoteConstants.iosAppAttestPlatform:
             return (
-                OfflineNoteV2Constants.iosAppAttestAssertionScheme,
-                OfflineNoteV2Constants.iosAppAttestAssertionKeyAlgorithm
+                AttestedOfflineNoteConstants.iosAppAttestAssertionScheme,
+                AttestedOfflineNoteConstants.iosAppAttestAssertionKeyAlgorithm
             )
         default:
             throw OfflineNotePayloadError.invalidField("platform")

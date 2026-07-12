@@ -2140,9 +2140,9 @@ fn lint_unused_pointer_constructor(
         Statement::Expr(expr) => {
             warn_if_unused_pointer_call(expr, constructors, func_name, warnings)
         }
-        Statement::Return(Some(expr)) => {
-            warn_if_unused_pointer_call(expr, constructors, func_name, warnings)
-        }
+        // A returned constructor value is consumed by the caller. Only a
+        // standalone expression statement discards the pointer value.
+        Statement::Return(Some(_)) => {}
         Statement::If {
             then_branch,
             else_branch,
@@ -2352,6 +2352,21 @@ mod tests {
             warnings
                 .iter()
                 .any(|w| w.code == "unused-pointer-constructor")
+        );
+    }
+
+    #[test]
+    fn lint_returned_pointer_constructor_is_consumed() {
+        let program = parse(
+            "fn account() -> AccountId { return AccountId::parse(\"sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB\"); }",
+        )
+        .unwrap();
+        let warnings = lint_program(&program);
+        assert!(
+            !warnings
+                .iter()
+                .any(|warning| warning.code == "unused-pointer-constructor"),
+            "return values must not be reported as discarded: {warnings:?}"
         );
     }
 

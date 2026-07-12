@@ -126,6 +126,38 @@ final class ZkAssetMerklePathTests: XCTestCase {
         XCTAssertEqual(path.directions, Data([0]))
     }
 
+    func testToriiSnapshotPreservesAndVerifiesAuthoritativeNextZeroPath() async throws {
+        let commitment = scalar(7)
+        let root = try computeRoot([commitment])
+        let provider = try LocalZkAssetMerklePathProvider(
+            rootHistory: [root],
+            commitmentHistory: [commitment]
+        )
+        let inputPath = try await provider.getMerklePathForCommitment(
+            asset: "usd#bank",
+            commitment: commitment
+        )
+        let nextZeroPath = try provider.nextZeroPath(asset: "usd#bank")
+        let client = clientReturning(merklePathResponse(
+            root: root,
+            entries: [(commitment, inputPath, inputPath.siblings)],
+            frontierLen: 1,
+            nextZeroPath: nextZeroPath
+        ))
+
+        let snapshot = try await client.getZkAssetMerklePathSnapshot(
+            asset: "usd#bank",
+            commitments: [commitment]
+        )
+        XCTAssertEqual(snapshot.nextZeroPath?.leafIndex, 1)
+        XCTAssertEqual(try snapshot.validatedNextZeroPath(), nextZeroPath)
+        let replacement = scalar(9)
+        XCTAssertEqual(
+            try snapshot.validatedNextZeroPath().root(replacingLeafWith: replacement),
+            try nextZeroPath.root(replacingLeafWith: replacement)
+        )
+    }
+
     func testToriiClientRejectsPathCountDriftAndReorderedResponses() async throws {
         let commitments = [scalar(1), scalar(2)]
         let root = try computeRoot(commitments)
@@ -366,7 +398,8 @@ final class ZkAssetMerklePathTests: XCTestCase {
     private func merklePathResponse(
         root: Data,
         entries: [(commitment: Data, path: ZkAssetMerklePath, siblings: [Data])],
-        frontierLen: Int = 2
+        frontierLen: Int = 2,
+        nextZeroPath: ZkAssetMerklePath? = nil
     ) -> Data {
         let treeDepth = entries.first?.path.siblings.count ?? 0
         let paths = entries.map { entry in
@@ -384,11 +417,29 @@ final class ZkAssetMerklePathTests: XCTestCase {
             }
             """
         }.joined(separator: ",")
+        let nextZeroJSON = nextZeroPath.map { path -> String in
+            let siblings = path.siblings.map { "\"\($0.hexEncodedString())\"" }
+                .joined(separator: ",")
+            let directions = path.directions.map { String($0) }.joined(separator: ",")
+            let witnessNodes = path.siblings.map { "\"\($0.hexEncodedString())\"" }
+                .joined(separator: ",")
+            return """
+            {
+              "commitment": "\(Data(repeating: 0, count: 32).hexEncodedString())",
+              "leaf_index": \(path.leafIndex),
+              "siblings": [\(siblings)],
+              "directions": [\(directions)],
+              "witness_nodes": [\(witnessNodes)],
+              "root": "\(root.hexEncodedString())"
+            }
+            """
+        } ?? "null"
         let json = """
         {
           "root": "\(root.hexEncodedString())",
           "frontier_len": \(frontierLen),
           "tree_depth": \(treeDepth),
+          "next_zero_path": \(nextZeroJSON),
           "paths": [\(paths)]
         }
         """
@@ -403,7 +454,7 @@ final class ZkAssetMerklePathTests: XCTestCase {
         directions: [String],
         witnessNodes: [String],
         pathRoot: String,
-        frontierLen: String = "3",
+        frontierLen: String = "1",
         treeDepth: String? = nil
     ) -> Data {
         let siblingJson = siblings.map { "\"\($0)\"" }.joined(separator: ",")

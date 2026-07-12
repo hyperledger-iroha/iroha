@@ -22,6 +22,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use iroha_crypto::Hash;
+use iroha_data_model::block::consensus_v2 as wire;
 
 /// A (key, value) pair for SMT inputs.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -41,9 +42,8 @@ pub(crate) const KAGEMUSHA_V2_TOPUP_ANCHOR_WITNESS_KEY_BYTES: usize = 33;
 /// Sixteen leaves require at most four 32-byte Merkle siblings. Together with
 /// a compact Commit-QC this keeps two independent origins inside the peer
 /// envelope's 9,211-byte raw budget even at hop 64.
-pub(crate) const KAGEMUSHA_V2_MAX_TOPUP_ANCHORS_PER_BLOCK: usize = 16;
-
-const KAGEMUSHA_V2_POST_STATE_ROOT_DOMAIN: &[u8] = b"iroha:kagemusha:v2:post-state-root";
+pub(crate) const KAGEMUSHA_V2_MAX_TOPUP_ANCHORS_PER_BLOCK: usize =
+    wire::MAX_KAGEMUSHA_TOPUP_ANCHORS_PER_BLOCK as usize;
 const KAGEMUSHA_V2_TOPUP_NODE_DOMAIN: &[u8] = b"iroha:kagemusha:v2:topup-node";
 const KAGEMUSHA_V2_TOPUP_EMPTY_DOMAIN: &[u8] = b"iroha:kagemusha:v2:topup-empty";
 
@@ -229,8 +229,11 @@ pub fn build_kagemusha_topup_block_commitment(
         .collect::<Result<Vec<_>, &'static str>>()?;
 
     let ordinary_writes_root = compute_post_state_root(&[], &ordinary_writes);
-    let post_state_root =
-        kagemusha_topup_post_state_root(leaf_count, ordinary_writes_root, topup_anchor_root);
+    let post_state_root = wire::ExecutionCommitment::topup_post_state_root(
+        leaf_count,
+        ordinary_writes_root,
+        topup_anchor_root,
+    );
     Ok(Some(KagemushaTopUpBlockCommitment {
         ordinary_writes_root,
         topup_anchor_root,
@@ -296,8 +299,11 @@ pub fn verify_kagemusha_topup_write_inclusion(
         };
         index /= 2;
     }
-    kagemusha_topup_post_state_root(proof.leaf_count, ordinary_writes_root, current)
-        == expected_post_state_root
+    wire::ExecutionCommitment::topup_post_state_root(
+        proof.leaf_count,
+        ordinary_writes_root,
+        current,
+    ) == expected_post_state_root
 }
 
 fn validate_kagemusha_topup_leaf(pair: &KvPair) -> Result<(), &'static str> {
@@ -328,25 +334,6 @@ fn kagemusha_topup_node_hash(level: u16, left: Hash, right: Hash) -> Hash {
     preimage.extend_from_slice(&level.to_le_bytes());
     preimage.extend_from_slice(left.as_ref());
     preimage.extend_from_slice(right.as_ref());
-    Hash::new(preimage)
-}
-
-fn kagemusha_topup_post_state_root(
-    anchor_count: u32,
-    ordinary_writes_root: Hash,
-    topup_anchor_root: Hash,
-) -> Hash {
-    let mut preimage = Vec::with_capacity(
-        KAGEMUSHA_V2_POST_STATE_ROOT_DOMAIN.len()
-            + 1
-            + core::mem::size_of::<u32>()
-            + 2 * Hash::LENGTH,
-    );
-    preimage.extend_from_slice(KAGEMUSHA_V2_POST_STATE_ROOT_DOMAIN);
-    preimage.push(0);
-    preimage.extend_from_slice(&anchor_count.to_le_bytes());
-    preimage.extend_from_slice(ordinary_writes_root.as_ref());
-    preimage.extend_from_slice(topup_anchor_root.as_ref());
     Hash::new(preimage)
 }
 

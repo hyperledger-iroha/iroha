@@ -106,3 +106,24 @@ fn compact_proof_dir_flip_fails() {
     let flipped = CompactMerkleProof::from_parts(cp.depth(), cp.dirs() ^ 1, cp.siblings().to_vec());
     assert!(!flipped.verify_sha256(&leaf, &typed_root));
 }
+
+#[test]
+fn compact_depth_cap_uses_the_full_protocol_register() {
+    let mut vm = IVM::new(u64::MAX);
+    let addr = ivm::Memory::HEAP_START + 32;
+    vm.memory.store_u32(addr, 0xDEAD_BEEF).expect("store");
+    vm.memory.commit();
+
+    vm.set_register(10, addr);
+    vm.set_register(11, ivm::Memory::OUTPUT_START);
+    // On a 32-bit host, an unchecked usize cast aliases this value to one.
+    // The protocol meaning is instead min(raw, 32), so the proof is not
+    // truncated to depth one.
+    vm.set_register(12, u64::from(u32::MAX) + 2);
+    vm.set_register(13, 0);
+    let prog = assemble_syscalls(&[syscalls::SYSCALL_GET_MERKLE_COMPACT as u8]);
+    vm.load_program(&prog).expect("load program");
+    vm.run().expect("run");
+
+    assert!(vm.register(10) > 1);
+}

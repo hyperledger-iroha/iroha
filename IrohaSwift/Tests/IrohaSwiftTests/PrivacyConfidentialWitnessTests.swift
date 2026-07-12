@@ -2,6 +2,43 @@ import XCTest
 @testable import IrohaSwift
 
 final class PrivacyConfidentialWitnessTests: XCTestCase {
+    func testEncodesPathBasedTransferWitnessWithoutWholeTree() throws {
+        let witness = try Self.transferWitnessV2()
+        let witnessArchive = try PrivacyConfidentialWitnessCodecs.encodeTransferWitnessV2(witness)
+        let witnessFrame = try XCTUnwrap(noritoDecodeFrame(witnessArchive))
+        XCTAssertEqual(witnessFrame.paddingLength, 8)
+        XCTAssertEqual(
+            witnessFrame.header.schema,
+            noritoSchemaHash(
+                forTypeName: PrivacyConfidentialWitnessCodecs.privacyConfidentialWitnessV2WireName
+            )
+        )
+
+        let fields = try compactFields(witnessFrame.payload)
+        XCTAssertEqual(fields.count, 9)
+        let paths = try compactSequence(fields[3])
+        XCTAssertEqual(paths.count, 2)
+        for path in paths {
+            let pathFields = try compactFields(path)
+            XCTAssertEqual(pathFields.count, 4)
+            XCTAssertEqual(
+                try compactSequence(pathFields[0]).count,
+                PrivacyConfidentialWitnessCodecs.confidentialTreeDepthV2
+            )
+            XCTAssertEqual(
+                try byteVec(pathFields[1]).count,
+                PrivacyConfidentialWitnessCodecs.confidentialTreeDepthV2
+            )
+            XCTAssertEqual(try compactSequence(pathFields[2]), [])
+            XCTAssertEqual(try byteVec(pathFields[3]), Self.fixed32(0x77))
+        }
+
+        let request = try PrivacyConfidentialWitnessCodecs
+            .buildConfidentialTransferProofRequestV2(witness: witness)
+        let requestFields = try compactFields(try XCTUnwrap(noritoDecodeFrame(request)).payload)
+        XCTAssertEqual(try byteVec(requestFields[4]), witnessArchive)
+    }
+
     func testEncodesTransferWitnessAndProofRequestWireShape() throws {
         let witness = try Self.transferWitness()
         let witnessArchive = try PrivacyConfidentialWitnessCodecs.encodeTransferWitness(witness)
@@ -390,6 +427,31 @@ final class PrivacyConfidentialWitnessTests: XCTestCase {
             unshieldChange: unshieldChange,
             publicAmount: publicAmount,
             rootHint: rootHint
+        )
+    }
+
+    private static func transferWitnessV2() throws -> PrivacyConfidentialWitnessV2 {
+        try PrivacyConfidentialWitnessV2(
+            chainId: "chain",
+            assetDefinitionId: "asset",
+            spendKey: fixed32(0x11),
+            inputPaths: [try pathV2(directionSeed: 0), try pathV2(directionSeed: 1)],
+            inputs: [try noteWitness(leafIndex: 0, rhoSeed: 0x22)],
+            transferOutputs: [try transferOutput(amount: "7", rhoSeed: 0x33)],
+            unshieldChange: [],
+            publicAmount: "0",
+            rootHint: fixed32(0x77)
+        )
+    }
+
+    private static func pathV2(
+        directionSeed: UInt8
+    ) throws -> PrivacyConfidentialMerklePathWitnessV2 {
+        let depth = PrivacyConfidentialWitnessCodecs.confidentialTreeDepthV2
+        return try PrivacyConfidentialMerklePathWitnessV2(
+            siblings: (0..<depth).map { fixed32(UInt8($0 + 1)) },
+            directions: Data((0..<depth).map { UInt8($0) & 1 ^ directionSeed }),
+            root: fixed32(0x77)
         )
     }
 

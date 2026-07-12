@@ -335,7 +335,7 @@ The V1 type vocabulary is:
   `DomainView`, `NftView`, and `QueryPage<View>` query projections
 - `Secret<T>` inside ZK contracts, subject to the information-flow rules below
 
-`i64`, `u128`, `Amount`, `float`, `num`, `number`, `Opaque`, `fixed_u128`,
+`i64`, `u128`, `Amount`, `float`, `num`, `number`, `money`, `Opaque`, `fixed_u128`,
 `String`, `Blob`, `Bytes`, `Balance`, and in-memory `Map` are not types in V1.
 Unit is an internal function-return state, not a source type: `()` and `(T)` are
 errors in type position. Omit the return type for a Unit-returning function;
@@ -479,6 +479,17 @@ arithmetic implementation as runtime execution.
 
 Intentional modular arithmetic is written with explicit operations such as `math::wrapping_add`, `math::wrapping_sub`, `math::wrapping_mul`, and `math::wrapping_neg`. Ordinary operators never silently wrap.
 
+```text
+math::wrapping_neg(value: int) -> int
+math::wrapping_add(left: int, right: int) -> int
+math::wrapping_sub(left: int, right: int) -> int
+math::wrapping_mul(left: int, right: int) -> int
+```
+
+The binary forms are named-only. These are the complete V1 modular-arithmetic
+APIs; the corresponding flat names and all generic `numeric::*` helpers are
+retired source spellings.
+
 `int` is the signed range `-2^511..=2^511-1`; its compact encoding does not
 change its semantic bounds. Division truncates toward zero, and remainder has
 the dividend's sign. `min_int / -1` and the paired remainder operation fail
@@ -491,11 +502,28 @@ arithmetic computes the exact mathematical result with conceptual unbounded
 intermediates, normalizes it, and then checks the final bounds. Plain decimal
 division succeeds only for a canonical exact result representable through
 scale 28; repeating results and terminating results needing more precision are
-distinct failures. Rounded operations require an output scale and one of the
-seven stable modes documented in
-[`kotodama_numeric_v1.md`](./kotodama_numeric_v1.md). They never round
-implicitly. Invalid constant arithmetic is diagnosed during compilation;
-runtime failures use the same stable numeric faults.
+distinct failures. Rounded operations require an output scale and exactly one
+of `Rounding::toward_zero`, `Rounding::away_from_zero`, `Rounding::floor`,
+`Rounding::ceil`, `Rounding::nearest_even`, `Rounding::nearest_away`, or
+`Rounding::nearest_toward_zero`, as documented in
+[`kotodama_numeric_v1.md`](./kotodama_numeric_v1.md). Other rounding spellings
+are rejected rather than treated as compatibility aliases.
+Rounded operations never round implicitly. Invalid constant arithmetic is
+diagnosed during compilation; runtime failures use the same stable numeric
+faults.
+
+The exact rounded source surface is:
+
+```text
+decimal.div_round(divisor: decimal, scale: int, mode: rounding-mode) -> decimal
+quantity.div_round(divisor: decimal, scale: int, mode: rounding-mode) -> quantity
+quantity.ratio_round(divisor: quantity, scale: int, mode: rounding-mode) -> decimal
+```
+
+All three arguments are named-only. `rounding-mode` denotes one of the seven
+`Rounding::*` paths listed above, not an integer tag or a user-declarable type.
+The scale is checked in `0..=28`; `div_round` is not an `int` method, and
+`ratio_round` is not a `decimal` method.
 
 ## Bounded lists
 

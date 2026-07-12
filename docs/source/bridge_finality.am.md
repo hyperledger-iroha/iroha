@@ -4,9 +4,9 @@ direction: ltr
 source: docs/source/bridge_finality.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 2e4c6ed5974f623906f51259a634bcad5df703bcec899630ae29f4669b289ab6
-source_last_modified: "2026-01-08T21:52:45.509525+00:00"
-translation_last_reviewed: 2026-02-07
+source_hash: 5e28e5c38283ad6be40a0fc48e0312797f490542a143f4cefdd209aaf8099ac5
+source_last_modified: "2026-07-11T20:38:35.470900+00:00"
+translation_last_reviewed: 2026-07-12
 translator: machine-google-reviewed
 ---
 
@@ -14,111 +14,70 @@ translator: machine-google-reviewed
 SPDX-License-Identifier: Apache-2.0
 -->
 
-# የድልድይ የመጨረሻነት ማረጋገጫዎች
+# የድልድይ መጨረሻነት ማረጋገጫዎች
 
-ይህ ሰነድ ለIroha የመጀመሪያ ድልድይ የመጨረሻነት ማረጋገጫ ገጽን ይገልጻል።
-ግቡ የውጭ ሰንሰለቶች ወይም የብርሃን ደንበኞች Iroha እገዳን እንዲያረጋግጡ ማድረግ ነው
-ያለ ሰንሰለት ስሌት ወይም የታመነ ማስተላለፎች ይጠናቀቃል።
+ይህ ሰነድ ለመጀመሪያው ልቀት የድልድይ መጨረሻነት ቅርጸትን ይገልጻል። ማረጋገጫው Sumeragi v2
+የፈጠረውንና በቋሚነት ያከማቸውን ትክክለኛ finality evidence ይይዛል። የማረጋገጫ
+envelope schema version `1` ሲሆን በውስጡ ያለው consensus protocol version `2` ነው።
+የSumeragi v1 certificate projection፣ decoder ወይም fallback መንገድ የለም።
 
-## የማረጋገጫ ቅርጸት
+## ትክክለኛው የማረጋገጫ ቅርጸት
 
-`BridgeFinalityProof` (Norito/JSON) የሚከተሉትን ያጠቃልላል
+በNorito ወይም Norito JSON የተመሰጠረው `BridgeFinalityProof` ሦስት መስኮች ብቻ አሉት፦
 
-- `height`: የማገጃ ቁመት.
-- `chain_id`: Iroha ሰንሰለት መለያ ሰንሰለት ተሻጋሪ ዳግም መጫወትን ለመከላከል።
-- `block_header`: ቀኖናዊ `BlockHeader`.
-- `block_hash`፡ የርዕሱ ሃሽ (ደንበኞች ለማረጋገጥ እንደገና ይሰላሉ)።
-- `commit_certificate`: አረጋጋጭ ስብስብ + እገዳውን ያጠናቀቁ ፊርማዎች.
-- `validator_set_pops`፡ የይዞታ ማረጋገጫ ባይት ከማረጋገጫ ስብስብ ጋር የተስተካከለ
-  ትዕዛዝ (ለ BLS ድምር ማረጋገጫ ያስፈልጋል)።
+```text
+{ version, block_header, finality_artifact }
+```
 
-ማስረጃው ራሱን የቻለ ነው; ምንም ውጫዊ መገለጫዎች ወይም ግልጽ ያልሆኑ ነጠብጣቦች አያስፈልጉም።
-ማቆየት፡ Torii የመጨረሻ ማረጋገጫዎችን ለቅርብ ጊዜ የምስክር ወረቀት መስኮት ያገለግላል
-(በተቀናበረው የታሪክ ካፕ የተገደበ፤ በ 512 ግቤቶች ውስጥ ነባሪዎች በ
-`sumeragi.commit_cert_history_cap` / `SUMERAGI_COMMIT_CERT_HISTORY_CAP`)። ደንበኞች
-ረዘም ያለ እይታዎች ከፈለጉ መሸጎጫ ወይም መልህቅ ማረጋገጫዎች አለባቸው።
-ቀኖናዊው ቱፕል `(block_header, block_hash, commit_certificate)`: የ
-የራስጌው hash በቁርጠኝነት ሰርተፊኬት ውስጥ ካለው ሃሽ ጋር መዛመድ አለበት፣ እና የ
-የሰንሰለት መታወቂያ ማስረጃውን ከአንድ ደብተር ጋር ያስራል። አገልጋዮች ውድቅ አድርገው ሀ
-የምስክር ወረቀቱ ወደ ሌላ ብሎክ ሲጠቁም `CommitCertificateHashMismatch`
-ሃሽ
+- `version` የግድ `1` መሆን አለበት፤
+- `block_header` በተጠየቀው ከፍታ ያለው canonical `BlockHeader` ነው፤
+- `finality_artifact` ለዚያ block የተቀመጠው ትክክለኛ `V2FinalityArtifact` ነው። በheight-context
+  roster ቅደም ተከተል የእያንዳንዱን validator BLS-normal PoP (`validator_set_pops`)
+  በቋሚነት በውስጡ ይይዛል።
 
-## የቁርጠኝነት ጥቅል
+Artifact-ው ሙሉና የማይለወጥ `HeightContext`፣ ትክክለኛ `BlockSubject`፣ block hash፣
+CommitQC እና roster-aligned PoP-ዎችን ይይዛል። Height context chain፣ epoch፣ roster፣
+`DualQuorum`፣ DA layout፣ leader seed እና ሌሎች consensus data ያስርቃል። Epoch-ን የሚያበቃው
+parent block context optional `next_epoch_snapshot` ደግሞ ይይዛል፤ መስኩ የcontext id ክፍል
+ስለሆነ parent CommitQC ለchild roster ሥልጣን ከመስጠቱ በፊት ያረጋግጠዋል።
+Finalized snapshot-ው የቀጣዩ epoch parameters ብቻ ሳይሆን `epoch_end_height` እና ለቀጣዩ roster
+የተስተካከሉ `validator_set_pops`-ዎችንም ያረጋግጣል።
 
-`BridgeFinalityBundle` (Norito/JSON) መሰረታዊ ማስረጃውን በግልፅ ያራዝመዋል።
-ቁርጠኝነት እና ማረጋገጫ;
+## ቋሚ ማከማቻ እና ማረጋገጥ
 
-- `commitment`: `{ chain_id, authority_set { id, validator_set, validator_set_hash, validator_set_hash_version }, block_height, block_hash, mmr_root?, mmr_leaf_index?, mmr_peaks?, next_authority_set? }`
-- `justification`: በተሰጠው ቁርጠኝነት ላይ ከተቀመጠው ባለስልጣን ፊርማዎች
-  ክፍያ (የእውቅና ማረጋገጫ ፊርማዎችን እንደገና ይጠቀማል)።
-- `block_header`, `commit_certificate`: ከመሠረታዊ ማስረጃ ጋር ተመሳሳይ ነው.
+የSumeragi v2 apply path artifact-ውን አረጋግጦ እንደማይለወጥ Kura sidecar ያከማቻል። Proof
+builder የcanonical block-ውንና sidecar-ውን ያነባል፤ ታሪካዊ PoP ወይም certificate ከሚለወጥ
+የአሁኑ world state እንደገና አይገነባም። የጎደለ፣ የተበላሸ፣ የሚጋጭ ወይም የማይረጋገጥ
+sidecar fail closed ይሆናል፤ ተደራሽነት በቅርብ in-memory history window አይገደብም።
 
-የአሁኑ ቦታ ያዥ፡ `mmr_root`/`mmr_peaks` የተገኙት ሀን እንደገና በማስላት ነው።
-የማገጃ-hash MMR በማህደረ ትውስታ; የማካተት ማረጋገጫዎች ገና አልተመለሱም። ደንበኞች ይችላሉ።
-አሁንም ተመሳሳዩን ሃሽ በቁርጠኝነት ክፍያ ዛሬ ያረጋግጡ።
+Stateless verifier version፣ chain፣ height፣ header hash፣ canonical predecessor፣ view፣ context፣
+subject እና CommitQC-ን
+በትክክል ያዛምዳል እና በartifact ውስጥ ያሉትን PoP-ዎች ሁሉ ያረጋግጣል። Signer index-ዎች
+በጥብቅ እየጨመሩና በወሰን ውስጥ መሆን አለባቸው። CommitQC የvalidator count እና voting
+power quorum ሁለቱንም ማሟላት፣ በትክክለኛው Sumeragi v2 vote preimage ላይ BLS aggregate
+signature-ው ትክክለኛ መሆን አለበት።
 
-የኤምኤምአር ጫፎች ከግራ ወደ ቀኝ ታዝዘዋል። ቁንጮዎችን በመያዝ `mmr_root`ን እንደገና ያስሉ።
-ከቀኝ ወደ ግራ: `root = H(p_n, H(p_{n-1}, ... H(p_1, p_0)))`.
+## የእምነት anchor እና successor ማረጋገጥ
 
-ኤፒአይ፡ `GET /v1/bridge/finality/bundle/{height}` (Norito/JSON)።
+አንድ ማረጋገጫ በራሱ roster ሥር ያለውን ውስጣዊ ወጥነት ብቻ ያሳያል።
+`BridgeFinalityVerifier` የመጀመሪያውን ማረጋገጫ ከመቀበሉ በፊት በግልጽ የታመነ
+`HeightContextId` ይፈልጋል። ከዚያ በኋላ ወዲያውኑ የሚቀጥለውን height ብቻ ተቀብሎ በchild
+context ያለውን parent CommitQC በቀድሞው frozen roster እና PoP ያረጋግጣል። በepoch ውስጥ child
+artifact የቀድሞውን artifact PoP ይቀዳል፤ በboundary ላይ epoch፣ roster፣ quorum፣ seed እና PoP
+በparent CommitQC ከተረጋገጠው `next_epoch_snapshot` ጋር፣ የተረጋገጠውን
+`epoch_end_height` ጨምሮ፣ መዛመድ አለባቸው። የቆዩ፣ የተዘለሉ እና ያልተገናኙ heights ይከለከላሉ።
 
-ማረጋገጫው ከመሠረታዊ ማረጋገጫው ጋር ተመሳሳይ ነው፡ `block_hash`ን እንደገና ያስሉ
-ራስጌ፣ የምስክር ወረቀት ፊርማዎችን ያረጋግጡ እና ቁርጠኝነትን ያረጋግጡ
-መስኮች የምስክር ወረቀቱን ይዛመዳሉ እና ሃሽ ያግዱ። ጥቅሉ ቁርጠኝነትን ይጨምራል/
-መለያየትን ለሚመርጡ የድልድይ ፕሮቶኮሎች የጽድቅ መጠቅለያ።
+SCCP ይህንኑ `BridgeFinalityProof` ይጠቀማል። በmessage የቀረበ roster ሥር signature-ን ብቻ
+ማመን በቂ አይደለም፤ በgovernance ከተቆለፈ checkpoint context/artifact እስከ message artifact
+ያለው እያንዳንዱ immediate successor መረጋገጥ አለበት።
 
-## የማረጋገጫ ደረጃዎች1. `block_hash` ከ `block_header` እንደገና ማስላት; አለመመጣጠን ላይ አለመቀበል።
-2. `commit_certificate.block_hash` እንደገና ከተሰላው `block_hash` ጋር ይዛመዳል።
-   ያልተዛመደ ራስጌ/የእውቅና ማረጋገጫ ጥንዶችን አለመቀበል።
-3. `chain_id` ከተጠበቀው Iroha ሰንሰለት ጋር ይዛመዳል።
-4. `validator_set_hash` ከ `commit_certificate.validator_set` እና
-   ከተመዘገበው ሃሽ/ስሪት ጋር መዛመዱን ያረጋግጡ።
-5. የ`validator_set_pops` ርዝማኔ ከማረጋገጫው ስብስብ ጋር መዛመዱን ያረጋግጡ እና ያረጋግጡ
-   እያንዳንዱ ፖፒ ከ BLS የህዝብ ቁልፍ ጋር።
-6. ከራስጌ ሃሽ ጋር በተያያዙ የምስክር ወረቀቶች ውስጥ ፊርማዎችን ያረጋግጡ
-   የተጠቀሰው አረጋጋጭ የህዝብ ቁልፎች እና ኢንዴክሶች; ምልአተ ጉባኤን ማስፈጸም
-   (`2f+1` ጊዜ `n>3`፣ሌላ `n`) እና የተባዙ/ከክልል ውጭ ኢንዴክሶችን ውድቅ ያድርጉ።
-7. እንደ አማራጭ የአረጋጋጩን ስብስብ ሃሽ በማነፃፀር ከታመነ ፍተሻ ጋር ማሰር
-   ወደ መልህቅ እሴት (ደካማ ርዕሰ-ጉዳይ መልህቅ)።
-8. በአማራጭነት ከሚጠበቀው የኢፖክ መልህቅ ጋር በማያያዝ ከአሮጌ/ከአዲሱ የተገኘ ማረጋገጫ
-   መልህቁ ሆን ተብሎ እስኪዞር ድረስ ዘመናት ውድቅ ይደረጋሉ።
+## Bundle እና API
 
-`BridgeFinalityVerifier` (በ`iroha_data_model::bridge`) እነዚህን ቼኮች ይተገበራል፣
-የሰንሰለት-መታወቂያ/ቁመት ተንሸራታች አለመቀበል፣አረጋጋጭ-ማስተካከያ ሃሽ/ስሪት አለመዛመጃ፣ጎደለ
-ወይም ልክ ያልሆኑ ፖፒዎች፣ የተባዙ/ከክልል ውጪ ፈራሚዎች፣ ልክ ያልሆኑ ፊርማዎች፣ እና
-ቀላል ደንበኞች አንድ ነጠላ እንደገና መጠቀም እንዲችሉ ምልአተ ጉባኤ ከመቁጠር በፊት ያልተጠበቁ ወቅቶች
-አረጋጋጭ.
+`BridgeFinalityBundle` በትክክል `{ commitment, finality_proof }` ነው። Commitment-ው
+`{ chain_id, height_context_id, block_height, block_hash }` ነው።
 
-## ዋቢ አረጋጋጭ
+- `GET /v1/bridge/finality/{height}` `BridgeFinalityProof` ይመልሳል፤
+- `GET /v1/bridge/finality/bundle/{height}` `BridgeFinalityBundle` ይመልሳል።
 
-`BridgeFinalityVerifier` የሚጠበቀውን `chain_id` እና አማራጭ የታመነ ይቀበላል
-validator-ስብስብ እና ዘመን መልህቆች. ራስጌ/ብሎክ-ሃሽ/ን ያስፈጽማል
-ሰርተፊኬት tuple፣ አረጋጋጭ የተዘጋጀ ሃሽ/ስሪትን፣ ቼኮችን ያረጋግጣል
-ፊርማ/ ምልአተ ጉባኤ ከማስታወቂያ አረጋጋጭ ስም ዝርዝር ጋር ይቃረናል፣ እና የቅርብ ጊዜውን ይከታተላል
-የቆዩ/የተዘለሉ ማስረጃዎችን ላለመቀበል ቁመት። መልህቆች ሲቀርቡ ውድቅ ያደርጋል
-በኤፖክስ/ሮስተሮች ላይ በግልፅ `UnexpectedEpoch`/
-`UnexpectedValidatorSet` ስህተቶች; ያለ መልህቅ የመጀመሪያውን ማረጋገጫ ይቀበላል
-የተባዛ/ከማስወጣቱ በፊት መተግበሩን ከመቀጠልዎ በፊት አረጋጋጭ-ሃሽ እና ኢፖክ አዘጋጅቷል።
-ክልል / በቂ ያልሆነ ፊርማዎች ከመወሰኛ ስህተቶች ጋር።
-
-## የኤፒአይ ወለል
-
-- `GET /v1/bridge/finality/{height}` - `BridgeFinalityProof` ለ
-  የተጠየቀው የማገጃ ቁመት. በ`Accept` በኩል የሚደረግ የይዘት ድርድር Norito ወይም ይደግፋል
-  ጄሰን
-- `GET /v1/bridge/finality/bundle/{height}` - `BridgeFinalityBundle` ይመልሳል
-  (ቁርጠኝነት + መጽደቅ + ራስጌ / የምስክር ወረቀት) ለተጠየቀው ቁመት.
-
-## ማስታወሻዎች እና ክትትሎች
-
-- በአሁኑ ጊዜ ማረጋገጫዎች ከተከማቹ የቃል የምስክር ወረቀቶች የተገኙ ናቸው። የተገደበው
-  ታሪክ የምስክር ወረቀት ማቆየት መስኮት ይከተላል; ደንበኞች መሸጎጫ ማድረግ አለባቸው
-  ረጅም አድማስ ከፈለጉ መልህቅ ማረጋገጫዎች። ከመስኮቱ ውጭ ያሉ ጥያቄዎች ይመለሳሉ
-  `CommitCertificateNotFound(height)`; ስህተቱን ይግለጹ እና ወደ አንድ ይመለሱ
-  መልህቅ የፍተሻ ነጥብ.
-- በድጋሚ የተጫወተ ወይም የተጭበረበረ ማስረጃ ከማይዛመደው `block_hash` (ራስጌ ከ.
-  የምስክር ወረቀት) በ `CommitCertificateHashMismatch` ውድቅ ተደርጓል; ደንበኞች አለባቸው
-  ፊርማ ከማረጋገጡ በፊት ተመሳሳይ የ tuple ቼክ ያከናውኑ እና ያስወግዱት።
-  ያልተመጣጠነ ጭነት.
-- የወደፊት ስራ የማረጋገጡን መጠን ለመቀነስ MMR/የባለስልጣን-የቁርጠኝነት ሰንሰለቶችን መጨመር ይችላል።
-  በበለጸጉ የቃል ኪዳን ኤንቨሎፖች ውስጥ ያለው የምስክር ወረቀት።
+Block-ው ወይም ትክክለኛው ቋሚ v2 artifact ከጎደለ ወይም invalid ከሆነ ሁለቱም endpoint-ዎች fail
+closed ይሆናሉ። ያልታወቁ መስኮች፣ ያልተደገፉ versions እና retired proof shapes መከልከል አለባቸው።

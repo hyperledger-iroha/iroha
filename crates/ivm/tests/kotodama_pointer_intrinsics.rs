@@ -28,7 +28,7 @@ fn raw_axt_pointer_constructors_are_rejected() {
 fn kotodama_zk_verify_accepts_typed_bytes_parameter() {
     let src = r#"
         seiyaku ZkVerifyIntrinsic {
-            kotoage fn verify(env: bytes) authorize("VerifyProof") {
+            kotoage fn verify(bytes env) authorize("VerifyProof") {
                 crypto::zk::verify_batch(env);
             }
         }

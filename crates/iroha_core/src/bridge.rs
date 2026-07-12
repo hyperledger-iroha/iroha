@@ -1,16 +1,13 @@
 //! Helpers for bridge finality proofs built from commit certificates.
 
-use std::{
-    collections::BTreeSet,
-    fmt,
-    num::NonZeroUsize,
-    sync::{Arc, Mutex, OnceLock},
-};
+use std::{collections::BTreeSet, fmt, num::NonZeroUsize, sync::Arc};
 
-use iroha_crypto::HashOf;
 use iroha_data_model::{
     ChainId,
-    block::{BlockHeader, SignedBlock},
+    block::{
+        SignedBlock,
+        consensus_v2::finality::{V2FinalityArtifact, V2QuorumCertificateVerificationError},
+    },
     bridge::{
         BRIDGE_FINALITY_PROOF_VERSION_V1, BridgeCommitment, BridgeFinalityBundle,
         BridgeFinalityProof, SccpOutboundMessageKeyV1,
@@ -22,11 +19,57 @@ use iroha_data_model::{
 use iroha_sccp::{SccpHubCommitmentV1, SccpPayloadV1, TairaBridgeFinalityProofV1};
 use thiserror::Error;
 
+#[cfg(test)]
+use iroha_data_model::block::BlockHeader;
+
 use crate::{
-    mmr::BlockMmr,
     state::{State as CoreState, StateReadOnly},
     tx::AcceptedTransaction,
 };
+
+/// A Sumeragi-v2 finality artifact whose structure, roster PoPs, and CommitQC
+/// cryptography have already been verified.
+///
+/// The wrapper is intentionally not decodable and exposes no mutable access.
+/// Untrusted implementations of [`BridgeStateReadOnly`] must call [`Self::verify`]
+/// to mint it. Kura-backed implementations use the private constructor only
+/// after Kura's cache-backed verification boundary succeeds.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[must_use]
+pub struct VerifiedV2FinalityArtifact {
+    artifact: V2FinalityArtifact,
+}
+
+impl VerifiedV2FinalityArtifact {
+    /// Fully verify an untrusted artifact and return its proof-typed wrapper.
+    ///
+    /// # Errors
+    ///
+    /// Returns the canonical v2 verification error when structural, PoP, or
+    /// CommitQC cryptographic validation fails.
+    pub fn verify(
+        artifact: V2FinalityArtifact,
+    ) -> Result<Self, V2QuorumCertificateVerificationError> {
+        artifact.verify()?;
+        Ok(Self { artifact })
+    }
+
+    /// Borrow the verified artifact without allowing mutation.
+    #[must_use]
+    pub const fn artifact(&self) -> &V2FinalityArtifact {
+        &self.artifact
+    }
+
+    /// Consume the wrapper and return the verified artifact.
+    #[must_use]
+    pub fn into_artifact(self) -> V2FinalityArtifact {
+        self.artifact
+    }
+
+    fn from_kura_verified(artifact: V2FinalityArtifact) -> Self {
+        Self { artifact }
+    }
+}
 
 /// Narrow read-only surface used by bridge finality proof builders.
 ///
@@ -36,11 +79,13 @@ pub trait BridgeStateReadOnly {
     fn bridge_chain_id(&self) -> &ChainId;
     /// Load a committed block at `height`.
     fn bridge_block_by_height(&self, height: NonZeroUsize) -> Option<Arc<SignedBlock>>;
-    /// Load the exact durable Sumeragi-v2 finality artifact for `height`.
-    fn bridge_v2_finality_artifact(
+    /// Load an exact durable Sumeragi-v2 finality artifact whose structure,
+    /// roster PoPs, and CommitQC cryptography have already been verified by the
+    /// storage boundary.
+    fn bridge_verified_v2_finality_artifact(
         &self,
         height: u64,
-    ) -> Result<Option<iroha_data_model::block::consensus_v2::finality::V2FinalityArtifact>, String>;
+    ) -> Result<Option<VerifiedV2FinalityArtifact>, String>;
 }
 
 impl<T: StateReadOnly> BridgeStateReadOnly for T {
@@ -52,13 +97,13 @@ impl<T: StateReadOnly> BridgeStateReadOnly for T {
         self.kura().get_block(height)
     }
 
-    fn bridge_v2_finality_artifact(
+    fn bridge_verified_v2_finality_artifact(
         &self,
         height: u64,
-    ) -> Result<Option<iroha_data_model::block::consensus_v2::finality::V2FinalityArtifact>, String>
-    {
+    ) -> Result<Option<VerifiedV2FinalityArtifact>, String> {
         self.kura()
             .v2_finality_artifact(height)
+            .map(|artifact| artifact.map(VerifiedV2FinalityArtifact::from_kura_verified))
             .map_err(|error| error.to_string())
     }
 }
@@ -72,24 +117,15 @@ impl BridgeStateReadOnly for CoreState {
         self.block_by_height(height)
     }
 
-    fn bridge_v2_finality_artifact(
+    fn bridge_verified_v2_finality_artifact(
         &self,
         height: u64,
-    ) -> Result<Option<iroha_data_model::block::consensus_v2::finality::V2FinalityArtifact>, String>
-    {
+    ) -> Result<Option<VerifiedV2FinalityArtifact>, String> {
         self.kura()
             .v2_finality_artifact(height)
+            .map(|artifact| artifact.map(VerifiedV2FinalityArtifact::from_kura_verified))
             .map_err(|error| error.to_string())
     }
-}
-
-struct MmrCache {
-    mmr: BlockMmr,
-    height: u64,
-    /// Chain id used to detect cross-ledger reuse in-process.
-    chain_id: Option<ChainId>,
-    /// Cached hash for the tip at `height` to detect top-block rewrites.
-    tip_hash: Option<HashOf<BlockHeader>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1032,87 +1068,6 @@ pub enum BridgeFinalityError {
         /// Height being proven.
         height: u64,
     },
-    /// The exact durable artifact failed v2 quorum or BLS verification.
-    #[error("Sumeragi-v2 finality artifact for height {height} failed verification: {reason}")]
-    InvalidFinalityArtifact {
-        /// Height being proven.
-        height: u64,
-        /// Typed verifier diagnostic.
-        reason: String,
-    },
-}
-
-fn compute_block_mmr(
-    state: &impl BridgeStateReadOnly,
-    height: u64,
-) -> Result<BlockMmr, BridgeFinalityError> {
-    static BLOCK_MMR_CACHE: OnceLock<Mutex<MmrCache>> = OnceLock::new();
-
-    if height == 0 {
-        return Err(BridgeFinalityError::InvalidHeight(height));
-    }
-
-    let cache = BLOCK_MMR_CACHE.get_or_init(|| {
-        Mutex::new(MmrCache {
-            mmr: BlockMmr::default(),
-            height: 0,
-            chain_id: None,
-            tip_hash: None,
-        })
-    });
-
-    let mut guard = cache.lock().expect("mmr cache mutex poisoned");
-    let chain_id = state.bridge_chain_id().clone();
-
-    let mut rebuild = height < guard.height || guard.chain_id.as_ref() != Some(&chain_id);
-    if !rebuild && guard.height > 0 {
-        let cached_tip = guard.tip_hash;
-        let current_tip = block_hash_at(state, guard.height)?;
-        if cached_tip != Some(current_tip) {
-            rebuild = true;
-        }
-    }
-
-    if rebuild {
-        // Rebuild from genesis to requested height to avoid rollback complexity.
-        let mut fresh = BlockMmr::default();
-        let mut tip_hash = None;
-        for h in 1..=height {
-            let hash = block_hash_at(state, h)?;
-            fresh.push(hash);
-            tip_hash = Some(hash);
-        }
-        guard.mmr = fresh;
-        guard.height = height;
-        guard.chain_id = Some(chain_id);
-        guard.tip_hash = tip_hash;
-    } else {
-        let mut tip_hash = guard.tip_hash;
-        for h in (guard.height + 1)..=height {
-            let hash = block_hash_at(state, h)?;
-            guard.mmr.push(hash);
-            guard.height = h;
-            tip_hash = Some(hash);
-        }
-        guard.chain_id = Some(chain_id);
-        guard.tip_hash = tip_hash;
-    }
-
-    Ok(guard.mmr.clone())
-}
-
-fn block_hash_at(
-    state: &impl BridgeStateReadOnly,
-    height: u64,
-) -> Result<iroha_crypto::HashOf<iroha_data_model::block::BlockHeader>, BridgeFinalityError> {
-    let h_usize: usize = height
-        .try_into()
-        .map_err(|_| BridgeFinalityError::InvalidHeight(height))?;
-    let nonzero = NonZeroUsize::new(h_usize).ok_or(BridgeFinalityError::InvalidHeight(height))?;
-    let block = state
-        .bridge_block_by_height(nonzero)
-        .ok_or(BridgeFinalityError::BlockNotFound(height))?;
-    Ok(block.hash())
 }
 
 /// Build a self-contained finality proof for the block at `height`.
@@ -1140,25 +1095,18 @@ pub fn build_finality_proof(
         .bridge_block_by_height(nonzero_height)
         .ok_or(BridgeFinalityError::BlockNotFound(height))?;
     let block_header = block.header();
-    let block_hash = block.hash();
     let finality_artifact = state
-        .bridge_v2_finality_artifact(height)
+        .bridge_verified_v2_finality_artifact(height)
         .map_err(|reason| BridgeFinalityError::FinalityArtifactRead { height, reason })?
-        .ok_or(BridgeFinalityError::FinalityArtifactNotFound(height))?;
+        .ok_or(BridgeFinalityError::FinalityArtifactNotFound(height))?
+        .into_artifact();
     if finality_artifact.height_context.chain_id != *state.bridge_chain_id()
         || finality_artifact
-            .validate_for_block(height, block_hash)
+            .validate_for_header(&block_header)
             .is_err()
     {
         return Err(BridgeFinalityError::FinalityArtifactMismatch { height });
     }
-
-    finality_artifact
-        .verify()
-        .map_err(|error| BridgeFinalityError::InvalidFinalityArtifact {
-            height,
-            reason: error.to_string(),
-        })?;
 
     Ok(BridgeFinalityProof {
         version: BRIDGE_FINALITY_PROOF_VERSION_V1,
@@ -1167,27 +1115,22 @@ pub fn build_finality_proof(
     })
 }
 
-/// Build an MMR commitment plus exact typed finality proof for `height`.
+/// Build a compact commitment plus exact typed finality proof for `height`.
 ///
 /// # Errors
 ///
-/// Returns [`BridgeFinalityError`] when the underlying finality proof or block MMR
-/// cannot be built for the requested height.
+/// Returns [`BridgeFinalityError`] when the underlying finality proof cannot be
+/// built for the requested height.
 pub fn build_finality_bundle(
     state: &impl BridgeStateReadOnly,
     height: u64,
 ) -> Result<BridgeFinalityBundle, BridgeFinalityError> {
     let proof = build_finality_proof(state, height)?;
-    let mmr = compute_block_mmr(state, height)?;
-    let mmr_root = mmr.root();
     let commitment = BridgeCommitment {
         chain_id: proof.finality_artifact.height_context.chain_id.clone(),
         height_context_id: proof.finality_artifact.context_id(),
         block_height: proof.finality_artifact.height,
         block_hash: proof.finality_artifact.block_hash,
-        mmr_root,
-        mmr_leaf_index: mmr.leaves().checked_sub(1),
-        mmr_peaks: Some(mmr.peaks.iter().map(|p| p.hash).collect()),
     };
     Ok(BridgeFinalityBundle {
         commitment,
@@ -1320,8 +1263,8 @@ pub fn verify_sccp_finality_proof_against_local_state(
 ///
 /// # Errors
 /// Returns a human-readable rejection reason when the context's finality
-/// artifact differs from authoritative local state or its one BLS aggregate
-/// verification fails.
+/// artifact differs from authoritative local state or the proof-typed storage
+/// lookup rejects that local artifact.
 pub fn verify_sccp_destination_context_against_local_state(
     state: &impl BridgeStateReadOnly,
     context: &iroha_sccp::SccpVerifiedDestinationContextV1,
@@ -1358,7 +1301,7 @@ fn verify_structural_sccp_finality_proof_against_local_state(
     validate_local_sccp_records_against_commitment_root(&local_block, commitment_root)?;
 
     let local_artifact = state
-        .bridge_v2_finality_artifact(height)
+        .bridge_verified_v2_finality_artifact(height)
         .map_err(|reason| {
             format!(
                 "failed to load local Sumeragi-v2 finality artifact at height {height}: {reason}"
@@ -1367,44 +1310,14 @@ fn verify_structural_sccp_finality_proof_against_local_state(
         .ok_or_else(|| {
             format!("local Sumeragi-v2 finality artifact at height {height} is missing")
         })?;
-    if local_artifact != *artifact {
+    if local_artifact.artifact() != artifact {
         return Err(
             "SCCP finality proof artifact does not match the exact durable local artifact"
                 .to_owned(),
         );
     }
 
-    count_sccp_local_bls_verification_for_tests();
-    iroha_data_model::bridge::verify_bridge_finality_proof(finality, state.bridge_chain_id())
-        .map_err(|error| {
-            format!("SCCP finality proof cryptographic verification failed: {error}")
-        })?;
     Ok(finality.clone())
-}
-
-#[cfg(test)]
-std::thread_local! {
-    static SCCP_LOCAL_BLS_VERIFICATIONS: core::cell::Cell<usize> = const {
-        core::cell::Cell::new(0)
-    };
-}
-
-#[cfg(test)]
-fn count_sccp_local_bls_verification_for_tests() {
-    SCCP_LOCAL_BLS_VERIFICATIONS.with(|counter| counter.set(counter.get().saturating_add(1)));
-}
-
-#[cfg(not(test))]
-fn count_sccp_local_bls_verification_for_tests() {}
-
-#[cfg(test)]
-pub(crate) fn reset_sccp_local_bls_verifications_for_tests() {
-    SCCP_LOCAL_BLS_VERIFICATIONS.with(|counter| counter.set(0));
-}
-
-#[cfg(test)]
-pub(crate) fn sccp_local_bls_verifications_for_tests() -> usize {
-    SCCP_LOCAL_BLS_VERIFICATIONS.with(core::cell::Cell::get)
 }
 
 #[cfg(test)]
@@ -1460,7 +1373,7 @@ mod tests {
     struct TestSccpFinalityState {
         chain_id: ChainId,
         block: Option<Arc<SignedBlock>>,
-        artifact: Option<iroha_data_model::block::consensus_v2::finality::V2FinalityArtifact>,
+        artifact: Option<V2FinalityArtifact>,
         artifact_error: Option<String>,
     }
 
@@ -1476,21 +1389,20 @@ mod tests {
             })
         }
 
-        fn bridge_v2_finality_artifact(
+        fn bridge_verified_v2_finality_artifact(
             &self,
             height: u64,
-        ) -> Result<
-            Option<iroha_data_model::block::consensus_v2::finality::V2FinalityArtifact>,
-            String,
-        > {
+        ) -> Result<Option<VerifiedV2FinalityArtifact>, String> {
             if let Some(error) = &self.artifact_error {
                 return Err(error.clone());
             }
-            Ok(self
-                .artifact
+            self.artifact
                 .as_ref()
                 .filter(|artifact| artifact.height == height)
-                .cloned())
+                .cloned()
+                .map(VerifiedV2FinalityArtifact::verify)
+                .transpose()
+                .map_err(|error| error.to_string())
         }
     }
 
@@ -1765,7 +1677,7 @@ mod tests {
     }
 
     #[test]
-    fn destination_context_uses_one_decode_pairing_and_local_bls() {
+    fn destination_context_uses_one_decode_pairing_and_verified_local_artifact() {
         let fixture = iroha_sccp::sccp_exact_outbound_test_fixture_v1();
         iroha_sccp::reset_sccp_destination_proof_work_counters_v1();
         let parsed = iroha_sccp::parse_sccp_destination_proof_v1(&fixture.bridge_proof)
@@ -1782,11 +1694,9 @@ mod tests {
             }
         );
         let state = persisted_state_for_exact_sccp_fixture(&fixture, verified.finality());
-        reset_sccp_local_bls_verifications_for_tests();
 
         verify_sccp_destination_context_against_local_state(&state, &verified)
             .expect("route-bound context must anchor to exact local v2 artifact");
-        assert_eq!(sccp_local_bls_verifications_for_tests(), 1);
         assert_eq!(
             iroha_sccp::sccp_destination_proof_work_counters_v1(),
             iroha_sccp::SccpDestinationProofWorkCountersV1 {
@@ -1800,7 +1710,7 @@ mod tests {
     }
 
     #[test]
-    fn sccp_finality_local_state_check_rejects_missing_block_before_bls() {
+    fn sccp_finality_local_state_check_rejects_missing_block_before_artifact_lookup() {
         let fixture = iroha_sccp::sccp_exact_outbound_test_fixture_v1();
         let finality =
             iroha_sccp::decode_taira_bridge_finality_proof(&fixture.bundle.finality_proof)
@@ -1811,43 +1721,39 @@ mod tests {
             artifact: None,
             artifact_error: None,
         };
-        reset_sccp_local_bls_verifications_for_tests();
         let err = verify_sccp_finality_proof_against_local_state(&state, &finality)
             .expect_err("unanchored SCCP finality must fail before local crypto");
         assert!(err.contains("block 1 is not available locally"), "{err}");
-        assert_eq!(sccp_local_bls_verifications_for_tests(), 0);
     }
 
     #[test]
-    fn sccp_local_anchor_rejects_artifact_chain_and_record_substitution_before_bls() {
+    fn sccp_local_anchor_rejects_artifact_chain_and_record_substitution() {
         let fixture = iroha_sccp::sccp_exact_outbound_test_fixture_v1();
         let finality =
             iroha_sccp::decode_taira_bridge_finality_proof(&fixture.bundle.finality_proof)
                 .expect("exact fixture finality proof");
         let base = persisted_state_for_exact_sccp_fixture(&fixture, &finality);
 
-        let assert_rejected_before_bls = |state: &TestSccpFinalityState, expected: &str| {
-            reset_sccp_local_bls_verifications_for_tests();
+        let assert_rejected = |state: &TestSccpFinalityState, expected: &str| {
             let error = verify_sccp_finality_proof_against_local_state(state, &finality)
                 .expect_err("adversarial local substitution must fail");
             assert!(
                 error.contains(expected),
                 "expected {expected:?}, got {error:?}"
             );
-            assert_eq!(sccp_local_bls_verifications_for_tests(), 0);
         };
 
         let mut attack = base.clone();
         attack.chain_id = "attacker-chain".into();
-        assert_rejected_before_bls(&attack, "chain id");
+        assert_rejected(&attack, "chain id");
 
         let mut attack = base.clone();
         attack.artifact = None;
-        assert_rejected_before_bls(&attack, "artifact at height 1 is missing");
+        assert_rejected(&attack, "artifact at height 1 is missing");
 
         let mut attack = base.clone();
         attack.artifact_error = Some("corrupt sidecar".to_owned());
-        assert_rejected_before_bls(&attack, "corrupt sidecar");
+        assert_rejected(&attack, "corrupt sidecar");
 
         let mut attack = base.clone();
         attack
@@ -1856,7 +1762,10 @@ mod tests {
             .expect("base artifact")
             .commit_qc
             .aggregate_signature[0] ^= 1;
-        assert_rejected_before_bls(&attack, "exact durable local artifact");
+        assert_rejected(
+            &attack,
+            "failed to load local Sumeragi-v2 finality artifact",
+        );
 
         let mut attack = base.clone();
         attack
@@ -1864,7 +1773,10 @@ mod tests {
             .as_mut()
             .expect("base artifact")
             .validator_set_pops[0][0] ^= 1;
-        assert_rejected_before_bls(&attack, "exact durable local artifact");
+        assert_rejected(
+            &attack,
+            "failed to load local Sumeragi-v2 finality artifact",
+        );
 
         let hostile_payload =
             canonical_test_sccp_payload_bytes(&sample_transfer_payload(999, [0x44; 20]));
@@ -1889,7 +1801,7 @@ mod tests {
             .expect("hostile local block results");
         let mut attack = base;
         attack.block = Some(Arc::new(hostile_block));
-        assert_rejected_before_bls(&attack, "commitment root does not match local SCCP records");
+        assert_rejected(&attack, "commitment root does not match local SCCP records");
     }
 
     #[test]
@@ -2116,9 +2028,7 @@ mod tests {
     #[test]
     fn collect_sccp_messages_skips_decodable_but_invalid_payloads() {
         let invalid = sample_transfer_payload(4, [0x22; 20]);
-        let SccpPayloadV1::Transfer(mut invalid_transfer) = invalid else {
-            panic!("sample payload should be a transfer");
-        };
+        let SccpPayloadV1::Transfer(mut invalid_transfer) = invalid;
         invalid_transfer.amount = 0;
         let invalid_payload = SccpPayloadV1::Transfer(invalid_transfer);
         assert!(
@@ -2352,9 +2262,7 @@ mod tests {
     #[test]
     fn collect_sccp_messages_from_accepted_transactions_skips_empty_outbound_route() {
         let mut payload = sample_transfer_payload(12, [0x22; 20]);
-        let SccpPayloadV1::Transfer(transfer) = &mut payload else {
-            unreachable!("sample payload is a transfer");
-        };
+        let SccpPayloadV1::Transfer(transfer) = &mut payload;
         transfer.route_id.clear();
         let accepted =
             accepted_transaction_with_sccp_payload(canonical_test_sccp_payload_bytes(&payload));
@@ -2636,9 +2544,7 @@ mod tests {
     #[test]
     fn validate_sccp_commitment_root_for_signed_block_rejects_bare_transfer_payload() {
         let payload = sample_transfer_payload(20, [0x22; 20]);
-        let SccpPayloadV1::Transfer(transfer) = payload else {
-            unreachable!("sample payload is a transfer");
-        };
+        let SccpPayloadV1::Transfer(transfer) = payload;
         let tx = signed_transaction_with_executable(ivm_proved_with_overlay(vec![
             InstructionBox::from(crate::bridge::test_record_sccp_message(
                 canonical_test_transfer_payload_bytes(&transfer),
@@ -2686,9 +2592,7 @@ mod tests {
     #[test]
     fn validate_sccp_commitment_root_for_signed_block_rejects_empty_outbound_route() {
         let mut payload = sample_transfer_payload(17, [0x22; 20]);
-        let SccpPayloadV1::Transfer(transfer) = &mut payload else {
-            unreachable!("sample payload is a transfer");
-        };
+        let SccpPayloadV1::Transfer(transfer) = &mut payload;
         transfer.route_id.clear();
         let payload = canonical_test_sccp_payload_bytes(&payload);
         let tx = signed_transaction_with_executable(ivm_proved_with_overlay(vec![

@@ -10,6 +10,7 @@ use iroha_data_model::{
     },
     trigger::{TriggerId, action::Repeats},
 };
+mod common;
 
 fn time_trigger(id: &str, namespace: Option<&str>, entrypoint: &str) -> TriggerDescriptor {
     TriggerDescriptor {
@@ -702,7 +703,7 @@ fn public_entrypoint_descriptor_targets_halting_wrapper() {
     vm.set_program_counter(parsed.prefix_len() as u64 + run.entry_pc)
         .expect("seek run wrapper");
     vm.run().expect("run entrypoint wrapper");
-    assert_eq!(vm.register(10), 42);
+    assert_eq!(common::decode_i64_register(&vm, 10), 42);
 }
 
 #[test]
@@ -746,7 +747,7 @@ seiyaku ContractArtifactFixture {
     vm.set_program_counter(parsed.prefix_len() as u64 + main.entry_pc)
         .expect("seek CNTR main wrapper");
     vm.run().expect("run selected main entrypoint");
-    assert_eq!(vm.register(10), 7);
+    assert_eq!(common::decode_i64_register(&vm, 10), 7);
 }
 
 #[test]
@@ -1444,7 +1445,7 @@ fn verify_rejects_noncanonical_or_reserved_state_names() {
     ] {
         let artifact = contract_artifact_with_states(vec![ivm::EmbeddedStateDescriptor {
             name: name.to_owned(),
-            ty: ivm::EmbeddedStateType::I64,
+            ty: ivm::EmbeddedStateType::Int,
         }]);
         let error = ivm::verify_contract_artifact(&artifact)
             .expect_err("noncanonical or reserved state name must fail admission");
@@ -1459,7 +1460,7 @@ fn verify_rejects_noncanonical_or_reserved_state_names() {
     ivm::verify_contract_artifact(&contract_artifact_with_states(vec![
         ivm::EmbeddedStateDescriptor {
             name: "_counter2".to_owned(),
-            ty: ivm::EmbeddedStateType::I64,
+            ty: ivm::EmbeddedStateType::Int,
         },
     ]))
     .expect("valid ASCII state identifier must pass admission");
@@ -1473,7 +1474,7 @@ fn verify_rejects_noncanonical_or_reserved_state_names() {
             name: "Record".to_owned(),
             fields: vec![ivm::EmbeddedStateFieldDescriptor {
                 name: "field-name".to_owned(),
-                ty: ivm::EmbeddedStateType::I64,
+                ty: ivm::EmbeddedStateType::Int,
             }],
         },
     ] {

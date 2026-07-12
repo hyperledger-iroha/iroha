@@ -1917,6 +1917,13 @@ mod tests {
         argument_record_gas_for_schema_bound(record_bytes, schema_bytes.len(), bound)
     }
 
+    fn int_atom(value: i128) -> EntrypointValueAtomV1 {
+        EntrypointValueAtomV1::Pointer(
+            crate::numeric_tlv::encode_int(&BigInt::from_i128(value))
+                .expect("encode canonical Int atom"),
+        )
+    }
+
     #[test]
     fn numeric_argument_atoms_require_canonical_decimal_strings() {
         assert_eq!(decode_int(&norito::json!("-7")), Ok(BigInt::from_i128(-7)));
@@ -1997,6 +2004,14 @@ mod tests {
             .collect()
     }
 
+    fn decoded_int(vm: &IVM, pointer: u64) -> BigInt {
+        let value = vm.validate_tlv(pointer).expect("materialized Int TLV");
+        assert_eq!(value.type_id, PointerType::Int);
+        IntValueV1::decode_frame(value.payload)
+            .expect("decode canonical Int frame")
+            .into_int()
+    }
+
     #[test]
     fn argument_record_binding_v1_golden() {
         let canonical_record = hex::decode("000102ff").expect("decode golden record bytes");
@@ -2026,7 +2041,7 @@ mod tests {
             ],
         };
         let payload = Json::from(norito::json!({
-            "count": 7,
+            "count": "7",
             "label": "ready",
             "bytes": "0x0102",
         }));
@@ -2039,8 +2054,8 @@ mod tests {
         assert_eq!(table.type_id, PointerType::Blob);
         assert_eq!(table.payload.len(), 1 + 3 * core::mem::size_of::<u64>());
         assert_eq!(table.payload[0], 0, "alignment prefix must be canonical");
-        let count = u64::from_le_bytes(table.payload[1..9].try_into().expect("count word"));
-        assert_eq!(count, 7);
+        let count_pointer = u64::from_le_bytes(table.payload[1..9].try_into().expect("count word"));
+        assert_eq!(decoded_int(&vm, count_pointer), BigInt::from_i128(7));
         for bytes in [9..17, 17..25] {
             let pointer =
                 u64::from_le_bytes(table.payload[bytes].try_into().expect("pointer word"));
@@ -2063,7 +2078,7 @@ mod tests {
             ],
         };
         let payload = Json::from(norito::json!({
-            "count": 7,
+            "count": "7",
             "label": "ready",
         }));
         let canonical: Arc<[u8]> = Arc::from(
@@ -2101,7 +2116,8 @@ mod tests {
             .expect("materialize prepared arguments");
 
         RECORD_DECODE_COUNT.with(|count| assert_eq!(count.get(), 1));
-        assert_eq!(decoded_words(&vm)[0], 7);
+        let count_pointer = decoded_words(&vm)[0];
+        assert_eq!(decoded_int(&vm, count_pointer), BigInt::from_i128(7));
     }
 
     #[test]
@@ -2113,7 +2129,7 @@ mod tests {
             }],
         };
         let canonical: Arc<[u8]> = Arc::from(
-            encode_argument_record_from_json(&schema, &Json::from(norito::json!({"count": 7})))
+            encode_argument_record_from_json(&schema, &Json::from(norito::json!({"count": "7"})))
                 .expect("encode argument record"),
         );
         let prepared =
@@ -2161,7 +2177,7 @@ mod tests {
             }],
         };
         let canonical: Arc<[u8]> = Arc::from(
-            encode_argument_record_from_json(&schema, &Json::from(norito::json!({"count": 7})))
+            encode_argument_record_from_json(&schema, &Json::from(norito::json!({"count": "7"})))
                 .expect("encode argument record"),
         );
         let prepared = prepare_argument_record_with_gas_limit(&schema, canonical, u64::MAX)
@@ -2553,6 +2569,136 @@ mod tests {
     }
 
     #[test]
+    fn raw_argument_record_decoder_accepts_heap_backed_record_and_schema() {
+        let schema = EntrypointArgumentSchemaV1 {
+            fields: vec![EntrypointArgumentFieldV1 {
+                name: "payload".to_owned(),
+                ty: argument_type(EntrypointValueKindV1::String),
+            }],
+        };
+        let record = encode_argument_record_from_json(
+            &schema,
+            &Json::from(norito::json!({ "payload": "heap-input" })),
+        )
+        .expect("encode argument record");
+        let record_envelope =
+            encode_tlv(PointerType::NoritoBytes, &record).expect("encode record TLV");
+        let schema_envelope = encode_tlv(
+            PointerType::NoritoBytes,
+            &to_bytes(&schema).expect("encode schema"),
+        )
+        .expect("encode schema TLV");
+        let mut vm = IVM::new(u64::MAX);
+        let record_pointer = vm
+            .alloc_heap(u64::try_from(record_envelope.len()).expect("record length fits u64"))
+            .expect("allocate HEAP record");
+        vm.store_bytes(record_pointer, &record_envelope)
+            .expect("store HEAP record");
+        let schema_pointer = vm
+            .alloc_heap(u64::try_from(schema_envelope.len()).expect("schema length fits u64"))
+            .expect("allocate HEAP schema");
+        vm.store_bytes(schema_pointer, &schema_envelope)
+            .expect("store HEAP schema");
+        vm.set_register(10, record_pointer);
+        vm.set_register(11, schema_pointer);
+
+        let quote = decode_argument_record_gas_quote(&vm).expect("quote HEAP arguments");
+        let actual = decode_argument_record(&mut vm).expect("decode HEAP arguments");
+        assert!(actual <= quote);
+        let words = decoded_words(&vm);
+        assert_eq!(words.len(), 1);
+        let value = vm.validate_tlv(words[0]).expect("materialized string TLV");
+        assert_eq!(value.type_id, PointerType::Blob);
+        assert_eq!(value.payload, b"heap-input");
+    }
+
+    #[test]
+    fn raw_argument_record_decoder_rejects_forged_pointer_regions_before_output() {
+        let schema = EntrypointArgumentSchemaV1 {
+            fields: vec![EntrypointArgumentFieldV1 {
+                name: "count".to_owned(),
+                ty: argument_type(EntrypointValueKindV1::Int),
+            }],
+        };
+        let record =
+            encode_argument_record_from_json(&schema, &Json::from(norito::json!({ "count": "7" })))
+                .expect("encode argument record");
+        let record_envelope =
+            encode_tlv(PointerType::NoritoBytes, &record).expect("encode record TLV");
+        let schema_envelope = encode_tlv(
+            PointerType::NoritoBytes,
+            &to_bytes(&schema).expect("encode schema"),
+        )
+        .expect("encode schema TLV");
+
+        for (label, pointer) in [
+            ("unallocated HEAP", crate::memory::Memory::HEAP_START),
+            ("OUTPUT", crate::memory::Memory::OUTPUT_START),
+            ("stack", crate::memory::Memory::STACK_START),
+        ] {
+            let mut vm = IVM::new(u64::MAX);
+            vm.store_bytes(pointer, &record_envelope)
+                .unwrap_or_else(|error| panic!("store {label} record: {error:?}"));
+            let schema_pointer = vm
+                .alloc_input_tlv(&schema_envelope)
+                .expect("allocate schema fixture");
+            vm.set_register(10, pointer);
+            vm.set_register(11, schema_pointer);
+            let registers_before = [vm.register(10), vm.register(11)];
+            let writes_before = vm.memory.write_log();
+
+            assert_eq!(
+                decode_argument_record_gas_quote(&vm),
+                Err(VMError::NoritoInvalid),
+                "{label} must fail during header-only preparation"
+            );
+            assert_eq!(decode_argument_record(&mut vm), Err(VMError::NoritoInvalid));
+            assert_eq!([vm.register(10), vm.register(11)], registers_before);
+            assert_eq!(vm.memory.write_log(), writes_before);
+        }
+
+        let mut partial_vm = IVM::new(u64::MAX);
+        let owned_record_bytes = record_envelope
+            .len()
+            .checked_sub(8)
+            .expect("record envelope exceeds one HEAP alignment unit");
+        let partial_pointer = partial_vm
+            .alloc_heap(u64::try_from(owned_record_bytes).expect("partial record length fits u64"))
+            .expect("allocate truncated HEAP record range");
+        partial_vm
+            .store_bytes(partial_pointer, &record_envelope)
+            .expect("store across unowned HEAP boundary");
+        let schema_pointer = partial_vm
+            .alloc_input_tlv(&schema_envelope)
+            .expect("allocate partial-case schema");
+        partial_vm.set_register(10, partial_pointer);
+        partial_vm.set_register(11, schema_pointer);
+        assert_eq!(
+            decode_argument_record(&mut partial_vm),
+            Err(VMError::NoritoInvalid)
+        );
+
+        let mut corrupted_vm = IVM::new(u64::MAX);
+        let mut corrupted = record_envelope;
+        let last = corrupted.len() - 1;
+        corrupted[last] ^= 1;
+        let record_pointer = corrupted_vm
+            .alloc_input_tlv(&corrupted)
+            .expect("allocate corrupted record");
+        let schema_pointer = corrupted_vm
+            .alloc_input_tlv(&schema_envelope)
+            .expect("allocate corrupted-case schema");
+        corrupted_vm.set_register(10, record_pointer);
+        corrupted_vm.set_register(11, schema_pointer);
+        decode_argument_record_gas_quote(&corrupted_vm)
+            .expect("hash corruption is intentionally checked after bounded preparation");
+        assert_eq!(
+            decode_argument_record(&mut corrupted_vm),
+            Err(VMError::NoritoInvalid)
+        );
+    }
+
+    #[test]
     fn canonical_v1_scalars_and_typed_ids_roundtrip() {
         let account = AccountId::new(
             "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774"
@@ -2590,7 +2736,7 @@ mod tests {
                 },
                 EntrypointArgumentFieldV1 {
                     name: "wide".to_owned(),
-                    ty: argument_type(EntrypointValueKindV1::U128),
+                    ty: argument_type(EntrypointValueKindV1::Int),
                 },
                 EntrypointArgumentFieldV1 {
                     name: "account".to_owned(),
@@ -2636,17 +2782,13 @@ mod tests {
         assert_eq!(words.len(), schema.fields.len());
         assert_eq!(words[0], 1);
 
-        let string = vm.memory.validate_tlv(words[1]).expect("string TLV");
+        let string = vm.validate_tlv(words[1]).expect("string TLV");
         assert_eq!(string.type_id, PointerType::Blob);
         assert_eq!(string.payload, "言霊".as_bytes());
 
-        let wide_tlv = vm.memory.validate_tlv(words[2]).expect("u128 TLV");
-        assert_eq!(wide_tlv.type_id, PointerType::NoritoBytes);
-        let decoded_wide: Numeric =
-            decode_from_bytes(wide_tlv.payload).expect("decode scale-zero Numeric");
-        assert_eq!(decoded_wide.to_string(), wide.to_string());
+        assert_eq!(decoded_int(&vm, words[2]), BigInt::from(wide));
 
-        let account_tlv = vm.memory.validate_tlv(words[3]).expect("AccountId TLV");
+        let account_tlv = vm.validate_tlv(words[3]).expect("AccountId TLV");
         assert_eq!(account_tlv.type_id, PointerType::AccountId);
         assert_eq!(
             decode_from_bytes::<AccountId>(account_tlv.payload).expect("decode AccountId"),
@@ -2662,25 +2804,25 @@ mod tests {
                 .expect("decode AssetDefinitionId"),
             definition
         );
-        let asset_tlv = vm.memory.validate_tlv(words[5]).expect("AssetId TLV");
+        let asset_tlv = vm.validate_tlv(words[5]).expect("AssetId TLV");
         assert_eq!(asset_tlv.type_id, PointerType::AssetId);
         assert_eq!(
             decode_from_bytes::<AssetId>(asset_tlv.payload).expect("decode AssetId"),
             asset
         );
-        let domain_tlv = vm.memory.validate_tlv(words[6]).expect("DomainId TLV");
+        let domain_tlv = vm.validate_tlv(words[6]).expect("DomainId TLV");
         assert_eq!(domain_tlv.type_id, PointerType::DomainId);
         assert_eq!(
             decode_from_bytes::<DomainId>(domain_tlv.payload).expect("decode DomainId"),
             domain
         );
-        let nft_tlv = vm.memory.validate_tlv(words[7]).expect("NftId TLV");
+        let nft_tlv = vm.validate_tlv(words[7]).expect("NftId TLV");
         assert_eq!(nft_tlv.type_id, PointerType::NftId);
         assert_eq!(
             decode_from_bytes::<NftId>(nft_tlv.payload).expect("decode NftId"),
             nft
         );
-        let dataspace_tlv = vm.memory.validate_tlv(words[8]).expect("DataSpaceId TLV");
+        let dataspace_tlv = vm.validate_tlv(words[8]).expect("DataSpaceId TLV");
         assert_eq!(dataspace_tlv.type_id, PointerType::DataSpaceId);
         assert_eq!(
             decode_from_bytes::<DataSpaceId>(dataspace_tlv.payload).expect("decode DataSpaceId"),
@@ -2716,7 +2858,7 @@ mod tests {
         assert_eq!(schema.word_count(), Some(4));
         let payload = Json::from(norito::json!({
             "request": {
-                "pair": [7, true],
+                "pair": ["7", true],
                 "memo": { "some": "言霊" },
                 "outcome": { "err": true },
             },
@@ -2728,7 +2870,7 @@ mod tests {
         RECORD_DECODE_COUNT.with(|count| assert_eq!(count.get(), 1));
         let words = decoded_words(&vm);
         assert_eq!(words.len(), 4);
-        assert_eq!(words[0], 7);
+        assert_eq!(decoded_int(&vm, words[0]), BigInt::from_i128(7));
         assert_eq!(words[1], 1);
         let (some, memo) = crate::sum::read_words(
             &vm,
@@ -2738,7 +2880,7 @@ mod tests {
         .expect("read Option");
         assert!(some);
         assert_eq!(memo.len(), 1);
-        let memo = vm.memory.validate_tlv(memo[0]).expect("memo string TLV");
+        let memo = vm.validate_tlv(memo[0]).expect("memo string TLV");
         assert_eq!(memo.type_id, PointerType::Blob);
         assert_eq!(memo.payload, "言霊".as_bytes());
         let (ok, outcome) = crate::sum::read_words(
@@ -2806,7 +2948,7 @@ mod tests {
         };
         assert!(schema.validate());
 
-        let mut value = njson::Value::from(7_i64);
+        let mut value = njson::Value::String("7".to_owned());
         for _ in 0..levels {
             value = njson::Value::Array(vec![value]);
         }
@@ -2823,7 +2965,7 @@ mod tests {
             assert_eq!(items[0].len(), 1);
             word = items[0][0];
         }
-        assert_eq!(word as i64, 7);
+        assert_eq!(decoded_int(&vm, word), BigInt::from_i128(7));
 
         let over_limit = EntrypointArgumentSchemaV1 {
             fields: vec![EntrypointArgumentFieldV1 {
@@ -2854,16 +2996,16 @@ mod tests {
             }],
         };
         let payload = Json::from(norito::json!({
-            "pairs": [[7, true], [9, false]],
+            "pairs": [["7", true], ["9", false]],
         }));
         let record = argument_record_from_json(&schema, &payload).expect("encode flat list tape");
         assert_eq!(
             record.atoms,
             vec![
                 EntrypointValueAtomV1::List(2),
-                EntrypointValueAtomV1::Int(7),
+                int_atom(7),
                 EntrypointValueAtomV1::Bool(true),
-                EntrypointValueAtomV1::Int(9),
+                int_atom(9),
                 EntrypointValueAtomV1::Bool(false),
             ],
             "list items must live inline in the record's single preorder atom tape",
@@ -2872,15 +3014,17 @@ mod tests {
         decode_argument_record(&mut vm).expect("decode flat list element subtree");
         let table = decoded_words(&vm);
         assert_eq!(table.len(), 1, "the list itself is one ABI word");
-        assert_eq!(
-            crate::list::read_words(
-                &vm,
-                table[0],
-                ListLayoutV1::try_new(2, 2).expect("pair-list layout"),
-            )
-            .expect("read contiguous pair list"),
-            vec![vec![7, 1], vec![9, 0]],
-        );
+        let pairs = crate::list::read_words(
+            &vm,
+            table[0],
+            ListLayoutV1::try_new(2, 2).expect("pair-list layout"),
+        )
+        .expect("read contiguous pair list");
+        assert_eq!(pairs.len(), 2);
+        assert_eq!(pairs[0][1], 1);
+        assert_eq!(pairs[1][1], 0);
+        assert_eq!(decoded_int(&vm, pairs[0][0]), BigInt::from_i128(7));
+        assert_eq!(decoded_int(&vm, pairs[1][0]), BigInt::from_i128(9));
 
         let schema_bytes = to_bytes(&schema).expect("encode pair-list schema");
         let schema_hash = entrypoint_argument_schema_hash_v1(&schema_bytes);
@@ -2889,17 +3033,14 @@ mod tests {
                 "trailing atom",
                 vec![
                     EntrypointValueAtomV1::List(1),
-                    EntrypointValueAtomV1::Int(7),
+                    int_atom(7),
                     EntrypointValueAtomV1::Bool(true),
-                    EntrypointValueAtomV1::Int(99),
+                    int_atom(99),
                 ],
             ),
             (
                 "missing atom",
-                vec![
-                    EntrypointValueAtomV1::List(1),
-                    EntrypointValueAtomV1::Int(7),
-                ],
+                vec![EntrypointValueAtomV1::List(1), int_atom(7)],
             ),
             (
                 "wrong atom kind",
@@ -2913,11 +3054,11 @@ mod tests {
                 "capacity overflow",
                 vec![
                     EntrypointValueAtomV1::List(3),
-                    EntrypointValueAtomV1::Int(1),
+                    int_atom(1),
                     EntrypointValueAtomV1::Bool(true),
-                    EntrypointValueAtomV1::Int(2),
+                    int_atom(2),
                     EntrypointValueAtomV1::Bool(true),
-                    EntrypointValueAtomV1::Int(3),
+                    int_atom(3),
                     EntrypointValueAtomV1::Bool(true),
                 ],
             ),
@@ -2925,7 +3066,7 @@ mod tests {
                 "item count exceeds available elements",
                 vec![
                     EntrypointValueAtomV1::List(2),
-                    EntrypointValueAtomV1::Int(1),
+                    int_atom(1),
                     EntrypointValueAtomV1::Bool(true),
                 ],
             ),
@@ -3010,7 +3151,7 @@ mod tests {
         let mut vm = install_record(
             &schema,
             &Json::from(norito::json!({
-                "request": { "pairs": [], "nonce": 41 },
+                "request": { "pairs": [], "nonce": "41" },
             })),
         );
         decode_argument_record(&mut vm).expect("decode empty list before product sibling");
@@ -3025,7 +3166,7 @@ mod tests {
             .expect("read empty list")
             .is_empty(),
         );
-        assert_eq!(words[1], 41);
+        assert_eq!(decoded_int(&vm, words[1]), BigInt::from_i128(41));
     }
 
     #[test]
@@ -3108,7 +3249,7 @@ mod tests {
             ],
         };
         let invalid = [
-            norito::json!({ "some": 1, "none": true }),
+            norito::json!({ "some": "1", "none": true }),
             norito::json!({ "none": false }),
             norito::json!({ "None": true }),
             njson::Value::Null,
@@ -3144,10 +3285,7 @@ mod tests {
         let option_schema_bytes = to_bytes(&option_schema).expect("option schema bytes");
         let hidden = EntrypointArgumentRecordV1 {
             schema_hash: entrypoint_argument_schema_hash_v1(&option_schema_bytes),
-            atoms: vec![
-                EntrypointValueAtomV1::Tag(false),
-                EntrypointValueAtomV1::Int(99),
-            ],
+            atoms: vec![EntrypointValueAtomV1::Tag(false), int_atom(99)],
         };
         let mut vm = install_raw_record(&option_schema, &hidden);
         assert_eq!(decode_argument_record(&mut vm), Err(VMError::DecodeError));
@@ -3186,7 +3324,7 @@ mod tests {
             }],
         };
         let canonical =
-            encode_argument_record_from_json(&schema, &Json::from(norito::json!({ "value": 7 })))
+            encode_argument_record_from_json(&schema, &Json::from(norito::json!({ "value": "7" })))
                 .expect("canonical record");
         validate_argument_record(&schema, &canonical).expect("valid record");
 
@@ -3230,9 +3368,9 @@ mod tests {
                 njson::Value::String("true".to_owned()),
             ),
             (EntrypointValueKindV1::String, njson::Value::Bool(true)),
-            (EntrypointValueKindV1::U128, njson::Value::from(7_u64)),
+            (EntrypointValueKindV1::Int, njson::Value::from(7_u64)),
             (
-                EntrypointValueKindV1::U128,
+                EntrypointValueKindV1::Int,
                 njson::Value::String("01".to_owned()),
             ),
             (
@@ -3291,7 +3429,7 @@ mod tests {
                 },
             ],
         };
-        let max_count = i64::MAX;
+        let max_count = i64::MAX.to_string();
         let payload = Json::from(norito::json!({
             "count": max_count,
             "bytes": "0x000102ff",
@@ -3299,7 +3437,9 @@ mod tests {
         install_record(&schema, &payload)
     }
 
+    #[track_caller]
     fn assert_aggregate_schema_predecode_bound(
+        label: &str,
         schema: &EntrypointArgumentSchemaV1,
         payload: &Json,
         expected_materialized_raw_heap: u64,
@@ -3323,7 +3463,9 @@ mod tests {
         assert_eq!(argument_record_decode_count(), 0);
 
         let prepared = prepare_argument_record_with_gas_limit(schema, canonical, bound)
-            .expect("aggregate record must fit its conservative bound");
+            .unwrap_or_else(|error| {
+                panic!("{label} record must fit its conservative bound: {error:?}")
+            });
         assert_eq!(argument_record_decode_count(), 1);
         assert!(prepared.inner.decode_plan.gas() <= bound);
         assert!(
@@ -3368,13 +3510,23 @@ mod tests {
         let wide_bound = schema_materialization_bound(&wide).expect("wide schema bound");
         assert_eq!(narrow_bound.raw_heap_bytes, 24);
         assert_eq!(wide_bound.raw_heap_bytes, 528);
+        assert_eq!(narrow_bound.pointer_envelopes, 1);
+        assert_eq!(wide_bound.pointer_envelopes, 64);
 
         let narrow_quote = prepared_gas_bound(&narrow, narrow_record.len());
         let wide_quote = prepared_gas_bound(&wide, wide_record.len());
+        let narrow_materialized =
+            materialized_bytes_for_schema_bound(narrow_record.len(), narrow_bound);
+        let wide_materialized = materialized_bytes_for_schema_bound(wide_record.len(), wide_bound);
         assert_eq!(
             wide_quote - narrow_quote,
-            wide_bound.raw_heap_bytes - narrow_bound.raw_heap_bytes,
-            "equal wire lengths must differ only by their schema-derived List allocation"
+            wide_materialized - narrow_materialized,
+            "equal wire lengths must differ by the schema-derived List and pointer-copy bounds"
+        );
+        assert!(
+            wide_materialized - narrow_materialized
+                >= wide_bound.raw_heap_bytes - narrow_bound.raw_heap_bytes,
+            "the conservative pointer-copy allowance must not reduce the raw List reservation"
         );
         assert!(
             wide_quote < 1_000_000,
@@ -3424,8 +3576,14 @@ mod tests {
             empty_string_list_bound.pointer_envelopes, 64,
             "pointer-copy alignment allowance must scale with bounded element capacity"
         );
-        assert_aggregate_schema_predecode_bound(&empty_string_list, &empty_list_payload, 528);
         assert_aggregate_schema_predecode_bound(
+            "empty string list",
+            &empty_string_list,
+            &empty_list_payload,
+            528,
+        );
+        assert_aggregate_schema_predecode_bound(
+            "populated string list",
             &empty_string_list,
             &Json::from(norito::json!({ "value": ["a", "bb"] })),
             528,
@@ -3453,7 +3611,12 @@ mod tests {
                 .raw_heap_bytes,
             40
         );
-        assert_aggregate_schema_predecode_bound(&option_wide_tuple, &none_payload, 40);
+        assert_aggregate_schema_predecode_bound(
+            "inactive wide Option",
+            &option_wide_tuple,
+            &none_payload,
+            40,
+        );
 
         let named_product = EntrypointArgumentSchemaV1 {
             fields: vec![EntrypointArgumentFieldV1 {
@@ -3481,11 +3644,16 @@ mod tests {
             schema_materialization_bound(&named_product).expect("named product schema bound"),
             SchemaMaterializationBound {
                 words: 2,
-                pointer_envelopes: 0,
+                pointer_envelopes: 3,
                 raw_heap_bytes: 48,
             }
         );
-        assert_aggregate_schema_predecode_bound(&named_product, &product_payload, 48);
+        assert_aggregate_schema_predecode_bound(
+            "named product",
+            &named_product,
+            &product_payload,
+            48,
+        );
 
         let result_unequal_branches = EntrypointArgumentSchemaV1 {
             fields: vec![EntrypointArgumentFieldV1 {
@@ -3504,7 +3672,7 @@ mod tests {
                 },
             }],
         };
-        let err_payload = Json::from(norito::json!({ "value": { "err": [1, 2, 3, 4] } }));
+        let err_payload = Json::from(norito::json!({ "value": { "err": ["1", "2", "3", "4"] } }));
         assert_eq!(
             schema_materialization_bound(&result_unequal_branches)
                 .expect("Result schema bound")
@@ -3512,7 +3680,12 @@ mod tests {
             568,
             "the fixed Result allocation plus the larger active branch must be reserved"
         );
-        assert_aggregate_schema_predecode_bound(&result_unequal_branches, &err_payload, 40);
+        assert_aggregate_schema_predecode_bound(
+            "unequal Result branch",
+            &result_unequal_branches,
+            &err_payload,
+            40,
+        );
 
         let nested_element = EntrypointValueTypeV1 {
             nodes: vec![
@@ -3533,7 +3706,12 @@ mod tests {
                 .raw_heap_bytes,
             35_344
         );
-        assert_aggregate_schema_predecode_bound(&nested, &empty_list_payload, 528);
+        assert_aggregate_schema_predecode_bound(
+            "nested empty list",
+            &nested,
+            &empty_list_payload,
+            528,
+        );
 
         reset_argument_record_decode_count();
         let mut vm = install_record(&empty_string_list, &empty_list_payload);
@@ -3570,6 +3748,7 @@ mod tests {
             "exponential nested capacity must saturate at the executable HEAP ceiling"
         );
         assert_aggregate_schema_predecode_bound(
+            "maximum-depth empty list",
             &schema,
             &Json::from(norito::json!({ "value": [] })),
             528,
@@ -3837,7 +4016,7 @@ mod tests {
             }],
         };
         let record =
-            encode_argument_record_from_json(&schema, &Json::from(norito::json!({"value": 1})))
+            encode_argument_record_from_json(&schema, &Json::from(norito::json!({"value": "1"})))
                 .expect("encode record");
         let mut record_envelope =
             encode_tlv(PointerType::NoritoBytes, &record).expect("encode record envelope");

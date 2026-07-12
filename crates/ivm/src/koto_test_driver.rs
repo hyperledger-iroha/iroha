@@ -24,8 +24,16 @@ use crate::{
 use ed25519_dalek::{Signature as Ed25519Signature, Verifier as _};
 use ed25519_dalek::{Signer as _, SigningKey};
 use iroha_data_model::prelude::{Mintable, Name};
-use iroha_primitives::{json::Json, numeric::Numeric};
+use iroha_data_model::{
+    nexus::DataSpaceId,
+    smart_contract::{CHAIN_DISCRIMINANT_MAINNET, ContractAddress},
+};
+use iroha_primitives::{json::Json, numeric::Numeric, numeric_abi::DecimalValueV1};
 use ivm_abi::entrypoint::EntrypointArgumentSchemaV1;
+use ivm_abi::state_value::{
+    StateValueAtomV1, StateValueKindV1, StateValueNodeV1, StateValueRecordV1, StateValueSchemaV1,
+    state_value_schema_hash_v1,
+};
 use norito::codec::Encode;
 use norito::json::{self, Value};
 
@@ -112,6 +120,7 @@ struct CompiledSuite {
 struct RuntimeEntrypoint {
     pc: u64,
     argument_schema: Option<EntrypointArgumentSchemaV1>,
+    permission: Option<String>,
 }
 
 #[derive(Clone)]
@@ -146,6 +155,7 @@ struct KotoTestHost {
     base_public_inputs: BTreeMap<Name, Vec<u8>>,
     entrypoints: HashMap<String, RuntimeEntrypoint>,
     program: Option<Vec<u8>>,
+    contract_address: ContractAddress,
     last_test_error: Option<String>,
     supplemental_trace_pcs: Vec<u64>,
     supplemental_delta_trace: Vec<crate::zk::DeltaEntry>,
@@ -648,6 +658,7 @@ fn compile_suite(suite: &DiscoveredSuite, zk_enabled: bool) -> Result<CompiledSu
                                 RuntimeEntrypoint {
                                     pc: runtime_pc_base.saturating_add(entry.entry_pc),
                                     argument_schema: entry.argument_schema.clone(),
+                                    permission: entry.permission.clone(),
                                 },
                             )
                         })
@@ -931,6 +942,26 @@ fn apply_fixture_action(
             }
             Err("fixture action `grant_permission` expects 1 or 2 arguments".to_string())
         }
+        "grant_contract_entrypoint_permission" => {
+            expect_arg_count(action, 2)?;
+            let alias = eval_actor_alias_expr(&action.args[0])?;
+            let entrypoint = eval_string_expr(&action.args[1])?;
+            if entrypoint.is_empty() || entrypoint.trim() != entrypoint {
+                return Err(
+                    "fixture contract entrypoint permission requires a non-empty canonical selector"
+                        .to_owned(),
+                );
+            }
+            let account = host
+                .actor_account(&alias)
+                .ok_or_else(|| format!("unknown actor `{alias}`"))?;
+            let permission = PermissionToken::ContractEntrypoint {
+                contract: host.contract_address.clone(),
+                entrypoint,
+            };
+            host.inner_mut().wsv.grant_permission(&account, permission);
+            Ok(())
+        }
         "register_domain" => {
             expect_arg_count(action, 1)?;
             let domain = eval_domain_expr(&action.args[0])?;
@@ -1049,12 +1080,20 @@ impl KotoTestHost {
         program: Option<Vec<u8>>,
         entrypoints: HashMap<String, RuntimeEntrypoint>,
     ) -> Self {
+        let contract_address = ContractAddress::derive(
+            CHAIN_DISCRIMINANT_MAINNET,
+            &inner.caller_subject(),
+            0,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("Kotodama test contract address derivation must be deterministic");
         Self {
             inner,
             actors: HashMap::new(),
             base_public_inputs: BTreeMap::new(),
             entrypoints,
             program,
+            contract_address,
             last_test_error: None,
             supplemental_trace_pcs: Vec::new(),
             supplemental_delta_trace: Vec::new(),
@@ -1259,6 +1298,21 @@ impl KotoTestHost {
                 ));
             }
         };
+        if runtime_entrypoint.permission.as_deref() == Some("CanInvokeContractEntrypoint") {
+            let permission = PermissionToken::ContractEntrypoint {
+                contract: self.contract_address.clone(),
+                entrypoint: entrypoint.clone(),
+            };
+            if !self.inner.wsv.has_permission(&actor.account, &permission) {
+                if expect_reject {
+                    vm.set_register(10, 0);
+                    return Ok(0);
+                }
+                return self.fail_test(format!(
+                    "actor `{actor_alias}` lacks exact CanInvokeContractEntrypoint permission for `{entrypoint}`"
+                ));
+            }
+        }
         let Some(program) = self.program.as_deref() else {
             return self.fail_test(format!(
                 "runtime entrypoint `{entrypoint}` has no compiled runtime artifact"
@@ -1640,26 +1694,101 @@ fn eval_detail_bytes(expr: &Expr) -> Result<Vec<u8>, String> {
 }
 
 fn eval_state_payload_expr(expr: &Expr) -> Result<Vec<u8>, String> {
-    let envelope = eval_envelope_expr(expr)?;
-    let tlv = crate::pointer_abi::validate_tlv_bytes(&envelope)
-        .map_err(|error| format!("invalid state fixture value: {error:?}"))?;
-    if tlv.type_id != PointerType::NoritoBytes {
-        return Err("state fixture values must use a NoritoBytes payload".to_owned());
+    let (kind, atom) = match expr {
+        Expr::Bool(value) => (StateValueKindV1::Bool, StateValueAtomV1::Bool(*value)),
+        Expr::IntLiteral(value) => (
+            StateValueKindV1::Int,
+            StateValueAtomV1::Pointer(
+                crate::numeric_tlv::encode_int(value)
+                    .map_err(|error| format!("invalid int state fixture: {error:?}"))?,
+            ),
+        ),
+        Expr::DecimalLiteral(raw) => {
+            let value = raw
+                .replace('_', "")
+                .parse::<Numeric>()
+                .map_err(|_| format!("invalid decimal state fixture `{raw}`"))?;
+            let value = DecimalValueV1::try_from_numeric(value)
+                .map_err(|error| format!("invalid decimal state fixture: {error:?}"))?;
+            (
+                StateValueKindV1::Decimal,
+                StateValueAtomV1::Pointer(
+                    crate::numeric_tlv::encode_decimal(value.as_numeric())
+                        .map_err(|error| format!("invalid decimal state fixture: {error:?}"))?,
+                ),
+            )
+        }
+        Expr::String(raw) | Expr::Ident(raw) => (
+            StateValueKindV1::String,
+            StateValueAtomV1::Pointer(make_tlv(PointerType::Blob, raw.as_bytes())),
+        ),
+        Expr::Bytes(bytes) => (
+            StateValueKindV1::Bytes,
+            StateValueAtomV1::Pointer(make_tlv(PointerType::Blob, bytes)),
+        ),
+        Expr::Call { name, .. } if name == "Json::parse" => (
+            StateValueKindV1::Json,
+            StateValueAtomV1::Pointer(eval_envelope_expr(expr)?),
+        ),
+        Expr::Call { name, .. } if name == "AccountId::parse" => (
+            StateValueKindV1::AccountId,
+            StateValueAtomV1::Pointer(eval_envelope_expr(expr)?),
+        ),
+        Expr::Call { name, .. } if name == "AssetDefinitionId::parse" => (
+            StateValueKindV1::AssetDefinitionId,
+            StateValueAtomV1::Pointer(eval_envelope_expr(expr)?),
+        ),
+        Expr::Call { name, .. } if name == "DomainId::parse" => (
+            StateValueKindV1::DomainId,
+            StateValueAtomV1::Pointer(eval_envelope_expr(expr)?),
+        ),
+        Expr::Call { name, .. } if name == "Name::parse" => (
+            StateValueKindV1::Name,
+            StateValueAtomV1::Pointer(eval_envelope_expr(expr)?),
+        ),
+        other => return Err(format!("unsupported state fixture value `{other:?}`")),
+    };
+    encode_state_leaf(kind, atom)
+}
+
+fn encode_state_leaf(kind: StateValueKindV1, atom: StateValueAtomV1) -> Result<Vec<u8>, String> {
+    let schema = StateValueSchemaV1 {
+        nodes: vec![StateValueNodeV1::Leaf(kind)],
+    };
+    if !schema.validate_atoms(std::slice::from_ref(&atom)) {
+        return Err(format!("invalid {kind:?} state fixture atom"));
     }
-    Ok(tlv.payload.to_vec())
+    let schema_bytes = norito::to_bytes(&schema)
+        .map_err(|error| format!("failed to encode state fixture schema: {error}"))?;
+    norito::to_bytes(&StateValueRecordV1 {
+        schema_hash: state_value_schema_hash_v1(&schema_bytes),
+        atoms: vec![atom],
+    })
+    .map_err(|error| format!("failed to encode state fixture record: {error}"))
 }
 
 fn eval_envelope_expr(expr: &Expr) -> Result<Vec<u8>, String> {
     match expr {
         Expr::Bool(value) => make_norito_envelope(value),
-        Expr::IntLiteral(value) => make_norito_envelope(value),
-        Expr::DecimalLiteral(raw) | Expr::String(raw) | Expr::Ident(raw) => {
-            make_norito_envelope(raw)
+        Expr::IntLiteral(value) => crate::numeric_tlv::encode_int(value)
+            .map_err(|error| format!("invalid int fixture value: {error:?}")),
+        Expr::DecimalLiteral(raw) => {
+            let value = raw
+                .replace('_', "")
+                .parse::<Numeric>()
+                .map_err(|_| format!("invalid decimal fixture value `{raw}`"))?;
+            crate::numeric_tlv::encode_decimal(&value)
+                .map_err(|error| format!("invalid decimal fixture value: {error:?}"))
         }
+        Expr::String(raw) | Expr::Ident(raw) => Ok(make_tlv(PointerType::Blob, raw.as_bytes())),
         Expr::Bytes(bytes) => Ok(make_tlv(PointerType::Blob, bytes)),
         Expr::Call { name, args, .. } if name == "Json::parse" => {
             let payload = eval_json_payload(args)?;
-            Ok(make_tlv(PointerType::Json, payload.as_bytes()))
+            let value = Json::from_str_norito(&payload)
+                .map_err(|error| format!("invalid JSON fixture value: {error}"))?;
+            let encoded = norito::to_bytes(&value)
+                .map_err(|error| format!("failed to encode JSON fixture value: {error}"))?;
+            Ok(make_tlv(PointerType::Json, &encoded))
         }
         Expr::Call { name, args, .. } if name == "AccountId::parse" => {
             if args.len() != 1 {
@@ -2231,12 +2360,49 @@ fn print_profile_report(compiled: &CompiledSuite, results: &[TestRunResult]) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use iroha_primitives::numeric_abi::IntValueV1;
     use std::{
         sync::atomic::{AtomicUsize, Ordering},
         time::{SystemTime, UNIX_EPOCH},
     };
 
     static TEMP_DIR_COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+    fn decode_i64_word(vm: &IVM, pointer: u64) -> i64 {
+        let tlv = vm.validate_tlv(pointer).expect("validate returned int TLV");
+        assert_eq!(tlv.type_id, PointerType::Int);
+        IntValueV1::decode_frame(tlv.payload)
+            .expect("decode returned int frame")
+            .into_int()
+            .try_to_i64()
+            .expect("test result fits i64")
+    }
+
+    fn decode_pointer_state_value(payload: &[u8], kind: StateValueKindV1) -> Vec<u8> {
+        let schema = StateValueSchemaV1 {
+            nodes: vec![StateValueNodeV1::Leaf(kind)],
+        };
+        let schema_bytes = norito::to_bytes(&schema).expect("encode state schema");
+        let record: StateValueRecordV1 =
+            norito::decode_from_bytes(payload).expect("decode state record");
+        assert_eq!(
+            record.schema_hash,
+            state_value_schema_hash_v1(&schema_bytes)
+        );
+        assert!(schema.validate_atoms(&record.atoms));
+        let [StateValueAtomV1::Pointer(envelope)] = record.atoms.as_slice() else {
+            panic!("state record must contain one pointer atom");
+        };
+        envelope.clone()
+    }
+
+    fn decode_int_state_value(payload: &[u8]) -> i64 {
+        let envelope = decode_pointer_state_value(payload, StateValueKindV1::Int);
+        crate::numeric_tlv::decode_int_bytes(&envelope)
+            .expect("decode canonical state int")
+            .try_to_i64()
+            .expect("test state int fits i64")
+    }
 
     struct TestTempDir {
         path: PathBuf,
@@ -2309,6 +2475,23 @@ mod tests {
             fixtures: build_fixture_map(&fixtures).expect("build fixture map"),
         };
         compile_suite(&suite, false).expect("compile fixture suite")
+    }
+
+    #[test]
+    fn pure_unit_test_suite_executes_without_runtime_artifact() {
+        let compiled = compiled_suite_with_fixtures(Vec::new());
+        assert!(compiled.runtime_code.is_none());
+        assert!(compiled.runtime_entrypoints.is_empty());
+
+        let results = execute_suite(&compiled, TraceMode::Off, 1)
+            .expect("execute a suite containing only private helpers and tests");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].name, "smoke");
+        assert!(
+            results[0].passed,
+            "unexpected failure: {:?}",
+            results[0].failure
+        );
     }
 
     #[test]
@@ -2697,8 +2880,7 @@ mod tests {
         host.syscall(TEST_SYSCALL_INVOKE_ENTRYPOINT_AS, &mut vm)
             .expect("invoke increment");
         let counter_state = host.inner.wsv.sc_get("counter").expect("counter state");
-        let counter: i64 = norito::decode_from_bytes(&counter_state).expect("decode counter value");
-        assert_eq!(counter, 5);
+        assert_eq!(decode_int_state_value(&counter_state), 5);
 
         put_blob(&mut vm, 10, "issuer");
         put_blob(&mut vm, 11, "remember_caller");
@@ -2712,8 +2894,11 @@ mod tests {
             .wsv
             .sc_get("last_actor")
             .expect("last_actor state");
-        let remembered_account_tlv = crate::pointer_abi::validate_tlv_bytes(&remembered_state)
-            .expect("remembered account tlv");
+        let remembered_account_envelope =
+            decode_pointer_state_value(&remembered_state, StateValueKindV1::AccountId);
+        let remembered_account_tlv =
+            crate::pointer_abi::validate_tlv_bytes(&remembered_account_envelope)
+                .expect("remembered account tlv");
         assert_eq!(remembered_account_tlv.type_id, PointerType::AccountId);
         let remembered: AccountId = norito::decode_from_bytes(remembered_account_tlv.payload)
             .expect("decode remembered account");
@@ -2727,12 +2912,12 @@ mod tests {
         put_blob(&mut vm, 10, "issuer");
         put_blob(&mut vm, 11, "pair");
         put_json(&mut vm, 12, "{}");
-        vm.set_register(13, 0);
+        vm.set_register(13, 0b11);
         vm.set_register(14, 2);
         host.syscall(TEST_SYSCALL_INVOKE_ENTRYPOINT_AS, &mut vm)
             .expect("invoke pair");
-        assert_eq!(vm.register(10), 2);
-        assert_eq!(vm.register(11), 3);
+        assert_eq!(decode_i64_word(&vm, vm.register(10)), 2);
+        assert_eq!(decode_i64_word(&vm, vm.register(11)), 3);
 
         put_blob(&mut vm, 10, "issuer");
         put_blob(&mut vm, 11, "reject_me");
@@ -3036,10 +3221,8 @@ mod tests {
         )
         .expect("apply public_input");
 
-        assert_eq!(
-            host.inner.wsv.sc_get("demo/counter").expect("seeded state"),
-            make_norito_envelope(&7i64).expect("encoded value"),
-        );
+        let seeded_counter = host.inner.wsv.sc_get("demo/counter").expect("seeded state");
+        assert_eq!(decode_int_state_value(&seeded_counter), 7);
         let trigger_name: Name = "trigger_event_json".parse().expect("name");
         let trigger_payload = public_inputs
             .get(&trigger_name)
@@ -3081,10 +3264,11 @@ mod tests {
             host.caller_subject(),
             parse_account_literal(DEFAULT_CALLER).expect("caller")
         );
-        assert_eq!(
-            host.inner.wsv.sc_get("demo/value").expect("state value"),
-            make_norito_envelope(&"hello").expect("encoded string"),
-        );
+        let stored = host.inner.wsv.sc_get("demo/value").expect("state value");
+        let envelope = decode_pointer_state_value(&stored, StateValueKindV1::String);
+        let value = crate::pointer_abi::validate_tlv_bytes(&envelope).expect("string state TLV");
+        assert_eq!(value.type_id, PointerType::Blob);
+        assert_eq!(value.payload, b"hello");
     }
 
     #[test]
@@ -3126,6 +3310,52 @@ mod tests {
         assert_eq!(
             host.actors["seller"].seed.expect("stored actor seed"),
             actor_seed
+        );
+    }
+
+    #[test]
+    fn fixture_entrypoint_grant_is_address_and_selector_scoped() {
+        let caller = parse_account_literal(DEFAULT_CALLER).expect("caller");
+        let actor = caller.clone();
+        let mut host = KotoTestHost::new(
+            WsvHost::new_with_subject(MockWorldStateView::default(), caller, HashMap::new()),
+            None,
+            HashMap::new(),
+        );
+        host.register_actor("operator".to_owned(), actor.clone())
+            .expect("register fixture actor");
+        let mut public_inputs = BTreeMap::new();
+        apply_fixture_action(
+            &FixtureAction {
+                name: "grant_contract_entrypoint_permission".to_owned(),
+                args: vec![
+                    Expr::String("operator".to_owned()),
+                    Expr::String("apply".to_owned()),
+                ],
+            },
+            &mut host,
+            &mut public_inputs,
+        )
+        .expect("grant exact fixture permission");
+
+        let exact = PermissionToken::ContractEntrypoint {
+            contract: host.contract_address.clone(),
+            entrypoint: "apply".to_owned(),
+        };
+        let wrong_selector = PermissionToken::ContractEntrypoint {
+            contract: host.contract_address.clone(),
+            entrypoint: "other".to_owned(),
+        };
+        assert!(host.inner.wsv.has_permission(&actor, &exact));
+        assert!(!host.inner.wsv.has_permission(&actor, &wrong_selector));
+
+        host.inner.wsv.grant_permission(
+            &actor,
+            PermissionToken::Custom("CanInvokeContractEntrypoint".to_owned()),
+        );
+        assert!(
+            !host.inner.wsv.has_permission(&actor, &wrong_selector),
+            "name-only grants must never materialize a scoped entrypoint capability"
         );
     }
 

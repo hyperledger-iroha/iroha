@@ -4,7 +4,7 @@
 //! allowance, witness-lineage, plaintext receipt, and aggregate proof models are
 //! intentionally absent from this module.
 
-use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, PublicKey, Signature};
+use iroha_crypto::{Algorithm, Hash, KeyPair, PublicKey, Signature};
 use iroha_data_model_derive::model;
 use iroha_primitives::numeric::Numeric;
 use iroha_schema::IntoSchema;
@@ -19,8 +19,11 @@ use crate::{
     ChainId,
     account::AccountId,
     asset::{AssetDefinitionId, AssetId},
-    consensus::VALIDATOR_SET_HASH_VERSION_V1,
-    peer::PeerId,
+    block::consensus_v2::{
+        ConsensusMode, DataAvailabilityLayout, DualQuorum, GlobalPhase, HeightContext,
+        HeightContextId, PROTOCOL_VERSION, QuorumCertificate, ValidatorPower,
+        finality::FinalizedNextEpochSnapshot,
+    },
     proof::{ProofAttachment, ProofBox, VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord},
     zk::BackendTag,
 };
@@ -171,7 +174,7 @@ pub const KAGEMUSHA_AGGREGATION_MODE_RECURSIVE_IN_CIRCUIT_V1: u16 = 2;
 /// SDK-facing Kagemusha spend mode for recursive compact tokens.
 pub const KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1: &str = "recursive_compact_v1";
 /// SDK-facing Kagemusha spend mode for recursive spend-again-offline cash.
-pub const KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1: &str = "recursive_spend_v1";
+pub const KAGEMUSHA_RECURSIVE_SPEND_MODE_V2: &str = "recursive_spend_v2";
 /// Maximum asset scale accepted by the exact Kagemusha V2 amount contract.
 pub const KAGEMUSHA_SCALED_AMOUNT_MAX_SCALE_V2: u32 = 28;
 /// Maximum number of branch decisions carried by one recursive spend lineage.
@@ -193,9 +196,17 @@ pub const KAGEMUSHA_TOPUP_FINALITY_MAX_SIBLINGS_V2: usize = 4;
 /// Maximum validator count accepted by an offline roster artifact.
 pub const KAGEMUSHA_TOPUP_FINALITY_MAX_VALIDATORS_V2: usize = 256;
 /// Maximum roster activation windows in one authenticated finality artifact.
-pub const KAGEMUSHA_TOPUP_FINALITY_MAX_ROSTER_WINDOWS_V2: usize = 256;
+///
+/// Sixteen full 256-validator windows, including fixed-width PoPs, fit below
+/// the independent 1 MiB canonical-archive ingress cap.
+pub const KAGEMUSHA_TOPUP_FINALITY_MAX_ROSTER_WINDOWS_V2: usize = 16;
 /// Maximum canonical Norito bytes accepted for one compact top-up finality proof.
-pub const KAGEMUSHA_TOPUP_FINALITY_PROOF_MAX_BYTES_V2: u64 = 64 * 1024;
+///
+/// The epoch-boundary case retains the complete next-epoch identity snapshot,
+/// including up to 256 bounded PoPs, so 64 KiB is not a sound worst-case cap.
+pub const KAGEMUSHA_TOPUP_FINALITY_PROOF_MAX_BYTES_V2: u64 = 256 * 1024;
+/// Maximum canonical Norito bytes accepted for one complete validated top-up anchor.
+pub const KAGEMUSHA_TOPUP_FINALITY_ANCHOR_MAX_BYTES_V2: u64 = 64 * 1024;
 /// Development/staging-only hop cap for record-backed semantic lineage.
 pub const KAGEMUSHA_RECURSIVE_SPEND_SEMANTIC_MAX_HOPS_V2: u32 = 8;
 /// Maximum number of transition nodes accepted in one semantic-lineage DAG witness.
@@ -319,8 +330,6 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3: u32 = 18;
 /// Exact schema identifier for the production recursive-spend artifact manifest.
 pub const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V3: &str =
     "kagemusha.offline.recursive_spend.artifact_manifest.v3";
-/// Exact offline mode selected by the V3 recursive-spend release contract.
-pub const KAGEMUSHA_RECURSIVE_SPEND_MODE_V2: &str = "recursive_spend_v2";
 /// Proof-system profile selected by the V3 recursive-spend release contract.
 pub const KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1: &str = "halo2/ipa-pasta-cycle-v1";
 /// Poseidon transcript profile shared by both Pasta-cycle proof parities.
@@ -1479,11 +1488,12 @@ mod model {
     use super::*;
 
     /// Compact CA-issued certificate for an Offline one-use note key.
-    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
+    #[derive(PartialOrd, Ord)]
     pub struct OfflineNoteKeyCertificate {
         /// Certificate format marker.
         pub version: u16,
@@ -1512,7 +1522,7 @@ mod model {
     }
 
     /// Canonical payload signed by Offline key-certificate issuers.
-    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -3091,51 +3101,64 @@ mod model {
         pub anchor_digest: [u8; 32],
     }
 
-    /// Commit certificate stripped of the validator roster cached by the wallet.
+    /// Bounded projection of the live Sumeragi-v2 height context needed to
+    /// authenticate one Commit certificate offline.
     ///
-    /// The phase is intentionally absent: this wire is valid only for a Commit
-    /// QC. `highest_qc` is also absent because it is legal only for NewView.
-    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    /// `context_id` is copied from the persisted [`HeightContext`] and is part
+    /// of the exact live [`crate::block::consensus_v2::Vote::signature_preimage`]
+    /// through the certificate round. Every non-roster identity field is
+    /// retained so verification can reconstruct and validate the complete
+    /// context with the manifest-authenticated roster window, then require its
+    /// computed identifier to equal `context_id`. This avoids duplicating the
+    /// current roster in every proof without making the context identifier an
+    /// opaque, attacker-selected cross-chain binding.
+    #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct KagemushaTopUpFinalityHeightContextV2 {
+        /// Typed identifier of the complete persisted height context.
+        pub context_id: HeightContextId,
+        /// Chain identifier committed by the complete height context.
+        pub chain_id: ChainId,
+        /// Live Sumeragi-v2 wire protocol revision.
+        pub protocol_version: u16,
+        /// Height governed by the projected context.
+        pub height: u64,
+        /// Finalized validator-election epoch.
+        pub epoch: u64,
+        /// Last height governed by the current frozen epoch snapshot.
+        pub epoch_end_height: u64,
+        /// Complete next-epoch transition on an epoch-boundary height.
+        pub next_epoch_snapshot: Option<FinalizedNextEpochSnapshot>,
+        /// Consensus mode governing the frozen roster.
+        pub mode: ConsensusMode,
+        /// Parent Commit certificate, absent only at genesis.
+        pub parent_commit_qc: Option<QuorumCertificate>,
+        /// Frozen Nexus/AMX context commitment.
+        pub nexus_amx_context_hash: Hash,
+        /// Frozen data-availability layout.
+        pub da_layout: DataAvailabilityLayout,
+        /// Finalized leader-rotation seed.
+        pub leader_seed: [u8; 32],
+    }
+
+    /// Canonical Sumeragi-v2 height-context projection and Commit certificate.
+    #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
     pub struct KagemushaTopUpFinalityCompactQcV2 {
-        /// Canonical finalized block hash.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
-        pub subject_block_hash: [u8; 32],
-        /// Execution root before the finalized block.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
-        pub parent_state_root: [u8; 32],
-        /// Execution root after the finalized block.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
-        pub post_state_root: [u8; 32],
-        /// Finalized one-based block height.
-        pub height: u64,
-        /// Consensus view that formed the certificate.
-        pub view: u64,
-        /// Consensus epoch.
-        pub epoch: u64,
-        /// Hash of the exact validator ordering used by the vote.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
-        pub chain_order_hash: [u8; 32],
-        /// Validator-order update sequence.
-        pub rechain_seq: u64,
-        /// Consensus-mode domain tag.
-        pub mode_tag: String,
-        /// Hash of the separately cached ordered validator set.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
-        pub validator_set_hash: [u8; 32],
-        /// Validator-set hash layout version.
-        pub validator_set_hash_version: u16,
-        /// LSB-first signer bitmap.
-        pub signers_bitmap: Vec<u8>,
-        /// Compressed BLS aggregate signature.
-        pub bls_aggregate_signature: Vec<u8>,
+        /// Bounded immutable consensus-context projection for the finalized height.
+        pub height_context: KagemushaTopUpFinalityHeightContextV2,
+        /// Exact Sumeragi-v2 Commit certificate persisted by Kura.
+        pub certificate: QuorumCertificate,
     }
 
     /// Canonical balanced-Merkle inclusion path for one finalized top-up.
-    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -3155,7 +3178,7 @@ mod model {
 
     /// Offline-verifiable proof that a finalized Commit QC authenticated one
     /// exact `(operation_id, anchor_digest)` write.
-    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -3165,11 +3188,8 @@ mod model {
         pub version: u16,
         /// Exact compact anchor identity bound by the recursive init proof.
         pub anchor: KagemushaRecursiveSpendTopUpAnchorRefV2,
-        /// Commit QC with its separately trusted roster omitted.
+        /// Commit QC with its roster PoPs supplied by the trusted artifact.
         pub commit_qc: KagemushaTopUpFinalityCompactQcV2,
-        /// Root of all non-Kagemusha writes in the finalized block.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
-        pub ordinary_writes_root: [u8; 32],
         /// Bounded block-local inclusion proof.
         pub anchor_path: KagemushaTopUpAnchorMerkleProofV2,
     }
@@ -3185,13 +3205,10 @@ mod model {
         pub activates_at_height: u64,
         /// First rejected block height, exclusive.
         pub withdraws_at_height: u64,
-        /// Hash of `validator_set` in exact consensus order.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
-        pub validator_set_hash: [u8; 32],
-        /// Validator-set hash layout version.
-        pub validator_set_hash_version: u16,
-        /// Exact ordered BLS validator identities.
-        pub validator_set: Vec<PeerId>,
+        /// Consensus mode governing this immutable roster window.
+        pub consensus_mode: ConsensusMode,
+        /// Exact ordered BLS validator identities and voting powers.
+        pub validator_set: Vec<ValidatorPower>,
         /// Fixed-size BLS proofs of possession aligned one-to-one with `validator_set`.
         pub validator_set_pops: Vec<[u8; 96]>,
     }
@@ -11140,21 +11157,95 @@ impl KagemushaRecursiveSpendTopUpAnchorRefV2 {
     }
 }
 
+impl KagemushaTopUpFinalityHeightContextV2 {
+    /// Validate the bounded context projection independently of a trust artifact.
+    pub fn validate_structure(&self) -> Result<(), KagemushaFoldError> {
+        let next_roster_too_large = self.next_epoch_snapshot.as_ref().is_some_and(|snapshot| {
+            snapshot.roster.len() > KAGEMUSHA_TOPUP_FINALITY_MAX_VALIDATORS_V2
+                || snapshot.validator_set_pops.len() > KAGEMUSHA_TOPUP_FINALITY_MAX_VALIDATORS_V2
+        });
+        let parent_signers_too_large = self.parent_commit_qc.as_ref().is_some_and(|parent| {
+            parent.signers.len() > KAGEMUSHA_TOPUP_FINALITY_MAX_VALIDATORS_V2
+        });
+        if self.protocol_version != PROTOCOL_VERSION
+            || self.height == 0
+            || !is_kagemusha_v3_chain_id(&self.chain_id)
+            || self.epoch_end_height < self.height
+            || next_roster_too_large
+            || parent_signers_too_large
+        {
+            return Err(KagemushaFoldError::InvalidRecursiveSpendProof {
+                field: "topup_finality.height_context",
+            });
+        }
+        Ok(())
+    }
+
+    /// Reconstruct and validate the exact complete height context using one
+    /// manifest-authenticated roster window.
+    pub fn reconstruct_for_roster_window(
+        &self,
+        window: &KagemushaTopUpFinalityRosterWindowV2,
+    ) -> Result<HeightContext, KagemushaFoldError> {
+        self.validate_structure()?;
+        window.validate_structure()?;
+        if self.height < window.activates_at_height
+            || self.height >= window.withdraws_at_height
+            || self.mode != window.consensus_mode
+        {
+            return Err(KagemushaFoldError::InvalidRecursiveSpendProof {
+                field: "topup_finality.height_context.roster_window",
+            });
+        }
+        let context = HeightContext {
+            chain_id: self.chain_id.clone(),
+            protocol_version: self.protocol_version,
+            height: self.height,
+            epoch: self.epoch,
+            epoch_end_height: self.epoch_end_height,
+            next_epoch_snapshot: self.next_epoch_snapshot.clone(),
+            mode: self.mode,
+            parent_commit_qc: self.parent_commit_qc.clone(),
+            roster: window.validator_set.clone(),
+            quorum: DualQuorum::from_roster(&window.validator_set).map_err(|_| {
+                KagemushaFoldError::InvalidRecursiveSpendProof {
+                    field: "topup_finality.height_context.quorum",
+                }
+            })?,
+            nexus_amx_context_hash: self.nexus_amx_context_hash,
+            da_layout: self.da_layout,
+            leader_seed: self.leader_seed,
+        };
+        if context.validate().is_err() || context.id() != self.context_id {
+            return Err(KagemushaFoldError::InvalidRecursiveSpendProof {
+                field: "topup_finality.height_context.context_id",
+            });
+        }
+        Ok(context)
+    }
+}
+
 impl KagemushaTopUpFinalityCompactQcV2 {
     /// Validate canonical bounds before consulting a trusted roster.
     pub fn validate_structure(&self) -> Result<(), KagemushaFoldError> {
-        if self.subject_block_hash == [0; 32]
-            || self.post_state_root == [0; 32]
-            || self.chain_order_hash == [0; 32]
-            || self.validator_set_hash == [0; 32]
-            || self.height == 0
-            || self.mode_tag.is_empty()
-            || self.mode_tag.len() > 64
-            || self.mode_tag.chars().any(char::is_control)
-            || self.validator_set_hash_version != VALIDATOR_SET_HASH_VERSION_V1
-            || self.signers_bitmap.is_empty()
-            || self.signers_bitmap.len() > KAGEMUSHA_TOPUP_FINALITY_MAX_VALIDATORS_V2.div_ceil(8)
-            || self.bls_aggregate_signature.len() != 96
+        let context = &self.height_context;
+        let certificate = &self.certificate;
+        context.validate_structure()?;
+        if certificate.round.context_id != context.context_id
+            || certificate.round.height != context.height
+            || certificate.phase != GlobalPhase::Commit
+            || certificate.aggregate_signature.len() != 96
+            || certificate.execution_commitment.validate().is_err()
+            || certificate.execution_commitment.topup_anchor_root.is_none()
+            || certificate.execution_commitment.topup_anchor_count == 0
+            || certificate.execution_commitment.topup_anchor_count
+                > KAGEMUSHA_TOPUP_FINALITY_MAX_ANCHORS_PER_BLOCK_V2
+            || certificate.signers.is_empty()
+            || certificate.signers.len() > KAGEMUSHA_TOPUP_FINALITY_MAX_VALIDATORS_V2
+            || certificate
+                .signers
+                .windows(2)
+                .any(|pair| pair[0] >= pair[1])
         {
             return Err(KagemushaFoldError::InvalidRecursiveSpendProof {
                 field: "topup_finality.commit_qc",
@@ -11169,51 +11260,14 @@ impl KagemushaTopUpFinalityCompactQcV2 {
         window: &KagemushaTopUpFinalityRosterWindowV2,
     ) -> Result<(), KagemushaFoldError> {
         self.validate_structure()?;
-        window.validate()?;
-        if self.height < window.activates_at_height
-            || self.height >= window.withdraws_at_height
-            || self.validator_set_hash != window.validator_set_hash
-            || self.validator_set_hash_version != window.validator_set_hash_version
-        {
-            return Err(KagemushaFoldError::InvalidRecursiveSpendProof {
+        window.validate_structure()?;
+        let context = &self.height_context;
+        let complete = context.reconstruct_for_roster_window(window)?;
+        self.certificate.validate(&complete).map_err(|_| {
+            KagemushaFoldError::InvalidRecursiveSpendProof {
                 field: "topup_finality.commit_qc.roster_window",
-            });
-        }
-        let roster_len = window.validator_set.len();
-        if self.signers_bitmap.len() != roster_len.div_ceil(8) {
-            return Err(KagemushaFoldError::InvalidRecursiveSpendProof {
-                field: "topup_finality.commit_qc.signers_bitmap",
-            });
-        }
-        let padding_bits = self.signers_bitmap.len() * 8 - roster_len;
-        if padding_bits > 0 {
-            let valid_bits = 8 - padding_bits;
-            let padding_mask = !((1_u8 << valid_bits) - 1);
-            if self
-                .signers_bitmap
-                .last()
-                .is_some_and(|byte| byte & padding_mask != 0)
-            {
-                return Err(KagemushaFoldError::InvalidRecursiveSpendProof {
-                    field: "topup_finality.commit_qc.signers_bitmap.padding",
-                });
             }
-        }
-        let signer_count = self
-            .signers_bitmap
-            .iter()
-            .map(|byte| byte.count_ones() as usize)
-            .sum::<usize>();
-        let required = if roster_len > 3 {
-            roster_len.saturating_mul(2) / 3 + 1
-        } else {
-            roster_len
-        };
-        if signer_count < required {
-            return Err(KagemushaFoldError::InvalidRecursiveSpendProof {
-                field: "topup_finality.commit_qc.quorum",
-            });
-        }
+        })?;
         Ok(())
     }
 }
@@ -11247,25 +11301,35 @@ impl KagemushaTopUpFinalityProofV2 {
     /// Validate the canonical self-contained proof shape. Cryptographic QC and
     /// Merkle verification are performed by the native verifier.
     pub fn validate_structure(&self) -> Result<(), KagemushaFoldError> {
-        if self.version != KAGEMUSHA_TOPUP_FINALITY_PROOF_VERSION_V2
-            || self.ordinary_writes_root == [0; 32]
-        {
+        if self.version != KAGEMUSHA_TOPUP_FINALITY_PROOF_VERSION_V2 {
             return Err(KagemushaFoldError::InvalidRecursiveSpendProof {
                 field: "topup_finality",
             });
         }
         self.anchor.validate()?;
         self.commit_qc.validate_structure()?;
-        self.anchor_path.validate()
+        self.anchor_path.validate()?;
+        if self.anchor_path.leaf_count
+            != self
+                .commit_qc
+                .certificate
+                .execution_commitment
+                .topup_anchor_count
+        {
+            return Err(KagemushaFoldError::InvalidRecursiveSpendProof {
+                field: "topup_finality.anchor_path.leaf_count",
+            });
+        }
+        Ok(())
     }
 }
 
 impl KagemushaTopUpFinalityRosterWindowV2 {
-    /// Validate the exact ordered roster, hash, PoPs, and activation window.
-    pub fn validate(&self) -> Result<(), KagemushaFoldError> {
+    /// Validate the exact ordered roster, powers, and activation window without
+    /// performing proof-of-possession pairings.
+    pub fn validate_structure(&self) -> Result<(), KagemushaFoldError> {
         if self.activates_at_height == 0
             || self.withdraws_at_height <= self.activates_at_height
-            || self.validator_set_hash_version != VALIDATOR_SET_HASH_VERSION_V1
             || self.validator_set.is_empty()
             || self.validator_set.len() > KAGEMUSHA_TOPUP_FINALITY_MAX_VALIDATORS_V2
             || self.validator_set.len() != self.validator_set_pops.len()
@@ -11277,28 +11341,39 @@ impl KagemushaTopUpFinalityRosterWindowV2 {
         let unique = self
             .validator_set
             .iter()
+            .map(|entry| &entry.validator)
             .collect::<std::collections::BTreeSet<_>>();
         if unique.len() != self.validator_set.len()
-            || self
-                .validator_set
-                .iter()
-                .any(|peer| !matches!(peer.public_key().try_algorithm(), Ok(Algorithm::BlsNormal)))
+            || self.validator_set.iter().any(|entry| {
+                entry.power == 0
+                    || !matches!(
+                        entry.validator.public_key().try_algorithm(),
+                        Ok(Algorithm::BlsNormal)
+                    )
+            })
+            || (self.consensus_mode == ConsensusMode::Permissioned
+                && self.validator_set.iter().any(|entry| entry.power != 1))
+            || DualQuorum::from_roster(&self.validator_set).is_err()
         {
             return Err(KagemushaFoldError::InvalidRecursiveSpendProof {
                 field: "topup_finality.roster_window.validator_set",
             });
         }
-        let computed = HashOf::new(&self.validator_set);
-        if computed.as_ref().as_ref() != self.validator_set_hash.as_slice() {
-            return Err(KagemushaFoldError::InvalidRecursiveSpendProof {
-                field: "topup_finality.roster_window.validator_set_hash",
-            });
-        }
+        Ok(())
+    }
+
+    /// Validate the complete roster window, including every BLS proof of
+    /// possession. Callers handling repeated proofs should cache success by the
+    /// authenticated roster-archive digest.
+    pub fn validate(&self) -> Result<(), KagemushaFoldError> {
+        self.validate_structure()?;
         if self
             .validator_set
             .iter()
             .zip(&self.validator_set_pops)
-            .any(|(peer, pop)| iroha_crypto::bls_normal_pop_verify(peer.public_key(), pop).is_err())
+            .any(|(entry, pop)| {
+                iroha_crypto::bls_normal_pop_verify(entry.validator.public_key(), pop).is_err()
+            })
         {
             return Err(KagemushaFoldError::InvalidRecursiveSpendProof {
                 field: "topup_finality.roster_window.validator_set_pops",
@@ -11309,8 +11384,9 @@ impl KagemushaTopUpFinalityRosterWindowV2 {
 }
 
 impl KagemushaTopUpFinalityRosterArtifactV2 {
-    /// Validate chain-scoped, strictly ordered, non-overlapping trust windows.
-    pub fn validate(&self) -> Result<(), KagemushaFoldError> {
+    /// Validate chain-scoped, strictly ordered, non-overlapping trust windows
+    /// without performing BLS proof-of-possession pairings.
+    pub fn validate_structure(&self) -> Result<(), KagemushaFoldError> {
         if self.version != KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_VERSION_V2
             || !is_kagemusha_v3_chain_id(&self.chain_id)
             || !is_kagemusha_v3_portable_identifier(&self.artifact_generation)
@@ -11323,7 +11399,7 @@ impl KagemushaTopUpFinalityRosterArtifactV2 {
         }
         let mut previous_withdrawal = None;
         for window in &self.windows {
-            window.validate()?;
+            window.validate_structure()?;
             if previous_withdrawal.is_some_and(|height| height > window.activates_at_height) {
                 return Err(KagemushaFoldError::InvalidRecursiveSpendProof {
                     field: "topup_finality.roster_artifact.windows.order",
@@ -11334,12 +11410,21 @@ impl KagemushaTopUpFinalityRosterArtifactV2 {
         Ok(())
     }
 
+    /// Validate every structural field and every BLS proof of possession.
+    pub fn validate(&self) -> Result<(), KagemushaFoldError> {
+        self.validate_structure()?;
+        for window in &self.windows {
+            window.validate()?;
+        }
+        Ok(())
+    }
+
     /// Select exactly one trusted roster for `height`.
     pub fn window_at(
         &self,
         height: u64,
     ) -> Result<&KagemushaTopUpFinalityRosterWindowV2, KagemushaFoldError> {
-        self.validate()?;
+        self.validate_structure()?;
         let mut matching = self.windows.iter().filter(|window| {
             height >= window.activates_at_height && height < window.withdraws_at_height
         });
@@ -31288,6 +31373,8 @@ mod offline_note_tests {
     }
 
     fn kagemusha_finality_roster_fixture(count: usize) -> KagemushaTopUpFinalityRosterWindowV2 {
+        use crate::peer::PeerId;
+
         let pairs = (0..count)
             .map(|_| {
                 let pair = KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
@@ -31299,20 +31386,19 @@ mod offline_note_tests {
             .collect::<Vec<_>>();
         let validator_set = pairs
             .iter()
-            .map(|(peer, _)| peer.clone())
+            .map(|(peer, _)| ValidatorPower {
+                validator: peer.clone(),
+                power: 1,
+            })
             .collect::<Vec<_>>();
         let validator_set_pops = pairs
             .into_iter()
             .map(|(_, pop)| pop.try_into().expect("96-byte BLS proof of possession"))
             .collect::<Vec<_>>();
-        let hash = HashOf::new(&validator_set);
-        let mut validator_set_hash = [0_u8; 32];
-        validator_set_hash.copy_from_slice(hash.as_ref().as_ref());
         KagemushaTopUpFinalityRosterWindowV2 {
-            activates_at_height: 10,
+            activates_at_height: 1,
             withdraws_at_height: 20,
-            validator_set_hash,
-            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+            consensus_mode: ConsensusMode::Permissioned,
             validator_set,
             validator_set_pops,
         }
@@ -31321,6 +31407,62 @@ mod offline_note_tests {
     fn kagemusha_finality_proof_fixture(
         window: &KagemushaTopUpFinalityRosterWindowV2,
     ) -> KagemushaTopUpFinalityProofV2 {
+        use crate::block::consensus_v2::{
+            BlockSubject, ConsensusRound, DataAvailabilityLayout, ExecutionCommitment,
+            HeightContext, PROTOCOL_VERSION, PayloadEncoding,
+        };
+
+        let complete_context = HeightContext {
+            chain_id: ChainId::from("kagemusha-finality-test"),
+            protocol_version: PROTOCOL_VERSION,
+            height: 1,
+            epoch: 0,
+            epoch_end_height: 10,
+            next_epoch_snapshot: None,
+            mode: window.consensus_mode,
+            parent_commit_qc: None,
+            roster: window.validator_set.clone(),
+            quorum: DualQuorum::from_roster(&window.validator_set).expect("fixture quorum"),
+            nexus_amx_context_hash: Hash::new(b"kagemusha finality fixture nexus"),
+            da_layout: DataAvailabilityLayout {
+                encoding: PayloadEncoding::Plain,
+                chunk_size_bytes: 1024,
+                data_shards: 0,
+                parity_shards: 0,
+                max_payload_size_bytes: 4096,
+                max_chunk_count: 4,
+            },
+            leader_seed: [0x43; 32],
+        };
+        let subject = BlockSubject {
+            parent_block_hash: None,
+            block_hash: iroha_crypto::HashOf::from_untyped_unchecked(Hash::new(
+                b"kagemusha finality fixture block",
+            )),
+            payload_hash: Hash::new(b"kagemusha finality fixture payload"),
+        };
+        let ordinary_writes_root = Hash::new(b"kagemusha finality ordinary writes");
+        let topup_anchor_root = Hash::new(b"kagemusha finality topup root");
+        let execution_commitment = ExecutionCommitment::new(
+            Hash::new(b"kagemusha finality parent state"),
+            ExecutionCommitment::topup_post_state_root(1, ordinary_writes_root, topup_anchor_root),
+            ordinary_writes_root,
+            Some(topup_anchor_root),
+            1,
+        )
+        .expect("fixture execution commitment");
+        let certificate = QuorumCertificate {
+            round: ConsensusRound {
+                context_id: complete_context.id(),
+                height: complete_context.height,
+                view: 3,
+            },
+            phase: GlobalPhase::Commit,
+            subject,
+            execution_commitment,
+            signers: (0..complete_context.quorum.min_signers).collect(),
+            aggregate_signature: vec![0x55; 96],
+        };
         KagemushaTopUpFinalityProofV2 {
             version: KAGEMUSHA_TOPUP_FINALITY_PROOF_VERSION_V2,
             anchor: KagemushaRecursiveSpendTopUpAnchorRefV2 {
@@ -31328,25 +31470,26 @@ mod offline_note_tests {
                 anchor_digest: [0x42; 32],
             },
             commit_qc: KagemushaTopUpFinalityCompactQcV2 {
-                subject_block_hash: [0x51; 32],
-                parent_state_root: [0x52; 32],
-                post_state_root: [0x53; 32],
-                height: 12,
-                view: 3,
-                epoch: 1,
-                chain_order_hash: [0x54; 32],
-                rechain_seq: 2,
-                mode_tag: "permissioned".to_owned(),
-                validator_set_hash: window.validator_set_hash,
-                validator_set_hash_version: window.validator_set_hash_version,
-                signers_bitmap: vec![0b0000_0111],
-                bls_aggregate_signature: vec![0x55; 96],
+                height_context: KagemushaTopUpFinalityHeightContextV2 {
+                    context_id: complete_context.id(),
+                    chain_id: complete_context.chain_id,
+                    protocol_version: complete_context.protocol_version,
+                    height: complete_context.height,
+                    epoch: complete_context.epoch,
+                    epoch_end_height: complete_context.epoch_end_height,
+                    next_epoch_snapshot: complete_context.next_epoch_snapshot,
+                    mode: complete_context.mode,
+                    parent_commit_qc: complete_context.parent_commit_qc,
+                    nexus_amx_context_hash: complete_context.nexus_amx_context_hash,
+                    da_layout: complete_context.da_layout,
+                    leader_seed: complete_context.leader_seed,
+                },
+                certificate,
             },
-            ordinary_writes_root: [0x56; 32],
             anchor_path: KagemushaTopUpAnchorMerkleProofV2 {
-                leaf_index: 1,
-                leaf_count: 3,
-                siblings: vec![[0x57; 32], [0x58; 32]],
+                leaf_index: 0,
+                leaf_count: 1,
+                siblings: Vec::new(),
             },
         }
     }
@@ -31372,10 +31515,10 @@ mod offline_note_tests {
         artifact.validate().expect("canonical roster artifact");
         assert_eq!(
             artifact
-                .window_at(12)
+                .window_at(1)
                 .expect("active roster")
                 .activates_at_height,
-            10
+            1
         );
         assert!(artifact.window_at(20).is_err());
 
@@ -31400,25 +31543,19 @@ mod offline_note_tests {
         let mut wrong_depth = proof.clone();
         wrong_depth.anchor_path.siblings.push([0x59; 32]);
         assert!(wrong_depth.validate_structure().is_err());
-        let mut zero_sibling = proof.clone();
-        zero_sibling.anchor_path.siblings[0] = [0; 32];
-        assert!(zero_sibling.validate_structure().is_err());
         let mut wrong_version = proof.clone();
         wrong_version.version += 1;
         assert!(wrong_version.validate_structure().is_err());
 
         let mut short_signature = proof.commit_qc.clone();
-        short_signature.bls_aggregate_signature.pop();
+        short_signature.certificate.aggregate_signature.pop();
         assert!(short_signature.validate_structure().is_err());
         let mut insufficient = proof.commit_qc.clone();
-        insufficient.signers_bitmap = vec![0b0000_0001];
+        insufficient.certificate.signers = vec![0];
         assert!(insufficient.validate_for_roster_window(&window).is_err());
-        let mut wrong_hash = proof.commit_qc.clone();
-        wrong_hash.validator_set_hash[0] ^= 0x80;
-        assert!(wrong_hash.validate_for_roster_window(&window).is_err());
-        let mut wrong_height = proof.commit_qc.clone();
-        wrong_height.height = window.withdraws_at_height;
-        assert!(wrong_height.validate_for_roster_window(&window).is_err());
+        let mut wrong_roster = proof.commit_qc.clone();
+        wrong_roster.height_context.leader_seed[0] ^= 1;
+        assert!(wrong_roster.validate_for_roster_window(&window).is_err());
 
         let mut bad_pop = window.clone();
         bad_pop.validator_set_pops[0][0] ^= 0x80;
@@ -31426,9 +31563,9 @@ mod offline_note_tests {
         let mut duplicate_peer = window.clone();
         duplicate_peer.validator_set[1] = duplicate_peer.validator_set[0].clone();
         assert!(duplicate_peer.validate().is_err());
-        let mut bad_window_hash = window.clone();
-        bad_window_hash.validator_set_hash[0] ^= 0x80;
-        assert!(bad_window_hash.validate().is_err());
+        let mut bad_power = window.clone();
+        bad_power.validator_set[0].power = 2;
+        assert!(bad_power.validate_structure().is_err());
 
         let mut second = window.clone();
         second.activates_at_height = 19;
@@ -31461,14 +31598,15 @@ mod offline_note_tests {
         for roster_len in [5_usize, 6] {
             let window = kagemusha_finality_roster_fixture(roster_len);
             let mut proof = kagemusha_finality_proof_fixture(&window);
-            proof.commit_qc.signers_bitmap = vec![0b0000_0111];
+            proof.commit_qc.certificate.signers = vec![0, 1, 2];
             assert!(
                 proof.commit_qc.validate_for_roster_window(&window).is_err(),
                 "three signers must not certify a {roster_len}-validator Commit QC"
             );
 
             let required = roster_len.saturating_mul(2) / 3 + 1;
-            proof.commit_qc.signers_bitmap = vec![(1_u8 << required) - 1];
+            proof.commit_qc.certificate.signers =
+                (0..u32::try_from(required).expect("small fixture roster")).collect();
             proof
                 .commit_qc
                 .validate_for_roster_window(&window)
@@ -31478,5 +31616,37 @@ mod offline_note_tests {
                     )
                 });
         }
+    }
+
+    #[test]
+    fn kagemusha_topup_finality_max_roster_shape_fits_the_archive_byte_cap() {
+        let template =
+            kagemusha_finality_roster_fixture(KAGEMUSHA_TOPUP_FINALITY_MAX_VALIDATORS_V2);
+        let windows = (0..KAGEMUSHA_TOPUP_FINALITY_MAX_ROSTER_WINDOWS_V2)
+            .map(|index| {
+                let mut window = template.clone();
+                let start = 1 + u64::try_from(index).expect("small index") * 100;
+                window.activates_at_height = start;
+                window.withdraws_at_height = start + 100;
+                window
+            })
+            .collect::<Vec<_>>();
+        let artifact = KagemushaTopUpFinalityRosterArtifactV2 {
+            version: KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_VERSION_V2,
+            chain_id: ChainId::from("kagemusha-finality-max-shape"),
+            artifact_generation: "max-shape-generation".to_owned(),
+            windows,
+        };
+        artifact
+            .validate_structure()
+            .expect("maximum roster shape is structurally valid");
+        let bytes = to_bytes(&artifact).expect("encode maximum roster shape");
+        assert!(
+            u64::try_from(bytes.len()).expect("archive length")
+                <= KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_MAX_BYTES_V2,
+            "maximum valid roster shape encoded to {} bytes, exceeding the {}-byte ingress cap",
+            bytes.len(),
+            KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_MAX_BYTES_V2,
+        );
     }
 }

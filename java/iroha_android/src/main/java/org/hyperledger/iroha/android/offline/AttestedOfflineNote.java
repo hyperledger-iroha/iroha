@@ -29,8 +29,8 @@ import org.hyperledger.iroha.norito.NoritoEncoder;
 import org.hyperledger.iroha.norito.NoritoHeader;
 import org.hyperledger.iroha.norito.TypeAdapter;
 
-/** Native Java implementation of Iroha Offline Note V2 canonical Norito encodings. */
-public final class OfflineNoteV2 {
+/** Native Java implementation of Iroha Attested Offline Note canonical Norito encodings. */
+public final class AttestedOfflineNote {
   public static final String KEY_CERTIFICATE_PAYLOAD_DOMAIN =
       "iroha:offline-note:key-certificate-payload";
   public static final String ISSUED_CLAIM_DOMAIN = "iroha:offline-note:issued-claim";
@@ -106,62 +106,62 @@ public final class OfflineNoteV2 {
   public static final String REGISTER_DEVICE_ATTESTATION_INSTRUCTION_SCHEMA =
       "iroha_data_model::isi::offline::RegisterOfflineDeviceAttestation";
 
-  private OfflineNoteV2() {}
+  private AttestedOfflineNote() {}
 
-  public static byte[] encodeCertificatePayload(final KeyCertificatePayloadV2 value) {
+  public static byte[] encodeCertificatePayload(final KeyCertificatePayload value) {
     return encodeWithHeader(value, KEY_CERTIFICATE_PAYLOAD_SCHEMA, KEY_CERTIFICATE_PAYLOAD_ADAPTER);
   }
 
-  public static byte[] encodeCertificate(final KeyCertificateV2 value) {
+  public static byte[] encodeCertificate(final KeyCertificate value) {
     return encodeWithHeader(value, KEY_CERTIFICATE_SCHEMA, KEY_CERTIFICATE_ADAPTER);
   }
 
   public static byte[] encodeDeviceAttestationRegistration(
-      final DeviceAttestationRegistrationV2 value) {
+      final DeviceAttestationRegistration value) {
     return encodeWithHeader(
         value, DEVICE_ATTESTATION_REGISTRATION_SCHEMA, DEVICE_ATTESTATION_REGISTRATION_ADAPTER);
   }
 
-  public static byte[] encodeIssue(final IssueV2 value) {
+  public static byte[] encodeIssue(final Issue value) {
     return encodeWithHeader(value, ISSUE_SCHEMA, ISSUE_ADAPTER);
   }
 
-  public static byte[] encodeIssuedClaim(final IssuedClaimV2 value) {
+  public static byte[] encodeIssuedClaim(final IssuedClaim value) {
     return encodeWithHeader(value, ISSUED_CLAIM_SCHEMA, ISSUED_CLAIM_ADAPTER);
   }
 
-  public static byte[] encodeAuditOutputClaim(final AuditOutputClaimV2 value) {
+  public static byte[] encodeAuditOutputClaim(final AuditOutputClaim value) {
     return encodeWithHeader(value, AUDIT_OUTPUT_CLAIM_SCHEMA, AUDIT_OUTPUT_CLAIM_ADAPTER);
   }
 
-  public static byte[] encodeRecursiveProof(final RecursiveProofV2 value) {
+  public static byte[] encodeRecursiveProof(final RecursiveProof value) {
     return encodeWithHeader(value, RECURSIVE_PROOF_SCHEMA, RECURSIVE_PROOF_ADAPTER);
   }
 
-  public static byte[] encodeRedeem(final RedeemV2 value) {
+  public static byte[] encodeRedeem(final Redeem value) {
     return encodeWithHeader(value, REDEEM_SCHEMA, REDEEM_ADAPTER);
   }
 
-  public static byte[] encodeRedeemPublicInputs(final RedeemPublicInputsV2 value) {
+  public static byte[] encodeRedeemPublicInputs(final RedeemPublicInputs value) {
     return encodeWithHeader(value, REDEEM_PUBLIC_INPUTS_SCHEMA, REDEEM_PUBLIC_INPUTS_ADAPTER);
   }
 
-  public static byte[] encodeAudit(final AuditBundleV2 value) {
+  public static byte[] encodeAudit(final AuditBundle value) {
     return encodeWithHeader(value, AUDIT_SCHEMA, AUDIT_ADAPTER);
   }
 
-  public static byte[] encodeAuditPublicInputs(final AuditPublicInputsV2 value) {
+  public static byte[] encodeAuditPublicInputs(final AuditPublicInputs value) {
     return encodeWithHeader(value, AUDIT_PUBLIC_INPUTS_SCHEMA, AUDIT_PUBLIC_INPUTS_ADAPTER);
   }
 
-  public static InstructionBox issueInstruction(final IssueV2 value) {
+  public static InstructionBox issueInstruction(final Issue value) {
     return InstructionBox.fromWirePayload(
         ISSUE_INSTRUCTION_SCHEMA,
         encodeInstructionWrapper(
             ISSUE_INSTRUCTION_SCHEMA, encodeIssue(value)));
   }
 
-  public static InstructionBox redeemInstruction(final RedeemV2 value) {
+  public static InstructionBox redeemInstruction(final Redeem value) {
     value.validateProofBinding();
     return InstructionBox.fromWirePayload(
         REDEEM_INSTRUCTION_SCHEMA,
@@ -169,7 +169,7 @@ public final class OfflineNoteV2 {
             REDEEM_INSTRUCTION_SCHEMA, encodeRedeem(value)));
   }
 
-  public static InstructionBox auditInstruction(final AuditBundleV2 value) {
+  public static InstructionBox auditInstruction(final AuditBundle value) {
     value.validateProofBinding();
     return InstructionBox.fromWirePayload(
         AUDIT_INSTRUCTION_SCHEMA,
@@ -178,74 +178,74 @@ public final class OfflineNoteV2 {
   }
 
   public static InstructionBox registerDeviceAttestationInstruction(
-      final DeviceAttestationRegistrationV2 value) {
+      final DeviceAttestationRegistration value) {
     return InstructionBox.fromWirePayload(
         REGISTER_DEVICE_ATTESTATION_INSTRUCTION_SCHEMA,
         encodeRegisterDeviceAttestationInstructionPayload(value));
   }
 
-  public static KeyCertificatePayloadV2 decodeCertificatePayload(final byte[] bytes) {
+  public static KeyCertificatePayload decodeCertificatePayload(final byte[] bytes) {
     return decodeWithHeader(bytes, KEY_CERTIFICATE_PAYLOAD_SCHEMA, KEY_CERTIFICATE_PAYLOAD_ADAPTER);
   }
 
-  public static KeyCertificateV2 decodeCertificate(final byte[] bytes) {
+  public static KeyCertificate decodeCertificate(final byte[] bytes) {
     return decodeWithHeader(bytes, KEY_CERTIFICATE_SCHEMA, KEY_CERTIFICATE_ADAPTER);
   }
 
-  public static DeviceAttestationRegistrationV2 decodeDeviceAttestationRegistration(
+  public static DeviceAttestationRegistration decodeDeviceAttestationRegistration(
       final byte[] bytes) {
     return decodeWithHeader(
         bytes, DEVICE_ATTESTATION_REGISTRATION_SCHEMA, DEVICE_ATTESTATION_REGISTRATION_ADAPTER);
   }
 
-  public static IssueV2 decodeIssue(final byte[] bytes) {
+  public static Issue decodeIssue(final byte[] bytes) {
     return decodeWithHeader(bytes, ISSUE_SCHEMA, ISSUE_ADAPTER);
   }
 
-  public static IssuedClaimV2 decodeIssuedClaim(final byte[] bytes) {
+  public static IssuedClaim decodeIssuedClaim(final byte[] bytes) {
     return decodeWithHeader(bytes, ISSUED_CLAIM_SCHEMA, ISSUED_CLAIM_ADAPTER);
   }
 
-  public static AuditOutputClaimV2 decodeAuditOutputClaim(final byte[] bytes) {
+  public static AuditOutputClaim decodeAuditOutputClaim(final byte[] bytes) {
     return decodeWithHeader(bytes, AUDIT_OUTPUT_CLAIM_SCHEMA, AUDIT_OUTPUT_CLAIM_ADAPTER);
   }
 
-  public static RecursiveProofV2 decodeRecursiveProof(final byte[] bytes) {
+  public static RecursiveProof decodeRecursiveProof(final byte[] bytes) {
     return decodeWithHeader(bytes, RECURSIVE_PROOF_SCHEMA, RECURSIVE_PROOF_ADAPTER);
   }
 
-  public static RedeemV2 decodeRedeem(final byte[] bytes) {
+  public static Redeem decodeRedeem(final byte[] bytes) {
     return decodeWithHeader(bytes, REDEEM_SCHEMA, REDEEM_ADAPTER);
   }
 
-  public static RedeemPublicInputsV2 decodeRedeemPublicInputs(final byte[] bytes) {
+  public static RedeemPublicInputs decodeRedeemPublicInputs(final byte[] bytes) {
     return decodeWithHeader(bytes, REDEEM_PUBLIC_INPUTS_SCHEMA, REDEEM_PUBLIC_INPUTS_ADAPTER);
   }
 
-  public static AuditBundleV2 decodeAudit(final byte[] bytes) {
+  public static AuditBundle decodeAudit(final byte[] bytes) {
     return decodeWithHeader(bytes, AUDIT_SCHEMA, AUDIT_ADAPTER);
   }
 
-  public static AuditPublicInputsV2 decodeAuditPublicInputs(final byte[] bytes) {
+  public static AuditPublicInputs decodeAuditPublicInputs(final byte[] bytes) {
     return decodeWithHeader(bytes, AUDIT_PUBLIC_INPUTS_SCHEMA, AUDIT_PUBLIC_INPUTS_ADAPTER);
   }
 
-  public static IssueV2 decodeIssueInstruction(final byte[] bytes) {
+  public static Issue decodeIssueInstruction(final byte[] bytes) {
     return decodeInstructionModel(
         bytes, ISSUE_INSTRUCTION_SCHEMA, ISSUE_SCHEMA, ISSUE_ADAPTER);
   }
 
-  public static RedeemV2 decodeRedeemInstruction(final byte[] bytes) {
+  public static Redeem decodeRedeemInstruction(final byte[] bytes) {
     return decodeInstructionModel(
         bytes, REDEEM_INSTRUCTION_SCHEMA, REDEEM_SCHEMA, REDEEM_ADAPTER);
   }
 
-  public static AuditBundleV2 decodeAuditInstruction(final byte[] bytes) {
+  public static AuditBundle decodeAuditInstruction(final byte[] bytes) {
     return decodeInstructionModel(
         bytes, AUDIT_INSTRUCTION_SCHEMA, AUDIT_SCHEMA, AUDIT_ADAPTER);
   }
 
-  public static DeviceAttestationRegistrationV2 decodeRegisterDeviceAttestationInstruction(
+  public static DeviceAttestationRegistration decodeRegisterDeviceAttestationInstruction(
       final byte[] bytes) {
     return decodeRegisterDeviceAttestationInstructionModel(bytes);
   }
@@ -277,7 +277,7 @@ public final class OfflineNoteV2 {
   private static byte[] encodeInstructionWrapper(
       final String schema, final byte[] framedModelPayload) {
     if (!isNoritoFrame(framedModelPayload)) {
-      throw new IllegalArgumentException("Offline Note V2 framed model payload is invalid");
+      throw new IllegalArgumentException("Attested Offline Note framed model payload is invalid");
     }
     final NoritoCodec.ArchiveView modelPayload = NoritoCodec.fromBytesView(framedModelPayload, null);
     return NoritoCodec.encode(
@@ -288,7 +288,7 @@ public final class OfflineNoteV2 {
   }
 
   private static byte[] encodeRegisterDeviceAttestationInstructionPayload(
-      final DeviceAttestationRegistrationV2 value) {
+      final DeviceAttestationRegistration value) {
     return NoritoCodec.encode(
         value,
         REGISTER_DEVICE_ATTESTATION_INSTRUCTION_SCHEMA,
@@ -296,7 +296,7 @@ public final class OfflineNoteV2 {
         NoritoHeader.COMPACT_LEN);
   }
 
-  private static DeviceAttestationRegistrationV2 decodeRegisterDeviceAttestationInstructionModel(
+  private static DeviceAttestationRegistration decodeRegisterDeviceAttestationInstructionModel(
       final byte[] bytes) {
     final byte[] wirePayload =
         extractInstructionWirePayload(
@@ -332,21 +332,21 @@ public final class OfflineNoteV2 {
     if (wirePayload != null) {
       return wirePayload;
     }
-    throw new IllegalArgumentException("Offline Note V2 instruction envelope is invalid");
+    throw new IllegalArgumentException("Attested Offline Note instruction envelope is invalid");
   }
 
   private static byte[] tryDecodeInstructionPair(
       final byte[] bytes, final List<String> expectedWireNames, final int flags) {
     try {
       final NoritoDecoder decoder = new NoritoDecoder(bytes, flags);
-      final String wireName = readField(decoder, OfflineNoteV2::readString);
+      final String wireName = readField(decoder, AttestedOfflineNote::readString);
       if (!expectedWireNames.contains(wireName)) {
         throw new IllegalArgumentException(
-            "Offline Note V2 instruction wire name mismatch: " + wireName);
+            "Attested Offline Note instruction wire name mismatch: " + wireName);
       }
-      final byte[] wirePayload = readField(decoder, OfflineNoteV2::readBytesVec);
+      final byte[] wirePayload = readField(decoder, AttestedOfflineNote::readBytesVec);
       if (decoder.remaining() != 0) {
-        throw new IllegalArgumentException("Trailing bytes after Offline Note V2 instruction envelope");
+        throw new IllegalArgumentException("Trailing bytes after Attested Offline Note instruction envelope");
       }
       return wirePayload;
     } catch (final RuntimeException ex) {
@@ -370,7 +370,7 @@ public final class OfflineNoteV2 {
         final NoritoDecoder decoder = new NoritoDecoder(bytes, attemptFlags);
         final T value = modelAdapter.decode(decoder);
         if (decoder.remaining() != 0) {
-          throw new IllegalArgumentException("Trailing bytes after Offline Note V2 instruction model decode");
+          throw new IllegalArgumentException("Trailing bytes after Attested Offline Note instruction model decode");
         }
         return value;
       } catch (final RuntimeException ex) {
@@ -378,7 +378,7 @@ public final class OfflineNoteV2 {
       }
     }
     throw new IllegalArgumentException(
-        "Offline Note V2 instruction model payload is invalid", lastError);
+        "Attested Offline Note instruction model payload is invalid", lastError);
   }
 
   private static boolean isNoritoFrame(final byte[] bytes) {
@@ -439,16 +439,16 @@ public final class OfflineNoteV2 {
     }
   }
 
-  public static final class RecursiveProofV2 {
+  public static final class RecursiveProof {
     private final VerifyingKeyIdReference verifierKeyId;
     private final byte[] publicInputsHash;
     private final ProofBox proof;
 
-    public RecursiveProofV2(final byte[] publicInputsHash, final ProofBox proof) {
+    public RecursiveProof(final byte[] publicInputsHash, final ProofBox proof) {
       this(new VerifyingKeyIdReference(), publicInputsHash, proof);
     }
 
-    public RecursiveProofV2(
+    public RecursiveProof(
         final VerifyingKeyIdReference verifierKeyId,
         final byte[] publicInputsHash,
         final ProofBox proof) {
@@ -471,7 +471,7 @@ public final class OfflineNoteV2 {
     }
   }
 
-  public static final class KeyCertificatePayloadV2 {
+  public static final class KeyCertificatePayload {
     private final String domain;
     private final int version;
     private final String platform;
@@ -485,7 +485,7 @@ public final class OfflineNoteV2 {
     private final Integer assertionUsageCountLimit;
     private final boolean oneUse;
 
-    public KeyCertificatePayloadV2(
+    public KeyCertificatePayload(
         final int version,
         final String platform,
         final String keyId,
@@ -512,7 +512,7 @@ public final class OfflineNoteV2 {
           oneUse);
     }
 
-    public KeyCertificatePayloadV2(
+    public KeyCertificatePayload(
         final String domain,
         final int version,
         final String platform,
@@ -609,7 +609,7 @@ public final class OfflineNoteV2 {
     }
   }
 
-  public static final class KeyCertificateV2 {
+  public static final class KeyCertificate {
     private final int version;
     private final String platform;
     private final String keyId;
@@ -623,7 +623,7 @@ public final class OfflineNoteV2 {
     private final boolean oneUse;
     private final byte[] issuerSignature;
 
-    public KeyCertificateV2(
+    public KeyCertificate(
         final int version,
         final String platform,
         final String keyId,
@@ -714,8 +714,8 @@ public final class OfflineNoteV2 {
       return Arrays.copyOf(issuerSignature, issuerSignature.length);
     }
 
-    public KeyCertificatePayloadV2 signingPayload() {
-      return new KeyCertificatePayloadV2(
+    public KeyCertificatePayload signingPayload() {
+      return new KeyCertificatePayload(
           version,
           platform,
           keyId,
@@ -742,7 +742,7 @@ public final class OfflineNoteV2 {
     }
   }
 
-  public static final class DeviceAttestationRegistrationV2 {
+  public static final class DeviceAttestationRegistration {
     private final int version;
     private final String platform;
     private final String keyId;
@@ -854,7 +854,7 @@ public final class OfflineNoteV2 {
               NoritoHeader.COMPACT_LEN));
     }
 
-    public DeviceAttestationRegistrationV2(
+    public DeviceAttestationRegistration(
         final int version,
         final String platform,
         final String keyId,
@@ -1077,14 +1077,14 @@ public final class OfflineNoteV2 {
       return computeChallengeHash();
     }
 
-    public DeviceAttestationRegistrationV2 replacingAttestationEvidence(
+    public DeviceAttestationRegistration replacingAttestationEvidence(
         final byte[] attestationReport, final byte[] evidence) {
       return replacingAttestationEvidence(attestationReport, evidence, null);
     }
 
-    public DeviceAttestationRegistrationV2 replacingAttestationEvidence(
+    public DeviceAttestationRegistration replacingAttestationEvidence(
         final byte[] attestationReport, final byte[] evidence, final byte[] challengeHash) {
-      return new DeviceAttestationRegistrationV2(
+      return new DeviceAttestationRegistration(
           version,
           platform,
           keyId,
@@ -1112,8 +1112,8 @@ public final class OfflineNoteV2 {
           expiresAtMs);
     }
 
-    public KeyCertificatePayloadV2 keyCertificatePayload() {
-      return new KeyCertificatePayloadV2(
+    public KeyCertificatePayload keyCertificatePayload() {
+      return new KeyCertificatePayload(
           KEY_CERTIFICATE_VERSION,
           platform,
           keyId,
@@ -1355,16 +1355,16 @@ public final class OfflineNoteV2 {
     }
   }
 
-  public static final class IssueV2 {
+  public static final class Issue {
     private final byte[] noteCommitment;
-    private final KeyCertificateV2 keyCertificate;
+    private final KeyCertificate keyCertificate;
     private final String assetId;
     private final String amount;
     private final String canonicalAmount;
 
-    public IssueV2(
+    public Issue(
         final byte[] noteCommitment,
-        final KeyCertificateV2 keyCertificate,
+        final KeyCertificate keyCertificate,
         final String assetId,
         final String amount) {
       this.noteCommitment = copy(noteCommitment, "noteCommitment");
@@ -1380,7 +1380,7 @@ public final class OfflineNoteV2 {
       return Arrays.copyOf(noteCommitment, noteCommitment.length);
     }
 
-    public KeyCertificateV2 keyCertificate() {
+    public KeyCertificate keyCertificate() {
       return keyCertificate;
     }
 
@@ -1396,8 +1396,8 @@ public final class OfflineNoteV2 {
       return canonicalAmount;
     }
 
-    public IssuedClaimV2 issuedClaim() {
-      return new IssuedClaimV2(
+    public IssuedClaim issuedClaim() {
+      return new IssuedClaim(
           noteCommitment(), keyCertificate.payloadHash(), assetId, canonicalAmount);
     }
 
@@ -1406,7 +1406,7 @@ public final class OfflineNoteV2 {
     }
   }
 
-  public static final class IssuedClaimV2 {
+  public static final class IssuedClaim {
     private final String domain;
     private final byte[] noteCommitment;
     private final byte[] keyCertificatePayloadHash;
@@ -1414,7 +1414,7 @@ public final class OfflineNoteV2 {
     private final String amount;
     private final String canonicalAmount;
 
-    public IssuedClaimV2(
+    public IssuedClaim(
         final byte[] noteCommitment,
         final byte[] keyCertificatePayloadHash,
         final String assetId,
@@ -1422,7 +1422,7 @@ public final class OfflineNoteV2 {
       this(ISSUED_CLAIM_DOMAIN, noteCommitment, keyCertificatePayloadHash, assetId, amount);
     }
 
-    public IssuedClaimV2(
+    public IssuedClaim(
         final String domain,
         final byte[] noteCommitment,
         final byte[] keyCertificatePayloadHash,
@@ -1473,16 +1473,16 @@ public final class OfflineNoteV2 {
     }
   }
 
-  public static final class AuditOutputClaimV2 {
+  public static final class AuditOutputClaim {
     private final byte[] noteCommitment;
-    private final KeyCertificateV2 keyCertificate;
+    private final KeyCertificate keyCertificate;
     private final String assetId;
     private final String amount;
     private final String canonicalAmount;
 
-    public AuditOutputClaimV2(
+    public AuditOutputClaim(
         final byte[] noteCommitment,
-        final KeyCertificateV2 keyCertificate,
+        final KeyCertificate keyCertificate,
         final String assetId,
         final String amount) {
       this.noteCommitment = copy(noteCommitment, "noteCommitment");
@@ -1498,7 +1498,7 @@ public final class OfflineNoteV2 {
       return Arrays.copyOf(noteCommitment, noteCommitment.length);
     }
 
-    public KeyCertificateV2 keyCertificate() {
+    public KeyCertificate keyCertificate() {
       return keyCertificate;
     }
 
@@ -1514,13 +1514,13 @@ public final class OfflineNoteV2 {
       return canonicalAmount;
     }
 
-    public IssuedClaimV2 issuedClaim() {
-      return new IssuedClaimV2(
+    public IssuedClaim issuedClaim() {
+      return new IssuedClaim(
           noteCommitment(), keyCertificate.payloadHash(), assetId, canonicalAmount);
     }
   }
 
-  public static final class RedeemPublicInputsV2 {
+  public static final class RedeemPublicInputs {
     private final String domain;
     private final byte[] sourceNoteCommitment;
     private final List<byte[]> inputNullifiers;
@@ -1530,7 +1530,7 @@ public final class OfflineNoteV2 {
     private final String amount;
     private final String canonicalAmount;
 
-    public RedeemPublicInputsV2(
+    public RedeemPublicInputs(
         final byte[] sourceNoteCommitment,
         final List<byte[]> inputNullifiers,
         final byte[] keyCertificatePayloadHash,
@@ -1547,7 +1547,7 @@ public final class OfflineNoteV2 {
           amount);
     }
 
-    public RedeemPublicInputsV2(
+    public RedeemPublicInputs(
         final String domain,
         final byte[] sourceNoteCommitment,
         final List<byte[]> inputNullifiers,
@@ -1612,24 +1612,24 @@ public final class OfflineNoteV2 {
     }
   }
 
-  public static final class RedeemV2 {
+  public static final class Redeem {
     private final byte[] sourceNoteCommitment;
     private final List<byte[]> inputNullifiers;
-    private final KeyCertificateV2 senderKeyCertificate;
+    private final KeyCertificate senderKeyCertificate;
     private final String recipient;
     private final String assetId;
     private final String amount;
     private final String canonicalAmount;
-    private final RecursiveProofV2 recursiveProof;
+    private final RecursiveProof recursiveProof;
 
-    public RedeemV2(
+    public Redeem(
         final byte[] sourceNoteCommitment,
         final List<byte[]> inputNullifiers,
-        final KeyCertificateV2 senderKeyCertificate,
+        final KeyCertificate senderKeyCertificate,
         final String recipient,
         final String assetId,
         final String amount,
-        final RecursiveProofV2 recursiveProof) {
+        final RecursiveProof recursiveProof) {
       this.sourceNoteCommitment = copy(sourceNoteCommitment, "sourceNoteCommitment");
       this.inputNullifiers = copyByteList(inputNullifiers, "inputNullifiers");
       this.senderKeyCertificate =
@@ -1653,7 +1653,7 @@ public final class OfflineNoteV2 {
       return copyByteList(inputNullifiers, "inputNullifiers");
     }
 
-    public KeyCertificateV2 senderKeyCertificate() {
+    public KeyCertificate senderKeyCertificate() {
       return senderKeyCertificate;
     }
 
@@ -1673,12 +1673,12 @@ public final class OfflineNoteV2 {
       return canonicalAmount;
     }
 
-    public RecursiveProofV2 recursiveProof() {
+    public RecursiveProof recursiveProof() {
       return recursiveProof;
     }
 
-    public RedeemPublicInputsV2 publicInputs() {
-      return new RedeemPublicInputsV2(
+    public RedeemPublicInputs publicInputs() {
+      return new RedeemPublicInputs(
           sourceNoteCommitment(),
           inputNullifiers(),
           senderKeyCertificate.payloadHash(),
@@ -1697,8 +1697,8 @@ public final class OfflineNoteV2 {
       }
     }
 
-    public RedeemV2 replacingRecursiveProof(final RecursiveProofV2 recursiveProof) {
-      return new RedeemV2(
+    public Redeem replacingRecursiveProof(final RecursiveProof recursiveProof) {
+      return new Redeem(
           sourceNoteCommitment(),
           inputNullifiers(),
           senderKeyCertificate,
@@ -1713,22 +1713,22 @@ public final class OfflineNoteV2 {
     }
   }
 
-  public static final class AuditPublicInputsV2 {
+  public static final class AuditPublicInputs {
     private final String domain;
     private final byte[] tokenId;
     private final byte[] keyCertificatePayloadHash;
     private final List<byte[]> inputNullifiers;
-    private final List<IssuedClaimV2> inputClaims;
+    private final List<IssuedClaim> inputClaims;
     private final List<byte[]> outputCommitments;
-    private final List<IssuedClaimV2> outputClaims;
+    private final List<IssuedClaim> outputClaims;
 
-    public AuditPublicInputsV2(
+    public AuditPublicInputs(
         final byte[] tokenId,
         final byte[] keyCertificatePayloadHash,
         final List<byte[]> inputNullifiers,
-        final List<IssuedClaimV2> inputClaims,
+        final List<IssuedClaim> inputClaims,
         final List<byte[]> outputCommitments,
-        final List<IssuedClaimV2> outputClaims) {
+        final List<IssuedClaim> outputClaims) {
       this(
           AUDIT_PUBLIC_INPUTS_DOMAIN,
           tokenId,
@@ -1739,14 +1739,14 @@ public final class OfflineNoteV2 {
           outputClaims);
     }
 
-    public AuditPublicInputsV2(
+    public AuditPublicInputs(
         final String domain,
         final byte[] tokenId,
         final byte[] keyCertificatePayloadHash,
         final List<byte[]> inputNullifiers,
-        final List<IssuedClaimV2> inputClaims,
+        final List<IssuedClaim> inputClaims,
         final List<byte[]> outputCommitments,
-        final List<IssuedClaimV2> outputClaims) {
+        final List<IssuedClaim> outputClaims) {
       this.domain = requireDomain(domain, AUDIT_PUBLIC_INPUTS_DOMAIN, "domain");
       this.tokenId = copy(tokenId, "tokenId");
       this.keyCertificatePayloadHash =
@@ -1775,7 +1775,7 @@ public final class OfflineNoteV2 {
       for (final byte[] commitment : this.outputCommitments) {
         committed.add(hexLower(commitment));
       }
-      for (final IssuedClaimV2 claim : this.outputClaims) {
+      for (final IssuedClaim claim : this.outputClaims) {
         if (!committed.contains(hexLower(claim.noteCommitment()))) {
           throw new IllegalArgumentException("audit output claim is not listed in output commitments");
         }
@@ -1798,7 +1798,7 @@ public final class OfflineNoteV2 {
       return copyByteList(inputNullifiers, "inputNullifiers");
     }
 
-    public List<IssuedClaimV2> inputClaims() {
+    public List<IssuedClaim> inputClaims() {
       return inputClaims;
     }
 
@@ -1806,7 +1806,7 @@ public final class OfflineNoteV2 {
       return copyByteList(outputCommitments, "outputCommitments");
     }
 
-    public List<IssuedClaimV2> outputClaims() {
+    public List<IssuedClaim> outputClaims() {
       return outputClaims;
     }
 
@@ -1819,23 +1819,23 @@ public final class OfflineNoteV2 {
     }
   }
 
-  public static final class AuditBundleV2 {
+  public static final class AuditBundle {
     private final byte[] tokenId;
-    private final KeyCertificateV2 senderKeyCertificate;
+    private final KeyCertificate senderKeyCertificate;
     private final List<byte[]> inputNullifiers;
-    private final List<IssuedClaimV2> inputClaims;
+    private final List<IssuedClaim> inputClaims;
     private final List<byte[]> outputCommitments;
-    private final List<AuditOutputClaimV2> outputClaims;
-    private final RecursiveProofV2 recursiveProof;
+    private final List<AuditOutputClaim> outputClaims;
+    private final RecursiveProof recursiveProof;
 
-    public AuditBundleV2(
+    public AuditBundle(
         final byte[] tokenId,
-        final KeyCertificateV2 senderKeyCertificate,
+        final KeyCertificate senderKeyCertificate,
         final List<byte[]> inputNullifiers,
-        final List<IssuedClaimV2> inputClaims,
+        final List<IssuedClaim> inputClaims,
         final List<byte[]> outputCommitments,
-        final List<AuditOutputClaimV2> outputClaims,
-        final RecursiveProofV2 recursiveProof) {
+        final List<AuditOutputClaim> outputClaims,
+        final RecursiveProof recursiveProof) {
       this.tokenId = copy(tokenId, "tokenId");
       this.senderKeyCertificate =
           Objects.requireNonNull(senderKeyCertificate, "senderKeyCertificate");
@@ -1863,7 +1863,7 @@ public final class OfflineNoteV2 {
       for (final byte[] commitment : this.outputCommitments) {
         committed.add(hexLower(commitment));
       }
-      for (final AuditOutputClaimV2 claim : this.outputClaims) {
+      for (final AuditOutputClaim claim : this.outputClaims) {
         if (!committed.contains(hexLower(claim.noteCommitment()))) {
           throw new IllegalArgumentException("audit output claim is not listed in output commitments");
         }
@@ -1874,7 +1874,7 @@ public final class OfflineNoteV2 {
       return Arrays.copyOf(tokenId, tokenId.length);
     }
 
-    public KeyCertificateV2 senderKeyCertificate() {
+    public KeyCertificate senderKeyCertificate() {
       return senderKeyCertificate;
     }
 
@@ -1882,7 +1882,7 @@ public final class OfflineNoteV2 {
       return copyByteList(inputNullifiers, "inputNullifiers");
     }
 
-    public List<IssuedClaimV2> inputClaims() {
+    public List<IssuedClaim> inputClaims() {
       return inputClaims;
     }
 
@@ -1890,20 +1890,20 @@ public final class OfflineNoteV2 {
       return copyByteList(outputCommitments, "outputCommitments");
     }
 
-    public List<AuditOutputClaimV2> outputClaims() {
+    public List<AuditOutputClaim> outputClaims() {
       return outputClaims;
     }
 
-    public RecursiveProofV2 recursiveProof() {
+    public RecursiveProof recursiveProof() {
       return recursiveProof;
     }
 
-    public AuditPublicInputsV2 publicInputs() {
-      final List<IssuedClaimV2> issuedOutputs = new ArrayList<>();
-      for (final AuditOutputClaimV2 claim : outputClaims) {
+    public AuditPublicInputs publicInputs() {
+      final List<IssuedClaim> issuedOutputs = new ArrayList<>();
+      for (final AuditOutputClaim claim : outputClaims) {
         issuedOutputs.add(claim.issuedClaim());
       }
-      return new AuditPublicInputsV2(
+      return new AuditPublicInputs(
           tokenId(),
           senderKeyCertificate.payloadHash(),
           inputNullifiers(),
@@ -1922,8 +1922,8 @@ public final class OfflineNoteV2 {
       }
     }
 
-    public AuditBundleV2 replacingRecursiveProof(final RecursiveProofV2 recursiveProof) {
-      return new AuditBundleV2(
+    public AuditBundle replacingRecursiveProof(final RecursiveProof recursiveProof) {
+      return new AuditBundle(
           tokenId(),
           senderKeyCertificate,
           inputNullifiers(),
@@ -1986,7 +1986,7 @@ public final class OfflineNoteV2 {
   public static final class InstanceBuilder {
     private InstanceBuilder() {}
 
-    public static InstanceValues redeemInstanceValues(final RedeemV2 redemption) {
+    public static InstanceValues redeemInstanceValues(final Redeem redemption) {
       final long inputCount =
           validateCount(redemption.inputNullifiers().size(), MAX_INPUT_AMOUNTS, "redemption input");
       final List<String> amounts = new ArrayList<>();
@@ -1996,7 +1996,7 @@ public final class OfflineNoteV2 {
       final long inputSum = normalizedAmounts.get(0);
       final long outputSum = normalizedAmounts.get(1);
       final byte[] issuedClaimHash =
-          new IssuedClaimV2(
+          new IssuedClaim(
                   redemption.sourceNoteCommitment(),
                   redemption.senderKeyCertificate().payloadHash(),
                   redemption.assetId(),
@@ -2023,7 +2023,7 @@ public final class OfflineNoteV2 {
       return new InstanceValues(publicValues, inputAmounts, outputAmounts);
     }
 
-    public static InstanceValues auditInstanceValues(final AuditBundleV2 audit) {
+    public static InstanceValues auditInstanceValues(final AuditBundle audit) {
       final long inputCount =
           validateCount(audit.inputClaims().size(), MAX_INPUT_AMOUNTS, "audit input");
       final long outputCount =
@@ -2035,13 +2035,13 @@ public final class OfflineNoteV2 {
 
       final List<byte[]> inputClaimHashes = new ArrayList<>();
       final List<String> amountStrings = new ArrayList<>();
-      for (final IssuedClaimV2 claim : audit.inputClaims()) {
+      for (final IssuedClaim claim : audit.inputClaims()) {
         inputClaimHashes.add(claim.claimHash());
         amountStrings.add(claim.canonicalAmount());
       }
       final List<byte[]> outputClaimHashes = new ArrayList<>();
-      for (final AuditOutputClaimV2 claim : audit.outputClaims()) {
-        final IssuedClaimV2 issued = claim.issuedClaim();
+      for (final AuditOutputClaim claim : audit.outputClaims()) {
+        final IssuedClaim issued = claim.issuedClaim();
         outputClaimHashes.add(issued.claimHash());
         amountStrings.add(issued.canonicalAmount());
       }
@@ -2104,27 +2104,27 @@ public final class OfflineNoteV2 {
   private static final TypeAdapter<InstructionModelPayload> INSTRUCTION_WRAPPER_PAYLOAD_ADAPTER =
       INSTRUCTION_WRAPPER_ADAPTER;
 
-  private static final TypeAdapter<DeviceAttestationRegistrationV2>
+  private static final TypeAdapter<DeviceAttestationRegistration>
       REGISTER_DEVICE_ATTESTATION_INSTRUCTION_ADAPTER =
           new TypeAdapter<>() {
             @Override
             public void encode(
-                final NoritoEncoder encoder, final DeviceAttestationRegistrationV2 value) {
+                final NoritoEncoder encoder, final DeviceAttestationRegistration value) {
               writeField(
                   encoder,
                   child -> DEVICE_ATTESTATION_REGISTRATION_ADAPTER.encode(child, value));
             }
 
             @Override
-            public DeviceAttestationRegistrationV2 decode(final NoritoDecoder decoder) {
+            public DeviceAttestationRegistration decode(final NoritoDecoder decoder) {
               return readField(decoder, child -> DEVICE_ATTESTATION_REGISTRATION_ADAPTER.decode(child));
             }
           };
 
-  private static final TypeAdapter<KeyCertificatePayloadV2> KEY_CERTIFICATE_PAYLOAD_ADAPTER =
+  private static final TypeAdapter<KeyCertificatePayload> KEY_CERTIFICATE_PAYLOAD_ADAPTER =
       new TypeAdapter<>() {
         @Override
-        public void encode(final NoritoEncoder encoder, final KeyCertificatePayloadV2 value) {
+        public void encode(final NoritoEncoder encoder, final KeyCertificatePayload value) {
           writeField(encoder, child -> writeString(child, value.domain()));
           writeField(encoder, child -> child.writeUInt(value.version(), 16));
           writeField(encoder, child -> writeString(child, value.platform()));
@@ -2140,27 +2140,27 @@ public final class OfflineNoteV2 {
         }
 
         @Override
-        public KeyCertificatePayloadV2 decode(final NoritoDecoder decoder) {
-          return new KeyCertificatePayloadV2(
-              readField(decoder, OfflineNoteV2::readString),
+        public KeyCertificatePayload decode(final NoritoDecoder decoder) {
+          return new KeyCertificatePayload(
+              readField(decoder, AttestedOfflineNote::readString),
               readField(decoder, child -> (int) child.readUInt(16)),
-              readField(decoder, OfflineNoteV2::readString),
-              readField(decoder, OfflineNoteV2::readString),
-              readField(decoder, OfflineNoteV2::readString),
-              readField(decoder, OfflineNoteV2::readAccountId),
-              readField(decoder, OfflineNoteV2::readBytesVec),
-              readField(decoder, OfflineNoteV2::readString),
-              readField(decoder, OfflineNoteV2::readString),
-              readField(decoder, OfflineNoteV2::readBytesVec),
-              readField(decoder, OfflineNoteV2::readOptionU32),
-              readField(decoder, OfflineNoteV2::readBool));
+              readField(decoder, AttestedOfflineNote::readString),
+              readField(decoder, AttestedOfflineNote::readString),
+              readField(decoder, AttestedOfflineNote::readString),
+              readField(decoder, AttestedOfflineNote::readAccountId),
+              readField(decoder, AttestedOfflineNote::readBytesVec),
+              readField(decoder, AttestedOfflineNote::readString),
+              readField(decoder, AttestedOfflineNote::readString),
+              readField(decoder, AttestedOfflineNote::readBytesVec),
+              readField(decoder, AttestedOfflineNote::readOptionU32),
+              readField(decoder, AttestedOfflineNote::readBool));
         }
       };
 
-  private static final TypeAdapter<KeyCertificateV2> KEY_CERTIFICATE_ADAPTER =
+  private static final TypeAdapter<KeyCertificate> KEY_CERTIFICATE_ADAPTER =
       new TypeAdapter<>() {
         @Override
-        public void encode(final NoritoEncoder encoder, final KeyCertificateV2 value) {
+        public void encode(final NoritoEncoder encoder, final KeyCertificate value) {
           writeField(encoder, child -> child.writeUInt(value.version(), 16));
           writeField(encoder, child -> writeString(child, value.platform()));
           writeField(encoder, child -> writeString(child, value.keyId()));
@@ -2176,29 +2176,29 @@ public final class OfflineNoteV2 {
         }
 
         @Override
-        public KeyCertificateV2 decode(final NoritoDecoder decoder) {
-          return new KeyCertificateV2(
+        public KeyCertificate decode(final NoritoDecoder decoder) {
+          return new KeyCertificate(
               readField(decoder, child -> (int) child.readUInt(16)),
-              readField(decoder, OfflineNoteV2::readString),
-              readField(decoder, OfflineNoteV2::readString),
-              readField(decoder, OfflineNoteV2::readString),
-              readField(decoder, OfflineNoteV2::readAccountId),
-              readField(decoder, OfflineNoteV2::readBytesVec),
-              readField(decoder, OfflineNoteV2::readString),
-              readField(decoder, OfflineNoteV2::readString),
-              readField(decoder, OfflineNoteV2::readBytesVec),
-              readField(decoder, OfflineNoteV2::readOptionU32),
-              readField(decoder, OfflineNoteV2::readBool),
-              readField(decoder, OfflineNoteV2::readConstVec));
+              readField(decoder, AttestedOfflineNote::readString),
+              readField(decoder, AttestedOfflineNote::readString),
+              readField(decoder, AttestedOfflineNote::readString),
+              readField(decoder, AttestedOfflineNote::readAccountId),
+              readField(decoder, AttestedOfflineNote::readBytesVec),
+              readField(decoder, AttestedOfflineNote::readString),
+              readField(decoder, AttestedOfflineNote::readString),
+              readField(decoder, AttestedOfflineNote::readBytesVec),
+              readField(decoder, AttestedOfflineNote::readOptionU32),
+              readField(decoder, AttestedOfflineNote::readBool),
+              readField(decoder, AttestedOfflineNote::readConstVec));
         }
       };
 
-  private static final TypeAdapter<DeviceAttestationRegistrationV2>
+  private static final TypeAdapter<DeviceAttestationRegistration>
       DEVICE_ATTESTATION_REGISTRATION_ADAPTER =
           new TypeAdapter<>() {
             @Override
             public void encode(
-                final NoritoEncoder encoder, final DeviceAttestationRegistrationV2 value) {
+                final NoritoEncoder encoder, final DeviceAttestationRegistration value) {
               writeField(encoder, child -> child.writeUInt(value.version(), 16));
               writeField(encoder, child -> writeString(child, value.platform()));
               writeField(encoder, child -> writeString(child, value.keyId()));
@@ -2229,30 +2229,30 @@ public final class OfflineNoteV2 {
             }
 
             @Override
-            public DeviceAttestationRegistrationV2 decode(final NoritoDecoder decoder) {
-              return new DeviceAttestationRegistrationV2(
+            public DeviceAttestationRegistration decode(final NoritoDecoder decoder) {
+              return new DeviceAttestationRegistration(
                   readField(decoder, child -> (int) child.readUInt(16)),
-                  readField(decoder, OfflineNoteV2::readString),
-                  readField(decoder, OfflineNoteV2::readString),
-                  readField(decoder, OfflineNoteV2::readString),
-                  readField(decoder, OfflineNoteV2::readAccountId),
-                  readField(decoder, OfflineNoteV2::readOptionAssetDefinitionId),
-                  readField(decoder, OfflineNoteV2::readOptionString),
-                  readField(decoder, OfflineNoteV2::readOptionString),
-                  readField(decoder, OfflineNoteV2::readOptionString),
-                  readField(decoder, OfflineNoteV2::readOptionString),
-                  readField(decoder, OfflineNoteV2::readOptionBytesVec),
-                  readField(decoder, OfflineNoteV2::readBytesVec),
-                  readField(decoder, OfflineNoteV2::readString),
-                  readField(decoder, OfflineNoteV2::readString),
-                  readField(decoder, OfflineNoteV2::readBytesVec),
-                  readField(decoder, OfflineNoteV2::readOptionU32),
-                  readField(decoder, OfflineNoteV2::readBool),
+                  readField(decoder, AttestedOfflineNote::readString),
+                  readField(decoder, AttestedOfflineNote::readString),
+                  readField(decoder, AttestedOfflineNote::readString),
+                  readField(decoder, AttestedOfflineNote::readAccountId),
+                  readField(decoder, AttestedOfflineNote::readOptionAssetDefinitionId),
+                  readField(decoder, AttestedOfflineNote::readOptionString),
+                  readField(decoder, AttestedOfflineNote::readOptionString),
+                  readField(decoder, AttestedOfflineNote::readOptionString),
+                  readField(decoder, AttestedOfflineNote::readOptionString),
+                  readField(decoder, AttestedOfflineNote::readOptionBytesVec),
+                  readField(decoder, AttestedOfflineNote::readBytesVec),
+                  readField(decoder, AttestedOfflineNote::readString),
+                  readField(decoder, AttestedOfflineNote::readString),
+                  readField(decoder, AttestedOfflineNote::readBytesVec),
+                  readField(decoder, AttestedOfflineNote::readOptionU32),
+                  readField(decoder, AttestedOfflineNote::readBool),
                   readField(decoder, child -> readHash(child, "challenge_hash")),
                   readField(decoder, child -> readHash(child, "attestation_report_hash")),
-                  readField(decoder, OfflineNoteV2::readBytesVec),
+                  readField(decoder, AttestedOfflineNote::readBytesVec),
                   readField(decoder, child -> readHash(child, "evidence_hash")),
-                  readField(decoder, OfflineNoteV2::readBytesVec),
+                  readField(decoder, AttestedOfflineNote::readBytesVec),
                   readField(decoder, child -> child.readUInt(64)),
                   readField(decoder, child -> readHash(child, "recent_block_hash")),
                   readField(decoder, child -> child.readUInt(64)));
@@ -2292,51 +2292,51 @@ public final class OfflineNoteV2 {
             @Override
             public DeviceAttestationChallengePreimage decode(final NoritoDecoder decoder) {
               return new DeviceAttestationChallengePreimage(
-                  readField(decoder, OfflineNoteV2::readString),
+                  readField(decoder, AttestedOfflineNote::readString),
                   readField(decoder, child -> (int) child.readUInt(16)),
-                  readField(decoder, OfflineNoteV2::readString),
-                  readField(decoder, OfflineNoteV2::readString),
-                  readField(decoder, OfflineNoteV2::readString),
-                  readField(decoder, OfflineNoteV2::readAccountId),
-                  readField(decoder, OfflineNoteV2::readOptionAssetDefinitionId),
-                  readField(decoder, OfflineNoteV2::readOptionString),
-                  readField(decoder, OfflineNoteV2::readOptionString),
-                  readField(decoder, OfflineNoteV2::readOptionString),
-                  readField(decoder, OfflineNoteV2::readOptionString),
-                  readField(decoder, OfflineNoteV2::readOptionBytesVec),
-                  readField(decoder, OfflineNoteV2::readBytesVec),
-                  readField(decoder, OfflineNoteV2::readString),
-                  readField(decoder, OfflineNoteV2::readString),
-                  readField(decoder, OfflineNoteV2::readOptionU32),
-                  readField(decoder, OfflineNoteV2::readBool),
+                  readField(decoder, AttestedOfflineNote::readString),
+                  readField(decoder, AttestedOfflineNote::readString),
+                  readField(decoder, AttestedOfflineNote::readString),
+                  readField(decoder, AttestedOfflineNote::readAccountId),
+                  readField(decoder, AttestedOfflineNote::readOptionAssetDefinitionId),
+                  readField(decoder, AttestedOfflineNote::readOptionString),
+                  readField(decoder, AttestedOfflineNote::readOptionString),
+                  readField(decoder, AttestedOfflineNote::readOptionString),
+                  readField(decoder, AttestedOfflineNote::readOptionString),
+                  readField(decoder, AttestedOfflineNote::readOptionBytesVec),
+                  readField(decoder, AttestedOfflineNote::readBytesVec),
+                  readField(decoder, AttestedOfflineNote::readString),
+                  readField(decoder, AttestedOfflineNote::readString),
+                  readField(decoder, AttestedOfflineNote::readOptionU32),
+                  readField(decoder, AttestedOfflineNote::readBool),
                   readField(decoder, child -> child.readUInt(64)),
                   readField(decoder, child -> readHash(child, "recent_block_hash")),
                   readField(decoder, child -> child.readUInt(64)));
             }
           };
 
-  private static final TypeAdapter<RecursiveProofV2> RECURSIVE_PROOF_ADAPTER =
+  private static final TypeAdapter<RecursiveProof> RECURSIVE_PROOF_ADAPTER =
       new TypeAdapter<>() {
         @Override
-        public void encode(final NoritoEncoder encoder, final RecursiveProofV2 value) {
+        public void encode(final NoritoEncoder encoder, final RecursiveProof value) {
           writeField(encoder, child -> writeVerifyingKeyId(child, value.verifierKeyId()));
           writeField(encoder, child -> child.writeBytes(value.publicInputsHash()));
           writeField(encoder, child -> writeProofBox(child, value.proof()));
         }
 
         @Override
-        public RecursiveProofV2 decode(final NoritoDecoder decoder) {
-          return new RecursiveProofV2(
-              readField(decoder, OfflineNoteV2::readVerifyingKeyId),
+        public RecursiveProof decode(final NoritoDecoder decoder) {
+          return new RecursiveProof(
+              readField(decoder, AttestedOfflineNote::readVerifyingKeyId),
               readField(decoder, child -> readHash(child, "public_inputs_hash")),
-              readField(decoder, OfflineNoteV2::readProofBox));
+              readField(decoder, AttestedOfflineNote::readProofBox));
         }
       };
 
-  private static final TypeAdapter<IssueV2> ISSUE_ADAPTER =
+  private static final TypeAdapter<Issue> ISSUE_ADAPTER =
       new TypeAdapter<>() {
         @Override
-        public void encode(final NoritoEncoder encoder, final IssueV2 value) {
+        public void encode(final NoritoEncoder encoder, final Issue value) {
           writeField(encoder, child -> child.writeBytes(value.noteCommitment()));
           writeField(encoder, child -> KEY_CERTIFICATE_ADAPTER.encode(child, value.keyCertificate()));
           writeField(encoder, child -> writeAssetId(child, value.assetId()));
@@ -2344,19 +2344,19 @@ public final class OfflineNoteV2 {
         }
 
         @Override
-        public IssueV2 decode(final NoritoDecoder decoder) {
-          return new IssueV2(
+        public Issue decode(final NoritoDecoder decoder) {
+          return new Issue(
               readField(decoder, child -> readHash(child, "note_commitment")),
               readField(decoder, KEY_CERTIFICATE_ADAPTER::decode),
-              readField(decoder, OfflineNoteV2::readAssetId),
-              readField(decoder, OfflineNoteV2::readNumeric));
+              readField(decoder, AttestedOfflineNote::readAssetId),
+              readField(decoder, AttestedOfflineNote::readNumeric));
         }
       };
 
-  private static final TypeAdapter<IssuedClaimV2> ISSUED_CLAIM_ADAPTER =
+  private static final TypeAdapter<IssuedClaim> ISSUED_CLAIM_ADAPTER =
       new TypeAdapter<>() {
         @Override
-        public void encode(final NoritoEncoder encoder, final IssuedClaimV2 value) {
+        public void encode(final NoritoEncoder encoder, final IssuedClaim value) {
           writeField(encoder, child -> writeString(child, value.domain()));
           writeField(encoder, child -> child.writeBytes(value.noteCommitment()));
           writeField(encoder, child -> child.writeBytes(value.keyCertificatePayloadHash()));
@@ -2365,20 +2365,20 @@ public final class OfflineNoteV2 {
         }
 
         @Override
-        public IssuedClaimV2 decode(final NoritoDecoder decoder) {
-          return new IssuedClaimV2(
-              readField(decoder, OfflineNoteV2::readString),
+        public IssuedClaim decode(final NoritoDecoder decoder) {
+          return new IssuedClaim(
+              readField(decoder, AttestedOfflineNote::readString),
               readField(decoder, child -> readHash(child, "note_commitment")),
               readField(decoder, child -> readHash(child, "key_certificate_payload_hash")),
-              readField(decoder, OfflineNoteV2::readAssetId),
-              readField(decoder, OfflineNoteV2::readNumeric));
+              readField(decoder, AttestedOfflineNote::readAssetId),
+              readField(decoder, AttestedOfflineNote::readNumeric));
         }
       };
 
-  private static final TypeAdapter<AuditOutputClaimV2> AUDIT_OUTPUT_CLAIM_ADAPTER =
+  private static final TypeAdapter<AuditOutputClaim> AUDIT_OUTPUT_CLAIM_ADAPTER =
       new TypeAdapter<>() {
         @Override
-        public void encode(final NoritoEncoder encoder, final AuditOutputClaimV2 value) {
+        public void encode(final NoritoEncoder encoder, final AuditOutputClaim value) {
           writeField(encoder, child -> child.writeBytes(value.noteCommitment()));
           writeField(encoder, child -> KEY_CERTIFICATE_ADAPTER.encode(child, value.keyCertificate()));
           writeField(encoder, child -> writeAssetId(child, value.assetId()));
@@ -2386,19 +2386,19 @@ public final class OfflineNoteV2 {
         }
 
         @Override
-        public AuditOutputClaimV2 decode(final NoritoDecoder decoder) {
-          return new AuditOutputClaimV2(
+        public AuditOutputClaim decode(final NoritoDecoder decoder) {
+          return new AuditOutputClaim(
               readField(decoder, child -> readHash(child, "note_commitment")),
               readField(decoder, KEY_CERTIFICATE_ADAPTER::decode),
-              readField(decoder, OfflineNoteV2::readAssetId),
-              readField(decoder, OfflineNoteV2::readNumeric));
+              readField(decoder, AttestedOfflineNote::readAssetId),
+              readField(decoder, AttestedOfflineNote::readNumeric));
         }
       };
 
-  private static final TypeAdapter<RedeemPublicInputsV2> REDEEM_PUBLIC_INPUTS_ADAPTER =
+  private static final TypeAdapter<RedeemPublicInputs> REDEEM_PUBLIC_INPUTS_ADAPTER =
       new TypeAdapter<>() {
         @Override
-        public void encode(final NoritoEncoder encoder, final RedeemPublicInputsV2 value) {
+        public void encode(final NoritoEncoder encoder, final RedeemPublicInputs value) {
           writeField(encoder, child -> writeString(child, value.domain()));
           writeField(encoder, child -> child.writeBytes(value.sourceNoteCommitment()));
           writeField(encoder, child -> writeVec(child, value.inputNullifiers(), NoritoEncoder::writeBytes));
@@ -2409,22 +2409,22 @@ public final class OfflineNoteV2 {
         }
 
         @Override
-        public RedeemPublicInputsV2 decode(final NoritoDecoder decoder) {
-          return new RedeemPublicInputsV2(
-              readField(decoder, OfflineNoteV2::readString),
+        public RedeemPublicInputs decode(final NoritoDecoder decoder) {
+          return new RedeemPublicInputs(
+              readField(decoder, AttestedOfflineNote::readString),
               readField(decoder, child -> readHash(child, "source_note_commitment")),
               readField(decoder, child -> readVec(child, element -> readHash(element, "input_nullifier"))),
               readField(decoder, child -> readHash(child, "key_certificate_payload_hash")),
-              readField(decoder, OfflineNoteV2::readAccountId),
-              readField(decoder, OfflineNoteV2::readAssetId),
-              readField(decoder, OfflineNoteV2::readNumeric));
+              readField(decoder, AttestedOfflineNote::readAccountId),
+              readField(decoder, AttestedOfflineNote::readAssetId),
+              readField(decoder, AttestedOfflineNote::readNumeric));
         }
       };
 
-  private static final TypeAdapter<RedeemV2> REDEEM_ADAPTER =
+  private static final TypeAdapter<Redeem> REDEEM_ADAPTER =
       new TypeAdapter<>() {
         @Override
-        public void encode(final NoritoEncoder encoder, final RedeemV2 value) {
+        public void encode(final NoritoEncoder encoder, final Redeem value) {
           writeField(encoder, child -> child.writeBytes(value.sourceNoteCommitment()));
           writeField(encoder, child -> writeVec(child, value.inputNullifiers(), NoritoEncoder::writeBytes));
           writeField(
@@ -2436,22 +2436,22 @@ public final class OfflineNoteV2 {
         }
 
         @Override
-        public RedeemV2 decode(final NoritoDecoder decoder) {
-          return new RedeemV2(
+        public Redeem decode(final NoritoDecoder decoder) {
+          return new Redeem(
               readField(decoder, child -> readHash(child, "source_note_commitment")),
               readField(decoder, child -> readVec(child, element -> readHash(element, "input_nullifier"))),
               readField(decoder, KEY_CERTIFICATE_ADAPTER::decode),
-              readField(decoder, OfflineNoteV2::readAccountId),
-              readField(decoder, OfflineNoteV2::readAssetId),
-              readField(decoder, OfflineNoteV2::readNumeric),
+              readField(decoder, AttestedOfflineNote::readAccountId),
+              readField(decoder, AttestedOfflineNote::readAssetId),
+              readField(decoder, AttestedOfflineNote::readNumeric),
               readField(decoder, RECURSIVE_PROOF_ADAPTER::decode));
         }
       };
 
-  private static final TypeAdapter<AuditPublicInputsV2> AUDIT_PUBLIC_INPUTS_ADAPTER =
+  private static final TypeAdapter<AuditPublicInputs> AUDIT_PUBLIC_INPUTS_ADAPTER =
       new TypeAdapter<>() {
         @Override
-        public void encode(final NoritoEncoder encoder, final AuditPublicInputsV2 value) {
+        public void encode(final NoritoEncoder encoder, final AuditPublicInputs value) {
           writeField(encoder, child -> writeString(child, value.domain()));
           writeField(encoder, child -> child.writeBytes(value.tokenId()));
           writeField(encoder, child -> child.writeBytes(value.keyCertificatePayloadHash()));
@@ -2464,9 +2464,9 @@ public final class OfflineNoteV2 {
         }
 
         @Override
-        public AuditPublicInputsV2 decode(final NoritoDecoder decoder) {
-          return new AuditPublicInputsV2(
-              readField(decoder, OfflineNoteV2::readString),
+        public AuditPublicInputs decode(final NoritoDecoder decoder) {
+          return new AuditPublicInputs(
+              readField(decoder, AttestedOfflineNote::readString),
               readField(decoder, child -> readHash(child, "token_id")),
               readField(decoder, child -> readHash(child, "key_certificate_payload_hash")),
               readField(decoder, child -> readVec(child, element -> readHash(element, "input_nullifier"))),
@@ -2476,10 +2476,10 @@ public final class OfflineNoteV2 {
         }
       };
 
-  private static final TypeAdapter<AuditBundleV2> AUDIT_ADAPTER =
+  private static final TypeAdapter<AuditBundle> AUDIT_ADAPTER =
       new TypeAdapter<>() {
         @Override
-        public void encode(final NoritoEncoder encoder, final AuditBundleV2 value) {
+        public void encode(final NoritoEncoder encoder, final AuditBundle value) {
           writeField(encoder, child -> child.writeBytes(value.tokenId()));
           writeField(
               encoder, child -> KEY_CERTIFICATE_ADAPTER.encode(child, value.senderKeyCertificate()));
@@ -2494,8 +2494,8 @@ public final class OfflineNoteV2 {
         }
 
         @Override
-        public AuditBundleV2 decode(final NoritoDecoder decoder) {
-          return new AuditBundleV2(
+        public AuditBundle decode(final NoritoDecoder decoder) {
+          return new AuditBundle(
               readField(decoder, child -> readHash(child, "token_id")),
               readField(decoder, KEY_CERTIFICATE_ADAPTER::decode),
               readField(decoder, child -> readVec(child, element -> readHash(element, "input_nullifier"))),
@@ -2527,7 +2527,7 @@ public final class OfflineNoteV2 {
     final NoritoDecoder child = new NoritoDecoder(parent.readBytes(length), parent.flags(), parent.flagsHint());
     final T value = readPayload.read(child);
     if (child.remaining() != 0) {
-      throw new IllegalArgumentException("Trailing bytes after Offline Note V2 field decode");
+      throw new IllegalArgumentException("Trailing bytes after Attested Offline Note field decode");
     }
     return value;
   }
@@ -2583,7 +2583,7 @@ public final class OfflineNoteV2 {
       return null;
     }
     if (tag == 1) {
-      return readField(decoder, OfflineNoteV2::readString);
+      return readField(decoder, AttestedOfflineNote::readString);
     }
     throw new IllegalArgumentException("invalid option tag: " + tag);
   }
@@ -2594,7 +2594,7 @@ public final class OfflineNoteV2 {
       return null;
     }
     if (tag == 1) {
-      return readField(decoder, OfflineNoteV2::readBytesVec);
+      return readField(decoder, AttestedOfflineNote::readBytesVec);
     }
     throw new IllegalArgumentException("invalid option tag: " + tag);
   }
@@ -2630,14 +2630,14 @@ public final class OfflineNoteV2 {
 
   private static VerifyingKeyIdReference readVerifyingKeyId(final NoritoDecoder decoder) {
     return new VerifyingKeyIdReference(
-        readField(decoder, OfflineNoteV2::readString),
-        readField(decoder, OfflineNoteV2::readString));
+        readField(decoder, AttestedOfflineNote::readString),
+        readField(decoder, AttestedOfflineNote::readString));
   }
 
   private static ProofBox readProofBox(final NoritoDecoder decoder) {
     return new ProofBox(
-        readField(decoder, OfflineNoteV2::readString),
-        readField(decoder, OfflineNoteV2::readBytesVec));
+        readField(decoder, AttestedOfflineNote::readString),
+        readField(decoder, AttestedOfflineNote::readBytesVec));
   }
 
   private static String readAccountId(final NoritoDecoder decoder) {
@@ -2696,7 +2696,7 @@ public final class OfflineNoteV2 {
                     payload,
                     member -> {
                       final PublicKeyCodec.PublicKeyPayload publicKey =
-                          readField(member, OfflineNoteV2::readPublicKeyPayload);
+                          readField(member, AttestedOfflineNote::readPublicKeyPayload);
                       final int weight = readField(member, child -> (int) child.readUInt(16));
                       return MultisigMemberPayload.of(publicKey.curveId(), weight, publicKey.keyBytes());
                     }));
@@ -2704,10 +2704,10 @@ public final class OfflineNoteV2 {
   }
 
   private static String readAssetId(final NoritoDecoder decoder) {
-    final String accountId = readField(decoder, OfflineNoteV2::readAccountId);
-    final byte[] definitionBytes = readField(decoder, OfflineNoteV2::readAssetDefinitionAddress);
+    final String accountId = readField(decoder, AttestedOfflineNote::readAccountId);
+    final byte[] definitionBytes = readField(decoder, AttestedOfflineNote::readAssetDefinitionAddress);
     final String definitionId = AssetDefinitionIdEncoder.encodeFromBytes(definitionBytes);
-    final Long dataspaceId = readField(decoder, OfflineNoteV2::readAssetBalanceScope);
+    final Long dataspaceId = readField(decoder, AttestedOfflineNote::readAssetBalanceScope);
     final String base = definitionId + "#" + accountId;
     return dataspaceId == null ? base : base + "#dataspace:" + dataspaceId;
   }
@@ -2903,7 +2903,7 @@ public final class OfflineNoteV2 {
   private static void writeMultisigMembers(
       final NoritoEncoder encoder, final List<MultisigMemberPayload> members) {
     final List<MultisigMemberPayload> sorted = new ArrayList<>(members);
-    sorted.sort(Comparator.comparing(OfflineNoteV2::canonicalSortKey, OfflineNoteV2::compareUnsigned));
+    sorted.sort(Comparator.comparing(AttestedOfflineNote::canonicalSortKey, AttestedOfflineNote::compareUnsigned));
     for (int i = 1; i < sorted.size(); i++) {
       if (Arrays.equals(canonicalSortKey(sorted.get(i - 1)), canonicalSortKey(sorted.get(i)))) {
         throw new IllegalArgumentException("duplicate multisig member");
@@ -3196,13 +3196,13 @@ public final class OfflineNoteV2 {
       final int version, final String accountId, final byte[] publicKey, final boolean oneUse) {
     if (version != KEY_CERTIFICATE_VERSION) {
       throw new IllegalArgumentException(
-          "Offline Note V2 key certificate version must be " + KEY_CERTIFICATE_VERSION);
+          "Attested Offline Note key certificate version must be " + KEY_CERTIFICATE_VERSION);
     }
     if (!oneUse) {
-      throw new IllegalArgumentException("Offline Note V2 key certificate must be one-use");
+      throw new IllegalArgumentException("Attested Offline Note key certificate must be one-use");
     }
     if (publicKey.length != 32) {
-      throw new IllegalArgumentException("Offline Note V2 note public key must be 32 bytes");
+      throw new IllegalArgumentException("Attested Offline Note public key must be 32 bytes");
     }
     encodeAccountIdPayload(accountId);
   }

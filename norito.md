@@ -176,7 +176,7 @@ DecimalValueV1  := byte_len_u32_le || mantissa_twos_complement_le || scale_u8
 QuantityValueV1 := byte_len_u32_le || mantissa_twos_complement_le || scale_u8
 ```
 
-`byte_len_u32_le` is fixed-width (never a compact varint), is at most 512, and
+`byte_len_u32_le` is fixed-width (never a compact varint), is at most 64, and
 must consume the payload exactly (apart from the required scale byte in the two
 scaled forms). The signed-byte and decimal canonicality rules above are checked
 after the frame checksum, schema, declared length, compression, and flags have
@@ -189,24 +189,26 @@ The normative nominal schema names and type-name hashes are:
 
 | Type | Schema name | 16-byte schema hash (hex) | Maximum frame bytes |
 |---|---|---:|---:|
-| `int` | `iroha.numeric.IntValueV1` | `07c039457363b9e1d36bbd31d93dec4a` | 556 |
-| `decimal` | `iroha.numeric.DecimalValueV1` | `ba2ffed52e4d8ee16f17efefe1828524` | 557 |
-| `quantity` | `iroha.numeric.QuantityValueV1` | `e4769984c81ce0e8b678f2eb06274ee3` | 557 |
+| `int` | `iroha.numeric.IntValueV1` | `07c039457363b9e1d36bbd31d93dec4a` | 108 |
+| `decimal` | `iroha.numeric.DecimalValueV1` | `ba2ffed52e4d8ee16f17efefe1828524` | 109 |
+| `quantity` | `iroha.numeric.QuantityValueV1` | `e4769984c81ce0e8b678f2eb06274ee3` | 109 |
 
 Including the 39-byte pointer-TLV envelope, the corresponding hard maxima are
-595, 596, and 596 bytes. Lengths beyond those caps must be rejected before any
+147, 148, and 148 bytes. Lengths beyond those caps must be rejected before any
 allocation based on the declared length.
 
 Exact decimal arithmetic is defined over conceptual unbounded integer
 intermediates. The exact mathematical result is normalized first; only its
 canonical mantissa and scale are checked against the value domain. Exact
-division tries output scales `0..=28` in ascending order. If all attempts have a
-remainder, reduction of the mathematical denominator distinguishes a repeating
-decimal (a remaining prime factor other than 2 or 5) from a terminating result
-whose minimum scale exceeds 28. Implementations must expose deterministic charge
-points before each attempted quotient/remainder, normalization division, and
-denominator-classification division; an out-of-gas decision occurs at that
-charge point before the arithmetic work begins.
+division first reduces the mathematical fraction and classifies its denominator.
+A remaining prime factor other than 2 or 5 is a repeating decimal. Otherwise,
+the larger multiplicity of 2 or 5 is the proven minimum output scale; a value
+above 28 is an exact-division scale overflow. A representable quotient performs
+exactly one quotient/remainder attempt at that proven scale. Implementations
+must expose deterministic charge points before each denominator-classification
+division, scale construction, quotient/remainder, and normalization division;
+an out-of-gas decision occurs at that charge point before the arithmetic work
+begins.
 
 ## Kotodama V1 Schema-Bound Aggregates
 

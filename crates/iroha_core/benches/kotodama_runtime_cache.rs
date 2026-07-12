@@ -6,7 +6,7 @@ use criterion::Criterion;
 use iroha_core::smartcontracts::ivm::cache::IvmCache;
 use iroha_crypto::Hash;
 use iroha_data_model::prelude::Name;
-use iroha_primitives::json::Json;
+use iroha_primitives::{json::Json, numeric_abi::IntValueV1};
 use ivm::{
     ProgramMetadata, host::DefaultHost, kotodama::compiler::Compiler, pointer_abi::PointerType,
 };
@@ -17,7 +17,7 @@ const GAS_LIMIT: u64 = u64::MAX;
 
 fn benchmark_program() -> Vec<u8> {
     Compiler::new()
-        .compile_source("seiyaku Add { view fn add(a: i64, b: i64) -> i64 { return a + b; } }")
+        .compile_source("seiyaku Add { view fn add(int a, int b) -> int { return a + b; } }")
         .expect("compile benchmark contract")
 }
 
@@ -59,7 +59,7 @@ fn argument_host(program: &[u8]) -> DefaultHost {
         .find(|entrypoint| entrypoint.name == "add")
         .and_then(|entrypoint| entrypoint.argument_schema.as_ref())
         .expect("benchmark entrypoint has an argument schema");
-    let json = Json::from(norito::json!({"a": 4, "b": 7}));
+    let json = Json::from(norito::json!({"a": "4", "b": "7"}));
     let record = ivm::encode_argument_record_from_json(schema, &json)
         .expect("encode canonical benchmark argument record");
     let key: Name = "trigger_event_json"
@@ -93,7 +93,17 @@ fn bench_production_runtime_cache(c: &mut Criterion) {
             .expect("select benchmark entrypoint");
         runtime.set_host(host.clone());
         runtime.run().expect("execute cold benchmark invocation");
-        assert_eq!(runtime.register(10), 11);
+        let result = runtime
+            .validate_tlv(runtime.register(10))
+            .expect("validate benchmark int result");
+        assert_eq!(result.type_id, PointerType::Int);
+        assert_eq!(
+            IntValueV1::decode_frame(result.payload)
+                .expect("decode benchmark int result")
+                .into_int()
+                .try_to_i64(),
+            Some(11)
+        );
     }
 
     c.bench_function("kotodama_core_runtime_warm_add", |b| {

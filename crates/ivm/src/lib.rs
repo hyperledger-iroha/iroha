@@ -83,7 +83,8 @@ mod sha3;
 pub mod signature;
 pub mod simple_instruction;
 mod state_overlay;
-mod state_value;
+#[path = "state_value.rs"]
+mod state_value_runtime;
 pub mod sum;
 pub mod syscall_metering;
 pub mod syscalls;
@@ -193,6 +194,8 @@ pub use ivm_abi::entrypoint::{
     EntrypointArgumentSchemaV1, EntrypointReturnRecordV1, EntrypointValueAtomV1,
     EntrypointValueTypeV1,
 };
+/// Canonical schemas and records used for durable Kotodama V1 state values.
+pub use ivm_abi::state_value;
 
 pub use crate::signature::{Ed25519BatchItem, verify_ed25519_batch_items};
 pub use crate::{

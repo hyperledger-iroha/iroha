@@ -3,9 +3,10 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import re
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Mapping, Optional, Union, get_args, get_type_hints
 from urllib.parse import quote
 
 import pytest
@@ -26,8 +27,12 @@ from iroha_torii_client import (  # noqa: E402  (import depends on sys.path muta
     NetworkTimeSnapshot,
     NetworkTimeStatus,
     OfflineAppliedOperation,
+    OfflineAssetScale,
     OfflinePendingOperation,
+    OfflineRedeemRequest,
     OfflineRejectedOperation,
+    OfflineTopUpAnchor,
+    OfflineTopUpRequest,
     ToriiCanonicalRequestAuth,
     ToriiClient,
     VpnQuoteCreateRequest,
@@ -4141,6 +4146,68 @@ def _offline_operation_reference(**overrides: Any) -> Dict[str, Any]:
     return reference
 
 
+def _offline_fixed_bytes(byte: int) -> List[int]:
+    return [byte] * 32
+
+
+def _offline_top_up_anchor(**overrides: Any) -> Dict[str, Any]:
+    amount = overrides.get("amount", {"atomic_units": 17, "scale": 4})
+    current_note = overrides.get(
+        "current_note",
+        {
+            "chain_id": "wonderland",
+            "asset": CANONICAL_ASSET_ID,
+            "note_commitment": _offline_fixed_bytes(0x41),
+            "spend_nullifier": _offline_fixed_bytes(0x51),
+            "amount": dict(amount),
+        },
+    )
+    anchor = {
+        "version": 2,
+        "chain_id": "wonderland",
+        "payer": CANONICAL_OWNER,
+        "asset": CANONICAL_ASSET_ID,
+        "asset_scale": amount["scale"],
+        "amount": amount,
+        "initial_root": _offline_fixed_bytes(0x10),
+        "finalized_root": _offline_fixed_bytes(0x20),
+        "topup_anchor_nullifiers": [_offline_fixed_bytes(0x31)],
+        "current_note": current_note,
+        "topup_operation_id": list(OFFLINE_OPERATION_BYTES),
+        "transfer_verifier_id": {
+            "backend": "halo2/ipa",
+            "name": "offline-transfer",
+        },
+        "transfer_verifier_commitment": _offline_fixed_bytes(0x61),
+        "artifact_generation": "generation-1",
+        "finalized_height": 12,
+        "finalized_tx_hash": _offline_fixed_bytes(0x22),
+        "anchor_digest": _offline_fixed_bytes(0x71),
+    }
+    anchor.update(overrides)
+    return anchor
+
+
+def _offline_applied_top_up_status(
+    anchor: Optional[Mapping[str, Any]] = None,
+    **result_overrides: Any,
+) -> Dict[str, Any]:
+    result = {
+        "transaction_hash": OFFLINE_TRANSACTION_HASH,
+        "finalized_block_height": 12,
+        "server_time_ms": 13,
+        "anchor": dict(anchor if anchor is not None else _offline_top_up_anchor()),
+    }
+    result.update(result_overrides)
+    return {
+        "state": "applied",
+        "value": {
+            "operation_id": OFFLINE_OPERATION_ID,
+            "result": {"kind": "top_up", "result": result},
+        },
+    }
+
+
 def _offline_rejected_status(error: Mapping[str, Any]) -> Dict[str, Any]:
     return {
         "state": "rejected",
@@ -4151,6 +4218,12 @@ def _offline_rejected_status(error: Mapping[str, Any]) -> Dict[str, Any]:
             "error": dict(error),
         },
     }
+
+
+def test_offline_public_request_annotations_are_closed_first_release_types() -> None:
+    assert get_type_hints(ToriiClient.submit_offline_top_up)["request"] is OfflineTopUpRequest
+    assert get_type_hints(ToriiClient.submit_offline_redeem)["request"] is OfflineRedeemRequest
+    assert get_args(OfflineAssetScale) == tuple(range(29))
 
 
 def test_get_offline_readiness_sends_exact_asset_selector_and_parses_blockers() -> None:
@@ -4319,6 +4392,8 @@ def test_offline_command_validation_rejects_malformed_ids_and_payloads_before_ne
         _offline_top_up_request(operation_id=[0] * 32),
         _offline_top_up_request(operation_id=[0x11] * 31 + [256]),
         _offline_top_up_request(authorization={"operation_id": [0x12] * 32}),
+        _offline_top_up_request(amount={"atomic_units": 1, "scale": 29}),
+        _offline_top_up_request(artifact_generation="é" * 65),
         cyclic,
     ]
     for request in requests:
@@ -4389,7 +4464,7 @@ def test_get_offline_operation_status_parses_all_tagged_states() -> None:
                             "transaction_hash": OFFLINE_TRANSACTION_HASH,
                             "finalized_block_height": 12,
                             "server_time_ms": 13,
-                            "anchor": {"version": 2},
+                            "anchor": _offline_top_up_anchor(),
                         },
                     },
                 },
@@ -4423,6 +4498,130 @@ def test_get_offline_operation_status_parses_all_tagged_states() -> None:
         assert session.calls[0]["url"].endswith(OFFLINE_STATUS_URI)
 
 
+def test_offline_top_up_anchor_is_closed_typed_and_cross_checked() -> None:
+    anchor = _offline_top_up_anchor(unknown_member={"attacker_controlled": True})
+    session = RecordingSession()
+    session.queue(StubResponse(payload=_offline_applied_top_up_status(anchor)))
+
+    status = ToriiClient(
+        "http://node.test", session=session
+    ).get_offline_operation_status(OFFLINE_OPERATION_ID)
+
+    assert isinstance(status, OfflineAppliedOperation)
+    assert status.result.kind == "top_up"
+    typed_anchor = status.result.result.anchor
+    assert isinstance(typed_anchor, OfflineTopUpAnchor)
+    assert typed_anchor.version == 2
+    assert typed_anchor.amount.scale == 4
+    assert typed_anchor.transfer_verifier_id.backend == "halo2/ipa"
+    assert typed_anchor.topup_operation_id == tuple(OFFLINE_OPERATION_BYTES)
+    assert not hasattr(typed_anchor, "unknown_member")
+
+
+def test_offline_top_up_anchor_preserves_full_width_amounts_and_heights() -> None:
+    amount = {"atomic_units": (1 << 128) - 1, "scale": 28}
+    finalized_height = (1 << 64) - 1
+    anchor = _offline_top_up_anchor(amount=amount, finalized_height=finalized_height)
+    session = RecordingSession()
+    session.queue(
+        StubResponse(
+            payload=_offline_applied_top_up_status(
+                anchor,
+                finalized_block_height=finalized_height,
+            )
+        )
+    )
+
+    status = ToriiClient(
+        "http://node.test", session=session
+    ).get_offline_operation_status(OFFLINE_OPERATION_ID)
+
+    assert isinstance(status, OfflineAppliedOperation)
+    assert status.result.kind == "top_up"
+    assert status.result.result.anchor.amount.atomic_units == (1 << 128) - 1
+    assert status.result.result.anchor.finalized_height == finalized_height
+
+
+def test_offline_top_up_anchor_rejects_malformed_and_cross_resource_conflicts() -> None:
+    missing_digest = _offline_top_up_anchor()
+    missing_digest.pop("anchor_digest")
+    invalid = [
+        missing_digest,
+        _offline_top_up_anchor(version=1),
+        _offline_top_up_anchor(asset_scale=29),
+        _offline_top_up_anchor(asset_scale=3),
+        _offline_top_up_anchor(finalized_root=_offline_fixed_bytes(0x10)),
+        _offline_top_up_anchor(topup_anchor_nullifiers=[]),
+        _offline_top_up_anchor(
+            topup_anchor_nullifiers=[
+                _offline_fixed_bytes(0x31),
+                _offline_fixed_bytes(0x32),
+                _offline_fixed_bytes(0x33),
+            ]
+        ),
+        _offline_top_up_anchor(
+            topup_anchor_nullifiers=[
+                _offline_fixed_bytes(0x31),
+                _offline_fixed_bytes(0x31),
+            ]
+        ),
+        _offline_top_up_anchor(
+            topup_anchor_nullifiers=[
+                _offline_fixed_bytes(0x32),
+                _offline_fixed_bytes(0x31),
+            ]
+        ),
+        _offline_top_up_anchor(topup_anchor_nullifiers=[_offline_fixed_bytes(0x41)]),
+        _offline_top_up_anchor(topup_operation_id=_offline_fixed_bytes(0x12)),
+        _offline_top_up_anchor(finalized_height=11),
+        _offline_top_up_anchor(finalized_tx_hash=_offline_fixed_bytes(0x23)),
+        _offline_top_up_anchor(anchor_digest=_offline_fixed_bytes(0)),
+        _offline_top_up_anchor(
+            transfer_verifier_id={"backend": "", "name": "offline-transfer"}
+        ),
+        _offline_top_up_anchor(
+            transfer_verifier_id={"backend": "halo2/ipa", "name": "v" * 257}
+        ),
+        _offline_top_up_anchor(transfer_verifier_commitment=_offline_fixed_bytes(0)),
+        _offline_top_up_anchor(artifact_generation="é" * 65),
+        _offline_top_up_anchor(
+            current_note={
+                "chain_id": "wonderland",
+                "asset": CANONICAL_ASSET_ID,
+                "note_commitment": _offline_fixed_bytes(0x41),
+                "spend_nullifier": _offline_fixed_bytes(0x41),
+                "amount": {"atomic_units": 17, "scale": 4},
+            }
+        ),
+        _offline_top_up_anchor(
+            current_note={
+                "chain_id": "other-chain",
+                "asset": CANONICAL_ASSET_ID,
+                "note_commitment": _offline_fixed_bytes(0x41),
+                "spend_nullifier": _offline_fixed_bytes(0x51),
+                "amount": {"atomic_units": 17, "scale": 4},
+            }
+        ),
+        _offline_top_up_anchor(
+            current_note={
+                "chain_id": "wonderland",
+                "asset": CANONICAL_ASSET_ID,
+                "note_commitment": _offline_fixed_bytes(0x41),
+                "spend_nullifier": _offline_fixed_bytes(0x51),
+                "amount": {"atomic_units": 18, "scale": 4},
+            }
+        ),
+    ]
+
+    for anchor in invalid:
+        session = RecordingSession()
+        session.queue(StubResponse(payload=_offline_applied_top_up_status(anchor)))
+        with pytest.raises(RuntimeError):
+            ToriiClient(
+                "http://node.test", session=session
+            ).get_offline_operation_status(OFFLINE_OPERATION_ID)
+
+
 def test_offline_applied_status_rejects_zero_finality_fields() -> None:
     for kind in ("top_up", "redeem"):
         for field in ("finalized_block_height", "server_time_ms"):
@@ -4433,7 +4632,9 @@ def test_offline_applied_status_rejects_zero_finality_fields() -> None:
             }
             result[field] = 0
             if kind == "top_up":
-                result["anchor"] = {}
+                result["anchor"] = _offline_top_up_anchor(
+                    finalized_height=result["finalized_block_height"]
+                )
             payload = {
                 "state": "applied",
                 "value": {

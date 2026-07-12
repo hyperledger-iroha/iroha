@@ -3,7 +3,10 @@
 use std::{
     fmt,
     num::{NonZeroU64, NonZeroUsize},
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
     time::{Duration, Instant},
 };
 
@@ -203,6 +206,10 @@ impl LiveQuery {
 pub struct LiveQueryStore {
     queries: DashMap<QueryId, QueryInfo>,
     queries_per_user: DashMap<AccountId, usize>,
+    // Includes both inserted queries and insertion reservations. Keeping this
+    // independent of `DashMap::len` makes the global capacity check atomic
+    // across shards and authorities.
+    query_slots: AtomicUsize,
     // The maximum number of queries in the store
     capacity: NonZeroUsize,
     // The maximum number of queries in the store per user
@@ -226,6 +233,7 @@ impl LiveQueryStore {
         Self {
             queries: DashMap::new(),
             queries_per_user: DashMap::new(),
+            query_slots: AtomicUsize::new(0),
             idle_time: cfg.idle_time,
             capacity: cfg.capacity,
             capacity_per_user: cfg.capacity_per_user,
@@ -286,18 +294,41 @@ impl LiveQueryStore {
             if query.last_access_time.elapsed() <= self.idle_time {
                 true
             } else {
-                expired.push(key.clone());
-                self.decrease_queries_per_user(query.authority.clone());
+                expired.push((key.clone(), query.authority.clone()));
                 false
             }
         });
-        expired
+        for (_, authority) in &expired {
+            self.decrease_queries_per_user(authority.clone());
+        }
+        self.release_query_slots(expired.len());
+        expired.into_iter().map(|(query_id, _)| query_id).collect()
     }
 
     fn remove(&self, query_id: &str) -> Option<QueryInfo> {
         let (_, query_info) = self.queries.remove(query_id)?;
         self.decrease_queries_per_user(query_info.authority.clone());
+        self.release_query_slots(1);
         Some(query_info)
+    }
+
+    fn try_reserve_query_slot(&self) -> bool {
+        self.query_slots
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+                (current < self.capacity.get()).then_some(current + 1)
+            })
+            .is_ok()
+    }
+
+    fn release_query_slots(&self, count: usize) {
+        if count == 0 {
+            return;
+        }
+        self.query_slots
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+                current.checked_sub(count)
+            })
+            .expect("live-query slot accounting must not underflow");
     }
 
     fn decrease_queries_per_user(&self, authority: AccountId) {
@@ -334,7 +365,7 @@ impl LiveQueryStore {
         authority: AccountId,
         mut generate_query_id: impl FnMut() -> QueryId,
     ) -> Result<QueryId, QueryExecutionFail> {
-        if self.queries.len() >= self.capacity.get() {
+        if !self.try_reserve_query_slot() {
             warn!(
                 max_queries = self.capacity,
                 "Reached maximum allowed number of queries in LiveQueryStore"
@@ -344,6 +375,8 @@ impl LiveQueryStore {
 
         let mut user_count = self.queries_per_user.entry(authority.clone()).or_insert(0);
         if *user_count >= self.capacity_per_user.get() {
+            drop(user_count);
+            self.release_query_slots(1);
             warn!(
                 max_queries_per_user = self.capacity_per_user,
                 %authority,
@@ -365,6 +398,7 @@ impl LiveQueryStore {
             };
             let Some(live_query) = live_query.take() else {
                 self.decrease_queries_per_user(authority);
+                self.release_query_slots(1);
                 return Err(QueryExecutionFail::CapacityLimit);
             };
             entry.insert(QueryInfo {
@@ -378,6 +412,7 @@ impl LiveQueryStore {
         }
 
         self.decrease_queries_per_user(authority);
+        self.release_query_slots(1);
         warn!(
             attempts = QUERY_ID_ALLOCATION_ATTEMPTS,
             "Failed to allocate a unique opaque query ID"
@@ -716,7 +751,7 @@ mod tests {
     use std::{
         num::NonZeroU64,
         sync::{
-            Arc,
+            Arc, Barrier,
             atomic::{AtomicBool, AtomicUsize, Ordering},
         },
         time::Duration,
@@ -1096,6 +1131,48 @@ mod tests {
             .handle_iter_start(build_iter(), &ALICE_ID, Some(1))
             .expect_err("capacity");
         assert_eq!(err, QueryExecutionFail::CapacityLimit);
+    }
+
+    #[test]
+    fn global_capacity_reservations_are_atomic_across_concurrent_callers() {
+        const CALLERS: usize = 32;
+        const CAPACITY: usize = 3;
+
+        let store = Arc::new(LiveQueryStore::from_config(
+            Config {
+                idle_time: Duration::from_secs(60),
+                capacity: nonzero!(3_usize),
+                capacity_per_user: nonzero!(32_usize),
+            },
+            ShutdownSignal::new(),
+        ));
+        let start = Arc::new(Barrier::new(CALLERS + 1));
+        let callers = (0..CALLERS)
+            .map(|_| {
+                let store = Arc::clone(&store);
+                let start = Arc::clone(&start);
+                std::thread::spawn(move || {
+                    start.wait();
+                    store.try_reserve_query_slot()
+                })
+            })
+            .collect::<Vec<_>>();
+
+        start.wait();
+        let admitted = callers
+            .into_iter()
+            .map(|caller| caller.join().expect("capacity caller must not panic"))
+            .filter(|admitted| *admitted)
+            .count();
+
+        assert_eq!(admitted, CAPACITY);
+        assert_eq!(store.query_slots.load(Ordering::Acquire), CAPACITY);
+        assert!(
+            store.queries.is_empty(),
+            "slot reservations alone must not manufacture live cursors"
+        );
+        store.release_query_slots(admitted);
+        assert_eq!(store.query_slots.load(Ordering::Acquire), 0);
     }
 
     #[test]

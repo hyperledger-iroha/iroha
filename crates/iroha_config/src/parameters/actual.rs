@@ -8151,6 +8151,10 @@ pub struct ToriiOfflineIssuer {
     pub max_balance: Numeric,
     /// Maximum authorized value for one offline transaction.
     pub max_tx_value: Numeric,
+    /// Maximum number of accepted bindings plus in-flight reservations retained in memory.
+    pub operation_registry_max_entries: NonZeroUsize,
+    /// Maximum canonical bytes reserved by accepted bindings and in-flight operations.
+    pub operation_registry_max_bytes: NonZeroUsize,
     /// Certificate TTL.
     pub certificate_ttl: Duration,
     /// Authorization refresh interval.

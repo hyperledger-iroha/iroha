@@ -6936,12 +6936,14 @@ mod settlement {
         isi::{
             InstructionBox,
             settlement::{
-                DvpIsi, PvpIsi, SettlementAtomicity, SettlementExecutionOrder, SettlementId,
+                DvpIsi, FxCorridorPolicy, PvpIsi, SetFxCorridorPolicy, SettleFxCorridor,
+                SettlementAtomicity, SettlementExecutionOrder, SettlementId,
                 SettlementInstructionBox, SettlementLeg, SettlementPlan,
             },
         },
         metadata::Metadata,
-        prelude::{AssetDefinitionId, Numeric},
+        nexus::DataSpaceId,
+        prelude::{AssetDefinitionId, Name, Numeric},
     };
 
     #[derive(clap::Subcommand, Debug)]
@@ -6950,6 +6952,10 @@ mod settlement {
         Dvp(DvpArgs),
         /// Create a payment-versus-payment instruction
         Pvp(PvpArgs),
+        /// Register or replace a governed native FX corridor policy
+        SetFxCorridorPolicy(SetFxCorridorPolicyArgs),
+        /// Execute one policy-backed native FX corridor settlement
+        SettleFxCorridor(SettleFxCorridorArgs),
     }
 
     impl Run for Command {
@@ -6957,7 +6963,115 @@ mod settlement {
             match self {
                 Command::Dvp(args) => args.run(context),
                 Command::Pvp(args) => args.run(context),
+                Command::SetFxCorridorPolicy(args) => args.run(context),
+                Command::SettleFxCorridor(args) => args.run(context),
             }
+        }
+    }
+
+    #[derive(clap::Args, Debug)]
+    pub struct SetFxCorridorPolicyArgs {
+        /// Stable policy identifier
+        #[arg(long)]
+        pub policy_id: Name,
+        /// Monotonic policy revision (first revision is 1)
+        #[arg(long)]
+        pub revision: u64,
+        /// Private dataspace holding the source balance
+        #[arg(long)]
+        pub source_dataspace: DataSpaceId,
+        /// Fixed account funding the source leg
+        #[arg(long)]
+        pub source_account: String,
+        /// Source-currency asset definition
+        #[arg(long)]
+        pub source_asset: AssetDefinitionId,
+        /// Fixed account receiving collected source currency
+        #[arg(long)]
+        pub source_sink: String,
+        /// Private dataspace holding the destination reserve
+        #[arg(long)]
+        pub destination_dataspace: DataSpaceId,
+        /// Fixed reserve funding destination payouts
+        #[arg(long)]
+        pub destination_reserve: String,
+        /// Destination-currency asset definition
+        #[arg(long)]
+        pub destination_asset: AssetDefinitionId,
+        /// Destination/source rate numerator
+        #[arg(long)]
+        pub rate_numerator: u64,
+        /// Destination/source rate denominator
+        #[arg(long)]
+        pub rate_denominator: u64,
+        /// Register the policy disabled
+        #[arg(long)]
+        pub disabled: bool,
+    }
+
+    impl SetFxCorridorPolicyArgs {
+        fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+            let policy = FxCorridorPolicy {
+                policy_id: self.policy_id,
+                revision: self.revision,
+                source_dataspace: self.source_dataspace,
+                source_account: resolve_account_id(context, &self.source_account)
+                    .wrap_err("failed to resolve --source-account")?,
+                source_asset_definition_id: self.source_asset,
+                source_sink: resolve_account_id(context, &self.source_sink)
+                    .wrap_err("failed to resolve --source-sink")?,
+                destination_dataspace: self.destination_dataspace,
+                destination_reserve: resolve_account_id(context, &self.destination_reserve)
+                    .wrap_err("failed to resolve --destination-reserve")?,
+                destination_asset_definition_id: self.destination_asset,
+                rate_numerator: self.rate_numerator,
+                rate_denominator: self.rate_denominator,
+                enabled: !self.disabled,
+            };
+            let instruction: SettlementInstructionBox = SetFxCorridorPolicy { policy }.into();
+            context.finish([InstructionBox::from(instruction)])
+        }
+    }
+
+    #[derive(clap::Args, Debug)]
+    pub struct SettleFxCorridorArgs {
+        /// Stable corridor policy identifier
+        #[arg(long)]
+        pub policy_id: Name,
+        /// Exact active policy revision expected by the signer
+        #[arg(long)]
+        pub expected_policy_revision: u64,
+        /// Expected source asset from the referenced policy
+        #[arg(long)]
+        pub source_asset: AssetDefinitionId,
+        /// Expected destination asset from the referenced policy
+        #[arg(long)]
+        pub destination_asset: AssetDefinitionId,
+        /// Globally unique settlement/replay identifier
+        #[arg(long)]
+        pub settlement_id: SettlementId,
+        /// Destination-currency recipient account or alias
+        #[arg(long)]
+        pub recipient: String,
+        /// Positive source-currency quantity
+        #[arg(long)]
+        pub source_amount: Numeric,
+    }
+
+    impl SettleFxCorridorArgs {
+        fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+            let instruction = SettleFxCorridor {
+                policy_id: self.policy_id,
+                expected_policy_revision: self.expected_policy_revision,
+                source_asset_definition_id: self.source_asset,
+                destination_asset_definition_id: self.destination_asset,
+                settlement_id: self.settlement_id,
+                recipient: resolve_account_id(context, &self.recipient)
+                    .wrap_err("failed to resolve --recipient")?,
+                source_amount: self.source_amount,
+            };
+            let instruction: SettlementInstructionBox = instruction.into();
+            context.finish([InstructionBox::from(instruction)])
         }
     }
 

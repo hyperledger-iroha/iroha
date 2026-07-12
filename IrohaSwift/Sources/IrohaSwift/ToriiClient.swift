@@ -9441,18 +9441,124 @@ public struct ToriiOfflineReadinessBlocker: Decodable, Sendable, Equatable {
     }
 }
 
+/// The active confidential-transfer verifier selected for an Offline readiness snapshot.
+public struct ToriiOfflineActiveTransferVerifier: Decodable, Sendable, Equatable {
+    public let id: ToriiVerifyingKeyId
+    public let version: UInt32
+    public let circuitId: String
+    public let commitment: String
+    public let publicInputsSchemaHash: String
+    public let maxProofBytes: UInt32
+    public let activationHeight: UInt64
+    public let withdrawalHeight: UInt64?
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case version
+        case circuitId = "circuit_id"
+        case commitment
+        case publicInputsSchemaHash = "public_inputs_schema_hash"
+        case maxProofBytes = "max_proof_bytes"
+        case activationHeight = "activation_height"
+        case withdrawalHeight = "withdrawal_height"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(ToriiVerifyingKeyId.self, forKey: .id)
+        version = try container.decode(UInt32.self, forKey: .version)
+        circuitId = try Self.decodeExactText(from: container, forKey: .circuitId)
+        commitment = try Self.decodeCanonicalHash(from: container, forKey: .commitment)
+        publicInputsSchemaHash = try Self.decodeCanonicalHash(
+            from: container,
+            forKey: .publicInputsSchemaHash
+        )
+        let decodedMaxProofBytes = try container.decode(UInt32.self, forKey: .maxProofBytes)
+        guard decodedMaxProofBytes > 0 else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .maxProofBytes,
+                in: container,
+                debugDescription: "max_proof_bytes must be greater than zero"
+            )
+        }
+        maxProofBytes = decodedMaxProofBytes
+        activationHeight = try container.decode(UInt64.self, forKey: .activationHeight)
+        guard container.contains(.withdrawalHeight) else {
+            throw DecodingError.keyNotFound(
+                CodingKeys.withdrawalHeight,
+                DecodingError.Context(
+                    codingPath: container.codingPath,
+                    debugDescription: "withdrawal_height is required"
+                )
+            )
+        }
+        withdrawalHeight = try container.decodeIfPresent(
+            UInt64.self,
+            forKey: .withdrawalHeight
+        )
+        if let withdrawalHeight, withdrawalHeight <= activationHeight {
+            throw DecodingError.dataCorruptedError(
+                forKey: .withdrawalHeight,
+                in: container,
+                debugDescription: "withdrawal_height must be greater than activation_height"
+            )
+        }
+    }
+
+    fileprivate func isActive(at blockHeight: UInt64) -> Bool {
+        activationHeight <= blockHeight
+            && withdrawalHeight.map { blockHeight < $0 } != false
+    }
+
+    private static func decodeExactText(
+        from container: KeyedDecodingContainer<CodingKeys>,
+        forKey key: CodingKeys
+    ) throws -> String {
+        let value = try container.decode(String.self, forKey: key)
+        guard ToriiOfflineReadinessValidation.isExactText(value) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: key,
+                in: container,
+                debugDescription: "\(key.stringValue) must be exact non-empty text"
+            )
+        }
+        return value
+    }
+
+    private static func decodeCanonicalHash(
+        from container: KeyedDecodingContainer<CodingKeys>,
+        forKey key: CodingKeys
+    ) throws -> String {
+        let value = try container.decode(String.self, forKey: key)
+        guard ToriiOfflineReadinessValidation.isCanonicalHash(value) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: key,
+                in: container,
+                debugDescription: "\(key.stringValue) must be exact lowercase 32-byte hexadecimal"
+            )
+        }
+        return value
+    }
+}
+
 public struct ToriiOfflineReadiness: Decodable, Sendable, Equatable {
     public let assetDefinitionId: String
+    /// Authoritative live asset scale. Values above 28 are retained so callers
+    /// can explain an `asset_scale_unsupported` readiness blocker.
+    public let assetScale: UInt32?
     public let evaluatedBlockHeight: UInt64
     public let evaluatedBlockHash: String
     public let evaluatedBlockHashBytes: Data
+    public let activeTransferVerifier: ToriiOfflineActiveTransferVerifier?
     public let ready: Bool
     public let blockers: [ToriiOfflineReadinessBlocker]
 
     private enum CodingKeys: String, CodingKey {
         case assetDefinitionId = "asset_definition_id"
+        case assetScale = "asset_scale"
         case evaluatedBlockHeight = "evaluated_block_height"
         case evaluatedBlockHash = "evaluated_block_hash"
+        case activeTransferVerifier = "active_transfer_verifier"
         case ready
         case blockers
     }
@@ -9463,6 +9569,16 @@ public struct ToriiOfflineReadiness: Decodable, Sendable, Equatable {
             from: container,
             forKey: .assetDefinitionId
         )
+        guard container.contains(.assetScale) else {
+            throw DecodingError.keyNotFound(
+                CodingKeys.assetScale,
+                DecodingError.Context(
+                    codingPath: container.codingPath,
+                    debugDescription: "asset_scale is required"
+                )
+            )
+        }
+        let decodedAssetScale = try container.decodeIfPresent(UInt32.self, forKey: .assetScale)
         evaluatedBlockHeight = try container.decode(
             UInt64.self,
             forKey: .evaluatedBlockHeight
@@ -9479,6 +9595,19 @@ public struct ToriiOfflineReadiness: Decodable, Sendable, Equatable {
         }
         evaluatedBlockHash = blockHash
         evaluatedBlockHashBytes = blockHashBytes
+        guard container.contains(.activeTransferVerifier) else {
+            throw DecodingError.keyNotFound(
+                CodingKeys.activeTransferVerifier,
+                DecodingError.Context(
+                    codingPath: container.codingPath,
+                    debugDescription: "active_transfer_verifier is required"
+                )
+            )
+        }
+        let decodedActiveTransferVerifier = try container.decodeIfPresent(
+            ToriiOfflineActiveTransferVerifier.self,
+            forKey: .activeTransferVerifier
+        )
         let decodedReady = try container.decode(Bool.self, forKey: .ready)
         let decodedBlockers = try container.decode(
             [ToriiOfflineReadinessBlocker].self,
@@ -9491,6 +9620,49 @@ public struct ToriiOfflineReadiness: Decodable, Sendable, Equatable {
                 debugDescription: "ready must be true exactly when blockers is empty"
             )
         }
+        let blockerCodes = Set(decodedBlockers.map(\.code))
+        let scaleUnavailable = blockerCodes.contains("asset_scale_unavailable")
+        let scaleUnsupported = blockerCodes.contains("asset_scale_unsupported")
+        switch decodedAssetScale {
+        case nil where !scaleUnavailable || scaleUnsupported:
+            throw DecodingError.dataCorruptedError(
+                forKey: .assetScale,
+                in: container,
+                debugDescription: "null asset_scale requires only the asset_scale_unavailable blocker"
+            )
+        case let scale? where scale <= 28 && (scaleUnavailable || scaleUnsupported):
+            throw DecodingError.dataCorruptedError(
+                forKey: .assetScale,
+                in: container,
+                debugDescription: "supported asset_scale must not have an asset scale blocker"
+            )
+        case let scale? where scale > 28 && (!scaleUnsupported || scaleUnavailable):
+            throw DecodingError.dataCorruptedError(
+                forKey: .assetScale,
+                in: container,
+                debugDescription: "asset_scale above 28 requires only the asset_scale_unsupported blocker"
+            )
+        default:
+            break
+        }
+        let transferUnavailable = blockerCodes.contains("transfer_verifier_unavailable")
+        guard (decodedActiveTransferVerifier == nil) == transferUnavailable else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .activeTransferVerifier,
+                in: container,
+                debugDescription: "active_transfer_verifier must be null exactly when transfer_verifier_unavailable is blocked"
+            )
+        }
+        if let decodedActiveTransferVerifier,
+           !decodedActiveTransferVerifier.isActive(at: evaluatedBlockHeight) {
+            throw DecodingError.dataCorruptedError(
+                forKey: .activeTransferVerifier,
+                in: container,
+                debugDescription: "active_transfer_verifier must be active at evaluated_block_height"
+            )
+        }
+        assetScale = decodedAssetScale
+        activeTransferVerifier = decodedActiveTransferVerifier
         ready = decodedReady
         blockers = decodedBlockers
     }
@@ -20058,6 +20230,41 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         if requestBody.commitments.isEmpty {
             return []
         }
+        let response = try await fetchZkAssetMerklePathResponse(
+            asset: asset,
+            commitments: commitments
+        )
+        return try response.validatedPaths(expectedCommitments: commitments)
+    }
+
+    /// Fetch the complete authoritative path snapshot, including Torii's
+    /// padded next-zero path. Kagemusha uses this form so a one-input proof can
+    /// be built from two bounded paths without downloading the whole tree.
+    public func getZkAssetMerklePathSnapshot(
+        asset: String,
+        commitments: [Data]
+    ) async throws -> ToriiZkMerklePathResponse {
+        let response = try await fetchZkAssetMerklePathResponse(
+            asset: asset,
+            commitments: commitments
+        )
+        _ = try response.validatedPaths(expectedCommitments: commitments)
+        guard response.treeDepth == ToriiZkMerklePathResponse.confidentialTreeDepthV2 else {
+            throw ToriiClientError.invalidPayload(
+                "Torii returned a non-confidential-v2 Merkle tree depth."
+            )
+        }
+        if response.frontierLen < ToriiZkMerklePathResponse.confidentialTreeCapacityV2 {
+            _ = try response.validatedNextZeroPath()
+        }
+        return response
+    }
+
+    private func fetchZkAssetMerklePathResponse(
+        asset: String,
+        commitments: [Data]
+    ) async throws -> ToriiZkMerklePathResponse {
+        let requestBody = try ToriiZkMerklePathRequest(assetId: asset, commitments: commitments)
         let request = try makeRequest(path: "/v1/zk/merkle-path",
                                       method: .post,
                                       queryItems: nil,
@@ -20070,7 +20277,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         } catch {
             throw ToriiClientError.decoding(error)
         }
-        return try response.validatedPaths(expectedCommitments: requestBody.commitments)
+        return response
     }
 
     @discardableResult

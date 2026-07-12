@@ -9419,8 +9419,19 @@ final class ToriiClientTests: XCTestCase {
         let payload = """
         {
           "asset_definition_id": "xor#wonderland",
+          "asset_scale": 9,
           "evaluated_block_height": 18446744073709551615,
           "evaluated_block_hash": "abababababababababababababababababababababababababababababababab",
+          "active_transfer_verifier": {
+            "id": {"backend": "halo2/ipa", "name": "offline-transfer"},
+            "version": 7,
+            "circuit_id": "halo2/pasta/ipa/offline-transfer",
+            "commitment": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+            "public_inputs_schema_hash": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+            "max_proof_bytes": 4096,
+            "activation_height": 0,
+            "withdrawal_height": null
+          },
           "ready": false,
           "blockers": [
             {"code": "offline_disabled", "message": "Offline transfers are disabled"}
@@ -9443,9 +9454,15 @@ final class ToriiClientTests: XCTestCase {
             assetDefinitionId: "xor#wonderland"
         )
         XCTAssertEqual(readiness.assetDefinitionId, "xor#wonderland")
+        XCTAssertEqual(readiness.assetScale, 9)
         XCTAssertEqual(readiness.evaluatedBlockHeight, UInt64.max)
         XCTAssertEqual(readiness.evaluatedBlockHash, String(repeating: "ab", count: 32))
         XCTAssertEqual(readiness.evaluatedBlockHashBytes, Data(repeating: 0xAB, count: 32))
+        XCTAssertEqual(readiness.activeTransferVerifier?.id.backend, "halo2/ipa")
+        XCTAssertEqual(readiness.activeTransferVerifier?.id.name, "offline-transfer")
+        XCTAssertEqual(readiness.activeTransferVerifier?.version, 7)
+        XCTAssertEqual(readiness.activeTransferVerifier?.maxProofBytes, 4096)
+        XCTAssertNil(readiness.activeTransferVerifier?.withdrawalHeight)
         XCTAssertFalse(readiness.ready)
         XCTAssertEqual(readiness.blockers.count, 1)
         XCTAssertEqual(readiness.blockers[0].code, "offline_disabled")
@@ -9456,15 +9473,31 @@ final class ToriiClientTests: XCTestCase {
     func testGetOfflineReadinessRejectsNonCanonicalFields() async throws {
         func payload(extra: String = "",
                      assetDefinitionId: String = "\"xor#wonderland\"",
+                     assetScale: String = "9",
                      blockHash: String = "\"abababababababababababababababababababababababababababababababab\"",
+                     activeTransferVerifier: String? = nil,
                      ready: String = "true",
                      blockers: String = "[]") -> Data {
+            let verifier = activeTransferVerifier ?? """
+            {
+              "id": {"backend": "halo2/ipa", "name": "offline-transfer"},
+              "version": 7,
+              "circuit_id": "halo2/pasta/ipa/offline-transfer",
+              "commitment": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+              "public_inputs_schema_hash": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+              "max_proof_bytes": 4096,
+              "activation_height": 0,
+              "withdrawal_height": null
+            }
+            """
             """
             {
               \(extra)
               "asset_definition_id": \(assetDefinitionId),
+              "asset_scale": \(assetScale),
               "evaluated_block_height": 7,
               "evaluated_block_hash": \(blockHash),
+              "active_transfer_verifier": \(verifier),
               "ready": \(ready),
               "blockers": \(blockers)
             }
@@ -9491,6 +9524,18 @@ final class ToriiClientTests: XCTestCase {
             (
                 payload(ready: "false"),
                 "ready must be true exactly when blockers is empty"
+            ),
+            (
+                payload(assetScale: "null"),
+                "null asset_scale requires only the asset_scale_unavailable blocker"
+            ),
+            (
+                payload(assetScale: "29"),
+                "asset_scale above 28 requires only the asset_scale_unsupported blocker"
+            ),
+            (
+                payload(activeTransferVerifier: "null"),
+                "active_transfer_verifier must be null exactly when transfer_verifier_unavailable is blocked"
             )
         ]
 
@@ -9520,12 +9565,59 @@ final class ToriiClientTests: XCTestCase {
     }
 
     @available(iOS 15.0, macOS 12.0, *)
+    func testGetOfflineReadinessAcceptsUnsupportedScaleAndUnavailableVerifierBlockers() async throws {
+        let payload = """
+        {
+          "asset_definition_id": "xor#wonderland",
+          "asset_scale": 29,
+          "evaluated_block_height": 7,
+          "evaluated_block_hash": "abababababababababababababababababababababababababababababababab",
+          "active_transfer_verifier": null,
+          "ready": false,
+          "blockers": [
+            {"code": "asset_scale_unsupported", "message": "The asset scale is unsupported"},
+            {"code": "transfer_verifier_unavailable", "message": "The verifier is unavailable"}
+          ]
+        }
+        """.data(using: .utf8)!
+
+        StubURLProtocol.handler = { request in
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            return (response, payload)
+        }
+
+        let readiness = try await makeClient().getOfflineReadiness(
+            assetDefinitionId: "xor#wonderland"
+        )
+        XCTAssertEqual(readiness.assetScale, 29)
+        XCTAssertNil(readiness.activeTransferVerifier)
+        XCTAssertFalse(readiness.ready)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
     func testGetOfflineReadinessIgnoresIndependentUnknownMembers() async throws {
         let payload = """
         {
           "asset_definition_id": "xor#wonderland",
+          "asset_scale": 9,
           "evaluated_block_height": 7,
           "evaluated_block_hash": "abababababababababababababababababababababababababababababababab",
+          "active_transfer_verifier": {
+            "id": {"backend": "halo2/ipa", "name": "offline-transfer"},
+            "version": 7,
+            "circuit_id": "halo2/pasta/ipa/offline-transfer",
+            "commitment": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+            "public_inputs_schema_hash": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+            "max_proof_bytes": 4096,
+            "activation_height": 0,
+            "withdrawal_height": null,
+            "future_verifier_metadata": true
+          },
           "ready": false,
           "blockers": [
             {
@@ -9560,8 +9652,10 @@ final class ToriiClientTests: XCTestCase {
         let duplicateRoot = """
         {
           "asset_definition_id": "xor#wonderland",
+          "asset_scale": 9,
           "evaluated_block_height": 7,
           "evaluated_block_hash": "abababababababababababababababababababababababababababababababab",
+          "active_transfer_verifier": null,
           "ready": true,
           "ready": false,
           "blockers": []
@@ -9570,8 +9664,10 @@ final class ToriiClientTests: XCTestCase {
         let duplicateNested = """
         {
           "asset_definition_id": "xor#wonderland",
+          "asset_scale": null,
           "evaluated_block_height": 7,
           "evaluated_block_hash": "abababababababababababababababababababababababababababababababab",
+          "active_transfer_verifier": null,
           "ready": false,
           "blockers": [{"code":"blocked","code":"other","message":"no"}]
         }
@@ -9639,12 +9735,12 @@ final class ToriiClientTests: XCTestCase {
         let topUpResponseArchive = OfflineOperationCodec.encodeReference(try reference(.topUp))
         let redeemResponseArchive = OfflineOperationCodec.encodeReference(try reference(.redeem))
         let topUpRequestArchive = requestArchive(
-            schema: KagemushaRecursiveSpendV2.topUpRequestWireName,
+            schema: KagemushaRecursiveSpend.topUpRequestWireName,
             fieldCount: 8,
             operationIdFieldIndex: 6
         )
         let redeemRequestArchive = requestArchive(
-            schema: KagemushaRecursiveSpendV2.redeemRequestWireName,
+            schema: KagemushaRecursiveSpend.redeemRequestWireName,
             fieldCount: 11,
             operationIdFieldIndex: 9
         )
@@ -9724,7 +9820,7 @@ final class ToriiClientTests: XCTestCase {
             )
         }
         let request = try OfflineTopUpRequest(noritoArchive: noritoEncode(
-            typeName: KagemushaRecursiveSpendV2.topUpRequestWireName,
+            typeName: KagemushaRecursiveSpend.topUpRequestWireName,
             payload: requestPayload.data,
             flags: NoritoHeader.compactLen
         ))

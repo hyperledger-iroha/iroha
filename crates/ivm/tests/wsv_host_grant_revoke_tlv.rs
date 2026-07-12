@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use iroha_crypto::{Hash, PublicKey};
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::{numeric::Numeric, numeric_abi::QuantityValueV1};
 use ivm::{
     IVM, Memory, PointerType,
     mock_wsv::{AccountId, AssetDefinitionId, MockWorldStateView, PermissionToken, WsvHost},
@@ -97,13 +97,12 @@ fn grant_revoke_permission_with_tlv() {
     let prog_bal = assemble_syscalls(&[syscalls::SYSCALL_GET_ACCOUNT_BALANCE as u8]);
     vm.load_program(&prog_bal).unwrap();
     vm.run().expect("balance after grant failed");
-    let tlv = vm
-        .memory
-        .validate_tlv(vm.register(10))
-        .expect("balance tlv");
-    assert_eq!(tlv.type_id, PointerType::NoritoBytes);
-    let value: Numeric = norito::decode_from_bytes(tlv.payload).expect("decode balance");
-    assert_eq!(value, Numeric::from(50_u64));
+    let tlv = vm.validate_tlv(vm.register(10)).expect("balance tlv");
+    assert_eq!(tlv.type_id, PointerType::Quantity);
+    let value = QuantityValueV1::decode_frame(tlv.payload)
+        .expect("decode canonical balance")
+        .into_quantity();
+    assert_eq!(value.as_numeric(), &Numeric::from(50_u64));
 
     // Step 3: revoke the same permission via Json TLV
     let subj = make_account_tlv(&bob);

@@ -1,13 +1,14 @@
 use std::{
     collections::BTreeMap,
-    sync::{Arc, Mutex, RwLock},
+    num::NonZeroUsize,
+    sync::{Arc, Mutex},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use axum::{http::HeaderMap, response::Response as AxResponse};
 use iroha_config::parameters::actual;
 use iroha_core::state::{StateReadOnly, WorldReadOnly};
-use iroha_crypto::{HashOf, KeyPair};
+use iroha_crypto::{Hash, HashOf, KeyPair};
 use iroha_data_model::{
     ValidationFail,
     account::AccountId,
@@ -36,13 +37,19 @@ use crate::{AppState, Error, SharedAppState, app_auth, routing};
 const PATH_OFFLINE_TOP_UP: &str = iroha_torii_shared::uri::OFFLINE_TOP_UP;
 const PATH_OFFLINE_REDEEM: &str = iroha_torii_shared::uri::OFFLINE_REDEEM;
 const OFFLINE_OPERATION_RETENTION_AFTER_EXPIRY_MS: u64 = 24 * 60 * 60 * 1_000;
+// Canonical logical accounting is intentionally independent of allocator and
+// architecture details: operation id + kind + request digest + transaction
+// hash + submission/expiry timestamps. The count budget separately bounds the
+// map-node/key duplication and in-flight coordination objects.
+const ADMITTED_OPERATION_ACCOUNTED_BYTES: usize =
+    iroha_config::parameters::defaults::torii::offline_issuer::OPERATION_REGISTRY_ACCOUNTED_BYTES_PER_ENTRY;
+
 #[derive(Debug, Clone)]
 pub(crate) struct OfflineV2IssuerRuntime {
     authority: AccountId,
     key_pair: KeyPair,
     max_tx_value: Numeric,
-    operations: Arc<RwLock<BTreeMap<[u8; 32], OfflineOperationRecord>>>,
-    in_flight: Arc<Mutex<BTreeMap<[u8; 32], InFlightSubmission>>>,
+    admission: Arc<Mutex<OfflineOperationRegistry>>,
 }
 
 impl OfflineV2IssuerRuntime {
@@ -51,8 +58,10 @@ impl OfflineV2IssuerRuntime {
             authority: config.authority,
             key_pair: config.key_pair,
             max_tx_value: config.max_tx_value,
-            operations: Arc::new(RwLock::new(BTreeMap::new())),
-            in_flight: Arc::new(Mutex::new(BTreeMap::new())),
+            admission: Arc::new(Mutex::new(OfflineOperationRegistry::new(
+                config.operation_registry_max_entries,
+                config.operation_registry_max_bytes,
+            ))),
         }
     }
 
@@ -69,7 +78,7 @@ impl OfflineV2IssuerRuntime {
 
 #[derive(Debug)]
 struct InFlightSubmission {
-    request: OfflineOperationRequestOwned,
+    binding: OfflineOperationRequestBinding,
     token: Arc<()>,
     updates: watch::Sender<SubmissionOutcome>,
 }
@@ -77,12 +86,12 @@ struct InFlightSubmission {
 #[derive(Debug, Clone)]
 enum SubmissionOutcome {
     Pending,
-    Accepted(OfflineOperationRecord),
+    Accepted(AdmittedOfflineOperationRecord),
     Retry,
 }
 
 enum SubmissionClaim {
-    Accepted(OfflineOperationRecord),
+    Accepted(AdmittedOfflineOperationRecord),
     Leader(SubmissionLeader),
     Follower(watch::Receiver<SubmissionOutcome>),
 }
@@ -91,7 +100,7 @@ struct SubmissionLeader {
     issuer: Arc<OfflineV2IssuerRuntime>,
     operation_id: [u8; 32],
     token: Arc<()>,
-    request: OfflineOperationRequestOwned,
+    binding: OfflineOperationRequestBinding,
     updates: watch::Sender<SubmissionOutcome>,
     active: bool,
 }
@@ -110,26 +119,40 @@ pub(crate) async fn handle_top_up(
         )
     })?;
     let requested = OfflineOperationRequest::TopUp(&topup_request);
+    let requested_binding = OfflineOperationRequestBinding::from_request(requested)?;
     let issuer = require_issuer(&app)?;
     let submission = loop {
-        if let Some(response) = find_existing_offline_operation(&app, &issuer, requested)? {
+        if let Some(response) =
+            find_existing_offline_operation(&app, &issuer, requested, &requested_binding)?
+        {
             return Ok(response);
         }
-        match issuer.claim_submission(requested)? {
+        match issuer.claim_submission(requested_binding)? {
             SubmissionClaim::Accepted(record) => {
-                return offline_operation_reference_for_record(&record);
+                return offline_operation_reference_for_admitted_record(&record);
             }
             SubmissionClaim::Leader(submission) => break submission,
             SubmissionClaim::Follower(receiver) => {
                 match wait_for_submission_outcome(receiver).await {
                     SubmissionOutcome::Accepted(record) => {
-                        return offline_operation_reference_for_record(&record);
+                        return offline_operation_reference_for_admitted_record(&record);
                     }
                     SubmissionOutcome::Retry | SubmissionOutcome::Pending => continue,
                 }
             }
         }
     };
+    // Retention pruning can remove an expired admitted binding after this
+    // caller's first recovery pass but before it acquires the in-flight claim.
+    // Once the claim is ours, repeat the authoritative queue/Kura lookup before
+    // signing; any earlier leader is either still represented in-flight or
+    // recoverable from one of those durable transaction sources.
+    if let Some(response) =
+        find_existing_offline_operation(&app, &issuer, requested, &requested_binding)?
+    {
+        drop(submission);
+        return Ok(response);
+    }
     validate_kagemusha_v2_topup_snapshot(&app, &topup_request)?;
     if topup_request.amount.public_numeric() > issuer.max_tx_value.clone() {
         return Err(validation(
@@ -161,8 +184,8 @@ pub(crate) async fn handle_top_up(
         PATH_OFFLINE_TOP_UP,
     )
     .await?;
-    let record = submission.accept(tx_hash);
-    offline_operation_reference_for_record(&record)
+    let record = submission.accept(tx_hash)?;
+    offline_operation_reference_for_admitted_record(&record)
 }
 
 pub(crate) async fn handle_redeem(
@@ -179,26 +202,37 @@ pub(crate) async fn handle_redeem(
         )
     })?;
     let requested = OfflineOperationRequest::Redeem(&redeem_request);
+    let requested_binding = OfflineOperationRequestBinding::from_request(requested)?;
     let issuer = require_issuer(&app)?;
     let submission = loop {
-        if let Some(response) = find_existing_offline_operation(&app, &issuer, requested)? {
+        if let Some(response) =
+            find_existing_offline_operation(&app, &issuer, requested, &requested_binding)?
+        {
             return Ok(response);
         }
-        match issuer.claim_submission(requested)? {
+        match issuer.claim_submission(requested_binding)? {
             SubmissionClaim::Accepted(record) => {
-                return offline_operation_reference_for_record(&record);
+                return offline_operation_reference_for_admitted_record(&record);
             }
             SubmissionClaim::Leader(submission) => break submission,
             SubmissionClaim::Follower(receiver) => {
                 match wait_for_submission_outcome(receiver).await {
                     SubmissionOutcome::Accepted(record) => {
-                        return offline_operation_reference_for_record(&record);
+                        return offline_operation_reference_for_admitted_record(&record);
                     }
                     SubmissionOutcome::Retry | SubmissionOutcome::Pending => continue,
                 }
             }
         }
     };
+    // See the top-up path: this second authoritative read closes the retention
+    // pruning window before a replacement transaction can be signed.
+    if let Some(response) =
+        find_existing_offline_operation(&app, &issuer, requested, &requested_binding)?
+    {
+        drop(submission);
+        return Ok(response);
+    }
     validate_kagemusha_v2_redeem_snapshot(&app, &redeem_request)?;
     if redeem_request.amount.public_numeric() > issuer.max_tx_value.clone() {
         return Err(validation(
@@ -228,8 +262,8 @@ pub(crate) async fn handle_redeem(
         PATH_OFFLINE_REDEEM,
     )
     .await?;
-    let record = submission.accept(tx_hash);
-    offline_operation_reference_for_record(&record)
+    let record = submission.accept(tx_hash)?;
+    offline_operation_reference_for_admitted_record(&record)
 }
 
 fn kagemusha_v2_snapshot_time_ms(app: &SharedAppState) -> u64 {
@@ -399,6 +433,53 @@ impl OfflineOperationRequestOwned {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct OfflineOperationRequestBinding {
+    operation_id: [u8; 32],
+    kind: KagemushaV2OperationKind,
+    canonical_request_digest: [u8; 32],
+    submitted_at_ms: u64,
+    expires_at_ms: u64,
+}
+
+impl OfflineOperationRequestBinding {
+    fn from_request(request: OfflineOperationRequestRef<'_>) -> Result<Self, Error> {
+        let authorization = request.authorization();
+        Ok(Self {
+            operation_id: authorization.operation_id,
+            kind: request.kind(),
+            canonical_request_digest: canonical_offline_request_digest(request)?,
+            submitted_at_ms: authorization.issued_at_ms,
+            expires_at_ms: authorization.expires_at_ms,
+        })
+    }
+}
+
+fn canonical_offline_request_digest(
+    request: OfflineOperationRequestRef<'_>,
+) -> Result<[u8; 32], Error> {
+    let canonical = match request {
+        OfflineOperationRequest::TopUp(request) => norito::to_bytes(request),
+        OfflineOperationRequest::Redeem(request) => norito::to_bytes(request),
+    }
+    .map_err(|source| {
+        Error::Query(ValidationFail::InternalError(format!(
+            "failed to encode canonical offline request binding: {source}"
+        )))
+    })?;
+    Ok(Hash::new(canonical).into())
+}
+
+fn ensure_same_offline_request_binding(
+    existing: &OfflineOperationRequestBinding,
+    requested: &OfflineOperationRequestBinding,
+) -> Result<(), Error> {
+    if existing == requested {
+        return Ok(());
+    }
+    Err(operation_id_conflict())
+}
+
 fn ensure_same_offline_request<TopUp: PartialEq, Redeem: PartialEq>(
     existing: &OfflineOperationRequest<TopUp, Redeem>,
     requested: &OfflineOperationRequest<TopUp, Redeem>,
@@ -406,10 +487,14 @@ fn ensure_same_offline_request<TopUp: PartialEq, Redeem: PartialEq>(
     if existing == requested {
         return Ok(());
     }
-    Err(Error::AppConflict {
+    Err(operation_id_conflict())
+}
+
+fn operation_id_conflict() -> Error {
+    Error::AppConflict {
         code: "operation_id_conflict",
         message: "Offline operation id is already bound to a different request.".to_owned(),
-    })
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -417,6 +502,70 @@ struct OfflineOperationRecord {
     request: OfflineOperationRequestOwned,
     transaction_hash: HashOf<SignedTransaction>,
     submitted_at_ms: u64,
+}
+
+impl OfflineOperationRecord {
+    fn binding(&self) -> Result<OfflineOperationRequestBinding, Error> {
+        OfflineOperationRequestBinding::from_request(self.request.as_ref())
+    }
+}
+
+#[derive(Debug, Clone)]
+struct AdmittedOfflineOperationRecord {
+    binding: OfflineOperationRequestBinding,
+    transaction_hash: HashOf<SignedTransaction>,
+}
+
+#[derive(Debug)]
+struct OfflineOperationRegistry {
+    records: BTreeMap<[u8; 32], AdmittedOfflineOperationRecord>,
+    in_flight: BTreeMap<[u8; 32], InFlightSubmission>,
+    max_entries: NonZeroUsize,
+    max_accounted_bytes: NonZeroUsize,
+}
+
+impl OfflineOperationRegistry {
+    fn new(max_entries: NonZeroUsize, max_accounted_bytes: NonZeroUsize) -> Self {
+        Self {
+            records: BTreeMap::new(),
+            in_flight: BTreeMap::new(),
+            max_entries,
+            max_accounted_bytes,
+        }
+    }
+
+    fn accounted_bytes(&self) -> usize {
+        self.tracked_entries()
+            .saturating_mul(ADMITTED_OPERATION_ACCOUNTED_BYTES)
+    }
+
+    fn tracked_entries(&self) -> usize {
+        self.records.len().saturating_add(self.in_flight.len())
+    }
+
+    fn has_capacity_for_new_operation(&self) -> bool {
+        self.tracked_entries().saturating_add(1) <= self.max_entries.get()
+            && self
+                .accounted_bytes()
+                .saturating_add(ADMITTED_OPERATION_ACCOUNTED_BYTES)
+                <= self.max_accounted_bytes.get()
+    }
+
+    fn prune_expired(&mut self, now_ms: u64) {
+        self.records.retain(|_, record| {
+            offline_operation_is_retained(record.binding.expires_at_ms, now_ms)
+        });
+    }
+
+    fn get(&self, operation_id: &[u8; 32]) -> Option<&AdmittedOfflineOperationRecord> {
+        self.records.get(operation_id)
+    }
+
+    fn insert_reserved(&mut self, record: AdmittedOfflineOperationRecord) {
+        self.records.insert(record.binding.operation_id, record);
+        debug_assert!(self.tracked_entries() <= self.max_entries.get());
+        debug_assert!(self.accounted_bytes() <= self.max_accounted_bytes.get());
+    }
 }
 
 fn require_idempotency_key(headers: &HeaderMap, operation_id: [u8; 32]) -> Result<(), Error> {
@@ -427,6 +576,17 @@ fn require_idempotency_key(headers: &HeaderMap, operation_id: [u8; 32]) -> Resul
         });
     }
     let expected = hex::encode(operation_id);
+    let actual = validated_idempotency_key(headers)?;
+    if actual != expected {
+        return Err(Error::AppConflict {
+            code: "idempotency_key_conflict",
+            message: "Idempotency-Key does not match the signed operation id.".to_owned(),
+        });
+    }
+    Ok(())
+}
+
+fn validated_idempotency_key(headers: &HeaderMap) -> Result<&str, Error> {
     let mut values = headers.get_all("idempotency-key").iter();
     let Some(raw) = values.next() else {
         return Err(Error::AppQueryValidation {
@@ -455,58 +615,48 @@ fn require_idempotency_key(headers: &HeaderMap, operation_id: [u8; 32]) -> Resul
                 .to_owned(),
         });
     }
-    if actual != expected {
-        return Err(Error::AppConflict {
-            code: "idempotency_key_conflict",
-            message: "Idempotency-Key does not match the signed operation id.".to_owned(),
-        });
-    }
-    Ok(())
+    Ok(actual)
 }
 
 impl OfflineV2IssuerRuntime {
     fn claim_submission(
         self: &Arc<Self>,
-        request: OfflineOperationRequestRef<'_>,
+        binding: OfflineOperationRequestBinding,
     ) -> Result<SubmissionClaim, Error> {
-        let operation_id = request.authorization().operation_id;
+        let operation_id = binding.operation_id;
 
-        // The admitted-operation registry and in-flight table are checked in
-        // one fixed lock order. This closes the gap between a caller's chain
-        // lookup and its in-flight claim: a leader that finishes in that gap is
-        // observed here as either still in flight or already admitted, never as
-        // permission to submit the same operation again.
-        let mut operations = self.operations.write().map_err(|_| {
+        // Accepted bindings and in-flight reservations share one capacity and
+        // one mutex. The transition from reservation to admitted binding is
+        // therefore atomic: no request can observe an absent operation between
+        // the two states or overbook memory while submissions are stalled.
+        let mut admission = self.admission.lock().map_err(|_| {
             Error::Query(ValidationFail::InternalError(
-                "offline operation registry lock is poisoned".to_owned(),
+                "offline operation admission registry lock is poisoned".to_owned(),
             ))
         })?;
         let now_ms = now_ms();
-        operations.retain(|_, stored| {
-            offline_operation_is_retained(stored.request.authorization().expires_at_ms, now_ms)
-        });
-        if let Some(existing) = operations.get(&operation_id) {
-            ensure_same_offline_request(&existing.request.as_ref(), &request)?;
+        admission.prune_expired(now_ms);
+        if let Some(existing) = admission.get(&operation_id) {
+            ensure_same_offline_request_binding(&existing.binding, &binding)?;
             return Ok(SubmissionClaim::Accepted(existing.clone()));
         }
-
-        let mut in_flight = self.in_flight.lock().map_err(|_| {
-            Error::Query(ValidationFail::InternalError(
-                "offline submission coordinator lock is poisoned".to_owned(),
-            ))
-        })?;
-        if let Some(existing) = in_flight.get(&operation_id) {
-            ensure_same_offline_request(&existing.request.as_ref(), &request)?;
+        if let Some(existing) = admission.in_flight.get(&operation_id) {
+            ensure_same_offline_request_binding(&existing.binding, &binding)?;
             return Ok(SubmissionClaim::Follower(existing.updates.subscribe()));
+        }
+        if !admission.has_capacity_for_new_operation() {
+            return Err(Error::AppServiceUnavailable {
+                code: "offline_operation_capacity_exhausted",
+                message: "Offline operation admission capacity is exhausted; retry after an in-flight submission completes or an admitted binding expires.".to_owned(),
+            });
         }
 
         let token = Arc::new(());
         let (updates, _) = watch::channel(SubmissionOutcome::Pending);
-        let request = request.into_owned();
-        in_flight.insert(
+        admission.in_flight.insert(
             operation_id,
             InFlightSubmission {
-                request: request.clone(),
+                binding,
                 token: Arc::clone(&token),
                 updates: updates.clone(),
             },
@@ -515,7 +665,7 @@ impl OfflineV2IssuerRuntime {
             issuer: Arc::clone(self),
             operation_id,
             token,
-            request,
+            binding,
             updates,
             active: true,
         }))
@@ -523,60 +673,84 @@ impl OfflineV2IssuerRuntime {
 
     fn record_admitted_operation(
         &self,
-        record: OfflineOperationRecord,
-    ) -> Result<OfflineOperationRecord, Error> {
-        let request = record.request.as_ref();
-        let operation_id = request.authorization().operation_id;
-        let mut operations = self.operations.write().map_err(|_| {
+        record: AdmittedOfflineOperationRecord,
+        token: &Arc<()>,
+    ) -> Result<AdmittedOfflineOperationRecord, Error> {
+        let operation_id = record.binding.operation_id;
+        let mut admission = self.admission.lock().map_err(|_| {
             Error::Query(ValidationFail::InternalError(
-                "offline operation registry lock is poisoned".to_owned(),
+                "offline operation admission registry lock is poisoned".to_owned(),
             ))
         })?;
-        let now_ms = now_ms();
-        operations.retain(|_, stored| {
-            offline_operation_is_retained(stored.request.authorization().expires_at_ms, now_ms)
-        });
-        if let Some(existing) = operations.get(&operation_id) {
-            ensure_same_offline_request(&existing.request.as_ref(), &request)?;
-            return Ok(existing.clone());
+        admission.prune_expired(now_ms());
+        if let Some(existing) = admission.get(&operation_id).cloned() {
+            ensure_same_offline_request_binding(&existing.binding, &record.binding)?;
+            if admission
+                .in_flight
+                .get(&operation_id)
+                .is_some_and(|entry| Arc::ptr_eq(&entry.token, token))
+            {
+                admission.in_flight.remove(&operation_id);
+            }
+            return Ok(existing);
         }
-        operations.insert(operation_id, record.clone());
+        let owns_reservation = admission
+            .in_flight
+            .get(&operation_id)
+            .is_some_and(|entry| Arc::ptr_eq(&entry.token, token));
+        if !owns_reservation {
+            return Err(Error::AppServiceUnavailable {
+                code: "offline_operation_admission_inconsistent",
+                message: "The accepted offline operation lost its admission reservation."
+                    .to_owned(),
+            });
+        }
+        admission.in_flight.remove(&operation_id);
+        admission.insert_reserved(record.clone());
         Ok(record)
     }
 }
 
 impl SubmissionLeader {
-    fn accept(mut self, transaction_hash: HashOf<SignedTransaction>) -> OfflineOperationRecord {
-        let record = OfflineOperationRecord {
-            submitted_at_ms: self.request.authorization().issued_at_ms,
-            request: self.request.clone(),
+    fn accept(
+        mut self,
+        transaction_hash: HashOf<SignedTransaction>,
+    ) -> Result<AdmittedOfflineOperationRecord, Error> {
+        let record = AdmittedOfflineOperationRecord {
+            binding: self.binding,
             transaction_hash,
         };
-        let admitted = match self.issuer.record_admitted_operation(record.clone()) {
-            Ok(admitted) => admitted,
+        match self
+            .issuer
+            .record_admitted_operation(record.clone(), &self.token)
+        {
+            Ok(admitted) => {
+                self.finish(SubmissionOutcome::Accepted(admitted.clone()));
+                Ok(admitted)
+            }
             Err(error) => {
                 iroha_logger::error!(
                     ?error,
                     operation_id = %hex::encode(self.operation_id),
-                    "accepted offline operation could not be cached"
+                    "accepted offline operation could not transition its admission reservation"
                 );
-                record
+                self.finish(SubmissionOutcome::Retry);
+                Err(error)
             }
-        };
-        self.finish(SubmissionOutcome::Accepted(admitted.clone()));
-        admitted
+        }
     }
 
     fn finish(&mut self, outcome: SubmissionOutcome) {
         if !self.active {
             return;
         }
-        if let Ok(mut in_flight) = self.issuer.in_flight.lock()
-            && in_flight
+        if let Ok(mut admission) = self.issuer.admission.lock()
+            && admission
+                .in_flight
                 .get(&self.operation_id)
                 .is_some_and(|entry| Arc::ptr_eq(&entry.token, &self.token))
         {
-            in_flight.remove(&self.operation_id);
+            admission.in_flight.remove(&self.operation_id);
         }
         let _ = self.updates.send_replace(outcome);
         self.active = false;
@@ -609,22 +783,20 @@ fn offline_operation_is_retained(expires_at_ms: u64, now_ms: u64) -> bool {
 
 fn find_admitted_offline_operation(
     issuer: &OfflineV2IssuerRuntime,
-    request: OfflineOperationRequestRef<'_>,
-) -> Result<Option<OfflineOperationRecord>, Error> {
-    let mut operations = issuer.operations.write().map_err(|_| {
+    requested_binding: &OfflineOperationRequestBinding,
+) -> Result<Option<AdmittedOfflineOperationRecord>, Error> {
+    let mut admission = issuer.admission.lock().map_err(|_| {
         Error::Query(ValidationFail::InternalError(
-            "offline operation registry lock is poisoned".to_owned(),
+            "offline operation admission registry lock is poisoned".to_owned(),
         ))
     })?;
     let now_ms = now_ms();
-    operations.retain(|_, record| {
-        offline_operation_is_retained(record.request.authorization().expires_at_ms, now_ms)
-    });
-    let operation_id = request.authorization().operation_id;
-    let Some(existing) = operations.get(&operation_id) else {
+    admission.prune_expired(now_ms);
+    let operation_id = requested_binding.operation_id;
+    let Some(existing) = admission.get(&operation_id) else {
         return Ok(None);
     };
-    ensure_same_offline_request(&existing.request.as_ref(), &request)?;
+    ensure_same_offline_request_binding(&existing.binding, requested_binding)?;
     Ok(Some(existing.clone()))
 }
 
@@ -668,14 +840,14 @@ fn offline_operation_reference_response(
     Ok(response)
 }
 
-fn offline_operation_reference_for_record(
-    record: &OfflineOperationRecord,
+fn offline_operation_reference_for_admitted_record(
+    record: &AdmittedOfflineOperationRecord,
 ) -> Result<AxResponse, Error> {
     offline_operation_reference_response(
-        record.request.authorization().operation_id,
-        record.request.kind().into(),
+        record.binding.operation_id,
+        record.binding.kind.into(),
         record.transaction_hash.to_string(),
-        record.submitted_at_ms,
+        record.binding.submitted_at_ms,
     )
 }
 
@@ -804,9 +976,10 @@ fn find_existing_offline_operation(
     app: &SharedAppState,
     issuer: &OfflineV2IssuerRuntime,
     requested: OfflineOperationRequestRef<'_>,
+    requested_binding: &OfflineOperationRequestBinding,
 ) -> Result<Option<AxResponse>, Error> {
-    if let Some(existing) = find_admitted_offline_operation(issuer, requested)? {
-        return offline_operation_reference_for_record(&existing).map(Some);
+    if let Some(existing) = find_admitted_offline_operation(issuer, requested_binding)? {
+        return offline_operation_reference_for_admitted_record(&existing).map(Some);
     }
 
     let authorization = requested.authorization();
@@ -926,11 +1099,75 @@ fn find_terminal_offline_operation_by_id(
     })
 }
 
+fn ensure_admitted_operation_matches_recovered_record(
+    admitted: &AdmittedOfflineOperationRecord,
+    recovered: &OfflineOperationRecord,
+) -> Result<(), Error> {
+    let recovered_binding = recovered.binding()?;
+    if admitted.binding != recovered_binding
+        || admitted.transaction_hash != recovered.transaction_hash
+    {
+        return Err(offline_operation_index_inconsistent(
+            "The authoritative offline operation differs from its admitted request binding.",
+        ));
+    }
+    Ok(())
+}
+
+fn pending_offline_operation_status(
+    operation_id: [u8; 32],
+    kind: KagemushaV2OperationKind,
+    transaction_hash: &HashOf<SignedTransaction>,
+    submitted_at_ms: u64,
+) -> OfflineOperationStatus {
+    OfflineOperationStatus::Pending {
+        operation_id: hex::encode(operation_id),
+        kind: kind.into(),
+        transaction_hash: transaction_hash.to_string(),
+        submitted_at_ms,
+    }
+}
+
+fn rejected_offline_operation_status(
+    operation_id: [u8; 32],
+    kind: KagemushaV2OperationKind,
+    transaction_hash: &HashOf<SignedTransaction>,
+    message: String,
+) -> OfflineOperationStatus {
+    OfflineOperationStatus::Rejected {
+        operation_id: hex::encode(operation_id),
+        kind: kind.into(),
+        transaction_hash: transaction_hash.to_string(),
+        error: iroha_torii_shared::ErrorEnvelope::new(
+            "offline_operation_rejected",
+            canonical_offline_rejection_message(message),
+        ),
+    }
+}
+
+fn respond_with_offline_operation_status(status: OfflineOperationStatus) -> AxResponse {
+    let pending = matches!(status, OfflineOperationStatus::Pending { .. });
+    let mut response =
+        crate::utils::respond_with_format(status, crate::utils::current_response_format());
+    response.headers_mut().insert(
+        axum::http::header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("no-store"),
+    );
+    if pending {
+        response.headers_mut().insert(
+            axum::http::header::RETRY_AFTER,
+            axum::http::HeaderValue::from_static("1"),
+        );
+    }
+    response
+}
+
 fn offline_operation_status_response(
     app: &SharedAppState,
     issuer: &OfflineV2IssuerRuntime,
     record: &OfflineOperationRecord,
     committed: Option<&KagemushaV2CommittedFinality>,
+    known_pending_in_queue: bool,
 ) -> Result<AxResponse, Error> {
     let operation_id = record.request.authorization().operation_id;
     let kind = record.request.kind();
@@ -976,14 +1213,8 @@ fn offline_operation_status_response(
             result,
         })
     };
-    let rejected = |message: String| OfflineOperationStatus::Rejected {
-        operation_id: operation_id_hex.clone(),
-        kind: kind.into(),
-        transaction_hash: record.transaction_hash.to_string(),
-        error: iroha_torii_shared::ErrorEnvelope::new(
-            "offline_operation_rejected",
-            canonical_offline_rejection_message(message),
-        ),
+    let rejected = |message: String| {
+        rejected_offline_operation_status(operation_id, kind, &record.transaction_hash, message)
     };
     let status = if let Some(finality) = committed {
         ensure_kagemusha_v2_terminal_finality_matches_record(record, finality)?;
@@ -1014,45 +1245,119 @@ fn offline_operation_status_response(
                     issuer,
                     &committed_record,
                     Some(&finality),
+                    false,
                 );
             }
             crate::PipelineStatusKind::Rejected | crate::PipelineStatusKind::Expired => {
                 rejected(kagemusha_v2_rejection_detail(entry.rejection.as_ref()))
             }
-            _ => OfflineOperationStatus::Pending {
-                operation_id: operation_id_hex.clone(),
-                kind: kind.into(),
-                transaction_hash: record.transaction_hash.to_string(),
-                submitted_at_ms: record.submitted_at_ms,
-            },
+            _ => pending_offline_operation_status(
+                operation_id,
+                kind,
+                &record.transaction_hash,
+                record.submitted_at_ms,
+            ),
         }
+    } else if known_pending_in_queue {
+        // The queue scan is authoritative pending provenance for this poll.
+        // Do not consult a temporarily incomplete Kura operation index and
+        // turn a known pending operation into a spurious 503 during rebuild.
+        pending_offline_operation_status(
+            operation_id,
+            kind,
+            &record.transaction_hash,
+            record.submitted_at_ms,
+        )
     } else if let Some((committed_record, finality)) =
         find_terminal_offline_operation_by_id(app, &issuer.authority, operation_id)?
     {
         ensure_same_offline_request(&committed_record.request.as_ref(), &record.request.as_ref())?;
-        return offline_operation_status_response(app, issuer, &committed_record, Some(&finality));
-    } else {
-        OfflineOperationStatus::Pending {
-            operation_id: operation_id_hex.clone(),
-            kind: kind.into(),
-            transaction_hash: record.transaction_hash.to_string(),
-            submitted_at_ms: record.submitted_at_ms,
-        }
-    };
-    let pending = matches!(status, OfflineOperationStatus::Pending { .. });
-    let mut response =
-        crate::utils::respond_with_format(status, crate::utils::current_response_format());
-    response.headers_mut().insert(
-        axum::http::header::CACHE_CONTROL,
-        axum::http::HeaderValue::from_static("no-store"),
-    );
-    if pending {
-        response.headers_mut().insert(
-            axum::http::header::RETRY_AFTER,
-            axum::http::HeaderValue::from_static("1"),
+        return offline_operation_status_response(
+            app,
+            issuer,
+            &committed_record,
+            Some(&finality),
+            false,
         );
+    } else {
+        ensure_unproven_pending_window_is_live(
+            kagemusha_v2_snapshot_time_ms(app),
+            record.request.authorization().expires_at_ms,
+        )?;
+        pending_offline_operation_status(
+            operation_id,
+            kind,
+            &record.transaction_hash,
+            record.submitted_at_ms,
+        )
+    };
+    Ok(respond_with_offline_operation_status(status))
+}
+
+fn admitted_offline_operation_status_response(
+    app: &SharedAppState,
+    issuer: &OfflineV2IssuerRuntime,
+    admitted: &AdmittedOfflineOperationRecord,
+) -> Result<AxResponse, Error> {
+    let operation_id = admitted.binding.operation_id;
+    if let Some((entry, _)) = crate::pipeline_status_local_entry(app, &admitted.transaction_hash) {
+        match entry.kind {
+            crate::PipelineStatusKind::Applied => {
+                let Some((record, finality)) =
+                    find_terminal_offline_operation_by_id(app, &issuer.authority, operation_id)?
+                else {
+                    return Err(offline_operation_index_inconsistent(
+                        "The applied offline operation is absent from the canonical operation index.",
+                    ));
+                };
+                ensure_admitted_operation_matches_recovered_record(admitted, &record)?;
+                return offline_operation_status_response(
+                    app,
+                    issuer,
+                    &record,
+                    Some(&finality),
+                    false,
+                );
+            }
+            crate::PipelineStatusKind::Rejected | crate::PipelineStatusKind::Expired => {
+                let status = rejected_offline_operation_status(
+                    operation_id,
+                    admitted.binding.kind,
+                    &admitted.transaction_hash,
+                    kagemusha_v2_rejection_detail(entry.rejection.as_ref()),
+                );
+                return Ok(respond_with_offline_operation_status(status));
+            }
+            _ => {
+                let status = pending_offline_operation_status(
+                    operation_id,
+                    admitted.binding.kind,
+                    &admitted.transaction_hash,
+                    admitted.binding.submitted_at_ms,
+                );
+                return Ok(respond_with_offline_operation_status(status));
+            }
+        }
     }
-    Ok(response)
+
+    if let Some((record, finality)) =
+        find_terminal_offline_operation_by_id(app, &issuer.authority, operation_id)?
+    {
+        ensure_admitted_operation_matches_recovered_record(admitted, &record)?;
+        return offline_operation_status_response(app, issuer, &record, Some(&finality), false);
+    }
+
+    ensure_unproven_pending_window_is_live(
+        kagemusha_v2_snapshot_time_ms(app),
+        admitted.binding.expires_at_ms,
+    )?;
+    let status = pending_offline_operation_status(
+        operation_id,
+        admitted.binding.kind,
+        &admitted.transaction_hash,
+        admitted.binding.submitted_at_ms,
+    );
+    Ok(respond_with_offline_operation_status(status))
 }
 
 pub(crate) fn handle_operation_status(
@@ -1061,27 +1366,32 @@ pub(crate) fn handle_operation_status(
 ) -> Result<AxResponse, Error> {
     let operation_id = parse_operation_id(operation_id)?;
     let issuer = require_issuer(app)?;
-    let record = issuer
-        .operations
-        .read()
-        .map_err(|_| {
+    let admitted = {
+        let mut admission = issuer.admission.lock().map_err(|_| {
             Error::Query(ValidationFail::InternalError(
-                "offline operation registry lock is poisoned".to_owned(),
+                "offline operation admission registry lock is poisoned".to_owned(),
             ))
-        })?
-        .get(&operation_id)
-        .cloned();
-    if let Some(record) = record {
-        return offline_operation_status_response(app, &issuer, &record, None);
+        })?;
+        admission.prune_expired(now_ms());
+        admission.get(&operation_id).cloned()
+    };
+    if let Some(admitted) = admitted {
+        if let Some(pending) =
+            find_pending_offline_operation_by_id(app, &issuer.authority, operation_id)
+        {
+            ensure_admitted_operation_matches_recovered_record(&admitted, &pending)?;
+            return offline_operation_status_response(app, &issuer, &pending, None, true);
+        }
+        return admitted_offline_operation_status_response(app, &issuer, &admitted);
     }
     if let Some(record) = find_pending_offline_operation_by_id(app, &issuer.authority, operation_id)
     {
-        return offline_operation_status_response(app, &issuer, &record, None);
+        return offline_operation_status_response(app, &issuer, &record, None, true);
     }
     if let Some((record, finality)) =
         find_terminal_offline_operation_by_id(app, &issuer.authority, operation_id)?
     {
-        return offline_operation_status_response(app, &issuer, &record, Some(&finality));
+        return offline_operation_status_response(app, &issuer, &record, Some(&finality), false);
     }
     Err(Error::AppNotFound {
         code: "offline_operation_not_found",
@@ -1156,6 +1466,18 @@ fn offline_operation_index_inconsistent(message: impl Into<String>) -> Error {
         code: "offline_operation_index_inconsistent",
         message: message.into(),
     }
+}
+
+fn ensure_unproven_pending_window_is_live(
+    snapshot_time_ms: u64,
+    expires_at_ms: u64,
+) -> Result<(), Error> {
+    if snapshot_time_ms <= expires_at_ms {
+        return Ok(());
+    }
+    Err(offline_operation_index_inconsistent(
+        "The accepted offline operation expired without queue, pipeline, or canonical terminal provenance.",
+    ))
 }
 
 fn ensure_kagemusha_v2_terminal_finality_matches_record(
@@ -1311,6 +1633,12 @@ fn reject_x_iroha_auth_headers(headers: &HeaderMap) -> Result<(), Error> {
     Ok(())
 }
 
+/// Validate body-independent Offline command headers before payload decoding.
+pub(crate) fn validate_command_headers_before_body(headers: &HeaderMap) -> Result<(), Error> {
+    reject_x_iroha_auth_headers(headers)?;
+    validated_idempotency_key(headers).map(|_| ())
+}
+
 fn now_ms() -> u64 {
     let duration = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1347,14 +1675,23 @@ mod tests {
     use super::*;
 
     fn submission_test_issuer() -> Arc<OfflineV2IssuerRuntime> {
+        submission_test_issuer_with_limits(64, 64 * ADMITTED_OPERATION_ACCOUNTED_BYTES)
+    }
+
+    fn submission_test_issuer_with_limits(
+        max_entries: usize,
+        max_accounted_bytes: usize,
+    ) -> Arc<OfflineV2IssuerRuntime> {
         let key_pair = KeyPair::try_from_seed(vec![0x51; 32], Algorithm::Ed25519)
             .expect("derive offline submission coordinator fixture key");
         Arc::new(OfflineV2IssuerRuntime {
             authority: AccountId::new(key_pair.public_key().clone()),
             key_pair,
             max_tx_value: Numeric::new(1_000, 0),
-            operations: Arc::new(RwLock::new(BTreeMap::new())),
-            in_flight: Arc::new(Mutex::new(BTreeMap::new())),
+            admission: Arc::new(Mutex::new(OfflineOperationRegistry::new(
+                NonZeroUsize::new(max_entries).expect("positive registry count"),
+                NonZeroUsize::new(max_accounted_bytes).expect("positive registry byte budget"),
+            ))),
         })
     }
 
@@ -1416,7 +1753,7 @@ mod tests {
         request: &OfflineTopUpRequest,
     ) -> SubmissionLeader {
         match issuer
-            .claim_submission(OfflineOperationRequest::TopUp(request))
+            .claim_submission(submission_test_binding(request))
             .expect("claim fixture submission")
         {
             SubmissionClaim::Leader(leader) => leader,
@@ -1426,8 +1763,30 @@ mod tests {
         }
     }
 
+    fn submission_test_binding(request: &OfflineTopUpRequest) -> OfflineOperationRequestBinding {
+        OfflineOperationRequestBinding::from_request(OfflineOperationRequest::TopUp(request))
+            .expect("canonical submission fixture binding")
+    }
+
     fn submission_test_hash(seed: u8) -> HashOf<SignedTransaction> {
         HashOf::from_untyped_unchecked(Hash::prehashed([seed; 32]))
+    }
+
+    fn admitted_record_fixture(
+        operation_seed: u8,
+        submitted_at_ms: u64,
+        expires_at_ms: u64,
+    ) -> AdmittedOfflineOperationRecord {
+        AdmittedOfflineOperationRecord {
+            binding: OfflineOperationRequestBinding {
+                operation_id: [operation_seed; 32],
+                kind: KagemushaV2OperationKind::TopUp,
+                canonical_request_digest: [operation_seed.wrapping_add(1); 32],
+                submitted_at_ms,
+                expires_at_ms,
+            },
+            transaction_hash: submission_test_hash(operation_seed),
+        }
     }
 
     fn submission_test_transaction(requests: Vec<OfflineTopUpRequest>) -> SignedTransaction {
@@ -1647,7 +2006,7 @@ mod tests {
         let leader = claim_test_leader(&issuer, &request);
 
         let follower = match issuer
-            .claim_submission(OfflineOperationRequest::TopUp(&request))
+            .claim_submission(submission_test_binding(&request))
             .expect("identical concurrent request must join the leader")
         {
             SubmissionClaim::Follower(receiver) => receiver,
@@ -1658,7 +2017,7 @@ mod tests {
 
         let mut conflicting = request.clone();
         conflicting.artifact_generation.push_str("-forged");
-        let error = match issuer.claim_submission(OfflineOperationRequest::TopUp(&conflicting)) {
+        let error = match issuer.claim_submission(submission_test_binding(&conflicting)) {
             Err(error) => error,
             Ok(_) => panic!("same operation id with changed fields must conflict"),
         };
@@ -1671,7 +2030,9 @@ mod tests {
         ));
 
         let transaction_hash = submission_test_hash(0x71);
-        let admitted = leader.accept(transaction_hash);
+        let admitted = leader
+            .accept(transaction_hash)
+            .expect("reserved fixture transition must succeed");
         let observed = tokio::time::timeout(
             Duration::from_secs(1),
             wait_for_submission_outcome(follower),
@@ -1681,22 +2042,22 @@ mod tests {
         let SubmissionOutcome::Accepted(observed) = observed else {
             panic!("accepted leader must publish the admitted operation")
         };
-        assert_eq!(observed.request, admitted.request);
+        assert_eq!(observed.binding, admitted.binding);
         assert_eq!(observed.transaction_hash, transaction_hash);
 
         match issuer
-            .claim_submission(OfflineOperationRequest::TopUp(&request))
+            .claim_submission(submission_test_binding(&request))
             .expect("admitted replay must be returned without resubmission")
         {
             SubmissionClaim::Accepted(replayed) => {
                 assert_eq!(replayed.transaction_hash, transaction_hash);
-                assert_eq!(replayed.request, admitted.request);
+                assert_eq!(replayed.binding, admitted.binding);
             }
             SubmissionClaim::Leader(_) | SubmissionClaim::Follower(_) => {
                 panic!("admitted replay must never create or join another submission")
             }
         }
-        let error = match issuer.claim_submission(OfflineOperationRequest::TopUp(&conflicting)) {
+        let error = match issuer.claim_submission(submission_test_binding(&conflicting)) {
             Err(error) => error,
             Ok(_) => panic!("admitted operation id must stay bound to its original request"),
         };
@@ -1707,8 +2068,23 @@ mod tests {
                 ..
             }
         ));
-        assert_eq!(issuer.operations.read().expect("operations lock").len(), 1);
-        assert!(issuer.in_flight.lock().expect("in-flight lock").is_empty());
+        assert_eq!(
+            issuer
+                .admission
+                .lock()
+                .expect("admission lock")
+                .records
+                .len(),
+            1
+        );
+        assert!(
+            issuer
+                .admission
+                .lock()
+                .expect("admission lock")
+                .in_flight
+                .is_empty()
+        );
     }
 
     #[tokio::test]
@@ -1717,7 +2093,7 @@ mod tests {
         let request = submission_test_request(0x12);
         let leader = claim_test_leader(&issuer, &request);
         let follower = match issuer
-            .claim_submission(OfflineOperationRequest::TopUp(&request))
+            .claim_submission(submission_test_binding(&request))
             .expect("claim cancellation follower")
         {
             SubmissionClaim::Follower(receiver) => receiver,
@@ -1742,12 +2118,20 @@ mod tests {
 
         let replacement = claim_test_leader(&issuer, &request);
         drop(replacement);
-        assert!(issuer.in_flight.lock().expect("in-flight lock").is_empty());
         assert!(
             issuer
-                .operations
-                .read()
-                .expect("operations lock")
+                .admission
+                .lock()
+                .expect("admission lock")
+                .in_flight
+                .is_empty()
+        );
+        assert!(
+            issuer
+                .admission
+                .lock()
+                .expect("admission lock")
+                .records
                 .is_empty()
         );
     }
@@ -1758,7 +2142,7 @@ mod tests {
         let request = submission_test_request(0x13);
         let leader = claim_test_leader(&issuer, &request);
         let follower = match issuer
-            .claim_submission(OfflineOperationRequest::TopUp(&request))
+            .claim_submission(submission_test_binding(&request))
             .expect("claim panic follower")
         {
             SubmissionClaim::Follower(receiver) => receiver,
@@ -1775,7 +2159,14 @@ mod tests {
 
         let replacement = claim_test_leader(&issuer, &request);
         drop(replacement);
-        assert!(issuer.in_flight.lock().expect("in-flight lock").is_empty());
+        assert!(
+            issuer
+                .admission
+                .lock()
+                .expect("admission lock")
+                .in_flight
+                .is_empty()
+        );
     }
 
     #[tokio::test]
@@ -1788,11 +2179,14 @@ mod tests {
         let (replacement_updates, replacement_receiver) =
             watch::channel(SubmissionOutcome::Pending);
         {
-            let mut in_flight = issuer.in_flight.lock().expect("in-flight lock");
-            in_flight.insert(
+            let mut admission = issuer.admission.lock().expect("admission lock");
+            admission.in_flight.insert(
                 operation_id,
                 InFlightSubmission {
-                    request: OfflineOperationRequest::TopUp(&request).into_owned(),
+                    binding: OfflineOperationRequestBinding::from_request(
+                        OfflineOperationRequest::TopUp(&request),
+                    )
+                    .expect("canonical replacement binding"),
                     token: Arc::clone(&replacement_token),
                     updates: replacement_updates.clone(),
                 },
@@ -1801,21 +2195,76 @@ mod tests {
 
         drop(stale_leader);
 
-        let in_flight = issuer.in_flight.lock().expect("in-flight lock");
-        let replacement = in_flight
+        let admission = issuer.admission.lock().expect("admission lock");
+        let replacement = admission
+            .in_flight
             .get(&operation_id)
             .expect("newer generation must survive stale leader drop");
         assert!(Arc::ptr_eq(&replacement.token, &replacement_token));
-        drop(in_flight);
+        drop(admission);
         assert!(matches!(
             &*replacement_receiver.borrow(),
             SubmissionOutcome::Pending
         ));
 
         issuer
-            .in_flight
+            .admission
             .lock()
-            .expect("in-flight lock")
+            .expect("admission lock")
+            .in_flight
+            .remove(&operation_id);
+        let _ = replacement_updates.send_replace(SubmissionOutcome::Retry);
+        retry_outcome(replacement_receiver).await;
+    }
+
+    #[tokio::test]
+    async fn accepted_submission_with_lost_reservation_fails_closed_and_releases_followers() {
+        let issuer = submission_test_issuer();
+        let request = submission_test_request(0x1F);
+        let stale_leader = claim_test_leader(&issuer, &request);
+        let stale_follower = stale_leader.updates.subscribe();
+        let operation_id = request.authorization.operation_id;
+        let replacement_token = Arc::new(());
+        let (replacement_updates, replacement_receiver) =
+            watch::channel(SubmissionOutcome::Pending);
+        {
+            let mut admission = issuer.admission.lock().expect("admission lock");
+            admission.in_flight.insert(
+                operation_id,
+                InFlightSubmission {
+                    binding: submission_test_binding(&request),
+                    token: Arc::clone(&replacement_token),
+                    updates: replacement_updates.clone(),
+                },
+            );
+        }
+
+        let error = stale_leader
+            .accept(submission_test_hash(0x7F))
+            .expect_err("a stale leader must not publish a false accepted cache transition");
+        assert!(matches!(
+            error,
+            Error::AppServiceUnavailable {
+                code: "offline_operation_admission_inconsistent",
+                ..
+            }
+        ));
+        retry_outcome(stale_follower).await;
+
+        {
+            let admission = issuer.admission.lock().expect("admission lock");
+            assert!(admission.records.get(&operation_id).is_none());
+            let replacement = admission
+                .in_flight
+                .get(&operation_id)
+                .expect("newer reservation survives stale acceptance");
+            assert!(Arc::ptr_eq(&replacement.token, &replacement_token));
+        }
+        issuer
+            .admission
+            .lock()
+            .expect("admission lock")
+            .in_flight
             .remove(&operation_id);
         let _ = replacement_updates.send_replace(SubmissionOutcome::Retry);
         retry_outcome(replacement_receiver).await;
@@ -1840,10 +2289,12 @@ mod tests {
             let claim_barrier = Arc::clone(&barrier);
             let claim = tokio::task::spawn_blocking(move || {
                 claim_barrier.wait();
-                claim_issuer.claim_submission(OfflineOperationRequest::TopUp(&claim_request))
+                claim_issuer.claim_submission(submission_test_binding(&claim_request))
             });
             barrier.wait();
-            let admitted = leader.accept(submission_test_hash(seed));
+            let admitted = leader
+                .accept(submission_test_hash(seed))
+                .expect("reserved race winner transition must succeed");
             match claim
                 .await
                 .expect("duplicate claim task")
@@ -2059,6 +2510,307 @@ mod tests {
     }
 
     #[test]
+    fn admitted_bindings_are_fixed_size_and_cover_every_canonical_request_byte() {
+        assert!(
+            !std::mem::needs_drop::<OfflineOperationRequestBinding>(),
+            "a binding must not own request buffers"
+        );
+        assert!(
+            !std::mem::needs_drop::<AdmittedOfflineOperationRecord>(),
+            "an admitted record must not own request buffers"
+        );
+        assert!(
+            std::mem::size_of::<AdmittedOfflineOperationRecord>() <= 128,
+            "the admitted record unexpectedly grew beyond its fixed-size metadata budget"
+        );
+
+        let mut request = submission_test_request(0x44);
+        request.pallas_open_envelopes_archive = vec![0xA5; 2 * 1024 * 1024];
+        let original =
+            OfflineOperationRequestBinding::from_request(OfflineOperationRequest::TopUp(&request))
+                .expect("canonical large request binding");
+        request.pallas_open_envelopes_archive[1_048_576] ^= 0xFF;
+        let changed =
+            OfflineOperationRequestBinding::from_request(OfflineOperationRequest::TopUp(&request))
+                .expect("canonical changed request binding");
+
+        assert_eq!(original.operation_id, changed.operation_id);
+        assert_ne!(
+            original.canonical_request_digest, changed.canonical_request_digest,
+            "a changed byte in a multi-MiB request must change the retained binding"
+        );
+        assert!(matches!(
+            ensure_same_offline_request_binding(&original, &changed),
+            Err(Error::AppConflict {
+                code: "operation_id_conflict",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn count_capacity_covers_admitted_and_in_flight_without_evicting_replays() {
+        let issuer = submission_test_issuer_with_limits(2, 2 * ADMITTED_OPERATION_ACCOUNTED_BYTES);
+        let admitted_request = submission_test_request(0x01);
+        let admitted_binding = submission_test_binding(&admitted_request);
+        claim_test_leader(&issuer, &admitted_request)
+            .accept(submission_test_hash(0x71))
+            .expect("reserved admitted fixture transition");
+        let pending_request = submission_test_request(0x02);
+        let pending_binding = submission_test_binding(&pending_request);
+        let pending_leader = claim_test_leader(&issuer, &pending_request);
+
+        assert!(matches!(
+            issuer
+                .claim_submission(admitted_binding)
+                .expect("an admitted replay bypasses capacity"),
+            SubmissionClaim::Accepted(_)
+        ));
+        assert!(matches!(
+            issuer
+                .claim_submission(pending_binding)
+                .expect("an in-flight replay bypasses capacity"),
+            SubmissionClaim::Follower(_)
+        ));
+
+        let mut conflicting = pending_binding;
+        conflicting.canonical_request_digest[0] ^= 1;
+        assert!(matches!(
+            issuer.claim_submission(conflicting),
+            Err(Error::AppConflict {
+                code: "operation_id_conflict",
+                ..
+            })
+        ));
+
+        let capacity_error = match issuer
+            .claim_submission(submission_test_binding(&submission_test_request(0x03)))
+        {
+            Err(error) => error,
+            Ok(_) => panic!("a third identity must fail closed at capacity"),
+        };
+        assert!(matches!(
+            &capacity_error,
+            Error::AppServiceUnavailable {
+                code: "offline_operation_capacity_exhausted",
+                ..
+            }
+        ));
+        assert_eq!(
+            capacity_error.into_response().status(),
+            axum::http::StatusCode::SERVICE_UNAVAILABLE
+        );
+
+        pending_leader
+            .accept(submission_test_hash(0x72))
+            .expect("reserved pending fixture transition");
+        let admission = issuer.admission.lock().expect("admission lock");
+        assert_eq!(admission.records.len(), 2);
+        assert!(admission.in_flight.is_empty());
+        assert_eq!(admission.tracked_entries(), 2);
+        assert_eq!(
+            admission.accounted_bytes(),
+            2 * ADMITTED_OPERATION_ACCOUNTED_BYTES
+        );
+    }
+
+    #[test]
+    fn byte_capacity_bounds_stalled_reservations_and_releases_on_drop() {
+        let issuer = submission_test_issuer_with_limits(32, ADMITTED_OPERATION_ACCOUNTED_BYTES);
+        let first = submission_test_request(0x11);
+        let first_leader = claim_test_leader(&issuer, &first);
+        let error = match issuer
+            .claim_submission(submission_test_binding(&submission_test_request(0x12)))
+        {
+            Err(error) => error,
+            Ok(_) => panic!("the byte budget permits only one reservation"),
+        };
+        assert!(matches!(
+            error,
+            Error::AppServiceUnavailable {
+                code: "offline_operation_capacity_exhausted",
+                ..
+            }
+        ));
+        drop(first_leader);
+
+        let replacement = claim_test_leader(&issuer, &submission_test_request(0x12));
+        assert_eq!(
+            issuer
+                .admission
+                .lock()
+                .expect("admission lock")
+                .tracked_entries(),
+            1
+        );
+        drop(replacement);
+        assert_eq!(
+            issuer
+                .admission
+                .lock()
+                .expect("admission lock")
+                .tracked_entries(),
+            0
+        );
+    }
+
+    #[test]
+    fn concurrent_unique_claims_cannot_overbook_admission_capacity() {
+        const CAPACITY: usize = 8;
+        const ATTEMPTS: usize = 32;
+        let issuer = submission_test_issuer_with_limits(
+            CAPACITY,
+            CAPACITY * ADMITTED_OPERATION_ACCOUNTED_BYTES,
+        );
+        let barrier = Arc::new(Barrier::new(ATTEMPTS));
+        let mut handles = Vec::with_capacity(ATTEMPTS);
+        for index in 0..ATTEMPTS {
+            let claim_issuer = Arc::clone(&issuer);
+            let claim_barrier = Arc::clone(&barrier);
+            let request =
+                submission_test_request(u8::try_from(index + 0x40).expect("fixture seed fits u8"));
+            handles.push(std::thread::spawn(move || {
+                let binding = submission_test_binding(&request);
+                claim_barrier.wait();
+                claim_issuer.claim_submission(binding)
+            }));
+        }
+
+        let mut leaders = Vec::with_capacity(CAPACITY);
+        let mut rejected = 0;
+        for handle in handles {
+            match handle.join().expect("claim thread must not panic") {
+                Ok(SubmissionClaim::Leader(leader)) => leaders.push(leader),
+                Err(Error::AppServiceUnavailable {
+                    code: "offline_operation_capacity_exhausted",
+                    ..
+                }) => rejected += 1,
+                Ok(SubmissionClaim::Accepted(_) | SubmissionClaim::Follower(_)) => {
+                    panic!("unique operation ids cannot be replays")
+                }
+                Err(error) => panic!("unexpected claim error: {error:?}"),
+            }
+        }
+
+        assert_eq!(leaders.len(), CAPACITY);
+        assert_eq!(rejected, ATTEMPTS - CAPACITY);
+        {
+            let admission = issuer.admission.lock().expect("admission lock");
+            assert_eq!(admission.tracked_entries(), CAPACITY);
+            assert_eq!(admission.in_flight.len(), CAPACITY);
+            assert_eq!(
+                admission.accounted_bytes(),
+                CAPACITY * ADMITTED_OPERATION_ACCOUNTED_BYTES
+            );
+        }
+        drop(leaders);
+        assert_eq!(
+            issuer
+                .admission
+                .lock()
+                .expect("admission lock")
+                .tracked_entries(),
+            0
+        );
+    }
+
+    #[test]
+    fn admission_registry_prunes_only_past_retention_and_never_capacity_evicts() {
+        let mut registry = OfflineOperationRegistry::new(
+            NonZeroUsize::new(1).expect("positive count"),
+            NonZeroUsize::new(ADMITTED_OPERATION_ACCOUNTED_BYTES).expect("positive bytes"),
+        );
+        let expires_at = 10;
+        registry.insert_reserved(admitted_record_fixture(0x31, 1, expires_at));
+        let retained_until = expires_at + OFFLINE_OPERATION_RETENTION_AFTER_EXPIRY_MS;
+        registry.prune_expired(retained_until);
+        assert!(registry.get(&[0x31; 32]).is_some());
+        assert!(!registry.has_capacity_for_new_operation());
+
+        registry.prune_expired(retained_until + 1);
+        assert!(registry.records.is_empty());
+        assert!(registry.has_capacity_for_new_operation());
+    }
+
+    #[test]
+    fn retention_pruning_leaves_queue_and_kura_records_authoritative_for_conflicts() {
+        let issuer = submission_test_issuer();
+        let mut original = submission_test_request(0x35);
+        original.authorization.expires_at_ms = 10;
+        let operation_id = original.authorization.operation_id;
+        let transaction = submission_test_transaction(vec![original.clone()]);
+        let recovered =
+            offline_operation_record_in_transaction(&transaction, &issuer.authority, operation_id)
+                .expect("authoritative transaction retains the complete request");
+
+        let mut registry = OfflineOperationRegistry::new(
+            NonZeroUsize::new(1).expect("positive count"),
+            NonZeroUsize::new(ADMITTED_OPERATION_ACCOUNTED_BYTES).expect("positive bytes"),
+        );
+        let admitted = AdmittedOfflineOperationRecord {
+            binding: recovered.binding().expect("canonical recovered binding"),
+            transaction_hash: recovered.transaction_hash,
+        };
+        registry.insert_reserved(admitted);
+        registry.prune_expired(10 + OFFLINE_OPERATION_RETENTION_AFTER_EXPIRY_MS + 1);
+        assert!(
+            registry.get(&operation_id).is_none(),
+            "fixture prunes only after the normative retention window"
+        );
+
+        ensure_same_offline_request(
+            &recovered.request.as_ref(),
+            &OfflineOperationRequest::TopUp(&original),
+        )
+        .expect("identical authoritative replay remains idempotent");
+        let mut conflicting = original;
+        conflicting.artifact_generation.push_str("-conflict");
+        assert!(matches!(
+            ensure_same_offline_request(
+                &recovered.request.as_ref(),
+                &OfflineOperationRequest::TopUp(&conflicting),
+            ),
+            Err(Error::AppConflict {
+                code: "operation_id_conflict",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn admitted_binding_recovery_rejects_digest_or_transaction_mismatch() {
+        let issuer = submission_test_issuer();
+        let request = submission_test_request(0x37);
+        let transaction = submission_test_transaction(vec![request]);
+        let recovered =
+            offline_operation_record_in_transaction(&transaction, &issuer.authority, [0x37; 32])
+                .expect("recover admitted fixture");
+        let matching = AdmittedOfflineOperationRecord {
+            binding: recovered.binding().expect("canonical binding"),
+            transaction_hash: recovered.transaction_hash,
+        };
+        ensure_admitted_operation_matches_recovered_record(&matching, &recovered)
+            .expect("matching authoritative record");
+
+        let mut wrong_digest = matching.clone();
+        wrong_digest.binding.canonical_request_digest[0] ^= 1;
+        let mut wrong_hash = matching;
+        wrong_hash.transaction_hash = submission_test_hash(0x38);
+        for adversarial in [wrong_digest, wrong_hash] {
+            let error =
+                ensure_admitted_operation_matches_recovered_record(&adversarial, &recovered)
+                    .expect_err("mismatched metadata must fail closed");
+            assert!(matches!(
+                error,
+                Error::AppServiceUnavailable {
+                    code: "offline_operation_index_inconsistent",
+                    ..
+                }
+            ));
+        }
+    }
+
+    #[test]
     fn applied_kagemusha_v2_finality_preserves_requested_operation_id() {
         let operation_id = [0x5A; 32];
         let finality =
@@ -2136,11 +2888,32 @@ mod tests {
     }
 
     #[test]
+    fn unproven_pending_state_fails_closed_after_signed_expiry() {
+        ensure_unproven_pending_window_is_live(9_999, 10_000)
+            .expect("a pre-expiry operation may still acquire authoritative provenance");
+        ensure_unproven_pending_window_is_live(10_000, 10_000)
+            .expect("the signed expiry boundary is inclusive");
+
+        let error = ensure_unproven_pending_window_is_live(10_001, 10_000)
+            .expect_err("an expired operation without provenance must not remain pending forever");
+        assert!(matches!(
+            &error,
+            Error::AppServiceUnavailable {
+                code: "offline_operation_index_inconsistent",
+                ..
+            }
+        ));
+        assert_eq!(
+            error.into_response().status(),
+            axum::http::StatusCode::SERVICE_UNAVAILABLE
+        );
+    }
+
+    #[test]
     fn kagemusha_v2_anchor_finality_binding_rejects_identity_hash_or_height_mismatch() {
         let operation_id = [0x31; 32];
         let transaction_hash = submission_test_hash(0x73);
-        let anchor_transaction_hash = <[u8; 32]>::try_from(transaction_hash.as_ref())
-            .expect("transaction hashes are 32 bytes");
+        let anchor_transaction_hash = *transaction_hash.as_ref();
         ensure_kagemusha_v2_anchor_finality_binding(
             operation_id,
             anchor_transaction_hash,

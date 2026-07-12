@@ -12694,6 +12694,25 @@ impl NexusFees {
                 return None;
             }
         };
+        for (field, value) in [
+            ("base_fee", &self.base_fee),
+            ("per_byte_fee", &self.per_byte_fee),
+            ("per_instruction_fee", &self.per_instruction_fee),
+            ("per_gas_unit_fee", &self.per_gas_unit_fee),
+            ("sponsor_max_fee", &self.sponsor_max_fee),
+            (
+                "sponsor_verified_balance_safety_floor",
+                &self.sponsor_verified_balance_safety_floor,
+            ),
+        ] {
+            if value.mantissa().is_negative() {
+                emitter.emit(
+                    Report::new(ParseError::InvalidNexusConfig)
+                        .attach(format!("nexus.fees.{field} must be non-negative")),
+                );
+                return None;
+            }
+        }
         if self.fee_sink_account_id.trim().is_empty() {
             emitter.emit(
                 Report::new(ParseError::InvalidNexusConfig)
@@ -12921,6 +12940,43 @@ mod nexus_asset_selector_tests {
         let mut emitter = Emitter::new();
         assert!(cfg.parse(&mut emitter).is_none());
         assert!(emitter.into_result().is_err());
+    }
+
+    #[test]
+    fn nexus_fees_parse_rejects_negative_numeric_fields() {
+        let negative = Numeric::new(-1_i32, 0);
+        let cases = [
+            NexusFees {
+                base_fee: negative.clone(),
+                ..NexusFees::default()
+            },
+            NexusFees {
+                per_byte_fee: negative.clone(),
+                ..NexusFees::default()
+            },
+            NexusFees {
+                per_instruction_fee: negative.clone(),
+                ..NexusFees::default()
+            },
+            NexusFees {
+                per_gas_unit_fee: negative.clone(),
+                ..NexusFees::default()
+            },
+            NexusFees {
+                sponsor_max_fee: negative.clone(),
+                ..NexusFees::default()
+            },
+            NexusFees {
+                sponsor_verified_balance_safety_floor: negative,
+                ..NexusFees::default()
+            },
+        ];
+
+        for cfg in cases {
+            let mut emitter = Emitter::new();
+            assert!(cfg.parse(&mut emitter).is_none());
+            assert!(emitter.into_result().is_err());
+        }
     }
 }
 
@@ -17934,6 +17990,12 @@ pub struct ToriiOfflineIssuer {
     /// Maximum authorized value for one offline transaction.
     #[config(default = "defaults::torii::offline_issuer::max_tx_value()")]
     pub max_tx_value: String,
+    /// Maximum number of accepted bindings plus in-flight reservations retained in memory.
+    #[config(default = "defaults::torii::offline_issuer::OPERATION_REGISTRY_MAX_ENTRIES")]
+    pub operation_registry_max_entries: usize,
+    /// Maximum canonical bytes reserved by accepted bindings and in-flight operations.
+    #[config(default = "defaults::torii::offline_issuer::OPERATION_REGISTRY_MAX_BYTES")]
+    pub operation_registry_max_bytes: usize,
     /// Certificate TTL in milliseconds.
     #[config(
         default = "DurationMs(std::time::Duration::from_millis(defaults::torii::offline_issuer::CERTIFICATE_TTL_MS))"
@@ -18003,12 +18065,34 @@ impl ToriiOfflineIssuer {
             Self::parse_positive_amount("torii.offline_issuer.max_balance", &self.max_balance);
         let max_tx_value =
             Self::parse_positive_amount("torii.offline_issuer.max_tx_value", &self.max_tx_value);
+        let operation_registry_max_entries = NonZeroUsize::new(self.operation_registry_max_entries)
+            .unwrap_or_else(|| {
+                panic!(
+                    "torii.offline_issuer.operation_registry_max_entries must be greater than zero"
+                )
+            });
+        let operation_registry_max_bytes = NonZeroUsize::new(self.operation_registry_max_bytes)
+            .unwrap_or_else(|| {
+                panic!(
+                    "torii.offline_issuer.operation_registry_max_bytes must be greater than zero"
+                )
+            });
+        if operation_registry_max_bytes.get()
+            < defaults::torii::offline_issuer::OPERATION_REGISTRY_ACCOUNTED_BYTES_PER_ENTRY
+        {
+            panic!(
+                "torii.offline_issuer.operation_registry_max_bytes must be at least {}",
+                defaults::torii::offline_issuer::OPERATION_REGISTRY_ACCOUNTED_BYTES_PER_ENTRY
+            );
+        }
         Some(actual::ToriiOfflineIssuer {
             authority: AccountId::new(key_pair.public_key().clone()),
             key_pair,
             attestation_verifier_public_key,
             max_balance,
             max_tx_value,
+            operation_registry_max_entries,
+            operation_registry_max_bytes,
             certificate_ttl: self.certificate_ttl_ms.get().max(MIN_TIMER_INTERVAL),
             authorization_refresh: self.authorization_refresh_ms.get().max(MIN_TIMER_INTERVAL),
             authorization_ttl: self.authorization_ttl_ms.get().max(MIN_TIMER_INTERVAL),
@@ -18043,6 +18127,10 @@ mod torii_offline_issuer_tests {
             attestation_verifier_public_key: Some(verifier_key_pair.public_key().clone()),
             max_balance: "100".to_string(),
             max_tx_value: "25".to_string(),
+            operation_registry_max_entries:
+                defaults::torii::offline_issuer::OPERATION_REGISTRY_MAX_ENTRIES,
+            operation_registry_max_bytes:
+                defaults::torii::offline_issuer::OPERATION_REGISTRY_MAX_BYTES,
             certificate_ttl_ms: DurationMs(Duration::from_millis(
                 defaults::torii::offline_issuer::CERTIFICATE_TTL_MS,
             )),
@@ -18076,7 +18164,42 @@ mod torii_offline_issuer_tests {
                     .expect("parsed attestation verifier public key must be valid"),
                 Algorithm::Ed25519
             );
+            assert_eq!(
+                parsed.operation_registry_max_entries.get(),
+                defaults::torii::offline_issuer::OPERATION_REGISTRY_MAX_ENTRIES
+            );
+            assert_eq!(
+                parsed.operation_registry_max_bytes.get(),
+                defaults::torii::offline_issuer::OPERATION_REGISTRY_MAX_BYTES
+            );
         }
+    }
+
+    #[test]
+    fn torii_offline_issuer_rejects_zero_operation_registry_limits() {
+        for field in ["entries", "bytes"] {
+            let mut issuer = sample_offline_issuer(Algorithm::Ed25519);
+            match field {
+                "entries" => issuer.operation_registry_max_entries = 0,
+                "bytes" => issuer.operation_registry_max_bytes = 0,
+                _ => unreachable!("fixture field is exhaustive"),
+            }
+            let panic = std::panic::catch_unwind(|| issuer.parse());
+            assert!(panic.is_err(), "zero {field} budget must fail startup");
+        }
+    }
+
+    #[test]
+    fn torii_offline_issuer_rejects_byte_budget_smaller_than_one_binding() {
+        let mut issuer = sample_offline_issuer(Algorithm::Ed25519);
+        issuer.operation_registry_max_bytes =
+            defaults::torii::offline_issuer::OPERATION_REGISTRY_ACCOUNTED_BYTES_PER_ENTRY - 1;
+
+        let panic = std::panic::catch_unwind(|| issuer.parse());
+        assert!(
+            panic.is_err(),
+            "a byte budget that cannot retain one reservation must fail startup"
+        );
     }
 
     #[test]

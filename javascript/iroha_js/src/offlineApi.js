@@ -11,6 +11,7 @@ const ERROR_CODE_PATTERN = /^[a-z0-9][a-z0-9_]{0,63}$/u;
 const MAX_U32 = 0xffff_ffffn;
 const MAX_U64 = 0xffff_ffff_ffff_ffffn;
 const MAX_U128 = (1n << 128n) - 1n;
+const MAX_OFFLINE_ASSET_SCALE = 28n;
 const MAX_JSON_DEPTH = 128;
 
 function isPlainObject(value) {
@@ -271,6 +272,25 @@ function requireByteArray(value, context, exactLength = null) {
   return value;
 }
 
+function normalizeFixedBytes(value, context, { nonZero = false } = {}) {
+  const bytes = requireByteArray(value, context, 32);
+  if (nonZero && bytes.every((byte) => byte === 0)) {
+    throw new RangeError(`${context} must not be all zero`);
+  }
+  return [...bytes];
+}
+
+function fixedBytesEqual(left, right) {
+  return left.every((byte, index) => byte === right[index]);
+}
+
+function compareFixedBytes(left, right) {
+  for (let index = 0; index < left.length; index += 1) {
+    if (left[index] !== right[index]) return left[index] - right[index];
+  }
+  return 0;
+}
+
 function operationIdFromBytes(value, context) {
   const bytes = requireByteArray(value, context, 32);
   if (bytes.every((byte) => byte === 0)) {
@@ -389,12 +409,21 @@ function stringifyJsonSnapshot(value) {
     .join(",")}}`;
 }
 
-function validateScaledAmount(value, context) {
+function normalizeScaledAmount(value, context) {
   const amount = requireObject(value, context);
-  requireUnsignedInteger(requireOwn(amount, "atomic_units", context), `${context}.atomic_units`, MAX_U128, {
+  const atomicUnits = requireUnsignedInteger(requireOwn(amount, "atomic_units", context), `${context}.atomic_units`, MAX_U128, {
     positive: true,
   });
-  requireUnsignedInteger(requireOwn(amount, "scale", context), `${context}.scale`, MAX_U32);
+  const scale = requireUnsignedInteger(
+    requireOwn(amount, "scale", context),
+    `${context}.scale`,
+    MAX_OFFLINE_ASSET_SCALE,
+  );
+  return { atomic_units: atomicUnits, scale };
+}
+
+function validateScaledAmount(value, context) {
+  normalizeScaledAmount(value, context);
 }
 
 function validateAuthorizationOperationId(request, context, operationId) {
@@ -432,8 +461,13 @@ function snapshotAndValidateCommand(input, context, kind) {
       requireOwn(request, "artifact_generation", context),
       `${context}.artifact_generation`,
     );
-    if (generation.length > 128 || /[\u0000-\u001f\u007f]/u.test(generation)) {
-      throw new RangeError(`${context}.artifact_generation must be at most 128 non-control characters`);
+    if (
+      new TextEncoder().encode(generation).length > 128
+      || /[\u0000-\u001f\u007f-\u009f]/u.test(generation)
+    ) {
+      throw new RangeError(
+        `${context}.artifact_generation must be at most 128 non-control UTF-8 bytes`,
+      );
     }
   } else {
     requireObject(requireOwn(request, "bundle", context), `${context}.bundle`);
@@ -467,10 +501,6 @@ export function normalizeOfflineRedeemRequest(input, context = "submitOfflineRed
   return snapshotAndValidateCommand(input, context, "redeem");
 }
 
-function cloneResponseJson(value, context) {
-  return snapshotJson(value, context);
-}
-
 export function normalizeOfflineReadinessResponse(payload, expectedAssetDefinitionId) {
   const context = "offline readiness response";
   const record = requireObject(payload, context);
@@ -481,6 +511,10 @@ export function normalizeOfflineReadinessResponse(payload, expectedAssetDefiniti
   if (assetDefinitionId !== expectedAssetDefinitionId) {
     throw new TypeError(`${context}.asset_definition_id does not match the requested asset`);
   }
+  const rawAssetScale = requireOwn(record, "asset_scale", context);
+  const assetScale = rawAssetScale === null
+    ? null
+    : requireUnsignedInteger(rawAssetScale, `${context}.asset_scale`, MAX_U32);
   const evaluatedBlockHeight = requireUnsignedResponseInteger(
     requireOwn(record, "evaluated_block_height", context),
     `${context}.evaluated_block_height`,
@@ -497,6 +531,7 @@ export function normalizeOfflineReadinessResponse(payload, expectedAssetDefiniti
   if (!Array.isArray(blockersValue)) {
     throw new TypeError(`${context}.blockers must be an array`);
   }
+  const blockerCodes = new Set();
   const blockers = blockersValue.map((value, index) => {
     const blockerContext = `${context}.blockers[${index}]`;
     const blocker = requireObject(value, blockerContext);
@@ -504,19 +539,54 @@ export function normalizeOfflineReadinessResponse(payload, expectedAssetDefiniti
     if (!ERROR_CODE_PATTERN.test(code)) {
       throw new TypeError(`${blockerContext}.code must be a stable lowercase code of 1 to 64 characters`);
     }
+    if (blockerCodes.has(code)) {
+      throw new TypeError(`${context}.blockers must not repeat blocker code ${code}`);
+    }
+    blockerCodes.add(code);
     const message = requireHumanMessage(
       requireOwn(blocker, "message", blockerContext),
       `${blockerContext}.message`,
     );
     return { code, message };
   });
+  const rawActiveTransferVerifier = requireOwn(record, "active_transfer_verifier", context);
+  const activeTransferVerifier = rawActiveTransferVerifier === null
+    ? null
+    : normalizeActiveTransferVerifier(
+      rawActiveTransferVerifier,
+      evaluatedBlockHeight,
+      `${context}.active_transfer_verifier`,
+    );
   if (ready !== (blockers.length === 0)) {
     throw new TypeError(`${context}.ready must be true exactly when blockers is empty`);
   }
+  const scaleUnavailable = blockerCodes.has("asset_scale_unavailable");
+  if ((assetScale === null) !== scaleUnavailable) {
+    throw new TypeError(
+      `${context}.asset_scale must be null exactly with asset_scale_unavailable`,
+    );
+  }
+  const scaleUnsupported = blockerCodes.has("asset_scale_unsupported");
+  if ((assetScale !== null && BigInt(assetScale) > MAX_OFFLINE_ASSET_SCALE) !== scaleUnsupported) {
+    throw new TypeError(
+      `${context}.asset_scale_unsupported must reflect whether asset_scale exceeds 28`,
+    );
+  }
+  const verifierUnavailable = blockerCodes.has("transfer_verifier_unavailable");
+  if ((activeTransferVerifier === null) !== verifierUnavailable) {
+    throw new TypeError(
+      `${context}.active_transfer_verifier must be null exactly with transfer_verifier_unavailable`,
+    );
+  }
+  if (ready && (assetScale === null || BigInt(assetScale) > MAX_OFFLINE_ASSET_SCALE)) {
+    throw new TypeError(`${context}.ready requires an Offline-supported asset scale`);
+  }
   return {
     asset_definition_id: assetDefinitionId,
+    asset_scale: assetScale,
     evaluated_block_height: evaluatedBlockHeight,
     evaluated_block_hash: evaluatedBlockHash,
+    active_transfer_verifier: activeTransferVerifier,
     ready,
     blockers,
   };
@@ -695,8 +765,8 @@ function normalizeErrorDetails(value, context) {
 }
 
 function normalizeErrorEnvelope(value, context) {
-    const record = requireObject(value, context);
-    const code = requireExactString(requireOwn(record, "code", context), `${context}.code`);
+  const record = requireObject(value, context);
+  const code = requireExactString(requireOwn(record, "code", context), `${context}.code`);
   if (!ERROR_CODE_PATTERN.test(code)) {
     throw new TypeError(`${context}.code must be a stable lowercase code of 1 to 64 characters`);
   }
@@ -711,7 +781,196 @@ function normalizeErrorEnvelope(value, context) {
   return result;
 }
 
-function normalizeOperationResult(value, context) {
+function fixedBytesHex(bytes) {
+  return bytes.map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function normalizeSpendableNote(value, context) {
+  const record = requireObject(value, context);
+  const noteCommitment = normalizeFixedBytes(
+    requireOwn(record, "note_commitment", context),
+    `${context}.note_commitment`,
+    { nonZero: true },
+  );
+  const spendNullifier = normalizeFixedBytes(
+    requireOwn(record, "spend_nullifier", context),
+    `${context}.spend_nullifier`,
+    { nonZero: true },
+  );
+  if (fixedBytesEqual(noteCommitment, spendNullifier)) {
+    throw new TypeError(`${context}.spend_nullifier must differ from note_commitment`);
+  }
+  return {
+    chain_id: requireHumanMessage(requireOwn(record, "chain_id", context), `${context}.chain_id`),
+    asset: requireHumanMessage(requireOwn(record, "asset", context), `${context}.asset`),
+    note_commitment: noteCommitment,
+    spend_nullifier: spendNullifier,
+    amount: normalizeScaledAmount(requireOwn(record, "amount", context), `${context}.amount`),
+  };
+}
+
+function normalizeVerifierKeyId(value, context) {
+  const record = requireObject(value, context);
+  const backend = requireHumanMessage(
+    requireOwn(record, "backend", context),
+    `${context}.backend`,
+  );
+  const name = requireHumanMessage(requireOwn(record, "name", context), `${context}.name`);
+  if (new TextEncoder().encode(backend).length > 256) {
+    throw new RangeError(`${context}.backend must contain at most 256 UTF-8 bytes`);
+  }
+  if (new TextEncoder().encode(name).length > 256) {
+    throw new RangeError(`${context}.name must contain at most 256 UTF-8 bytes`);
+  }
+  return {
+    backend,
+    name,
+  };
+}
+
+function normalizeTopUpAnchor(value, context, expected) {
+  const record = requireObject(value, context);
+  const version = requireUnsignedInteger(
+    requireOwn(record, "version", context),
+    `${context}.version`,
+    0xffffn,
+  );
+  if (BigInt(version) !== 2n) {
+    throw new TypeError(`${context}.version must be 2`);
+  }
+  const amount = normalizeScaledAmount(
+    requireOwn(record, "amount", context),
+    `${context}.amount`,
+  );
+  const assetScale = requireUnsignedInteger(
+    requireOwn(record, "asset_scale", context),
+    `${context}.asset_scale`,
+    MAX_OFFLINE_ASSET_SCALE,
+  );
+  if (BigInt(assetScale) !== BigInt(amount.scale)) {
+    throw new TypeError(`${context}.asset_scale must equal amount.scale`);
+  }
+  const initialRoot = normalizeFixedBytes(
+    requireOwn(record, "initial_root", context),
+    `${context}.initial_root`,
+    { nonZero: true },
+  );
+  const finalizedRoot = normalizeFixedBytes(
+    requireOwn(record, "finalized_root", context),
+    `${context}.finalized_root`,
+    { nonZero: true },
+  );
+  if (fixedBytesEqual(initialRoot, finalizedRoot)) {
+    throw new TypeError(`${context}.finalized_root must differ from initial_root`);
+  }
+
+  const rawNullifiers = requireOwn(record, "topup_anchor_nullifiers", context);
+  if (!Array.isArray(rawNullifiers) || rawNullifiers.length < 1 || rawNullifiers.length > 2) {
+    throw new RangeError(`${context}.topup_anchor_nullifiers must contain one or two entries`);
+  }
+  const topupAnchorNullifiers = rawNullifiers.map((raw, index) =>
+    normalizeFixedBytes(
+      raw,
+      `${context}.topup_anchor_nullifiers[${index}]`,
+      { nonZero: true },
+    ));
+  for (let index = 1; index < topupAnchorNullifiers.length; index += 1) {
+    if (compareFixedBytes(topupAnchorNullifiers[index - 1], topupAnchorNullifiers[index]) >= 0) {
+      throw new TypeError(
+        `${context}.topup_anchor_nullifiers must be strictly sorted and unique`,
+      );
+    }
+  }
+
+  const currentNote = normalizeSpendableNote(
+    requireOwn(record, "current_note", context),
+    `${context}.current_note`,
+  );
+  const chainId = requireHumanMessage(
+    requireOwn(record, "chain_id", context),
+    `${context}.chain_id`,
+  );
+  if (currentNote.chain_id !== chainId) {
+    throw new TypeError(`${context}.current_note.chain_id must equal chain_id`);
+  }
+  if (
+    BigInt(currentNote.amount.atomic_units) !== BigInt(amount.atomic_units)
+    || BigInt(currentNote.amount.scale) !== BigInt(amount.scale)
+  ) {
+    throw new TypeError(`${context}.current_note.amount must equal amount`);
+  }
+  if (topupAnchorNullifiers.some((nullifier) =>
+    fixedBytesEqual(nullifier, currentNote.note_commitment)
+    || fixedBytesEqual(nullifier, currentNote.spend_nullifier))) {
+    throw new TypeError(`${context}.topup_anchor_nullifiers must not reuse current note material`);
+  }
+
+  const topupOperationId = normalizeFixedBytes(
+    requireOwn(record, "topup_operation_id", context),
+    `${context}.topup_operation_id`,
+    { nonZero: true },
+  );
+  if (fixedBytesHex(topupOperationId) !== expected.operationId) {
+    throw new TypeError(`${context}.topup_operation_id does not match the operation`);
+  }
+  const finalizedHeight = requireUnsignedInteger(
+    requireOwn(record, "finalized_height", context),
+    `${context}.finalized_height`,
+    MAX_U64,
+    { positive: true },
+  );
+  if (BigInt(finalizedHeight) !== BigInt(expected.finalizedBlockHeight)) {
+    throw new TypeError(`${context}.finalized_height does not match finalized_block_height`);
+  }
+  const finalizedTxHash = normalizeFixedBytes(
+    requireOwn(record, "finalized_tx_hash", context),
+    `${context}.finalized_tx_hash`,
+    { nonZero: true },
+  );
+  if (fixedBytesHex(finalizedTxHash) !== expected.transactionHash) {
+    throw new TypeError(`${context}.finalized_tx_hash does not match transaction_hash`);
+  }
+  const artifactGeneration = requireHumanMessage(
+    requireOwn(record, "artifact_generation", context),
+    `${context}.artifact_generation`,
+  );
+  if (new TextEncoder().encode(artifactGeneration).length > 128) {
+    throw new RangeError(`${context}.artifact_generation must contain at most 128 UTF-8 bytes`);
+  }
+
+  return {
+    version,
+    chain_id: chainId,
+    payer: requireHumanMessage(requireOwn(record, "payer", context), `${context}.payer`),
+    asset: requireHumanMessage(requireOwn(record, "asset", context), `${context}.asset`),
+    asset_scale: assetScale,
+    amount,
+    initial_root: initialRoot,
+    finalized_root: finalizedRoot,
+    topup_anchor_nullifiers: topupAnchorNullifiers,
+    current_note: currentNote,
+    topup_operation_id: topupOperationId,
+    transfer_verifier_id: normalizeVerifierKeyId(
+      requireOwn(record, "transfer_verifier_id", context),
+      `${context}.transfer_verifier_id`,
+    ),
+    transfer_verifier_commitment: normalizeFixedBytes(
+      requireOwn(record, "transfer_verifier_commitment", context),
+      `${context}.transfer_verifier_commitment`,
+      { nonZero: true },
+    ),
+    artifact_generation: artifactGeneration,
+    finalized_height: finalizedHeight,
+    finalized_tx_hash: finalizedTxHash,
+    anchor_digest: normalizeFixedBytes(
+      requireOwn(record, "anchor_digest", context),
+      `${context}.anchor_digest`,
+      { nonZero: true },
+    ),
+  };
+}
+
+function normalizeOperationResult(value, context, operationId) {
   const record = requireObject(value, context);
   const kind = requireOwn(record, "kind", context);
   if (kind !== "top_up" && kind !== "redeem") {
@@ -737,9 +996,14 @@ function normalizeOperationResult(value, context) {
     ),
   };
   if (kind === "top_up") {
-    result.anchor = cloneResponseJson(
-      requireObject(requireOwn(rawResult, "anchor", resultContext), `${resultContext}.anchor`),
+    result.anchor = normalizeTopUpAnchor(
+      requireOwn(rawResult, "anchor", resultContext),
       `${resultContext}.anchor`,
+      {
+        operationId,
+        transactionHash,
+        finalizedBlockHeight: result.finalized_block_height,
+      },
     );
   } else if (Object.prototype.hasOwnProperty.call(rawResult, "anchor")) {
     throw new TypeError(`${resultContext}.anchor is invalid for a redeem result`);
@@ -786,7 +1050,11 @@ export function normalizeOfflineOperationStatus(payload, expectedOperationId) {
       state,
       value: {
         operation_id: returnedOperationId,
-        result: normalizeOperationResult(requireOwn(rawValue, "result", valueContext), `${valueContext}.result`),
+        result: normalizeOperationResult(
+          requireOwn(rawValue, "result", valueContext),
+          `${valueContext}.result`,
+          returnedOperationId,
+        ),
       },
     };
   }

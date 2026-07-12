@@ -6212,6 +6212,102 @@ impl Client {
                 "offline readiness response has an inconsistent ready/blockers state"
             ));
         }
+        let has_blocker = |code: &str| {
+            readiness
+                .blockers
+                .iter()
+                .any(|blocker| blocker.code == code)
+        };
+        match readiness.asset_scale {
+            None if !has_blocker("asset_scale_unavailable") => {
+                return Err(eyre!(
+                    "offline readiness response omitted the live asset scale without an asset_scale_unavailable blocker"
+                ));
+            }
+            Some(scale)
+                if scale > iroha_data_model::offline::KAGEMUSHA_SCALED_AMOUNT_MAX_SCALE_V2
+                    && !has_blocker("asset_scale_unsupported") =>
+            {
+                return Err(eyre!(
+                    "offline readiness response exposes an unsupported asset scale without an asset_scale_unsupported blocker"
+                ));
+            }
+            Some(scale)
+                if scale <= iroha_data_model::offline::KAGEMUSHA_SCALED_AMOUNT_MAX_SCALE_V2
+                    && (has_blocker("asset_scale_unavailable")
+                        || has_blocker("asset_scale_unsupported")) =>
+            {
+                return Err(eyre!(
+                    "offline readiness response has an inconsistent asset scale blocker"
+                ));
+            }
+            _ => {}
+        }
+        match readiness.active_transfer_verifier.as_ref() {
+            None if !has_blocker("transfer_verifier_unavailable") => {
+                return Err(eyre!(
+                    "offline readiness response omitted the active transfer verifier without a transfer_verifier_unavailable blocker"
+                ));
+            }
+            Some(verifier) => {
+                if has_blocker("transfer_verifier_unavailable") {
+                    return Err(eyre!(
+                        "offline readiness response contains both an active transfer verifier and an unavailable blocker"
+                    ));
+                }
+                if !iroha_data_model::proof::verifying_key_id_field_is_portable(
+                    &verifier.id.backend,
+                ) || !iroha_data_model::proof::verifying_key_id_field_is_portable(
+                    &verifier.id.name,
+                ) {
+                    return Err(eyre!(
+                        "offline readiness response contains a non-portable transfer verifier id"
+                    ));
+                }
+                if !iroha_data_model::zk::open_verify_circuit_id_is_portable(&verifier.circuit_id) {
+                    return Err(eyre!(
+                        "offline readiness response contains a non-portable confidential-transfer circuit id"
+                    ));
+                }
+                Self::require_lower_hex_32(
+                    &verifier.commitment,
+                    "active_transfer_verifier.commitment",
+                )?;
+                Self::require_lower_hex_32(
+                    &verifier.public_inputs_schema_hash,
+                    "active_transfer_verifier.public_inputs_schema_hash",
+                )?;
+                if verifier.commitment.bytes().all(|byte| byte == b'0')
+                    || verifier
+                        .public_inputs_schema_hash
+                        .bytes()
+                        .all(|byte| byte == b'0')
+                {
+                    return Err(eyre!(
+                        "offline readiness response contains zero transfer-verifier metadata"
+                    ));
+                }
+                if verifier.max_proof_bytes == 0 {
+                    return Err(eyre!(
+                        "offline readiness response selected a transfer verifier with a zero proof limit"
+                    ));
+                }
+                if verifier.activation_height > readiness.evaluated_block_height {
+                    return Err(eyre!(
+                        "offline readiness response selected a transfer verifier before activation"
+                    ));
+                }
+                if verifier.withdrawal_height.is_some_and(|withdrawal_height| {
+                    withdrawal_height <= verifier.activation_height
+                        || readiness.evaluated_block_height >= withdrawal_height
+                }) {
+                    return Err(eyre!(
+                        "offline readiness response selected a transfer verifier outside its activation window"
+                    ));
+                }
+            }
+            None => {}
+        }
         Ok(readiness)
     }
 
@@ -6912,14 +7008,34 @@ mod offline_client_tests {
             .expect("response")
     }
 
+    fn active_transfer_verifier() -> iroha_torii_shared::offline_api::OfflineActiveTransferVerifier
+    {
+        iroha_torii_shared::offline_api::OfflineActiveTransferVerifier {
+            id: iroha_torii_shared::offline_api::OfflineVerifierId {
+                backend: "halo2/ipa".to_owned(),
+                name: "confidential-transfer-v2".to_owned(),
+            },
+            version: 1,
+            circuit_id: "halo2/pasta/ipa/anon-transfer-2x2-merkle16-poseidon-diversified"
+                .to_owned(),
+            commitment: "11".repeat(32),
+            public_inputs_schema_hash: "22".repeat(32),
+            max_proof_bytes: 65_536,
+            activation_height: 1,
+            withdrawal_height: None,
+        }
+    }
+
     #[test]
     fn readiness_request_is_typed_negotiated_and_asset_bound() {
         let asset_definition_id: AssetDefinitionId =
             "xor#wonderland".parse().expect("asset definition id");
         let readiness = OfflineReadiness {
             asset_definition_id: asset_definition_id.to_string(),
+            asset_scale: Some(9),
             evaluated_block_height: 19,
             evaluated_block_hash: "ab".repeat(32),
+            active_transfer_verifier: Some(active_transfer_verifier()),
             ready: false,
             blockers: vec![iroha_torii_shared::offline_api::OfflineReadinessBlocker {
                 code: "issuer_key_missing".to_owned(),
@@ -6960,15 +7076,19 @@ mod offline_client_tests {
         for readiness in [
             OfflineReadiness {
                 asset_definition_id: "rose#wonderland".to_owned(),
+                asset_scale: Some(9),
                 evaluated_block_height: 1,
                 evaluated_block_hash: "ab".repeat(32),
+                active_transfer_verifier: Some(active_transfer_verifier()),
                 ready: true,
                 blockers: Vec::new(),
             },
             OfflineReadiness {
                 asset_definition_id: requested.to_string(),
+                asset_scale: Some(9),
                 evaluated_block_height: 1,
                 evaluated_block_hash: "ab".repeat(32),
+                active_transfer_verifier: Some(active_transfer_verifier()),
                 ready: true,
                 blockers: vec![iroha_torii_shared::offline_api::OfflineReadinessBlocker {
                     code: "forged".to_owned(),
@@ -6977,8 +7097,10 @@ mod offline_client_tests {
             },
             OfflineReadiness {
                 asset_definition_id: requested.to_string(),
+                asset_scale: Some(9),
                 evaluated_block_height: 1,
                 evaluated_block_hash: "AB".repeat(32),
+                active_transfer_verifier: Some(active_transfer_verifier()),
                 ready: true,
                 blockers: Vec::new(),
             },
@@ -6996,6 +7118,62 @@ mod offline_client_tests {
             assert!(
                 error.to_string().contains("offline readiness response")
                     || error.to_string().contains("evaluated_block_hash"),
+                "unexpected error: {error:#}"
+            );
+        }
+    }
+
+    #[test]
+    fn readiness_rejects_unbound_scale_and_verifier_snapshots() {
+        let requested: AssetDefinitionId = "xor#wonderland".parse().expect("asset definition id");
+        let unrelated_blocker = || iroha_torii_shared::offline_api::OfflineReadinessBlocker {
+            code: "proof_backend_unavailable".to_owned(),
+            message: "proof backend is unavailable".to_owned(),
+        };
+        let mut future_verifier = active_transfer_verifier();
+        future_verifier.activation_height = 2;
+        for readiness in [
+            OfflineReadiness {
+                asset_definition_id: requested.to_string(),
+                asset_scale: None,
+                evaluated_block_height: 1,
+                evaluated_block_hash: "ab".repeat(32),
+                active_transfer_verifier: Some(active_transfer_verifier()),
+                ready: false,
+                blockers: vec![unrelated_blocker()],
+            },
+            OfflineReadiness {
+                asset_definition_id: requested.to_string(),
+                asset_scale: Some(9),
+                evaluated_block_height: 1,
+                evaluated_block_hash: "ab".repeat(32),
+                active_transfer_verifier: None,
+                ready: false,
+                blockers: vec![unrelated_blocker()],
+            },
+            OfflineReadiness {
+                asset_definition_id: requested.to_string(),
+                asset_scale: Some(9),
+                evaluated_block_height: 1,
+                evaluated_block_hash: "ab".repeat(32),
+                active_transfer_verifier: Some(future_verifier),
+                ready: false,
+                blockers: vec![unrelated_blocker()],
+            },
+        ] {
+            let response = HttpResponse::builder()
+                .status(StatusCode::OK)
+                .header("content-type", APPLICATION_NORITO)
+                .body(norito::to_bytes(&readiness).expect("encode readiness"))
+                .expect("response");
+            let error = with_mock_http(
+                respond_with(&Arc::new(Mutex::new(Vec::new())), response),
+                || client_with_base_url(base_url()).get_offline_readiness(&requested),
+            )
+            .expect_err("unbound readiness metadata must fail closed");
+            assert!(
+                error.to_string().contains("asset scale")
+                    || error.to_string().contains("transfer verifier"),
                 "unexpected error: {error:#}"
             );
         }
@@ -7140,8 +7318,10 @@ mod offline_client_tests {
     fn negotiated_decoder_rejects_retired_and_missing_media_types() {
         let readiness = OfflineReadiness {
             asset_definition_id: "xor#wonderland".to_owned(),
+            asset_scale: Some(9),
             evaluated_block_height: 1,
             evaluated_block_hash: "ab".repeat(32),
+            active_transfer_verifier: Some(active_transfer_verifier()),
             ready: true,
             blockers: Vec::new(),
         };

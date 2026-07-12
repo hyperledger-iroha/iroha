@@ -49,7 +49,7 @@ public struct OfflineTopUpRequest: Equatable, Sendable {
     public init(noritoArchive: Data) throws {
         let validated = try OfflineOperationValidation.requestArchive(
             noritoArchive,
-            schema: KagemushaRecursiveSpendV2.topUpRequestWireName,
+            schema: KagemushaRecursiveSpend.topUpRequestWireName,
             operationIdFieldIndex: 6,
             fieldCount: 8
         )
@@ -70,7 +70,7 @@ public struct OfflineRedeemRequest: Equatable, Sendable {
     public init(noritoArchive: Data) throws {
         let validated = try OfflineOperationValidation.requestArchive(
             noritoArchive,
-            schema: KagemushaRecursiveSpendV2.redeemRequestWireName,
+            schema: KagemushaRecursiveSpend.redeemRequestWireName,
             operationIdFieldIndex: 9,
             fieldCount: 11
         )
@@ -144,7 +144,7 @@ public struct OfflineTopUpAnchor: Equatable, Sendable {
 
     /// Validates and retains a canonical top-up anchor Norito archive.
     public init(noritoArchive: Data) throws {
-        let wireValue = try KagemushaRecursiveSpendV2Codecs.decodeTopUpAnchor(
+        let wireValue = try KagemushaRecursiveSpendCodecs.decodeTopUpAnchor(
             Data(noritoArchive)
         )
         self.archive = Data(wireValue.archive)
@@ -589,7 +589,7 @@ public enum OfflineOperationCodec {
             try $0.readBytes($0.remaining())
         }
         let anchorArchive = noritoEncode(
-            typeName: KagemushaRecursiveSpendV2.topUpAnchorWireName,
+            typeName: KagemushaRecursiveSpend.topUpAnchorWireName,
             payload: anchorPayload,
             flags: NoritoHeader.compactLen
         )
@@ -956,7 +956,7 @@ private enum OfflineOperationValidation {
         fieldCount: Int
     ) throws -> (archive: Data, operationId: String) {
         guard !value.isEmpty,
-              value.count <= KagemushaRecursiveSpendProver.nativeArchiveMaxBytes,
+              value.count <= KagemushaRecursiveSpend.artifactMaximumFileBytes,
               let frame = noritoDecodeFrame(value),
               frame.header.schema == noritoSchemaHash(forTypeName: schema),
               frame.header.compression == .none,

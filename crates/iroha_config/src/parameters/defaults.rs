@@ -1842,6 +1842,13 @@ pub mod torii {
             "100000".to_string()
         }
 
+        /// Maximum number of accepted bindings plus in-flight reservations retained in memory.
+        pub const OPERATION_REGISTRY_MAX_ENTRIES: usize = 4_096;
+        /// Canonical bytes charged for each admitted binding or in-flight reservation.
+        pub const OPERATION_REGISTRY_ACCOUNTED_BYTES_PER_ENTRY: usize = 32 + 1 + 32 + 32 + 8 + 8;
+        /// Maximum canonical bytes reserved by accepted bindings and in-flight operations.
+        pub const OPERATION_REGISTRY_MAX_BYTES: usize = 512 * 1024;
+
         /// Certificate TTL in milliseconds.
         pub const CERTIFICATE_TTL_MS: u64 = 7 * 24 * 60 * 60 * 1_000;
         /// Authorization refresh interval in milliseconds.

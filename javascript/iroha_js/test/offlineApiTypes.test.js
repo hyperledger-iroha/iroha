@@ -44,3 +44,15 @@ test("Offline clients expose only the final first-release route family", () => {
   }
   assert.doesNotMatch(source, /\/v1\/offline\/v2|\/v1\/offline\/notes\//u);
 });
+
+test("Offline declarations use closed DTOs and a typed finalized anchor", () => {
+  const declarations = readFileSync(new URL("../index.d.ts", import.meta.url), "utf8");
+  const offlineStart = declarations.indexOf("export type OfflineByteArray");
+  const offlineEnd = declarations.indexOf("export interface ToriiStatusPayload", offlineStart);
+  const offlineDeclarations = declarations.slice(offlineStart, offlineEnd);
+
+  assert.match(offlineDeclarations, /export interface OfflineTopUpAnchor \{/u);
+  assert.match(offlineDeclarations, /anchor: OfflineTopUpAnchor;/u);
+  assert.match(offlineDeclarations, /scale: OfflineAssetScale;/u);
+  assert.doesNotMatch(offlineDeclarations, /Record<string, unknown>|\bunknown\b/u);
+});

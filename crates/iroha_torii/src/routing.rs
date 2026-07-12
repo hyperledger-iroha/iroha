@@ -6035,8 +6035,12 @@ pub async fn handle_v1_bridge_finality(
     height: u64,
     accept: Option<axum::http::HeaderValue>,
 ) -> Result<Response> {
-    let proof = iroha_core::bridge::build_finality_proof(state.as_ref(), height)
-        .map_err(map_bridge_finality_error)?;
+    let proof = tokio::task::spawn_blocking(move || {
+        iroha_core::bridge::build_finality_proof(state.as_ref(), height)
+    })
+    .await
+    .map_err(|_| sccp_internal_error("bridge finality verification worker failed"))?
+    .map_err(map_bridge_finality_error)?;
 
     let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
@@ -6056,15 +6060,19 @@ pub async fn handle_v1_bridge_finality(
     Ok(resp)
 }
 
-/// GET /v1/bridge/finality/bundle/{height} — MMR commitment + exact v2 proof for a block.
+/// GET /v1/bridge/finality/bundle/{height} — Compact commitment + exact v2 proof for a block.
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_bridge_finality_bundle(
     state: Arc<CoreState>,
     height: u64,
     accept: Option<axum::http::HeaderValue>,
 ) -> Result<Response> {
-    let bundle = iroha_core::bridge::build_finality_bundle(state.as_ref(), height)
-        .map_err(map_bridge_finality_error)?;
+    let bundle = tokio::task::spawn_blocking(move || {
+        iroha_core::bridge::build_finality_bundle(state.as_ref(), height)
+    })
+    .await
+    .map_err(|_| sccp_internal_error("bridge finality bundle worker failed"))?
+    .map_err(map_bridge_finality_error)?;
 
     let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
@@ -6094,8 +6102,7 @@ fn map_bridge_finality_error(err: iroha_core::bridge::BridgeFinalityError) -> Er
             ))
         }
         iroha_core::bridge::BridgeFinalityError::FinalityArtifactRead { .. }
-        | iroha_core::bridge::BridgeFinalityError::FinalityArtifactMismatch { .. }
-        | iroha_core::bridge::BridgeFinalityError::InvalidFinalityArtifact { .. } => Error::Query(
+        | iroha_core::bridge::BridgeFinalityError::FinalityArtifactMismatch { .. } => Error::Query(
             iroha_data_model::ValidationFail::InternalError(format!("{err:?}")),
         ),
     }
@@ -7509,21 +7516,27 @@ fn validate_sccp_durable_outbox_record(
     Ok(())
 }
 
-fn reconstruct_sccp_message_bundles_from_block(
+struct ValidatedSccpBlockMessages {
+    commitment_root: [u8; 32],
+    messages: Vec<iroha_core::bridge::RecordedSccpMessage>,
+    positions: BTreeMap<[u8; 32], usize>,
+}
+
+fn validate_sccp_block_messages(
     state: &CoreState,
     height: u64,
     block: &iroha_data_model::block::SignedBlock,
     indexed_records: &[SccpIndexedOutboundRecord],
-) -> Result<Vec<TairaSccpMessageProofV1>> {
+) -> Result<Option<ValidatedSccpBlockMessages>> {
     if indexed_records.is_empty() {
-        return Ok(Vec::new());
+        return Ok(None);
     }
     if indexed_records
         .iter()
         .any(|indexed| indexed.record.recorded_at_height != height)
     {
         return Err(sccp_internal_error(format!(
-            "SCCP recent-message block group mixes records outside height {height}"
+            "SCCP block group mixes records outside height {height}"
         )));
     }
 
@@ -7551,13 +7564,9 @@ fn reconstruct_sccp_message_bundles_from_block(
         )));
     }
 
-    let commitments = messages
-        .iter()
-        .map(|message| message.commitment.clone())
-        .collect::<Vec<_>>();
-    let mut message_positions = BTreeMap::new();
+    let mut positions = BTreeMap::new();
     for (index, message) in messages.iter().enumerate() {
-        if message_positions
+        if positions
             .insert(message.commitment.message_id, index)
             .is_some()
         {
@@ -7567,6 +7576,30 @@ fn reconstruct_sccp_message_bundles_from_block(
             )));
         }
     }
+    Ok(Some(ValidatedSccpBlockMessages {
+        commitment_root,
+        messages,
+        positions,
+    }))
+}
+
+fn reconstruct_sccp_message_bundles_from_block(
+    state: &CoreState,
+    height: u64,
+    block: &iroha_data_model::block::SignedBlock,
+    indexed_records: &[SccpIndexedOutboundRecord],
+) -> Result<Vec<TairaSccpMessageProofV1>> {
+    let Some(validated) = validate_sccp_block_messages(state, height, block, indexed_records)?
+    else {
+        return Ok(Vec::new());
+    };
+    let commitment_root = validated.commitment_root;
+    let messages = validated.messages;
+    let message_positions = validated.positions;
+    let commitments = messages
+        .iter()
+        .map(|message| message.commitment.clone())
+        .collect::<Vec<_>>();
     let finality_proof = iroha_core::bridge::build_finality_proof(state, height)
         .map_err(map_bridge_finality_error)?;
     let finality_proof_bytes = build_sccp_finality_proof_bytes(&finality_proof, commitment_root)?;
@@ -7767,13 +7800,23 @@ fn validate_recent_message_projection(
     Ok(())
 }
 
-fn recent_message_entry_from_bundle(
+fn recent_message_entry_from_recorded(
     height: u64,
-    bundle: &TairaSccpMessageProofV1,
+    message: &iroha_core::bridge::RecordedSccpMessage,
 ) -> Result<SccpRecentMessageDto> {
-    let context = sccp_committed_outbound_context(bundle)?;
-    let message_id_hex = hex::encode(bundle.commitment.message_id);
-    let payload_projection = sccp_payload_projection(&bundle.payload).ok_or_else(|| {
+    let context = message.context;
+    if !context.is_well_formed()
+        || sccp_message_source_domain(&message.payload) != context.lane.source.domain_id()
+        || sccp_message_target_domain(&message.payload) != context.lane.target.domain_id()
+        || iroha_sccp::hub_commitment_from_sccp_payload(context, &message.payload).as_ref()
+            != Some(&message.commitment)
+    {
+        return Err(sccp_internal_error(
+            "finalized SCCP message disagrees with its exact committed outbound context",
+        ));
+    }
+    let message_id_hex = hex::encode(message.commitment.message_id);
+    let payload_projection = sccp_payload_projection(&message.payload).ok_or_else(|| {
         sccp_internal_error(format!(
             "finalized SCCP message {message_id_hex} has no valid closed transfer projection"
         ))
@@ -7786,7 +7829,7 @@ fn recent_message_entry_from_bundle(
     Ok(SccpRecentMessageDto {
         height,
         message_id_hex: message_id_hex.clone(),
-        kind: sccp_message_payload_kind_key(&bundle.payload).to_owned(),
+        kind: sccp_message_payload_kind_key(&message.payload).to_owned(),
         source_profile: context.lane.source.profile_key().to_owned(),
         target_profile: context.lane.target.profile_key().to_owned(),
         destination_binding_hash: format!("0x{}", hex::encode(context.destination_binding_hash)),
@@ -7822,6 +7865,69 @@ fn group_sccp_indexed_records_by_height(
             .push(indexed);
     }
     groups.into_values().collect()
+}
+
+fn recent_sccp_entries_from_indexed_records(
+    state: &CoreState,
+    indexed_records: &[SccpIndexedOutboundRecord],
+) -> Result<Vec<SccpRecentMessageDto>> {
+    let Some(first) = indexed_records.first() else {
+        return Ok(Vec::new());
+    };
+    let height = first.record.recorded_at_height;
+    let host_height = usize::try_from(height).map_err(|_| {
+        sccp_internal_error(format!(
+            "SCCP message {} records a block height that is not representable on this host",
+            hex::encode(first.key.message_id)
+        ))
+    })?;
+    let host_height = NonZeroUsize::new(host_height).ok_or_else(|| {
+        sccp_internal_error(format!(
+            "SCCP message {} records forbidden block height zero",
+            hex::encode(first.key.message_id)
+        ))
+    })?;
+    let block = state.block_by_height(host_height).ok_or_else(|| {
+        sccp_internal_error(format!(
+            "SCCP message {} is indexed at height {height}, but the finalized block body is unavailable",
+            hex::encode(first.key.message_id)
+        ))
+    })?;
+    let validated = validate_sccp_block_messages(state, height, block.as_ref(), indexed_records)?
+        .ok_or_else(|| sccp_internal_error("nonempty SCCP group validated as empty"))?;
+
+    let mut entries = Vec::with_capacity(indexed_records.len());
+    for indexed in indexed_records {
+        let index = *validated
+            .positions
+            .get(&indexed.key.message_id)
+            .ok_or_else(|| {
+                sccp_internal_error(format!(
+                    "SCCP message {} is indexed at height {height}, but that block contains no matching successful record",
+                    hex::encode(indexed.key.message_id)
+                ))
+            })?;
+        let message = &validated.messages[index];
+        if sccp_message_source_domain(&message.payload) != iroha_sccp::SCCP_DOMAIN_SORA {
+            return Err(sccp_bad_request(
+                "SCCP recent readback is reserved for SORA-origin messages; inbound messages use protocol-native admission",
+            ));
+        }
+        if message.commitment.context.lane != indexed.key.lane
+            || message.commitment.context.destination_binding_hash
+                != indexed.record.destination_binding_hash
+            || message.commitment.context.route_configuration_hash
+                != indexed.record.route_configuration_hash
+            || message.commitment.payload_hash != indexed.record.payload_hash
+        {
+            return Err(sccp_internal_error(format!(
+                "SCCP message {} disagrees with its indexed lane, destination binding, route configuration, or payload",
+                hex::encode(indexed.key.message_id)
+            )));
+        }
+        entries.push(recent_message_entry_from_recorded(height, message)?);
+    }
+    Ok(entries)
 }
 
 fn collect_recent_sccp_messages(
@@ -7889,18 +7995,13 @@ fn collect_recent_sccp_messages(
 
     let mut items = Vec::with_capacity(indexed_records.len());
     for group in group_sccp_indexed_records_by_height(indexed_records) {
-        let bundles = reconstruct_sccp_message_bundles_from_indexed_records(state, &group)?;
-        if bundles.len() != group.len() {
+        let entries = recent_sccp_entries_from_indexed_records(state, &group)?;
+        if entries.len() != group.len() {
             return Err(sccp_internal_error(
                 "SCCP recent-message block reconstruction returned an incomplete group",
             ));
         }
-        for (indexed, bundle) in group.into_iter().zip(bundles) {
-            items.push(recent_message_entry_from_bundle(
-                indexed.record.recorded_at_height,
-                &bundle,
-            )?);
-        }
+        items.extend(entries);
     }
 
     Ok(SccpRecentMessagesDto { items })
@@ -7909,12 +8010,17 @@ fn collect_recent_sccp_messages(
 /// GET /v1/sccp/proofs/message/{message_id} — SORA-origin SCCP message bundle.
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_sccp_message_bundle(
-    state: &CoreState,
+    state: Arc<CoreState>,
     message_id_hex: String,
     accept: Option<axum::http::HeaderValue>,
 ) -> Result<Response> {
     let message_id = parse_sccp_message_id_hex(&message_id_hex)?;
-    let bundle = sccp_message_bundle_for_request(state, message_id)?.ok_or_else(sccp_not_found)?;
+    let bundle = tokio::task::spawn_blocking(move || {
+        sccp_message_bundle_for_request(state.as_ref(), message_id)
+    })
+    .await
+    .map_err(|_| sccp_internal_error("SCCP message-proof worker failed"))??
+    .ok_or_else(sccp_not_found)?;
     sccp_bundle_response(&bundle, accept.as_ref())
 }
 
@@ -7931,12 +8037,16 @@ pub async fn handle_v1_sccp_registry(
 /// GET /v1/sccp/proof-requests/{message_id} — exact state-derived Groth16 request.
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_sccp_proof_request(
-    state: &CoreState,
+    state: Arc<CoreState>,
     message_id_hex: String,
     accept: Option<axum::http::HeaderValue>,
 ) -> Result<Response> {
     let message_id = parse_sccp_message_id_hex(&message_id_hex)?;
-    let material = sccp_exact_proof_material(state, message_id)?.ok_or_else(sccp_not_found)?;
+    let material =
+        tokio::task::spawn_blocking(move || sccp_exact_proof_material(state.as_ref(), message_id))
+            .await
+            .map_err(|_| sccp_internal_error("SCCP proof-request worker failed"))??
+            .ok_or_else(sccp_not_found)?;
     sccp_bundle_response(&material.request, accept.as_ref())
 }
 
@@ -7953,11 +8063,14 @@ pub async fn handle_v1_sccp_capabilities(
 /// GET /v1/sccp/messages/recent — newest-first committed SCCP message discovery with compact metadata.
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_sccp_messages_recent(
-    state: &CoreState,
+    state: Arc<CoreState>,
     crate::NoritoQuery(window): crate::NoritoQuery<HistoryWindowQuery>,
     accept: Option<axum::http::HeaderValue>,
 ) -> Result<Response> {
-    let snapshot = collect_recent_sccp_messages(state, &window)?;
+    let snapshot =
+        tokio::task::spawn_blocking(move || collect_recent_sccp_messages(state.as_ref(), &window))
+            .await
+            .map_err(|_| sccp_internal_error("SCCP recent-message worker failed"))??;
     sccp_bundle_response(&snapshot, accept.as_ref())
 }
 
@@ -12842,7 +12955,7 @@ mod contract_manifest_response_tests {
                         },
                     }],
                 }),
-                return_type: Some("i64".to_owned()),
+                return_type: Some("int".to_owned()),
                 return_schema: Some(EntrypointValueTypeV1 {
                     nodes: vec![EntrypointValueTypeNodeV1::Leaf(EntrypointValueKindV1::Int)],
                 }),
@@ -13122,35 +13235,24 @@ fn encode_contract_state_pointer_tlv_bytes(
     let (type_id, payload) = match ty {
         ivm::EmbeddedStateType::Int => {
             let value = raw.parse::<iroha_primitives::bigint::BigInt>().ok()?;
-            let frame = iroha_primitives::numeric_abi::IntValueV1::try_new(value)
-                .ok()?
-                .encode_frame()
-                .ok()?;
-            (PointerType::Int, frame)
+            return ivm::numeric_tlv::encode_int(&value).ok();
         }
         ivm::EmbeddedStateType::Decimal => {
-            let value = raw.parse::<iroha_primitives::numeric::Numeric>().ok()?;
-            let frame = iroha_primitives::numeric_abi::DecimalValueV1::try_from_numeric(value)
+            let value = raw
+                .parse::<iroha_primitives::numeric::Numeric>()
                 .ok()?
-                .encode_frame()
+                .canonicalize_decimal()
                 .ok()?;
-            (PointerType::Decimal, frame)
+            return ivm::numeric_tlv::encode_decimal(&value).ok();
         }
         ivm::EmbeddedStateType::Quantity => {
-            let value = raw.parse::<iroha_primitives::numeric::Quantity>().ok()?;
-            let frame = iroha_primitives::numeric_abi::QuantityValueV1::new(value)
-                .encode_frame()
+            let value = raw
+                .parse::<iroha_primitives::numeric::Numeric>()
+                .ok()?
+                .canonicalize_decimal()
                 .ok()?;
-            (PointerType::Quantity, frame)
-        }
-        ivm::EmbeddedStateType::String => (PointerType::Blob, raw.as_bytes().to_vec()),
-        ivm::EmbeddedStateType::Bytes => {
-            let value = if let Some(trimmed) = raw.strip_prefix("0x") {
-                hex::decode(trimmed).ok()?
-            } else {
-                raw.as_bytes().to_vec()
-            };
-            (PointerType::Blob, value)
+            let value = iroha_primitives::numeric::Quantity::try_from_numeric(value).ok()?;
+            return ivm::numeric_tlv::encode_quantity(&value).ok();
         }
         ivm::EmbeddedStateType::Name => {
             let value: iroha_data_model::name::Name = raw.parse().ok()?;
@@ -13187,6 +13289,15 @@ fn encode_contract_state_pointer_tlv_bytes(
             let value = iroha_data_model::nexus::DataSpaceId::new(raw_id);
             (PointerType::DataSpaceId, to_bytes(&value).ok()?)
         }
+        ivm::EmbeddedStateType::String => (PointerType::Blob, raw.as_bytes().to_vec()),
+        ivm::EmbeddedStateType::Bytes => {
+            let value = if let Some(trimmed) = raw.strip_prefix("0x") {
+                hex::decode(trimmed).ok()?
+            } else {
+                raw.as_bytes().to_vec()
+            };
+            (PointerType::Blob, value)
+        }
         _ => return None,
     };
 
@@ -13201,8 +13312,8 @@ fn contract_state_stored_map_key_suffix(
     let canonical_key = match key_ty {
         ivm::EmbeddedStateType::Bool => {
             let value = match logical_key_suffix {
-                "false" => 0_i64,
-                "true" => 1_i64,
+                "false" | "0" => 0_i64,
+                "true" | "1" => 1_i64,
                 _ => return None,
             };
             let _canonical_flags =
@@ -13453,24 +13564,19 @@ fn decode_contract_state_pointer_json(
 
     match ty {
         Type::Int => {
-            let payload = decode_contract_state_pointer_payload(envelope, PointerType::Int, "int")?;
-            let value = iroha_primitives::numeric_abi::IntValueV1::decode_frame(payload)
+            let value = ivm::numeric_tlv::decode_int_bytes(envelope)
                 .map_err(|err| format!("decode int: {err}"))?;
-            Ok(norito::json::Value::from(value.as_int().to_string()))
+            Ok(norito::json::Value::from(value.to_string()))
         }
         Type::Decimal => {
-            let payload =
-                decode_contract_state_pointer_payload(envelope, PointerType::Decimal, "decimal")?;
-            let value = iroha_primitives::numeric_abi::DecimalValueV1::decode_frame(payload)
+            let value = ivm::numeric_tlv::decode_decimal_bytes(envelope)
                 .map_err(|err| format!("decode decimal: {err}"))?;
-            Ok(norito::json::Value::from(value.as_numeric().to_string()))
+            Ok(norito::json::Value::from(value.to_string()))
         }
         Type::Quantity => {
-            let payload =
-                decode_contract_state_pointer_payload(envelope, PointerType::Quantity, "quantity")?;
-            let value = iroha_primitives::numeric_abi::QuantityValueV1::decode_frame(payload)
+            let value = ivm::numeric_tlv::decode_quantity_bytes(envelope)
                 .map_err(|err| format!("decode quantity: {err}"))?;
-            Ok(norito::json::Value::from(value.as_quantity().to_string()))
+            Ok(norito::json::Value::from(value.to_string()))
         }
         Type::String => {
             let payload =
@@ -14267,15 +14373,21 @@ mod contract_state_tests {
         )
     }
 
+    fn pointer_envelope_state_record(ty: &ivm::EmbeddedStateType, envelope: Vec<u8>) -> Vec<u8> {
+        state_record(
+            ty,
+            vec![ivm_abi::state_value::StateValueAtomV1::Pointer(envelope)],
+        )
+    }
+
     fn int_state_record(value: &str) -> Vec<u8> {
         let value = value
             .parse::<iroha_primitives::bigint::BigInt>()
             .expect("parse test integer");
-        let frame = iroha_primitives::numeric_abi::IntValueV1::try_new(value)
-            .expect("test integer is inside the V1 domain")
-            .encode_frame()
-            .expect("encode test int frame");
-        pointer_state_record(&ivm::EmbeddedStateType::Int, PointerType::Int, &frame)
+        pointer_envelope_state_record(
+            &ivm::EmbeddedStateType::Int,
+            ivm::numeric_tlv::encode_int(&value).expect("encode test int envelope"),
+        )
     }
 
     fn assert_map_key_suffix_matches_ivm_host(
@@ -14422,6 +14534,75 @@ mod contract_state_tests {
     }
 
     #[test]
+    fn contract_state_map_key_suffix_uses_canonical_numeric_pointer_envelopes() {
+        let int = "42"
+            .parse::<iroha_primitives::bigint::BigInt>()
+            .expect("parse int");
+        let decimal = "7.00"
+            .parse::<iroha_primitives::numeric::Numeric>()
+            .expect("parse decimal")
+            .canonicalize_decimal()
+            .expect("canonical decimal");
+        let quantity = iroha_primitives::numeric::Quantity::try_from_numeric(decimal.clone())
+            .expect("canonical quantity");
+
+        for (ty, raw, expected) in [
+            (
+                ivm::EmbeddedStateType::Int,
+                "42",
+                ivm::numeric_tlv::encode_int(&int).expect("encode int"),
+            ),
+            (
+                ivm::EmbeddedStateType::Decimal,
+                "7.00",
+                ivm::numeric_tlv::encode_decimal(&decimal).expect("encode decimal"),
+            ),
+            (
+                ivm::EmbeddedStateType::Quantity,
+                "7.00",
+                ivm::numeric_tlv::encode_quantity(&quantity).expect("encode quantity"),
+            ),
+        ] {
+            let expected = hex::encode(expected);
+            assert_eq!(
+                contract_state_stored_map_key_suffix(&ty, raw).as_deref(),
+                Some(expected.as_str())
+            );
+        }
+    }
+
+    #[test]
+    fn decode_contract_state_scalar_json_supports_decimal_and_quantity() {
+        let decimal = "123.450"
+            .parse::<iroha_primitives::numeric::Numeric>()
+            .expect("parse decimal")
+            .canonicalize_decimal()
+            .expect("canonical decimal");
+        let quantity = iroha_primitives::numeric::Quantity::try_from_numeric(decimal.clone())
+            .expect("canonical quantity");
+
+        let decimal_json = decode_contract_state_scalar_json(
+            &pointer_envelope_state_record(
+                &ivm::EmbeddedStateType::Decimal,
+                ivm::numeric_tlv::encode_decimal(&decimal).expect("encode decimal"),
+            ),
+            &ivm::EmbeddedStateType::Decimal,
+        )
+        .expect("decode decimal");
+        let quantity_json = decode_contract_state_scalar_json(
+            &pointer_envelope_state_record(
+                &ivm::EmbeddedStateType::Quantity,
+                ivm::numeric_tlv::encode_quantity(&quantity).expect("encode quantity"),
+            ),
+            &ivm::EmbeddedStateType::Quantity,
+        )
+        .expect("decode quantity");
+
+        assert_eq!(decimal_json, Value::from(decimal.to_string()));
+        assert_eq!(quantity_json, Value::from(quantity.to_string()));
+    }
+
+    #[test]
     fn decode_contract_state_map_value_json_preserves_struct_field_encodings() {
         let schema = ivm::EmbeddedStateType::Struct {
             name: "MintRequestRecord".to_owned(),
@@ -14527,6 +14708,14 @@ mod contract_state_tests {
         let bool_true =
             assert_map_key_suffix_matches_ivm_host(&ivm::EmbeddedStateType::Bool, "true");
         assert_ne!(bool_false, bool_true);
+        assert_eq!(
+            bool_false,
+            assert_map_key_suffix_matches_ivm_host(&ivm::EmbeddedStateType::Bool, "0")
+        );
+        assert_eq!(
+            bool_true,
+            assert_map_key_suffix_matches_ivm_host(&ivm::EmbeddedStateType::Bool, "1")
+        );
 
         assert_map_key_suffix_matches_ivm_host(
             &ivm::EmbeddedStateType::Int,
@@ -14575,7 +14764,6 @@ mod contract_state_tests {
         );
 
         for (ty, invalid) in [
-            (&ivm::EmbeddedStateType::Bool, "1"),
             (&ivm::EmbeddedStateType::Int, "1.5"),
             (&ivm::EmbeddedStateType::Decimal, "nan"),
             (&ivm::EmbeddedStateType::DataSpaceId, "0x"),
@@ -14616,6 +14804,8 @@ mod contract_state_tests {
 
         assert_roundtrip(&ivm::EmbeddedStateType::Bool, "false", "false");
         assert_roundtrip(&ivm::EmbeddedStateType::Bool, "true", "true");
+        assert_roundtrip(&ivm::EmbeddedStateType::Bool, "0", "false");
+        assert_roundtrip(&ivm::EmbeddedStateType::Bool, "1", "true");
         assert_roundtrip(
             &ivm::EmbeddedStateType::Int,
             "1234567890123456789012345678901234567890",
@@ -14920,7 +15110,6 @@ mod contract_state_tests {
     #[test]
     fn contract_state_invalid_logical_map_keys_fail_before_storage_lookup() {
         for (key_ty, invalid) in [
-            (ivm::EmbeddedStateType::Bool, "1"),
             (ivm::EmbeddedStateType::Int, "1.5"),
             (ivm::EmbeddedStateType::Decimal, "nan"),
             (ivm::EmbeddedStateType::Quantity, "-1"),
@@ -15098,6 +15287,49 @@ mod contract_state_tests {
         let error = decode_contract_state_scalar_json(&json_payload, &ivm::EmbeddedStateType::Json)
             .expect_err("unbound legacy JSON must not bypass the V1 state schema");
         assert!(error.contains("record"), "{error}");
+    }
+
+    #[test]
+    fn decode_contract_state_scalar_json_rejects_policyless_norito_json_wrapper() {
+        let json_value = iroha_primitives::json::Json::from_str_norito(
+            "{\"tranche_id\":\"benefit-1\",\"beneficiary_account_id\":\"i105-user\"}",
+        )
+        .expect("valid json payload");
+        let json_payload = norito::to_bytes(&json_value).expect("encode json payload");
+        let error = decode_contract_state_scalar_json(
+            &pointer_envelope_state_record(
+                &ivm::EmbeddedStateType::Json,
+                make_tlv(PointerType::NoritoBytes, &json_payload),
+            ),
+            &ivm::EmbeddedStateType::Json,
+        )
+        .expect_err("policy-less NoritoBytes wrappers are not canonical JSON state");
+        assert!(error.contains("expected Json payload"), "{error}");
+    }
+
+    #[test]
+    fn contract_state_numeric_map_keys_use_exact_nominal_pointer_envelopes() {
+        for (ty, first, equivalent) in [
+            (ivm::EmbeddedStateType::Int, "7", "7"),
+            (ivm::EmbeddedStateType::Decimal, "7.00", "7"),
+            (ivm::EmbeddedStateType::Quantity, "7.00", "7"),
+        ] {
+            let suffix = contract_state_stored_map_key_suffix(&ty, first)
+                .expect("canonical numeric state-map key");
+            let canonical = encode_contract_state_pointer_tlv_bytes(&ty, equivalent)
+                .expect("canonical numeric pointer envelope");
+            assert_eq!(suffix, hex::encode(canonical));
+            assert_eq!(
+                suffix,
+                contract_state_stored_map_key_suffix(&ty, equivalent)
+                    .expect("equivalent canonical numeric state-map key")
+            );
+        }
+
+        assert!(
+            contract_state_stored_map_key_suffix(&ivm::EmbeddedStateType::Quantity, "-1").is_none(),
+            "negative quantities must fail closed"
+        );
     }
 }
 
@@ -17474,7 +17706,7 @@ fn execute_contract_view(
         message: error.to_string(),
         vm_diagnostic: None,
     })?;
-    let live_alias = resolve_exact_contract_runtime_alias(
+    let _live_alias = resolve_exact_contract_runtime_alias(
         &query_view.world,
         contract_address,
         contract_alias,
@@ -17512,27 +17744,17 @@ fn execute_contract_view(
         authority.clone(),
         query_view.accounts_snapshot(),
     );
-    let contract_subject = iroha_core::smartcontracts::code::fetch_bound_contract_subject(
+    host.bind_deployed_contract_runtime_context(
         &query_view,
         contract_address,
+        program.code_hash,
+        program.prepared_contract(),
+        selector,
     )
-    .ok_or_else(|| ContractViewExecutionError {
-        message: format!(
-            "contract instance `{contract_address}` has no valid runtime subject binding"
-        ),
+    .map_err(|error| ContractViewExecutionError {
+        message: error.to_string(),
         vm_diagnostic: None,
     })?;
-    let runtime_identity = iroha_core::smartcontracts::code::BoundContractIdentity {
-        contract_address: contract_address.clone(),
-        contract_alias: live_alias,
-        code_hash: program.code_hash,
-    };
-    host.bind_deployed_contract_runtime_context(
-        contract_subject,
-        &runtime_identity,
-        selector.to_owned(),
-        runtime_permission,
-    );
     let arguments = prepare_contract_argument_record(
         program.prepared_contract(),
         selector,
@@ -17655,7 +17877,7 @@ fn execute_contract_call_simulation(
         gas_used: 0,
         queued_instructions: Vec::new(),
     })?;
-    let live_alias = resolve_exact_contract_runtime_alias(
+    let _live_alias = resolve_exact_contract_runtime_alias(
         &query_view.world,
         contract_address,
         contract_alias,
@@ -17706,30 +17928,20 @@ fn execute_contract_call_simulation(
         authority.clone(),
         query_view.accounts_snapshot(),
     );
-    let contract_subject = iroha_core::smartcontracts::code::fetch_bound_contract_subject(
+    host.bind_deployed_contract_runtime_context(
         &query_view,
         contract_address,
+        program.code_hash,
+        program.prepared_contract(),
+        selector,
     )
-    .ok_or_else(|| ContractCallSimulationError {
-        message: format!(
-            "contract instance `{contract_address}` has no valid runtime subject binding"
-        ),
+    .map_err(|error| ContractCallSimulationError {
+        message: error.to_string(),
         vm_diagnostic: None,
         normalized_payload: normalized_payload.clone(),
         gas_used: 0,
         queued_instructions: Vec::new(),
     })?;
-    let runtime_identity = iroha_core::smartcontracts::code::BoundContractIdentity {
-        contract_address: contract_address.clone(),
-        contract_alias: live_alias,
-        code_hash: program.code_hash,
-    };
-    host.bind_deployed_contract_runtime_context(
-        contract_subject,
-        &runtime_identity,
-        selector.to_owned(),
-        runtime_permission,
-    );
     let arguments = prepare_contract_argument_record(
         program.prepared_contract(),
         selector,
@@ -60018,6 +60230,13 @@ mod sse_stream_tests {
                 .extensions()
                 .get::<crate::ReviewedProtocolNativeError>(),
             Some(&crate::ReviewedProtocolNativeError::StreamResumeUnsupported)
+        );
+        assert!(
+            response
+                .extensions()
+                .get::<crate::utils::HttpErrorCode>()
+                .is_none(),
+            "the response boundary assigns the public error code after validation"
         );
         assert_eq!(
             response

@@ -2753,8 +2753,9 @@ impl<'a> CstAstLowerer<'a> {
                             "integer literal is outside the signed Kotodama int domain",
                         )
                     })?;
-                    let mut expr =
+                    let expr =
                         self.source_expression_from(minus.range.start, bigint_literal_expr(value));
+                    let mut expr = self.parse_postfix(expr, minus.range.start)?;
                     for (op, token) in prefixes.into_iter().rev() {
                         expr = self.source_expression_from(
                             token.range.start,
@@ -2776,11 +2777,12 @@ impl<'a> CstAstLowerer<'a> {
                         range,
                         self.current_function,
                     );
-                    let mut expr = Expr::Source {
+                    let expr = Expr::Source {
                         node,
                         source: SourceRange::new(self.facts.source_map.source(), range),
                         expression: Box::new(Expr::DecimalLiteral(format!("-{spelling}"))),
                     };
+                    let mut expr = self.parse_postfix(expr, minus.range.start)?;
                     for (op, token) in prefixes.into_iter().rev() {
                         expr = self.source_expression_from(
                             token.range.start,
@@ -5344,6 +5346,21 @@ mod tests {
     }
 
     #[test]
+    fn signed_literals_retain_postfix_calls_after_atomic_range_parsing() {
+        for literal in ["-1", "-1.0"] {
+            let receiver = if literal == "-1" {
+                format!("({literal})")
+            } else {
+                literal.to_owned()
+            };
+            parse_module(&format!(
+                "fn main() {{ let value = {receiver}.operation(argument: 2); }}"
+            ))
+            .unwrap_or_else(|error| panic!("signed postfix `{literal}` failed: {error}"));
+        }
+    }
+
+    #[test]
     fn native_json_preserves_decoded_keys_and_exact_source_spelling() {
         let program = parse_module(
             r#"fn build(string label) -> Json {
@@ -5740,7 +5757,7 @@ mod tests {
     #[test]
     fn parse_rejects_state_parameter_annotations() {
         let src = r#"
-        fn helper(balances: state StateMap<Name, int>, Name key) {}
+        fn helper(state StateMap<Name, int> balances, Name key) {}
         "#;
         let err = parse_module(src).expect_err("state parameters must be rejected");
         assert!(err.contains("state handles are not first-class parameters"));
@@ -5808,7 +5825,7 @@ mod tests {
             "state_map_get(map, 1)",
         ] {
             let error = parse_module(&format!(
-                "fn f(Option<int>, map: StateMap<int, int> value) {{ let _x = {expression}; }}"
+                "fn f(Option<int> value, StateMap<int, int> map) {{ let _x = {expression}; }}"
             ))
             .expect_err("flat sum/state helper must be rejected by the V1 parser");
             assert!(

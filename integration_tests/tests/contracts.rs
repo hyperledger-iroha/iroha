@@ -60,11 +60,11 @@ seiyaku ContractStateProbe {
     NotInitialized = 1
   }
 
-  state Initialized: i64;
-  state StoredValue: i64;
-  state probe_readback: i64;
+  state int Initialized;
+  state int StoredValue;
+  state int probe_readback;
 
-  kotoage fn main() -> i64 authorize("CanEnactGovernance") {
+  kotoage fn main() -> int authorize("CanEnactGovernance") {
     return 0;
   }
 
@@ -92,19 +92,19 @@ seiyaku ContractStateProbe {
 fn dynamic_access_counter_artifact() -> Vec<u8> {
     let src = r#"
 seiyaku DynamicAccessCounter {
-  state Counters: StateMap<i64, i64>;
+  state StateMap<int, int> Counters;
 
-  fn bump_hidden(key: i64, delta: i64) {
+  fn bump_hidden(int key, int delta) {
     let current = Counters.get(key).unwrap_or(0);
     Counters[key] = current + delta;
   }
 
-  kotoage fn bump_direct(key: i64, delta: i64) authorize("CanEnactGovernance") {
+  kotoage fn bump_direct(int key, int delta) authorize("CanEnactGovernance") {
     let current = Counters.get(key).unwrap_or(0);
     Counters[key] = current + delta;
   }
 
-  kotoage fn bump_via_helper(key: i64, delta: i64) authorize("CanEnactGovernance") {
+  kotoage fn bump_via_helper(int key, int delta) authorize("CanEnactGovernance") {
     bump_hidden(key, delta);
   }
 }
@@ -136,23 +136,23 @@ seiyaku DynamicAccessCounter {
 fn typed_core_query_pager_artifact() -> Vec<u8> {
     let source = r#"
 seiyaku TypedCoreQueryPager {
-  view fn accounts(offset: i64, limit: i64) -> QueryPage<AccountView> {
+  view fn accounts(int offset, int limit) -> QueryPage<AccountView> {
     ledger::query::accounts(offset: offset, limit: limit)
   }
 
-  view fn assets(offset: i64, limit: i64) -> QueryPage<AssetView> {
+  view fn assets(int offset, int limit) -> QueryPage<AssetView> {
     ledger::query::assets(offset: offset, limit: limit)
   }
 
-  view fn asset_definitions(offset: i64, limit: i64) -> QueryPage<AssetDefinitionView> {
+  view fn asset_definitions(int offset, int limit) -> QueryPage<AssetDefinitionView> {
     ledger::query::asset_definitions(offset: offset, limit: limit)
   }
 
-  view fn domains(offset: i64, limit: i64) -> QueryPage<DomainView> {
+  view fn domains(int offset, int limit) -> QueryPage<DomainView> {
     ledger::query::domains(offset: offset, limit: limit)
   }
 
-  view fn nfts(offset: i64, limit: i64) -> QueryPage<NftView> {
+  view fn nfts(int offset, int limit) -> QueryPage<NftView> {
     ledger::query::nfts(offset: offset, limit: limit)
   }
 }
@@ -164,8 +164,8 @@ seiyaku TypedCoreQueryPager {
 
 fn typed_core_query_page_payload(offset: i64, limit: i64) -> norito::json::Value {
     norito::json::object([
-        ("offset", norito::json::Value::from(offset)),
-        ("limit", norito::json::Value::from(limit)),
+        ("offset", norito::json::Value::from(offset.to_string())),
+        ("limit", norito::json::Value::from(limit.to_string())),
     ])
     .expect("serialize typed core-query page arguments")
 }
@@ -255,8 +255,8 @@ where
 
 fn dynamic_counter_args(key: i64, delta: i64) -> norito::json::Value {
     norito::json::object([
-        ("key", norito::json::Value::from(key)),
-        ("delta", norito::json::Value::from(delta)),
+        ("key", norito::json::Value::from(key.to_string())),
+        ("delta", norito::json::Value::from(delta.to_string())),
     ])
     .expect("serialize dynamic counter arguments")
 }

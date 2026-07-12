@@ -97,31 +97,30 @@ print(assets, txs, holders)
 
 ## 5. Offline readiness
 
-Use `GET /v1/offline/readiness` through `get_offline_readiness()` for offline feature discovery.
-Classic Offline Note issuance, redemption, and audit transaction paths are retired;
-Kagemusha readiness fields advertise the active offline payment implementation.
+Readiness is evaluated for one exact asset definition. Pass its canonical ID to
+`get_offline_readiness`; for example, the call below sends
+`GET /v1/offline/readiness?asset_definition_id=xor%23wonderland`. A successful
+response sets `ready` to `True` exactly when its typed `blockers` tuple is empty.
+An unmet requirement is a normal `ready == False` result; HTTP `503` is reserved
+for an evaluation failure.
 
 ```python
 from iroha_python import ToriiClient
 
 client = ToriiClient("http://127.0.0.1:8080")
-readiness = client.get_offline_readiness()
-print("kagemusha", readiness.offline_kagemusha_recursive_compact_available)
+readiness = client.get_offline_readiness(asset_definition_id="xor#wonderland")
+print("offline ready", readiness.ready, readiness.blockers)
 ```
 ## 6. Stream events
 
-Torii SSE endpoints are exposed via generators. The SDK automatically resumes
-when `resume=True` and you provide an `EventCursor`.
+Torii SSE helpers return live-only generators. They may reconnect within the
+configured retry budget, but Torii retains no replay log: reconnects can leave
+a gap. Replay cursors and resume arguments are intentionally unsupported; query
+committed ledger state when complete history is required.
 
 ```python
-from iroha_python import PipelineEventFilterBox, EventCursor
-
-cursor = EventCursor()
-
 for event in client.stream_pipeline_blocks(
     status="Committed",
-    resume=True,
-    cursor=cursor,
     with_metadata=True,
 ):
     print("Block height", event.data.block.height)

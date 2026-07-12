@@ -5381,7 +5381,10 @@ mod tests {
 
         assert_eq!(entry.last_present_snapshot, manifest.snapshot_index);
         assert_eq!(entry.last_mutated_snapshot, manifest.snapshot_index);
-        assert_eq!(entry.value_size_bytes, record.measured_bytes());
+        assert_eq!(
+            entry.value_size_bytes,
+            MeasuredBytes::measured_bytes(&record)
+        );
     }
 
     #[test]
@@ -5473,7 +5476,10 @@ mod tests {
 
         assert_eq!(entry.last_present_snapshot, manifest.snapshot_index);
         assert_eq!(entry.last_mutated_snapshot, manifest.snapshot_index);
-        assert_eq!(entry.value_size_bytes, record.measured_bytes());
+        assert_eq!(
+            entry.value_size_bytes,
+            MeasuredBytes::measured_bytes(&record)
+        );
     }
 
     #[test]

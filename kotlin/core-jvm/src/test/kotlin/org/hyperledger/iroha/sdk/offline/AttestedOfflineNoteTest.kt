@@ -27,7 +27,7 @@ private const val RETIRED_REDEEM_INSTRUCTION_ALIAS_SCHEMA =
 private const val RETIRED_AUDIT_INSTRUCTION_ALIAS_SCHEMA =
     "iroha_data_model::isi::offline::AuditOfflineNoteV2"
 
-class OfflineNoteV2Test {
+class AttestedOfflineNoteTest {
     @Test
     fun certificateSigningBytesMatchRustVector() {
         val fixture = loadFixture()
@@ -39,7 +39,7 @@ class OfflineNoteV2Test {
     }
 
     @Test
-    fun offlineNoteV2ModelsMatchRustNoritoVectors() {
+    fun attestedOfflineNoteModelsMatchRustNoritoVectors() {
         val fixture = loadFixture()
         val chain = obj(fixture, "chain_vectors")
 
@@ -53,7 +53,7 @@ class OfflineNoteV2Test {
     }
 
     @Test
-    fun offlineNoteV2DecodersRoundTripRustNoritoVectors() {
+    fun attestedOfflineNoteDecodersRoundTripRustNoritoVectors() {
         val fixture = loadFixture()
         val chain = obj(fixture, "chain_vectors")
         val sender = certificate(obj(obj(fixture, "payment_token"), "sender_key_certificate"))
@@ -65,8 +65,8 @@ class OfflineNoteV2Test {
         val certificatePayloadBytes = sender.signingPayload().noritoEncoded()
         val certificateBytes = sender.noritoEncoded()
         val issuedClaimBytes = issue.issuedClaim().noritoEncoded()
-        val auditOutputClaimBytes = OfflineNoteV2.encodeAuditOutputClaim(audit.outputClaims[0])
-        val recursiveProofBytes = OfflineNoteV2.encodeRecursiveProof(audit.recursiveProof)
+        val auditOutputClaimBytes = AttestedOfflineNote.encodeAuditOutputClaim(audit.outputClaims[0])
+        val recursiveProofBytes = AttestedOfflineNote.encodeRecursiveProof(audit.recursiveProof)
         val redeemPublicInputsBytes = redeem.publicInputs().noritoEncoded()
         val auditPublicInputsBytes = audit.publicInputs().noritoEncoded()
         val issueBytes = base64Bytes(string(obj(chain, "issue"), "norito_base64"))
@@ -76,43 +76,43 @@ class OfflineNoteV2Test {
 
         assertEquals(
             base64(certificatePayloadBytes),
-            base64(OfflineNoteV2.decodeCertificatePayload(certificatePayloadBytes).noritoEncoded()),
+            base64(AttestedOfflineNote.decodeCertificatePayload(certificatePayloadBytes).noritoEncoded()),
         )
-        assertEquals(base64(certificateBytes), base64(OfflineNoteV2.decodeCertificate(certificateBytes).noritoEncoded()))
-        assertEquals(base64(issuedClaimBytes), base64(OfflineNoteV2.decodeIssuedClaim(issuedClaimBytes).noritoEncoded()))
+        assertEquals(base64(certificateBytes), base64(AttestedOfflineNote.decodeCertificate(certificateBytes).noritoEncoded()))
+        assertEquals(base64(issuedClaimBytes), base64(AttestedOfflineNote.decodeIssuedClaim(issuedClaimBytes).noritoEncoded()))
         assertEquals(
             base64(auditOutputClaimBytes),
-            base64(OfflineNoteV2.encodeAuditOutputClaim(OfflineNoteV2.decodeAuditOutputClaim(auditOutputClaimBytes))),
+            base64(AttestedOfflineNote.encodeAuditOutputClaim(AttestedOfflineNote.decodeAuditOutputClaim(auditOutputClaimBytes))),
         )
         assertEquals(
             base64(recursiveProofBytes),
-            base64(OfflineNoteV2.encodeRecursiveProof(OfflineNoteV2.decodeRecursiveProof(recursiveProofBytes))),
+            base64(AttestedOfflineNote.encodeRecursiveProof(AttestedOfflineNote.decodeRecursiveProof(recursiveProofBytes))),
         )
         assertEquals(
             base64(redeemPublicInputsBytes),
-            base64(OfflineNoteV2.decodeRedeemPublicInputs(redeemPublicInputsBytes).noritoEncoded()),
+            base64(AttestedOfflineNote.decodeRedeemPublicInputs(redeemPublicInputsBytes).noritoEncoded()),
         )
         assertEquals(
             base64(auditPublicInputsBytes),
-            base64(OfflineNoteV2.decodeAuditPublicInputs(auditPublicInputsBytes).noritoEncoded()),
+            base64(AttestedOfflineNote.decodeAuditPublicInputs(auditPublicInputsBytes).noritoEncoded()),
         )
-        assertEquals(base64(issueBytes), base64(OfflineNoteV2.decodeIssue(issueBytes).noritoEncoded()))
+        assertEquals(base64(issueBytes), base64(AttestedOfflineNote.decodeIssue(issueBytes).noritoEncoded()))
 
-        val decodedAudit = OfflineNoteV2.decodeAudit(auditBytes)
+        val decodedAudit = AttestedOfflineNote.decodeAudit(auditBytes)
         decodedAudit.validateProofBinding()
         assertEquals(base64(auditBytes), base64(decodedAudit.noritoEncoded()))
 
-        val decodedRedeem = OfflineNoteV2.decodeRedeem(redeemBytes)
+        val decodedRedeem = AttestedOfflineNote.decodeRedeem(redeemBytes)
         decodedRedeem.validateProofBinding()
         assertEquals(base64(redeemBytes), base64(decodedRedeem.noritoEncoded()))
         assertEquals(
             base64(registration.noritoEncoded()),
-            base64(OfflineNoteV2.decodeDeviceAttestationRegistration(registrationBytes).noritoEncoded()),
+            base64(AttestedOfflineNote.decodeDeviceAttestationRegistration(registrationBytes).noritoEncoded()),
         )
     }
 
     @Test
-    fun offlineNoteV2DecodersRejectMalformedPayloads() {
+    fun attestedOfflineNoteDecodersRejectMalformedPayloads() {
         val fixture = loadFixture()
         val chain = obj(fixture, "chain_vectors")
         val issueBytes = base64Bytes(string(obj(chain, "issue"), "norito_base64"))
@@ -120,23 +120,23 @@ class OfflineNoteV2Test {
         val certificatePayloadBytes = sender.signingPayload().noritoEncoded()
 
         assertFailsWith<IllegalArgumentException> {
-            OfflineNoteV2.decodeIssue(issueBytes.copyOf(issueBytes.size - 1))
+            AttestedOfflineNote.decodeIssue(issueBytes.copyOf(issueBytes.size - 1))
         }
         assertFailsWith<IllegalArgumentException> {
-            OfflineNoteV2.decodeRedeem(issueBytes)
+            AttestedOfflineNote.decodeRedeem(issueBytes)
         }
         val corruptedIssue = issueBytes.copyOf()
         corruptedIssue[corruptedIssue.lastIndex] = (corruptedIssue.last().toInt() xor 0x01).toByte()
         assertFailsWith<IllegalArgumentException> {
-            OfflineNoteV2.decodeIssue(corruptedIssue)
+            AttestedOfflineNote.decodeIssue(corruptedIssue)
         }
         assertFailsWith<IllegalArgumentException> {
-            OfflineNoteV2.decodeCertificate(certificatePayloadBytes)
+            AttestedOfflineNote.decodeCertificate(certificatePayloadBytes)
         }
     }
 
     @Test
-    fun offlineNoteV2InstructionWrappersProduceSchemaBoundPayloads() {
+    fun attestedOfflineNoteInstructionWrappersProduceSchemaBoundPayloads() {
         val fixture = loadFixture()
         val issue = issue(fixture)
         val audit = audit(fixture)
@@ -145,44 +145,44 @@ class OfflineNoteV2Test {
 
         assertEquals(
             "iroha_data_model::isi::offline::IssueOfflineNote",
-            OfflineNoteV2.ISSUE_INSTRUCTION_SCHEMA,
+            AttestedOfflineNote.ISSUE_INSTRUCTION_SCHEMA,
             "canonical issue instruction wire name",
         )
         assertEquals(
             "iroha_data_model::isi::offline::RedeemOfflineNote",
-            OfflineNoteV2.REDEEM_INSTRUCTION_SCHEMA,
+            AttestedOfflineNote.REDEEM_INSTRUCTION_SCHEMA,
             "canonical redeem instruction wire name",
         )
         assertEquals(
             "iroha_data_model::isi::offline::AuditOfflineNote",
-            OfflineNoteV2.AUDIT_INSTRUCTION_SCHEMA,
+            AttestedOfflineNote.AUDIT_INSTRUCTION_SCHEMA,
             "canonical audit instruction wire name",
         )
         assertEquals(
             "iroha_data_model::isi::offline::RegisterOfflineDeviceAttestation",
-            OfflineNoteV2.REGISTER_DEVICE_ATTESTATION_INSTRUCTION_SCHEMA,
+            AttestedOfflineNote.REGISTER_DEVICE_ATTESTATION_INSTRUCTION_SCHEMA,
             "canonical attestation registration instruction wire name",
         )
-        assertTrue(!OfflineNoteV2.ISSUE_INSTRUCTION_SCHEMA.endsWith("V2"))
-        assertTrue(!OfflineNoteV2.REDEEM_INSTRUCTION_SCHEMA.endsWith("V2"))
-        assertTrue(!OfflineNoteV2.AUDIT_INSTRUCTION_SCHEMA.endsWith("V2"))
+        assertTrue(!AttestedOfflineNote.ISSUE_INSTRUCTION_SCHEMA.endsWith("V2"))
+        assertTrue(!AttestedOfflineNote.REDEEM_INSTRUCTION_SCHEMA.endsWith("V2"))
+        assertTrue(!AttestedOfflineNote.AUDIT_INSTRUCTION_SCHEMA.endsWith("V2"))
 
         assertInstructionWrapper(
-            schema = OfflineNoteV2.ISSUE_INSTRUCTION_SCHEMA,
-            modelPayload = OfflineNoteV2.encodeIssue(issue),
-            instruction = OfflineNoteV2.issueInstruction(issue),
+            schema = AttestedOfflineNote.ISSUE_INSTRUCTION_SCHEMA,
+            modelPayload = AttestedOfflineNote.encodeIssue(issue),
+            instruction = AttestedOfflineNote.issueInstruction(issue),
         )
         assertInstructionWrapper(
-            schema = OfflineNoteV2.AUDIT_INSTRUCTION_SCHEMA,
-            modelPayload = OfflineNoteV2.encodeAudit(audit),
-            instruction = OfflineNoteV2.auditInstruction(audit),
+            schema = AttestedOfflineNote.AUDIT_INSTRUCTION_SCHEMA,
+            modelPayload = AttestedOfflineNote.encodeAudit(audit),
+            instruction = AttestedOfflineNote.auditInstruction(audit),
         )
         assertInstructionWrapper(
-            schema = OfflineNoteV2.REDEEM_INSTRUCTION_SCHEMA,
-            modelPayload = OfflineNoteV2.encodeRedeem(redeem),
-            instruction = OfflineNoteV2.redeemInstruction(redeem),
+            schema = AttestedOfflineNote.REDEEM_INSTRUCTION_SCHEMA,
+            modelPayload = AttestedOfflineNote.encodeRedeem(redeem),
+            instruction = AttestedOfflineNote.redeemInstruction(redeem),
         )
-        val registerWirePayload = wirePayloadBytes(OfflineNoteV2.registerDeviceAttestationInstruction(registration))
+        val registerWirePayload = wirePayloadBytes(AttestedOfflineNote.registerDeviceAttestationInstruction(registration))
         assertEquals(
             string(obj(obj(fixture, "chain_vectors"), "attestation_registration"), "instruction_norito_base64"),
             base64(registerWirePayload),
@@ -190,7 +190,7 @@ class OfflineNoteV2Test {
         )
         assertEquals(
             base64(registration.noritoEncoded()),
-            base64(OfflineNoteV2.decodeRegisterDeviceAttestationInstruction(registerWirePayload).noritoEncoded()),
+            base64(AttestedOfflineNote.decodeRegisterDeviceAttestationInstruction(registerWirePayload).noritoEncoded()),
             "decoded register device attestation instruction",
         )
     }
@@ -213,14 +213,14 @@ class OfflineNoteV2Test {
         )
         assertEquals(
             base64(keyCertificatePayload.noritoEncoded()),
-            base64(OfflineNoteV2.decodeCertificatePayload(keyCertificatePayload.noritoEncoded()).noritoEncoded()),
+            base64(AttestedOfflineNote.decodeCertificatePayload(keyCertificatePayload.noritoEncoded()).noritoEncoded()),
         )
         assertEquals(string(vector, "norito_base64"), base64(registration.noritoEncoded()))
 
         val changedReport = "other-report".toByteArray(Charsets.UTF_8)
         val changed = registration.replacingAttestationEvidence(
             attestationReport = changedReport,
-            evidence = attestationEvidence(OfflineNoteV2.hash(changedReport)),
+            evidence = attestationEvidence(AttestedOfflineNote.hash(changedReport)),
         )
         assertEquals(registration.canonicalChallengeHash().toList(), changed.canonicalChallengeHash().toList())
         assertTrue(!registration.attestationReportHash().contentEquals(changed.attestationReportHash()))
@@ -231,7 +231,7 @@ class OfflineNoteV2Test {
     fun offlineDeviceAttestationRegistrationDraftBuildsChallengeBeforeEvidence() {
         val fixture = loadFixture()
         val vector = obj(obj(fixture, "chain_vectors"), "attestation_registration")
-        val preAttestationChallenge = OfflineNoteV2.DeviceAttestationRegistrationV2
+        val preAttestationChallenge = AttestedOfflineNote.DeviceAttestationRegistration
             .preAttestationChallengeHash(
                 version = int(vector, "version"),
                 platform = string(vector, "platform"),
@@ -254,7 +254,7 @@ class OfflineNoteV2Test {
                 recentBlockHash = hexBytes(string(vector, "recent_block_hash")),
                 expiresAtMs = long(vector, "expires_at_ms"),
             )
-        val draft = OfflineNoteV2.DeviceAttestationRegistrationV2(
+        val draft = AttestedOfflineNote.DeviceAttestationRegistration(
             version = int(vector, "version"),
             platform = string(vector, "platform"),
             keyId = string(vector, "key_id"),
@@ -277,7 +277,7 @@ class OfflineNoteV2Test {
             recentBlockHash = hexBytes(string(vector, "recent_block_hash")),
             expiresAtMs = long(vector, "expires_at_ms"),
         )
-        val emptyReportHash = OfflineNoteV2.hash(ByteArray(0))
+        val emptyReportHash = AttestedOfflineNote.hash(ByteArray(0))
         val expectedEvidence = attestationEvidence(emptyReportHash)
 
         assertEquals(string(vector, "challenge_hash"), hex(draft.canonicalChallengeHash()))
@@ -286,41 +286,41 @@ class OfflineNoteV2Test {
         assertEquals(emptyReportHash.toList(), draft.attestationReportHash().toList())
         assertEquals(ByteArray(0).toList(), draft.attestationReport().toList())
         assertEquals(expectedEvidence.toList(), draft.evidence().toList())
-        assertEquals(OfflineNoteV2.hash(expectedEvidence).toList(), draft.evidenceHash().toList())
+        assertEquals(AttestedOfflineNote.hash(expectedEvidence).toList(), draft.evidenceHash().toList())
     }
 
     @Test
-    fun offlineNoteV2InstructionWrappersRejectProofMismatches() {
+    fun attestedOfflineNoteInstructionWrappersRejectProofMismatches() {
         val fixture = loadFixture()
         val audit = audit(fixture)
         val redeem = redeem(fixture)
-        val badProof = OfflineNoteV2.RecursiveProofV2(
-            publicInputsHash = OfflineNoteV2.hash("wrong-public-inputs".toByteArray()),
-            proof = OfflineNoteV2.ProofBox(
-                OfflineNoteV2.RECURSIVE_BACKEND,
+        val badProof = AttestedOfflineNote.RecursiveProof(
+            publicInputsHash = AttestedOfflineNote.hash("wrong-public-inputs".toByteArray()),
+            proof = AttestedOfflineNote.ProofBox(
+                AttestedOfflineNote.RECURSIVE_BACKEND,
                 "offline-v2-forged-proof".toByteArray()
             )
         )
 
         assertFailsWith<IllegalArgumentException> {
-            OfflineNoteV2.redeemInstruction(redeem.replacingRecursiveProof(badProof))
+            AttestedOfflineNote.redeemInstruction(redeem.replacingRecursiveProof(badProof))
         }
         assertFailsWith<IllegalArgumentException> {
-            OfflineNoteV2.auditInstruction(audit.replacingRecursiveProof(badProof))
+            AttestedOfflineNote.auditInstruction(audit.replacingRecursiveProof(badProof))
         }
     }
 
     @Test
-    fun offlineNoteV2InstructionDecodersReadExplorerEnvelopeBytes() {
+    fun attestedOfflineNoteInstructionDecodersReadExplorerEnvelopeBytes() {
         val fixture = loadFixture()
         val issue = issue(fixture)
         val audit = audit(fixture)
         val redeem = redeem(fixture)
         val registration = attestationRegistration(fixture)
-        val issueWirePayload = wirePayloadBytes(OfflineNoteV2.issueInstruction(issue))
-        val auditWirePayload = wirePayloadBytes(OfflineNoteV2.auditInstruction(audit))
-        val redeemWirePayload = wirePayloadBytes(OfflineNoteV2.redeemInstruction(redeem))
-        val registerWirePayload = wirePayloadBytes(OfflineNoteV2.registerDeviceAttestationInstruction(registration))
+        val issueWirePayload = wirePayloadBytes(AttestedOfflineNote.issueInstruction(issue))
+        val auditWirePayload = wirePayloadBytes(AttestedOfflineNote.auditInstruction(audit))
+        val redeemWirePayload = wirePayloadBytes(AttestedOfflineNote.redeemInstruction(redeem))
+        val registerWirePayload = wirePayloadBytes(AttestedOfflineNote.registerDeviceAttestationInstruction(registration))
         assertEquals(
             string(obj(obj(fixture, "chain_vectors"), "attestation_registration"), "instruction_norito_base64"),
             base64(registerWirePayload),
@@ -328,37 +328,37 @@ class OfflineNoteV2Test {
 
         assertEquals(
             base64(issue.noritoEncoded()),
-            base64(OfflineNoteV2.decodeIssueInstruction(
-                rawInstructionPair(OfflineNoteV2.ISSUE_INSTRUCTION_SCHEMA, issueWirePayload),
+            base64(AttestedOfflineNote.decodeIssueInstruction(
+                rawInstructionPair(AttestedOfflineNote.ISSUE_INSTRUCTION_SCHEMA, issueWirePayload),
             ).noritoEncoded()),
         )
         assertEquals(
             base64(issue.noritoEncoded()),
-            base64(OfflineNoteV2.decodeIssueInstruction(
-                rawInstructionPair(OfflineNoteV2.ISSUE_INSTRUCTION_SCHEMA, issueWirePayload, compact = false),
+            base64(AttestedOfflineNote.decodeIssueInstruction(
+                rawInstructionPair(AttestedOfflineNote.ISSUE_INSTRUCTION_SCHEMA, issueWirePayload, compact = false),
             ).noritoEncoded()),
         )
         assertEquals(
             base64(issue.noritoEncoded()),
-            base64(OfflineNoteV2.decodeIssueInstruction(issueWirePayload).noritoEncoded()),
+            base64(AttestedOfflineNote.decodeIssueInstruction(issueWirePayload).noritoEncoded()),
         )
 
-        val decodedAudit = OfflineNoteV2.decodeAuditInstruction(
-            rawInstructionPair(OfflineNoteV2.AUDIT_INSTRUCTION_SCHEMA, auditWirePayload),
+        val decodedAudit = AttestedOfflineNote.decodeAuditInstruction(
+            rawInstructionPair(AttestedOfflineNote.AUDIT_INSTRUCTION_SCHEMA, auditWirePayload),
         )
         decodedAudit.validateProofBinding()
         assertEquals(base64(audit.noritoEncoded()), base64(decodedAudit.noritoEncoded()))
 
-        val decodedRedeem = OfflineNoteV2.decodeRedeemInstruction(
-            rawInstructionPair(OfflineNoteV2.REDEEM_INSTRUCTION_SCHEMA, redeemWirePayload),
+        val decodedRedeem = AttestedOfflineNote.decodeRedeemInstruction(
+            rawInstructionPair(AttestedOfflineNote.REDEEM_INSTRUCTION_SCHEMA, redeemWirePayload),
         )
         decodedRedeem.validateProofBinding()
         assertEquals(base64(redeem.noritoEncoded()), base64(decodedRedeem.noritoEncoded()))
         assertEquals(
             base64(registration.noritoEncoded()),
-            base64(OfflineNoteV2.decodeRegisterDeviceAttestationInstruction(
+            base64(AttestedOfflineNote.decodeRegisterDeviceAttestationInstruction(
                 rawInstructionPair(
-                    OfflineNoteV2.REGISTER_DEVICE_ATTESTATION_INSTRUCTION_SCHEMA,
+                    AttestedOfflineNote.REGISTER_DEVICE_ATTESTATION_INSTRUCTION_SCHEMA,
                     registerWirePayload,
                 ),
             ).noritoEncoded()),
@@ -366,106 +366,106 @@ class OfflineNoteV2Test {
     }
 
     @Test
-    fun offlineNoteV2InstructionDecodersRejectRetiredAliasEnvelopeBytes() {
+    fun attestedOfflineNoteInstructionDecodersRejectRetiredAliasEnvelopeBytes() {
         val fixture = loadFixture()
         val issue = issue(fixture)
         val audit = audit(fixture)
         val redeem = redeem(fixture)
         val issueAliasWirePayload = encodeInstructionWrapper(
             RETIRED_ISSUE_INSTRUCTION_ALIAS_SCHEMA,
-            OfflineNoteV2.encodeIssue(issue),
+            AttestedOfflineNote.encodeIssue(issue),
         )
         val auditAliasWirePayload = encodeInstructionWrapper(
             RETIRED_AUDIT_INSTRUCTION_ALIAS_SCHEMA,
-            OfflineNoteV2.encodeAudit(audit),
+            AttestedOfflineNote.encodeAudit(audit),
         )
         val redeemAliasWirePayload = encodeInstructionWrapper(
             RETIRED_REDEEM_INSTRUCTION_ALIAS_SCHEMA,
-            OfflineNoteV2.encodeRedeem(redeem),
+            AttestedOfflineNote.encodeRedeem(redeem),
         )
 
         assertFailsWith<IllegalArgumentException>(
             "retired issue instruction alias should throw",
-        ) { OfflineNoteV2.decodeIssueInstruction(issueAliasWirePayload) }
+        ) { AttestedOfflineNote.decodeIssueInstruction(issueAliasWirePayload) }
         assertFailsWith<IllegalArgumentException>(
             "retired audit instruction alias should throw",
-        ) { OfflineNoteV2.decodeAuditInstruction(auditAliasWirePayload) }
+        ) { AttestedOfflineNote.decodeAuditInstruction(auditAliasWirePayload) }
         assertFailsWith<IllegalArgumentException>(
             "retired redeem instruction alias should throw",
-        ) { OfflineNoteV2.decodeRedeemInstruction(redeemAliasWirePayload) }
+        ) { AttestedOfflineNote.decodeRedeemInstruction(redeemAliasWirePayload) }
         assertFailsWith<IllegalArgumentException>(
             "retired issue instruction alias envelope should throw",
         ) {
-            OfflineNoteV2.decodeIssueInstruction(
+            AttestedOfflineNote.decodeIssueInstruction(
                 rawInstructionPair(RETIRED_ISSUE_INSTRUCTION_ALIAS_SCHEMA, issueAliasWirePayload),
             )
         }
         assertFailsWith<IllegalArgumentException>(
             "retired audit instruction alias envelope should throw",
         ) {
-            OfflineNoteV2.decodeAuditInstruction(
+            AttestedOfflineNote.decodeAuditInstruction(
                 rawInstructionPair(RETIRED_AUDIT_INSTRUCTION_ALIAS_SCHEMA, auditAliasWirePayload),
             )
         }
         assertFailsWith<IllegalArgumentException>(
             "retired redeem instruction alias envelope should throw",
         ) {
-            OfflineNoteV2.decodeRedeemInstruction(
+            AttestedOfflineNote.decodeRedeemInstruction(
                 rawInstructionPair(RETIRED_REDEEM_INSTRUCTION_ALIAS_SCHEMA, redeemAliasWirePayload),
             )
         }
     }
 
     @Test
-    fun offlineNoteV2InstructionDecodersRejectWrongEnvelopeShapes() {
+    fun attestedOfflineNoteInstructionDecodersRejectWrongEnvelopeShapes() {
         val fixture = loadFixture()
         val issue = issue(fixture)
         val redeem = redeem(fixture)
         val registration = attestationRegistration(fixture)
-        val issueWirePayload = wirePayloadBytes(OfflineNoteV2.issueInstruction(issue))
-        val redeemWirePayload = wirePayloadBytes(OfflineNoteV2.redeemInstruction(redeem))
+        val issueWirePayload = wirePayloadBytes(AttestedOfflineNote.issueInstruction(issue))
+        val redeemWirePayload = wirePayloadBytes(AttestedOfflineNote.redeemInstruction(redeem))
         val retiredRegisterWrapperPayload = encodeInstructionWrapper(
-            OfflineNoteV2.REGISTER_DEVICE_ATTESTATION_INSTRUCTION_SCHEMA,
-            OfflineNoteV2.encodeDeviceAttestationRegistration(registration),
+            AttestedOfflineNote.REGISTER_DEVICE_ATTESTATION_INSTRUCTION_SCHEMA,
+            AttestedOfflineNote.encodeDeviceAttestationRegistration(registration),
         )
-        val issuePair = rawInstructionPair(OfflineNoteV2.ISSUE_INSTRUCTION_SCHEMA, issueWirePayload)
+        val issuePair = rawInstructionPair(AttestedOfflineNote.ISSUE_INSTRUCTION_SCHEMA, issueWirePayload)
 
         assertFailsWith<IllegalArgumentException> {
-            OfflineNoteV2.decodeIssueInstruction(
-                rawInstructionPair(OfflineNoteV2.REDEEM_INSTRUCTION_SCHEMA, issueWirePayload),
+            AttestedOfflineNote.decodeIssueInstruction(
+                rawInstructionPair(AttestedOfflineNote.REDEEM_INSTRUCTION_SCHEMA, issueWirePayload),
             )
         }
         assertFailsWith<IllegalArgumentException> {
-            OfflineNoteV2.decodeRedeemInstruction(issuePair)
+            AttestedOfflineNote.decodeRedeemInstruction(issuePair)
         }
         assertFailsWith<IllegalArgumentException> {
-            OfflineNoteV2.decodeIssueInstruction(issue.noritoEncoded())
+            AttestedOfflineNote.decodeIssueInstruction(issue.noritoEncoded())
         }
         assertFailsWith<IllegalArgumentException> {
-            OfflineNoteV2.decodeIssueInstruction(issuePair.copyOf(issuePair.size - 1))
+            AttestedOfflineNote.decodeIssueInstruction(issuePair.copyOf(issuePair.size - 1))
         }
         val corruptedWirePayload = issueWirePayload.copyOf()
         corruptedWirePayload[corruptedWirePayload.lastIndex] =
             (corruptedWirePayload.last().toInt() xor 0x01).toByte()
         assertFailsWith<IllegalArgumentException> {
-            OfflineNoteV2.decodeIssueInstruction(corruptedWirePayload)
+            AttestedOfflineNote.decodeIssueInstruction(corruptedWirePayload)
         }
         assertFailsWith<IllegalArgumentException> {
-            OfflineNoteV2.decodeAuditInstruction(
-                rawInstructionPair(OfflineNoteV2.AUDIT_INSTRUCTION_SCHEMA, redeemWirePayload),
+            AttestedOfflineNote.decodeAuditInstruction(
+                rawInstructionPair(AttestedOfflineNote.AUDIT_INSTRUCTION_SCHEMA, redeemWirePayload),
             )
         }
         assertFailsWith<IllegalArgumentException>(
             "retired register device attestation generic wrapper should throw",
         ) {
-            OfflineNoteV2.decodeRegisterDeviceAttestationInstruction(retiredRegisterWrapperPayload)
+            AttestedOfflineNote.decodeRegisterDeviceAttestationInstruction(retiredRegisterWrapperPayload)
         }
         assertFailsWith<IllegalArgumentException>(
             "retired register device attestation generic wrapper envelope should throw",
         ) {
-            OfflineNoteV2.decodeRegisterDeviceAttestationInstruction(
+            AttestedOfflineNote.decodeRegisterDeviceAttestationInstruction(
                 rawInstructionPair(
-                    OfflineNoteV2.REGISTER_DEVICE_ATTESTATION_INSTRUCTION_SCHEMA,
+                    AttestedOfflineNote.REGISTER_DEVICE_ATTESTATION_INSTRUCTION_SCHEMA,
                     retiredRegisterWrapperPayload,
                 ),
             )
@@ -473,7 +473,7 @@ class OfflineNoteV2Test {
     }
 
     @Test
-    fun offlineNoteV2DomainsRejectSubstitutionAndPadding() {
+    fun attestedOfflineNoteDomainsRejectSubstitutionAndPadding() {
         val fixture = loadFixture()
         val certificate = certificate(obj(obj(fixture, "payment_token"), "sender_key_certificate"))
         val audit = audit(fixture)
@@ -483,8 +483,8 @@ class OfflineNoteV2Test {
         val redeemPublic = redeem.publicInputs()
 
         assertFailsWith<IllegalArgumentException> {
-            OfflineNoteV2.KeyCertificatePayloadV2(
-                domain = "${OfflineNoteV2.KEY_CERTIFICATE_PAYLOAD_DOMAIN} ",
+            AttestedOfflineNote.KeyCertificatePayload(
+                domain = "${AttestedOfflineNote.KEY_CERTIFICATE_PAYLOAD_DOMAIN} ",
                 version = certificate.version,
                 platform = certificate.platform,
                 keyId = certificate.keyId,
@@ -499,8 +499,8 @@ class OfflineNoteV2Test {
             )
         }
         assertFailsWith<IllegalArgumentException> {
-            OfflineNoteV2.IssuedClaimV2(
-                domain = "${OfflineNoteV2.ISSUED_CLAIM_DOMAIN}\n",
+            AttestedOfflineNote.IssuedClaim(
+                domain = "${AttestedOfflineNote.ISSUED_CLAIM_DOMAIN}\n",
                 noteCommitment = claim.noteCommitment(),
                 keyCertificatePayloadHash = claim.keyCertificatePayloadHash(),
                 assetId = claim.assetId,
@@ -508,8 +508,8 @@ class OfflineNoteV2Test {
             )
         }
         assertFailsWith<IllegalArgumentException> {
-            OfflineNoteV2.RedeemPublicInputsV2(
-                domain = "forged:${OfflineNoteV2.REDEEM_PUBLIC_INPUTS_DOMAIN}",
+            AttestedOfflineNote.RedeemPublicInputs(
+                domain = "forged:${AttestedOfflineNote.REDEEM_PUBLIC_INPUTS_DOMAIN}",
                 sourceNoteCommitment = redeemPublic.sourceNoteCommitment(),
                 inputNullifiers = redeemPublic.inputNullifiers(),
                 keyCertificatePayloadHash = redeemPublic.keyCertificatePayloadHash(),
@@ -519,8 +519,8 @@ class OfflineNoteV2Test {
             )
         }
         assertFailsWith<IllegalArgumentException> {
-            OfflineNoteV2.AuditPublicInputsV2(
-                domain = " ${OfflineNoteV2.AUDIT_PUBLIC_INPUTS_DOMAIN}",
+            AttestedOfflineNote.AuditPublicInputs(
+                domain = " ${AttestedOfflineNote.AUDIT_PUBLIC_INPUTS_DOMAIN}",
                 tokenId = auditPublic.tokenId(),
                 keyCertificatePayloadHash = auditPublic.keyCertificatePayloadHash(),
                 inputNullifiers = auditPublic.inputNullifiers(),
@@ -532,16 +532,16 @@ class OfflineNoteV2Test {
     }
 
     @Test
-    fun offlineNoteV2AssetScopeDataspaceIdsRejectNonCanonicalForms() {
+    fun attestedOfflineNoteAssetScopeDataspaceIdsRejectNonCanonicalForms() {
         val issue = issue(loadFixture())
 
-        OfflineNoteV2.IssueV2(
+        AttestedOfflineNote.Issue(
             noteCommitment = issue.noteCommitment(),
             keyCertificate = issue.keyCertificate,
             assetId = "${issue.assetId}#dataspace:0",
             amount = issue.amount,
         )
-        OfflineNoteV2.IssueV2(
+        AttestedOfflineNote.Issue(
             noteCommitment = issue.noteCommitment(),
             keyCertificate = issue.keyCertificate,
             assetId = "${issue.assetId}#dataspace:1",
@@ -560,7 +560,7 @@ class OfflineNoteV2Test {
             assertFailsWith<IllegalArgumentException>(
                 "non-canonical V2 dataspace scope should reject: $rejected",
             ) {
-                OfflineNoteV2.IssueV2(
+                AttestedOfflineNote.Issue(
                     noteCommitment = issue.noteCommitment(),
                     keyCertificate = issue.keyCertificate,
                     assetId = "${issue.assetId}#$rejected",
@@ -589,14 +589,14 @@ class OfflineNoteV2Test {
     fun proofBindingRejectsMismatch() {
         val fixture = loadFixture()
         val redeem = redeem(fixture)
-        val badProof = OfflineNoteV2.RecursiveProofV2(
-            publicInputsHash = OfflineNoteV2.hash("wrong-public-inputs".toByteArray()),
-            proof = OfflineNoteV2.ProofBox(
-                OfflineNoteV2.RECURSIVE_BACKEND,
+        val badProof = AttestedOfflineNote.RecursiveProof(
+            publicInputsHash = AttestedOfflineNote.hash("wrong-public-inputs".toByteArray()),
+            proof = AttestedOfflineNote.ProofBox(
+                AttestedOfflineNote.RECURSIVE_BACKEND,
                 "offline-v2-vector-redeem-proof".toByteArray()
             )
         )
-        val forged = OfflineNoteV2.RedeemV2(
+        val forged = AttestedOfflineNote.Redeem(
             sourceNoteCommitment = redeem.sourceNoteCommitment(),
             inputNullifiers = redeem.inputNullifiers(),
             senderKeyCertificate = redeem.senderKeyCertificate,
@@ -614,46 +614,46 @@ class OfflineNoteV2Test {
     @Test
     fun proofVerifierAndHashValidationRejectsMalformedValues() {
         val publicInputsHash = audit(loadFixture()).publicInputsHash()
-        val proof = OfflineNoteV2.ProofBox(OfflineNoteV2.RECURSIVE_BACKEND, byteArrayOf(1))
-        assertEquals(OfflineNoteV2.RECURSIVE_BACKEND, proof.backend)
+        val proof = AttestedOfflineNote.ProofBox(AttestedOfflineNote.RECURSIVE_BACKEND, byteArrayOf(1))
+        assertEquals(AttestedOfflineNote.RECURSIVE_BACKEND, proof.backend)
 
         assertFailsWith<IllegalArgumentException> {
-            OfflineNoteV2.ProofBox("  ${OfflineNoteV2.RECURSIVE_BACKEND}  ", byteArrayOf(1))
+            AttestedOfflineNote.ProofBox("  ${AttestedOfflineNote.RECURSIVE_BACKEND}  ", byteArrayOf(1))
         }
         assertFailsWith<IllegalArgumentException> {
-            OfflineNoteV2.ProofBox(" \n ", byteArrayOf(1))
+            AttestedOfflineNote.ProofBox(" \n ", byteArrayOf(1))
         }
         assertFailsWith<IllegalArgumentException> {
-            OfflineNoteV2.ProofBox(OfflineNoteV2.RECURSIVE_BACKEND, byteArrayOf())
+            AttestedOfflineNote.ProofBox(AttestedOfflineNote.RECURSIVE_BACKEND, byteArrayOf())
         }
         assertFailsWith<IllegalArgumentException> {
-            OfflineNoteV2.RecursiveProofV2(
+            AttestedOfflineNote.RecursiveProof(
                 publicInputsHash = ByteArray(31) { 1 },
-                proof = OfflineNoteV2.ProofBox(OfflineNoteV2.RECURSIVE_BACKEND, byteArrayOf(1)),
+                proof = AttestedOfflineNote.ProofBox(AttestedOfflineNote.RECURSIVE_BACKEND, byteArrayOf(1)),
             )
         }
         val nonCanonicalHash = publicInputsHash.copyOf()
         nonCanonicalHash[31] = (nonCanonicalHash[31].toInt() and 0xfe).toByte()
         assertFailsWith<IllegalArgumentException> {
-            OfflineNoteV2.RecursiveProofV2(
+            AttestedOfflineNote.RecursiveProof(
                 publicInputsHash = nonCanonicalHash,
-                proof = OfflineNoteV2.ProofBox(OfflineNoteV2.RECURSIVE_BACKEND, byteArrayOf(1)),
+                proof = AttestedOfflineNote.ProofBox(AttestedOfflineNote.RECURSIVE_BACKEND, byteArrayOf(1)),
             )
         }
         assertFailsWith<IllegalArgumentException> {
-            OfflineNoteV2.VerifyingKeyIdReference(backend = "", name = "vk")
+            AttestedOfflineNote.VerifyingKeyIdReference(backend = "", name = "vk")
         }
         assertFailsWith<IllegalArgumentException> {
-            OfflineNoteV2.VerifyingKeyIdReference(backend = " halo2/ipa ", name = "vk")
+            AttestedOfflineNote.VerifyingKeyIdReference(backend = " halo2/ipa ", name = "vk")
         }
         assertFailsWith<IllegalArgumentException> {
-            OfflineNoteV2.VerifyingKeyIdReference(backend = "halo2/ipa", name = " vk ")
+            AttestedOfflineNote.VerifyingKeyIdReference(backend = "halo2/ipa", name = " vk ")
         }
         assertFailsWith<IllegalArgumentException> {
-            OfflineNoteV2.VerifyingKeyIdReference(backend = "halo2:ipa", name = "vk")
+            AttestedOfflineNote.VerifyingKeyIdReference(backend = "halo2:ipa", name = "vk")
         }
         assertFailsWith<IllegalArgumentException> {
-            OfflineNoteV2.VerifyingKeyIdReference(backend = "halo2/ipa", name = "bad:vk")
+            AttestedOfflineNote.VerifyingKeyIdReference(backend = "halo2/ipa", name = "bad:vk")
         }
     }
 
@@ -662,7 +662,7 @@ class OfflineNoteV2Test {
         val canonicalHash = "ab".repeat(32)
         for (rejectedHash in nonExactPublicInputHashes(canonicalHash)) {
             assertFalse(
-                OfflineNoteV2Halo2Prover.verifyOpenVerifyEnvelope(ByteArray(0), rejectedHash),
+                AttestedOfflineNoteHalo2Prover.verifyOpenVerifyEnvelope(ByteArray(0), rejectedHash),
                 "OpenVerifyEnvelope must reject non-exact public input hash before decoding",
             )
         }
@@ -670,24 +670,24 @@ class OfflineNoteV2Test {
 
     @Test
     fun openVerifyEnvelopeDecoderRejectsMalformedV2EnvelopeFields() {
-        val values = OfflineNoteV2.InstanceBuilder.auditInstanceValues(audit(loadFixture())).publicValues()
+        val values = AttestedOfflineNote.InstanceBuilder.auditInstanceValues(audit(loadFixture())).publicValues()
         val payload = fakeZk1ProofPayload(byteArrayOf(1, 2, 3), values)
-        val envelope = OfflineNoteV2Halo2Prover.openVerifyEnvelope(payload)
+        val envelope = AttestedOfflineNoteHalo2Prover.openVerifyEnvelope(payload)
 
-        assertFalse(OfflineNoteV2Halo2Prover.verifyOpenVerifyEnvelope(envelope, "00".repeat(32)))
+        assertFalse(AttestedOfflineNoteHalo2Prover.verifyOpenVerifyEnvelope(envelope, "00".repeat(32)))
 
         val emptyProofError = assertFailsWith<IllegalArgumentException> {
-            OfflineNoteV2Halo2Prover.verifyOpenVerifyEnvelope(
-                OfflineNoteV2Halo2Prover.openVerifyEnvelope(ByteArray(0)),
+            AttestedOfflineNoteHalo2Prover.verifyOpenVerifyEnvelope(
+                AttestedOfflineNoteHalo2Prover.openVerifyEnvelope(ByteArray(0)),
                 "00".repeat(32),
             )
         }
         assertTrue(emptyProofError.message.orEmpty().contains("OpenVerifyEnvelope proof payload is empty"))
 
         val trailingCircuitError = assertFailsWith<IllegalArgumentException> {
-            OfflineNoteV2Halo2Prover.verifyOpenVerifyEnvelope(
+            AttestedOfflineNoteHalo2Prover.verifyOpenVerifyEnvelope(
                 rawOpenVerifyEnvelopeWithCircuitPayload(
-                    openEnvelopeStringPayload(OfflineNoteV2Halo2Prover.CIRCUIT_ID) + byteArrayOf(0),
+                    openEnvelopeStringPayload(AttestedOfflineNoteHalo2Prover.CIRCUIT_ID) + byteArrayOf(0),
                 ),
                 values,
             )
@@ -706,8 +706,8 @@ class OfflineNoteV2Test {
         val issuerSignature = base64Bytes(string(certJson, "issuer_signature_base64"))
 
         assertFailsWith<IllegalArgumentException> {
-            OfflineNoteV2.KeyCertificateV2(
-                version = OfflineNoteV2.KEY_CERTIFICATE_VERSION + 1,
+            AttestedOfflineNote.KeyCertificate(
+                version = AttestedOfflineNote.KEY_CERTIFICATE_VERSION + 1,
                 platform = string(certJson, "platform"),
                 keyId = string(certJson, "key_id"),
                 deviceId = string(certJson, "device_id"),
@@ -722,7 +722,7 @@ class OfflineNoteV2Test {
             )
         }
         assertFailsWith<IllegalArgumentException> {
-            OfflineNoteV2.KeyCertificateV2(
+            AttestedOfflineNote.KeyCertificate(
                 platform = string(certJson, "platform"),
                 keyId = string(certJson, "key_id"),
                 deviceId = string(certJson, "device_id"),
@@ -737,7 +737,7 @@ class OfflineNoteV2Test {
             )
         }
         assertFailsWith<IllegalArgumentException> {
-            OfflineNoteV2.KeyCertificateV2(
+            AttestedOfflineNote.KeyCertificate(
                 platform = string(certJson, "platform"),
                 keyId = "\u00A0\u2003",
                 deviceId = string(certJson, "device_id"),
@@ -752,8 +752,8 @@ class OfflineNoteV2Test {
             )
         }
         assertFailsWith<IllegalArgumentException> {
-            OfflineNoteV2.KeyCertificatePayloadV2(
-                version = OfflineNoteV2.KEY_CERTIFICATE_VERSION,
+            AttestedOfflineNote.KeyCertificatePayload(
+                version = AttestedOfflineNote.KEY_CERTIFICATE_VERSION,
                 platform = "ios-app-attest",
                 keyId = string(certJson, "key_id"),
                 deviceId = string(certJson, "device_id"),
@@ -767,7 +767,7 @@ class OfflineNoteV2Test {
             )
         }
         assertFailsWith<IllegalArgumentException> {
-            OfflineNoteV2.KeyCertificateV2(
+            AttestedOfflineNote.KeyCertificate(
                 platform = "ios-app-attest",
                 keyId = string(certJson, "key_id"),
                 deviceId = string(certJson, "device_id"),
@@ -782,8 +782,8 @@ class OfflineNoteV2Test {
             )
         }
         assertFailsWith<IllegalArgumentException> {
-            OfflineNoteV2.KeyCertificatePayloadV2(
-                version = OfflineNoteV2.KEY_CERTIFICATE_VERSION,
+            AttestedOfflineNote.KeyCertificatePayload(
+                version = AttestedOfflineNote.KEY_CERTIFICATE_VERSION,
                 platform = string(certJson, "platform"),
                 keyId = string(certJson, "key_id"),
                 deviceId = "\u00A0\u2003",
@@ -797,7 +797,7 @@ class OfflineNoteV2Test {
             )
         }
         assertFailsWith<IllegalArgumentException> {
-            OfflineNoteV2.KeyCertificateV2(
+            AttestedOfflineNote.KeyCertificate(
                 platform = string(certJson, "platform"),
                 keyId = string(certJson, "key_id"),
                 deviceId = string(certJson, "device_id"),
@@ -812,7 +812,7 @@ class OfflineNoteV2Test {
             )
         }
         assertFailsWith<IllegalArgumentException> {
-            OfflineNoteV2.KeyCertificateV2(
+            AttestedOfflineNote.KeyCertificate(
                 platform = string(certJson, "platform"),
                 keyId = string(certJson, "key_id"),
                 deviceId = string(certJson, "device_id"),
@@ -827,7 +827,7 @@ class OfflineNoteV2Test {
             )
         }
         assertFailsWith<IllegalArgumentException> {
-            OfflineNoteV2.KeyCertificateV2(
+            AttestedOfflineNote.KeyCertificate(
                 platform = string(certJson, "platform"),
                 keyId = string(certJson, "key_id"),
                 deviceId = string(certJson, "device_id"),
@@ -842,7 +842,7 @@ class OfflineNoteV2Test {
             )
         }
         assertFailsWith<IllegalArgumentException> {
-            OfflineNoteV2.KeyCertificateV2(
+            AttestedOfflineNote.KeyCertificate(
                 platform = string(certJson, "platform"),
                 keyId = string(certJson, "key_id"),
                 deviceId = string(certJson, "device_id"),
@@ -857,7 +857,7 @@ class OfflineNoteV2Test {
             )
         }
         assertFailsWith<IllegalArgumentException> {
-            OfflineNoteV2.KeyCertificateV2(
+            AttestedOfflineNote.KeyCertificate(
                 platform = string(certJson, "platform"),
                 keyId = string(certJson, "key_id"),
                 deviceId = string(certJson, "device_id"),
@@ -872,8 +872,8 @@ class OfflineNoteV2Test {
             )
         }
         assertFailsWith<IllegalArgumentException> {
-            OfflineNoteV2.KeyCertificatePayloadV2(
-                version = OfflineNoteV2.KEY_CERTIFICATE_VERSION,
+            AttestedOfflineNote.KeyCertificatePayload(
+                version = AttestedOfflineNote.KEY_CERTIFICATE_VERSION,
                 platform = string(certJson, "platform"),
                 keyId = string(certJson, "key_id"),
                 deviceId = string(certJson, "device_id"),
@@ -915,7 +915,7 @@ class OfflineNoteV2Test {
         assertFailsWith<IllegalArgumentException> {
             attestationRegistration(
                 fixture,
-                evidenceHash = OfflineNoteV2.hash(forgedEvidence),
+                evidenceHash = AttestedOfflineNote.hash(forgedEvidence),
                 evidence = forgedEvidence,
             )
         }
@@ -971,17 +971,17 @@ class OfflineNoteV2Test {
         assertFailsWith<IllegalArgumentException> {
             attestationRegistration(
                 fixture,
-                platform = OfflineNoteV2.ANDROID_KEYMINT_PLATFORM,
-                assertionScheme = OfflineNoteV2.ANDROID_KEYMINT_ASSERTION_SCHEME,
-                assertionKeyAlgorithm = OfflineNoteV2.ANDROID_KEYMINT_ASSERTION_KEY_ALGORITHM,
+                platform = AttestedOfflineNote.ANDROID_KEYMINT_PLATFORM,
+                assertionScheme = AttestedOfflineNote.ANDROID_KEYMINT_ASSERTION_SCHEME,
+                assertionKeyAlgorithm = AttestedOfflineNote.ANDROID_KEYMINT_ASSERTION_KEY_ALGORITHM,
             )
         }
         assertFailsWith<IllegalArgumentException> {
             attestationRegistration(
                 fixture,
-                platform = OfflineNoteV2.ANDROID_KEYMINT_PLATFORM,
+                platform = AttestedOfflineNote.ANDROID_KEYMINT_PLATFORM,
                 assertionScheme = "android-keymint-ecdsa-p256-usage-limit",
-                assertionKeyAlgorithm = OfflineNoteV2.ANDROID_KEYMINT_ASSERTION_KEY_ALGORITHM,
+                assertionKeyAlgorithm = AttestedOfflineNote.ANDROID_KEYMINT_ASSERTION_KEY_ALGORITHM,
                 assertionUsageCountLimit = 1,
             )
         }
@@ -989,9 +989,9 @@ class OfflineNoteV2Test {
             attestationRegistration(
                 fixture,
                 keyId = "00".repeat(32),
-                platform = OfflineNoteV2.ANDROID_KEYMINT_PLATFORM,
-                assertionScheme = OfflineNoteV2.ANDROID_KEYMINT_ASSERTION_SCHEME,
-                assertionKeyAlgorithm = OfflineNoteV2.ANDROID_KEYMINT_ASSERTION_KEY_ALGORITHM,
+                platform = AttestedOfflineNote.ANDROID_KEYMINT_PLATFORM,
+                assertionScheme = AttestedOfflineNote.ANDROID_KEYMINT_ASSERTION_SCHEME,
+                assertionKeyAlgorithm = AttestedOfflineNote.ANDROID_KEYMINT_ASSERTION_KEY_ALGORITHM,
                 assertionUsageCountLimit = 1,
             )
         }
@@ -1002,9 +1002,9 @@ class OfflineNoteV2Test {
             attestationRegistration(
                 fixture,
                 keyId = androidUppercaseKeyId,
-                platform = OfflineNoteV2.ANDROID_KEYMINT_PLATFORM,
-                assertionScheme = OfflineNoteV2.ANDROID_KEYMINT_ASSERTION_SCHEME,
-                assertionKeyAlgorithm = OfflineNoteV2.ANDROID_KEYMINT_ASSERTION_KEY_ALGORITHM,
+                platform = AttestedOfflineNote.ANDROID_KEYMINT_PLATFORM,
+                assertionScheme = AttestedOfflineNote.ANDROID_KEYMINT_ASSERTION_SCHEME,
+                assertionKeyAlgorithm = AttestedOfflineNote.ANDROID_KEYMINT_ASSERTION_KEY_ALGORITHM,
                 assertionUsageCountLimit = 1,
             )
         }
@@ -1054,7 +1054,7 @@ class OfflineNoteV2Test {
     fun auditBundleRejectsInvalidShapesAndUncommittedOutputs() {
         val audit = audit(loadFixture())
         assertFailsWith<IllegalArgumentException> {
-            OfflineNoteV2.AuditBundleV2(
+            AttestedOfflineNote.AuditBundle(
                 tokenId = audit.tokenId(),
                 senderKeyCertificate = audit.senderKeyCertificate,
                 inputNullifiers = emptyList(),
@@ -1065,7 +1065,7 @@ class OfflineNoteV2Test {
             )
         }
         assertFailsWith<IllegalArgumentException> {
-            OfflineNoteV2.AuditBundleV2(
+            AttestedOfflineNote.AuditBundle(
                 tokenId = audit.tokenId(),
                 senderKeyCertificate = audit.senderKeyCertificate,
                 inputNullifiers = audit.inputNullifiers(),
@@ -1076,7 +1076,7 @@ class OfflineNoteV2Test {
             )
         }
         assertFailsWith<IllegalArgumentException> {
-            OfflineNoteV2.AuditBundleV2(
+            AttestedOfflineNote.AuditBundle(
                 tokenId = audit.tokenId(),
                 senderKeyCertificate = audit.senderKeyCertificate,
                 inputNullifiers = audit.inputNullifiers() + audit.inputNullifiers()[0],
@@ -1087,7 +1087,7 @@ class OfflineNoteV2Test {
             )
         }
         assertFailsWith<IllegalArgumentException> {
-            OfflineNoteV2.AuditBundleV2(
+            AttestedOfflineNote.AuditBundle(
                 tokenId = audit.tokenId(),
                 senderKeyCertificate = audit.senderKeyCertificate,
                 inputNullifiers = audit.inputNullifiers(),
@@ -1098,7 +1098,7 @@ class OfflineNoteV2Test {
             )
         }
         assertFailsWith<IllegalArgumentException> {
-            OfflineNoteV2.AuditBundleV2(
+            AttestedOfflineNote.AuditBundle(
                 tokenId = audit.tokenId(),
                 senderKeyCertificate = audit.senderKeyCertificate,
                 inputNullifiers = audit.inputNullifiers(),
@@ -1108,14 +1108,14 @@ class OfflineNoteV2Test {
                 recursiveProof = audit.recursiveProof,
             )
         }
-        val uncommittedOutput = OfflineNoteV2.AuditOutputClaimV2(
-            noteCommitment = OfflineNoteV2.hash("uncommitted-output".toByteArray()),
+        val uncommittedOutput = AttestedOfflineNote.AuditOutputClaim(
+            noteCommitment = AttestedOfflineNote.hash("uncommitted-output".toByteArray()),
             keyCertificate = audit.outputClaims[0].keyCertificate,
             assetId = audit.outputClaims[0].assetId,
             amount = audit.outputClaims[0].amount,
         )
         assertFailsWith<IllegalArgumentException> {
-            OfflineNoteV2.AuditBundleV2(
+            AttestedOfflineNote.AuditBundle(
                 tokenId = audit.tokenId(),
                 senderKeyCertificate = audit.senderKeyCertificate,
                 inputNullifiers = audit.inputNullifiers(),
@@ -1135,7 +1135,7 @@ class OfflineNoteV2Test {
         val redeem = redeem(fixture)
 
         assertFailsWith<IllegalArgumentException> {
-            OfflineNoteV2.IssueV2(
+            AttestedOfflineNote.Issue(
                 noteCommitment = ByteArray(31) { 1 },
                 keyCertificate = cert,
                 assetId = string(obj(obj(fixture, "chain_vectors"), "issue"), "asset_id"),
@@ -1143,7 +1143,7 @@ class OfflineNoteV2Test {
             )
         }
         assertFailsWith<IllegalArgumentException> {
-            OfflineNoteV2.IssueV2(
+            AttestedOfflineNote.Issue(
                 noteCommitment = redeem.sourceNoteCommitment(),
                 keyCertificate = cert,
                 assetId = "cash#branch.sbp",
@@ -1151,7 +1151,7 @@ class OfflineNoteV2Test {
             )
         }
         assertFailsWith<IllegalArgumentException> {
-            OfflineNoteV2.IssueV2(
+            AttestedOfflineNote.Issue(
                 noteCommitment = redeem.sourceNoteCommitment(),
                 keyCertificate = cert,
                 assetId = redeem.assetId,
@@ -1159,7 +1159,7 @@ class OfflineNoteV2Test {
             )
         }
         assertFailsWith<IllegalArgumentException> {
-            OfflineNoteV2.RedeemV2(
+            AttestedOfflineNote.Redeem(
                 sourceNoteCommitment = redeem.sourceNoteCommitment(),
                 inputNullifiers = emptyList(),
                 senderKeyCertificate = redeem.senderKeyCertificate,
@@ -1170,7 +1170,7 @@ class OfflineNoteV2Test {
             )
         }
         assertFailsWith<IllegalArgumentException> {
-            OfflineNoteV2.RedeemPublicInputsV2(
+            AttestedOfflineNote.RedeemPublicInputs(
                 sourceNoteCommitment = ByteArray(31) { 1 },
                 inputNullifiers = redeem.inputNullifiers(),
                 keyCertificatePayloadHash = redeem.senderKeyCertificate.payloadHash(),
@@ -1180,7 +1180,7 @@ class OfflineNoteV2Test {
             )
         }
         assertFailsWith<IllegalArgumentException> {
-            OfflineNoteV2.RedeemPublicInputsV2(
+            AttestedOfflineNote.RedeemPublicInputs(
                 sourceNoteCommitment = redeem.sourceNoteCommitment(),
                 inputNullifiers = redeem.inputNullifiers(),
                 keyCertificatePayloadHash = ByteArray(31) { 1 },
@@ -1190,7 +1190,7 @@ class OfflineNoteV2Test {
             )
         }
         assertFailsWith<IllegalArgumentException> {
-            OfflineNoteV2.RedeemPublicInputsV2(
+            AttestedOfflineNote.RedeemPublicInputs(
                 sourceNoteCommitment = redeem.sourceNoteCommitment(),
                 inputNullifiers = redeem.inputNullifiers(),
                 keyCertificatePayloadHash = redeem.senderKeyCertificate.payloadHash(),
@@ -1200,13 +1200,13 @@ class OfflineNoteV2Test {
             )
         }
 
-        val overLimitOutput = OfflineNoteV2.AuditOutputClaimV2(
-            noteCommitment = OfflineNoteV2.hash("third-output".toByteArray()),
+        val overLimitOutput = AttestedOfflineNote.AuditOutputClaim(
+            noteCommitment = AttestedOfflineNote.hash("third-output".toByteArray()),
             keyCertificate = audit.outputClaims[0].keyCertificate,
             assetId = audit.outputClaims[0].assetId,
             amount = "0",
         )
-        val tooManyOutputs = OfflineNoteV2.AuditBundleV2(
+        val tooManyOutputs = AttestedOfflineNote.AuditBundle(
             tokenId = audit.tokenId(),
             senderKeyCertificate = audit.senderKeyCertificate,
             inputNullifiers = audit.inputNullifiers(),
@@ -1216,16 +1216,16 @@ class OfflineNoteV2Test {
             recursiveProof = audit.recursiveProof,
         )
         assertFailsWith<IllegalArgumentException> {
-            OfflineNoteV2.InstanceBuilder.auditInstanceValues(tooManyOutputs)
+            AttestedOfflineNote.InstanceBuilder.auditInstanceValues(tooManyOutputs)
         }
 
-        val unconservedOutput = OfflineNoteV2.AuditOutputClaimV2(
+        val unconservedOutput = AttestedOfflineNote.AuditOutputClaim(
             noteCommitment = audit.outputClaims[0].noteCommitment(),
             keyCertificate = audit.outputClaims[0].keyCertificate,
             assetId = audit.outputClaims[0].assetId,
             amount = "6",
         )
-        val unconservedAudit = OfflineNoteV2.AuditBundleV2(
+        val unconservedAudit = AttestedOfflineNote.AuditBundle(
             tokenId = audit.tokenId(),
             senderKeyCertificate = audit.senderKeyCertificate,
             inputNullifiers = audit.inputNullifiers(),
@@ -1235,7 +1235,7 @@ class OfflineNoteV2Test {
             recursiveProof = audit.recursiveProof,
         )
         assertFailsWith<IllegalArgumentException> {
-            OfflineNoteV2.InstanceBuilder.auditInstanceValues(unconservedAudit)
+            AttestedOfflineNote.InstanceBuilder.auditInstanceValues(unconservedAudit)
         }
     }
 
@@ -1243,8 +1243,8 @@ class OfflineNoteV2Test {
     fun instanceValuesMatchRustVectors() {
         val fixture = loadFixture()
         val chain = obj(fixture, "chain_vectors")
-        val auditValues = OfflineNoteV2.InstanceBuilder.auditInstanceValues(audit(fixture))
-        val redeemValues = OfflineNoteV2.InstanceBuilder.redeemInstanceValues(redeem(fixture))
+        val auditValues = AttestedOfflineNote.InstanceBuilder.auditInstanceValues(audit(fixture))
+        val redeemValues = AttestedOfflineNote.InstanceBuilder.redeemInstanceValues(redeem(fixture))
         val auditPublic = auditValues.publicValues()
         val redeemPublic = redeemValues.publicValues()
 
@@ -1272,55 +1272,56 @@ class OfflineNoteV2Test {
         assertEquals(5L, redeemValues.inputAmounts()[0])
         assertEquals(5L, redeemValues.outputAmounts()[0])
         assertEquals(
-            OfflineNoteV2.instanceScalarBytes(auditPublic[0]).toList(),
+            AttestedOfflineNote.instanceScalarBytes(auditPublic[0]).toList(),
             auditValues.publicInstanceColumns()[0].toList(),
         )
     }
 
     @Test
     fun nativeHalo2ProverProducesVerifyingPayloadWhenRequested() {
-        if (System.getenv("IROHA_JVM_OFFLINE_V2_PROVER_TEST") != "1") {
+        if (System.getenv("IROHA_JVM_ATTESTED_OFFLINE_NOTE_PROVER_TEST") != "1") {
             return
         }
         val fixture = loadFixture()
         val audit = audit(fixture)
-        val values = OfflineNoteV2.InstanceBuilder.auditInstanceValues(audit)
-        OfflineNoteV2Halo2Prover.prewarm()
-        val payload = OfflineNoteV2Halo2Prover.proveZk1Payload(values)
-        System.getenv("IROHA_JVM_OFFLINE_V2_PAYLOAD_OUT")?.let {
+        val values = AttestedOfflineNote.InstanceBuilder.auditInstanceValues(audit)
+        AttestedOfflineNoteHalo2Prover.prewarm()
+        val payload = AttestedOfflineNoteHalo2Prover.proveZk1Payload(values)
+        System.getenv("IROHA_JVM_ATTESTED_OFFLINE_NOTE_PAYLOAD_OUT")?.let {
             Files.write(Paths.get(it), payload)
         }
 
-        assertTrue(OfflineNoteV2Halo2Prover.verifyZk1Payload(payload, values.publicValues()))
-        val proof = OfflineNoteV2Halo2Prover.proveAudit(audit)
+        assertTrue(AttestedOfflineNoteHalo2Prover.verifyZk1Payload(payload, values.publicValues()))
+        val proof = AttestedOfflineNoteHalo2Prover.proveAudit(audit)
         audit.replacingRecursiveProof(proof).validateProofBinding()
-        assertTrue(proof.proof.bytes().size <= OfflineNoteV2Halo2Prover.MAX_ENVELOPE_BYTES)
+        assertTrue(proof.proof.bytes().size <= AttestedOfflineNoteHalo2Prover.MAX_ENVELOPE_BYTES)
         val publicInputsHashHex = hex(proof.publicInputsHash())
-        assertTrue(OfflineNoteV2Halo2Prover.verifyOpenVerifyEnvelope(proof.proof.bytes(), publicInputsHashHex))
+        assertTrue(AttestedOfflineNoteHalo2Prover.verifyOpenVerifyEnvelope(proof.proof.bytes(), publicInputsHashHex))
         for (rejectedHash in nonExactPublicInputHashes(publicInputsHashHex)) {
-            assertFalse(OfflineNoteV2Halo2Prover.verifyOpenVerifyEnvelope(proof.proof.bytes(), rejectedHash))
+            assertFalse(AttestedOfflineNoteHalo2Prover.verifyOpenVerifyEnvelope(proof.proof.bytes(), rejectedHash))
         }
     }
 
     @Test
     fun nativeHalo2ProverPerformanceWhenRequested() {
-        if (System.getenv("IROHA_JVM_OFFLINE_V2_BENCH") != "1") {
+        if (System.getenv("IROHA_JVM_ATTESTED_OFFLINE_NOTE_BENCH") != "1") {
             return
         }
-        val iterations = System.getenv("IROHA_JVM_OFFLINE_V2_BENCH_ITERATIONS")?.toInt() ?: 20
+        val iterations =
+            System.getenv("IROHA_JVM_ATTESTED_OFFLINE_NOTE_BENCH_ITERATIONS")?.toInt() ?: 20
         assertTrue(iterations > 0)
         val fixture = loadFixture()
         val audit = audit(fixture)
         val redeem = redeem(fixture)
-        OfflineNoteV2Halo2Prover.prewarm()
-        OfflineNoteV2Halo2Prover.proveAudit(audit)
-        OfflineNoteV2Halo2Prover.proveRedeem(redeem)
+        AttestedOfflineNoteHalo2Prover.prewarm()
+        AttestedOfflineNoteHalo2Prover.proveAudit(audit)
+        AttestedOfflineNoteHalo2Prover.proveRedeem(redeem)
 
         val auditSeconds = benchmarkSeconds(iterations) {
-            OfflineNoteV2Halo2Prover.proveAudit(audit)
+            AttestedOfflineNoteHalo2Prover.proveAudit(audit)
         }
         val redeemSeconds = benchmarkSeconds(iterations) {
-            OfflineNoteV2Halo2Prover.proveRedeem(redeem)
+            AttestedOfflineNoteHalo2Prover.proveRedeem(redeem)
         }
         println("offline_note_v2_jvm_bench audit=${summary(auditSeconds)} redeem=${summary(redeemSeconds)}")
     }
@@ -1331,9 +1332,9 @@ class OfflineNoteV2Test {
         assertEquals("iroha:qr1:", string(fountain, "frame_prefix"))
     }
 
-    private fun issue(fixture: Map<String, Any?>): OfflineNoteV2.IssueV2 {
+    private fun issue(fixture: Map<String, Any?>): AttestedOfflineNote.Issue {
         val chainIssue = obj(obj(fixture, "chain_vectors"), "issue")
-        return OfflineNoteV2.IssueV2(
+        return AttestedOfflineNote.Issue(
             noteCommitment = hexBytes(string(chainIssue, "note_commitment")),
             keyCertificate = certificate(obj(obj(fixture, "payment_token"), "sender_key_certificate")),
             assetId = string(chainIssue, "asset_id"),
@@ -1341,40 +1342,40 @@ class OfflineNoteV2Test {
         )
     }
 
-    private fun redeem(fixture: Map<String, Any?>): OfflineNoteV2.RedeemV2 {
+    private fun redeem(fixture: Map<String, Any?>): AttestedOfflineNote.Redeem {
         val vector = obj(obj(fixture, "chain_vectors"), "redeem")
         val payment = obj(fixture, "payment_token")
-        return OfflineNoteV2.RedeemV2(
+        return AttestedOfflineNote.Redeem(
             sourceNoteCommitment = hexBytes(string(vector, "source_note_commitment")),
             inputNullifiers = list(vector, "input_nullifiers").map { hexBytes(it as String) },
             senderKeyCertificate = certificate(obj(payment, "recipient_key_certificate")),
             recipient = string(payment, "recipient_account_id"),
             assetId = string(vector, "asset_id"),
             amount = string(vector, "amount"),
-            recursiveProof = OfflineNoteV2.RecursiveProofV2(
+            recursiveProof = AttestedOfflineNote.RecursiveProof(
                 publicInputsHash = hexBytes(string(vector, "public_inputs_hash")),
-                proof = OfflineNoteV2.ProofBox(
-                    OfflineNoteV2.RECURSIVE_BACKEND,
+                proof = AttestedOfflineNote.ProofBox(
+                    AttestedOfflineNote.RECURSIVE_BACKEND,
                     "offline-v2-vector-redeem-proof".toByteArray()
                 )
             )
         )
     }
 
-    private fun audit(fixture: Map<String, Any?>): OfflineNoteV2.AuditBundleV2 {
+    private fun audit(fixture: Map<String, Any?>): AttestedOfflineNote.AuditBundle {
         val vector = obj(obj(fixture, "chain_vectors"), "audit")
         val payment = obj(fixture, "payment_token")
-        return OfflineNoteV2.AuditBundleV2(
+        return AttestedOfflineNote.AuditBundle(
             tokenId = hexBytes(string(vector, "token_id")),
             senderKeyCertificate = certificate(obj(payment, "sender_key_certificate")),
             inputNullifiers = list(vector, "input_nullifiers").map { hexBytes(it as String) },
             inputClaims = list(payment, "input_claims").map { issuedClaim(objValue(it, "input claim")) },
             outputCommitments = list(vector, "output_commitments").map { hexBytes(it as String) },
             outputClaims = list(payment, "output_claims").map { auditOutputClaim(objValue(it, "output claim")) },
-            recursiveProof = OfflineNoteV2.RecursiveProofV2(
+            recursiveProof = AttestedOfflineNote.RecursiveProof(
                 publicInputsHash = hexBytes(string(vector, "public_inputs_hash")),
-                proof = OfflineNoteV2.ProofBox(
-                    OfflineNoteV2.RECURSIVE_BACKEND,
+                proof = AttestedOfflineNote.ProofBox(
+                    AttestedOfflineNote.RECURSIVE_BACKEND,
                     "offline-v2-vector-audit-proof".toByteArray()
                 )
             )
@@ -1404,9 +1405,9 @@ class OfflineNoteV2Test {
         recentBlockHash: ByteArray? = null,
         oneUse: Boolean? = null,
         assetDefinitionId: String? = null,
-    ): OfflineNoteV2.DeviceAttestationRegistrationV2 {
+    ): AttestedOfflineNote.DeviceAttestationRegistration {
         val vector = obj(obj(fixture, "chain_vectors"), "attestation_registration")
-        return OfflineNoteV2.DeviceAttestationRegistrationV2(
+        return AttestedOfflineNote.DeviceAttestationRegistration(
             version = int(vector, "version"),
             platform = platform ?: string(vector, "platform"),
             keyId = keyId ?: string(vector, "key_id"),
@@ -1436,8 +1437,8 @@ class OfflineNoteV2Test {
         )
     }
 
-    private fun certificate(json: Map<String, Any?>): OfflineNoteV2.KeyCertificateV2 =
-        OfflineNoteV2.KeyCertificateV2(
+    private fun certificate(json: Map<String, Any?>): AttestedOfflineNote.KeyCertificate =
+        AttestedOfflineNote.KeyCertificate(
             version = int(json, "version"),
             platform = string(json, "platform"),
             keyId = string(json, "key_id"),
@@ -1452,8 +1453,8 @@ class OfflineNoteV2Test {
             issuerSignature = base64Bytes(string(json, "issuer_signature_base64")),
         )
 
-    private fun issuedClaim(json: Map<String, Any?>): OfflineNoteV2.IssuedClaimV2 =
-        OfflineNoteV2.IssuedClaimV2(
+    private fun issuedClaim(json: Map<String, Any?>): AttestedOfflineNote.IssuedClaim =
+        AttestedOfflineNote.IssuedClaim(
             domain = string(json, "domain"),
             noteCommitment = hexBytes(string(json, "note_commitment")),
             keyCertificatePayloadHash = hexBytes(string(json, "key_certificate_payload_hash")),
@@ -1461,8 +1462,8 @@ class OfflineNoteV2Test {
             amount = string(json, "amount"),
         )
 
-    private fun auditOutputClaim(json: Map<String, Any?>): OfflineNoteV2.AuditOutputClaimV2 =
-        OfflineNoteV2.AuditOutputClaimV2(
+    private fun auditOutputClaim(json: Map<String, Any?>): AttestedOfflineNote.AuditOutputClaim =
+        AttestedOfflineNote.AuditOutputClaim(
             noteCommitment = hexBytes(string(json, "note_commitment")),
             keyCertificate = certificate(obj(json, "key_certificate")),
             assetId = "${string(json, "asset_definition_id")}#${string(json, "account_id")}",
@@ -1476,7 +1477,7 @@ class OfflineNoteV2Test {
     ) {
         assertEquals(schema, instruction.name)
         val payload = instruction.payload as? WirePayload
-            ?: error("Offline Note V2 instruction must use a wire payload")
+            ?: error("Attested Offline Note instruction must use a wire payload")
         assertEquals(schema, payload.wireName)
         val outerFrame = NoritoHeader.decode(payload.payloadBytes, null)
         assertEquals(
@@ -1500,7 +1501,7 @@ class OfflineNoteV2Test {
         writeUInt32Le(instances, 16)
         writeUInt32Le(instances, 1)
         for (value in publicValues) {
-            instances.write(OfflineNoteV2.instanceScalarBytes(value))
+            instances.write(AttestedOfflineNote.instanceScalarBytes(value))
         }
         appendTlv(out, "I10P", instances.toByteArray())
         return out.toByteArray()
@@ -1524,7 +1525,7 @@ class OfflineNoteV2Test {
         val adapter = object : TypeAdapter<Unit> {
             override fun encode(encoder: NoritoEncoder, value: Unit) {
                 writeOpenEnvelopeField(encoder) {
-                    it.writeUInt(OfflineNoteV2Halo2Prover.BACKEND_TAG.toLong(), 32)
+                    it.writeUInt(AttestedOfflineNoteHalo2Prover.BACKEND_TAG.toLong(), 32)
                 }
                 writeOpenEnvelopeRawField(encoder, circuitFieldPayload)
             }
@@ -1673,7 +1674,7 @@ class OfflineNoteV2Test {
         MessageDigest.getInstance("SHA-256").digest(bytes)
 
     private fun attestationEvidence(attestationReportHash: ByteArray): ByteArray =
-        OfflineNoteV2.DEVICE_ATTESTATION_EVIDENCE_PREFIX.toByteArray(Charsets.UTF_8) + attestationReportHash
+        AttestedOfflineNote.DEVICE_ATTESTATION_EVIDENCE_PREFIX.toByteArray(Charsets.UTF_8) + attestationReportHash
 
     private fun offCurveP256AssertionPublicKey(): ByteArray =
         ByteArray(65).also { it[0] = 0x04 }

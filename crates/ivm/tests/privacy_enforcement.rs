@@ -318,6 +318,7 @@ fn value_dependent_arithmetic_traps_reject_private_operands_before_reading_value
         instruction::wide::arithmetic::REMU,
         instruction::wide::arithmetic::DIV_CEIL,
     ] {
+        let mut expected_remaining = None;
         for (numerator, denominator) in
             [(12_u64, 3_u64), (12, 0), (i64::MIN as u64, (-1_i64) as u64)]
         {
@@ -335,6 +336,12 @@ fn value_dependent_arithmetic_traps_reject_private_operands_before_reading_value
                 Err(VMError::PrivacyViolation),
                 "opcode {opcode:#x} exposed a private value-dependent outcome for {numerator}/{denominator}"
             );
+            let remaining = vm.remaining_gas();
+            if let Some(expected) = expected_remaining {
+                assert_eq!(remaining, expected, "opcode {opcode:#x} leaked through gas");
+            } else {
+                expected_remaining = Some(remaining);
+            }
         }
     }
 
@@ -355,20 +362,28 @@ fn value_dependent_arithmetic_traps_reject_private_operands_before_reading_value
 
 #[test]
 fn zk_assertions_reject_private_predicates_independent_of_truth_value() {
-    for value in [0_u64, 1] {
-        for word in [
-            encoding::wide::encode_rr(instruction::wide::zk::ASSERT, 0, 1, 0),
-            encoding::wide::encode_ri(instruction::wide::zk::ASSERT_RANGE, 0, 1, 1),
-        ] {
+    for word in [
+        encoding::wide::encode_rr(instruction::wide::zk::ASSERT, 0, 1, 0),
+        encoding::wide::encode_ri(instruction::wide::zk::ASSERT_RANGE, 0, 1, 1),
+    ] {
+        let mut expected_remaining = None;
+        for value in [0_u64, 1] {
             let mut vm = IVM::new(10_000);
             vm.load_program(&raw_zk_program(&[word]))
                 .expect("load private assertion fixture");
             vm.set_register(1, value);
             vm.registers.set_tag(1, true);
             assert_eq!(vm.run(), Err(VMError::PrivacyViolation));
+            let remaining = vm.remaining_gas();
+            if let Some(expected) = expected_remaining {
+                assert_eq!(remaining, expected, "private assertion leaked through gas");
+            } else {
+                expected_remaining = Some(remaining);
+            }
         }
     }
 
+    let mut expected_remaining = None;
     for (left, right) in [(7_u64, 7_u64), (7, 8)] {
         let word = encoding::wide::encode_rr(instruction::wide::zk::ASSERT_EQ, 0, 1, 2);
         let mut vm = IVM::new(10_000);
@@ -379,6 +394,12 @@ fn zk_assertions_reject_private_predicates_independent_of_truth_value() {
         vm.registers.set_tag(1, true);
         vm.registers.set_tag(2, true);
         assert_eq!(vm.run(), Err(VMError::PrivacyViolation));
+        let remaining = vm.remaining_gas();
+        if let Some(expected) = expected_remaining {
+            assert_eq!(remaining, expected, "private equality leaked through gas");
+        } else {
+            expected_remaining = Some(remaining);
+        }
     }
 }
 
@@ -535,7 +556,7 @@ fn successful_hosts_cannot_declassify_unwritten_output_registers() {
                     assert_eq!(vm.register(10), 0);
                     assert!(!vm.registers.tag(10));
                 }
-                syscalls::SYSCALL_ZK_VERIFY_TRANSFER => {
+                syscalls::SYSCALL_VERIFY_PROOF => {
                     assert_eq!(vm.register(10), 123, "declared input must be preserved");
                     assert!(!vm.registers.tag(10));
                     assert_eq!(vm.register(11), 0, "output-only r11 must be sanitized");
@@ -551,7 +572,7 @@ fn successful_hosts_cannot_declassify_unwritten_output_registers() {
                 assert_eq!(vm.register(10), 0);
                 assert!(!vm.registers.tag(10));
             }
-            if number == syscalls::SYSCALL_ZK_VERIFY_TRANSFER {
+            if number == syscalls::SYSCALL_VERIFY_PROOF {
                 assert_eq!(vm.register(11), 0);
                 assert!(!vm.registers.tag(11));
                 vm.set_register(10, 1);
@@ -580,9 +601,7 @@ fn successful_hosts_cannot_declassify_unwritten_output_registers() {
 
     let mut partial_write = IVM::new(10_000);
     partial_write
-        .load_program(&raw_zk_program(&[scall(
-            syscalls::SYSCALL_ZK_VERIFY_TRANSFER,
-        )]))
+        .load_program(&raw_zk_program(&[scall(syscalls::SYSCALL_VERIFY_PROOF)]))
         .expect("load partial-output syscall fixture");
     partial_write.set_host(PartialOutputHost);
     partial_write.set_register(10, 123);
@@ -659,6 +678,38 @@ fn output_sanitization_restores_registers_when_prepare_or_quote_fails() {
 }
 
 #[test]
+fn host_cannot_return_a_private_tag_through_an_ordinary_public_output() {
+    struct PrivateOutputHost;
+
+    impl IVMHost for PrivateOutputHost {
+        fn prepare_syscall(&self, _number: u32, _vm: &IVM) -> Result<u64, VMError> {
+            Ok(0)
+        }
+
+        fn syscall(&mut self, _number: u32, vm: &mut IVM) -> Result<u64, VMError> {
+            vm.set_register(10, 7);
+            vm.registers.set_tag(10, true);
+            Ok(0)
+        }
+
+        fn as_any(&mut self) -> &mut dyn Any
+        where
+            Self: 'static,
+        {
+            self
+        }
+    }
+
+    let mut vm = IVM::new(10_000);
+    vm.load_program(&raw_zk_program(&[scall(syscalls::SYSCALL_CURRENT_TIME_MS)]))
+        .expect("load private host-output fixture");
+    vm.set_host(PrivateOutputHost);
+
+    assert_eq!(vm.run(), Err(VMError::PrivacyViolation));
+    assert!(vm.registers.tag(10), "the VM must not launder the host tag");
+}
+
+#[test]
 fn private_input_cannot_flow_directly_to_public_syscall_sinks() {
     for sink in [
         syscalls::SYSCALL_USE_NULLIFIER,
@@ -730,7 +781,10 @@ fn compiled_secret_commitment_executes_end_to_end() {
     common::select_kotodama_entrypoint(&mut vm, &artifact, "commitment");
     vm.run().expect("execute approved commitment");
 
-    assert_eq!(vm.register(10), pedersen_commit_truncated(7, 11));
+    assert_eq!(
+        common::decode_u64_register(&vm, 10),
+        pedersen_commit_truncated(7, 11)
+    );
     assert!(
         !vm.registers.tag(10),
         "the approved commitment must be the explicit declassification boundary"
@@ -868,6 +922,7 @@ fn zk_field_operations_propagate_private_tags_and_reject_mixed_visibility() {
 
 #[test]
 fn zk_field_inverse_rejects_private_operand_independent_of_invertibility() {
+    let mut expected_remaining = None;
     for value in [0_u64, 7] {
         let program = raw_zk_program(&[encoding::wide::encode_rr(
             instruction::wide::zk::FINV,
@@ -881,6 +936,12 @@ fn zk_field_inverse_rejects_private_operand_independent_of_invertibility() {
         vm.registers.set_tag(1, true);
 
         assert_eq!(vm.run(), Err(VMError::PrivacyViolation));
+        let remaining = vm.remaining_gas();
+        if let Some(expected) = expected_remaining {
+            assert_eq!(remaining, expected, "private inverse leaked through gas");
+        } else {
+            expected_remaining = Some(remaining);
+        }
     }
 }
 

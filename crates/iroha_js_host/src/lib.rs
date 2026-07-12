@@ -15429,7 +15429,7 @@ seiyaku Privacy {
             "x".repeat(MAX_KOTODAMA_SOURCE_NAME_BYTES + 1),
         ] {
             let request = JsKotodamaCompileRequest {
-                source: "seiyaku Demo { view fn ping() -> i64 { return 1; } }".to_owned(),
+                source: "seiyaku Demo { view fn ping() -> int { return 1; } }".to_owned(),
                 source_name: Some(source_name),
                 zk: false,
             };

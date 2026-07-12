@@ -153,17 +153,28 @@ fn guess_defaults(n: u32) -> (String, String, String) {
         args = "r10=&NoritoBytes(VrfEpochSeedRequest)".into();
         ret = "r10=ptr (&NoritoBytes(VrfEpochSeedResponse)), r11=status:u64".into();
         gas = "G_vote_get + bytes".into();
-    } else if up.starts_with("NUMERIC_") {
-        gas = "G_numeric".into();
+    } else if up.starts_with("INT_") || up.starts_with("DECIMAL_") || up.starts_with("QUANTITY_") {
+        // Numeric ABI rows are mandatory in `spec/syscalls.toml`; this branch
+        // is only the diagnostic starting point printed when one is missing.
+        // Keep it aligned with the first-release pointer-backed staged family
+        // rather than suggesting the retired scalar `NUMERIC_*` protocol.
+        let value_type = if up.starts_with("INT_") {
+            "Int"
+        } else if up.starts_with("DECIMAL_") {
+            "Decimal"
+        } else {
+            "Quantity"
+        };
+        gas = "G_numeric_staged".into();
         if up.contains("FROM_INT") {
-            args = "r10=value:i64".into();
-            ret = "r10=ptr (&NoritoBytes(Numeric))".into();
+            args = "r10=&Int".into();
+            ret = format!("r10=&{value_type}");
         } else if up.contains("TO_INT") {
-            args = "r10=&NoritoBytes(Numeric)".into();
-            ret = "r10=value:i64".into();
+            args = format!("r10=&{value_type}");
+            ret = "r10=&Int-or-zero, r11=NumericFaultV1-or-zero".into();
         } else if up.contains("NEG") {
-            args = "r10=&NoritoBytes(Numeric)".into();
-            ret = "r10=ptr (&NoritoBytes(Numeric))".into();
+            args = format!("r10=&{value_type}");
+            ret = format!("r10=&{value_type}-or-zero, r11=NumericFaultV1-or-zero");
         } else if up.contains("EQ")
             || up.contains("NE")
             || up.contains("LT")
@@ -171,11 +182,11 @@ fn guess_defaults(n: u32) -> (String, String, String) {
             || up.contains("GT")
             || up.contains("GE")
         {
-            args = "r10=&NoritoBytes(Numeric), r11=&NoritoBytes(Numeric)".into();
+            args = format!("r10=&{value_type}, r11=&{value_type}");
             ret = "r10=u64(0/1)".into();
         } else {
-            args = "r10=&NoritoBytes(Numeric), r11=&NoritoBytes(Numeric)".into();
-            ret = "r10=ptr (&NoritoBytes(Numeric))".into();
+            args = format!("r10=&{value_type}, r11=&{value_type}");
+            ret = format!("r10=&{value_type}-or-zero, r11=NumericFaultV1-or-zero");
         }
     } else if up.contains("PROVE_EXECUTION") || n == 0xF4 {
         ret = "r10=ptr (&NoritoBytes(ExecutionProof)), r11=status:u64".into();

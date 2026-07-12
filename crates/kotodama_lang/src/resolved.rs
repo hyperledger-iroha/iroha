@@ -769,7 +769,7 @@ module Origins {
     fn parser_binding_facts_have_direct_owners_and_exact_utf8_ranges() {
         let text = r#"
 誓約 ExactFacts {
-    fn inspect(Option<int>, values: List<int, 4> input) {
+    fn inspect(Option<int> input, List<int, 4> values) {
         // 雪 before every repeated ASCII binding makes character and byte offsets differ.
         let int repeated = 1;
         if let Option::some(repeated) = input {
@@ -883,7 +883,7 @@ module Parenthesized {
     fn binding_fact_fixture() -> (SourceFile, SpannedProgram) {
         let text = r#"
 誓約 BindingIntegrity {
-    fn inspect(Option<int>, values: List<int, 4> input) -> int {
+    fn inspect(Option<int> input, List<int, 4> values) -> int {
         let int base = 1;
         if let Option::some(payload) = input { return payload; }
         if let Option::some(payload) = input { return payload; }

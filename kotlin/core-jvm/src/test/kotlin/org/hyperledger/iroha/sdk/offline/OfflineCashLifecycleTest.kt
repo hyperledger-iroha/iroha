@@ -281,6 +281,7 @@ class OfflineCashLifecycleTest {
         assertEquals("expired", expired.code)
     }
 
+    /* Retired pre-release Kagemusha ABI-6 wire-name test.
     @Test
     fun `kagemusha wire name constants are canonical`() {
         assertEquals(
@@ -297,6 +298,7 @@ class OfflineCashLifecycleTest {
         )
         assertEquals(KagemushaWireNames.TRANSFER_INSTRUCTION, KagemushaInstructionType.TRANSFER.wireName)
     }
+    */
 
     private class RecordingSynchronizer(
         private val events: MutableList<String>,

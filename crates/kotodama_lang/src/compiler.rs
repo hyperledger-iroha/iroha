@@ -1502,13 +1502,13 @@ mod tests {
     };
 
     use super::{
-        AUTHORITY_ACCOUNT_KEY, AccessHintDiagnostics, AccessSets, COLLECTION_ITERATION_CAP,
-        Compiler, CompilerMode, CompilerOptions, DEFAULT_MAX_CYCLES, DataKind, DeferredTransfer,
-        GLOBAL_WILDCARD_KEY, HINT_SKIP_DYNAMIC_STATE_PATH, HINT_SKIP_LITERAL_TRIGGER_SPEC_DECODE,
-        HINT_SKIP_OPAQUE_ISI, IrAccessClass, LiteralFixups, NFT_COARSE_KEY, STATE_WILDCARD_KEY,
-        TRAMPOLINE_ISLAND_BYTES, TransferKind, WIDE_IMM_MAX, checked_align_stack_frame_size,
-        classify_ir_access, decoded_control_target, emit_addi, emit_load64, emit_store64,
-        encode_addi, encode_jal, encode_nop, encode_pointer_tlv_bytes, patch_indexed_literal_load,
+        ACCOUNT_WILDCARD_KEY, AUTHORITY_ACCOUNT_KEY, AccessHintDiagnostics, AccessSets,
+        COLLECTION_ITERATION_CAP, Compiler, CompilerMode, CompilerOptions, DEFAULT_MAX_CYCLES,
+        DataKind, DeferredTransfer, GLOBAL_WILDCARD_KEY, HINT_SKIP_DYNAMIC_STATE_PATH,
+        HINT_SKIP_LITERAL_TRIGGER_SPEC_DECODE, HINT_SKIP_OPAQUE_ISI, IrAccessClass, LiteralFixups,
+        NFT_COARSE_KEY, STATE_WILDCARD_KEY, TRAMPOLINE_ISLAND_BYTES, TransferKind, WIDE_IMM_MAX,
+        checked_align_stack_frame_size, classify_ir_access, decoded_control_target, emit_addi,
+        emit_load64, emit_store64, encode_addi, encode_jal, encode_nop, patch_indexed_literal_load,
         patch_literal_load, pointer_type_for_kind, push_word, record_isi_access,
         relax_control_transfers_with_trampolines, reserve_word, stack_slot_offset_bytes,
     };
@@ -1665,24 +1665,27 @@ mod tests {
     #[test]
     fn unresolved_world_ir_uses_read_or_write_appropriate_wildcards() {
         let temp = ir::Temp(0);
-        for instruction in [
-            ir::Instr::ResolveAccountAlias {
-                dest: temp,
-                alias: temp,
-            },
-            ir::Instr::ZkVerify {
-                number: syscalls::SYSCALL_ZK_VERIFY_TRANSFER,
-                payload: temp,
-            },
-        ] {
-            let (access, skips) = unresolved_world_access(&instruction);
-            assert_eq!(
-                access.reads,
-                IndexSet::from([GLOBAL_WILDCARD_KEY.to_owned()])
-            );
-            assert!(access.writes.is_empty());
-            assert_eq!(skips, IndexSet::from([HINT_SKIP_OPAQUE_ISI.to_owned()]));
-        }
+        let (access, skips) = unresolved_world_access(&ir::Instr::ResolveAccountAlias {
+            dest: temp,
+            alias: temp,
+        });
+        assert_eq!(
+            access.reads,
+            IndexSet::from([ACCOUNT_WILDCARD_KEY.to_owned()])
+        );
+        assert!(access.writes.is_empty());
+        assert!(skips.is_empty());
+
+        let (access, skips) = unresolved_world_access(&ir::Instr::ZkVerify {
+            number: syscalls::SYSCALL_ZK_VERIFY_TRANSFER,
+            payload: temp,
+        });
+        assert_eq!(
+            access.reads,
+            IndexSet::from([GLOBAL_WILDCARD_KEY.to_owned()])
+        );
+        assert!(access.writes.is_empty());
+        assert_eq!(skips, IndexSet::from([HINT_SKIP_OPAQUE_ISI.to_owned()]));
 
         let (access, skips) = unresolved_world_access(&ir::Instr::CreateNftsForAllUsers);
         assert_eq!(
@@ -1753,7 +1756,7 @@ mod tests {
     }
 
     fn canonical_numeric_state_key(base: &str, kind: ir::DataRefKind, value: &str) -> String {
-        let encoded = encode_pointer_tlv_bytes(kind, value)
+        let encoded = super::encode_pointer_tlv_bytes(kind, value)
             .expect("encode canonical pointer-backed numeric state key");
         format!("state:{base}/{}", hex::encode(encoded))
     }
@@ -2452,7 +2455,10 @@ seiyaku SumJoinFacts {
         let add_count = bytes[parsed.code_offset..]
             .chunks_exact(4)
             .map(|chunk| u32::from_le_bytes(chunk.try_into().expect("instruction word")))
-            .filter(|word| instruction::wide::opcode(*word) == instruction::wide::arithmetic::ADD)
+            .filter(|word| {
+                instruction::wide::opcode(*word) == instruction::wide::system::SYSTEM
+                    && encoding::wide::decode_syscallx(*word) == syscalls::SYSCALL_INT_ADD
+            })
             .count();
         assert_eq!(
             add_count, 1,
@@ -2735,7 +2741,7 @@ seiyaku HelperAccess {
     }
 
     #[test]
-    fn unary_neg_emits_neg_opcode() {
+    fn unary_neg_emits_exact_int_syscall() {
         let src = r#"
 seiyaku NegTest {
   kotoage fn neg(int x) -> int authorize("Entry") {
@@ -2749,12 +2755,14 @@ seiyaku NegTest {
         let mut found = false;
         for chunk in bytes[parsed.code_offset..].chunks_exact(4) {
             let word = u32::from_le_bytes(<[u8; 4]>::try_from(chunk).unwrap());
-            if instruction::wide::opcode(word) == instruction::wide::arithmetic::NEG {
+            if instruction::wide::opcode(word) == instruction::wide::system::SYSTEM
+                && encoding::wide::decode_syscallx(word) == syscalls::SYSCALL_INT_NEG
+            {
                 found = true;
                 break;
             }
         }
-        assert!(found, "expected NEG opcode in compiled code");
+        assert!(found, "expected INT_NEG syscall in compiled code");
     }
 
     #[test]
@@ -2801,7 +2809,7 @@ seiyaku NegTest {
     }
 
     #[test]
-    fn signed_comparisons_use_overflow_safe_opcodes() {
+    fn adaptive_int_comparisons_use_exact_numeric_syscalls() {
         let src = r#"
 seiyaku CompilerFixture {
 
@@ -2821,38 +2829,38 @@ view fn branch(int a, int b) -> int {
             .compile_source(src)
             .expect("compile signed comparisons");
         let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
-        let opcodes = bytes[parsed.code_offset..]
+        let words = bytes[parsed.code_offset..]
             .chunks_exact(4)
-            .map(|chunk| {
-                instruction::wide::opcode(u32::from_le_bytes(
-                    chunk.try_into().expect("instruction word"),
-                ))
-            })
+            .map(|chunk| u32::from_le_bytes(chunk.try_into().expect("instruction word")))
             .collect::<Vec<_>>();
 
+        for syscall in [
+            syscalls::SYSCALL_INT_LT,
+            syscalls::SYSCALL_INT_LE,
+            syscalls::SYSCALL_INT_GT,
+            syscalls::SYSCALL_INT_GE,
+        ] {
+            assert!(
+                words.iter().any(|word| {
+                    instruction::wide::opcode(*word) == instruction::wide::system::SYSTEM
+                        && encoding::wide::decode_syscallx(*word) == syscall
+                }),
+                "missing exact adaptive-int comparison syscall {}",
+                syscalls::syscall_name(syscall).unwrap_or("UNKNOWN")
+            );
+        }
         assert!(
-            opcodes.contains(&instruction::wide::arithmetic::SLT),
-            "signed comparison values must use SLT"
-        );
-        assert!(
-            opcodes.contains(&instruction::wide::arithmetic::XORI),
-            "inclusive signed comparisons must invert SLT"
-        );
-        assert!(
-            opcodes.contains(&instruction::wide::control::BLT),
-            "signed less-than branches must use BLT"
-        );
-        assert!(
-            opcodes.contains(&instruction::wide::control::BGE),
-            "signed greater-or-equal branches must use BGE"
-        );
-        assert!(
-            !opcodes.contains(&instruction::wide::arithmetic::SUB),
-            "signed comparison lowering must not infer ordering from wrapping subtraction"
-        );
-        assert!(
-            !opcodes.contains(&instruction::wide::arithmetic::SRA),
-            "signed comparison lowering must not extract a wrapped subtraction sign bit"
+            words.iter().all(|word| {
+                !matches!(
+                    instruction::wide::opcode(*word),
+                    instruction::wide::arithmetic::SLT
+                        | instruction::wide::control::BLT
+                        | instruction::wide::control::BGE
+                        | instruction::wide::arithmetic::SUB
+                        | instruction::wide::arithmetic::SRA
+                )
+            }),
+            "adaptive int pointers must never enter scalar signed comparison opcodes"
         );
     }
 
@@ -3434,6 +3442,10 @@ kotoage fn main() authorize("CompilerFixture") {{
   ledger::account::set_quorum(account, 3);
 }}
 
+kotoage fn dynamic(AccountId account, int quorum) authorize("CompilerFixture") {{
+  ledger::account::set_quorum(account, quorum);
+}}
+
 }}
 "#
         );
@@ -3465,6 +3477,13 @@ kotoage fn main() authorize("CompilerFixture") {{
                 "expected {label} syscall in compiled code"
             );
         }
+        let int_to_u64 = encoding::wide::encode_syscallx(ivm_abi::syscalls::SYSCALL_INT_TRY_TO_U64)
+            .to_le_bytes();
+        assert!(
+            code.windows(int_to_u64.len())
+                .any(|window| window == int_to_u64),
+            "dynamic quorum must use checked int-to-u64 conversion"
+        );
 
         let hints = manifest
             .access_set_hints
@@ -3500,7 +3519,39 @@ fn main(AccountId account) {
 
 }
 "#,
-                "ledger::account::set_quorum expects (AccountId, quantity)",
+                "ledger::account::set_quorum expects (AccountId, int)",
+            ),
+            (
+                r#"
+seiyaku CompilerFixture {
+fn main(AccountId account) { ledger::account::set_quorum(account, -1); }
+}
+"#,
+                "account quorum must be in the protocol range 1..=65535",
+            ),
+            (
+                r#"
+seiyaku CompilerFixture {
+fn main(AccountId account) { ledger::account::set_quorum(account, 0); }
+}
+"#,
+                "account quorum must be in the protocol range 1..=65535",
+            ),
+            (
+                r#"
+seiyaku CompilerFixture {
+fn main(AccountId account) { ledger::account::set_quorum(account, 65536); }
+}
+"#,
+                "account quorum must be in the protocol range 1..=65535",
+            ),
+            (
+                r#"
+seiyaku CompilerFixture {
+fn main(AccountId account) { ledger::account::set_quorum(account, 18446744073709551616); }
+}
+"#,
+                "account quorum must be in the protocol range 1..=65535",
             ),
         ] {
             let parsed = parse(src).expect("parse source");
@@ -5226,7 +5277,7 @@ fn main() {
     fn opaque_pointer_abi_types_are_not_source_types() {
         for type_name in ["Domain", "Blob", "NoritoBytes", "Opaque"] {
             let source = format!(
-                "seiyaku CompilerFixture {{ view fn inspect(value: {type_name}) -> int {{ return 0; }} }}"
+                "seiyaku CompilerFixture {{ view fn inspect({type_name} value) -> int {{ return 0; }} }}"
             );
             let error = test_mode_compiler()
                 .compile_source(&source)
@@ -5768,12 +5819,11 @@ fn main() {{
         string_map.insert((func_idx, backend), "halo2/ipa".to_string());
         string_map.insert((func_idx, proof), "0xab".to_string());
         string_map.insert((func_idx, vk), "vk_unshield_outputs".to_string());
-        let mut int_const_map = HashMap::new();
-        int_const_map.insert((func_idx, amount), 7);
+        let public_amount = u128::try_from(i64::MAX).expect("i64::MAX is non-negative") + 1;
+        string_map.insert((func_idx, amount), public_amount.to_string());
 
         let raw = super::unshield_inline_instruction_literal(
             &string_map,
-            &int_const_map,
             func_idx,
             asset,
             to,
@@ -5792,9 +5842,54 @@ fn main() {{
             .as_any()
             .downcast_ref::<iroha_data_model::isi::zk::Unshield>()
             .expect("Unshield instruction");
-        assert_eq!(unshield.public_amount(), &7u128);
+        assert_eq!(unshield.public_amount(), &public_amount);
         assert_eq!(unshield.inputs().as_slice(), &[[0x11u8; 32], [0x12u8; 32]]);
         assert_eq!(unshield.outputs().as_slice(), &[[0x21u8; 32], [0x22u8; 32]]);
+    }
+
+    #[test]
+    fn unshield_inline_amount_uses_the_explicit_u128_protocol_domain() {
+        let account = sample_account_literal();
+        let inputs = "\\x00".repeat(32);
+        let source = |amount: &str| {
+            format!(
+                r#"
+seiyaku UnshieldAmount {{
+  view fn build() -> bytes {{
+    return crypto::zk::build_unshield(
+      asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
+      destination: AccountId::parse("{account}"),
+      amount: {amount},
+      inputs: b"{inputs}",
+      backend: "halo2",
+      proof: b"proof",
+      verification_key: b"vk",
+    );
+  }}
+}}
+"#
+            )
+        };
+
+        Compiler::new()
+            .compile_source(&source("9223372036854775808"))
+            .expect("a literal above i64 but inside u128 must compile");
+
+        for (amount, expected) in [
+            ("-1", "requires non-negative amount"),
+            (
+                "340282366920938463463374607431768211456",
+                "amount exceeds the u128 protocol range",
+            ),
+        ] {
+            let error = Compiler::new()
+                .compile_source(&source(amount))
+                .expect_err("amount outside the protocol u128 domain must fail");
+            assert!(
+                error.contains(expected),
+                "amount={amount}: expected `{expected}` in {error}"
+            );
+        }
     }
 
     #[test]
@@ -6443,6 +6538,22 @@ fn main() {
                 "unexpected rejection for {call}: {error}"
             );
         }
+
+        let canonical = r#"
+            seiyaku CompilerFixture {
+                view fn wrapping(int left, int right) -> (int, int, int, int) {
+                    return (
+                        math::wrapping_neg(left),
+                        math::wrapping_add(left: left, right: right),
+                        math::wrapping_sub(left: left, right: right),
+                        math::wrapping_mul(left: left, right: right)
+                    );
+                }
+            }
+        "#;
+        test_mode_compiler()
+            .compile_source(canonical)
+            .expect("canonical V1 wrapping helpers must not match retired-helper diagnostics");
     }
 
     #[test]
@@ -6624,6 +6735,7 @@ seiyaku CompilerFixture {
 
 view fn main() {
   let _authority = context::authority();
+  let _subject = context::contract_subject();
   let _now = context::current_time_ms();
   let _height = context::block_height();
   let _block_time = context::block_time_ms();
@@ -6641,6 +6753,10 @@ view fn main() {
 
         for (syscall, label) in [
             (ivm_abi::syscalls::SYSCALL_GET_AUTHORITY, "GET_AUTHORITY"),
+            (
+                ivm_abi::syscalls::SYSCALL_SYSVAR_CONTRACT_SUBJECT,
+                "SYSVAR_CONTRACT_SUBJECT",
+            ),
             (
                 ivm_abi::syscalls::SYSCALL_CURRENT_TIME_MS,
                 "CURRENT_TIME_MS",
@@ -6693,6 +6809,14 @@ fn main() { let _authority = context::authority(1); }
             (
                 r#"
 seiyaku CompilerFixture {
+fn main() { let _subject = context::contract_subject(1); }
+}
+"#,
+                "context::contract_subject expects no arguments",
+            ),
+            (
+                r#"
+seiyaku CompilerFixture {
 fn main() { let _height = context::block_height(1); }
 }
 "#,
@@ -6717,6 +6841,138 @@ fn main() { let _chain = context::chain_id(1); }
         }
 
         assert_internal_source_names_rejected(&["sysvar_authority"]);
+    }
+
+    #[test]
+    fn native_control_and_recovery_builtins_emit_typed_syscalls() {
+        let compiler = test_mode_compiler();
+        let bytes = compiler
+            .compile_source(
+                r#"
+seiyaku CompilerFixture {
+kotoage fn apply(AccountId account, AssetDefinitionId asset, Option<quantity> cap, quantity replacement_cap, string alias, AccountId replacement) authorize("ControlAdmin") {
+  ledger::asset::set_transfer_freeze(account: account, asset_definition: asset, frozen: true);
+  ledger::asset::set_transfer_daily_limit(account: account, asset_definition: asset, cap: cap);
+  ledger::asset::set_transfer_daily_limit(account: account, asset_definition: asset, cap: Option::some(replacement_cap));
+  ledger::asset::set_transfer_daily_limit(account: account, asset_definition: asset, cap: Option::none);
+  ledger::account::recovery::propose(alias: alias, replacement: replacement);
+  ledger::account::recovery::approve(alias: alias);
+  ledger::account::recovery::cancel(alias: alias);
+  ledger::account::recovery::finalize(alias: alias);
+}
+}
+"#,
+            )
+            .expect("compile typed native control and recovery calls");
+        let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
+        let code = &bytes[parsed.code_offset..];
+        for (syscall, label) in [
+            (
+                ivm_abi::syscalls::SYSCALL_SET_ASSET_TRANSFER_FREEZE,
+                "SET_ASSET_TRANSFER_FREEZE",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_SET_ASSET_TRANSFER_DAILY_LIMIT,
+                "SET_ASSET_TRANSFER_DAILY_LIMIT",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_ACCOUNT_RECOVERY_PROPOSE,
+                "ACCOUNT_RECOVERY_PROPOSE",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_ACCOUNT_RECOVERY_APPROVE,
+                "ACCOUNT_RECOVERY_APPROVE",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_ACCOUNT_RECOVERY_CANCEL,
+                "ACCOUNT_RECOVERY_CANCEL",
+            ),
+            (
+                ivm_abi::syscalls::SYSCALL_ACCOUNT_RECOVERY_FINALIZE,
+                "ACCOUNT_RECOVERY_FINALIZE",
+            ),
+        ] {
+            let needle = encoding::wide::encode_syscallx(syscall).to_le_bytes();
+            assert!(
+                code.windows(needle.len()).any(|window| window == needle),
+                "expected {label} syscall"
+            );
+        }
+    }
+
+    #[test]
+    fn native_control_and_recovery_builtins_reject_wrong_types_and_arity() {
+        for (source, expected) in [
+            (
+                r#"
+seiyaku CompilerFixture {
+fn apply(AccountId account, AssetDefinitionId asset) {
+  ledger::asset::set_transfer_freeze(account: account, asset_definition: asset, frozen: 1);
+}
+}
+"#,
+                "ledger::asset::set_transfer_freeze expects (AccountId, AssetDefinitionId, bool)",
+            ),
+            (
+                r#"
+seiyaku CompilerFixture {
+fn apply(AccountId account, AssetDefinitionId asset) {
+  ledger::asset::set_transfer_daily_limit(account: account, asset_definition: asset, cap: true);
+}
+}
+"#,
+                "ledger::asset::set_transfer_daily_limit expects (AccountId, AssetDefinitionId, Option<quantity>)",
+            ),
+            (
+                r#"
+seiyaku CompilerFixture {
+fn apply(AccountId replacement) {
+  ledger::account::recovery::propose(Name::parse("not_string"), replacement);
+}
+}
+"#,
+                "ledger::account::recovery::propose expects (string, AccountId)",
+            ),
+            (
+                r#"
+seiyaku CompilerFixture {
+fn apply(AccountId alias) {
+  ledger::account::recovery::approve(alias);
+}
+}
+"#,
+                "ledger::account::recovery::approve expects (string)",
+            ),
+            (
+                r#"
+seiyaku CompilerFixture {
+fn apply() {
+  ledger::account::recovery::cancel("alias@domain", "extra");
+}
+}
+"#,
+                "ledger::account::recovery::cancel expects (string)",
+            ),
+            (
+                r#"
+seiyaku CompilerFixture {
+fn apply() {
+  ledger::account::recovery::finalize();
+}
+}
+"#,
+                "ledger::account::recovery::finalize expects (string)",
+            ),
+        ] {
+            let parsed = parse(source).expect("parse invalid native control/recovery call");
+            let error = analyze(&parsed)
+                .expect_err("semantic analysis must reject invalid native control/recovery call");
+            assert!(
+                error.message.contains(expected),
+                "expected `{expected}`, got `{}`",
+                error.message
+            );
+        }
     }
 
     #[test]
@@ -7838,16 +8094,19 @@ kotoage fn main() authorize("AssetAdmin") {{
                 .write_keys
                 .contains(&format!("asset_def.detail:{asset_def}:zk.unshield.last"))
         );
-        assert!(!hints.read_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
-        assert!(!hints.write_keys.contains(&GLOBAL_WILDCARD_KEY.to_string()));
+        assert_conservative_ledger_read(&hints.read_keys, &hints.write_keys);
 
         let entrypoints = manifest.entrypoints.expect("entrypoints present");
         let demo = entrypoints
             .iter()
             .find(|entry| entry.name == "demo")
             .expect("demo entrypoint");
-        assert_eq!(demo.access_hints_complete, Some(true));
-        assert!(demo.access_hints_skipped.is_empty());
+        assert_eq!(demo.access_hints_complete, Some(false));
+        assert_eq!(
+            demo.access_hints_skipped,
+            vec![HINT_SKIP_OPAQUE_ISI.to_owned()],
+            "opaque proof envelopes require a conservative read wildcard even when the built instruction payloads are exact"
+        );
     }
 
     #[test]
@@ -10519,6 +10778,66 @@ seiyaku RoundedQuantity {
     }
 
     #[test]
+    fn user_facing_type_first_counter_example_compiles_as_a_complete_contract() {
+        let source = r#"
+seiyaku Counter {
+    const int initial = 1;
+    const int step = 2;
+
+    state int value;
+
+    hajimari() {
+        value = initial;
+    }
+
+    kotoage fn increment() authorize("CanIncrement") {
+        value = value + step;
+    }
+
+    view fn current() -> int {
+        return value;
+    }
+}
+"#;
+
+        let (artifact, manifest) = Compiler::new()
+            .compile_source_with_manifest(source)
+            .expect("compile the normative type-first Counter example");
+        let interface = ProgramMetadata::parse(&artifact)
+            .expect("parse Counter artifact")
+            .contract_interface
+            .expect("Counter embeds its contract interface");
+
+        assert_eq!(interface.seiyaku_name, "Counter");
+        assert!(
+            interface
+                .states
+                .iter()
+                .any(|state| { state.name == "value" && state.ty == EmbeddedStateType::Int })
+        );
+        let increment = interface
+            .entrypoints
+            .iter()
+            .find(|entrypoint| entrypoint.name == "increment")
+            .expect("authorized increment entrypoint");
+        assert_eq!(increment.permission.as_deref(), Some("CanIncrement"));
+        assert!(
+            interface
+                .entrypoints
+                .iter()
+                .any(|entrypoint| entrypoint.name == "hajimari")
+        );
+        assert!(
+            interface
+                .entrypoints
+                .iter()
+                .any(|entrypoint| entrypoint.name == "current")
+        );
+        assert_eq!(manifest.seiyaku_name.as_deref(), Some("Counter"));
+        assert!(manifest.abi_hash.is_some());
+    }
+
+    #[test]
     fn leaf_identity_emits_no_frame_or_stack_traffic() {
         let source = r#"
         seiyaku LeafOptimization {
@@ -10864,16 +11183,16 @@ seiyaku RoundedQuantity {
         let arithmetic_uses = words[reload + 1..]
             .iter()
             .filter(|word| {
-                if instruction::wide::opcode(**word) != instruction::wide::arithmetic::ADD {
+                if instruction::wide::opcode(**word) != instruction::wide::arithmetic::ADDI {
                     return false;
                 }
-                let (_, _, left, right) = encoding::wide::decode_rr(**word);
-                left == split_register || right == split_register
+                let (_, _, source, immediate) = encoding::wide::decode_ri(**word);
+                source == split_register && immediate == 0
             })
             .count();
         assert!(
             arithmetic_uses >= 3,
-            "the split register must feed all clustered a0 additions: {words:08x?}"
+            "the split register must feed every clustered checked numeric syscall: {words:08x?}"
         );
     }
 
@@ -10931,17 +11250,20 @@ seiyaku RoundedQuantity {
 
         let ordered = function_words("ordered");
         assert!(
-            ordered.iter().any(|word| matches!(
-                instruction::wide::opcode(*word),
-                instruction::wide::control::BLT | instruction::wide::control::BGE
-            )),
-            "signed comparison must lower directly into the branch"
+            ordered.iter().any(|word| {
+                instruction::wide::opcode(*word) == instruction::wide::system::SYSTEM
+                    && encoding::wide::decode_syscallx(*word) == syscalls::SYSCALL_INT_LT
+            }),
+            "adaptive int comparison must use the exact INT_LT syscall"
         );
         assert!(
             ordered.iter().all(|word| {
-                instruction::wide::opcode(*word) != instruction::wide::arithmetic::SLT
+                !matches!(
+                    instruction::wide::opcode(*word),
+                    instruction::wide::control::BLT | instruction::wide::control::BGE
+                ) && instruction::wide::opcode(*word) != instruction::wide::arithmetic::SLT
             }),
-            "compare-branch fusion must not materialize a dead boolean"
+            "adaptive int pointers must never be compared by scalar signed opcodes"
         );
     }
 
@@ -10973,8 +11295,8 @@ seiyaku RoundedQuantity {
             .map(|word| u32::from_le_bytes(word.try_into().expect("instruction word")))
             .collect::<Vec<_>>();
         assert_eq!(
-            answer.bytecode_words, 3,
-            "only the returned constant, return-register move, and leaf return should remain; report={answer:?}; words={words:08x?}"
+            answer.bytecode_words, 2,
+            "only the returned literal load and leaf return should remain; report={answer:?}; words={words:08x?}"
         );
     }
 
@@ -11575,7 +11897,6 @@ impl Compiler {
                     } = instr
                         && let Some(raw) = unshield_inline_instruction_literal(
                             &string_map,
-                            &int_const_map,
                             func_idx,
                             *asset,
                             *to,
@@ -13742,25 +14063,13 @@ impl Compiler {
                                         format!("build_unshield_inline requires literal {label}");
                                     Err(i18n::translate(self.lang, Message::SemanticError(&err)))
                                 };
-                            let require_amount = |temp: &ir::Temp| -> Result<i64, String> {
-                                if let Some(value) = int_const_map.get(&(func_idx, *temp)) {
-                                    return Ok(*value);
-                                }
-                                let err =
-                                    "build_unshield_inline requires literal amount".to_string();
-                                Err(i18n::translate(self.lang, Message::SemanticError(&err)))
-                            };
                             let asset_id_str = require_literal("asset", asset)?;
                             let to_str = require_literal("to", to)?;
-                            let amt = require_amount(amount)?;
-                            if amt < 0 {
-                                let err = "build_unshield_inline requires non-negative amount"
-                                    .to_string();
-                                return Err(i18n::translate(
-                                    self.lang,
-                                    Message::SemanticError(&err),
-                                ));
-                            }
+                            let amount_literal = require_literal("amount", amount)?;
+                            let amt =
+                                parse_unshield_public_amount(&amount_literal).map_err(|err| {
+                                    i18n::translate(self.lang, Message::SemanticError(&err))
+                                })?;
                             let ad = AssetDefinitionId::parse_address_literal(&asset_id_str)
                                 .map_err(|e| {
                                 let err = format!(
@@ -13809,7 +14118,7 @@ impl Compiler {
                             let uz = DMZk::Unshield {
                                 asset: ad,
                                 to: acct,
-                                public_amount: amt as u128,
+                                public_amount: amt,
                                 inputs: ins,
                                 outputs: outs,
                                 proof: pa,
@@ -19455,7 +19764,9 @@ fn record_isi_access(
                 func_idx,
                 *account,
             ) else {
-                return apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
+                access_set.reads.insert(ACCOUNT_WILDCARD_KEY.to_owned());
+                access_set.writes.insert(ACCOUNT_WILDCARD_KEY.to_owned());
+                return;
             };
             add_account_hint_rw(access_set, &id);
         }
@@ -19468,7 +19779,9 @@ fn record_isi_access(
                 func_idx,
                 *account,
             ) else {
-                return apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
+                access_set.reads.insert(ACCOUNT_WILDCARD_KEY.to_owned());
+                access_set.writes.insert(ACCOUNT_WILDCARD_KEY.to_owned());
+                return;
             };
             add_account_hint_rw(access_set, &id);
         }
@@ -19671,7 +19984,12 @@ fn record_isi_access(
                 _ => apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI),
             }
         }
-        ir::Instr::ResolveAccountAlias { .. } | ir::Instr::ZkVerify { .. } => {
+        ir::Instr::ResolveAccountAlias { .. } => {
+            // Alias resolution is account-scoped even when the alias is malformed or
+            // not statically bound. A global world wildcard would overstate its reach.
+            access_set.reads.insert(ACCOUNT_WILDCARD_KEY.to_owned());
+        }
+        ir::Instr::ZkVerify { .. } => {
             apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI)
         }
         ir::Instr::CreateNftsForAllUsers => {
@@ -20295,10 +20613,22 @@ fn submit_ballot_inline_instruction_literal(
     Some(format!("0x{}", hex::encode(bytes)))
 }
 
+fn parse_unshield_public_amount(raw: &str) -> Result<u128, String> {
+    let value = raw
+        .parse::<iroha_primitives::bigint::BigInt>()
+        .map_err(|_| "build_unshield_inline requires a canonical int literal amount".to_owned())?;
+    if value.is_negative() {
+        return Err("build_unshield_inline requires non-negative amount".to_owned());
+    }
+    value
+        .to_string()
+        .parse::<u128>()
+        .map_err(|_| "build_unshield_inline amount exceeds the u128 protocol range".to_owned())
+}
+
 #[allow(clippy::too_many_arguments)]
 fn unshield_inline_instruction_literal(
     string_map: &HashMap<(usize, ir::Temp), String>,
-    int_const_map: &HashMap<(usize, ir::Temp), i64>,
     func_idx: usize,
     asset: ir::Temp,
     to: ir::Temp,
@@ -20319,7 +20649,7 @@ fn unshield_inline_instruction_literal(
     let account = AccountId::parse_encoded(&literal(to)?)
         .map(iroha_data_model::account::ParsedAccountId::into_account_id)
         .ok()?;
-    let public_amount = u128::try_from(*int_const_map.get(&(func_idx, amount))?).ok()?;
+    let public_amount = parse_unshield_public_amount(&literal(amount)?).ok()?;
     let inputs = decode_fixed32_chunks(&literal(inputs)?, "inputs", false).ok()?;
     let outputs = if let Some(outputs) = outputs {
         decode_fixed32_chunks(&literal(outputs)?, "outputs", true).ok()?
@@ -21694,10 +22024,6 @@ fn classify_ir_access(instr: &ir::Instr) -> IrAccessClass {
         | ir::Instr::NumericRound { .. }
         | ir::Instr::DecimalToInt { .. }
         | ir::Instr::NumericCompare { .. }
-        // `DirectHelperSyscall` is reserved for compiler-owned codec, numeric,
-        // and argument-record helpers. World operations have dedicated IR
-        // variants below so their access cannot be hidden behind a raw number.
-        | ir::Instr::DirectHelperSyscall { .. }
         | ir::Instr::Min { .. }
         | ir::Instr::Max { .. }
         | ir::Instr::Abs { .. }
@@ -21767,15 +22093,11 @@ fn classify_ir_access(instr: &ir::Instr) -> IrAccessClass {
         ir::Instr::Sm3Hash { .. } => access_class_for_builtin(Builtin::Sm3Hash),
         ir::Instr::Sha256Hash { .. } => access_class_for_builtin(Builtin::Sha256Hash),
         ir::Instr::Sha3Hash { .. } => access_class_for_builtin(Builtin::Sha3Hash),
-        ir::Instr::Blake2b256Hash { .. } => {
-            access_class_for_builtin(Builtin::Blake2b256Hash)
-        }
+        ir::Instr::Blake2b256Hash { .. } => access_class_for_builtin(Builtin::Blake2b256Hash),
         ir::Instr::Keccak256Hash { .. } => access_class_for_builtin(Builtin::Keccak256Hash),
         ir::Instr::IrohaHash { .. } => access_class_for_builtin(Builtin::IrohaHash),
         ir::Instr::Sm2Verify { .. } => access_class_for_builtin(Builtin::Sm2Verify),
-        ir::Instr::VerifySignature { .. } => {
-            access_class_for_builtin(Builtin::VerifySignature)
-        }
+        ir::Instr::VerifySignature { .. } => access_class_for_builtin(Builtin::VerifySignature),
         ir::Instr::Sm4GcmSeal { .. } => access_class_for_builtin(Builtin::Sm4GcmSeal),
         ir::Instr::Sm4GcmOpen { .. } => access_class_for_builtin(Builtin::Sm4GcmOpen),
         ir::Instr::Sm4CcmSeal { .. } => access_class_for_builtin(Builtin::Sm4CcmSeal),
@@ -21792,9 +22114,7 @@ fn classify_ir_access(instr: &ir::Instr) -> IrAccessClass {
         }
         ir::Instr::EscrowRelease { .. } => access_class_for_builtin(Builtin::EscrowRelease),
         ir::Instr::EscrowCancel { .. } => access_class_for_builtin(Builtin::EscrowCancel),
-        ir::Instr::EscrowOpenDispute { .. } => {
-            access_class_for_builtin(Builtin::EscrowOpenDispute)
-        }
+        ir::Instr::EscrowOpenDispute { .. } => access_class_for_builtin(Builtin::EscrowOpenDispute),
         ir::Instr::EscrowResolveDispute { .. } => {
             access_class_for_builtin(Builtin::EscrowResolveDispute)
         }
@@ -21819,9 +22139,7 @@ fn classify_ir_access(instr: &ir::Instr) -> IrAccessClass {
         ir::Instr::AnonymousEscrowResolveDispute { .. } => {
             access_class_for_builtin(Builtin::AnonymousEscrowResolveDispute)
         }
-        ir::Instr::TransferBatchBegin => {
-            access_class_for_builtin(Builtin::TransferV1BatchBegin)
-        }
+        ir::Instr::TransferBatchBegin => access_class_for_builtin(Builtin::TransferV1BatchBegin),
         ir::Instr::TransferBatchEnd => access_class_for_builtin(Builtin::TransferV1BatchEnd),
         ir::Instr::TransferBatchApply { .. } => {
             access_class_for_builtin(Builtin::TransferV1BatchApply)
@@ -21834,13 +22152,9 @@ fn classify_ir_access(instr: &ir::Instr) -> IrAccessClass {
         ir::Instr::CreateNftsForAllUsers => {
             access_class_for_builtin(Builtin::CreateNftsForAllUsers)
         }
-        ir::Instr::SetExecutionDepth { .. } => {
-            access_class_for_builtin(Builtin::SetExecutionDepth)
-        }
+        ir::Instr::SetExecutionDepth { .. } => access_class_for_builtin(Builtin::SetExecutionDepth),
         ir::Instr::SetVl { .. } => access_class_for_builtin(Builtin::SetVl),
-        ir::Instr::SetAccountDetail { .. } => {
-            access_class_for_builtin(Builtin::SetAccountDetail)
-        }
+        ir::Instr::SetAccountDetail { .. } => access_class_for_builtin(Builtin::SetAccountDetail),
         ir::Instr::CreateNft { .. } => access_class_for_builtin(Builtin::NftMintAsset),
         ir::Instr::SetNftData { .. } => access_class_for_builtin(Builtin::NftSetMetadata),
         ir::Instr::BurnNft { .. } => access_class_for_builtin(Builtin::NftBurnAsset),
@@ -21849,48 +22163,46 @@ fn classify_ir_access(instr: &ir::Instr) -> IrAccessClass {
         ir::Instr::RegisterAccount { .. } => access_class_for_builtin(Builtin::RegisterAccount),
         ir::Instr::AddSignatory { .. } => access_class_for_builtin(Builtin::AddSignatory),
         ir::Instr::RemoveSignatory { .. } => access_class_for_builtin(Builtin::RemoveSignatory),
-        ir::Instr::SetAccountQuorum { .. } => {
-            access_class_for_builtin(Builtin::SetAccountQuorum)
-        }
-        ir::Instr::UnregisterDomain { .. } => {
-            access_class_for_builtin(Builtin::UnregisterDomain)
-        }
+        ir::Instr::SetAccountQuorum { .. } => access_class_for_builtin(Builtin::SetAccountQuorum),
+        ir::Instr::UnregisterDomain { .. } => access_class_for_builtin(Builtin::UnregisterDomain),
         ir::Instr::UnregisterAsset { .. } => access_class_for_builtin(Builtin::UnregisterAsset),
-        ir::Instr::UnregisterAccount { .. } => {
-            access_class_for_builtin(Builtin::UnregisterAccount)
-        }
+        ir::Instr::UnregisterAccount { .. } => access_class_for_builtin(Builtin::UnregisterAccount),
         ir::Instr::RegisterPeer { .. } => access_class_for_builtin(Builtin::RegisterPeer),
         ir::Instr::UnregisterPeer { .. } => access_class_for_builtin(Builtin::UnregisterPeer),
         ir::Instr::CreateTrigger { .. } => access_class_for_builtin(Builtin::CreateTrigger),
         ir::Instr::RemoveTrigger { .. } => access_class_for_builtin(Builtin::RemoveTrigger),
-        ir::Instr::SetTriggerEnabled { .. } => {
-            access_class_for_builtin(Builtin::SetTriggerEnabled)
-        }
-        ir::Instr::GrantPermission { .. } => {
-            access_class_for_builtin(Builtin::GrantPermission)
-        }
-        ir::Instr::RevokePermission { .. } => {
-            access_class_for_builtin(Builtin::RevokePermission)
-        }
+        ir::Instr::SetTriggerEnabled { .. } => access_class_for_builtin(Builtin::SetTriggerEnabled),
+        ir::Instr::GrantPermission { .. } => access_class_for_builtin(Builtin::GrantPermission),
+        ir::Instr::RevokePermission { .. } => access_class_for_builtin(Builtin::RevokePermission),
         ir::Instr::CreateRole { .. } => access_class_for_builtin(Builtin::CreateRole),
         ir::Instr::DeleteRole { .. } => access_class_for_builtin(Builtin::DeleteRole),
         ir::Instr::GrantRole { .. } => access_class_for_builtin(Builtin::GrantRole),
+        ir::Instr::DirectHelperSyscall { syscall, .. } => {
+            use ivm_abi::syscalls::SyscallAccess;
+            match ivm_abi::syscalls::registered_syscall_access(*syscall) {
+                Some(SyscallAccess::None) => IrAccessClass::None,
+                Some(SyscallAccess::StateRead) => IrAccessClass::Ledger(BuiltinAccess::StateRead),
+                Some(SyscallAccess::StateWrite) => IrAccessClass::Ledger(BuiltinAccess::StateWrite),
+                Some(SyscallAccess::LedgerRead) => IrAccessClass::Ledger(BuiltinAccess::LedgerRead),
+                Some(SyscallAccess::LedgerWrite) => {
+                    IrAccessClass::Ledger(BuiltinAccess::LedgerWrite)
+                }
+                Some(SyscallAccess::Dynamic) | None => {
+                    IrAccessClass::Ledger(BuiltinAccess::Dynamic)
+                }
+            }
+        }
         ir::Instr::RevokeRole { .. } => access_class_for_builtin(Builtin::RevokeRole),
         ir::Instr::TransferDomain { .. } => access_class_for_builtin(Builtin::TransferDomain),
         ir::Instr::ResolveAccountAlias { .. } => {
             access_class_for_builtin(Builtin::ResolveAccountAlias)
         }
-        ir::Instr::InvokeEntrypointAs { .. }
-        | ir::Instr::InvokeEntrypointAsMulti { .. } => {
+        ir::Instr::InvokeEntrypointAs { .. } | ir::Instr::InvokeEntrypointAsMulti { .. } => {
             access_class_for_builtin(Builtin::TestInvokeEntrypointAs)
         }
-        ir::Instr::ExpectRejectAs { .. } => {
-            access_class_for_builtin(Builtin::TestExpectRejectAs)
-        }
+        ir::Instr::ExpectRejectAs { .. } => access_class_for_builtin(Builtin::TestExpectRejectAs),
         ir::Instr::ActorAccount { .. } => access_class_for_builtin(Builtin::TestActorAccount),
-        ir::Instr::ActorPublicKey { .. } => {
-            access_class_for_builtin(Builtin::TestActorPublicKey)
-        }
+        ir::Instr::ActorPublicKey { .. } => access_class_for_builtin(Builtin::TestActorPublicKey),
         ir::Instr::ActorSign { .. } => access_class_for_builtin(Builtin::TestActorSign),
         ir::Instr::ZkVerify { number, .. } => match *number {
             ivm_abi::syscalls::SYSCALL_ZK_VERIFY_TRANSFER => {
@@ -21913,9 +22225,7 @@ fn classify_ir_access(instr: &ir::Instr) -> IrAccessClass {
         ir::Instr::ProveExecution { .. } => access_class_for_builtin(Builtin::ProveExecution),
         ir::Instr::GrowHeap { .. } => access_class_for_builtin(Builtin::GrowHeap),
         ir::Instr::GetMerklePath { .. } => access_class_for_builtin(Builtin::GetMerklePath),
-        ir::Instr::GetMerkleCompact { .. } => {
-            access_class_for_builtin(Builtin::GetMerkleCompact)
-        }
+        ir::Instr::GetMerkleCompact { .. } => access_class_for_builtin(Builtin::GetMerkleCompact),
         ir::Instr::GetRegisterMerkleCompact { .. } => {
             access_class_for_builtin(Builtin::GetRegisterMerkleCompact)
         }
@@ -21932,13 +22242,9 @@ fn classify_ir_access(instr: &ir::Instr) -> IrAccessClass {
         ir::Instr::QueryGet { .. } => access_class_for_builtin(Builtin::QueryGetParameter),
         ir::Instr::CoreQueryGet { .. } => access_class_for_builtin(Builtin::QueryGetAccount),
         ir::Instr::CoreQueryPage { .. } => access_class_for_builtin(Builtin::QueryPageAccounts),
-        ir::Instr::GetAccountBalance { .. } => {
-            access_class_for_builtin(Builtin::GetAccountBalance)
-        }
+        ir::Instr::GetAccountBalance { .. } => access_class_for_builtin(Builtin::GetAccountBalance),
         ir::Instr::Alloc { .. } => access_class_for_builtin(Builtin::Alloc),
-        ir::Instr::GetPrivateInput { .. } => {
-            access_class_for_builtin(Builtin::GetPrivateInput)
-        }
+        ir::Instr::GetPrivateInput { .. } => access_class_for_builtin(Builtin::GetPrivateInput),
         ir::Instr::UseNullifier { .. } => access_class_for_builtin(Builtin::UseNullifier),
         ir::Instr::CommitOutput => access_class_for_builtin(Builtin::CommitOutput),
         ir::Instr::SmartContractLifecycle { syscall, .. } => match *syscall {

@@ -55,6 +55,8 @@ pub mod isi {
             amount: &Numeric,
         ) -> Result<(), Error> {
             let resolved_id = self.resolve_asset_id_for_current_scope(id)?;
+            let spec = self.asset_definition(resolved_id.definition())?.spec();
+            assert_numeric_spec_with(amount, spec)?;
             if sccp_registry_references_custody_asset(self.sccp_registry.get(), &resolved_id) {
                 return Err(InstructionExecutionError::InvariantViolation(
                     "SCCP custody can only be debited by verified native inbound settlement".into(),
@@ -68,6 +70,7 @@ pub mod isi {
                 .ok_or_else(|| FindError::Asset(resolved_id.clone().into()))?;
             let quantity: &mut Numeric = &mut *asset;
             ensure_non_negative(quantity)?;
+            assert_numeric_spec_with(quantity, spec)?;
             let current = quantity.clone();
             let candidate = current
                 .checked_sub(amount.clone())
@@ -75,6 +78,7 @@ pub mod isi {
             if candidate.mantissa().is_negative() {
                 return Err(MathError::NotEnoughQuantity.into());
             }
+            assert_numeric_spec_with(&candidate, spec)?;
             *quantity = candidate;
             if (**asset).is_zero() {
                 assert!(self.remove_asset_and_metadata(&resolved_id).is_some());
@@ -170,15 +174,19 @@ pub mod isi {
             amount: &Numeric,
         ) -> Result<(), Error> {
             let resolved_id = self.resolve_asset_id_for_current_scope(id)?;
+            let spec = self.asset_definition(resolved_id.definition())?.spec();
             ensure_non_negative(amount)?;
+            assert_numeric_spec_with(amount, spec)?;
             let is_nonzero = {
                 let dst = self.asset_or_insert(&resolved_id, Numeric::zero())?;
                 let q: &mut Numeric = &mut *dst;
                 ensure_non_negative(q)?;
+                assert_numeric_spec_with(q, spec)?;
                 *q = q
                     .clone()
                     .checked_add(amount.clone())
                     .ok_or(MathError::Overflow)?;
+                assert_numeric_spec_with(q, spec)?;
                 !q.is_zero()
             };
             if is_nonzero {
@@ -336,10 +344,19 @@ pub mod isi {
         Ok(())
     }
 
-    fn ensure_asset_transfer_control_owner(
+    #[derive(Clone, Copy)]
+    enum TransferControlCapability {
+        Freeze,
+        DailyLimit,
+        OwnerOnly,
+    }
+
+    fn ensure_asset_transfer_control_authority(
         state_transaction: &StateTransaction<'_, '_>,
         authority: &AccountId,
+        account_id: &AccountId,
         asset_definition_id: &AssetDefinitionId,
+        capability: TransferControlCapability,
     ) -> Result<(), Error> {
         let owner = state_transaction
             .world
@@ -349,9 +366,58 @@ pub mod isi {
         if owner == *authority {
             return Ok(());
         }
+        let account_domain = state_transaction
+            .world
+            .account(account_id)?
+            .label()
+            .and_then(|label| label.domain.as_ref())
+            .cloned()
+            .ok_or_else(|| {
+                InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "transfer-control target account {account_id} has no canonical on-chain domain label"
+                    )
+                    .into(),
+                )
+            })?;
+        let required: Option<Permission> = match capability {
+            TransferControlCapability::Freeze => Some(
+                iroha_executor_data_model::permission::asset::CanSetAssetTransferFreeze {
+                    asset_definition: asset_definition_id.clone(),
+                    account_domain,
+                }
+                .into(),
+            ),
+            TransferControlCapability::DailyLimit => Some(
+                iroha_executor_data_model::permission::asset::CanSetAssetTransferDailyLimit {
+                    asset_definition: asset_definition_id.clone(),
+                    account_domain,
+                }
+                .into(),
+            ),
+            TransferControlCapability::OwnerOnly => None,
+        };
+        if required.as_ref().is_some_and(|required| {
+            state_transaction
+                .world
+                .account_permissions_iter(authority)
+                .is_ok_and(|permissions| permissions.into_iter().any(|actual| actual == required))
+                || state_transaction
+                    .world
+                    .account_roles_iter(authority)
+                    .any(|role_id| {
+                        state_transaction
+                            .world
+                            .roles
+                            .get(role_id)
+                            .is_some_and(|role| role.permissions().any(|actual| actual == required))
+                    })
+        }) {
+            return Ok(());
+        }
         Err(InstructionExecutionError::InvariantViolation(
             format!(
-                "account {authority} cannot manage transfer controls for asset definition {asset_definition_id}; owner is {owner}"
+                "account {authority} lacks an exact asset- and account-domain-scoped transfer-control permission for {account_id} and {asset_definition_id}; owner is {owner}"
             )
             .into(),
         ))
@@ -1704,10 +1770,12 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            ensure_asset_transfer_control_owner(
+            ensure_asset_transfer_control_authority(
                 state_transaction,
                 authority,
+                &self.account_id,
                 &self.asset_definition_id,
+                TransferControlCapability::Freeze,
             )?;
             state_transaction.world.account(&self.account_id)?;
 
@@ -1737,10 +1805,12 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            ensure_asset_transfer_control_owner(
+            ensure_asset_transfer_control_authority(
                 state_transaction,
                 authority,
+                &self.account_id,
                 &self.asset_definition_id,
+                TransferControlCapability::OwnerOnly,
             )?;
             state_transaction.world.account(&self.account_id)?;
 
@@ -1770,10 +1840,25 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            ensure_asset_transfer_control_owner(
+            if self.limits.len() != 1 || self.limits[0].window != AssetTransferControlWindow::Day {
+                let asset_definition = state_transaction
+                    .world
+                    .asset_definition(&self.asset_definition_id)?;
+                let owner = asset_definition.owned_by();
+                if owner != authority {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "delegated daily-limit permission accepts exactly one DAY limit"
+                            .to_owned()
+                            .into(),
+                    ));
+                }
+            }
+            ensure_asset_transfer_control_authority(
                 state_transaction,
                 authority,
+                &self.account_id,
                 &self.asset_definition_id,
+                TransferControlCapability::DailyLimit,
             )?;
             state_transaction.world.account(&self.account_id)?;
 
@@ -3025,7 +3110,10 @@ pub mod query {
             AssetTransferControlWindow, AssetTransferLimit, DOMAIN_ASSET_USAGE_POLICY_METADATA_KEY,
             DomainAssetUsagePolicyV1,
         };
-        use iroha_data_model::isi::transfer::{TransferAssetBatch, TransferAssetBatchEntry};
+        use iroha_data_model::isi::{
+            error::InstructionEvaluationError,
+            transfer::{TransferAssetBatch, TransferAssetBatchEntry},
+        };
         use iroha_data_model::nexus::{
             Allowance, AllowanceWindow, AssetPermissionManifest, CapabilityScope, DataSpaceId,
             ManifestEffect, ManifestEntry,
@@ -4243,6 +4331,142 @@ pub mod query {
                 err,
                 InstructionExecutionError::Math(MathError::NegativeValue)
             ));
+        }
+
+        #[test]
+        fn numeric_asset_mutation_boundaries_reject_negative_values() {
+            let (state, asset_definition_id, source_asset_id) =
+                build_asset_transfer_control_test_state(10);
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut stx = block.transaction();
+            seed_test_call_hash(&mut stx, 0x91);
+            let negative = Numeric::new(-1_i32, 0);
+            let destination_asset_id = AssetId::new(asset_definition_id.clone(), BOB_ID.clone());
+
+            let err = stx
+                .world
+                .asset_or_insert_exact(&destination_asset_id, negative.clone())
+                .expect_err("negative default balance must be rejected");
+            assert!(matches!(
+                err,
+                InstructionExecutionError::Math(MathError::NegativeValue)
+            ));
+            assert!(stx.world.assets.get(&destination_asset_id).is_none());
+
+            let err = stx
+                .world
+                .increase_asset_total_amount(&asset_definition_id, &negative)
+                .expect_err("negative supply increment must be rejected");
+            assert!(matches!(
+                err,
+                InstructionExecutionError::Math(MathError::NegativeValue)
+            ));
+            let err = stx
+                .world
+                .decrease_asset_total_amount(&asset_definition_id, &negative)
+                .expect_err("negative supply decrement must be rejected");
+            assert!(matches!(
+                err,
+                InstructionExecutionError::Math(MathError::NegativeValue)
+            ));
+            let err = stx
+                .world
+                .decrease_asset_total_amount(&asset_definition_id, &Numeric::one())
+                .expect_err("signed subtraction must not create a negative total");
+            assert!(matches!(
+                err,
+                InstructionExecutionError::Math(MathError::NotEnoughQuantity)
+            ));
+
+            for err in [
+                Mint::asset_numeric(negative.clone(), source_asset_id.clone())
+                    .execute(&ALICE_ID, &mut stx)
+                    .expect_err("negative mint must be rejected"),
+                Burn::asset_numeric(negative.clone(), source_asset_id.clone())
+                    .execute(&ALICE_ID, &mut stx)
+                    .expect_err("negative burn must be rejected"),
+                Transfer::asset_numeric(source_asset_id.clone(), negative, BOB_ID.clone())
+                    .execute(&ALICE_ID, &mut stx)
+                    .expect_err("negative transfer must be rejected"),
+            ] {
+                assert!(matches!(
+                    err,
+                    InstructionExecutionError::Math(MathError::NegativeValue)
+                ));
+            }
+
+            assert_eq!(
+                stx.world
+                    .assets
+                    .get(&source_asset_id)
+                    .map(|value| value.as_ref()),
+                Some(&Numeric::new(10_u32, 0))
+            );
+            assert!(stx.world.assets.get(&destination_asset_id).is_none());
+            assert_eq!(
+                stx.world
+                    .asset_definition(&asset_definition_id)
+                    .expect("asset definition")
+                    .total_quantity(),
+                &Numeric::zero()
+            );
+        }
+
+        #[test]
+        fn asset_insert_and_totals_reject_values_outside_numeric_spec() {
+            let domain_id = DomainId::try_new("integer_assets", "universal").expect("domain id");
+            let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
+            let alice_account = build_account_in_domain(&ALICE_ID, &domain_id);
+            let definition_id =
+                AssetDefinitionId::new(domain_id, "coin".parse().expect("asset name"));
+            let definition = AssetDefinition::new(
+                definition_id.clone(),
+                iroha_primitives::numeric::NumericSpec::integer(),
+            )
+            .with_name("coin".to_owned())
+            .build(&ALICE_ID);
+            let world = World::with([domain], [alice_account], [definition]);
+            let state = State::new(
+                world,
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut stx = block.transaction();
+            let asset_id = AssetId::new(definition_id.clone(), ALICE_ID.clone());
+            let fractional = Numeric::new(1_u32, 1);
+
+            let err = stx
+                .world
+                .asset_or_insert_exact(&asset_id, fractional.clone())
+                .expect_err("fractional default must violate integer asset spec");
+            assert!(matches!(
+                err,
+                InstructionExecutionError::Evaluate(InstructionEvaluationError::Type(
+                    TypeError::AssetNumericSpec(_)
+                ))
+            ));
+            let err = stx
+                .world
+                .increase_asset_total_amount(&definition_id, &fractional)
+                .expect_err("fractional total delta must violate integer asset spec");
+            assert!(matches!(
+                err,
+                InstructionExecutionError::Evaluate(InstructionEvaluationError::Type(
+                    TypeError::AssetNumericSpec(_)
+                ))
+            ));
+            assert!(stx.world.assets.get(&asset_id).is_none());
+            assert_eq!(
+                stx.world
+                    .asset_definition(&definition_id)
+                    .expect("asset definition must remain present")
+                    .total_quantity(),
+                &Numeric::zero(),
+                "rejected out-of-spec values must not mutate aggregate supply"
+            );
         }
 
         #[test]

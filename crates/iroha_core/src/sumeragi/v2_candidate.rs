@@ -29,7 +29,7 @@ use iroha_data_model::{
     da::{commitment::DaCommitmentBundle, pin_intent::DaPinIntentBundle},
     events::pipeline::PipelineEventBox,
     merge::MergeLedgerEntry,
-    transaction::{SignedTransaction, TransactionEntrypoint},
+    transaction::TransactionEntrypoint,
 };
 use iroha_primitives::time::TimeSource;
 use iroha_sumeragi_core::EventTag;
@@ -77,21 +77,6 @@ impl CandidateLimits {
             max_payload_bytes,
             max_queue_scan,
         })
-    }
-
-    /// Maximum number of external transactions in one candidate.
-    pub(crate) const fn max_transactions(self) -> NonZeroUsize {
-        self.max_transactions
-    }
-
-    /// Maximum exact canonical body size in bytes.
-    pub(crate) const fn max_payload_bytes(self) -> NonZeroUsize {
-        self.max_payload_bytes
-    }
-
-    /// Maximum number of pending queue entries inspected per attempt.
-    pub(crate) const fn max_queue_scan(self) -> NonZeroUsize {
-        self.max_queue_scan
     }
 }
 
@@ -154,17 +139,6 @@ pub(crate) struct PreparedCandidateWork {
     pub(crate) lane_payload_ownerships: Vec<SumeragiLanePayloadOwnership>,
 }
 
-impl PreparedCandidateWork {
-    /// Construct work for a batch containing only available single-route entries.
-    #[must_use]
-    pub(crate) fn single_route_batch(candidate_count: usize) -> Self {
-        Self {
-            native_amx_receipts: vec![None; candidate_count],
-            lane_payload_ownerships: Vec::new(),
-        }
-    }
-}
-
 /// A bounded subset of candidate indices whose lane-local work is unavailable.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct CandidateWorkUnavailable {
@@ -206,33 +180,6 @@ pub(crate) trait CandidateWorkProvider {
         view: wire::View,
         candidates: &[CandidateDescriptor<'_>],
     ) -> Result<PreparedCandidateWork, CandidateWorkUnavailable>;
-}
-
-/// Conservative provider used when no certified Native AMX snapshot exists.
-///
-/// Single-route transactions remain eligible. Native AMX transactions are
-/// reported unavailable and therefore remain in the queue without preventing
-/// an honest leader from producing a heartbeat or single-route block.
-#[derive(Clone, Copy, Debug, Default)]
-pub(crate) struct SingleRouteWorkProvider;
-
-impl CandidateWorkProvider for SingleRouteWorkProvider {
-    fn prepare(
-        &mut self,
-        _context: &wire::HeightContext,
-        _view: wire::View,
-        candidates: &[CandidateDescriptor<'_>],
-    ) -> Result<PreparedCandidateWork, CandidateWorkUnavailable> {
-        let unavailable = unavailable_native_amx_indices(candidates);
-        if unavailable.is_empty() {
-            Ok(PreparedCandidateWork::single_route_batch(candidates.len()))
-        } else {
-            Err(CandidateWorkUnavailable::new(
-                unavailable,
-                "certified Native AMX receipts are not available",
-            ))
-        }
-    }
 }
 
 /// Complete immutable inputs for one fresh successor candidate.
@@ -281,8 +228,6 @@ pub(crate) struct AssembledV2Candidate {
     block: SignedBlock,
     canonical_wire: Vec<u8>,
     encoded_payload: EncodedV2Payload,
-    selected_transaction_hashes: Vec<HashOf<SignedTransaction>>,
-    selected_entrypoint_hashes: Vec<HashOf<TransactionEntrypoint>>,
     events: Vec<PipelineEventBox>,
     scan_report: CandidateScanReport,
 }
@@ -296,31 +241,6 @@ impl AssembledV2Candidate {
     /// Borrow the signed canonical successor block.
     pub(crate) const fn block(&self) -> &SignedBlock {
         &self.block
-    }
-
-    /// Exact canonical `SignedBlockWire` bytes committed by the manifest.
-    pub(crate) fn canonical_wire(&self) -> &[u8] {
-        &self.canonical_wire
-    }
-
-    /// Borrow the deterministic manifest and chunk sequence.
-    pub(crate) const fn encoded_payload(&self) -> &EncodedV2Payload {
-        &self.encoded_payload
-    }
-
-    /// Queue transaction hashes included in the candidate.
-    pub(crate) fn selected_transaction_hashes(&self) -> &[HashOf<SignedTransaction>] {
-        &self.selected_transaction_hashes
-    }
-
-    /// Canonical external-entrypoint order committed by the candidate.
-    pub(crate) fn selected_entrypoint_hashes(&self) -> &[HashOf<TransactionEntrypoint>] {
-        &self.selected_entrypoint_hashes
-    }
-
-    /// Pipeline events emitted when the block was constructed.
-    pub(crate) fn events(&self) -> &[PipelineEventBox] {
-        &self.events
     }
 
     /// Bounded queue-selection diagnostics.
@@ -515,14 +435,6 @@ impl V2CandidateAssembler {
                 block,
                 canonical_wire,
                 encoded_payload,
-                selected_transaction_hashes: selected
-                    .iter()
-                    .map(|candidate| candidate.transaction.hash())
-                    .collect(),
-                selected_entrypoint_hashes: selected
-                    .iter()
-                    .map(|candidate| candidate.entrypoint_hash)
-                    .collect(),
                 events,
                 scan_report: report,
             });
@@ -908,16 +820,6 @@ fn validate_prepared_work(
     Ok(())
 }
 
-fn unavailable_native_amx_indices(candidates: &[CandidateDescriptor<'_>]) -> BTreeSet<usize> {
-    candidates
-        .iter()
-        .enumerate()
-        .filter_map(|(index, candidate)| {
-            matches!(candidate.routing_plan(), RoutingPlan::NativeAmx(_)).then_some(index)
-        })
-        .collect()
-}
-
 fn encoded_chunk_count(
     layout: wire::DataAvailabilityLayout,
     payload_len: usize,
@@ -1098,15 +1000,10 @@ mod tests {
     use std::{borrow::Cow, num::NonZeroUsize};
 
     use iroha_crypto::{Algorithm, KeyPair};
-    use iroha_data_model::{
-        ChainId,
-        account::AccountId,
-        nexus::{DataSpaceId, LaneId},
-        transaction::TransactionBuilder,
-    };
+    use iroha_data_model::{ChainId, account::AccountId, transaction::TransactionBuilder};
 
     use super::*;
-    use crate::queue::{RouteLeg, RouteLegRole, RoutingDecision};
+    use crate::queue::RoutingDecision;
 
     fn nonzero(value: usize) -> NonZeroUsize {
         NonZeroUsize::new(value).expect("test value is non-zero")
@@ -1156,24 +1053,6 @@ mod tests {
             (window[0].entrypoint_hash, window[0].source_ordinal)
                 <= (window[1].entrypoint_hash, window[1].source_ordinal)
         }));
-    }
-
-    #[test]
-    fn single_route_provider_defers_native_amx_only() {
-        let mut single = record(1, "single", 0);
-        single.routing_plan = RoutingPlan::single(RoutingDecision::default());
-        let coordinator = RoutingDecision::new(LaneId::new(1), DataSpaceId::new(1));
-        let participant = RouteLeg::new(
-            RoutingDecision::new(LaneId::new(2), DataSpaceId::new(2)),
-            RouteLegRole::Participant,
-        );
-        let mut native = record(2, "native", 1);
-        native.routing_plan = RoutingPlan::native_amx(coordinator, vec![participant]);
-        let candidates = [single.descriptor(), native.descriptor()];
-        assert_eq!(
-            unavailable_native_amx_indices(&candidates),
-            BTreeSet::from([1])
-        );
     }
 
     #[test]

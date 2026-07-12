@@ -28,3 +28,10 @@ path = "fuzz_targets/kotodama_lower.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "numeric_v1"
+path = "fuzz_targets/numeric_v1.rs"
+test = false
+doc = false
+bench = false

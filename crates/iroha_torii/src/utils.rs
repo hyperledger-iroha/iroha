@@ -84,9 +84,9 @@ pub(crate) fn is_valid_error_detail_text(value: &str) -> bool {
 pub(crate) fn is_valid_reject_code(code: &str) -> bool {
     !code.is_empty()
         && code.len() <= MAX_REJECT_CODE_BYTES
-        && code.bytes().all(|byte| {
-            byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.' | b':')
-        })
+        && code
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.' | b':'))
 }
 
 fn is_valid_bounded_public_text(value: &str, max_characters: usize) -> bool {
@@ -183,25 +183,240 @@ fn telemetry_error_code<T: Any>(value: &T) -> Option<HttpErrorCode> {
         .map(HttpErrorCode::from_envelope)
 }
 
-fn base_media_type(raw: &str) -> &str {
-    raw.split(';').next().map(str::trim).unwrap_or_default()
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct MediaParameter {
+    name: String,
+    value: String,
+    quoted: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ParsedMediaType {
+    type_name: String,
+    subtype: String,
+    parameters: Vec<MediaParameter>,
+}
+
+impl ParsedMediaType {
+    fn essence(&self) -> String {
+        format!("{}/{}", self.type_name, self.subtype)
+    }
+
+    fn has_concrete_type(&self) -> bool {
+        !self.type_name.contains('*') && !self.subtype.contains('*')
+    }
+
+    fn has_valid_range_wildcards(&self) -> bool {
+        match (self.type_name.as_str(), self.subtype.as_str()) {
+            ("*", "*") => true,
+            ("*", _) => false,
+            (type_name, "*") => !type_name.contains('*'),
+            _ => self.has_concrete_type(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum MediaParseError {
+    InvalidSyntax,
+    DuplicateParameter,
+    InvalidQuality,
+}
+
+fn is_http_token_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric()
+        || matches!(
+            byte,
+            b'!' | b'#'
+                | b'$'
+                | b'%'
+                | b'&'
+                | b'\''
+                | b'*'
+                | b'+'
+                | b'-'
+                | b'.'
+                | b'^'
+                | b'_'
+                | b'`'
+                | b'|'
+                | b'~'
+        )
+}
+
+fn is_optional_whitespace(byte: u8) -> bool {
+    matches!(byte, b' ' | b'\t')
+}
+
+fn is_quoted_text_byte(byte: u8) -> bool {
+    matches!(byte, b'\t' | b' ' | b'!' | b'#'..=b'[' | b']'..=b'~')
+}
+
+fn is_quoted_pair_byte(byte: u8) -> bool {
+    matches!(byte, b'\t' | b' '..=b'~')
+}
+
+fn trim_optional_whitespace(raw: &str) -> &str {
+    raw.trim_matches(|character| matches!(character, ' ' | '\t'))
+}
+
+struct MediaCursor<'a> {
+    bytes: &'a [u8],
+    position: usize,
+}
+
+impl<'a> MediaCursor<'a> {
+    fn new(raw: &'a str) -> Result<Self, MediaParseError> {
+        if !raw.is_ascii() {
+            return Err(MediaParseError::InvalidSyntax);
+        }
+        Ok(Self {
+            bytes: raw.as_bytes(),
+            position: 0,
+        })
+    }
+
+    fn at_end(&self) -> bool {
+        self.position == self.bytes.len()
+    }
+
+    fn current(&self) -> Option<u8> {
+        self.bytes.get(self.position).copied()
+    }
+
+    fn skip_optional_whitespace(&mut self) {
+        while self.current().is_some_and(is_optional_whitespace) {
+            self.position += 1;
+        }
+    }
+
+    fn consume(&mut self, expected: u8) -> Result<(), MediaParseError> {
+        if self.current() != Some(expected) {
+            return Err(MediaParseError::InvalidSyntax);
+        }
+        self.position += 1;
+        Ok(())
+    }
+
+    fn token(&mut self) -> Result<&'a str, MediaParseError> {
+        let start = self.position;
+        while self.current().is_some_and(is_http_token_byte) {
+            self.position += 1;
+        }
+        if self.position == start {
+            return Err(MediaParseError::InvalidSyntax);
+        }
+        // `MediaCursor::new` rejects non-ASCII input, so token boundaries are
+        // always UTF-8 boundaries.
+        Ok(std::str::from_utf8(&self.bytes[start..self.position])
+            .expect("ASCII media token is valid UTF-8"))
+    }
+
+    fn parameter_value(&mut self) -> Result<(String, bool), MediaParseError> {
+        if self.current() != Some(b'"') {
+            return self.token().map(|value| (value.to_owned(), false));
+        }
+
+        self.position += 1;
+        let mut decoded = String::new();
+        loop {
+            let byte = self.current().ok_or(MediaParseError::InvalidSyntax)?;
+            match byte {
+                b'"' => {
+                    self.position += 1;
+                    return Ok((decoded, true));
+                }
+                b'\\' => {
+                    self.position += 1;
+                    let escaped = self.current().ok_or(MediaParseError::InvalidSyntax)?;
+                    if !is_quoted_pair_byte(escaped) {
+                        return Err(MediaParseError::InvalidSyntax);
+                    }
+                    decoded.push(char::from(escaped));
+                    self.position += 1;
+                }
+                value if is_quoted_text_byte(value) => {
+                    decoded.push(char::from(value));
+                    self.position += 1;
+                }
+                _ => return Err(MediaParseError::InvalidSyntax),
+            }
+        }
+    }
+}
+
+fn parse_media_type(raw: &str) -> Result<ParsedMediaType, MediaParseError> {
+    let mut cursor = MediaCursor::new(raw)?;
+    cursor.skip_optional_whitespace();
+    let type_name = cursor.token()?.to_ascii_lowercase();
+    cursor.consume(b'/')?;
+    let subtype = cursor.token()?.to_ascii_lowercase();
+
+    let mut parameters: Vec<MediaParameter> = Vec::new();
+    loop {
+        cursor.skip_optional_whitespace();
+        if cursor.at_end() {
+            break;
+        }
+        cursor.consume(b';')?;
+        cursor.skip_optional_whitespace();
+        let name = cursor.token()?.to_ascii_lowercase();
+        // Whitespace around `=` is not part of the HTTP parameter grammar.
+        cursor.consume(b'=')?;
+        let (value, quoted) = cursor.parameter_value()?;
+        if parameters.iter().any(|parameter| parameter.name == name) {
+            return Err(MediaParseError::DuplicateParameter);
+        }
+        parameters.push(MediaParameter {
+            name,
+            value,
+            quoted,
+        });
+    }
+
+    Ok(ParsedMediaType {
+        type_name,
+        subtype,
+        parameters,
+    })
+}
+
+fn is_json_subtype(subtype: &str) -> bool {
+    subtype == "json"
+        || subtype
+            .strip_suffix("+json")
+            .is_some_and(|prefix| !prefix.is_empty())
+}
+
+fn has_supported_json_charset(parameters: &[MediaParameter]) -> bool {
+    parameters.iter().all(|parameter| {
+        parameter.name != "charset" || parameter.value.eq_ignore_ascii_case("utf-8")
+    })
 }
 
 fn is_norito_media_type(raw: &str) -> bool {
-    let base = base_media_type(raw);
-    !base.is_empty() && base.eq_ignore_ascii_case(NORITO_MIME_TYPE)
+    parse_media_type(raw).is_ok_and(|media_type| {
+        media_type.has_concrete_type()
+            && media_type.type_name == "application"
+            && media_type.subtype == "x-norito"
+            && media_type
+                .parameters
+                .iter()
+                .all(|parameter| parameter.name != "q")
+    })
 }
 
 fn is_json_media_type(raw: &str) -> bool {
-    let base = base_media_type(raw);
-    if base.is_empty() {
-        return false;
-    }
-    if base.eq_ignore_ascii_case(JSON_MIME_TYPE) {
-        return true;
-    }
-    let lower = base.to_ascii_lowercase();
-    lower.starts_with("application/") && lower.ends_with("+json")
+    parse_media_type(raw).is_ok_and(|media_type| {
+        media_type.has_concrete_type()
+            && media_type.type_name == "application"
+            && is_json_subtype(&media_type.subtype)
+            && has_supported_json_charset(&media_type.parameters)
+            && media_type
+                .parameters
+                .iter()
+                .all(|parameter| parameter.name != "q")
+    })
 }
 
 /// Classify a response `Content-Type` as one of Torii's two typed representations.
@@ -210,13 +425,25 @@ fn is_json_media_type(raw: &str) -> bool {
 /// raw blobs, and hosted content return `None` and retain their own negotiation rules.
 #[must_use]
 pub fn typed_response_format_for_content_type(raw: &str) -> Option<ResponseFormat> {
-    if is_json_media_type(raw) {
-        Some(ResponseFormat::Json)
-    } else if is_norito_media_type(raw) {
-        Some(ResponseFormat::Norito)
-    } else {
-        None
+    let media_type = parse_media_type(raw).ok()?;
+    if !media_type.has_concrete_type()
+        || media_type
+            .parameters
+            .iter()
+            .any(|parameter| parameter.name == "q")
+    {
+        return None;
     }
+    if media_type.type_name == "application"
+        && is_json_subtype(&media_type.subtype)
+        && has_supported_json_charset(&media_type.parameters)
+    {
+        return Some(ResponseFormat::Json);
+    }
+    if media_type.type_name == "application" && media_type.subtype == "x-norito" {
+        return Some(ResponseFormat::Norito);
+    }
+    None
 }
 
 /// Preferred response encoding negotiated from the `Accept` header.
@@ -249,6 +476,115 @@ pub fn current_response_format() -> ResponseFormat {
         .unwrap_or(ResponseFormat::Norito)
 }
 
+/// Supported representation declared by a typed request body.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum TypedRequestContentFormat {
+    /// Norito-backed JSON encoded as UTF-8.
+    Json,
+    /// Native Norito binary encoding.
+    Norito,
+}
+
+fn typed_request_media_rejection(
+    status: StatusCode,
+    code: &'static str,
+    message: impl Into<String>,
+) -> Response {
+    respond_with_status_and_format(
+        status,
+        ErrorEnvelope::new(code, message),
+        current_response_format(),
+    )
+}
+
+/// Validate and classify a typed request's `Content-Type` without reading its body.
+///
+/// The header must occur exactly once and be either `application/json` (with no
+/// parameter or one `charset=utf-8`) or parameter-free `application/x-norito`.
+/// This helper is shared by early admission middleware and body extractors so
+/// unsupported media cannot reach idempotency handling or body collection through
+/// a divergent second parsing path.
+#[allow(clippy::result_large_err)]
+pub(crate) fn typed_request_content_format(
+    headers: &axum::http::HeaderMap,
+) -> Result<TypedRequestContentFormat, Response> {
+    let mut content_types = headers.get_all(CONTENT_TYPE).iter();
+    let Some(value) = content_types.next() else {
+        return Err(typed_request_media_rejection(
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "request_content_type_missing",
+            format!("missing Content-Type; use application/json or {NORITO_MIME_TYPE}"),
+        ));
+    };
+    if content_types.next().is_some() {
+        return Err(typed_request_media_rejection(
+            StatusCode::BAD_REQUEST,
+            "request_content_type_invalid",
+            "Content-Type must appear exactly once.",
+        ));
+    }
+    let declared = value.to_str().map_err(|_| {
+        typed_request_media_rejection(
+            StatusCode::BAD_REQUEST,
+            "request_content_type_invalid",
+            "Content-Type is not valid ASCII.",
+        )
+    })?;
+    let declared = trim_optional_whitespace(declared);
+    if declared.is_empty() {
+        return Err(typed_request_media_rejection(
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "request_content_type_missing",
+            format!("missing Content-Type; use application/json or {NORITO_MIME_TYPE}"),
+        ));
+    }
+
+    let media_type = parse_media_type(declared).map_err(|_| {
+        typed_request_media_rejection(
+            StatusCode::BAD_REQUEST,
+            "request_content_type_invalid",
+            "Content-Type has invalid media-type syntax.",
+        )
+    })?;
+    if !media_type.has_concrete_type() {
+        return Err(typed_request_media_rejection(
+            StatusCode::BAD_REQUEST,
+            "request_content_type_invalid",
+            "Content-Type must declare one concrete media type.",
+        ));
+    }
+
+    let request_format = if media_type.type_name == "application" {
+        if media_type.subtype == "json"
+            && match media_type.parameters.as_slice() {
+                [] => true,
+                [parameter] => {
+                    parameter.name == "charset" && parameter.value.eq_ignore_ascii_case("utf-8")
+                }
+                _ => false,
+            }
+        {
+            Some(TypedRequestContentFormat::Json)
+        } else if media_type.subtype == "x-norito" && media_type.parameters.is_empty() {
+            Some(TypedRequestContentFormat::Norito)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    request_format.ok_or_else(|| {
+        typed_request_media_rejection(
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "request_content_type_unsupported",
+            format!(
+                "unsupported Content-Type `{declared}`; use application/json or {NORITO_MIME_TYPE}"
+            ),
+        )
+    })
+}
+
 fn not_acceptable(message: impl Into<String>) -> Response {
     // When no requested representation can be selected there is no negotiated
     // format to honor. The first-release contract uses a typed JSON envelope as
@@ -279,33 +615,195 @@ fn parse_accept_qvalue(raw: &str) -> Option<u16> {
     }
 }
 
-#[allow(clippy::result_large_err)]
-fn parse_accept_quality<I, S>(params: I) -> Result<u16, Response>
-where
-    I: Iterator<Item = S>,
-    S: AsRef<str>,
-{
-    let mut quality = 1_000;
-    let mut quality_seen = false;
-    for param in params {
-        let param = param.as_ref().trim();
-        let Some((name, value)) = param.split_once('=') else {
-            if param.eq_ignore_ascii_case("q") {
-                return Err(not_acceptable("invalid q-value in Accept header"));
+fn split_accept_list(raw: &str) -> Result<Vec<&str>, MediaParseError> {
+    if !raw.is_ascii() {
+        return Err(MediaParseError::InvalidSyntax);
+    }
+
+    let bytes = raw.as_bytes();
+    let mut entries = Vec::new();
+    let mut start = 0;
+    let mut position = 0;
+    let mut in_quotes = false;
+    while position < bytes.len() {
+        let byte = bytes[position];
+        if in_quotes {
+            match byte {
+                b'"' => {
+                    in_quotes = false;
+                    position += 1;
+                }
+                b'\\' => {
+                    position += 1;
+                    let escaped = bytes
+                        .get(position)
+                        .copied()
+                        .ok_or(MediaParseError::InvalidSyntax)?;
+                    if !is_quoted_pair_byte(escaped) {
+                        return Err(MediaParseError::InvalidSyntax);
+                    }
+                    position += 1;
+                }
+                value if is_quoted_text_byte(value) => position += 1,
+                _ => return Err(MediaParseError::InvalidSyntax),
             }
             continue;
-        };
-        if !name.trim().eq_ignore_ascii_case("q") {
-            continue;
         }
-        if quality_seen {
-            return Err(not_acceptable("duplicate q-value in Accept header"));
+
+        match byte {
+            b'"' => {
+                in_quotes = true;
+                position += 1;
+            }
+            b',' => {
+                let entry = trim_optional_whitespace(&raw[start..position]);
+                if entry.is_empty() {
+                    return Err(MediaParseError::InvalidSyntax);
+                }
+                entries.push(entry);
+                position += 1;
+                start = position;
+            }
+            b'\t' | b' '..=b'~' => position += 1,
+            _ => return Err(MediaParseError::InvalidSyntax),
         }
-        quality_seen = true;
-        quality = parse_accept_qvalue(value.trim())
-            .ok_or_else(|| not_acceptable("invalid q-value in Accept header"))?;
     }
-    Ok(quality)
+    if in_quotes {
+        return Err(MediaParseError::InvalidSyntax);
+    }
+    let entry = trim_optional_whitespace(&raw[start..]);
+    if entry.is_empty() {
+        return Err(MediaParseError::InvalidSyntax);
+    }
+    entries.push(entry);
+    Ok(entries)
+}
+
+#[derive(Copy, Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+struct MediaSpecificity {
+    type_level: u8,
+    parameter_count: usize,
+}
+
+#[derive(Clone, Debug)]
+struct ParsedAcceptRange {
+    media_type: ParsedMediaType,
+    quality: u16,
+}
+
+fn parse_accept_ranges(raw: &str) -> Result<Vec<ParsedAcceptRange>, MediaParseError> {
+    split_accept_list(raw)?
+        .into_iter()
+        .map(|entry| {
+            let mut media_type = parse_media_type(entry)?;
+            if !media_type.has_valid_range_wildcards() {
+                return Err(MediaParseError::InvalidSyntax);
+            }
+
+            let quality_index = media_type
+                .parameters
+                .iter()
+                .position(|parameter| parameter.name == "q");
+            let quality = quality_index.map_or(Ok(1_000), |index| {
+                let parameter = &media_type.parameters[index];
+                if parameter.quoted {
+                    return Err(MediaParseError::InvalidQuality);
+                }
+                parse_accept_qvalue(&parameter.value).ok_or(MediaParseError::InvalidQuality)
+            })?;
+            // Parameters after `q` are Accept extensions. They are required to
+            // be syntactically valid and unique, but do not constrain the
+            // selected representation.
+            if let Some(index) = quality_index {
+                media_type.parameters.truncate(index);
+            }
+            Ok(ParsedAcceptRange {
+                media_type,
+                quality,
+            })
+        })
+        .collect()
+}
+
+#[allow(clippy::result_large_err)]
+fn parse_accept_header(header: &HeaderValue) -> Result<Vec<ParsedAcceptRange>, Response> {
+    let raw = header.to_str().map_err(|_| {
+        not_acceptable(
+            "invalid Accept header encoding; supported: application/json, application/x-norito",
+        )
+    })?;
+    parse_accept_ranges(raw).map_err(|error| {
+        let message = match error {
+            MediaParseError::InvalidQuality => "invalid q-value in Accept header",
+            MediaParseError::DuplicateParameter => "duplicate parameter in Accept header",
+            MediaParseError::InvalidSyntax => "malformed Accept header",
+        };
+        not_acceptable(message)
+    })
+}
+
+fn typed_range_specificity(
+    media_type: &ParsedMediaType,
+    format: ResponseFormat,
+) -> Option<MediaSpecificity> {
+    let type_level = match (media_type.type_name.as_str(), media_type.subtype.as_str()) {
+        ("*", "*") => 0,
+        ("application", "*") => 1,
+        ("application", subtype)
+            if match format {
+                ResponseFormat::Json => is_json_subtype(subtype),
+                ResponseFormat::Norito => subtype == "x-norito",
+            } =>
+        {
+            2
+        }
+        _ => return None,
+    };
+
+    let parameters_match = media_type.parameters.iter().all(|parameter| match format {
+        ResponseFormat::Json => {
+            parameter.name == "charset" && parameter.value.eq_ignore_ascii_case("utf-8")
+        }
+        ResponseFormat::Norito => false,
+    });
+    parameters_match.then_some(MediaSpecificity {
+        type_level,
+        parameter_count: media_type.parameters.len(),
+    })
+}
+
+fn parameter_values_match(name: &str, left: &str, right: &str) -> bool {
+    if name == "charset" {
+        left.eq_ignore_ascii_case(right)
+    } else {
+        left == right
+    }
+}
+
+fn native_range_specificity(
+    media_type: &ParsedMediaType,
+    actual: &ParsedMediaType,
+) -> Option<MediaSpecificity> {
+    let type_level = if media_type.type_name == "*" && media_type.subtype == "*" {
+        0
+    } else if media_type.type_name == actual.type_name && media_type.subtype == "*" {
+        1
+    } else if media_type.type_name == actual.type_name && media_type.subtype == actual.subtype {
+        2
+    } else {
+        return None;
+    };
+
+    let parameters_match = media_type.parameters.iter().all(|expected| {
+        actual.parameters.iter().any(|candidate| {
+            candidate.name == expected.name
+                && parameter_values_match(&expected.name, &expected.value, &candidate.value)
+        })
+    });
+    parameters_match.then_some(MediaSpecificity {
+        type_level,
+        parameter_count: media_type.parameters.len(),
+    })
 }
 
 /// Negotiate the response format from an optional `Accept` header value.
@@ -326,19 +824,12 @@ fn negotiate_response_format_with_default(
         return Ok(default_format);
     };
 
-    let raw = match header.to_str() {
-        Ok(h) => h,
-        Err(_) => {
-            return Err(not_acceptable(
-                "invalid Accept header encoding; supported: application/json, application/x-norito",
-            ));
-        }
-    };
+    let parsed_ranges = parse_accept_header(header)?;
 
     #[derive(Copy, Clone, Debug)]
     struct MediaRange {
         quality: u16,
-        specificity: u8,
+        specificity: MediaSpecificity,
         index: usize,
         matches_json: bool,
         matches_norito: bool,
@@ -346,40 +837,34 @@ fn negotiate_response_format_with_default(
 
     let mut ranges = Vec::new();
 
-    for (idx, entry) in raw.split(',').enumerate() {
-        let trimmed = entry.trim();
-        if trimmed.is_empty() {
-            continue;
+    for (index, range) in parsed_ranges.iter().enumerate() {
+        let json_specificity = typed_range_specificity(&range.media_type, ResponseFormat::Json);
+        let norito_specificity = typed_range_specificity(&range.media_type, ResponseFormat::Norito);
+        if let Some(specificity) = json_specificity {
+            ranges.push(MediaRange {
+                quality: range.quality,
+                specificity,
+                index,
+                matches_json: true,
+                matches_norito: false,
+            });
         }
-        let mut parts = trimmed.split(';');
-        let media_type = parts.next().unwrap().trim();
-        let quality = parse_accept_quality(parts)?;
-
-        let (specificity, matches_json, matches_norito) = if is_norito_media_type(media_type) {
-            (2, false, true)
-        } else if is_json_media_type(media_type) {
-            (2, true, false)
-        } else if media_type.eq_ignore_ascii_case("application/*") {
-            (1, true, true)
-        } else if media_type.eq_ignore_ascii_case("*/*") {
-            (0, true, true)
-        } else {
-            continue;
-        };
-        ranges.push(MediaRange {
-            quality,
-            specificity,
-            index: idx,
-            matches_json,
-            matches_norito,
-        });
+        if let Some(specificity) = norito_specificity {
+            ranges.push(MediaRange {
+                quality: range.quality,
+                specificity,
+                index,
+                matches_json: false,
+                matches_norito: true,
+            });
+        }
     }
 
     #[derive(Copy, Clone)]
     struct EffectivePreference {
         format: ResponseFormat,
         quality: u16,
-        specificity: u8,
+        specificity: MediaSpecificity,
     }
 
     let effective = |format: ResponseFormat| {
@@ -412,7 +897,7 @@ fn negotiate_response_format_with_default(
                 json
             } else if norito.specificity > json.specificity {
                 norito
-            } else if json.specificity == 2 {
+            } else if json.specificity.type_level == 2 {
                 // Equal explicit preferences use Torii's binary-first tie
                 // break. Wildcard-only ties retain the endpoint's default.
                 norito
@@ -479,58 +964,43 @@ pub fn ensure_response_media_type_acceptable(
     accept: Option<&HeaderValue>,
     actual_content_type: &str,
 ) -> Result<(), Response> {
-    let Some(header) = accept else {
-        return Ok(());
-    };
-    let actual = base_media_type(actual_content_type);
-    let Some((actual_type, actual_subtype)) = actual.split_once('/') else {
-        return Err(not_acceptable(
-            "response Content-Type is invalid and cannot be negotiated",
-        ));
-    };
-    if actual_type.is_empty() || actual_subtype.is_empty() {
+    let actual = parse_media_type(actual_content_type)
+        .map_err(|_| not_acceptable("response Content-Type is invalid and cannot be negotiated"))?;
+    if !actual.has_concrete_type()
+        || actual
+            .parameters
+            .iter()
+            .any(|parameter| parameter.name == "q")
+        || (actual.type_name == "application"
+            && is_json_subtype(&actual.subtype)
+            && !has_supported_json_charset(&actual.parameters))
+    {
         return Err(not_acceptable(
             "response Content-Type is invalid and cannot be negotiated",
         ));
     }
-    let raw = header
-        .to_str()
-        .map_err(|_| not_acceptable("invalid Accept header encoding for protocol response"))?;
-    let mut effective: Option<(u8, usize, u16)> = None;
-    for (index, entry) in raw.split(',').enumerate() {
-        let trimmed = entry.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        let mut parts = trimmed.split(';');
-        let media_range = parts.next().unwrap().trim();
-        let quality = parse_accept_quality(parts)?;
-        let specificity = if media_range.eq_ignore_ascii_case(actual) {
-            2
-        } else if media_range.eq_ignore_ascii_case("*/*") {
-            0
-        } else if media_range
-            .split_once('/')
-            .is_some_and(|(range_type, range_subtype)| {
-                range_subtype == "*" && range_type.eq_ignore_ascii_case(actual_type)
-            })
-        {
-            1
-        } else {
+    let Some(header) = accept else {
+        return Ok(());
+    };
+    let parsed_ranges = parse_accept_header(header)?;
+    let mut effective: Option<(MediaSpecificity, usize, u16)> = None;
+    for (index, range) in parsed_ranges.iter().enumerate() {
+        let Some(specificity) = native_range_specificity(&range.media_type, &actual) else {
             continue;
         };
         if effective.is_none_or(|(current_specificity, current_index, _)| {
             specificity > current_specificity
                 || (specificity == current_specificity && index < current_index)
         }) {
-            effective = Some((specificity, index, quality));
+            effective = Some((specificity, index, range.quality));
         }
     }
     if effective.is_some_and(|(_, _, quality)| quality > 0) {
         return Ok(());
     }
     Err(not_acceptable(format!(
-        "requested content type is not acceptable for this endpoint; response uses {actual}"
+        "requested content type is not acceptable for this endpoint; response uses {}",
+        actual.essence()
     )))
 }
 
@@ -547,43 +1017,18 @@ fn negotiate_single_typed_response(
         ResponseFormat::Json => JSON_MIME_TYPE,
         ResponseFormat::Norito => NORITO_MIME_TYPE,
     };
-    let raw = match header.to_str() {
-        Ok(h) => h,
-        Err(_) => {
-            return Err(not_acceptable(format!(
-                "invalid Accept header encoding; supported: {supported}"
-            )));
-        }
-    };
+    let parsed_ranges = parse_accept_header(header)?;
 
-    let mut effective: Option<(u8, usize, u16)> = None;
-    for (index, entry) in raw.split(',').enumerate() {
-        let trimmed = entry.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        let mut parts = trimmed.split(';');
-        let media_type = parts.next().unwrap().trim();
-        let quality = parse_accept_quality(parts)?;
-
-        let exact_match = match format {
-            ResponseFormat::Json => is_json_media_type(media_type),
-            ResponseFormat::Norito => is_norito_media_type(media_type),
-        };
-        let specificity = if exact_match {
-            2
-        } else if media_type.eq_ignore_ascii_case("application/*") {
-            1
-        } else if media_type.eq_ignore_ascii_case("*/*") {
-            0
-        } else {
+    let mut effective: Option<(MediaSpecificity, usize, u16)> = None;
+    for (index, range) in parsed_ranges.iter().enumerate() {
+        let Some(specificity) = typed_range_specificity(&range.media_type, format) else {
             continue;
         };
         if effective.is_none_or(|(current_specificity, current_index, _)| {
             specificity > current_specificity
                 || (specificity == current_specificity && index < current_index)
         }) {
-            effective = Some((specificity, index, quality));
+            effective = Some((specificity, index, range.quality));
         }
     }
 
@@ -1427,74 +1872,14 @@ pub mod extractors {
     #[cfg(not(feature = "telemetry"))]
     fn record_norito_decode_failure(_: &'static str, _: &norito::Error) {}
 
-    #[derive(Clone, Copy, Debug)]
-    enum NoritoJsonFormat {
-        Json,
-        Norito,
-    }
-
-    #[allow(clippy::result_large_err)]
-    fn norito_json_format(headers: &axum::http::HeaderMap) -> Result<NoritoJsonFormat, Response> {
-        let mut content_types = headers.get_all(CONTENT_TYPE).iter();
-        let Some(value) = content_types.next() else {
-            return Err(typed_request_rejection(
-                StatusCode::UNSUPPORTED_MEDIA_TYPE,
-                "request_content_type_missing",
-                format!(
-                    "missing Content-Type; use application/json or {}",
-                    super::NORITO_MIME_TYPE
-                ),
-            ));
-        };
-        if content_types.next().is_some() {
-            return Err(typed_request_rejection(
-                StatusCode::BAD_REQUEST,
-                "request_content_type_invalid",
-                "Content-Type must appear exactly once.",
-            ));
-        }
-        let declared = value.to_str().map_err(|_| {
-            typed_request_rejection(
-                StatusCode::BAD_REQUEST,
-                "request_content_type_invalid",
-                "Content-Type is not valid ASCII.",
-            )
-        })?;
-        let declared = declared.trim();
-        if declared.is_empty() {
-            return Err(typed_request_rejection(
-                StatusCode::UNSUPPORTED_MEDIA_TYPE,
-                "request_content_type_missing",
-                format!(
-                    "missing Content-Type; use application/json or {}",
-                    super::NORITO_MIME_TYPE
-                ),
-            ));
-        }
-        if super::is_norito_media_type(declared) {
-            return Ok(NoritoJsonFormat::Norito);
-        }
-        if super::is_json_media_type(declared) {
-            return Ok(NoritoJsonFormat::Json);
-        }
-        Err(typed_request_rejection(
-            StatusCode::UNSUPPORTED_MEDIA_TYPE,
-            "request_content_type_unsupported",
-            format!(
-                "unsupported Content-Type `{declared}`; use application/json or {}",
-                super::NORITO_MIME_TYPE
-            ),
-        ))
-    }
-
     #[allow(clippy::result_large_err)]
     fn decode_body_as_norito_or_json<T: JsonDeserializeOwned + SupportsNoritoDecode + 'static>(
         body: &Bytes,
-        format: NoritoJsonFormat,
+        format: super::TypedRequestContentFormat,
     ) -> Result<T, Response> {
         match format {
-            NoritoJsonFormat::Json => decode_as_json::<T>(body),
-            NoritoJsonFormat::Norito => decode_as_norito::<T>(body),
+            super::TypedRequestContentFormat::Json => decode_as_json::<T>(body),
+            super::TypedRequestContentFormat::Norito => decode_as_norito::<T>(body),
         }
     }
 
@@ -1512,7 +1897,7 @@ pub mod extractors {
         type Rejection = Response;
 
         async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
-            let format = norito_json_format(req.headers())?;
+            let format = super::typed_request_content_format(req.headers())?;
             let body = Bytes::from_request(req, state)
                 .await
                 .map_err(typed_body_rejection)?;
@@ -1540,7 +1925,7 @@ pub mod extractors {
         type Rejection = Response;
 
         async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
-            let format = norito_json_format(req.headers())?;
+            let format = super::typed_request_content_format(req.headers())?;
             let body = Bytes::from_request(req, state)
                 .await
                 .map_err(typed_body_rejection)?;
@@ -1643,7 +2028,7 @@ pub mod extractors {
     }
 
     fn decode_query<T: JsonDeserializeOwned>(query: &str) -> Result<T, json::Error> {
-        let pairs = query_pairs(query);
+        let pairs = query_pairs(query)?;
         reject_duplicate_query_keys(&pairs)?;
         let mut object = json::Map::new();
         for (key, value) in pairs {
@@ -1653,7 +2038,7 @@ pub mod extractors {
     }
 
     fn decode_string_query<T: JsonDeserializeOwned>(query: &str) -> Result<T, json::Error> {
-        let pairs = query_pairs(query);
+        let pairs = query_pairs(query)?;
         reject_duplicate_query_keys(&pairs)?;
         let mut object = json::Map::new();
         for (key, value) in pairs {
@@ -1675,7 +2060,7 @@ pub mod extractors {
         Ok(())
     }
 
-    fn query_pairs(query: &str) -> Vec<(String, String)> {
+    fn query_pairs(query: &str) -> Result<Vec<(String, String)>, json::Error> {
         query
             .split('&')
             .filter(|segment| !segment.is_empty())
@@ -1683,16 +2068,47 @@ pub mod extractors {
                 let mut parts = segment.splitn(2, '=');
                 let raw_key = parts.next().unwrap_or("");
                 let raw_value = parts.next().unwrap_or("");
-                (decode_component(raw_key), decode_component(raw_value))
+                Ok((decode_component(raw_key)?, decode_component(raw_value)?))
             })
             .collect()
     }
 
-    fn decode_component(input: &str) -> String {
+    fn decode_component(input: &str) -> Result<String, json::Error> {
+        // HTML form query semantics decode `+` as a space before percent
+        // decoding. A literal plus must therefore be encoded as `%2B`.
+        let bytes = input.as_bytes();
+        let mut position = 0;
+        while position < bytes.len() {
+            if bytes[position] != b'%' {
+                position += 1;
+                continue;
+            }
+            let Some(high) = bytes.get(position + 1).copied() else {
+                return Err(json::Error::Message(
+                    "invalid percent-encoding in query component".to_owned(),
+                ));
+            };
+            let Some(low) = bytes.get(position + 2).copied() else {
+                return Err(json::Error::Message(
+                    "invalid percent-encoding in query component".to_owned(),
+                ));
+            };
+            if !high.is_ascii_hexdigit() || !low.is_ascii_hexdigit() {
+                return Err(json::Error::Message(
+                    "invalid percent-encoding in query component".to_owned(),
+                ));
+            }
+            position += 3;
+        }
+
         let replaced = input.replace('+', " ");
         decode(&replaced)
-            .unwrap_or_else(|_| std::borrow::Cow::Borrowed(&replaced))
-            .into_owned()
+            .map(std::borrow::Cow::into_owned)
+            .map_err(|error| {
+                json::Error::Message(format!(
+                    "invalid percent-encoding in query component: {error}"
+                ))
+            })
     }
 
     fn scalar_to_value(raw: &str) -> Value {
@@ -1780,6 +2196,8 @@ pub mod extractors {
             for query in [
                 "asset_definition_id=first&asset_definition_id=second",
                 "asset_definition_id=first&asset%5fdefinition%5fid=second",
+                "asset_definition_id=first&%61sset_definition_id=second",
+                "asset_definition_id=first&asset%5Fdefinition%5Fid=second",
             ] {
                 let request = Request::builder()
                     .uri(format!("/?{query}"))
@@ -1809,6 +2227,54 @@ pub mod extractors {
                     "query={query}, envelope={envelope:?}"
                 );
             }
+        }
+
+        #[tokio::test]
+        async fn malformed_percent_encoding_uses_typed_query_error() {
+            for malformed in ["%", "%2", "%GG"] {
+                for query in [
+                    format!("asset_definition_id={malformed}"),
+                    format!("{malformed}=value"),
+                ] {
+                    let request = Request::builder()
+                        .uri(format!("/?{query}"))
+                        .body(())
+                        .expect("request URI");
+                    let (mut parts, _) = request.into_parts();
+                    let response = super::super::with_current_response_format(
+                        super::super::ResponseFormat::Json,
+                        NoritoQuery::<RequiredQueryForTest>::from_request_parts(&mut parts, &()),
+                    )
+                    .await
+                    .expect_err("malformed percent escape must fail closed");
+
+                    assert_eq!(response.status(), StatusCode::BAD_REQUEST, "query={query}");
+                    let bytes = response
+                        .into_body()
+                        .collect()
+                        .await
+                        .expect("collect malformed-query response")
+                        .to_bytes();
+                    let envelope: iroha_torii_shared::ErrorEnvelope =
+                        norito::json::from_slice(&bytes).expect("decode typed query error");
+                    assert_eq!(envelope.code(), "request_query_invalid");
+                    assert!(
+                        envelope.message().contains("percent-encoding"),
+                        "query={query}, envelope={envelope:?}"
+                    );
+                }
+            }
+        }
+
+        #[test]
+        fn query_plus_and_percent_encoded_plus_have_distinct_form_semantics() {
+            let space: StringQueryForTest =
+                super::decode_string_query("label=tron+nile").expect("form-space query");
+            assert_eq!(space.label.as_deref(), Some("tron nile"));
+
+            let plus: StringQueryForTest =
+                super::decode_string_query("label=tron%2Bnile").expect("literal-plus query");
+            assert_eq!(plus.label.as_deref(), Some("tron+nile"));
         }
 
         #[tokio::test]
@@ -2155,16 +2621,22 @@ pub mod extractors {
         fn negotiate_accepts_exact_http_qvalue_boundaries() {
             for raw in [
                 "application/json;q=0",
+                "application/json;q=0.",
+                "application/json;q=0.000",
                 "application/json;q=0.001",
                 "application/json;q=0.999",
                 "application/json;q=1",
+                "application/json;q=1.",
                 "application/json;q=1.000",
             ] {
                 let header = raw
                     .parse::<HeaderValue>()
                     .expect("syntactically valid header bytes");
                 let result = super::super::negotiate_response_format(Some(&header));
-                if raw.ends_with("q=0") {
+                if matches!(
+                    raw,
+                    "application/json;q=0" | "application/json;q=0." | "application/json;q=0.000"
+                ) {
                     assert!(result.is_err(), "zero quality forbids the only range");
                 } else {
                     assert_eq!(
@@ -2173,6 +2645,148 @@ pub mod extractors {
                         "header={raw}"
                     );
                 }
+            }
+        }
+
+        #[test]
+        fn accept_parser_keeps_quoted_commas_and_escapes_inside_one_entry() {
+            let header = HeaderValue::from_static(
+                r#"application/json;profile="a,b\"c";q=0.4, application/x-norito;q=0.8;note="x,y""#,
+            );
+            let format = super::super::negotiate_response_format(Some(&header))
+                .expect("quoted comma must not split an Accept entry");
+            assert_eq!(format, super::super::ResponseFormat::Norito);
+
+            let header =
+                HeaderValue::from_static(r#"application/json;q=0.8;note="one,two\\three""#);
+            let format = super::super::negotiate_response_format(Some(&header))
+                .expect("valid quoted Accept extension");
+            assert_eq!(format, super::super::ResponseFormat::Json);
+        }
+
+        #[test]
+        fn accept_parser_rejects_malformed_or_duplicate_parameters() {
+            for raw in [
+                "application/json;profile",
+                "application/json;=value",
+                "application/json;profile=",
+                "application/json;profile =value",
+                "application/json;profile= value",
+                "application/json;profile=one;PROFILE=two",
+                "application/json;",
+                "application/json;;q=1",
+                "application/json q=1",
+                "application/json;q=1;Q=0.5",
+                "*/json",
+                "application/*+json",
+                "application/json*",
+            ] {
+                let header = HeaderValue::from_str(raw).expect("valid header field bytes");
+                let error = super::super::negotiate_response_format(Some(&header))
+                    .expect_err("malformed parameter grammar must fail closed");
+                assert_eq!(error.status(), StatusCode::NOT_ACCEPTABLE, "header={raw}");
+            }
+        }
+
+        #[test]
+        fn accept_parser_rejects_bad_quotes_and_quoted_qvalues() {
+            for raw in [
+                r#"application/json;profile="unterminated"#,
+                r#"application/json;profile="closed"trailing"#,
+                r#"application/json;profile="trailing\""#,
+                r#"application/json;q="0.5""#,
+            ] {
+                let header = HeaderValue::from_str(raw).expect("valid header field bytes");
+                let error = super::super::negotiate_response_format(Some(&header))
+                    .expect_err("invalid quoted-string grammar must fail closed");
+                assert_eq!(error.status(), StatusCode::NOT_ACCEPTABLE, "header={raw}");
+            }
+
+            for raw in [
+                "application/json;profile=\"bad\\\u{7f}\"",
+                "application/json;profile=\"bad\u{7f}\"",
+                "application/json;profile=\"bad\rvalue\"",
+                "application/json;profile=\"välue\"",
+            ] {
+                assert!(
+                    super::super::parse_accept_ranges(raw).is_err(),
+                    "strict ASCII quoted-string parser must reject {raw:?}"
+                );
+            }
+        }
+
+        #[test]
+        fn accept_parser_rejects_empty_list_members() {
+            for raw in [
+                "",
+                " ",
+                ",application/json",
+                "application/json,",
+                "application/json,,application/x-norito",
+                "application/json, \t , application/x-norito",
+            ] {
+                let header = HeaderValue::from_str(raw).expect("valid header field bytes");
+                let error = super::super::negotiate_response_format(Some(&header))
+                    .expect_err("empty Accept list members must fail closed");
+                assert_eq!(error.status(), StatusCode::NOT_ACCEPTABLE, "header={raw:?}");
+            }
+        }
+
+        #[test]
+        fn accept_specificity_includes_matching_media_parameters() {
+            let header = HeaderValue::from_static(
+                "application/json;q=0, application/json;charset=utf-8;q=0.8, application/x-norito;q=0.7",
+            );
+            assert_eq!(
+                super::super::negotiate_response_format(Some(&header)).expect("format"),
+                super::super::ResponseFormat::Json
+            );
+
+            let header = HeaderValue::from_static("application/*;q=0, */*;q=1");
+            assert_eq!(
+                super::super::negotiate_response_format(Some(&header))
+                    .expect_err("more-specific zero must override all-type wildcard")
+                    .status(),
+                StatusCode::NOT_ACCEPTABLE
+            );
+
+            let header =
+                HeaderValue::from_static("application/json;charset=iso-8859-1;q=0, */*;q=1");
+            assert_eq!(
+                super::super::negotiate_response_format(Some(&header)).expect("format"),
+                super::super::ResponseFormat::Norito,
+                "an incompatible charset range must not match the UTF-8 JSON representation"
+            );
+        }
+
+        #[test]
+        fn json_accept_charset_is_utf8_only() {
+            for raw in [
+                "application/json;charset=utf-8",
+                "application/json;charset=UTF-8",
+                "application/json;charset=\"Utf-8\"",
+                "application/problem+json;charset=utf-8",
+            ] {
+                let header = HeaderValue::from_str(raw).expect("Accept header");
+                assert_eq!(
+                    super::super::negotiate_response_format(Some(&header)).expect("UTF-8 JSON"),
+                    super::super::ResponseFormat::Json,
+                    "header={raw}"
+                );
+            }
+            for raw in [
+                "application/json;charset=latin1",
+                "application/json;charset=\"\"",
+                "application/json;charset=utf-8;CHARSET=utf-8",
+            ] {
+                let header = HeaderValue::from_str(raw).expect("Accept header");
+                assert_eq!(
+                    super::super::negotiate_response_format(Some(&header))
+                        .expect_err("unsupported or duplicate charset must fail")
+                        .status(),
+                    StatusCode::NOT_ACCEPTABLE,
+                    "header={raw}"
+                );
             }
         }
 
@@ -2230,6 +2844,74 @@ pub mod extractors {
         }
 
         #[test]
+        fn protocol_media_negotiation_matches_strict_quoted_parameters() {
+            let header = HeaderValue::from_static(
+                r#"text/event-stream;profile="one,two\"three";q=0.7, */*;q=0.1"#,
+            );
+            super::super::ensure_response_media_type_acceptable(
+                Some(&header),
+                r#"text/event-stream; charset=utf-8; profile="one,two\"three""#,
+            )
+            .expect("matching decoded quoted parameter");
+
+            let mismatched =
+                HeaderValue::from_static(r#"text/event-stream;profile="different,value";q=1"#);
+            assert_eq!(
+                super::super::ensure_response_media_type_acceptable(
+                    Some(&mismatched),
+                    r#"text/event-stream;profile="one,two""#,
+                )
+                .expect_err("mismatched media parameter must not match")
+                .status(),
+                StatusCode::NOT_ACCEPTABLE
+            );
+        }
+
+        #[test]
+        fn protocol_media_negotiation_rejects_malformed_headers_and_actual_types() {
+            for raw in [
+                "text/event-stream;profile",
+                "text/event-stream;profile=one;PROFILE=two",
+                "text/event-stream,",
+            ] {
+                let header = HeaderValue::from_str(raw).expect("header field bytes");
+                assert_eq!(
+                    super::super::ensure_response_media_type_acceptable(
+                        Some(&header),
+                        "text/event-stream",
+                    )
+                    .expect_err("malformed Accept must fail")
+                    .status(),
+                    StatusCode::NOT_ACCEPTABLE,
+                    "header={raw}"
+                );
+            }
+
+            let wildcard = HeaderValue::from_static("*/*");
+            for actual in [
+                "text/event-stream;profile",
+                "text/event-stream;profile=one;PROFILE=two",
+                "application/json;charset=latin1",
+                "application/*",
+            ] {
+                assert_eq!(
+                    super::super::ensure_response_media_type_acceptable(Some(&wildcard), actual,)
+                        .expect_err("invalid actual Content-Type must fail")
+                        .status(),
+                    StatusCode::NOT_ACCEPTABLE,
+                    "actual={actual}"
+                );
+                assert_eq!(
+                    super::super::ensure_response_media_type_acceptable(None, actual)
+                        .expect_err("invalid actual Content-Type is invalid without Accept too")
+                        .status(),
+                    StatusCode::NOT_ACCEPTABLE,
+                    "actual={actual}"
+                );
+            }
+        }
+
+        #[test]
         fn protocol_media_negotiation_rejects_unrelated_media() {
             let header = HeaderValue::from_static("application/json, image/*;q=0.5");
             let error = super::super::ensure_response_media_type_acceptable(
@@ -2266,6 +2948,206 @@ pub mod extractors {
                     "protocol media type must not enter typed negotiation: {native}"
                 );
             }
+        }
+
+        #[test]
+        fn typed_response_content_type_classifier_enforces_strict_syntax_and_charset() {
+            for valid in [
+                "application/json; charset=utf-8",
+                "APPLICATION/PROBLEM+JSON; CHARSET=\"UTF-8\"; profile=torii",
+            ] {
+                assert_eq!(
+                    super::super::typed_response_format_for_content_type(valid),
+                    Some(super::super::ResponseFormat::Json),
+                    "valid={valid}"
+                );
+            }
+            for invalid in [
+                "application/json; charset=latin1",
+                "application/json; charset=utf-8; CHARSET=utf-8",
+                "application/json; charset =utf-8",
+                "application/json; charset= utf-8",
+                "application/json; profile=\"unterminated",
+                "application/json;q=1",
+                "application/*+json",
+                "*/json",
+            ] {
+                assert_eq!(
+                    super::super::typed_response_format_for_content_type(invalid),
+                    None,
+                    "invalid={invalid}"
+                );
+            }
+        }
+
+        #[test]
+        fn typed_request_content_type_is_the_exact_first_release_pair() {
+            for (raw, expected) in [
+                (
+                    "application/json",
+                    super::super::TypedRequestContentFormat::Json,
+                ),
+                (
+                    "application/json;charset=utf-8",
+                    super::super::TypedRequestContentFormat::Json,
+                ),
+                (
+                    "application/json;charset=\"UTF-8\"",
+                    super::super::TypedRequestContentFormat::Json,
+                ),
+                (
+                    super::super::NORITO_MIME_TYPE,
+                    super::super::TypedRequestContentFormat::Norito,
+                ),
+            ] {
+                let mut headers = axum::http::HeaderMap::new();
+                headers.insert(
+                    CONTENT_TYPE,
+                    HeaderValue::from_str(raw).expect("Content-Type"),
+                );
+                assert_eq!(
+                    super::super::typed_request_content_format(&headers).expect("supported type"),
+                    expected,
+                    "content_type={raw}"
+                );
+            }
+
+            for raw in [
+                "application/problem+json",
+                "application/json;profile=torii",
+                "application/json;charset=utf-8;profile=torii",
+                "application/json;charset=latin1",
+                "application/x-norito;charset=utf-8",
+                "application/x-norito;profile=torii-v1",
+            ] {
+                let mut headers = axum::http::HeaderMap::new();
+                headers.insert(
+                    CONTENT_TYPE,
+                    HeaderValue::from_str(raw).expect("Content-Type"),
+                );
+                assert_eq!(
+                    super::super::typed_request_content_format(&headers)
+                        .expect_err("unsupported request media parameters")
+                        .status(),
+                    StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                    "content_type={raw}"
+                );
+            }
+        }
+
+        #[tokio::test]
+        async fn typed_request_content_type_errors_have_exact_status_and_code() {
+            for (raw, expected_status, expected_code) in [
+                (
+                    "application/json;profile=\"unterminated",
+                    StatusCode::BAD_REQUEST,
+                    "request_content_type_invalid",
+                ),
+                (
+                    "application/json;charset=utf-8;CHARSET=utf-8",
+                    StatusCode::BAD_REQUEST,
+                    "request_content_type_invalid",
+                ),
+                (
+                    "application/json;charset =utf-8",
+                    StatusCode::BAD_REQUEST,
+                    "request_content_type_invalid",
+                ),
+                (
+                    "application/*",
+                    StatusCode::BAD_REQUEST,
+                    "request_content_type_invalid",
+                ),
+                (
+                    "application/problem+json",
+                    StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                    "request_content_type_unsupported",
+                ),
+                (
+                    "application/json;profile=torii",
+                    StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                    "request_content_type_unsupported",
+                ),
+                (
+                    "application/json;charset=latin1",
+                    StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                    "request_content_type_unsupported",
+                ),
+                (
+                    "application/x-norito;profile=torii-v1",
+                    StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                    "request_content_type_unsupported",
+                ),
+            ] {
+                let mut headers = axum::http::HeaderMap::new();
+                headers.insert(
+                    CONTENT_TYPE,
+                    HeaderValue::from_str(raw).expect("Content-Type field bytes"),
+                );
+                let response = super::super::with_current_response_format(
+                    super::super::ResponseFormat::Json,
+                    async {
+                        super::super::typed_request_content_format(&headers)
+                            .expect_err("invalid or unsupported request Content-Type")
+                    },
+                )
+                .await;
+                assert_eq!(response.status(), expected_status, "content_type={raw}");
+                let body = response
+                    .into_body()
+                    .collect()
+                    .await
+                    .expect("collect Content-Type error")
+                    .to_bytes();
+                let envelope: iroha_torii_shared::ErrorEnvelope =
+                    norito::json::from_slice(&body).expect("decode Content-Type error");
+                assert_eq!(envelope.code(), expected_code, "content_type={raw}");
+            }
+
+            let missing_headers = axum::http::HeaderMap::new();
+            let missing = super::super::with_current_response_format(
+                super::super::ResponseFormat::Json,
+                async {
+                    super::super::typed_request_content_format(&missing_headers)
+                        .expect_err("missing Content-Type")
+                },
+            )
+            .await;
+            assert_eq!(missing.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+            let body = missing
+                .into_body()
+                .collect()
+                .await
+                .expect("collect missing Content-Type error")
+                .to_bytes();
+            let envelope: iroha_torii_shared::ErrorEnvelope =
+                norito::json::from_slice(&body).expect("decode missing Content-Type error");
+            assert_eq!(envelope.code(), "request_content_type_missing");
+
+            let mut duplicate_headers = axum::http::HeaderMap::new();
+            duplicate_headers.append(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+            duplicate_headers.append(
+                CONTENT_TYPE,
+                HeaderValue::from_static(super::super::NORITO_MIME_TYPE),
+            );
+            let duplicate = super::super::with_current_response_format(
+                super::super::ResponseFormat::Json,
+                async {
+                    super::super::typed_request_content_format(&duplicate_headers)
+                        .expect_err("duplicate Content-Type")
+                },
+            )
+            .await;
+            assert_eq!(duplicate.status(), StatusCode::BAD_REQUEST);
+            let body = duplicate
+                .into_body()
+                .collect()
+                .await
+                .expect("collect duplicate Content-Type error")
+                .to_bytes();
+            let envelope: iroha_torii_shared::ErrorEnvelope =
+                norito::json::from_slice(&body).expect("decode duplicate Content-Type error");
+            assert_eq!(envelope.code(), "request_content_type_invalid");
         }
 
         #[tokio::test]
@@ -2504,6 +3386,51 @@ pub mod extractors {
                 .await
                 .expect_err("non-ASCII Content-Type must fail");
             assert_eq!(non_ascii_error.status(), StatusCode::BAD_REQUEST);
+        }
+
+        #[tokio::test]
+        async fn norito_json_rejects_malformed_or_non_utf8_media_before_body_collection() {
+            #[derive(
+                Clone,
+                Debug,
+                NoritoSerialize,
+                NoritoDeserialize,
+                crate::json_macros::JsonSerialize,
+                crate::json_macros::JsonDeserialize,
+            )]
+            struct Payload;
+
+            for (content_type, expected_status) in [
+                (
+                    "application/json; charset=latin1",
+                    StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                ),
+                (
+                    "application/json; charset=utf-8; CHARSET=utf-8",
+                    StatusCode::BAD_REQUEST,
+                ),
+                ("application/json; charset =utf-8", StatusCode::BAD_REQUEST),
+                (
+                    "application/json; profile=\"unterminated",
+                    StatusCode::BAD_REQUEST,
+                ),
+                ("application/json;q=1", StatusCode::UNSUPPORTED_MEDIA_TYPE),
+            ] {
+                let mut request = Request::builder()
+                    .method("POST")
+                    .header(CONTENT_TYPE, content_type)
+                    .body(Body::from("oversized"))
+                    .expect("request");
+                DefaultBodyLimit::max(1).apply(&mut request);
+                let error = NoritoJson::<Payload>::from_request(request, &())
+                    .await
+                    .expect_err("invalid media type must fail before body collection");
+                assert_eq!(
+                    error.status(),
+                    expected_status,
+                    "content_type={content_type}"
+                );
+            }
         }
 
         #[tokio::test]

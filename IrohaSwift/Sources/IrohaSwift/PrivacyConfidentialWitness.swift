@@ -135,9 +135,137 @@ public struct PrivacyConfidentialWitnessV1: Equatable, Sendable {
     }
 }
 
+/// Bounded confidential-v2 Merkle path supplied by Torii.
+///
+/// The path deliberately omits intermediate witness nodes because the native
+/// prover recomputes and constrains them. This keeps an online preparation
+/// proportional to the fixed tree depth instead of the complete frontier.
+public struct PrivacyConfidentialMerklePathWitnessV2: Equatable, Sendable {
+    public let siblings: [Data]
+    public let directions: Data
+    public let root: Data
+
+    public init(siblings: [Data], directions: Data, root: Data) throws {
+        guard siblings.count == PrivacyConfidentialWitnessCodecs.confidentialTreeDepthV2,
+              directions.count == siblings.count else {
+            throw PrivacyConfidentialWitnessError.invalidField("merklePath.depth")
+        }
+        self.siblings = try siblings.enumerated().map { index, value in
+            try PrivacyConfidentialWitnessCodecs.fixed32(
+                value,
+                field: "merklePath.siblings[\(index)]"
+            )
+        }
+        guard directions.allSatisfy({ $0 == 0 || $0 == 1 }) else {
+            throw PrivacyConfidentialWitnessError.invalidField("merklePath.directions")
+        }
+        self.directions = Data(directions)
+        self.root = try PrivacyConfidentialWitnessCodecs.fixed32(root, field: "merklePath.root")
+    }
+
+    public init(path: ZkAssetMerklePath) throws {
+        try self.init(
+            siblings: path.siblings,
+            directions: path.directions,
+            root: path.rootAtHeight
+        )
+    }
+}
+
+/// Path-based privacy witness used by first-release Kagemusha lifecycle calls.
+///
+/// Exactly two paths are carried because the transfer and unshield circuits
+/// always expose two input slots. For a one-input proof the second path is the
+/// authoritative `next_zero_path` returned by `POST /v1/zk/merkle-path`.
+public struct PrivacyConfidentialWitnessV2: Equatable, Sendable {
+    public let chainId: String
+    public let assetDefinitionId: String
+    public let spendKey: Data
+    public let inputPaths: [PrivacyConfidentialMerklePathWitnessV2]
+    public let inputs: [PrivacyConfidentialNoteWitnessV1]
+    public let transferOutputs: [PrivacyConfidentialTransferOutputWitnessV1]
+    public let unshieldChange: [PrivacyConfidentialUnshieldChangeWitnessV1]
+    public let publicAmount: String
+    public let rootHint: Data
+
+    public init(
+        chainId: String,
+        assetDefinitionId: String,
+        spendKey: Data,
+        inputPaths: [PrivacyConfidentialMerklePathWitnessV2],
+        inputs: [PrivacyConfidentialNoteWitnessV1],
+        transferOutputs: [PrivacyConfidentialTransferOutputWitnessV1],
+        unshieldChange: [PrivacyConfidentialUnshieldChangeWitnessV1],
+        publicAmount: String,
+        rootHint: Data
+    ) throws {
+        self.chainId = try PrivacyConfidentialWitnessCodecs.canonicalText(
+            chainId,
+            field: "chainId"
+        )
+        self.assetDefinitionId = try PrivacyConfidentialWitnessCodecs.canonicalText(
+            assetDefinitionId,
+            field: "assetDefinitionId"
+        )
+        self.spendKey = try PrivacyConfidentialWitnessCodecs.fixed32(
+            spendKey,
+            field: "spendKey"
+        )
+        guard inputPaths.count == 2 else {
+            throw PrivacyConfidentialWitnessError.invalidField("inputPaths")
+        }
+        self.inputPaths = inputPaths
+        self.inputs = inputs
+        self.transferOutputs = transferOutputs
+        self.unshieldChange = unshieldChange
+        self.publicAmount = try PrivacyConfidentialWitnessCodecs.canonicalU128(
+            publicAmount,
+            field: "publicAmount"
+        )
+        self.rootHint = try PrivacyConfidentialWitnessCodecs.fixed32(
+            rootHint,
+            field: "rootHint"
+        )
+
+        guard inputPaths.allSatisfy({ $0.root == self.rootHint }) else {
+            throw PrivacyConfidentialWitnessError.invalidField("inputPaths.root")
+        }
+        guard (1...PrivacyConfidentialWitnessCodecs.confidentialMaxInputsV2)
+            .contains(inputs.count) else {
+            throw PrivacyConfidentialWitnessError.invalidField("inputs")
+        }
+        guard transferOutputs.count
+            <= PrivacyConfidentialWitnessCodecs.confidentialMaxTransferOutputsV2 else {
+            throw PrivacyConfidentialWitnessError.invalidField("transferOutputs")
+        }
+        guard unshieldChange.count
+            <= PrivacyConfidentialWitnessCodecs.confidentialMaxUnshieldChangeOutputsV3 else {
+            throw PrivacyConfidentialWitnessError.invalidField("unshieldChange")
+        }
+        guard transferOutputs.isEmpty || unshieldChange.isEmpty else {
+            throw PrivacyConfidentialWitnessError.invalidField("transferOutputs")
+        }
+        guard transferOutputs.isEmpty || self.publicAmount == "0" else {
+            throw PrivacyConfidentialWitnessError.invalidField("publicAmount")
+        }
+        var seenLeafIndexes = Set<UInt64>()
+        var seenRhos = Set<Data>()
+        for (index, input) in inputs.enumerated() {
+            guard input.leafIndex
+                    < UInt64(PrivacyConfidentialWitnessCodecs.confidentialTreeCapacityV2),
+                  seenLeafIndexes.insert(input.leafIndex).inserted,
+                  seenRhos.insert(input.rho).inserted else {
+                throw PrivacyConfidentialWitnessError.invalidField("inputs[\(index)]")
+            }
+        }
+    }
+}
+
 public enum PrivacyConfidentialWitnessCodecs {
     public static let privacyConfidentialWitnessV1WireName =
         "connect_norito_bridge::privacy_production::PrivacyConfidentialWitnessV1"
+    public static let privacyConfidentialWitnessV2WireName =
+        "connect_norito_bridge::privacy_production::PrivacyConfidentialWitnessV2"
     public static let privacyProofRequestV1WireName =
         "connect_norito_bridge::PrivacyProofRequestV1"
     public static let confidentialTransferV2AlgorithmId = "confidential-transfer-v2"
@@ -149,6 +277,7 @@ public enum PrivacyConfidentialWitnessCodecs {
     public static let confidentialUnshieldV3VerifierRef =
         "halo2-ipa-pasta:confidential_unshield_v3"
     public static let confidentialTreeCapacityV2 = 1 << 16
+    public static let confidentialTreeDepthV2 = 16
     public static let confidentialMaxInputsV2 = 2
     public static let confidentialMaxTransferOutputsV2 = 2
     public static let confidentialMaxUnshieldChangeOutputsV3 = 1
@@ -200,6 +329,25 @@ public enum PrivacyConfidentialWitnessCodecs {
         return try addHeaderPadding(archive, bytes: witnessHeaderPaddingBytes)
     }
 
+    public static func encodeWitnessV2(_ witness: PrivacyConfidentialWitnessV2) throws -> Data {
+        var writer = OfflineCompactNoritoWriter()
+        writer.writeField(OfflineCompactNorito.encodeString(witness.chainId))
+        writer.writeField(OfflineCompactNorito.encodeString(witness.assetDefinitionId))
+        writer.writeField(encodeBytesVec(witness.spendKey))
+        writer.writeField(try encodeSequence(witness.inputPaths, encodeMerklePathV2))
+        writer.writeField(try encodeSequence(witness.inputs, encodeNoteWitness))
+        writer.writeField(try encodeSequence(witness.transferOutputs, encodeTransferOutput))
+        writer.writeField(try encodeSequence(witness.unshieldChange, encodeUnshieldChange))
+        writer.writeField(try ConfidentialNoteCrypto.u128LittleEndianBytes(witness.publicAmount))
+        writer.writeField(encodeBytesVec(witness.rootHint))
+        let archive = noritoEncode(
+            typeName: privacyConfidentialWitnessV2WireName,
+            payload: writer.data,
+            flags: requestFlags
+        )
+        return try addHeaderPadding(archive, bytes: witnessHeaderPaddingBytes)
+    }
+
     public static func encodeTransferWitness(
         _ witness: PrivacyConfidentialWitnessV1
     ) throws -> Data {
@@ -212,6 +360,20 @@ public enum PrivacyConfidentialWitnessCodecs {
     ) throws -> Data {
         try validateUnshieldWitness(witness)
         return try encodeWitness(witness)
+    }
+
+    public static func encodeTransferWitnessV2(
+        _ witness: PrivacyConfidentialWitnessV2
+    ) throws -> Data {
+        try validateTransferWitnessV2(witness)
+        return try encodeWitnessV2(witness)
+    }
+
+    public static func encodeUnshieldWitnessV2(
+        _ witness: PrivacyConfidentialWitnessV2
+    ) throws -> Data {
+        try validateUnshieldWitnessV2(witness)
+        return try encodeWitnessV2(witness)
     }
 
     public static func buildConfidentialTransferProofRequestV1(
@@ -240,6 +402,36 @@ public enum PrivacyConfidentialWitnessCodecs {
             vkRef: vkRef,
             publicInputs: confidentialUnshieldPublicInputsSchemaV1,
             witness: encodeUnshieldWitness(witness),
+            proof: Data()
+        )
+    }
+
+    public static func buildConfidentialTransferProofRequestV2(
+        witness: PrivacyConfidentialWitnessV2,
+        vkRef: String = confidentialTransferV2VerifierRef
+    ) throws -> Data {
+        try validateVkRef(vkRef, expected: confidentialTransferV2VerifierRef)
+        return try encodePrivacyProofRequest(
+            algorithmId: confidentialTransferV2AlgorithmId,
+            entrypoint: confidentialTransferV2Entrypoint,
+            vkRef: vkRef,
+            publicInputs: confidentialTransferPublicInputsSchemaV1,
+            witness: encodeTransferWitnessV2(witness),
+            proof: Data()
+        )
+    }
+
+    public static func buildConfidentialUnshieldProofRequestV2(
+        witness: PrivacyConfidentialWitnessV2,
+        vkRef: String = confidentialUnshieldV3VerifierRef
+    ) throws -> Data {
+        try validateVkRef(vkRef, expected: confidentialUnshieldV3VerifierRef)
+        return try encodePrivacyProofRequest(
+            algorithmId: confidentialUnshieldV3AlgorithmId,
+            entrypoint: confidentialUnshieldV3Entrypoint,
+            vkRef: vkRef,
+            publicInputs: confidentialUnshieldPublicInputsSchemaV1,
+            witness: encodeUnshieldWitnessV2(witness),
             proof: Data()
         )
     }
@@ -298,6 +490,32 @@ public enum PrivacyConfidentialWitnessCodecs {
     }
 
     private static func validateUnshieldWitness(_ witness: PrivacyConfidentialWitnessV1) throws {
+        guard witness.transferOutputs.isEmpty else {
+            throw PrivacyConfidentialWitnessError.invalidField("transferOutputs")
+        }
+        guard witness.unshieldChange.count <= confidentialMaxUnshieldChangeOutputsV3 else {
+            throw PrivacyConfidentialWitnessError.invalidField("unshieldChange")
+        }
+    }
+
+    private static func validateTransferWitnessV2(
+        _ witness: PrivacyConfidentialWitnessV2
+    ) throws {
+        guard witness.publicAmount == "0" else {
+            throw PrivacyConfidentialWitnessError.invalidField("publicAmount")
+        }
+        guard witness.unshieldChange.isEmpty else {
+            throw PrivacyConfidentialWitnessError.invalidField("unshieldChange")
+        }
+        guard (1...confidentialMaxTransferOutputsV2).contains(witness.transferOutputs.count)
+        else {
+            throw PrivacyConfidentialWitnessError.invalidField("transferOutputs")
+        }
+    }
+
+    private static func validateUnshieldWitnessV2(
+        _ witness: PrivacyConfidentialWitnessV2
+    ) throws {
         guard witness.transferOutputs.isEmpty else {
             throw PrivacyConfidentialWitnessError.invalidField("transferOutputs")
         }
@@ -374,6 +592,19 @@ public enum PrivacyConfidentialWitnessCodecs {
         writer.writeField(encodeBytesVec(note.rho))
         writer.writeField(encodeBytesVec(note.diversifier))
         writer.writeField(OfflineCompactNorito.encodeUInt64(note.leafIndex))
+        return writer.data
+    }
+
+    private static func encodeMerklePathV2(
+        _ path: PrivacyConfidentialMerklePathWitnessV2
+    ) throws -> Data {
+        var writer = OfflineCompactNoritoWriter()
+        writer.writeField(try encodeSequence(path.siblings, encodeBytesVec))
+        writer.writeField(encodeBytesVec(path.directions))
+        // Native recomputes these nodes and rejects inconsistent supplied
+        // nodes, so the compact wallet wire intentionally sends an empty list.
+        writer.writeField(try encodeSequence([Data](), encodeBytesVec))
+        writer.writeField(encodeBytesVec(path.root))
         return writer.data
     }
 

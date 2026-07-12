@@ -734,6 +734,18 @@ pub fn npos_seed_for_height_from_world(
     height: u64,
 ) -> [u8; 32] {
     let epoch = epoch_for_height_from_world(world, height);
+    npos_seed_for_epoch_from_world(world, chain_id, epoch)
+}
+
+/// Resolve the `NPoS` PRF seed for one exact authenticated epoch.
+///
+/// Callers that already carry a finalized epoch number must use this rather
+/// than re-deriving an epoch from a possibly different height schedule.
+pub(crate) fn npos_seed_for_epoch_from_world(
+    world: &impl WorldReadOnly,
+    chain_id: &ChainId,
+    epoch: u64,
+) -> [u8; 32] {
     if let Some(record) = world.vrf_epochs().get(&epoch) {
         return record.seed;
     }
@@ -1416,6 +1428,33 @@ mod tests {
         assert_eq!(
             npos_seed_for_height_from_world(&view, state.chain_id_ref(), 15),
             next_epoch_seed_from_seed(epoch2_seed)
+        );
+    }
+
+    #[test]
+    fn npos_seed_for_exact_epoch_does_not_rederive_epoch_from_height() {
+        let state = state_with_npos_params(SumeragiNposParameters {
+            epoch_length_blocks: 100,
+            ..SumeragiNposParameters::default().with_epoch_seed([0x44; 32])
+        });
+        let mut authenticated_epoch = vrf_record(7, 0, 100, false);
+        authenticated_epoch.seed = [0xA7; 32];
+        {
+            let mut world = state.world.block();
+            world.vrf_epochs.insert(7, authenticated_epoch);
+            world.commit();
+        }
+
+        let view = state.world_view();
+        assert_eq!(epoch_for_height_from_world(&view, 2), 0);
+        assert_ne!(
+            npos_seed_for_height_from_world(&view, state.chain_id_ref(), 2),
+            [0xA7; 32]
+        );
+        assert_eq!(
+            npos_seed_for_epoch_from_world(&view, state.chain_id_ref(), 7),
+            [0xA7; 32],
+            "a parent-authenticated epoch number is authoritative"
         );
     }
 

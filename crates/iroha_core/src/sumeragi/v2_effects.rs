@@ -196,21 +196,6 @@ impl BodyFetchTask {
         self.id
     }
 
-    /// Original reducer incarnation tag.
-    pub(crate) const fn tag(&self) -> EventTag {
-        self.tag
-    }
-
-    /// Exact proposal round.
-    pub(crate) const fn round(&self) -> wire::ConsensusRound {
-        self.round
-    }
-
-    /// Exact requested block subject.
-    pub(crate) const fn subject(&self) -> wire::BlockSubject {
-        self.subject
-    }
-
     /// Manifest known before reconstruction, if any.
     pub(crate) const fn manifest(&self) -> Option<&wire::PayloadManifest> {
         self.manifest.as_ref()
@@ -1855,6 +1840,27 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
     ) -> Result<(), EffectExecutorError> {
         match effect {
             AdapterEffect::Sign { tag, request } => {
+                if let SignRequest::Vote(vote) = &request {
+                    let validated = self
+                        .validated_bodies
+                        .get(&(vote.round, vote.subject))
+                        .ok_or_else(|| {
+                            EffectExecutorError::Contract(
+                                "vote signing requires a recovered fsynced validation marker"
+                                    .to_owned(),
+                            )
+                        })?;
+                    if validated.durable().context_id() != self.context.id()
+                        || validated.durable().round() != vote.round
+                        || validated.durable().subject() != vote.subject
+                        || validated.execution_commitment() != vote.execution_commitment
+                    {
+                        return Err(EffectExecutorError::Contract(
+                            "vote execution commitment differs from the durable validation marker"
+                                .to_owned(),
+                        ));
+                    }
+                }
                 self.ensure_pending_slot()?;
                 let id = self.allocate_work_id()?;
                 self.pending_signatures.insert(
@@ -2322,7 +2328,8 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         certificate: wire::QuorumCertificate,
         services: &mut S,
     ) -> Result<(), EffectExecutorError> {
-        if certificate.phase != wire::GlobalPhase::Commit
+        if tag.height() != self.context.height
+            || certificate.phase != wire::GlobalPhase::Commit
             || certificate.subject != subject
             || certificate.round.context_id != self.context.id()
             || certificate.round.height != self.context.height
@@ -2356,6 +2363,12 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         if self.durable_bodies.get(&key) != Some(validated_receipt.durable()) {
             return Err(EffectExecutorError::Contract(
                 "Apply validation receipt differs from local durable body".to_owned(),
+            ));
+        }
+        if certificate.execution_commitment != validated_receipt.execution_commitment() {
+            return Err(EffectExecutorError::Contract(
+                "Apply CommitQC execution commitment differs from the durable validation marker"
+                    .to_owned(),
             ));
         }
         self.ensure_pending_slot()?;
@@ -2713,7 +2726,11 @@ fn merge_sidecar_reference_matches_carrier(
 
 fn verify_pending_kura_apply_parts(
     context: &wire::HeightContext,
-    decision: Option<(wire::ConsensusRound, wire::BlockSubject)>,
+    decision: Option<(
+        wire::ConsensusRound,
+        wire::BlockSubject,
+        wire::ExecutionCommitment,
+    )>,
     recovered_bodies: &BTreeMap<
         (wire::ConsensusRound, wire::BlockSubject),
         (wire::PayloadManifest, DurableBodyReceipt),
@@ -2728,7 +2745,7 @@ fn verify_pending_kura_apply_parts(
             "recovered Kura tip belongs to a different frozen height context",
         ));
     }
-    let (round, subject) = decision.ok_or_else(|| {
+    let (round, subject, execution_commitment) = decision.ok_or_else(|| {
         mismatch("canonical Kura tip has no complete durable Decision WAL record")
     })?;
     if round.context_id != context.id()
@@ -2757,6 +2774,11 @@ fn verify_pending_kura_apply_parts(
     if validated.durable() != durable {
         return Err(mismatch(
             "durable validation marker differs from the recovered exact body frame",
+        ));
+    }
+    if validated.execution_commitment() != execution_commitment {
+        return Err(mismatch(
+            "durable Decision commitment differs from the recovered validation marker",
         ));
     }
     Ok(())
@@ -3010,12 +3032,13 @@ mod tests {
                 .find(|task| task.id() == work_id)
                 .expect("validation task");
             let rejection = self.validation_error.clone();
+            let execution_commitment = fixture_execution_commitment();
             self.body_store
                 .as_mut()
                 .expect("body store service")
                 .execute_validation_task(task, move |_| match rejection {
                     Some(reason) => Err(reason),
-                    None => Ok(()),
+                    None => Ok(execution_commitment),
                 })
                 .expect("execute deterministic validation task")
         }
@@ -3289,6 +3312,7 @@ mod tests {
                 round: self.manifest.round,
                 phase,
                 subject: self.manifest.subject,
+                execution_commitment: fixture_execution_commitment(),
                 signers: vec![0, 1, 2],
                 aggregate_signature: vec![1],
             }
@@ -3303,6 +3327,14 @@ mod tests {
         }
     }
 
+    fn fixture_execution_commitment() -> wire::ExecutionCommitment {
+        wire::ExecutionCommitment::without_topups(
+            Hash::new(b"effects fixture parent state"),
+            Hash::new(b"effects fixture post state"),
+            Hash::new(b"effects fixture ordinary writes"),
+        )
+    }
+
     fn tag(view: u64) -> EventTag {
         EventTag::new(1, view, Generation::new(7))
     }
@@ -3312,6 +3344,7 @@ mod tests {
             round: fixture.manifest.round,
             phase: wire::GlobalPhase::Prepare,
             subject: fixture.manifest.subject,
+            execution_commitment: fixture_execution_commitment(),
             signer: 0,
             signature: Vec::new(),
         }
@@ -3433,6 +3466,31 @@ mod tests {
             .expect("local validation completion");
     }
 
+    fn persist_fsynced_validation_marker(
+        executor: &mut V2EffectExecutor<FakeRuntime>,
+        services: &mut FakeServices,
+        fixture: &Fixture,
+        manifest: wire::PayloadManifest,
+    ) {
+        executor
+            .admit_local_proposal(
+                tag(manifest.round.view),
+                manifest,
+                fixture.body.clone(),
+                services,
+            )
+            .expect("admit exact body before vote signing");
+        complete_local_proposal_chain(executor, services);
+
+        // The helper's purpose is only to cross the real body/marker fsync
+        // boundary. Keep each caller's assertions focused on the subsequent
+        // signature operation.
+        executor.runtime.completions.clear();
+        services.store_tasks.clear();
+        services.validation_tasks.clear();
+        services.statuses.clear();
+    }
+
     #[test]
     fn queue_configuration_and_pending_capacity_fail_closed() {
         let fixture = Fixture::new();
@@ -3450,6 +3508,12 @@ mod tests {
 
         let mut executor = fixture.executor(EffectQueueConfig::new(1, 1, 1_048_576, 1));
         let mut services = fixture.services();
+        persist_fsynced_validation_marker(
+            &mut executor,
+            &mut services,
+            &fixture,
+            fixture.manifest.clone(),
+        );
         let effects = vec![
             AdapterEffect::Sign {
                 tag: tag(0),
@@ -4024,10 +4088,64 @@ mod tests {
     }
 
     #[test]
+    fn vote_signing_requires_the_exact_fsynced_execution_commitment() {
+        let fixture = Fixture::new();
+        let mut missing = fixture.executor(EffectQueueConfig::default());
+        let mut missing_services = fixture.services();
+        assert!(matches!(
+            missing.consume_effects(
+                vec![AdapterEffect::Sign {
+                    tag: tag(0),
+                    request: SignRequest::Vote(vote(&fixture)),
+                }],
+                &mut missing_services,
+            ),
+            Err(EffectExecutorError::Contract(reason))
+                if reason.contains("fsynced validation marker")
+        ));
+        assert!(missing.status().fail_closed);
+        assert!(missing_services.sign_tasks.is_empty());
+
+        let mut drift = fixture.executor(EffectQueueConfig::default());
+        let mut drift_services = fixture.services();
+        persist_fsynced_validation_marker(
+            &mut drift,
+            &mut drift_services,
+            &fixture,
+            fixture.manifest.clone(),
+        );
+        let mut drifted_vote = vote(&fixture);
+        drifted_vote.execution_commitment = wire::ExecutionCommitment::without_topups(
+            Hash::new(b"drifted effects fixture parent state"),
+            Hash::new(b"drifted effects fixture post state"),
+            Hash::new(b"drifted effects fixture ordinary writes"),
+        );
+        assert!(matches!(
+            drift.consume_effects(
+                vec![AdapterEffect::Sign {
+                    tag: tag(0),
+                    request: SignRequest::Vote(drifted_vote),
+                }],
+                &mut drift_services,
+            ),
+            Err(EffectExecutorError::Contract(reason))
+                if reason.contains("differs from the durable validation marker")
+        ));
+        assert!(drift.status().fail_closed);
+        assert!(drift_services.sign_tasks.is_empty());
+    }
+
+    #[test]
     fn sign_effect_verifies_signature_and_preserves_original_tag() {
         let fixture = Fixture::new();
         let mut executor = fixture.executor(EffectQueueConfig::default());
         let mut services = fixture.services();
+        persist_fsynced_validation_marker(
+            &mut executor,
+            &mut services,
+            &fixture,
+            fixture.manifest.clone(),
+        );
         let request = SignRequest::Vote(vote(&fixture));
         executor
             .consume_effects(
@@ -4070,6 +4188,12 @@ mod tests {
         let fixture = Fixture::new();
         let mut executor = fixture.executor(EffectQueueConfig::default());
         let mut services = fixture.services();
+        persist_fsynced_validation_marker(
+            &mut executor,
+            &mut services,
+            &fixture,
+            fixture.manifest.clone(),
+        );
         executor
             .consume_effects(
                 vec![AdapterEffect::Sign {
@@ -4445,6 +4569,48 @@ mod tests {
     }
 
     #[test]
+    fn apply_accepts_decided_old_view_but_rejects_wrong_height_tag() {
+        let fixture = Fixture::new();
+        let mut executor = fixture.executor(EffectQueueConfig::default());
+        let mut services = fixture.services();
+        executor
+            .admit_local_proposal(
+                tag(0),
+                fixture.manifest.clone(),
+                fixture.body.clone(),
+                &mut services,
+            )
+            .expect("local proposal");
+        complete_local_proposal_chain(&mut executor, &mut services);
+
+        let commit = fixture.qc(wire::GlobalPhase::Commit);
+        assert!(matches!(
+            executor.begin_apply(
+                EventTag::new(2, 3, Generation::new(7)),
+                fixture.manifest.subject,
+                commit.clone(),
+                &mut services,
+            ),
+            Err(EffectExecutorError::Contract(_))
+        ));
+        assert!(executor.pending_applications.is_empty());
+        assert!(services.apply_tasks.is_empty());
+
+        executor
+            .begin_apply(
+                tag(3),
+                fixture.manifest.subject,
+                commit.clone(),
+                &mut services,
+            )
+            .expect("a delayed decided CommitQC remains actionable");
+        assert_eq!(executor.pending_applications.len(), 1);
+        assert_eq!(services.apply_tasks.len(), 1);
+        assert_eq!(services.apply_tasks[0].tag(), tag(3));
+        assert_eq!(services.apply_tasks[0].certificate(), &commit);
+    }
+
+    #[test]
     fn pending_kura_tip_requires_exact_decision_body_and_validation_replay() {
         let fixture = Fixture::new();
         let directory = TempDir::new().expect("body-store directory");
@@ -4458,7 +4624,11 @@ mod tests {
             .store(fixture.manifest.clone(), fixture.body.clone())
             .expect("persist exact body");
         let validated = store
-            .validate(&durable, |_| Ok::<_, &'static str>(()))
+            .validate(&durable, |_| {
+                Ok::<_, &'static str>(
+                    ValidatedBodyReceipt::for_test(durable.clone()).execution_commitment(),
+                )
+            })
             .expect("persist validation marker");
         drop(store);
         let reopened = V2BodyStore::open_with_policy(
@@ -4480,7 +4650,11 @@ mod tests {
             fixture.context.height,
             fixture.block.hash(),
         );
-        let decision = Some((fixture.manifest.round, fixture.manifest.subject));
+        let decision = Some((
+            fixture.manifest.round,
+            fixture.manifest.subject,
+            validated.execution_commitment(),
+        ));
 
         verify_pending_kura_apply_parts(
             &fixture.context,
@@ -4529,6 +4703,28 @@ mod tests {
             ),
             Err(EffectExecutorError::PendingApplyRecoveryMismatch(reason))
                 if reason.contains("no matching durable validation marker")
+        ));
+
+        let mismatched_execution_commitment = fixture_execution_commitment();
+        assert_ne!(
+            mismatched_execution_commitment,
+            validated.execution_commitment(),
+            "the adversarial Decision fixture must change the consensus-bound execution result"
+        );
+        assert!(matches!(
+            verify_pending_kura_apply_parts(
+                &fixture.context,
+                Some((
+                    fixture.manifest.round,
+                    fixture.manifest.subject,
+                    mismatched_execution_commitment,
+                )),
+                &recovered,
+                &validations,
+                expected,
+            ),
+            Err(EffectExecutorError::PendingApplyRecoveryMismatch(reason))
+                if reason.contains("Decision commitment differs")
         ));
         assert_eq!(validated.durable(), &durable);
     }
@@ -4791,6 +4987,7 @@ mod tests {
                 round: manifest.round,
                 phase: wire::GlobalPhase::Prepare,
                 subject: manifest.subject,
+                execution_commitment: fixture_execution_commitment(),
                 signers: vec![0, 1, 2],
                 aggregate_signature: vec![1],
             };
@@ -4837,6 +5034,12 @@ mod tests {
         let mut stale_ids = Vec::new();
         for view in 0..6 {
             let manifest = manifest_at_view(&fixture, view);
+            persist_fsynced_validation_marker(
+                &mut executor,
+                &mut services,
+                &fixture,
+                manifest.clone(),
+            );
             executor
                 .consume_effects(
                     vec![AdapterEffect::Sign {
@@ -4845,6 +5048,7 @@ mod tests {
                             round: manifest.round,
                             phase: wire::GlobalPhase::Prepare,
                             subject: manifest.subject,
+                            execution_commitment: fixture_execution_commitment(),
                             signer: 0,
                             signature: Vec::new(),
                         }),
@@ -5023,6 +5227,12 @@ mod tests {
         let fixture = Fixture::new();
         let mut executor = fixture.executor(EffectQueueConfig::default());
         let mut services = fixture.services();
+        persist_fsynced_validation_marker(
+            &mut executor,
+            &mut services,
+            &fixture,
+            fixture.manifest.clone(),
+        );
         executor
             .runtime
             .steps

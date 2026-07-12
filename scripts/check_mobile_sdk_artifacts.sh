@@ -332,7 +332,7 @@ check_xcframework() {
       fi
     done
 
-    require_regex "$manifest" '"native_bridge_abi_version"[[:space:]]*:[[:space:]]*[0-9]+' "NoritoBridge ABI version"
+    require_regex "$manifest" '"native_bridge_abi_version"[[:space:]]*:[[:space:]]*18([[:space:]]*[,}])' "exact first-release NoritoBridge ABI 18"
     require_regex "$manifest" '"source_commit"[[:space:]]*:[[:space:]]*"[[:xdigit:]]{40}"' "NoritoBridge source commit"
     require_regex "$manifest" '"source_tree_dirty"[[:space:]]*:[[:space:]]*(true|false)' "NoritoBridge source dirty state"
     require_regex "$manifest" '"source_fingerprint_sha256"[[:space:]]*:[[:space:]]*"[[:xdigit:]]{64}"' "NoritoBridge source fingerprint"
@@ -345,13 +345,9 @@ check_xcframework() {
       connect_norito_kagemusha_recursive_spend_artifact_write_v3
       connect_norito_kagemusha_recursive_spend_artifact_finalize_v3
       connect_norito_kagemusha_recursive_spend_artifact_cancel_v3
-      connect_norito_kagemusha_recursive_spend_init
-      connect_norito_kagemusha_recursive_spend_append
-      connect_norito_kagemusha_recursive_spend_verify
-      connect_norito_kagemusha_recursive_spend_redeem
-      connect_norito_kagemusha_recursive_spend_topup
-      connect_norito_kagemusha_recursive_spend_lineage_witness_from_init_result
-      connect_norito_kagemusha_recursive_spend_lineage_witness_append_result
+      connect_norito_kagemusha_recursive_spend_artifact_set_install_v3
+      connect_norito_kagemusha_recursive_spend_artifact_set_is_installed_v3
+      connect_norito_kagemusha_recursive_spend_artifact_set_uninstall_v3
       connect_norito_kagemusha_recursive_spend_init_v2
       connect_norito_kagemusha_recursive_spend_topup_unsigned_payload_digest_v2
       connect_norito_kagemusha_recursive_spend_topup_finalize_request_v2
@@ -378,10 +374,6 @@ check_xcframework() {
       connect_norito_kagemusha_recursive_spend_bundle_summary_v2
       connect_norito_kagemusha_recursive_spend_build_split_intent_v2
       connect_norito_kagemusha_recursive_spend_build_redemption_intent_v2
-      connect_norito_kagemusha_recursive_spend_artifact_begin_v2
-      connect_norito_kagemusha_recursive_spend_artifact_write_v2
-      connect_norito_kagemusha_recursive_spend_artifact_finalize_v2
-      connect_norito_kagemusha_recursive_spend_artifact_cancel_v2
     )
     if ! python3 - "$manifest" "${required_symbols[@]}" <<'PY'
 import json
@@ -418,8 +410,8 @@ PY
       local source_abi manifest_abi source_commit manifest_commit source_dirty manifest_dirty source_fingerprint manifest_fingerprint
       source_abi="$(sed -nE 's/.*CONNECT_NORITO_BRIDGE_ABI_VERSION:[[:space:]]*u32[[:space:]]*=[[:space:]]*([0-9]+).*/\1/p' "$bridge_source" | head -n1)"
       manifest_abi="$(manifest_json_value "$manifest" native_bridge_abi_version 2>/dev/null || true)"
-      if [[ -z "$source_abi" || "$manifest_abi" != "$source_abi" ]]; then
-        fail "NoritoBridge artifact ABI does not match bridge source"
+      if [[ "$source_abi" != "18" || "$manifest_abi" != "18" ]]; then
+        fail "NoritoBridge artifact and bridge source must both use exact first-release ABI 18"
       fi
       source_commit="$(git -C "$ROOT_DIR" rev-parse HEAD)"
       manifest_commit="$(manifest_json_value "$manifest" source_commit 2>/dev/null || true)"
