@@ -8,7 +8,10 @@ use iroha_crypto::Hash;
 use iroha_data_model::prelude::*;
 use iroha_primitives::json::Json;
 use iroha_test_samples::ALICE_ID;
-use ivm::{IVM, IVMHost, PointerType, ProgramMetadata, syscalls};
+use ivm::{
+    EmbeddedContractInterfaceV1, EmbeddedStateDescriptor, EmbeddedStateType, IVM, IVMHost,
+    PointerType, ProgramMetadata, syscalls,
+};
 
 fn make_tlv(pty: PointerType, payload: &[u8]) -> Vec<u8> {
     let mut v = Vec::with_capacity(7 + payload.len() + 32);
@@ -34,6 +37,29 @@ fn load_metadata(vm: &mut IVM) {
         ivm::syscalls::is_syscall_allowed(vm.syscall_policy(), syscalls::SYSCALL_JSON_ENCODE),
         "ABI policy must allow JSON helpers in tests"
     );
+}
+
+fn load_state_map_metadata(vm: &mut IVM, name: &str, key: EmbeddedStateType) {
+    let interface = EmbeddedContractInterfaceV1 {
+        seiyaku_name: "CodecHelperFixture".to_owned(),
+        compiler_fingerprint: "iroha-core-tests".to_owned(),
+        features_bitmap: 0,
+        access_set_hints: None,
+        kotoba: Vec::new(),
+        entrypoints: Vec::new(),
+        states: vec![EmbeddedStateDescriptor {
+            name: name.to_owned(),
+            ty: EmbeddedStateType::StateMap {
+                key: Box::new(key),
+                value: Box::new(EmbeddedStateType::Bytes),
+            },
+        }],
+        error_codes: Vec::new(),
+    };
+    let mut artifact = ProgramMetadata::default().encode();
+    artifact.extend_from_slice(&interface.encode_section());
+    vm.load_program(&artifact)
+        .expect("load schema-bound StateMap metadata");
 }
 
 #[test]
@@ -150,16 +176,16 @@ fn name_decode_from_norito_bytes() {
 }
 
 #[test]
-fn build_path_key_norito_appends_hash() {
+fn build_path_key_norito_appends_canonical_key_bytes() {
     let mut host = CoreHost::new(ALICE_ID.clone());
     let mut vm = IVM::new(0);
-    load_metadata(&mut vm);
+    load_state_map_metadata(&mut vm, "kv", EmbeddedStateType::Bytes);
 
     let base: Name = "kv".parse().unwrap();
     let base_bytes = norito::to_bytes(&base).expect("encode base name");
     let base_ptr = preload_input(&mut vm, 0, &make_tlv(PointerType::Name, &base_bytes));
-    let key = b"opaque norito payload";
-    let key_ptr = preload_input(&mut vm, 256, &make_tlv(PointerType::NoritoBytes, key));
+    let key = make_tlv(PointerType::Blob, b"opaque bytes payload");
+    let key_ptr = preload_input(&mut vm, 256, &make_tlv(PointerType::NoritoBytes, &key));
 
     vm.set_register(10, base_ptr);
     vm.set_register(11, key_ptr);
@@ -174,9 +200,7 @@ fn build_path_key_norito_appends_hash() {
     assert_eq!(out_tlv.type_id, PointerType::Name);
     let out_name: Name = norito::decode_from_bytes(out_tlv.payload).expect("decode output Name");
 
-    let expected_hash = Hash::new(key);
-    let hex = hex::encode(expected_hash.as_ref());
-    assert_eq!(out_name.as_ref(), format!("kv/{hex}"));
+    assert_eq!(out_name.as_ref(), format!("kv/{}", hex::encode(key)));
 }
 
 #[test]

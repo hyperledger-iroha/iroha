@@ -2798,10 +2798,6 @@ fn rewrite_instr_uses<F: FnMut(&mut Temp)>(instr: &mut ir::Instr, mut f: F) {
         }
         EncodeInt { value, .. } | PointerToNorito { value, .. } => f(value),
         PointerFromNorito { blob, .. } => f(blob),
-        PathMapKey { base, key, .. } => {
-            f(base);
-            f(key);
-        }
         PathMapKeyNorito { base, key_blob, .. } => {
             f(base);
             f(key_blob);
@@ -2854,18 +2850,7 @@ fn rewrite_instr_uses<F: FnMut(&mut Temp)>(instr: &mut ir::Instr, mut f: F) {
             f(left);
             f(right);
         }
-        VrfVerify {
-            input,
-            public_key,
-            proof,
-            variant,
-            ..
-        } => {
-            f(input);
-            f(public_key);
-            f(proof);
-            f(variant);
-        }
+        VrfVerify { request, .. } => f(request),
         VrfVerifyBatch { batch, .. } => f(batch),
         AxtBegin { descriptor } => f(descriptor),
         AxtTouch { dsid, manifest } => {
@@ -2995,7 +2980,6 @@ fn dest_temp_mut(instr: &mut ir::Instr) -> Option<&mut Temp> {
         ir::Instr::JsonObject { dest, .. } => Some(dest),
         ir::Instr::JsonSetInt { dest, .. } => Some(dest),
         ir::Instr::JsonSetAccountId { dest, .. } => Some(dest),
-        ir::Instr::PathMapKey { dest, .. } => Some(dest),
         ir::Instr::PathMapKeyNorito { dest, .. } => Some(dest),
         ir::Instr::JsonEncode { dest, .. } => Some(dest),
         ir::Instr::JsonDecode { dest, .. } => Some(dest),

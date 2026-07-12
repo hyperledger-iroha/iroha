@@ -129,6 +129,30 @@ jobs:
       - name: Norito-RPC fixture parity
         run: cargo xtask norito-rpc-verify
 
+  numeric_v1_architecture_parity:
+    name: Numeric V1 parity (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        runner:
+          - ubuntu-latest
+          - ubuntu-24.04-arm
+          - macos-14
+          - windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: "true"
+          shared-key: numeric-v1-${{ matrix.runner }}
+      - name: Verify canonical numeric fixtures and consensus behavior
+        run: |
+          cargo test --locked -p ivm --test ivm_group_06 numeric_
+          cargo test --locked -p ivm --test ivm_group_03 gas_schedule_hash
+
   android_fixture_compat:
     runs-on: ubuntu-latest
     steps:

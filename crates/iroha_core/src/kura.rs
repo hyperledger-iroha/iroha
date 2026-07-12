@@ -110,19 +110,21 @@ const DATA_FILE_NAME: &str = "blocks.data";
 const HASHES_FILE_NAME: &str = "blocks.hashes";
 const COUNT_FILE_NAME: &str = "blocks.count.norito";
 const VERIFIED_SNAPSHOT_TAIL_FILE_NAME: &str = "verified_snapshot_tail.norito";
+const STORE_ROOT_LOCK_FILE_NAME: &str = ".kura.lock";
 const VERIFIED_SNAPSHOT_TAIL_DIGEST_DOMAIN: &[u8] = b"iroha:kura:verified-snapshot-tail:v1\0";
 const PIPELINE_DIR_NAME: &str = "pipeline";
 const DA_BLOCKS_DIR_NAME: &str = "da_blocks";
 const WSV_CHECKPOINTS_DIR_NAME: &str = "wsv_checkpoints";
 const COMMIT_MANIFESTS_DIR_NAME: &str = "commit_manifests";
 const V2_FINALITY_ARTIFACTS_DIR_NAME: &str = "v2_finality";
-/// Hard read limit for one self-contained v2 finality artifact.
+/// Hard limit for the consensus artifact embedded in one Kura finality record.
 ///
 /// The maximum 4,096-validator roster, its current PoPs, and a boundary
 /// snapshot containing the next roster and PoPs fit well below this limit.
-/// Keeping an independent ceiling prevents a corrupted local sidecar from
-/// turning recovery or bridge-proof reads into an unbounded allocation.
 const MAX_V2_FINALITY_ARTIFACT_BYTES: usize = 8 * 1024 * 1024;
+/// Hard limit for the complete private record, including its retained block header.
+const MAX_KURA_V2_FINALITY_RECORD_BYTES: usize = MAX_V2_FINALITY_ARTIFACT_BYTES + 256 * 1024;
+const KURA_V2_FINALITY_RECORD_VERSION: u16 = 1;
 /// Number of immutable sidecar identities whose successful BLS verification
 /// is remembered. Entries retain only metadata and an artifact hash, not the
 /// potentially multi-megabyte artifact itself.
@@ -136,6 +138,28 @@ struct VerifiedV2FinalityCacheEntry {
     height: u64,
     artifact_hash: HashOf<V2FinalityArtifact>,
     metadata: std::fs::Metadata,
+}
+
+/// Private durable envelope retaining the exact canonical header after body eviction.
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
+#[norito(deny_unknown_fields)]
+struct KuraV2FinalityRecord {
+    /// Kura-local envelope version.
+    format_version: u16,
+    /// Exact canonical header whose hash is certified by `artifact`.
+    block_header: BlockHeader,
+    /// Self-contained consensus finality evidence.
+    artifact: V2FinalityArtifact,
+}
+
+impl KuraV2FinalityRecord {
+    fn new(block_header: BlockHeader, artifact: V2FinalityArtifact) -> Self {
+        Self {
+            format_version: KURA_V2_FINALITY_RECORD_VERSION,
+            block_header,
+            artifact,
+        }
+    }
 }
 const CERTIFIED_LANE_BLOCKS_DATA_FILE: &str = "certified_blocks.norito";
 const CERTIFIED_LANE_BLOCKS_INDEX_FILE: &str = "certified_blocks.index";
@@ -280,6 +304,11 @@ fn default_fastpq_proof_sidecar_max_retries() -> usize {
 pub struct Kura {
     /// The block storage
     block_store: Mutex<BlockStore>,
+    /// Serializes destructive canonical-chain changes with finality association and lane relabels.
+    ///
+    /// This is the outermost lock for those operations. Inner locks retain their existing order:
+    /// identity/path snapshots, then `block_store_write_lock`, then `block_store`.
+    canonical_chain_lock: Mutex<()>,
     /// Serializes block-store writes while allowing reads during long eviction compaction.
     block_store_write_lock: Mutex<()>,
     /// The array of block hashes and a slot for an arc of the block. This is normally recovered from the index file.
@@ -381,6 +410,9 @@ pub struct Kura {
     /// Test hook for forcing the next commit manifest sidecar write to fail.
     #[cfg(test)]
     fail_next_commit_manifest_write: AtomicBool,
+    /// Test hook for forcing redundant committed-pending cleanup to fail.
+    #[cfg(test)]
+    fail_next_pending_merge_cleanup: AtomicBool,
     /// Test hook for forcing the next lane-geometry catalog publication to fail.
     #[cfg(test)]
     fail_next_lane_geometry_publication: AtomicBool,
@@ -407,6 +439,8 @@ pub struct Kura {
     eviction_paused_after_snapshot: AtomicBool,
     /// Retains the temporary storage directory used by test-only Kura instances.
     _temp_store_dir: Option<tempfile::TempDir>,
+    /// Exclusive OS lock dropped only after every other Kura resource.
+    _store_root_lock_file: Option<std::fs::File>,
 }
 
 type BlockData = Vec<(HashOf<BlockHeader>, Option<Arc<SignedBlock>>)>;
@@ -1856,12 +1890,112 @@ impl Kura {
         )
     }
 
+    fn acquire_store_root_lock(store_root: &Path) -> Result<std::fs::File> {
+        let canonical_root = std::fs::canonicalize(store_root)
+            .map_err(|error| Error::IO(error, store_root.to_path_buf()))?;
+        let root_before = std::fs::symlink_metadata(&canonical_root)
+            .map_err(|error| Error::IO(error, canonical_root.clone()))?;
+        if root_before.file_type().is_symlink() || !root_before.is_dir() {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "canonical Kura store root is not a direct directory",
+                ),
+                canonical_root,
+            ));
+        }
+        let lock_path = canonical_root.join(STORE_ROOT_LOCK_FILE_NAME);
+        if let Some(metadata) = match std::fs::symlink_metadata(&lock_path) {
+            Ok(metadata) => Some(metadata),
+            Err(error) if error.kind() == ErrorKind::NotFound => None,
+            Err(error) => return Err(Error::IO(error, lock_path)),
+        } && (metadata.file_type().is_symlink()
+            || !metadata.file_type().is_file()
+            || !Self::sidecar_is_single_link(&metadata))
+        {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "Kura store-root lock path is not a single-link regular file",
+                ),
+                lock_path,
+            ));
+        }
+
+        let mut options = std::fs::OpenOptions::new();
+        options.read(true).write(true).create(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt as _;
+
+            options
+                .mode(0o600)
+                .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32);
+        }
+        let file = options
+            .open(&lock_path)
+            .map_err(|error| Error::IO(error, lock_path.clone()))?;
+        let opened_metadata = file
+            .metadata()
+            .map_err(|error| Error::IO(error, lock_path.clone()))?;
+        let path_metadata = std::fs::symlink_metadata(&lock_path)
+            .map_err(|error| Error::IO(error, lock_path.clone()))?;
+        if !opened_metadata.file_type().is_file()
+            || !path_metadata.file_type().is_file()
+            || path_metadata.file_type().is_symlink()
+            || !Self::sidecar_is_single_link(&opened_metadata)
+            || !Self::sidecar_is_single_link(&path_metadata)
+            || !Self::sidecar_metadata_same_object(&opened_metadata, &path_metadata)
+        {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "Kura store-root lock path changed while opening",
+                ),
+                lock_path,
+            ));
+        }
+        match file.try_lock() {
+            Ok(()) => {}
+            Err(std::fs::TryLockError::WouldBlock) => return Err(Error::Locked(lock_path)),
+            Err(std::fs::TryLockError::Error(error)) => {
+                return Err(Error::IO(error, lock_path));
+            }
+        }
+        let root_after = std::fs::symlink_metadata(&canonical_root)
+            .map_err(|error| Error::IO(error, canonical_root.clone()))?;
+        let path_after = std::fs::symlink_metadata(&lock_path)
+            .map_err(|error| Error::IO(error, lock_path.clone()))?;
+        if root_after.file_type().is_symlink()
+            || !root_after.is_dir()
+            || !Self::sidecar_metadata_same_object(&root_before, &root_after)
+            || path_after.file_type().is_symlink()
+            || !path_after.is_file()
+            || !Self::sidecar_file_metadata_unchanged(&path_metadata, &path_after)
+        {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "Kura store root or lock path changed while acquiring the OS lock",
+                ),
+                lock_path,
+            ));
+        }
+        Ok(file)
+    }
+
     fn new_inner(
         config: &Config,
         lane_config: &LaneConfig,
         configured_catalog_hash: Option<Hash>,
     ) -> Result<(Arc<Self>, BlockCount)> {
-        let store_dir = config.store_dir.resolve_relative_path();
+        let configured_store_dir = config.store_dir.resolve_relative_path();
+        create_dir_all_with_context(&configured_store_dir)?;
+        // Resolve aliases once, before taking the lock, and use the same stable
+        // absolute root for every subsequent Kura path.
+        let store_dir = std::fs::canonicalize(&configured_store_dir)
+            .map_err(|error| Error::IO(error, configured_store_dir))?;
+        let store_root_lock_file = Self::acquire_store_root_lock(&store_dir)?;
         if let Some(configured_catalog_hash) = configured_catalog_hash {
             Self::establish_or_verify_configured_lane_catalog_baseline(
                 &store_dir,
@@ -1878,6 +2012,11 @@ impl Kura {
         let blocks_root = Self::select_block_store_root(&store_dir, primary_lane);
         let mut block_store =
             BlockStore::with_fsync(&blocks_root, config.fsync_mode, config.fsync_interval);
+        let v2_finality_floor =
+            Self::highest_v2_finality_artifact_height_for(&store_root, &blocks_root)?;
+        if let Some(finalized_height) = v2_finality_floor {
+            block_store.preflight_v2_finalized_prefix(finalized_height)?;
+        }
         block_store.create_files_if_they_do_not_exist()?;
 
         let (block_notify_tx, block_notify_rx) = mpsc::sync_channel(BLOCK_NOTIFY_CHANNEL_CAPACITY);
@@ -1886,7 +2025,8 @@ impl Kura {
             .debug_output_new_blocks
             .then(|| blocks_root.join("blocks.jsonl"));
 
-        let (_, mut chain_validation) = Kura::init(&mut block_store, config.init_mode)?;
+        let (_, mut chain_validation) =
+            Kura::init(&mut block_store, config.init_mode, v2_finality_floor)?;
         let manifest_reconciliation = Self::reconcile_commit_manifests(
             &mut block_store,
             &blocks_root,
@@ -1967,7 +2107,9 @@ impl Kura {
         }
 
         let kura = Arc::new(Self {
+            _store_root_lock_file: Some(store_root_lock_file),
             block_store: Mutex::new(block_store),
+            canonical_chain_lock: Mutex::new(()),
             block_store_write_lock: Mutex::new(()),
             block_data: Mutex::new(block_data),
             hard_fork_hash_only_block_count: AtomicUsize::new(hard_fork_hash_only_block_count),
@@ -2027,6 +2169,8 @@ impl Kura {
             #[cfg(test)]
             fail_next_commit_manifest_write: AtomicBool::new(false),
             #[cfg(test)]
+            fail_next_pending_merge_cleanup: AtomicBool::new(false),
+            #[cfg(test)]
             fail_next_lane_geometry_publication: AtomicBool::new(false),
             #[cfg(test)]
             fail_next_lane_geometry_publication_after_write: AtomicBool::new(false),
@@ -2045,6 +2189,7 @@ impl Kura {
             _temp_store_dir: None,
         });
 
+        kura.validate_v2_finality_inventory_on_startup()?;
         kura.reconcile_merge_carriers_from_durable_blocks()?;
 
         if block_count > 0 {
@@ -2097,11 +2242,13 @@ impl Kura {
         let lane_config = LaneConfig::default();
         let roster_log_path = Self::roster_log_path(&store_root);
         Arc::new(Self {
+            _store_root_lock_file: None,
             block_store: Mutex::new(BlockStore::with_fsync(
                 &blocks_root,
                 FsyncMode::Off,
                 FSYNC_INTERVAL,
             )),
+            canonical_chain_lock: Mutex::new(()),
             block_store_write_lock: Mutex::new(()),
             block_data: Mutex::new(Vec::new()),
             hard_fork_hash_only_block_count: AtomicUsize::new(0),
@@ -2163,6 +2310,8 @@ impl Kura {
             fail_next_wsv_checkpoint_write: AtomicBool::new(false),
             #[cfg(test)]
             fail_next_commit_manifest_write: AtomicBool::new(false),
+            #[cfg(test)]
+            fail_next_pending_merge_cleanup: AtomicBool::new(false),
             #[cfg(test)]
             fail_next_lane_geometry_publication: AtomicBool::new(false),
             #[cfg(test)]
@@ -3072,6 +3221,7 @@ impl Kura {
         if self.store_root.as_os_str().is_empty() {
             return Ok(());
         }
+        let _canonical_chain_guard = self.canonical_chain_lock.lock();
         for (previous, current) in migrations {
             if previous.kura_segment == current.kura_segment {
                 self.set_lane_storage_entry(current);
@@ -3551,8 +3701,8 @@ impl Kura {
         true
     }
 
-    fn canonical_sidecar_directory(
-        &self,
+    fn canonical_sidecar_directory_for(
+        store_root: &Path,
         expected_directory: &Path,
     ) -> Result<Option<(PathBuf, std::fs::Metadata)>> {
         let before = match std::fs::symlink_metadata(expected_directory) {
@@ -3569,19 +3719,17 @@ impl Kura {
                 expected_directory.to_path_buf(),
             ));
         }
-        let relative = expected_directory
-            .strip_prefix(&self.store_root)
-            .map_err(|_| {
-                Error::IO(
-                    std::io::Error::new(
-                        ErrorKind::InvalidData,
-                        "sidecar directory is outside the configured Kura root",
-                    ),
-                    expected_directory.to_path_buf(),
-                )
-            })?;
-        let canonical_root = std::fs::canonicalize(&self.store_root)
-            .map_err(|error| Error::IO(error, self.store_root.clone()))?;
+        let relative = expected_directory.strip_prefix(store_root).map_err(|_| {
+            Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "sidecar directory is outside the configured Kura root",
+                ),
+                expected_directory.to_path_buf(),
+            )
+        })?;
+        let canonical_root = std::fs::canonicalize(store_root)
+            .map_err(|error| Error::IO(error, store_root.to_path_buf()))?;
         let canonical_directory = std::fs::canonicalize(expected_directory)
             .map_err(|error| Error::IO(error, expected_directory.to_path_buf()))?;
         if canonical_directory != canonical_root.join(relative) {
@@ -3610,8 +3758,15 @@ impl Kura {
         Ok(Some((canonical_directory, after)))
     }
 
-    fn regular_sidecar_metadata(
+    fn canonical_sidecar_directory(
         &self,
+        expected_directory: &Path,
+    ) -> Result<Option<(PathBuf, std::fs::Metadata)>> {
+        Self::canonical_sidecar_directory_for(&self.store_root, expected_directory)
+    }
+
+    fn regular_sidecar_metadata_for(
+        store_root: &Path,
         path: &Path,
         expected_directory: &Path,
     ) -> Result<Option<std::fs::Metadata>> {
@@ -3624,7 +3779,7 @@ impl Kura {
                 path.to_path_buf(),
             ));
         }
-        let directory = self.canonical_sidecar_directory(expected_directory)?;
+        let directory = Self::canonical_sidecar_directory_for(store_root, expected_directory)?;
         let metadata = match std::fs::symlink_metadata(path) {
             Ok(metadata) => metadata,
             Err(err) if err.kind() == ErrorKind::NotFound => return Ok(None),
@@ -3665,14 +3820,25 @@ impl Kura {
         Ok(Some(metadata))
     }
 
-    fn read_regular_sidecar_bytes(
+    fn regular_sidecar_metadata(
         &self,
+        path: &Path,
+        expected_directory: &Path,
+    ) -> Result<Option<std::fs::Metadata>> {
+        Self::regular_sidecar_metadata_for(&self.store_root, path, expected_directory)
+    }
+
+    fn read_regular_sidecar_bytes_for(
+        store_root: &Path,
         path: &Path,
         expected_directory: &Path,
         byte_limit: usize,
     ) -> Result<Option<Vec<u8>>> {
-        let directory_before = self.canonical_sidecar_directory(expected_directory)?;
-        let Some(metadata) = self.regular_sidecar_metadata(path, expected_directory)? else {
+        let directory_before =
+            Self::canonical_sidecar_directory_for(store_root, expected_directory)?;
+        let Some(metadata) =
+            Self::regular_sidecar_metadata_for(store_root, path, expected_directory)?
+        else {
             return Ok(None);
         };
         let Some((_, directory_before)) = directory_before else {
@@ -3717,7 +3883,8 @@ impl Kura {
             .map_err(|err| Error::IO(err, path.to_path_buf()))?;
         let path_after =
             std::fs::symlink_metadata(path).map_err(|err| Error::IO(err, path.to_path_buf()))?;
-        let directory_after = self.canonical_sidecar_directory(expected_directory)?;
+        let directory_after =
+            Self::canonical_sidecar_directory_for(store_root, expected_directory)?;
         if bytes.len() > byte_limit
             || u64::try_from(bytes.len())? != metadata.len()
             || !path_after.is_file()
@@ -3737,6 +3904,15 @@ impl Kura {
             ));
         }
         Ok(Some(bytes))
+    }
+
+    fn read_regular_sidecar_bytes(
+        &self,
+        path: &Path,
+        expected_directory: &Path,
+        byte_limit: usize,
+    ) -> Result<Option<Vec<u8>>> {
+        Self::read_regular_sidecar_bytes_for(&self.store_root, path, expected_directory, byte_limit)
     }
 
     fn block_merge_reference(
@@ -4718,6 +4894,16 @@ impl Kura {
         &self,
         hash: HashOf<MergeLedgerEntry>,
     ) -> Result<()> {
+        #[cfg(test)]
+        if self
+            .fail_next_pending_merge_cleanup
+            .swap(false, Ordering::Relaxed)
+        {
+            return Err(Error::IO(
+                std::io::Error::other("injected committed-pending cleanup failure"),
+                self.pending_merge_entry_path(hash),
+            ));
+        }
         let path = self.pending_merge_entry_path(hash);
         let directory = self.pending_merge_entry_dir();
         let _guard = self.sidecar_lock.lock();
@@ -4730,6 +4916,16 @@ impl Kura {
             }
             Err(err) if err.kind() == ErrorKind::NotFound => Ok(()),
             Err(err) => Err(Error::IO(err, path)),
+        }
+    }
+
+    fn remove_committed_pending_merge_entry_best_effort(&self, hash: HashOf<MergeLedgerEntry>) {
+        if let Err(error) = self.remove_pending_certified_merge_entry(hash) {
+            warn!(
+                ?error,
+                %hash,
+                "committed merge entry remains in the redundant pending sidecar store"
+            );
         }
     }
 
@@ -4829,7 +5025,11 @@ impl Kura {
     /// - file storage is unavailable
     /// - data in file storage is invalid or corrupted
     #[iroha_logger::log(skip_all, name = "kura_init")]
-    fn init(block_store: &mut BlockStore, mode: InitMode) -> Result<(BlockData, ChainValidation)> {
+    fn init(
+        block_store: &mut BlockStore,
+        mode: InitMode,
+        v2_finality_floor: Option<u64>,
+    ) -> Result<(BlockData, ChainValidation)> {
         let block_index_count: usize = block_store
             .read_durable_index_count()?
             .try_into()
@@ -4842,16 +5042,22 @@ impl Kura {
                 block_store,
                 block_index_count,
                 hard_fork_hash_only_block_count,
+                v2_finality_floor,
             )?
         } else {
             match mode {
-                InitMode::Fast => {
-                    Kura::init_fast_mode(block_store, block_index_count).or_else(|error| {
-                        warn!(%error, "Hashes file is broken. Falling back to strict init mode.");
-                        Kura::init_strict_mode(block_store, block_index_count)
-                    })
+                InitMode::Fast => Kura::init_fast_mode(
+                    block_store,
+                    block_index_count,
+                    v2_finality_floor,
+                )
+                .or_else(|error| {
+                    warn!(%error, "Hashes file is broken. Falling back to strict init mode.");
+                    Kura::init_strict_mode(block_store, block_index_count, v2_finality_floor)
+                }),
+                InitMode::Strict => {
+                    Kura::init_strict_mode(block_store, block_index_count, v2_finality_floor)
                 }
-                InitMode::Strict => Kura::init_strict_mode(block_store, block_index_count),
             }?
         };
 
@@ -4875,10 +5081,41 @@ impl Kura {
         Ok((block_data, chain_validation))
     }
 
+    fn ensure_startup_rewrite_respects_v2_finality(
+        v2_finality_floor: Option<u64>,
+        rewrite_from_height: u64,
+    ) -> Result<()> {
+        if let Some(finalized_height) = v2_finality_floor
+            && finalized_height >= rewrite_from_height
+        {
+            return Err(Error::FinalizedV2BlockMutation {
+                rewrite_from_height,
+                finalized_height,
+            });
+        }
+        Ok(())
+    }
+
+    fn rewrite_validated_block_hashes(
+        block_store: &mut BlockStore,
+        hashes: &[HashOf<BlockHeader>],
+        v2_finality_floor: Option<u64>,
+    ) -> Result<()> {
+        let Some(finalized_height) = v2_finality_floor else {
+            return block_store.overwrite_block_hashes(hashes);
+        };
+        let suffix_start = usize::try_from(finalized_height)?;
+        let Some(suffix) = hashes.get(suffix_start..) else {
+            return Err(Error::HashesFileHeightMismatch);
+        };
+        block_store.overwrite_block_hash_suffix(finalized_height, suffix)
+    }
+
     fn init_hash_only_hard_fork_mode(
         block_store: &mut BlockStore,
         mut block_index_count: usize,
         hard_fork_hash_only_block_count: usize,
+        v2_finality_floor: Option<u64>,
     ) -> Result<ChainValidation, Error> {
         let mut block_hashes_count: usize = block_store
             .read_hashes_count()?
@@ -4886,6 +5123,10 @@ impl Kura {
             .expect("INTERNAL BUG: block hashes count exceeds usize::MAX");
         let mut repaired_height_mismatch = false;
         if block_hashes_count > block_index_count {
+            Self::ensure_startup_rewrite_respects_v2_finality(
+                v2_finality_floor,
+                u64::try_from(block_index_count)?.saturating_add(1),
+            )?;
             warn!(
                 hashes_count = block_hashes_count,
                 index_count = block_index_count,
@@ -4896,6 +5137,10 @@ impl Kura {
             block_hashes_count = block_index_count;
             repaired_height_mismatch = true;
         } else if block_hashes_count < block_index_count {
+            Self::ensure_startup_rewrite_respects_v2_finality(
+                v2_finality_floor,
+                u64::try_from(block_hashes_count)?.saturating_add(1),
+            )?;
             warn!(
                 hashes_count = block_hashes_count,
                 index_count = block_index_count,
@@ -4928,12 +5173,17 @@ impl Kura {
             &block_indices,
             Some(&expected_hashes),
             hard_fork_hash_only_block_count,
+            v2_finality_floor,
         )?;
         validation.hard_fork_hash_only_block_count = validation
             .hard_fork_hash_only_block_count
             .min(validation.hashes.len());
         if validation.truncated || validation.hash_mismatch {
-            block_store.overwrite_block_hashes(&validation.hashes)?;
+            Self::rewrite_validated_block_hashes(
+                block_store,
+                &validation.hashes,
+                v2_finality_floor,
+            )?;
         }
         validation.truncated |= repaired_height_mismatch;
         info!(
@@ -4950,12 +5200,17 @@ impl Kura {
     fn init_fast_mode(
         block_store: &mut BlockStore,
         block_index_count: usize,
+        v2_finality_floor: Option<u64>,
     ) -> Result<ChainValidation, Error> {
         let mut block_hashes_count: usize = block_store
             .read_hashes_count()?
             .try_into()
             .expect("INTERNAL BUG: block hashes count exceeds usize::MAX");
         if block_hashes_count > block_index_count {
+            Self::ensure_startup_rewrite_respects_v2_finality(
+                v2_finality_floor,
+                u64::try_from(block_index_count)?.saturating_add(1),
+            )?;
             warn!(
                 hashes_count = block_hashes_count,
                 index_count = block_index_count,
@@ -4968,10 +5223,19 @@ impl Kura {
             let mut block_indices = vec![BlockIndex::default(); block_index_count];
             block_store.read_block_indices(0, &mut block_indices)?;
             let expected_hashes = block_store.read_block_hashes(0, block_hashes_count)?;
-            let validation =
-                Self::validate_block_chain(block_store, &block_indices, Some(&expected_hashes), 0)?;
+            let validation = Self::validate_block_chain(
+                block_store,
+                &block_indices,
+                Some(&expected_hashes),
+                0,
+                v2_finality_floor,
+            )?;
             if validation.truncated || validation.hash_mismatch {
-                block_store.overwrite_block_hashes(&validation.hashes)?;
+                Self::rewrite_validated_block_hashes(
+                    block_store,
+                    &validation.hashes,
+                    v2_finality_floor,
+                )?;
             }
             Ok(validation)
         } else {
@@ -4982,12 +5246,37 @@ impl Kura {
     fn init_strict_mode(
         block_store: &mut BlockStore,
         block_index_count: usize,
+        v2_finality_floor: Option<u64>,
     ) -> Result<ChainValidation, Error> {
         let mut block_indices = vec![BlockIndex::default(); block_index_count];
         block_store.read_block_indices(0, &mut block_indices)?;
         let hashes_count = block_store.read_hashes_count()?;
-        let expected_hashes = if hashes_count == block_index_count as u64 {
+        if let Some(finalized_height) = v2_finality_floor {
+            if u64::try_from(block_index_count)? < finalized_height {
+                return Err(Error::FinalizedV2BlockMutation {
+                    rewrite_from_height: u64::try_from(block_index_count)?.saturating_add(1),
+                    finalized_height,
+                });
+            }
+            if hashes_count < finalized_height {
+                return Err(Error::FinalizedV2BlockMutation {
+                    rewrite_from_height: hashes_count.saturating_add(1),
+                    finalized_height,
+                });
+            }
+        }
+        let hash_journal_is_exact = hashes_count == block_index_count as u64;
+        let expected_hashes = if hash_journal_is_exact {
             Some(block_store.read_block_hashes(0, block_index_count)?)
+        } else if let Some(finalized_height) = v2_finality_floor {
+            let finalized_count = usize::try_from(finalized_height)?;
+            warn!(
+                hashes_count,
+                index_count = block_index_count,
+                finalized_height,
+                "strict Kura init is retaining the finalized hash prefix and rebuilding only its mutable suffix"
+            );
+            Some(block_store.read_block_hashes(0, finalized_count)?)
         } else {
             if hashes_count > 0 {
                 warn!(
@@ -4999,9 +5288,20 @@ impl Kura {
             None
         };
 
-        let validation =
-            Self::validate_block_chain(block_store, &block_indices, expected_hashes.as_deref(), 0)?;
-        block_store.overwrite_block_hashes(&validation.hashes)?;
+        let validation = Self::validate_block_chain(
+            block_store,
+            &block_indices,
+            expected_hashes.as_deref(),
+            0,
+            v2_finality_floor,
+        )?;
+        if !hash_journal_is_exact || validation.truncated || validation.hash_mismatch {
+            Self::rewrite_validated_block_hashes(
+                block_store,
+                &validation.hashes,
+                v2_finality_floor,
+            )?;
+        }
 
         Ok(validation)
     }
@@ -5012,9 +5312,10 @@ impl Kura {
         block_indices: &[BlockIndex],
         expected_hashes: Option<&[HashOf<BlockHeader>]>,
         hash_only_prefix: usize,
+        v2_finality_floor: Option<u64>,
     ) -> Result<ChainValidation, Error> {
         if let Some(expected) = expected_hashes {
-            if expected.len() != block_indices.len() {
+            if expected.len() > block_indices.len() || expected.len() < hash_only_prefix {
                 return Err(Error::HashesFileHeightMismatch);
             }
         } else if hash_only_prefix > 0 {
@@ -5042,7 +5343,7 @@ impl Kura {
 
             if block.length == 0
                 && block.is_evicted()
-                && expected_hashes.is_some()
+                && expected_hashes.is_some_and(|hashes| hashes.get(idx).is_some())
                 && idx >= hash_only_prefix
             {
                 let expected = expected_hashes
@@ -5081,8 +5382,9 @@ impl Kura {
                 let payload = match block_store.read_da_block_bytes(height, block.length) {
                     Ok(payload) => Some(payload),
                     Err(error) => {
-                        if let Some(expected_hashes) = expected_hashes {
-                            let expected = expected_hashes[idx];
+                        if let Some(expected) =
+                            expected_hashes.and_then(|hashes| hashes.get(idx)).copied()
+                        {
                             debug!(
                                 ?error,
                                 block_index = idx,
@@ -5110,10 +5412,15 @@ impl Kura {
                 };
                 match decode_framed_signed_block(&payload) {
                     Ok(decoded_block) => {
-                        if let Some(expected_hashes) = expected_hashes {
-                            let expected = expected_hashes[idx];
+                        if let Some(expected) =
+                            expected_hashes.and_then(|hashes| hashes.get(idx)).copied()
+                        {
                             let actual = decoded_block.hash();
                             if actual != expected {
+                                Self::ensure_startup_rewrite_respects_v2_finality(
+                                    v2_finality_floor,
+                                    height,
+                                )?;
                                 warn!(
                                     expected = %expected,
                                     actual = %actual,
@@ -5136,8 +5443,13 @@ impl Kura {
                         decoded_block
                     }
                     Err(error) => {
-                        if let Some(expected_hashes) = expected_hashes {
-                            let expected = expected_hashes[idx];
+                        if let Some(expected) =
+                            expected_hashes.and_then(|hashes| hashes.get(idx)).copied()
+                        {
+                            Self::ensure_startup_rewrite_respects_v2_finality(
+                                v2_finality_floor,
+                                height,
+                            )?;
                             warn!(
                                 ?error,
                                 block_index = idx,
@@ -5229,9 +5541,9 @@ impl Kura {
             }
 
             let decoded_block_hash = decoded_block.hash();
-            if let Some(expected_hashes) = expected_hashes {
-                let expected = expected_hashes[idx];
+            if let Some(expected) = expected_hashes.and_then(|hashes| hashes.get(idx)).copied() {
                 if expected != decoded_block_hash {
+                    Self::ensure_startup_rewrite_respects_v2_finality(v2_finality_floor, height)?;
                     hash_mismatch = true;
                     warn!(
                         expected = ?expected,
@@ -5249,6 +5561,10 @@ impl Kura {
         let truncated = truncated.unwrap_or(false);
         let validated_height = block_hashes.len() as u64;
         if truncated {
+            Self::ensure_startup_rewrite_respects_v2_finality(
+                v2_finality_floor,
+                validated_height.saturating_add(1),
+            )?;
             block_store.prune(validated_height)?;
             info!(
                 validated_height,
@@ -5845,6 +6161,160 @@ impl Kura {
         Self::v2_finality_artifact_path_for(&self.active_blocks_dir.lock(), height)
     }
 
+    fn v2_finality_artifact_heights_for(store_root: &Path, blocks_dir: &Path) -> Result<Vec<u64>> {
+        let directory = Self::v2_finality_artifact_dir_for(blocks_dir);
+        if Self::canonical_sidecar_directory_for(store_root, &directory)?.is_none() {
+            return Ok(Vec::new());
+        }
+        let entries =
+            std::fs::read_dir(&directory).map_err(|error| Error::IO(error, directory.clone()))?;
+        let mut heights = Vec::new();
+        for entry in entries {
+            let entry = entry.map_err(|error| Error::IO(error, directory.clone()))?;
+            let path = entry.path();
+            let file_name = entry.file_name();
+            let name = file_name.to_str().ok_or_else(|| {
+                Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        "v2 finality directory contains a non-UTF-8 entry",
+                    ),
+                    path.clone(),
+                )
+            })?;
+            if name.starts_with(".kura-sidecar-") {
+                continue;
+            }
+            if let Some(stem) = name.strip_suffix(".norito.tmp")
+                && stem.len() == 20
+                && stem.as_bytes().iter().all(u8::is_ascii_digit)
+            {
+                continue;
+            }
+            let Some(stem) = name.strip_suffix(".norito") else {
+                return Err(Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        "v2 finality directory contains an unknown entry",
+                    ),
+                    path,
+                ));
+            };
+            if stem.len() != 20 || !stem.as_bytes().iter().all(u8::is_ascii_digit) {
+                return Err(Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        "v2 finality artifact name is not a canonical 20-digit height",
+                    ),
+                    path,
+                ));
+            }
+            let height = stem.parse::<u64>().map_err(|_| {
+                Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        "v2 finality artifact height exceeds the supported range",
+                    ),
+                    path.clone(),
+                )
+            })?;
+            if height == 0 {
+                return Err(Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        "v2 finality artifact height must be non-zero",
+                    ),
+                    path,
+                ));
+            }
+            Self::regular_sidecar_metadata_for(store_root, &path, &directory)?.ok_or_else(
+                || {
+                    Error::IO(
+                        std::io::Error::new(
+                            ErrorKind::InvalidData,
+                            "v2 finality artifact disappeared during rollback preflight",
+                        ),
+                        path.clone(),
+                    )
+                },
+            )?;
+            heights.push(height);
+        }
+        heights.sort_unstable();
+        Ok(heights)
+    }
+
+    fn highest_v2_finality_artifact_height_for(
+        store_root: &Path,
+        blocks_dir: &Path,
+    ) -> Result<Option<u64>> {
+        Ok(
+            Self::v2_finality_artifact_heights_for(store_root, blocks_dir)?
+                .last()
+                .copied(),
+        )
+    }
+
+    fn highest_v2_finality_artifact_height(&self, blocks_dir: &Path) -> Result<Option<u64>> {
+        Self::highest_v2_finality_artifact_height_for(&self.store_root, blocks_dir)
+    }
+
+    fn ensure_v2_finality_allows_rewrite_from(
+        &self,
+        blocks_dir: &Path,
+        rewrite_from_height: u64,
+    ) -> Result<()> {
+        if let Some(finalized_height) = self.highest_v2_finality_artifact_height(blocks_dir)?
+            && finalized_height >= rewrite_from_height
+        {
+            return Err(Error::FinalizedV2BlockMutation {
+                rewrite_from_height,
+                finalized_height,
+            });
+        }
+        Ok(())
+    }
+
+    fn validate_v2_finality_inventory_on_startup(&self) -> Result<()> {
+        let _canonical_chain_guard = self.canonical_chain_lock.lock();
+        let blocks_dir = self.active_blocks_dir.lock().clone();
+        let finalized_heights =
+            Self::v2_finality_artifact_heights_for(&self.store_root, &blocks_dir)?;
+        let Some(finalized_height) = finalized_heights.last().copied() else {
+            return Ok(());
+        };
+        let durable_height = self.block_store.lock().read_durable_index_count()?;
+        if finalized_height > durable_height {
+            return Err(Error::V2FinalityBeyondDurableChain {
+                finalized_height,
+                durable_height,
+            });
+        }
+        let directory = Self::v2_finality_artifact_dir_for(&blocks_dir);
+        for height in finalized_heights {
+            let block_height = NonZeroUsize::new(usize::try_from(height)?)
+                .ok_or(Error::V2FinalityCanonicalHeaderUnavailable { height })?;
+            let canonical_hash = self
+                .get_durable_block_hash(block_height)
+                .ok_or(Error::V2FinalityCanonicalHeaderUnavailable { height })?;
+            let path = Self::v2_finality_artifact_path_for(&blocks_dir, height);
+            let record = self
+                .decode_v2_finality_record_at(&path, &directory)?
+                .ok_or_else(|| {
+                    Error::IO(
+                        std::io::Error::new(
+                            ErrorKind::InvalidData,
+                            "v2 finality artifact disappeared during startup validation",
+                        ),
+                        path.clone(),
+                    )
+                })?;
+            Self::validate_v2_finality_record_at(&path, height, canonical_hash, &record)?;
+            self.verify_v2_finality_artifact_at(&path, &directory, &record.artifact)?;
+        }
+        Ok(())
+    }
+
     fn v2_finality_cache_hit(
         &self,
         height: u64,
@@ -5897,11 +6367,11 @@ impl Kura {
     fn verify_v2_finality_artifact_at(
         &self,
         path: &Path,
+        directory: &Path,
         artifact: &V2FinalityArtifact,
     ) -> Result<()> {
-        let directory = self.v2_finality_artifact_dir();
         let metadata = self
-            .regular_sidecar_metadata(path, &directory)?
+            .regular_sidecar_metadata(path, directory)?
             .ok_or_else(|| {
                 Error::IO(
                     std::io::Error::new(
@@ -5918,7 +6388,7 @@ impl Kura {
 
         self.verify_v2_finality_crypto(artifact)?;
         let after = self
-            .regular_sidecar_metadata(path, &directory)?
+            .regular_sidecar_metadata(path, directory)?
             .ok_or_else(|| {
                 Error::IO(
                     std::io::Error::new(
@@ -5944,11 +6414,11 @@ impl Kura {
     fn cache_newly_verified_v2_finality(
         &self,
         path: &Path,
+        directory: &Path,
         artifact: &V2FinalityArtifact,
     ) -> Result<()> {
-        let directory = self.v2_finality_artifact_dir();
         let metadata = self
-            .regular_sidecar_metadata(path, &directory)?
+            .regular_sidecar_metadata(path, directory)?
             .ok_or_else(|| {
                 Error::IO(
                     std::io::Error::new(
@@ -5958,11 +6428,7 @@ impl Kura {
                     path.to_path_buf(),
                 )
             })?;
-        self.remember_verified_v2_finality(
-            artifact.height,
-            HashOf::new(artifact),
-            metadata,
-        );
+        self.remember_verified_v2_finality(artifact.height, HashOf::new(artifact), metadata);
         Ok(())
     }
 
@@ -5993,36 +6459,57 @@ impl Kura {
         artifact.validate()?;
         let height = artifact.height;
         let block_hash = artifact.block_hash;
+        let artifact_bytes = artifact.encode();
+        if artifact_bytes.len() > MAX_V2_FINALITY_ARTIFACT_BYTES {
+            return Err(Error::V2FinalityArtifactTooLarge {
+                actual: artifact_bytes.len(),
+                max: MAX_V2_FINALITY_ARTIFACT_BYTES,
+            });
+        }
 
-        // Keep the lock order used by Kura's staged sidecars: sidecar first,
-        // then the block-store writer. This prevents a block replacement or
-        // prune from interleaving between the canonical-hash check and rename.
-        let _sidecar_guard = self.sidecar_lock.lock();
-        let _block_write_guard = self.block_store_write_lock.lock();
-        self.ensure_durable_block_at_height(height, block_hash)?;
+        // Finality association and destructive canonical-chain operations share
+        // one outer lock. Appends cannot change an existing height, so the
+        // block-store writer lock is deliberately not retained across BLS work
+        // or sidecar I/O.
+        let _canonical_chain_guard = self.canonical_chain_lock.lock();
         let block_height = NonZeroUsize::new(usize::try_from(height)?)
             .ok_or(Error::V2FinalityCanonicalHeaderUnavailable { height })?;
+        let blocks_dir = self.active_blocks_dir.lock().clone();
+        let dir = Self::v2_finality_artifact_dir_for(&blocks_dir);
+        let path = Self::v2_finality_artifact_path_for(&blocks_dir, height);
+        self.ensure_durable_block_at_height(height, block_hash)?;
+        let canonical_hash = self
+            .get_durable_block_hash(block_height)
+            .ok_or(Error::V2FinalityCanonicalHeaderUnavailable { height })?;
+
+        if let Some(existing) = self.decode_v2_finality_record_at(&path, &dir)? {
+            Self::validate_v2_finality_record_at(&path, height, canonical_hash, &existing)?;
+            if existing.artifact != *artifact {
+                return Err(Error::ConflictingV2FinalityArtifact { height });
+            }
+            self.verify_v2_finality_artifact_at(&path, &dir, &existing.artifact)?;
+            return Ok(v2_commit_receipt(&existing.artifact));
+        }
+
         let canonical_block = self
             .get_block(block_height)
             .ok_or(Error::V2FinalityCanonicalHeaderUnavailable { height })?;
-        artifact.validate_for_header(&canonical_block.header())?;
-
-        let dir = self.v2_finality_artifact_dir();
-        let path = dir.join(format!("{height:020}.norito"));
-        if let Some(existing) = self.decode_v2_finality_artifact_at(&path)? {
-            existing.validate_for_header(&canonical_block.header())?;
-            self.verify_v2_finality_artifact_at(&path, &existing)?;
-            if existing != *artifact {
-                return Err(Error::ConflictingV2FinalityArtifact { height });
-            }
-            return Ok(v2_commit_receipt(&existing));
+        let canonical_header = canonical_block.header();
+        if canonical_header.hash() != canonical_hash {
+            return Err(Error::BlockHeightConflict {
+                height,
+                expected: canonical_hash,
+                actual: canonical_header.hash(),
+            });
         }
-
-        let bytes = artifact.encode();
-        if bytes.len() > MAX_V2_FINALITY_ARTIFACT_BYTES {
-            return Err(Error::V2FinalityArtifactTooLarge {
+        artifact.validate_for_header(&canonical_header)?;
+        let record = KuraV2FinalityRecord::new(canonical_header, artifact.clone());
+        Self::validate_v2_finality_record_at(&path, height, canonical_hash, &record)?;
+        let bytes = record.encode();
+        if bytes.len() > MAX_KURA_V2_FINALITY_RECORD_BYTES {
+            return Err(Error::V2FinalityRecordTooLarge {
                 actual: bytes.len(),
-                max: MAX_V2_FINALITY_ARTIFACT_BYTES,
+                max: MAX_KURA_V2_FINALITY_RECORD_BYTES,
             });
         }
         self.verify_v2_finality_crypto(artifact)?;
@@ -6042,21 +6529,77 @@ impl Kura {
             sync_dir(parent).map_err(|error| Error::IO(error, parent.to_path_buf()))?;
         }
         self.write_atomic_synced(&path, &bytes)?;
-        self.cache_newly_verified_v2_finality(&path, artifact)?;
+        self.cache_newly_verified_v2_finality(&path, &dir, artifact)?;
         Ok(v2_commit_receipt(artifact))
     }
 
-    fn decode_v2_finality_artifact_at(&self, path: &Path) -> Result<Option<V2FinalityArtifact>> {
-        let directory = self.v2_finality_artifact_dir();
+    fn decode_v2_finality_record_at(
+        &self,
+        path: &Path,
+        directory: &Path,
+    ) -> Result<Option<KuraV2FinalityRecord>> {
         let Some(bytes) =
-            self.read_regular_sidecar_bytes(path, &directory, MAX_V2_FINALITY_ARTIFACT_BYTES)?
+            self.read_regular_sidecar_bytes(path, directory, MAX_KURA_V2_FINALITY_RECORD_BYTES)?
         else {
             return Ok(None);
         };
         let mut cursor = bytes.as_slice();
-        V2FinalityArtifact::decode_all(&mut cursor)
-            .map(Some)
-            .map_err(Error::NoritoFrame)
+        let record = KuraV2FinalityRecord::decode_all(&mut cursor).map_err(Error::NoritoFrame)?;
+        if record.encode() != bytes {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "Kura v2 finality record is not canonically encoded",
+                ),
+                path.to_path_buf(),
+            ));
+        }
+        Ok(Some(record))
+    }
+
+    fn validate_v2_finality_record_at(
+        path: &Path,
+        expected_height: u64,
+        canonical_hash: HashOf<BlockHeader>,
+        record: &KuraV2FinalityRecord,
+    ) -> Result<()> {
+        if record.format_version != KURA_V2_FINALITY_RECORD_VERSION {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "unsupported Kura v2 finality record version",
+                ),
+                path.to_path_buf(),
+            ));
+        }
+        if record.artifact.height != expected_height {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "v2 finality artifact height does not match its canonical file name",
+                ),
+                path.to_path_buf(),
+            ));
+        }
+        let artifact_len = record.artifact.encode().len();
+        if artifact_len > MAX_V2_FINALITY_ARTIFACT_BYTES {
+            return Err(Error::V2FinalityArtifactTooLarge {
+                actual: artifact_len,
+                max: MAX_V2_FINALITY_ARTIFACT_BYTES,
+            });
+        }
+        let recorded_hash = record.block_header.hash();
+        if recorded_hash != canonical_hash {
+            return Err(Error::BlockHeightConflict {
+                height: expected_height,
+                expected: canonical_hash,
+                actual: recorded_hash,
+            });
+        }
+        record
+            .artifact
+            .validate_for_header(&record.block_header)
+            .map_err(Error::from)
     }
 
     /// Read and cryptographically validate a v2 finality artifact for a durable block.
@@ -6071,9 +6614,28 @@ impl Kura {
     /// or CommitQC verification fails, the height is zero or absent from the
     /// durable chain, or the canonical header differs.
     pub fn v2_finality_artifact(&self, height: u64) -> Result<Option<V2FinalityArtifact>> {
-        let _sidecar_guard = self.sidecar_lock.lock();
-        let path = self.v2_finality_artifact_path(height);
-        let Some(artifact) = self.decode_v2_finality_artifact_at(&path)? else {
+        Ok(self
+            .v2_finality_artifact_with_header(height)?
+            .map(|(_, artifact)| artifact))
+    }
+
+    /// Read a verified finality artifact together with its retained canonical header.
+    ///
+    /// This remains available after the block body is evicted to remote-only storage.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the durable record, canonical hash binding, artifact
+    /// structure, or finality cryptography is invalid.
+    pub(crate) fn v2_finality_artifact_with_header(
+        &self,
+        height: u64,
+    ) -> Result<Option<(BlockHeader, V2FinalityArtifact)>> {
+        let _canonical_chain_guard = self.canonical_chain_lock.lock();
+        let blocks_dir = self.active_blocks_dir.lock().clone();
+        let directory = Self::v2_finality_artifact_dir_for(&blocks_dir);
+        let path = Self::v2_finality_artifact_path_for(&blocks_dir, height);
+        let Some(record) = self.decode_v2_finality_record_at(&path, &directory)? else {
             return Ok(None);
         };
 
@@ -6088,19 +6650,9 @@ impl Kura {
                 actual_height: height,
             });
         };
-        let canonical_block = self
-            .get_block(block_height)
-            .ok_or(Error::V2FinalityCanonicalHeaderUnavailable { height })?;
-        if canonical_block.hash() != block_hash {
-            return Err(Error::BlockHeightConflict {
-                height,
-                expected: block_hash,
-                actual: canonical_block.hash(),
-            });
-        }
-        artifact.validate_for_header(&canonical_block.header())?;
-        self.verify_v2_finality_artifact_at(&path, &artifact)?;
-        Ok(Some(artifact))
+        Self::validate_v2_finality_record_at(&path, height, block_hash, &record)?;
+        self.verify_v2_finality_artifact_at(&path, &directory, &record.artifact)?;
+        Ok(Some((record.block_header, record.artifact)))
     }
 
     /// Recover a validated durable v2 finality artifact together with the
@@ -6817,6 +7369,7 @@ impl Kura {
         block: &Arc<SignedBlock>,
         merge_entry: Option<&MergeLedgerEntry>,
     ) -> Result<()> {
+        let _canonical_chain_guard = self.canonical_chain_lock.lock();
         let block_hash = block.hash();
         let actual_height = block.header().height().get();
         let actual_height_usize = usize::try_from(actual_height)?;
@@ -6859,7 +7412,7 @@ impl Kura {
                 self.set_block_height_index_entry(actual_height_usize, block_hash);
                 if let Some(entry) = merge_entry {
                     self.append_committed_merge_entry_for_block_if_missing(block, entry)?;
-                    self.remove_pending_certified_merge_entry(entry.canonical_hash())?;
+                    self.remove_committed_pending_merge_entry_best_effort(entry.canonical_hash());
                 }
                 self.set_transaction_entrypoint_index_entry(
                     actual_height_usize,
@@ -6899,7 +7452,7 @@ impl Kura {
             self.set_block_height_index_entry(actual_height_usize, block_hash);
             if let Some(entry) = merge_entry {
                 self.append_committed_merge_entry_for_block_if_missing(block, entry)?;
-                self.remove_pending_certified_merge_entry(entry.canonical_hash())?;
+                self.remove_committed_pending_merge_entry_best_effort(entry.canonical_hash());
             }
             self.set_transaction_entrypoint_index_entry(
                 actual_height_usize,
@@ -6978,9 +7531,7 @@ impl Kura {
         if let Some(batch) = lane_artifacts.take() {
             batch.commit();
         }
-        if let Some((entry_hash, _)) = merge_rollback {
-            self.remove_pending_certified_merge_entry(entry_hash)?;
-        }
+        let committed_pending_entry = merge_rollback.map(|(entry_hash, _)| entry_hash);
         block_data.push((block_hash, Some(Arc::clone(block))));
         Self::drop_persisted_blocks(
             &mut block_data,
@@ -6996,6 +7547,12 @@ impl Kura {
             merge_entry,
         );
         drop(block_data);
+        // Pending sidecars are redundant after the merge log and carrier are
+        // durable. Release canonical block state before taking `sidecar_lock`
+        // so lane-artifact readers cannot form a sidecar/block-data lock cycle.
+        if let Some(entry_hash) = committed_pending_entry {
+            self.remove_committed_pending_merge_entry_best_effort(entry_hash);
+        }
         self.append_debug_block_dump(block);
 
         debug!(
@@ -7989,9 +8546,11 @@ impl Kura {
     /// Replace Kura's current top block durably.
     ///
     /// # Errors
-    /// Returns an error if the block is not at the current top height, cannot be persisted, or
-    /// exceeds the configured storage budget.
+    /// Returns an error if the block is not at the current top height, the height already has
+    /// durable v2 finality, the replacement cannot be persisted, or it exceeds the configured
+    /// storage budget.
     pub fn replace_top_block(&self, block: impl Into<Arc<SignedBlock>>) -> Result<()> {
+        let _canonical_chain_guard = self.canonical_chain_lock.lock();
         self.invalidate_pending_budget_cache();
         let block = block.into();
         let height = block.header().height().get();
@@ -8030,6 +8589,9 @@ impl Kura {
                 return Ok(());
             }
         }
+
+        let blocks_dir = self.active_blocks_dir.lock().clone();
+        self.ensure_v2_finality_allows_rewrite_from(&blocks_dir, height)?;
 
         self.check_replace_storage_budget(block.as_ref())?;
         self.validate_lane_payload_ownership_artifacts_for_block(
@@ -8110,10 +8672,16 @@ impl Kura {
     ///
     /// # Errors
     ///
-    /// Returns an error if height conversion fails, persisted block storage pruning fails, or
-    /// truncating the merge log fails.
+    /// Returns an error if height conversion fails, the requested suffix contains durable v2
+    /// finality, persisted block storage pruning fails, or truncating the merge log fails.
     pub fn prune_to_height(&self, height: u64) -> Result<()> {
+        let _canonical_chain_guard = self.canonical_chain_lock.lock();
         let keep = usize::try_from(height)?;
+        if keep >= self.blocks_count() {
+            return Ok(());
+        }
+        let blocks_dir = self.active_blocks_dir.lock().clone();
+        self.ensure_v2_finality_allows_rewrite_from(&blocks_dir, height.saturating_add(1))?;
         let carrier_records = self.merge_carrier_records()?;
         let merge_entries = self.merge_log.lock().all_entries()?;
         let legacy_count = merge_entries
@@ -8327,6 +8895,7 @@ impl Kura {
             return Ok(0);
         }
 
+        let _canonical_chain_guard = self.canonical_chain_lock.lock();
         let mut block_data = self.block_data.lock();
         let current = block_data.len();
         let target = snapshot_hashes.len();
@@ -8380,6 +8949,14 @@ impl Kura {
             return Ok(0);
         }
         rewrite_from = rewrite_from.min(shared);
+
+        if rewrite_from < current {
+            let blocks_dir = self.active_blocks_dir.lock().clone();
+            self.ensure_v2_finality_allows_rewrite_from(
+                &blocks_dir,
+                u64::try_from(rewrite_from)?.saturating_add(1),
+            )?;
+        }
 
         let _write_guard = self.block_store_write_lock.lock();
         let mut block_store = self.block_store.lock();
@@ -17540,6 +18117,92 @@ impl BlockStore {
         Ok(candidate)
     }
 
+    /// Validate the finalized canonical prefix without opening any file for writing.
+    ///
+    /// `create_files_if_they_do_not_exist` performs commit-marker reconciliation,
+    /// which is normally allowed to prune an incomplete tail. A durable finality
+    /// sidecar changes that contract: an incomplete finalized prefix must be
+    /// rejected before reconciliation can mutate any canonical file.
+    fn preflight_v2_finalized_prefix(&self, finalized_height: u64) -> Result<()> {
+        let mutation = |rewrite_from_height| Error::FinalizedV2BlockMutation {
+            rewrite_from_height,
+            finalized_height,
+        };
+        let required_index_len = finalized_height
+            .checked_mul(BlockIndex::SIZE)
+            .ok_or_else(|| mutation(1))?;
+        let required_hashes_len = finalized_height
+            .checked_mul(SIZE_OF_BLOCK_HASH)
+            .ok_or_else(|| mutation(1))?;
+
+        let marker_path = self.commit_marker_path();
+        let marker_bytes =
+            std::fs::read(&marker_path).map_err(|error| Error::IO(error, marker_path.clone()))?;
+        let marker = norito::decode_from_bytes::<BlockStoreCommitMarker>(&marker_bytes)
+            .map_err(|_| mutation(1))?;
+        let canonical_marker = norito::to_bytes(&marker).map_err(Error::NoritoFrame)?;
+        if marker.version != BlockStoreCommitMarker::VERSION || canonical_marker != marker_bytes {
+            return Err(mutation(1));
+        }
+        if marker.count < finalized_height {
+            return Err(Error::V2FinalityBeyondDurableChain {
+                finalized_height,
+                durable_height: marker.count,
+            });
+        }
+
+        let index_path = self.path_to_blockchain.join(INDEX_FILE_NAME);
+        let mut index_file = std::fs::File::open(&index_path)
+            .map_err(|error| Error::IO(error, index_path.clone()))?;
+        let index_len = index_file
+            .metadata()
+            .map_err(|error| Error::IO(error, index_path.clone()))?
+            .len();
+        if index_len < required_index_len {
+            return Err(mutation(
+                index_len
+                    .checked_div(BlockIndex::SIZE)
+                    .unwrap_or(0)
+                    .saturating_add(1),
+            ));
+        }
+
+        let hashes_path = self.path_to_blockchain.join(HASHES_FILE_NAME);
+        let hashes_len = std::fs::metadata(&hashes_path)
+            .map_err(|error| Error::IO(error, hashes_path.clone()))?
+            .len();
+        if hashes_len < required_hashes_len {
+            return Err(mutation(
+                hashes_len
+                    .checked_div(SIZE_OF_BLOCK_HASH)
+                    .unwrap_or(0)
+                    .saturating_add(1),
+            ));
+        }
+
+        let data_path = self.path_to_blockchain.join(DATA_FILE_NAME);
+        let data_len = std::fs::metadata(&data_path)
+            .map_err(|error| Error::IO(error, data_path.clone()))?
+            .len();
+        let mut buffer = [0_u8; core::mem::size_of::<u64>()];
+        for index_position in 0..finalized_height {
+            let index = BlockIndex::read(&mut index_file, &mut buffer)
+                .map_err(|_| mutation(index_position.saturating_add(1)))?;
+            if index.length == 0 || index.length > STRICT_INIT_MAX_BLOCK_BYTES {
+                return Err(mutation(index_position.saturating_add(1)));
+            }
+            if !index.is_evicted()
+                && index
+                    .start
+                    .checked_add(index.length)
+                    .is_none_or(|end| end > data_len)
+            {
+                return Err(mutation(index_position.saturating_add(1)));
+            }
+        }
+        Ok(())
+    }
+
     fn init_commit_marker(&mut self) -> Result<()> {
         if self.path_to_blockchain.as_os_str().is_empty() {
             return Ok(());
@@ -18189,6 +18852,66 @@ impl BlockStore {
         Ok(())
     }
 
+    /// Rewrite a suffix of the hashes file while preserving every preceding byte.
+    ///
+    /// `start_block_height` is the zero-based hash index at which `hashes` begins.
+    /// The existing journal must already contain the entire prefix. This is used by
+    /// startup recovery when that prefix is protected by durable finality.
+    fn overwrite_block_hash_suffix(
+        &mut self,
+        start_block_height: u64,
+        hashes: &[HashOf<BlockHeader>],
+    ) -> Result<()> {
+        let path = self.path_to_blockchain.join(HASHES_FILE_NAME);
+        let start_location = start_block_height
+            .checked_mul(SIZE_OF_BLOCK_HASH)
+            .ok_or_else(|| {
+                Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::InvalidInput,
+                        "hash suffix start offset overflowed",
+                    ),
+                    path.clone(),
+                )
+            })?;
+        let suffix_count = u64::try_from(hashes.len())?;
+        let new_count = start_block_height
+            .checked_add(suffix_count)
+            .ok_or_else(|| {
+                Error::IO(
+                    std::io::Error::new(ErrorKind::InvalidInput, "hash suffix count overflowed"),
+                    path.clone(),
+                )
+            })?;
+        let new_len = new_count.checked_mul(SIZE_OF_BLOCK_HASH).ok_or_else(|| {
+            Error::IO(
+                std::io::Error::new(ErrorKind::InvalidInput, "hash suffix length overflowed"),
+                path.clone(),
+            )
+        })?;
+
+        let hashes_file = self.ensure_hashes_file()?;
+        hashes_file.try_io(|file| {
+            let current_len = file.metadata()?.len();
+            if current_len < start_location {
+                return Err(std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "hashes journal does not contain the finalized prefix",
+                ));
+            }
+            file.seek(SeekFrom::Start(start_location))?;
+            let mut writer = BufWriter::new(&mut *file);
+            for hash in hashes {
+                writer.write_all(hash.as_ref())?;
+            }
+            writer.flush()?;
+            drop(writer);
+            file.set_len(new_len)
+        })?;
+        self.schedule_fsync_after_write()?;
+        Ok(())
+    }
+
     /// Create the index and data files if they do not
     /// already exist.
     ///
@@ -18626,6 +19349,13 @@ pub enum Error {
         /// Hard persistence/read limit.
         max: usize,
     },
+    /// Encoded Kura Sumeragi v2 finality record is {actual} bytes; hard maximum is {max}
+    V2FinalityRecordTooLarge {
+        /// Encoded private record size.
+        actual: usize,
+        /// Hard persistence/read limit.
+        max: usize,
+    },
     /// Canonical block header for Sumeragi v2 finality height `{height}` is unavailable
     V2FinalityCanonicalHeaderUnavailable {
         /// Height whose complete canonical header could not be loaded.
@@ -18636,6 +19366,20 @@ pub enum Error {
         /// Height whose finality path already contains a different artifact.
         height: u64,
     },
+    /// Canonical-chain mutation from height `{rewrite_from_height}` would rewrite durable Sumeragi-v2 finality at height `{finalized_height}`
+    FinalizedV2BlockMutation {
+        /// First canonical height the requested mutation could replace or remove.
+        rewrite_from_height: u64,
+        /// Highest durable finality artifact that makes the mutation invalid.
+        finalized_height: u64,
+    },
+    /// Highest durable Sumeragi-v2 finality height `{finalized_height}` exceeds the canonical durable block height `{durable_height}`
+    V2FinalityBeyondDurableChain {
+        /// Highest canonical finality sidecar file discovered at startup.
+        finalized_height: u64,
+        /// Height published by the durable block-store marker.
+        durable_height: u64,
+    },
     /// Failed to allocate buffer
     Alloc(#[from] std::collections::TryReserveError),
     /// Tried reading block data out of bounds: start `{start_block_height}`, count `{block_count}`
@@ -18645,7 +19389,7 @@ pub enum Error {
         /// The actual block count
         block_count: usize,
     },
-    /// Tried to lock block store by creating a lockfile at {0}, but it already exists
+    /// Another live Kura instance owns the store-root lock at {0}
     Locked(PathBuf),
     /// Block writer thread unavailable; persistence notifications cannot be delivered
     BlockWriterUnavailable,
@@ -19019,7 +19763,7 @@ mod tests {
         entry
     }
 
-    fn v2_finality_artifact_for_block(block: &SignedBlock) -> V2FinalityArtifact {
+    fn v2_finality_fixture_keys() -> Vec<KeyPair> {
         let mut keypairs = (0..4)
             .map(|_| {
                 KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
@@ -19029,6 +19773,14 @@ mod tests {
         keypairs.sort_by(|left, right| {
             PeerId::new(left.public_key().clone()).cmp(&PeerId::new(right.public_key().clone()))
         });
+        keypairs
+    }
+
+    fn v2_finality_artifact_for_block_with_keys(
+        block: &SignedBlock,
+        parent: Option<&V2FinalityArtifact>,
+        keypairs: &[KeyPair],
+    ) -> V2FinalityArtifact {
         let roster = keypairs
             .iter()
             .map(|keypair| ValidatorPower {
@@ -19037,7 +19789,11 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let height = block.header().height().get();
-        assert_eq!(height, 1, "fixture uses a genesis-height block");
+        assert_eq!(
+            parent.map_or(1, |artifact| artifact.height.saturating_add(1)),
+            height,
+            "fixture finality artifacts must form a contiguous chain"
+        );
         let context = HeightContext {
             chain_id: ChainId::from("kura-v2-finality-test"),
             protocol_version: PROTOCOL_VERSION,
@@ -19046,7 +19802,7 @@ mod tests {
             epoch_end_height: 100,
             next_epoch_snapshot: None,
             mode: ConsensusMode::Permissioned,
-            parent_commit_qc: None,
+            parent_commit_qc: parent.map(|artifact| artifact.commit_qc.clone()),
             quorum: DualQuorum::from_roster(&roster).expect("valid fixture quorum"),
             roster,
             nexus_amx_context_hash: Hash::new(b"kura finality nexus amx context"),
@@ -19061,15 +19817,15 @@ mod tests {
             leader_seed: [0x42; 32],
         };
         let subject = BlockSubject {
-            parent_block_hash: None,
+            parent_block_hash: block.header().prev_block_hash(),
             block_hash: block.hash(),
-            payload_hash: Hash::new(b"canonical consensus body"),
+            payload_hash: Hash::new(block.encode_wire().expect("canonical block wire")),
         };
         let mut commit_qc = QuorumCertificate {
             round: ConsensusRound {
                 context_id: context.id(),
                 height,
-                view: 0,
+                view: block.header().view_change_index(),
             },
             phase: GlobalPhase::Commit,
             subject,
@@ -19110,6 +19866,35 @@ mod tests {
         artifact
     }
 
+    fn v2_finality_artifact_for_block(block: &SignedBlock) -> V2FinalityArtifact {
+        assert_eq!(
+            block.header().height().get(),
+            1,
+            "single-artifact fixture requires a genesis-height block"
+        );
+        v2_finality_artifact_for_block_with_keys(block, None, &v2_finality_fixture_keys())
+    }
+
+    fn v2_finality_artifacts_for_chain(blocks: &[Arc<SignedBlock>]) -> Vec<V2FinalityArtifact> {
+        let keypairs = v2_finality_fixture_keys();
+        let mut artifacts = Vec::with_capacity(blocks.len());
+        for block in blocks {
+            let artifact =
+                v2_finality_artifact_for_block_with_keys(block, artifacts.last(), &keypairs);
+            artifacts.push(artifact);
+        }
+        artifacts
+    }
+
+    fn replace_v2_finality_record_artifact(path: &Path, artifact: V2FinalityArtifact) {
+        let bytes = std::fs::read(path).expect("read Kura finality record");
+        let mut cursor = bytes.as_slice();
+        let mut record =
+            KuraV2FinalityRecord::decode_all(&mut cursor).expect("decode Kura finality record");
+        record.artifact = artifact;
+        std::fs::write(path, record.encode()).expect("replace Kura finality record artifact");
+    }
+
     #[test]
     fn checked_keypair_helpers_preserve_requested_algorithm() {
         assert_eq!(checked_keypair().algorithm(), Algorithm::default());
@@ -19137,6 +19922,86 @@ mod tests {
             block_store_path.file_name().and_then(|name| name.to_str()),
             Some("blocks")
         );
+    }
+
+    #[test]
+    fn store_root_lock_rejects_a_second_live_kura_and_releases_on_drop() {
+        let temp_dir = TempDir::new().expect("create Kura store root");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = RuntimeLaneConfig::default();
+        let (first, _) = Kura::new(&config, &lane_config).expect("open first Kura");
+        let expected_lock_path = std::fs::canonicalize(temp_dir.path())
+            .expect("canonical Kura root")
+            .join(STORE_ROOT_LOCK_FILE_NAME);
+
+        assert!(matches!(
+            Kura::new(&config, &lane_config),
+            Err(Error::Locked(path)) if path == expected_lock_path
+        ));
+
+        drop(first);
+        let (reopened, _) = Kura::new(&config, &lane_config)
+            .expect("the OS lock must be released when the first Kura is dropped");
+        drop(reopened);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn store_root_lock_rejects_a_symlink_without_touching_its_target() {
+        use std::os::unix::fs::symlink;
+
+        let temp_dir = TempDir::new().expect("create Kura store root");
+        let victim = temp_dir.path().join("lock-victim");
+        let victim_bytes = b"must remain untouched";
+        std::fs::write(&victim, victim_bytes).expect("create lock victim");
+        let lock_path = temp_dir.path().join(STORE_ROOT_LOCK_FILE_NAME);
+        symlink(&victim, &lock_path).expect("plant lockfile symlink");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+
+        assert!(matches!(
+            Kura::new(&config, &RuntimeLaneConfig::default()),
+            Err(Error::IO(error, observed_path))
+                if error.kind() == ErrorKind::InvalidData && observed_path == lock_path
+        ));
+        assert_eq!(
+            std::fs::read(&victim).expect("read lock victim"),
+            victim_bytes
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn store_root_lock_canonicalizes_a_symlinked_root_for_all_kura_paths() {
+        use std::os::unix::fs::symlink;
+
+        let real_root = TempDir::new().expect("create real Kura root");
+        let alias_parent = TempDir::new().expect("create Kura alias parent");
+        let alias_root = alias_parent.path().join("kura-alias");
+        symlink(real_root.path(), &alias_root).expect("create Kura root alias");
+        let canonical_root = std::fs::canonicalize(real_root.path()).expect("canonical real root");
+        let mut alias_config = kura_config_for_dir(&real_root, BLOCKS_IN_MEMORY);
+        alias_config.store_dir = WithOrigin::inline(alias_root);
+        let real_config = kura_config_for_dir(&real_root, BLOCKS_IN_MEMORY);
+        let lane_config = RuntimeLaneConfig::default();
+
+        let (aliased, _) = Kura::new(&alias_config, &lane_config).expect("open aliased Kura root");
+        assert_eq!(aliased.store_root, canonical_root);
+        assert!(
+            aliased
+                .active_blocks_dir
+                .lock()
+                .starts_with(&canonical_root)
+        );
+        assert!(matches!(
+            Kura::new(&real_config, &lane_config),
+            Err(Error::Locked(path))
+                if path == canonical_root.join(STORE_ROOT_LOCK_FILE_NAME)
+        ));
+
+        drop(aliased);
+        let (reopened, _) = Kura::new(&real_config, &lane_config)
+            .expect("canonical root must reopen after aliased owner drops");
+        drop(reopened);
     }
 
     #[test]
@@ -19222,7 +20087,7 @@ mod tests {
         let path = kura.v2_finality_artifact_path(artifact.height);
         let mut forged = artifact.clone();
         forged.commit_qc.aggregate_signature[0] ^= 0x80;
-        std::fs::write(&path, forged.encode()).expect("substitute forged sidecar bytes");
+        replace_v2_finality_record_artifact(&path, forged);
         assert!(matches!(
             kura.v2_finality_artifact(artifact.height),
             Err(Error::V2FinalityCryptography(_))
@@ -19234,7 +20099,7 @@ mod tests {
             "replacement identity must invalidate the successful cache entry"
         );
 
-        std::fs::write(&path, artifact.encode()).expect("restore exact valid sidecar bytes");
+        replace_v2_finality_record_artifact(&path, artifact.clone());
         assert_eq!(
             kura.v2_finality_artifact(artifact.height)
                 .expect("reverify restored sidecar"),
@@ -19246,6 +20111,41 @@ mod tests {
             3,
             "restored bytes require a fresh successful cryptographic pass"
         );
+    }
+
+    #[test]
+    fn v2_finality_persistence_never_waits_for_the_block_store_writer_lock() {
+        let kura = Kura::blank_kura_for_testing();
+        let block = DummyBlocks::new().next();
+        kura.store_block(Arc::clone(&block))
+            .expect("store canonical block");
+        let artifact = v2_finality_artifact_for_block(&block);
+        let writer_guard = kura.block_store_write_lock.lock();
+        let worker_kura = Arc::clone(&kura);
+        let (result_tx, result_rx) = mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            result_tx
+                .send(
+                    worker_kura
+                        .store_v2_finality_artifact(&artifact)
+                        .map(|_| ()),
+                )
+                .expect("report finality persistence result");
+        });
+
+        let result = result_rx.recv_timeout(Duration::from_secs(5));
+        drop(writer_guard);
+        if matches!(&result, Err(RecvTimeoutError::Timeout)) {
+            let _ = result_rx.recv_timeout(Duration::from_secs(5));
+            worker.join().expect("join finality persistence worker");
+            panic!(
+                "v2 finality persistence waited for block_store_write_lock and can deadlock with a block-data owner"
+            );
+        }
+        result
+            .expect("finality worker did not disconnect")
+            .expect("persist finality while writer lock is independently held");
+        worker.join().expect("join finality persistence worker");
     }
 
     #[test]
@@ -19283,6 +20183,312 @@ mod tests {
     }
 
     #[test]
+    fn v2_finality_record_rejects_a_substituted_retained_header() {
+        let kura = Kura::blank_kura_for_testing();
+        let block = DummyBlocks::new().next();
+        kura.store_block(Arc::clone(&block))
+            .expect("store canonical block");
+        let artifact = v2_finality_artifact_for_block(&block);
+        kura.store_v2_finality_artifact(&artifact)
+            .expect("persist finality artifact");
+        let path = kura.v2_finality_artifact_path(1);
+        let bytes = std::fs::read(&path).expect("read Kura finality record");
+        let mut cursor = bytes.as_slice();
+        let mut record =
+            KuraV2FinalityRecord::decode_all(&mut cursor).expect("decode Kura finality record");
+        let substitute: SignedBlock =
+            ValidBlock::new_dummy_and_modify_header(checked_keypair().private_key(), |header| {
+                header.set_height(nonzero!(1_u64));
+                header.set_prev_block_hash(None);
+                header.set_view_change_index(header.view_change_index().saturating_add(1));
+            })
+            .into();
+        record.block_header = substitute.header();
+        std::fs::write(&path, record.encode()).expect("substitute retained header");
+
+        assert!(matches!(
+            kura.v2_finality_artifact(1),
+            Err(Error::BlockHeightConflict {
+                height: 1,
+                expected,
+                actual,
+            }) if expected == block.hash() && actual == substitute.hash()
+        ));
+    }
+
+    #[test]
+    fn finalized_remote_only_block_retains_header_across_restart() {
+        let temp_dir = TempDir::new().expect("create Kura root");
+        let config = kura_config_for_dir(&temp_dir, nonzero!(1_usize));
+        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("open Kura");
+        let mut generator = DummyBlocks::new();
+        let blocks = (0..4).map(|_| generator.next()).collect::<Vec<_>>();
+        for block in &blocks {
+            kura.store_block(Arc::clone(block))
+                .expect("store canonical block");
+        }
+        let height = nonzero!(2_usize);
+        let expected_header = blocks[1].header();
+        let artifacts = v2_finality_artifacts_for_chain(&blocks[..2]);
+        let artifact = artifacts[1].clone();
+        kura.store_v2_finality_artifact(&artifact)
+            .expect("persist finality with retained header");
+
+        let (_, payload_len) = advertise_required_replicas(&kura, height);
+        assert!(
+            kura.evict_block_bodies(payload_len)
+                .expect("evict finalized body")
+                >= payload_len
+        );
+        {
+            let store = kura.block_store.lock();
+            store
+                .remove_da_block_file(height.get() as u64)
+                .expect("remove local DA cache to make the body remote-only");
+        }
+        assert!(kura.get_block(height).is_none());
+        drop(kura);
+
+        let (reopened, _) =
+            Kura::new(&config, &RuntimeLaneConfig::default()).expect("reopen remote-only Kura");
+        assert!(reopened.get_block(height).is_none());
+        let finality_height = u64::try_from(height.get()).expect("height fits u64");
+        let (retained_header, recovered) = reopened
+            .v2_finality_artifact_with_header(finality_height)
+            .expect("read retained finality record")
+            .expect("finality record exists");
+        assert_eq!(retained_header, expected_header);
+        assert_eq!(recovered, artifact);
+        reopened
+            .store_v2_finality_artifact(&artifact)
+            .expect("idempotent persistence must not require the evicted body");
+    }
+
+    #[test]
+    fn finalized_top_block_rejects_replacement_without_mutation() {
+        let kura = Kura::blank_kura_for_testing();
+        let block = DummyBlocks::new().next();
+        let original_hash = block.hash();
+        kura.store_block(Arc::clone(&block))
+            .expect("store canonical block");
+        let artifact = v2_finality_artifact_for_block(&block);
+        kura.store_v2_finality_artifact(&artifact)
+            .expect("finalize canonical block");
+
+        kura.replace_top_block(Arc::clone(&block))
+            .expect("an exact idempotent replacement remains harmless");
+        let replacement: SignedBlock =
+            ValidBlock::new_dummy_and_modify_header(checked_keypair().private_key(), |header| {
+                header.set_height(nonzero!(1_u64));
+                header.set_prev_block_hash(None);
+                header.set_view_change_index(header.view_change_index().saturating_add(1));
+            })
+            .into();
+        let replacement_hash = replacement.hash();
+        assert_ne!(replacement_hash, original_hash);
+
+        assert!(matches!(
+            kura.replace_top_block(replacement),
+            Err(Error::FinalizedV2BlockMutation {
+                rewrite_from_height: 1,
+                finalized_height: 1,
+            })
+        ));
+        assert_eq!(kura.blocks_count(), 1);
+        assert_eq!(
+            kura.get_durable_block_hash(nonzero!(1_usize)),
+            Some(original_hash)
+        );
+        assert_eq!(
+            kura.v2_finality_artifact(1)
+                .expect("read finality after rejected replacement"),
+            Some(artifact)
+        );
+    }
+
+    #[test]
+    fn pruning_across_durable_v2_finality_is_atomic_and_rejected() {
+        let kura = Kura::blank_kura_for_testing();
+        let block = DummyBlocks::new().next();
+        let original_hash = block.hash();
+        kura.store_block(Arc::clone(&block))
+            .expect("store canonical block");
+        let artifact = v2_finality_artifact_for_block(&block);
+        kura.store_v2_finality_artifact(&artifact)
+            .expect("finalize canonical block");
+
+        assert!(matches!(
+            kura.prune_to_height(0),
+            Err(Error::FinalizedV2BlockMutation {
+                rewrite_from_height: 1,
+                finalized_height: 1,
+            })
+        ));
+        assert_eq!(kura.blocks_count(), 1);
+        assert_eq!(
+            kura.get_durable_block_hash(nonzero!(1_usize)),
+            Some(original_hash)
+        );
+        assert_eq!(
+            kura.v2_finality_artifact(1)
+                .expect("read finality after rejected prune"),
+            Some(artifact)
+        );
+    }
+
+    #[test]
+    fn startup_rejects_finality_inventory_ahead_of_the_durable_chain() {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("init Kura");
+        let block = DummyBlocks::new().next();
+        kura.store_block(Arc::clone(&block))
+            .expect("store canonical block");
+        let artifact = v2_finality_artifact_for_block(&block);
+        kura.store_v2_finality_artifact(&artifact)
+            .expect("persist canonical finality");
+        let blocks_dir = kura.active_blocks_dir.lock().clone();
+        let canonical_path = Kura::v2_finality_artifact_path_for(&blocks_dir, 1);
+        let impossible_path = Kura::v2_finality_artifact_path_for(&blocks_dir, 2);
+        std::fs::copy(&canonical_path, &impossible_path)
+            .expect("plant finality beyond the durable marker");
+        drop(kura);
+
+        assert!(matches!(
+            Kura::new(&config, &RuntimeLaneConfig::default()),
+            Err(Error::V2FinalityBeyondDurableChain {
+                finalized_height: 2,
+                durable_height: 1,
+            })
+        ));
+    }
+
+    #[test]
+    fn startup_verifies_every_v2_finality_artifact_below_the_highest() {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("init Kura");
+        let mut generator = DummyBlocks::new();
+        let blocks = vec![generator.next(), generator.next()];
+        for block in &blocks {
+            kura.store_block(Arc::clone(block))
+                .expect("store canonical block");
+        }
+        let artifacts = v2_finality_artifacts_for_chain(&blocks);
+        for artifact in &artifacts {
+            kura.store_v2_finality_artifact(artifact)
+                .expect("persist canonical finality");
+        }
+        let lower_path = kura.v2_finality_artifact_path(1);
+        let mut forged_lower = artifacts[0].clone();
+        forged_lower.commit_qc.aggregate_signature[0] ^= 0x80;
+        forged_lower
+            .validate()
+            .expect("signature substitution remains structurally valid");
+        drop(kura);
+        replace_v2_finality_record_artifact(&lower_path, forged_lower);
+
+        assert!(matches!(
+            Kura::new(&config, &RuntimeLaneConfig::default()),
+            Err(Error::V2FinalityCryptography(_))
+        ));
+    }
+
+    #[test]
+    fn startup_corruption_recovery_cannot_prune_finalized_block_bytes() {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("init Kura");
+        let mut generator = DummyBlocks::new();
+        let blocks = vec![generator.next(), generator.next()];
+        for block in &blocks {
+            kura.store_block(Arc::clone(block))
+                .expect("store canonical block");
+        }
+        let artifacts = v2_finality_artifacts_for_chain(&blocks);
+        kura.store_v2_finality_artifact(&artifacts[1])
+            .expect("finalize the canonical suffix block");
+        let blocks_dir = kura.active_blocks_dir.lock().clone();
+        drop(kura);
+
+        let mut store = BlockStore::new(&blocks_dir);
+        let final_index = store
+            .read_block_index(1)
+            .expect("read finalized suffix index");
+        drop(store);
+        let data_path = blocks_dir.join(DATA_FILE_NAME);
+        let truncated_len = final_index
+            .start
+            .checked_add(final_index.length)
+            .and_then(|end| end.checked_sub(1))
+            .expect("final block contains at least one byte");
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&data_path)
+            .expect("open canonical data file")
+            .set_len(truncated_len)
+            .expect("truncate the finalized suffix block");
+        let canonical_paths = [
+            data_path,
+            blocks_dir.join(INDEX_FILE_NAME),
+            blocks_dir.join(HASHES_FILE_NAME),
+            blocks_dir.join(COUNT_FILE_NAME),
+        ];
+        let before = canonical_paths
+            .iter()
+            .map(|path| std::fs::read(path).expect("snapshot corrupted canonical file"))
+            .collect::<Vec<_>>();
+
+        assert!(matches!(
+            Kura::new(&config, &RuntimeLaneConfig::default()),
+            Err(Error::FinalizedV2BlockMutation {
+                rewrite_from_height: 2,
+                finalized_height: 2,
+            })
+        ));
+        for (path, expected) in canonical_paths.iter().zip(before) {
+            assert_eq!(
+                std::fs::read(path).expect("read canonical file after rejected recovery"),
+                expected,
+                "startup must not mutate {} before rejecting finalized corruption",
+                path.display()
+            );
+        }
+    }
+
+    #[test]
+    fn incomplete_v2_finality_temp_file_does_not_freeze_top_replacement() {
+        let kura = Kura::blank_kura_for_testing();
+        let block = DummyBlocks::new().next();
+        let original_hash = block.hash();
+        kura.store_block(block).expect("store canonical block");
+        let temporary_path = kura
+            .v2_finality_artifact_path(1)
+            .with_extension("norito.tmp");
+        std::fs::create_dir_all(temporary_path.parent().expect("temporary path parent"))
+            .expect("create finality directory");
+        std::fs::write(&temporary_path, b"interrupted write")
+            .expect("write incomplete temporary artifact");
+        let replacement: SignedBlock =
+            ValidBlock::new_dummy_and_modify_header(checked_keypair().private_key(), |header| {
+                header.set_height(nonzero!(1_u64));
+                header.set_prev_block_hash(None);
+                header.set_view_change_index(header.view_change_index().saturating_add(1));
+            })
+            .into();
+        let replacement_hash = replacement.hash();
+        assert_ne!(replacement_hash, original_hash);
+
+        kura.replace_top_block(replacement)
+            .expect("noncanonical temporary bytes do not establish finality");
+        assert_eq!(
+            kura.get_durable_block_hash(nonzero!(1_usize)),
+            Some(replacement_hash)
+        );
+        assert!(temporary_path.is_file());
+    }
+
+    #[test]
     fn v2_finality_store_and_read_reject_invalid_aggregate_cryptography() {
         let kura = Kura::blank_kura_for_testing();
         let block = DummyBlocks::new().next();
@@ -19307,8 +20513,7 @@ mod tests {
 
         kura.store_v2_finality_artifact(&artifact)
             .expect("persist valid finality artifact");
-        std::fs::write(&path, forged.encode())
-            .expect("replace durable artifact with structurally valid forgery");
+        replace_v2_finality_record_artifact(&path, forged);
         assert!(matches!(
             kura.v2_finality_artifact(artifact.height),
             Err(Error::V2FinalityCryptography(_))
@@ -19361,7 +20566,7 @@ mod tests {
             .expect("persist finality artifact");
 
         let path = kura.v2_finality_artifact_path(artifact.height);
-        let encoded = artifact.encode();
+        let encoded = std::fs::read(&path).expect("read canonical finality record");
         let partial = &encoded[..encoded.len() / 2];
         std::fs::write(path.with_extension("norito.tmp"), partial)
             .expect("write interrupted temporary artifact");
@@ -19390,7 +20595,7 @@ mod tests {
             .store_v2_finality_artifact(&artifact)
             .expect("persist finality artifact");
         let path = kura.v2_finality_artifact_path(artifact.height);
-        std::fs::write(&path, vec![0xA5; MAX_V2_FINALITY_ARTIFACT_BYTES + 1])
+        std::fs::write(&path, vec![0xA5; MAX_KURA_V2_FINALITY_RECORD_BYTES + 1])
             .expect("replace artifact with oversized hostile bytes");
 
         assert!(matches!(
@@ -20965,6 +22170,92 @@ mod tests {
             Some(expected.clone())
         );
         assert_eq!(kura.merge_ledger_snapshot(), vec![expected]);
+    }
+
+    #[test]
+    fn merge_pending_cleanup_releases_block_data_before_waiting_for_sidecar_lock() {
+        let kura = Kura::blank_kura_for_testing();
+        let mut blocks = DummyBlocks::new();
+        let parent = blocks.next();
+        let mut entry = sample_merge_entry(1);
+        let carrier = next_merge_carrier(&mut blocks, &mut entry);
+        let entry_hash = entry.canonical_hash();
+        kura.store_block(parent).expect("store carrier parent");
+        kura.persist_pending_certified_merge_entry(&entry)
+            .expect("persist pending merge entry");
+
+        let sidecar_guard = kura.sidecar_lock.lock();
+        let worker_kura = Arc::clone(&kura);
+        let worker =
+            thread::spawn(move || worker_kura.store_block_with_merge_entry(carrier, &entry));
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while kura.durable_blocks_count() < 2 {
+            assert!(
+                Instant::now() < deadline,
+                "carrier block did not become durable while sidecar cleanup was blocked"
+            );
+            thread::yield_now();
+        }
+        let block_data_guard = loop {
+            if let Some(guard) = kura.block_data.try_lock() {
+                break guard;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "block_data remained locked while pending-sidecar cleanup waited for sidecar_lock"
+            );
+            thread::yield_now();
+        };
+        assert_eq!(
+            block_data_guard.len(),
+            2,
+            "canonical in-memory state must be published before pending-sidecar cleanup"
+        );
+        drop(block_data_guard);
+        drop(sidecar_guard);
+
+        worker
+            .join()
+            .expect("join carrier store worker")
+            .expect("store carrier after releasing sidecar lock");
+        assert!(
+            !kura.pending_merge_entry_path(entry_hash).exists(),
+            "committed pending sidecar should be removed after lock contention clears"
+        );
+    }
+
+    #[test]
+    fn committed_block_succeeds_when_redundant_pending_cleanup_fails() {
+        let kura = Kura::blank_kura_for_testing();
+        let mut blocks = DummyBlocks::new();
+        let parent = blocks.next();
+        let mut entry = sample_merge_entry(1);
+        let carrier = next_merge_carrier(&mut blocks, &mut entry);
+        let carrier_hash = carrier.hash();
+        let entry_hash = entry.canonical_hash();
+        kura.store_block(parent).expect("store carrier parent");
+        kura.persist_pending_certified_merge_entry(&entry)
+            .expect("persist pending merge entry");
+        kura.fail_next_pending_merge_cleanup
+            .store(true, Ordering::Relaxed);
+
+        kura.store_block_with_merge_entry(Arc::clone(&carrier), &entry)
+            .expect("redundant cleanup failure must not report canonical commit failure");
+        assert_eq!(kura.blocks_count(), 2);
+        assert_eq!(
+            kura.get_durable_block_hash(nonzero!(2_usize)),
+            Some(carrier_hash)
+        );
+        assert_eq!(kura.merge_ledger_snapshot(), vec![entry.clone()]);
+        assert!(
+            kura.pending_merge_entry_path(entry_hash).is_file(),
+            "injected cleanup failure must leave the redundant pending sidecar"
+        );
+
+        kura.store_block_with_merge_entry(carrier, &entry)
+            .expect("idempotent retry cleans the redundant pending sidecar");
+        assert!(!kura.pending_merge_entry_path(entry_hash).exists());
     }
 
     #[test]
@@ -30911,10 +32202,83 @@ mod tests {
         let huge_len = STRICT_INIT_MAX_BLOCK_BYTES + 1;
         store.write_block_index(0, start, huge_len).unwrap();
 
-        let validation = Kura::init_strict_mode(&mut store, 1).unwrap();
+        let validation = Kura::init_strict_mode(&mut store, 1, None).unwrap();
         assert!(validation.truncated);
         assert!(validation.hashes.is_empty());
         assert_eq!(store.read_index_count().unwrap(), 0);
+    }
+
+    #[test]
+    fn strict_init_repairs_only_the_hash_suffix_above_v2_finality() {
+        let dir = TempDir::new().unwrap();
+        let mut store = new_block_store(&dir);
+        store.create_files_if_they_do_not_exist().unwrap();
+        let mut generator = DummyBlocks::new();
+        let blocks = vec![generator.next(), generator.next(), generator.next()];
+        for block in &blocks {
+            store.append_block_to_chain(block).unwrap();
+        }
+
+        let hashes_path = primary_blocks_dir(&dir).join(HASHES_FILE_NAME);
+        let finalized_prefix_len = usize::try_from(2 * SIZE_OF_BLOCK_HASH).unwrap();
+        let pristine_bytes = std::fs::read(&hashes_path).expect("read pristine hash journal");
+        let finalized_prefix = pristine_bytes[..finalized_prefix_len].to_vec();
+        let forged = HashOf::from_untyped_unchecked(Hash::prehashed([0xD7; Hash::LENGTH]));
+        assert_ne!(forged, blocks[2].hash());
+        store
+            .write_block_hash(2, forged)
+            .expect("corrupt only the unfinalized hash suffix");
+
+        let validation = Kura::init_strict_mode(&mut store, 3, Some(2))
+            .expect("repair above finality must succeed");
+        assert!(validation.hash_mismatch);
+        assert!(!validation.truncated);
+        assert_eq!(
+            validation.hashes,
+            blocks.iter().map(|block| block.hash()).collect::<Vec<_>>()
+        );
+
+        let repaired_bytes = std::fs::read(&hashes_path).expect("read repaired hash journal");
+        assert_eq!(
+            &repaired_bytes[..finalized_prefix_len],
+            finalized_prefix.as_slice(),
+            "repairing an unfinalized suffix must leave finalized-prefix bytes untouched"
+        );
+        assert_eq!(repaired_bytes, pristine_bytes);
+    }
+
+    #[test]
+    fn strict_init_reconstructs_a_missing_hash_suffix_above_v2_finality() {
+        let dir = TempDir::new().unwrap();
+        let mut store = new_block_store(&dir);
+        store.create_files_if_they_do_not_exist().unwrap();
+        let mut generator = DummyBlocks::new();
+        let blocks = vec![generator.next(), generator.next(), generator.next()];
+        for block in &blocks {
+            store.append_block_to_chain(block).unwrap();
+        }
+
+        let hashes_path = primary_blocks_dir(&dir).join(HASHES_FILE_NAME);
+        let pristine_bytes = std::fs::read(&hashes_path).expect("read pristine hash journal");
+        let finalized_prefix_len = usize::try_from(2 * SIZE_OF_BLOCK_HASH).unwrap();
+        store
+            .truncate_hashes_to_count(2)
+            .expect("remove only the unfinalized hash suffix");
+
+        let validation = Kura::init_strict_mode(&mut store, 3, Some(2))
+            .expect("reconstruct a missing suffix without rewriting finality");
+        assert!(!validation.hash_mismatch);
+        assert!(!validation.truncated);
+        assert_eq!(
+            validation.hashes,
+            blocks.iter().map(|block| block.hash()).collect::<Vec<_>>()
+        );
+        let repaired_bytes = std::fs::read(&hashes_path).expect("read reconstructed journal");
+        assert_eq!(
+            &repaired_bytes[..finalized_prefix_len],
+            &pristine_bytes[..finalized_prefix_len]
+        );
+        assert_eq!(repaired_bytes, pristine_bytes);
     }
 
     #[test]
@@ -30926,7 +32290,7 @@ mod tests {
         let zeros = vec![0_u8; usize::try_from(first_index.length).unwrap()];
         store.write_block_data(first_index.start, &zeros).unwrap();
 
-        let validation = Kura::init_hash_only_hard_fork_mode(&mut store, 3, 1).unwrap();
+        let validation = Kura::init_hash_only_hard_fork_mode(&mut store, 3, 1, None).unwrap();
 
         assert!(!validation.truncated);
         assert_eq!(validation.hashes.len(), 3);
@@ -30972,7 +32336,7 @@ mod tests {
         store.write_block_index(1, EVICTED_BLOCK_START, 0).unwrap();
         store.write_block_hash(1, snapshot_tail_hash).unwrap();
 
-        let validation = Kura::init_hash_only_hard_fork_mode(&mut store, 2, 1).unwrap();
+        let validation = Kura::init_hash_only_hard_fork_mode(&mut store, 2, 1, None).unwrap();
 
         assert!(!validation.truncated);
         assert_eq!(validation.hashes.len(), 2);
@@ -31198,7 +32562,7 @@ mod tests {
         let zeros = vec![0_u8; usize::try_from(tail_index.length).unwrap()];
         store.write_block_data(tail_index.start, &zeros).unwrap();
 
-        let validation = Kura::init_hash_only_hard_fork_mode(&mut store, 4, 2).unwrap();
+        let validation = Kura::init_hash_only_hard_fork_mode(&mut store, 4, 2, None).unwrap();
 
         assert!(validation.truncated);
         assert_eq!(validation.hashes.len(), 3);
@@ -31443,7 +32807,8 @@ mod tests {
             let mut reopened = BlockStore::with_fsync(&blocks_dir, FsyncMode::Off, FSYNC_INTERVAL);
             reopened.create_files_if_they_do_not_exist().unwrap();
             assert_eq!(reopened.read_durable_index_count().unwrap(), 5);
-            let validation = Kura::init_hash_only_hard_fork_mode(&mut reopened, 5, 2).unwrap();
+            let validation =
+                Kura::init_hash_only_hard_fork_mode(&mut reopened, 5, 2, None).unwrap();
             assert_eq!(validation.hashes, snapshot_hashes);
             assert_eq!(validation.hard_fork_hash_only_block_count, 2);
             assert!(!validation.truncated);
@@ -31462,7 +32827,7 @@ mod tests {
         assert_eq!(store.read_hashes_count().unwrap(), 3);
         assert!(store.data_file_len().unwrap() > retained_data_len);
 
-        let validation = Kura::init_hash_only_hard_fork_mode(&mut store, 4, 2).unwrap();
+        let validation = Kura::init_hash_only_hard_fork_mode(&mut store, 4, 2, None).unwrap();
 
         assert!(validation.truncated);
         assert_eq!(validation.hashes.len(), 3);
@@ -31482,7 +32847,7 @@ mod tests {
         assert_eq!(store.read_index_count().unwrap(), 2);
         assert_eq!(store.read_hashes_count().unwrap(), 3);
 
-        let validation = Kura::init_hash_only_hard_fork_mode(&mut store, 2, 1).unwrap();
+        let validation = Kura::init_hash_only_hard_fork_mode(&mut store, 2, 1, None).unwrap();
 
         assert!(validation.truncated);
         assert_eq!(validation.hashes.len(), 2);

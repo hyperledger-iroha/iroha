@@ -1568,17 +1568,17 @@ pub mod torii {
     pub const PROOF_BURST: Option<u32> = Some(60);
     /// Maximum proof request payload size (bytes).
     pub const PROOF_MAX_BODY_BYTES: Bytes<u64> = Bytes(8 * 1024 * 1024); // 8 MiB
-    /// Maximum proof request bodies buffered concurrently before handler admission.
+    /// Maximum proof-bearing request bodies buffered concurrently before handler admission.
     pub const PROOF_BODY_MAX_INFLIGHT: NonZeroUsize = nonzero!(8usize);
-    /// Absolute deadline for reading one admitted proof request body.
+    /// Absolute deadline for reading one admitted proof-bearing request body.
     pub const PROOF_BODY_READ_TIMEOUT_MS: u64 = 15_000;
     /// Steady-state egress budget for proof responses (bytes/sec). None disables.
     pub const PROOF_EGRESS_BYTES_PER_SEC: Option<u64> = Some(8 * 1024 * 1024); // 8 MiB/s
     /// Burst egress budget for proof responses (bytes).
     ///
-    /// The 32 MiB default accommodates the canonical IVM job response ceiling:
-    /// a 16 MiB encoded proved payload plus an 8 MiB proof encoded as base64.
-    pub const PROOF_EGRESS_BURST_BYTES: Option<u64> = Some(32 * 1024 * 1024); // 32 MiB
+    /// The 64 MiB default accommodates both the canonical IVM job response ceiling
+    /// and worst-case first-release SCCP JSON expansion of a 16 MiB binary envelope.
+    pub const PROOF_EGRESS_BURST_BYTES: Option<u64> = Some(64 * 1024 * 1024); // 64 MiB
     /// Aggregate memory budget for retained `/v1/zk/ivm/prove` job state.
     pub const ZK_IVM_PROVE_JOB_MAX_RETAINED_BYTES: Bytes<u64> = Bytes(128 * 1024 * 1024); // 128 MiB
     /// Maximum page size accepted by proof listing endpoints.

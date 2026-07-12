@@ -104,6 +104,20 @@ public final class ContractManifestTests {
           "\"seiyaku_name\":\"state_map_get\""),
       replaceFirst(
           response,
+          "\"seiyaku_name\":\"Ledger\"",
+          "\"seiyaku_name\":\"__kotodama_quantity_ratio_round\""),
+      replaceFirst(
+          response,
+          "\"seiyaku_name\":\"Ledger\"",
+          "\"seiyaku_name\":\"__kotodama_decimal_to_int_trunc\""),
+      replaceFirst(
+          response,
+          "\"seiyaku_name\":\"Ledger\"",
+          "\"seiyaku_name\":\"__kotodama_decimal_to_int_round\""),
+      replaceFirst(response, "\"kind\":\"Quantity\"", "\"kind\":\"Amount\""),
+      replaceFirst(response, "\"kind\":\"Decimal\"", "\"kind\":\"U128\""),
+      replaceFirst(
+          response,
           "\"namespace\":\"TransferError\"",
           "\"namespace\":\"Option\""),
       replaceFirst(response, "\"features_bitmap\":0", "\"features_bitmap\":4"),

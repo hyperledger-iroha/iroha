@@ -3943,6 +3943,18 @@ where
         .is_ok_and(|parsed| parsed.to_string() == *raw)
 }
 
+fn validate_local_int_json_string(value: &norito::json::Value) -> bool {
+    let norito::json::Value::String(raw) = value else {
+        return false;
+    };
+    raw.parse::<iroha_primitives::bigint::BigInt>()
+        .ok()
+        .filter(|parsed| parsed.to_string() == *raw)
+        .is_some_and(|parsed| {
+            iroha_primitives::numeric_abi::IntValueV1::try_new(parsed).is_ok()
+        })
+}
+
 fn validate_local_contract_value(
     schema: &LocalContractSchemaType,
     value: &norito::json::Value,
@@ -3950,9 +3962,7 @@ fn validate_local_contract_value(
 ) -> Result<()> {
     let ok = match schema {
         LocalContractSchemaType::Unit => matches!(value, norito::json::Value::Null),
-        LocalContractSchemaType::Int => {
-            validate_local_exact_json_string::<iroha_primitives::bigint::BigInt>(value)
-        }
+        LocalContractSchemaType::Int => validate_local_int_json_string(value),
         LocalContractSchemaType::Decimal => {
             validate_local_exact_json_string::<iroha_primitives::numeric::Numeric>(value)
         }
@@ -5019,12 +5029,12 @@ mod tests {
         let program = compile_contract_program(
             r#"
             seiyaku Demo {
-                kotoage fn submit(int amount, recipient: AccountId) -> int authorize("Submit") {
+                kotoage fn submit(int amount, AccountId recipient) -> int authorize("Submit") {
                     return amount;
                 }
 
-                kotoage fn upload(owner: AccountId, tag: Name, payload: bytes) -> int authorize("Upload") {
-                    return codec::tlv_len(payload);
+                kotoage fn upload(AccountId owner, Name tag, bytes payload) -> int authorize("Upload") {
+                    return 1;
                 }
 
                 view fn ping() -> int {
@@ -5424,15 +5434,15 @@ mod tests {
             parse_local_contract_schema_type("(int,(bool,bytes))").expect("nested tuple schema");
         validate_local_contract_value(
             &tuple_schema,
-            &norito::json!([7, [true, "0x00"]]),
+            &norito::json!(["7", [true, "0x00"]]),
             "tuple_payload",
         )
         .expect("valid nested tuple payload");
 
         for invalid in [
-            norito::json!([7, true]),
-            norito::json!([7, [true, "0x0"]]),
-            norito::json!([7, [true, "0x00"], 9]),
+            norito::json!(["7", true]),
+            norito::json!(["7", [true, "0x0"]]),
+            norito::json!(["7", [true, "0x00"], 9]),
         ] {
             let err = validate_local_contract_value(&tuple_schema, &invalid, "tuple_payload")
                 .expect_err("invalid nested tuple payload must fail");
@@ -5462,7 +5472,7 @@ mod tests {
     fn local_contract_schema_validation_rejects_scalar_boundary_values() {
         for (schema_raw, payload, field_name) in [
             ("()", norito::json!({}), "unit"),
-            ("fixed_u128", norito::json!("not-a-number"), "amount"),
+            ("decimal", norito::json!("not-a-number"), "amount"),
             ("bool", norito::json!("true"), "flag"),
             ("Name", norito::json!("bad name"), "name"),
             ("AssetDefinitionId", norito::json!("xor"), "asset_def"),
@@ -5482,11 +5492,28 @@ mod tests {
             );
         }
 
-        let numeric_schema = parse_local_contract_schema_type("fixed_u128").expect("numeric");
-        validate_local_contract_value(&numeric_schema, &norito::json!("1.25"), "amount")
+        let decimal_schema = parse_local_contract_schema_type("decimal").expect("decimal");
+        validate_local_contract_value(&decimal_schema, &norito::json!("1.25"), "amount")
             .expect("decimal numeric string is valid");
-        validate_local_contract_value(&numeric_schema, &norito::json!(7_i64), "amount")
-            .expect("integer numeric value is valid");
+        let err = validate_local_contract_value(&decimal_schema, &norito::json!(7_i64), "amount")
+            .expect_err("JSON numeric tokens must not enter the exact decimal domain");
+        assert!(err.to_string().contains("does not match the declared schema"));
+
+        let int_schema = parse_local_contract_schema_type("int").expect("int");
+        for endpoint in [
+            "-6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042048",
+            "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042047",
+        ] {
+            validate_local_contract_value(&int_schema, &norito::json!(endpoint), "value")
+                .expect("both signed-512 endpoints are valid");
+        }
+        for neighbor in [
+            "-6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042049",
+            "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042048",
+        ] {
+            validate_local_contract_value(&int_schema, &norito::json!(neighbor), "value")
+                .expect_err("both signed-512 neighbors are invalid");
+        }
     }
 
     #[test]

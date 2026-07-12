@@ -3461,6 +3461,7 @@ mod measured_bytes_impls {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<SccpOutboundMessageRecordV1>();
             total = total.saturating_add(self.payload_hash.measured_bytes_extra());
+            total = total.saturating_add(self.payload_bytes.measured_bytes_extra());
             total = total.saturating_add(self.recorded_at_height.measured_bytes_extra());
             total
         }
@@ -5317,17 +5318,17 @@ mod tests {
         let mut backend =
             TieredStateBackend::new(true, 0, 0, 0, Some(temp.path().to_path_buf()), None, 0, 0);
         let mut world = World::default();
+        let exact = iroha_sccp::sccp_exact_outbound_test_fixture_v1();
         let key = iroha_data_model::bridge::SccpOutboundMessageKeyV1 {
-            lane: iroha_data_model::bridge::SccpLaneIdV1 {
-                source: iroha_data_model::bridge::SccpNetworkV1::SoraTaira,
-                target: iroha_data_model::bridge::SccpNetworkV1::EthereumSepolia,
-            },
-            message_id: [0xA5; 32],
+            lane: exact.bundle.commitment.context.lane,
+            message_id: exact.bundle.commitment.message_id,
         };
         let record = iroha_data_model::bridge::SccpOutboundMessageRecordV1 {
-            destination_binding_hash: [0x4A; 32],
-            route_configuration_hash: [0x4B; 32],
-            payload_hash: [0x5A; 32],
+            destination_binding_hash: exact.bundle.commitment.context.destination_binding_hash,
+            route_configuration_hash: exact.bundle.commitment.context.route_configuration_hash,
+            payload_hash: exact.bundle.commitment.payload_hash,
+            payload_bytes: iroha_sccp::canonical_sccp_payload_bytes(&exact.bundle.payload)
+                .expect("exact fixture payload encodes canonically"),
             recorded_at_height: 42,
         };
         world.sccp_outbound_messages.insert(key.clone(), record);

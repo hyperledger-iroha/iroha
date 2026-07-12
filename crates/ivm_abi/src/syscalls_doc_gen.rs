@@ -48,7 +48,6 @@ pub static DOCS: &[crate::syscalls::SyscallDoc] = &[
     crate::syscalls::SyscallDoc { number: 81, args: "r10=&Name, r11=&NoritoBytes", ret: "u64=0", gas: "asset:gas/G_state_set@ivm.core/v2 + bytes" },
     crate::syscalls::SyscallDoc { number: 82, args: "r10=&Name", ret: "u64=0", gas: "asset:gas/G_state_del@ivm.core/v2" },
     crate::syscalls::SyscallDoc { number: 83, args: "r10=&NoritoBytes(Norito-framed i64)", ret: "r10=i64", gas: "asset:gas/G_numeric@ivm.core/v2 + bytes" },
-    crate::syscalls::SyscallDoc { number: 84, args: "r10=&Name(base), r11=key:i64", ret: "r10=ptr (&Name)", gas: "asset:gas/G_path@ivm.core/v2 + bytes" },
     crate::syscalls::SyscallDoc { number: 85, args: "r10=value:i64", ret: "r10=ptr (&NoritoBytes(Norito-framed i64))", gas: "asset:gas/G_numeric@ivm.core/v2 + bytes" },
     crate::syscalls::SyscallDoc { number: 86, args: "r10=&Name(base), r11=&NoritoBytes(key)", ret: "r10=ptr (&Name)", gas: "asset:gas/G_path@ivm.core/v2 + bytes" },
     crate::syscalls::SyscallDoc { number: 87, args: "r10=&Json", ret: "ptr (&NoritoBytes)", gas: "asset:gas/G_json_encode@ivm.core/v2 + bytes" },

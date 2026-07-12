@@ -989,11 +989,9 @@ impl TrustedOutputParent {
         let final_path = path.join(&output_name);
         match fs::symlink_metadata(&final_path) {
             Ok(_) => {
-                return Err(format!(
-                    "output directory already exists: {}",
-                    final_path.display()
-                )
-                .into());
+                return Err(
+                    format!("output directory already exists: {}", final_path.display()).into(),
+                );
             }
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
             Err(error) => return Err(error.into()),
@@ -1001,10 +999,7 @@ impl TrustedOutputParent {
         let file = File::open(&path)?;
         let opened = file.metadata()?;
         let current = fs::metadata(&path)?;
-        if !opened.is_dir()
-            || opened.dev() != current.dev()
-            || opened.ino() != current.ino()
-        {
+        if !opened.is_dir() || opened.dev() != current.dev() || opened.ino() != current.ino() {
             return Err("output parent changed while it was opened".into());
         }
         Ok(Self {
@@ -1049,7 +1044,9 @@ impl PublicationDirectory {
     fn open_existing(path: PathBuf) -> io::Result<Self> {
         let before = fs::symlink_metadata(&path)?;
         if before.file_type().is_symlink() || !before.is_dir() {
-            return Err(io::Error::other("publication directory is not a real directory"));
+            return Err(io::Error::other(
+                "publication directory is not a real directory",
+            ));
         }
         let file = File::open(&path)?;
         Self::validate(path, file)
@@ -1058,7 +1055,9 @@ impl PublicationDirectory {
     fn validate(path: PathBuf, file: File) -> io::Result<Self> {
         let opened = file.metadata()?;
         if !opened.is_dir() {
-            return Err(io::Error::other("publication descriptor is not a directory"));
+            return Err(io::Error::other(
+                "publication descriptor is not a directory",
+            ));
         }
         #[cfg(unix)]
         {
@@ -1087,11 +1086,7 @@ impl PublicationDirectory {
             let file = File::from(rustix::fs::openat(
                 &self.file,
                 name,
-                OFlags::WRONLY
-                    | OFlags::CREATE
-                    | OFlags::EXCL
-                    | OFlags::NOFOLLOW
-                    | OFlags::CLOEXEC,
+                OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
                 Mode::from_raw_mode(0o600),
             )?);
             verify_owner_private_regular_file(&file)?;
@@ -1162,7 +1157,11 @@ impl PublicationDirectory {
         if metadata.len() != expected_total_size
             || metadata.len() > KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_FILE_BYTES_V3
         {
-            return Err(format!("staged artifact has an unexpected length: {}", spec.file_name).into());
+            return Err(format!(
+                "staged artifact has an unexpected length: {}",
+                spec.file_name
+            )
+            .into());
         }
         let mut magic = [0_u8; 8];
         let mut header_len_bytes = [0_u8; 4];
@@ -1184,7 +1183,9 @@ impl PublicationDirectory {
         let decoded: KagemushaRecursiveSpendPastaCycleArtifactsV3 =
             norito::decode_from_bytes(&header_bytes)?;
         if norito::to_bytes(&decoded)? != header_bytes {
-            return Err(format!("staged artifact header is noncanonical: {}", spec.file_name).into());
+            return Err(
+                format!("staged artifact header is noncanonical: {}", spec.file_name).into(),
+            );
         }
         decoded.validate_header().map_err(io::Error::other)?;
         if decoded.parity != spec.parity
@@ -1192,7 +1193,9 @@ impl PublicationDirectory {
             || decoded.payload_size_bytes != expected_payload_size
             || decoded.payload_sha256 != expected_payload_sha256
         {
-            return Err(format!("staged artifact header binding changed: {}", spec.file_name).into());
+            return Err(
+                format!("staged artifact header binding changed: {}", spec.file_name).into(),
+            );
         }
 
         let mut framed_hasher = Sha256::new();
@@ -1254,18 +1257,24 @@ impl PublicationDirectory {
                 .map_err(|_| io::Error::other("publication contains a non-UTF-8 file name"))?;
             let metadata = fs::symlink_metadata(entry.path())?;
             if metadata.file_type().is_symlink() || !metadata.is_file() || !actual.insert(name) {
-                return Err(io::Error::other("publication contains an invalid directory entry"));
+                return Err(io::Error::other(
+                    "publication contains an invalid directory entry",
+                ));
             }
             #[cfg(unix)]
             {
                 use std::os::unix::fs::MetadataExt as _;
                 if metadata.nlink() != 1 {
-                    return Err(io::Error::other("publication file has an external hard link"));
+                    return Err(io::Error::other(
+                        "publication file has an external hard link",
+                    ));
                 }
             }
         }
         if actual != expected.into_iter().map(str::to_owned).collect() {
-            return Err(io::Error::other("publication file inventory is incomplete or excessive"));
+            return Err(io::Error::other(
+                "publication file inventory is incomplete or excessive",
+            ));
         }
         Ok(())
     }
@@ -1280,7 +1289,9 @@ fn validate_publication_file_name(name: &str) -> io::Result<()> {
     if !matches!(components.next(), Some(std::path::Component::Normal(_)))
         || components.next().is_some()
     {
-        return Err(io::Error::other("publication file name must be one normal component"));
+        return Err(io::Error::other(
+            "publication file name must be one normal component",
+        ));
     }
     Ok(())
 }

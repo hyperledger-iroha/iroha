@@ -84,9 +84,9 @@ pub(crate) fn is_valid_error_detail_text(value: &str) -> bool {
 pub(crate) fn is_valid_reject_code(code: &str) -> bool {
     !code.is_empty()
         && code.len() <= MAX_REJECT_CODE_BYTES
-        && code.bytes().all(|byte| {
-            byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.' | b':')
-        })
+        && code
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.' | b':'))
 }
 
 fn is_valid_bounded_public_text(value: &str, max_characters: usize) -> bool {

@@ -16049,10 +16049,14 @@ pub struct Torii {
     /// Maximum proof request payload size (bytes).
     #[config(default = "defaults::torii::PROOF_MAX_BODY_BYTES")]
     pub proof_max_body_bytes: Bytes<u64>,
-    /// Maximum proof request bodies buffered concurrently before handler admission.
+    /// Maximum proof-bearing request bodies buffered concurrently before handler admission.
+    ///
+    /// This aggregate gate also covers SCCP bridge proof/message submissions.
     #[config(default = "defaults::torii::PROOF_BODY_MAX_INFLIGHT")]
     pub proof_body_max_inflight: NonZeroUsize,
-    /// Absolute deadline for reading one admitted proof request body (milliseconds).
+    /// Absolute deadline for reading one admitted proof-bearing request body (milliseconds).
+    ///
+    /// This deadline also applies to SCCP bridge proof/message submissions.
     #[config(
         default = "DurationMs(std::time::Duration::from_millis(defaults::torii::PROOF_BODY_READ_TIMEOUT_MS))"
     )]

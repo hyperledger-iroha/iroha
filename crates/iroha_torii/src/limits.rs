@@ -138,6 +138,16 @@ impl InnerLimiter {
             return false;
         }
 
+        self.allow_required(key, required, now)
+    }
+
+    fn allow_cost_capped_to_burst(&mut self, key: &str, cost: u64, now: Instant) -> bool {
+        let required = (cost.max(1) as f64).min(self.burst);
+        self.allow_required(key, required, now)
+    }
+
+    fn allow_required(&mut self, key: &str, required: f64, now: Instant) -> bool {
+        let burst = self.burst;
         let rate_per_sec = self.rate_per_sec;
         let bucket = match self.buckets.get_mut(key) {
             Some(bucket) => bucket,
@@ -242,6 +252,22 @@ impl RateLimiter {
             .shard_for(key)
             .lock()
             .allow_cost(key, cost, Instant::now())
+    }
+
+    /// Consume a weighted cost capped to this limiter's configured burst.
+    ///
+    /// This preserves relative weighting whenever the burst can accommodate it while ensuring a
+    /// positive, otherwise-valid burst cannot make an endpoint permanently unserviceable. A
+    /// disabled limiter still allows without allocating a bucket.
+    #[allow(clippy::unused_async)]
+    pub async fn allow_cost_capped_to_burst(&self, key: &str, cost: u64) -> bool {
+        if self.inner.disabled {
+            return true;
+        }
+        self.inner
+            .shard_for(key)
+            .lock()
+            .allow_cost_capped_to_burst(key, cost, Instant::now())
     }
 
     /// Returns true after consuming `count` single-token requests for the same key.
@@ -922,6 +948,39 @@ mod tests {
         );
         assert!(limiter.allow_cost("too-large", 1).await);
         assert_eq!(limiter.bucket_count().await, 1);
+    }
+
+    #[tokio::test]
+    async fn capped_cost_consumes_the_exact_available_burst() {
+        let limiter = RateLimiter::new(Some(10), Some(3));
+
+        assert!(limiter.allow_cost_capped_to_burst("capped", 8).await);
+        assert!(
+            !limiter.allow("capped").await,
+            "an oversized weighted request must consume the full configured burst"
+        );
+    }
+
+    #[tokio::test]
+    async fn capped_cost_preserves_disabled_limiter_behavior() {
+        let limiter = RateLimiter::new(None, Some(1));
+
+        assert!(
+            limiter
+                .allow_cost_capped_to_burst("disabled", u64::MAX)
+                .await
+        );
+        assert_eq!(limiter.bucket_count().await, 0);
+    }
+
+    #[test]
+    fn capped_cost_preserves_fractional_refill_timing() {
+        let mut limiter = InnerLimiter::new(2.0, 3.0, 1);
+        let start = Instant::now();
+
+        assert!(limiter.allow_cost_capped_to_burst("refill", 8, start));
+        assert!(!limiter.allow_cost("refill", 1, start + Duration::from_millis(499)));
+        assert!(limiter.allow_cost("refill", 1, start + Duration::from_millis(500)));
     }
 
     #[tokio::test]

@@ -788,8 +788,8 @@ scan limited to repository policy text plus intentional guard-test fixtures.
 
 ## SCCP Launch Scope
 
-**Status:** exact V1 implementation complete; integrated validation and live
-deployment evidence pending.
+**Status:** exact V1 implementation and local release-fixture validation
+complete; audited live deployment evidence pending.
 
 The first release has exactly three production remote profiles: Ethereum
 mainnet, BNB Smart Chain mainnet, and TRON mainnet, each paired with SORA Taira
@@ -856,14 +856,15 @@ Multisig authorities use preparation followed by the multisig workflow, never
 the direct detached-signature shortcut. The unified response uses
 `route_configuration_hash_hex`; the retired manifest alias is not accepted.
 
-The remaining SCCP release work is final integrated validation plus external
-evidence:
+The remaining SCCP release work is external deployment and audit evidence,
+plus the blocked broad workspace lanes:
 
-- complete the clean-build Core/Torii/CLI, production-validator, consolidated
-  cross-SDK, and four-peer admission matrix; the full SCCP library suite and
-  pinned EVM/Ethereum/BSC/TRON contract corridor are green, as are the Swift,
-  Python, JavaScript, Kotlin/JVM, and Android Java exact-schema/padding suites,
-  while Windows .NET execution still requires its host runtime;
+- complete the clean-build Core/Torii/CLI and four-peer admission matrix once
+  unrelated current-tree Core test fixtures compile; the full SCCP library and
+  production-validator suites, test-only release fixture, pinned
+  EVM/Ethereum/BSC/TRON contract corridor, Torii source schema, and focused
+  Swift, Python, JavaScript, and TypeScript lanes are green, while Java and
+  Windows .NET execution still require their host runtimes;
 - obtain independently audited, reproducible semantic circuit, witness
   generator, proving key, verifying key, toolchain, and audit-report artifacts
   for all three production profiles;

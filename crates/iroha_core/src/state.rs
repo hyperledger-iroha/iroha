@@ -47,8 +47,8 @@ use iroha_data_model::{
         proofs::{BlockProofs, BlockReceiptProof, ExecutionReceiptProof},
     },
     bridge::{
-        SccpInboundAnchorHighWaterKeyV1, SccpOutboundMessageIndexKeyV1, SccpOutboundMessageKeyV1,
-        SccpOutboundMessageRecordV1, SccpOutboundProofRecordV1,
+        SccpGovernedRouteV1, SccpInboundAnchorHighWaterKeyV1, SccpOutboundMessageIndexKeyV1,
+        SccpOutboundMessageKeyV1, SccpOutboundMessageRecordV1, SccpOutboundProofRecordV1,
         sccp::{SccpInboundMessageKeyV1, SccpInboundMessageRecordV1},
     },
     confidential::ConfidentialFeatureDigest,
@@ -3288,7 +3288,7 @@ pub struct World {
     pub(crate) axt_replay_ledger: Storage<AxtHandleReplayKey, AxtReplayRecord>,
     /// First-class typed SCCP governance registry.
     pub(crate) sccp_registry: Cell<iroha_data_model::bridge::SccpRegistryV1>,
-    /// Chain-wide outbox replay registry for SORA-origin SCCP messages.
+    /// Chain-wide outbox replay registry with bounded canonical SCCP payload evidence.
     pub(crate) sccp_outbound_messages:
         Storage<SccpOutboundMessageKeyV1, SccpOutboundMessageRecordV1>,
     /// Global exact message-id locator into the authoritative outbound replay map.
@@ -3790,7 +3790,7 @@ pub struct WorldBlock<'world> {
     pub(crate) axt_replay_ledger: StorageBlock<'world, AxtHandleReplayKey, AxtReplayRecord>,
     /// First-class typed SCCP governance registry for this block scope.
     pub(crate) sccp_registry: CellBlock<'world, iroha_data_model::bridge::SccpRegistryV1>,
-    /// Chain-wide outbox replay registry for SORA-origin SCCP messages.
+    /// Chain-wide outbox replay registry with bounded canonical SCCP payload evidence.
     pub(crate) sccp_outbound_messages:
         StorageBlock<'world, SccpOutboundMessageKeyV1, SccpOutboundMessageRecordV1>,
     /// Global exact message-id locator for this block scope.
@@ -4691,7 +4691,7 @@ pub struct WorldTransaction<'block, 'world> {
     /// First-class typed SCCP governance registry for this transaction.
     pub(crate) sccp_registry:
         CellTransaction<'block, 'world, iroha_data_model::bridge::SccpRegistryV1>,
-    /// Chain-wide outbox replay registry for SORA-origin SCCP messages.
+    /// Chain-wide outbox replay registry with bounded canonical SCCP payload evidence.
     pub(crate) sccp_outbound_messages:
         StorageTransaction<'block, 'world, SccpOutboundMessageKeyV1, SccpOutboundMessageRecordV1>,
     /// Global exact message-id locator for this transaction.
@@ -6173,7 +6173,7 @@ pub struct WorldView<'world> {
     pub(crate) axt_replay_ledger: StorageView<'world, AxtHandleReplayKey, AxtReplayRecord>,
     /// First-class typed SCCP governance registry view.
     pub(crate) sccp_registry: CellView<'world, iroha_data_model::bridge::SccpRegistryV1>,
-    /// Chain-wide outbox replay registry for SORA-origin SCCP messages.
+    /// Chain-wide outbox replay registry with bounded canonical SCCP payload evidence.
     pub(crate) sccp_outbound_messages:
         StorageView<'world, SccpOutboundMessageKeyV1, SccpOutboundMessageRecordV1>,
     /// Global exact message-id locator view.
@@ -27056,7 +27056,12 @@ impl State {
                 continue;
             }
             let messages = self.world.sccp_outbound_messages.view();
-            let record = messages.get(key).copied();
+            let record = messages
+                .get(key)
+                .filter(|record| {
+                    crate::bridge::validate_sccp_outbound_message_record_v1(key, record).is_some()
+                })
+                .cloned();
             let generation_after = self.state_view_generation();
             if is_stable_state_view_generation(generation_before, generation_after) {
                 return record;
@@ -34748,16 +34753,17 @@ impl State {
         self.confidential_digest_cache.bump();
     }
 
-    /// Insert one structurally valid outbound SCCP record for deterministic API tests.
+    /// Insert one fully canonical outbound SCCP record for deterministic API tests.
     #[cfg(any(test, feature = "iroha-core-tests"))]
     pub fn insert_sccp_outbound_message_for_testing(
         &self,
         key: SccpOutboundMessageKeyV1,
         record: SccpOutboundMessageRecordV1,
     ) -> core::result::Result<(), String> {
-        if !record.is_well_formed_for_key(&key) {
-            return Err("test SCCP outbound key/record is not structurally valid".to_owned());
-        }
+        crate::bridge::validate_sccp_outbound_message_record_v1(&key, &record).ok_or_else(|| {
+            "test SCCP outbound key/record failed canonical validation of bounded payload, lane identity, context, or hash"
+                .to_owned()
+        })?;
         let local = sccp_local_sora_network_for_chain_id(&self.chain_id).ok_or_else(|| {
             format!(
                 "test state chain id `{}` is not a canonical public SORA chain id",
@@ -34771,7 +34777,7 @@ impl State {
                 local.profile_key()
             ));
         }
-        let index = SccpOutboundMessageIndexKeyV1::new(key, record)
+        let index = SccpOutboundMessageIndexKeyV1::new(key, &record)
             .ok_or_else(|| "test SCCP outbound key/record cannot form an index key".to_owned())?;
         let mut world = self.world.block();
         if world.sccp_outbound_messages.get(&key).is_some() {
@@ -37588,13 +37594,13 @@ pub(crate) fn validate_sccp_registry_local_profile(
     Ok(())
 }
 
-fn validate_sccp_outbound_retained_route(
-    registry: &ValidatedSccpRegistryV1,
+fn validate_sccp_outbound_retained_route<'a>(
+    registry: &'a ValidatedSccpRegistryV1,
     key: &SccpOutboundMessageKeyV1,
     destination_binding_hash: [u8; 32],
     route_configuration_hash: [u8; 32],
     record_kind: &str,
-) -> core::result::Result<(), String> {
+) -> core::result::Result<&'a SccpGovernedRouteV1, String> {
     let binding_route = registry
         .historical_route_by_destination_binding(destination_binding_hash)
         .ok_or_else(|| {
@@ -37618,6 +37624,51 @@ fn validate_sccp_outbound_retained_route(
         return Err(format!(
             "SCCP outbound {record_kind} retained route belongs to another exact lane"
         ));
+    }
+    Ok(binding_route)
+}
+
+fn validate_sccp_outbound_payload_for_retained_route(
+    projection: &crate::bridge::ValidatedSccpOutboundMessageProjectionV1,
+    route: &SccpGovernedRouteV1,
+) -> core::result::Result<(), String> {
+    let iroha_sccp::SccpPayloadV1::Transfer(transfer) = &projection.payload;
+    if transfer.route_id_codec != iroha_sccp::SCCP_CODEC_CANONICAL_TEXT
+        || transfer.asset_id_codec != iroha_sccp::SCCP_CODEC_CANONICAL_TEXT
+        || transfer.route_id.as_slice() != route.route_id.as_bytes()
+        || transfer.asset_id.as_slice() != route.asset_key.as_bytes()
+        || transfer.route_revision != route.revision
+    {
+        return Err(
+            "SCCP outbound replay payload route id, asset key, or revision differs from its retained route configuration"
+                .to_owned(),
+        );
+    }
+
+    let sender_literal = core::str::from_utf8(&transfer.sender)
+        .map_err(|_| "SCCP outbound replay sender is not valid UTF-8".to_owned())?;
+    let sender_address = iroha_data_model::account::AccountAddress::parse_encoded(
+        sender_literal,
+        Some(iroha_sccp::SCCP_TAIRA_I105_DISCRIMINANT_V1),
+    )
+    .map_err(|error| {
+        format!("SCCP outbound replay sender is not an exact Taira I105 account: {error}")
+    })?;
+    let canonical_sender = sender_address
+        .to_i105_for_discriminant(iroha_sccp::SCCP_TAIRA_I105_DISCRIMINANT_V1)
+        .map_err(|error| {
+            format!("SCCP outbound replay sender cannot be rendered canonically: {error}")
+        })?;
+    let sender = sender_address
+        .to_account_id()
+        .map_err(|error| format!("SCCP outbound replay sender controller is invalid: {error}"))?;
+    if canonical_sender != sender_literal
+        || !iroha_sccp::sccp_destination_contract_supports_account_v1(&sender)
+    {
+        return Err(
+            "SCCP outbound replay sender is not a canonical destination-contract-supported Taira account"
+                .to_owned(),
+        );
     }
     Ok(())
 }
@@ -37718,6 +37769,11 @@ pub(crate) fn validate_sccp_state_local_profile(state: &State) -> core::result::
     )?;
     validate_sccp_registry_local_profile(registry.as_ref(), &state.chain_id)?;
     for (key, record) in state.world.sccp_outbound_messages.view().iter() {
+        let projection = crate::bridge::validate_sccp_outbound_message_record_v1(key, record)
+            .ok_or_else(|| {
+                "SCCP outbound replay record carries malformed, non-canonical, oversized, or identity-mismatched payload evidence"
+                    .to_owned()
+            })?;
         if key.lane.source != local {
             return Err(format!(
                 "SCCP outbound replay key source profile `{}` does not match local profile `{}`",
@@ -37725,13 +37781,14 @@ pub(crate) fn validate_sccp_state_local_profile(state: &State) -> core::result::
                 local.profile_key()
             ));
         }
-        validate_sccp_outbound_retained_route(
+        let route = validate_sccp_outbound_retained_route(
             registry.as_ref(),
             key,
             record.destination_binding_hash,
             record.route_configuration_hash,
             "replay record",
         )?;
+        validate_sccp_outbound_payload_for_retained_route(&projection, route)?;
     }
     for (key, record) in state.world.sccp_outbound_proofs.view().iter() {
         if key.lane.source != local {
@@ -37741,7 +37798,7 @@ pub(crate) fn validate_sccp_state_local_profile(state: &State) -> core::result::
                 local.profile_key()
             ));
         }
-        validate_sccp_outbound_retained_route(
+        let _ = validate_sccp_outbound_retained_route(
             registry.as_ref(),
             key,
             record.destination_binding_hash,
@@ -43126,25 +43183,32 @@ mod tiered_snapshot_diff_tests {
         SccpOutboundMessageRecordV1,
         SccpOutboundMessageIndexKeyV1,
     ) {
-        use iroha_data_model::bridge::sccp::{SccpLaneIdV1, SccpNetworkV1};
-
-        let key = SccpOutboundMessageKeyV1::new(
-            SccpLaneIdV1 {
-                source: SccpNetworkV1::SoraTaira,
-                target: SccpNetworkV1::EthereumMainnet,
-            },
-            [0x81; 32],
-        )
-        .expect("valid outbound replay key");
-        let record = SccpOutboundMessageRecordV1 {
-            destination_binding_hash: [0x82; 32],
-            route_configuration_hash: [0x83; 32],
-            payload_hash: [0x84; 32],
-            recorded_at_height: 19,
-        };
+        static FIXTURE: std::sync::LazyLock<(
+            SccpOutboundMessageKeyV1,
+            SccpOutboundMessageRecordV1,
+        )> = std::sync::LazyLock::new(|| {
+            let exact = iroha_sccp::sccp_exact_outbound_test_fixture_v1();
+            let key = SccpOutboundMessageKeyV1::new(
+                exact.bundle.commitment.context.lane,
+                exact.bundle.commitment.message_id,
+            )
+            .expect("valid outbound replay key");
+            let record = SccpOutboundMessageRecordV1 {
+                destination_binding_hash: exact.bundle.commitment.context.destination_binding_hash,
+                route_configuration_hash: exact.bundle.commitment.context.route_configuration_hash,
+                payload_hash: exact.bundle.commitment.payload_hash,
+                payload_bytes: iroha_sccp::canonical_sccp_payload_bytes(&exact.bundle.payload)
+                    .expect("exact fixture payload encodes canonically"),
+                recorded_at_height: 19,
+            };
+            (key, record)
+        });
+        let (key, record) = &*FIXTURE;
+        crate::bridge::validate_sccp_outbound_message_record_v1(key, record)
+            .expect("exact fixture forms a canonical durable record");
         let index =
-            SccpOutboundMessageIndexKeyV1::new(key, record).expect("valid outbound record index");
-        (key, record, index)
+            SccpOutboundMessageIndexKeyV1::new(*key, record).expect("valid outbound record index");
+        (*key, record.clone(), index)
     }
 
     fn sample_sccp_outbound_proof() -> (
@@ -43241,7 +43305,7 @@ mod tiered_snapshot_diff_tests {
             .expect("outbound replay registry fixture must be valid");
         let mut world = World::default();
         *world.sccp_registry.get_mut() = registry;
-        replace_complete_sccp_outbound_history(&mut world, key, message, proof);
+        replace_complete_sccp_outbound_history(&mut world, key, message.clone(), proof);
         (world, key, message, proof, route, other_route)
     }
 
@@ -43403,7 +43467,9 @@ mod tiered_snapshot_diff_tests {
             let mut block = world.block();
             {
                 let mut transaction = block.transaction();
-                transaction.sccp_outbound_messages.insert(key, record);
+                transaction
+                    .sccp_outbound_messages
+                    .insert(key, record.clone());
                 transaction
                     .sccp_outbound_message_locator
                     .insert(key.message_id, key);
@@ -43516,7 +43582,7 @@ mod tiered_snapshot_diff_tests {
             ChainId::from(iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1),
         );
         state
-            .insert_sccp_outbound_message_for_testing(key, record)
+            .insert_sccp_outbound_message_for_testing(key, record.clone())
             .expect("first exact fixture insert succeeds");
 
         let view = state.view();
@@ -43534,7 +43600,7 @@ mod tiered_snapshot_diff_tests {
         drop(view);
 
         let duplicate = state
-            .insert_sccp_outbound_message_for_testing(key, record)
+            .insert_sccp_outbound_message_for_testing(key, record.clone())
             .expect_err("duplicate composite key must fail");
         assert!(duplicate.contains("already exists"), "{duplicate}");
 
@@ -43547,22 +43613,85 @@ mod tiered_snapshot_diff_tests {
         )
         .expect("alternate exact lane is structurally valid");
         let alias_record = SccpOutboundMessageRecordV1 {
-            destination_binding_hash: [0x91; 32],
-            route_configuration_hash: [0x92; 32],
-            payload_hash: [0x93; 32],
+            destination_binding_hash: record.destination_binding_hash,
+            route_configuration_hash: record.route_configuration_hash,
+            payload_hash: record.payload_hash,
+            payload_bytes: record.payload_bytes.clone(),
             recorded_at_height: 20,
         };
         let alias_error = state
             .insert_sccp_outbound_message_for_testing(alias_key, alias_record)
             .expect_err("one message id must not alias another exact lane");
         assert!(
-            alias_error.contains("message id already exists"),
+            alias_error.contains("failed canonical validation"),
             "{alias_error}"
         );
         let view = state.view();
         assert_eq!(view.world.sccp_outbound_messages.len(), 1);
         assert_eq!(view.world.sccp_outbound_message_locator.len(), 1);
         assert_eq!(view.world.sccp_outbound_message_index.len(), 1);
+    }
+
+    #[test]
+    fn sccp_outbound_api_fixture_insert_rejects_untrusted_payload_evidence_atomically() {
+        let (key, record, _) = sample_sccp_outbound();
+        let state = State::new_with_chain(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+            ChainId::from(iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1),
+        );
+
+        let mut malformed = record.clone();
+        malformed.payload_bytes[0] ^= 0x7f;
+        let mut noncanonical = record.clone();
+        noncanonical.payload_bytes.push(0);
+        let mut oversized = record.clone();
+        oversized.payload_bytes =
+            vec![0xA5; iroha_data_model::bridge::SCCP_OUTBOUND_MESSAGE_MAX_PAYLOAD_BYTES_V1 + 1];
+        let mut wrong_hash = record.clone();
+        wrong_hash.payload_hash = [0xA6; 32];
+        let wrong_key = SccpOutboundMessageKeyV1 {
+            message_id: [0xA7; 32],
+            ..key
+        };
+        let mut aliased_asset_payload =
+            iroha_sccp::decode_canonical_sccp_payload_bytes(&record.payload_bytes)
+                .expect("exact fixture payload decodes");
+        let iroha_sccp::SccpPayloadV1::Transfer(transfer) = &mut aliased_asset_payload;
+        transfer.asset_id = b"xor#scope".to_vec();
+        let aliased_asset_bytes = iroha_sccp::canonical_sccp_payload_bytes(&aliased_asset_payload)
+            .expect("scoped-asset payload remains canonically encodable");
+        let aliased_asset_key = SccpOutboundMessageKeyV1::new(
+            key.lane,
+            iroha_sccp::sccp_message_id(key.lane, &aliased_asset_payload)
+                .expect("scoped-asset payload remains structurally lane-bound"),
+        )
+        .expect("scoped-asset payload forms a structurally valid key");
+        let aliased_asset_record = SccpOutboundMessageRecordV1 {
+            payload_hash: iroha_sccp::payload_hash(&aliased_asset_bytes),
+            payload_bytes: aliased_asset_bytes,
+            ..record.clone()
+        };
+        assert!(aliased_asset_record.is_well_formed_for_key(&aliased_asset_key));
+
+        for (hostile_key, hostile_record) in [
+            (key, malformed),
+            (key, noncanonical),
+            (key, oversized),
+            (key, wrong_hash),
+            (wrong_key, record.clone()),
+            (aliased_asset_key, aliased_asset_record),
+        ] {
+            let error = state
+                .insert_sccp_outbound_message_for_testing(hostile_key, hostile_record)
+                .expect_err("untrusted durable payload evidence must fail before mutation");
+            assert!(error.contains("canonical validation"), "{error}");
+            let view = state.view();
+            assert!(view.world.sccp_outbound_messages.is_empty());
+            assert!(view.world.sccp_outbound_message_locator.is_empty());
+            assert!(view.world.sccp_outbound_message_index.is_empty());
+        }
     }
 
     #[test]
@@ -43575,7 +43704,7 @@ mod tiered_snapshot_diff_tests {
         rebuild_sccp_inbound_anchor_high_water(&mut world);
         world
             .sccp_outbound_messages
-            .insert(outbound_key, outbound_record);
+            .insert(outbound_key, outbound_record.clone());
         world
             .sccp_outbound_message_locator
             .insert(outbound_key.message_id, outbound_key);
@@ -43673,7 +43802,7 @@ mod tiered_snapshot_diff_tests {
         ) {
             let (key, message, index, proof_record) = sample_sccp_outbound_proof();
             let mut world = World::default();
-            world.sccp_outbound_messages.insert(key, message);
+            world.sccp_outbound_messages.insert(key, message.clone());
             world
                 .sccp_outbound_message_locator
                 .insert(key.message_id, key);
@@ -43731,7 +43860,7 @@ mod tiered_snapshot_diff_tests {
         let (mut height_drift, key, mut message, old_index, _) = world_with_outbound_proof();
         height_drift.sccp_outbound_message_index.remove(old_index);
         message.recorded_at_height += 1;
-        let new_index = SccpOutboundMessageIndexKeyV1::new(key, message)
+        let new_index = SccpOutboundMessageIndexKeyV1::new(key, &message)
             .expect("drifted authoritative message remains structurally valid");
         height_drift.sccp_outbound_messages.insert(key, message);
         height_drift
@@ -43892,19 +44021,14 @@ mod tiered_snapshot_diff_tests {
     fn sccp_replay_snapshot_rejects_forged_outbound_entries() {
         use iroha_data_model::bridge::{SccpLaneIdV1, SccpNetworkV1};
 
-        let valid_key = SccpOutboundMessageKeyV1 {
-            lane: SccpLaneIdV1 {
-                source: SccpNetworkV1::SoraTaira,
-                target: SccpNetworkV1::EthereumSepolia,
-            },
-            message_id: [0xA1; 32],
-        };
-        let valid_record = SccpOutboundMessageRecordV1 {
-            destination_binding_hash: [0xA2; 32],
-            route_configuration_hash: [0xA4; 32],
-            payload_hash: [0xA3; 32],
-            recorded_at_height: 1,
-        };
+        let (valid_key, valid_record, _) = sample_sccp_outbound();
+        let mut malformed_payload = valid_record.clone();
+        malformed_payload.payload_bytes[0] ^= 0x7f;
+        let mut noncanonical_payload = valid_record.clone();
+        noncanonical_payload.payload_bytes.push(0);
+        let mut oversized_payload = valid_record.clone();
+        oversized_payload.payload_bytes =
+            vec![0xA5; iroha_data_model::bridge::SCCP_OUTBOUND_MESSAGE_MAX_PAYLOAD_BYTES_V1 + 1];
         for (key, record) in [
             (
                 SccpOutboundMessageKeyV1 {
@@ -43914,7 +44038,7 @@ mod tiered_snapshot_diff_tests {
                     },
                     ..valid_key
                 },
-                valid_record,
+                valid_record.clone(),
             ),
             (
                 SccpOutboundMessageKeyV1 {
@@ -43924,7 +44048,7 @@ mod tiered_snapshot_diff_tests {
                     },
                     ..valid_key
                 },
-                valid_record,
+                valid_record.clone(),
             ),
             (
                 SccpOutboundMessageKeyV1 {
@@ -43934,62 +44058,62 @@ mod tiered_snapshot_diff_tests {
                     },
                     ..valid_key
                 },
-                valid_record,
+                valid_record.clone(),
             ),
             (
                 SccpOutboundMessageKeyV1 {
                     message_id: [0; 32],
                     ..valid_key
                 },
-                valid_record,
+                valid_record.clone(),
             ),
             (
                 valid_key,
                 SccpOutboundMessageRecordV1 {
                     destination_binding_hash: [0; 32],
-                    ..valid_record
+                    ..valid_record.clone()
                 },
             ),
             (
                 valid_key,
                 SccpOutboundMessageRecordV1 {
                     route_configuration_hash: [0; 32],
-                    ..valid_record
+                    ..valid_record.clone()
                 },
             ),
             (
                 valid_key,
                 SccpOutboundMessageRecordV1 {
                     payload_hash: [0; 32],
-                    ..valid_record
+                    ..valid_record.clone()
                 },
             ),
             (
                 valid_key,
                 SccpOutboundMessageRecordV1 {
                     recorded_at_height: 0,
-                    ..valid_record
+                    ..valid_record.clone()
                 },
             ),
             (
                 valid_key,
                 SccpOutboundMessageRecordV1 {
                     payload_hash: valid_record.destination_binding_hash,
-                    ..valid_record
+                    ..valid_record.clone()
                 },
             ),
             (
                 valid_key,
                 SccpOutboundMessageRecordV1 {
                     route_configuration_hash: valid_record.destination_binding_hash,
-                    ..valid_record
+                    ..valid_record.clone()
                 },
             ),
             (
                 valid_key,
                 SccpOutboundMessageRecordV1 {
                     route_configuration_hash: valid_record.payload_hash,
-                    ..valid_record
+                    ..valid_record.clone()
                 },
             ),
             (
@@ -43997,21 +44121,45 @@ mod tiered_snapshot_diff_tests {
                     message_id: valid_record.destination_binding_hash,
                     ..valid_key
                 },
-                valid_record,
+                valid_record.clone(),
             ),
             (
                 SccpOutboundMessageKeyV1 {
                     message_id: valid_record.route_configuration_hash,
                     ..valid_key
                 },
-                valid_record,
+                valid_record.clone(),
             ),
             (
                 SccpOutboundMessageKeyV1 {
                     message_id: valid_record.payload_hash,
                     ..valid_key
                 },
-                valid_record,
+                valid_record.clone(),
+            ),
+            (valid_key, malformed_payload),
+            (valid_key, noncanonical_payload),
+            (valid_key, oversized_payload),
+            (
+                valid_key,
+                SccpOutboundMessageRecordV1 {
+                    payload_bytes: Vec::new(),
+                    ..valid_record.clone()
+                },
+            ),
+            (
+                valid_key,
+                SccpOutboundMessageRecordV1 {
+                    payload_hash: [0xA3; 32],
+                    ..valid_record.clone()
+                },
+            ),
+            (
+                SccpOutboundMessageKeyV1 {
+                    message_id: [0xA1; 32],
+                    ..valid_key
+                },
+                valid_record.clone(),
             ),
         ] {
             let mut world = World::default();
@@ -44286,6 +44434,57 @@ mod tiered_snapshot_diff_tests {
 
         let (mut world, key, mut message, mut proof, _, _) =
             world_with_valid_sccp_outbound_history();
+        let mut payload = iroha_sccp::decode_canonical_sccp_payload_bytes(&message.payload_bytes)
+            .expect("exact outbound snapshot payload decodes");
+        let iroha_sccp::SccpPayloadV1::Transfer(transfer) = &mut payload;
+        transfer.route_id[0] ^= 0x20;
+        message.payload_bytes = iroha_sccp::canonical_sccp_payload_bytes(&payload)
+            .expect("wrong-route snapshot payload remains canonically encodable");
+        message.payload_hash = iroha_sccp::payload_hash(&message.payload_bytes);
+        let wrong_route_key = SccpOutboundMessageKeyV1::new(
+            key.lane,
+            iroha_sccp::sccp_message_id(key.lane, &payload)
+                .expect("wrong-route snapshot payload remains structurally lane-bound"),
+        )
+        .expect("wrong-route snapshot payload forms a structural replay key");
+        proof.payload_hash = message.payload_hash;
+        assert!(message.is_well_formed_for_key(&wrong_route_key));
+        assert!(proof.is_well_formed_for_key(&wrong_route_key));
+        assert!(
+            crate::bridge::validate_sccp_outbound_message_record_v1(&wrong_route_key, &message,)
+                .is_some(),
+            "generic canonical projection must leave governed route matching to state hydration"
+        );
+        replace_complete_sccp_outbound_history(&mut world, wrong_route_key, message, proof);
+        assert_rejected(
+            world,
+            "payload route drift",
+            "payload route id, asset key, or revision",
+        );
+
+        let (mut world, key, mut message, mut proof, _, _) =
+            world_with_valid_sccp_outbound_history();
+        let mut payload = iroha_sccp::decode_canonical_sccp_payload_bytes(&message.payload_bytes)
+            .expect("exact outbound snapshot payload decodes");
+        let iroha_sccp::SccpPayloadV1::Transfer(transfer) = &mut payload;
+        transfer.sender = b"alice".to_vec();
+        message.payload_bytes = iroha_sccp::canonical_sccp_payload_bytes(&payload)
+            .expect("non-address sender remains canonically encodable");
+        message.payload_hash = iroha_sccp::payload_hash(&message.payload_bytes);
+        let wrong_sender_key = SccpOutboundMessageKeyV1::new(
+            key.lane,
+            iroha_sccp::sccp_message_id(key.lane, &payload)
+                .expect("non-address sender remains structurally lane-bound"),
+        )
+        .expect("non-address sender forms a structural replay key");
+        proof.payload_hash = message.payload_hash;
+        assert!(message.is_well_formed_for_key(&wrong_sender_key));
+        assert!(proof.is_well_formed_for_key(&wrong_sender_key));
+        replace_complete_sccp_outbound_history(&mut world, wrong_sender_key, message, proof);
+        assert_rejected(world, "non-address sender", "exact Taira I105 account");
+
+        let (mut world, key, mut message, mut proof, _, _) =
+            world_with_valid_sccp_outbound_history();
         message.destination_binding_hash = [0xA1; 32];
         proof.destination_binding_hash = message.destination_binding_hash;
         assert!(message.is_well_formed_for_key(&key));
@@ -44338,7 +44537,11 @@ mod tiered_snapshot_diff_tests {
         assert!(message.is_well_formed_for_key(&other_lane_key));
         assert!(proof.is_well_formed_for_key(&other_lane_key));
         replace_complete_sccp_outbound_history(&mut world, other_lane_key, message, proof);
-        assert_rejected(world, "cross-lane route", "belongs to another exact lane");
+        assert_rejected(
+            world,
+            "cross-lane route",
+            "identity-mismatched payload evidence",
+        );
     }
 
     #[test]
@@ -44426,7 +44629,7 @@ mod tiered_snapshot_diff_tests {
         key: SccpOutboundMessageKeyV1,
         record: SccpOutboundMessageRecordV1,
     ) {
-        let index = SccpOutboundMessageIndexKeyV1::new(key, record)
+        let index = SccpOutboundMessageIndexKeyV1::new(key, &record)
             .expect("valid outbound record must form an ordered index key");
         world.sccp_outbound_messages.insert(key, record);
         world
@@ -50322,59 +50525,29 @@ impl StateTransaction<'_, '_> {
             let asset_definition_domain =
                 asset_id.definition().try_domain().map(ToString::to_string);
             let account_id = asset_id.account().to_string();
-            if let Ok(amount_i64) = amount_str.parse::<i64>() {
-                let mut details = norito::json::Map::new();
-                details.insert("kind".to_owned(), norito::json!("asset_change"));
-                details.insert("op".to_owned(), norito::json!(op));
+            let mut details = norito::json::Map::new();
+            details.insert("kind".to_owned(), norito::json!("asset_change"));
+            details.insert("op".to_owned(), norito::json!(op));
+            details.insert(
+                "asset_definition_id".to_owned(),
+                norito::json!(asset_definition_id),
+            );
+            if let Some(asset_definition_name) = asset_definition_name.as_ref() {
                 details.insert(
-                    "asset_definition_id".to_owned(),
-                    norito::json!(asset_definition_id),
+                    "asset_definition_name".to_owned(),
+                    norito::json!(asset_definition_name),
                 );
-                if let Some(asset_definition_name) = asset_definition_name.as_ref() {
-                    details.insert(
-                        "asset_definition_name".to_owned(),
-                        norito::json!(asset_definition_name),
-                    );
-                }
-                if let Some(asset_definition_domain) = asset_definition_domain.as_ref() {
-                    details.insert(
-                        "asset_definition_domain".to_owned(),
-                        norito::json!(asset_definition_domain),
-                    );
-                }
-                details.insert("account_id".to_owned(), norito::json!(account_id));
-                details.insert("account_domain".to_owned(), norito::json!(account_domain));
-                details.insert("amount".to_owned(), norito::json!(amount_str));
-                details.insert("amount_i64".to_owned(), norito::json!(amount_i64));
-                payload = norito::json::Value::Object(details);
-            } else {
-                let mut details = norito::json::Map::new();
-                details.insert(
-                    "kind".to_owned(),
-                    norito::json!("asset_change_unsupported_amount"),
-                );
-                details.insert("op".to_owned(), norito::json!(op));
-                details.insert(
-                    "asset_definition_id".to_owned(),
-                    norito::json!(asset_definition_id),
-                );
-                if let Some(asset_definition_name) = asset_definition_name.as_ref() {
-                    details.insert(
-                        "asset_definition_name".to_owned(),
-                        norito::json!(asset_definition_name),
-                    );
-                }
-                if let Some(asset_definition_domain) = asset_definition_domain.as_ref() {
-                    details.insert(
-                        "asset_definition_domain".to_owned(),
-                        norito::json!(asset_definition_domain),
-                    );
-                }
-                details.insert("account_id".to_owned(), norito::json!(account_id));
-                details.insert("account_domain".to_owned(), norito::json!(account_domain));
-                details.insert("amount".to_owned(), norito::json!(amount_str));
-                payload = norito::json::Value::Object(details);
             }
+            if let Some(asset_definition_domain) = asset_definition_domain.as_ref() {
+                details.insert(
+                    "asset_definition_domain".to_owned(),
+                    norito::json!(asset_definition_domain),
+                );
+            }
+            details.insert("account_id".to_owned(), norito::json!(account_id));
+            details.insert("account_domain".to_owned(), norito::json!(account_domain));
+            details.insert("amount".to_owned(), norito::json!(amount_str));
+            payload = norito::json::Value::Object(details);
         }
 
         Json::from(payload)
@@ -52539,12 +52712,12 @@ pub(crate) mod deserialize {
         messages: &Storage<SccpOutboundMessageKeyV1, SccpOutboundMessageRecordV1>,
     ) -> Result<(), json::Error> {
         for (key, record) in messages.view().iter() {
-            if !record.is_well_formed_for_key(key) {
-                return Err(json::Error::InvalidField {
+            crate::bridge::validate_sccp_outbound_message_record_v1(key, record).ok_or_else(|| {
+                json::Error::InvalidField {
                     field: "world.sccp_outbound_messages".to_owned(),
-                    message: "outbound replay entry must use an exact SORA-to-external lane, nonzero local height, and four distinct nonzero binding/configuration/message/payload hash roles".to_owned(),
-                });
-            }
+                    message: "outbound replay entry must carry one bounded canonical payload bound to its exact lane, governed context, message id, and payload hash".to_owned(),
+                }
+            })?;
         }
         Ok(())
     }
@@ -52616,7 +52789,7 @@ pub(crate) mod deserialize {
                         .to_owned(),
                 });
             }
-            let index_key = SccpOutboundMessageIndexKeyV1::new(*key, *record).ok_or_else(|| {
+            let index_key = SccpOutboundMessageIndexKeyV1::new(*key, record).ok_or_else(|| {
                 json::Error::InvalidField {
                     field: "world.sccp_outbound_message_index".to_owned(),
                     message: "authoritative outbound entry cannot form a valid ordered locator"
@@ -57196,6 +57369,42 @@ mod tests {
         assert_eq!(
             obj.get("asset_definition_id"),
             Some(&norito::json!(asset_definition.to_string()))
+        );
+    }
+
+    #[test]
+    fn trigger_args_preserve_asset_amounts_beyond_i64_as_canonical_strings() {
+        let asset_domain: DomainId = DomainId::try_new("wide", "universal").unwrap();
+        let (subject, _) = gen_account_in("wide-trigger-amount");
+        let asset_definition = AssetDefinitionId::new(asset_domain, "coin".parse().unwrap());
+        let wide_amount = Numeric::from(i128::from(i64::MAX) + 1);
+        let event = data_pre::DataEvent::Domain(data_pre::DomainEvent::Account(
+            data_pre::AccountEvent::Asset(data_pre::AssetEvent::Added(data_pre::AssetChanged {
+                asset: AssetId::new(asset_definition, subject),
+                amount: wide_amount.clone(),
+            })),
+        ));
+
+        let state = State::new_for_testing(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let block = new_dummy_block_with_payload(|_| {});
+        let mut state_block = state.block(block.as_ref().header());
+        let stx = state_block.transaction();
+        let args = stx.trigger_args_from_data_event(&event);
+        let payload: norito::json::Value = args.try_into_any().expect("decode trigger args");
+        let object = payload.as_object().expect("trigger args object");
+
+        assert_eq!(object.get("kind"), Some(&norito::json!("asset_change")));
+        assert_eq!(
+            object.get("amount"),
+            Some(&norito::json!(wide_amount.to_string()))
+        );
+        assert!(
+            object.get("amount_i64").is_none(),
+            "the retired width-specific projection must not truncate wide values"
         );
     }
 
@@ -100675,7 +100884,7 @@ seiyaku IdentitylessRawCallback {
 
         let src = r#"
             seiyaku AliasTransfer {
-              fn main_impl(ev: Json) -> Option<bool> {
+              fn main_impl(Json ev) -> Option<bool> {
                 if (ev.get_name(Name::parse("kind"))? != Name::parse("asset_change")) {
                   return Option::some(true);
                 }
@@ -100684,7 +100893,7 @@ seiyaku IdentitylessRawCallback {
                 }
                 let dst_domain = ev.get_name(Name::parse("account_domain"))?;
                 let dst = ev.get_account_id(Name::parse("account_id"))?;
-                let amount = ev.get_int(Name::parse("amount_i64"))?;
+                let amount = ev.get_quantity(Name::parse("amount"))?;
                 if (amount <= 0) {
                   return Option::some(true);
                 }
@@ -100693,12 +100902,12 @@ seiyaku IdentitylessRawCallback {
                 if (dst_domain != Name::parse("wonderland.universal")) {
                   return Option::some(true);
                 }
-                ledger::asset::transfer(source: dst, destination: src, asset_definition: AssetDefinitionId::parse("__ROSE_ASSET_DEFINITION_ID__"), amount: Amount::from_i64(amount), dataspace: DataSpaceId::parse("0"));
-                ledger::asset::transfer(source: src, destination: dst, asset_definition: AssetDefinitionId::parse("__GOLD_ASSET_DEFINITION_ID__"), amount: Amount::from_i64(payout), dataspace: DataSpaceId::parse("0"));
+                ledger::asset::transfer(source: dst, destination: src, asset_definition: AssetDefinitionId::parse("__ROSE_ASSET_DEFINITION_ID__"), amount: amount, dataspace: DataSpaceId::parse("0"));
+                ledger::asset::transfer(source: src, destination: dst, asset_definition: AssetDefinitionId::parse("__GOLD_ASSET_DEFINITION_ID__"), amount: payout, dataspace: DataSpaceId::parse("0"));
                 Option::some(true)
               }
 
-              kotoage fn main(ev: Json) authorize("alias_transfer_run") {
+              kotoage fn main(Json ev) authorize("alias_transfer_run") {
                 assert(main_impl(ev).is_some(), "missing or invalid asset event field");
               }
             }

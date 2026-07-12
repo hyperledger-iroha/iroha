@@ -2261,10 +2261,6 @@ pub(crate) fn visit_instr_uses<F: FnMut(Temp)>(instr: &Instr, mut f: F) {
         }
         EncodeInt { value, .. } | PointerToNorito { value, .. } => f(*value),
         PointerFromNorito { blob, .. } => f(*blob),
-        PathMapKey { base, key, .. } => {
-            f(*base);
-            f(*key);
-        }
         PathMapKeyNorito { base, key_blob, .. } => {
             f(*base);
             f(*key_blob);
@@ -2317,18 +2313,7 @@ pub(crate) fn visit_instr_uses<F: FnMut(Temp)>(instr: &Instr, mut f: F) {
             f(*left);
             f(*right);
         }
-        VrfVerify {
-            input,
-            public_key,
-            proof,
-            variant,
-            ..
-        } => {
-            f(*input);
-            f(*public_key);
-            f(*proof);
-            f(*variant);
-        }
+        VrfVerify { request, .. } => f(*request),
         VrfVerifyBatch { batch, .. } => f(*batch),
         AxtBegin { descriptor } => f(*descriptor),
         AxtTouch { dsid, manifest } => {
@@ -2475,7 +2460,6 @@ fn dest_temp(instr: &Instr) -> Option<Temp> {
         Instr::JsonObject { dest, .. } => Some(*dest),
         Instr::JsonSetInt { dest, .. } => Some(*dest),
         Instr::JsonSetAccountId { dest, .. } => Some(*dest),
-        Instr::PathMapKey { dest, .. } => Some(*dest),
         Instr::PathMapKeyNorito { dest, .. } => Some(*dest),
         Instr::JsonEncode { dest, .. } => Some(*dest),
         Instr::JsonDecode { dest, .. } => Some(*dest),

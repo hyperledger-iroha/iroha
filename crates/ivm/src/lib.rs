@@ -189,13 +189,13 @@ pub use iroha_crypto::{MerkleProof, MerkleTree};
 pub use ivm_abi::SyscallPolicy;
 /// Stable V1 typed core-query tags, projections, and bounded page records.
 pub use ivm_abi::core_query;
-/// Canonical schemas and records used for durable Kotodama V1 state values.
-pub use ivm_abi::state_value;
 /// Exact schemas and typed nested-return records encoded at public contract boundaries.
 pub use ivm_abi::entrypoint::{
     EntrypointArgumentSchemaV1, EntrypointReturnRecordV1, EntrypointValueAtomV1,
     EntrypointValueTypeV1,
 };
+/// Canonical schemas and records used for durable Kotodama V1 state values.
+pub use ivm_abi::state_value;
 
 pub use crate::signature::{Ed25519BatchItem, verify_ed25519_batch_items};
 pub use crate::{

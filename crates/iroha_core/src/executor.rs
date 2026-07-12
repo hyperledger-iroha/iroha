@@ -13099,7 +13099,7 @@ seiyaku IdentityRequired {
         );
         metadata.insert(
             "contract_payload".parse().expect("payload key"),
-            Json::from(norito::json!({ "value": 7 })),
+            Json::from(norito::json!({ "value": "7" })),
         );
         let bytecode = IvmBytecode::from_compiled(program);
         let raw = TransactionBuilder::new(chain_id.clone(), authority.clone())
@@ -13481,7 +13481,7 @@ seiyaku IdentityRequired {
     #[test]
     fn trigger_dispatch_rejects_static_payload_and_implicit_entrypoint() {
         let contract = prepared_parameterized_trigger_contract();
-        let event_args = Json::from(norito::json!({"val": 7}));
+        let event_args = Json::from(norito::json!({"val": "7"}));
 
         let err = parse_prepared_trigger_call_execution_context(
             &Metadata::default(),
@@ -13503,7 +13503,7 @@ seiyaku IdentityRequired {
         );
         metadata.insert(
             Name::from_str("contract_payload").expect("static name"),
-            Json::from(norito::json!({"val": 99})),
+            Json::from(norito::json!({"val": "99"})),
         );
         let err = parse_prepared_trigger_call_execution_context(
             &metadata,

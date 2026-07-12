@@ -3274,9 +3274,7 @@ mod tests {
 
         let mut changed_tron_profile = baseline_tron;
         let SccpSemanticProofProfileV1::SoraTairaFinalityInclusionGroth16Bn254(ref mut circuit) =
-            changed_tron_profile
-                .outbound_proof_policy
-                .semantic_profile;
+            changed_tron_profile.outbound_proof_policy.semantic_profile;
         circuit.circuit_commitment = [0x76; 32];
         changed_tron_profile
             .outbound_proof_policy

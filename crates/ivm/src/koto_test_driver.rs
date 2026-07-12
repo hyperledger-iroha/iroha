@@ -2945,8 +2945,8 @@ mod tests {
 
                     let pk = test::actor_public_key("issuer");
                     let sig = test::actor_sign("issuer", b"native-flow");
-                    test::assert(codec::tlv_len(pk) > 0);
-                    test::assert(codec::tlv_len(sig) > 0);
+                    test::assert(pk != b"");
+                    test::assert(sig != b"");
                 }}
 
                 #[test(fixture="actors")]

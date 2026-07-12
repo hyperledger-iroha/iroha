@@ -1577,7 +1577,10 @@ async fn contracts_call_configure_roundtrips_account_id_map_state() {
     );
 
     let paused = run_contract_view(&app, &creds.account, &contract_address, "paused", None).await;
-    assert_eq!(paused.get("result").and_then(json::Value::as_str), Some("0"));
+    assert_eq!(
+        paused.get("result").and_then(json::Value::as_str),
+        Some("0")
+    );
 }
 
 #[tokio::test]

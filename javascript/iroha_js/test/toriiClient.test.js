@@ -19921,12 +19921,30 @@ test("registerContractCode rejects forged branded manifest declarations before f
     "match",
     "int",
     "state_map_get",
+    "__kotodama_quantity_ratio_round",
+    "__kotodama_decimal_to_int_trunc",
+    "__kotodama_decimal_to_int_round",
     "__kotodama_link_forged",
     "９ledger",
   ]) {
     await assert.rejects(
       submit({ seiyakuName }),
       /seiyaku_name must (?:not be empty|be a canonical Kotodama V1 identifier)/u,
+    );
+  }
+  for (const retired of ["U128", "Amount"]) {
+    await assert.rejects(
+      submit({
+        entrypoints: [{
+          name: "legacy_numeric",
+          kind: "View",
+          returnType: retired,
+          returnSchema: {
+            nodes: [{ kind: "Leaf", value: { kind: retired, value: null } }],
+          },
+        }],
+      }),
+      /not a V1 entrypoint value kind/u,
     );
   }
   await assert.rejects(

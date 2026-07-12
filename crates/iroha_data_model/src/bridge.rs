@@ -13,11 +13,11 @@ use crate::{ChainId, nexus::LaneId, proof::ProofBox};
 pub mod sccp;
 mod sccp_registry;
 pub use sccp::{
-    SCCP_V1_JSON_SAFE_INTEGER_MAX, SccpEvmSourceEmitterV1, SccpInboundAnchorHighWaterKeyV1,
-    SccpInboundMessageKeyV1, SccpInboundMessageRecordV1, SccpLaneIdV1, SccpNetworkV1,
-    SccpOutboundMessageContextV1, SccpOutboundMessageIndexKeyV1, SccpOutboundMessageKeyV1,
-    SccpOutboundMessageRecordV1, SccpOutboundProofRecordV1, SccpSourceEmitterV1,
-    SccpSourceIdentityV1, SccpTronSourceEmitterV1,
+    SCCP_OUTBOUND_MESSAGE_MAX_PAYLOAD_BYTES_V1, SCCP_V1_JSON_SAFE_INTEGER_MAX,
+    SccpEvmSourceEmitterV1, SccpInboundAnchorHighWaterKeyV1, SccpInboundMessageKeyV1,
+    SccpInboundMessageRecordV1, SccpLaneIdV1, SccpNetworkV1, SccpOutboundMessageContextV1,
+    SccpOutboundMessageIndexKeyV1, SccpOutboundMessageKeyV1, SccpOutboundMessageRecordV1,
+    SccpOutboundProofRecordV1, SccpSourceEmitterV1, SccpSourceIdentityV1, SccpTronSourceEmitterV1,
 };
 pub use sccp_registry::{
     SCCP_V1_MAX_GOVERNED_LANES, SCCP_V1_MAX_KEY_BYTES, SCCP_V1_MAX_LIVE_GOVERNED_ROUTES,
@@ -1676,6 +1676,7 @@ mod tests {
             destination_binding_hash: [0x23; 32],
             route_configuration_hash: [0x25; 32],
             payload_hash: [0x24; 32],
+            payload_bytes: vec![0x53, 0x43, 0x43, 0x50],
             recorded_at_height: 77,
         };
         let buf = record.encode();
@@ -2261,9 +2262,12 @@ mod tests {
     #[test]
     fn verifier_rejects_self_consistent_header_parent_and_view_substitutions() {
         let mut parent_attack = make_v2_fixture("chain-a");
-        parent_attack.proof.block_header.set_prev_block_hash(Some(
-            HashOf::from_untyped_unchecked(Hash::new(b"forged genesis predecessor")),
-        ));
+        parent_attack
+            .proof
+            .block_header
+            .set_prev_block_hash(Some(HashOf::from_untyped_unchecked(Hash::new(
+                b"forged genesis predecessor",
+            ))));
         rebind_v2_proof_to_header(&mut parent_attack.proof, &parent_attack.keys);
         assert_eq!(
             parent_attack
@@ -2325,9 +2329,11 @@ mod tests {
     fn successor_rejects_a_resigned_wrong_header_predecessor() {
         let parent = make_v2_fixture("chain-a");
         let mut child = make_successor_v2_proof(&parent);
-        child.block_header.set_prev_block_hash(Some(
-            HashOf::from_untyped_unchecked(Hash::new(b"unrelated predecessor")),
-        ));
+        child
+            .block_header
+            .set_prev_block_hash(Some(HashOf::from_untyped_unchecked(Hash::new(
+                b"unrelated predecessor",
+            ))));
         rebind_v2_proof_to_header(&mut child, &parent.keys);
 
         let mut verifier = BridgeFinalityVerifier::with_context(

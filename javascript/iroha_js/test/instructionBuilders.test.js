@@ -1484,6 +1484,13 @@ baseTest("smart-contract schema builder enforces canonical flat-preorder V1 tape
     assert.throws(() => build(malformed), /canonical|capacity|complete|only capacity/u);
   }
 
+  for (const retired of ["U128", "Amount"]) {
+    assert.throws(
+      () => build([leaf(retired)]),
+      /not a V1 entrypoint value kind/u,
+    );
+  }
+
   for (const [name, fields, children] of [
     ["AccountView", ["id", "metadata"], [leaf("AccountId"), leaf("Json")]],
     ["AssetView", ["id", "amount"], [leaf("AssetId"), leaf("Quantity")]],

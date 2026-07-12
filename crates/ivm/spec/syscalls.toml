@@ -311,12 +311,6 @@ ret = "r10=i64"
 gas = "G_numeric + bytes"
 
 [[syscall]]
-number = "0x54"
-args = "r10=&Name(base), r11=key:i64"
-ret = "r10=ptr (&Name)"
-gas = "G_path + bytes"
-
-[[syscall]]
 number = "0x55"
 args = "r10=value:i64"
 ret = "r10=ptr (&NoritoBytes(Norito-framed i64))"

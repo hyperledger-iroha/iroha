@@ -1445,7 +1445,7 @@ fn verify_rejects_noncanonical_or_reserved_state_names() {
     ] {
         let artifact = contract_artifact_with_states(vec![ivm::EmbeddedStateDescriptor {
             name: name.to_owned(),
-            ty: ivm::EmbeddedStateType::I64,
+            ty: ivm::EmbeddedStateType::Int,
         }]);
         let error = ivm::verify_contract_artifact(&artifact)
             .expect_err("noncanonical or reserved state name must fail admission");
@@ -1460,7 +1460,7 @@ fn verify_rejects_noncanonical_or_reserved_state_names() {
     ivm::verify_contract_artifact(&contract_artifact_with_states(vec![
         ivm::EmbeddedStateDescriptor {
             name: "_counter2".to_owned(),
-            ty: ivm::EmbeddedStateType::I64,
+            ty: ivm::EmbeddedStateType::Int,
         },
     ]))
     .expect("valid ASCII state identifier must pass admission");
@@ -1474,7 +1474,7 @@ fn verify_rejects_noncanonical_or_reserved_state_names() {
             name: "Record".to_owned(),
             fields: vec![ivm::EmbeddedStateFieldDescriptor {
                 name: "field-name".to_owned(),
-                ty: ivm::EmbeddedStateType::I64,
+                ty: ivm::EmbeddedStateType::Int,
             }],
         },
     ] {

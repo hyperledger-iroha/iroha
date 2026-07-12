@@ -1096,13 +1096,7 @@ pub enum Instr {
         dest: Temp,
         blob: Temp,
     },
-    /// Build a Name path for map key: r10 = &Name base; r11 = key (int); returns &Name in dest.
-    PathMapKey {
-        dest: Temp,
-        base: Temp,
-        key: Temp,
-    },
-    /// Build Name path: base / hash(norito_bytes_key)
+    /// Build a schema-bound Name path from canonical pointer-envelope key bytes.
     PathMapKeyNorito {
         dest: Temp,
         base: Temp,
@@ -1253,10 +1247,7 @@ pub enum Instr {
     /// Verify a VRF proof and return the output Blob pointer (or 0).
     VrfVerify {
         dest: Temp,
-        input: Temp,
-        public_key: Temp,
-        proof: Temp,
-        variant: Temp,
+        request: Temp,
     },
     /// Batch VRF verification returning a NoritoBytes vector of outputs (or 0).
     VrfVerifyBatch {
@@ -5734,18 +5725,20 @@ fn lower_surface_builtin_call(
         Builtin::Path => {
             let base = lower_expr(ctx, &args[0], vars);
             let d = ctx.new_temp();
-            if semantic::is_numeric_type(&args[1].ty) {
-                let key = lower_expr_as_i64(ctx, &args[1], vars);
-                ctx.current_instr(Instr::PathMapKey { dest: d, base, key });
-            } else if semantic::is_blob_like(&args[1].ty) {
-                let blob = lower_expr(ctx, &args[1], vars);
+            if semantic::is_numeric_type(&args[1].ty) || semantic::is_blob_like(&args[1].ty) {
+                let key = lower_expr(ctx, &args[1], vars);
+                let blob = ctx.new_temp();
+                ctx.current_instr(Instr::PointerToNorito {
+                    dest: blob,
+                    value: key,
+                });
                 ctx.current_instr(Instr::PathMapKeyNorito {
                     dest: d,
                     base,
                     key_blob: blob,
                 });
             } else {
-                panic!("path expects an int-like or bytes-like key")
+                panic!("path expects a canonical numeric or bytes-like key")
             }
             d
         }
@@ -6793,18 +6786,9 @@ fn lower_surface_builtin_call(
             dest
         }
         Builtin::VrfVerify => {
-            let input = lower_expr(ctx, &args[0], vars);
-            let public_key = lower_expr(ctx, &args[1], vars);
-            let proof = lower_expr(ctx, &args[2], vars);
-            let variant = lower_expr_as_u64(ctx, &args[3], vars);
+            let request = lower_expr(ctx, &args[0], vars);
             let dest = ctx.new_temp();
-            ctx.current_instr(Instr::VrfVerify {
-                dest,
-                input,
-                public_key,
-                proof,
-                variant,
-            });
+            ctx.current_instr(Instr::VrfVerify { dest, request });
             dest
         }
         Builtin::VrfVerifyBatch => {
@@ -10034,7 +10018,6 @@ mod tests {
                 int scheme,
                 int tag_length,
                 int enabled,
-                int variant,
             ) {
                 let _verified = crypto::verify_signature(
                     message: payload,
@@ -10050,12 +10033,7 @@ mod tests {
                     tag_length: tag_length,
                 );
                 ledger::trigger::set_enabled(Name::parse("scheduled"), enabled);
-                let _vrf = crypto::vrf::verify(
-                    message: payload,
-                    proof: payload,
-                    public_key: payload,
-                    variant: variant,
-                );
+                let _vrf = crypto::vrf::verify(request: payload);
             }
         "#;
         let lowered = lower(
@@ -10076,7 +10054,7 @@ mod tests {
             })
             .collect::<Vec<_>>();
 
-        assert_eq!(converted.len(), 4);
+        assert_eq!(converted.len(), 3);
         for scalar in instructions
             .iter()
             .filter_map(|instruction| match instruction {
@@ -10086,7 +10064,6 @@ mod tests {
                     ..
                 } => Some(*tag_len),
                 Instr::SetTriggerEnabled { enabled, .. } => Some(*enabled),
-                Instr::VrfVerify { variant, .. } => Some(*variant),
                 _ => None,
             })
         {
@@ -11720,8 +11697,7 @@ fn either(bool value) -> bool { return value || rhs(); }
                 {
                     name_literals.insert(*dest, value.clone());
                 }
-                if let Instr::PathMapKey { base, .. } | Instr::PathMapKeyNorito { base, .. } = instr
-                {
+                if let Instr::PathMapKeyNorito { base, .. } = instr {
                     let base_name = name_literals
                         .get(base)
                         .cloned()

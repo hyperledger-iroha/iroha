@@ -4117,7 +4117,7 @@ seiyaku ProtectedStateFreeOverlay {
         );
         metadata.insert(
             "contract_payload".parse().expect("metadata key"),
-            Json::from(norito::json!({ "value": 7 })),
+            Json::from(norito::json!({ "value": "7" })),
         );
         let transaction = TransactionBuilder::new(chain_id, authority)
             .with_metadata(metadata)
@@ -4164,7 +4164,7 @@ seiyaku PermissionlessStateFreeOverlay {
         );
         metadata.insert(
             "contract_payload".parse().expect("metadata key"),
-            Json::from(norito::json!({ "value": 7 })),
+            Json::from(norito::json!({ "value": "7" })),
         );
         let transaction = TransactionBuilder::new(
             ChainId::from("permissionless-state-free-overlay"),
@@ -4221,7 +4221,7 @@ seiyaku ProtectedParameterizedOverlay {
             .expect("write argument schema");
         let arguments = ivm::encode_argument_record_from_json(
             schema,
-            &Json::from(norito::json!({ "value": 7 })),
+            &Json::from(norito::json!({ "value": "7" })),
         )
         .expect("encode canonical parameterized arguments");
         let arguments = ContractArgumentRecord::try_new(arguments)
@@ -7390,7 +7390,7 @@ seiyaku ProtectedProved {
         );
         metadata.insert(
             "contract_payload".parse().expect("metadata key"),
-            Json::from(norito::json!({ "value": 9 })),
+            Json::from(norito::json!({ "value": "9" })),
         );
         metadata.insert(
             "contract_address".parse().expect("metadata key"),
@@ -7660,6 +7660,7 @@ seiyaku ProtectedProved {
         world.contract_manifests.insert(
             code_hash,
             ContractManifest {
+                seiyaku_name: None,
                 code_hash: Some(code_hash),
                 abi_hash: Some(abi_hash),
                 compiler_fingerprint: None,
@@ -7668,6 +7669,7 @@ seiyaku ProtectedProved {
                 entrypoints: None,
                 states: None,
                 kotoba: None,
+                error_codes: None,
                 provenance: None,
             }
             .signed(&kp),
@@ -7768,6 +7770,7 @@ seiyaku ProtectedProved {
         world.contract_manifests.insert(
             code_hash,
             ContractManifest {
+                seiyaku_name: None,
                 code_hash: Some(code_hash),
                 abi_hash: Some(abi_hash),
                 compiler_fingerprint: None,
@@ -7776,6 +7779,7 @@ seiyaku ProtectedProved {
                 entrypoints: None,
                 states: None,
                 kotoba: None,
+                error_codes: None,
                 provenance: None,
             }
             .signed(&kp),

@@ -8300,7 +8300,7 @@ pub mod isi {
             .world
             .sccp_outbound_messages
             .get(&key)
-            .copied()
+            .cloned()
             .ok_or_else(|| {
                 invalid_bridge_proof(
                     "SCCP destination proof locator names no authoritative outbound record",
@@ -8316,10 +8316,16 @@ pub mod isi {
                 "an SCCP destination proof for this exact outbound lane and message has already been accepted",
             ));
         }
-        if !record.is_well_formed_for_key(&key)
-            || record.payload_hash != bundle.commitment.payload_hash
-            || record.destination_binding_hash != context.destination_binding_hash
-            || record.route_configuration_hash != context.route_configuration_hash
+        let outbox_projection = crate::bridge::validate_sccp_outbound_message_record_v1(
+            &key, &record,
+        )
+        .ok_or_else(|| {
+            invalid_bridge_proof(
+                "SCCP destination proof names malformed authoritative outbox payload evidence",
+            )
+        })?;
+        if outbox_projection.commitment != bundle.commitment
+            || outbox_projection.payload != bundle.payload
             || destination_proof.route_configuration_hash != record.route_configuration_hash
         {
             return Err(invalid_bridge_proof(
@@ -10411,14 +10417,16 @@ pub mod isi {
                 state_transaction,
             )?;
             let recorded_at_height = state_transaction._curr_block.height.get();
-            let record = iroha_data_model::bridge::SccpOutboundMessageRecordV1 {
-                destination_binding_hash: validated.context.destination_binding_hash,
-                route_configuration_hash: validated.context.route_configuration_hash,
-                payload_hash: validated.commitment.payload_hash,
-                recorded_at_height,
-            };
+            let record = validated
+                .outbound_record(recorded_at_height)
+                .ok_or_else(|| {
+                    InstructionExecutionError::InvariantViolation(
+                    "validated SCCP outbound message could not form its durable canonical record"
+                        .into(),
+                )
+                })?;
             let index_key =
-                iroha_data_model::bridge::SccpOutboundMessageIndexKeyV1::new(key, record)
+                iroha_data_model::bridge::SccpOutboundMessageIndexKeyV1::new(key, &record)
                     .ok_or_else(|| {
                         InstructionExecutionError::InvariantViolation(
                             "validated SCCP outbound message could not form its ordered locator"
@@ -18790,13 +18798,14 @@ pub mod isi {
                 .world
                 .sccp_outbound_messages
                 .get(&key)
-                .copied()
+                .cloned()
                 .expect("SCCP outbox record should be stored");
 
             assert_eq!(
                 record.payload_hash,
                 iroha_sccp::payload_hash(&payload_bytes)
             );
+            assert_eq!(record.payload_bytes, payload_bytes);
             assert_eq!(
                 record.destination_binding_hash,
                 crate::bridge::test_sccp_outbound_context_for_payload_bytes(&payload_bytes)
@@ -19330,7 +19339,7 @@ pub mod isi {
                 .sccp_outbound_messages
                 .view()
                 .get(&key)
-                .copied()
+                .cloned()
                 .expect("binary record remains durable");
             assert_eq!(
                 record.payload_hash,
@@ -26109,6 +26118,8 @@ seiyaku GovernanceLifecycle {
             .expect("exact outbound replay key");
             let message = iroha_data_model::bridge::SccpOutboundMessageRecordV1 {
                 payload_hash: exact.bundle.commitment.payload_hash,
+                payload_bytes: iroha_sccp::canonical_sccp_payload_bytes(&exact.bundle.payload)
+                    .expect("exact outbound payload encodes canonically"),
                 destination_binding_hash: exact.bundle.commitment.context.destination_binding_hash,
                 route_configuration_hash: exact.bundle.commitment.context.route_configuration_hash,
                 recorded_at_height: exact.request.public_inputs.finality_height,

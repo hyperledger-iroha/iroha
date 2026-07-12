@@ -32,6 +32,7 @@ ALL_PHASES=(
   contract-smoke
   tvm-contract-smoke
   core-admission
+  runtime-api
 )
 
 SELECTED_PHASES=()
@@ -95,7 +96,7 @@ list_phases() {
 
 is_known_phase() {
   case "$1" in
-    rust-sccp|evidence-scripts|js-sdk|python-sdk|swift-sdk|kotlin-sdk|java-android|dotnet-sdk|contract-smoke|tvm-contract-smoke|core-admission)
+    rust-sccp|evidence-scripts|js-sdk|python-sdk|swift-sdk|kotlin-sdk|java-android|dotnet-sdk|contract-smoke|tvm-contract-smoke|core-admission|runtime-api)
       return 0
       ;;
     *)
@@ -1858,6 +1859,63 @@ phase_core_admission() {
       -- --nocapture
 }
 
+phase_runtime_api() {
+  # Durable protocol-2 finality is part of SCCP's trust boundary. Keep the
+  # mutation/restart adversaries explicit so a broad name-filter change cannot
+  # silently stop exercising finalized Kura recovery.
+  run_cmd \
+    env "CARGO_TARGET_DIR=$CARGO_TARGET_DIR" "NORITO_SKIP_BINDINGS_SYNC=$NORITO_SKIP_BINDINGS_SYNC" \
+    cargo test --locked -p iroha_core --lib kura::tests::v2_finality -- --nocapture
+  run_cmd \
+    env "CARGO_TARGET_DIR=$CARGO_TARGET_DIR" "NORITO_SKIP_BINDINGS_SYNC=$NORITO_SKIP_BINDINGS_SYNC" \
+    cargo test --locked -p iroha_core --lib \
+      kura::tests::finalized_top_block_rejects_replacement_without_mutation -- --nocapture
+  run_cmd \
+    env "CARGO_TARGET_DIR=$CARGO_TARGET_DIR" "NORITO_SKIP_BINDINGS_SYNC=$NORITO_SKIP_BINDINGS_SYNC" \
+    cargo test --locked -p iroha_core --lib \
+      kura::tests::pruning_across_durable_v2_finality_is_atomic_and_rejected -- --nocapture
+  run_cmd \
+    env "CARGO_TARGET_DIR=$CARGO_TARGET_DIR" "NORITO_SKIP_BINDINGS_SYNC=$NORITO_SKIP_BINDINGS_SYNC" \
+    cargo test --locked -p iroha_core --lib \
+      kura::tests::startup_corruption_recovery_cannot_prune_finalized_block_bytes -- --nocapture
+
+  # Run the complete focused apply/effect module suites: these own the durable
+  # body, validation, finality, and post-finality cleanup sequencing used by
+  # the SCCP settlement chain.
+  run_cmd \
+    env "CARGO_TARGET_DIR=$CARGO_TARGET_DIR" "NORITO_SKIP_BINDINGS_SYNC=$NORITO_SKIP_BINDINGS_SYNC" \
+    cargo test --locked -p iroha_core --lib sumeragi::v2_apply::tests:: -- --nocapture
+  run_cmd \
+    env "CARGO_TARGET_DIR=$CARGO_TARGET_DIR" "NORITO_SKIP_BINDINGS_SYNC=$NORITO_SKIP_BINDINGS_SYNC" \
+    cargo test --locked -p iroha_core --lib sumeragi::v2_effects::tests:: -- --nocapture
+
+  # Compile and exercise the actual Torii/CLI surfaces, not only Core's bridge
+  # admission helpers. The standalone endpoint test covers JSON/Norito output
+  # and cryptographic finality failure modes against real router state.
+  run_cmd \
+    env "CARGO_TARGET_DIR=$CARGO_TARGET_DIR" "NORITO_SKIP_BINDINGS_SYNC=$NORITO_SKIP_BINDINGS_SYNC" \
+    cargo test --locked -p iroha_torii --lib sccp_ -- --nocapture
+  run_cmd \
+    env "CARGO_TARGET_DIR=$CARGO_TARGET_DIR" "NORITO_SKIP_BINDINGS_SYNC=$NORITO_SKIP_BINDINGS_SYNC" \
+    cargo test --locked -p iroha_torii --lib bridge_finality_ -- --nocapture
+  run_cmd \
+    env "CARGO_TARGET_DIR=$CARGO_TARGET_DIR" "NORITO_SKIP_BINDINGS_SYNC=$NORITO_SKIP_BINDINGS_SYNC" \
+    cargo test --locked -p iroha_torii --lib \
+      generated_openapi_has_only_resolvable_component_schema_refs -- --nocapture
+  run_cmd \
+    env "CARGO_TARGET_DIR=$CARGO_TARGET_DIR" "NORITO_SKIP_BINDINGS_SYNC=$NORITO_SKIP_BINDINGS_SYNC" \
+    cargo test --locked -p iroha_torii --test bridge_finality_endpoint -- --nocapture
+  run_cmd \
+    env "CARGO_TARGET_DIR=$CARGO_TARGET_DIR" "NORITO_SKIP_BINDINGS_SYNC=$NORITO_SKIP_BINDINGS_SYNC" \
+    cargo test --locked -p iroha_cli sccp_ -- --nocapture
+
+  # Fail when the checked-in latest/current specs or their manifests no longer
+  # match Torii's generated router contract. Historical snapshots stay immutable.
+  run_cmd \
+    env "CARGO_TARGET_DIR=$CARGO_TARGET_DIR" "NORITO_SKIP_BINDINGS_SYNC=$NORITO_SKIP_BINDINGS_SYNC" \
+    bash ci/check_openapi_spec.sh
+}
+
 run_with_log_dir() {
   local phase
   mkdir -p "$LOG_DIR"
@@ -1973,6 +2031,9 @@ main() {
         ;;
       core-admission)
         phase_core_admission
+        ;;
+      runtime-api)
+        phase_runtime_api
         ;;
     esac
   done

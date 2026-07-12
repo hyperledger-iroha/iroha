@@ -53,6 +53,30 @@ client = create_torii_client(
 )
 ```
 
+## Exact Kotodama numbers
+
+`KotodamaInt`, `KotodamaDecimal`, and `KotodamaQuantity` implement the
+first-release Numeric V1 contract without host floating point. JSON boundaries
+use canonical strings; `NumericV1Codec` also encodes and validates the
+schema-bound Norito frames and pointer envelopes used by the IVM ABI.
+
+```python
+from iroha_python import KotodamaDecimal, KotodamaQuantity, NumericV1Codec
+
+price = KotodamaDecimal("12.500")
+quantity = NumericV1Codec.decode_quantity_json("3.25")
+payload = NumericV1Codec.encode_quantity_envelope(quantity)
+
+assert str(price) == "12.5"
+assert NumericV1Codec.decode_quantity_envelope(payload) == KotodamaQuantity(
+    "3.25"
+)
+```
+
+Python `float` and `decimal.Decimal` inputs are rejected. Use exact strings or,
+for component construction, an arbitrary-precision integer mantissa plus an
+explicit scale.
+
 ## Offline lifecycle
 
 The first-release HTTP lifecycle has exactly four canonical routes:

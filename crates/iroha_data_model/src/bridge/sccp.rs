@@ -18,6 +18,15 @@ use super::SccpNativeTrustAnchorV1;
 /// supported SDK, including runtimes whose JSON number type is IEEE-754 binary64.
 pub const SCCP_V1_JSON_SAFE_INTEGER_MAX: u64 = (1_u64 << 53) - 1;
 
+/// Maximum canonical SCCP application-payload bytes retained in one outbound record.
+///
+/// This consensus-visible bound is shared by transaction admission, durable state, and
+/// protocol-native proof admission. Keeping the canonical payload in the authoritative outbox
+/// record lets APIs project recent messages without reopening historical block bodies. V1 has
+/// four variable fields individually capped at 256 bytes; 4 KiB deliberately leaves fixed-layout
+/// and framing headroom while rejecting payload amplification far above the closed V1 surface.
+pub const SCCP_OUTBOUND_MESSAGE_MAX_PAYLOAD_BYTES_V1: usize = 4 * 1024;
+
 /// A supported SCCP network profile for the V1 wire format.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -343,7 +352,10 @@ pub struct SccpOutboundMessageIndexKeyV1 {
 impl SccpOutboundMessageIndexKeyV1 {
     /// Build an ordered locator from one authoritative replay key and record.
     #[must_use]
-    pub fn new(key: SccpOutboundMessageKeyV1, record: SccpOutboundMessageRecordV1) -> Option<Self> {
+    pub fn new(
+        key: SccpOutboundMessageKeyV1,
+        record: &SccpOutboundMessageRecordV1,
+    ) -> Option<Self> {
         if !record.is_well_formed_for_key(&key) {
             return None;
         }
@@ -406,7 +418,7 @@ impl PartialOrd for SccpOutboundMessageIndexKeyV1 {
 }
 
 /// Durable admission evidence for a SORA-origin outbound SCCP message.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -421,12 +433,21 @@ pub struct SccpOutboundMessageRecordV1 {
     pub route_configuration_hash: [u8; 32],
     /// Hash of the exact canonical SCCP payload admitted for the key.
     pub payload_hash: [u8; 32],
+    /// Exact canonical SCCP payload admitted for this authoritative outbox entry.
+    ///
+    /// Core admission and snapshot hydration revalidate these bytes against the lane, context,
+    /// message identifier, and payload hash. The data-model layer enforces the shared storage
+    /// bound without duplicating SCCP semantic decoding.
+    pub payload_bytes: Vec<u8>,
     /// Local SORA block height at which the message was recorded.
     pub recorded_at_height: u64,
 }
 
 impl SccpOutboundMessageRecordV1 {
-    /// Return whether both distinct commitments and the admission height are nonzero.
+    /// Return whether commitment roles are distinct and payload evidence is nonempty and bounded.
+    ///
+    /// This predicate is deliberately structural. Nodes must additionally perform canonical SCCP
+    /// decode/re-encode and lane-bound identity validation before admitting untrusted records.
     #[must_use]
     pub fn is_well_formed(&self) -> bool {
         nonzero(&self.destination_binding_hash)
@@ -436,9 +457,11 @@ impl SccpOutboundMessageRecordV1 {
             && self.destination_binding_hash != self.route_configuration_hash
             && self.route_configuration_hash != self.payload_hash
             && self.recorded_at_height != 0
+            && !self.payload_bytes.is_empty()
+            && self.payload_bytes.len() <= SCCP_OUTBOUND_MESSAGE_MAX_PAYLOAD_BYTES_V1
     }
 
-    /// Return whether this record and replay key use three distinct nonzero hash roles.
+    /// Return whether this bounded record and replay key use four distinct nonzero hash roles.
     #[must_use]
     pub fn is_well_formed_for_key(&self, key: &SccpOutboundMessageKeyV1) -> bool {
         self.is_well_formed()
@@ -907,6 +930,7 @@ mod tests {
             destination_binding_hash: [15; 32],
             route_configuration_hash: [16; 32],
             payload_hash: [17; 32],
+            payload_bytes: vec![0x91],
             recorded_at_height: 10,
         }
     }
@@ -1313,19 +1337,27 @@ mod tests {
         for hostile in [
             SccpOutboundMessageRecordV1 {
                 destination_binding_hash: [0; 32],
-                ..record
+                ..record.clone()
             },
             SccpOutboundMessageRecordV1 {
                 route_configuration_hash: record.destination_binding_hash,
-                ..record
+                ..record.clone()
             },
             SccpOutboundMessageRecordV1 {
                 payload_hash: record.route_configuration_hash,
-                ..record
+                ..record.clone()
             },
             SccpOutboundMessageRecordV1 {
                 recorded_at_height: 0,
-                ..record
+                ..record.clone()
+            },
+            SccpOutboundMessageRecordV1 {
+                payload_bytes: Vec::new(),
+                ..record.clone()
+            },
+            SccpOutboundMessageRecordV1 {
+                payload_bytes: vec![0x91; SCCP_OUTBOUND_MESSAGE_MAX_PAYLOAD_BYTES_V1 + 1],
+                ..record.clone()
             },
         ] {
             assert!(!hostile.is_well_formed_for_key(&key), "{hostile:?}");
@@ -1344,7 +1376,7 @@ mod tests {
             SccpOutboundMessageKeyV1::new(outbound_lane(SccpNetworkV1::TronMainnet), [18; 32])
                 .expect("valid key");
         let record = outbound_record();
-        let index = SccpOutboundMessageIndexKeyV1::new(key, record).expect("valid ordered index");
+        let index = SccpOutboundMessageIndexKeyV1::new(key, &record).expect("valid ordered index");
         assert_eq!(index.recorded_at_height, record.recorded_at_height);
         assert_eq!(index.message_key(), key);
         assert!(index.is_well_formed());
@@ -1352,9 +1384,9 @@ mod tests {
         assert!(
             SccpOutboundMessageIndexKeyV1::new(
                 key,
-                SccpOutboundMessageRecordV1 {
+                &SccpOutboundMessageRecordV1 {
                     recorded_at_height: 0,
-                    ..record
+                    ..record.clone()
                 },
             )
             .is_none()
@@ -1437,7 +1469,7 @@ mod tests {
                 .expect("valid outbound key");
             SccpOutboundMessageIndexKeyV1::new(
                 key,
-                SccpOutboundMessageRecordV1 {
+                &SccpOutboundMessageRecordV1 {
                     recorded_at_height: height,
                     ..outbound_record()
                 },

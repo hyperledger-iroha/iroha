@@ -53,7 +53,6 @@ fn abi_syscall_list_matches_golden() {
         S::SYSCALL_STATE_SET,
         S::SYSCALL_STATE_DEL,
         S::SYSCALL_DECODE_INT,
-        S::SYSCALL_BUILD_PATH_MAP_KEY,
         S::SYSCALL_ENCODE_INT,
         S::SYSCALL_BUILD_PATH_KEY_NORITO,
         S::SYSCALL_JSON_ENCODE,

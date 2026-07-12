@@ -7495,17 +7495,10 @@ fn analyze_surface_builtin_call(
             })
         }
         Builtin::VrfVerify => {
-            if arg_typed.len() != 4 {
+            if arg_typed.len() != 1 || !is_blob_like(&arg_typed[0].ty) {
                 return Err(SemanticError {
                     code: "K2003",
-                    message: "vrf_verify expects (bytes, bytes, bytes, int variant)".into(),
-                });
-            }
-            if arg_typed[..3].iter().any(|t| !is_blob_like(&t.ty)) || !is_int_like(&arg_typed[3].ty)
-            {
-                return Err(SemanticError {
-                    code: "K2003",
-                    message: "vrf_verify expects (bytes, bytes, bytes, int variant)".into(),
+                    message: "vrf_verify expects one bytes-encoded VrfVerifyRequest".into(),
                 });
             }
             Ok(TypedExpr {
@@ -11759,6 +11752,17 @@ fn analyze_expr_expected_inner(
                 is_named: false,
             };
             if let Some(builtin) = Builtin::from_name(&name) {
+                if builtin == Builtin::VrfVerify
+                    && (args.len() != 1
+                        || argument_names
+                            .as_deref()
+                            .is_some_and(|names| !names.iter().map(String::as_str).eq(["request"])))
+                {
+                    return Err(SemanticError {
+                        code: "E_RETIRED_VRF_VERIFY_ARGS",
+                        message: "the four-register VRF verify form is retired; pass one bytes-encoded VrfVerifyRequest as `request`".into(),
+                    });
+                }
                 let signature = builtin.signature();
                 let receiver_count = usize::from(*implicit_receiver);
                 let parameter_names = signature

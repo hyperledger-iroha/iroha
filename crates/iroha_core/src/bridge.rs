@@ -5,7 +5,7 @@ use std::{collections::BTreeSet, fmt, num::NonZeroUsize, sync::Arc};
 use iroha_data_model::{
     ChainId,
     block::{
-        SignedBlock,
+        BlockHeader, SignedBlock,
         consensus_v2::finality::{V2FinalityArtifact, V2QuorumCertificateVerificationError},
     },
     bridge::{
@@ -19,9 +19,6 @@ use iroha_data_model::{
 use iroha_sccp::{SccpHubCommitmentV1, SccpPayloadV1, TairaBridgeFinalityProofV1};
 use thiserror::Error;
 
-#[cfg(test)]
-use iroha_data_model::block::BlockHeader;
-
 use crate::{
     state::{State as CoreState, StateReadOnly},
     tx::AcceptedTransaction,
@@ -33,11 +30,13 @@ use crate::{
 /// The wrapper is intentionally not decodable and exposes no mutable access.
 /// Untrusted implementations of [`BridgeStateReadOnly`] must call [`Self::verify`]
 /// to mint it. Kura-backed implementations use the private constructor only
-/// after Kura's cache-backed verification boundary succeeds.
+/// after Kura's cache-backed verification boundary succeeds, and attach the
+/// header authenticated by Kura's private durable finality record.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[must_use]
 pub struct VerifiedV2FinalityArtifact {
     artifact: V2FinalityArtifact,
+    retained_header: Option<BlockHeader>,
 }
 
 impl VerifiedV2FinalityArtifact {
@@ -51,7 +50,10 @@ impl VerifiedV2FinalityArtifact {
         artifact: V2FinalityArtifact,
     ) -> Result<Self, V2QuorumCertificateVerificationError> {
         artifact.verify()?;
-        Ok(Self { artifact })
+        Ok(Self {
+            artifact,
+            retained_header: None,
+        })
     }
 
     /// Borrow the verified artifact without allowing mutation.
@@ -66,8 +68,17 @@ impl VerifiedV2FinalityArtifact {
         self.artifact
     }
 
-    fn from_kura_verified(artifact: V2FinalityArtifact) -> Self {
-        Self { artifact }
+    /// Borrow Kura's authenticated retained header when one accompanied the artifact.
+    #[must_use]
+    pub const fn retained_header(&self) -> Option<&BlockHeader> {
+        self.retained_header.as_ref()
+    }
+
+    fn from_kura_verified(block_header: BlockHeader, artifact: V2FinalityArtifact) -> Self {
+        Self {
+            artifact,
+            retained_header: Some(block_header),
+        }
     }
 }
 
@@ -102,8 +113,12 @@ impl<T: StateReadOnly> BridgeStateReadOnly for T {
         height: u64,
     ) -> Result<Option<VerifiedV2FinalityArtifact>, String> {
         self.kura()
-            .v2_finality_artifact(height)
-            .map(|artifact| artifact.map(VerifiedV2FinalityArtifact::from_kura_verified))
+            .v2_finality_artifact_with_header(height)
+            .map(|record| {
+                record.map(|(header, artifact)| {
+                    VerifiedV2FinalityArtifact::from_kura_verified(header, artifact)
+                })
+            })
             .map_err(|error| error.to_string())
     }
 }
@@ -122,8 +137,12 @@ impl BridgeStateReadOnly for CoreState {
         height: u64,
     ) -> Result<Option<VerifiedV2FinalityArtifact>, String> {
         self.kura()
-            .v2_finality_artifact(height)
-            .map(|artifact| artifact.map(VerifiedV2FinalityArtifact::from_kura_verified))
+            .v2_finality_artifact_with_header(height)
+            .map(|record| {
+                record.map(|(header, artifact)| {
+                    VerifiedV2FinalityArtifact::from_kura_verified(header, artifact)
+                })
+            })
             .map_err(|error| error.to_string())
     }
 }
@@ -154,6 +173,41 @@ pub(crate) struct ValidatedRecordedSccpMessage {
     pub key: SccpOutboundMessageKeyV1,
     /// Canonical SCCP hub commitment for the payload.
     pub commitment: SccpHubCommitmentV1,
+}
+
+/// Location-free, fully validated projection of one authoritative SCCP outbox record.
+///
+/// The projection is safe for read APIs to render directly: Core has verified exact canonical
+/// payload framing and semantics, the lane-bound message identifier, all structural context
+/// roles, and the payload commitment against the supplied durable record.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ValidatedSccpOutboundMessageProjectionV1 {
+    /// Exact outbound lane and governed binding context retained by the record.
+    pub context: iroha_data_model::bridge::SccpOutboundMessageContextV1,
+    /// Canonically decoded SCCP V1 application payload.
+    pub payload: SccpPayloadV1,
+    /// Recomputed lane-, context-, message-, and payload-bound hub commitment.
+    pub commitment: SccpHubCommitmentV1,
+}
+
+impl ValidatedRecordedSccpMessage {
+    /// Build the authoritative durable outbox record from this canonical validation result.
+    pub(crate) fn outbound_record(
+        &self,
+        recorded_at_height: u64,
+    ) -> Option<iroha_data_model::bridge::SccpOutboundMessageRecordV1> {
+        let payload_bytes = iroha_sccp::canonical_sccp_payload_bytes(&self.payload).ok()?;
+        let record = iroha_data_model::bridge::SccpOutboundMessageRecordV1 {
+            destination_binding_hash: self.context.destination_binding_hash,
+            route_configuration_hash: self.context.route_configuration_hash,
+            payload_hash: self.commitment.payload_hash,
+            payload_bytes,
+            recorded_at_height,
+        };
+        validate_sccp_outbound_message_record_internal(&self.key, &record)
+            .is_ok()
+            .then_some(record)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -298,10 +352,13 @@ fn validate_recorded_sccp_payload(
         .ok_or(RecordedSccpMessageValidationError::InvalidContext)?;
     let commitment = iroha_sccp::hub_commitment_from_sccp_payload(context, &payload)
         .ok_or(RecordedSccpMessageValidationError::InvalidContext)?;
+    let payload_bytes = iroha_sccp::canonical_sccp_payload_bytes(&payload)
+        .map_err(|_| RecordedSccpMessageValidationError::InvalidPayload)?;
     let durable = iroha_data_model::bridge::SccpOutboundMessageRecordV1 {
         destination_binding_hash: context.destination_binding_hash,
         route_configuration_hash: context.route_configuration_hash,
         payload_hash: commitment.payload_hash,
+        payload_bytes,
         recorded_at_height: 1,
     };
     if !durable.is_well_formed_for_key(&key) {
@@ -319,9 +376,59 @@ pub(crate) fn validate_recorded_sccp_message_payload_bytes(
     context: iroha_data_model::bridge::SccpOutboundMessageContextV1,
     payload_bytes: &[u8],
 ) -> Result<ValidatedRecordedSccpMessage, RecordedSccpMessageValidationError> {
+    if payload_bytes.is_empty()
+        || payload_bytes.len()
+            > iroha_data_model::bridge::SCCP_OUTBOUND_MESSAGE_MAX_PAYLOAD_BYTES_V1
+    {
+        return Err(RecordedSccpMessageValidationError::InvalidPayload);
+    }
     let payload = decode_recorded_sccp_payload_bytes(payload_bytes)
         .ok_or(RecordedSccpMessageValidationError::InvalidPayload)?;
     validate_recorded_sccp_payload(context, payload)
+}
+
+/// Fully revalidate one authoritative SCCP outbox record against its replay key.
+///
+/// This is intentionally stronger than the data-model structural predicate: it decodes and
+/// re-encodes the retained payload, verifies SCCP V1 semantics, recomputes the lane-bound message
+/// identifier and payload commitment, and binds both governed context hashes to the record.
+fn validate_sccp_outbound_message_record_internal(
+    key: &SccpOutboundMessageKeyV1,
+    record: &iroha_data_model::bridge::SccpOutboundMessageRecordV1,
+) -> Result<ValidatedRecordedSccpMessage, RecordedSccpMessageValidationError> {
+    if !record.is_well_formed_for_key(key) {
+        return Err(RecordedSccpMessageValidationError::InvalidContext);
+    }
+    let context = iroha_data_model::bridge::SccpOutboundMessageContextV1 {
+        lane: key.lane,
+        destination_binding_hash: record.destination_binding_hash,
+        route_configuration_hash: record.route_configuration_hash,
+    };
+    let validated = validate_recorded_sccp_message_payload_bytes(context, &record.payload_bytes)?;
+    if validated.key != *key || validated.commitment.payload_hash != record.payload_hash {
+        return Err(RecordedSccpMessageValidationError::InvalidPayload);
+    }
+    Ok(validated)
+}
+
+/// Validate and project one authoritative SCCP outbox record without block-body access.
+///
+/// Returns `None` unless the retained bytes are bounded, exact canonical SCCP V1 framing; decode
+/// to a structurally and semantically valid SORA-origin payload for the supplied lane; recompute
+/// the supplied lane-bound message identifier; and match the record's payload hash and governed
+/// context roles. Registry hydration separately proves those context hashes name one retained
+/// governed route before the state becomes observable.
+#[must_use]
+pub fn validate_sccp_outbound_message_record_v1(
+    key: &SccpOutboundMessageKeyV1,
+    record: &iroha_data_model::bridge::SccpOutboundMessageRecordV1,
+) -> Option<ValidatedSccpOutboundMessageProjectionV1> {
+    let validated = validate_sccp_outbound_message_record_internal(key, record).ok()?;
+    Some(ValidatedSccpOutboundMessageProjectionV1 {
+        context: validated.context,
+        payload: validated.payload,
+        commitment: validated.commitment,
+    })
 }
 
 fn validate_recorded_sccp_message_payload_bytes_for_block_collection(
@@ -1091,15 +1198,19 @@ pub fn build_finality_proof(
     let nonzero_height =
         NonZeroUsize::new(height_usize).ok_or(BridgeFinalityError::InvalidHeight(height))?;
 
-    let block = state
-        .bridge_block_by_height(nonzero_height)
-        .ok_or(BridgeFinalityError::BlockNotFound(height))?;
-    let block_header = block.header();
-    let finality_artifact = state
+    let verified_finality = state
         .bridge_verified_v2_finality_artifact(height)
         .map_err(|reason| BridgeFinalityError::FinalityArtifactRead { height, reason })?
-        .ok_or(BridgeFinalityError::FinalityArtifactNotFound(height))?
-        .into_artifact();
+        .ok_or(BridgeFinalityError::FinalityArtifactNotFound(height))?;
+    let block_header = if let Some(header) = verified_finality.retained_header() {
+        header.clone()
+    } else {
+        state
+            .bridge_block_by_height(nonzero_height)
+            .ok_or(BridgeFinalityError::BlockNotFound(height))?
+            .header()
+    };
+    let finality_artifact = verified_finality.into_artifact();
     if finality_artifact.height_context.chain_id != *state.bridge_chain_id()
         || finality_artifact
             .validate_for_header(&block_header)
@@ -1448,6 +1559,96 @@ mod tests {
                 .as_bytes()
                 .to_vec(),
         })
+    }
+
+    #[test]
+    fn durable_outbound_record_retains_and_revalidates_exact_canonical_payload() {
+        let payload = sample_transfer_payload(41, [0x31; 20]);
+        let payload_bytes = canonical_test_sccp_payload_bytes(&payload);
+        let context = test_sccp_outbound_context_for_payload_bytes(&payload_bytes);
+        let validated = validate_recorded_sccp_message_payload_bytes(context, &payload_bytes)
+            .expect("exact outbound payload validates");
+        let record = validated
+            .outbound_record(9)
+            .expect("validated payload forms a durable record");
+
+        assert_eq!(record.payload_bytes, payload_bytes);
+        assert_eq!(
+            record.payload_hash,
+            iroha_sccp::payload_hash(&payload_bytes)
+        );
+        let projection = validate_sccp_outbound_message_record_v1(&validated.key, &record)
+            .expect("durable record fully revalidates");
+        assert_eq!(projection.context, validated.context);
+        assert_eq!(projection.payload, validated.payload);
+        assert_eq!(projection.commitment, validated.commitment);
+        assert!(validated.outbound_record(0).is_none());
+    }
+
+    #[test]
+    fn durable_outbound_record_rejects_payload_malleability_amplification_and_identity_drift() {
+        let payload = sample_transfer_payload(42, [0x32; 20]);
+        let payload_bytes = canonical_test_sccp_payload_bytes(&payload);
+        let context = test_sccp_outbound_context_for_payload_bytes(&payload_bytes);
+        let validated = validate_recorded_sccp_message_payload_bytes(context, &payload_bytes)
+            .expect("exact outbound payload validates");
+        let record = validated
+            .outbound_record(10)
+            .expect("validated payload forms a durable record");
+
+        let mut malformed = record.clone();
+        malformed.payload_bytes[0] ^= 0x7f;
+        let mut trailing_alias = record.clone();
+        trailing_alias.payload_bytes.push(0);
+        let mut oversized = record.clone();
+        oversized.payload_bytes =
+            vec![0xA5; iroha_data_model::bridge::SCCP_OUTBOUND_MESSAGE_MAX_PAYLOAD_BYTES_V1 + 1];
+        let mut wrong_hash = record.clone();
+        wrong_hash.payload_hash = [0xA6; 32];
+        let wrong_key = SccpOutboundMessageKeyV1 {
+            message_id: [0xA7; 32],
+            ..validated.key
+        };
+        let wrong_lane_key = SccpOutboundMessageKeyV1 {
+            lane: iroha_data_model::bridge::SccpLaneIdV1 {
+                source: iroha_data_model::bridge::SccpNetworkV1::SoraTaira,
+                target: iroha_data_model::bridge::SccpNetworkV1::EthereumSepolia,
+            },
+            ..validated.key
+        };
+        let mut aliased_asset_payload = payload;
+        let SccpPayloadV1::Transfer(transfer) = &mut aliased_asset_payload;
+        transfer.asset_id = b"xor#scope".to_vec();
+        let aliased_asset_bytes = canonical_test_sccp_payload_bytes(&aliased_asset_payload);
+        let aliased_asset_key = SccpOutboundMessageKeyV1::new(
+            context.lane,
+            iroha_sccp::sccp_message_id(context.lane, &aliased_asset_payload)
+                .expect("scoped-asset payload remains structurally lane-bound"),
+        )
+        .expect("scoped-asset payload forms a structural key");
+        let aliased_asset_record = iroha_data_model::bridge::SccpOutboundMessageRecordV1 {
+            destination_binding_hash: context.destination_binding_hash,
+            route_configuration_hash: context.route_configuration_hash,
+            payload_hash: iroha_sccp::payload_hash(&aliased_asset_bytes),
+            payload_bytes: aliased_asset_bytes,
+            recorded_at_height: 10,
+        };
+        assert!(aliased_asset_record.is_well_formed_for_key(&aliased_asset_key));
+
+        for (key, hostile) in [
+            (validated.key, malformed),
+            (validated.key, trailing_alias),
+            (validated.key, oversized),
+            (validated.key, wrong_hash),
+            (wrong_key, record.clone()),
+            (wrong_lane_key, record),
+            (aliased_asset_key, aliased_asset_record),
+        ] {
+            assert!(
+                validate_sccp_outbound_message_record_v1(&key, &hostile).is_none(),
+                "hostile durable evidence unexpectedly validated: {hostile:?}"
+            );
+        }
     }
 
     fn signed_transaction_with_executable(executable: Executable) -> SignedTransaction {

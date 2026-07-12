@@ -8,7 +8,10 @@ use iroha_data_model::{
     smart_contract::ContractAddress,
 };
 use iroha_primitives::{numeric::Quantity, numeric_abi::QuantityValueV1};
-use ivm::{CoreHost, IVM, PointerType, encoding, instruction::wide, syscalls};
+use ivm::{
+    CoreHost, EmbeddedContractInterfaceV1, EmbeddedStateDescriptor, EmbeddedStateType, IVM,
+    PointerType, ProgramMetadata, encoding, instruction::wide, syscalls,
+};
 mod common;
 
 fn tlv(pty: PointerType, payload: &[u8]) -> Vec<u8> {
@@ -29,6 +32,105 @@ fn alloc_heap_tlv(vm: &mut IVM, bytes: &[u8]) -> u64 {
         .store_bytes(addr, bytes)
         .expect("store heap direct tlv");
     addr
+}
+
+fn state_map_interface(name: &str, key: EmbeddedStateType) -> EmbeddedContractInterfaceV1 {
+    EmbeddedContractInterfaceV1 {
+        seiyaku_name: "DirectMapKeyFixture".to_owned(),
+        compiler_fingerprint: "ivm-integration-tests".to_owned(),
+        features_bitmap: 0,
+        access_set_hints: None,
+        kotoba: Vec::new(),
+        entrypoints: Vec::new(),
+        states: vec![EmbeddedStateDescriptor {
+            name: name.to_owned(),
+            ty: EmbeddedStateType::StateMap {
+                key: Box::new(key),
+                value: Box::new(EmbeddedStateType::Bytes),
+            },
+        }],
+        error_codes: Vec::new(),
+    }
+}
+
+fn assemble_state_map_syscall(number: u32, name: &str, key: EmbeddedStateType) -> Vec<u8> {
+    let mut program = ProgramMetadata::default().encode();
+    program.extend_from_slice(&state_map_interface(name, key).encode_section());
+    program.extend_from_slice(
+        &encoding::wide::encode_sys(
+            wide::system::SCALL,
+            u8::try_from(number).expect("fixture syscall fits compact encoding"),
+        )
+        .to_le_bytes(),
+    );
+    program.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
+    program
+}
+
+fn assemble_state_map_syscall_with_literals(
+    number: u32,
+    name: &str,
+    key: EmbeddedStateType,
+    literals: &[&[u8]],
+) -> (Vec<u8>, Vec<u64>) {
+    let section = state_map_interface(name, key).encode_section();
+    let offsets_len = literals.len() * core::mem::size_of::<u64>();
+    // Literal descriptors are relative to the start of the LTLB section, even
+    // when a CNTR section precedes it in the artifact.
+    let data_start = 16 + offsets_len;
+    let mut offsets = Vec::with_capacity(literals.len());
+    let mut data = Vec::new();
+    let mut cursor = u64::try_from(data_start).expect("literal offset fits u64");
+    for literal in literals {
+        offsets.push(cursor);
+        data.extend_from_slice(literal);
+        cursor = cursor
+            .checked_add(u64::try_from(literal.len()).expect("literal length fits u64"))
+            .expect("literal offset remains bounded");
+    }
+    let post_pad = (4 - ((section.len() + 16 + offsets_len + data.len()) % 4)) % 4;
+
+    let mut program = ProgramMetadata::default().encode();
+    program.extend_from_slice(&section);
+    program.extend_from_slice(&ivm_abi::metadata::LITERAL_SECTION_MAGIC);
+    program.extend_from_slice(
+        &u32::try_from(literals.len())
+            .expect("literal count fits u32")
+            .to_le_bytes(),
+    );
+    program.extend_from_slice(
+        &u32::try_from(post_pad)
+            .expect("literal padding fits u32")
+            .to_le_bytes(),
+    );
+    program.extend_from_slice(
+        &u32::try_from(data.len())
+            .expect("literal data fits u32")
+            .to_le_bytes(),
+    );
+    for offset in &offsets {
+        program.extend_from_slice(&offset.to_le_bytes());
+    }
+    program.extend_from_slice(&data);
+    program.extend(std::iter::repeat_n(0, post_pad));
+    program.extend_from_slice(
+        &encoding::wide::encode_sys(
+            wide::system::SCALL,
+            u8::try_from(number).expect("fixture syscall fits compact encoding"),
+        )
+        .to_le_bytes(),
+    );
+    program.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
+    let literal_ptrs = offsets
+        .into_iter()
+        .map(|offset| {
+            u64::try_from(section.len())
+                .expect("CNTR section length fits u64")
+                .checked_add(offset)
+                .expect("literal pointer remains bounded")
+        })
+        .collect();
+    (program, literal_ptrs)
 }
 
 fn unwrap_some_word(vm: &IVM) -> u64 {
@@ -607,10 +709,13 @@ fn json_set_account_id_direct_accepts_input_heap_and_literal_pointers() {
 #[test]
 fn build_path_key_norito_direct_accepts_input_heap_and_literal_pointers() {
     let base_tlv = tlv(PointerType::Name, b"state");
-    let key_payload = norito::to_bytes(&42_u64).expect("encode norito key");
+    let key_payload = tlv(PointerType::Blob, b"canonical key bytes");
     let key_tlv = tlv(PointerType::NoritoBytes, &key_payload);
-    let direct_prog =
-        common::assemble_syscalls(&[syscalls::SYSCALL_BUILD_PATH_KEY_NORITO_DIRECT as u8]);
+    let direct_prog = assemble_state_map_syscall(
+        syscalls::SYSCALL_BUILD_PATH_KEY_NORITO_DIRECT,
+        "state",
+        EmbeddedStateType::Bytes,
+    );
     let expected_path = format!("state/{}", hex::encode(&key_payload));
 
     let decode_path = |vm: &IVM| {
@@ -643,8 +748,10 @@ fn build_path_key_norito_direct_accepts_input_heap_and_literal_pointers() {
     vm.run().unwrap();
     decode_path(&vm);
 
-    let (literal_prog, literal_ptrs) = common::assemble_syscalls_with_literal_section(
-        &[syscalls::SYSCALL_BUILD_PATH_KEY_NORITO_DIRECT as u8],
+    let (literal_prog, literal_ptrs) = assemble_state_map_syscall_with_literals(
+        syscalls::SYSCALL_BUILD_PATH_KEY_NORITO_DIRECT,
+        "state",
+        EmbeddedStateType::Bytes,
         &[base_tlv.as_slice(), key_tlv.as_slice()],
     );
     let base_addr = literal_ptrs[0];

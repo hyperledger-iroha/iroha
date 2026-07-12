@@ -10376,9 +10376,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_artifact_final
                 .lock()
                 .map_err(|_| BridgeError::KagemushaRecursiveSpendV2Artifact)?
                 .remove(&handle);
-            close_kagemusha_recursive_spend_artifact_v3(
-                removed.as_ref().unwrap_or(&artifact),
-            );
+            close_kagemusha_recursive_spend_artifact_v3(removed.as_ref().unwrap_or(&artifact));
             return Err(BridgeError::KagemushaRecursiveSpendV2Artifact);
         }
         artifact_guard.ready = true;

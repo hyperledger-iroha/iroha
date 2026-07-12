@@ -6028,68 +6028,98 @@ pub async fn handle_v1_sumeragi_commit_qcs(
     Ok(resp)
 }
 
-/// GET /v1/bridge/finality/{height} — Self-contained finality proof for a block.
-#[iroha_futures::telemetry_future]
-pub async fn handle_v1_bridge_finality(
-    state: Arc<CoreState>,
-    height: u64,
-    accept: Option<axum::http::HeaderValue>,
-) -> Result<Response> {
-    let proof = tokio::task::spawn_blocking(move || {
-        iroha_core::bridge::build_finality_proof(state.as_ref(), height)
+/// Run synchronous query work while retaining admission through physical completion.
+pub(crate) async fn run_admitted_blocking<T, F>(
+    admission: crate::QueryAdmissionPermit,
+    worker_failure: &'static str,
+    work: F,
+) -> Result<T>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T> + Send + 'static,
+{
+    tokio::task::spawn_blocking(move || {
+        // Keep every owned permit in the physical worker. Dropping or aborting
+        // the HTTP future detaches `spawn_blocking`; it must not free capacity
+        // while CPU or file work is still running.
+        let _admission = admission;
+        work()
     })
     .await
-    .map_err(|_| sccp_internal_error("bridge finality verification worker failed"))?
-    .map_err(map_bridge_finality_error)?;
+    .map_err(|_| sccp_internal_error(worker_failure))?
+}
 
-    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
-        Ok(fmt) => fmt,
-        Err(resp) => return Ok(resp),
-    };
+#[cfg(feature = "app_api")]
+async fn run_sccp_submit_blocking<T, F>(worker_failure: &'static str, work: F) -> Result<T>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T> + Send + 'static,
+{
+    tokio::task::spawn_blocking(work)
+        .await
+        .map_err(|_| sccp_internal_error(worker_failure))?
+}
 
-    if matches!(format, crate::utils::ResponseFormat::Norito) {
-        return Ok(crate::NoritoBody(proof).into_response());
-    }
+/// GET /v1/bridge/finality/{height} — Self-contained finality proof for a block.
+#[iroha_futures::telemetry_future]
+pub(crate) async fn handle_v1_bridge_finality(
+    state: Arc<CoreState>,
+    height: u64,
+    format: crate::utils::ResponseFormat,
+    admission: crate::QueryAdmissionPermit,
+) -> Result<Response> {
+    run_admitted_blocking(
+        admission,
+        "bridge finality verification worker failed",
+        move || {
+            let proof = iroha_core::bridge::build_finality_proof(state.as_ref(), height)
+                .map_err(map_bridge_finality_error)?;
 
-    let body = json::to_json_pretty(&proof).map_err(norito_internal_error)?;
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
+            if matches!(format, crate::utils::ResponseFormat::Norito) {
+                return Ok(crate::NoritoBody(proof).into_response());
+            }
+
+            let body = json::to_json_pretty(&proof).map_err(norito_internal_error)?;
+            let mut resp = axum::response::Response::new(axum::body::Body::from(body));
+            resp.headers_mut().insert(
+                axum::http::header::CONTENT_TYPE,
+                axum::http::HeaderValue::from_static("application/json"),
+            );
+            Ok(resp)
+        },
+    )
+    .await
 }
 
 /// GET /v1/bridge/finality/bundle/{height} — Compact commitment + exact v2 proof for a block.
 #[iroha_futures::telemetry_future]
-pub async fn handle_v1_bridge_finality_bundle(
+pub(crate) async fn handle_v1_bridge_finality_bundle(
     state: Arc<CoreState>,
     height: u64,
-    accept: Option<axum::http::HeaderValue>,
+    format: crate::utils::ResponseFormat,
+    admission: crate::QueryAdmissionPermit,
 ) -> Result<Response> {
-    let bundle = tokio::task::spawn_blocking(move || {
-        iroha_core::bridge::build_finality_bundle(state.as_ref(), height)
-    })
+    run_admitted_blocking(
+        admission,
+        "bridge finality bundle worker failed",
+        move || {
+            let bundle = iroha_core::bridge::build_finality_bundle(state.as_ref(), height)
+                .map_err(map_bridge_finality_error)?;
+
+            if matches!(format, crate::utils::ResponseFormat::Norito) {
+                return Ok(crate::NoritoBody(bundle).into_response());
+            }
+
+            let body = json::to_json_pretty(&bundle).map_err(norito_internal_error)?;
+            let mut resp = axum::response::Response::new(axum::body::Body::from(body));
+            resp.headers_mut().insert(
+                axum::http::header::CONTENT_TYPE,
+                axum::http::HeaderValue::from_static("application/json"),
+            );
+            Ok(resp)
+        },
+    )
     .await
-    .map_err(|_| sccp_internal_error("bridge finality bundle worker failed"))?
-    .map_err(map_bridge_finality_error)?;
-
-    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
-        Ok(fmt) => fmt,
-        Err(resp) => return Ok(resp),
-    };
-
-    if matches!(format, crate::utils::ResponseFormat::Norito) {
-        return Ok(crate::NoritoBody(bundle).into_response());
-    }
-
-    let body = json::to_json_pretty(&bundle).map_err(norito_internal_error)?;
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
 }
 
 fn map_bridge_finality_error(err: iroha_core::bridge::BridgeFinalityError) -> Error {
@@ -6134,6 +6164,16 @@ where
         Ok(format) => format,
         Err(response) => return Ok(response),
     };
+    sccp_bundle_response_with_format(value, format)
+}
+
+fn sccp_bundle_response_with_format<T>(
+    value: &T,
+    format: crate::utils::ResponseFormat,
+) -> Result<Response>
+where
+    T: Clone + Send + norito::core::NoritoSerialize + norito::json::JsonSerialize + 'static,
+{
     if matches!(format, crate::utils::ResponseFormat::Norito) {
         let mut response = crate::NoritoBody(value.clone()).into_response();
         response
@@ -6192,14 +6232,21 @@ pub fn reject_sccp_query(raw_query: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-/// Validate the only two canonical query fields accepted by recent-message discovery.
-pub fn validate_sccp_recent_query(raw_query: Option<&str>) -> Result<()> {
+/// Parse the only two canonical query fields accepted by recent-message discovery.
+pub fn parse_sccp_recent_query(raw_query: Option<&str>) -> Result<HistoryWindowQuery> {
     const RECENT_SCCP_MESSAGES_CAP: u64 = 50;
+    const MAX_CANONICAL_QUERY_BYTES: usize = 64;
 
     let Some(query) = raw_query.filter(|query| !query.is_empty()) else {
-        return Ok(());
+        return Ok(HistoryWindowQuery::default());
     };
+    if query.len() > MAX_CANONICAL_QUERY_BYTES {
+        return Err(sccp_bad_request(
+            "recent SCCP query exceeds the canonical 64-byte bound",
+        ));
+    }
     let mut seen = BTreeSet::new();
+    let mut window = HistoryWindowQuery::default();
     for segment in query.split('&') {
         if segment.is_empty() {
             return Err(sccp_bad_request(
@@ -6232,7 +6279,11 @@ pub fn validate_sccp_recent_query(raw_query: Option<&str>) -> Result<()> {
                 "recent SCCP query field `{key}` must be one canonical unsigned decimal integer"
             )));
         }
-        let parsed = parsed.expect("canonical SCCP query integer parsed above");
+        let parsed = parsed.ok_or_else(|| {
+            sccp_bad_request(format!(
+                "recent SCCP query field `{key}` must be one canonical unsigned decimal integer"
+            ))
+        })?;
         match key {
             "from" if parsed == 0 => {
                 return Err(sccp_bad_request(
@@ -6244,10 +6295,21 @@ pub fn validate_sccp_recent_query(raw_query: Option<&str>) -> Result<()> {
                     "recent SCCP query field `limit` must be between 1 and {RECENT_SCCP_MESSAGES_CAP}"
                 )));
             }
-            _ => {}
+            "from" => window.from = Some(parsed),
+            "limit" => window.limit = Some(parsed),
+            _ => {
+                return Err(sccp_bad_request(
+                    "recent SCCP query contains an unsupported field",
+                ));
+            }
         }
     }
-    Ok(())
+    Ok(window)
+}
+
+/// Validate the canonical recent-message query without retaining its values.
+pub fn validate_sccp_recent_query(raw_query: Option<&str>) -> Result<()> {
+    parse_sccp_recent_query(raw_query).map(|_| ())
 }
 
 #[derive(
@@ -6488,7 +6550,7 @@ pub struct SccpRecentMessagesDto {
     pub items: Vec<SccpRecentMessageDto>,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 struct SccpIndexedOutboundRecord {
     key: iroha_data_model::bridge::SccpOutboundMessageKeyV1,
     record: iroha_data_model::bridge::SccpOutboundMessageRecordV1,
@@ -6524,8 +6586,8 @@ fn sccp_indexed_outbound_record(
         return Ok(None);
     };
     let key = *key;
-    let record = *record;
-    let expected_index = iroha_data_model::bridge::SccpOutboundMessageIndexKeyV1::new(key, record)
+    let record = record.clone();
+    let expected_index = iroha_data_model::bridge::SccpOutboundMessageIndexKeyV1::new(key, &record)
         .ok_or_else(|| {
             sccp_internal_error(format!(
                 "outbound SCCP record {} cannot form its ordered index key",
@@ -6541,7 +6603,7 @@ fn sccp_indexed_outbound_record(
 
 fn sccp_historical_route_for_record<'a>(
     registry: &'a iroha_core::state::ValidatedSccpRegistryV1,
-    indexed: SccpIndexedOutboundRecord,
+    indexed: &SccpIndexedOutboundRecord,
 ) -> Result<&'a iroha_data_model::bridge::SccpGovernedRouteV1> {
     let by_binding = registry
         .historical_route_by_destination_binding(indexed.record.destination_binding_hash)
@@ -6592,9 +6654,9 @@ fn sccp_exact_proof_material(
     let Some(indexed) = sccp_indexed_outbound_record(state, message_id)? else {
         return Ok(None);
     };
-    let bundle = reconstruct_sccp_message_bundle_from_indexed_record(state, indexed)?;
+    let bundle = reconstruct_sccp_message_bundle_from_indexed_record(state, indexed.clone())?;
     let registry = state.sccp_registry_snapshot();
-    let governed_route = sccp_historical_route_for_record(registry.as_ref(), indexed)?;
+    let governed_route = sccp_historical_route_for_record(registry.as_ref(), &indexed)?;
     let request = iroha_sccp::build_sccp_groth16_bn254_proof_request_from_governed_route_v1(
         &bundle,
         governed_route,
@@ -6658,24 +6720,71 @@ mod sccp_first_release_api_tests {
         }
     }
 
+    #[cfg(feature = "app_api")]
+    #[tokio::test(flavor = "current_thread")]
+    async fn sccp_submit_worker_does_not_block_runtime_or_release_on_cancellation() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        };
+
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let physically_finished = Arc::new(AtomicBool::new(false));
+        let worker_finished = Arc::clone(&physically_finished);
+        let task = tokio::spawn(run_sccp_submit_blocking(
+            "adversarial SCCP worker failed",
+            move || {
+                let _ = started_tx.send(());
+                release_rx.recv().expect("release physical SCCP worker");
+                worker_finished.store(true, Ordering::SeqCst);
+                Ok(())
+            },
+        ));
+
+        started_rx.await.expect("blocking SCCP worker started");
+        tokio::time::timeout(std::time::Duration::from_millis(100), async {
+            for _ in 0..64 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("blocking SCCP work must not stall a current-thread runtime");
+
+        task.abort();
+        tokio::task::yield_now().await;
+        assert!(
+            !physically_finished.load(Ordering::SeqCst),
+            "request cancellation must not pretend the physical worker completed"
+        );
+        release_tx.send(()).expect("release blocking SCCP worker");
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            while !physically_finished.load(Ordering::SeqCst) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("detached SCCP worker must complete after cancellation");
+    }
+
     fn indexed_fixture() -> (
         [u8; 32],
         iroha_data_model::bridge::SccpOutboundMessageKeyV1,
         iroha_data_model::bridge::SccpOutboundMessageRecordV1,
     ) {
-        let message_id = [0x11; 32];
+        let exact = iroha_sccp::sccp_exact_outbound_test_fixture_v1();
+        let message_id = exact.bundle.commitment.message_id;
         let key = iroha_data_model::bridge::SccpOutboundMessageKeyV1::new(
-            iroha_data_model::bridge::SccpLaneIdV1 {
-                source: iroha_data_model::bridge::SccpNetworkV1::SoraTaira,
-                target: iroha_data_model::bridge::SccpNetworkV1::EthereumSepolia,
-            },
+            exact.bundle.commitment.context.lane,
             message_id,
         )
         .expect("valid indexed fixture key");
         let record = iroha_data_model::bridge::SccpOutboundMessageRecordV1 {
-            destination_binding_hash: [0x22; 32],
-            route_configuration_hash: [0x33; 32],
-            payload_hash: [0x44; 32],
+            destination_binding_hash: exact.bundle.commitment.context.destination_binding_hash,
+            route_configuration_hash: exact.bundle.commitment.context.route_configuration_hash,
+            payload_hash: exact.bundle.commitment.payload_hash,
+            payload_bytes: iroha_sccp::canonical_sccp_payload_bytes(&exact.bundle.payload)
+                .expect("canonical exact outbound payload"),
             recorded_at_height: 9,
         };
         (message_id, key, record)
@@ -6731,6 +6840,18 @@ mod sccp_first_release_api_tests {
         ] {
             assert!(validate_sccp_recent_query(valid).is_ok());
         }
+        assert_eq!(
+            parse_sccp_recent_query(Some("from=7&limit=50"))
+                .expect("canonical recent window")
+                .from,
+            Some(7)
+        );
+        assert_eq!(
+            parse_sccp_recent_query(Some("from=7&limit=50"))
+                .expect("canonical recent window")
+                .limit,
+            Some(50)
+        );
         for invalid in [
             "network_id_hex=00",
             "proof_bytes_hex=00",
@@ -6756,6 +6877,11 @@ mod sccp_first_release_api_tests {
                 "noncanonical recent query must reject: {invalid}"
             );
         }
+        let oversized = format!("from=1&limit=1{}", "0".repeat(65));
+        assert!(
+            parse_sccp_recent_query(Some(&oversized)).is_err(),
+            "oversized recent query must reject before generic query decoding"
+        );
 
         let state = empty_taira_state();
         for window in [
@@ -6782,32 +6908,43 @@ mod sccp_first_release_api_tests {
     #[test]
     fn locator_record_validation_rejects_tamper_and_missing_index() {
         let (message_id, key, record) = indexed_fixture();
-        assert!(validate_sccp_indexed_outbound_record(message_id, key, record, true).is_ok());
+        assert!(
+            validate_sccp_indexed_outbound_record(message_id, key, record.clone(), true).is_ok()
+        );
 
         let wrong_id = [0x12; 32];
-        assert!(validate_sccp_indexed_outbound_record(wrong_id, key, record, true).is_err());
-        assert!(validate_sccp_indexed_outbound_record(message_id, key, record, false).is_err());
+        assert!(
+            validate_sccp_indexed_outbound_record(wrong_id, key, record.clone(), true).is_err()
+        );
+        assert!(
+            validate_sccp_indexed_outbound_record(message_id, key, record.clone(), false).is_err()
+        );
 
         for hostile in [
             iroha_data_model::bridge::SccpOutboundMessageRecordV1 {
                 destination_binding_hash: [0; 32],
-                ..record
+                ..record.clone()
             },
             iroha_data_model::bridge::SccpOutboundMessageRecordV1 {
                 route_configuration_hash: record.destination_binding_hash,
-                ..record
+                ..record.clone()
             },
             iroha_data_model::bridge::SccpOutboundMessageRecordV1 {
                 payload_hash: record.route_configuration_hash,
-                ..record
+                ..record.clone()
             },
             iroha_data_model::bridge::SccpOutboundMessageRecordV1 {
                 recorded_at_height: 0,
-                ..record
+                ..record.clone()
+            },
+            iroha_data_model::bridge::SccpOutboundMessageRecordV1 {
+                payload_bytes: Vec::new(),
+                ..record.clone()
             },
         ] {
             assert!(
-                validate_sccp_indexed_outbound_record(message_id, key, hostile, true).is_err(),
+                validate_sccp_indexed_outbound_record(message_id, key, hostile.clone(), true)
+                    .is_err(),
                 "malformed durable record must reject: {hostile:?}"
             );
         }
@@ -6862,51 +6999,6 @@ mod sccp_first_release_api_tests {
             selected
                 .iter()
                 .all(|entry| entry.recorded_at_height <= FROM)
-        );
-    }
-
-    #[test]
-    fn recent_index_records_group_each_block_height_exactly_once() {
-        let indexed_at = |height: u64, id: u8| {
-            let key = iroha_data_model::bridge::SccpOutboundMessageKeyV1::new(
-                iroha_data_model::bridge::SccpLaneIdV1 {
-                    source: iroha_data_model::bridge::SccpNetworkV1::SoraTaira,
-                    target: iroha_data_model::bridge::SccpNetworkV1::EthereumSepolia,
-                },
-                [id; 32],
-            )
-            .expect("valid outbound key");
-            SccpIndexedOutboundRecord {
-                key,
-                record: iroha_data_model::bridge::SccpOutboundMessageRecordV1 {
-                    destination_binding_hash: [0xa1; 32],
-                    route_configuration_hash: [0xa2; 32],
-                    payload_hash: [0xa3; 32],
-                    recorded_at_height: height,
-                },
-            }
-        };
-        let groups = group_sccp_indexed_records_by_height(vec![
-            indexed_at(41, 1),
-            indexed_at(40, 2),
-            indexed_at(41, 3),
-            indexed_at(7, 4),
-            indexed_at(40, 5),
-        ]);
-
-        assert_eq!(groups.len(), 3);
-        assert_eq!(
-            groups
-                .iter()
-                .map(|group| (
-                    group[0].record.recorded_at_height,
-                    group
-                        .iter()
-                        .map(|item| item.key.message_id[0])
-                        .collect::<Vec<_>>()
-                ))
-                .collect::<Vec<_>>(),
-            [(41, vec![1, 3]), (40, vec![2, 5]), (7, vec![4])]
         );
     }
 
@@ -7040,15 +7132,26 @@ mod sccp_first_release_api_tests {
     }
 
     #[test]
-    fn indexed_locator_with_missing_block_body_fails_closed() {
+    fn recent_projection_survives_missing_historical_block_body() {
         let state = empty_taira_state();
         let (message_id, key, record) = indexed_fixture();
         state
             .insert_sccp_outbound_message_for_testing(key, record)
-            .expect("insert indexed hostile fixture");
+            .expect("insert exact indexed fixture");
+
+        let recent = collect_recent_sccp_messages(
+            &state,
+            &HistoryWindowQuery {
+                from: None,
+                limit: Some(1),
+            },
+        )
+        .expect("durable outbox projection must not depend on historical block bodies");
+        assert_eq!(recent.items.len(), 1);
+        assert_eq!(recent.items[0].message_id_hex, hex::encode(message_id));
 
         let error = sccp_message_bundle_for_request(&state, message_id)
-            .expect_err("indexed message without its block body must fail closed");
+            .expect_err("proof material still requires its finalized block body");
         let Error::Query(iroha_data_model::ValidationFail::InternalError(message)) = error else {
             panic!("unexpected missing-block error: {error}");
         };
@@ -7589,7 +7692,8 @@ fn reconstruct_sccp_message_bundles_from_block(
     block: &iroha_data_model::block::SignedBlock,
     indexed_records: &[SccpIndexedOutboundRecord],
 ) -> Result<Vec<TairaSccpMessageProofV1>> {
-    let Some(validated) = validate_sccp_block_messages(state, height, block, indexed_records)? else {
+    let Some(validated) = validate_sccp_block_messages(state, height, block, indexed_records)?
+    else {
         return Ok(Vec::new());
     };
     let commitment_root = validated.commitment_root;
@@ -7690,7 +7794,10 @@ fn reconstruct_sccp_message_bundle_from_indexed_record(
     state: &CoreState,
     indexed: SccpIndexedOutboundRecord,
 ) -> Result<TairaSccpMessageProofV1> {
-    let mut bundles = reconstruct_sccp_message_bundles_from_indexed_records(state, &[indexed])?;
+    let mut bundles = reconstruct_sccp_message_bundles_from_indexed_records(
+        state,
+        std::slice::from_ref(&indexed),
+    )?;
     bundles.pop().ok_or_else(|| {
         sccp_internal_error(format!(
             "SCCP message {} produced no reconstructed finalized bundle",
@@ -7799,9 +7906,10 @@ fn validate_recent_message_projection(
     Ok(())
 }
 
-fn recent_message_entry_from_recorded(
+fn recent_message_entry_from_projection(
     height: u64,
-    message: &iroha_core::bridge::RecordedSccpMessage,
+    message_id: [u8; 32],
+    message: &iroha_core::bridge::ValidatedSccpOutboundMessageProjectionV1,
 ) -> Result<SccpRecentMessageDto> {
     let context = message.context;
     if !context.is_well_formed()
@@ -7814,7 +7922,12 @@ fn recent_message_entry_from_recorded(
             "finalized SCCP message disagrees with its exact committed outbound context",
         ));
     }
-    let message_id_hex = hex::encode(message.commitment.message_id);
+    if message.commitment.message_id != message_id {
+        return Err(sccp_internal_error(
+            "validated SCCP outbox projection returned a different message identifier",
+        ));
+    }
+    let message_id_hex = hex::encode(message_id);
     let payload_projection = sccp_payload_projection(&message.payload).ok_or_else(|| {
         sccp_internal_error(format!(
             "finalized SCCP message {message_id_hex} has no valid closed transfer projection"
@@ -7853,60 +7966,21 @@ fn take_bounded_recent_sccp_index_keys(
     ordered.take(limit).collect()
 }
 
-fn group_sccp_indexed_records_by_height(
-    records: Vec<SccpIndexedOutboundRecord>,
-) -> Vec<Vec<SccpIndexedOutboundRecord>> {
-    let mut groups: BTreeMap<Reverse<u64>, Vec<SccpIndexedOutboundRecord>> = BTreeMap::new();
-    for indexed in records {
-        groups
-            .entry(Reverse(indexed.record.recorded_at_height))
-            .or_default()
-            .push(indexed);
-    }
-    groups.into_values().collect()
-}
-
 fn recent_sccp_entries_from_indexed_records(
-    state: &CoreState,
     indexed_records: &[SccpIndexedOutboundRecord],
 ) -> Result<Vec<SccpRecentMessageDto>> {
-    let Some(first) = indexed_records.first() else {
-        return Ok(Vec::new());
-    };
-    let height = first.record.recorded_at_height;
-    let host_height = usize::try_from(height).map_err(|_| {
-        sccp_internal_error(format!(
-            "SCCP message {} records a block height that is not representable on this host",
-            hex::encode(first.key.message_id)
-        ))
-    })?;
-    let host_height = NonZeroUsize::new(host_height).ok_or_else(|| {
-        sccp_internal_error(format!(
-            "SCCP message {} records forbidden block height zero",
-            hex::encode(first.key.message_id)
-        ))
-    })?;
-    let block = state.block_by_height(host_height).ok_or_else(|| {
-        sccp_internal_error(format!(
-            "SCCP message {} is indexed at height {height}, but the finalized block body is unavailable",
-            hex::encode(first.key.message_id)
-        ))
-    })?;
-    let validated = validate_sccp_block_messages(state, height, block.as_ref(), indexed_records)?
-        .ok_or_else(|| sccp_internal_error("nonempty SCCP group validated as empty"))?;
-
     let mut entries = Vec::with_capacity(indexed_records.len());
     for indexed in indexed_records {
-        let index = *validated
-            .positions
-            .get(&indexed.key.message_id)
-            .ok_or_else(|| {
-                sccp_internal_error(format!(
-                    "SCCP message {} is indexed at height {height}, but that block contains no matching successful record",
-                    hex::encode(indexed.key.message_id)
-                ))
-            })?;
-        let message = &validated.messages[index];
+        let message = iroha_core::bridge::validate_sccp_outbound_message_record_v1(
+            &indexed.key,
+            &indexed.record,
+        )
+        .ok_or_else(|| {
+            sccp_internal_error(format!(
+                "SCCP message {} has malformed canonical payload evidence in its authoritative outbox record",
+                hex::encode(indexed.key.message_id)
+            ))
+        })?;
         if sccp_message_source_domain(&message.payload) != iroha_sccp::SCCP_DOMAIN_SORA {
             return Err(sccp_bad_request(
                 "SCCP recent readback is reserved for SORA-origin messages; inbound messages use protocol-native admission",
@@ -7924,7 +7998,11 @@ fn recent_sccp_entries_from_indexed_records(
                 hex::encode(indexed.key.message_id)
             )));
         }
-        entries.push(recent_message_entry_from_recorded(height, message)?);
+        entries.push(recent_message_entry_from_projection(
+            indexed.record.recorded_at_height,
+            indexed.key.message_id,
+            &message,
+        )?);
     }
     Ok(entries)
 }
@@ -7992,15 +8070,11 @@ fn collect_recent_sccp_messages(
         indexed_records.push(indexed);
     }
 
-    let mut items = Vec::with_capacity(indexed_records.len());
-    for group in group_sccp_indexed_records_by_height(indexed_records) {
-        let entries = recent_sccp_entries_from_indexed_records(state, &group)?;
-        if entries.len() != group.len() {
-            return Err(sccp_internal_error(
-                "SCCP recent-message block reconstruction returned an incomplete group",
-            ));
-        }
-        items.extend(entries);
+    let items = recent_sccp_entries_from_indexed_records(&indexed_records)?;
+    if items.len() != indexed_records.len() {
+        return Err(sccp_internal_error(
+            "SCCP recent-message outbox projection returned an incomplete page",
+        ));
     }
 
     Ok(SccpRecentMessagesDto { items })
@@ -8008,19 +8082,19 @@ fn collect_recent_sccp_messages(
 
 /// GET /v1/sccp/proofs/message/{message_id} — SORA-origin SCCP message bundle.
 #[iroha_futures::telemetry_future]
-pub async fn handle_v1_sccp_message_bundle(
+pub(crate) async fn handle_v1_sccp_message_bundle(
     state: Arc<CoreState>,
     message_id_hex: String,
-    accept: Option<axum::http::HeaderValue>,
+    format: crate::utils::ResponseFormat,
+    admission: crate::QueryAdmissionPermit,
 ) -> Result<Response> {
     let message_id = parse_sccp_message_id_hex(&message_id_hex)?;
-    let bundle = tokio::task::spawn_blocking(move || {
-        sccp_message_bundle_for_request(state.as_ref(), message_id)
+    run_admitted_blocking(admission, "SCCP message-proof worker failed", move || {
+        let bundle = sccp_message_bundle_for_request(state.as_ref(), message_id)?
+            .ok_or_else(sccp_not_found)?;
+        sccp_bundle_response_with_format(&bundle, format)
     })
     .await
-    .map_err(|_| sccp_internal_error("SCCP message-proof worker failed"))??
-    .ok_or_else(sccp_not_found)?;
-    sccp_bundle_response(&bundle, accept.as_ref())
 }
 
 /// GET /v1/sccp/registry — authoritative typed SCCP route registry.
@@ -8035,19 +8109,19 @@ pub async fn handle_v1_sccp_registry(
 
 /// GET /v1/sccp/proof-requests/{message_id} — exact state-derived Groth16 request.
 #[iroha_futures::telemetry_future]
-pub async fn handle_v1_sccp_proof_request(
+pub(crate) async fn handle_v1_sccp_proof_request(
     state: Arc<CoreState>,
     message_id_hex: String,
-    accept: Option<axum::http::HeaderValue>,
+    format: crate::utils::ResponseFormat,
+    admission: crate::QueryAdmissionPermit,
 ) -> Result<Response> {
     let message_id = parse_sccp_message_id_hex(&message_id_hex)?;
-    let material = tokio::task::spawn_blocking(move || {
-        sccp_exact_proof_material(state.as_ref(), message_id)
+    run_admitted_blocking(admission, "SCCP proof-request worker failed", move || {
+        let material =
+            sccp_exact_proof_material(state.as_ref(), message_id)?.ok_or_else(sccp_not_found)?;
+        sccp_bundle_response_with_format(&material.request, format)
     })
     .await
-    .map_err(|_| sccp_internal_error("SCCP proof-request worker failed"))??
-    .ok_or_else(sccp_not_found)?;
-    sccp_bundle_response(&material.request, accept.as_ref())
 }
 
 /// GET /v1/sccp/capabilities — relay-operator SCCP capability discovery for proof backends, codecs, and routes.
@@ -8062,17 +8136,17 @@ pub async fn handle_v1_sccp_capabilities(
 
 /// GET /v1/sccp/messages/recent — newest-first committed SCCP message discovery with compact metadata.
 #[iroha_futures::telemetry_future]
-pub async fn handle_v1_sccp_messages_recent(
+pub(crate) async fn handle_v1_sccp_messages_recent(
     state: Arc<CoreState>,
-    crate::NoritoQuery(window): crate::NoritoQuery<HistoryWindowQuery>,
-    accept: Option<axum::http::HeaderValue>,
+    window: HistoryWindowQuery,
+    format: crate::utils::ResponseFormat,
+    admission: crate::QueryAdmissionPermit,
 ) -> Result<Response> {
-    let snapshot = tokio::task::spawn_blocking(move || {
-        collect_recent_sccp_messages(state.as_ref(), &window)
+    run_admitted_blocking(admission, "SCCP recent-message worker failed", move || {
+        let snapshot = collect_recent_sccp_messages(state.as_ref(), &window)?;
+        sccp_bundle_response_with_format(&snapshot, format)
     })
     .await
-    .map_err(|_| sccp_internal_error("SCCP recent-message worker failed"))??;
-    sccp_bundle_response(&snapshot, accept.as_ref())
 }
 
 /// GET /v1/sumeragi/validator-sets — Bounded history of validator-set snapshots (newest first)
@@ -12371,8 +12445,7 @@ pub(crate) fn push_accepted_transactions_for_ingress_with_routing_plans(
         })
 }
 
-#[iroha_futures::telemetry_future]
-async fn handle_transaction_inner(
+fn handle_transaction_inner_sync(
     chain_id: Arc<ChainId>,
     queue: Arc<Queue>,
     state: Arc<CoreState>,
@@ -12403,6 +12476,18 @@ async fn handle_transaction_inner(
         enqueue_started.elapsed(),
     );
     result
+}
+
+#[iroha_futures::telemetry_future]
+async fn handle_transaction_inner(
+    chain_id: Arc<ChainId>,
+    queue: Arc<Queue>,
+    state: Arc<CoreState>,
+    tx: impl Into<TransactionEntrypoint>,
+    telemetry: &MaybeTelemetry,
+    routing_plan: Option<RoutingPlan>,
+) -> Result<RoutingDecision> {
+    handle_transaction_inner_sync(chain_id, queue, state, tx, telemetry, routing_plan)
 }
 
 pub async fn handle_transaction(
@@ -12473,6 +12558,44 @@ async fn handle_transaction_with_metrics_and_routing_plan(
 
     let result =
         handle_transaction_inner(chain_id, queue, state, tx, &telemetry, routing_plan).await;
+
+    #[cfg(feature = "telemetry")]
+    observe_route_stage_latency(
+        &telemetry,
+        "transaction",
+        "handle",
+        if result.is_ok() { "ok" } else { "error" },
+        start.elapsed(),
+    );
+
+    #[cfg(feature = "telemetry")]
+    if let Ok(decision) = &result {
+        observe_lane_admission_latency(
+            &telemetry,
+            endpoint,
+            decision.lane_id,
+            start.elapsed().as_secs_f64(),
+        );
+    }
+
+    result
+}
+
+#[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
+fn handle_transaction_with_metrics_and_routing_plan_sync(
+    chain_id: Arc<ChainId>,
+    queue: Arc<Queue>,
+    state: Arc<CoreState>,
+    tx: impl Into<TransactionEntrypoint>,
+    telemetry: MaybeTelemetry,
+    routing_plan: Option<RoutingPlan>,
+    endpoint: &'static str,
+) -> Result<RoutingDecision> {
+    #[cfg(feature = "telemetry")]
+    let start = std::time::Instant::now();
+
+    let result =
+        handle_transaction_inner_sync(chain_id, queue, state, tx, &telemetry, routing_plan);
 
     #[cfg(feature = "telemetry")]
     observe_route_stage_latency(
@@ -12944,7 +13067,7 @@ mod contract_manifest_response_tests {
                 kind: EntryPointKind::Kotoage,
                 params: vec![EntrypointParamDescriptor {
                     name: "amount".to_owned(),
-                    type_name: "Amount".to_owned(),
+                    type_name: "quantity".to_owned(),
                 }],
                 argument_schema: Some(EntrypointArgumentSchemaV1 {
                     fields: vec![EntrypointArgumentFieldV1 {
@@ -14265,10 +14388,7 @@ mod contract_state_tests {
     #[test]
     fn decode_contract_state_map_value_json_preserves_struct_field_encodings() {
         let mut storage = BTreeMap::<String, Vec<u8>>::new();
-        storage.insert(
-            "Requests_status/mr123".to_owned(),
-            int_tlv("1"),
-        );
+        storage.insert("Requests_status/mr123".to_owned(), int_tlv("1"));
         storage.insert(
             "Requests_approval_alias_fqn/mr123".to_owned(),
             make_tlv(PointerType::Blob, b"banking@centralbank"),
@@ -14410,8 +14530,7 @@ mod contract_state_tests {
         }
 
         assert!(
-            contract_state_stored_map_key_suffix(&ivm::EmbeddedStateType::Quantity, "-1")
-                .is_none(),
+            contract_state_stored_map_key_suffix(&ivm::EmbeddedStateType::Quantity, "-1").is_none(),
             "negative quantities must fail closed"
         );
     }
@@ -15448,16 +15567,21 @@ pub fn handle_post_contract_call_simulate(
     Ok(body)
 }
 
-/// POST /v1/bridge/proofs/submit — submit a bridge proof derived from a live SCCP bundle.
-#[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
-pub async fn handle_post_bridge_proof_submit(
+enum PreparedBridgeProofSubmit {
+    Direct {
+        transaction: SignedTransaction,
+        response: BridgeSubmitResponseDto,
+    },
+    Prepare(BridgeSubmitResponseDto),
+}
+
+#[cfg(feature = "app_api")]
+fn prepare_bridge_proof_submit(
     chain_id: Arc<ChainId>,
-    queue: Arc<Queue>,
     state: Arc<CoreState>,
-    telemetry: MaybeTelemetry,
-    JsonOnly(req): JsonOnly<BridgeProofSubmitDto>,
-) -> Result<impl IntoResponse> {
+    req: BridgeProofSubmitDto,
+) -> Result<PreparedBridgeProofSubmit> {
     use base64::Engine as _;
     use iroha_data_model::prelude as dm;
     use iroha_primitives::const_vec::ConstVec;
@@ -15522,7 +15646,7 @@ pub async fn handle_post_bridge_proof_submit(
         hex::encode(material.indexed.record.route_configuration_hash);
     let backend = bridge_proof.backend_label();
 
-    let response = if direct_submit {
+    let prepared = if direct_submit {
         let creation_time_ms = creation_time_ms.expect("validated direct SCCP creation time");
         let tx = build_exact_sccp_signed_transaction(
             state.as_ref(),
@@ -15539,29 +15663,23 @@ pub async fn handle_post_bridge_proof_submit(
             "bridge proof",
         )?;
         let tx_hash_hex = hex::encode(tx.hash().as_ref());
-        handle_transaction_with_metrics(
-            chain_id,
-            queue,
-            state,
-            tx,
-            telemetry,
-            "/v1/bridge/proofs/submit",
-        )
-        .await?;
-        BridgeSubmitResponseDto {
-            submitted: true,
-            payload_kind,
-            message_id_hex,
-            backend,
-            counterparty_domain,
-            counterparty_chain: counterparty_chain.clone(),
-            route_configuration_hash_hex,
-            range_start_height,
-            range_end_height,
-            creation_time_ms,
-            tx_hash_hex: Some(tx_hash_hex),
-            transaction_payload_b64: None,
-            signing_message_b64: None,
+        PreparedBridgeProofSubmit::Direct {
+            transaction: tx,
+            response: BridgeSubmitResponseDto {
+                submitted: true,
+                payload_kind,
+                message_id_hex,
+                backend,
+                counterparty_domain,
+                counterparty_chain: counterparty_chain.clone(),
+                route_configuration_hash_hex,
+                range_start_height,
+                range_end_height,
+                creation_time_ms,
+                tx_hash_hex: Some(tx_hash_hex),
+                transaction_payload_b64: None,
+                signing_message_b64: None,
+            },
         }
     } else {
         let creation_time_ms = creation_time_ms.unwrap_or_else(current_time_millis);
@@ -15579,7 +15697,7 @@ pub async fn handle_post_bridge_proof_submit(
             base64::engine::general_purpose::STANDARD.encode(builder.encode_payload());
         let signing_message_b64 =
             base64::engine::general_purpose::STANDARD.encode(builder.payload_hash_bytes());
-        BridgeSubmitResponseDto {
+        PreparedBridgeProofSubmit::Prepare(BridgeSubmitResponseDto {
             submitted: false,
             payload_kind,
             message_id_hex,
@@ -15593,32 +15711,95 @@ pub async fn handle_post_bridge_proof_submit(
             tx_hash_hex: None,
             transaction_payload_b64: Some(transaction_payload_b64),
             signing_message_b64: Some(signing_message_b64),
-        }
+        })
     };
 
-    let body = norito::json::to_json_pretty(&response).map_err(|error| {
-        sccp_internal_error(format!(
-            "failed to encode exact SCCP bridge-proof response: {error}"
-        ))
-    })?;
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
+    Ok(prepared)
 }
 
-/// POST /v1/bridge/messages — prepare or submit one native SCCP proof-admission transaction.
-#[cfg(feature = "app_api")]
+/// POST /v1/bridge/proofs/submit — submit a bridge proof derived from a live SCCP bundle.
 #[iroha_futures::telemetry_future]
-pub async fn handle_post_bridge_message_submit(
+#[cfg(feature = "app_api")]
+pub(crate) async fn handle_post_bridge_proof_submit(
     chain_id: Arc<ChainId>,
     queue: Arc<Queue>,
     state: Arc<CoreState>,
     telemetry: MaybeTelemetry,
-    JsonOnly(req): JsonOnly<BridgeMessageSubmitDto>,
-) -> Result<impl IntoResponse> {
+    request_body: axum::body::Bytes,
+    admission: crate::QueryAdmissionPermit,
+) -> Result<(axum::response::Response, bool)> {
+    run_sccp_submit_blocking("SCCP bridge-proof admission worker failed", move || {
+        // The sole ingress permit, including the bounded-body slot, remains in
+        // this physical worker even if the awaiting HTTP request is cancelled.
+        let _admission = admission;
+        let request: BridgeProofSubmitDto =
+            norito::json::from_slice(&request_body).map_err(|error| {
+                conversion_error(format!(
+                    "invalid closed SCCP bridge-proof submission JSON: {error}"
+                ))
+            })?;
+        let prepared =
+            prepare_bridge_proof_submit(Arc::clone(&chain_id), Arc::clone(&state), request)?;
+        let (body, charge_prepare_egress) = match prepared {
+            PreparedBridgeProofSubmit::Direct {
+                transaction,
+                response,
+            } => {
+                // Complete every fallible response transformation before the
+                // queue mutation so a successful submission cannot become an
+                // ambiguous serialization failure.
+                let body = norito::json::to_vec_pretty(&response).map_err(|error| {
+                    sccp_internal_error(format!(
+                        "failed to encode exact SCCP bridge-proof response: {error}"
+                    ))
+                })?;
+                handle_transaction_with_metrics_and_routing_plan_sync(
+                    chain_id,
+                    queue,
+                    state,
+                    transaction,
+                    telemetry,
+                    None,
+                    "/v1/bridge/proofs/submit",
+                )?;
+                (body, false)
+            }
+            PreparedBridgeProofSubmit::Prepare(response) => (
+                norito::json::to_vec_pretty(&response).map_err(|error| {
+                    sccp_internal_error(format!(
+                        "failed to encode exact SCCP bridge-proof response: {error}"
+                    ))
+                })?,
+                true,
+            ),
+        };
+        let mut response = axum::response::Response::new(axum::body::Body::from(body));
+        response.headers_mut().insert(
+            axum::http::header::CONTENT_TYPE,
+            axum::http::HeaderValue::from_static("application/json"),
+        );
+        Ok((response, charge_prepare_egress))
+    })
+    .await
+}
+
+#[cfg(feature = "app_api")]
+enum PreparedBridgeMessageSubmit {
+    Direct {
+        transaction: SignedTransaction,
+        routing_plan: RoutingPlan,
+        response: BridgeSubmitResponseDto,
+    },
+    Prepare(BridgeSubmitResponseDto),
+}
+
+#[cfg(feature = "app_api")]
+fn prepare_bridge_message_submit(
+    chain_id: Arc<ChainId>,
+    queue: Arc<Queue>,
+    state: Arc<CoreState>,
+    req: BridgeMessageSubmitDto,
+) -> Result<PreparedBridgeMessageSubmit> {
     use base64::Engine as _;
     use iroha_data_model::prelude as dm;
     use iroha_primitives::const_vec::ConstVec;
@@ -15700,7 +15881,7 @@ pub async fn handle_post_bridge_message_submit(
     let route_configuration_hash_hex = hex::encode(route_configuration_hash);
     let backend = bridge_proof.backend_label();
 
-    let response = if direct_submit {
+    let prepared = if direct_submit {
         let creation_time_ms = creation_time_ms.expect("validated direct SCCP creation time");
         let tx = build_exact_sccp_signed_transaction(
             state.as_ref(),
@@ -15727,30 +15908,24 @@ pub async fn handle_post_bridge_message_submit(
             "/v1/bridge/messages",
         )?;
         let tx_hash_hex = hex::encode(tx.hash().as_ref());
-        handle_transaction_with_metrics_and_routing_plan(
-            chain_id.clone(),
-            queue.clone(),
-            state.clone(),
-            tx,
-            telemetry.clone(),
-            Some(routing_plan.clone()),
-            "/v1/bridge/messages",
-        )
-        .await?;
-        BridgeSubmitResponseDto {
-            submitted: true,
-            payload_kind,
-            message_id_hex,
-            backend,
-            counterparty_domain,
-            counterparty_chain: counterparty_chain.to_owned(),
-            route_configuration_hash_hex,
-            range_start_height,
-            range_end_height,
-            creation_time_ms,
-            tx_hash_hex: Some(tx_hash_hex),
-            transaction_payload_b64: None,
-            signing_message_b64: None,
+        PreparedBridgeMessageSubmit::Direct {
+            transaction: tx,
+            routing_plan,
+            response: BridgeSubmitResponseDto {
+                submitted: true,
+                payload_kind,
+                message_id_hex,
+                backend,
+                counterparty_domain,
+                counterparty_chain: counterparty_chain.to_owned(),
+                route_configuration_hash_hex,
+                range_start_height,
+                range_end_height,
+                creation_time_ms,
+                tx_hash_hex: Some(tx_hash_hex),
+                transaction_payload_b64: None,
+                signing_message_b64: None,
+            },
         }
     } else {
         let creation_time_ms = creation_time_ms.unwrap_or_else(current_time_millis);
@@ -15768,7 +15943,7 @@ pub async fn handle_post_bridge_message_submit(
             base64::engine::general_purpose::STANDARD.encode(builder.encode_payload());
         let signing_message_b64 =
             base64::engine::general_purpose::STANDARD.encode(builder.payload_hash_bytes());
-        BridgeSubmitResponseDto {
+        PreparedBridgeMessageSubmit::Prepare(BridgeSubmitResponseDto {
             submitted: false,
             payload_kind,
             message_id_hex,
@@ -15782,20 +15957,77 @@ pub async fn handle_post_bridge_message_submit(
             tx_hash_hex: None,
             transaction_payload_b64: Some(transaction_payload_b64),
             signing_message_b64: Some(signing_message_b64),
-        }
+        })
     };
 
-    let body = norito::json::to_json_pretty(&response).map_err(|error| {
-        sccp_internal_error(format!(
-            "failed to encode exact SCCP bridge-message response: {error}"
-        ))
-    })?;
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
+    Ok(prepared)
+}
+
+/// POST /v1/bridge/messages — prepare or submit one native SCCP proof-admission transaction.
+#[cfg(feature = "app_api")]
+#[iroha_futures::telemetry_future]
+pub(crate) async fn handle_post_bridge_message_submit(
+    chain_id: Arc<ChainId>,
+    queue: Arc<Queue>,
+    state: Arc<CoreState>,
+    telemetry: MaybeTelemetry,
+    request_body: axum::body::Bytes,
+    admission: crate::QueryAdmissionPermit,
+) -> Result<(axum::response::Response, bool)> {
+    run_sccp_submit_blocking("SCCP bridge-message admission worker failed", move || {
+        // Keep all admission capacity with the physical verifier/serializer.
+        let _admission = admission;
+        let request: BridgeMessageSubmitDto =
+            norito::json::from_slice(&request_body).map_err(|error| {
+                conversion_error(format!(
+                    "invalid closed SCCP bridge-message submission JSON: {error}"
+                ))
+            })?;
+        let prepared = prepare_bridge_message_submit(
+            Arc::clone(&chain_id),
+            Arc::clone(&queue),
+            Arc::clone(&state),
+            request,
+        )?;
+        let (body, charge_prepare_egress) = match prepared {
+            PreparedBridgeMessageSubmit::Direct {
+                transaction,
+                routing_plan,
+                response,
+            } => {
+                let body = norito::json::to_vec_pretty(&response).map_err(|error| {
+                    sccp_internal_error(format!(
+                        "failed to encode exact SCCP bridge-message response: {error}"
+                    ))
+                })?;
+                handle_transaction_with_metrics_and_routing_plan_sync(
+                    chain_id,
+                    queue,
+                    state,
+                    transaction,
+                    telemetry,
+                    Some(routing_plan),
+                    "/v1/bridge/messages",
+                )?;
+                (body, false)
+            }
+            PreparedBridgeMessageSubmit::Prepare(response) => (
+                norito::json::to_vec_pretty(&response).map_err(|error| {
+                    sccp_internal_error(format!(
+                        "failed to encode exact SCCP bridge-message response: {error}"
+                    ))
+                })?,
+                true,
+            ),
+        };
+        let mut response = axum::response::Response::new(axum::body::Body::from(body));
+        response.headers_mut().insert(
+            axum::http::header::CONTENT_TYPE,
+            axum::http::HeaderValue::from_static("application/json"),
+        );
+        Ok((response, charge_prepare_egress))
+    })
+    .await
 }
 
 /// POST /v1/contracts/view — execute a read-only contract view entrypoint locally.
@@ -15964,29 +16196,6 @@ pub(crate) fn asset_alias_observation_time_ms(state: &CoreState) -> u64 {
 }
 
 #[cfg(feature = "app_api")]
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum ContractSchemaType {
-    Unit,
-    Int,
-    Numeric,
-    Bool,
-    String,
-    Json,
-    Name,
-    AccountId,
-    AssetDefinitionId,
-    AssetId,
-    DomainId,
-    NftId,
-    Bytes,
-    DataSpaceId,
-    AxtDescriptor,
-    AssetHandle,
-    ProofBlob,
-    Tuple(Vec<ContractSchemaType>),
-}
-
-#[cfg(feature = "app_api")]
 fn advertised_contract_entrypoint<'a>(
     manifest: &'a manifest::ContractManifest,
     selector: &str,
@@ -16063,274 +16272,6 @@ fn ensure_view_contract_entrypoint<'a>(
     selector: &str,
 ) -> Result<&'a manifest::EntrypointDescriptor> {
     ensure_contract_entrypoint_kind(manifest, selector, manifest::EntryPointKind::View)
-}
-
-#[cfg(feature = "app_api")]
-fn split_schema_list(input: &str) -> Result<Vec<String>> {
-    let mut items = Vec::new();
-    let mut current = String::new();
-    let mut depth = 0_i32;
-    for ch in input.chars() {
-        match ch {
-            '(' => {
-                depth += 1;
-                current.push(ch);
-            }
-            ')' => {
-                depth -= 1;
-                if depth < 0 {
-                    return Err(conversion_error(format!(
-                        "invalid contract schema type `{input}`"
-                    )));
-                }
-                current.push(ch);
-            }
-            ',' if depth == 0 => {
-                items.push(current.trim().to_owned());
-                current.clear();
-            }
-            _ => current.push(ch),
-        }
-    }
-    if depth != 0 {
-        return Err(conversion_error(format!(
-            "invalid contract schema type `{input}`"
-        )));
-    }
-    if !current.trim().is_empty() {
-        items.push(current.trim().to_owned());
-    }
-    Ok(items)
-}
-
-#[cfg(feature = "app_api")]
-fn parse_contract_schema_type(raw: &str) -> Result<ContractSchemaType> {
-    let trimmed = raw.trim();
-    if trimmed == "()" {
-        return Ok(ContractSchemaType::Unit);
-    }
-    if trimmed.starts_with('(') && trimmed.ends_with(')') {
-        let inner = &trimmed[1..trimmed.len() - 1];
-        if inner.trim().is_empty() {
-            return Ok(ContractSchemaType::Tuple(Vec::new()));
-        }
-        let items = split_schema_list(inner)?
-            .into_iter()
-            .map(|item| parse_contract_schema_type(&item))
-            .collect::<Result<Vec<_>>>()?;
-        return Ok(ContractSchemaType::Tuple(items));
-    }
-    match trimmed {
-        "i64" => Ok(ContractSchemaType::Int),
-        "u128" | "Amount" => Ok(ContractSchemaType::Numeric),
-        "bool" => Ok(ContractSchemaType::Bool),
-        "string" => Ok(ContractSchemaType::String),
-        "Json" => Ok(ContractSchemaType::Json),
-        "Name" => Ok(ContractSchemaType::Name),
-        "AccountId" => Ok(ContractSchemaType::AccountId),
-        "AssetDefinitionId" => Ok(ContractSchemaType::AssetDefinitionId),
-        "AssetId" => Ok(ContractSchemaType::AssetId),
-        "DomainId" => Ok(ContractSchemaType::DomainId),
-        "NftId" => Ok(ContractSchemaType::NftId),
-        "bytes" => Ok(ContractSchemaType::Bytes),
-        "DataSpaceId" => Ok(ContractSchemaType::DataSpaceId),
-        "AxtDescriptor" => Ok(ContractSchemaType::AxtDescriptor),
-        "AssetHandle" => Ok(ContractSchemaType::AssetHandle),
-        "ProofBlob" => Ok(ContractSchemaType::ProofBlob),
-        _ => Err(conversion_error(format!(
-            "unsupported contract schema type `{trimmed}`"
-        ))),
-    }
-}
-
-#[cfg(feature = "app_api")]
-fn validate_numeric_json_value(value: &Value) -> bool {
-    match value {
-        Value::String(raw) => raw.parse::<iroha_primitives::numeric::Numeric>().is_ok(),
-        Value::Number(norito::json::native::Number::I64(_))
-        | Value::Number(norito::json::native::Number::U64(_)) => true,
-        _ => false,
-    }
-}
-
-#[cfg(feature = "app_api")]
-fn parse_contract_i64_literal(raw: &str) -> Option<i64> {
-    if raw.is_empty() {
-        return None;
-    }
-    let bytes = raw.as_bytes();
-    let start = usize::from(bytes.first() == Some(&b'-'));
-    if start == bytes.len() || !bytes[start..].iter().all(|byte| byte.is_ascii_digit()) {
-        return None;
-    }
-    raw.parse::<i64>().ok()
-}
-
-#[cfg(feature = "app_api")]
-fn normalize_contract_blob_literal(raw: &str) -> Value {
-    let trimmed = raw.strip_prefix("0x").unwrap_or(raw);
-    if trimmed.len() % 2 == 0 && hex::decode(trimmed).is_ok() {
-        Value::from(trimmed.to_ascii_lowercase())
-    } else {
-        Value::from(hex::encode(raw.as_bytes()))
-    }
-}
-
-#[cfg(feature = "app_api")]
-fn normalize_contract_value(
-    schema: &ContractSchemaType,
-    value: &Value,
-    field_name: &str,
-) -> Result<Value> {
-    match schema {
-        ContractSchemaType::Unit if matches!(value, Value::Null) => Ok(Value::Null),
-        ContractSchemaType::Unit => Err(conversion_error(format!(
-            "contract payload field `{field_name}` does not match the declared schema"
-        ))),
-        ContractSchemaType::Int => match value {
-            Value::Number(norito::json::native::Number::I64(v)) => Ok(Value::from(*v)),
-            Value::Number(norito::json::native::Number::U64(v)) => {
-                let parsed = i64::try_from(*v).map_err(|_| {
-                    conversion_error(format!(
-                        "contract payload field `{field_name}` must fit within signed 64-bit integer range"
-                    ))
-                })?;
-                Ok(Value::from(parsed))
-            }
-            Value::String(raw) => parse_contract_i64_literal(raw)
-                .map(Value::from)
-                .ok_or_else(|| {
-                    conversion_error(format!(
-                        "contract payload field `{field_name}` must be a base-10 signed 64-bit integer"
-                    ))
-                }),
-            _ => Err(conversion_error(format!(
-                "contract payload field `{field_name}` does not match the declared schema"
-            ))),
-        },
-        ContractSchemaType::Numeric if validate_numeric_json_value(value) => Ok(value.clone()),
-        ContractSchemaType::Numeric => Err(conversion_error(format!(
-            "contract payload field `{field_name}` does not match the declared schema"
-        ))),
-        ContractSchemaType::Bool if matches!(value, Value::Bool(_)) => Ok(value.clone()),
-        ContractSchemaType::Bool => Err(conversion_error(format!(
-            "contract payload field `{field_name}` does not match the declared schema"
-        ))),
-        ContractSchemaType::String if matches!(value, Value::String(_)) => Ok(value.clone()),
-        ContractSchemaType::String => Err(conversion_error(format!(
-            "contract payload field `{field_name}` does not match the declared schema"
-        ))),
-        ContractSchemaType::Json => Ok(value.clone()),
-        ContractSchemaType::Name => match value {
-            Value::String(raw) => Name::from_str(raw).is_ok(),
-            _ => false,
-        }
-        .then(|| value.clone())
-        .ok_or_else(|| {
-            conversion_error(format!(
-                "contract payload field `{field_name}` does not match the declared schema"
-            ))
-        }),
-        ContractSchemaType::AccountId => match value {
-            Value::String(raw) => iroha_data_model::account::AccountId::parse_encoded(raw)
-                .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-                .or_else(|_| {
-                    raw.parse::<iroha_data_model::smart_contract::ContractAddress>()
-                        .map(|address| address.subject_id())
-                })
-                .is_ok(),
-            _ => false,
-        }
-        .then(|| value.clone())
-        .ok_or_else(|| {
-            conversion_error(format!(
-                "contract payload field `{field_name}` does not match the declared schema"
-            ))
-        }),
-        ContractSchemaType::AssetDefinitionId => match value {
-            Value::String(raw) => raw
-                .parse::<iroha_data_model::asset::AssetDefinitionId>()
-                .is_ok(),
-            _ => false,
-        }
-        .then(|| value.clone())
-        .ok_or_else(|| {
-            conversion_error(format!(
-                "contract payload field `{field_name}` does not match the declared schema"
-            ))
-        }),
-        ContractSchemaType::AssetId => match value {
-            Value::String(raw) => raw.parse::<iroha_data_model::asset::AssetId>().is_ok(),
-            _ => false,
-        }
-        .then(|| value.clone())
-        .ok_or_else(|| {
-            conversion_error(format!(
-                "contract payload field `{field_name}` does not match the declared schema"
-            ))
-        }),
-        ContractSchemaType::DomainId => match value {
-            Value::String(raw) => {
-                iroha_data_model::domain::DomainId::parse_fully_qualified(raw).is_ok()
-            }
-            _ => false,
-        }
-        .then(|| value.clone())
-        .ok_or_else(|| {
-            conversion_error(format!(
-                "contract payload field `{field_name}` does not match the declared schema"
-            ))
-        }),
-        ContractSchemaType::NftId => match value {
-            Value::String(raw) => raw.parse::<iroha_data_model::nft::NftId>().is_ok(),
-            _ => false,
-        }
-        .then(|| value.clone())
-        .ok_or_else(|| {
-            conversion_error(format!(
-                "contract payload field `{field_name}` does not match the declared schema"
-            ))
-        }),
-        ContractSchemaType::Bytes => match value {
-            Value::String(raw) => Ok(normalize_contract_blob_literal(raw)),
-            _ => Err(conversion_error(format!(
-                "contract payload field `{field_name}` does not match the declared schema"
-            ))),
-        },
-        ContractSchemaType::DataSpaceId => match value {
-            Value::String(raw) => raw.parse::<u64>().is_ok(),
-            Value::Number(norito::json::native::Number::I64(v)) => *v >= 0,
-            Value::Number(norito::json::native::Number::U64(_)) => true,
-            _ => false,
-        }
-        .then(|| value.clone())
-        .ok_or_else(|| {
-            conversion_error(format!(
-                "contract payload field `{field_name}` does not match the declared schema"
-            ))
-        }),
-        ContractSchemaType::AxtDescriptor
-        | ContractSchemaType::AssetHandle
-        | ContractSchemaType::ProofBlob if matches!(value, Value::String(_)) => Ok(value.clone()),
-        ContractSchemaType::AxtDescriptor
-        | ContractSchemaType::AssetHandle
-        | ContractSchemaType::ProofBlob => Err(conversion_error(format!(
-            "contract payload field `{field_name}` does not match the declared schema"
-        ))),
-        ContractSchemaType::Tuple(items) => match value {
-            Value::Array(values) if values.len() == items.len() => {
-                let normalized = items
-                    .iter()
-                    .zip(values.iter())
-                    .map(|(schema, item)| normalize_contract_value(schema, item, field_name))
-                    .collect::<Result<Vec<_>>>()?;
-                Ok(Value::Array(normalized))
-            }
-            _ => Err(conversion_error(format!(
-                "contract payload field `{field_name}` does not match the declared schema"
-            ))),
-        },
-    }
 }
 
 #[cfg(feature = "app_api")]
@@ -19520,13 +19461,13 @@ mod contract_payload_normalization_tests {
         }
     }
 
-    fn i64_descriptor() -> EntrypointDescriptor {
+    fn int_descriptor() -> EntrypointDescriptor {
         EntrypointDescriptor {
             name: "create".to_owned(),
             kind: EntryPointKind::Kotoage,
             params: vec![EntrypointParamDescriptor {
                 name: "amount".to_owned(),
-                type_name: "i64".to_owned(),
+                type_name: "int".to_owned(),
             }],
             argument_schema: Some(scalar_argument_schema("amount", EntrypointValueKindV1::Int)),
             return_type: None,
@@ -19617,9 +19558,9 @@ mod contract_payload_normalization_tests {
 
     #[test]
     fn denied_contract_requests_skip_payload_normalization_and_record_decoding() {
-        let descriptor = i64_descriptor();
+        let descriptor = int_descriptor();
         let malformed_payload = IrohaJson::new(norito::json!({
-            "amount": "9223372036854775808"
+            "amount": "+1"
         }));
         let normalization_attempted = std::cell::Cell::new(false);
         ivm::reset_argument_record_decode_count();
@@ -19641,37 +19582,34 @@ mod contract_payload_normalization_tests {
     }
 
     #[test]
-    fn normalize_contract_payload_canonicalizes_string_i64_values() {
-        let descriptor = i64_descriptor();
+    fn normalize_contract_payload_accepts_only_canonical_string_int_values() {
+        let descriptor = int_descriptor();
         let string_payload = IrohaJson::new(norito::json!({ "amount": "10" }));
         let number_payload = IrohaJson::new(norito::json!({ "amount": 10 }));
 
         let normalized_string = normalize_contract_payload(&descriptor, Some(&string_payload))
-            .expect("string i64 payload should normalize")
+            .expect("canonical string int payload should validate")
             .expect("payload");
-        let normalized_number = normalize_contract_payload(&descriptor, Some(&number_payload))
-            .expect("numeric i64 payload should normalize")
-            .expect("payload");
+        let number_error = normalize_contract_payload(&descriptor, Some(&number_payload))
+            .expect_err("JSON number tokens must not enter the exact int domain");
 
         let left =
             json::parse_value(normalized_string.get()).expect("normalized string payload json");
-        let right =
-            json::parse_value(normalized_number.get()).expect("normalized numeric payload json");
-        assert_eq!(left, right);
-        assert_eq!(left, norito::json!({ "amount": 10 }));
+        assert_eq!(left, norito::json!({ "amount": "10" }));
+        assert!(expect_conversion(number_error).contains("exact argument schema"));
     }
 
     #[test]
-    fn normalize_contract_payload_rejects_out_of_range_string_i64_values() {
-        let descriptor = i64_descriptor();
+    fn normalize_contract_payload_rejects_int_beyond_signed_512_bit_domain() {
+        let descriptor = int_descriptor();
         let payload = IrohaJson::new(norito::json!({
-            "amount": "9223372036854775808"
+            "amount": "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042048"
         }));
 
         let err = normalize_contract_payload(&descriptor, Some(&payload))
-            .expect_err("overflowing string i64 values must fail");
+            .expect_err("the positive signed-512 neighbor must fail");
         let message = expect_conversion(err);
-        assert!(message.contains("base-10 signed 64-bit integer"));
+        assert!(message.contains("exact argument schema"));
     }
 
     #[test]
@@ -19701,10 +19639,10 @@ mod contract_payload_normalization_tests {
 seiyaku ZkIvmPayloadNormalizeTest {
 
   kotoage fn burn_and_record(
-    sender: AccountId,
-    settlement_asset: AssetDefinitionId,
-    amount: i64,
-    record_instruction: bytes
+    AccountId sender,
+    AssetDefinitionId settlement_asset,
+    int amount,
+    bytes record_instruction
   ) authorize("CanEnactGovernance") {}
 }
 "#,
@@ -19743,7 +19681,7 @@ seiyaku ZkIvmPayloadNormalizeTest {
         let mut expected = Map::new();
         expected.insert("sender".into(), Value::from(sender));
         expected.insert("settlement_asset".into(), Value::from(settlement_asset));
-        expected.insert("amount".into(), Value::from(25_000_000_000_000_000_i64));
+        expected.insert("amount".into(), Value::from("25000000000000000"));
         expected.insert("record_instruction".into(), Value::from("aabbcc"));
         assert_eq!(value, Value::Object(expected));
     }
@@ -22671,7 +22609,7 @@ mod multisig_selector_tests {
                 r#"
 seiyaku BytesPayloadNormalizeTest {
 
-  kotoage fn create(alias_literal: bytes) authorize("CanEnactGovernance") {}
+  kotoage fn create(bytes alias_literal) authorize("CanEnactGovernance") {}
 }
 "#,
             )

@@ -1925,19 +1925,13 @@ impl Builtin {
                 &[s::SYSCALL_RESOLVE_ACCOUNT_ALIAS]
             }
             Self::PointerConstructor(_) => &[],
-            Self::Contains => &[
-                s::SYSCALL_BUILD_PATH_MAP_KEY,
-                s::SYSCALL_BUILD_PATH_KEY_NORITO,
-                s::SYSCALL_STATE_GET,
-            ],
+            Self::Contains => &[s::SYSCALL_BUILD_PATH_KEY_NORITO, s::SYSCALL_STATE_GET],
             Self::GetOrDefault | Self::GetOr => &[
-                s::SYSCALL_BUILD_PATH_MAP_KEY,
                 s::SYSCALL_BUILD_PATH_KEY_NORITO,
                 s::SYSCALL_STATE_GET,
                 s::SYSCALL_STATE_VALUE_DECODE,
             ],
             Self::Ensure => &[
-                s::SYSCALL_BUILD_PATH_MAP_KEY,
                 s::SYSCALL_BUILD_PATH_KEY_NORITO,
                 s::SYSCALL_STATE_GET,
                 s::SYSCALL_STATE_VALUE_DECODE,
@@ -1945,7 +1939,6 @@ impl Builtin {
                 s::SYSCALL_STATE_SET,
             ],
             Self::StateMapRemove => &[
-                s::SYSCALL_BUILD_PATH_MAP_KEY,
                 s::SYSCALL_BUILD_PATH_KEY_NORITO,
                 s::SYSCALL_STATE_GET,
                 s::SYSCALL_STATE_VALUE_DECODE,
@@ -2104,10 +2097,7 @@ impl Builtin {
             Self::AddSignatory => &[s::SYSCALL_ADD_SIGNATORY],
             Self::RemoveSignatory => &[s::SYSCALL_REMOVE_SIGNATORY],
             Self::SetAccountQuorum => &[s::SYSCALL_SET_ACCOUNT_QUORUM],
-            Self::Path => &[
-                s::SYSCALL_BUILD_PATH_MAP_KEY,
-                s::SYSCALL_BUILD_PATH_KEY_NORITO,
-            ],
+            Self::Path => &[s::SYSCALL_BUILD_PATH_KEY_NORITO],
             Self::NameDecode => &[s::SYSCALL_NAME_DECODE],
             Self::TlvEq => &[s::SYSCALL_TLV_EQ],
             Self::TlvLen => &[s::SYSCALL_TLV_LEN],
@@ -2442,7 +2432,7 @@ impl Builtin {
             | Self::ZkVerifyBatch
             | Self::ZkVoteVerifyBallot
             | Self::ZkVoteVerifyTally => S::new(&["bytes"], "()"),
-            Self::VrfVerify => S::new(&["bytes", "bytes", "bytes", "int"], "bytes"),
+            Self::VrfVerify => S::new(&["bytes"], "bytes"),
             Self::VrfVerifyBatch => S::new(&["bytes"], "bytes"),
             Self::Sm3Hash
             | Self::Sha256Hash
@@ -2664,7 +2654,7 @@ impl Builtin {
             Self::AxtTouch => signature.with_names(&["dataspace", "proof"]),
             Self::VerifyDsProof => signature.with_names(&["dataspace", "proof"]),
             Self::UseAssetHandle => signature.with_names(&["handle", "operation", "proof"]),
-            Self::VrfVerify => signature.with_names(&["message", "proof", "public_key", "variant"]),
+            Self::VrfVerify => signature.with_names(&["request"]),
             Self::Sm2Verify => {
                 signature.with_names(&["message", "signature", "public_key", "distid"])
             }

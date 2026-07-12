@@ -28,11 +28,11 @@ public sealed class ContractManifestTests
             (byte)64,
             entrypoint.ArgumentSchema.Fields[1].ValueType.Nodes[0].ListValue!.Capacity);
         Assert.Equal(1, entrypoint.ReturnSchema!.WordCount);
-        Assert.Equal("Result<(bool, u128), string>", entrypoint.ReturnSchema.CanonicalTypeName);
+        Assert.Equal("Result<(bool, int), string>", entrypoint.ReturnSchema.CanonicalTypeName);
         Assert.Equal(ToriiContractTriggerRepeatsKind.Indefinitely, entrypoint.Triggers.Single().Repeats.Kind);
         Assert.Equal("transfer", entrypoint.Triggers.Single().Callback.Entrypoint);
         Assert.Equal("daily-settlement", entrypoint.Triggers.Single().Metadata["purpose"]!.GetValue<string>());
-        Assert.Equal("StateMap<AccountId, Amount>", manifest.States!.Single().TypeName);
+        Assert.Equal("StateMap<AccountId, quantity>", manifest.States!.Single().TypeName);
         Assert.Equal((uint)1001, manifest.ErrorCodes!.Single().Code);
         Assert.Equal("ja", manifest.Kotoba!.Single().Translations.Last().Language);
         Assert.Equal("ed25519:fixture", manifest.Provenance!.Signer);
@@ -90,6 +90,26 @@ public sealed class ContractManifestTests
     }
 
     [Fact]
+    public void EntrypointSchemasExposeOnlyTheFirstReleaseNumericKinds()
+    {
+        foreach (var (wireKind, typeName) in new[]
+        {
+            ("Int", "int"),
+            ("Decimal", "decimal"),
+            ("Quantity", "quantity"),
+        })
+        {
+            var (_, schema) = ParseReturnSchema(new[] { Leaf(wireKind) }, typeName);
+            Assert.Equal(typeName, schema.CanonicalTypeName);
+        }
+
+        foreach (var retired in new[] { "U128", "Amount" })
+        {
+            AssertSchemaRejected(new[] { Leaf(retired) }, retired, "unsupported");
+        }
+    }
+
+    [Fact]
     public void EntrypointSchemasRejectLegacyTruncatedDeepAndForgedTapes()
     {
         foreach (var (name, fields, children) in QueryViews())
@@ -136,18 +156,18 @@ public sealed class ContractManifestTests
             },
             "List<Name, 64>",
             "unknown field");
-        AssertSchemaRejected(new[] { ListNode(64) }, "List<i64, 64>", "ends before");
+        AssertSchemaRejected(new[] { ListNode(64) }, "List<int, 64>", "ends before");
         AssertSchemaRejected(
             new[] { Leaf("Bool"), Leaf("Bool") },
             "bool",
             "complete canonical prefix type tree");
         AssertSchemaRejected(
             new[] { ListNode(0), Leaf("Int") },
-            "List<i64, 0>",
+            "List<int, 0>",
             "capacity");
         AssertSchemaRejected(
             new[] { ListNode(65), Leaf("Int") },
-            "List<i64, 65>",
+            "List<int, 65>",
             "capacity");
 
         var forgedForEncoding = new ToriiEntrypointValueTypeV1
@@ -198,7 +218,7 @@ public sealed class ContractManifestTests
         var atLimitNodes = Enumerable.Repeat(ListNode(1), 255)
             .Append(Leaf("Int"))
             .ToArray();
-        var atLimitName = "i64";
+        var atLimitName = "int";
         for (var depth = 0; depth < 255; depth++)
         {
             atLimitName = $"List<{atLimitName}, 1>";
@@ -284,15 +304,15 @@ public sealed class ContractManifestTests
         IEnumerable<string> nodes,
         string typeName)
     {
-        return $$"""
+        return $$$"""
         {
           "entrypoints":[{
             "name":"inspect",
             "kind":{"kind":"View","value":null},
             "params":[],
             "argument_schema":null,
-            "return_type":{{JsonSerializer.Serialize(typeName)}},
-            "return_schema":{"nodes":[{{string.Join(",", nodes)}}]},
+            "return_type":{{{JsonSerializer.Serialize(typeName)}}},
+            "return_schema":{"nodes":[{{{string.Join(",", nodes)}}}]},
             "permission":null,
             "read_keys":[],
             "write_keys":[],
@@ -315,7 +335,7 @@ public sealed class ContractManifestTests
             (
                 "AssetView",
                 new[] { "id", "amount" },
-                new[] { Leaf("AssetId"), Leaf("Amount") }),
+                new[] { Leaf("AssetId"), Leaf("Quantity") }),
             (
                 "AssetDefinitionView",
                 new[] { "id", "name", "description", "owned_by", "total_quantity", "metadata" },
@@ -326,7 +346,7 @@ public sealed class ContractManifestTests
                     NullNode("Option"),
                     Leaf("String"),
                     Leaf("AccountId"),
-                    Leaf("Amount"),
+                    Leaf("Quantity"),
                     Leaf("Json"),
                 }),
             (
@@ -342,29 +362,29 @@ public sealed class ContractManifestTests
 
     private static string StructNode(string name, IEnumerable<string> fields)
     {
-        return $$"""
-        {"kind":"Struct","value":{"name":{{JsonSerializer.Serialize(name)}},"fields":[{{string.Join(",", fields.Select(field => JsonSerializer.Serialize(field)))}}]}}
+        return $$$"""
+        {"kind":"Struct","value":{"name":{{{JsonSerializer.Serialize(name)}}},"fields":[{{{string.Join(",", fields.Select(field => JsonSerializer.Serialize(field)))}}}]}}
         """;
     }
 
     private static string ListNode(byte capacity)
     {
-        return $$"""{"kind":"List","value":{"capacity":{{capacity}}}}""";
+        return $$$"""{"kind":"List","value":{"capacity":{{{capacity}}}}}""";
     }
 
     private static string NullNode(string kind)
     {
-        return $$"""{"kind":{{JsonSerializer.Serialize(kind)}},"value":null}""";
+        return $$$"""{"kind":{{{JsonSerializer.Serialize(kind)}}},"value":null}""";
     }
 
     private static string Leaf(string kind)
     {
-        return $$"""{"kind":"Leaf","value":{"kind":{{JsonSerializer.Serialize(kind)}},"value":null}}""";
+        return $$$"""{"kind":"Leaf","value":{"kind":{{{JsonSerializer.Serialize(kind)}}},"value":null}}""";
     }
 
     private static string FullResponse()
     {
-        return $$"""
+        return $$$"""
         {
           "manifest":{
             "seiyaku_name":"Ledger",
@@ -393,7 +413,7 @@ public sealed class ContractManifestTests
               "argument_schema":{"fields":[
                 {"name":"request","ty":{"nodes":[
                   {"kind":"Struct","value":{"name":"Transfer","fields":["amount","memo"]}},
-                  {"kind":"Leaf","value":{"kind":"Amount","value":null}},
+                  {"kind":"Leaf","value":{"kind":"Quantity","value":null}},
                   {"kind":"Option","value":null},
                   {"kind":"Leaf","value":{"kind":"String","value":null}}
                 ]}},
@@ -402,12 +422,12 @@ public sealed class ContractManifestTests
                   {"kind":"Leaf","value":{"kind":"Name","value":null}}
                 ]}}
               ]},
-              "return_type":"Result<(bool, u128), string>",
+              "return_type":"Result<(bool, int), string>",
               "return_schema":{"nodes":[
                 {"kind":"Result","value":null},
                 {"kind":"Tuple","value":2},
                 {"kind":"Leaf","value":{"kind":"Bool","value":null}},
-                {"kind":"Leaf","value":{"kind":"U128","value":null}},
+                {"kind":"Leaf","value":{"kind":"Int","value":null}},
                 {"kind":"Leaf","value":{"kind":"String","value":null}}
               ]},
               "permission":"TransferAsset",
@@ -418,13 +438,13 @@ public sealed class ContractManifestTests
               "triggers":[{
                 "id":"settle",
                 "repeats":{"Indefinitely":null},
-                "filter":"{{FilterBase64}}",
+                "filter":"{{{FilterBase64}}}",
                 "authority":null,
                 "metadata":{"purpose":"daily-settlement","round":7},
                 "callback":{"namespace":null,"entrypoint":"transfer"}
               }]
             }],
-            "states":[{"name":"Balances","type_name":"StateMap<AccountId, Amount>"}],
+            "states":[{"name":"Balances","type_name":"StateMap<AccountId, quantity>"}],
             "error_codes":[{"namespace":"TransferError","name":"InsufficientFunds","code":1001}],
             "kotoba":[{
               "msg_id":"transfer.denied",
@@ -435,8 +455,8 @@ public sealed class ContractManifestTests
             }],
             "provenance":{"signer":"ed25519:fixture","signature":"fixture-signature"}
           },
-          "code_hash":"{{new string('b', 64)}}",
-          "abi_hash":"{{new string('d', 64)}}"
+          "code_hash":"{{{new string('b', 64)}}}",
+          "abi_hash":"{{{new string('d', 64)}}}"
         }
         """;
     }

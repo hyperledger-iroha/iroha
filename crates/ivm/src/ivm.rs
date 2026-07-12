@@ -1479,6 +1479,7 @@ pub(crate) fn prepare_instruction_stream(
 struct ProgramLoadImage<'a> {
     code_region: &'a [u8],
     metadata: ProgramMetadata,
+    contract_interface: Option<Arc<crate::metadata::EmbeddedContractInterfaceV1>>,
     contract_debug: Option<EmbeddedContractDebugInfoV1>,
     literal_table: DecodedLiteralTable,
     predecoded: Option<Arc<[crate::ivm_cache::DecodedOp]>>,
@@ -1571,6 +1572,7 @@ pub struct IVM {
     max_cycles: u64,
     metadata: ProgramMetadata,
     code_hash: [u8; 32],
+    contract_interface: Option<Arc<crate::metadata::EmbeddedContractInterfaceV1>>,
     contract_debug: Option<EmbeddedContractDebugInfoV1>,
     literal_table: DecodedLiteralTable,
     predecoded: Option<Arc<[crate::ivm_cache::DecodedOp]>>,
@@ -1665,6 +1667,7 @@ impl Clone for IVM {
             max_cycles: self.max_cycles,
             metadata: self.metadata.clone(),
             code_hash: self.code_hash,
+            contract_interface: self.contract_interface.clone(),
             contract_debug: self.contract_debug.clone(),
             literal_table: self.literal_table.clone(),
             predecoded: self.predecoded.clone(),
@@ -1994,6 +1997,7 @@ impl IVM {
             max_cycles: 0,
             metadata: ProgramMetadata::default(),
             code_hash: [0u8; 32],
+            contract_interface: None,
             contract_debug: None,
             literal_table: DecodedLiteralTable::empty(),
             predecoded: None,
@@ -2745,6 +2749,7 @@ impl IVM {
         self.entrypoint_pc = Some(0);
         self.program_prefix_len = 0;
         self.contract_debug = None;
+        self.contract_interface = None;
         self.literal_table = DecodedLiteralTable::empty();
         self.last_diagnostic = None;
         self.predecoded = None;
@@ -2805,6 +2810,7 @@ impl IVM {
         self.install_program(ProgramLoadImage {
             code_region,
             metadata: meta,
+            contract_interface: parsed.contract_interface.map(Arc::new),
             contract_debug: parsed.contract_debug,
             literal_table,
             predecoded,
@@ -2828,6 +2834,7 @@ impl IVM {
         self.install_program(ProgramLoadImage {
             code_region: contract.code_region(),
             metadata: contract.metadata().clone(),
+            contract_interface: Some(contract.shared_contract_interface()),
             contract_debug: None,
             literal_table: contract.literal_table().clone(),
             predecoded: Some(Arc::clone(contract.decoded())),
@@ -2848,6 +2855,7 @@ impl IVM {
             return Err(VMError::PrivacyViolation);
         }
         self.metadata = image.metadata.clone();
+        self.contract_interface = image.contract_interface;
         self.contract_debug = image.contract_debug;
         self.literal_table = image.literal_table;
         self.vector_enabled = image.metadata.mode & crate::metadata::mode::VECTOR != 0;
@@ -3108,6 +3116,16 @@ impl IVM {
     /// Access the parsed program metadata for the currently loaded program.
     pub fn metadata(&self) -> &ProgramMetadata {
         &self.metadata
+    }
+
+    /// Return the self-describing contract interface retained for the loaded image.
+    ///
+    /// Compiler-internal host helpers use the declared durable-state schema to
+    /// validate typed state paths. Generic 1.0 programs have no interface and
+    /// therefore cannot use schema-bound helpers such as `StateMap` key codecs.
+    #[must_use]
+    pub fn contract_interface(&self) -> Option<&crate::metadata::EmbeddedContractInterfaceV1> {
+        self.contract_interface.as_deref()
     }
 
     /// Returns `true` when the VM is executing in zero-knowledge mode.

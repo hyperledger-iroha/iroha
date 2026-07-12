@@ -6588,14 +6588,14 @@ seiyaku TriggerDispatch {
                 authority "{multisig_id}";
               }}
 
-              state Requests_requested_by_actor: StateMap<Name, bytes>;
-              state ToAccount: StateMap<Name, AccountId>;
-              state Amount: StateMap<Name, i64>;
-              state ProposalStatus: StateMap<Name, i64>;
-              state CreatedAtMs: StateMap<Name, i64>;
-              state ExpiresAtMs: StateMap<Name, i64>;
+              state StateMap<Name, bytes> Requests_requested_by_actor;
+              state StateMap<Name, AccountId> ToAccount;
+              state StateMap<Name, quantity> Amount;
+              state StateMap<Name, int> ProposalStatus;
+              state StateMap<Name, int> CreatedAtMs;
+              state StateMap<Name, int> ExpiresAtMs;
 
-              fn run_impl(ev: Json) -> Option<bool> {{
+              fn run_impl(Json ev) -> Option<bool> {{
                 let request_id = ev.get_name(Name::parse("request_id"))?;
                 assert(!ProposalStatus.contains(request_id), "mint request already exists");
                 let action = ev.get_name(Name::parse("action"))?;
@@ -6605,22 +6605,22 @@ seiyaku TriggerDispatch {
                 assert(asset_id == expected_asset, "unsupported asset definition");
                 let to_account_id = ev.get_account_id(Name::parse("to_account_id"))?;
                 assert(to_account_id == context::authority(), "mint destination account mismatch");
-                let amount_i64 = ev.get_int(Name::parse("amount_i64"))?;
+                let amount = ev.get_quantity(Name::parse("amount"))?;
                 let requested_by_actor = ev.get_blob_hex(Name::parse("requested_by_actor_hex"))?;
                 let created_at_ms = ev.get_int(Name::parse("created_at_ms"))?;
                 let expires_at_ms = ev.get_int(Name::parse("expires_at_ms"))?;
-                assert(amount_i64 > 0, "invalid amount");
+                assert(amount > 0, "invalid amount");
 
                 Requests_requested_by_actor[request_id] = requested_by_actor;
                 ToAccount[request_id] = to_account_id;
-                Amount[request_id] = amount_i64;
+                Amount[request_id] = amount;
                 ProposalStatus[request_id] = 1;
                 CreatedAtMs[request_id] = created_at_ms;
                 ExpiresAtMs[request_id] = expires_at_ms;
                 Option::some(true)
               }}
 
-              kotoage fn run(ev: Json) authorize("staged_mint_request_run") {{
+              kotoage fn run(Json ev) authorize("staged_mint_request_run") {{
                 assert(run_impl(ev).is_some(), "missing or invalid staged mint field");
               }}
             }}
@@ -6658,10 +6658,10 @@ seiyaku TriggerDispatch {
                 "request_id":"mrtest",
                 "asset_id":"66owaQmAQMuHxPzxUN3bqZ6FJfDa",
                 "to_account_id":"{multisig_id}",
-                "amount_i64":111,
+                "amount":"111",
                 "requested_by_actor_hex":"7b226163746f72223a226f70657261746f7231227d",
-                "created_at_ms":1779225455574,
-                "expires_at_ms":1779311855574
+                "created_at_ms":"1779225455574",
+                "expires_at_ms":"1779311855574"
             }}"#,
             multisig_id = multisig_id,
         );

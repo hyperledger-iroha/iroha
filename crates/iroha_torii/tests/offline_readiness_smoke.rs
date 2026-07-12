@@ -161,7 +161,11 @@ async fn offline_router_exposes_only_the_final_first_release_contract() {
             .to_bytes();
         let duplicate_error: iroha_torii_shared::ErrorEnvelope =
             norito::json::from_slice(&duplicate_body).expect("decode duplicate-query error");
-        assert_eq!(duplicate_error.code(), "request_query_invalid", "query={query}");
+        assert_eq!(
+            duplicate_error.code(),
+            "request_query_invalid",
+            "query={query}"
+        );
         assert!(
             duplicate_error.message().contains("duplicate field"),
             "query={query}, error={duplicate_error:?}"

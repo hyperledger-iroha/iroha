@@ -261,10 +261,8 @@ async fn proof_and_bundle_endpoints_return_the_exact_durable_v2_artifact() {
         bundle.commitment.height_context_id,
         fixture.artifact.context_id()
     );
-    let mut bundle_verifier = BridgeFinalityVerifier::with_context(
-        fixture.chain_id,
-        fixture.artifact.context_id(),
-    );
+    let mut bundle_verifier =
+        BridgeFinalityVerifier::with_context(fixture.chain_id, fixture.artifact.context_id());
     bundle_verifier
         .verify_bundle(&bundle)
         .expect("trusted verifier accepts exact endpoint bundle");

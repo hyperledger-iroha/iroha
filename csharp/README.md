@@ -15,6 +15,10 @@ This initial slice provides the foundation needed for a usable managed SDK:
   construction, initialization, and access plus strict v1 frame decode checks
   for magic/version, schema, compression, reserved layout flags, zero padding,
   length, and CRC
+- lossless Kotodama numeric V1 values for signed 512-bit `int`, exact
+  scale-bounded `decimal`, and nominal non-negative `quantity`, with canonical
+  string-only JSON, minimal two's-complement Norito frames, authenticated
+  pointer envelopes, and no conversion through CLR floating-point types
 - canonical Torii request signing headers with exact account, matching
   Ed25519 private seed, method, path, 16-byte lowercase-hex nonce, canonical
   64-byte signature-header base64, and positive timestamp validation before

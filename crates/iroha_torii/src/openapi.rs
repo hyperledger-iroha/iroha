@@ -6731,7 +6731,7 @@ fn sumeragi_paths() -> Map {
         Value::Object(sccp_bridge_submit_operation(
             "bridgeProofSubmit",
             "Prepare or submit an SCCP destination-proof transaction.",
-            "The JSON-only request carries a canonical destination proof. Preparation omits both detached-signing fields; direct submission must provide both `signature_b64` and the byte-identical prepared `transaction_payload_b64`, together with the exact positive `creation_time_ms` returned by preparation.",
+            "The JSON-only request carries a canonical destination proof. Preparation provides neither detached-signing value (the optional fields may be absent or null); direct submission must provide both `signature_b64` and the byte-identical prepared `transaction_payload_b64`, together with the exact positive `creation_time_ms` returned by preparation.",
             "#/components/schemas/SccpBridgeProofSubmitRequest",
         )),
     );
@@ -6740,7 +6740,7 @@ fn sumeragi_paths() -> Map {
         Value::Object(sccp_bridge_submit_operation(
             "bridgeMessageSubmit",
             "Prepare or submit a protocol-native SCCP admission transaction.",
-            "The JSON-only request carries one canonical native proof. Preparation omits both detached-signing fields; direct submission must provide both `signature_b64` and the byte-identical prepared `transaction_payload_b64`, together with the exact positive `creation_time_ms` returned by preparation.",
+            "The JSON-only request carries one canonical native proof. Preparation provides neither detached-signing value (the optional fields may be absent or null); direct submission must provide both `signature_b64` and the byte-identical prepared `transaction_payload_b64`, together with the exact positive `creation_time_ms` returned by preparation.",
             "#/components/schemas/SccpBridgeMessageSubmitRequest",
         )),
     );
@@ -6943,9 +6943,9 @@ fn bridge_finality_bundle_operation() -> Map {
     let mut responses = Map::new();
     responses.insert(
         "200".into(),
-        json_response(
+        typed_dual_format_response(
             "Finality bundle for the requested block height.",
-            schema_ref("BridgeFinalityBundle"),
+            "#/components/schemas/BridgeFinalityBundle",
         ),
     );
     responses.insert(
@@ -6988,7 +6988,7 @@ fn sccp_capabilities_operation() -> Map {
     let mut responses = Map::new();
     responses.insert(
         "200".into(),
-        sccp_dual_format_response(
+        typed_dual_format_response(
             "SCCP capability snapshot.",
             "#/components/schemas/SccpCapabilitiesV1",
         ),
@@ -7025,7 +7025,7 @@ fn sccp_registry_operation() -> Map {
     let mut responses = Map::new();
     responses.insert(
         "200".into(),
-        sccp_dual_format_response(
+        typed_dual_format_response(
             "Authoritative SCCP registry.",
             "#/components/schemas/SccpRegistryV1",
         ),
@@ -7062,15 +7062,12 @@ fn sccp_message_bundle_operation() -> Map {
     );
     operation.insert(
         "parameters".into(),
-        Value::Array(vec![string_path_param(
-            "message_id",
-            "Canonical SCCP message id hex string.",
-        )]),
+        Value::Array(vec![sccp_message_id_parameter()]),
     );
     let mut responses = Map::new();
     responses.insert(
         "200".into(),
-        sccp_dual_format_response(
+        typed_dual_format_response(
             "Canonical finalized SCCP message bundle.",
             "#/components/schemas/SccpMessageBundleV1",
         ),
@@ -7111,15 +7108,12 @@ fn sccp_proof_request_operation() -> Map {
     );
     operation.insert(
         "parameters".into(),
-        Value::Array(vec![string_path_param(
-            "message_id",
-            "Canonical SCCP message id hex string.",
-        )]),
+        Value::Array(vec![sccp_message_id_parameter()]),
     );
     let mut responses = Map::new();
     responses.insert(
         "200".into(),
-        sccp_dual_format_response(
+        typed_dual_format_response(
             "Canonical state-derived SCCP Groth16 proof request.",
             "#/components/schemas/SccpProofRequestV1",
         ),
@@ -7167,7 +7161,7 @@ fn sccp_recent_messages_operation() -> Map {
     };
     responses.insert(
         "200".into(),
-        sccp_dual_format_response(
+        typed_dual_format_response(
             "Recent finalized SCCP outbound messages.",
             "#/components/schemas/SccpRecentMessagesV1",
         ),
@@ -7176,7 +7170,7 @@ fn sccp_recent_messages_operation() -> Map {
     methods
 }
 
-fn sccp_dual_format_response(description: &str, schema_ref: &str) -> Value {
+fn typed_dual_format_response(description: &str, schema_ref: &str) -> Value {
     norito::json!({
         "description": description,
         "content": {
@@ -7192,6 +7186,19 @@ fn sccp_dual_format_response(description: &str, schema_ref: &str) -> Value {
             }
         }
     })
+}
+
+fn sccp_message_id_parameter() -> Value {
+    let mut parameter = string_path_param(
+        "message_id",
+        "Canonical nonzero SCCP message id encoded as exactly 64 lowercase hexadecimal characters.",
+    );
+    let schema = parameter
+        .as_object_mut()
+        .and_then(|parameter| parameter.get_mut("schema"))
+        .expect("string path parameter has a schema");
+    *schema = norito::json!({ "$ref": "#/components/schemas/SccpHex32" });
+    parameter
 }
 
 fn sccp_bridge_submit_operation(
@@ -7344,9 +7351,9 @@ fn bridge_finality_operation() -> Map {
     let mut responses = Map::new();
     responses.insert(
         "200".into(),
-        json_response(
+        typed_dual_format_response(
             "Finality proof for the requested block height.",
-            schema_ref("BridgeFinalityProof"),
+            "#/components/schemas/BridgeFinalityProof",
         ),
     );
     responses.insert(
@@ -11901,13 +11908,21 @@ fn sccp_submit_and_governance_schemas(schemas: &mut Map) {
             "additionalProperties": false,
             "properties": {
                 "authority": { "$ref": "#/components/schemas/SccpTairaI105Account" },
+                "signature_b64": {
+                    "type": "null",
+                    "description": "Preparation carries no detached signature; canonical DTO JSON may encode the absent optional field as null."
+                },
+                "transaction_payload_b64": {
+                    "type": "null",
+                    "description": "Preparation carries no prepared transaction payload; canonical DTO JSON may encode the absent optional field as null."
+                },
                 "destination_proof_b64": {
                     "$ref": "#/components/schemas/SccpCanonicalBase64",
                     "maxLength": 22457004,
                     "description": "Canonical Norito SccpGroth16Bn254ProofArtifactV1 bytes."
                 },
                 "creation_time_ms": {
-                    "type": "integer", "format": "uint64", "minimum": 1,
+                    "type": ["integer", "null"], "format": "uint64", "minimum": 1,
                     "maximum": 18446744073709551615_u64
                 }
             }
@@ -11954,7 +11969,7 @@ fn sccp_submit_and_governance_schemas(schemas: &mut Map) {
                 { "$ref": "#/components/schemas/SccpBridgeProofPrepareRequest" },
                 { "$ref": "#/components/schemas/SccpBridgeProofSignedRequest" }
             ],
-            "description": "Closed two-state request: preparation has neither signing field; direct submission has both and an explicit positive creation timestamp."
+            "description": "Closed two-state request: preparation has no non-null signing field; direct submission has both and an explicit positive creation timestamp."
         }),
     );
     schemas.insert(
@@ -11965,13 +11980,21 @@ fn sccp_submit_and_governance_schemas(schemas: &mut Map) {
             "additionalProperties": false,
             "properties": {
                 "authority": { "$ref": "#/components/schemas/SccpTairaI105Account" },
+                "signature_b64": {
+                    "type": "null",
+                    "description": "Preparation carries no detached signature; canonical DTO JSON may encode the absent optional field as null."
+                },
+                "transaction_payload_b64": {
+                    "type": "null",
+                    "description": "Preparation carries no prepared transaction payload; canonical DTO JSON may encode the absent optional field as null."
+                },
                 "native_proof_b64": {
                     "$ref": "#/components/schemas/SccpCanonicalBase64",
                     "maxLength": 22369624,
                     "description": "Canonical Norito native SCCP admission proof bytes."
                 },
                 "creation_time_ms": {
-                    "type": "integer", "format": "uint64", "minimum": 1,
+                    "type": ["integer", "null"], "format": "uint64", "minimum": 1,
                     "maximum": 18446744073709551615_u64
                 }
             }
@@ -12018,7 +12041,7 @@ fn sccp_submit_and_governance_schemas(schemas: &mut Map) {
                 { "$ref": "#/components/schemas/SccpBridgeMessagePrepareRequest" },
                 { "$ref": "#/components/schemas/SccpBridgeMessageSignedRequest" }
             ],
-            "description": "Closed two-state request: preparation has neither signing field; direct submission has both and an explicit positive creation timestamp."
+            "description": "Closed two-state request: preparation has no non-null signing field; direct submission has both and an explicit positive creation timestamp."
         }),
     );
     schemas.insert(
@@ -18237,6 +18260,37 @@ mod tests {
             );
         }
 
+        for path in [
+            "/v1/sccp/proofs/message/{message_id}",
+            "/v1/sccp/proof-requests/{message_id}",
+        ] {
+            let message_id_schema = paths
+                .get(path)
+                .and_then(Value::as_object)
+                .and_then(|path| path.get("get"))
+                .and_then(Value::as_object)
+                .and_then(|get| get.get("parameters"))
+                .and_then(Value::as_array)
+                .and_then(|parameters| {
+                    parameters.iter().find(|parameter| {
+                        parameter
+                            .as_object()
+                            .and_then(|parameter| parameter.get("name"))
+                            .and_then(Value::as_str)
+                            == Some("message_id")
+                    })
+                })
+                .and_then(Value::as_object)
+                .and_then(|parameter| parameter.get("schema"))
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("missing message_id schema for {path}"));
+            assert_eq!(
+                message_id_schema.get("$ref").and_then(Value::as_str),
+                Some("#/components/schemas/SccpHex32"),
+                "{path} must reject noncanonical message identifiers at the documented boundary"
+            );
+        }
+
         let parameters = paths
             .get("/v1/sccp/messages/recent")
             .and_then(Value::as_object)
@@ -18263,6 +18317,39 @@ mod tests {
             schema_for("limit").get("maximum"),
             Some(&Value::from(50_u64))
         );
+    }
+
+    #[test]
+    fn generated_spec_has_exact_first_release_sccp_and_bridge_operations() {
+        let document = generate_spec();
+        let paths = document
+            .get("paths")
+            .and_then(Value::as_object)
+            .expect("paths section");
+        let methods = ["get", "post", "put", "patch", "delete"];
+        let actual = paths
+            .iter()
+            .filter(|(path, _)| path.starts_with("/v1/sccp/") || path.starts_with("/v1/bridge/"))
+            .flat_map(|(path, item)| {
+                let item = item.as_object().expect("SCCP/bridge path item");
+                methods.into_iter().filter_map(move |method| {
+                    item.contains_key(method).then(|| (path.as_str(), method))
+                })
+            })
+            .collect::<BTreeSet<_>>();
+        let expected = BTreeSet::from([
+            ("/v1/bridge/finality/{height}", "get"),
+            ("/v1/bridge/finality/bundle/{height}", "get"),
+            ("/v1/bridge/proofs/submit", "post"),
+            ("/v1/bridge/messages", "post"),
+            ("/v1/sccp/proofs/message/{message_id}", "get"),
+            ("/v1/sccp/capabilities", "get"),
+            ("/v1/sccp/registry", "get"),
+            ("/v1/sccp/proof-requests/{message_id}", "get"),
+            ("/v1/sccp/messages/recent", "get"),
+        ]);
+
+        assert_eq!(actual, expected);
     }
 
     #[test]
@@ -18995,14 +19082,16 @@ mod tests {
             );
         }
 
-        for (prepare, signed) in [
+        for (prepare, signed, proof_field) in [
             (
                 "SccpBridgeProofPrepareRequest",
                 "SccpBridgeProofSignedRequest",
+                "destination_proof_b64",
             ),
             (
                 "SccpBridgeMessagePrepareRequest",
                 "SccpBridgeMessageSignedRequest",
+                "native_proof_b64",
             ),
         ] {
             let prepare = schema(schemas, prepare);
@@ -19019,16 +19108,81 @@ mod tests {
                 .get("properties")
                 .and_then(Value::as_object)
                 .expect("prepare request properties");
-            assert!(!prepare_properties.contains_key("signature_b64"));
-            assert!(!prepare_properties.contains_key("transaction_payload_b64"));
+            assert_eq!(required(prepare), ["authority", proof_field]);
+            assert_eq!(
+                prepare_properties
+                    .keys()
+                    .map(String::as_str)
+                    .collect::<BTreeSet<_>>(),
+                BTreeSet::from([
+                    "authority",
+                    "signature_b64",
+                    "transaction_payload_b64",
+                    proof_field,
+                    "creation_time_ms",
+                ])
+            );
+            for field in ["signature_b64", "transaction_payload_b64"] {
+                assert_eq!(
+                    prepare_properties
+                        .get(field)
+                        .and_then(Value::as_object)
+                        .and_then(|field| field.get("type"))
+                        .and_then(Value::as_str),
+                    Some("null"),
+                    "preparation `{field}` may only carry the DTO's explicit null representation"
+                );
+            }
+            let preparation_creation_time = prepare_properties
+                .get("creation_time_ms")
+                .and_then(Value::as_object)
+                .expect("prepare creation_time_ms schema");
+            assert_eq!(
+                preparation_creation_time
+                    .get("type")
+                    .and_then(Value::as_array)
+                    .map(|types| {
+                        types
+                            .iter()
+                            .map(|value| value.as_str().expect("creation-time JSON type"))
+                            .collect::<Vec<_>>()
+                    }),
+                Some(vec!["integer", "null"])
+            );
+            assert_eq!(
+                preparation_creation_time
+                    .get("minimum")
+                    .and_then(Value::as_u64),
+                Some(1)
+            );
             let signed_required = required(signed);
-            assert!(signed_required.contains(&"signature_b64"));
-            assert!(signed_required.contains(&"transaction_payload_b64"));
-            assert!(signed_required.contains(&"creation_time_ms"));
+            assert_eq!(
+                signed_required,
+                [
+                    "authority",
+                    "signature_b64",
+                    "transaction_payload_b64",
+                    proof_field,
+                    "creation_time_ms",
+                ]
+            );
             let signed_properties = signed
                 .get("properties")
                 .and_then(Value::as_object)
                 .expect("signed request properties");
+            assert_eq!(
+                signed_properties
+                    .keys()
+                    .map(String::as_str)
+                    .collect::<BTreeSet<_>>(),
+                BTreeSet::from([
+                    "authority",
+                    "signature_b64",
+                    "transaction_payload_b64",
+                    proof_field,
+                    "creation_time_ms",
+                ])
+            );
             assert_eq!(
                 signed_properties
                     .get("signature_b64")
@@ -19054,24 +19208,72 @@ mod tests {
                 Some(1)
             );
         }
-        assert_eq!(
-            schema(schemas, "SccpBridgeProofSubmitRequest")
+        for (request, prepare, signed) in [
+            (
+                "SccpBridgeProofSubmitRequest",
+                "SccpBridgeProofPrepareRequest",
+                "SccpBridgeProofSignedRequest",
+            ),
+            (
+                "SccpBridgeMessageSubmitRequest",
+                "SccpBridgeMessagePrepareRequest",
+                "SccpBridgeMessageSignedRequest",
+            ),
+        ] {
+            let variants = schema(schemas, request)
                 .get("oneOf")
                 .and_then(Value::as_array)
-                .map(Vec::len),
-            Some(2)
-        );
+                .unwrap_or_else(|| panic!("{request} oneOf variants"));
+            assert_eq!(
+                variants
+                    .iter()
+                    .filter_map(Value::as_object)
+                    .filter_map(|variant| variant.get("$ref"))
+                    .filter_map(Value::as_str)
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>(),
+                vec![
+                    format!("#/components/schemas/{prepare}"),
+                    format!("#/components/schemas/{signed}"),
+                ]
+            );
+        }
 
         let response = schema(schemas, "SccpBridgeSubmitResponseV1");
+        assert_eq!(
+            response.get("additionalProperties"),
+            Some(&Value::Bool(false))
+        );
         let response_required = required(response);
-        assert!(response_required.contains(&"route_configuration_hash_hex"));
-        assert!(response_required.contains(&"tx_hash_hex"));
-        assert!(response_required.contains(&"transaction_payload_b64"));
-        assert!(response_required.contains(&"signing_message_b64"));
+        assert_eq!(
+            response_required,
+            [
+                "submitted",
+                "payload_kind",
+                "message_id_hex",
+                "backend",
+                "counterparty_domain",
+                "counterparty_chain",
+                "route_configuration_hash_hex",
+                "range_start_height",
+                "range_end_height",
+                "creation_time_ms",
+                "tx_hash_hex",
+                "transaction_payload_b64",
+                "signing_message_b64",
+            ]
+        );
         let response_properties = response
             .get("properties")
             .and_then(Value::as_object)
             .expect("SCCP response properties");
+        assert_eq!(
+            response_properties
+                .keys()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>(),
+            response_required.into_iter().collect::<BTreeSet<_>>()
+        );
         assert!(!response_properties.contains_key("manifest_hash_hex"));
         assert_eq!(
             response
@@ -19110,6 +19312,10 @@ mod tests {
         assert_eq!(routes.get("maxItems").and_then(Value::as_u64), Some(64));
         let recent = schema(schemas, "SccpRecentMessagesV1");
         assert_eq!(
+            recent.get("additionalProperties"),
+            Some(&Value::Bool(false))
+        );
+        assert_eq!(
             recent
                 .get("properties")
                 .and_then(Value::as_object)
@@ -19119,7 +19325,83 @@ mod tests {
                 .and_then(Value::as_u64),
             Some(50)
         );
-        assert!(required(schema(schemas, "SccpRecentMessageV1")).contains(&"payload_projection"));
+        assert_eq!(required(recent), ["items"]);
+        assert_eq!(
+            recent
+                .get("properties")
+                .and_then(Value::as_object)
+                .expect("recent-message response properties")
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            ["items"]
+        );
+        let recent_message = schema(schemas, "SccpRecentMessageV1");
+        assert_eq!(
+            recent_message.get("additionalProperties"),
+            Some(&Value::Bool(false))
+        );
+        let recent_message_required = required(recent_message);
+        assert_eq!(
+            recent_message_required,
+            [
+                "height",
+                "message_id_hex",
+                "kind",
+                "source_profile",
+                "target_profile",
+                "destination_binding_hash",
+                "route_configuration_hash",
+                "target_domain",
+                "amount",
+                "payload_projection",
+                "links",
+            ]
+        );
+        assert_eq!(
+            recent_message
+                .get("properties")
+                .and_then(Value::as_object)
+                .expect("recent-message properties")
+                .keys()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([
+                "height",
+                "message_id_hex",
+                "kind",
+                "source_profile",
+                "target_profile",
+                "destination_binding_hash",
+                "route_configuration_hash",
+                "target_domain",
+                "asset_id",
+                "route_id",
+                "recipient",
+                "amount",
+                "payload_projection",
+                "links",
+            ])
+        );
+        let recent_links = schema(schemas, "SccpRecentMessageLinksV1");
+        assert_eq!(
+            recent_links.get("additionalProperties"),
+            Some(&Value::Bool(false))
+        );
+        assert_eq!(
+            required(recent_links),
+            ["bundle_path", "proof_request_path"]
+        );
+        assert_eq!(
+            recent_links
+                .get("properties")
+                .and_then(Value::as_object)
+                .expect("recent-message link properties")
+                .keys()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from(["bundle_path", "proof_request_path"])
+        );
 
         let raw_transfer = schema(schemas, "SccpRawTransferPayloadV1");
         let raw_properties = raw_transfer
@@ -19298,6 +19580,7 @@ mod tests {
         assert!(!paths.contains_key("/v1/sccp/manifests"));
         assert!(!paths.contains_key("/v1/sccp/artifacts/message/{message_id}"));
         assert!(!paths.contains_key("/v1/sccp/jobs/message/{message_id}"));
+        assert!(!paths.contains_key("/v1/sccp/proofs/burn/{message_id}"));
         assert!(paths.contains_key("/v1/sumeragi/validator-sets"));
         assert!(paths.contains_key("/v1/sumeragi/validator-sets/{height}"));
         assert!(paths.contains_key("/v1/sumeragi/rbc/sessions"));
@@ -22332,22 +22615,58 @@ mod tests {
             .and_then(Value::as_object)
             .expect("paths")
             .clone();
-        for path in [
-            "/v1/bridge/finality/{height}",
-            "/v1/bridge/finality/bundle/{height}",
+        for (path, response_schema) in [
+            (
+                "/v1/bridge/finality/{height}",
+                "#/components/schemas/BridgeFinalityProof",
+            ),
+            (
+                "/v1/bridge/finality/bundle/{height}",
+                "#/components/schemas/BridgeFinalityBundle",
+            ),
         ] {
-            let description = paths
+            let operation = paths
                 .get(path)
                 .and_then(Value::as_object)
                 .and_then(|path| path.get("get"))
                 .and_then(Value::as_object)
-                .and_then(|operation| operation.get("description"))
+                .unwrap_or_else(|| panic!("missing GET operation for {path}"));
+            let description = operation
+                .get("description")
                 .and_then(Value::as_str)
                 .unwrap_or_else(|| panic!("missing GET description for {path}"));
             assert!(description.contains("Sumeragi-v2"));
             assert!(description.contains("durable"));
             assert!(!description.contains("validator set signatures"));
             assert!(!description.contains("block header and commit certificate"));
+
+            let content = operation
+                .get("responses")
+                .and_then(Value::as_object)
+                .and_then(|responses| responses.get("200"))
+                .and_then(Value::as_object)
+                .and_then(|response| response.get("content"))
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("missing successful response content for {path}"));
+            assert_eq!(
+                content
+                    .get("application/json")
+                    .and_then(Value::as_object)
+                    .and_then(|media| media.get("schema"))
+                    .and_then(Value::as_object)
+                    .and_then(|schema| schema.get("$ref"))
+                    .and_then(Value::as_str),
+                Some(response_schema),
+                "{path} JSON response schema"
+            );
+            let norito = content
+                .get("application/x-norito")
+                .and_then(Value::as_object)
+                .and_then(|media| media.get("schema"))
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("missing Norito response schema for {path}"));
+            assert_eq!(norito.get("type").and_then(Value::as_str), Some("string"));
+            assert_eq!(norito.get("format").and_then(Value::as_str), Some("binary"));
         }
     }
 

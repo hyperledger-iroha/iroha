@@ -2428,6 +2428,7 @@ impl WsvHost {
         Self::byte_gas(16, input_len, output_len)
     }
 
+    #[cfg(test)]
     fn path_gas(input_len: usize, output_len: usize) -> u64 {
         Self::byte_gas(16, input_len, output_len)
     }
@@ -3510,6 +3511,7 @@ impl IVMHost for WsvHost {
             crate::syscalls::SYSCALL_STATE_GET => {
                 // r10 = &Name path -> return r10 = &NoritoBytes value in INPUT (or 0 if none)
                 let name = self.decode_name_reg(vm, 10)?;
+                crate::host::validate_declared_state_path(vm, &name)?;
                 let path = name.as_ref();
                 self.log_read_key(path);
                 if self.tx_active
@@ -3572,9 +3574,11 @@ impl IVMHost for WsvHost {
                     });
                 }
                 let path_name = self.decode_name_payload(p_path.payload)?;
+                crate::host::validate_declared_state_path(vm, &path_name)?;
+                crate::host::validate_state_value_payload_len(p_val.payload.len())?;
+                crate::host::validate_declared_state_value_payload(vm, &path_name, p_val.payload)?;
                 let path = path_name.as_ref();
                 self.log_write_key(path);
-                crate::host::validate_state_value_payload_len(p_val.payload.len())?;
                 let stored = p_val.payload.to_vec();
                 if self.tx_active {
                     if crate::dev_env::decode_trace_enabled() {
@@ -3596,6 +3600,7 @@ impl IVMHost for WsvHost {
                     return Err(VMError::NoritoInvalid);
                 }
                 let path = self.decode_name_payload(p_path.payload)?;
+                crate::host::validate_declared_state_path(vm, &path)?;
                 self.log_write_key(path.as_ref());
                 if self.tx_active {
                     if crate::dev_env::decode_trace_enabled() {
@@ -3609,6 +3614,7 @@ impl IVMHost for WsvHost {
             }
             crate::syscalls::SYSCALL_STATE_KEYS => {
                 let prefix = self.decode_name_reg(vm, 10)?;
+                crate::host::validate_declared_state_scan_path(vm, &prefix)?;
                 self.log_read_key(prefix.as_ref());
                 let keys = self.state_keys_with_prefix(&prefix)?;
                 let selected = Self::paged_state_keys(&keys, vm.register(11), vm.register(12))?;
@@ -3623,12 +3629,14 @@ impl IVMHost for WsvHost {
             }
             crate::syscalls::SYSCALL_STATE_HAS => {
                 let path = self.decode_name_reg(vm, 10)?;
+                crate::host::validate_declared_state_path(vm, &path)?;
                 self.log_read_key(path.as_ref());
                 vm.set_register(10, u64::from(self.state_key_present(path.as_ref())));
                 Ok(16)
             }
             crate::syscalls::SYSCALL_STATE_LEN => {
                 let path = self.decode_name_reg(vm, 10)?;
+                crate::host::validate_declared_state_path(vm, &path)?;
                 self.log_read_key(path.as_ref());
                 if let Some(len) = self.state_value_len(path.as_ref())? {
                     let gas = Self::state_query_gas(len);
@@ -3645,6 +3653,7 @@ impl IVMHost for WsvHost {
             }
             crate::syscalls::SYSCALL_STATE_COUNT => {
                 let prefix = self.decode_name_reg(vm, 10)?;
+                crate::host::validate_declared_state_scan_path(vm, &prefix)?;
                 self.log_read_key(prefix.as_ref());
                 let total = self.state_keys_with_prefix(&prefix)?.len();
                 let gas = Self::state_count_gas(total);
@@ -3706,36 +3715,6 @@ impl IVMHost for WsvHost {
                 vm.set_register(10, val as u64);
                 Ok(Self::numeric_payload_gas(input_len, 0))
             }
-            crate::syscalls::SYSCALL_BUILD_PATH_MAP_KEY => {
-                // r10 = &Name base; r11 = key (int) -> r10 = &Name("<base>/<key>")
-                let base_addr = vm.register(10);
-                let resolved = crate::core_host::CoreHost::resolve_code_tlv_addr(vm, base_addr);
-                let base_tlv = vm.validate_tlv(resolved)?;
-                if base_tlv.type_id != PointerType::Name {
-                    return Err(VMError::NoritoInvalid);
-                }
-                let base_name = self.decode_name_payload(base_tlv.payload)?;
-                let input_len = base_tlv.payload.len();
-                let key = vm.register(11) as i64;
-                let base = base_name.as_ref();
-                let mut s = String::with_capacity(base.len() + 1 + 20);
-                s.push_str(base);
-                s.push('/');
-                use core::fmt::Write as _;
-                let _ = write!(&mut s, "{key}");
-                let path_name = Name::from_str(&s).map_err(|_| VMError::NoritoInvalid)?;
-                let body = norito::to_bytes(&path_name).map_err(|_| VMError::NoritoInvalid)?;
-                let mut out = Vec::with_capacity(7 + body.len() + 32);
-                out.extend_from_slice(&(PointerType::Name as u16).to_be_bytes());
-                out.push(1);
-                out.extend_from_slice(&(body.len() as u32).to_be_bytes());
-                out.extend_from_slice(&body);
-                let h: [u8; 32] = iroha_crypto::Hash::new(&body).into();
-                out.extend_from_slice(&h);
-                let p = vm.alloc_host_tlv(&out)?;
-                vm.set_register(10, p);
-                Ok(Self::path_gas(input_len, body.len()))
-            }
             crate::syscalls::SYSCALL_ALLOC => {
                 let size = vm.register(10);
                 let addr = vm.alloc_heap(size)?;
@@ -3745,7 +3724,7 @@ impl IVMHost for WsvHost {
             crate::syscalls::SYSCALL_ENCODE_INT => {
                 // r10 = value (i64) -> r10 = &NoritoBytes (Norito-framed i64)
                 let val = vm.register(10) as i64;
-                let body = norito::to_bytes(&val).map_err(|_| VMError::NoritoInvalid)?;
+                let body = crate::host::canonical_norito_bytes(&val)?;
                 let mut out = Vec::with_capacity(7 + body.len() + 32);
                 out.extend_from_slice(&(PointerType::NoritoBytes as u16).to_be_bytes());
                 out.push(1);
@@ -7054,6 +7033,29 @@ mod tests_null_decode {
     use iroha_data_model::prelude::Name;
     use iroha_primitives::json::Json;
 
+    fn load_int_state_map_schema(vm: &mut IVM, name: &str) {
+        let interface = crate::metadata::EmbeddedContractInterfaceV1 {
+            seiyaku_name: "MockWsvStateMapFixture".to_owned(),
+            compiler_fingerprint: "ivm-mock-wsv-tests".to_owned(),
+            features_bitmap: 0,
+            access_set_hints: None,
+            kotoba: Vec::new(),
+            entrypoints: Vec::new(),
+            states: vec![crate::metadata::EmbeddedStateDescriptor {
+                name: name.to_owned(),
+                ty: crate::metadata::EmbeddedStateType::StateMap {
+                    key: Box::new(crate::metadata::EmbeddedStateType::Int),
+                    value: Box::new(crate::metadata::EmbeddedStateType::Bytes),
+                },
+            }],
+            error_codes: Vec::new(),
+        };
+        let mut artifact = crate::metadata::ProgramMetadata::default().encode();
+        artifact.extend_from_slice(&interface.encode_section());
+        vm.load_program(&artifact)
+            .expect("load mock WSV map schema");
+    }
+
     fn make_tlv(pointer_type: PointerType, payload: &[u8]) -> Vec<u8> {
         let mut out = Vec::with_capacity(7 + payload.len() + iroha_crypto::Hash::LENGTH);
         out.extend_from_slice(&(pointer_type as u16).to_be_bytes());
@@ -7790,6 +7792,7 @@ mod tests_null_decode {
             WsvHost::new_with_subject(MockWorldStateView::new(), caller.clone(), HashMap::new());
         let mut vm = IVM::new(u64::MAX);
         vm.set_host(host);
+        load_int_state_map_schema(&mut vm, "orders");
 
         vm.set_register(10, 42);
         let encode_int_gas =
@@ -7809,17 +7812,9 @@ mod tests_null_decode {
         let base_ptr = vm
             .alloc_input_tlv(&make_tlv(PointerType::Name, &base_bytes))
             .expect("alloc base");
-        vm.set_register(10, base_ptr);
-        vm.set_register(11, 7);
-        let path_gas = call_syscall_with_quote(&mut vm, syscalls::SYSCALL_BUILD_PATH_MAP_KEY)
-            .expect("path map key");
-        let path_tlv = vm.validate_tlv(vm.register(10)).expect("path tlv");
-        assert_eq!(
-            path_gas,
-            WsvHost::path_gas(base_bytes.len(), path_tlv.payload.len())
-        );
-
-        let key_bytes = norito::to_bytes(&42_i64).expect("encode key");
+        let key_bytes =
+            crate::numeric_tlv::encode_int(&iroha_primitives::bigint::BigInt::from_i128(7))
+                .expect("encode canonical int key");
         let key_ptr = vm
             .alloc_input_tlv(&make_tlv(PointerType::NoritoBytes, &key_bytes))
             .expect("alloc key");

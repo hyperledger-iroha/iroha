@@ -89,29 +89,6 @@ fn decode_schema(
     Ok((schema, tlv.payload))
 }
 
-fn pointer_type(kind: StateValueKindV1) -> Option<PointerType> {
-    Some(match kind {
-        StateValueKindV1::Bool => return None,
-        StateValueKindV1::Int => PointerType::Int,
-        StateValueKindV1::Decimal => PointerType::Decimal,
-        StateValueKindV1::Quantity => PointerType::Quantity,
-        StateValueKindV1::String | StateValueKindV1::Bytes => PointerType::Blob,
-        StateValueKindV1::Json => PointerType::Json,
-        StateValueKindV1::AccountId => PointerType::AccountId,
-        StateValueKindV1::AssetDefinitionId => PointerType::AssetDefinitionId,
-        StateValueKindV1::AssetId => PointerType::AssetId,
-        StateValueKindV1::DomainId => PointerType::DomainId,
-        StateValueKindV1::NftId => PointerType::NftId,
-        StateValueKindV1::Name => PointerType::Name,
-        StateValueKindV1::DataSpaceId => PointerType::DataSpaceId,
-        StateValueKindV1::AxtDescriptor => PointerType::AxtDescriptor,
-        StateValueKindV1::AssetHandle => PointerType::AssetHandle,
-        StateValueKindV1::ProofBlob => PointerType::ProofBlob,
-        StateValueKindV1::SoracloudRequest => PointerType::SoracloudRequest,
-        StateValueKindV1::SoracloudResponse => PointerType::SoracloudResponse,
-    })
-}
-
 fn decode_canonical_norito<T>(payload: &[u8]) -> Result<T, VMError>
 where
     T: norito::codec::Decode + norito::codec::Encode,
@@ -285,7 +262,7 @@ fn validate_state_pointer_atom(
     kind: StateValueKindV1,
     envelope: &[u8],
 ) -> Result<(), VMError> {
-    let expected = pointer_type(kind).ok_or(VMError::DecodeError)?;
+    let expected = kind.pointer_type().ok_or(VMError::DecodeError)?;
     let tlv = pointer_abi::validate_tlv_bytes(envelope)?;
     if tlv.type_id != expected || !pointer_abi::is_type_allowed_for_policy(policy, tlv.type_id) {
         return Err(VMError::DecodeError);
@@ -406,6 +383,125 @@ fn validate_state_atom_stream(
         return Err(VMError::DecodeError);
     }
     Ok(())
+}
+
+fn append_embedded_state_schema_nodes(
+    ty: &crate::metadata::EmbeddedStateType,
+    nodes: &mut Vec<StateValueNodeV1>,
+) -> Result<(), VMError> {
+    use crate::metadata::EmbeddedStateType as Embedded;
+    use StateValueKindV1 as Kind;
+
+    match ty {
+        Embedded::Int => nodes.push(StateValueNodeV1::Leaf(Kind::Int)),
+        Embedded::Decimal => nodes.push(StateValueNodeV1::Leaf(Kind::Decimal)),
+        Embedded::Quantity => nodes.push(StateValueNodeV1::Leaf(Kind::Quantity)),
+        Embedded::Bool => nodes.push(StateValueNodeV1::Leaf(Kind::Bool)),
+        Embedded::String => nodes.push(StateValueNodeV1::Leaf(Kind::String)),
+        Embedded::Bytes => nodes.push(StateValueNodeV1::Leaf(Kind::Bytes)),
+        Embedded::DataSpaceId => nodes.push(StateValueNodeV1::Leaf(Kind::DataSpaceId)),
+        Embedded::AccountId => nodes.push(StateValueNodeV1::Leaf(Kind::AccountId)),
+        Embedded::AssetDefinitionId => {
+            nodes.push(StateValueNodeV1::Leaf(Kind::AssetDefinitionId));
+        }
+        Embedded::AssetId => nodes.push(StateValueNodeV1::Leaf(Kind::AssetId)),
+        Embedded::NftId => nodes.push(StateValueNodeV1::Leaf(Kind::NftId)),
+        Embedded::DomainId => nodes.push(StateValueNodeV1::Leaf(Kind::DomainId)),
+        Embedded::Name => nodes.push(StateValueNodeV1::Leaf(Kind::Name)),
+        Embedded::Json => nodes.push(StateValueNodeV1::Leaf(Kind::Json)),
+        Embedded::Tuple(items) => {
+            let arity = u16::try_from(items.len()).map_err(|_| VMError::NoritoInvalid)?;
+            nodes.push(StateValueNodeV1::Tuple { arity });
+            for item in items {
+                append_embedded_state_schema_nodes(item, nodes)?;
+            }
+        }
+        Embedded::Struct { name, fields } => {
+            nodes.push(StateValueNodeV1::Struct {
+                name: name.clone(),
+                fields: fields.iter().map(|field| field.name.clone()).collect(),
+            });
+            for field in fields {
+                append_embedded_state_schema_nodes(&field.ty, nodes)?;
+            }
+        }
+        Embedded::Option(inner) => {
+            nodes.push(StateValueNodeV1::Option);
+            append_embedded_state_schema_nodes(inner, nodes)?;
+        }
+        Embedded::Result { ok, err } => {
+            nodes.push(StateValueNodeV1::Result);
+            append_embedded_state_schema_nodes(ok, nodes)?;
+            append_embedded_state_schema_nodes(err, nodes)?;
+        }
+        Embedded::List { element, capacity } => {
+            let mut element_nodes = Vec::new();
+            append_embedded_state_schema_nodes(element, &mut element_nodes)?;
+            let element = StateValueSchemaV1 {
+                nodes: element_nodes,
+            };
+            if !element.validate() {
+                return Err(VMError::NoritoInvalid);
+            }
+            nodes.push(StateValueNodeV1::List {
+                element: Box::new(element),
+                capacity: *capacity,
+            });
+        }
+        Embedded::StateMap { .. } => return Err(VMError::NoritoInvalid),
+    }
+    Ok(())
+}
+
+/// Reconstruct the exact compiler-owned durable-value schema embedded in CNTR.
+pub(crate) fn schema_for_embedded_state_type(
+    ty: &crate::metadata::EmbeddedStateType,
+) -> Result<StateValueSchemaV1, VMError> {
+    let mut nodes = Vec::new();
+    append_embedded_state_schema_nodes(ty, &mut nodes)?;
+    let schema = StateValueSchemaV1 { nodes };
+    if !schema.validate() {
+        return Err(VMError::NoritoInvalid);
+    }
+    Ok(schema)
+}
+
+fn decode_validated_state_value_record(
+    policy: ivm_abi::SyscallPolicy,
+    schema: &StateValueSchemaV1,
+    schema_payload: &[u8],
+    payload: &[u8],
+) -> Result<StateValueRecordV1, VMError> {
+    if !schema.validate()
+        || schema_payload.len() > MAX_STATE_VALUE_SCHEMA_BYTES
+        || payload.len() > MAX_STATE_VALUE_RECORD_BYTES
+    {
+        return Err(VMError::NoritoInvalid);
+    }
+    let record: StateValueRecordV1 =
+        decode_from_bytes(payload).map_err(|_| VMError::DecodeError)?;
+    if record.schema_hash != state_value_schema_hash_v1(schema_payload)
+        || !schema.validate_atoms(&record.atoms)
+        || to_bytes(&record)
+            .map_err(|_| VMError::DecodeError)?
+            .as_slice()
+            != payload
+    {
+        return Err(VMError::DecodeError);
+    }
+    validate_state_atom_stream(policy, schema, &record.atoms)?;
+    Ok(record)
+}
+
+/// Validate one persisted record against an exact CNTR-derived state schema.
+pub(crate) fn validate_state_value_record(
+    vm: &IVM,
+    schema: &StateValueSchemaV1,
+    payload: &[u8],
+) -> Result<(), VMError> {
+    let schema_payload = to_bytes(schema).map_err(|_| VMError::DecodeError)?;
+    decode_validated_state_value_record(vm.syscall_policy(), schema, &schema_payload, payload)
+        .map(drop)
 }
 
 #[derive(Clone, Copy)]
@@ -611,7 +707,7 @@ fn encode_state_node(
             if pointer == 0 {
                 return Err(VMError::DecodeError);
             }
-            let expected = pointer_type(*kind).ok_or(VMError::DecodeError)?;
+            let expected = kind.pointer_type().ok_or(VMError::DecodeError)?;
             let (envelope, tlv) =
                 load_expected_tlv(context.vm, pointer, expected, context.resolver)?;
             validate_pointer_payload(*kind, tlv.payload)?;
@@ -923,18 +1019,12 @@ pub(crate) fn decode_state_value(vm: &mut IVM, resolver: AddressResolver) -> Res
     if tlv.payload.len() > MAX_STATE_VALUE_RECORD_BYTES {
         return Err(VMError::NoritoInvalid);
     }
-    let record: StateValueRecordV1 =
-        decode_from_bytes(tlv.payload).map_err(|_| VMError::DecodeError)?;
-    if record.schema_hash != state_value_schema_hash_v1(schema_payload)
-        || !schema.validate_atoms(&record.atoms)
-        || to_bytes(&record)
-            .map_err(|_| VMError::DecodeError)?
-            .as_slice()
-            != tlv.payload
-    {
-        return Err(VMError::DecodeError);
-    }
-    validate_state_atom_stream(vm.syscall_policy(), &schema, &record.atoms)?;
+    let record = decode_validated_state_value_record(
+        vm.syscall_policy(),
+        &schema,
+        schema_payload,
+        tlv.payload,
+    )?;
     let atoms = record.atoms;
     let record_len = tlv.payload.len();
 
