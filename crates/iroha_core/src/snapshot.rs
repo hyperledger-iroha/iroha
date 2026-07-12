@@ -25,7 +25,7 @@ use iroha_data_model::{
     asset::AssetId,
     block::{BlockHeader, consensus_v2::SnapshotV2BootstrapRecord},
     name::Name,
-    nexus::{DataSpaceId, LaneCatalog, LaneId},
+    nexus::{LaneCatalog, LaneId},
 };
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
 use iroha_logger::prelude::*;

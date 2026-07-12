@@ -179,7 +179,7 @@ use mv::{
 use nonzero_ext::nonzero;
 use norito::{
     NoritoDeserialize, NoritoSerialize,
-    codec::{Decode, DecodeAll, Encode},
+    codec::{Decode, Encode},
     derive::{JsonDeserialize, JsonSerialize},
     json,
 };
@@ -47938,7 +47938,7 @@ mod fastpq_tx_set_hash_tests {
         transaction::TransactionBuilder,
     };
     use iroha_logger::Level;
-    use iroha_primitives::{json::Json, numeric::Numeric};
+    use iroha_primitives::json::Json;
     use iroha_test_samples::{ALICE_ID, BOB_ID, gen_account_in};
     use nonzero_ext::nonzero;
 
@@ -104986,7 +104986,6 @@ seiyaku IdentitylessRawCallback {
             },
         };
         use iroha_primitives::json::Json;
-        use iroha_primitives::numeric::Numeric;
         use ivm::{
             KotodamaCompiler,
             kotodama::compiler::{CompilerMode, CompilerOptions},

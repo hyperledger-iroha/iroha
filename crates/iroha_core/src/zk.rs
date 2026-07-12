@@ -3652,6 +3652,7 @@ mod zk1 {
 }
 
 #[cfg(test)]
+/// Helpers for constructing canonical ZK1 test envelopes.
 pub mod zk1_test_helpers {
     use halo2_proofs::{
         halo2curves::pasta::{EqAffine as Curve, Fp},
