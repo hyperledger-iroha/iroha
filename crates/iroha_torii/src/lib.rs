@@ -544,7 +544,7 @@ pub use routing::{
     DeployContractBundleReceiptDto, DeployContractDto, EvidenceListQuery, EvidenceSubmitRequestDto,
     KaigiRelayDetailDto, KaigiRelayDomainMetricsDto, KaigiRelayHealthSnapshotDto,
     KaigiRelaySummaryDto, KaigiRelaySummaryListDto, MaybeTelemetry, MultisigAccountSelectorDto,
-    MultisigCancelRequestDto, MultisigProposalsGetRequestDto, MultisigProposalsListRequestDto,
+    MultisigCancelRequestDto, MultisigProposalLookupRequestDto, MultisigProposalsQueryRequestDto,
     PinAliasDto, PinPolicyDto, PinPolicyStorageClassDto, ProofApiLimits, ProofFindByIdQueryDto,
     ProofListQuery, RegisterPinManifestDto, RegisterPinManifestResponseDto, SetContractAliasDto,
     SetContractAliasResponseDto, SpaceDirectoryManifestPublishDto, SpaceDirectoryManifestRevokeDto,
@@ -5720,11 +5720,33 @@ mod strict_request_target_tests {
         };
         Router::new()
             .route(
-                route_catalog::contracts_and_verification_keys::MULTISIG_PROPOSALS_LIST_POST.path(),
+                route_catalog::contracts_and_verification_keys::MULTISIG_PROPOSALS_QUERY_POST
+                    .path(),
                 mount(Arc::clone(&counter)),
             )
             .route(
-                route_catalog::contracts_and_verification_keys::MULTISIG_PROPOSALS_GET_POST.path(),
+                route_catalog::contracts_and_verification_keys::MULTISIG_PROPOSALS_LOOKUP_POST
+                    .path(),
+                mount(Arc::clone(&counter)),
+            )
+            .route(
+                route_catalog::contracts_and_verification_keys::MULTISIG_APPROVALS_QUERY_POST
+                    .path(),
+                mount(Arc::clone(&counter)),
+            )
+            .route(
+                route_catalog::contracts_and_verification_keys::MULTISIG_APPROVALS_LOOKUP_POST
+                    .path(),
+                mount(Arc::clone(&counter)),
+            )
+            .route(
+                route_catalog::contracts_and_verification_keys::MULTISIG_APPROVALS_QUERY_FOR_AUTHORITY_POST
+                    .path(),
+                mount(Arc::clone(&counter)),
+            )
+            .route(
+                route_catalog::contracts_and_verification_keys::MULTISIG_APPROVALS_LOOKUP_FOR_AUTHORITY_POST
+                    .path(),
                 mount(Arc::clone(&counter)),
             )
             .route(
@@ -5921,18 +5943,17 @@ mod strict_request_target_tests {
     }
 
     #[tokio::test]
-    async fn canonical_proposal_routes_do_not_resolve_retired_query_aliases() {
+    async fn canonical_query_routes_do_not_resolve_retired_action_aliases() {
         let counter = Arc::new(AtomicUsize::new(0));
         let router = catalog_cutover_test_router(Arc::clone(&counter));
 
         for retired_path in [
-            "/v1/multisig/proposals/query",
-            "/v1/multisig/proposals/lookup",
-            "/v1/multisig/approvals/query",
-            "/v1/multisig/approvals/lookup",
-            "/v1/multisig/approvals/query-for-authority",
-            "/v1/multisig/approvals/lookup-for-authority",
+            "/v1/multisig/proposals/list",
+            "/v1/multisig/proposals/get",
+            "/v1/multisig/approvals/list",
+            "/v1/multisig/approvals/get",
             "/v1/multisig/approvals/list_for_authority",
+            "/v1/multisig/approvals/get_for_authority",
             "/v1/controls/asset-transfer/get",
         ] {
             let response = router
@@ -5951,8 +5972,12 @@ mod strict_request_target_tests {
         assert_eq!(counter.load(Ordering::SeqCst), 0);
 
         for canonical_path in [
-            "/v1/multisig/proposals/list",
-            "/v1/multisig/proposals/get",
+            "/v1/multisig/proposals/query",
+            "/v1/multisig/proposals/lookup",
+            "/v1/multisig/approvals/query",
+            "/v1/multisig/approvals/lookup",
+            "/v1/multisig/approvals/query-for-authority",
+            "/v1/multisig/approvals/lookup-for-authority",
             "/v1/controls/asset-transfer/query",
         ] {
             let response = router
@@ -5972,11 +5997,12 @@ mod strict_request_target_tests {
                 "{canonical_path}"
             );
         }
-        assert_eq!(counter.load(Ordering::SeqCst), 3);
+        assert_eq!(counter.load(Ordering::SeqCst), 7);
 
         for adversarial_path in [
             "/v1/multisig/proposals//query",
             "/v1/multisig/proposals/%2fquery",
+            "/v1/multisig/proposals/query/",
             "/v1/multisig/proposals/list/",
         ] {
             let response = router
@@ -5998,7 +6024,7 @@ mod strict_request_target_tests {
                 "{adversarial_path}"
             );
         }
-        assert_eq!(counter.load(Ordering::SeqCst), 3);
+        assert_eq!(counter.load(Ordering::SeqCst), 7);
     }
 }
 
@@ -35856,68 +35882,226 @@ async fn handler_post_multisig_cancel(
 }
 
 #[cfg(feature = "app_api")]
-async fn handler_post_multisig_proposals_list(
+async fn handler_post_multisig_proposals_query(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    request: NoritoJson<crate::routing::MultisigProposalsListRequestDto>,
+    request: NoritoJson<crate::routing::MultisigProposalsQueryRequestDto>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
     if let Err(error) = validate_api_token(app.as_ref(), &headers) {
         app.telemetry
-            .with_metrics(|tel| tel.inc_torii_contract_error("multisig_proposals_list"));
+            .with_metrics(|tel| tel.inc_torii_contract_error("multisig_proposals_query"));
         return Err(error);
     }
     check_public_contract_read_route_rate_limit(
         &app,
         &headers,
         remote_ip,
-        "v1/multisig/proposals/list",
-        "multisig_proposals_list",
+        "v1/multisig/proposals/query",
+        "multisig_proposals_query",
         app.api_token_enforced(),
     )
     .await?;
     let response =
-        crate::routing::handle_post_multisig_proposals_list(app.state.clone(), request).await;
+        crate::routing::handle_post_multisig_proposals_query(app.state.clone(), request).await;
     match response {
         Ok(resp) => Ok(resp.into_response()),
         Err(err) => {
             app.telemetry
-                .with_metrics(|tel| tel.inc_torii_contract_error("multisig_proposals_list"));
+                .with_metrics(|tel| tel.inc_torii_contract_error("multisig_proposals_query"));
             Err(err)
         }
     }
 }
 
 #[cfg(feature = "app_api")]
-async fn handler_post_multisig_proposals_get(
+async fn handler_post_multisig_proposals_lookup(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    request: NoritoJson<crate::routing::MultisigProposalsGetRequestDto>,
+    request: NoritoJson<crate::routing::MultisigProposalLookupRequestDto>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
     if let Err(error) = validate_api_token(app.as_ref(), &headers) {
         app.telemetry
-            .with_metrics(|tel| tel.inc_torii_contract_error("multisig_proposals_get"));
+            .with_metrics(|tel| tel.inc_torii_contract_error("multisig_proposals_lookup"));
         return Err(error);
     }
     check_public_contract_read_route_rate_limit(
         &app,
         &headers,
         remote_ip,
-        "v1/multisig/proposals/get",
-        "multisig_proposals_get",
+        "v1/multisig/proposals/lookup",
+        "multisig_proposals_lookup",
         app.api_token_enforced(),
     )
     .await?;
     let response =
-        crate::routing::handle_post_multisig_proposals_get(app.state.clone(), request).await;
+        crate::routing::handle_post_multisig_proposals_lookup(app.state.clone(), request).await;
     match response {
         Ok(resp) => Ok(resp.into_response()),
         Err(err) => {
             app.telemetry
-                .with_metrics(|tel| tel.inc_torii_contract_error("multisig_proposals_get"));
+                .with_metrics(|tel| tel.inc_torii_contract_error("multisig_proposals_lookup"));
+            Err(err)
+        }
+    }
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_post_multisig_approvals_query(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    NoritoJson(request): NoritoJson<crate::routing::MultisigApprovalsQueryRequestDto>,
+) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
+    validate_api_token(&app, &headers)?;
+    let viewer = match tx_history_viewer_from_headers(&app, &headers) {
+        Ok(viewer) => viewer,
+        Err(response) => return Ok(response),
+    };
+    check_public_contract_read_route_rate_limit(
+        &app,
+        &headers,
+        remote_ip,
+        &format!("v1/multisig/approvals/query:{}", viewer.subject),
+        "multisig_approvals_query",
+        app.api_token_enforced(),
+    )
+    .await?;
+    match crate::routing::handle_post_multisig_approvals_query(
+        app.state.clone(),
+        crate::routing::MultisigApprovalsViewerScope {
+            viewer_account_ids: viewer.account_ids,
+        },
+        NoritoJson(request),
+    )
+    .await
+    {
+        Ok(resp) => Ok(resp.into_response()),
+        Err(err) => {
+            app.telemetry
+                .with_metrics(|tel| tel.inc_torii_contract_error("multisig_approvals_query"));
+            Err(err)
+        }
+    }
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_post_multisig_approvals_lookup(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    NoritoJson(request): NoritoJson<crate::routing::MultisigApprovalLookupRequestDto>,
+) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
+    validate_api_token(&app, &headers)?;
+    let viewer = match tx_history_viewer_from_headers(&app, &headers) {
+        Ok(viewer) => viewer,
+        Err(response) => return Ok(response),
+    };
+    check_public_contract_read_route_rate_limit(
+        &app,
+        &headers,
+        remote_ip,
+        &format!("v1/multisig/approvals/lookup:{}", viewer.subject),
+        "multisig_approvals_lookup",
+        app.api_token_enforced(),
+    )
+    .await?;
+    match crate::routing::handle_post_multisig_approvals_lookup(
+        app.state.clone(),
+        crate::routing::MultisigApprovalsViewerScope {
+            viewer_account_ids: viewer.account_ids,
+        },
+        NoritoJson(request),
+    )
+    .await
+    {
+        Ok(resp) => Ok(resp.into_response()),
+        Err(err) => {
+            app.telemetry
+                .with_metrics(|tel| tel.inc_torii_contract_error("multisig_approvals_lookup"));
+            Err(err)
+        }
+    }
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_post_multisig_approvals_query_for_authority(
+    State(app): State<SharedAppState>,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    request: NoritoJsonWithBytes<crate::routing::MultisigApprovalsQueryRequestDto>,
+) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
+    validate_api_token(&app, &headers)?;
+    let authority =
+        require_signed_alias_request(&app, &headers, &method, &uri, request.raw.as_ref())?;
+    check_public_contract_read_route_rate_limit(
+        &app,
+        &headers,
+        remote_ip,
+        &format!("v1/multisig/approvals/query-for-authority:{authority}"),
+        "multisig_approvals_query_for_authority",
+        app.api_token_enforced(),
+    )
+    .await?;
+    match crate::routing::handle_post_multisig_approvals_query_for_authority(
+        app.state.clone(),
+        request.value,
+        authority,
+    )
+    .await
+    {
+        Ok(resp) => Ok(resp.into_response()),
+        Err(err) => {
+            app.telemetry.with_metrics(|tel| {
+                tel.inc_torii_contract_error("multisig_approvals_query_for_authority")
+            });
+            Err(err)
+        }
+    }
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_post_multisig_approvals_lookup_for_authority(
+    State(app): State<SharedAppState>,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    request: NoritoJsonWithBytes<crate::routing::MultisigApprovalLookupRequestDto>,
+) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
+    validate_api_token(&app, &headers)?;
+    let authority =
+        require_signed_alias_request(&app, &headers, &method, &uri, request.raw.as_ref())?;
+    check_public_contract_read_route_rate_limit(
+        &app,
+        &headers,
+        remote_ip,
+        &format!("v1/multisig/approvals/lookup-for-authority:{authority}"),
+        "multisig_approvals_lookup_for_authority",
+        app.api_token_enforced(),
+    )
+    .await?;
+    match crate::routing::handle_post_multisig_approvals_lookup_for_authority(
+        app.state.clone(),
+        request.value,
+        authority,
+    )
+    .await
+    {
+        Ok(resp) => Ok(resp.into_response()),
+        Err(err) => {
+            app.telemetry.with_metrics(|tel| {
+                tel.inc_torii_contract_error("multisig_approvals_lookup_for_authority")
+            });
             Err(err)
         }
     }
@@ -45148,13 +45332,33 @@ impl Torii {
                 .layer(DefaultBodyLimit::max(MULTISIG_READ_MAX_BODY_BYTES)),
         );
         builder.route(
-            &route_catalog::contracts_and_verification_keys::MULTISIG_PROPOSALS_LIST_POST,
-            catalog_post(handler_post_multisig_proposals_list)
+            &route_catalog::contracts_and_verification_keys::MULTISIG_PROPOSALS_QUERY_POST,
+            catalog_post(handler_post_multisig_proposals_query)
                 .layer(DefaultBodyLimit::max(MULTISIG_READ_MAX_BODY_BYTES)),
         );
         builder.route(
-            &route_catalog::contracts_and_verification_keys::MULTISIG_PROPOSALS_GET_POST,
-            catalog_post(handler_post_multisig_proposals_get)
+            &route_catalog::contracts_and_verification_keys::MULTISIG_PROPOSALS_LOOKUP_POST,
+            catalog_post(handler_post_multisig_proposals_lookup)
+                .layer(DefaultBodyLimit::max(MULTISIG_READ_MAX_BODY_BYTES)),
+        );
+        builder.route(
+            &route_catalog::contracts_and_verification_keys::MULTISIG_APPROVALS_QUERY_POST,
+            catalog_post(handler_post_multisig_approvals_query)
+                .layer(DefaultBodyLimit::max(MULTISIG_READ_MAX_BODY_BYTES)),
+        );
+        builder.route(
+            &route_catalog::contracts_and_verification_keys::MULTISIG_APPROVALS_LOOKUP_POST,
+            catalog_post(handler_post_multisig_approvals_lookup)
+                .layer(DefaultBodyLimit::max(MULTISIG_READ_MAX_BODY_BYTES)),
+        );
+        builder.route(
+            &route_catalog::contracts_and_verification_keys::MULTISIG_APPROVALS_QUERY_FOR_AUTHORITY_POST,
+            catalog_post(handler_post_multisig_approvals_query_for_authority)
+                .layer(DefaultBodyLimit::max(MULTISIG_READ_MAX_BODY_BYTES)),
+        );
+        builder.route(
+            &route_catalog::contracts_and_verification_keys::MULTISIG_APPROVALS_LOOKUP_FOR_AUTHORITY_POST,
+            catalog_post(handler_post_multisig_approvals_lookup_for_authority)
                 .layer(DefaultBodyLimit::max(MULTISIG_READ_MAX_BODY_BYTES)),
         );
         builder.route(
@@ -50769,7 +50973,7 @@ pub(crate) mod tests_runtime_handlers {
         state::{State as IrohaState, World},
         sumeragi::{
             consensus::{PERMISSIONED_TAG, Phase, Vote, vote_preimage},
-            status::record_commit_qc,
+            status::record_commit_qc_for_tests,
         },
         tx::AcceptedTransaction,
     };
@@ -59552,7 +59756,7 @@ pub(crate) mod tests_runtime_handlers {
                 bls_aggregate_signature: signature.payload().to_vec(),
             },
         };
-        record_commit_qc(cert.clone());
+        record_commit_qc_for_tests(cert.clone());
         cert
     }
 
@@ -60191,7 +60395,8 @@ pub(crate) mod tests_runtime_handlers {
             0,
         );
 
-        store_block(&app, block);
+        let stored_block_hash = store_block(&app, block);
+        assert_eq!(stored_block_hash, artifact.block_hash);
         if persist_finality {
             let receipt = app
                 .kura
@@ -60199,6 +60404,10 @@ pub(crate) mod tests_runtime_handlers {
                 .expect("persist exact SCCP v2 finality artifact");
             assert_eq!(receipt.height(), artifact.height);
             assert_eq!(receipt.block_hash(), artifact.block_hash);
+            assert_eq!(receipt.context_id(), artifact.context_id());
+            assert_eq!(receipt.subject(), artifact.subject);
+            assert_eq!(receipt.certificate(), artifact.commit_qc.as_ref());
+            assert_eq!(receipt.artifact_hash(), HashOf::new(&artifact));
         }
         let mut app = app;
         let app_mut = Arc::get_mut(&mut app).expect("unique app state for SCCP fixture");
@@ -68598,15 +68807,25 @@ pub(crate) mod tests_runtime_handlers {
         let app = mk_app_state_for_tests_with_options(None, Some((1, 1)), None, None);
         let headers = HeaderMap::new();
         let remote_ip = std::net::IpAddr::from([127, 0, 0, 1]);
-        let policy =
-            super::sccp_submit_ingress_policy("/v1/bridge/proofs/submit").expect("known policy");
-        let key = super::rate_limit_key(
-            &headers,
-            Some(remote_ip),
-            policy.rate_limit_hint,
-            app.api_token_enforced(),
+        let policies = ["/v1/bridge/proofs/submit", "/v1/bridge/messages"]
+            .map(|path| super::sccp_submit_ingress_policy(path).expect("known policy"));
+        let rate_limit_keys = policies.map(|policy| {
+            super::rate_limit_key(
+                &headers,
+                Some(remote_ip),
+                policy.rate_limit_hint,
+                app.api_token_enforced(),
+            )
+        });
+        assert_eq!(
+            rate_limit_keys[0], rate_limit_keys[1],
+            "identified callers must share one deploy-rate bucket across SCCP submit routes"
         );
-        assert!(app.deploy_rate_limiter.allow(&key).await);
+        assert!(
+            app.deploy_rate_limiter
+                .allow_cost_capped_to_burst(&rate_limit_keys[0], policies[0].rate_limit_cost)
+                .await
+        );
         let router = sccp_ingress_test_router(app);
 
         for path in ["/v1/bridge/proofs/submit", "/v1/bridge/messages"] {
@@ -72312,6 +72531,215 @@ mod tests {
         let response = tx_history_viewer_from_headers(&app, &headers)
             .expect_err("bare subject aliases must be rejected");
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn multisig_approvals_authority_routes_stay_separate_from_jwt_only_routes() {
+        let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
+        let key_pair = checked_torii_test_ed25519_keypair(
+            0x82,
+            "derive multisig approvals authority fixture key",
+        );
+        let account_id = AccountId::new(key_pair.public_key().clone());
+        let mut app = mk_app_state_for_tests_with_world(world_with_account(&account_id));
+        let app_state = Arc::get_mut(&mut app).expect("unique app state");
+        app_state.tx_history_access_policy = Arc::new(TxHistoryAccessPolicy {
+            jwt: Some(TxHistoryJwtConfig {
+                algorithm: JwtAlgorithm::HS256,
+                key: TxHistoryJwtKey::Hmac(b"shared-secret".to_vec()),
+                issuer: Some("pk-cbdc-dev".to_string()),
+                audience: Some("pk-cbdc".to_string()),
+            }),
+            ..TxHistoryAccessPolicy::default()
+        });
+
+        let method = axum::http::Method::POST;
+        let uri: axum::http::Uri = "/v1/multisig/approvals/query-for-authority"
+            .parse()
+            .expect("uri");
+        let router = Router::new()
+            .route(
+                uri.path(),
+                post(super::handler_post_multisig_approvals_query_for_authority),
+            )
+            .with_state(app.clone());
+        for (content_type, body) in [
+            (
+                "application/json",
+                norito::json::to_vec(&crate::routing::MultisigApprovalsQueryRequestDto::default())
+                    .expect("serialize JSON approvals request"),
+            ),
+            (
+                "application/x-norito",
+                norito::to_bytes(&crate::routing::MultisigApprovalsQueryRequestDto::default())
+                    .expect("serialize Norito approvals request"),
+            ),
+        ] {
+            let mut headers =
+                signed_app_headers(&account_id, &key_pair, &method, &uri, body.as_ref());
+            headers.insert(
+                axum::http::header::CONTENT_TYPE,
+                HeaderValue::from_str(content_type).expect("content type"),
+            );
+            let mut request = Request::builder()
+                .method(method.clone())
+                .uri(uri.clone())
+                .body(Body::from(body))
+                .expect("authority request");
+            *request.headers_mut() = headers;
+            request
+                .extensions_mut()
+                .insert(crate::loopback_connect_info());
+            let authority_response = router
+                .clone()
+                .oneshot(request)
+                .await
+                .expect("authority response");
+            assert_eq!(
+                authority_response.status(),
+                StatusCode::OK,
+                "{content_type}"
+            );
+
+            let body = axum::body::to_bytes(authority_response.into_body(), usize::MAX)
+                .await
+                .expect("body");
+            let payload: norito::json::Value =
+                norito::json::from_slice(&body).expect("decode authority approvals response");
+            assert!(
+                payload
+                    .get("items")
+                    .and_then(norito::json::Value::as_array)
+                    .is_some_and(|items| items.is_empty())
+            );
+        }
+
+        for content_type in [None, Some("text/plain")] {
+            let body = b"{}".to_vec();
+            let mut headers =
+                signed_app_headers(&account_id, &key_pair, &method, &uri, body.as_ref());
+            if let Some(content_type) = content_type {
+                headers.insert(
+                    axum::http::header::CONTENT_TYPE,
+                    HeaderValue::from_static(content_type),
+                );
+            }
+            let mut request = Request::builder()
+                .method(method.clone())
+                .uri(uri.clone())
+                .body(Body::from(body))
+                .expect("unsupported-media authority request");
+            *request.headers_mut() = headers;
+            request
+                .extensions_mut()
+                .insert(crate::loopback_connect_info());
+            let response = router
+                .clone()
+                .oneshot(request)
+                .await
+                .expect("unsupported-media authority response");
+            assert_eq!(
+                response.status(),
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                "content_type={content_type:?}",
+            );
+        }
+
+        let signed_body = b"{}".to_vec();
+        let mut headers =
+            signed_app_headers(&account_id, &key_pair, &method, &uri, signed_body.as_ref());
+        headers.insert(
+            axum::http::header::CONTENT_TYPE,
+            HeaderValue::from_static("application/json"),
+        );
+        let mut mutated_request = Request::builder()
+            .method(method)
+            .uri(uri)
+            .body(Body::from(r#"{"status":[]}"#))
+            .expect("mutated authority request");
+        *mutated_request.headers_mut() = headers;
+        mutated_request
+            .extensions_mut()
+            .insert(crate::loopback_connect_info());
+        let mutated_response = router
+            .oneshot(mutated_request)
+            .await
+            .expect("mutated authority response");
+        assert_eq!(mutated_response.status(), StatusCode::FORBIDDEN);
+
+        let lookup_method = axum::http::Method::POST;
+        let lookup_uri: axum::http::Uri = "/v1/multisig/approvals/lookup-for-authority"
+            .parse()
+            .expect("lookup uri");
+        let lookup_router = Router::new()
+            .route(
+                lookup_uri.path(),
+                post(super::handler_post_multisig_approvals_lookup_for_authority),
+            )
+            .with_state(app.clone());
+        let proposal_id = Hash::new(b"missing authority lookup proposal").to_string();
+        for (content_type, body) in [
+            (
+                "application/json",
+                norito::json::to_vec(&crate::routing::MultisigApprovalLookupRequestDto {
+                    multisig_account_ref: crate::routing::multisig_account_fingerprint(&account_id),
+                    proposal_id: Some(proposal_id.clone()),
+                    instructions_hash: None,
+                })
+                .expect("serialize JSON approval lookup request"),
+            ),
+            (
+                "application/x-norito",
+                norito::to_bytes(&crate::routing::MultisigApprovalLookupRequestDto {
+                    multisig_account_ref: crate::routing::multisig_account_fingerprint(&account_id),
+                    proposal_id: Some(proposal_id.clone()),
+                    instructions_hash: None,
+                })
+                .expect("serialize Norito approval lookup request"),
+            ),
+        ] {
+            let mut headers = signed_app_headers(
+                &account_id,
+                &key_pair,
+                &lookup_method,
+                &lookup_uri,
+                body.as_ref(),
+            );
+            headers.insert(
+                axum::http::header::CONTENT_TYPE,
+                HeaderValue::from_str(content_type).expect("lookup content type"),
+            );
+            let mut request = Request::builder()
+                .method(lookup_method.clone())
+                .uri(lookup_uri.clone())
+                .body(Body::from(body))
+                .expect("authority lookup request");
+            *request.headers_mut() = headers;
+            request
+                .extensions_mut()
+                .insert(crate::loopback_connect_info());
+            let lookup_response = lookup_router
+                .clone()
+                .oneshot(request)
+                .await
+                .expect("authority lookup response");
+            assert_eq!(
+                lookup_response.status(),
+                StatusCode::NOT_FOUND,
+                "{content_type}",
+            );
+        }
+
+        let jwt_only_response = super::handler_post_multisig_approvals_query(
+            State(app),
+            HeaderMap::new(),
+            crate::loopback_connect_info(),
+            NoritoJson(crate::routing::MultisigApprovalsQueryRequestDto::default()),
+        )
+        .await
+        .expect("jwt-only response");
+        assert_eq!(jwt_only_response.status(), StatusCode::UNAUTHORIZED);
     }
 
     #[cfg(feature = "zk-stark")]
@@ -78832,8 +79260,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn multisig_proposals_list_does_not_forbid_unsigned_request_for_alias_selector() {
-        let request = routing::MultisigProposalsListRequestDto {
+    async fn multisig_proposals_query_does_not_forbid_unsigned_request_for_alias_selector() {
+        let request = routing::MultisigProposalsQueryRequestDto {
             selector: routing::MultisigAccountSelectorDto {
                 multisig_account_id: None,
                 multisig_account_alias: Some("banking@centralbank.universal".to_owned()),
@@ -78842,7 +79270,7 @@ mod tests {
             cursor: None,
             limit: None,
         };
-        let response = handler_post_multisig_proposals_list(
+        let response = handler_post_multisig_proposals_query(
             State(mk_app_state_for_tests()),
             HeaderMap::new(),
             crate::loopback_connect_info(),
@@ -78856,8 +79284,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn multisig_proposals_get_does_not_forbid_unsigned_request_for_alias_selector() {
-        let request = routing::MultisigProposalsGetRequestDto {
+    async fn multisig_proposals_lookup_does_not_forbid_unsigned_request_for_alias_selector() {
+        let request = routing::MultisigProposalLookupRequestDto {
             selector: routing::MultisigAccountSelectorDto {
                 multisig_account_id: None,
                 multisig_account_alias: Some("banking@centralbank.universal".to_owned()),
@@ -78865,7 +79293,7 @@ mod tests {
             proposal_id: Some("deadbeef".to_owned()),
             instructions_hash: None,
         };
-        let response = handler_post_multisig_proposals_get(
+        let response = handler_post_multisig_proposals_lookup(
             State(mk_app_state_for_tests()),
             HeaderMap::new(),
             crate::loopback_connect_info(),
@@ -78886,13 +79314,15 @@ mod tests {
                     .layer(DefaultBodyLimit::max(MULTISIG_READ_MAX_BODY_BYTES)),
             )
             .route(
-                route_catalog::contracts_and_verification_keys::MULTISIG_PROPOSALS_LIST_POST.path(),
-                post(handler_post_multisig_proposals_list)
+                route_catalog::contracts_and_verification_keys::MULTISIG_PROPOSALS_QUERY_POST
+                    .path(),
+                post(handler_post_multisig_proposals_query)
                     .layer(DefaultBodyLimit::max(MULTISIG_READ_MAX_BODY_BYTES)),
             )
             .route(
-                route_catalog::contracts_and_verification_keys::MULTISIG_PROPOSALS_GET_POST.path(),
-                post(handler_post_multisig_proposals_get)
+                route_catalog::contracts_and_verification_keys::MULTISIG_PROPOSALS_LOOKUP_POST
+                    .path(),
+                post(handler_post_multisig_proposals_lookup)
                     .layer(DefaultBodyLimit::max(MULTISIG_READ_MAX_BODY_BYTES)),
             )
             .fallback(|| async { StatusCode::NOT_FOUND })
@@ -78939,8 +79369,8 @@ mod tests {
 
         for path in [
             "/v1/multisig/spec",
-            "/v1/multisig/proposals/list",
-            "/v1/multisig/proposals/get",
+            "/v1/multisig/proposals/query",
+            "/v1/multisig/proposals/lookup",
         ] {
             let method_response = router
                 .clone()
@@ -78957,10 +79387,7 @@ mod tests {
                 "{path}"
             );
         }
-        for retired in [
-            "/v1/multisig/proposals/query",
-            "/v1/multisig/proposals/lookup",
-        ] {
+        for retired in ["/v1/multisig/proposals/list", "/v1/multisig/proposals/get"] {
             let response = router
                 .clone()
                 .oneshot(multisig_read_contract_request(
@@ -78979,11 +79406,11 @@ mod tests {
                 r#"{"multisig_account_alias":"banking@centralbank.universal","extra":true}"#,
             ),
             (
-                "/v1/multisig/proposals/list",
+                "/v1/multisig/proposals/query",
                 r#"{"multisig_account_alias":"banking@centralbank.universal","status":[],"extra":true}"#,
             ),
             (
-                "/v1/multisig/proposals/get",
+                "/v1/multisig/proposals/lookup",
                 r#"{"multisig_account_alias":"banking@centralbank.universal","proposal_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","extra":true}"#,
             ),
         ] {
@@ -78999,7 +79426,7 @@ mod tests {
             .clone()
             .oneshot(multisig_read_contract_request(
                 HttpMethod::POST,
-                "/v1/multisig/proposals/list",
+                "/v1/multisig/proposals/query",
                 r#"{"multisig_account_alias": "unterminated"#,
             ))
             .await
@@ -79008,7 +79435,7 @@ mod tests {
 
         let mut missing_content_type = multisig_read_contract_request(
             HttpMethod::POST,
-            "/v1/multisig/proposals/list",
+            "/v1/multisig/proposals/query",
             alias_body,
         );
         missing_content_type
@@ -79031,7 +79458,7 @@ mod tests {
         let oversized_response = router
             .oneshot(multisig_read_contract_request(
                 HttpMethod::POST,
-                "/v1/multisig/proposals/list",
+                "/v1/multisig/proposals/query",
                 oversized,
             ))
             .await
@@ -79124,13 +79551,13 @@ mod tests {
         .into_response();
         assert_ne!(spec_response.status(), StatusCode::TOO_MANY_REQUESTS);
 
-        let list_request = routing::MultisigProposalsListRequestDto {
+        let list_request = routing::MultisigProposalsQueryRequestDto {
             selector: selector(),
             status: Vec::new(),
             cursor: None,
             limit: None,
         };
-        let list_response = handler_post_multisig_proposals_list(
+        let list_response = handler_post_multisig_proposals_query(
             State(app.clone()),
             headers.clone(),
             crate::loopback_connect_info(),
@@ -79141,12 +79568,12 @@ mod tests {
         .into_response();
         assert_ne!(list_response.status(), StatusCode::TOO_MANY_REQUESTS);
 
-        let get_request = routing::MultisigProposalsGetRequestDto {
+        let get_request = routing::MultisigProposalLookupRequestDto {
             selector: selector(),
             proposal_id: Some("deadbeef".to_owned()),
             instructions_hash: None,
         };
-        let get_response = handler_post_multisig_proposals_get(
+        let get_response = handler_post_multisig_proposals_lookup(
             State(app),
             headers,
             crate::loopback_connect_info(),
@@ -79196,13 +79623,13 @@ mod tests {
         .into_response();
         assert_ne!(spec_response.status(), StatusCode::TOO_MANY_REQUESTS);
 
-        let list_request = routing::MultisigProposalsListRequestDto {
+        let list_request = routing::MultisigProposalsQueryRequestDto {
             selector: selector(),
             status: Vec::new(),
             cursor: None,
             limit: None,
         };
-        let list_response = handler_post_multisig_proposals_list(
+        let list_response = handler_post_multisig_proposals_query(
             State(app),
             headers,
             crate::loopback_connect_info(),

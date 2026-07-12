@@ -54,7 +54,6 @@ pub(super) fn allow_stale_block_created(
 pub(super) enum BlockSyncRecoveryMode {
     PayloadOnly,
     RequestedPayloadRepair,
-    SignedQuorumFrontierRepair,
     CommitEvidenceRepair {
         observed_commit_qc_epoch: Option<u64>,
         allow_aborted_revival_without_local_commit_qc: bool,
@@ -63,10 +62,7 @@ pub(super) enum BlockSyncRecoveryMode {
 
 impl BlockSyncRecoveryMode {
     const fn allows_authoritative_frontier_owner_supersede(self) -> bool {
-        matches!(
-            self,
-            Self::SignedQuorumFrontierRepair | Self::CommitEvidenceRepair { .. }
-        )
+        matches!(self, Self::CommitEvidenceRepair { .. })
     }
 
     const fn allows_stale_recovery_without_request(self) -> bool {
@@ -82,9 +78,7 @@ impl BlockSyncRecoveryMode {
                 allow_aborted_revival_without_local_commit_qc,
                 ..
             } => allow_aborted_revival_without_local_commit_qc,
-            Self::PayloadOnly | Self::RequestedPayloadRepair | Self::SignedQuorumFrontierRepair => {
-                false
-            }
+            Self::PayloadOnly | Self::RequestedPayloadRepair => false,
         }
     }
 
@@ -94,9 +88,7 @@ impl BlockSyncRecoveryMode {
                 observed_commit_qc_epoch,
                 ..
             } => observed_commit_qc_epoch,
-            Self::PayloadOnly | Self::RequestedPayloadRepair | Self::SignedQuorumFrontierRepair => {
-                None
-            }
+            Self::PayloadOnly | Self::RequestedPayloadRepair => None,
         }
     }
 }
@@ -4348,27 +4340,31 @@ impl Actor {
         let committed_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
         let allow_hash_coupled_roster = height <= committed_height;
         let allow_sidecar = !self.sidecar_quarantined_for_height(height);
-        let mut commit_topology =
-            if self.vote_roster_cache.contains_key(&block_hash) || !allow_hash_coupled_roster {
-                Vec::new()
-            } else {
-                super::persisted_roster_for_block(
-                    self.state.as_ref(),
-                    &self.kura,
-                    consensus_mode,
-                    height,
-                    block_hash,
-                    Some(view),
-                    &self.roster_validation_cache,
-                    Some(&mut self.block_sync_roster_cache),
-                    allow_sidecar,
-                )
-                .map(|selection| {
-                    self.cache_vote_roster(block_hash, height, view, selection.roster.clone());
-                    selection.roster
-                })
-                .unwrap_or_default()
-            };
+        let mut commit_topology = if self.vote_roster_cache.contains_key(&block_hash)
+            || !allow_hash_coupled_roster
+        {
+            Vec::new()
+        } else {
+            super::persisted_roster_for_block(
+                self.state.as_ref(),
+                &self.kura,
+                consensus_mode,
+                height,
+                block_hash,
+                Some(view),
+                &self.roster_validation_cache,
+                Some(&mut self.block_sync_roster_cache),
+                allow_sidecar,
+            )
+            .filter(|selection| {
+                super::non_block_sync_roster_selection_is_authenticated(selection, consensus_mode)
+            })
+            .map(|selection| {
+                self.cache_vote_roster(block_hash, height, view, selection.roster.clone());
+                selection.roster
+            })
+            .unwrap_or_default()
+        };
         if commit_topology.is_empty() {
             commit_topology =
                 self.roster_for_vote_with_mode(block_hash, height, view, consensus_mode);
@@ -4634,15 +4630,6 @@ mod tests {
     }
 
     #[test]
-    fn signed_quorum_repair_cannot_impersonate_commit_evidence() {
-        let mode = BlockSyncRecoveryMode::SignedQuorumFrontierRepair;
-        assert!(mode.allows_authoritative_frontier_owner_supersede());
-        assert!(!mode.allows_stale_recovery_without_request());
-        assert!(!mode.allows_aborted_revival_without_local_commit_qc());
-        assert_eq!(mode.observed_commit_qc_epoch(), None);
-    }
-
-    #[test]
     fn commit_evidence_repair_preserves_epoch_and_revival_policy() {
         let mode = BlockSyncRecoveryMode::CommitEvidenceRepair {
             observed_commit_qc_epoch: Some(42),
@@ -4674,20 +4661,16 @@ mod tests {
             AllowNoSignal,
             PayloadOnlySupersede,
             RequestedPayloadSupersede,
-            SignedQuorumSupersede,
             CommitEvidenceSupersede,
             PayloadOnlyStaleWithoutRequest,
             RequestedPayloadStaleWithoutRequest,
-            SignedQuorumStaleWithoutRequest,
             CommitEvidenceStaleWithoutRequest,
             PayloadOnlyAbortedRevival,
             RequestedPayloadAbortedRevival,
-            SignedQuorumAbortedRevival,
             CommitEvidenceNoFlagAbortedRevival,
             CommitEvidenceFlagAbortedRevival,
             PayloadOnlyEpoch,
             RequestedPayloadEpoch,
-            SignedQuorumEpoch,
             CommitEvidenceNoEpoch,
             CommitEvidenceSomeEpoch,
         }
@@ -4705,7 +4688,6 @@ mod tests {
                 Candidate::RequestedPayloadSupersede,
                 Action::RejectSupersede,
             ),
-            (Candidate::SignedQuorumSupersede, Action::AllowSupersede),
             (Candidate::CommitEvidenceSupersede, Action::AllowSupersede),
             (
                 Candidate::PayloadOnlyStaleWithoutRequest,
@@ -4714,10 +4696,6 @@ mod tests {
             (
                 Candidate::RequestedPayloadStaleWithoutRequest,
                 Action::AllowStaleWithoutRequest,
-            ),
-            (
-                Candidate::SignedQuorumStaleWithoutRequest,
-                Action::RejectStaleWithoutRequest,
             ),
             (
                 Candidate::CommitEvidenceStaleWithoutRequest,
@@ -4732,10 +4710,6 @@ mod tests {
                 Action::RejectAbortedRevival,
             ),
             (
-                Candidate::SignedQuorumAbortedRevival,
-                Action::RejectAbortedRevival,
-            ),
-            (
                 Candidate::CommitEvidenceNoFlagAbortedRevival,
                 Action::RejectAbortedRevival,
             ),
@@ -4745,7 +4719,6 @@ mod tests {
             ),
             (Candidate::PayloadOnlyEpoch, Action::EpochNone),
             (Candidate::RequestedPayloadEpoch, Action::EpochNone),
-            (Candidate::SignedQuorumEpoch, Action::EpochNone),
             (Candidate::CommitEvidenceNoEpoch, Action::EpochNone),
             (Candidate::CommitEvidenceSomeEpoch, Action::EpochSome),
         ];
@@ -4809,10 +4782,6 @@ mod tests {
                     BlockSyncRecoveryMode::RequestedPayloadRepair,
                     RecoveryModeAction::Supersede,
                 ),
-                Candidate::SignedQuorumSupersede => recovery_mode_action(
-                    BlockSyncRecoveryMode::SignedQuorumFrontierRepair,
-                    RecoveryModeAction::Supersede,
-                ),
                 Candidate::CommitEvidenceSupersede => recovery_mode_action(
                     BlockSyncRecoveryMode::CommitEvidenceRepair {
                         observed_commit_qc_epoch: None,
@@ -4828,10 +4797,6 @@ mod tests {
                     BlockSyncRecoveryMode::RequestedPayloadRepair,
                     RecoveryModeAction::StaleWithoutRequest,
                 ),
-                Candidate::SignedQuorumStaleWithoutRequest => recovery_mode_action(
-                    BlockSyncRecoveryMode::SignedQuorumFrontierRepair,
-                    RecoveryModeAction::StaleWithoutRequest,
-                ),
                 Candidate::CommitEvidenceStaleWithoutRequest => recovery_mode_action(
                     BlockSyncRecoveryMode::CommitEvidenceRepair {
                         observed_commit_qc_epoch: None,
@@ -4845,10 +4810,6 @@ mod tests {
                 ),
                 Candidate::RequestedPayloadAbortedRevival => recovery_mode_action(
                     BlockSyncRecoveryMode::RequestedPayloadRepair,
-                    RecoveryModeAction::AbortedRevival,
-                ),
-                Candidate::SignedQuorumAbortedRevival => recovery_mode_action(
-                    BlockSyncRecoveryMode::SignedQuorumFrontierRepair,
                     RecoveryModeAction::AbortedRevival,
                 ),
                 Candidate::CommitEvidenceNoFlagAbortedRevival => recovery_mode_action(
@@ -4871,10 +4832,6 @@ mod tests {
                 ),
                 Candidate::RequestedPayloadEpoch => recovery_mode_action(
                     BlockSyncRecoveryMode::RequestedPayloadRepair,
-                    RecoveryModeAction::ObservedEpoch,
-                ),
-                Candidate::SignedQuorumEpoch => recovery_mode_action(
-                    BlockSyncRecoveryMode::SignedQuorumFrontierRepair,
                     RecoveryModeAction::ObservedEpoch,
                 ),
                 Candidate::CommitEvidenceNoEpoch => recovery_mode_action(

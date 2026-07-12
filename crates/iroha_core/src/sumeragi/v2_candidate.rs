@@ -139,6 +139,17 @@ pub(crate) struct PreparedCandidateWork {
     pub(crate) lane_payload_ownerships: Vec<SumeragiLanePayloadOwnership>,
 }
 
+impl PreparedCandidateWork {
+    /// Construct work for a batch containing only available single-route entries.
+    #[must_use]
+    #[cfg(test)]
+    pub(crate) fn single_route_batch(candidate_count: usize) -> Self {
+        Self {
+            native_amx_receipts: vec![None; candidate_count],
+            lane_payload_ownerships: Vec::new(),
+        }
+    }
+}
 /// A bounded subset of candidate indices whose lane-local work is unavailable.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct CandidateWorkUnavailable {
@@ -182,6 +193,34 @@ pub(crate) trait CandidateWorkProvider {
     ) -> Result<PreparedCandidateWork, CandidateWorkUnavailable>;
 }
 
+/// Conservative provider used when no certified Native AMX snapshot exists.
+///
+/// Single-route transactions remain eligible. Native AMX transactions are
+/// reported unavailable and therefore remain in the queue without preventing
+/// an honest leader from producing a heartbeat or single-route block.
+#[derive(Clone, Copy, Debug, Default)]
+#[cfg(test)]
+pub(crate) struct SingleRouteWorkProvider;
+
+#[cfg(test)]
+impl CandidateWorkProvider for SingleRouteWorkProvider {
+    fn prepare(
+        &mut self,
+        _context: &wire::HeightContext,
+        _view: wire::View,
+        candidates: &[CandidateDescriptor<'_>],
+    ) -> Result<PreparedCandidateWork, CandidateWorkUnavailable> {
+        let unavailable = unavailable_native_amx_indices(candidates);
+        if unavailable.is_empty() {
+            Ok(PreparedCandidateWork::single_route_batch(candidates.len()))
+        } else {
+            Err(CandidateWorkUnavailable::new(
+                unavailable,
+                "certified Native AMX receipts are not available",
+            ))
+        }
+    }
+}
 /// Complete immutable inputs for one fresh successor candidate.
 pub(crate) struct CandidateRequest<'request, Work> {
     /// Frozen height context governing this candidate.
@@ -820,6 +859,16 @@ fn validate_prepared_work(
     Ok(())
 }
 
+#[cfg(test)]
+fn unavailable_native_amx_indices(candidates: &[CandidateDescriptor<'_>]) -> BTreeSet<usize> {
+    candidates
+        .iter()
+        .enumerate()
+        .filter_map(|(index, candidate)| {
+            matches!(candidate.routing_plan(), RoutingPlan::NativeAmx(_)).then_some(index)
+        })
+        .collect()
+}
 fn encoded_chunk_count(
     layout: wire::DataAvailabilityLayout,
     payload_len: usize,
@@ -1000,10 +1049,15 @@ mod tests {
     use std::{borrow::Cow, num::NonZeroUsize};
 
     use iroha_crypto::{Algorithm, KeyPair};
-    use iroha_data_model::{ChainId, account::AccountId, transaction::TransactionBuilder};
+    use iroha_data_model::{
+        ChainId,
+        account::AccountId,
+        nexus::{DataSpaceId, LaneId},
+        transaction::TransactionBuilder,
+    };
 
     use super::*;
-    use crate::queue::RoutingDecision;
+    use crate::queue::{RouteLeg, RouteLegRole, RoutingDecision};
 
     fn nonzero(value: usize) -> NonZeroUsize {
         NonZeroUsize::new(value).expect("test value is non-zero")
@@ -1053,6 +1107,25 @@ mod tests {
             (window[0].entrypoint_hash, window[0].source_ordinal)
                 <= (window[1].entrypoint_hash, window[1].source_ordinal)
         }));
+    }
+
+    #[test]
+    fn single_route_provider_defers_native_amx_only() {
+        let mut single = record(1, "single", 0);
+        single.routing_plan = RoutingPlan::single(RoutingDecision::default());
+        let coordinator = RoutingDecision::new(LaneId::new(1), DataSpaceId::new(1));
+        let participant = RouteLeg::new(
+            RoutingDecision::new(LaneId::new(2), DataSpaceId::new(2)),
+            RouteLegRole::Participant,
+        );
+        let mut native = record(2, "native", 1);
+        native.routing_plan = RoutingPlan::native_amx(coordinator, vec![participant]);
+        let candidates = [single.descriptor(), native.descriptor()];
+        let _provider = SingleRouteWorkProvider;
+        assert_eq!(
+            unavailable_native_amx_indices(&candidates),
+            BTreeSet::from([1])
+        );
     }
 
     #[test]

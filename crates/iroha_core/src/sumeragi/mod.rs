@@ -12959,9 +12959,11 @@ pub(crate) mod v2_runtime;
 pub(crate) mod v2_transport;
 pub(crate) mod v2_worker;
 pub(crate) mod vnext;
+pub(crate) mod vote_lock;
 pub mod witness;
 pub use evidence::EvidenceValidationContext;
 pub use evidence::evidence_subject_height_view;
+pub(crate) use main_loop::qc::AuthenticatedCommitRoster;
 
 /// Validate an evidence payload using the canonical rules.
 ///
@@ -12991,6 +12993,12 @@ pub use status::StatusSnapshot;
 /// Return the latest consensus status snapshot (leader, QCs, drop counters).
 pub fn status_snapshot() -> StatusSnapshot {
     status::snapshot()
+}
+
+/// Return whether this process has fail-closed consensus participation.
+#[must_use]
+pub fn consensus_safety_halt_active() -> bool {
+    status::consensus_safety_halt_active()
 }
 
 use self::message::*;

@@ -49,8 +49,8 @@ Terminologiya
 ### Kotodama → IVM
 - Frontend parçaları mövcuddur (lexer/parser/minimal semantika/IR/regalloc).
 - Codegen (`kotodama::compiler`) IVM əməliyyatlarının bir hissəsini yayır və aktiv əməliyyatları üçün `SCALL` istifadə edir:
-  - `MintAsset` → set x10=hesab, x11=aktiv, x12=&Amount; `SCALL SYSCALL_MINT_ASSET`.
-  - `BurnAsset`/`TransferAsset` oxşar (məbləğ Amount göstəricisi kimi ötürülür).
+  - `MintAsset` → set x10=hesab, x11=aktiv, x12=&QuantityValueV1; `SCALL SYSCALL_MINT_ASSET`.
+  - `BurnAsset`/`TransferAsset` oxşar (məbləğ QuantityValueV1 göstəricisi kimi ötürülür).
 - `koto_*_demo.rs` demoları sürətli sınaq üçün ID-lərə uyğunlaşdırılmış tam indekslərlə `WsvHost` istifadə edərək göstərir.
 
 ---
@@ -130,9 +130,9 @@ Terminologiya
 Nümayəndə alt çoxluğu — host tətbiqi zamanı yekunlaşdırın və genişləndirin.- SYSCALL_REGISTER_DOMAIN(id: ptr DomainId) → ISI Qeydiyyatı
 - SYSCALL_REGISTER_ACCOUNT(id: ptr AccountId) → ISI Qeydiyyatı
 - SYSCALL_REGISTER_ASSET(id: ptr AssetDefinitionId, nağd: u8) → ISI Registri
-- SYSCALL_MINT_ASSET(hesab: ptr AccountId, aktiv: ptr AssetDefinitionId, məbləğ: ptr Amount) → ISI Mint
-- SYSCALL_BURN_ASSET(hesab: ptr AccountId, aktiv: ptr AssetDefinitionId, məbləğ: ptr Amount) → ISI Burn
-- SYSCALL_TRANSFER_ASSET(dan: ptr AccountId, to: ptr AccountId, aktiv: ptr AssetDefinitionId, məbləğ: ptr Amount) → ISI Transfer
+- SYSCALL_MINT_ASSET(hesab: ptr AccountId, aktiv: ptr AssetDefinitionId, məbləğ: ptr QuantityValueV1) → ISI Mint
+- SYSCALL_BURN_ASSET(hesab: ptr AccountId, aktiv: ptr AssetDefinitionId, məbləğ: ptr QuantityValueV1) → ISI Burn
+- SYSCALL_TRANSFER_ASSET(dan: ptr AccountId, to: ptr AccountId, aktiv: ptr AssetDefinitionId, məbləğ: ptr QuantityValueV1) → ISI Transfer
 - SYSCALL_TRANSFER_V1_BATCH_BEGIN() / SYSCALL_TRANSFER_V1_BATCH_END() → ISI TransferAssetBatch (əhatə dairəsini açın/bağlayın; fərdi girişlər `transfer_asset` vasitəsilə azaldılır)
 - SYSCALL_TRANSFER_V1_BATCH_APPLY(&NoritoBytes) → Müqavilələr artıq zəncirdən kənar girişləri seriallaşdırdıqda əvvəlcədən kodlanmış partiyanı təqdim edin
 - SYSCALL_NFT_MINT_ASSET(id: ptr NftId, sahib: ptr AccountId) → ISI Qeydiyyatı

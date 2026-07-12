@@ -51,7 +51,7 @@ translator: manual
 ### Kotodama → IVM
 - קיימים רכיבי פרונטאנד (lexer,‏ parser,‏ סמנטיקה מינימלית,‏ IR,‏ הקצאת רגיסטרים).
 - מחולל הקוד (`kotodama::compiler`) מפיק תת-קבוצה של הוראות IVM ומשתמש ב-`SCALL` לפעולות נכס:
-  - `MintAsset` — מגדיר x10=account,‏ x11=asset,‏ x12=&Amount ומבצע `SCALL SYSCALL_MINT_ASSET`.
+  - `MintAsset` — מגדיר x10=account,‏ x11=asset,‏ x12=&QuantityValueV1 ומבצע `SCALL SYSCALL_MINT_ASSET`.
   - `BurnAsset`/‏`TransferAsset` פועלים בדפוס דומה.
 - הדגמות `koto_*_demo.rs` מציגות שימוש ב-`WsvHost` עם מיפוי זמני של שלמים ל-ID לטובת בדיקות מהירות.
 
@@ -124,9 +124,9 @@ translator: manual
 - `SYSCALL_REGISTER_DOMAIN(id: ptr DomainId)` → ISI ‏`Register<Domain>`
 - `SYSCALL_REGISTER_ACCOUNT(id: ptr AccountId)` → ISI ‏`Register<Account>`
 - `SYSCALL_REGISTER_ASSET(id: ptr AssetDefinitionId, mintable: u8)` → ISI ‏`Register<AssetDefinition>`
-- `SYSCALL_MINT_ASSET(account: ptr AccountId, asset: ptr AssetDefinitionId, amount: ptr Amount)` → ISI ‏`Mint<Numeric, Asset>`
-- `SYSCALL_BURN_ASSET(account: ptr AccountId, asset: ptr AssetDefinitionId, amount: ptr Amount)` → ISI ‏`Burn<Numeric, Asset>`
-- `SYSCALL_TRANSFER_ASSET(from: ptr AccountId, to: ptr AccountId, asset: ptr AssetDefinitionId, amount: ptr Amount)` → ISI ‏`Transfer<Asset>`
+- `SYSCALL_MINT_ASSET(account: ptr AccountId, asset: ptr AssetDefinitionId, amount: ptr QuantityValueV1)` → ISI ‏`Mint<Numeric, Asset>`
+- `SYSCALL_BURN_ASSET(account: ptr AccountId, asset: ptr AssetDefinitionId, amount: ptr QuantityValueV1)` → ISI ‏`Burn<Numeric, Asset>`
+- `SYSCALL_TRANSFER_ASSET(from: ptr AccountId, to: ptr AccountId, asset: ptr AssetDefinitionId, amount: ptr QuantityValueV1)` → ISI ‏`Transfer<Asset>`
 - `SYSCALL_TRANSFER_V1_BATCH_BEGIN()` / `SYSCALL_TRANSFER_V1_BATCH_END()` → ISI ‏`TransferAssetBatch` ‎(פתיחת/סגירת תחום באצ׳; כל רשומה מפורקת לקריאת `transfer_asset`)
 - `SYSCALL_TRANSFER_V1_BATCH_APPLY(&NoritoBytes<TransferAssetBatch>)` → מאפשר להגיש אצווה מקודדת מראש בקריאה אחת
 - `SYSCALL_NFT_MINT_ASSET(id: ptr NftId, owner: ptr AccountId)` → ISI ‏`Register<Nft>`

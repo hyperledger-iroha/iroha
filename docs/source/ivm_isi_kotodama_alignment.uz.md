@@ -49,8 +49,8 @@ Terminologiya
 ### Kotodama → IVM
 - Frontend qismlari mavjud (lekser/parser/minimal semantika/IR/regalloc).
 - Codegen (`kotodama::compiler`) IVM operatsiyalari toʻplamini chiqaradi va aktiv operatsiyalari uchun `SCALL` dan foydalanadi:
-  - `MintAsset` → o'rnatish x10=hisob, x11=aktiv, x12=&Amount; `SCALL SYSCALL_MINT_ASSET`.
-  - `BurnAsset`/`TransferAsset` shunga o'xshash (summa Amount ko'rsatgich sifatida berilgan).
+  - `MintAsset` → o'rnatish x10=hisob, x11=aktiv, x12=&QuantityValueV1; `SCALL SYSCALL_MINT_ASSET`.
+  - `BurnAsset`/`TransferAsset` shunga o'xshash (summa QuantityValueV1 ko'rsatgich sifatida berilgan).
 - `koto_*_demo.rs` demolari `WsvHost` yordamida tez sinovdan oʻtkazish uchun identifikatorlarga koʻrsatilgan butun son indekslari bilan namoyish etiladi.
 
 ---
@@ -130,9 +130,9 @@ Terminologiya
 Vakil kichik to'plami - xostni amalga oshirish jarayonida yakunlang va kengaytiring.- SYSCALL_REGISTER_DOMAIN(id: ptr DomainId) → ISI Register
 - SYSCALL_REGISTER_ACCOUNT (id: ptr AccountId) → ISI Register
 - SYSCALL_REGISTER_ASSET(id: ptr AssetDefinitionId, mintable: u8) → ISI Register
-- SYSCALL_MINT_ASSET(hisob: ptr AccountId, aktiv: ptr AssetDefinitionId, summa: ptr Amount) → ISI Mint
-- SYSCALL_BURN_ASSET(hisob: ptr AccountId, aktiv: ptr AssetDefinitionId, summa: ptr Amount) → ISI Burn
-- SYSCALL_TRANSFER_ASSET(dan: ptr AccountId, to: ptr AccountId, aktiv: ptr AssetDefinitionId, summa: ptr Amount) → ISI Transfer
+- SYSCALL_MINT_ASSET(hisob: ptr AccountId, aktiv: ptr AssetDefinitionId, summa: ptr QuantityValueV1) → ISI Mint
+- SYSCALL_BURN_ASSET(hisob: ptr AccountId, aktiv: ptr AssetDefinitionId, summa: ptr QuantityValueV1) → ISI Burn
+- SYSCALL_TRANSFER_ASSET(dan: ptr AccountId, to: ptr AccountId, aktiv: ptr AssetDefinitionId, summa: ptr QuantityValueV1) → ISI Transfer
 - SYSCALL_TRANSFER_V1_BATCH_BEGIN() / SYSCALL_TRANSFER_V1_BATCH_END() → ISI TransferAssetBatch (ko‘lamni ochish/yopish; individual yozuvlar `transfer_asset` orqali tushiriladi)
 - SYSCALL_TRANSFER_V1_BATCH_APPLY(&NoritoBytes) → Shartnomalar zanjirdan tashqaridagi yozuvlarni seriyalashtirganda, oldindan kodlangan partiyani yuboring
 - SYSCALL_NFT_MINT_ASSET (id: ptr NftId, egasi: ptr AccountId) → ISI Register

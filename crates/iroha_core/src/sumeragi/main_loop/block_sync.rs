@@ -896,48 +896,6 @@ fn block_sync_consensus_mode_tag(consensus_mode: ConsensusMode) -> &'static str 
     }
 }
 
-fn block_sync_commit_conflict_detected(
-    height_convertible: bool,
-    nonzero_height: bool,
-    committed_present: bool,
-    committed_hash_matches: bool,
-) -> bool {
-    height_convertible && nonzero_height && committed_present && !committed_hash_matches
-}
-
-fn block_sync_commit_conflict_should_validate_qc(
-    commit_conflict: bool,
-    incoming_qc_present: bool,
-) -> bool {
-    commit_conflict && incoming_qc_present
-}
-
-fn block_sync_commit_conflict_should_emit_evidence(
-    commit_conflict: bool,
-    incoming_qc_present: bool,
-    qc_valid: bool,
-) -> bool {
-    commit_conflict && incoming_qc_present && qc_valid
-}
-
-fn block_sync_commit_conflict_should_clear_missing(commit_conflict: bool) -> bool {
-    commit_conflict
-}
-
-fn block_sync_commit_conflict_drop_record(
-    commit_conflict: bool,
-) -> Option<(
-    super::status::ConsensusMessageKind,
-    super::status::ConsensusMessageOutcome,
-    super::status::ConsensusMessageReason,
-)> {
-    commit_conflict.then_some((
-        super::status::ConsensusMessageKind::BlockSyncUpdate,
-        super::status::ConsensusMessageOutcome::Dropped,
-        super::status::ConsensusMessageReason::CommitConflict,
-    ))
-}
-
 fn deferred_block_sync_validation_pending_conflicts(
     pending_height: Option<u64>,
     block_height: u64,
@@ -1193,24 +1151,6 @@ fn block_sync_future_window_drop_decision(
     .unwrap_or(generic_drop)
 }
 
-fn block_sync_commit_conflict_allow_genesis_stub(block_height: u64, block_view: u64) -> bool {
-    block_height == 1 && block_view == 0
-}
-
-const BLOCK_SYNC_COMMIT_CONFLICT_EVIDENCE_REASON: &str = "commit_conflict_finality";
-
-fn block_sync_commit_conflict_invalid_qc_evidence(
-    commit_qc: Qc,
-) -> crate::sumeragi::consensus::Evidence {
-    crate::sumeragi::consensus::Evidence {
-        kind: crate::sumeragi::consensus::EvidenceKind::InvalidQc,
-        payload: crate::sumeragi::consensus::EvidencePayload::InvalidQc {
-            certificate: commit_qc,
-            reason: BLOCK_SYNC_COMMIT_CONFLICT_EVIDENCE_REASON.to_owned(),
-        },
-    }
-}
-
 fn block_sync_vote_placeholder_matches(
     vote: &crate::sumeragi::consensus::Vote,
     block_hash: HashOf<BlockHeader>,
@@ -1275,27 +1215,6 @@ fn block_sync_snapshot_hint_filter(
         checkpoint_after,
         stake_after,
     }
-}
-
-fn block_sync_snapshot_roster_selection(
-    snapshot: &crate::commit_roster_journal::CommitRosterSnapshot,
-) -> Option<BlockSyncRosterSelection> {
-    let roster = snapshot.commit_qc.validator_set.clone();
-    if roster.is_empty() {
-        return None;
-    }
-    let stake_snapshot = snapshot
-        .stake_snapshot
-        .as_ref()
-        .filter(|snapshot| snapshot.matches_roster(&roster))
-        .cloned();
-    Some(BlockSyncRosterSelection {
-        roster,
-        source: BlockSyncRosterSource::CommitRosterJournal,
-        commit_qc: Some(snapshot.commit_qc.clone()),
-        checkpoint: Some(snapshot.validator_checkpoint.clone()),
-        stake_snapshot,
-    })
 }
 
 fn block_sync_no_roster_known_vote_only(
@@ -1538,6 +1457,7 @@ fn block_sync_selected_apply_allow_nonextending_qc(
     selection_commit_qc_present || incoming_qc_validated_by_roster || incoming_qc_usable
 }
 
+#[cfg(test)]
 fn block_sync_selected_apply_same_height_frontier_conflict(
     block_quorum_met: bool,
     incoming_qc_usable: bool,
@@ -1560,19 +1480,6 @@ fn block_sync_selected_apply_preserve_on_payload_mismatch(
     !incoming_qc_usable && !commit_cert_present && !checkpoint_present
 }
 
-fn block_sync_selected_apply_authoritative_supersede(
-    incoming_qc_usable: bool,
-    commit_cert_present: bool,
-    checkpoint_present: bool,
-    block_quorum_met: bool,
-    same_height_frontier_conflict: bool,
-) -> bool {
-    incoming_qc_usable
-        || commit_cert_present
-        || checkpoint_present
-        || (block_quorum_met && !same_height_frontier_conflict)
-}
-
 fn block_sync_selected_apply_recovery_mode(
     has_commit_votes: bool,
     incoming_qc_usable: bool,
@@ -1580,7 +1487,6 @@ fn block_sync_selected_apply_recovery_mode(
     checkpoint_present: bool,
     observed_incoming_qc_epoch: Option<u64>,
     expected_epoch: u64,
-    authoritative_supersede: bool,
 ) -> BlockSyncRecoveryMode {
     if has_commit_votes || incoming_qc_usable || commit_cert_present || checkpoint_present {
         BlockSyncRecoveryMode::CommitEvidenceRepair {
@@ -1590,43 +1496,9 @@ fn block_sync_selected_apply_recovery_mode(
                 || commit_cert_present
                 || checkpoint_present,
         }
-    } else if authoritative_supersede {
-        BlockSyncRecoveryMode::SignedQuorumFrontierRepair
     } else {
         BlockSyncRecoveryMode::PayloadOnly
     }
-}
-
-#[derive(Clone, Copy, Debug)]
-struct BlockSyncSelectedApplySignedQuorumRepair {
-    creation_ok: bool,
-    block_known_after_creation: bool,
-    signature_quorum_met: bool,
-    exact_contiguous_frontier: bool,
-    qc_evidence_present: bool,
-    commit_cert_present: bool,
-    checkpoint_present: bool,
-    missing_commit_qc_repair_active: bool,
-}
-
-fn block_sync_selected_apply_signed_quorum_commit_repair_active(
-    input: BlockSyncSelectedApplySignedQuorumRepair,
-) -> bool {
-    input.creation_ok
-        && input.block_known_after_creation
-        && input.signature_quorum_met
-        && input.exact_contiguous_frontier
-        && !input.qc_evidence_present
-        && !input.commit_cert_present
-        && !input.checkpoint_present
-        && input.missing_commit_qc_repair_active
-}
-
-fn block_sync_selected_apply_pending_commit_qc_observed(
-    signed_quorum_commit_repair_active: bool,
-    pending_block_matches_non_invalid: bool,
-) -> bool {
-    signed_quorum_commit_repair_active && pending_block_matches_non_invalid
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1959,6 +1831,546 @@ impl Actor {
                 bls_aggregate_signature: checkpoint.bls_aggregate_signature.clone(),
             },
         })
+    }
+
+    fn commit_qc_from_block_sync_votes(
+        &self,
+        block_hash: HashOf<BlockHeader>,
+        block_height: u64,
+        block_view: u64,
+        votes: &[crate::sumeragi::consensus::Vote],
+        canonical_topology: &super::network_topology::Topology,
+        stake_snapshot: Option<&CommitStakeSnapshot>,
+    ) -> Vec<crate::sumeragi::consensus::Qc> {
+        if canonical_topology.as_ref().is_empty() {
+            return Vec::new();
+        }
+        let (consensus_mode, mode_tag, prf_seed) = self.consensus_context_for_height(block_height);
+        let expected_epoch = self.epoch_for_height(block_height);
+        let signature_topology = super::topology_for_view(
+            canonical_topology,
+            block_height,
+            block_view,
+            mode_tag,
+            prf_seed,
+        );
+        let (chain_order_hash, rechain_seq) = self
+            .vnext_chain_order_binding_for_signature_topology(
+                block_height,
+                block_view,
+                consensus_mode,
+                &signature_topology,
+            );
+        let mut root_groups: BTreeMap<
+            (Hash, Hash),
+            BTreeMap<ValidatorIndex, crate::sumeragi::consensus::Vote>,
+        > = BTreeMap::new();
+        for vote in votes {
+            if vote.phase != crate::sumeragi::consensus::Phase::Commit
+                || vote.block_hash != block_hash
+                || vote.height != block_height
+                || vote.view != block_view
+                || vote.epoch != expected_epoch
+                || vote.chain_order_hash != chain_order_hash
+                || vote.rechain_seq != rechain_seq
+                || vote.highest_qc.is_some()
+                || !super::vote_signature_valid(
+                    vote,
+                    &signature_topology,
+                    &self.common_config.chain,
+                    mode_tag,
+                )
+            {
+                continue;
+            }
+            root_groups
+                .entry((vote.parent_state_root, vote.post_state_root))
+                .or_default()
+                .entry(vote.signer)
+                .or_insert_with(|| vote.clone());
+        }
+
+        let mut candidates = Vec::new();
+        for ((parent_state_root, post_state_root), accepted_votes) in root_groups {
+            let view_signers = accepted_votes.keys().copied().collect::<BTreeSet<_>>();
+            let quorum = match consensus_mode {
+                ConsensusMode::Permissioned => {
+                    view_signers.len() >= signature_topology.min_votes_for_commit().max(1)
+                }
+                ConsensusMode::Npos => {
+                    let Some(snapshot) = stake_snapshot
+                        .filter(|snapshot| snapshot.matches_roster(canonical_topology.as_ref()))
+                    else {
+                        continue;
+                    };
+                    let Ok(signer_peers) =
+                        super::signer_peers_for_topology(&view_signers, &signature_topology)
+                    else {
+                        continue;
+                    };
+                    matches!(
+                        super::stake_snapshot::stake_quorum_reached_for_snapshot(
+                            snapshot,
+                            canonical_topology.as_ref(),
+                            &signer_peers,
+                        ),
+                        Ok(true)
+                    )
+                }
+            };
+            if !quorum {
+                continue;
+            }
+            let Ok(aggregate_signature) = super::aggregate_vote_signatures(
+                &accepted_votes,
+                crate::sumeragi::consensus::Phase::Commit,
+                block_hash,
+                block_height,
+                block_view,
+                expected_epoch,
+                &view_signers,
+            ) else {
+                continue;
+            };
+            let canonical_signers = super::normalize_signer_indices_to_canonical(
+                &view_signers,
+                &signature_topology,
+                canonical_topology,
+            );
+            if canonical_signers.len() != view_signers.len() {
+                continue;
+            }
+            let validator_set = canonical_topology.as_ref().to_vec();
+            let candidate = crate::sumeragi::consensus::Qc {
+                phase: crate::sumeragi::consensus::Phase::Commit,
+                subject_block_hash: block_hash,
+                parent_state_root,
+                post_state_root,
+                height: block_height,
+                view: block_view,
+                epoch: expected_epoch,
+                chain_order_hash,
+                rechain_seq,
+                mode_tag: mode_tag.to_owned(),
+                highest_qc: None,
+                validator_set_hash: HashOf::new(&validator_set),
+                validator_set_hash_version:
+                    iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
+                validator_set,
+                aggregate: crate::sumeragi::consensus::QcAggregate {
+                    signers_bitmap: super::build_signers_bitmap(
+                        &canonical_signers,
+                        canonical_topology.as_ref().len(),
+                    ),
+                    bls_aggregate_signature: aggregate_signature,
+                },
+            };
+            let inputs = self.roster_validation_cache.inputs_for_roster(
+                &candidate.validator_set,
+                consensus_mode,
+                stake_snapshot,
+            );
+            if super::validate_commit_qc_roster_cached(
+                &self.roster_validation_cache,
+                &candidate,
+                block_hash,
+                block_height,
+                Some(block_view),
+                consensus_mode,
+                expected_epoch,
+                &self.common_config.chain,
+                mode_tag,
+                false,
+                &inputs,
+            )
+            .is_ok()
+            {
+                candidates.push(candidate);
+            }
+        }
+        candidates
+    }
+
+    pub(super) fn authoritative_finality_roster_and_stake(
+        &self,
+        committed_hash: HashOf<BlockHeader>,
+        height: u64,
+        consensus_mode: ConsensusMode,
+    ) -> Option<(
+        super::network_topology::Topology,
+        Option<CommitStakeSnapshot>,
+    )> {
+        let committed_height = self.committed_height_snapshot();
+        let expected_mode_tag = match consensus_mode {
+            ConsensusMode::Permissioned => PERMISSIONED_TAG,
+            ConsensusMode::Npos => NPOS_TAG,
+        };
+        if let Some(authority) =
+            super::status::authenticated_commit_authority_for_block(height, committed_hash)
+            && authority.qc.mode_tag == expected_mode_tag
+            && authority.qc.validator_set_hash_version == VALIDATOR_SET_HASH_VERSION_V1
+            && authority.qc.validator_set_hash == HashOf::new(&authority.qc.validator_set)
+        {
+            let roster = super::roster::canonicalize_roster_for_mode(
+                authority.qc.validator_set.clone(),
+                consensus_mode,
+            );
+            if roster == authority.qc.validator_set && !roster.is_empty() {
+                let stake_snapshot = match consensus_mode {
+                    ConsensusMode::Permissioned if authority.stake_snapshot.is_none() => None,
+                    ConsensusMode::Npos => authority
+                        .stake_snapshot
+                        .filter(|snapshot| snapshot.matches_roster(&roster)),
+                    ConsensusMode::Permissioned => return None,
+                };
+                if !matches!(consensus_mode, ConsensusMode::Npos) || stake_snapshot.is_some() {
+                    return Some((
+                        super::network_topology::Topology::new(roster),
+                        stake_snapshot,
+                    ));
+                }
+            }
+        }
+        let locally_authoritative_roster = if height == 1 {
+            (self.finality_canonical_block_hash_for_height(1) == Some(committed_hash))
+                .then(|| self.canonical_genesis_roster_authority_inputs())
+                .flatten()
+                .filter(|(mode, _, _, _)| *mode == consensus_mode)
+                .map(|(_, roster, _, _)| roster)
+        } else if height == committed_height
+            && matches!(consensus_mode, ConsensusMode::Permissioned)
+        {
+            Some(self.state.prev_commit_topology_snapshot())
+        } else if height == committed_height.saturating_add(1) {
+            Some(self.state.commit_topology_snapshot())
+        } else {
+            None
+        }
+        .map(|roster| super::roster::canonicalize_roster_for_mode(roster, consensus_mode))
+        .filter(|roster| !roster.is_empty());
+        let Some(locally_authoritative_roster) = locally_authoritative_roster else {
+            debug!(
+                height,
+                committed_height,
+                block = %committed_hash,
+                "rejecting historical finality context without an independently derived local roster"
+            );
+            return None;
+        };
+        let snapshot = self
+            .state
+            .commit_roster_snapshot_for_block(height, committed_hash)
+            .filter(|snapshot| {
+                snapshot.commit_qc.height == height
+                    && snapshot.commit_qc.subject_block_hash == committed_hash
+                    && snapshot.commit_qc.validator_set.as_slice()
+                        == locally_authoritative_roster.as_slice()
+            });
+        if let Some(snapshot) = snapshot.as_ref() {
+            let (_, mode_tag, _) = self.consensus_context_for_height(height);
+            let persisted_stake = if matches!(consensus_mode, ConsensusMode::Npos) {
+                let world = self.state.world_view();
+                let nexus = self.state.nexus_snapshot();
+                let active_lane_ids = nexus
+                    .enabled
+                    .then(|| crate::state::nexus_active_lane_ids(&nexus));
+                CommitStakeSnapshot::from_roster_with_active_lanes(
+                    &world,
+                    &snapshot.commit_qc.validator_set,
+                    active_lane_ids.as_ref(),
+                )
+            } else {
+                None
+            };
+            let inputs = self.roster_validation_cache.inputs_for_roster(
+                &snapshot.commit_qc.validator_set,
+                consensus_mode,
+                persisted_stake.as_ref(),
+            );
+            if !snapshot
+                .commit_qc
+                .aggregate
+                .bls_aggregate_signature
+                .is_empty()
+                && super::validate_commit_qc_roster_cached(
+                    &self.roster_validation_cache,
+                    &snapshot.commit_qc,
+                    committed_hash,
+                    height,
+                    Some(snapshot.commit_qc.view),
+                    consensus_mode,
+                    self.epoch_for_height(height),
+                    &self.common_config.chain,
+                    mode_tag,
+                    false,
+                    &inputs,
+                )
+                .is_ok()
+            {
+                let topology = super::network_topology::Topology::new(
+                    super::roster::canonicalize_roster_for_mode(
+                        snapshot.commit_qc.validator_set.clone(),
+                        consensus_mode,
+                    ),
+                );
+                let stake_snapshot = match consensus_mode {
+                    ConsensusMode::Permissioned => None,
+                    ConsensusMode::Npos => persisted_stake,
+                };
+                if !topology.as_ref().is_empty()
+                    && (!matches!(consensus_mode, ConsensusMode::Npos) || stake_snapshot.is_some())
+                {
+                    return Some((topology, stake_snapshot));
+                }
+            }
+        }
+
+        let topology = super::network_topology::Topology::new(locally_authoritative_roster);
+        let stake_snapshot = match consensus_mode {
+            ConsensusMode::Permissioned => None,
+            ConsensusMode::Npos if height == 1 => {
+                // Genesis carries no signed stake sidecar. Derive any later conflict-proof
+                // weights from the locally replayed genesis world, never from the candidate or
+                // persisted wire metadata.
+                let world = self.state.world_view();
+                let nexus = self.state.nexus_snapshot();
+                let active_lane_ids = nexus
+                    .enabled
+                    .then(|| crate::state::nexus_active_lane_ids(&nexus));
+                CommitStakeSnapshot::from_roster_with_active_lanes(
+                    &world,
+                    topology.as_ref(),
+                    active_lane_ids.as_ref(),
+                )
+            }
+            ConsensusMode::Npos if height == committed_height.saturating_add(1) => {
+                // This is the Kura-before-WSV / next-height window. Read the parent state
+                // directly: the Actor cache can lag a worker-thread commit and must never be
+                // treated as stake authority.
+                let world = self.state.world_view();
+                let nexus = self.state.nexus_snapshot();
+                let active_lane_ids = nexus
+                    .enabled
+                    .then(|| crate::state::nexus_active_lane_ids(&nexus));
+                CommitStakeSnapshot::from_roster_with_active_lanes(
+                    &world,
+                    topology.as_ref(),
+                    active_lane_ids.as_ref(),
+                )
+            }
+            // A structurally decoded journal/sidecar entry is not stake authority unless its QC
+            // passed the authenticated snapshot branch above. Never reuse weights from a failed
+            // snapshot validation in this topology-only fallback.
+            ConsensusMode::Npos => None,
+        };
+        if matches!(consensus_mode, ConsensusMode::Npos) && stake_snapshot.is_none() {
+            return None;
+        }
+        Some((topology, stake_snapshot))
+    }
+
+    pub(super) fn authoritative_finality_context(
+        &self,
+        height: u64,
+        subject_block_hash: HashOf<BlockHeader>,
+        consensus_mode: ConsensusMode,
+    ) -> Option<(
+        super::network_topology::Topology,
+        Option<CommitStakeSnapshot>,
+    )> {
+        let canonical_hash = self
+            .finality_canonical_block_hash_for_height(height)
+            .unwrap_or(subject_block_hash);
+        self.authoritative_finality_roster_and_stake(canonical_hash, height, consensus_mode)
+    }
+
+    pub(super) fn signed_commit_quorum_for_roster(
+        &self,
+        block: &SignedBlock,
+        topology: &super::network_topology::Topology,
+        stake_snapshot: Option<&CommitStakeSnapshot>,
+    ) -> bool {
+        let height = block.header().height().get();
+        let view = block.header().view_change_index();
+        let (consensus_mode, mode_tag, prf_seed) = self.consensus_context_for_height(height);
+        let world = self.state.world_view();
+        let Ok(block_signers) =
+            super::validated_block_signers_from_world(block, topology, &world, mode_tag, prf_seed)
+        else {
+            return false;
+        };
+        match consensus_mode {
+            ConsensusMode::Permissioned => {
+                block_signers.len() >= topology.min_votes_for_commit().max(1)
+            }
+            ConsensusMode::Npos => {
+                let Some(snapshot) =
+                    stake_snapshot.filter(|snapshot| snapshot.matches_roster(topology.as_ref()))
+                else {
+                    return false;
+                };
+                let signature_topology =
+                    super::topology_for_view(topology, height, view, mode_tag, prf_seed);
+                let Ok(signer_peers) =
+                    super::signer_peers_for_topology(&block_signers, &signature_topology)
+                else {
+                    return false;
+                };
+                let stake_quorum = super::stake_snapshot::stake_quorum_reached_for_snapshot(
+                    snapshot,
+                    topology.as_ref(),
+                    &signer_peers,
+                )
+                .unwrap_or(false);
+                let persisted_tip_context = height == self.committed_height_snapshot();
+                stake_quorum
+                    && (!persisted_tip_context
+                        || block_signers.len() >= topology.min_votes_for_commit().max(1))
+            }
+        }
+    }
+
+    fn handle_committed_height_conflict_proof(
+        &mut self,
+        block: &SignedBlock,
+        commit_votes: &[crate::sumeragi::consensus::Vote],
+        incoming_qc: Option<&crate::sumeragi::consensus::Qc>,
+        validator_checkpoint: Option<&ValidatorSetCheckpoint>,
+    ) -> bool {
+        let block_hash = block.hash();
+        let block_height = block.header().height().get();
+        let block_view = block.header().view_change_index();
+        let Ok(height_usize) = usize::try_from(block_height) else {
+            return false;
+        };
+        let Some(committed_hash) = self.finality_canonical_block_hash_for_height(block_height)
+        else {
+            return false;
+        };
+        let hash_conflict = committed_hash != block_hash;
+
+        let (consensus_mode, mode_tag, _) = self.consensus_context_for_height(block_height);
+        let expected_epoch = self.epoch_for_height(block_height);
+        let historical = self.authoritative_finality_roster_and_stake(
+            committed_hash,
+            block_height,
+            consensus_mode,
+        );
+        let mut candidates = Vec::new();
+        if historical.is_some() {
+            if let Some(qc) = incoming_qc {
+                candidates.push(qc.clone());
+            }
+            if let Some(checkpoint) = validator_checkpoint.filter(|checkpoint| {
+                checkpoint.block_hash == block_hash
+                    && checkpoint.height == block_height
+                    && checkpoint.view == block_view
+            }) {
+                candidates.push(crate::sumeragi::consensus::Qc {
+                    phase: crate::sumeragi::consensus::Phase::Commit,
+                    subject_block_hash: checkpoint.block_hash,
+                    parent_state_root: checkpoint.parent_state_root,
+                    post_state_root: checkpoint.post_state_root,
+                    height: checkpoint.height,
+                    view: checkpoint.view,
+                    epoch: expected_epoch,
+                    chain_order_hash: checkpoint.chain_order_hash,
+                    rechain_seq: checkpoint.rechain_seq,
+                    mode_tag: mode_tag.to_owned(),
+                    highest_qc: None,
+                    validator_set_hash: checkpoint.validator_set_hash,
+                    validator_set_hash_version: checkpoint.validator_set_hash_version,
+                    validator_set: checkpoint.validator_set.clone(),
+                    aggregate: crate::sumeragi::consensus::QcAggregate {
+                        signers_bitmap: checkpoint.signers_bitmap.clone(),
+                        bls_aggregate_signature: checkpoint.bls_aggregate_signature.clone(),
+                    },
+                });
+            }
+        }
+        let vote_qcs = historical
+            .as_ref()
+            .map_or_else(Vec::new, |(topology, historical_stake)| {
+                self.commit_qc_from_block_sync_votes(
+                    block_hash,
+                    block_height,
+                    block_view,
+                    commit_votes,
+                    topology,
+                    historical_stake.as_ref(),
+                )
+            });
+
+        for candidate in candidates {
+            let Some((historical_topology, historical_stake)) = historical.as_ref() else {
+                break;
+            };
+            if candidate.aggregate.bls_aggregate_signature.is_empty() {
+                continue;
+            }
+            let historical_roster = historical_topology.as_ref().to_vec();
+            if candidate.validator_set != historical_roster
+                || candidate.validator_set_hash != HashOf::new(&historical_roster)
+                || candidate.validator_set_hash_version
+                    != iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1
+            {
+                continue;
+            }
+            let inputs = self.roster_validation_cache.inputs_for_roster(
+                &candidate.validator_set,
+                consensus_mode,
+                historical_stake.as_ref(),
+            );
+            if super::validate_commit_qc_roster_cached(
+                &self.roster_validation_cache,
+                &candidate,
+                block_hash,
+                block_height,
+                Some(block_view),
+                consensus_mode,
+                expected_epoch,
+                &self.common_config.chain,
+                mode_tag,
+                false,
+                &inputs,
+            )
+            .is_ok()
+            {
+                let registered = self.register_authenticated_commit_qc(&candidate);
+                if !registered {
+                    return true;
+                }
+            }
+        }
+        for candidate in vote_qcs {
+            let registered = self.register_authenticated_commit_qc(&candidate);
+            if !registered {
+                return true;
+            }
+        }
+
+        if super::status::consensus_safety_halt_active() {
+            let _ = self.consensus_participation_halted();
+            return true;
+        }
+
+        if !hash_conflict {
+            return false;
+        }
+
+        info!(
+            committed_height = height_usize,
+            committed_hash = %committed_hash,
+            incoming_hash = %block_hash,
+            "dropping block sync update that conflicts with committed block without authenticated quorum proof"
+        );
+        self.record_consensus_message_handling(
+            super::status::ConsensusMessageKind::BlockSyncUpdate,
+            super::status::ConsensusMessageOutcome::Dropped,
+            super::status::ConsensusMessageReason::CommitConflict,
+        );
+        self.clear_missing_block_request(&block_hash, MissingBlockClearReason::Obsolete);
+        true
     }
 
     pub(super) fn block_sync_qc_is_missing_context_error(err: &QcValidationError) -> bool {
@@ -2466,15 +2878,22 @@ impl Actor {
         progress
     }
 
-    pub(super) fn enqueue_fetch_pending_block_response(&mut self, peer: PeerId, msg: BlockMessage) {
+    pub(super) fn enqueue_fetch_pending_block_response(
+        &mut self,
+        peer: PeerId,
+        msg: BlockMessage,
+    ) -> bool {
+        if self.consensus_participation_halted() {
+            return false;
+        }
         let mut msg = BlockMessageWire::new(msg);
         if !self.prepare_background_block_message(&mut msg) {
-            return;
+            return false;
         }
         let request = BackgroundRequest::Post { peer, msg };
         if self.config.debug.disable_background_worker {
             self.dispatch_background_inline(request);
-            return;
+            return true;
         }
         let dispatched = {
             #[cfg(feature = "telemetry")]
@@ -2493,6 +2912,7 @@ impl Actor {
         if let Err(request) = dispatched {
             self.dispatch_background_fallback(*request);
         }
+        true
     }
 
     fn dispatch_fetch_pending_block_response(
@@ -2500,11 +2920,14 @@ impl Actor {
         peer: PeerId,
         msg: BlockMessage,
         bypass_queue: bool,
-    ) {
+    ) -> bool {
+        if self.consensus_participation_halted() {
+            return false;
+        }
         if bypass_queue {
             let mut msg = BlockMessageWire::new(msg);
             if !self.prepare_background_block_message(&mut msg) {
-                return;
+                return false;
             }
             #[cfg(test)]
             self.record_background_request(&BackgroundRequest::Post {
@@ -2512,9 +2935,9 @@ impl Actor {
                 msg: msg.clone(),
             });
             self.dispatch_background_fallback(BackgroundRequest::Post { peer, msg });
-            return;
+            return true;
         }
-        self.enqueue_fetch_pending_block_response(peer, msg);
+        self.enqueue_fetch_pending_block_response(peer, msg)
     }
 
     pub(super) fn block_body_response_from_payload(
@@ -2550,7 +2973,7 @@ impl Actor {
     }
 
     pub(super) fn block_body_response_for_wire(
-        &self,
+        &mut self,
         block: &SignedBlock,
     ) -> super::message::BlockBodyResponse {
         let block_hash = block.hash();
@@ -2679,6 +3102,9 @@ impl Actor {
         &mut self,
         block: &SignedBlock,
     ) -> Option<crate::sumeragi::consensus::Qc> {
+        if self.consensus_participation_halted() {
+            return None;
+        }
         let block_hash = block.hash();
         let height = block.header().height().get();
         let view = block.header().view_change_index();
@@ -2687,22 +3113,23 @@ impl Actor {
                 direct_commit_qc_for_block_decision(true, false, false, false, 0, 1, false).result,
                 DirectCommitQcForBlockResult::Cache
             );
-            return Some(qc);
+            return self.authenticate_direct_commit_qc(block, &qc).then_some(qc);
         }
 
-        {
+        let world_qc = {
             let world = self.state.world_view();
-            if let Some(qc) = crate::block_sync::BlockSynchronizer::block_sync_qc_for_world(
+            crate::block_sync::BlockSynchronizer::block_sync_qc_for_world(
                 &world,
                 self.config.consensus_mode,
                 block,
-            ) {
-                let decision =
-                    direct_commit_qc_for_block_decision(false, true, false, false, 0, 1, false);
-                debug_assert!(decision.world_consulted);
-                debug_assert_eq!(decision.result, DirectCommitQcForBlockResult::World);
-                return Some(qc);
-            }
+            )
+        };
+        if let Some(qc) = world_qc {
+            let decision =
+                direct_commit_qc_for_block_decision(false, true, false, false, 0, 1, false);
+            debug_assert!(decision.world_consulted);
+            debug_assert_eq!(decision.result, DirectCommitQcForBlockResult::World);
+            return self.authenticate_direct_commit_qc(block, &qc).then_some(qc);
         }
 
         let (consensus_mode, _, _) = self.consensus_context_for_height(height);
@@ -2781,7 +3208,54 @@ impl Actor {
                 "formed direct commit QC from cached votes for fetch response"
             );
         }
-        formed
+        formed.and_then(|qc| self.authenticate_direct_commit_qc(block, &qc).then_some(qc))
+    }
+
+    fn authenticate_direct_commit_qc(
+        &mut self,
+        block: &SignedBlock,
+        qc: &crate::sumeragi::consensus::Qc,
+    ) -> bool {
+        if self.consensus_participation_halted() {
+            return false;
+        }
+        let block_hash = block.hash();
+        let height = block.header().height().get();
+        let block_view = block.header().view_change_index();
+        let (consensus_mode, mode_tag, _) = self.consensus_context_for_height(height);
+        let expected_epoch = self.epoch_for_height(height);
+        let stake_snapshot = self
+            .state
+            .commit_roster_snapshot_for_block(height, block_hash)
+            .and_then(|snapshot| snapshot.stake_snapshot);
+        let inputs = self.roster_validation_cache.inputs_for_roster(
+            &qc.validator_set,
+            consensus_mode,
+            stake_snapshot.as_ref(),
+        );
+        if let Err(err) = super::validate_commit_qc_roster_cached(
+            &self.roster_validation_cache,
+            qc,
+            block_hash,
+            height,
+            Some(block_view),
+            consensus_mode,
+            expected_epoch,
+            &self.common_config.chain,
+            mode_tag,
+            height == 1 && block_view == 0,
+            &inputs,
+        ) {
+            warn!(
+                ?err,
+                height,
+                view = block_view,
+                block = %block_hash,
+                "refusing to publish cached commit QC before aggregate authentication"
+            );
+            return false;
+        }
+        self.register_authenticated_commit_qc(qc)
     }
 
     fn validator_checkpoint_from_commit_qc(
@@ -2877,6 +3351,17 @@ impl Actor {
         response: &super::message::CertifiedBlockFetchResponse,
         source: &'static str,
     ) -> bool {
+        if let Err(err) = response.validate_subject() {
+            warn!(
+                ?err,
+                height = response.height,
+                view = response.view,
+                block = %response.block.hash(),
+                source,
+                "dropping malformed certified commit proof companion"
+            );
+            return false;
+        }
         let proof = Self::certified_block_fetch_proof_for_response(response);
         let msg =
             BlockMessage::CertifiedBlockFetch(super::message::CertifiedBlockFetch::Proof(proof));
@@ -2896,15 +3381,29 @@ impl Actor {
             );
             return false;
         }
+        if !self.dispatch_fetch_pending_block_response(
+            peer.clone(),
+            msg,
+            /*bypass_queue*/ true,
+        ) {
+            warn!(
+                height = response.height,
+                view = response.view,
+                block = %block_hash,
+                peer = %peer,
+                source,
+                "certified commit proof companion failed authentication or dispatch preparation"
+            );
+            return false;
+        }
         info!(
             height = response.height,
             view = response.view,
             block = %block_hash,
             peer = %peer,
             source,
-            "sending certified commit proof companion"
+            "sent certified commit proof companion"
         );
-        self.dispatch_fetch_pending_block_response(peer, msg, /*bypass_queue*/ true);
         true
     }
 
@@ -2923,6 +3422,17 @@ impl Actor {
         peer: PeerId,
         response: super::message::CertifiedBlockFetchResponse,
     ) -> bool {
+        if let Err(err) = response.validate_subject() {
+            warn!(
+                ?err,
+                height = response.height,
+                view = response.view,
+                block = %response.block.hash(),
+                peer = %peer,
+                "dropping malformed certified block fetch response before dispatch"
+            );
+            return false;
+        }
         let full = BlockMessage::CertifiedBlockFetch(
             super::message::CertifiedBlockFetch::Response(response.clone()),
         );
@@ -2930,8 +3440,8 @@ impl Actor {
         let cap = self.block_message_frame_cap(&full);
         let full_len = super::consensus_block_wire_len(&origin, &full);
         if full_len <= cap {
-            self.dispatch_fetch_pending_block_response(peer, full, /*bypass_queue*/ true);
-            return true;
+            return self
+                .dispatch_fetch_pending_block_response(peer, full, /*bypass_queue*/ true);
         }
 
         let block = response.block.clone();
@@ -2959,37 +3469,20 @@ impl Actor {
         let body_msg =
             BlockMessage::CertifiedBlockFetch(super::message::CertifiedBlockFetch::Body(body));
         let body_len = super::consensus_block_wire_len(&origin, &body_msg);
-        self.dispatch_fetch_pending_block_response(
-            peer.clone(),
-            proof_msg,
-            /*bypass_queue*/ true,
-        );
-        if body_len <= cap {
-            self.dispatch_fetch_pending_block_response(
-                peer.clone(),
-                body_msg,
-                /*bypass_queue*/ true,
-            );
+        let (body_msg, body_kind) = if body_len <= cap {
+            (body_msg, "certified_body")
         } else {
             let body_response =
                 BlockMessage::BlockBodyResponse(self.plain_block_body_response_for_wire(&block));
             let body_response_len = super::consensus_block_wire_len(&origin, &body_response);
             if body_response_len <= cap {
-                self.dispatch_fetch_pending_block_response(
-                    peer.clone(),
-                    body_response,
-                    /*bypass_queue*/ true,
-                );
+                (body_response, "plain_body_response")
             } else {
                 let created =
                     BlockMessage::BlockCreated(self.frontier_block_created_for_wire(&block));
                 let created_len = super::consensus_block_wire_len(&origin, &created);
                 if created_len <= cap {
-                    self.dispatch_fetch_pending_block_response(
-                        peer.clone(),
-                        created,
-                        /*bypass_queue*/ true,
-                    );
+                    (created, "block_created")
                 } else {
                     warn!(
                         height,
@@ -3002,8 +3495,38 @@ impl Actor {
                         created_len,
                         "skipping certified block fetch body split; block body exceeds frame cap"
                     );
+                    return false;
                 }
             }
+        };
+        if !self.dispatch_fetch_pending_block_response(
+            peer.clone(),
+            proof_msg,
+            /*bypass_queue*/ true,
+        ) {
+            warn!(
+                height,
+                view,
+                block = %block_hash,
+                peer = %peer,
+                "certified block fetch proof failed authentication or dispatch preparation; suppressing body continuation"
+            );
+            return false;
+        }
+        if !self.dispatch_fetch_pending_block_response(
+            peer.clone(),
+            body_msg,
+            /*bypass_queue*/ true,
+        ) {
+            warn!(
+                height,
+                view,
+                block = %block_hash,
+                peer = %peer,
+                body_kind,
+                "certified block fetch body continuation failed dispatch preparation"
+            );
+            return false;
         }
         info!(
             height,
@@ -3013,7 +3536,8 @@ impl Actor {
             full_len,
             proof_len,
             body_len,
-            "split oversized certified block fetch response into proof and body"
+            body_kind,
+            "split oversized certified block fetch response into authenticated proof and body"
         );
         true
     }
@@ -3243,10 +3767,12 @@ impl Actor {
         let height = proof.height;
         let view = proof.view;
         let commit_qc = proof.commit_qc.clone();
-        self.handle_qc_with_stake_snapshot(commit_qc.clone(), proof.stake_snapshot.clone())?;
+        // Certified-fetch snapshots crossed the network and are never stake authority. QC handling
+        // derives the aligned snapshot from local finality context instead.
+        self.handle_qc_with_stake_snapshot(commit_qc.clone(), None)?;
         if self
             .cached_commit_qc_for_block(block_hash, height, view)
-            .is_none()
+            .is_none_or(|cached| HashOf::new(&cached) != HashOf::new(&commit_qc))
         {
             warn!(
                 height,
@@ -3261,12 +3787,11 @@ impl Actor {
             );
             return Ok(false);
         }
-        self.state.record_commit_roster(
-            &commit_qc,
-            &proof.validator_checkpoint,
-            proof.stake_snapshot.clone(),
-        );
-        super::status::record_commit_qc(commit_qc.clone());
+        let roster_recorded = self.record_authorized_commit_roster_hint(&commit_qc);
+        let halted = self.consensus_participation_halted();
+        if !roster_recorded || halted {
+            return Ok(false);
+        }
         self.clear_missing_commit_qc_request(&block_hash, MissingBlockClearReason::Obsolete);
         Ok(true)
     }
@@ -3481,6 +4006,9 @@ impl Actor {
         view: u64,
         source: &'static str,
     ) {
+        if !self.register_authenticated_commit_qc(&qc) {
+            return;
+        }
         info!(
             height,
             view,
@@ -3500,8 +4028,6 @@ impl Actor {
         &mut self,
         peer: PeerId,
         block: &SignedBlock,
-        priority: FetchPendingBlockPriority,
-        requester_roster_proof_known: bool,
     ) -> bool {
         let block_hash = block.hash();
         let header = block.header();
@@ -3532,27 +4058,6 @@ impl Actor {
                     replayed_votes,
                     "sending cached commit votes for commit-QC-only fetch response"
                 );
-            }
-            if self.committed_signed_quorum_fetch_fallback_available(block) {
-                let update = self.signed_quorum_fetch_fallback_update(block);
-                info!(
-                    height,
-                    view,
-                    block = %block_hash,
-                    peer = %peer,
-                    replayed_votes,
-                    "sending signed-quorum block sync fallback for commit-QC-only fetch response"
-                );
-                self.send_fetch_pending_block_response(
-                    peer,
-                    BlockMessage::BlockSyncUpdate(update),
-                    priority,
-                    /*force_bypass_queue*/ true,
-                    /*allow_highest_qc_bypass*/ true,
-                    /*allow_hintless_block_sync_bypass*/ true,
-                    requester_roster_proof_known,
-                );
-                return true;
             }
             debug!(
                 height,
@@ -3590,20 +4095,11 @@ impl Actor {
         true
     }
 
-    pub(super) fn committed_signed_quorum_fetch_fallback_available(
+    #[cfg(test)]
+    pub(super) fn validated_legacy_block_signature_quorum_count(
         &self,
         block: &SignedBlock,
-    ) -> bool {
-        let block_hash = block.hash();
-        let height = block.header().height().get();
-        if self.committed_block_hash_for_height(height) != Some(block_hash) {
-            return false;
-        }
-
-        self.signed_commit_quorum_signer_count(block).is_some()
-    }
-
-    pub(super) fn signed_commit_quorum_signer_count(&self, block: &SignedBlock) -> Option<usize> {
+    ) -> Option<usize> {
         let block_hash = block.hash();
         let height = block.header().height().get();
         let view = block.header().view_change_index();
@@ -3654,21 +4150,6 @@ impl Actor {
                 .then_some(block_signers.len())
             }
         }
-    }
-
-    fn signed_quorum_fetch_fallback_update(
-        &self,
-        block: &SignedBlock,
-    ) -> super::message::BlockSyncUpdate {
-        super::block_sync_update_with_roster(
-            block,
-            self.state.as_ref(),
-            self.kura.as_ref(),
-            self.config.consensus_mode,
-            self.common_config.trusted_peers.value(),
-            self.common_config.peer.id(),
-            &self.roster_validation_cache,
-        )
     }
 
     pub(super) fn send_block_body_response(&mut self, peer: PeerId, block: &SignedBlock) {
@@ -3829,7 +4310,7 @@ impl Actor {
             let height = update.block.header().height().get();
             let view = update.block.header().view_change_index();
             let expected_epoch = self.epoch_for_height(height);
-            Self::apply_cached_qcs_to_block_sync_update(
+            Self::apply_cached_qcs_to_block_sync_update_with_roster_cache(
                 update,
                 &self.qc_cache,
                 &self.vote_log,
@@ -3839,6 +4320,7 @@ impl Actor {
                 expected_epoch,
                 self.state.as_ref(),
                 self.config.consensus_mode,
+                Some(&self.roster_validation_cache),
             );
             direct_commit_qc = self
                 .direct_commit_qc_from_block_sync_update(block_hash, height, view, update)
@@ -3952,7 +4434,10 @@ impl Actor {
         self.dispatch_fetch_pending_block_response(peer, msg, bypass_queue);
     }
 
-    pub(super) fn build_fetch_pending_block_payload(&self, block: &SignedBlock) -> BlockMessage {
+    pub(super) fn build_fetch_pending_block_payload(
+        &mut self,
+        block: &SignedBlock,
+    ) -> BlockMessage {
         let block_hash = block.hash();
         let block_height = block.header().height().get();
         let block_view = block.header().view_change_index();
@@ -3967,7 +4452,7 @@ impl Actor {
         );
         let mut update = update;
         let expected_epoch = self.epoch_for_height(block_height);
-        Self::apply_cached_qcs_to_block_sync_update(
+        Self::apply_cached_qcs_to_block_sync_update_with_roster_cache(
             &mut update,
             &self.qc_cache,
             &self.vote_log,
@@ -3977,7 +4462,15 @@ impl Actor {
             expected_epoch,
             self.state.as_ref(),
             self.config.consensus_mode,
+            Some(&self.roster_validation_cache),
         );
+        if update
+            .commit_qc
+            .as_ref()
+            .is_some_and(|qc| !self.register_authenticated_commit_qc(qc))
+        {
+            return BlockMessage::BlockCreated(self.frontier_block_created_for_wire(block));
+        }
         let (consensus_mode, _, _) = self.consensus_context_for_height(block_height);
         let has_roster = super::block_sync_update_has_roster(&update, consensus_mode);
         let has_cached_qc = update.commit_qc.is_some() || !update.commit_votes.is_empty();
@@ -4230,12 +4723,8 @@ impl Actor {
         let mut payload_peers = BTreeMap::new();
         for (peer, meta) in peers {
             if meta.commit_qc_only {
-                let commit_qc_sent = self.dispatch_commit_qc_only_fetch_response(
-                    peer.clone(),
-                    block,
-                    meta.priority,
-                    meta.requester_roster_proof_known,
-                );
+                let commit_qc_sent =
+                    self.dispatch_commit_qc_only_fetch_response(peer.clone(), block);
                 let decision = fetch_pending_responses_batch_commit_decision(true, commit_qc_sent);
                 debug_assert!(decision.dispatch_commit_qc_only);
                 if decision.restash {
@@ -4956,10 +5445,111 @@ impl Actor {
         let block_hash = block.hash();
         let block_height = block.header().height().get();
         let block_view = block.header().view_change_index();
-        self.maybe_cache_rehydrated_kura_body(&block);
-        let parent_hash = block.header().prev_block_hash();
         let local_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
         let expected_epoch = self.epoch_for_height(block_height);
+        let checkpoint_consensus_mode = self.consensus_context_for_height(block_height).0;
+        if validator_checkpoint.is_some() {
+            // A wire stake snapshot is evidence supplied by the sender, not stake authority.
+            // Resolve the exact block/height context locally before a checkpoint can influence
+            // any roster, status, frontier, or finality cache. Converting the checkpoint into a
+            // Commit QC also routes it through the canonical conflict ledger.
+            let Some((_, authoritative_stake)) = self.authoritative_finality_context(
+                block_height,
+                block_hash,
+                checkpoint_consensus_mode,
+            ) else {
+                warn!(
+                    height = block_height,
+                    view = block_view,
+                    block = %block_hash,
+                    mode = ?checkpoint_consensus_mode,
+                    "dropping block sync checkpoint without locally authoritative finality context"
+                );
+                return Ok(());
+            };
+            if matches!(checkpoint_consensus_mode, ConsensusMode::Npos)
+                && authoritative_stake.is_none()
+            {
+                warn!(
+                    height = block_height,
+                    view = block_view,
+                    block = %block_hash,
+                    "dropping NPoS block sync checkpoint without locally authoritative stake"
+                );
+                return Ok(());
+            }
+
+            let checkpoint_qc = validator_checkpoint
+                .as_ref()
+                .and_then(|checkpoint| {
+                    self.commit_qc_from_validator_checkpoint(
+                        block_hash,
+                        block_height,
+                        block_view,
+                        checkpoint,
+                        authoritative_stake.as_ref(),
+                    )
+                })
+                .filter(|qc| self.register_authenticated_commit_qc(qc));
+            if self.consensus_participation_halted() {
+                return Ok(());
+            }
+            if checkpoint_qc.is_none() {
+                validator_checkpoint = None;
+            }
+
+            let authenticated_incoming_qc = incoming_qc
+                .take()
+                .filter(|qc| self.register_authenticated_commit_qc(qc));
+            if self.consensus_participation_halted() {
+                return Ok(());
+            }
+            incoming_qc = authenticated_incoming_qc.or(checkpoint_qc);
+            if incoming_qc.is_none() {
+                warn!(
+                    height = block_height,
+                    view = block_view,
+                    block = %block_hash,
+                    mode = ?checkpoint_consensus_mode,
+                    "dropping block sync checkpoint that cannot produce an authenticated Commit QC"
+                );
+                return Ok(());
+            }
+            // Never propagate the sender-provided weights beyond the authentication gate.
+            stake_snapshot = authoritative_stake;
+        } else if matches!(checkpoint_consensus_mode, ConsensusMode::Npos) {
+            // A QC-only (or payload/vote-only) update must not retain its sender's weights either.
+            // Resolve an aligned local snapshot from the QC subject when possible; otherwise discard
+            // the wire field and let downstream finality validation fail closed or continue as a
+            // payload-only recovery path.
+            let wire_stake_snapshot_present = stake_snapshot.is_some();
+            stake_snapshot = incoming_qc
+                .as_ref()
+                .and_then(|qc| self.authoritative_stake_for_commit_qc_context(qc))
+                .flatten();
+            if wire_stake_snapshot_present {
+                debug!(
+                    height = block_height,
+                    view = block_view,
+                    block = %block_hash,
+                    locally_authoritative = stake_snapshot.is_some(),
+                    "discarded sender-provided NPoS stake snapshot from block sync update"
+                );
+            }
+        }
+        let kura_committed_start = Instant::now();
+        if self.handle_committed_height_conflict_proof(
+            &block,
+            &commit_votes,
+            incoming_qc.as_ref(),
+            validator_checkpoint.as_ref(),
+        ) {
+            return Ok(());
+        }
+        let kura_committed_ms =
+            u64::try_from(kura_committed_start.elapsed().as_millis()).unwrap_or(u64::MAX);
+        self.maybe_cache_rehydrated_kura_body(&block);
+        let parent_hash = block.header().prev_block_hash();
         let requested_missing_block_by_hash = self
             .pending
             .missing_block_requests
@@ -5129,21 +5719,6 @@ impl Actor {
                         )
                     })
                 });
-                let signed_quorum_repair_signers = sidecar_qc
-                    .is_none()
-                    .then(|| {
-                        (exact_contiguous_frontier
-                            && self.missing_commit_qc_repair_active_for_round(
-                                block_hash,
-                                block_height,
-                                block_view,
-                                local_height,
-                                Instant::now(),
-                            ))
-                        .then(|| self.signed_commit_quorum_signer_count(&block))
-                        .flatten()
-                    })
-                    .flatten();
                 if sidecar_qc.is_some() {
                     let qc = sidecar_qc
                         .take()
@@ -5164,24 +5739,6 @@ impl Actor {
                         block_height,
                     ));
                     drop(world_view);
-                    let checkpoint = validator_checkpoint.clone().unwrap_or_else(|| {
-                        ValidatorSetCheckpoint::new_with_chain_order(
-                            qc.height,
-                            qc.view,
-                            qc.subject_block_hash,
-                            qc.chain_order_hash,
-                            qc.rechain_seq,
-                            qc.parent_state_root,
-                            qc.post_state_root,
-                            qc.validator_set.clone(),
-                            qc.aggregate.signers_bitmap.clone(),
-                            qc.aggregate.bls_aggregate_signature.clone(),
-                            qc.validator_set_hash_version,
-                            None,
-                        )
-                    });
-                    self.state
-                        .record_commit_roster(&qc, &checkpoint, stake_snapshot.clone());
                     let topology = super::network_topology::Topology::new(qc.validator_set.clone());
                     if let Some(work) = self.prepare_known_block_qc_work(
                         qc,
@@ -5191,7 +5748,6 @@ impl Actor {
                         consensus_mode,
                         mode_tag,
                         prf_seed,
-                        true,
                     ) {
                         let buffered_local_block =
                             self.pending
@@ -5221,40 +5777,6 @@ impl Actor {
                         block_hash,
                         super::status::RoundEventCauseTrace::BlockSyncUpdated,
                         None,
-                    );
-                } else if let Some(block_signers) = signed_quorum_repair_signers {
-                    if let Some(pending) = self.pending.pending_blocks.get_mut(&block_hash)
-                        && pending.height == block_height
-                        && pending.view == block_view
-                        && pending.validation_status != ValidationStatus::Invalid
-                    {
-                        // A canonical committed peer may no longer have a portable commit QC,
-                        // but its committed block still carries a verified commit-signature
-                        // quorum. Treat that quorum as the local commit evidence needed to run
-                        // the finalization path.
-                        pending.note_commit_qc_observed(expected_epoch);
-                    }
-                    self.note_frontier_commit_qc_observed(
-                        block_hash,
-                        block_height,
-                        block_view,
-                        Instant::now(),
-                    );
-                    self.clear_missing_commit_qc_request(
-                        &block_hash,
-                        MissingBlockClearReason::Obsolete,
-                    );
-                    self.request_commit_pipeline_for_pending(
-                        block_hash,
-                        super::status::RoundEventCauseTrace::BlockSyncUpdated,
-                        None,
-                    );
-                    info!(
-                        height = block_height,
-                        view = block_view,
-                        block = %block_hash,
-                        block_signers,
-                        "accepted signed-quorum block sync fallback as commit evidence for known block"
                     );
                 } else if exact_contiguous_frontier {
                     let recovery_targets = self.known_block_commit_qc_recovery_targets(
@@ -5363,24 +5885,6 @@ impl Actor {
                     block_height,
                 ));
                 drop(world_view);
-                let checkpoint = validator_checkpoint.clone().unwrap_or_else(|| {
-                    ValidatorSetCheckpoint::new_with_chain_order(
-                        qc.height,
-                        qc.view,
-                        qc.subject_block_hash,
-                        qc.chain_order_hash,
-                        qc.rechain_seq,
-                        qc.parent_state_root,
-                        qc.post_state_root,
-                        qc.validator_set.clone(),
-                        qc.aggregate.signers_bitmap.clone(),
-                        qc.aggregate.bls_aggregate_signature.clone(),
-                        qc.validator_set_hash_version,
-                        None,
-                    )
-                });
-                self.state
-                    .record_commit_roster(&qc, &checkpoint, stake_snapshot.clone());
                 let topology = super::network_topology::Topology::new(qc.validator_set.clone());
                 if let Some(work) = self.prepare_known_block_qc_work(
                     qc,
@@ -5390,7 +5894,6 @@ impl Actor {
                     consensus_mode,
                     mode_tag,
                     prf_seed,
-                    true,
                 ) {
                     self.enqueue_known_block_qc_work(work);
                 }
@@ -5631,133 +6134,6 @@ impl Actor {
             let local_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
             (consensus_mode, mode_tag, prf_seed, local_height)
         };
-        let kura_committed_start = Instant::now();
-        if let Ok(height_usize) = usize::try_from(block_height)
-            && let Some(nz_height) = NonZeroUsize::new(height_usize)
-        {
-            if let Some(committed) = self.kura.get_block(nz_height) {
-                let committed_hash = committed.hash();
-                let commit_conflict = block_sync_commit_conflict_detected(
-                    true,
-                    true,
-                    true,
-                    committed_hash == block_hash,
-                );
-                if commit_conflict {
-                    let Some(commit_qc) = incoming_qc.take() else {
-                        info!(
-                            committed_height = height_usize,
-                            committed_hash = %committed_hash,
-                            incoming_hash = %block_hash,
-                            "dropping block sync update that conflicts with committed block without commit QC"
-                        );
-                        if let Some((kind, outcome, reason)) =
-                            block_sync_commit_conflict_drop_record(commit_conflict)
-                        {
-                            self.record_consensus_message_handling(kind, outcome, reason);
-                        }
-                        if block_sync_commit_conflict_should_clear_missing(commit_conflict) {
-                            self.clear_missing_block_request(
-                                &block_hash,
-                                MissingBlockClearReason::Obsolete,
-                            );
-                        }
-                        return Ok(());
-                    };
-                    let inputs = self.roster_validation_cache.inputs_for_roster(
-                        &commit_qc.validator_set,
-                        consensus_mode,
-                        stake_snapshot.as_ref(),
-                    );
-                    let allow_genesis_stub =
-                        block_sync_commit_conflict_allow_genesis_stub(block_height, block_view);
-                    let should_validate_qc =
-                        block_sync_commit_conflict_should_validate_qc(commit_conflict, true);
-                    let qc_valid = if should_validate_qc {
-                        match super::validate_commit_qc_roster_cached(
-                            &self.roster_validation_cache,
-                            &commit_qc,
-                            block_hash,
-                            block_height,
-                            Some(block_view),
-                            consensus_mode,
-                            expected_epoch,
-                            &self.common_config.chain,
-                            mode_tag,
-                            allow_genesis_stub,
-                            &inputs,
-                        ) {
-                            Ok(_) => true,
-                            Err(err) => {
-                                warn!(
-                                    ?err,
-                                    committed_height = height_usize,
-                                    committed_hash = %committed_hash,
-                                    incoming_hash = %block_hash,
-                                    "dropping commit-conflict block sync update with invalid commit QC"
-                                );
-                                if let Some((kind, outcome, reason)) =
-                                    block_sync_commit_conflict_drop_record(commit_conflict)
-                                {
-                                    self.record_consensus_message_handling(kind, outcome, reason);
-                                }
-                                if block_sync_commit_conflict_should_clear_missing(commit_conflict)
-                                {
-                                    self.clear_missing_block_request(
-                                        &block_hash,
-                                        MissingBlockClearReason::Obsolete,
-                                    );
-                                }
-                                return Ok(());
-                            }
-                        }
-                    } else {
-                        false
-                    };
-                    if block_sync_commit_conflict_should_emit_evidence(
-                        commit_conflict,
-                        true,
-                        qc_valid,
-                    ) {
-                        info!(
-                            committed_height = height_usize,
-                            committed_hash = %committed_hash,
-                            incoming_hash = %block_hash,
-                            view = block_view,
-                            "rejecting conflicting commit QC at committed height; enforcing finality"
-                        );
-                        #[cfg(feature = "telemetry")]
-                        {
-                            self.telemetry.inc_commit_conflict_detected();
-                        }
-                        let evidence = block_sync_commit_conflict_invalid_qc_evidence(commit_qc);
-                        if let Err(err) = self.record_and_broadcast_evidence(evidence) {
-                            warn!(
-                                ?err,
-                                committed_height = height_usize,
-                                committed_hash = %committed_hash,
-                                incoming_hash = %block_hash,
-                                "failed to record commit-conflict evidence"
-                            );
-                        }
-                    }
-                    if let Some((kind, outcome, reason)) =
-                        block_sync_commit_conflict_drop_record(commit_conflict)
-                    {
-                        self.record_consensus_message_handling(kind, outcome, reason);
-                    }
-                    if block_sync_commit_conflict_should_clear_missing(commit_conflict) {
-                        self.clear_missing_block_request(
-                            &block_hash,
-                            MissingBlockClearReason::Obsolete,
-                        );
-                    }
-                    return Ok(());
-                }
-            }
-        }
-        let kura_committed_ms =
-            u64::try_from(kura_committed_start.elapsed().as_millis()).unwrap_or(u64::MAX);
         let kura_known_start = Instant::now();
         let block_known = self.kura.get_block_height_by_hash(block_hash).is_some();
         let kura_known_ms =
@@ -6109,37 +6485,20 @@ impl Actor {
                 stake_snapshot = None;
             }
         }
-        let snapshot_selection = snapshot.as_ref().and_then(|snapshot| {
-            let selection = block_sync_snapshot_roster_selection(snapshot)?;
-            if let Some(key) = BlockSyncRosterCacheKey::from_hints(
-                block_hash,
-                block_height,
-                block_view,
-                consensus_mode,
-                selection.commit_qc.as_ref(),
-                selection.checkpoint.as_ref(),
-                selection.stake_snapshot.as_ref(),
-            ) {
-                self.block_sync_roster_cache.insert(key, selection.clone());
-            }
-            Some(selection)
-        });
         let roster_start = Instant::now();
         let persisted_roster_start = Instant::now();
         let allow_sidecar = !self.sidecar_quarantined_for_height(block_height);
-        let persisted_roster = snapshot_selection.or_else(|| {
-            persisted_roster_for_block(
-                self.state.as_ref(),
-                &self.kura,
-                consensus_mode,
-                block_height,
-                block_hash,
-                Some(block_view),
-                &self.roster_validation_cache,
-                Some(&mut self.block_sync_roster_cache),
-                allow_sidecar,
-            )
-        });
+        let persisted_roster = persisted_roster_for_block(
+            self.state.as_ref(),
+            &self.kura,
+            consensus_mode,
+            block_height,
+            block_hash,
+            Some(block_view),
+            &self.roster_validation_cache,
+            Some(&mut self.block_sync_roster_cache),
+            allow_sidecar,
+        );
         let roster_persisted_ms =
             u64::try_from(persisted_roster_start.elapsed().as_millis()).unwrap_or(u64::MAX);
         let cert_hint = incoming_qc.as_ref();
@@ -6174,7 +6533,7 @@ impl Actor {
                 source = selection.source.as_str(),
                 "block sync roster cache hit"
             );
-            Some(selection)
+            publish_authenticated_roster_selection(&selection).then_some(selection)
         } else {
             let selection = select_block_sync_roster(
                 &block,
@@ -6192,22 +6551,19 @@ impl Actor {
                 allow_uncertified,
                 &self.roster_validation_cache,
             );
-            if let (Some(selection), Some(key)) = (selection.as_ref(), roster_cache_key.as_ref()) {
-                if selection.commit_qc.is_some() || selection.checkpoint.is_some() {
-                    self.block_sync_roster_cache
-                        .insert(key.clone(), selection.clone());
-                }
-            }
             selection
         };
         let roster_select_ms =
             u64::try_from(selection_start.elapsed().as_millis()).unwrap_or(u64::MAX);
         let roster_ms = u64::try_from(roster_start.elapsed().as_millis()).unwrap_or(u64::MAX);
         let roster_validate_ms = roster_ms;
+        if self.consensus_participation_halted() {
+            return Ok(());
+        }
         let roster_snapshot = self
             .state
             .commit_roster_snapshot_for_block(block_height, block_hash);
-        let Some(selection) = selection else {
+        let Some(mut selection) = selection else {
             if block_sync_no_roster_known_vote_only(
                 block_known,
                 has_commit_votes,
@@ -6319,6 +6675,68 @@ impl Actor {
             }
             return Ok(());
         };
+        if selection.commit_qc.is_none() {
+            let Some(checkpoint) = selection.checkpoint.as_ref() else {
+                warn!(
+                    height = block_height,
+                    view = block_view,
+                    block = %block_hash,
+                    mode = ?consensus_mode,
+                    "dropping roster selection without authenticated Commit QC"
+                );
+                return Ok(());
+            };
+            let Some((_, authoritative_stake)) =
+                self.authoritative_finality_context(block_height, block_hash, consensus_mode)
+            else {
+                warn!(
+                    height = block_height,
+                    view = block_view,
+                    block = %block_hash,
+                    mode = ?consensus_mode,
+                    "dropping checkpoint-only roster selection without authoritative context"
+                );
+                return Ok(());
+            };
+            if matches!(consensus_mode, ConsensusMode::Npos) && authoritative_stake.is_none() {
+                warn!(
+                    height = block_height,
+                    view = block_view,
+                    block = %block_hash,
+                    "dropping checkpoint-only NPoS roster selection without authoritative stake"
+                );
+                return Ok(());
+            }
+            let Some(checkpoint_qc) = self.commit_qc_from_validator_checkpoint(
+                block_hash,
+                block_height,
+                block_view,
+                checkpoint,
+                authoritative_stake.as_ref(),
+            ) else {
+                return Ok(());
+            };
+            if !self.register_authenticated_commit_qc(&checkpoint_qc) {
+                return Ok(());
+            }
+            selection.commit_qc = Some(checkpoint_qc);
+            selection.stake_snapshot = authoritative_stake;
+        }
+        // `selection_from_roster_artifacts` authenticated this exact QC. Publish it through the
+        // Actor's canonical-aware transition gate before any checkpoint, cache, journal, or WSV
+        // roster mutation; State deliberately rejects first-time/unregistered QCs.
+        if let Some(cert) = selection.commit_qc.clone() {
+            if !self.register_authenticated_commit_qc(&cert) {
+                return Ok(());
+            }
+            let Some(authoritative_stake) =
+                self.authoritative_stake_for_registered_commit_qc(&cert)
+            else {
+                return Ok(());
+            };
+            selection.stake_snapshot = authoritative_stake.clone();
+            stake_snapshot = authoritative_stake;
+        }
         super::status::inc_block_sync_roster_source(selection.source.as_str());
         #[cfg(feature = "telemetry")]
         if let Some(telemetry) = self.telemetry_handle() {
@@ -6331,6 +6749,10 @@ impl Actor {
             source = selection.source.as_str(),
             "block sync roster selected"
         );
+        if let Some(key) = roster_cache_key.as_ref() {
+            self.block_sync_roster_cache
+                .insert(key.clone(), selection.clone());
+        }
         self.cache_vote_roster(
             block_hash,
             block_height,
@@ -6338,39 +6760,26 @@ impl Actor {
             selection.roster.clone(),
         );
         let topology = super::network_topology::Topology::new(selection.roster.clone());
-        if let Some(checkpoint) = selection.checkpoint.clone() {
-            super::status::record_validator_checkpoint(checkpoint);
-        }
-        // Persist commit rosters only once the block is known locally.
-        let commit_roster_record = selection.commit_qc.as_ref().map(|cert| {
-            let checkpoint = selection.checkpoint.clone().unwrap_or_else(|| {
-                ValidatorSetCheckpoint::new_with_chain_order(
-                    cert.height,
-                    cert.view,
-                    cert.subject_block_hash,
-                    cert.chain_order_hash,
-                    cert.rechain_seq,
-                    cert.parent_state_root,
-                    cert.post_state_root,
-                    cert.validator_set.clone(),
-                    cert.aggregate.signers_bitmap.clone(),
-                    cert.aggregate.bls_aggregate_signature.clone(),
-                    cert.validator_set_hash_version,
-                    None,
-                )
-            });
-            (cert.clone(), checkpoint, selection.stake_snapshot.clone())
-        });
+        // An authenticated QC is the only authority that may cross the durable roster boundary.
+        // Remote checkpoint fields are never written directly; the Actor derives the canonical
+        // checkpoint and local stake snapshot from the registered QC below.
+        let commit_roster_record = selection.commit_qc.clone();
         if !block_known {
-            if let Some((cert, checkpoint, stake_snapshot)) = commit_roster_record.as_ref() {
-                self.state
-                    .record_commit_roster_hint(cert, checkpoint, stake_snapshot.clone());
+            if let Some(cert) = commit_roster_record.as_ref() {
+                let roster_recorded = self.record_authorized_commit_roster_hint(cert);
+                let halted = self.consensus_participation_halted();
+                if !roster_recorded || halted {
+                    return Ok(());
+                }
             }
         }
         if block_known {
-            if let Some((cert, checkpoint, stake_snapshot)) = commit_roster_record.as_ref() {
-                self.state
-                    .record_commit_roster(cert, checkpoint, stake_snapshot.clone());
+            if let Some(cert) = commit_roster_record.as_ref() {
+                let roster_recorded = self.record_authorized_commit_roster_hint(cert);
+                let halted = self.consensus_participation_halted();
+                if !roster_recorded || halted {
+                    return Ok(());
+                }
             }
             info!(
                 hash = ?block_hash,
@@ -6391,7 +6800,7 @@ impl Actor {
                         .or(stake_snapshot.as_ref()),
                 )
             });
-            if let Some((candidate_qc_source, qc)) = block_sync_known_roster_candidate_qc(
+            if let Some((_, qc)) = block_sync_known_roster_candidate_qc(
                 incoming_qc.take(),
                 selection.commit_qc.clone(),
                 checkpoint_qc,
@@ -6417,8 +6826,6 @@ impl Actor {
                         "skipping redundant known-block QC replay: commit QC already cached locally"
                     );
                 } else {
-                    let commit_qc_match =
-                        candidate_qc_source == BlockSyncKnownRosterCandidateQcSource::Selection;
                     let work = self.prepare_known_block_qc_work(
                         qc,
                         Arc::new(block),
@@ -6427,7 +6834,6 @@ impl Actor {
                         consensus_mode,
                         mode_tag,
                         prf_seed,
-                        commit_qc_match,
                     );
                     if let Some(work) = work {
                         self.enqueue_known_block_qc_work(work);
@@ -6682,42 +7088,14 @@ impl Actor {
 
         let qc_validate_start = Instant::now();
         let commit_cert_hint_present = selection.commit_qc.is_some();
-        let checkpoint_present = selection.checkpoint.is_some();
         let candidate_qc_present = candidate_qc.is_some();
         let candidate_qc_signers = candidate_qc.as_ref().map(qc_signer_count);
         let block_signer_count = block_signers.len();
-        let signature_quorum_met = match consensus_mode {
-            ConsensusMode::Permissioned => block_signer_count >= commit_quorum,
-            ConsensusMode::Npos => {
-                let signature_topology = super::topology_for_view(
-                    &topology,
-                    block_height,
-                    block_view,
-                    mode_tag,
-                    prf_seed,
-                );
-                let mut signer_peers = BTreeSet::new();
-                for signer in &block_signers {
-                    let Ok(idx) = usize::try_from(*signer) else {
-                        continue;
-                    };
-                    let Some(peer) = signature_topology.as_ref().get(idx) else {
-                        continue;
-                    };
-                    signer_peers.insert(peer.clone());
-                }
-                if let Some(snapshot) = selection.stake_snapshot.as_ref() {
-                    super::stake_snapshot::stake_quorum_reached_for_snapshot(
-                        snapshot,
-                        &selection.roster,
-                        &signer_peers,
-                    )
-                    .unwrap_or(false)
-                } else {
-                    false
-                }
-            }
-        };
+        // Block signatures remain useful as transport/quorum evidence, but their preimage is not
+        // chain/mode-domain-separated. Only a validated Commit QC below may register finality.
+        // In particular, a block-sync payload's matching stake snapshot is not authority: it
+        // could assign fabricated weights to an otherwise well-formed roster.
+        let signature_quorum_met = self.validate_signed_block_quorum(&block);
         let local_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
         let mut cached_qc_tally: Option<QcSignerTally> = None;
         let cached_qc_match = candidate_qc.as_ref().and_then(|qc| {
@@ -6848,7 +7226,7 @@ impl Actor {
 
         let candidate_kept = candidate_qc.is_some();
         let candidate_validated = validated_qc.is_some();
-        let (mut incoming_qc, incoming_qc_validated) = if let Some(qc) = validated_qc {
+        let (mut incoming_qc, mut incoming_qc_validated) = if let Some(qc) = validated_qc {
             (Some(qc), true)
         } else if block_sync_selected_qc_should_derive_cached(
             candidate_kept,
@@ -6896,6 +7274,7 @@ impl Actor {
                         "accepting block sync QC validated from aggregate signature despite local validation failure"
                     );
                     incoming_qc = Some(qc);
+                    incoming_qc_validated = true;
                 }
             }
             u64::try_from(qc_fallback_start.elapsed().as_millis()).unwrap_or(u64::MAX)
@@ -6904,6 +7283,18 @@ impl Actor {
         };
         let qc_validate_ms =
             u64::try_from(qc_validate_start.elapsed().as_millis()).unwrap_or(u64::MAX);
+        if incoming_qc_validated && let Some(qc) = incoming_qc.as_ref() {
+            if !self.register_authenticated_commit_qc(qc) {
+                return Ok(());
+            }
+            let Some(authoritative_stake) = self.authoritative_stake_for_registered_commit_qc(qc)
+            else {
+                return Ok(());
+            };
+            // Validation may have consumed a local copy resolved earlier in this ingress path,
+            // but all post-authentication consumers refresh from the exact registered QC.
+            stake_snapshot = authoritative_stake;
+        }
         let hard_locked_conflict = incoming_qc.as_ref().is_some_and(|qc| {
             self.locked_qc.is_some_and(|lock| {
                 Self::block_sync_qc_same_height_conflict(lock, qc)
@@ -6936,8 +7327,15 @@ impl Actor {
             incoming_qc_validated,
             hard_locked_conflict,
         );
+        // A raw checkpoint is never independent quorum evidence. It counts only while its paired,
+        // centrally authenticated Commit QC remains usable after the locked-chain gate.
+        let checkpoint_present = super::block_sync_authenticated_checkpoint_present(
+            selection.checkpoint.is_some(),
+            commit_cert_present,
+            incoming_qc_usable,
+        );
         let invalid_qc_present = had_incoming_qc && !incoming_qc_validated && !qc_evidence_present;
-        let block_quorum_met = block_signer_count >= commit_quorum;
+        let block_quorum_met = signature_quorum_met;
         let known_exact_frontier_payload_needs_commit_qc = block_known_locally
             && exact_contiguous_frontier
             && !qc_evidence_present
@@ -7190,32 +7588,13 @@ impl Actor {
             incoming_qc_signers,
             "applying block sync update"
         );
-        let quorum_only_same_height_frontier_conflict =
-            block_sync_selected_apply_same_height_frontier_conflict(
-                block_quorum_met,
-                incoming_qc_usable,
-                commit_cert_present,
-                checkpoint_present,
-                self.local_conflicting_frontier_vote(block_height, block_hash)
-                    .is_some(),
-            );
         // Raw block-signature quorum is enough to hydrate the payload locally and keep stale-view
-        // catch-up moving, but it is not authoritative enough to steal same-height frontier
-        // ownership from a branch that this validator already voted on. Only certified evidence
-        // may bypass the passive retained branch path in that exact conflict case.
+        // catch-up moving, but it is never authoritative enough to steal frontier ownership.
         let allow_frontier_owner_preserve_on_payload_mismatch =
             block_sync_selected_apply_preserve_on_payload_mismatch(
                 incoming_qc_usable,
                 commit_cert_present,
                 checkpoint_present,
-            );
-        let allow_authoritative_frontier_owner_supersede =
-            block_sync_selected_apply_authoritative_supersede(
-                incoming_qc_usable,
-                commit_cert_present,
-                checkpoint_present,
-                block_quorum_met,
-                quorum_only_same_height_frontier_conflict,
             );
         let recovery_mode = block_sync_selected_apply_recovery_mode(
             has_commit_votes,
@@ -7224,7 +7603,6 @@ impl Actor {
             checkpoint_present,
             incoming_qc.as_ref().map(|qc| qc.epoch),
             expected_epoch,
-            allow_authoritative_frontier_owner_supersede,
         );
         let created = super::message::BlockCreated {
             block,
@@ -7241,67 +7619,9 @@ impl Actor {
             u64::try_from(block_apply_start.elapsed().as_millis()).unwrap_or(u64::MAX);
         let block_known_after_creation = self.block_known_locally(block_hash);
         let creation_ok = creation_result.is_ok();
-        let missing_commit_qc_repair_active = creation_ok
-            && block_known_after_creation
-            && signature_quorum_met
-            && exact_contiguous_frontier
-            && !qc_evidence_present
-            && !commit_cert_present
-            && !checkpoint_present
-            && self.missing_commit_qc_repair_active_for_round(
-                block_hash,
-                block_height,
-                block_view,
-                local_height,
-                Instant::now(),
-            );
-        let signed_quorum_commit_repair_active =
-            block_sync_selected_apply_signed_quorum_commit_repair_active(
-                BlockSyncSelectedApplySignedQuorumRepair {
-                    creation_ok,
-                    block_known_after_creation,
-                    signature_quorum_met,
-                    exact_contiguous_frontier,
-                    qc_evidence_present,
-                    commit_cert_present,
-                    checkpoint_present,
-                    missing_commit_qc_repair_active,
-                },
-            );
-        if signed_quorum_commit_repair_active {
-            if let Some(pending) = self.pending.pending_blocks.get_mut(&block_hash)
-                && block_sync_selected_apply_pending_commit_qc_observed(
-                    signed_quorum_commit_repair_active,
-                    pending.height == block_height
-                        && pending.view == block_view
-                        && pending.validation_status != ValidationStatus::Invalid,
-                )
-            {
-                // A canonical committed peer may no longer have a portable commit QC, but its
-                // committed block still carries a verified commit-signature quorum. Treat that
-                // quorum as the local commit evidence needed to run the finalization path.
-                pending.note_commit_qc_observed(expected_epoch);
-            }
-            self.note_frontier_commit_qc_observed(
-                block_hash,
-                block_height,
-                block_view,
-                Instant::now(),
-            );
-            self.clear_missing_commit_qc_request(&block_hash, MissingBlockClearReason::Obsolete);
-            self.request_commit_pipeline_for_pending(
-                block_hash,
-                super::status::RoundEventCauseTrace::BlockSyncUpdated,
-                None,
-            );
-            info!(
-                height = block_height,
-                view = block_view,
-                block = %block_hash,
-                block_signers = block_signer_count,
-                "accepted signed-quorum block sync fallback as commit evidence"
-            );
-        }
+        // Never convert legacy block signatures into Commit-QC state. Even a full validator
+        // signature quorum can be replayed across chains or consensus modes that reuse keys.
+        // The missing-QC request remains active until chain-bound Commit votes/QC arrive.
         let recovered_sparse_next_height_payload =
             block_sync_selected_apply_sparse_next_height_payload_recovered(
                 BlockSyncSelectedApplySparseRecovery {
@@ -7332,9 +7652,12 @@ impl Actor {
         }
         let ready_for_qc = block_sync_ready_for_qc(block_known_after_creation, &creation_result);
         if block_known_after_creation {
-            if let Some((cert, checkpoint, stake_snapshot)) = commit_roster_record.as_ref() {
-                self.state
-                    .record_commit_roster(cert, checkpoint, stake_snapshot.clone());
+            if let Some(cert) = commit_roster_record.as_ref() {
+                let roster_recorded = self.record_authorized_commit_roster_hint(cert);
+                let halted = self.consensus_participation_halted();
+                if !roster_recorded || halted {
+                    return Ok(());
+                }
             }
         }
         if block_sync_selected_apply_payload_unapplied_drop(ready_for_qc) {
@@ -7547,7 +7870,17 @@ impl Actor {
                 }
                 let qc_signers = qc_signer_count(&qc);
                 let tally_start = Instant::now();
-                let cached_tally = self.qc_signer_tally.get(&Self::qc_tally_key(&qc)).cloned();
+                let cached_tally = cached_qc_for(
+                    &self.qc_cache,
+                    qc.phase,
+                    qc.subject_block_hash,
+                    qc.height,
+                    qc.view,
+                    qc.epoch,
+                )
+                .filter(|cached| HashOf::new(cached) == HashOf::new(&qc))
+                .and_then(|_| self.qc_signer_tally.get(&Self::qc_tally_key(&qc)))
+                .cloned();
                 let tally_result =
                     match block_sync_selected_qc_process_tally_source(cached_tally.is_some()) {
                         BlockSyncSelectedQcProcessTallySource::Cached => {
@@ -7655,9 +7988,7 @@ impl Actor {
                             return Ok(());
                         }
                         self.qc_cache.insert(Self::qc_tally_key(&qc), qc.clone());
-                        if block_known_for_commit {
-                            super::status::record_commit_qc(qc.clone());
-                        } else {
+                        if !block_known_for_commit {
                             let sent = self.request_certified_block_for_qc(
                                 &qc,
                                 &topology,
@@ -7817,7 +8148,7 @@ impl Actor {
         block_signers: &BTreeSet<crate::sumeragi::consensus::ValidatorIndex>,
         allow_nonextending_qc: bool,
         consensus_mode: ConsensusMode,
-        stake_snapshot: Option<super::stake_snapshot::CommitStakeSnapshot>,
+        _stake_snapshot: Option<super::stake_snapshot::CommitStakeSnapshot>,
         mode_tag: &str,
         prf_seed: Option<[u8; 32]>,
     ) {
@@ -7980,6 +8311,9 @@ impl Actor {
                 "retaining cached non-extending block sync QC for lock realignment"
             );
         }
+        let Some(stake_snapshot) = self.authoritative_stake_for_registered_commit_qc(&qc) else {
+            return;
+        };
         let qc_signers = qc_signer_count(&qc);
         let tally_result = {
             let world_view = self.state.world_view();
@@ -9042,12 +9376,14 @@ impl Actor {
         qc: crate::sumeragi::consensus::Qc,
         block: Arc<SignedBlock>,
         topology: super::network_topology::Topology,
-        stake_snapshot: Option<CommitStakeSnapshot>,
+        _stake_snapshot: Option<CommitStakeSnapshot>,
         consensus_mode: ConsensusMode,
         mode_tag: &'static str,
         prf_seed: Option<[u8; 32]>,
-        commit_qc_match: bool,
     ) -> Option<KnownBlockQcWork> {
+        if self.consensus_participation_halted() {
+            return None;
+        }
         let block_hash = block.hash();
         let block_height = block.header().height().get();
         let block_view = block.header().view_change_index();
@@ -9104,10 +9440,21 @@ impl Actor {
             );
             return None;
         }
-        if let Some(lock) = self.locked_qc {
-            let same_height_conflict = Self::block_sync_qc_same_height_conflict(lock, &qc);
-            if same_height_conflict {
-                if !Self::block_sync_qc_same_height_recoverable(lock, &qc, true) {
+        let stake_snapshot = match consensus_mode {
+            ConsensusMode::Permissioned => None,
+            ConsensusMode::Npos => self.authoritative_stake_for_commit_qc_context(&qc)?,
+        };
+        // Lock/staleness checks are liveness filters, not authentication. A candidate which would
+        // conflict with already authenticated finality must reach aggregate verification so a
+        // valid conflict can trigger the safety halt (while an invalid one is simply dropped).
+        let possible_finality_conflict = super::status::conflicting_commit_qc(&qc).is_some()
+            || self.canonical_committed_qc_conflict(&qc).is_some();
+        if !possible_finality_conflict {
+            if let Some(lock) = self.locked_qc {
+                let same_height_conflict = Self::block_sync_qc_same_height_conflict(lock, &qc);
+                if same_height_conflict
+                    && !Self::block_sync_qc_same_height_recoverable(lock, &qc, true)
+                {
                     if self.defer_block_sync_qc_while_locked_payload_missing(
                         &qc,
                         "known_block_qc.height_conflict.missing_locked_payload",
@@ -9128,35 +9475,35 @@ impl Actor {
                     return None;
                 }
             }
-        }
-        if self.block_sync_qc_is_stale_against_lock(&qc) {
-            debug!(
-                height = qc.height,
-                view = qc.view,
-                incoming_hash = %qc.subject_block_hash,
-                locked_height = self.locked_qc.map(|lock| lock.height),
-                "dropping stale known-block QC below locked height"
-            );
-            self.record_consensus_message_handling(
-                super::status::ConsensusMessageKind::Qc,
-                super::status::ConsensusMessageOutcome::Dropped,
-                super::status::ConsensusMessageReason::LockedQc,
-            );
-            return None;
-        }
-        if !self.block_sync_qc_extends_locked_chain(&qc) {
-            if self.defer_block_sync_qc_while_locked_payload_missing(
-                &qc,
-                "known_block_qc.non_extending.missing_locked_payload",
-            ) {
+            if self.block_sync_qc_is_stale_against_lock(&qc) {
+                debug!(
+                    height = qc.height,
+                    view = qc.view,
+                    incoming_hash = %qc.subject_block_hash,
+                    locked_height = self.locked_qc.map(|lock| lock.height),
+                    "dropping stale known-block QC below locked height"
+                );
+                self.record_consensus_message_handling(
+                    super::status::ConsensusMessageKind::Qc,
+                    super::status::ConsensusMessageOutcome::Dropped,
+                    super::status::ConsensusMessageReason::LockedQc,
+                );
                 return None;
             }
-            debug!(
-                height = qc.height,
-                view = qc.view,
-                incoming_hash = %qc.subject_block_hash,
-                "retaining known-block non-extending QC for lock realignment"
-            );
+            if !self.block_sync_qc_extends_locked_chain(&qc) {
+                if self.defer_block_sync_qc_while_locked_payload_missing(
+                    &qc,
+                    "known_block_qc.non_extending.missing_locked_payload",
+                ) {
+                    return None;
+                }
+                debug!(
+                    height = qc.height,
+                    view = qc.view,
+                    incoming_hash = %qc.subject_block_hash,
+                    "retaining known-block non-extending QC for lock realignment"
+                );
+            }
         }
         Some(KnownBlockQcWork {
             qc,
@@ -9166,13 +9513,15 @@ impl Actor {
             consensus_mode,
             mode_tag,
             prf_seed,
-            commit_qc_match,
             aggregate_ok: None,
         })
     }
 
     pub(super) fn enqueue_known_block_qc_work(&mut self, work: KnownBlockQcWork) {
-        let key = Self::qc_tally_key(&work.qc);
+        if self.consensus_participation_halted() {
+            return;
+        }
+        let key = super::known_block_qc_key(&work.qc);
         if self.known_block_qc_work.contains_key(&key) {
             debug!(
                 phase = ?work.qc.phase,
@@ -9183,9 +9532,13 @@ impl Actor {
             );
             return;
         }
-        match bounded_qc_insert_decision(&self.known_block_qc_work, key, KNOWN_BLOCK_QC_WORK_CAP) {
-            BoundedQcInsertDecision::Insert => {}
-            BoundedQcInsertDecision::DropIncoming => {
+        match bounded_known_block_qc_insert_decision(
+            &self.known_block_qc_work,
+            key,
+            KNOWN_BLOCK_QC_WORK_CAP,
+        ) {
+            BoundedKnownBlockQcInsertDecision::Insert => {}
+            BoundedKnownBlockQcInsertDecision::DropIncoming => {
                 self.record_consensus_message_handling(
                     super::status::ConsensusMessageKind::Qc,
                     super::status::ConsensusMessageOutcome::Dropped,
@@ -9201,7 +9554,7 @@ impl Actor {
                 );
                 return;
             }
-            BoundedQcInsertDecision::Evict(evicted) => {
+            BoundedKnownBlockQcInsertDecision::Evict(evicted) => {
                 self.known_block_qc_work.remove(&evicted);
                 super::status::inc_qc_deferred_expired();
                 #[cfg(feature = "telemetry")]
@@ -9213,9 +9566,9 @@ impl Actor {
                     height = work.qc.height,
                     view = work.qc.view,
                     block = %work.qc.subject_block_hash,
-                    evicted_height = evicted.2,
-                    evicted_view = evicted.3,
-                    evicted_block = %evicted.1,
+                    evicted_height = evicted.0.2,
+                    evicted_view = evicted.0.3,
+                    evicted_block = %evicted.0.1,
                     cap = KNOWN_BLOCK_QC_WORK_CAP,
                     "evicting older known-block QC work from bounded queue"
                 );
@@ -9228,9 +9581,9 @@ impl Actor {
             super::status::ConsensusMessageReason::AggregateVerifyDeferred,
         );
         debug!(
-            height = key.2,
-            view = key.3,
-            block = %key.1,
+            height = key.0.2,
+            view = key.0.3,
+            block = %key.0.1,
             queued = self.known_block_qc_work.len(),
             "deferred known-block QC processing off payload queue"
         );
@@ -9240,7 +9593,7 @@ impl Actor {
     }
 
     pub(super) fn drain_known_block_qc_work(&mut self, tick_deadline: Option<Instant>) -> bool {
-        if self.known_block_qc_work.is_empty() {
+        if self.consensus_participation_halted() || self.known_block_qc_work.is_empty() {
             return false;
         }
         let mut progress = false;
@@ -9260,6 +9613,9 @@ impl Actor {
                 progress = true;
             }
             processed = processed.saturating_add(1);
+            if self.consensus_participation_halted() {
+                break;
+            }
         }
         if processed > 0 {
             debug!(
@@ -9378,7 +9734,12 @@ impl Actor {
     }
 
     pub(super) fn apply_known_block_qc_work(&mut self, work: KnownBlockQcWork) -> bool {
-        if self.block_sync_qc_is_stale_against_lock(&work.qc) {
+        if self.consensus_participation_halted() {
+            return false;
+        }
+        let possible_finality_conflict = super::status::conflicting_commit_qc(&work.qc).is_some()
+            || self.canonical_committed_qc_conflict(&work.qc).is_some();
+        if self.block_sync_qc_is_stale_against_lock(&work.qc) && !possible_finality_conflict {
             debug!(
                 height = work.qc.height,
                 view = work.qc.view,
@@ -9402,7 +9763,7 @@ impl Actor {
             work.qc.epoch,
         )
         .filter(|cached| HashOf::new(cached) == HashOf::new(&work.qc));
-        let cached_tally = if cached_qc_match.is_some() || work.commit_qc_match {
+        let cached_tally = if cached_qc_match.is_some() {
             self.qc_signer_tally
                 .get(&Self::qc_tally_key(&work.qc))
                 .cloned()
@@ -9421,11 +9782,10 @@ impl Actor {
             qc,
             block,
             topology,
-            stake_snapshot,
+            stake_snapshot: validation_stake_snapshot,
             consensus_mode,
             mode_tag,
             prf_seed,
-            commit_qc_match: _,
             aggregate_ok,
         } = work;
         let block_hash = block.hash();
@@ -9486,7 +9846,7 @@ impl Actor {
                 &self.roster_validation_cache.pops,
                 &self.common_config.chain,
                 consensus_mode,
-                stake_snapshot.as_ref(),
+                validation_stake_snapshot.as_ref(),
                 mode_tag,
                 prf_seed,
                 aggregate_ok,
@@ -9516,6 +9876,12 @@ impl Actor {
                 );
                 return false;
             }
+        };
+        if !self.register_authenticated_commit_qc(&qc) {
+            return true;
+        }
+        let Some(stake_snapshot) = self.authoritative_stake_for_registered_commit_qc(&qc) else {
+            return true;
         };
         crate::sumeragi::status::record_precommit_signers(
             crate::sumeragi::status::PrecommitSignerRecord {
@@ -9578,24 +9944,8 @@ impl Actor {
             }
             return true;
         }
-        let checkpoint = ValidatorSetCheckpoint::new_with_chain_order(
-            qc.height,
-            qc.view,
-            qc.subject_block_hash,
-            qc.chain_order_hash,
-            qc.rechain_seq,
-            qc.parent_state_root,
-            qc.post_state_root,
-            qc.validator_set.clone(),
-            qc.aggregate.signers_bitmap.clone(),
-            qc.aggregate.bls_aggregate_signature.clone(),
-            qc.validator_set_hash_version,
-            None,
-        );
-        if self
-            .state
-            .record_commit_roster(&qc, &checkpoint, stake_snapshot.clone())
-        {
+        let roster_recorded = self.record_authorized_commit_roster_hint(&qc);
+        if roster_recorded {
             debug!(
                 incoming_hash = %block_hash,
                 height = block_height,
@@ -9603,10 +9953,12 @@ impl Actor {
                 "recorded commit roster from block sync QC"
             );
         }
+        if self.consensus_participation_halted() {
+            return true;
+        }
         let qc_key = Self::qc_tally_key(&qc);
         self.deferred_missing_payload_qcs.remove(&qc_key);
         self.quarantined_block_sync_qcs.remove(&qc_key);
-        super::status::record_commit_qc(qc.clone());
         self.qc_cache.insert(Self::qc_tally_key(&qc), qc.clone());
         self.clear_missing_commit_qc_request(&block_hash, MissingBlockClearReason::Obsolete);
         debug!(
@@ -9644,21 +9996,18 @@ impl Actor {
 
 #[cfg(test)]
 mod allow_uncertified_block_sync_roster_tests {
-    use iroha_config::parameters::actual::ConsensusMode;
+    use crate::{
+        commit_roster_journal::CommitRosterSnapshot,
+        sumeragi::{
+            consensus::{PERMISSIONED_TAG, Phase, Qc, QcAggregate, ValidatorIndex, Vote},
+            stake_snapshot::CommitStakeSnapshot,
+        },
+    };
     use iroha_crypto::{Hash, HashOf, KeyPair};
     use iroha_data_model::{
         block::BlockHeader,
         consensus::{VALIDATOR_SET_HASH_VERSION_V1, ValidatorSetCheckpoint},
         peer::PeerId,
-    };
-    use iroha_primitives::numeric::Numeric;
-
-    use crate::{
-        commit_roster_journal::CommitRosterSnapshot,
-        sumeragi::{
-            consensus::{NPOS_TAG, PERMISSIONED_TAG, Phase, Qc, QcAggregate, ValidatorIndex, Vote},
-            stake_snapshot::{CommitStakeSnapshot, CommitStakeSnapshotEntry},
-        },
     };
 
     use super::super::message::FetchPendingBlockPriority;
@@ -9667,40 +10016,30 @@ mod allow_uncertified_block_sync_roster_tests {
         FutureConsensusMessageDropDecision, future_consensus_message_drop_decision,
     };
     use super::{
-        BLOCK_SYNC_COMMIT_CONFLICT_EVIDENCE_REASON, BlockBodyDirectCommitQcSource,
-        BlockBodyRepairEpochSource, BlockBodyResponseDispatchDecision,
-        BlockBodyResponsePayloadIdentity, BlockSyncFetchBlockBodyHandleDecision,
-        BlockSyncFetchResponseDeferralCommittedHash, BlockSyncFetchResponseDeferralMessage,
-        BlockSyncKnownRosterCandidateQcSource, BlockSyncNoRosterFallbackSource,
-        BlockSyncRosterSource, BlockSyncSelectedApplySignedQuorumRepair,
-        BlockSyncSelectedApplySparseRecovery, BlockSyncSelectedQcProcessTallySource,
-        BlockSyncSelectedQcShape, BlockSyncSelectedQcSource, BlockSyncSnapshotHintFilter,
-        DetachedBlockBodyCommitQcDecision, DirectCommitQcForBlockResult,
-        DirectCommitQcTopologySource, FetchPendingResponseFinalPayload,
-        FetchPendingResponsePayloadKind, FetchPendingResponsesBatchPayloadKind,
-        FetchPendingResponsesBatchPayloadMessage, PendingResponseFlushKind,
-        allow_uncertified_block_sync_roster, block_body_direct_commit_qc_created_source,
-        block_body_direct_commit_qc_update_source, block_body_repair_epoch_decision,
-        block_body_repair_epoch_deferred_source, block_body_repair_epoch_pending_source,
-        block_body_repair_gate_decision, block_body_request_stash_window_decision,
-        block_body_response_dispatch_decision, block_sync_commit_conflict_allow_genesis_stub,
-        block_sync_commit_conflict_detected, block_sync_commit_conflict_drop_record,
-        block_sync_commit_conflict_invalid_qc_evidence,
-        block_sync_commit_conflict_should_clear_missing,
-        block_sync_commit_conflict_should_emit_evidence,
-        block_sync_commit_conflict_should_validate_qc, block_sync_consensus_mode_tag,
+        BlockBodyDirectCommitQcSource, BlockBodyRepairEpochSource,
+        BlockBodyResponseDispatchDecision, BlockBodyResponsePayloadIdentity,
+        BlockSyncFetchBlockBodyHandleDecision, BlockSyncFetchResponseDeferralCommittedHash,
+        BlockSyncFetchResponseDeferralMessage, BlockSyncKnownRosterCandidateQcSource,
+        BlockSyncNoRosterFallbackSource, BlockSyncSelectedApplySparseRecovery,
+        BlockSyncSelectedQcProcessTallySource, BlockSyncSelectedQcShape, BlockSyncSelectedQcSource,
+        BlockSyncSnapshotHintFilter, DetachedBlockBodyCommitQcDecision,
+        DirectCommitQcForBlockResult, DirectCommitQcTopologySource,
+        FetchPendingResponseFinalPayload, FetchPendingResponsePayloadKind,
+        FetchPendingResponsesBatchPayloadKind, FetchPendingResponsesBatchPayloadMessage,
+        PendingResponseFlushKind, allow_uncertified_block_sync_roster,
+        block_body_direct_commit_qc_created_source, block_body_direct_commit_qc_update_source,
+        block_body_repair_epoch_decision, block_body_repair_epoch_deferred_source,
+        block_body_repair_epoch_pending_source, block_body_repair_gate_decision,
+        block_body_request_stash_window_decision, block_body_response_dispatch_decision,
         block_sync_fetch_block_body_handle_decision, block_sync_future_window_drop_decision,
         block_sync_future_window_far_ahead, block_sync_future_window_lower_unresolved,
         block_sync_future_window_pre_generic_drop, block_sync_future_window_requested_margin,
         block_sync_known_roster_candidate_qc, block_sync_no_roster_fallback_roster,
         block_sync_no_roster_known_vote_only, block_sync_selected_apply_allow_nonextending_qc,
-        block_sync_selected_apply_authoritative_supersede,
         block_sync_selected_apply_payload_unapplied_drop,
-        block_sync_selected_apply_pending_commit_qc_observed,
         block_sync_selected_apply_preserve_on_payload_mismatch,
         block_sync_selected_apply_qc_to_apply, block_sync_selected_apply_recovery_mode,
         block_sync_selected_apply_same_height_frontier_conflict,
-        block_sync_selected_apply_signed_quorum_commit_repair_active,
         block_sync_selected_apply_sparse_next_height_payload_recovered,
         block_sync_selected_qc_aggregate_ok, block_sync_selected_qc_cache_final_validation_drop,
         block_sync_selected_qc_cache_missing_context_quarantine,
@@ -9736,14 +10075,14 @@ mod allow_uncertified_block_sync_roster_tests {
         block_sync_selected_signatures_should_cache_validated_signers,
         block_sync_selected_signatures_should_defer,
         block_sync_selected_signatures_should_request_gap, block_sync_snapshot_hint_filter,
-        block_sync_snapshot_roster_selection, block_sync_stale_view_drop_record,
-        block_sync_stale_view_has_commit_evidence, block_sync_stale_view_should_drop,
-        block_sync_vote_placeholder_matches, deferred_block_sync_cache_decision,
-        deferred_block_sync_cache_key, deferred_block_sync_cap_eviction_count,
-        deferred_block_sync_cap_should_evict, deferred_block_sync_commit_evidence_present,
-        deferred_block_sync_defer_record_decision, deferred_block_sync_eviction_rank,
-        deferred_block_sync_merge_decision, deferred_block_sync_replay_decision,
-        deferred_block_sync_update_deferral_reason, deferred_block_sync_validation_inflight_blocks,
+        block_sync_stale_view_drop_record, block_sync_stale_view_has_commit_evidence,
+        block_sync_stale_view_should_drop, block_sync_vote_placeholder_matches,
+        deferred_block_sync_cache_decision, deferred_block_sync_cache_key,
+        deferred_block_sync_cap_eviction_count, deferred_block_sync_cap_should_evict,
+        deferred_block_sync_commit_evidence_present, deferred_block_sync_defer_record_decision,
+        deferred_block_sync_eviction_rank, deferred_block_sync_merge_decision,
+        deferred_block_sync_replay_decision, deferred_block_sync_update_deferral_reason,
+        deferred_block_sync_validation_inflight_blocks,
         deferred_block_sync_validation_pending_conflicts, detached_block_body_commit_qc_decision,
         direct_commit_qc_for_block_decision, fetch_pending_response_frame_decision,
         fetch_pending_response_preflight_decision, fetch_pending_responses_batch_commit_decision,
@@ -9762,20 +10101,6 @@ mod allow_uncertified_block_sync_roster_tests {
 
     fn snapshot_roster_test_peer() -> PeerId {
         PeerId::new(snapshot_roster_test_keypair().public_key().clone())
-    }
-
-    fn snapshot_roster_test_stake_snapshot(roster: &[PeerId]) -> CommitStakeSnapshot {
-        CommitStakeSnapshot {
-            validator_set_hash: HashOf::new(&roster.to_vec()),
-            entries: roster
-                .iter()
-                .cloned()
-                .map(|peer_id| CommitStakeSnapshotEntry {
-                    peer_id,
-                    stake: Numeric::new(1, 0),
-                })
-                .collect(),
-        }
     }
 
     fn snapshot_roster_test_snapshot(
@@ -9912,504 +10237,6 @@ mod allow_uncertified_block_sync_roster_tests {
                 expected_after,
                 "{case} requested flag mismatch"
             );
-        }
-    }
-
-    #[test]
-    fn block_sync_snapshot_roster_formal_gate_matrix() {
-        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-        enum Source {
-            Snapshot,
-            Persisted,
-            Cache,
-            Fresh,
-            None,
-        }
-
-        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-        enum SidecarArg {
-            NotCalled,
-            Allowed,
-            Blocked,
-        }
-
-        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-        struct Decision {
-            selected_source: Source,
-            snapshot_roster_origin: bool,
-            snapshot_commit_qc_included: bool,
-            snapshot_checkpoint_included: bool,
-            snapshot_stake_included: bool,
-            snapshot_cache_insert: bool,
-            persisted_lookup_called: bool,
-            allow_sidecar_arg: SidecarArg,
-            cache_lookup_called: bool,
-            fresh_selector_called: bool,
-            fresh_cache_insert: bool,
-        }
-
-        #[derive(Debug, Clone, Copy)]
-        struct Case {
-            label: &'static str,
-            has_snapshot: bool,
-            snapshot_roster_nonempty: bool,
-            snapshot_stake_present: bool,
-            snapshot_stake_matches: bool,
-            snapshot_cache_key: bool,
-            persisted_available: bool,
-            cache_hit: bool,
-            fallback_cache_key: bool,
-            fresh_available: bool,
-            fresh_certified: bool,
-            sidecar_quarantined: bool,
-            expected: Decision,
-        }
-
-        let snapshot = Decision {
-            selected_source: Source::Snapshot,
-            snapshot_roster_origin: true,
-            snapshot_commit_qc_included: true,
-            snapshot_checkpoint_included: true,
-            snapshot_stake_included: true,
-            snapshot_cache_insert: true,
-            persisted_lookup_called: false,
-            allow_sidecar_arg: SidecarArg::NotCalled,
-            cache_lookup_called: false,
-            fresh_selector_called: false,
-            fresh_cache_insert: false,
-        };
-        let persisted = Decision {
-            selected_source: Source::Persisted,
-            snapshot_roster_origin: false,
-            snapshot_commit_qc_included: false,
-            snapshot_checkpoint_included: false,
-            snapshot_stake_included: false,
-            snapshot_cache_insert: false,
-            persisted_lookup_called: true,
-            allow_sidecar_arg: SidecarArg::Allowed,
-            cache_lookup_called: false,
-            fresh_selector_called: false,
-            fresh_cache_insert: false,
-        };
-        let cache = Decision {
-            selected_source: Source::Cache,
-            cache_lookup_called: true,
-            ..persisted
-        };
-        let fresh_certified = Decision {
-            selected_source: Source::Fresh,
-            cache_lookup_called: true,
-            fresh_selector_called: true,
-            fresh_cache_insert: true,
-            ..persisted
-        };
-        let fresh_uncertified = Decision {
-            selected_source: Source::Fresh,
-            cache_lookup_called: true,
-            fresh_selector_called: true,
-            fresh_cache_insert: false,
-            ..persisted
-        };
-        let no_selection = Decision {
-            selected_source: Source::None,
-            cache_lookup_called: true,
-            fresh_selector_called: true,
-            ..persisted
-        };
-        let cases = [
-            Case {
-                label: "snapshot_matching_stake",
-                has_snapshot: true,
-                snapshot_roster_nonempty: true,
-                snapshot_stake_present: true,
-                snapshot_stake_matches: true,
-                snapshot_cache_key: true,
-                persisted_available: false,
-                cache_hit: false,
-                fallback_cache_key: true,
-                fresh_available: false,
-                fresh_certified: false,
-                sidecar_quarantined: false,
-                expected: snapshot,
-            },
-            Case {
-                label: "snapshot_no_stake",
-                has_snapshot: true,
-                snapshot_roster_nonempty: true,
-                snapshot_stake_present: false,
-                snapshot_stake_matches: false,
-                snapshot_cache_key: true,
-                persisted_available: false,
-                cache_hit: false,
-                fallback_cache_key: true,
-                fresh_available: false,
-                fresh_certified: false,
-                sidecar_quarantined: false,
-                expected: Decision {
-                    snapshot_stake_included: false,
-                    ..snapshot
-                },
-            },
-            Case {
-                label: "snapshot_wrong_stake",
-                has_snapshot: true,
-                snapshot_roster_nonempty: true,
-                snapshot_stake_present: true,
-                snapshot_stake_matches: false,
-                snapshot_cache_key: true,
-                persisted_available: false,
-                cache_hit: false,
-                fallback_cache_key: true,
-                fresh_available: false,
-                fresh_certified: false,
-                sidecar_quarantined: false,
-                expected: Decision {
-                    snapshot_stake_included: false,
-                    ..snapshot
-                },
-            },
-            Case {
-                label: "snapshot_no_key",
-                has_snapshot: true,
-                snapshot_roster_nonempty: true,
-                snapshot_stake_present: false,
-                snapshot_stake_matches: false,
-                snapshot_cache_key: false,
-                persisted_available: false,
-                cache_hit: false,
-                fallback_cache_key: true,
-                fresh_available: false,
-                fresh_certified: false,
-                sidecar_quarantined: false,
-                expected: Decision {
-                    snapshot_stake_included: false,
-                    snapshot_cache_insert: false,
-                    ..snapshot
-                },
-            },
-            Case {
-                label: "snapshot_preempts_persisted",
-                has_snapshot: true,
-                snapshot_roster_nonempty: true,
-                snapshot_stake_present: true,
-                snapshot_stake_matches: true,
-                snapshot_cache_key: true,
-                persisted_available: true,
-                cache_hit: false,
-                fallback_cache_key: true,
-                fresh_available: false,
-                fresh_certified: false,
-                sidecar_quarantined: false,
-                expected: snapshot,
-            },
-            Case {
-                label: "snapshot_preempts_cache",
-                has_snapshot: true,
-                snapshot_roster_nonempty: true,
-                snapshot_stake_present: true,
-                snapshot_stake_matches: true,
-                snapshot_cache_key: true,
-                persisted_available: false,
-                cache_hit: true,
-                fallback_cache_key: true,
-                fresh_available: false,
-                fresh_certified: false,
-                sidecar_quarantined: false,
-                expected: snapshot,
-            },
-            Case {
-                label: "snapshot_preempts_fresh",
-                has_snapshot: true,
-                snapshot_roster_nonempty: true,
-                snapshot_stake_present: true,
-                snapshot_stake_matches: true,
-                snapshot_cache_key: true,
-                persisted_available: false,
-                cache_hit: false,
-                fallback_cache_key: true,
-                fresh_available: true,
-                fresh_certified: true,
-                sidecar_quarantined: false,
-                expected: snapshot,
-            },
-            Case {
-                label: "snapshot_empty_persisted",
-                has_snapshot: true,
-                snapshot_roster_nonempty: false,
-                snapshot_stake_present: false,
-                snapshot_stake_matches: false,
-                snapshot_cache_key: true,
-                persisted_available: true,
-                cache_hit: false,
-                fallback_cache_key: true,
-                fresh_available: false,
-                fresh_certified: false,
-                sidecar_quarantined: false,
-                expected: persisted,
-            },
-            Case {
-                label: "snapshot_empty_none",
-                has_snapshot: true,
-                snapshot_roster_nonempty: false,
-                snapshot_stake_present: false,
-                snapshot_stake_matches: false,
-                snapshot_cache_key: true,
-                persisted_available: false,
-                cache_hit: false,
-                fallback_cache_key: true,
-                fresh_available: false,
-                fresh_certified: false,
-                sidecar_quarantined: false,
-                expected: no_selection,
-            },
-            Case {
-                label: "no_snapshot_persisted_allowed",
-                has_snapshot: false,
-                snapshot_roster_nonempty: false,
-                snapshot_stake_present: false,
-                snapshot_stake_matches: false,
-                snapshot_cache_key: true,
-                persisted_available: true,
-                cache_hit: false,
-                fallback_cache_key: true,
-                fresh_available: false,
-                fresh_certified: false,
-                sidecar_quarantined: false,
-                expected: persisted,
-            },
-            Case {
-                label: "no_snapshot_persisted_quarantined",
-                has_snapshot: false,
-                snapshot_roster_nonempty: false,
-                snapshot_stake_present: false,
-                snapshot_stake_matches: false,
-                snapshot_cache_key: true,
-                persisted_available: true,
-                cache_hit: false,
-                fallback_cache_key: true,
-                fresh_available: false,
-                fresh_certified: false,
-                sidecar_quarantined: true,
-                expected: Decision {
-                    allow_sidecar_arg: SidecarArg::Blocked,
-                    ..persisted
-                },
-            },
-            Case {
-                label: "no_snapshot_persisted_and_cache",
-                has_snapshot: false,
-                snapshot_roster_nonempty: false,
-                snapshot_stake_present: false,
-                snapshot_stake_matches: false,
-                snapshot_cache_key: true,
-                persisted_available: true,
-                cache_hit: true,
-                fallback_cache_key: true,
-                fresh_available: false,
-                fresh_certified: false,
-                sidecar_quarantined: false,
-                expected: persisted,
-            },
-            Case {
-                label: "no_snapshot_cache_hit",
-                has_snapshot: false,
-                snapshot_roster_nonempty: false,
-                snapshot_stake_present: false,
-                snapshot_stake_matches: false,
-                snapshot_cache_key: true,
-                persisted_available: false,
-                cache_hit: true,
-                fallback_cache_key: true,
-                fresh_available: false,
-                fresh_certified: false,
-                sidecar_quarantined: false,
-                expected: cache,
-            },
-            Case {
-                label: "no_snapshot_cache_and_fresh",
-                has_snapshot: false,
-                snapshot_roster_nonempty: false,
-                snapshot_stake_present: false,
-                snapshot_stake_matches: false,
-                snapshot_cache_key: true,
-                persisted_available: false,
-                cache_hit: true,
-                fallback_cache_key: true,
-                fresh_available: true,
-                fresh_certified: true,
-                sidecar_quarantined: false,
-                expected: cache,
-            },
-            Case {
-                label: "no_snapshot_fresh_qc",
-                has_snapshot: false,
-                snapshot_roster_nonempty: false,
-                snapshot_stake_present: false,
-                snapshot_stake_matches: false,
-                snapshot_cache_key: true,
-                persisted_available: false,
-                cache_hit: false,
-                fallback_cache_key: true,
-                fresh_available: true,
-                fresh_certified: true,
-                sidecar_quarantined: false,
-                expected: fresh_certified,
-            },
-            Case {
-                label: "no_snapshot_fresh_checkpoint",
-                has_snapshot: false,
-                snapshot_roster_nonempty: false,
-                snapshot_stake_present: false,
-                snapshot_stake_matches: false,
-                snapshot_cache_key: true,
-                persisted_available: false,
-                cache_hit: false,
-                fallback_cache_key: true,
-                fresh_available: true,
-                fresh_certified: true,
-                sidecar_quarantined: false,
-                expected: fresh_certified,
-            },
-            Case {
-                label: "no_snapshot_fresh_uncertified",
-                has_snapshot: false,
-                snapshot_roster_nonempty: false,
-                snapshot_stake_present: false,
-                snapshot_stake_matches: false,
-                snapshot_cache_key: true,
-                persisted_available: false,
-                cache_hit: false,
-                fallback_cache_key: true,
-                fresh_available: true,
-                fresh_certified: false,
-                sidecar_quarantined: false,
-                expected: fresh_uncertified,
-            },
-            Case {
-                label: "no_snapshot_fresh_no_key",
-                has_snapshot: false,
-                snapshot_roster_nonempty: false,
-                snapshot_stake_present: false,
-                snapshot_stake_matches: false,
-                snapshot_cache_key: true,
-                persisted_available: false,
-                cache_hit: false,
-                fallback_cache_key: false,
-                fresh_available: true,
-                fresh_certified: true,
-                sidecar_quarantined: false,
-                expected: Decision {
-                    cache_lookup_called: false,
-                    fresh_cache_insert: false,
-                    ..fresh_certified
-                },
-            },
-            Case {
-                label: "no_snapshot_none",
-                has_snapshot: false,
-                snapshot_roster_nonempty: false,
-                snapshot_stake_present: false,
-                snapshot_stake_matches: false,
-                snapshot_cache_key: true,
-                persisted_available: false,
-                cache_hit: false,
-                fallback_cache_key: true,
-                fresh_available: false,
-                fresh_certified: false,
-                sidecar_quarantined: false,
-                expected: no_selection,
-            },
-        ];
-
-        let roster = vec![snapshot_roster_test_peer(), snapshot_roster_test_peer()];
-        let matching_stake = snapshot_roster_test_stake_snapshot(&roster);
-        let wrong_stake = snapshot_roster_test_stake_snapshot(&[snapshot_roster_test_peer()]);
-
-        for case in cases {
-            let snapshot_selected = case.has_snapshot && case.snapshot_roster_nonempty;
-            let selected_source = if snapshot_selected {
-                Source::Snapshot
-            } else if case.persisted_available {
-                Source::Persisted
-            } else if case.cache_hit && case.fallback_cache_key {
-                Source::Cache
-            } else if case.fresh_available {
-                Source::Fresh
-            } else {
-                Source::None
-            };
-            let actual = Decision {
-                selected_source,
-                snapshot_roster_origin: selected_source == Source::Snapshot,
-                snapshot_commit_qc_included: selected_source == Source::Snapshot,
-                snapshot_checkpoint_included: selected_source == Source::Snapshot,
-                snapshot_stake_included: selected_source == Source::Snapshot
-                    && case.snapshot_stake_present
-                    && case.snapshot_stake_matches,
-                snapshot_cache_insert: snapshot_selected && case.snapshot_cache_key,
-                persisted_lookup_called: !snapshot_selected,
-                allow_sidecar_arg: if snapshot_selected {
-                    SidecarArg::NotCalled
-                } else if case.sidecar_quarantined {
-                    SidecarArg::Blocked
-                } else {
-                    SidecarArg::Allowed
-                },
-                cache_lookup_called: !snapshot_selected
-                    && !case.persisted_available
-                    && case.fallback_cache_key,
-                fresh_selector_called: !snapshot_selected
-                    && !case.persisted_available
-                    && !(case.cache_hit && case.fallback_cache_key),
-                fresh_cache_insert: selected_source == Source::Fresh
-                    && case.fallback_cache_key
-                    && case.fresh_certified,
-            };
-            assert_eq!(
-                actual, case.expected,
-                "{} abstract decision mismatch",
-                case.label
-            );
-
-            if case.has_snapshot {
-                let snapshot_roster = if case.snapshot_roster_nonempty {
-                    roster.clone()
-                } else {
-                    Vec::new()
-                };
-                let stake_snapshot = match (
-                    case.snapshot_stake_present,
-                    case.snapshot_stake_matches,
-                    case.snapshot_roster_nonempty,
-                ) {
-                    (true, true, true) => Some(matching_stake.clone()),
-                    (true, false, true) => Some(wrong_stake.clone()),
-                    _ => None,
-                };
-                let snapshot = snapshot_roster_test_snapshot(snapshot_roster, stake_snapshot);
-                let selection = block_sync_snapshot_roster_selection(&snapshot);
-                assert_eq!(
-                    selection.is_some(),
-                    snapshot_selected,
-                    "{} snapshot helper selection mismatch",
-                    case.label
-                );
-                if let Some(selection) = selection {
-                    assert_eq!(selection.source, BlockSyncRosterSource::CommitRosterJournal);
-                    assert_eq!(selection.roster, roster);
-                    assert_eq!(selection.commit_qc.as_ref(), Some(&snapshot.commit_qc));
-                    assert_eq!(
-                        selection.checkpoint.as_ref(),
-                        Some(&snapshot.validator_checkpoint)
-                    );
-                    assert_eq!(
-                        selection.stake_snapshot.is_some(),
-                        case.snapshot_stake_present && case.snapshot_stake_matches,
-                        "{} snapshot stake inclusion mismatch",
-                        case.label
-                    );
-                }
-            }
         }
     }
 
@@ -10926,13 +10753,6 @@ mod allow_uncertified_block_sync_roster_tests {
         }
 
         #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-        enum PrepareCommitQcMatchArg {
-            NotCalled,
-            True,
-            False,
-        }
-
-        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
         enum ReturnKind {
             Ok,
             Continue,
@@ -10952,7 +10772,6 @@ mod allow_uncertified_block_sync_roster_tests {
             candidate_qc_source: CandidateSource,
             redundant_replay: bool,
             prepare_known_qc_work: bool,
-            prepare_commit_qc_match_arg: PrepareCommitQcMatchArg,
             enqueue_known_qc_work: bool,
             clear_missing_commit_qc: bool,
             clear_missing_block: bool,
@@ -10990,7 +10809,6 @@ mod allow_uncertified_block_sync_roster_tests {
             candidate_qc_source: CandidateSource::None,
             redundant_replay: false,
             prepare_known_qc_work: false,
-            prepare_commit_qc_match_arg: PrepareCommitQcMatchArg::NotCalled,
             enqueue_known_qc_work: false,
             clear_missing_commit_qc: false,
             clear_missing_block: true,
@@ -11004,14 +10822,12 @@ mod allow_uncertified_block_sync_roster_tests {
             commit_roster_checkpoint_kind: CommitRosterCheckpointKind::SynthFromCommitQc,
             candidate_qc_source: CandidateSource::Selection,
             prepare_known_qc_work: true,
-            prepare_commit_qc_match_arg: PrepareCommitQcMatchArg::True,
             enqueue_known_qc_work: true,
             ..known_no_qc
         };
         let known_incoming_qc = Decision {
             candidate_qc_source: CandidateSource::Incoming,
             prepare_known_qc_work: true,
-            prepare_commit_qc_match_arg: PrepareCommitQcMatchArg::False,
             enqueue_known_qc_work: true,
             ..known_no_qc
         };
@@ -11019,7 +10835,6 @@ mod allow_uncertified_block_sync_roster_tests {
             checkpoint_recorded: true,
             candidate_qc_source: CandidateSource::Checkpoint,
             prepare_known_qc_work: true,
-            prepare_commit_qc_match_arg: PrepareCommitQcMatchArg::False,
             enqueue_known_qc_work: true,
             ..known_no_qc
         };
@@ -11177,7 +10992,6 @@ mod allow_uncertified_block_sync_roster_tests {
                 expected: Decision {
                     redundant_replay: true,
                     prepare_known_qc_work: false,
-                    prepare_commit_qc_match_arg: PrepareCommitQcMatchArg::NotCalled,
                     enqueue_known_qc_work: false,
                     ..known_selection_qc
                 },
@@ -11434,13 +11248,6 @@ mod allow_uncertified_block_sync_roster_tests {
                 && candidate_qc_source != CandidateSource::None
                 && candidate_qc_source != CandidateSource::Later
                 && !redundant_replay;
-            let prepare_commit_qc_match_arg = if !prepare_known_qc_work {
-                PrepareCommitQcMatchArg::NotCalled
-            } else if candidate_qc_source == CandidateSource::Selection {
-                PrepareCommitQcMatchArg::True
-            } else {
-                PrepareCommitQcMatchArg::False
-            };
             let actual = Decision {
                 source_metric_recorded: true,
                 vote_roster_cached: true,
@@ -11454,7 +11261,6 @@ mod allow_uncertified_block_sync_roster_tests {
                 candidate_qc_source,
                 redundant_replay,
                 prepare_known_qc_work,
-                prepare_commit_qc_match_arg,
                 enqueue_known_qc_work: prepare_known_qc_work && case.prepare_work_some,
                 clear_missing_commit_qc: case.block_known && case.cached_commit_qc_available,
                 clear_missing_block: case.block_known,
@@ -11508,7 +11314,6 @@ mod allow_uncertified_block_sync_roster_tests {
             candidate_qc_source: CandidateSource,
             redundant_replay: bool,
             prepare_known_qc_work: bool,
-            prepare_commit_qc_match_arg: bool,
             enqueue_known_qc_work: bool,
             clear_missing_commit_qc: bool,
             clear_missing_block: bool,
@@ -11546,7 +11351,6 @@ mod allow_uncertified_block_sync_roster_tests {
             candidate_qc_source: CandidateSource::None,
             redundant_replay: false,
             prepare_known_qc_work: false,
-            prepare_commit_qc_match_arg: false,
             enqueue_known_qc_work: false,
             clear_missing_commit_qc: false,
             clear_missing_block: true,
@@ -11560,14 +11364,12 @@ mod allow_uncertified_block_sync_roster_tests {
             commit_roster_checkpoint_kind: CommitRosterCheckpointKind::SynthFromCommitQc,
             candidate_qc_source: CandidateSource::Selection,
             prepare_known_qc_work: true,
-            prepare_commit_qc_match_arg: true,
             enqueue_known_qc_work: true,
             ..known_no_qc
         };
         let known_incoming_qc = Decision {
             candidate_qc_source: CandidateSource::Incoming,
             prepare_known_qc_work: true,
-            prepare_commit_qc_match_arg: false,
             enqueue_known_qc_work: true,
             ..known_no_qc
         };
@@ -11575,7 +11377,6 @@ mod allow_uncertified_block_sync_roster_tests {
             checkpoint_recorded: true,
             candidate_qc_source: CandidateSource::Checkpoint,
             prepare_known_qc_work: true,
-            prepare_commit_qc_match_arg: false,
             enqueue_known_qc_work: true,
             ..known_no_qc
         };
@@ -11676,7 +11477,6 @@ mod allow_uncertified_block_sync_roster_tests {
                 expected: Decision {
                     redundant_replay: true,
                     prepare_known_qc_work: false,
-                    prepare_commit_qc_match_arg: false,
                     enqueue_known_qc_work: false,
                     clear_missing_commit_qc: true,
                     ..known_selection_qc
@@ -11818,8 +11618,6 @@ mod allow_uncertified_block_sync_roster_tests {
                 candidate_qc_source,
                 redundant_replay,
                 prepare_known_qc_work,
-                prepare_commit_qc_match_arg: prepare_known_qc_work
-                    && candidate_qc_source == CandidateSource::Selection,
                 enqueue_known_qc_work: prepare_known_qc_work && case.prepare_work_some,
                 clear_missing_commit_qc: case.block_known
                     && (case.cached_qc_match
@@ -12924,14 +12722,14 @@ mod allow_uncertified_block_sync_roster_tests {
             IncomingQcRecovery,
             CommitCertRecovery,
             CheckpointRecovery,
-            SignedQuorumFrontierRepair,
+            UnboundSignatureQuorumPayloadOnly,
             PreservePayloadMismatch,
-            SignedQuorumCommitRepairActive,
-            SignedQuorumRepairCreationError,
-            SignedQuorumRepairUnknownAfter,
-            SignedQuorumRepairNoSignatureQuorum,
-            SignedQuorumRepairNotFrontier,
-            SignedQuorumRepairHasQc,
+            UnboundSignatureCannotRepairCommit,
+            UnboundSignatureCreationError,
+            UnboundSignatureUnknownAfter,
+            UnboundSignatureNoQuorum,
+            UnboundSignatureNotFrontier,
+            UnboundSignatureWithQc,
             SparseNextHeightRecovery,
             SparseKnownBefore,
             SparseUnknownAfter,
@@ -13017,7 +12815,7 @@ mod allow_uncertified_block_sync_roster_tests {
             incoming_qc_object(candidate)
                 || matches!(
                     candidate,
-                    Candidate::ReadyForQc | Candidate::SignedQuorumRepairHasQc
+                    Candidate::ReadyForQc | Candidate::UnboundSignatureWithQc
                 )
         }
 
@@ -13026,7 +12824,7 @@ mod allow_uncertified_block_sync_roster_tests {
                 candidate,
                 Candidate::SameHeightSignatureConflict
                     | Candidate::SignatureQuorumSupersedesWithoutConflict
-                    | Candidate::SignedQuorumFrontierRepair
+                    | Candidate::UnboundSignatureQuorumPayloadOnly
             )
         }
 
@@ -13034,57 +12832,17 @@ mod allow_uncertified_block_sync_roster_tests {
             matches!(candidate, Candidate::SameHeightSignatureConflict)
         }
 
-        fn signature_quorum_met(candidate: Candidate) -> bool {
-            matches!(
-                candidate,
-                Candidate::SignedQuorumFrontierRepair
-                    | Candidate::SignedQuorumCommitRepairActive
-                    | Candidate::SignedQuorumRepairCreationError
-                    | Candidate::SignedQuorumRepairUnknownAfter
-                    | Candidate::SignedQuorumRepairNotFrontier
-                    | Candidate::SignedQuorumRepairHasQc
-            )
-        }
-
-        fn exact_contiguous_frontier(candidate: Candidate) -> bool {
-            matches!(
-                candidate,
-                Candidate::SignedQuorumFrontierRepair
-                    | Candidate::SignedQuorumCommitRepairActive
-                    | Candidate::SignedQuorumRepairCreationError
-                    | Candidate::SignedQuorumRepairUnknownAfter
-                    | Candidate::SignedQuorumRepairNoSignatureQuorum
-                    | Candidate::SignedQuorumRepairHasQc
-                    | Candidate::SparseNextHeightRecovery
-                    | Candidate::SparseKnownBefore
-                    | Candidate::SparseUnknownAfter
-                    | Candidate::SparseHasCommitQuorum
-            )
-        }
-
-        fn missing_commit_qc_repair_active(candidate: Candidate) -> bool {
-            matches!(
-                candidate,
-                Candidate::SignedQuorumCommitRepairActive
-                    | Candidate::SignedQuorumRepairCreationError
-                    | Candidate::SignedQuorumRepairUnknownAfter
-                    | Candidate::SignedQuorumRepairNoSignatureQuorum
-                    | Candidate::SignedQuorumRepairNotFrontier
-                    | Candidate::SignedQuorumRepairHasQc
-            )
-        }
-
         fn creation_ok(candidate: Candidate) -> bool {
             !matches!(
                 candidate,
-                Candidate::SignedQuorumRepairCreationError | Candidate::NotReadyCreationError
+                Candidate::UnboundSignatureCreationError | Candidate::NotReadyCreationError
             )
         }
 
         fn block_known_after(candidate: Candidate) -> bool {
             !matches!(
                 candidate,
-                Candidate::SignedQuorumRepairUnknownAfter
+                Candidate::UnboundSignatureUnknownAfter
                     | Candidate::SparseUnknownAfter
                     | Candidate::NotReadyUnknownAfter
             )
@@ -13104,10 +12862,6 @@ mod allow_uncertified_block_sync_roster_tests {
             !matches!(candidate, Candidate::SparseHasCommitQuorum)
         }
 
-        fn pending_block_matches_non_invalid(candidate: Candidate) -> bool {
-            matches!(candidate, Candidate::SignedQuorumCommitRepairActive)
-        }
-
         let candidates = [
             Candidate::SelectionCommitQcAllowsNonextending,
             Candidate::IncomingQcValidAllowsNonextending,
@@ -13123,14 +12877,14 @@ mod allow_uncertified_block_sync_roster_tests {
             Candidate::IncomingQcRecovery,
             Candidate::CommitCertRecovery,
             Candidate::CheckpointRecovery,
-            Candidate::SignedQuorumFrontierRepair,
+            Candidate::UnboundSignatureQuorumPayloadOnly,
             Candidate::PreservePayloadMismatch,
-            Candidate::SignedQuorumCommitRepairActive,
-            Candidate::SignedQuorumRepairCreationError,
-            Candidate::SignedQuorumRepairUnknownAfter,
-            Candidate::SignedQuorumRepairNoSignatureQuorum,
-            Candidate::SignedQuorumRepairNotFrontier,
-            Candidate::SignedQuorumRepairHasQc,
+            Candidate::UnboundSignatureCannotRepairCommit,
+            Candidate::UnboundSignatureCreationError,
+            Candidate::UnboundSignatureUnknownAfter,
+            Candidate::UnboundSignatureNoQuorum,
+            Candidate::UnboundSignatureNotFrontier,
+            Candidate::UnboundSignatureWithQc,
             Candidate::SparseNextHeightRecovery,
             Candidate::SparseKnownBefore,
             Candidate::SparseUnknownAfter,
@@ -13158,14 +12912,12 @@ mod allow_uncertified_block_sync_roster_tests {
                 && !checkpoint_present(candidate);
             let spec_authoritative_supersede = incoming_qc_usable(candidate)
                 || commit_cert_present(candidate)
-                || checkpoint_present(candidate)
-                || (block_quorum_met(candidate) && !spec_same_height_frontier_conflict);
+                || checkpoint_present(candidate);
             let spec_recovery_commit_evidence = has_commit_votes(candidate)
                 || incoming_qc_usable(candidate)
                 || commit_cert_present(candidate)
                 || checkpoint_present(candidate);
-            let spec_recovery_signed_quorum =
-                !spec_recovery_commit_evidence && spec_authoritative_supersede;
+            let spec_recovery_signed_quorum = false;
             let spec_recovery_payload_only =
                 !spec_recovery_commit_evidence && !spec_recovery_signed_quorum;
             let spec_observed_epoch_incoming =
@@ -13180,16 +12932,8 @@ mod allow_uncertified_block_sync_roster_tests {
                 && (has_commit_votes(candidate)
                     || commit_cert_present(candidate)
                     || checkpoint_present(candidate));
-            let spec_signed_quorum_commit_repair_active = creation_ok(candidate)
-                && block_known_after(candidate)
-                && signature_quorum_met(candidate)
-                && exact_contiguous_frontier(candidate)
-                && !qc_evidence_present(candidate)
-                && !commit_cert_present(candidate)
-                && !checkpoint_present(candidate)
-                && missing_commit_qc_repair_active(candidate);
-            let spec_pending_commit_qc_observed = spec_signed_quorum_commit_repair_active
-                && pending_block_matches_non_invalid(candidate);
+            let spec_signed_quorum_commit_repair_active = false;
+            let spec_pending_commit_qc_observed = false;
             let spec_sparse_next_height_payload_recovered = block_known_after(candidate)
                 && next_height(candidate)
                 && block_signer_below_commit_quorum(candidate)
@@ -13241,13 +12985,9 @@ mod allow_uncertified_block_sync_roster_tests {
                     commit_cert_present(candidate),
                     checkpoint_present(candidate),
                 );
-            let authoritative_supersede = block_sync_selected_apply_authoritative_supersede(
-                incoming_qc_usable(candidate),
-                commit_cert_present(candidate),
-                checkpoint_present(candidate),
-                block_quorum_met(candidate),
-                same_height_frontier_conflict,
-            );
+            let authoritative_supersede = incoming_qc_usable(candidate)
+                || commit_cert_present(candidate)
+                || checkpoint_present(candidate);
             let recovery_mode = block_sync_selected_apply_recovery_mode(
                 has_commit_votes(candidate),
                 incoming_qc_usable(candidate),
@@ -13255,7 +12995,6 @@ mod allow_uncertified_block_sync_roster_tests {
                 checkpoint_present(candidate),
                 incoming_qc_object(candidate).then_some(observed_incoming_epoch),
                 expected_epoch,
-                authoritative_supersede,
             );
             let (
                 recovery_commit_evidence,
@@ -13274,25 +13013,10 @@ mod allow_uncertified_block_sync_roster_tests {
                     observed_commit_qc_epoch,
                     allow_aborted_revival_without_local_commit_qc,
                 ),
-                BlockSyncRecoveryMode::SignedQuorumFrontierRepair => {
-                    (false, true, false, None, false)
-                }
                 BlockSyncRecoveryMode::PayloadOnly => (false, false, true, None, false),
                 BlockSyncRecoveryMode::RequestedPayloadRepair => (false, false, false, None, false),
             };
-            let signed_quorum_commit_repair_active =
-                block_sync_selected_apply_signed_quorum_commit_repair_active(
-                    BlockSyncSelectedApplySignedQuorumRepair {
-                        creation_ok: creation_ok(candidate),
-                        block_known_after_creation: block_known_after(candidate),
-                        signature_quorum_met: signature_quorum_met(candidate),
-                        exact_contiguous_frontier: exact_contiguous_frontier(candidate),
-                        qc_evidence_present: qc_evidence_present(candidate),
-                        commit_cert_present: commit_cert_present(candidate),
-                        checkpoint_present: checkpoint_present(candidate),
-                        missing_commit_qc_repair_active: missing_commit_qc_repair_active(candidate),
-                    },
-                );
+            let signed_quorum_commit_repair_active = false;
             let block_signer_count = if block_signer_below_commit_quorum(candidate) {
                 1
             } else {
@@ -13346,10 +13070,7 @@ mod allow_uncertified_block_sync_roster_tests {
                 pass_signed_quorum_mode: recovery_signed_quorum,
                 pass_payload_only_mode: recovery_payload_only,
                 signed_quorum_commit_repair_active,
-                pending_commit_qc_observed: block_sync_selected_apply_pending_commit_qc_observed(
-                    signed_quorum_commit_repair_active,
-                    pending_block_matches_non_invalid(candidate),
-                ),
+                pending_commit_qc_observed: false,
                 frontier_commit_qc_observed: signed_quorum_commit_repair_active,
                 clear_missing_commit_qc_request: signed_quorum_commit_repair_active,
                 request_commit_pipeline: signed_quorum_commit_repair_active,
@@ -13473,234 +13194,6 @@ mod allow_uncertified_block_sync_roster_tests {
                 record_reason: record.map(|(_, _, reason)| reason),
                 clear_missing_request: false,
                 continue_after_gate: !drop,
-                return_ok: true,
-            };
-
-            assert_eq!(actual, expected, "{candidate:?} mismatch");
-        }
-    }
-
-    #[test]
-    fn block_sync_commit_conflict_formal_gate_matrix() {
-        #[derive(Debug, Clone, Copy)]
-        enum Candidate {
-            HeightZeroSkips,
-            CommittedAbsent,
-            CommittedSameHash,
-            ConflictNoQc,
-            ConflictInvalidQc,
-            ConflictValidQc,
-            ConflictValidQcEvidenceError,
-            ConflictValidQcWithStake,
-            ConflictValidQcNpos,
-            ConflictValidQcGenesisStub,
-        }
-
-        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-        struct Decision {
-            validate_called: bool,
-            validation_args_bound: bool,
-            validation_uses_stake: bool,
-            validation_mode: Option<ConsensusMode>,
-            validation_mode_tag: Option<&'static str>,
-            validation_allow_genesis_stub: bool,
-            drop: bool,
-            clear_missing: bool,
-            record_kind: Option<super::super::status::ConsensusMessageKind>,
-            record_outcome: Option<super::super::status::ConsensusMessageOutcome>,
-            record_reason: Option<super::super::status::ConsensusMessageReason>,
-            evidence_emitted: bool,
-            evidence_kind_invalid_qc: bool,
-            evidence_reason_matches: bool,
-            evidence_certificate_matches_incoming: bool,
-            falls_through: bool,
-            return_ok: bool,
-        }
-
-        fn height_convertible(candidate: Candidate) -> bool {
-            !matches!(candidate, Candidate::HeightZeroSkips)
-        }
-
-        fn nonzero_height(candidate: Candidate) -> bool {
-            !matches!(candidate, Candidate::HeightZeroSkips)
-        }
-
-        fn committed_present(candidate: Candidate) -> bool {
-            nonzero_height(candidate) && !matches!(candidate, Candidate::CommittedAbsent)
-        }
-
-        fn committed_hash_matches(candidate: Candidate) -> bool {
-            matches!(candidate, Candidate::CommittedSameHash)
-        }
-
-        fn incoming_qc(candidate: Candidate) -> bool {
-            matches!(
-                candidate,
-                Candidate::ConflictInvalidQc
-                    | Candidate::ConflictValidQc
-                    | Candidate::ConflictValidQcEvidenceError
-                    | Candidate::ConflictValidQcWithStake
-                    | Candidate::ConflictValidQcNpos
-                    | Candidate::ConflictValidQcGenesisStub
-            )
-        }
-
-        fn qc_valid(candidate: Candidate) -> bool {
-            matches!(
-                candidate,
-                Candidate::ConflictValidQc
-                    | Candidate::ConflictValidQcEvidenceError
-                    | Candidate::ConflictValidQcWithStake
-                    | Candidate::ConflictValidQcNpos
-                    | Candidate::ConflictValidQcGenesisStub
-            )
-        }
-
-        fn stake_snapshot_present(candidate: Candidate) -> bool {
-            matches!(candidate, Candidate::ConflictValidQcWithStake)
-        }
-
-        fn consensus_mode(candidate: Candidate) -> ConsensusMode {
-            if matches!(candidate, Candidate::ConflictValidQcNpos) {
-                ConsensusMode::Npos
-            } else {
-                ConsensusMode::Permissioned
-            }
-        }
-
-        fn height(candidate: Candidate) -> u64 {
-            if matches!(candidate, Candidate::ConflictValidQcGenesisStub) {
-                1
-            } else {
-                4
-            }
-        }
-
-        fn view(candidate: Candidate) -> u64 {
-            if matches!(candidate, Candidate::ConflictValidQcGenesisStub) {
-                0
-            } else {
-                2
-            }
-        }
-
-        let candidates = [
-            Candidate::HeightZeroSkips,
-            Candidate::CommittedAbsent,
-            Candidate::CommittedSameHash,
-            Candidate::ConflictNoQc,
-            Candidate::ConflictInvalidQc,
-            Candidate::ConflictValidQc,
-            Candidate::ConflictValidQcEvidenceError,
-            Candidate::ConflictValidQcWithStake,
-            Candidate::ConflictValidQcNpos,
-            Candidate::ConflictValidQcGenesisStub,
-        ];
-
-        for candidate in candidates {
-            let spec_conflict = height_convertible(candidate)
-                && nonzero_height(candidate)
-                && committed_present(candidate)
-                && !committed_hash_matches(candidate);
-            let spec_validate_called = spec_conflict && incoming_qc(candidate);
-            let spec_evidence_emitted =
-                spec_conflict && incoming_qc(candidate) && qc_valid(candidate);
-            let spec_record = spec_conflict.then_some((
-                super::super::status::ConsensusMessageKind::BlockSyncUpdate,
-                super::super::status::ConsensusMessageOutcome::Dropped,
-                super::super::status::ConsensusMessageReason::CommitConflict,
-            ));
-            let expected = Decision {
-                validate_called: spec_validate_called,
-                validation_args_bound: spec_validate_called,
-                validation_uses_stake: spec_validate_called && stake_snapshot_present(candidate),
-                validation_mode: spec_validate_called.then_some(consensus_mode(candidate)),
-                validation_mode_tag: spec_validate_called.then(|| {
-                    if consensus_mode(candidate) == ConsensusMode::Npos {
-                        NPOS_TAG
-                    } else {
-                        PERMISSIONED_TAG
-                    }
-                }),
-                validation_allow_genesis_stub: spec_validate_called
-                    && height(candidate) == 1
-                    && view(candidate) == 0,
-                drop: spec_conflict,
-                clear_missing: spec_conflict,
-                record_kind: spec_record.map(|(kind, _, _)| kind),
-                record_outcome: spec_record.map(|(_, outcome, _)| outcome),
-                record_reason: spec_record.map(|(_, _, reason)| reason),
-                evidence_emitted: spec_evidence_emitted,
-                evidence_kind_invalid_qc: spec_evidence_emitted,
-                evidence_reason_matches: spec_evidence_emitted,
-                evidence_certificate_matches_incoming: spec_evidence_emitted,
-                falls_through: !spec_conflict,
-                return_ok: true,
-            };
-
-            let conflict = block_sync_commit_conflict_detected(
-                height_convertible(candidate),
-                nonzero_height(candidate),
-                committed_present(candidate),
-                committed_hash_matches(candidate),
-            );
-            let validate_called =
-                block_sync_commit_conflict_should_validate_qc(conflict, incoming_qc(candidate));
-            let evidence_emitted = block_sync_commit_conflict_should_emit_evidence(
-                conflict,
-                incoming_qc(candidate),
-                qc_valid(candidate),
-            );
-            let record = block_sync_commit_conflict_drop_record(conflict);
-            let (
-                evidence_kind_invalid_qc,
-                evidence_reason_matches,
-                evidence_certificate_matches_incoming,
-            ) = if evidence_emitted {
-                let incoming =
-                    snapshot_roster_test_snapshot(vec![snapshot_roster_test_peer()], None)
-                        .commit_qc;
-                let evidence = block_sync_commit_conflict_invalid_qc_evidence(incoming.clone());
-                let kind_invalid_qc = matches!(
-                    evidence.kind,
-                    crate::sumeragi::consensus::EvidenceKind::InvalidQc
-                );
-                match evidence.payload {
-                    crate::sumeragi::consensus::EvidencePayload::InvalidQc {
-                        certificate,
-                        reason,
-                    } => (
-                        kind_invalid_qc,
-                        reason == BLOCK_SYNC_COMMIT_CONFLICT_EVIDENCE_REASON,
-                        certificate == incoming,
-                    ),
-                    _ => (kind_invalid_qc, false, false),
-                }
-            } else {
-                (false, false, false)
-            };
-            let actual = Decision {
-                validate_called,
-                validation_args_bound: validate_called,
-                validation_uses_stake: validate_called && stake_snapshot_present(candidate),
-                validation_mode: validate_called.then_some(consensus_mode(candidate)),
-                validation_mode_tag: validate_called
-                    .then_some(block_sync_consensus_mode_tag(consensus_mode(candidate))),
-                validation_allow_genesis_stub: validate_called
-                    && block_sync_commit_conflict_allow_genesis_stub(
-                        height(candidate),
-                        view(candidate),
-                    ),
-                drop: conflict,
-                clear_missing: block_sync_commit_conflict_should_clear_missing(conflict),
-                record_kind: record.map(|(kind, _, _)| kind),
-                record_outcome: record.map(|(_, outcome, _)| outcome),
-                record_reason: record.map(|(_, _, reason)| reason),
-                evidence_emitted,
-                evidence_kind_invalid_qc,
-                evidence_reason_matches,
-                evidence_certificate_matches_incoming,
-                falls_through: !conflict,
                 return_ok: true,
             };
 

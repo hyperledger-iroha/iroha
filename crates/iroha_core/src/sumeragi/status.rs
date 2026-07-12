@@ -750,12 +750,53 @@ const KEY_LIFECYCLE_HISTORY_CAP: usize = 128;
 static VALIDATOR_CHECKPOINT_HISTORY: OnceLock<Mutex<VecDeque<ValidatorSetCheckpoint>>> =
     OnceLock::new();
 static COMMIT_CERT_HISTORY: OnceLock<Mutex<VecDeque<Qc>>> = OnceLock::new();
+static AUTHENTICATED_FINALITY_LEDGER: OnceLock<Mutex<AuthenticatedFinalityLedger>> =
+    OnceLock::new();
+// Serializes authenticated finality registration with every Kura/WSV commit transition. A
+// conflicting certificate must either halt first or wait until the already-authorized transition
+// is completely durable; there must be no check-then-mutate window between those operations.
+static CONSENSUS_TRANSITION_GATE: OnceLock<Mutex<()>> = OnceLock::new();
+#[cfg(not(test))]
+static CONSENSUS_TRANSITION_HALT_SINK: OnceLock<super::vote_lock::SafetyHaltSink> = OnceLock::new();
+#[cfg(not(test))]
+static CONSENSUS_SAFETY_HALT: OnceLock<Mutex<ConsensusSafetyHaltSnapshot>> = OnceLock::new();
+#[cfg(test)]
+std::thread_local! {
+    // Actor tests execute in parallel and share every other process-global status fixture. Keep
+    // the newly fail-closed halt thread-local in unit tests so one conflict regression cannot
+    // nondeterministically stop unrelated actors; production remains process-global.
+    static TEST_CONSENSUS_SAFETY_HALT: std::cell::RefCell<ConsensusSafetyHaltSnapshot> =
+        std::cell::RefCell::new(ConsensusSafetyHaltSnapshot::default());
+    static TEST_CONSENSUS_TRANSITION_HALT_SINK:
+        std::cell::RefCell<Option<super::vote_lock::SafetyHaltSink>> = const {
+            std::cell::RefCell::new(None)
+        };
+}
 static PRECOMMIT_SIGNER_HISTORY: OnceLock<Mutex<VecDeque<PrecommitSignerRecord>>> = OnceLock::new();
 static KEY_LIFECYCLE_HISTORY: OnceLock<Mutex<VecDeque<ConsensusKeyRecord>>> = OnceLock::new();
 const NPOS_ELECTION_HISTORY_CAP: usize = 32;
 static NPOS_ELECTION_HISTORY: OnceLock<Mutex<VecDeque<ValidatorElectionOutcome>>> = OnceLock::new();
 const DEFAULT_COMMIT_CERT_HISTORY_CAP: usize = 512;
 static COMMIT_CERT_HISTORY_CAP: OnceLock<AtomicUsize> = OnceLock::new();
+
+#[derive(Debug, Default)]
+struct AuthenticatedFinalityLedger {
+    subjects: BTreeMap<(u64, u64), Qc>,
+    block_subjects: BTreeMap<(u64, u64), HashOf<BlockHeader>>,
+    fingerprints: BTreeMap<(u64, u64), BTreeSet<HashOf<Qc>>>,
+    authorities: BTreeMap<(u64, u64), RetainedCommitAuthority>,
+}
+
+/// Parent-state authority independently used to authenticate one retained Commit subject.
+///
+/// The stake snapshot is `None` only for permissioned consensus and the canonical unsigned
+/// genesis stub. In NPoS it is derived from the local parent WSV (including during replay), never
+/// from candidate wire or merely structural journal metadata.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(in crate::sumeragi) struct RetainedCommitAuthority {
+    pub(in crate::sumeragi) qc: Qc,
+    pub(in crate::sumeragi) stake_snapshot: Option<CommitStakeSnapshot>,
+}
 
 fn commit_cert_history_cap() -> usize {
     COMMIT_CERT_HISTORY_CAP
@@ -764,10 +805,10 @@ fn commit_cert_history_cap() -> usize {
 }
 
 /// Set the commit certificate history cap at runtime (should be called during initialization).
-pub fn set_commit_cert_history_cap(cap: usize) {
+pub(crate) fn set_commit_cert_history_cap(cap: usize) {
     COMMIT_CERT_HISTORY_CAP
         .get_or_init(|| AtomicUsize::new(DEFAULT_COMMIT_CERT_HISTORY_CAP))
-        .store(cap, StdOrdering::Relaxed);
+        .store(cap.max(1), StdOrdering::Relaxed);
 }
 
 /// Actor responsible for paying a Nexus fee.
@@ -3800,6 +3841,31 @@ pub struct QcSnapshot {
     pub signatures_total: u64,
 }
 
+/// Fail-closed consensus safety halt exposed to operators.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ConsensusSafetyHaltSnapshot {
+    /// Whether this process has halted consensus participation.
+    pub active: bool,
+    /// Stable machine-readable halt reason.
+    pub reason: Option<String>,
+    /// Height at which the unsafe condition was detected.
+    pub height: u64,
+    /// Epoch at which the unsafe condition was detected.
+    pub epoch: u64,
+    /// First authenticated block subject involved in the halt.
+    pub first_block_hash: Option<HashOf<BlockHeader>>,
+    /// Conflicting authenticated block subject, when applicable.
+    pub conflicting_block_hash: Option<HashOf<BlockHeader>>,
+    /// Parent state root authenticated by the first certificate.
+    pub first_parent_state_root: Option<Hash>,
+    /// Post-state root authenticated by the first certificate.
+    pub first_post_state_root: Option<Hash>,
+    /// Parent state root authenticated by the conflicting certificate.
+    pub conflicting_parent_state_root: Option<Hash>,
+    /// Post-state root authenticated by the conflicting certificate.
+    pub conflicting_post_state_root: Option<Hash>,
+}
+
 /// Snapshot of the latest hidden commit-pipeline budget.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct CommitPipelineSnapshot {
@@ -4146,6 +4212,8 @@ pub struct StatusSnapshot {
     pub canonical_pending_finality: Option<HashOf<BlockHeader>>,
     /// Latest commit certificate summary (best-effort).
     pub commit_qc: QcSnapshot,
+    /// Fail-closed consensus safety state.
+    pub safety_halt: ConsensusSafetyHaltSnapshot,
     /// Latest commit quorum signature tally (best-effort).
     pub commit_quorum: CommitQuorumSnapshot,
     /// Settlement telemetry snapshot (DvP/PvP).
@@ -4530,6 +4598,115 @@ fn commit_cert_history_slot() -> &'static Mutex<VecDeque<Qc>> {
     COMMIT_CERT_HISTORY.get_or_init(|| Mutex::new(VecDeque::new()))
 }
 
+fn authenticated_finality_ledger_slot() -> &'static Mutex<AuthenticatedFinalityLedger> {
+    AUTHENTICATED_FINALITY_LEDGER.get_or_init(|| Mutex::new(AuthenticatedFinalityLedger::default()))
+}
+
+/// Guard serializing Kura/WSV transitions with authenticated commit-QC registration.
+pub(crate) struct ConsensusTransitionGuard {
+    _transition_guard: MutexGuard<'static, ()>,
+}
+
+impl Drop for ConsensusTransitionGuard {
+    fn drop(&mut self) {
+        if !std::thread::panicking() {
+            return;
+        }
+        if let Err(err) = latch_consensus_transition_poison_halt() {
+            iroha_logger::error!(
+                error = %err,
+                "failed to persist consensus transition poison halt during unwinding"
+            );
+            #[cfg(not(test))]
+            std::process::abort();
+        }
+    }
+}
+
+/// Install the identity-bound marker sink used if the consensus transition gate is poisoned.
+pub(super) fn install_consensus_transition_halt_sink(
+    sink: super::vote_lock::SafetyHaltSink,
+) -> Result<(), &'static str> {
+    #[cfg(test)]
+    {
+        TEST_CONSENSUS_TRANSITION_HALT_SINK.with(|slot| {
+            *slot.borrow_mut() = Some(sink);
+        });
+        Ok(())
+    }
+    #[cfg(not(test))]
+    {
+        if CONSENSUS_TRANSITION_HALT_SINK
+            .get()
+            .is_some_and(|installed| installed == &sink)
+        {
+            return Ok(());
+        }
+        match CONSENSUS_TRANSITION_HALT_SINK.set(sink.clone()) {
+            Ok(()) => Ok(()),
+            Err(_) if CONSENSUS_TRANSITION_HALT_SINK.get() == Some(&sink) => Ok(()),
+            Err(_) => Err("consensus transition halt sink identity/path changed"),
+        }
+    }
+}
+
+fn consensus_transition_poison_halt() -> ConsensusSafetyHaltSnapshot {
+    ConsensusSafetyHaltSnapshot {
+        active: true,
+        reason: Some("consensus_transition_mutex_poisoned".to_owned()),
+        ..ConsensusSafetyHaltSnapshot::default()
+    }
+}
+
+fn persist_consensus_transition_poison_halt(
+    halt: &ConsensusSafetyHaltSnapshot,
+) -> Result<(), String> {
+    #[cfg(test)]
+    let sink = TEST_CONSENSUS_TRANSITION_HALT_SINK.with(|slot| slot.borrow().clone());
+    #[cfg(not(test))]
+    let sink = CONSENSUS_TRANSITION_HALT_SINK.get().cloned();
+    let sink = sink.ok_or_else(|| "consensus transition halt sink is not installed".to_owned())?;
+    sink.record(halt)
+        .map(|_| ())
+        .map_err(|err| format!("consensus transition halt marker: {err}"))
+}
+
+fn latch_consensus_transition_poison_halt() -> Result<(), String> {
+    let halt = consensus_transition_poison_halt();
+    activate_consensus_safety_halt_snapshot_while_guarded(halt.clone());
+    persist_consensus_transition_poison_halt(&halt)
+}
+
+fn fail_closed_after_consensus_transition_poison() -> ! {
+    match latch_consensus_transition_poison_halt() {
+        Ok(()) => iroha_logger::error!(
+            "consensus transition gate was poisoned; durable safety halt latched"
+        ),
+        Err(err) => iroha_logger::error!(
+            error = %err,
+            "consensus transition gate was poisoned and the halt marker could not be persisted"
+        ),
+    }
+    #[cfg(not(test))]
+    std::process::abort();
+    #[cfg(test)]
+    panic!("consensus transition gate poisoned; refusing further consensus mutation");
+}
+
+/// Serialize a Kura/WSV consensus transition with authenticated commit-QC registration.
+pub(crate) fn consensus_transition_guard() -> ConsensusTransitionGuard {
+    let transition_guard = match CONSENSUS_TRANSITION_GATE
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+    {
+        Ok(guard) => guard,
+        Err(_) => fail_closed_after_consensus_transition_poison(),
+    };
+    ConsensusTransitionGuard {
+        _transition_guard: transition_guard,
+    }
+}
+
 /// Snapshot of precommit quorum signers for a committed block.
 #[derive(Clone, Debug)]
 pub struct PrecommitSignerRecord {
@@ -4591,26 +4768,713 @@ pub fn validator_checkpoint_history() -> Vec<ValidatorSetCheckpoint> {
         .collect()
 }
 
-/// Record a commit certificate, retaining a bounded history (newest-last order).
-pub fn record_commit_qc(cert: Qc) {
+/// Result of atomically registering a commit certificate in operator history.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CommitQcRecordOutcome {
+    /// The certificate advanced the retained history for its subject.
+    Recorded,
+    /// An equal or newer certificate for the same authenticated subject was already retained.
+    Duplicate,
+    /// A different authenticated subject was already retained at the same epoch and height.
+    Conflict {
+        /// Previously retained certificate that conflicts with the candidate.
+        existing: Qc,
+    },
+    /// An authenticated hash-only finality proof retained a different block at this slot.
+    BlockHashConflict {
+        /// Previously retained authenticated block subject.
+        existing_block_hash: HashOf<BlockHeader>,
+    },
+    /// The same finality subject was presented with a different parent-state authority.
+    AuthorityConflict {
+        /// Previously authenticated certificate for the authority slot.
+        existing: Qc,
+    },
+}
+
+impl CommitQcRecordOutcome {
+    /// Return whether registration exposed conflicting authenticated finality.
+    #[must_use]
+    pub const fn is_conflict(&self) -> bool {
+        matches!(
+            self,
+            Self::Conflict { .. } | Self::BlockHashConflict { .. } | Self::AuthorityConflict { .. }
+        )
+    }
+}
+
+/// Atomically register a commit certificate that has already passed consensus authentication.
+///
+/// This capability is crate-private so dependent crates cannot promote arbitrary certificates
+/// into the authenticated-finality ledger. Network-facing callers must use the central
+/// `Actor::register_authenticated_commit_qc` gate first.
+#[cfg(any(
+    test,
+    all(feature = "iroha-core-tests", feature = "finality-test-fixtures")
+))]
+pub(crate) fn record_commit_qc(cert: Qc) -> CommitQcRecordOutcome {
     #[cfg(test)]
-    let _guard = commit_history_test_guard();
+    let _test_guard = commit_history_test_guard();
+    let transition_guard = consensus_transition_guard();
+    record_commit_qc_while_guarded(cert, &transition_guard)
+}
+
+/// Register a commit QC while the caller holds the canonical transition gate.
+fn record_commit_qc_while_guarded(
+    cert: Qc,
+    _guard: &ConsensusTransitionGuard,
+) -> CommitQcRecordOutcome {
+    let key = (cert.epoch, cert.height);
+    let outcome = {
+        let mut ledger = lock_operator_status_slot(
+            authenticated_finality_ledger_slot(),
+            "authenticated finality ledger",
+        );
+        if let Some(existing) = ledger
+            .subjects
+            .get(&key)
+            .filter(|existing| commit_qcs_conflict(existing, &cert))
+        {
+            CommitQcRecordOutcome::Conflict {
+                existing: existing.clone(),
+            }
+        } else if let Some(existing_block_hash) = ledger
+            .block_subjects
+            .get(&key)
+            .filter(|existing| **existing != cert.subject_block_hash)
+        {
+            // A retained QC is handled above so its state-root commitments are preserved in the
+            // halt payload. This branch is reserved for genuinely hash-only finality evidence.
+            CommitQcRecordOutcome::BlockHashConflict {
+                existing_block_hash: *existing_block_hash,
+            }
+        } else {
+            let duplicate = ledger.subjects.get(&key).is_some_and(|existing| {
+                same_commit_qc_subject(existing, &cert) && existing.view >= cert.view
+            });
+            if !duplicate {
+                ledger.subjects.insert(key, cert.clone());
+            }
+            ledger
+                .block_subjects
+                .entry(key)
+                .or_insert(cert.subject_block_hash);
+            ledger
+                .fingerprints
+                .entry(key)
+                .or_default()
+                .insert(HashOf::new(&cert));
+            if duplicate {
+                CommitQcRecordOutcome::Duplicate
+            } else {
+                CommitQcRecordOutcome::Recorded
+            }
+        }
+    };
+    match &outcome {
+        CommitQcRecordOutcome::Conflict { existing } => {
+            activate_consensus_safety_halt_for_conflicting_qcs_while_guarded(existing, &cert);
+            iroha_logger::error!(
+                height = cert.height,
+                epoch = cert.epoch,
+                first_view = existing.view,
+                first_block = %existing.subject_block_hash,
+                first_parent_state_root = %existing.parent_state_root,
+                first_post_state_root = %existing.post_state_root,
+                conflicting_view = cert.view,
+                conflicting_block = %cert.subject_block_hash,
+                conflicting_parent_state_root = %cert.parent_state_root,
+                conflicting_post_state_root = %cert.post_state_root,
+                "authenticated conflicting commit QCs detected; consensus safety halt activated"
+            );
+            return outcome;
+        }
+        CommitQcRecordOutcome::BlockHashConflict {
+            existing_block_hash,
+        } => {
+            activate_consensus_safety_halt_snapshot_with_guard(
+                ConsensusSafetyHaltSnapshot {
+                    active: true,
+                    reason: Some("conflicting_authenticated_finality_subject".to_owned()),
+                    height: cert.height,
+                    epoch: cert.epoch,
+                    first_block_hash: Some(*existing_block_hash),
+                    conflicting_block_hash: Some(cert.subject_block_hash),
+                    first_parent_state_root: None,
+                    first_post_state_root: None,
+                    conflicting_parent_state_root: Some(cert.parent_state_root),
+                    conflicting_post_state_root: Some(cert.post_state_root),
+                },
+                _guard,
+            );
+            iroha_logger::error!(
+                height = cert.height,
+                epoch = cert.epoch,
+                first_block = %existing_block_hash,
+                conflicting_block = %cert.subject_block_hash,
+                "authenticated commit QC conflicts with retained hash-only finality; consensus safety halt activated"
+            );
+            return outcome;
+        }
+        CommitQcRecordOutcome::AuthorityConflict { existing } => {
+            activate_consensus_safety_halt_snapshot_with_guard(
+                ConsensusSafetyHaltSnapshot {
+                    active: true,
+                    reason: Some("authenticated_finality_authority_mismatch".to_owned()),
+                    height: cert.height,
+                    epoch: cert.epoch,
+                    first_block_hash: Some(existing.subject_block_hash),
+                    conflicting_block_hash: Some(cert.subject_block_hash),
+                    first_parent_state_root: Some(existing.parent_state_root),
+                    first_post_state_root: Some(existing.post_state_root),
+                    conflicting_parent_state_root: Some(cert.parent_state_root),
+                    conflicting_post_state_root: Some(cert.post_state_root),
+                },
+                _guard,
+            );
+            iroha_logger::error!(
+                height = cert.height,
+                epoch = cert.epoch,
+                block = %cert.subject_block_hash,
+                "authenticated Commit subject was presented with divergent parent-state authority"
+            );
+            return outcome;
+        }
+        CommitQcRecordOutcome::Recorded | CommitQcRecordOutcome::Duplicate => {}
+    }
+    {
+        let mut history =
+            lock_operator_status_slot(commit_cert_history_slot(), "commit certificate history");
+        if !history
+            .iter()
+            .any(|existing| same_commit_qc_subject(existing, &cert) && existing.view >= cert.view)
+        {
+            history
+                .retain(|entry| !(same_commit_qc_subject(entry, &cert) && entry.view <= cert.view));
+            history.push_back(cert.clone());
+            while history.len() > commit_cert_history_cap() {
+                history.pop_front();
+            }
+        }
+    }
     clear_active_view_change_cause_after_commit();
     set_canonical_pending_finality(None);
     promote_observable_qc_from_commit(&cert);
-    let mut guard =
-        lock_operator_status_slot(commit_cert_history_slot(), "commit certificate history");
-    // Keep the latest certificate per (height, block_hash) to avoid stale duplicates while
-    // preserving alternate views for other hashes at the same height.
-    guard.retain(|entry| {
-        !(entry.height == cert.height
-            && entry.subject_block_hash == cert.subject_block_hash
-            && entry.view <= cert.view)
-    });
-    guard.push_back(cert);
-    while guard.len() > commit_cert_history_cap() {
-        guard.pop_front();
+    outcome
+}
+
+fn same_authenticated_commit_authority(
+    existing: &RetainedCommitAuthority,
+    candidate: &Qc,
+    candidate_stake: Option<&CommitStakeSnapshot>,
+) -> bool {
+    same_commit_qc_subject(&existing.qc, candidate)
+        && existing.qc.mode_tag == candidate.mode_tag
+        && existing.qc.chain_order_hash == candidate.chain_order_hash
+        && existing.qc.rechain_seq == candidate.rechain_seq
+        && existing.qc.validator_set_hash_version == candidate.validator_set_hash_version
+        && existing.qc.validator_set_hash == candidate.validator_set_hash
+        && existing.qc.validator_set == candidate.validator_set
+        && existing.stake_snapshot.as_ref() == candidate_stake
+}
+
+/// Register a fully authenticated Commit QC together with the independent parent-state authority
+/// used for its validation.
+///
+/// This is the only production registration path for ordinary Commit QCs. Retaining the authority
+/// makes historical validation restart-equivalent and prevents structural journal weights from
+/// becoming self-authenticating.
+fn record_commit_qc_with_authority_while_guarded(
+    cert: Qc,
+    stake_snapshot: Option<CommitStakeSnapshot>,
+    guard: &ConsensusTransitionGuard,
+) -> CommitQcRecordOutcome {
+    let key = (cert.epoch, cert.height);
+    let existing_authority = lock_operator_status_slot(
+        authenticated_finality_ledger_slot(),
+        "authenticated finality ledger",
+    )
+    .authorities
+    .get(&key)
+    .cloned();
+    if let Some(existing) = existing_authority.as_ref()
+        && same_commit_qc_subject(&existing.qc, &cert)
+        && !same_authenticated_commit_authority(existing, &cert, stake_snapshot.as_ref())
+    {
+        let outcome = CommitQcRecordOutcome::AuthorityConflict {
+            existing: existing.qc.clone(),
+        };
+        activate_consensus_safety_halt_snapshot_with_guard(
+            ConsensusSafetyHaltSnapshot {
+                active: true,
+                reason: Some("authenticated_finality_authority_mismatch".to_owned()),
+                height: cert.height,
+                epoch: cert.epoch,
+                first_block_hash: Some(existing.qc.subject_block_hash),
+                conflicting_block_hash: Some(cert.subject_block_hash),
+                first_parent_state_root: Some(existing.qc.parent_state_root),
+                first_post_state_root: Some(existing.qc.post_state_root),
+                conflicting_parent_state_root: Some(cert.parent_state_root),
+                conflicting_post_state_root: Some(cert.post_state_root),
+            },
+            guard,
+        );
+        return outcome;
     }
+
+    let outcome = record_commit_qc_while_guarded(cert.clone(), guard);
+    if !outcome.is_conflict() {
+        let mut ledger = lock_operator_status_slot(
+            authenticated_finality_ledger_slot(),
+            "authenticated finality ledger",
+        );
+        match ledger.authorities.entry(key) {
+            std::collections::btree_map::Entry::Vacant(entry) => {
+                entry.insert(RetainedCommitAuthority {
+                    qc: cert,
+                    stake_snapshot,
+                });
+            }
+            std::collections::btree_map::Entry::Occupied(mut entry) => {
+                let existing = entry.get();
+                if same_authenticated_commit_authority(existing, &cert, stake_snapshot.as_ref())
+                    && existing.qc.view < cert.view
+                {
+                    entry.insert(RetainedCommitAuthority {
+                        qc: cert,
+                        stake_snapshot,
+                    });
+                }
+            }
+        }
+    }
+    outcome
+}
+
+/// Register an opaque authority minted by the central Commit-QC authentication module.
+pub(in crate::sumeragi) fn record_authenticated_commit_authority_while_guarded(
+    authority: &super::main_loop::qc::AuthenticatedCommitAuthority,
+    guard: &ConsensusTransitionGuard,
+) -> CommitQcRecordOutcome {
+    record_commit_qc_with_authority_while_guarded(
+        authority.commit_qc().clone(),
+        authority.stake_snapshot().cloned(),
+        guard,
+    )
+}
+
+/// Return the independently authenticated authority retained for a canonical block subject.
+#[must_use]
+pub(in crate::sumeragi) fn authenticated_commit_authority_for_block(
+    height: u64,
+    block_hash: HashOf<BlockHeader>,
+) -> Option<RetainedCommitAuthority> {
+    lock_operator_status_slot(
+        authenticated_finality_ledger_slot(),
+        "authenticated finality ledger",
+    )
+    .authorities
+    .values()
+    .find(|authority| {
+        authority.qc.height == height && authority.qc.subject_block_hash == block_hash
+    })
+    .cloned()
+}
+
+/// Register the canonical unsigned genesis authority.
+///
+/// Genesis is the sole production path allowed to register an unsigned certificate. Production
+/// callers must present the opaque authority minted from local genesis topology/order inputs.
+pub(in crate::sumeragi) fn record_canonical_genesis_commit_authority(
+    authority: &crate::sumeragi::main_loop::qc::AuthenticatedCommitRoster,
+) -> Result<CommitQcRecordOutcome, &'static str> {
+    let transition_guard = consensus_transition_guard();
+    record_canonical_genesis_commit_authority_while_guarded(authority, &transition_guard)
+}
+
+/// Register the canonical unsigned genesis authority while the caller holds the canonical
+/// transition gate.
+pub(in crate::sumeragi) fn record_canonical_genesis_commit_authority_while_guarded(
+    authority: &crate::sumeragi::main_loop::qc::AuthenticatedCommitRoster,
+    transition_guard: &ConsensusTransitionGuard,
+) -> Result<CommitQcRecordOutcome, &'static str> {
+    if authority.commit_qc().height != 1 || authority.stake_snapshot().is_some() {
+        return Err("authority is not the canonical unsigned genesis capability");
+    }
+    record_canonical_genesis_commit_qc_stub_raw_while_guarded(
+        authority.commit_qc().clone(),
+        transition_guard,
+    )
+}
+
+fn record_canonical_genesis_commit_qc_stub_raw_while_guarded(
+    cert: Qc,
+    transition_guard: &ConsensusTransitionGuard,
+) -> Result<CommitQcRecordOutcome, &'static str> {
+    #[cfg(test)]
+    let _test_guard = commit_history_test_guard();
+    let zero_state_root = Hash::prehashed([0; Hash::LENGTH]);
+    let is_canonical_stub = matches!(cert.phase, crate::sumeragi::consensus::Phase::Commit)
+        && cert.height == 1
+        && cert.view == 0
+        && cert.epoch == 0
+        && cert.rechain_seq == 0
+        && cert.parent_state_root == zero_state_root
+        && cert.post_state_root == zero_state_root
+        && matches!(
+            cert.mode_tag.as_str(),
+            crate::sumeragi::consensus::PERMISSIONED_TAG | crate::sumeragi::consensus::NPOS_TAG
+        )
+        && cert.highest_qc.is_none()
+        && !cert.validator_set.is_empty()
+        && cert.validator_set_hash_version
+            == iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1
+        && cert.validator_set_hash == HashOf::new(&cert.validator_set)
+        && cert.aggregate.signers_bitmap.len() == cert.validator_set.len().div_ceil(8)
+        && cert.aggregate.bls_aggregate_signature.is_empty()
+        && cert.aggregate.signers_bitmap.iter().all(|byte| *byte == 0);
+    if !is_canonical_stub {
+        return Err("commit QC is not the canonical unsigned genesis stub");
+    }
+    Ok(record_commit_qc_with_authority_while_guarded(
+        cert,
+        None,
+        transition_guard,
+    ))
+}
+
+#[cfg(test)]
+pub(crate) fn record_canonical_genesis_commit_qc_stub_for_tests(
+    cert: Qc,
+) -> Result<CommitQcRecordOutcome, &'static str> {
+    let transition_guard = consensus_transition_guard();
+    record_canonical_genesis_commit_qc_stub_for_tests_while_guarded(cert, &transition_guard)
+}
+
+#[cfg(test)]
+pub(crate) fn record_canonical_genesis_commit_qc_stub_for_tests_while_guarded(
+    cert: Qc,
+    transition_guard: &ConsensusTransitionGuard,
+) -> Result<CommitQcRecordOutcome, &'static str> {
+    record_canonical_genesis_commit_qc_stub_raw_while_guarded(cert, transition_guard)
+}
+
+/// Test-only raw commit-QC registration capability for dependent-crate fixtures.
+///
+/// This deliberately requires a narrow finality-fixture feature in addition to the broad core-test
+/// helpers, keeping the capability out of workspace tooling and validator release graphs.
+#[cfg(all(feature = "iroha-core-tests", feature = "finality-test-fixtures"))]
+#[doc(hidden)]
+pub fn record_commit_qc_for_tests(cert: Qc) -> CommitQcRecordOutcome {
+    record_commit_qc(cert)
+}
+
+/// Return whether this exact certificate has already passed the authenticated registration gate.
+#[must_use]
+pub(crate) fn commit_qc_is_recorded(cert: &Qc) -> bool {
+    let key = (cert.epoch, cert.height);
+    let fingerprint = HashOf::new(cert);
+    lock_operator_status_slot(
+        authenticated_finality_ledger_slot(),
+        "authenticated finality ledger",
+    )
+    .fingerprints
+    .get(&key)
+    .is_some_and(|fingerprints| fingerprints.contains(&fingerprint))
+}
+
+/// Result of registering an authenticated hash-only block finality subject.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum BlockSubjectRecordOutcome {
+    /// This slot had no authenticated subject.
+    Recorded,
+    /// The same authenticated block subject was already retained.
+    Duplicate,
+    /// A different authenticated block subject was already retained.
+    Conflict {
+        /// Previously retained block subject.
+        existing_block_hash: HashOf<BlockHeader>,
+    },
+}
+
+fn record_authenticated_block_subject_raw_while_guarded(
+    epoch: u64,
+    height: u64,
+    block_hash: HashOf<BlockHeader>,
+    guard: &ConsensusTransitionGuard,
+) -> BlockSubjectRecordOutcome {
+    let key = (epoch, height);
+    let outcome = {
+        let mut ledger = lock_operator_status_slot(
+            authenticated_finality_ledger_slot(),
+            "authenticated finality ledger",
+        );
+        let existing = ledger
+            .subjects
+            .get(&key)
+            .map(|qc| qc.subject_block_hash)
+            .or_else(|| ledger.block_subjects.get(&key).copied());
+        match existing {
+            Some(existing_block_hash) if existing_block_hash != block_hash => {
+                BlockSubjectRecordOutcome::Conflict {
+                    existing_block_hash,
+                }
+            }
+            Some(_) => BlockSubjectRecordOutcome::Duplicate,
+            None => {
+                ledger.block_subjects.insert(key, block_hash);
+                BlockSubjectRecordOutcome::Recorded
+            }
+        }
+    };
+    if let BlockSubjectRecordOutcome::Conflict {
+        existing_block_hash,
+    } = outcome
+    {
+        activate_consensus_safety_halt_snapshot_with_guard(
+            ConsensusSafetyHaltSnapshot {
+                active: true,
+                reason: Some("conflicting_authenticated_finality_subject".to_owned()),
+                height,
+                epoch,
+                first_block_hash: Some(existing_block_hash),
+                conflicting_block_hash: Some(block_hash),
+                first_parent_state_root: None,
+                first_post_state_root: None,
+                conflicting_parent_state_root: None,
+                conflicting_post_state_root: None,
+            },
+            guard,
+        );
+    }
+    outcome
+}
+
+/// Register hash-only finality using a capability minted by the Actor's authorized commit gate.
+pub(in crate::sumeragi) fn record_authenticated_block_subject_while_guarded(
+    subject: &super::main_loop::qc::AuthenticatedBlockSubject,
+    guard: &ConsensusTransitionGuard,
+) -> BlockSubjectRecordOutcome {
+    record_authenticated_block_subject_raw_while_guarded(
+        subject.epoch(),
+        subject.height(),
+        subject.block_hash(),
+        guard,
+    )
+}
+
+#[cfg(test)]
+fn record_authenticated_block_subject_for_tests(
+    epoch: u64,
+    height: u64,
+    block_hash: HashOf<BlockHeader>,
+    guard: &ConsensusTransitionGuard,
+) -> BlockSubjectRecordOutcome {
+    record_authenticated_block_subject_raw_while_guarded(epoch, height, block_hash, guard)
+}
+
+/// Return a retained authenticated block subject that conflicts with a proposed transition.
+pub(crate) fn conflicting_authenticated_block_subject_while_guarded(
+    epoch: u64,
+    height: u64,
+    block_hash: HashOf<BlockHeader>,
+    _guard: &ConsensusTransitionGuard,
+) -> Option<HashOf<BlockHeader>> {
+    let ledger = lock_operator_status_slot(
+        authenticated_finality_ledger_slot(),
+        "authenticated finality ledger",
+    );
+    ledger
+        .subjects
+        .get(&(epoch, height))
+        .map(|qc| qc.subject_block_hash)
+        .or_else(|| ledger.block_subjects.get(&(epoch, height)).copied())
+        .filter(|existing| *existing != block_hash)
+}
+
+/// Retain a bounded, restart-recoverable authenticated-finality window after durable commit.
+///
+/// Genesis remains pinned separately. The configured window counts recent committed non-genesis
+/// heights; any already authenticated prepared successor is newer than the floor and is retained
+/// automatically. Keeping the exact QC and its independently derived parent-state authority lets
+/// a later historical conflict reach cryptographic validation without trusting remote metadata.
+pub(crate) fn prune_authenticated_finality_history(
+    committed_height: u64,
+    committed_retention: usize,
+) {
+    let _transition_guard = consensus_transition_guard();
+    let committed_retention = committed_retention.max(1);
+    let retain_from = committed_height
+        .saturating_sub(u64::try_from(committed_retention.saturating_sub(1)).unwrap_or(u64::MAX));
+    let retain = |height: &u64| *height == 1 || *height >= retain_from;
+    let mut ledger = lock_operator_status_slot(
+        authenticated_finality_ledger_slot(),
+        "authenticated finality ledger",
+    );
+    ledger.subjects.retain(|(_, height), _| retain(height));
+    ledger
+        .block_subjects
+        .retain(|(_, height), _| retain(height));
+    ledger.fingerprints.retain(|(_, height), _| retain(height));
+    ledger.authorities.retain(|(_, height), _| retain(height));
+}
+
+fn same_commit_qc_subject(existing: &Qc, candidate: &Qc) -> bool {
+    existing.phase == crate::sumeragi::consensus::Phase::Commit
+        && candidate.phase == crate::sumeragi::consensus::Phase::Commit
+        && existing.height == candidate.height
+        && existing.epoch == candidate.epoch
+        && existing.subject_block_hash == candidate.subject_block_hash
+        && existing.parent_state_root == candidate.parent_state_root
+        && existing.post_state_root == candidate.post_state_root
+}
+
+fn commit_qcs_conflict(existing: &Qc, candidate: &Qc) -> bool {
+    existing.phase == crate::sumeragi::consensus::Phase::Commit
+        && candidate.phase == crate::sumeragi::consensus::Phase::Commit
+        && existing.height == candidate.height
+        && existing.epoch == candidate.epoch
+        && (existing.subject_block_hash != candidate.subject_block_hash
+            || existing.parent_state_root != candidate.parent_state_root
+            || existing.post_state_root != candidate.post_state_root)
+}
+
+/// Return an already recorded commit QC that conflicts with `cert` at the same epoch and height.
+#[must_use]
+pub fn conflicting_commit_qc(cert: &Qc) -> Option<Qc> {
+    if cert.phase != crate::sumeragi::consensus::Phase::Commit {
+        return None;
+    }
+    lock_operator_status_slot(
+        authenticated_finality_ledger_slot(),
+        "authenticated finality ledger",
+    )
+    .subjects
+    .get(&(cert.epoch, cert.height))
+    .filter(|existing| commit_qcs_conflict(existing, cert))
+    .cloned()
+}
+
+/// Activate a process-lifetime fail-closed consensus safety halt.
+pub fn activate_consensus_safety_halt(
+    reason: &str,
+    height: u64,
+    epoch: u64,
+    first_block_hash: Option<HashOf<BlockHeader>>,
+    conflicting_block_hash: Option<HashOf<BlockHeader>>,
+) {
+    activate_consensus_safety_halt_snapshot(ConsensusSafetyHaltSnapshot {
+        active: true,
+        reason: Some(reason.to_owned()),
+        height,
+        epoch,
+        first_block_hash,
+        conflicting_block_hash,
+        ..ConsensusSafetyHaltSnapshot::default()
+    });
+}
+
+/// Activate a fail-closed halt with the full conflicting commit-QC state commitment.
+pub fn activate_consensus_safety_halt_for_conflicting_qcs(existing: &Qc, conflicting: &Qc) {
+    let transition_guard = consensus_transition_guard();
+    let _ = &transition_guard;
+    activate_consensus_safety_halt_for_conflicting_qcs_while_guarded(existing, conflicting);
+}
+
+fn activate_consensus_safety_halt_for_conflicting_qcs_while_guarded(
+    existing: &Qc,
+    conflicting: &Qc,
+) {
+    activate_consensus_safety_halt_snapshot_while_guarded(ConsensusSafetyHaltSnapshot {
+        active: true,
+        reason: Some("conflicting_commit_qc".to_owned()),
+        height: conflicting.height,
+        epoch: conflicting.epoch,
+        first_block_hash: Some(existing.subject_block_hash),
+        conflicting_block_hash: Some(conflicting.subject_block_hash),
+        first_parent_state_root: Some(existing.parent_state_root),
+        first_post_state_root: Some(existing.post_state_root),
+        conflicting_parent_state_root: Some(conflicting.parent_state_root),
+        conflicting_post_state_root: Some(conflicting.post_state_root),
+    });
+}
+
+/// Restore or activate a fully populated consensus safety-halt snapshot.
+pub(super) fn activate_consensus_safety_halt_snapshot(snapshot: ConsensusSafetyHaltSnapshot) {
+    let transition_guard = consensus_transition_guard();
+    let _ = &transition_guard;
+    activate_consensus_safety_halt_snapshot_while_guarded(snapshot);
+}
+
+/// Activate a halt while the caller holds the canonical transition gate.
+pub(crate) fn activate_consensus_safety_halt_snapshot_with_guard(
+    snapshot: ConsensusSafetyHaltSnapshot,
+    _guard: &ConsensusTransitionGuard,
+) {
+    activate_consensus_safety_halt_snapshot_while_guarded(snapshot);
+}
+
+fn activate_consensus_safety_halt_snapshot_while_guarded(snapshot: ConsensusSafetyHaltSnapshot) {
+    #[cfg(test)]
+    {
+        TEST_CONSENSUS_SAFETY_HALT.with(|halt| {
+            let mut halt = halt.borrow_mut();
+            if !halt.active {
+                *halt = snapshot;
+            }
+        });
+        return;
+    }
+    #[cfg(not(test))]
+    {
+        let mut halt = lock_operator_status_slot(
+            CONSENSUS_SAFETY_HALT
+                .get_or_init(|| Mutex::new(ConsensusSafetyHaltSnapshot::default())),
+            "consensus safety halt",
+        );
+        if !halt.active {
+            *halt = snapshot;
+        }
+    }
+}
+
+/// Return the current fail-closed consensus safety state.
+#[must_use]
+pub fn consensus_safety_halt_snapshot() -> ConsensusSafetyHaltSnapshot {
+    #[cfg(test)]
+    {
+        return TEST_CONSENSUS_SAFETY_HALT.with(|halt| halt.borrow().clone());
+    }
+    #[cfg(not(test))]
+    lock_operator_status_slot(
+        CONSENSUS_SAFETY_HALT.get_or_init(|| Mutex::new(ConsensusSafetyHaltSnapshot::default())),
+        "consensus safety halt",
+    )
+    .clone()
+}
+
+/// Return whether a fail-closed consensus safety halt is active.
+#[must_use]
+pub fn consensus_safety_halt_active() -> bool {
+    consensus_safety_halt_snapshot().active
+}
+
+/// Clear the process safety halt for isolated unit tests.
+#[cfg(test)]
+pub(crate) fn reset_consensus_safety_halt_for_tests() {
+    TEST_CONSENSUS_SAFETY_HALT.with(|halt| {
+        *halt.borrow_mut() = ConsensusSafetyHaltSnapshot::default();
+    });
+}
+
+#[cfg(test)]
+fn reset_consensus_transition_gate_for_tests() {
+    if let Some(gate) = CONSENSUS_TRANSITION_GATE.get() {
+        gate.clear_poison();
+    }
+    TEST_CONSENSUS_TRANSITION_HALT_SINK.with(|slot| {
+        *slot.borrow_mut() = None;
+    });
 }
 
 fn promote_observable_qc_from_commit(cert: &Qc) {
@@ -4764,6 +5628,7 @@ pub fn reset_validator_checkpoints_for_tests() {
     guard.clear();
 }
 
+#[cfg(test)]
 /// Clear commit certificate history (test-only helper).
 pub fn reset_commit_certs_for_tests() {
     #[cfg(test)]
@@ -4771,6 +5636,16 @@ pub fn reset_commit_certs_for_tests() {
     let mut guard =
         lock_operator_status_slot(commit_cert_history_slot(), "commit certificate history");
     guard.clear();
+    let mut ledger = lock_operator_status_slot(
+        authenticated_finality_ledger_slot(),
+        "authenticated finality ledger",
+    );
+    ledger.subjects.clear();
+    ledger.block_subjects.clear();
+    ledger.fingerprints.clear();
+    ledger.authorities.clear();
+    #[cfg(test)]
+    reset_consensus_safety_halt_for_tests();
 }
 
 #[cfg(test)]
@@ -5217,6 +6092,7 @@ pub fn snapshot() -> StatusSnapshot {
         locked_qc_subject,
         canonical_pending_finality: canonical_pending_finality_hash(),
         commit_qc,
+        safety_halt: consensus_safety_halt_snapshot(),
         commit_quorum: commit_quorum_snapshot(),
         settlement: settlement_snapshot(),
         gossip_fallback_total: GOSSIP_FALLBACK_TOTAL.load(Ordering::Relaxed),
@@ -9206,7 +10082,7 @@ mod tests {
         collections::{BTreeMap, BTreeSet, VecDeque},
         num::{NonZeroU64, NonZeroUsize},
         str::FromStr,
-        sync::atomic::Ordering,
+        sync::{Arc, Barrier, atomic::Ordering},
         time::Duration,
     };
 
@@ -9267,6 +10143,15 @@ mod tests {
 
     fn checked_public_key() -> iroha_crypto::PublicKey {
         checked_keypair().public_key().clone()
+    }
+
+    struct ResetTransitionPoisonOnDrop;
+
+    impl Drop for ResetTransitionPoisonOnDrop {
+        fn drop(&mut self) {
+            super::reset_consensus_transition_gate_for_tests();
+            super::reset_commit_certs_for_tests();
+        }
     }
 
     fn lane_payload_ownership_fixture(
@@ -9466,6 +10351,468 @@ mod tests {
             super::lock_operator_status_slot(super::commit_cert_history_slot(), "commit history");
         history.clear();
         history.push_back(cert);
+    }
+
+    #[test]
+    fn canonical_genesis_stub_gate_rejects_other_unsigned_certificates() {
+        let _guard = super::commit_history_test_guard();
+        super::reset_commit_certs_for_tests();
+
+        let mut canonical = commit_qc_fixture(1, 0, 0x01);
+        canonical.aggregate.signers_bitmap = vec![0];
+        assert!(matches!(
+            super::record_canonical_genesis_commit_qc_stub_for_tests(canonical.clone()),
+            Ok(super::CommitQcRecordOutcome::Recorded)
+        ));
+        super::prune_authenticated_finality_history(1, 1);
+        assert!(
+            super::commit_qc_is_recorded(&canonical),
+            "the sole unsigned canonical root subject must survive ordinary commit pruning"
+        );
+
+        let mut wrong_height = canonical.clone();
+        wrong_height.height = 2;
+        assert!(
+            super::record_canonical_genesis_commit_qc_stub_for_tests(wrong_height.clone()).is_err()
+        );
+        assert!(!super::commit_qc_is_recorded(&wrong_height));
+
+        let mut signed = canonical.clone();
+        signed.aggregate.bls_aggregate_signature = vec![0xA5; 96];
+        assert!(super::record_canonical_genesis_commit_qc_stub_for_tests(signed.clone()).is_err());
+        assert!(!super::commit_qc_is_recorded(&signed));
+
+        let mut nonzero_root = canonical.clone();
+        nonzero_root.post_state_root = UntypedHash::prehashed([0xA6; UntypedHash::LENGTH]);
+        assert!(
+            super::record_canonical_genesis_commit_qc_stub_for_tests(nonzero_root.clone()).is_err()
+        );
+        assert!(!super::commit_qc_is_recorded(&nonzero_root));
+
+        let mut malformed_bitmap = canonical;
+        malformed_bitmap.aggregate.signers_bitmap.clear();
+        assert!(
+            super::record_canonical_genesis_commit_qc_stub_for_tests(malformed_bitmap.clone())
+                .is_err()
+        );
+        assert!(!super::commit_qc_is_recorded(&malformed_bitmap));
+
+        super::reset_commit_certs_for_tests();
+    }
+
+    #[test]
+    fn poisoned_consensus_transition_gate_persists_halt_and_blocks_later_mutation() {
+        let _commit_guard = super::commit_history_test_guard();
+        super::reset_consensus_transition_gate_for_tests();
+        super::reset_commit_certs_for_tests();
+        let _reset = ResetTransitionPoisonOnDrop;
+
+        let dir = tempfile::tempdir().expect("transition poison marker tempdir");
+        let journal_path =
+            crate::sumeragi::vote_lock::LocalVoteLockJournal::journal_path(dir.path());
+        let chain_id: iroha_data_model::ChainId =
+            "transition-poison-test".parse().expect("chain id");
+        let validator = checked_bls_keypair();
+        let journal = crate::sumeragi::vote_lock::LocalVoteLockJournal::load(
+            journal_path.clone(),
+            &chain_id,
+            validator.public_key(),
+        )
+        .expect("load isolated transition poison journal");
+        super::install_consensus_transition_halt_sink(journal.safety_halt_sink())
+            .expect("install transition poison halt sink");
+
+        let first = commit_qc_fixture(71, 2, 0x71);
+        assert!(matches!(
+            super::record_commit_qc(first.clone()),
+            super::CommitQcRecordOutcome::Recorded
+        ));
+        let poison = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _transition_guard = super::consensus_transition_guard();
+            panic!("inject consensus transition poison");
+        }));
+        assert!(
+            poison.is_err(),
+            "poison injection must unwind through the guard"
+        );
+
+        let halt = super::consensus_safety_halt_snapshot();
+        assert!(halt.active);
+        assert_eq!(
+            halt.reason.as_deref(),
+            Some("consensus_transition_mutex_poisoned")
+        );
+        let reloaded = crate::sumeragi::vote_lock::LocalVoteLockJournal::load(
+            journal_path,
+            &chain_id,
+            validator.public_key(),
+        )
+        .expect("reload durable transition poison marker");
+        assert_eq!(reloaded.safety_halt(), Some(&halt));
+
+        let later = commit_qc_fixture(72, 3, 0x72);
+        let later_registration = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            super::record_commit_qc(later.clone())
+        }));
+        assert!(
+            later_registration.is_err(),
+            "a poisoned transition gate must not recover its inner mutex"
+        );
+        assert!(
+            !super::commit_qc_is_recorded(&later),
+            "later QC registration must not mutate authenticated finality"
+        );
+        assert_eq!(
+            super::commit_qc_history(),
+            vec![first],
+            "later QC history must remain unchanged after poison"
+        );
+
+        let transition_mutation_ran = std::cell::Cell::new(false);
+        let later_transition = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _transition_guard = super::consensus_transition_guard();
+            transition_mutation_ran.set(true);
+        }));
+        assert!(later_transition.is_err());
+        assert!(
+            !transition_mutation_ran.get(),
+            "Kura/WSV transition code after guard acquisition must remain unreachable"
+        );
+    }
+
+    #[test]
+    fn conflicting_commit_qcs_activate_fail_closed_safety_halt() {
+        let _guard = super::commit_history_test_guard();
+        super::reset_consensus_safety_halt_for_tests();
+        super::lock_operator_status_slot(super::commit_cert_history_slot(), "commit history")
+            .clear();
+
+        let first = commit_qc_fixture(23, 4, 0xA1);
+        let conflicting = commit_qc_fixture(23, 7, 0xB2);
+        super::record_commit_qc(first.clone());
+        super::record_commit_qc(conflicting.clone());
+
+        let halt = super::consensus_safety_halt_snapshot();
+        assert!(halt.active);
+        assert_eq!(halt.reason.as_deref(), Some("conflicting_commit_qc"));
+        assert_eq!(halt.height, 23);
+        assert_eq!(halt.epoch, first.epoch);
+        assert_eq!(halt.first_block_hash, Some(first.subject_block_hash));
+        assert_eq!(
+            halt.conflicting_block_hash,
+            Some(conflicting.subject_block_hash)
+        );
+        assert_eq!(halt.first_parent_state_root, Some(first.parent_state_root));
+        assert_eq!(halt.first_post_state_root, Some(first.post_state_root));
+        assert_eq!(
+            halt.conflicting_parent_state_root,
+            Some(conflicting.parent_state_root)
+        );
+        assert_eq!(
+            halt.conflicting_post_state_root,
+            Some(conflicting.post_state_root)
+        );
+        let history = super::commit_qc_history();
+        assert_eq!(
+            history.len(),
+            1,
+            "conflicting QC must not replace the safe frontier"
+        );
+        assert_eq!(history[0].subject_block_hash, first.subject_block_hash);
+
+        super::lock_operator_status_slot(super::commit_cert_history_slot(), "commit history")
+            .clear();
+        super::reset_consensus_safety_halt_for_tests();
+    }
+
+    #[test]
+    fn same_block_commit_qcs_with_divergent_state_roots_activate_safety_halt() {
+        let _guard = super::commit_history_test_guard();
+        super::reset_consensus_safety_halt_for_tests();
+        super::lock_operator_status_slot(super::commit_cert_history_slot(), "commit history")
+            .clear();
+
+        let first = commit_qc_fixture(24, 5, 0xA3);
+        let mut conflicting = first.clone();
+        conflicting.view = 8;
+        conflicting.post_state_root = UntypedHash::prehashed([0xB4; UntypedHash::LENGTH]);
+        super::record_commit_qc(first.clone());
+        super::record_commit_qc(conflicting.clone());
+
+        let halt = super::consensus_safety_halt_snapshot();
+        assert!(halt.active);
+        assert_eq!(halt.reason.as_deref(), Some("conflicting_commit_qc"));
+        assert_eq!(halt.first_block_hash, Some(first.subject_block_hash));
+        assert_eq!(halt.conflicting_block_hash, Some(first.subject_block_hash));
+        assert_eq!(halt.first_parent_state_root, Some(first.parent_state_root));
+        assert_eq!(halt.first_post_state_root, Some(first.post_state_root));
+        assert_eq!(
+            halt.conflicting_parent_state_root,
+            Some(conflicting.parent_state_root)
+        );
+        assert_eq!(
+            halt.conflicting_post_state_root,
+            Some(conflicting.post_state_root)
+        );
+        let history = super::commit_qc_history();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].post_state_root, first.post_state_root);
+
+        super::lock_operator_status_slot(super::commit_cert_history_slot(), "commit history")
+            .clear();
+        super::reset_consensus_safety_halt_for_tests();
+    }
+
+    #[test]
+    fn same_subject_distinct_aggregate_fingerprints_remain_commit_authorized() {
+        let _guard = super::commit_history_test_guard();
+        super::reset_commit_certs_for_tests();
+
+        let first = commit_qc_fixture(26, 4, 0xA6);
+        let mut alternate_quorum = first.clone();
+        alternate_quorum.aggregate.signers_bitmap = vec![0b0000_1110];
+        alternate_quorum.aggregate.bls_aggregate_signature = vec![0x5A; 96];
+
+        assert!(matches!(
+            super::record_commit_qc(first.clone()),
+            super::CommitQcRecordOutcome::Recorded
+        ));
+        assert!(matches!(
+            super::record_commit_qc(alternate_quorum.clone()),
+            super::CommitQcRecordOutcome::Duplicate
+        ));
+        assert!(super::commit_qc_is_recorded(&first));
+        assert!(super::commit_qc_is_recorded(&alternate_quorum));
+        assert_eq!(
+            super::commit_qc_history().len(),
+            1,
+            "operator history remains subject-deduplicated while exact auth capabilities survive"
+        );
+
+        super::reset_commit_certs_for_tests();
+    }
+
+    #[test]
+    fn uncommitted_finality_survives_operator_history_and_legacy_fingerprint_caps() {
+        let _guard = super::commit_history_test_guard();
+        let old_cap = super::commit_cert_history_cap();
+        super::set_commit_cert_history_cap(1);
+        super::reset_commit_certs_for_tests();
+
+        let first = commit_qc_fixture(40, 1, 0x40);
+        let newer_height = commit_qc_fixture(41, 1, 0x41);
+        super::record_commit_qc(first.clone());
+        super::record_commit_qc(newer_height);
+        assert!(
+            super::commit_qc_history()
+                .iter()
+                .all(|qc| qc.height != first.height),
+            "bounded operator history fixture must evict the older height"
+        );
+
+        let mut first_alternate = first.clone();
+        for idx in 0_u32..4_100 {
+            let mut alternate = first.clone();
+            alternate.aggregate.bls_aggregate_signature = idx.to_le_bytes().to_vec();
+            if idx == 4_099 {
+                first_alternate = alternate.clone();
+            }
+            assert!(!super::record_commit_qc(alternate).is_conflict());
+        }
+        assert!(super::commit_qc_is_recorded(&first));
+        assert!(super::commit_qc_is_recorded(&first_alternate));
+
+        let conflicting = commit_qc_fixture(40, 9, 0x4F);
+        assert!(super::record_commit_qc(conflicting).is_conflict());
+        assert!(super::consensus_safety_halt_active());
+
+        super::set_commit_cert_history_cap(old_cap);
+        super::reset_commit_certs_for_tests();
+    }
+
+    #[test]
+    fn authenticated_finality_history_retains_configured_committed_window() {
+        let _guard = super::commit_history_test_guard();
+        super::reset_commit_certs_for_tests();
+
+        let expired = commit_qc_fixture(48, 2, 0x48);
+        let retained_historical = commit_qc_fixture(49, 2, 0x49);
+        let committed = commit_qc_fixture(50, 2, 0x50);
+        let future = commit_qc_fixture(51, 2, 0x51);
+        super::record_commit_qc(expired.clone());
+        super::record_commit_qc(retained_historical.clone());
+        super::record_commit_qc(committed.clone());
+        super::record_commit_qc(future.clone());
+        super::prune_authenticated_finality_history(50, 2);
+
+        assert!(!super::commit_qc_is_recorded(&expired));
+        assert!(super::commit_qc_is_recorded(&retained_historical));
+        assert!(super::commit_qc_is_recorded(&committed));
+        assert!(super::commit_qc_is_recorded(&future));
+        let conflicting_expired = commit_qc_fixture(48, 7, 0x58);
+        assert!(super::conflicting_commit_qc(&conflicting_expired).is_none());
+        let conflicting_retained = commit_qc_fixture(49, 7, 0x4F);
+        assert_eq!(
+            super::conflicting_commit_qc(&conflicting_retained),
+            Some(retained_historical),
+            "every subject in the configured historical window must remain conflict-detectable"
+        );
+
+        super::reset_commit_certs_for_tests();
+    }
+
+    #[test]
+    fn qc_then_conflicting_hash_only_subject_activates_safety_halt() {
+        let _guard = super::commit_history_test_guard();
+        super::reset_commit_certs_for_tests();
+
+        let qc = commit_qc_fixture(52, 2, 0x52);
+        assert!(matches!(
+            super::record_commit_qc(qc.clone()),
+            super::CommitQcRecordOutcome::Recorded
+        ));
+        let conflicting_hash = HashOf::<BlockHeader>::from_untyped_unchecked(
+            UntypedHash::prehashed([0x5F; UntypedHash::LENGTH]),
+        );
+        let transition_guard = super::consensus_transition_guard();
+        assert!(matches!(
+            super::record_authenticated_block_subject_for_tests(
+                qc.epoch,
+                qc.height,
+                conflicting_hash,
+                &transition_guard,
+            ),
+            super::BlockSubjectRecordOutcome::Conflict {
+                existing_block_hash
+            } if existing_block_hash == qc.subject_block_hash
+        ));
+        drop(transition_guard);
+
+        let halt = super::consensus_safety_halt_snapshot();
+        assert!(halt.active);
+        assert_eq!(halt.first_block_hash, Some(qc.subject_block_hash));
+        assert_eq!(halt.conflicting_block_hash, Some(conflicting_hash));
+        super::reset_commit_certs_for_tests();
+    }
+
+    #[test]
+    fn hash_only_subject_then_conflicting_qc_activates_safety_halt() {
+        let _guard = super::commit_history_test_guard();
+        super::reset_commit_certs_for_tests();
+
+        let qc = commit_qc_fixture(53, 2, 0x53);
+        let first_hash = HashOf::<BlockHeader>::from_untyped_unchecked(UntypedHash::prehashed(
+            [0x5E; UntypedHash::LENGTH],
+        ));
+        let transition_guard = super::consensus_transition_guard();
+        assert!(matches!(
+            super::record_authenticated_block_subject_for_tests(
+                qc.epoch,
+                qc.height,
+                first_hash,
+                &transition_guard,
+            ),
+            super::BlockSubjectRecordOutcome::Recorded
+        ));
+        drop(transition_guard);
+
+        assert!(matches!(
+            super::record_commit_qc(qc.clone()),
+            super::CommitQcRecordOutcome::BlockHashConflict {
+                existing_block_hash
+            } if existing_block_hash == first_hash
+        ));
+        let halt = super::consensus_safety_halt_snapshot();
+        assert!(halt.active);
+        assert_eq!(halt.first_block_hash, Some(first_hash));
+        assert_eq!(halt.conflicting_block_hash, Some(qc.subject_block_hash));
+        super::reset_commit_certs_for_tests();
+    }
+
+    #[test]
+    fn canonical_commit_retains_hash_only_subject_inside_history_window() {
+        let _guard = super::commit_history_test_guard();
+        super::reset_commit_certs_for_tests();
+
+        let first_hash = HashOf::<BlockHeader>::from_untyped_unchecked(UntypedHash::prehashed(
+            [0x54; UntypedHash::LENGTH],
+        ));
+        let replacement_hash = HashOf::<BlockHeader>::from_untyped_unchecked(
+            UntypedHash::prehashed([0x55; UntypedHash::LENGTH]),
+        );
+        let transition_guard = super::consensus_transition_guard();
+        assert!(matches!(
+            super::record_authenticated_block_subject_for_tests(
+                0,
+                54,
+                first_hash,
+                &transition_guard,
+            ),
+            super::BlockSubjectRecordOutcome::Recorded
+        ));
+        drop(transition_guard);
+
+        super::prune_authenticated_finality_history(54, 1);
+        let transition_guard = super::consensus_transition_guard();
+        assert!(matches!(
+            super::record_authenticated_block_subject_for_tests(
+                0,
+                54,
+                replacement_hash,
+                &transition_guard,
+            ),
+            super::BlockSubjectRecordOutcome::Conflict { .. }
+        ));
+        drop(transition_guard);
+        assert!(super::consensus_safety_halt_active());
+        super::reset_commit_certs_for_tests();
+    }
+
+    #[test]
+    fn concurrent_commit_qc_registration_is_atomic_and_retains_one_subject() {
+        let _guard = super::commit_history_test_guard();
+        super::reset_consensus_safety_halt_for_tests();
+        super::lock_operator_status_slot(super::commit_cert_history_slot(), "commit history")
+            .clear();
+
+        let first = commit_qc_fixture(25, 3, 0xC5);
+        let conflicting = commit_qc_fixture(25, 3, 0xD5);
+        let barrier = Arc::new(Barrier::new(2));
+        let owner = super::current_test_lock_owner_token();
+        let handles = [first, conflicting].map(|cert| {
+            let barrier = Arc::clone(&barrier);
+            std::thread::spawn(move || {
+                super::with_test_lock_owner(owner, || {
+                    barrier.wait();
+                    super::record_commit_qc(cert)
+                })
+            })
+        });
+        let outcomes = handles.map(|handle| handle.join().expect("registration thread"));
+
+        assert_eq!(
+            outcomes
+                .iter()
+                .filter(|outcome| matches!(outcome, super::CommitQcRecordOutcome::Recorded))
+                .count(),
+            1
+        );
+        assert_eq!(
+            outcomes
+                .iter()
+                .filter(|outcome| outcome.is_conflict())
+                .count(),
+            1
+        );
+        assert_eq!(
+            super::commit_qc_history().len(),
+            1,
+            "check-and-insert must never retain both finality subjects"
+        );
+
+        super::lock_operator_status_slot(super::commit_cert_history_slot(), "commit history")
+            .clear();
+        super::reset_consensus_safety_halt_for_tests();
     }
 
     fn reset_penalty_status_for_tests() {
@@ -10599,6 +11946,15 @@ mod tests {
         let oldest = history.last().expect("history has tail");
         assert_eq!(oldest.height, 5);
         assert_eq!(oldest.view, 10);
+        super::set_commit_cert_history_cap(old_cap);
+    }
+
+    #[test]
+    fn commit_qc_history_cap_cannot_disable_conflict_detection() {
+        let _guard = super::commit_history_test_guard();
+        let old_cap = super::commit_cert_history_cap();
+        super::set_commit_cert_history_cap(0);
+        assert_eq!(super::commit_cert_history_cap(), 1);
         super::set_commit_cert_history_cap(old_cap);
     }
 

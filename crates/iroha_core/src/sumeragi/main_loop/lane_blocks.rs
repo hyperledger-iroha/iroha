@@ -2076,26 +2076,6 @@ impl Actor {
         cached
     }
 
-    #[cfg(test)]
-    fn lane_block_artifact_has_matching_application_receipt(
-        kura: &crate::kura::Kura,
-        artifact: &crate::kura::LaneBlockArtifact,
-    ) -> bool {
-        let ownership = &artifact.ownership;
-        let Some(receipt) = kura
-            .read_lane_block_application_receipt(ownership.lane_id, ownership.lane_block_height)
-        else {
-            return false;
-        };
-        let descriptor = &receipt.proposal.descriptor;
-        descriptor.lane_id == ownership.lane_id
-            && descriptor.dataspace_id == ownership.dataspace_id
-            && descriptor.lane_block_height == ownership.lane_block_height
-            && descriptor.lane_block_view == ownership.lane_block_view
-            && Some(descriptor.descriptor_hash) == ownership.lane_block_descriptor_hash
-            && receipt.artifact.ownership == *ownership
-    }
-
     pub(super) fn shared_lane_block_authority_for_ingress(
         &self,
         target_height: u64,
@@ -2286,6 +2266,9 @@ impl Actor {
         &self,
         proposal: &crate::sumeragi::consensus::LaneBlockProposalV1,
     ) -> Option<crate::lane_consensus::LaneBlockVoteV1> {
+        if self.consensus_participation_halted_now() {
+            return None;
+        }
         let local_peer = self.common_config.peer.id();
         if !proposal.descriptor.validator_set.contains(local_peer) {
             return None;
@@ -2983,8 +2966,7 @@ impl Actor {
         }))
     }
 
-    #[cfg(test)]
-    fn rebroadcast_cached_lane_block_bundles_if_due(&mut self, now: Instant) -> usize {
+    pub(super) fn rebroadcast_cached_lane_block_bundles_if_due(&mut self, now: Instant) -> usize {
         let _ = self.prune_durably_finalized_lane_block_state();
         if self.last_lane_block_rebroadcast.is_some_and(|last| {
             now.saturating_duration_since(last) < self.legacy_lane_block_rebroadcast_cooldown()
@@ -3437,6 +3419,9 @@ impl Actor {
         &self,
         proposal: &crate::sumeragi::consensus::LaneBlockProposalV1,
     ) -> Option<crate::lane_consensus::LaneBlockVoteV1> {
+        if self.consensus_participation_halted_now() {
+            return None;
+        }
         let local_peer = self.common_config.peer.id();
         if !proposal.descriptor.validator_set.contains(local_peer) {
             return None;

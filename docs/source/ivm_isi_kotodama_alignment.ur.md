@@ -49,8 +49,8 @@ translator: machine-google-reviewed
 ####Kotodama → IVM
 - فرنٹ اینڈ کے ٹکڑے موجود ہیں (لیکسر/پارسر/کم سے کم سیمنٹکس/آئی آر/ریگالوک)۔
 - کوڈجن (`kotodama::compiler`) IVM OPS کا ایک سب سیٹ خارج کرتا ہے اور اثاثہ کاروں کے لئے `SCALL` استعمال کرتا ہے:
-  - `MintAsset` → سیٹ x10 = اکاؤنٹ ، x11 = اثاثہ ، x12 = &Amount ؛ `SCALL SYSCALL_MINT_ASSET`۔
-  - `BurnAsset`/`TransferAsset` اسی طرح (Amount پوائنٹر کے طور پر منظور شدہ رقم)۔
+  - `MintAsset` → سیٹ x10 = اکاؤنٹ ، x11 = اثاثہ ، x12 = &QuantityValueV1 ؛ `SCALL SYSCALL_MINT_ASSET`۔
+  - `BurnAsset`/`TransferAsset` اسی طرح (QuantityValueV1 پوائنٹر کے طور پر منظور شدہ رقم)۔
 - فوری جانچ کے لئے IDS میں نقشہ لگائے جانے والے عددی اشارے کے ساتھ `WsvHost` کا استعمال کرتے ہوئے DEMOS `koto_*_demo.rs` دکھائیں۔
 
 ---

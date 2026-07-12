@@ -254,9 +254,9 @@ or radix-specific shortcut is not a different observable algorithm.
 Rounded division requires an output scale and one of these stable modes:
 
 ```text
-decimal.div_round(divisor: decimal, scale: int, mode: rounding-mode) -> decimal
-quantity.div_round(divisor: decimal, scale: int, mode: rounding-mode) -> quantity
-quantity.ratio_round(divisor: quantity, scale: int, mode: rounding-mode) -> decimal
+decimal.div_round(decimal divisor, int scale, rounding-mode mode) -> decimal
+quantity.div_round(decimal divisor, int scale, rounding-mode mode) -> quantity
+quantity.ratio_round(quantity divisor, int scale, rounding-mode mode) -> decimal
 ```
 
 All three methods require the three argument names shown above. `rounding-mode`
@@ -330,10 +330,10 @@ modulo `2^512` and reinterpret the result in the signed domain. V1 does not
 inherit an `i64` or `u128` modulus from retired source types.
 
 ```text
-math::wrapping_neg(value: int) -> int
-math::wrapping_add(left: int, right: int) -> int
-math::wrapping_sub(left: int, right: int) -> int
-math::wrapping_mul(left: int, right: int) -> int
+math::wrapping_neg(int value) -> int
+math::wrapping_add(int left, int right) -> int
+math::wrapping_sub(int left, int right) -> int
+math::wrapping_mul(int left, int right) -> int
 ```
 
 The binary forms require the `left` and `right` argument names. These four

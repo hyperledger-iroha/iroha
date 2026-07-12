@@ -4186,8 +4186,8 @@ seiyaku ProtectedStateFreeOverlay {
             .compile_source(
                 r#"
 seiyaku PermissionlessStateFreeOverlay {
-  kotoage fn write(int value) {
-    let _value = value;
+  view fn write(int value) -> int {
+    return value;
   }
 }
 "#,
@@ -7730,7 +7730,7 @@ seiyaku ProtectedProved {
                 argument_schema: None,
                 return_type: None,
                 return_schema: None,
-                permission: None,
+                permission: Some("CanInvokeOverlayFixture".to_owned()),
                 read_keys: Vec::new(),
                 write_keys: Vec::new(),
                 access_hints_complete: Some(true),

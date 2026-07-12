@@ -2687,7 +2687,7 @@ mod tests {
             commitment_index: 0,
         };
         state
-            .insert_sccp_outbound_message_for_testing(key, record.clone())
+            .insert_sccp_outbound_message_for_testing(key.clone(), record.clone())
             .expect("insert canonical SCCP outbound snapshot fixture");
         (state, key, record)
     }

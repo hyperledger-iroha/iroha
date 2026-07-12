@@ -14357,7 +14357,7 @@ public struct ToriiMultisigProposalEntry: Decodable, Sendable, Equatable {
     }
 }
 
-public struct ToriiMultisigProposalsListRequest: Encodable, Sendable {
+public struct ToriiMultisigProposalsQueryRequest: Encodable, Sendable {
     public var selector: ToriiMultisigAccountSelector
     public var status: [ToriiMultisigProposalStatus]
     public var cursor: String?
@@ -14382,7 +14382,7 @@ public struct ToriiMultisigProposalsListRequest: Encodable, Sendable {
     }
 
     public func encode(to encoder: Encoder) throws {
-        let normalizedSelector = try selector.normalizedPayload(field: "multisig proposals list selector")
+        let normalizedSelector = try selector.normalizedPayload(field: "multisig proposals query selector")
         guard Set(status).count == status.count else {
             throw ToriiClientError.invalidPayload("multisig proposal status filters must be unique.")
         }
@@ -14406,7 +14406,7 @@ public struct ToriiMultisigProposalsListRequest: Encodable, Sendable {
     }
 }
 
-public struct ToriiMultisigProposalsListResponse: Decodable, Sendable, Equatable {
+public struct ToriiMultisigProposalsQueryResponse: Decodable, Sendable, Equatable {
     public let resolvedMultisigAccountId: String
     public let proposals: [ToriiMultisigProposalEntry]
     public let nextCursor: String?
@@ -14429,7 +14429,7 @@ public struct ToriiMultisigProposalsListResponse: Decodable, Sendable, Equatable
     }
 }
 
-public struct ToriiMultisigProposalGetRequest: Encodable, Sendable {
+public struct ToriiMultisigProposalLookupRequest: Encodable, Sendable {
     public var selector: ToriiMultisigAccountSelector
     public var proposalId: String?
     public var instructionsHash: String?
@@ -14450,7 +14450,7 @@ public struct ToriiMultisigProposalGetRequest: Encodable, Sendable {
     }
 
     public func encode(to encoder: Encoder) throws {
-        let normalizedSelector = try selector.normalizedPayload(field: "multisig proposal get selector")
+        let normalizedSelector = try selector.normalizedPayload(field: "multisig proposal lookup selector")
         let normalizedProposalId = try ToriiRequestValidation.normalizedOptionalNonEmpty(proposalId, field: "proposal_id")
         let normalizedInstructionsHash = try ToriiRequestValidation.normalizedOptional32ByteHex(
             instructionsHash,
@@ -14458,7 +14458,7 @@ public struct ToriiMultisigProposalGetRequest: Encodable, Sendable {
         )
         guard normalizedProposalId != nil || normalizedInstructionsHash != nil else {
             throw ToriiClientError.invalidPayload(
-                "multisig proposal get request requires proposal_id or instructions_hash."
+                "multisig proposal lookup request requires proposal_id or instructions_hash."
             )
         }
         var container = encoder.container(keyedBy: CodingKeys.self)
@@ -14469,7 +14469,7 @@ public struct ToriiMultisigProposalGetRequest: Encodable, Sendable {
     }
 }
 
-public struct ToriiMultisigProposalGetResponse: Decodable, Sendable, Equatable {
+public struct ToriiMultisigProposalLookupResponse: Decodable, Sendable, Equatable {
     public let resolvedMultisigAccountId: String
     public let proposalId: String
     public let instructionsHash: String
@@ -18928,15 +18928,15 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     }
 
     @discardableResult
-    public func listMultisigProposals(_ requestBody: ToriiMultisigProposalsListRequest,
-                                      completion: @escaping (Result<ToriiMultisigProposalsListResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.listMultisigProposals(requestBody) }
+    public func queryMultisigProposals(_ requestBody: ToriiMultisigProposalsQueryRequest,
+                                      completion: @escaping (Result<ToriiMultisigProposalsQueryResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) { try await self.queryMultisigProposals(requestBody) }
     }
 
     @discardableResult
-    public func getMultisigProposal(_ requestBody: ToriiMultisigProposalGetRequest,
-                                    completion: @escaping (Result<ToriiMultisigProposalGetResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.getMultisigProposal(requestBody) }
+    public func lookupMultisigProposal(_ requestBody: ToriiMultisigProposalLookupRequest,
+                                    completion: @escaping (Result<ToriiMultisigProposalLookupResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) { try await self.lookupMultisigProposal(requestBody) }
     }
 
     @discardableResult
@@ -20923,24 +20923,24 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         return try decodeJSON(ToriiMultisigSpecResponse.self, from: data)
     }
 
-    public func listMultisigProposals(_ requestBody: ToriiMultisigProposalsListRequest) async throws -> ToriiMultisigProposalsListResponse {
-        let request = try makeRequest(path: "/v1/multisig/proposals/list",
+    public func queryMultisigProposals(_ requestBody: ToriiMultisigProposalsQueryRequest) async throws -> ToriiMultisigProposalsQueryResponse {
+        let request = try makeRequest(path: "/v1/multisig/proposals/query",
                                       method: .post,
                                       queryItems: nil,
                                       body: try JSONEncoder().encode(requestBody),
                                       headers: ["Content-Type": "application/json"])
         let data = try await data(for: request)
-        return try decodeJSON(ToriiMultisigProposalsListResponse.self, from: data)
+        return try decodeJSON(ToriiMultisigProposalsQueryResponse.self, from: data)
     }
 
-    public func getMultisigProposal(_ requestBody: ToriiMultisigProposalGetRequest) async throws -> ToriiMultisigProposalGetResponse {
-        let request = try makeRequest(path: "/v1/multisig/proposals/get",
+    public func lookupMultisigProposal(_ requestBody: ToriiMultisigProposalLookupRequest) async throws -> ToriiMultisigProposalLookupResponse {
+        let request = try makeRequest(path: "/v1/multisig/proposals/lookup",
                                       method: .post,
                                       queryItems: nil,
                                       body: try JSONEncoder().encode(requestBody),
                                       headers: ["Content-Type": "application/json"])
         let data = try await data(for: request)
-        return try decodeJSON(ToriiMultisigProposalGetResponse.self, from: data)
+        return try decodeJSON(ToriiMultisigProposalLookupResponse.self, from: data)
     }
 
     public func fetchContractCodeBytes(codeHashHex: String) async throws -> ToriiContractCodeBytes {

@@ -1897,6 +1897,50 @@ mod tests {
     }
 
     #[test]
+    fn typed_test_graph_projects_durable_state_map_intrinsics_into_runtime() {
+        let target = TestSourceUnit {
+            source_name: "state-map-runtime.ko".to_owned(),
+            source: r#"seiyaku StateMapRuntime {
+                state StateMap<Name, int> flags;
+                fn current() -> int {
+                    return match flags.get(Name::parse("paused")) {
+                        Option::some(value) => value,
+                        Option::none => 0,
+                    };
+                }
+                view fn paused() -> int { return current(); }
+                #[test]
+                fn absent_flag_is_zero() { test::assert(current() == 0); }
+            }"#
+            .to_owned(),
+        };
+
+        let outputs = CompilerSession::new(CompilerOptions {
+            mode: CompilerMode::Test,
+            ..CompilerOptions::default()
+        })
+        .build_test_sources(&target, &[])
+        .expect("valid compiler intrinsics must survive the production projection");
+        let runtime = outputs
+            .runtime
+            .expect("public view requires runtime output");
+        assert!(
+            runtime
+                .report
+                .source_map
+                .iter()
+                .any(|entry| entry.function_name == "current")
+        );
+        assert!(
+            runtime
+                .report
+                .source_map
+                .iter()
+                .all(|entry| entry.function_name != "absent_flag_is_zero")
+        );
+    }
+
+    #[test]
     fn typed_test_graph_without_runtime_entrypoint_skips_runtime_artifact() {
         let target = TestSourceUnit {
             source_name: "pure-suite.ko".to_owned(),

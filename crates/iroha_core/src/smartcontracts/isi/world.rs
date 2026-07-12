@@ -22187,7 +22187,7 @@ seiyaku GovernanceLifecycle {
                 .expect("completed settlement artifact is cryptographically valid");
             kura.persist_block_with_retained_archive_for_tests(&Arc::new(block))
                 .expect("store exact SCCP finalized block and retained archive fixture");
-            let _ = kura
+            let _receipt = kura
                 .store_v2_finality_artifact(&finality.finality_artifact)
                 .expect("store exact SCCP retained finality fixture");
             (fixture, finality)

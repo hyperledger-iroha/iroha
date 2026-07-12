@@ -21059,7 +21059,7 @@ test("multisig response decoders reject non-exact resolved account ids", async (
       clientWithResponse({
         resolved_multisig_account_id: paddedAccountId,
         proposals: [],
-      }).listMultisigProposals(selector),
+      }).queryMultisigProposals(selector),
     pattern,
   );
   await assert.rejects(
@@ -21069,7 +21069,7 @@ test("multisig response decoders reject non-exact resolved account ids", async (
         proposal_id: proposalId,
         instructions_hash: proposalId,
         proposal: { approvals: [] },
-      }).getMultisigProposal({ ...selector, instructionsHash: proposalId }),
+      }).lookupMultisigProposal({ ...selector, instructionsHash: proposalId }),
     pattern,
   );
 });
@@ -21208,7 +21208,20 @@ test("getMultisigSpec posts selector and returns raw spec payload", async () => 
   assert.deepEqual(result, responsePayload);
 });
 
-test("listMultisigProposals decodes proposal entries", async () => {
+test("ToriiClient source and dist use only first-release multisig proposal routes", () => {
+  for (const relativePath of ["../src/toriiClient.js", "../dist/toriiClient.js"]) {
+    const source = readFileSync(new URL(relativePath, import.meta.url), "utf8");
+    assert.doesNotMatch(
+      source,
+      /["']\/v1\/multisig\/proposals\/(?:list|get)["']/,
+      `${relativePath} must not retain retired multisig proposal paths`,
+    );
+    assert.match(source, /["']\/v1\/multisig\/proposals\/query["']/);
+    assert.match(source, /["']\/v1\/multisig\/proposals\/lookup["']/);
+  }
+});
+
+test("queryMultisigProposals decodes proposal entries", async () => {
   let captured;
   const responsePayload = {
     resolved_multisig_account_id: FIXTURE_ALICE_ID,
@@ -21241,13 +21254,13 @@ test("listMultisigProposals decodes proposal entries", async () => {
       });
     },
   });
-  const result = await client.listMultisigProposals({
+  const result = await client.queryMultisigProposals({
     multisigAccountAlias: "cbdc@banka",
     status: ["collecting_signatures"],
     cursor: "page-1",
     limit: 25,
   });
-  assert.equal(captured.url, `${BASE_URL}/v1/multisig/proposals/list`);
+  assert.equal(captured.url, `${BASE_URL}/v1/multisig/proposals/query`);
   assert.deepEqual(JSON.parse(captured.init.body), {
     multisig_account_alias: "cbdc@banka",
     status: ["COLLECTING_SIGNATURES"],
@@ -21257,7 +21270,7 @@ test("listMultisigProposals decodes proposal entries", async () => {
   assert.deepEqual(result, responsePayload);
 });
 
-test("getMultisigProposal resolves by instructions hash", async () => {
+test("lookupMultisigProposal resolves by instructions hash", async () => {
   let captured;
   const responsePayload = {
     resolved_multisig_account_id: FIXTURE_ALICE_ID,
@@ -21281,11 +21294,11 @@ test("getMultisigProposal resolves by instructions hash", async () => {
     });
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const result = await client.getMultisigProposal({
+  const result = await client.lookupMultisigProposal({
     multisigAccountAlias: "cbdc@banka",
     instructionsHash: "e".repeat(64),
   });
-  assert.equal(captured.url, `${BASE_URL}/v1/multisig/proposals/get`);
+  assert.equal(captured.url, `${BASE_URL}/v1/multisig/proposals/lookup`);
   assert.deepEqual(JSON.parse(captured.init.body), {
     multisig_account_alias: "cbdc@banka",
     instructions_hash: "e".repeat(64),
@@ -21293,7 +21306,7 @@ test("getMultisigProposal resolves by instructions hash", async () => {
   assert.deepEqual(result, responsePayload);
 });
 
-test("listMultisigProposals rejects unsupported request and response statuses", async () => {
+test("queryMultisigProposals rejects unsupported request and response statuses", async () => {
   const noFetchClient = new ToriiClient(BASE_URL, {
     fetchImpl: async () => {
       throw new Error("fetch should not be invoked");
@@ -21301,7 +21314,7 @@ test("listMultisigProposals rejects unsupported request and response statuses", 
   });
   await assert.rejects(
     () =>
-      noFetchClient.listMultisigProposals({
+      noFetchClient.queryMultisigProposals({
         multisigAccountAlias: "cbdc@banka",
         status: ["READY_TO_SUBMIT"],
       }),
@@ -21309,7 +21322,7 @@ test("listMultisigProposals rejects unsupported request and response statuses", 
   );
   await assert.rejects(
     () =>
-      noFetchClient.listMultisigProposals({
+      noFetchClient.queryMultisigProposals({
         multisigAccountId: FIXTURE_ALICE_ID,
         multisigAccountAlias: "cbdc@banka",
       }),
@@ -21317,7 +21330,7 @@ test("listMultisigProposals rejects unsupported request and response statuses", 
   );
   await assert.rejects(
     () =>
-      noFetchClient.getMultisigProposal({
+      noFetchClient.lookupMultisigProposal({
         multisigAccountId: FIXTURE_ALICE_ID,
         proposalId: "f".repeat(64),
         instructionsHash: "f".repeat(64),
@@ -21348,10 +21361,10 @@ test("listMultisigProposals rejects unsupported request and response statuses", 
   });
   await assert.rejects(
     () =>
-      invalidResponseClient.listMultisigProposals({
+      invalidResponseClient.queryMultisigProposals({
         multisigAccountAlias: "cbdc@banka",
       }),
-    /multisig proposals list response\.proposals\[0\]\.status must be one of/,
+    /multisig proposals query response\.proposals\[0\]\.status must be one of/,
   );
 });
 

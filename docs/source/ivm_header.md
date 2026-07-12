@@ -5,7 +5,7 @@ Magic
 - 4 bytes: ASCII `IVM\0` at offset 0.
 
 Layout (current)
-- Offsets and sizes (17 bytes total):
+- Offsets and sizes (49 bytes total):
   - 0..4: magic `IVM\0`
   - 4: `version_major: u8`
   - 5: `version_minor: u8`
@@ -13,12 +13,14 @@ Layout (current)
   - 7: `vector_length: u8`
   - 8..16: `max_cycles: u64` (little‑endian)
   - 16: `abi_version: u8`
+  - 17..49: `abi_hash: [u8; 32]` (canonical ABI descriptor hash for `abi_version`)
 
 Mode bits
 - `ZK = 0x01`, `VECTOR = 0x02`, `HTM = 0x04` (reserved/feature‑gated).
 
 Fields (meaning)
 - `abi_version`: syscall table and pointer‑ABI schema version.
+- `abi_hash`: canonical 32-byte ABI descriptor hash selected by `abi_version`.
 - `mode`: feature bits for ZK tracing/VECTOR/HTM.
 - `vector_length`: logical vector length for vector ops (0 selects the runtime default).
 - `max_cycles`: execution padding bound used in ZK mode and admission.
@@ -37,6 +39,13 @@ Durable state helpers and ABI surface
 - CoreHost wires STATE_{GET,SET,DEL} to WSV-backed durable smart-contract state; dev/test hosts may use overlays or local persistence but must preserve the same observable behavior.
 
 Validation
+- The `abi_hash` at bytes 17..49 must equal the canonical 32-byte ABI
+  descriptor hash selected by `abi_version`. The parser validates this field
+  before decoding `CNTR`, any other prefix section, or the instruction stream.
+- For deployable artifacts, the required `CNTR` section carries the same ABI
+  hash. Admission requires the header's `abi_version`/`abi_hash` and the
+  embedded `CNTR.abi_hash` to resolve to the same runtime descriptor, so both
+  the fixed header and `CNTR` bind the artifact to the ABI.
 - Generic IVM parsing accepts `version_major = 1` with `version_minor = 0` or
   `1`. Deployable contract artifacts require version `1.1`.
 - Deployable contract artifacts must embed a `CNTR` section immediately after

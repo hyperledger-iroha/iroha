@@ -85,7 +85,7 @@ use tokio::{
     time::{MissedTickBehavior, interval},
 };
 
-#[cfg(any(test, feature = "iroha-core-tests"))]
+#[cfg(test)]
 use crate::state::LaneLifecycleError;
 #[cfg(feature = "telemetry")]
 use crate::telemetry::{DataspaceTeuGaugeUpdate, LaneTeuGaugeUpdate};
@@ -7793,7 +7793,7 @@ impl Queue {
     ///
     /// # Errors
     /// Returns an error if updating the lane lifecycle or reconfiguring Nexus metadata fails.
-    #[cfg(any(test, feature = "iroha-core-tests"))]
+    #[cfg(test)]
     pub(crate) fn apply_lane_lifecycle(
         &self,
         state: &mut State,
@@ -7824,7 +7824,11 @@ pub mod tests {
         time::Duration,
     };
 
-    use iroha_config::parameters::actual::{LaneRoutingMatcher, LaneRoutingRule};
+    use iroha_config::{
+        base::WithOrigin,
+        kura::InitMode,
+        parameters::actual::{Kura as KuraConfig, LaneRoutingMatcher, LaneRoutingRule},
+    };
     use iroha_crypto::{
         Algorithm, Hash, KeyPair, MerkleTree,
         privacy::{LaneCommitmentId, LanePrivacyCommitment, MerkleCommitment},
@@ -19290,16 +19294,44 @@ pub mod tests {
             (participant.lane_id, participant.dataspace_id),
         ];
         let (lane_catalog, dataspace_catalog) = Queue::test_catalogs_for_routes(&routes);
+        let kura_dir = tempdir().expect("authenticated queue Kura root");
+        let lane_geometry = LaneGeometry::from_catalog(&lane_catalog);
+        let kura_config = KuraConfig {
+            init_mode: InitMode::Strict,
+            store_dir: WithOrigin::inline(kura_dir.path().join("kura")),
+            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
+            blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
+            debug_output_new_blocks: false,
+            merge_ledger_cache_capacity:
+                iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
+            fsync_mode: iroha_config::kura::FsyncMode::Batched,
+            fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
+            block_sync_roster_retention:
+                iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
+            roster_sidecar_retention:
+                iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas:
+                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
+        };
+        let (kura, _) =
+            Kura::new_with_configured_lane_catalog(&kura_config, &lane_geometry, &lane_catalog)
+                .expect("open authenticated two-lane reservation Kura");
         let mut state = State::new(
             world_with_test_domains(),
-            Kura::blank_kura_for_testing(),
+            kura,
             LiveQueryStore::start_test(),
         );
+        state
+            .prepare_configured_primary_geometry_anchor(&lane_catalog)
+            .expect("anchor authenticated reservation-test primary");
+        state
+            .restore_kura_lane_segments_before_startup_replay()
+            .expect("restore reservation-test startup cursor");
         let mut nexus = state.nexus_snapshot();
         nexus.enabled = true;
         nexus.lane_catalog = (*lane_catalog).clone();
         nexus.configured_lane_catalog = nexus.lane_catalog.clone();
-        nexus.lane_config = LaneGeometry::from_catalog(&nexus.lane_catalog);
+        nexus.lane_config = lane_geometry;
         nexus.dataspace_catalog = (*dataspace_catalog).clone();
         state
             .set_nexus_from_config(nexus)
