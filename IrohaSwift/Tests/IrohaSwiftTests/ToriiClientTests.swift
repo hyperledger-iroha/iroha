@@ -49,6 +49,24 @@ private func nativeAmxTestHash(_ seed: UInt8) -> String {
     return "hash:\(body)#\(String(format: "%04X", checksum))"
 }
 
+private func canonicalKagemushaVerifierRecordArchive(
+    seed: UInt8,
+    verifierKeyLength: Int = 96
+) throws -> Data {
+    guard verifierKeyLength > 0 else {
+        throw NSError(
+            domain: "ToriiClientTests",
+            code: -1,
+            userInfo: [NSLocalizedDescriptionKey: "verifierKeyLength must be positive"]
+        )
+    }
+    return noritoEncode(
+        typeName: KagemushaRecursiveSpend.verifyingKeyRecordWireName,
+        payload: Data(repeating: seed, count: verifierKeyLength),
+        flags: NoritoHeader.compactLen
+    )
+}
+
 private func nativeAmxStatusPayload(
     preparePhase: String = "prepare",
     signature: String = String(repeating: "9a", count: 96),
@@ -9490,7 +9508,7 @@ final class ToriiClientTests: XCTestCase {
               "withdrawal_height": null
             }
             """
-            """
+            return """
             {
               \(extra)
               "asset_definition_id": \(assetDefinitionId),
@@ -10572,7 +10590,7 @@ final class ToriiClientHeaderTests: XCTestCase {
     func testVerifyingKeyDetailRejectsNoncanonicalRecordNoritoBase64() throws {
         let recordNorito = try canonicalKagemushaVerifierRecordArchive(
             seed: 0x79,
-            verifierKeyLength: 95
+            verifierKeyLength: 96
         )
         let canonical = recordNorito.base64EncodedString()
         XCTAssertTrue(canonical.hasSuffix("="))

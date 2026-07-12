@@ -21877,6 +21877,100 @@ mod tests {
     }
 
     #[test]
+    fn v2_finality_crypto_cache_uses_fixed_lru_capacity() {
+        let kura = Kura::blank_kura_for_testing();
+        let identity_path = kura.store_root().join("v2-finality-cache-lru-identity");
+        std::fs::write(&identity_path, b"stable identity").expect("write cache identity file");
+        let artifact_hash = HashOf::<V2FinalityArtifact>::from_untyped_unchecked(Hash::new(
+            b"v2 finality cache artifact",
+        ));
+        let bytes_hash = |height: u64| Hash::new(height.to_le_bytes());
+        let capacity = u64::try_from(V2_FINALITY_VERIFICATION_CACHE_CAPACITY)
+            .expect("cache capacity fits u64");
+
+        for height in 1..=capacity {
+            kura.remember_verified_v2_finality(
+                height,
+                artifact_hash,
+                bytes_hash(height),
+                std::fs::metadata(&identity_path).expect("read stable cache identity"),
+            );
+        }
+        assert_eq!(
+            kura.v2_finality_verification_cache.lock().len(),
+            V2_FINALITY_VERIFICATION_CACHE_CAPACITY
+        );
+
+        let metadata = std::fs::metadata(&identity_path).expect("reread stable cache identity");
+        assert!(
+            kura.v2_finality_cache_hit(1, artifact_hash, bytes_hash(1), &metadata),
+            "reading the oldest entry must promote it to most-recently used"
+        );
+        let inserted_height = capacity.saturating_add(1);
+        kura.remember_verified_v2_finality(
+            inserted_height,
+            artifact_hash,
+            bytes_hash(inserted_height),
+            metadata,
+        );
+
+        let cache = kura.v2_finality_verification_cache.lock();
+        assert_eq!(cache.len(), V2_FINALITY_VERIFICATION_CACHE_CAPACITY);
+        assert!(cache.iter().any(|entry| entry.height == 1));
+        assert!(cache.iter().all(|entry| entry.height != 2));
+        assert_eq!(
+            cache.back().map(|entry| entry.height),
+            Some(inserted_height)
+        );
+    }
+
+    #[test]
+    fn bridge_and_sccp_proof_builders_reuse_exact_finality_sidecar_verification() {
+        let kura = Kura::blank_kura_for_testing();
+        let block = DummyBlocks::new().next();
+        kura.store_block(Arc::clone(&block))
+            .expect("store canonical block");
+        let artifact = v2_finality_artifact_for_block(&block);
+        kura.store_v2_finality_artifact(&artifact)
+            .expect("persist and verify finality artifact");
+        assert_eq!(
+            kura.v2_finality_crypto_verifications
+                .load(Ordering::Relaxed),
+            1
+        );
+
+        let state = State::new_with_chain_for_testing(
+            World::default(),
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+            artifact.height_context.chain_id.clone(),
+        );
+        for _ in 0..4 {
+            let proof = crate::bridge::build_finality_proof(&state, artifact.height)
+                .expect("build bridge proof from verified Kura finality");
+            assert_eq!(proof.finality_artifact, artifact);
+            let bundle = crate::bridge::build_finality_bundle(&state, artifact.height)
+                .expect("build bridge bundle from verified Kura finality");
+            assert_eq!(bundle.finality_proof.finality_artifact, artifact);
+            assert!(
+                crate::bridge::validated_sccp_finalized_messages_at_height(
+                    &state,
+                    artifact.height,
+                )
+                .expect("build SCCP finality projection from verified Kura finality")
+                .is_none(),
+                "a block without an SCCP commitment has no finalized SCCP projection"
+            );
+        }
+        assert_eq!(
+            kura.v2_finality_crypto_verifications
+                .load(Ordering::Relaxed),
+            1,
+            "bridge and SCCP proof construction must not repeat Kura's BLS verification"
+        );
+    }
+
+    #[test]
     fn v2_finality_persistence_never_waits_for_the_block_store_writer_lock() {
         let kura = Kura::blank_kura_for_testing();
         let block = DummyBlocks::new().next();

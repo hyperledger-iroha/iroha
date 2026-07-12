@@ -45,10 +45,12 @@ Finalized snapshot-ው የቀጣዩ epoch parameters ብቻ ሳይሆን `epoch_
 
 ## ቋሚ ማከማቻ እና ማረጋገጥ
 
-የSumeragi v2 apply path artifact-ውን አረጋግጦ እንደማይለወጥ Kura sidecar ያከማቻል። Proof
-builder የcanonical block-ውንና sidecar-ውን ያነባል፤ ታሪካዊ PoP ወይም certificate ከሚለወጥ
-የአሁኑ world state እንደገና አይገነባም። የጎደለ፣ የተበላሸ፣ የሚጋጭ ወይም የማይረጋገጥ
-sidecar fail closed ይሆናል፤ ተደራሽነት በቅርብ in-memory history window አይገደብም።
+Kura finality ከማተሙ ወይም block body ከማስወገዱ በፊት ትክክለኛውን canonical header እና
+በ`commitment_index` ቅደም ተከተል ያለውን SCCP archive የያዘ immutable retained record
+ያስቀምጣል። Finality artifact ከዚያ ከዚያው header ጋር በተለየ immutable record ይቀመጣል።
+Proof builder retained header እና finality record ብቻ ያነባል፤ historical block body ወይም
+mutable WSV payload አይፈልግም። የጎደለ፣ የተበላሸ፣ የሚጋጭ ወይም የማይረጋገጥ record
+fail closed ይሆናል።
 
 Stateless verifier version፣ chain፣ height፣ header hash፣ canonical predecessor፣ view፣ context፣
 subject እና CommitQC-ን
@@ -79,5 +81,6 @@ SCCP ይህንኑ `BridgeFinalityProof` ይጠቀማል። በmessage የቀረ�
 - `GET /v1/bridge/finality/{height}` `BridgeFinalityProof` ይመልሳል፤
 - `GET /v1/bridge/finality/bundle/{height}` `BridgeFinalityBundle` ይመልሳል።
 
-Block-ው ወይም ትክክለኛው ቋሚ v2 artifact ከጎደለ ወይም invalid ከሆነ ሁለቱም endpoint-ዎች fail
-closed ይሆናሉ። ያልታወቁ መስኮች፣ ያልተደገፉ versions እና retired proof shapes መከልከል አለባቸው።
+Retained canonical header ወይም ትክክለኛው ቋሚ v2 artifact ከጎደለ ወይም invalid ከሆነ
+ሁለቱም endpoint-ዎች fail closed ይሆናሉ። Block-body eviction ትክክለኛ proof-ን አያጠፋም።
+ያልታወቁ መስኮች፣ ያልተደገፉ versions እና retired proof shapes መከልከል አለባቸው።

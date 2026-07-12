@@ -4999,8 +4999,12 @@ mod tests {
     }
 
     #[test]
-    fn state_keys_page_bound_covers_admissible_pages_and_rejects_oversized_pages() {
-        for count in [0_usize, 1] {
+    fn state_keys_page_bound_covers_admissible_pages_and_rejects_item_overflow() {
+        for count in [
+            0_usize,
+            1,
+            usize::try_from(syscalls::STATE_KEYS_MAX_ITEMS).unwrap(),
+        ] {
             let keys: Vec<Name> = (0..count).map(maximum_bounded_state_name).collect();
             let encoded = norito::to_bytes(&keys).expect("encode bounded state-key page");
             let quote =
@@ -5011,16 +5015,13 @@ mod tests {
                     >= u64::try_from(encoded.len()).expect("encoded page length"),
                 "page bound underquoted {count} maximum-sized names"
             );
+            assert!(encoded.len() <= syscalls::STATE_MAP_MAX_PAGE_BYTES);
         }
-        let oversized: Vec<Name> = (0..64).map(maximum_bounded_state_name).collect();
-        assert!(
-            norito::to_bytes(&oversized)
-                .expect("encode oversized state-key page")
-                .len()
-                > syscalls::STATE_MAP_MAX_PAGE_BYTES
-        );
+        let oversized: Vec<Name> = (0..=syscalls::STATE_KEYS_MAX_ITEMS)
+            .map(maximum_bounded_state_name)
+            .collect();
         assert_eq!(
-            state_keys_page_gas_quote(&oversized, 0, 0, syscalls::STATE_KEYS_MAX_ITEMS),
+            state_keys_page_gas_quote(&oversized, 0, 0, syscalls::STATE_KEYS_MAX_ITEMS + 1,),
             Err(VMError::NoritoInvalid)
         );
     }

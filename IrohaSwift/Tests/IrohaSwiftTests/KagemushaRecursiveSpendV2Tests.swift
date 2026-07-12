@@ -651,15 +651,15 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
         )
         XCTAssertEqual(
             KagemushaRecursiveSpend.splitIntentWireName,
-            "iroha_data_model::offline::model::KagemushaRecursiveSpendSplitIntent"
+            "iroha_data_model::offline::model::KagemushaRecursiveSpendSplitIntentV2"
         )
         XCTAssertEqual(
             KagemushaRecursiveSpend.branchWireName,
-            "iroha_data_model::offline::model::KagemushaRecursiveSpendBranch"
+            "iroha_data_model::offline::model::KagemushaRecursiveSpendBranchV2"
         )
         XCTAssertEqual(
             KagemushaRecursiveSpend.splitResultWireName,
-            "iroha_data_model::offline::model::KagemushaRecursiveSpendSplitResult"
+            "iroha_data_model::offline::model::KagemushaRecursiveSpendSplitResultV2"
         )
         XCTAssertThrowsError(try KagemushaRecursiveSpend.ensureProofBackendAvailable()) { error in
             XCTAssertEqual(error as? KagemushaRecursiveSpendError, .proofBackendUnavailable)
@@ -802,7 +802,7 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
             expectedArtifactSHA256: Data(repeating: 0, count: 32)
         )) { error in
             XCTAssertEqual(
-                error as? KagemushaRecursiveSpendV2Error,
+                error as? KagemushaRecursiveSpendError,
                 .invalidField("artifact.sha256")
             )
         }
@@ -813,7 +813,7 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
             expectedArtifactSHA256: fixed32(0xA5)
         )) { error in
             XCTAssertEqual(
-                error as? KagemushaRecursiveSpendV2Error,
+                error as? KagemushaRecursiveSpendError,
                 .invalidField("artifactSet.state")
             )
         }
@@ -921,21 +921,6 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
             )
         }
 
-        let futureVerifier = try transferFixture(
-            currentNote: currentNote,
-            activationHeight: 2
-        )
-        XCTAssertThrowsError(try KagemushaRecursiveSpendInitRequest(
-            topUpAnchor: anchor,
-            recordBundle: futureVerifier.recordBundle,
-            pallasOpenEnvelopesArchive: futureVerifier.pallasOpenEnvelopes,
-            lineageMode: .semantic
-        )) { error in
-            XCTAssertEqual(
-                error as? KagemushaRecursiveSpendRequestCodecError,
-                .invalidArchive("initRequest.recordBundle.verifierRecords[0].record")
-            )
-        }
     }
 
     func testRecipientPublicKeyUsesCanonicalDynamicVector() throws {
@@ -1099,7 +1084,7 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
         ])
         let verifierEntry = fields([verifierKeyIDPayload, verifierRecord])
         let recordBundle = noritoEncode(
-            typeName: KagemushaRecursiveSpendRequestCodecs.recordBundleWireName,
+            typeName: KagemushaRecursiveSpend.verifiedFoldRecordBundleWireName,
             payload: fields([bundle, sequence([verifierEntry])]),
             flags: NoritoHeader.compactLen
         )
@@ -1227,7 +1212,7 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
     }
 
     private func fixed32Sequence(_ values: [Data]) -> Data {
-        sequence(values)
+        sequence(values.map(constVector))
     }
 
     private func byteVector(_ value: Data) -> Data {

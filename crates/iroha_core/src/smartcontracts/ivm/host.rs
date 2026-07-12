@@ -11876,18 +11876,6 @@ mod pointer_abi_tests {
         v
     }
 
-    fn quantity_frame(value: &Numeric) -> Vec<u8> {
-        let quantity = Quantity::from_canonical_numeric(value.clone())
-            .expect("canonical non-negative quantity");
-        QuantityValueV1::new(quantity)
-            .encode_frame()
-            .expect("encode quantity frame")
-    }
-
-    fn store_quantity(vm: &mut IVM, value: &Numeric) -> u64 {
-        store_tlv(vm, PointerType::Quantity, &quantity_frame(value))
-    }
-
     fn test_policy_snapshot(dsid: DataSpaceId, policy: AxtPolicyEntry) -> AxtPolicySnapshot {
         let binding = AxtPolicyBinding { dsid, policy };
         AxtPolicySnapshot {
