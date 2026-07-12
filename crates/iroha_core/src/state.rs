@@ -45786,6 +45786,42 @@ mod tiered_snapshot_diff_tests {
     }
 
     #[test]
+    fn sccp_snapshot_deserialization_rejects_inbound_high_water_drift() {
+        let assert_rejected = |world: World, label: &str, expected: &str| {
+            let error = decode_sccp_world_snapshot(world)
+                .err()
+                .unwrap_or_else(|| panic!("{label}: hostile high-water snapshot must fail"));
+            assert!(
+                error.to_string().contains(expected),
+                "{label}: unexpected snapshot error: {error}"
+            );
+        };
+
+        let (mut missing, _, _, _, _) = world_with_valid_sccp_inbound_history();
+        missing.sccp_inbound_anchor_high_water = Storage::default();
+        assert_rejected(missing, "missing entry", "missing an admitted anchor entry");
+
+        let (mut stale, key, record, _, _) = world_with_valid_sccp_inbound_history();
+        let high_water_key =
+            SccpInboundAnchorHighWaterKeyV1::new(key.lane, record.trust_anchor.anchor_hash)
+                .expect("valid high-water key");
+        stale
+            .sccp_inbound_anchor_high_water
+            .insert(high_water_key, record.anchor_interval_height + 1);
+        assert_rejected(
+            stale,
+            "stale maximum",
+            "does not equal recomputed admitted maximum",
+        );
+
+        let (mut extra, key, _, _, _) = world_with_valid_sccp_inbound_history();
+        let extra_key = SccpInboundAnchorHighWaterKeyV1::new(key.lane, [0xA7; 32])
+            .expect("well-formed forged high-water key");
+        extra.sccp_inbound_anchor_high_water.insert(extra_key, 1);
+        assert_rejected(extra, "unbacked entry", "extra unbacked entry");
+    }
+
+    #[test]
     fn sccp_replay_snapshot_rejects_stripping_both_replay_indexes() {
         let mut encoded = sccp_state_snapshot_value(World::default(), SCCP_SNAPSHOT_CHAIN_ID);
         let world = state_snapshot_world_mut(&mut encoded);
@@ -56800,7 +56836,7 @@ pub(crate) mod deserialize {
         let sccp_outbound_message_index = take_required(&mut map, "sccp_outbound_message_index")?;
         let sccp_outbound_proofs = take_required(&mut map, "sccp_outbound_proofs")?;
         let sccp_inbound_messages = take_required(&mut map, "sccp_inbound_messages")?;
-        let sccp_inbound_anchor_high_water =
+        let sccp_inbound_anchor_high_water: Storage<SccpInboundAnchorHighWaterKeyV1, u64> =
             take_required(&mut map, "sccp_inbound_anchor_high_water")?;
         validate_sccp_outbound_pending_messages(&sccp_outbound_pending_messages)?;
         validate_sccp_outbound_pending_usage(
@@ -56815,9 +56851,11 @@ pub(crate) mod deserialize {
         )?;
         validate_sccp_outbound_proofs(&sccp_outbound_proofs, &sccp_outbound_message_locator)?;
         validate_sccp_inbound_messages(&sccp_inbound_messages)?;
+        let sccp_inbound_messages_view = sccp_inbound_messages.view();
+        let sccp_inbound_anchor_high_water_view = sccp_inbound_anchor_high_water.view();
         validate_sccp_inbound_anchor_high_water_index(
-            &sccp_inbound_messages,
-            &sccp_inbound_anchor_high_water,
+            &sccp_inbound_messages_view,
+            &sccp_inbound_anchor_high_water_view,
         )
         .map_err(|message| json::Error::InvalidField {
             field: "world.sccp_inbound_anchor_high_water".to_owned(),
