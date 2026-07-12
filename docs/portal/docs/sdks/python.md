@@ -98,7 +98,7 @@ print(assets, txs, holders)
 ## 5. Offline readiness
 
 Readiness is evaluated for one exact asset definition. Pass its canonical ID to
-`get_offline_readiness`; for example, the call below sends
+`get_kagemusha_readiness`; for example, the call below sends
 `GET /v1/offline/readiness?asset_definition_id=xor%23wonderland`. A successful
 response sets `ready` to `True` exactly when its typed `blockers` tuple is empty.
 An unmet requirement is a normal `ready == False` result; HTTP `503` is reserved
@@ -108,19 +108,24 @@ for an evaluation failure.
 from iroha_python import ToriiClient
 
 client = ToriiClient("http://127.0.0.1:8080")
-readiness = client.get_offline_readiness(asset_definition_id="xor#wonderland")
+readiness = client.get_kagemusha_readiness(asset_definition_id="xor#wonderland")
 print(
     "offline ready",
     readiness.ready,
+    readiness.required_bridge_abi_version,
     readiness.active_transfer_verifier,
     readiness.active_topup_shield_verifier,
+    readiness.active_unshield_verifier,
+    readiness.active_recursive_transition_verifier,
+    readiness.active_recursive_state_verifier,
     readiness.blockers,
 )
 ```
 
-The two verifier fields are required nullable snapshots for distinct roles.
-Each is null exactly with its matching unavailable blocker, and `ready=True`
-requires both to be active at the evaluated block.
+All five verifier fields are required nullable snapshots for distinct roles.
+Each is null exactly with its matching unavailable blocker. `ready=True`
+requires bridge ABI 19, all five active verifiers, the production proof
+backend, and recursive lineage support.
 ## 6. Stream events
 
 Torii SSE helpers return live-only generators. They may reconnect within the

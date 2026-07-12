@@ -51,10 +51,8 @@ pub const OFFLINE_DEVICE_ATTESTATION_ANDROID_KEYMINT_ASSERTION_SCHEME: &str =
 pub const OFFLINE_DEVICE_ATTESTATION_ANDROID_KEYMINT_ASSERTION_KEY_ALGORITHM: &str =
     "ecdsa-p256-sha256";
 
-/// Sole first-release product selector for recursive spend-again offline cash.
-pub const KAGEMUSHA_RECURSIVE_SPEND_PRODUCT_MODE_V1: &str = "recursive_spend_v1";
-/// Internal mode bound into ABI-18 native capability and V3 artifact records.
-pub const KAGEMUSHA_RECURSIVE_SPEND_MODE_V2: &str = "recursive_spend_v2";
+/// Sole Kagemusha mode bound into ABI-19 native capability and V3 artifact records.
+pub const KAGEMUSHA_RECURSIVE_SPEND_MODE: &str = "recursive_spend_v1";
 /// Maximum asset scale accepted by the exact Kagemusha V2 amount contract.
 pub const KAGEMUSHA_SCALED_AMOUNT_MAX_SCALE_V2: u32 = 28;
 /// Fixed depth-16 confidential tree capacity used by top-up shielding.
@@ -180,7 +178,7 @@ pub const KAGEMUSHA_REDEMPTION_TRANSITION_DIGEST_DOMAIN_V2: &str =
 pub const KAGEMUSHA_UNSHIELD_PUBLIC_INPUTS_DIGEST_DOMAIN_V2: &str =
     "iroha:kagemusha:v2:unshield-public-inputs";
 /// Native bridge ABI that first advertises the fail-closed Pasta-cycle V3 contract.
-pub const KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3: u32 = 18;
+pub const KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3: u32 = 19;
 /// Exact schema identifier for the production recursive-spend artifact manifest.
 pub const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V3: &str =
     "kagemusha.offline.recursive_spend.artifact_manifest.v3";
@@ -252,24 +250,11 @@ pub const KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_MAX_BYTES_V2: u64 = 2 * 1024 
 /// The public V2 statement is defined so SDKs can converge on one wire contract,
 /// but it must remain fail-closed until the recursive proof binds both sibling
 /// branches and their independent redemption nullifiers.
-pub const KAGEMUSHA_RECURSIVE_SPEND_V2_PROOF_BACKEND_AVAILABLE: bool = false;
+pub const KAGEMUSHA_RECURSIVE_SPEND_PROOF_BACKEND_AVAILABLE: bool = false;
 /// Canonical verifier-record namespace for Kagemusha proof admission.
 pub const KAGEMUSHA_VERIFIER_NAMESPACE: &str = "offline_kagemusha";
 /// Transparent backend used by the independent confidential transfer circuits.
 pub const KAGEMUSHA_CONFIDENTIAL_PROOF_BACKEND: &str = "halo2/ipa";
-
-/// Return the sole public Kagemusha product mode when the authenticated V3
-/// recursion backend is ready.
-#[must_use]
-pub const fn preferred_kagemusha_offline_spend_mode(
-    pasta_cycle_v3_backend_available: bool,
-) -> Option<&'static str> {
-    if pasta_cycle_v3_backend_available {
-        Some(KAGEMUSHA_RECURSIVE_SPEND_PRODUCT_MODE_V1)
-    } else {
-        None
-    }
-}
 
 /// Registry schema hash for the V3 transition verifier record.
 #[must_use]
@@ -672,6 +657,10 @@ mod model {
         pub topup_anchor: KagemushaRecursiveSpendTopUpAnchorV2,
         /// Offline-verifiable proof that consensus finalized this exact anchor.
         pub topup_finality_proof: KagemushaTopUpFinalityProofV2,
+        /// Exact content-addressed validator roster selected by the installed
+        /// release manifest. Embedding it makes init one atomic native trust
+        /// decision instead of relying on a preceding verifier call.
+        pub topup_finality_roster_artifact: KagemushaTopUpFinalityRosterArtifactV2,
         /// Authenticated artifact release installed before offline operation.
         pub artifact_binding: KagemushaRecursiveSpendArtifactBindingV3,
     }
@@ -743,7 +732,7 @@ mod model {
     ///
     /// Top-up is deliberately two-phase: the chain first settles the public
     /// debit and confidential transfer, then the wallet proves the initial
-    /// Reserved recursive state against this immutable receipt.
+    /// Recursive state proof bound to this immutable receipt.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
@@ -1050,7 +1039,7 @@ mod model {
     /// spendable recipient and optional change branches.
     ///
     /// The current bridge deliberately exposes no prover entrypoint for this
-    /// request while [`KAGEMUSHA_RECURSIVE_SPEND_V2_PROOF_BACKEND_AVAILABLE`]
+    /// request while [`KAGEMUSHA_RECURSIVE_SPEND_PROOF_BACKEND_AVAILABLE`]
     /// is false.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -1629,7 +1618,7 @@ mod model {
         pub output: KagemushaSpendableNoteDescriptorV2,
         /// Deterministic transition-bound change children of every consumed claim.
         pub branch_claims: Vec<KagemushaRecursiveSpendBranchClaimV2>,
-        /// Reserved recursive proof making that child independently spendable.
+        /// Recursive proof making that child independently spendable.
         pub bundle: KagemushaRecursiveSpendBundleV2,
     }
 
@@ -3274,7 +3263,7 @@ impl KagemushaRecursiveSpendArtifactManifestV3 {
         if self.schema != KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V3
             || self.version != KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_VERSION_V3
             || self.bridge_abi_version != KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3
-            || self.mode != KAGEMUSHA_RECURSIVE_SPEND_MODE_V2
+            || self.mode != KAGEMUSHA_RECURSIVE_SPEND_MODE
             || self.proof_backend != KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1
             || self.transcript_profile != KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V1
             || !is_kagemusha_v3_portable_identifier(&self.generation)
@@ -3380,7 +3369,7 @@ impl KagemushaRecursiveSpendNativeCapabilitiesV1 {
         if self.bridge_abi_version != KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3
             || self.artifact_manifest_schema
                 != KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V3
-            || self.mode != KAGEMUSHA_RECURSIVE_SPEND_MODE_V2
+            || self.mode != KAGEMUSHA_RECURSIVE_SPEND_MODE
             || self.proof_backend != KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1
             || self.transcript_profile != KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V1
             || self.proof_envelope_version
@@ -3389,7 +3378,7 @@ impl KagemushaRecursiveSpendNativeCapabilitiesV1 {
             || self.transition_circuit_id != KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_EQ_CIRCUIT_ID_V1
             || self.state_circuit_id != KAGEMUSHA_RECURSIVE_SPEND_STATE_EP_CIRCUIT_ID_V1
             || self.max_proof_bytes != KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROOF_BYTES_V3
-            || self.proof_backend_available != KAGEMUSHA_RECURSIVE_SPEND_V2_PROOF_BACKEND_AVAILABLE
+            || self.proof_backend_available != KAGEMUSHA_RECURSIVE_SPEND_PROOF_BACKEND_AVAILABLE
             || (self.proof_backend_available && !self.missing_gates.is_empty())
             || (!self.proof_backend_available && self.missing_gates != kagemusha_v3_missing_gates())
         {
@@ -3408,7 +3397,7 @@ pub fn kagemusha_recursive_spend_native_capabilities_v1()
     KagemushaRecursiveSpendNativeCapabilitiesV1 {
         bridge_abi_version: KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3,
         artifact_manifest_schema: KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V3.to_owned(),
-        mode: KAGEMUSHA_RECURSIVE_SPEND_MODE_V2.to_owned(),
+        mode: KAGEMUSHA_RECURSIVE_SPEND_MODE.to_owned(),
         proof_backend: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1.to_owned(),
         transcript_profile: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V1.to_owned(),
         proof_envelope_version: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_PROOF_ENVELOPE_VERSION_V1,
@@ -3416,8 +3405,8 @@ pub fn kagemusha_recursive_spend_native_capabilities_v1()
         transition_circuit_id: KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_EQ_CIRCUIT_ID_V1.to_owned(),
         state_circuit_id: KAGEMUSHA_RECURSIVE_SPEND_STATE_EP_CIRCUIT_ID_V1.to_owned(),
         max_proof_bytes: KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROOF_BYTES_V3,
-        proof_backend_available: KAGEMUSHA_RECURSIVE_SPEND_V2_PROOF_BACKEND_AVAILABLE,
-        missing_gates: if KAGEMUSHA_RECURSIVE_SPEND_V2_PROOF_BACKEND_AVAILABLE {
+        proof_backend_available: KAGEMUSHA_RECURSIVE_SPEND_PROOF_BACKEND_AVAILABLE,
+        missing_gates: if KAGEMUSHA_RECURSIVE_SPEND_PROOF_BACKEND_AVAILABLE {
             Vec::new()
         } else {
             kagemusha_v3_missing_gates()
@@ -3430,7 +3419,6 @@ fn kagemusha_v3_missing_gates() -> Vec<String> {
         "opposite_field_pasta_loader",
         "cross_field_poseidon_transcript",
         "two_layer_recursive_accumulator",
-        "topup_finality_bound_init",
         "authenticated_release_envelope",
         "independent_cryptographic_review",
         "physical_device_performance_evidence",
@@ -3660,7 +3648,7 @@ impl KagemushaRecursiveSpendTopUpAnchorV2 {
         Ok(self)
     }
 
-    /// Compute the digest bound into the later Reserved init/redemption proof.
+    /// Compute the digest bound into the later recursive init/redemption proof.
     pub fn compute_anchor_digest(&self) -> Result<[u8; 32], KagemushaValidationError> {
         kagemusha_poseidon_preimage(&KagemushaTopUpAnchorDigestPreimageV2 {
             domain: KAGEMUSHA_TOPUP_ANCHOR_DIGEST_DOMAIN_V2.to_owned(),
@@ -4745,11 +4733,13 @@ impl KagemushaRecursiveSpendInitRequestV2 {
     pub fn new(
         topup_anchor: KagemushaRecursiveSpendTopUpAnchorV2,
         topup_finality_proof: KagemushaTopUpFinalityProofV2,
+        topup_finality_roster_artifact: KagemushaTopUpFinalityRosterArtifactV2,
         artifact_binding: KagemushaRecursiveSpendArtifactBindingV3,
     ) -> Result<Self, KagemushaValidationError> {
         let request = Self {
             topup_anchor,
             topup_finality_proof,
+            topup_finality_roster_artifact,
             artifact_binding,
         };
         request.validate_public_binding()?;
@@ -4760,11 +4750,16 @@ impl KagemushaRecursiveSpendInitRequestV2 {
     pub fn validate_public_binding(&self) -> Result<(), KagemushaValidationError> {
         self.topup_anchor.validate_public_binding()?;
         self.topup_finality_proof.validate_structure()?;
+        self.topup_finality_roster_artifact
+            .validate_structure()?;
         self.artifact_binding.validate()?;
         if self.artifact_binding != self.topup_anchor.artifact_binding
             || self.topup_finality_proof.anchor != self.topup_anchor.compact_ref()?
             || self.topup_finality_proof.commit_qc.height_context.height
                 != self.topup_anchor.finalized_height
+            || self.topup_finality_roster_artifact.chain_id != self.topup_anchor.chain_id
+            || self.topup_finality_roster_artifact.artifact_generation
+                != self.artifact_binding.generation
         {
             return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
                 field: "init_request",
@@ -5199,7 +5194,7 @@ impl KagemushaRecursiveSpendRedeemBuildRequestV2 {
 }
 
 impl KagemushaRecursiveSpendPublicStatementV2 {
-    /// Validate the canonical Reserved recursive state statement.
+    /// Validate the canonical recursive state statement.
     pub fn validate_context(&self) -> Result<(), KagemushaValidationError> {
         self.current_note.validate_public_binding()?;
         self.artifact_binding.validate()?;

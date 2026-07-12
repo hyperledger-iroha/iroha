@@ -2804,6 +2804,60 @@ public extension IrohaSDK {
         return try await toriiRestClient.getAssets(accountId: accountId, limit: limit, asset: asset, scope: scope)
     }
 
+    func prepareDetachedAssetTransfer(
+        _ request: ToriiAssetTransferRequest
+    ) async throws -> ToriiAssetTransferDraft {
+        guard let toriiRestClient else {
+            throw Self.restUnavailableError()
+        }
+        return try await toriiRestClient.prepareDetachedAssetTransfer(request)
+    }
+
+    func submitDetachedAssetTransfer(
+        _ draft: ToriiAssetTransferDraft,
+        publicKeyHex: String,
+        signatureBase64: String
+    ) async throws -> ToriiAssetTransferResponse {
+        guard let toriiRestClient else {
+            throw Self.restUnavailableError()
+        }
+        return try await toriiRestClient.submitDetachedAssetTransfer(
+            draft,
+            publicKeyHex: publicKeyHex,
+            signatureBase64: signatureBase64
+        )
+    }
+
+    func submitDetachedAssetTransfer(
+        _ draft: ToriiAssetTransferDraft,
+        signingKey: SigningKey
+    ) async throws -> ToriiAssetTransferResponse {
+        guard let toriiRestClient else {
+            throw Self.restUnavailableError()
+        }
+        return try await toriiRestClient.submitDetachedAssetTransfer(
+            draft,
+            signingKey: signingKey
+        )
+    }
+
+    func waitForDetachedAssetTransferFinality(
+        _ draft: ToriiAssetTransferDraft,
+        submittedResponse: ToriiAssetTransferResponse,
+        pollOptions: PipelineStatusPollOptions? = nil,
+        mode: PipelineEndpointMode? = nil
+    ) async throws -> ToriiPipelineTransactionStatus {
+        guard let toriiRestClient else {
+            throw Self.restUnavailableError()
+        }
+        return try await toriiRestClient.waitForDetachedAssetTransferFinality(
+            draft,
+            submittedResponse: submittedResponse,
+            pollOptions: pollOptions ?? pipelinePollOptions,
+            mode: mode ?? pipelineEndpointMode
+        )
+    }
+
     func iterateAccountTransferHistory(accountId: String,
                                        page: UInt64? = nil,
                                        perPage: UInt64? = nil,

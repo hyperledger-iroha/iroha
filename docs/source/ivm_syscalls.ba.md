@@ -36,13 +36,13 @@ translator: machine-google-reviewed
 Канонлы syscall таблицаһы (субсет)| Hex | Исем | Аргументтар (`r10+`-та) | Ҡайтарыу | Газ (нигеҙ + үҙгәртеүсән) | Иҫкәрмәләр |
 |------------------------------------------------------------------------------------------------------------------ --------------------------------------|--------------------------|------------------ |
 | 0x1А | SET_ACCOUNT_DAIL | `&AccountId`, `&Name`, `&Json` | `u64=0` | `G_set_detail + bytes(val)` | Иҫәп яҙмаһы өсөн деталь яҙа |
-| 0х22 | МИНТ_АССЕТ | `&AccountId`, `&AssetDefinitionId`, `&Amount` | `u64=0` | `G_mint` | Минтс `amount` актив иҫәпкә алыу өсөн |
-| 0х23 | БУРН_АССЕТ | `&AccountId`, `&AssetDefinitionId`, `&Amount` | `u64=0` | `G_burn` | Бернс `amount` иҫәбенә |
-| 0x24 | TRANSFER_V1 | `&AccountId(from)`, `&AccountId(to)`, `&AssetDefinitionId`, `&Amount` | `u64=0` | `G_transfer` | Batch-internal FASTPQ transfer; `transfer_batch` coalesces entries on this path |
+| 0х22 | МИНТ_АССЕТ | `&AccountId`, `&AssetDefinitionId`, `&QuantityValueV1` | `u64=0` | `G_mint` | Минтс `amount` актив иҫәпкә алыу өсөн |
+| 0х23 | БУРН_АССЕТ | `&AccountId`, `&AssetDefinitionId`, `&QuantityValueV1` | `u64=0` | `G_burn` | Бернс `amount` иҫәбенә |
+| 0x24 | TRANSFER_V1 | `&AccountId(from)`, `&AccountId(to)`, `&AssetDefinitionId`, `&QuantityValueV1` | `u64=0` | `G_transfer` | Batch-internal FASTPQ transfer; `transfer_batch` coalesces entries on this path |
 | 0х29 | ТРАНСФЕР_В1_БАТЧ_БЕГИН | – | `u64=0` | `G_transfer` | FASTPQ тапшырыу партияһы күләмен башлай |
 | 0х2А | ТРАНСФЕР_В1_БАТЧ_ЭНД | – | `u64=0` | `G_transfer` | Флаш тупланған FASTPQ тапшырыу партияһы |
 | 0x2B | ТРАНСФЕР_В1_БАТЧ_СУЛ | `r10=&NoritoBytes(TransferAssetBatch)` | `u64=0` | `G_transfer` | Ҡулланыу Norito-кодланған партия бер syscall |
-| 0x2C | TRANSFER_ASSET_SCOPED | `&AccountId(from)`, `&AccountId(to)`, `&AssetDefinitionId`, `&Amount`, `&DataSpaceId` | `u64=0` | `G_transfer` | Standalone `transfer_asset` path; global assets use global source balances and dataspace-restricted assets use `r14` |
+| 0x2C | TRANSFER_ASSET_SCOPED | `&AccountId(from)`, `&AccountId(to)`, `&AssetDefinitionId`, `&QuantityValueV1`, `&DataSpaceId` | `u64=0` | `G_transfer` | Standalone `transfer_asset` path; global assets use global source balances and dataspace-restricted assets use `r14` |
 | 0х25 | NFT_MINT_ASSET | `&NftId`, `&AccountId(owner)` | `u64=0` | `G_nft_mint_asset` | Яңы НФТ теркәү |
 | 0х26 | NFT_TRANSFER_ASSET | `&AccountId(from)`, `&NftId`, `&AccountId(to)` | `u64=0` | `G_nft_transfer_asset` | НФТ-ға милек хоҡуғын күсерә |
 | 0х27 | NFT_SET_METADATA | `&NftId`, `&Name`, `&Json` | `u64=0` | `G_nft_set_metadata` | Яңыртыу НФТ метамағлүмәттәр |

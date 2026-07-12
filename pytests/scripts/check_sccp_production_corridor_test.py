@@ -148,6 +148,7 @@ def test_evidence_phase_builds_and_uses_production_validator() -> None:
     trace = dry_run("evidence-scripts").stdout
     assert "cargo build --locked -p iroha_sccp --bin sccp_release_evidence" in trace
     assert "pytests/scripts/sccp_release_tooling_test.py" in trace
+    assert "pytests/scripts/sccp_release_fixture_reseal_test.py" in trace
     assert "scripts/sccp_release_fixture.py" in trace
     assert " validate" in trace
     assert " build --output-dir" in trace
@@ -253,13 +254,15 @@ def test_retired_operator_surface_is_physically_absent() -> None:
         "sccp_release_bundle.py",
         "sccp_release_common.py",
         "sccp_release_fixture.py",
+        "sccp_release_fixture_reseal.py",
         "sccp_release_readiness_report.py",
         "sccp_verify_release_bundle.py",
     }
     actual = {path.name for path in (ROOT / "scripts").glob("sccp*")}
     assert actual == allowed
     assert {path.name for path in (ROOT / "pytests" / "scripts").glob("sccp*_test.py")} == {
-        "sccp_release_tooling_test.py"
+        "sccp_release_fixture_reseal_test.py",
+        "sccp_release_tooling_test.py",
     }
 
 

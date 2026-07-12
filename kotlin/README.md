@@ -8,7 +8,7 @@ Not published to Maven Central yet. Build locally and consume via `mavenLocal()`
 
 | Artifact | Type | Description |
 |----------|------|-------------|
-| `org.hyperledger.iroha.sdk:core-jvm` | JAR | Pure Kotlin/JVM models, codec, crypto, clients, and ABI-18 artifact streaming |
+| `org.hyperledger.iroha.sdk:core-jvm` | JAR | Pure Kotlin/JVM models, codec, crypto, clients, and ABI-19 artifact streaming |
 | `org.hyperledger.iroha.sdk:client-android` | AAR | Android keystore, device telemetry, IrohaKeyManager, shared JNI bridge for ML-DSA / offline flows |
 
 ### Consumer usage
@@ -47,7 +47,7 @@ have a gap.
 ### Kagemusha proof artifacts
 
 The JVM packages do not expose an offline-spend lifecycle. `core-jvm` retains only the exact
-ABI-18 Kagemusha V3 artifact streaming and backend-capability bridge. It installs exactly six
+ABI-19 Kagemusha V3 artifact streaming and backend-capability bridge. It installs exactly six
 Pasta artifacts atomically: transition and state parameters, proving keys, and verifying keys.
 The top-up-finality roster is authenticated release metadata, not a seventh proof-key stream.
 

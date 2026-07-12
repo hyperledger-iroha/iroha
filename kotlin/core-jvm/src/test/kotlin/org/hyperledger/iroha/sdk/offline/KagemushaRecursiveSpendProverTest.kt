@@ -7,31 +7,22 @@ import kotlin.test.assertTrue
 
 class KagemushaRecursiveSpendProverTest {
     @Test
-    fun exactAbi18IsRequired() {
-        assertTrue(KagemushaRecursiveSpendProver.isExactBridgeAbi(18))
-        assertFalse(KagemushaRecursiveSpendProver.isExactBridgeAbi(17))
-        assertFalse(KagemushaRecursiveSpendProver.isExactBridgeAbi(19))
+    fun exactAbi19IsRequired() {
+        assertTrue(KagemushaRecursiveSpendProver.isExactBridgeAbi(19))
+        assertFalse(KagemushaRecursiveSpendProver.isExactBridgeAbi(20))
         assertTrue(
             KagemushaRecursiveSpendProver.detectExactNativeAvailability(
                 loadLibrary = {},
-                abiVersion = { 18 },
-                symbolProbe = { true },
-            ),
-        )
-        assertFalse(
-            KagemushaRecursiveSpendProver.detectExactNativeAvailability(
-                loadLibrary = {},
-                abiVersion = { 17 },
+                abiVersion = { 19 },
                 symbolProbe = { true },
             ),
         )
     }
 
     @Test
-    fun publicModesAndInventoryAreCurrentOnly() {
-        assertEquals("recursive_spend_v1", KagemushaRecursiveSpendProver.PRODUCT_MODE)
-        assertEquals("recursive_spend_v2", KagemushaRecursiveSpendProver.ARTIFACT_MANIFEST_MODE)
-        assertEquals(18, KagemushaRecursiveSpendProver.REQUIRED_NATIVE_BRIDGE_ABI_VERSION)
+    fun artifactContractAndInventoryAreCurrentOnly() {
+        assertEquals("recursive_spend_v1", KagemushaRecursiveSpendProver.ARTIFACT_MANIFEST_MODE)
+        assertEquals(19, KagemushaRecursiveSpendProver.REQUIRED_NATIVE_BRIDGE_ABI_VERSION)
         assertEquals(6, KagemushaRecursiveSpendProver.ARTIFACT_COUNT)
         assertEquals(
             "kagemusha.offline.recursive_spend.artifact_manifest.v3",

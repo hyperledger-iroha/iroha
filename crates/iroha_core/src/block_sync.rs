@@ -79,7 +79,6 @@ pub mod message {
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
     use iroha_crypto::KeyPair;
@@ -120,4 +119,3 @@ mod tests {
         );
     }
 }
-

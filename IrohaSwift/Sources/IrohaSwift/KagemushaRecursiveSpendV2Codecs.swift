@@ -230,6 +230,11 @@ public enum KagemushaRecursiveSpendCodecs {
             schema: KagemushaRecursiveSpend.topUpFinalityProofWireName,
             field: "topUpFinalityProof"
         ))
+        writer.writeField(try nestedPayload(
+            request.topUpFinalityRosterArtifact.noritoArchive,
+            schema: KagemushaRecursiveSpend.topUpFinalityRosterArtifactWireName,
+            field: "topUpFinalityRosterArtifact"
+        ))
         writer.writeField(artifactBinding(request.artifactBinding))
         return frame(KagemushaRecursiveSpend.initRequestWireName, payload: writer.data)
     }
@@ -250,6 +255,10 @@ public enum KagemushaRecursiveSpendCodecs {
             KagemushaRecursiveSpend.topUpFinalityProofWireName,
             payload: try reader.field()
         )
+        let finalityRosterArtifact = frame(
+            KagemushaRecursiveSpend.topUpFinalityRosterArtifactWireName,
+            payload: try reader.field()
+        )
         let binding = try decodeArtifactBinding(reader.field())
         try reader.finish("initRequest")
         let anchor = try decodeTopUpAnchor(anchorArchive)
@@ -262,6 +271,9 @@ public enum KagemushaRecursiveSpendCodecs {
             topUpAnchor: anchor,
             topUpFinalityProof: KagemushaTopUpFinalityProofArchive(
                 noritoArchive: finalityProof
+            ),
+            topUpFinalityRosterArtifact: KagemushaTopUpFinalityRosterArtifactArchive(
+                noritoArchive: finalityRosterArtifact
             )
         )
         guard try encodeInitRequest(request) == archive else {

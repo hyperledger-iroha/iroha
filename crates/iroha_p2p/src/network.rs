@@ -933,6 +933,15 @@ mod data_frame_wire_len_tests {
         body: Vec<u8>,
     }
 
+    #[derive(Clone, Debug, Decode, Encode)]
+    struct DeniedDummy;
+
+    impl message::ClassifyTopic for DeniedDummy {
+        fn is_outbound_allowed(&self) -> bool {
+            false
+        }
+    }
+
     #[test]
     fn data_frame_wire_len_matches_manual_envelope() {
         let origin = PeerId::from(KeyPair::random().public_key().clone());
@@ -1027,6 +1036,20 @@ mod data_frame_wire_len_tests {
             RelayTarget::Direct(peer_id) => assert_eq!(peer_id, target),
             RelayTarget::Broadcast => panic!("expected direct relay target"),
         }
+    }
+
+    #[test]
+    fn relay_message_preserves_outbound_admission_policy() {
+        let origin = PeerId::from(KeyPair::random().public_key().clone());
+        let frame = RelayMessage::new(
+            origin,
+            RelayTarget::Broadcast,
+            1,
+            message::Priority::High,
+            DeniedDummy,
+        );
+
+        assert!(!frame.is_outbound_allowed());
     }
 }
 
@@ -7573,7 +7596,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
         frame: RelayMessage<T>,
         topic: message::Topic,
     ) -> bool {
-        if !frame.is_outbound_allowed() {
+        if !message::ClassifyTopic::is_outbound_allowed(&frame) {
             iroha_logger::warn!(
                 peer = %peer_id,
                 ?topic,

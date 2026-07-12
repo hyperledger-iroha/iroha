@@ -77,6 +77,7 @@ export {
   decodePdpCommitmentHeader,
   buildConnectWebSocketUrl,
   encryptIdentifierInputForPolicy,
+  hashIdentifierEncryptedInput,
   encodeIdentifierResolutionReceiptAttestation,
   encodeIdentifierResolutionReceiptPayload,
   buildIdentifierRequestForPolicy,

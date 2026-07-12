@@ -12511,6 +12511,37 @@ impl Compiler {
                     Ok(0)
                 }
             };
+            let load_pointer_value = |temp: &ir::Temp,
+                                      target: u8,
+                                      scratch: u8,
+                                      expected_kind: ir::DataRefKind,
+                                      code: &mut Vec<u8>|
+             -> Result<(), String> {
+                if let Some(literal) = string_map.get(&(func_idx, *temp)) {
+                    let actual_kind = dataref_kind_map
+                        .get(&(func_idx, *temp))
+                        .copied()
+                        .ok_or_else(|| {
+                            format!("pointer literal {:?} has no ABI kind metadata", temp)
+                        })?;
+                    if actual_kind != expected_kind {
+                        return Err(format!(
+                            "pointer literal {:?} has ABI kind {actual_kind:?}, expected {expected_kind:?}",
+                            temp
+                        ));
+                    }
+                    emit_literal_load(
+                        code,
+                        &fixups,
+                        target,
+                        data_key_for_pointer(actual_kind, literal),
+                    );
+                } else {
+                    let source = src_reg(temp, scratch, code)?;
+                    push_word(code, encode_addi(target, source, 0)?);
+                }
+                Ok(())
+            };
             let dst_reg = |t: &ir::Temp| -> (u8, bool, i64) {
                 if let Some(r) = alloc.regs.get(t) {
                     (*r as u8, false, 0)
@@ -13084,9 +13115,8 @@ impl Compiler {
                                 let r_asset = src_reg(asset, scratch2, &mut code)?;
                                 push_word(&mut code, encode_addi(11, r_asset, 0)?);
                             }
-                            // r12 = amount
-                            let r_amt = src_reg(amount, scratch1, &mut code)?;
-                            push_word(&mut code, encode_addi(12, r_amt, 0)?);
+                            // r12 = &Quantity
+                            load_pointer_value(amount, 12, scratch1, DRK::Quantity, &mut code)?;
 
                             // Mirror TLVs for r10 and r11 into INPUT to satisfy pointer-ABI validation.
                             let pub_word = encoding::wide::encode_sys(
@@ -13117,7 +13147,6 @@ impl Compiler {
                             asset,
                             amount,
                         } => {
-                            let r_amt = src_reg(amount, scratch1, &mut code)?;
                             // r10 = &AccountId
                             if let Some(k_acc) = string_map
                                 .get(&(func_idx, *account))
@@ -13138,7 +13167,7 @@ impl Compiler {
                                 let r_asset = src_reg(asset, scratch2, &mut code)?;
                                 push_word(&mut code, encode_addi(11, r_asset, 0)?);
                             }
-                            push_word(&mut code, encode_addi(12, r_amt, 0)?);
+                            load_pointer_value(amount, 12, scratch1, DRK::Quantity, &mut code)?;
                             // Mirror TLVs for r10 and r11 into INPUT to satisfy pointer‑ABI validation.
                             let pub_word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
@@ -14352,7 +14381,6 @@ impl Compiler {
                             dataspace,
                         } => {
                             // Pointer-ABI: accept literal pointers (from string_map) or runtime pointers.
-                            let r_amt = src_reg(amount, scratch1, &mut code)?;
                             if let Some(from_str) = string_map
                                 .get(&(func_idx, *from))
                                 .map(|s| DataKey(DataKind::Account, s.clone()))
@@ -14380,7 +14408,7 @@ impl Compiler {
                                 let r_asset = src_reg(asset, scratch2, &mut code)?;
                                 push_word(&mut code, encode_addi(12, r_asset, 0)?);
                             }
-                            push_word(&mut code, encode_addi(13, r_amt, 0)?);
+                            load_pointer_value(amount, 13, scratch1, DRK::Quantity, &mut code)?;
                             if let Some(dataspace_str) = string_map
                                 .get(&(func_idx, *dataspace))
                                 .map(|s| DataKey(DataKind::DataSpaceId, s.clone()))
@@ -14429,7 +14457,6 @@ impl Compiler {
                             asset,
                             amount,
                         } => {
-                            let r_amt = src_reg(amount, scratch1, &mut code)?;
                             if let Some(from_str) = string_map
                                 .get(&(func_idx, *from))
                                 .map(|s| DataKey(DataKind::Account, s.clone()))
@@ -14457,7 +14484,7 @@ impl Compiler {
                                 let r_asset = src_reg(asset, scratch2, &mut code)?;
                                 push_word(&mut code, encode_addi(12, r_asset, 0)?);
                             }
-                            push_word(&mut code, encode_addi(13, r_amt, 0)?);
+                            load_pointer_value(amount, 13, scratch1, DRK::Quantity, &mut code)?;
                             let pub_word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
                                 syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
@@ -14486,7 +14513,6 @@ impl Compiler {
                             amount,
                             evidence_hashes,
                         } => {
-                            let r_amount = src_reg(amount, scratch1, &mut code)?;
                             if let Some(escrow_str) = string_map
                                 .get(&(func_idx, *escrow))
                                 .map(|s| DataKey(DataKind::Name, s.clone()))
@@ -14505,7 +14531,7 @@ impl Compiler {
                                 let r_asset = src_reg(asset, scratch2, &mut code)?;
                                 push_word(&mut code, encode_addi(11, r_asset, 0)?);
                             }
-                            push_word(&mut code, encode_addi(12, r_amount, 0)?);
+                            load_pointer_value(amount, 12, scratch1, DRK::Quantity, &mut code)?;
                             let pub_word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
                                 syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
@@ -14602,10 +14628,20 @@ impl Compiler {
                             seller_amount,
                             evidence_hashes,
                         } => {
-                            let r_buyer = src_reg(buyer_amount, scratch1, &mut code)?;
-                            let r_seller = src_reg(seller_amount, scratch2, &mut code)?;
-                            push_word(&mut code, encode_addi(11, r_buyer, 0)?);
-                            push_word(&mut code, encode_addi(12, r_seller, 0)?);
+                            load_pointer_value(
+                                buyer_amount,
+                                11,
+                                scratch1,
+                                DRK::Quantity,
+                                &mut code,
+                            )?;
+                            load_pointer_value(
+                                seller_amount,
+                                12,
+                                scratch2,
+                                DRK::Quantity,
+                                &mut code,
+                            )?;
                             if let Some(escrow_str) = string_map
                                 .get(&(func_idx, *escrow))
                                 .map(|s| DataKey(DataKind::Name, s.clone()))

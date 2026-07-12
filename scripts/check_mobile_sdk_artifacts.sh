@@ -332,13 +332,16 @@ check_xcframework() {
       fi
     done
 
-    require_regex "$manifest" '"native_bridge_abi_version"[[:space:]]*:[[:space:]]*18([[:space:]]*[,}])' "exact first-release NoritoBridge ABI 18"
+    require_regex "$manifest" '"native_bridge_abi_version"[[:space:]]*:[[:space:]]*19([[:space:]]*[,}])' "exact first-release NoritoBridge ABI 19"
     require_regex "$manifest" '"source_commit"[[:space:]]*:[[:space:]]*"[[:xdigit:]]{40}"' "NoritoBridge source commit"
     require_regex "$manifest" '"source_tree_dirty"[[:space:]]*:[[:space:]]*(true|false)' "NoritoBridge source dirty state"
     require_regex "$manifest" '"source_fingerprint_sha256"[[:space:]]*:[[:space:]]*"[[:xdigit:]]{64}"' "NoritoBridge source fingerprint"
     require_regex "$manifest" '"bridge_header_sha256"[[:space:]]*:[[:space:]]*"[[:xdigit:]]{64}"' "NoritoBridge header hash"
     local required_symbols=(
       connect_norito_bridge_abi_version
+      connect_norito_detached_transaction_scaffold_inspect_v1
+      connect_norito_detached_transaction_scaffold_finalize_ed25519_v1
+      connect_norito_canonical_json_blake3_v1
       connect_norito_kagemusha_recursive_spend_capabilities_v1
       connect_norito_kagemusha_topup_finality_verify_v2
       connect_norito_kagemusha_topup_shield_build_unsigned_v2
@@ -354,7 +357,6 @@ check_xcframework() {
       connect_norito_kagemusha_recursive_spend_topup_finalize_request_v2
       connect_norito_kagemusha_recursive_spend_topup_v2
       connect_norito_kagemusha_recursive_spend_append_v2
-      connect_norito_kagemusha_recursive_spend_redeem_change_v2
       connect_norito_kagemusha_recursive_spend_verify_v2
       connect_norito_kagemusha_recursive_spend_redeem_unsigned_payload_digest_v2
       connect_norito_kagemusha_recursive_spend_redeem_finalize_request_v2
@@ -374,7 +376,6 @@ check_xcframework() {
       connect_norito_kagemusha_recursive_spend_peer_payment_validate_v2
       connect_norito_kagemusha_recursive_spend_bundle_summary_v2
       connect_norito_kagemusha_recursive_spend_build_split_intent_v2
-      connect_norito_kagemusha_recursive_spend_build_redemption_intent_v2
     )
     if ! python3 - "$manifest" "${required_symbols[@]}" <<'PY'
 import json
@@ -411,8 +412,8 @@ PY
       local source_abi manifest_abi source_commit manifest_commit source_dirty manifest_dirty source_fingerprint manifest_fingerprint
       source_abi="$(sed -nE 's/.*CONNECT_NORITO_BRIDGE_ABI_VERSION:[[:space:]]*u32[[:space:]]*=[[:space:]]*([0-9]+).*/\1/p' "$bridge_source" | head -n1)"
       manifest_abi="$(manifest_json_value "$manifest" native_bridge_abi_version 2>/dev/null || true)"
-      if [[ "$source_abi" != "18" || "$manifest_abi" != "18" ]]; then
-        fail "NoritoBridge artifact and bridge source must both use exact first-release ABI 18"
+      if [[ "$source_abi" != "19" || "$manifest_abi" != "19" ]]; then
+        fail "NoritoBridge artifact and bridge source must both use exact first-release ABI 19"
       fi
       source_commit="$(git -C "$ROOT_DIR" rev-parse HEAD)"
       manifest_commit="$(manifest_json_value "$manifest" source_commit 2>/dev/null || true)"
@@ -494,28 +495,21 @@ check_android_package() {
   require_file "$settings" "Kotlin settings manifest"
   require_literal "$settings" 'include(":core-jvm")' "core-jvm module include"
   require_literal "$settings" 'include(":client-android")' "client-android module include"
-  require_literal "$settings" 'include(":offline-wallet-android")' "offline-wallet-android module include"
 
   check_gradle_publication "core-jvm" "core-jvm"
   check_gradle_publication "client-android" "client-android"
-  check_gradle_publication "offline-wallet-android" "offline-wallet-android"
 
   require_file "$ROOT_DIR/kotlin/client-android/src/main/AndroidManifest.xml" "client-android AndroidManifest"
-  require_file "$ROOT_DIR/kotlin/offline-wallet-android/src/main/AndroidManifest.xml" "offline-wallet-android AndroidManifest"
 
   if [[ "$REQUIRE_ANDROID_OUTPUTS" == "1" ]]; then
     local client_aar="$ROOT_DIR/kotlin/client-android/build/outputs/aar/client-android-release.aar"
-    local offline_aar="$ROOT_DIR/kotlin/offline-wallet-android/build/outputs/aar/offline-wallet-android-release.aar"
     local abi
 
     require_glob "$ROOT_DIR/kotlin/core-jvm/build/libs/core-jvm-*.jar" "core-jvm built jar"
     require_glob "$client_aar" "client-android release aar"
-    require_glob "$offline_aar" "offline-wallet-android release aar"
 
     require_zip_entry "$client_aar" "AndroidManifest.xml" "client-android release aar"
     require_zip_entry "$client_aar" "classes.jar" "client-android release aar"
-    require_zip_entry "$offline_aar" "AndroidManifest.xml" "offline-wallet-android release aar"
-    require_zip_entry "$offline_aar" "classes.jar" "offline-wallet-android release aar"
 
     for abi in arm64-v8a x86_64; do
       require_file "$ROOT_DIR/kotlin/client-android/src/main/jniLibs/$abi/libconnect_norito_bridge.so" "client-android $abi native bridge library"

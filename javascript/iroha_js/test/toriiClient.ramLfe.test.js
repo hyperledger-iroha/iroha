@@ -35,19 +35,20 @@ const PARAMETER_DIGEST = "99".repeat(32);
 const EVALUATION_KEY_DIGEST = "aa".repeat(32);
 const RECEIPT = {
   payload: {
-    program_id: { name: PROGRAM_ID },
-    program_digest: `hash:${"11".repeat(32).toUpperCase()}#ABCD`,
+    program_id: PROGRAM_ID,
+    program_digest: "bb".repeat(32),
     backend: "bfv-programmed-sha3-256-v1",
-    verification_mode: {
-      mode: "Signed",
-      value: null,
-    },
-    output_hash: `hash:${"22".repeat(32).toUpperCase()}#BCDE`,
-    associated_data_hash: `hash:${"33".repeat(32).toUpperCase()}#CDEF`,
+    verification_mode: "signed",
+    input_ciphertext_hash: INPUT_CIPHERTEXT_HASH,
+    output_ciphertext_hash: OUTPUT_CIPHERTEXT_HASH,
+    parameter_digest: PARAMETER_DIGEST,
+    evaluation_key_digest: EVALUATION_KEY_DIGEST,
+    output_hash: OUTPUT_HASH,
+    associated_data_hash: ASSOCIATED_DATA_HASH,
     executed_at_ms: 42,
     expires_at_ms: 142,
   },
-  signature: "AA".repeat(64),
+  attestation: { kind: "signed", signature: "AA".repeat(64) },
 };
 
 function ramLfeOutputOpening(overrides = {}) {
@@ -80,7 +81,7 @@ function ramLfeExecuteResponse(overrides = {}) {
     backend: "bfv-programmed-sha3-256-v1",
     verification_mode: "signed",
     receipt: RECEIPT,
-    output_opening: ramLfeOutputOpening({ signature: "AB".repeat(64) }),
+    output_opening: ramLfeOutputOpening(),
     ...overrides,
   };
 }
@@ -263,15 +264,45 @@ test("executeRamLfeProgram rejects non-exact response fields", async () => {
     ["backend", ramLfeExecuteResponse({ backend: "BFV-programmed-sha3-256-v1" })],
     ["verification_mode", ramLfeExecuteResponse({ verification_mode: " signed" })],
     ["output_opening", ramLfeExecuteResponse({ output_opening: null })],
+    ["executed_at_ms", ramLfeExecuteResponse({ executed_at_ms: "42" })],
+    [
+      "receipt.payload.input_ciphertext_hash",
+      ramLfeExecuteResponse({
+        receipt: {
+          ...RECEIPT,
+          payload: {
+            ...RECEIPT.payload,
+            input_ciphertext_hash: "cc".repeat(32),
+          },
+        },
+      }),
+    ],
+    [
+      "receipt",
+      ramLfeExecuteResponse({ receipt: { ...RECEIPT, ignored: true } }),
+    ],
+    [
+      "output_opening.payload",
+      ramLfeExecuteResponse({
+        output_opening: ramLfeOutputOpening({
+          payload: { output_ciphertext_hash: "dd".repeat(32) },
+        }),
+      }),
+    ],
+    [
+      "ignored",
+      ramLfeExecuteResponse({ ignored: true }),
+      /ram-lfe execute response contains unsupported fields: ignored/,
+    ],
   ];
 
-  for (const [field, body] of cases) {
+  for (const [field, body, expectedPattern] of cases) {
     const client = new ToriiClient("https://example.test", {
       fetchImpl: async () => jsonResponse(200, body),
     });
     await assert.rejects(
       () => client.executeRamLfeProgram(PROGRAM_ID, { encryptedInput: "ABCD" }),
-      new RegExp(`ram-lfe execute response\\.${field}`),
+      expectedPattern ?? new RegExp(`ram-lfe execute response\\.${field}`),
       `RAM-LFE execute response ${field} exactness`,
     );
   }

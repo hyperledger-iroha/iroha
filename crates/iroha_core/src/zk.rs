@@ -55,6 +55,12 @@ pub(crate) mod kagemusha_recursion_adapter;
 #[cfg(feature = "zk-halo2-ipa")]
 pub mod kagemusha_v2;
 
+/// Canonical verifier-record namespace for Kagemusha offline proofs.
+pub const KAGEMUSHA_VERIFIER_NAMESPACE: &str =
+    iroha_data_model::offline::KAGEMUSHA_VERIFIER_NAMESPACE;
+/// Canonical Halo2 IPA parameter degree for recursive-spend lineage proofs.
+pub const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_K: u32 = 12;
+
 use iroha_data_model::proof::{ProofBox, VerifyingKeyBox, VerifyingKeyId};
 #[cfg(feature = "zk-preverify")]
 use ivm::halo2::VMExecutionCircuit;

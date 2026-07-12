@@ -42,11 +42,14 @@ pub(crate) struct V2ApplyService {
     genesis_account: AccountId,
     events_sender: EventsSender,
     validator_set_pops: Vec<Vec<u8>>,
+    #[cfg(test)]
+    fail_after_kura_store: std::sync::atomic::AtomicBool,
 }
 
 impl V2ApplyService {
     fn classify_candidate_validation_error(
         merge_reference: Option<&CertifiedMergeLedgerReference>,
+        failed_block: &SignedBlock,
         error: &BlockValidationError,
     ) -> V2ApplyError {
         if let BlockValidationError::MissingCertifiedMergeSidecar { entry_hash } = error {
@@ -62,7 +65,22 @@ impl V2ApplyService {
                 ),
             };
         }
-        V2ApplyError::Validation(error.to_string())
+        let rejected_result_count = failed_block
+            .has_results()
+            .then(|| {
+                failed_block
+                    .results()
+                    .filter(|result| result.is_err())
+                    .count()
+            })
+            .unwrap_or(0);
+        if rejected_result_count == 0 {
+            V2ApplyError::Validation(error.to_string())
+        } else {
+            V2ApplyError::Validation(format!(
+                "{error}; rejected transaction result count: {rejected_result_count}"
+            ))
+        }
     }
 
     fn validate_lane_payload_plan(
@@ -70,6 +88,12 @@ impl V2ApplyService {
         context: &wire::HeightContext,
         body: &SignedBlock,
     ) -> Result<(), V2ApplyError> {
+        // Genesis instructions bootstrap the lane catalog itself and therefore cannot be routed
+        // through a pre-existing committed lane plan. The canonical genesis validator below still
+        // enforces its authority, chain, transaction, Merkle, and result invariants.
+        if context.height == 1 && body.execution_context().is_none() {
+            return Ok(());
+        }
         let external_count = body.external_entrypoint_count();
         let Some(bundle) = body.execution_context() else {
             return if external_count == 0 {
@@ -148,6 +172,8 @@ impl V2ApplyService {
             genesis_account,
             events_sender,
             validator_set_pops,
+            #[cfg(test)]
+            fail_after_kura_store: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -179,10 +205,11 @@ impl V2ApplyService {
         {
             return Err(V2ApplyError::TaskMismatch);
         }
-        // Authenticate every byte that will become durable finality before
-        // touching Kura, WSV, merge-sidecar retention, or post-apply metadata.
-        // A malformed decision must remain a pure rejection, never a crash
-        // image whose canonical block/state lacks valid finality.
+        // Authenticate the exact durable decision and its association with the selected body
+        // before pruning carrier sidecars or crossing either Kura/WSV commit boundary.
+        // `ApplyTask` deliberately retains the wire certificate, so this adapter must not rely
+        // only on the upstream reducer having verified it. A malformed decision remains a pure
+        // rejection, never a crash image whose canonical block/state lacks valid finality.
         let artifact = wire::finality::V2FinalityArtifact::new(
             context.clone(),
             task.subject(),
@@ -234,9 +261,15 @@ impl V2ApplyService {
             self.validate_and_apply(
                 context,
                 body,
-                durable_hash.is_none(),
+                true,
                 task.validated_receipt().execution_commitment(),
             )?;
+        } else {
+            // WSV is already committed, but Kura may have crashed after the
+            // block commit marker and before publishing its merge log/carrier
+            // association. Re-store the exact durable body idempotently before
+            // publishing any later recovery metadata.
+            self.kura.store_block(Arc::new(body))?;
         }
 
         // This is deliberately outside `validate_and_apply`: WSV commit and
@@ -294,8 +327,12 @@ impl V2ApplyService {
             &mut voting_block,
         )
         .unpack(|_| {});
-        let (_valid, mut state_block) = result.map_err(|(_, error)| {
-            Self::classify_candidate_validation_error(merge_reference, error.as_ref())
+        let (_valid, mut state_block) = result.map_err(|(failed_block, error)| {
+            Self::classify_candidate_validation_error(
+                merge_reference,
+                failed_block.as_ref(),
+                error.as_ref(),
+            )
         })?;
         let witness = state_block
             .take_exec_witness()
@@ -332,8 +369,12 @@ impl V2ApplyService {
                 &mut voting_block,
             )
             .unpack(|event| pipeline_events.push(event))
-            .map_err(|(_, error)| {
-                Self::classify_candidate_validation_error(merge_reference.as_ref(), error.as_ref())
+            .map_err(|(failed_block, error)| {
+                Self::classify_candidate_validation_error(
+                    merge_reference.as_ref(),
+                    failed_block.as_ref(),
+                    error.as_ref(),
+                )
             })?;
         let witness = state_block
             .take_exec_witness()
@@ -360,8 +401,18 @@ impl V2ApplyService {
             .unpack(|event| pipeline_events.push(event))
             .map_err(|(_, error)| V2ApplyError::Commit(error.to_string()))?;
 
+        // Kura owns the first irreversible commit point. This call is also the
+        // idempotent repair boundary for a durable block whose merge
+        // association was interrupted after its block fsync.
         if store_block {
             self.kura.store_block(committed_block.clone())?;
+            #[cfg(test)]
+            if self
+                .fail_after_kura_store
+                .swap(false, std::sync::atomic::Ordering::Relaxed)
+            {
+                return Err(V2ApplyError::InjectedCrashAfterKuraStore);
+            }
         }
         let commit_topology = context
             .roster
@@ -417,6 +468,12 @@ impl V2ApplyService {
         );
         self.kura.store_commit_manifest(manifest)?;
         Ok(())
+    }
+
+    #[cfg(test)]
+    fn fail_after_kura_store_for_test(&self) {
+        self.fail_after_kura_store
+            .store(true, std::sync::atomic::Ordering::Relaxed);
     }
 }
 
@@ -491,6 +548,10 @@ pub(crate) enum V2ApplyError {
     /// WSV transaction could not commit.
     #[error("Sumeragi v2 state commit failed: {0}")]
     StateCommit(String),
+    /// Test-only crash boundary after Kura commits and before WSV publication.
+    #[cfg(test)]
+    #[error("injected crash after Kura store and before WSV commit")]
+    InjectedCrashAfterKuraStore,
 }
 
 impl BodyValidationError for V2ApplyError {
@@ -513,27 +574,31 @@ mod tests {
     use iroha_config::parameters::actual::Queue as QueueConfig;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature, SignatureOf};
     use iroha_data_model::{
-        Registrable,
+        Registrable, ValidationFail,
         account::Account,
         block::{
             BlockExecutionContextBundle, BlockHeader, BlockSignature, SignedBlock,
             consensus_v2 as wire,
         },
         consensus::VALIDATOR_SET_HASH_VERSION_V1,
-        isi::Log,
+        isi::SetParameter,
         merge::{MergeLedgerEntry, MergeQuorumCertificate},
+        parameter::{Parameter, system::SumeragiParameter},
         peer::PeerId,
-        transaction::TransactionBuilder,
+        transaction::{
+            TransactionBuilder, error::TransactionRejectionReason, signed::TransactionResultInner,
+        },
     };
-    use iroha_logger::Level;
     use iroha_sumeragi_core::{EventTag, Generation};
+    use mv::storage::StorageReadOnly;
 
     use super::*;
     use crate::{
         block::BlockBuilder,
+        governance::manifest::LaneManifestRegistry,
         query::store::LiveQueryStore,
         queue::execution_context_for_routing_plan,
-        state::World,
+        state::{World, WorldReadOnly},
         sumeragi::{
             v2_body_store::{BlockSignaturePolicy, V2BodyStore, ValidatedBodyReceipt},
             v2_effects::ApplyTask,
@@ -550,6 +615,7 @@ mod tests {
         state: Arc<State>,
         kura: Arc<Kura>,
         body_root: tempfile::TempDir,
+        genesis_key: KeyPair,
     }
 
     impl ApplyFixture {
@@ -612,6 +678,11 @@ mod tests {
                 LiveQueryStore::start_test(),
                 chain_id.clone(),
             ));
+            let nexus = state.nexus_snapshot();
+            let lane_manifests = Arc::new(
+                LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
+            );
+            state.install_lane_manifests(&lane_manifests);
             let (events_sender, _events_receiver) = tokio::sync::broadcast::channel(32);
             let queue = Arc::new(Queue::from_config(
                 QueueConfig::default(),
@@ -639,17 +710,55 @@ mod tests {
                 view: 0,
             };
             let leader_index = context.leader(0);
-            let leader = &keys[usize::try_from(leader_index).expect("leader index")];
             let proof_policy_bundle = crate::da::active_proof_policy_bundle_at_height(
                 &state.nexus_snapshot(),
                 context.height,
             );
+            let confidential_features = {
+                let state_view = state.view();
+                let digest = crate::state::compute_confidential_feature_digest(
+                    state_view.world(),
+                    &state_view.zk,
+                    state_view.sccp_registry.as_ref(),
+                    context.height,
+                );
+                (!digest.is_empty()).then_some(digest)
+            };
+            let build_genesis_body =
+                |transaction: iroha_data_model::transaction::signed::SignedTransaction,
+                 execution_context: Option<BlockExecutionContextBundle>| {
+                    let creation_time_ms = (transaction.creation_time() + Duration::from_millis(1))
+                        .as_millis()
+                        .try_into()
+                        .expect("fixture creation time fits u64");
+                    let mut header = BlockHeader::new(
+                        NonZeroU64::new(1).expect("non-zero fixture height"),
+                        None,
+                        None,
+                        None,
+                        creation_time_ms,
+                        0,
+                    );
+                    header.set_confidential_features(confidential_features);
+                    let mut builder = iroha_data_model::block::builder::BlockBuilder::new(header);
+                    builder.push_transaction(transaction);
+                    builder.set_da_proof_policies(Some(proof_policy_bundle.clone()));
+                    builder.set_execution_context(execution_context);
+                    builder
+                        .try_build_with_signature(0, transaction_key.private_key())
+                        .expect("sign valid genesis fixture body")
+                };
             let body = if include_lane_payload {
                 let transaction = TransactionBuilder::new(chain_id.clone(), transaction_authority)
-                    .with_instructions([Log::new(
-                        Level::INFO,
-                        "v2 lane apply recovery fixture".to_owned(),
-                    )])
+                    .with_instructions([
+                        SetParameter::new(Parameter::Sumeragi(SumeragiParameter::MinFinalityMs(
+                            100,
+                        ))),
+                        SetParameter::new(Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(100))),
+                        SetParameter::new(Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(
+                            100,
+                        ))),
+                    ])
                     .sign(transaction_key.private_key());
                 let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(transaction.clone()));
                 let routing_plan = queue
@@ -674,24 +783,20 @@ mod tests {
                         &routing_plan,
                     )])
                     .with_lane_payload_ownerships(lane_plan.ownerships);
-                let block =
-                    BlockBuilder::new_with_time_source(vec![accepted], TimeSource::new_system())
-                        .chain(0, None)
-                        .with_da_proof_policies(Some(proof_policy_bundle.clone()))
-                        .with_execution_context(Some(execution_context))
-                        .try_sign_with_index(leader.private_key(), u64::from(leader_index))
-                        .expect("sign fixture lane body")
-                        .unpack(|_| {});
-                SignedBlock::from(block)
+                build_genesis_body(transaction, Some(execution_context))
             } else {
-                let block =
-                    BlockBuilder::new_with_time_source(Vec::new(), TimeSource::new_system())
-                        .chain(0, None)
-                        .with_da_proof_policies(Some(proof_policy_bundle))
-                        .try_sign_with_index(leader.private_key(), u64::from(leader_index))
-                        .expect("sign fixture block")
-                        .unpack(|_| {});
-                SignedBlock::from(block)
+                let transaction = TransactionBuilder::new(chain_id.clone(), transaction_authority)
+                    .with_instructions([
+                        SetParameter::new(Parameter::Sumeragi(SumeragiParameter::MinFinalityMs(
+                            100,
+                        ))),
+                        SetParameter::new(Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(100))),
+                        SetParameter::new(Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(
+                            100,
+                        ))),
+                    ])
+                    .sign(transaction_key.private_key());
+                build_genesis_body(transaction, None)
             };
             let canonical_wire = body.encode_wire().expect("canonical block wire");
             let subject = wire::BlockSubject {
@@ -749,7 +854,7 @@ mod tests {
             let mut body_store = V2BodyStore::open_with_policy(
                 body_root.path(),
                 context.clone(),
-                BlockSignaturePolicy::RotatingLeader,
+                BlockSignaturePolicy::GenesisAuthority(transaction_key.public_key().clone()),
             )
             .expect("open body store");
             let durable = body_store
@@ -778,6 +883,7 @@ mod tests {
                 state,
                 kura,
                 body_root,
+                genesis_key: transaction_key,
             }
         }
 
@@ -785,7 +891,9 @@ mod tests {
             V2BodyStore::open_with_policy(
                 self.body_root.path(),
                 self.context.clone(),
-                BlockSignaturePolicy::RotatingLeader,
+                BlockSignaturePolicy::GenesisAuthority(
+                    self.service.genesis_account.signatory().clone(),
+                ),
             )
             .expect("reopen body store after crash")
         }
@@ -831,6 +939,17 @@ mod tests {
                     .get_durable_block_hash(NonZeroUsize::new(1).expect("height")),
                 Some(self.body.hash())
             );
+            let durable = self
+                .kura
+                .get_block(NonZeroUsize::new(1).expect("height"))
+                .expect("read complete durable block");
+            assert!(durable.has_results());
+            assert_eq!(
+                durable.results().len(),
+                self.body.external_entrypoint_count()
+            );
+            assert!(durable.results().all(|result| result.is_ok()));
+            assert_eq!(durable.execution_context(), self.body.execution_context());
             assert!(
                 self.kura
                     .wsv_checkpoint(self.context.height)
@@ -851,6 +970,14 @@ mod tests {
             assert_eq!(artifact.height_context, self.context);
             assert_eq!(artifact.subject, self.manifest.subject);
             assert_eq!(artifact.commit_qc, self.task.certificate().clone());
+            assert!(
+                self.state
+                    .world_view()
+                    .commit_qcs()
+                    .get(&self.body.hash())
+                    .is_none(),
+                "Sumeragi v2 finality must not be projected into the legacy commit-QC store"
+            );
         }
     }
 
@@ -878,9 +1005,9 @@ mod tests {
             execution_batch: None,
             global_state_root: Hash::new(label),
             merge_qc: MergeQuorumCertificate::new(
-                context.height,
-                context.epoch,
                 view,
+                context.epoch,
+                context.height,
                 HashOf::from_untyped_unchecked(Hash::new(b"v2 apply decided-sidecar parent")),
                 Hash::new(b"v2 apply decided-sidecar chain"),
                 VALIDATOR_SET_HASH_VERSION_V1,
@@ -908,145 +1035,224 @@ mod tests {
         SignedBlock::from(block)
     }
 
-    #[test]
-    fn durable_decision_retains_exact_earlier_view_sidecar_and_prunes_losers() {
-        let fixture = ApplyFixture::new();
-        let exact = pending_merge_entry(&fixture.context, 1, b"exact earlier-view sidecar");
-        let losing = pending_merge_entry(&fixture.context, 2, b"losing later-view sidecar");
-        let exact_hash = fixture
-            .kura
-            .persist_pending_certified_merge_entry(&exact)
-            .expect("persist exact decided sidecar");
-        let losing_hash = fixture
-            .kura
-            .persist_pending_certified_merge_entry(&losing)
-            .expect("persist losing sidecar");
-        assert_ne!(exact_hash, losing_hash);
-
-        let body = body_with_merge_reference(CertifiedMergeLedgerReference::new(&exact));
-        fixture
-            .service
-            .retain_decided_merge_sidecar(&fixture.context, &body)
-            .expect("bind exact sidecar from durable decided body");
-        assert_eq!(
-            fixture
-                .kura
-                .merge_entry_by_hash(exact_hash)
-                .expect("read exact sidecar after decision binding"),
-            Some(exact),
-            "the exact earlier-view reference remains protected until finalization"
-        );
-        assert!(
-            fixture
-                .kura
-                .merge_entry_by_hash(losing_hash)
-                .expect("read losing sidecar after decision binding")
-                .is_none(),
-            "a durable decision must release every non-referenced sidecar at its height"
-        );
-
-        fixture
-            .kura
-            .prune_finalized_pending_certified_merge_entries(fixture.context.height)
-            .expect("finalized height retires the exact protected sidecar");
-        assert!(
-            fixture
-                .kura
-                .merge_entry_by_hash(exact_hash)
-                .expect("read exact sidecar after finalization")
-                .is_none()
-        );
+    macro_rules! v2_apply_test {
+        ($name:ident, $body:block) => {
+            #[test]
+            fn $name() {
+                let handle = crate::sumeragi::sumeragi_thread_builder(concat!(
+                    "sumeragi-v2-apply-test-",
+                    stringify!($name)
+                ))
+                .spawn(move || $body)
+                .expect("spawn v2 apply test on the production consensus stack");
+                if let Err(payload) = handle.join() {
+                    std::panic::resume_unwind(payload);
+                }
+            }
+        };
     }
 
-    #[test]
-    fn invalid_commit_aggregate_is_rejected_before_kura_or_wsv_mutation() {
+    v2_apply_test!(
+        durable_decision_retains_exact_earlier_view_sidecar_and_prunes_losers,
+        {
+            let fixture = ApplyFixture::new();
+            let exact = pending_merge_entry(&fixture.context, 1, b"exact earlier-view sidecar");
+            let losing = pending_merge_entry(&fixture.context, 2, b"losing later-view sidecar");
+            let exact_hash = fixture
+                .kura
+                .persist_pending_certified_merge_entry(&exact)
+                .expect("persist exact decided sidecar");
+            let losing_hash = fixture
+                .kura
+                .persist_pending_certified_merge_entry(&losing)
+                .expect("persist losing sidecar");
+            assert_ne!(exact_hash, losing_hash);
+
+            let body = body_with_merge_reference(CertifiedMergeLedgerReference::new(&exact));
+            fixture
+                .service
+                .retain_decided_merge_sidecar(&fixture.context, &body)
+                .expect("bind exact sidecar from durable decided body");
+            assert_eq!(
+                fixture
+                    .kura
+                    .merge_entry_by_hash(exact_hash)
+                    .expect("read exact sidecar after decision binding"),
+                Some(exact),
+                "the exact earlier-view reference remains protected until finalization"
+            );
+            assert!(
+                fixture
+                    .kura
+                    .merge_entry_by_hash(losing_hash)
+                    .expect("read losing sidecar after decision binding")
+                    .is_none(),
+                "a durable decision must release every non-referenced sidecar at its height"
+            );
+
+            fixture
+                .kura
+                .prune_finalized_pending_certified_merge_entries(fixture.context.height)
+                .expect("finalized height retires the exact protected sidecar");
+            assert!(
+                fixture
+                    .kura
+                    .merge_entry_by_hash(exact_hash)
+                    .expect("read exact sidecar after finalization")
+                    .is_none()
+            );
+        }
+    );
+
+    v2_apply_test!(forged_commit_qc_is_rejected_before_any_durable_mutation, {
         let fixture = ApplyFixture::new();
-        let mut certificate = fixture.task.certificate().clone();
-        certificate.aggregate_signature[0] ^= 0x80;
-        let task = ApplyTask::for_test(
+        let pending = pending_merge_entry(
+            &fixture.context,
+            2,
+            b"pending sidecar must survive unauthenticated Apply",
+        );
+        let pending_hash = fixture
+            .kura
+            .persist_pending_certified_merge_entry(&pending)
+            .expect("persist pending sidecar before forged Apply");
+        let baseline_state_hash =
+            crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref());
+
+        let mut forged_certificate = fixture.task.certificate().clone();
+        let first_signature_byte = forged_certificate
+            .aggregate_signature
+            .first_mut()
+            .expect("fixture CommitQC aggregate signature");
+        *first_signature_byte ^= 0x80;
+        let forged_task = ApplyTask::for_test(
             2,
             fixture.task.tag(),
             fixture.task.subject(),
-            certificate,
+            forged_certificate,
             fixture.task.validated_receipt().clone(),
         );
         let mut store = fixture.reopen_body_store();
 
         assert!(matches!(
-            fixture.service.execute(&fixture.context, &mut store, &task),
+            fixture
+                .service
+                .execute(&fixture.context, &mut store, &forged_task),
             Err(V2ApplyError::FinalityCryptography(
                 wire::finality::V2QuorumCertificateVerificationError::InvalidAggregateSignature
             ))
         ));
-        fixture.assert_no_apply_mutation();
-    }
-
-    #[test]
-    fn resigned_commit_qc_with_wrong_header_view_is_rejected_without_mutation() {
-        let fixture = ApplyFixture::new();
-        let mut keys = (1_u8..=4)
-            .map(|seed| {
-                KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
-                    .expect("deterministic BLS key")
-            })
-            .collect::<Vec<_>>();
-        keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));
-        let mut certificate = fixture.task.certificate().clone();
-        certificate.round.view = fixture.body.header().view_change_index().saturating_add(1);
-        let preimage = wire::Vote {
-            round: certificate.round,
-            phase: certificate.phase,
-            subject: certificate.subject,
-            execution_commitment: certificate.execution_commitment,
-            signer: certificate.signers[0],
-            signature: Vec::new(),
-        }
-        .signature_preimage();
-        let signatures = certificate
-            .signers
-            .iter()
-            .map(|index| {
-                Signature::try_new(
-                    keys[usize::try_from(*index).expect("fixture signer index")].private_key(),
-                    &preimage,
-                )
-                .expect("sign wrong-view Commit vote")
-                .payload()
-                .to_vec()
-            })
-            .collect::<Vec<_>>();
-        certificate.aggregate_signature = iroha_crypto::bls_normal_aggregate_signatures(
-            &signatures.iter().map(Vec::as_slice).collect::<Vec<_>>(),
-        )
-        .expect("aggregate wrong-view Commit votes");
-        let task = ApplyTask::for_test(
-            2,
-            fixture.task.tag(),
-            fixture.task.subject(),
-            certificate,
-            fixture.task.validated_receipt().clone(),
+        assert_eq!(fixture.state.committed_height(), 0);
+        assert_eq!(
+            crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref()),
+            baseline_state_hash,
+            "an unauthenticated decision must not mutate WSV"
         );
-        let mut store = fixture.reopen_body_store();
+        assert_eq!(fixture.kura.durable_blocks_count(), 0);
+        fixture.assert_no_post_apply_sidecars();
+        assert_eq!(
+            fixture
+                .kura
+                .merge_entry_by_hash(pending_hash)
+                .expect("read pending sidecar after forged Apply"),
+            Some(pending),
+            "finality verification must precede pending-sidecar pruning"
+        );
+    });
 
-        assert!(matches!(
-            fixture.service.execute(&fixture.context, &mut store, &task),
-            Err(V2ApplyError::Finality(
-                wire::finality::V2FinalityValidationError::AssociatedViewMismatch {
-                    certificate: 1,
-                    block: 0,
-                }
-            ))
-        ));
-        fixture.assert_no_apply_mutation();
-    }
+    v2_apply_test!(
+        invalid_commit_aggregate_is_rejected_before_kura_or_wsv_mutation,
+        {
+            let fixture = ApplyFixture::new();
+            let mut certificate = fixture.task.certificate().clone();
+            certificate.aggregate_signature[0] ^= 0x80;
+            let task = ApplyTask::for_test(
+                2,
+                fixture.task.tag(),
+                fixture.task.subject(),
+                certificate,
+                fixture.task.validated_receipt().clone(),
+            );
+            let mut store = fixture.reopen_body_store();
 
-    #[test]
-    fn invalid_non_signer_durable_pop_is_rejected_before_kura_or_wsv_mutation() {
-        let mut fixture = ApplyFixture::new();
-        fixture.service.validator_set_pops[3][0] ^= 0x80;
-        let mut store = fixture.reopen_body_store();
+            assert!(matches!(
+                fixture.service.execute(&fixture.context, &mut store, &task),
+                Err(V2ApplyError::FinalityCryptography(
+                    wire::finality::V2QuorumCertificateVerificationError::InvalidAggregateSignature
+                ))
+            ));
+            fixture.assert_no_apply_mutation();
+        }
+    );
 
-        assert!(matches!(
+    v2_apply_test!(
+        resigned_commit_qc_with_wrong_header_view_is_rejected_without_mutation,
+        {
+            let fixture = ApplyFixture::new();
+            let mut keys = (1_u8..=4)
+                .map(|seed| {
+                    KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                        .expect("deterministic BLS key")
+                })
+                .collect::<Vec<_>>();
+            keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));
+            let mut certificate = fixture.task.certificate().clone();
+            certificate.round.view = fixture.body.header().view_change_index().saturating_add(1);
+            let preimage = wire::Vote {
+                round: certificate.round,
+                phase: certificate.phase,
+                subject: certificate.subject,
+                execution_commitment: certificate.execution_commitment,
+                signer: certificate.signers[0],
+                signature: Vec::new(),
+            }
+            .signature_preimage();
+            let signatures = certificate
+                .signers
+                .iter()
+                .map(|index| {
+                    Signature::try_new(
+                        keys[usize::try_from(*index).expect("fixture signer index")].private_key(),
+                        &preimage,
+                    )
+                    .expect("sign wrong-view Commit vote")
+                    .payload()
+                    .to_vec()
+                })
+                .collect::<Vec<_>>();
+            certificate.aggregate_signature = iroha_crypto::bls_normal_aggregate_signatures(
+                &signatures.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+            )
+            .expect("aggregate wrong-view Commit votes");
+            let task = ApplyTask::for_test(
+                2,
+                fixture.task.tag(),
+                fixture.task.subject(),
+                certificate,
+                fixture.task.validated_receipt().clone(),
+            );
+            let mut store = fixture.reopen_body_store();
+
+            assert!(matches!(
+                fixture.service.execute(&fixture.context, &mut store, &task),
+                Err(V2ApplyError::Finality(
+                    wire::finality::V2FinalityValidationError::AssociatedViewMismatch {
+                        certificate: 1,
+                        block: 0,
+                    }
+                ))
+            ));
+            fixture.assert_no_apply_mutation();
+        }
+    );
+
+    v2_apply_test!(
+        invalid_non_signer_durable_pop_is_rejected_before_kura_or_wsv_mutation,
+        {
+            let mut fixture = ApplyFixture::new();
+            fixture.service.validator_set_pops[3][0] ^= 0x80;
+            let mut store = fixture.reopen_body_store();
+
+            assert!(matches!(
             fixture.execute(&mut store),
             Err(V2ApplyError::FinalityCryptography(
                 wire::finality::V2QuorumCertificateVerificationError::InvalidProofOfPossession {
@@ -1054,12 +1260,14 @@ mod tests {
                 }
             ))
         ));
-        fixture.assert_no_apply_mutation();
-    }
+            fixture.assert_no_apply_mutation();
+        }
+    );
 
-    #[test]
-    fn block_write_failure_never_advances_wsv_and_retry_is_exact() {
+    v2_apply_test!(block_write_failure_never_advances_wsv_and_retry_is_exact, {
         let fixture = ApplyFixture::new();
+        let baseline_state_hash =
+            crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref());
         let mut store = fixture.reopen_body_store();
         fixture.kura.fail_next_block_write_for_tests();
         assert!(matches!(
@@ -1067,34 +1275,168 @@ mod tests {
             Err(V2ApplyError::Kura(_))
         ));
         assert_eq!(fixture.state.committed_height(), 0);
+        assert_eq!(
+            crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref()),
+            baseline_state_hash,
+            "a failed Kura write must not leak any WSV mutation"
+        );
         assert_eq!(fixture.kura.durable_blocks_count(), 0);
         fixture.assert_no_post_apply_sidecars();
 
-        fixture.execute(&mut store).expect("retry exact apply");
-        fixture.assert_complete();
-    }
-
-    #[test]
-    fn restart_recovers_kura_block_written_before_wsv_commit() {
-        let fixture = ApplyFixture::new();
+        drop(store);
+        let mut reopened = fixture.reopen_body_store();
         fixture
+            .execute(&mut reopened)
+            .expect("retry exact apply after reopening the durable body store");
+        fixture.assert_complete();
+        let view = fixture.state.view();
+        let sumeragi = view.world().parameters().sumeragi();
+        assert_eq!(sumeragi.min_finality_ms(), 100);
+        assert_eq!(sumeragi.block_time_ms(), 100);
+        assert_eq!(sumeragi.commit_time_ms(), 100);
+    });
+
+    v2_apply_test!(height_one_lane_exemption_never_accepts_empty_genesis, {
+        let fixture = ApplyFixture::new();
+        let proof_policy_bundle = crate::da::active_proof_policy_bundle_at_height(
+            &fixture.state.nexus_snapshot(),
+            fixture.context.height,
+        );
+        let invalid = BlockBuilder::new_with_time_source(Vec::new(), TimeSource::new_system())
+            .chain(0, None)
+            .with_da_proof_policies(Some(proof_policy_bundle))
+            .try_sign_with_index(fixture.genesis_key.private_key(), 0)
+            .expect("sign empty genesis negative fixture")
+            .unpack(|_| {});
+        let error = fixture
+            .service
+            .validate_candidate(&fixture.context, &SignedBlock::from(invalid))
+            .expect_err("canonical genesis validation must reject an empty body");
+        assert!(
+            matches!(&error, V2ApplyError::Validation(message) if message.contains("must have 1 to 16 transactions")),
+            "unexpected empty-genesis rejection: {error}"
+        );
+    });
+
+    v2_apply_test!(
+        validation_error_classification_handles_body_without_results,
+        {
+            let key = KeyPair::try_from_seed(vec![0xD4; 32], Algorithm::Ed25519)
+                .expect("derive malformed-body signer");
+            let body = SignedBlock::from(
+                BlockBuilder::new_with_time_source(Vec::new(), TimeSource::new_system())
+                    .chain(0, None)
+                    .try_sign_with_index(key.private_key(), 0)
+                    .expect("sign no-results body")
+                    .unpack(|_| {}),
+            );
+            assert!(!body.has_results());
+            let error = V2ApplyService::classify_candidate_validation_error(
+                None,
+                &body,
+                &BlockValidationError::EmptyBlock,
+            );
+            assert!(
+                matches!(error, V2ApplyError::Validation(message) if message.contains("no committed overlays"))
+            );
+        }
+    );
+
+    v2_apply_test!(
+        validation_error_classification_redacts_internal_result_details,
+        {
+            let fixture = ApplyFixture::new();
+            let mut rejected = fixture.body.clone();
+            let entry_hashes = rejected
+                .external_entrypoints_cloned()
+                .map(|entrypoint| entrypoint.hash())
+                .collect::<Vec<_>>();
+            let secret = "sensitive executor diagnostic";
+            let result: TransactionResultInner = Err(TransactionRejectionReason::Validation(
+                ValidationFail::InternalError(secret.to_owned()),
+            ));
+            rejected
+                .set_transaction_results(Vec::new(), &entry_hashes, vec![result])
+                .expect("attach one rejected result");
+            let error = V2ApplyService::classify_candidate_validation_error(
+                None,
+                &rejected,
+                &BlockValidationError::EmptyBlock,
+            );
+            let V2ApplyError::Validation(message) = error else {
+                panic!("unexpected classification")
+            };
+            assert!(message.contains("rejected transaction result count: 1"));
+            assert!(!message.contains(secret));
+        }
+    );
+
+    v2_apply_test!(
+        post_genesis_external_body_without_execution_context_is_rejected,
+        {
+            let fixture = ApplyFixture::new();
+            let mut post_genesis_context = fixture.context.clone();
+            post_genesis_context.height = 2;
+            let error = fixture
+                .service
+                .validate_lane_payload_plan(&post_genesis_context, &fixture.body)
+                .expect_err("the height-one lane-plan exemption must never apply post-genesis");
+            assert!(
+                matches!(&error, V2ApplyError::Validation(message) if message.contains("external entrypoints without execution context")),
+                "unexpected post-genesis lane-plan rejection: {error}"
+            );
+        }
+    );
+
+    v2_apply_test!(restart_recovers_kura_block_written_before_wsv_commit, {
+        let fixture = ApplyFixture::new();
+        let baseline_state_hash =
+            crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref());
+        let mut store = fixture.reopen_body_store();
+        fixture.service.fail_after_kura_store_for_test();
+        assert!(matches!(
+            fixture.execute(&mut store),
+            Err(V2ApplyError::InjectedCrashAfterKuraStore)
+        ));
+        drop(store);
+        let durable = fixture
             .kura
-            .store_block(fixture.body.clone())
-            .expect("model durable Kura block before crash");
-        assert_eq!(fixture.state.committed_height(), 0);
-        assert_eq!(fixture.kura.durable_blocks_count(), 1);
+            .get_block(NonZeroUsize::new(1).expect("height"))
+            .expect("read production-validated Kura crash image");
+        assert!(durable.has_results());
+        assert_eq!(durable.results().len(), 1);
+        assert!(durable.results().all(|result| result.is_ok()));
+        let durable_wire = durable.encode_wire().expect("encode Kura crash image");
         fixture.assert_no_post_apply_sidecars();
+        assert_eq!(fixture.kura.durable_blocks_count(), 1);
+        assert_eq!(fixture.state.committed_height(), 0);
+        assert_eq!(
+            crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref()),
+            baseline_state_hash,
+            "the Kura-first crash boundary must not leak partial WSV state"
+        );
 
         let mut store = fixture.reopen_body_store();
         fixture
             .execute(&mut store)
             .expect("resume WSV application from exact durable body");
         fixture.assert_complete();
-    }
+        assert_eq!(
+            fixture
+                .kura
+                .get_block(NonZeroUsize::new(1).expect("height"))
+                .expect("read recovered Kura block")
+                .encode_wire()
+                .expect("encode recovered Kura block"),
+            durable_wire,
+            "an exact retry must preserve the complete canonical Kura wire"
+        );
+    });
 
-    #[test]
-    fn restart_recovers_kura_lane_body_written_before_wsv_commit() {
+    v2_apply_test!(restart_recovers_kura_lane_body_written_before_wsv_commit, {
         let fixture = ApplyFixture::new_with_lane_payload(true);
+        let baseline_state_hash =
+            crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref());
         let ownerships = fixture
             .body
             .execution_context()
@@ -1102,12 +1444,29 @@ mod tests {
             .lane_payload_ownerships
             .clone();
         assert_eq!(ownerships.len(), 1, "fixture must carry lane ownership");
-        fixture
+        let mut store = fixture.reopen_body_store();
+        fixture.service.fail_after_kura_store_for_test();
+        assert!(matches!(
+            fixture.execute(&mut store),
+            Err(V2ApplyError::InjectedCrashAfterKuraStore)
+        ));
+        drop(store);
+        let durable = fixture
             .kura
-            .store_block(fixture.body.clone())
-            .expect("model durable Kura lane body before crash");
-        assert_eq!(fixture.state.committed_height(), 0);
+            .get_block(NonZeroUsize::new(1).expect("height"))
+            .expect("read production-validated Kura lane crash image");
+        assert!(durable.has_results());
+        assert_eq!(durable.results().len(), 1);
+        assert!(durable.results().all(|result| result.is_ok()));
+        let durable_wire = durable.encode_wire().expect("encode Kura lane crash image");
+        fixture.assert_no_post_apply_sidecars();
         assert_eq!(fixture.kura.durable_blocks_count(), 1);
+        assert_eq!(fixture.state.committed_height(), 0);
+        assert_eq!(
+            crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref()),
+            baseline_state_hash,
+            "the Kura-first lane crash boundary must not leak partial WSV state"
+        );
         assert!(
             fixture
                 .kura
@@ -1121,42 +1480,54 @@ mod tests {
             .execute(&mut store)
             .expect("resume exact lane-body WSV application after Kura-first crash");
         fixture.assert_complete();
-    }
-
-    #[test]
-    fn conflicting_canonical_kura_block_fails_before_wsv_mutation() {
-        let fixture = ApplyFixture::new();
-        let conflicting_key =
-            KeyPair::try_from_seed(vec![0xE1; 32], Algorithm::Ed25519).expect("conflict key");
-        let header = BlockHeader::new(
-            NonZeroU64::new(1).expect("height"),
-            None,
-            None,
-            None,
-            9_999,
-            0,
+        assert_eq!(
+            fixture
+                .kura
+                .get_block(NonZeroUsize::new(1).expect("height"))
+                .expect("read recovered Kura lane block")
+                .encode_wire()
+                .expect("encode recovered Kura lane block"),
+            durable_wire,
+            "an exact lane retry must preserve the complete canonical Kura wire"
         );
-        let signature = SignatureOf::try_from_hash(conflicting_key.private_key(), header.hash())
-            .expect("sign conflicting block");
-        let conflicting =
-            SignedBlock::presigned(BlockSignature::new(0, signature), header, Vec::new());
-        assert_ne!(conflicting.hash(), fixture.body.hash());
-        fixture
-            .kura
-            .store_block(conflicting)
-            .expect("persist conflicting canonical block");
-        let mut store = fixture.reopen_body_store();
+    });
 
-        assert!(matches!(
-            fixture.execute(&mut store),
-            Err(V2ApplyError::KuraConflict)
-        ));
-        assert_eq!(fixture.state.committed_height(), 0);
-        fixture.assert_no_post_apply_sidecars();
-    }
+    v2_apply_test!(
+        conflicting_canonical_kura_block_fails_before_wsv_mutation,
+        {
+            let fixture = ApplyFixture::new();
+            let conflicting_key =
+                KeyPair::try_from_seed(vec![0xE1; 32], Algorithm::Ed25519).expect("conflict key");
+            let header = BlockHeader::new(
+                NonZeroU64::new(1).expect("height"),
+                None,
+                None,
+                None,
+                9_999,
+                0,
+            );
+            let signature =
+                SignatureOf::try_from_hash(conflicting_key.private_key(), header.hash())
+                    .expect("sign conflicting block");
+            let conflicting =
+                SignedBlock::presigned(BlockSignature::new(0, signature), header, Vec::new());
+            assert_ne!(conflicting.hash(), fixture.body.hash());
+            fixture
+                .kura
+                .store_block(conflicting)
+                .expect("persist conflicting canonical block");
+            let mut store = fixture.reopen_body_store();
 
-    #[test]
-    fn wsv_without_its_canonical_kura_block_fails_closed() {
+            assert!(matches!(
+                fixture.execute(&mut store),
+                Err(V2ApplyError::KuraConflict)
+            ));
+            assert_eq!(fixture.state.committed_height(), 0);
+            fixture.assert_no_post_apply_sidecars();
+        }
+    );
+
+    v2_apply_test!(wsv_without_its_canonical_kura_block_fails_closed, {
         let fixture = ApplyFixture::new();
         fixture
             .service
@@ -1176,129 +1547,134 @@ mod tests {
             Err(V2ApplyError::StateAheadOfKura)
         ));
         fixture.assert_no_post_apply_sidecars();
-    }
+    });
 
-    #[test]
-    fn apply_rejects_commit_qc_execution_commitment_drift_before_state_or_kura_write() {
-        let fixture = ApplyFixture::new();
-        let mut certificate = fixture.task.certificate().clone();
-        certificate.execution_commitment = wire::ExecutionCommitment::without_topups(
-            Hash::new(b"wrong parent state"),
-            Hash::new(b"wrong post state"),
-            Hash::new(b"wrong ordinary writes"),
-        );
-        let task = ApplyTask::for_test(
-            2,
-            fixture.task.tag(),
-            fixture.task.subject(),
-            certificate,
-            fixture.task.validated_receipt().clone(),
-        );
-        let mut store = fixture.reopen_body_store();
+    v2_apply_test!(
+        apply_rejects_commit_qc_execution_commitment_drift_before_state_or_kura_write,
+        {
+            let fixture = ApplyFixture::new();
+            let mut certificate = fixture.task.certificate().clone();
+            certificate.execution_commitment = wire::ExecutionCommitment::without_topups(
+                Hash::new(b"wrong parent state"),
+                Hash::new(b"wrong post state"),
+                Hash::new(b"wrong ordinary writes"),
+            );
+            let task = ApplyTask::for_test(
+                2,
+                fixture.task.tag(),
+                fixture.task.subject(),
+                certificate,
+                fixture.task.validated_receipt().clone(),
+            );
+            let mut store = fixture.reopen_body_store();
 
-        assert!(matches!(
-            fixture.service.execute(&fixture.context, &mut store, &task),
-            Err(V2ApplyError::ExecutionCommitmentMismatch)
-        ));
-        assert_eq!(fixture.state.committed_height(), 0);
-        assert_eq!(fixture.kura.durable_blocks_count(), 0);
-        fixture.assert_no_post_apply_sidecars();
-    }
-
-    #[test]
-    fn fresh_apply_recomputes_and_rejects_a_consistently_forged_marker_and_qc() {
-        let fixture = ApplyFixture::new();
-        let forged_commitment = wire::ExecutionCommitment::without_topups(
-            Hash::new(b"forged parent state"),
-            Hash::new(b"forged post state"),
-            Hash::new(b"forged ordinary writes"),
-        );
-        let mut certificate = fixture.task.certificate().clone();
-        certificate.execution_commitment = forged_commitment;
-
-        let mut keys = (1_u8..=4)
-            .map(|seed| {
-                KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
-                    .expect("deterministic BLS key")
-            })
-            .collect::<Vec<_>>();
-        keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));
-        let preimage = wire::Vote {
-            round: certificate.round,
-            phase: certificate.phase,
-            subject: certificate.subject,
-            execution_commitment: forged_commitment,
-            signer: certificate.signers[0],
-            signature: Vec::new(),
+            assert!(matches!(
+                fixture.service.execute(&fixture.context, &mut store, &task),
+                Err(V2ApplyError::ExecutionCommitmentMismatch)
+            ));
+            assert_eq!(fixture.state.committed_height(), 0);
+            assert_eq!(fixture.kura.durable_blocks_count(), 0);
+            fixture.assert_no_post_apply_sidecars();
         }
-        .signature_preimage();
-        let signatures = certificate
-            .signers
-            .iter()
-            .map(|index| {
-                Signature::try_new(
-                    keys[usize::try_from(*index).expect("fixture signer index")].private_key(),
-                    &preimage,
-                )
-                .expect("sign forged execution commitment")
-                .payload()
-                .to_vec()
-            })
-            .collect::<Vec<_>>();
-        certificate.aggregate_signature = iroha_crypto::bls_normal_aggregate_signatures(
-            &signatures.iter().map(Vec::as_slice).collect::<Vec<_>>(),
-        )
-        .expect("aggregate forged Commit votes");
+    );
 
-        let forged_validation = ValidatedBodyReceipt::for_test_with_commitment(
-            fixture.task.validated_receipt().durable().clone(),
-            forged_commitment,
-        );
-        let task = ApplyTask::for_test(
-            2,
-            fixture.task.tag(),
-            fixture.manifest.subject,
-            certificate,
-            forged_validation,
-        );
-        let mut store = fixture.reopen_body_store();
+    v2_apply_test!(
+        fresh_apply_recomputes_and_rejects_a_consistently_forged_marker_and_qc,
+        {
+            let fixture = ApplyFixture::new();
+            let forged_commitment = wire::ExecutionCommitment::without_topups(
+                Hash::new(b"forged parent state"),
+                Hash::new(b"forged post state"),
+                Hash::new(b"forged ordinary writes"),
+            );
+            let mut certificate = fixture.task.certificate().clone();
+            certificate.execution_commitment = forged_commitment;
 
-        assert!(matches!(
-            fixture.service.execute(&fixture.context, &mut store, &task),
-            Err(V2ApplyError::ExecutionCommitmentMismatch)
-        ));
-        fixture.assert_no_apply_mutation();
-    }
+            let mut keys = (1_u8..=4)
+                .map(|seed| {
+                    KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                        .expect("deterministic BLS key")
+                })
+                .collect::<Vec<_>>();
+            keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));
+            let preimage = wire::Vote {
+                round: certificate.round,
+                phase: certificate.phase,
+                subject: certificate.subject,
+                execution_commitment: forged_commitment,
+                signer: certificate.signers[0],
+                signature: Vec::new(),
+            }
+            .signature_preimage();
+            let signatures = certificate
+                .signers
+                .iter()
+                .map(|index| {
+                    Signature::try_new(
+                        keys[usize::try_from(*index).expect("fixture signer index")].private_key(),
+                        &preimage,
+                    )
+                    .expect("sign forged execution commitment")
+                    .payload()
+                    .to_vec()
+                })
+                .collect::<Vec<_>>();
+            certificate.aggregate_signature = iroha_crypto::bls_normal_aggregate_signatures(
+                &signatures.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+            )
+            .expect("aggregate forged Commit votes");
 
-    #[test]
-    fn restart_recovers_wsv_before_checkpoint_manifest_and_finality() {
-        let fixture = ApplyFixture::new();
-        let mut store = fixture.reopen_body_store();
-        fixture.kura.fail_next_wsv_checkpoint_write_for_tests();
-        assert!(matches!(
-            fixture.execute(&mut store),
-            Err(V2ApplyError::Kura(_))
-        ));
-        assert_eq!(fixture.state.committed_height(), 1);
-        assert_eq!(fixture.kura.durable_blocks_count(), 1);
-        fixture.assert_no_post_apply_sidecars();
+            let forged_validation = ValidatedBodyReceipt::for_test_with_commitment(
+                fixture.task.validated_receipt().durable().clone(),
+                forged_commitment,
+            );
+            let task = ApplyTask::for_test(
+                2,
+                fixture.task.tag(),
+                fixture.manifest.subject,
+                certificate,
+                forged_validation,
+            );
+            let mut store = fixture.reopen_body_store();
 
-        drop(store);
-        let mut reopened = fixture.reopen_body_store();
-        assert!(
-            reopened
-                .validated_recovery_catalog()
-                .contains_key(&(fixture.manifest.round, fixture.manifest.subject)),
-            "restart must recover the exact durable validation marker"
-        );
-        fixture
-            .execute(&mut reopened)
-            .expect("complete metadata without reapplying WSV");
-        fixture.assert_complete();
-    }
+            assert!(matches!(
+                fixture.service.execute(&fixture.context, &mut store, &task),
+                Err(V2ApplyError::ExecutionCommitmentMismatch)
+            ));
+            fixture.assert_no_apply_mutation();
+        }
+    );
 
-    #[test]
-    fn restart_recovers_checkpoint_before_manifest_and_finality() {
+    v2_apply_test!(
+        restart_recovers_wsv_before_checkpoint_manifest_and_finality,
+        {
+            let fixture = ApplyFixture::new();
+            let mut store = fixture.reopen_body_store();
+            fixture.kura.fail_next_wsv_checkpoint_write_for_tests();
+            assert!(matches!(
+                fixture.execute(&mut store),
+                Err(V2ApplyError::Kura(_))
+            ));
+            assert_eq!(fixture.state.committed_height(), 1);
+            assert_eq!(fixture.kura.durable_blocks_count(), 1);
+            fixture.assert_no_post_apply_sidecars();
+
+            drop(store);
+            let mut reopened = fixture.reopen_body_store();
+            assert!(
+                reopened
+                    .validated_recovery_catalog()
+                    .contains_key(&(fixture.manifest.round, fixture.manifest.subject)),
+                "restart must recover the exact durable validation marker"
+            );
+            fixture
+                .execute(&mut reopened)
+                .expect("complete metadata without reapplying WSV");
+            fixture.assert_complete();
+        }
+    );
+
+    v2_apply_test!(restart_recovers_checkpoint_before_manifest_and_finality, {
         let fixture = ApplyFixture::new();
         let mut store = fixture.reopen_body_store();
         fixture.kura.fail_next_commit_manifest_write_for_tests();
@@ -1333,10 +1709,9 @@ mod tests {
         let mut reopened = fixture.reopen_body_store();
         fixture.execute(&mut reopened).expect("complete manifest");
         fixture.assert_complete();
-    }
+    });
 
-    #[test]
-    fn restart_recovers_metadata_written_before_finality() {
+    v2_apply_test!(restart_recovers_metadata_written_before_finality, {
         let fixture = ApplyFixture::new();
         let mut store = fixture.reopen_body_store();
         fixture.kura.fail_next_v2_finality_write_for_tests();
@@ -1371,32 +1746,34 @@ mod tests {
         let mut reopened = fixture.reopen_body_store();
         fixture.execute(&mut reopened).expect("complete finality");
         fixture.assert_complete();
-    }
+    });
 
-    #[test]
-    fn complete_apply_replay_is_idempotent_and_never_advances_twice() {
-        let fixture = ApplyFixture::new();
-        let mut store = fixture.reopen_body_store();
-        fixture.execute(&mut store).expect("initial apply");
-        let state_hash = crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref());
-        let artifact = fixture
-            .kura
-            .v2_finality_artifact(1)
-            .expect("read finality")
-            .expect("finality exists");
-
-        fixture.execute(&mut store).expect("idempotent replay");
-        fixture.assert_complete();
-        assert_eq!(
-            crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref()),
-            state_hash
-        );
-        assert_eq!(
-            fixture
+    v2_apply_test!(
+        complete_apply_replay_is_idempotent_and_never_advances_twice,
+        {
+            let fixture = ApplyFixture::new();
+            let mut store = fixture.reopen_body_store();
+            fixture.execute(&mut store).expect("initial apply");
+            let state_hash = crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref());
+            let artifact = fixture
                 .kura
                 .v2_finality_artifact(1)
-                .expect("read repeated finality"),
-            Some(artifact)
-        );
-    }
+                .expect("read finality")
+                .expect("finality exists");
+
+            fixture.execute(&mut store).expect("idempotent replay");
+            fixture.assert_complete();
+            assert_eq!(
+                crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref()),
+                state_hash
+            );
+            assert_eq!(
+                fixture
+                    .kura
+                    .v2_finality_artifact(1)
+                    .expect("read repeated finality"),
+                Some(artifact)
+            );
+        }
+    );
 }

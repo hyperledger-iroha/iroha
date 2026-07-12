@@ -742,6 +742,7 @@ pub(crate) mod v2_worker;
 pub mod witness;
 pub use evidence::EvidenceValidationContext;
 pub use evidence::evidence_subject_height_view;
+pub(crate) use status::AuthenticatedCommitRoster;
 
 /// Validate an evidence payload using the canonical rules.
 ///

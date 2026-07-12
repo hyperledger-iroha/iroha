@@ -6,32 +6,28 @@ import java.util.List;
 import java.util.Set;
 import java.util.TreeSet;
 
-/** Source-level contract checks for the non-spending ABI-18 artifact bridge. */
+/** Source-level contract checks for the non-spending ABI-19 artifact bridge. */
 public final class KagemushaRecursiveSpendProverTest {
   public static void main(final String[] args) {
     exactAbiIsRequired();
-    productAndArtifactModesAreDistinct();
+    artifactContractIsFixed();
     publicSurfaceIsArtifactOnly();
   }
 
   private static void exactAbiIsRequired() {
-    assert KagemushaRecursiveSpendProver.isExactBridgeAbi(18);
-    assert !KagemushaRecursiveSpendProver.isExactBridgeAbi(17);
-    assert !KagemushaRecursiveSpendProver.isExactBridgeAbi(19);
+    assert KagemushaRecursiveSpendProver.isExactBridgeAbi(19);
+    assert !KagemushaRecursiveSpendProver.isExactBridgeAbi(20);
     assert KagemushaRecursiveSpendProver.detectExactNativeAvailability(
-        () -> {}, () -> 18, () -> true);
+        () -> {}, () -> 19, () -> true);
     assert !KagemushaRecursiveSpendProver.detectExactNativeAvailability(
-        () -> {}, () -> 17, () -> true);
+        () -> {}, () -> 19, () -> false);
     assert !KagemushaRecursiveSpendProver.detectExactNativeAvailability(
-        () -> {}, () -> 18, () -> false);
-    assert !KagemushaRecursiveSpendProver.detectExactNativeAvailability(
-        () -> { throw new UnsatisfiedLinkError("missing"); }, () -> 18, () -> true);
+        () -> { throw new UnsatisfiedLinkError("missing"); }, () -> 19, () -> true);
   }
 
-  private static void productAndArtifactModesAreDistinct() {
-    assert "recursive_spend_v1".equals(KagemushaRecursiveSpendProver.PRODUCT_MODE);
-    assert "recursive_spend_v2".equals(KagemushaRecursiveSpendProver.ARTIFACT_MANIFEST_MODE);
-    assert KagemushaRecursiveSpendProver.REQUIRED_NATIVE_BRIDGE_ABI_VERSION == 18;
+  private static void artifactContractIsFixed() {
+    assert "recursive_spend_v1".equals(KagemushaRecursiveSpendProver.ARTIFACT_MANIFEST_MODE);
+    assert KagemushaRecursiveSpendProver.REQUIRED_NATIVE_BRIDGE_ABI_VERSION == 19;
     assert KagemushaRecursiveSpendProver.ARTIFACT_COUNT == 6;
     assert "kagemusha.offline.recursive_spend.artifact_manifest.v3"
         .equals(KagemushaRecursiveSpendProver.ARTIFACT_MANIFEST_SCHEMA);

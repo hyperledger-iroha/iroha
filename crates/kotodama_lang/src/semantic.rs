@@ -133,25 +133,44 @@ fn is_list_intrinsic(name: &str) -> bool {
     )
 }
 
-fn is_sum_type_intrinsic(name: &str) -> bool {
-    matches!(
-        name,
-        "is_some" | "is_none" | "is_ok" | "is_err" | "unwrap_or" | "unwrap_err_or"
-    )
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CompilerIntrinsicKind {
+    StateMap,
+    List,
+    Numeric,
+    Sum,
 }
 
-fn is_lowered_intrinsic(name: &str) -> bool {
-    name == STATE_MAP_GET_INTRINSIC
-        || is_list_intrinsic(name)
-        || is_sum_type_intrinsic(name)
-        || matches!(
-            name,
-            DECIMAL_DIV_ROUND_INTRINSIC
-                | QUANTITY_DIV_ROUND_INTRINSIC
-                | QUANTITY_RATIO_ROUND_INTRINSIC
-                | DECIMAL_TO_INT_TRUNC_INTRINSIC
-                | DECIMAL_TO_INT_ROUND_INTRINSIC
-        )
+/// Classify calls owned by typed semantic lowering rather than by the source
+/// function graph or the public builtin surface.
+///
+/// Keeping this registry at the semantic boundary makes production projection
+/// validate the same internal call vocabulary that semantic analysis emits.
+/// It also prevents source declarations from shadowing compiler-owned calls.
+fn compiler_intrinsic_kind(name: &str) -> Option<CompilerIntrinsicKind> {
+    if name == STATE_MAP_GET_INTRINSIC {
+        return Some(CompilerIntrinsicKind::StateMap);
+    }
+    if is_list_intrinsic(name) {
+        return Some(CompilerIntrinsicKind::List);
+    }
+    if matches!(
+        name,
+        DECIMAL_DIV_ROUND_INTRINSIC
+            | QUANTITY_DIV_ROUND_INTRINSIC
+            | QUANTITY_RATIO_ROUND_INTRINSIC
+            | DECIMAL_TO_INT_TRUNC_INTRINSIC
+            | DECIMAL_TO_INT_ROUND_INTRINSIC
+    ) {
+        return Some(CompilerIntrinsicKind::Numeric);
+    }
+    if matches!(
+        name,
+        "is_some" | "is_none" | "is_ok" | "is_err" | "unwrap_or" | "unwrap_err_or"
+    ) {
+        return Some(CompilerIntrinsicKind::Sum);
+    }
+    None
 }
 
 fn is_canonical_type_spelling(name: &str) -> bool {
@@ -169,7 +188,7 @@ fn is_canonical_type_spelling(name: &str) -> bool {
 /// Return whether a source declaration collides with compiler-owned names.
 pub fn is_reserved_source_declaration(name: &str, is_function: bool) -> bool {
     name.starts_with(LINKED_SYMBOL_PREFIX)
-        || is_lowered_intrinsic(name)
+        || compiler_intrinsic_kind(name).is_some()
         || is_canonical_type_spelling(name)
         || (is_function
             && (Builtin::from_name(name).is_some() || Builtin::from_source_name(name).is_some()))
@@ -2431,11 +2450,6 @@ fn validate_production_projection_expr(
                     }
                     _ => {}
                 }
-            } else if is_lowered_intrinsic(name) {
-                // Member operations and exact numeric helpers are lowered into
-                // compiler-owned calls before the test target is projected.
-                // They do not have source declarations and must survive the
-                // production-call-graph validation as intrinsic leaves.
             } else if removed.contains(name) {
                 return Err(SemanticError {
                     code: "E_TEST_ONLY_PRODUCTION",
@@ -2443,7 +2457,7 @@ fn validate_production_projection_expr(
                         "retained function `{owner}` calls removed test function `{name}`"
                     ),
                 });
-            } else if !retained.contains(name) {
+            } else if !retained.contains(name) && compiler_intrinsic_kind(name).is_none() {
                 return Err(SemanticError {
                     code: "K2002",
                     message: format!(
@@ -15099,6 +15113,104 @@ mod tests {
     use crate::parser::parse_test_fragment as parse;
 
     #[test]
+    fn production_projection_accepts_registered_intrinsics_and_rejects_fabricated_calls() {
+        let retained = HashSet::new();
+        let removed = HashSet::new();
+        let registered = [
+            STATE_MAP_GET_INTRINSIC,
+            LIST_LEN_INTRINSIC,
+            LIST_GET_INTRINSIC,
+            LIST_TRY_SET_INTRINSIC,
+            LIST_TRY_PUSH_INTRINSIC,
+            LIST_POP_INTRINSIC,
+            LIST_CONTAINS_INTRINSIC,
+            LIST_TAKE_INTRINSIC,
+            LIST_ENUMERATE_INTRINSIC,
+            DECIMAL_DIV_ROUND_INTRINSIC,
+            QUANTITY_DIV_ROUND_INTRINSIC,
+            QUANTITY_RATIO_ROUND_INTRINSIC,
+            DECIMAL_TO_INT_TRUNC_INTRINSIC,
+            DECIMAL_TO_INT_ROUND_INTRINSIC,
+            "is_some",
+            "is_none",
+            "is_ok",
+            "is_err",
+            "unwrap_or",
+            "unwrap_err_or",
+        ];
+        for name in registered {
+            assert!(
+                compiler_intrinsic_kind(name).is_some(),
+                "missing compiler intrinsic registry entry for {name}"
+            );
+            assert!(
+                is_reserved_source_declaration(name, true),
+                "compiler intrinsic {name} must not be shadowable by a source function"
+            );
+            let expression = TypedExpr {
+                expr: ExprKind::Call {
+                    name: name.to_owned(),
+                    args: Vec::new(),
+                },
+                ty: Type::Int,
+            };
+            validate_production_projection_expr(
+                &expression,
+                "retained_helper",
+                &retained,
+                &removed,
+                false,
+            )
+            .unwrap_or_else(|error| panic!("registered intrinsic {name} was rejected: {error:?}"));
+        }
+
+        let fabricated = TypedExpr {
+            expr: ExprKind::Call {
+                name: "__fabricated_projection_escape".to_owned(),
+                args: Vec::new(),
+            },
+            ty: Type::Int,
+        };
+        assert!(compiler_intrinsic_kind("__fabricated_projection_escape").is_none());
+        assert!(!is_reserved_source_declaration(
+            "__fabricated_projection_escape",
+            true
+        ));
+        let error = validate_production_projection_expr(
+            &fabricated,
+            "retained_helper",
+            &retained,
+            &removed,
+            false,
+        )
+        .expect_err("unregistered typed calls must fail closed");
+        assert_eq!(error.code, "K2002");
+        assert!(error.message.contains("__fabricated_projection_escape"));
+    }
+
+    #[test]
+    fn removed_test_function_cannot_hide_behind_an_intrinsic_name() {
+        let retained = HashSet::new();
+        let removed = HashSet::from(["is_some".to_owned()]);
+        let expression = TypedExpr {
+            expr: ExprKind::Call {
+                name: "is_some".to_owned(),
+                args: Vec::new(),
+            },
+            ty: Type::Bool,
+        };
+        let error = validate_production_projection_expr(
+            &expression,
+            "retained_helper",
+            &retained,
+            &removed,
+            false,
+        )
+        .expect_err("removed test calls must take precedence over intrinsic classification");
+        assert_eq!(error.code, "E_TEST_ONLY_PRODUCTION");
+    }
+
+    #[test]
     fn pending_diagnostic_fills_first_spanless_failure_without_masking_structured_failure() {
         let source = crate::source::SourceId(9);
         let structured = crate::semantic_diagnostics::SemanticDiagnostic {
@@ -17667,13 +17779,22 @@ mod tests {
 
     #[test]
     fn public_entrypoints_reject_zk_verify_without_permission() {
-        let program = parse(
-            "seiyaku Demo { kotoage fn verify(bytes payload) { crypto::zk::verify_unshield(payload); } }",
+        let mut program = parse(
+            "seiyaku Demo { kotoage fn verify(bytes payload) authorize(\"Verify\") { crypto::zk::verify_unshield(payload); } }",
         )
         .expect("parse public zk verify");
+        let function = program
+            .items
+            .iter_mut()
+            .find_map(|item| match item {
+                Item::Function(function) if function.name == "verify" => Some(function),
+                _ => None,
+            })
+            .expect("verify function");
+        function.modifiers.permission = None;
         let err = SemanticContext::with_zk_enabled(true)
             .analyze(&program)
-            .expect_err("public zk verify should require permission");
+            .expect_err("a fabricated public zk verifier AST should require permission");
         assert!(
             err.message
                 .contains("kotoage function `verify` requires `authorize(\"Permission\")`"),
@@ -17809,11 +17930,21 @@ mod tests {
 
     #[test]
     fn public_entrypoints_reject_state_mutation_without_permission() {
-        let program = parse(
-            "seiyaku Demo { state int counter; hajimari() { counter = 0; } kotoage fn set() { counter = 1; } }",
+        let mut program = parse(
+            "seiyaku Demo { state int counter; hajimari() { counter = 0; } kotoage fn set() authorize(\"Set\") { counter = 1; } }",
         )
         .expect("parse public state mutation");
-        let err = analyze(&program).expect_err("public state mutation should require permission");
+        let function = program
+            .items
+            .iter_mut()
+            .find_map(|item| match item {
+                Item::Function(function) if function.name == "set" => Some(function),
+                _ => None,
+            })
+            .expect("set function");
+        function.modifiers.permission = None;
+        let err = analyze(&program)
+            .expect_err("a fabricated public state-mutation AST should require permission");
         assert!(
             err.message
                 .contains("kotoage function `set` requires `authorize(\"Permission\")`"),

@@ -2467,9 +2467,7 @@ mod network_relay_tests {
     use iroha_core::{
         SoranetPowConfigBroadcast, SoranetPuzzleConfigBroadcast,
         sumeragi::{
-            consensus::{
-                LaneBlockDescriptorV1, LaneBlockProposalV1, LaneBlockQcV1, Phase,
-            },
+            consensus::{LaneBlockDescriptorV1, LaneBlockProposalV1, LaneBlockQcV1, Phase},
             message::{BlockMessage, BlockMessageWire, ConsensusParamsAdvert},
         },
         torii_proxy::{
@@ -2531,10 +2529,9 @@ mod network_relay_tests {
         assert!(v2_payload_chunk_block_message().requires_blocking_ingress());
         assert!(sumeragi_v2_commit_certificate_request().requires_blocking_ingress());
 
-        assert!(NetworkRelayShared::retired_sumeragi_message_meta(
-            &consensus_params_msg()
-        )
-        .is_some());
+        assert!(
+            NetworkRelayShared::retired_sumeragi_message_meta(&consensus_params_msg()).is_some()
+        );
         assert!(NetworkRelayShared::retired_sumeragi_message_meta(&v2_vote_msg()).is_none());
     }
 
@@ -2748,17 +2745,15 @@ mod network_relay_tests {
 
     fn v2_certified_body_response_msg() -> iroha_core::NetworkMessage {
         sumeragi_msg(BlockMessage::V2(ConsensusMessageV2::new(
-            ConsensusMessageV2Payload::CertifiedBodyResponse(
-                consensus_v2::CertifiedBodyResponse {
-                    request_hash: HashOf::from_untyped_unchecked(Hash::new(
-                        b"irohad-certified-body-request",
-                    )),
-                    manifest: sample_v2_manifest(),
-                    body: b"body".to_vec(),
-                    responder: 0,
-                    signature: vec![0x69],
-                },
-            ),
+            ConsensusMessageV2Payload::CertifiedBodyResponse(consensus_v2::CertifiedBodyResponse {
+                request_hash: HashOf::from_untyped_unchecked(Hash::new(
+                    b"irohad-certified-body-request",
+                )),
+                manifest: sample_v2_manifest(),
+                body: b"body".to_vec(),
+                responder: 0,
+                signature: vec![0x69],
+            }),
         )))
     }
 
@@ -3424,14 +3419,30 @@ fn apply_state_config_before_kura_replay(
     let restored_runtime = state
         .nexus_runtime_restored_from_snapshot()
         .then(|| state.nexus_snapshot());
-    let nexus = nexus_config_for_startup_replay(config.nexus.clone(), restored_runtime.as_ref());
-    state
-        .set_nexus_from_config(nexus)
-        .map_err(|err| Report::new(err).change_context(StartError::InitKura))
-        .map_err(|report| {
-            report.attach("failed to apply Nexus lane catalog/lifecycle at startup")
-        })?;
-    if restored_runtime.is_some() {
+    if restored_runtime.is_none() {
+        state
+            .prepare_configured_primary_geometry_anchor(&config.nexus.configured_lane_catalog)
+            .map_err(|err| Report::new(err).change_context(StartError::InitKura))
+            .map_err(|report| {
+                report.attach("failed to anchor authenticated primary lane geometry at startup")
+            })?;
+        state
+            .restore_kura_lane_segments_before_startup_replay()
+            .map_err(|err| Report::new(err).change_context(StartError::InitKura))
+            .map_err(|report| {
+                report.attach("failed to restore primary geometry before startup replay")
+            })?;
+    } else {
+        state
+            .prepare_restored_configured_primary_geometry_anchor(
+                &config.nexus.configured_lane_catalog,
+            )
+            .map_err(|err| Report::new(err).change_context(StartError::InitKura))
+            .map_err(|report| {
+                report.attach(
+                    "failed to anchor snapshot-authenticated primary lane geometry at startup",
+                )
+            })?;
         state
             .restore_kura_lane_segments_from_nexus()
             .map_err(|err| Report::new(err).change_context(StartError::InitKura))
@@ -3439,6 +3450,13 @@ fn apply_state_config_before_kura_replay(
                 report.attach("failed to restore snapshot Nexus lane storage at startup")
             })?;
     }
+    let nexus = nexus_config_for_startup_replay(config.nexus.clone(), restored_runtime.as_ref());
+    state
+        .set_nexus_from_config(nexus)
+        .map_err(|err| Report::new(err).change_context(StartError::InitKura))
+        .map_err(|report| {
+            report.attach("failed to apply Nexus lane catalog/lifecycle at startup")
+        })?;
     Ok(())
 }
 
@@ -3956,8 +3974,7 @@ impl Iroha {
             signed_v2_genesis_context_metadata(effective_genesis)
                 .map_err(|error| Report::new(StartError::InitKura).attach(error))?;
         if config.nexus.enabled
-            && signed_consensus_mode
-                != iroha_data_model::block::consensus_v2::ConsensusMode::Npos
+            && signed_consensus_mode != iroha_data_model::block::consensus_v2::ConsensusMode::Npos
         {
             return Err(Report::new(StartError::InitKura)
                 .attach("Nexus requires the signed genesis Sumeragi v2 mode to be NPoS"));
@@ -4419,18 +4436,17 @@ impl Iroha {
                 view.sccp_registry.as_ref(),
                 height,
             );
-            let (mode_tag, bls_domain, caps, block_cadence_ms) =
-                consensus_caps_from_genesis(
-                    effective_genesis,
-                    &config.common.chain,
-                    &config_caps,
-                    &config.sumeragi,
+            let (mode_tag, bls_domain, caps, block_cadence_ms) = consensus_caps_from_genesis(
+                effective_genesis,
+                &config.common.chain,
+                &config_caps,
+                &config.sumeragi,
+            )
+            .ok_or_else(|| {
+                Report::new(StartError::InitKura).attach(
+                    "signed genesis does not contain one canonical Sumeragi v2 handshake context",
                 )
-                .ok_or_else(|| {
-                    Report::new(StartError::InitKura).attach(
-                        "signed genesis does not contain one canonical Sumeragi v2 handshake context",
-                    )
-                })?;
+            })?;
             (
                 mode_tag,
                 bls_domain,
@@ -4688,16 +4704,16 @@ impl Iroha {
             } else {
                 let (fresh_mode_tag, fresh_bls_domain, fresh_caps, fresh_block_cadence_ms) =
                     consensus_caps_from_genesis(
-                    genesis_block,
-                    &config.common.chain,
-                    &config_caps,
-                    &config.sumeragi,
-                )
-                .ok_or_else(|| {
-                    Report::new(StartError::InitKura).attach(
+                        genesis_block,
+                        &config.common.chain,
+                        &config_caps,
+                        &config.sumeragi,
+                    )
+                    .ok_or_else(|| {
+                        Report::new(StartError::InitKura).attach(
                         "fresh genesis is missing required signed Sumeragi v2 consensus metadata",
                     )
-                })?;
+                    })?;
                 if fresh_block_cadence_ms != signed_block_cadence_ms {
                     return Err(Report::new(StartError::InitKura).attach(
                         "fresh signed genesis cadence differs from the handshake opened for bootstrap",
@@ -5082,7 +5098,6 @@ impl Iroha {
         );
         supervisor.monitor(child);
         log_startup_trace("irohad.peers_gossiper.ready", startup_trace_started_at);
-
 
         #[cfg(feature = "telemetry")]
         let torii_telemetry =
@@ -9840,16 +9855,15 @@ mod tests {
             let height = u64::try_from(state.committed_height()).unwrap_or(u64::MAX);
             let config_caps = build_consensus_config_caps(&config.nexus, None, None)
                 .expect("config caps should build");
-            let (mode_tag_perm, bls_perm, caps_perm) =
-                compute_consensus_handshake_caps(
-                    &world,
-                    height,
-                    &config,
-                    &config_caps,
-                    iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned,
-                    None,
-                )
-                .expect("valid permissioned v2 handshake config");
+            let (mode_tag_perm, bls_perm, caps_perm) = compute_consensus_handshake_caps(
+                &world,
+                height,
+                &config,
+                &config_caps,
+                iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned,
+                None,
+            )
+            .expect("valid permissioned v2 handshake config");
             assert_eq!(
                 mode_tag_perm,
                 iroha_core::sumeragi::consensus::PERMISSIONED_TAG
@@ -9866,16 +9880,15 @@ mod tests {
             let permissioned_fp = caps_perm.consensus_fingerprint;
             let permissioned_v2_config_fp = caps_perm.config.v2_config_fingerprint;
 
-            let (mode_tag_npos, bls_npos, caps_npos) =
-                compute_consensus_handshake_caps(
-                    &world,
-                    height,
-                    &config,
-                    &config_caps,
-                    iroha_data_model::block::consensus_v2::ConsensusMode::Npos,
-                    None,
-                )
-                .expect("valid NPoS v2 handshake config");
+            let (mode_tag_npos, bls_npos, caps_npos) = compute_consensus_handshake_caps(
+                &world,
+                height,
+                &config,
+                &config_caps,
+                iroha_data_model::block::consensus_v2::ConsensusMode::Npos,
+                None,
+            )
+            .expect("valid NPoS v2 handshake config");
             assert_eq!(mode_tag_npos, iroha_core::sumeragi::consensus::NPOS_TAG);
             assert_eq!(bls_npos, "bls-iroha2:npos-sumeragi:v2");
             assert_eq!(
@@ -9906,11 +9919,12 @@ mod tests {
                     .build_raw()
                     .with_consensus_meta()
                     .build_and_sign(&genesis_keys)?;
-            let npos_genesis = GenesisBuilder::new_without_executor(chain.clone(), PathBuf::from("."))
-                .build_raw()
-                .with_consensus_mode(SumeragiConsensusMode::Npos)
-                .with_consensus_meta()
-                .build_and_sign(&genesis_keys)?;
+            let npos_genesis =
+                GenesisBuilder::new_without_executor(chain.clone(), PathBuf::from("."))
+                    .build_raw()
+                    .with_consensus_mode(SumeragiConsensusMode::Npos)
+                    .with_consensus_meta()
+                    .build_and_sign(&genesis_keys)?;
 
             let config_caps = build_consensus_config_caps(&config.nexus, None, None)
                 .map_err(|err| eyre::eyre!(format!("{err:?}")))?;
@@ -9979,16 +9993,15 @@ mod tests {
             let state = State::new_for_testing(World::new(), kura, query);
             let world = state.world_view();
             let height = u64::try_from(state.committed_height()).unwrap_or(u64::MAX);
-            let (mode_tag, bls_domain, consensus_caps) =
-                compute_consensus_handshake_caps(
-                    &world,
-                    height,
-                    &config,
-                    &config_caps,
-                    iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned,
-                    None,
-                )
-                .expect("valid v2 handshake config");
+            let (mode_tag, bls_domain, consensus_caps) = compute_consensus_handshake_caps(
+                &world,
+                height,
+                &config,
+                &config_caps,
+                iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned,
+                None,
+            )
+            .expect("valid v2 handshake config");
 
             // Diverge the runtime chain after computing consensus caps to force a
             // fingerprint mismatch without altering the embedded handshake metadata.

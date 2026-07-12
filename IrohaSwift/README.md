@@ -155,10 +155,9 @@ canonical unprefixed Base58 asset-definition IDs on the Swift surface.
 
 ### Kagemusha offline cash lifecycle
 
-IrohaSwift exposes one public offline-cash product selector:
-`KagemushaOfflineSpendMode.recursiveSpend` (`recursive_spend_v1`). The
-versioned native artifact contract remains `recursive_spend_v2` and is not a
-second spend mode.
+IrohaSwift exposes only Kagemusha offline cash. There is no runtime product-mode
+field or wallet-selectable offline API. The native artifact wire contract is
+authenticated internally and is not another public API.
 
 Use the typed `KagemushaRecursiveSpend` and
 `KagemushaRecursiveSpendCodecs` APIs for top-up, recipient-request creation,
@@ -167,11 +166,12 @@ redemption. Amounts are canonical atomic `u128` values paired with the
 asset-definition scale; callers must reject excess decimal precision instead of
 rounding.
 
-Wallet applications own encrypted note state and QR/NFC transport. Persist inputs,
-recipient output, optional sender change, lineage witness, and operation status at
-each commit boundary. Fetch and install the complete V3 artifact set before an
-offline exchange; no network or artifact access belongs on the offline send or
-receive path.
+Wallet applications own encrypted note state and peer transport. Persist the
+opaque bundle, recipient output, optional sender change, artifact binding, and
+operation status at each commit boundary. Fetch and atomically install the
+complete V3 artifact set before an offline exchange. Every proof operation must
+receive the resulting `KagemushaRecursiveSpendInstalledArtifactSet`; no network
+or artifact access belongs on the offline send or receive path.
 
 ### Push Devices
 
@@ -282,6 +282,46 @@ Relay operators submit cumulative receipt/voucher evidence with
 operator receives only earned XOR and the customer gets the refundable balance.
 
 > **Account selectors:** Account-scoped helpers (`ToriiClient.getAssets`, `getTransactions`, and matching `IrohaSDK` shortcuts) accept canonical I105 account ids or on-chain account aliases (`name@dataspace` / `name@domain.dataspace`). Torii resolves aliases to canonical account ids before serving the response.
+
+### Detached asset transfers
+
+Use the SDK-owned two-phase `/v1/assets/transfer` flow for online payments. It
+prepares exactly one numeric transfer, requires an explicit balance scope and
+short creation/TTL window, and never accepts a private key, nonce, arbitrary
+metadata, aliases, or legacy field spellings.
+
+```swift
+let request = ToriiAssetTransferRequest(
+    authority: authority,
+    assetDefinitionId: assetDefinitionId,
+    assetBalanceScope: "dataspace:10", // or exactly "global"
+    amount: "750",
+    destination: destination,
+    memo: "invoice 42",
+    feeSponsor: sponsor,
+    creationTimeMs: torii.recommendedCreationTimeMs(),
+    transactionTtlMs: 120_000
+)
+let draft = try await torii.prepareDetachedAssetTransfer(request)
+
+// SigningKey keeps signing local. The public-key/signature overload is also
+// available for Keychain or hardware-backed signers.
+let submitted = try await torii.submitDetachedAssetTransfer(
+    draft,
+    signingKey: signingKey
+)
+let finality = try await torii.waitForDetachedAssetTransferFinality(
+    draft,
+    submittedResponse: submitted
+)
+```
+
+Preparation fails closed unless ABI-19 native inspection proves the versioned
+scaffold has the exact authority, chain, definition, source scope, amount,
+destination, memo, fee sponsor, creation time, TTL, and no extra metadata.
+Submission locally verifies Ed25519 authority/signature binding, uses native
+finalization, and requires Torii's final transaction and entrypoint hashes to
+match. `IrohaSDK` forwards the same prepare, submit, and finality methods.
 
 ### Kotodama contract manifests
 
@@ -683,8 +723,8 @@ operation and its input note until the operation status reaches final chain
 state. A transport timeout or unknown state is not permission to create a new
 operation ID.
 
-The sole product mode is `recursive_spend_v1`. Runtime use requires the exact
-ABI 18 capability archive, the complete native V2 symbol inventory, and a
+Runtime use requires the exact ABI 19 capability archive, the complete native
+first-release symbol inventory, and a
 validated proof-backend readiness result. The V3 manifest and its six streamed
 key artifacts are content-addressed and installed atomically through
 `KagemushaRecursiveSpendArtifactInstallSessionV3`; a partial or corrupt
@@ -723,7 +763,7 @@ admitted production privacy entrypoints, including
 `buildZkAceAuthorizationProofV1(requestArchive:)`, dispatch through the same
 production archive paths and remain fail-closed while the privacy rows are
 gated. Planned catalog entrypoints stay unexported until their production gates
-pass. Native availability in the first release requires exact ABI 18, the privacy
+pass. Native availability in the first release requires exact ABI 19, the privacy
 capability/build/verify symbols, and successful Norito probe outputs whose
 operation-specific result schema bytes match the called entry point.
 

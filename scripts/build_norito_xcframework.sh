@@ -325,8 +325,8 @@ if [[ -z "$BRIDGE_ABI_VERSION" ]]; then
   echo "[-] Unable to determine native bridge ABI version" >&2
   exit 1
 fi
-if [[ "$BRIDGE_ABI_VERSION" != "18" ]]; then
-  echo "[-] First-release NoritoBridge artifacts require exact native bridge ABI 18 (found $BRIDGE_ABI_VERSION)" >&2
+if [[ "$BRIDGE_ABI_VERSION" != "19" ]]; then
+  echo "[-] First-release NoritoBridge artifacts require exact native bridge ABI 19 (found $BRIDGE_ABI_VERSION)" >&2
   exit 1
 fi
 SOURCE_COMMIT=$(git -C "$ROOT_DIR" rev-parse HEAD)
@@ -375,6 +375,9 @@ cat > "$OUT_DIR/NoritoBridge.artifacts.json" <<EOF
   "bridge_header_sha256": "$HEADER_HASH",
   "required_symbols": [
     "connect_norito_bridge_abi_version",
+    "connect_norito_detached_transaction_scaffold_inspect_v1",
+    "connect_norito_detached_transaction_scaffold_finalize_ed25519_v1",
+    "connect_norito_canonical_json_blake3_v1",
     "connect_norito_kagemusha_recursive_spend_capabilities_v1",
     "connect_norito_kagemusha_topup_finality_verify_v2",
     "connect_norito_kagemusha_topup_shield_build_unsigned_v2",
@@ -390,7 +393,6 @@ cat > "$OUT_DIR/NoritoBridge.artifacts.json" <<EOF
     "connect_norito_kagemusha_recursive_spend_topup_finalize_request_v2",
     "connect_norito_kagemusha_recursive_spend_topup_v2",
     "connect_norito_kagemusha_recursive_spend_append_v2",
-    "connect_norito_kagemusha_recursive_spend_redeem_change_v2",
     "connect_norito_kagemusha_recursive_spend_verify_v2",
     "connect_norito_kagemusha_recursive_spend_redeem_unsigned_payload_digest_v2",
     "connect_norito_kagemusha_recursive_spend_redeem_finalize_request_v2",
@@ -409,8 +411,7 @@ cat > "$OUT_DIR/NoritoBridge.artifacts.json" <<EOF
     "connect_norito_kagemusha_recursive_spend_peer_payment_from_split_v2",
     "connect_norito_kagemusha_recursive_spend_peer_payment_validate_v2",
     "connect_norito_kagemusha_recursive_spend_bundle_summary_v2",
-    "connect_norito_kagemusha_recursive_spend_build_split_intent_v2",
-    "connect_norito_kagemusha_recursive_spend_build_redemption_intent_v2"
+    "connect_norito_kagemusha_recursive_spend_build_split_intent_v2"
   ],
   "kagemusha_mobile_artifact_roles": [
     {

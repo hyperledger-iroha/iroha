@@ -71,7 +71,7 @@ network prefix stay aligned with `docs/source/sns/address_display_guidelines.md`
 ## Kagemusha proof artifacts
 
 The Java SDK does not expose an offline-spend lifecycle. The only Kagemusha surface is
-`KagemushaRecursiveSpendProver`, which requires native bridge ABI 18 exactly and streams the
+`KagemushaRecursiveSpendProver`, which requires native bridge ABI 19 exactly and streams the
 six authenticated V3 proof-key artifacts into an atomic generation install. Product wallets use
 the Swift SDK for top-up, split/change transfer, verification, and redemption.
 

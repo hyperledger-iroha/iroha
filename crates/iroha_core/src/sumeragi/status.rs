@@ -34,21 +34,306 @@ use iroha_data_model::{
         },
         consensus_v2::SumeragiV2Status,
     },
-    consensus::ConsensusKeyRecord,
+    consensus::{ConsensusKeyRecord, Qc, ValidatorSetCheckpoint},
     da::commitment::DaCommitmentBundle,
     isi::settlement::{SettlementAtomicity, SettlementExecutionOrder},
     nexus::{DataSpaceId, LaneId, LaneRelayEnvelope, LaneRelayError},
+    peer::PeerId,
 };
 use iroha_primitives::numeric::Numeric;
 use iroha_telemetry::metrics;
 use norito::codec::{Decode, Encode};
 
 use crate::{
+    commit_roster_journal::CommitRosterSnapshot,
     governance::manifest::{GovernanceRules, LaneManifestStatus, RuntimeUpgradeHook},
     queue::{BackpressureState, QueuePressureSnapshot},
 };
 
 static SUMERAGI_V2_STATUS: OnceLock<Mutex<Option<SumeragiV2Status>>> = OnceLock::new();
+static MODE_TAG: OnceLock<Mutex<String>> = OnceLock::new();
+static STAGED_MODE_TAG: OnceLock<Mutex<Option<String>>> = OnceLock::new();
+static STAGED_MODE_ACTIVATION_HEIGHT: OnceLock<Mutex<Option<u64>>> = OnceLock::new();
+static MODE_ACTIVATION_LAG_BLOCKS: OnceLock<Mutex<Option<u64>>> = OnceLock::new();
+static VALIDATOR_CHECKPOINT_HISTORY: OnceLock<Mutex<VecDeque<ValidatorSetCheckpoint>>> =
+    OnceLock::new();
+static COMMIT_CERT_HISTORY: OnceLock<Mutex<VecDeque<Qc>>> = OnceLock::new();
+static LAST_PROPOSE_MS: AtomicU64 = AtomicU64::new(0);
+static LAST_COLLECT_DA_MS: AtomicU64 = AtomicU64::new(0);
+static LAST_COLLECT_PREVOTE_MS: AtomicU64 = AtomicU64::new(0);
+static LAST_COLLECT_PRECOMMIT_MS: AtomicU64 = AtomicU64::new(0);
+static LAST_COLLECT_AGG_MS: AtomicU64 = AtomicU64::new(0);
+static LAST_COMMIT_MS: AtomicU64 = AtomicU64::new(0);
+static MAX_PROPOSE_MS: AtomicU64 = AtomicU64::new(0);
+static MAX_COLLECT_DA_MS: AtomicU64 = AtomicU64::new(0);
+static MAX_COLLECT_PREVOTE_MS: AtomicU64 = AtomicU64::new(0);
+static MAX_COLLECT_PRECOMMIT_MS: AtomicU64 = AtomicU64::new(0);
+static MAX_COLLECT_AGG_MS: AtomicU64 = AtomicU64::new(0);
+static MAX_COMMIT_MS: AtomicU64 = AtomicU64::new(0);
+static LAST_PROPOSE_EMA_MS: AtomicU64 = AtomicU64::new(0);
+static LAST_COLLECT_DA_EMA_MS: AtomicU64 = AtomicU64::new(0);
+static LAST_COLLECT_PREVOTE_EMA_MS: AtomicU64 = AtomicU64::new(0);
+static LAST_COLLECT_PRECOMMIT_EMA_MS: AtomicU64 = AtomicU64::new(0);
+static LAST_COLLECT_AGG_EMA_MS: AtomicU64 = AtomicU64::new(0);
+static LAST_COMMIT_EMA_MS: AtomicU64 = AtomicU64::new(0);
+static LAST_PIPELINE_TOTAL_EMA_MS: AtomicU64 = AtomicU64::new(0);
+static GOSSIP_FALLBACK_TOTAL: AtomicU64 = AtomicU64::new(0);
+static BLOCK_CREATED_DROPPED_BY_LOCK_TOTAL: AtomicU64 = AtomicU64::new(0);
+static BLOCK_CREATED_HINT_MISMATCH_TOTAL: AtomicU64 = AtomicU64::new(0);
+static BLOCK_CREATED_PROPOSAL_MISMATCH_TOTAL: AtomicU64 = AtomicU64::new(0);
+static AVAILABILITY_STATS: OnceLock<Mutex<AvailabilityStats>> = OnceLock::new();
+static QC_LATENCY_MS: OnceLock<Mutex<BTreeMap<&'static str, u64>>> = OnceLock::new();
+static RBC_BACKLOG: OnceLock<Mutex<RbcBacklogSnapshot>> = OnceLock::new();
+static PENDING_RBC_STATE: OnceLock<Mutex<PendingRbcSnapshot>> = OnceLock::new();
+
+const VALIDATOR_CHECKPOINT_HISTORY_CAP: usize = 64;
+const COMMIT_CERT_HISTORY_CAP: usize = 512;
+
+/// Opaque view of one authenticated legacy commit-roster snapshot.
+///
+/// Sumeragi v2 carries finality in its exact Kura-owned v2 artifact and does
+/// not mint this capability. The type survives only for recovery metadata
+/// consumers that must inspect a capability authenticated by an external
+/// compatibility path without accepting raw journal fields independently.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct AuthenticatedCommitRoster(CommitRosterSnapshot);
+
+impl AuthenticatedCommitRoster {
+    /// Return the authenticated commit certificate.
+    #[must_use]
+    pub(crate) fn commit_qc(&self) -> &crate::sumeragi::consensus::Qc {
+        &self.0.commit_qc
+    }
+
+    /// Return the validator checkpoint bound to the certificate.
+    #[must_use]
+    pub(crate) fn validator_checkpoint(
+        &self,
+    ) -> &iroha_data_model::consensus::ValidatorSetCheckpoint {
+        &self.0.validator_checkpoint
+    }
+
+    /// Return the optional stake authority bound to the validator roster.
+    #[must_use]
+    pub(crate) fn stake_snapshot(
+        &self,
+    ) -> Option<&crate::sumeragi::stake_snapshot::CommitStakeSnapshot> {
+        self.0.stake_snapshot.as_ref()
+    }
+
+    /// Construct a capability from an internally authenticated fixture.
+    ///
+    /// This seam is deliberately test-only: production v2 code must never
+    /// promote decoded legacy journal metadata into finality authority.
+    #[cfg(test)]
+    pub(crate) fn from_snapshot_for_tests(snapshot: CommitRosterSnapshot) -> Option<Self> {
+        let qc = &snapshot.commit_qc;
+        let checkpoint = &snapshot.validator_checkpoint;
+        let exact_checkpoint = checkpoint.height == qc.height
+            && checkpoint.view == qc.view
+            && checkpoint.block_hash == qc.subject_block_hash
+            && checkpoint.parent_state_root == qc.parent_state_root
+            && checkpoint.post_state_root == qc.post_state_root
+            && checkpoint.chain_order_hash == qc.chain_order_hash
+            && checkpoint.rechain_seq == qc.rechain_seq
+            && checkpoint.validator_set_hash == qc.validator_set_hash
+            && checkpoint.validator_set_hash_version == qc.validator_set_hash_version
+            && checkpoint.validator_set == qc.validator_set
+            && checkpoint.signers_bitmap == qc.aggregate.signers_bitmap
+            && checkpoint.bls_aggregate_signature == qc.aggregate.bls_aggregate_signature
+            && checkpoint.expires_at_height.is_none();
+        let exact_stake = snapshot
+            .stake_snapshot
+            .as_ref()
+            .is_none_or(|stake| stake.matches_roster(&qc.validator_set));
+        (exact_checkpoint && exact_stake).then_some(Self(snapshot))
+    }
+}
+
+#[cfg(test)]
+mod authenticated_commit_roster_tests {
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
+    use iroha_data_model::{
+        block::{BlockHeader, consensus::QcAggregate},
+        consensus::{Qc, VALIDATOR_SET_HASH_VERSION_V1, ValidatorSetCheckpoint},
+        peer::PeerId,
+    };
+
+    use super::{AuthenticatedCommitRoster, CommitRosterSnapshot};
+    use crate::sumeragi::consensus::{PERMISSIONED_TAG, Phase};
+
+    fn fixture() -> CommitRosterSnapshot {
+        let key_pair = KeyPair::try_from_seed(
+            b"authenticated-commit-roster-status-test".to_vec(),
+            Algorithm::BlsNormal,
+        )
+        .expect("derive validator fixture");
+        let validator_set = vec![PeerId::new(key_pair.public_key().clone())];
+        let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"block"));
+        let parent_state_root = Hash::new(b"parent-state");
+        let post_state_root = Hash::new(b"post-state");
+        let chain_order_hash = Hash::new(b"chain-order");
+        let signers_bitmap = vec![1];
+        let aggregate_signature = vec![0xA5; 96];
+        let qc = Qc {
+            phase: Phase::Commit,
+            subject_block_hash: block_hash,
+            parent_state_root,
+            post_state_root,
+            height: 7,
+            view: 2,
+            epoch: 1,
+            chain_order_hash,
+            rechain_seq: 3,
+            mode_tag: PERMISSIONED_TAG.to_owned(),
+            highest_qc: None,
+            validator_set_hash: HashOf::new(&validator_set),
+            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set: validator_set.clone(),
+            aggregate: QcAggregate {
+                signers_bitmap: signers_bitmap.clone(),
+                bls_aggregate_signature: aggregate_signature.clone(),
+            },
+        };
+        let validator_checkpoint = ValidatorSetCheckpoint::new_with_chain_order(
+            qc.height,
+            qc.view,
+            block_hash,
+            chain_order_hash,
+            qc.rechain_seq,
+            parent_state_root,
+            post_state_root,
+            validator_set,
+            signers_bitmap,
+            aggregate_signature,
+            VALIDATOR_SET_HASH_VERSION_V1,
+            None,
+        );
+        CommitRosterSnapshot {
+            commit_qc: qc,
+            validator_checkpoint,
+            stake_snapshot: None,
+        }
+    }
+
+    #[test]
+    fn capability_exposes_only_an_exact_roster_tuple() {
+        let snapshot = fixture();
+        let capability = AuthenticatedCommitRoster::from_snapshot_for_tests(snapshot.clone())
+            .expect("exact snapshot should mint a test capability");
+        assert_eq!(capability.commit_qc(), &snapshot.commit_qc);
+        assert_eq!(
+            capability.validator_checkpoint(),
+            &snapshot.validator_checkpoint
+        );
+        assert_eq!(capability.stake_snapshot(), None);
+
+        let mut mismatched = snapshot;
+        mismatched.validator_checkpoint.view += 1;
+        assert!(AuthenticatedCommitRoster::from_snapshot_for_tests(mismatched).is_none());
+    }
+
+    #[test]
+    fn archival_mode_tags_roundtrip_without_changing_v2_status() {
+        let _guard = super::mode_tags_test_guard();
+        super::clear_v2_status();
+        super::set_mode_tags(PERMISSIONED_TAG, Some("staged"), Some(9));
+
+        assert_eq!(
+            super::mode_tags(),
+            (
+                PERMISSIONED_TAG.to_owned(),
+                Some("staged".to_owned()),
+                Some(9),
+                None,
+            )
+        );
+        assert_eq!(super::v2_status(), None);
+
+        super::set_mode_tags("", None, None);
+    }
+
+    #[test]
+    fn archival_commit_histories_are_newest_first_and_resettable() {
+        let _guard = super::commit_history_test_guard();
+        super::reset_commit_certs_for_tests();
+        super::reset_validator_checkpoints_for_tests();
+
+        let first = fixture();
+        let mut second = first.clone();
+        second.commit_qc.height += 1;
+        second.validator_checkpoint.height += 1;
+        super::record_commit_qc(first.commit_qc.clone());
+        super::record_validator_checkpoint(first.validator_checkpoint.clone());
+        super::record_commit_qc(second.commit_qc.clone());
+        super::record_validator_checkpoint(second.validator_checkpoint.clone());
+
+        assert_eq!(
+            super::commit_qc_history()
+                .first()
+                .map(|certificate| certificate.height),
+            Some(second.commit_qc.height)
+        );
+        assert_eq!(
+            super::validator_checkpoint_history()
+                .first()
+                .map(|checkpoint| checkpoint.height),
+            Some(second.validator_checkpoint.height)
+        );
+
+        super::reset_commit_certs_for_tests();
+        super::reset_validator_checkpoints_for_tests();
+        assert!(super::commit_qc_history().is_empty());
+        assert!(super::validator_checkpoint_history().is_empty());
+    }
+
+    #[test]
+    fn lane_rbc_reset_clears_surviving_adapter_diagnostics() {
+        let _guard = super::rbc_status_test_guard();
+        super::lock_operator_status_slot(super::lane_activity_slot(), "lane activity test").push(
+            super::LaneActivitySnapshot {
+                lane_id: 7,
+                ..super::LaneActivitySnapshot::default()
+            },
+        );
+        super::lock_operator_status_slot(
+            super::dataspace_activity_slot(),
+            "dataspace activity test",
+        )
+        .push(super::DataspaceActivitySnapshot {
+            lane_id: 7,
+            dataspace_id: 9,
+            tx_served: 1,
+        });
+        super::lock_operator_status_slot(
+            super::pipeline_execution_slot(),
+            "pipeline execution test",
+        )
+        .rbc_chunks_total = 3;
+
+        super::reset_rbc_backlog_stats_for_tests();
+
+        assert!(
+            super::lock_operator_status_slot(super::lane_activity_slot(), "lane activity test")
+                .is_empty()
+        );
+        assert!(
+            super::lock_operator_status_slot(
+                super::dataspace_activity_slot(),
+                "dataspace activity test",
+            )
+            .is_empty()
+        );
+        assert_eq!(
+            super::lock_operator_status_slot(
+                super::pipeline_execution_slot(),
+                "pipeline execution test",
+            )
+            .rbc_chunks_total,
+            0
+        );
+    }
+}
 
 /// Publish the exact protocol-v2 reducer snapshot served by Torii.
 pub fn set_v2_status(status: SumeragiV2Status) {
@@ -77,6 +362,51 @@ pub fn clear_v2_status() {
     }
 }
 
+/// Record archival consensus-mode labels used by retained evidence validation.
+///
+/// The labels are process-local diagnostics only. Protocol-v2 consensus mode
+/// remains owned by the immutable height context.
+pub fn set_mode_tags(
+    mode_tag: &str,
+    staged_mode_tag: Option<&str>,
+    staged_mode_activation_height: Option<u64>,
+) {
+    *lock_operator_status_slot(
+        MODE_TAG.get_or_init(|| Mutex::new(String::new())),
+        "mode tag",
+    ) = mode_tag.to_owned();
+    *lock_operator_status_slot(
+        STAGED_MODE_TAG.get_or_init(|| Mutex::new(None)),
+        "staged mode tag",
+    ) = staged_mode_tag.map(ToOwned::to_owned);
+    *lock_operator_status_slot(
+        STAGED_MODE_ACTIVATION_HEIGHT.get_or_init(|| Mutex::new(None)),
+        "staged mode activation height",
+    ) = staged_mode_activation_height;
+}
+
+/// Return archival consensus-mode labels used by retained operator routes.
+#[must_use]
+pub fn mode_tags() -> (String, Option<String>, Option<u64>, Option<u64>) {
+    let mode = MODE_TAG
+        .get()
+        .map(|slot| lock_operator_status_slot(slot, "mode tag").clone())
+        .unwrap_or_default();
+    let staged = STAGED_MODE_TAG
+        .get()
+        .map(|slot| lock_operator_status_slot(slot, "staged mode tag").clone())
+        .unwrap_or_default();
+    let activation = STAGED_MODE_ACTIVATION_HEIGHT
+        .get()
+        .map(|slot| *lock_operator_status_slot(slot, "staged mode activation height"))
+        .unwrap_or_default();
+    let lag = MODE_ACTIVATION_LAG_BLOCKS
+        .get()
+        .map(|slot| *lock_operator_status_slot(slot, "mode activation lag"))
+        .unwrap_or_default();
+    (mode, staged, activation, lag)
+}
+
 /// Legacy lane-RBC mismatch labels retained only by lane-local telemetry.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum RbcMismatchKind {
@@ -98,6 +428,209 @@ impl RbcMismatchKind {
             Self::ChunkRoot => "chunk_root",
         }
     }
+}
+
+#[derive(Default)]
+struct AvailabilityStats {
+    total_votes: u64,
+    per_peer: BTreeMap<PeerId, CollectorEntry>,
+}
+
+#[derive(Clone)]
+struct CollectorEntry {
+    idx: u64,
+    votes: u64,
+}
+
+/// Snapshot entry describing availability votes ingested by a collector.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AvailabilityCollectorSnapshot {
+    /// Collector topology index.
+    pub collector_idx: u64,
+    /// Collector peer identifier.
+    pub peer: PeerId,
+    /// Number of availability votes ingested by this collector.
+    pub votes_ingested: u64,
+}
+
+/// Aggregated availability vote ingestion snapshot for the telemetry route.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct AvailabilitySnapshot {
+    /// Total availability votes ingested by this node.
+    pub total: u64,
+    /// Per-collector vote counts keyed by topology index and peer id.
+    pub collectors: Vec<AvailabilityCollectorSnapshot>,
+}
+
+/// Aggregated RBC backlog metrics snapshot for the telemetry route.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RbcBacklogSnapshot {
+    /// Total missing chunks across active sessions.
+    pub total_missing_chunks: u64,
+    /// Maximum missing chunks within any single session.
+    pub max_missing_chunks: u64,
+    /// Number of sessions whose local chunk delivery is still incomplete.
+    pub pending_sessions: u64,
+}
+
+/// Pending pre-INIT RBC stash entry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PendingRbcEntrySnapshot {
+    /// Block hash associated with the pending session.
+    pub block_hash: HashOf<BlockHeader>,
+    /// Block height for the pending session.
+    pub height: u64,
+    /// View index for the pending session.
+    pub view: u64,
+    /// Number of chunk frames currently buffered.
+    pub chunks: u64,
+    /// Total chunk payload bytes currently buffered.
+    pub bytes: u64,
+    /// READY frames currently buffered.
+    pub ready: u64,
+    /// DELIVER frames currently buffered.
+    pub deliver: u64,
+    /// Chunk frames dropped for this session due to caps.
+    pub dropped_chunks: u64,
+    /// Chunk payload bytes dropped for this session due to caps.
+    pub dropped_bytes: u64,
+    /// READY frames dropped for this session due to caps.
+    pub dropped_ready: u64,
+    /// DELIVER frames dropped for this session due to caps.
+    pub dropped_deliver: u64,
+    /// Age in milliseconds since the first pending message was recorded.
+    pub age_ms: u64,
+}
+
+impl Default for PendingRbcEntrySnapshot {
+    fn default() -> Self {
+        Self {
+            block_hash: HashOf::from_untyped_unchecked(Hash::prehashed([0; Hash::LENGTH])),
+            height: 0,
+            view: 0,
+            chunks: 0,
+            bytes: 0,
+            ready: 0,
+            deliver: 0,
+            dropped_chunks: 0,
+            dropped_bytes: 0,
+            dropped_ready: 0,
+            dropped_deliver: 0,
+            age_ms: 0,
+        }
+    }
+}
+
+/// Aggregated pending RBC stash metrics.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PendingRbcSnapshot {
+    /// Current pending sessions awaiting INIT.
+    pub sessions: u64,
+    /// Maximum pending sessions retained.
+    pub session_cap: u64,
+    /// Aggregate pending chunk frames across sessions.
+    pub chunks: u64,
+    /// Aggregate pending chunk payload bytes across sessions.
+    pub bytes: u64,
+    /// Configured per-session chunk cap.
+    pub max_chunks_per_session: u64,
+    /// Configured per-session byte cap.
+    pub max_bytes_per_session: u64,
+    /// Configured TTL in milliseconds before pending entries expire.
+    pub ttl_ms: u64,
+    /// Total pending frames dropped across all reasons.
+    pub drops_total: u64,
+    /// Total pending frames dropped due to cap enforcement.
+    pub drops_cap_total: u64,
+    /// Aggregate payload or signature bytes dropped due to caps.
+    pub drops_cap_bytes_total: u64,
+    /// Total pending frames dropped due to TTL expiry.
+    pub drops_ttl_total: u64,
+    /// Aggregate payload or signature bytes dropped due to TTL expiry.
+    pub drops_ttl_bytes_total: u64,
+    /// Total pending bytes dropped across all reasons.
+    pub drops_bytes_total: u64,
+    /// Total pending sessions evicted.
+    pub evicted_total: u64,
+    /// Total READY frames stashed before processing.
+    pub stash_ready_total: u64,
+    /// READY frames stashed because INIT has not arrived.
+    pub stash_ready_init_missing_total: u64,
+    /// READY frames stashed because the commit roster is missing.
+    pub stash_ready_roster_missing_total: u64,
+    /// READY frames stashed because the commit roster hash mismatched.
+    pub stash_ready_roster_hash_mismatch_total: u64,
+    /// READY frames stashed while the commit roster is unverified.
+    pub stash_ready_roster_unverified_total: u64,
+    /// Total DELIVER frames stashed before processing.
+    pub stash_deliver_total: u64,
+    /// DELIVER frames stashed because INIT has not arrived.
+    pub stash_deliver_init_missing_total: u64,
+    /// DELIVER frames stashed because the commit roster is missing.
+    pub stash_deliver_roster_missing_total: u64,
+    /// DELIVER frames stashed because the commit roster hash mismatched.
+    pub stash_deliver_roster_hash_mismatch_total: u64,
+    /// DELIVER frames stashed while the commit roster is unverified.
+    pub stash_deliver_roster_unverified_total: u64,
+    /// Chunk frames stashed before INIT arrives.
+    pub stash_chunk_total: u64,
+    /// Pending sessions with per-session drop counters.
+    pub entries: Vec<PendingRbcEntrySnapshot>,
+}
+
+/// Process-local phase-latency and retained compatibility-counter snapshot.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PhaseLatenciesSnapshot {
+    /// Last observed latency for the propose phase in milliseconds.
+    pub propose_ms: u64,
+    /// Last observed latency for data-availability collection in milliseconds.
+    pub collect_da_ms: u64,
+    /// Last observed latency for prevote collection in milliseconds.
+    pub collect_prevote_ms: u64,
+    /// Last observed latency for precommit collection in milliseconds.
+    pub collect_precommit_ms: u64,
+    /// Last observed latency for redundant collector fan-out in milliseconds.
+    pub collect_aggregator_ms: u64,
+    /// Last observed latency for the commit phase in milliseconds.
+    pub commit_ms: u64,
+    /// Maximum propose latency observed since process start.
+    pub propose_max_ms: u64,
+    /// Maximum data-availability collection latency observed since process start.
+    pub collect_da_max_ms: u64,
+    /// Maximum prevote collection latency observed since process start.
+    pub collect_prevote_max_ms: u64,
+    /// Maximum precommit collection latency observed since process start.
+    pub collect_precommit_max_ms: u64,
+    /// Maximum redundant collector fan-out latency observed since process start.
+    pub collect_aggregator_max_ms: u64,
+    /// Maximum commit latency observed since process start.
+    pub commit_max_ms: u64,
+    /// EMA propose latency in milliseconds.
+    pub propose_ema_ms: u64,
+    /// EMA data-availability collection latency in milliseconds.
+    pub collect_da_ema_ms: u64,
+    /// EMA prevote collection latency in milliseconds.
+    pub collect_prevote_ema_ms: u64,
+    /// EMA precommit collection latency in milliseconds.
+    pub collect_precommit_ema_ms: u64,
+    /// EMA redundant collector fan-out latency in milliseconds.
+    pub collect_aggregator_ema_ms: u64,
+    /// EMA commit latency in milliseconds.
+    pub commit_ema_ms: u64,
+    /// Sum of current propose, DA, prevote, precommit, and commit latencies.
+    pub pipeline_total_ms: u64,
+    /// Saturating sum of the maxima for the pipeline phases.
+    pub pipeline_total_max_ms: u64,
+    /// EMA latency for the aggregate pipeline in milliseconds.
+    pub pipeline_total_ema_ms: u64,
+    /// Gossip fallback invocations after collectors were exhausted.
+    pub gossip_fallback_total: u64,
+    /// Block-created messages dropped by the locked-QC gate.
+    pub block_created_dropped_by_lock_total: u64,
+    /// Block-created messages rejected due to hint mismatch.
+    pub block_created_hint_mismatch_total: u64,
+    /// Block-created messages rejected due to proposal mismatch.
+    pub block_created_proposal_mismatch_total: u64,
 }
 
 fn lock_operator_status_slot<T>(
@@ -146,6 +679,22 @@ static TX_QUEUE_OLDEST_QUEUED_AGE_MS: AtomicU64 = AtomicU64::new(0);
 const LANE_RELAY_ENVELOPES_CAP: usize = 64;
 const LANE_PAYLOAD_OWNERSHIPS_CAP: usize = 128;
 const COMMITTED_LANE_BLOCKS_CAP: usize = 128;
+
+fn availability_slot() -> &'static Mutex<AvailabilityStats> {
+    AVAILABILITY_STATS.get_or_init(|| Mutex::new(AvailabilityStats::default()))
+}
+
+fn qc_latency_slot() -> &'static Mutex<BTreeMap<&'static str, u64>> {
+    QC_LATENCY_MS.get_or_init(|| Mutex::new(BTreeMap::new()))
+}
+
+fn rbc_backlog_slot() -> &'static Mutex<RbcBacklogSnapshot> {
+    RBC_BACKLOG.get_or_init(|| Mutex::new(RbcBacklogSnapshot::default()))
+}
+
+fn pending_rbc_slot() -> &'static Mutex<PendingRbcSnapshot> {
+    PENDING_RBC_STATE.get_or_init(|| Mutex::new(PendingRbcSnapshot::default()))
+}
 
 /// Actor responsible for paying a Nexus fee.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1258,6 +1807,76 @@ fn key_history_slot() -> &'static Mutex<VecDeque<ConsensusKeyRecord>> {
     KEY_LIFECYCLE_HISTORY.get_or_init(|| Mutex::new(VecDeque::new()))
 }
 
+fn checkpoint_history_slot() -> &'static Mutex<VecDeque<ValidatorSetCheckpoint>> {
+    VALIDATOR_CHECKPOINT_HISTORY.get_or_init(|| Mutex::new(VecDeque::new()))
+}
+
+fn commit_cert_history_slot() -> &'static Mutex<VecDeque<Qc>> {
+    COMMIT_CERT_HISTORY.get_or_init(|| Mutex::new(VecDeque::new()))
+}
+
+/// Record a validator checkpoint for retained archival query routes.
+pub fn record_validator_checkpoint(checkpoint: ValidatorSetCheckpoint) {
+    let mut history =
+        lock_operator_status_slot(checkpoint_history_slot(), "validator checkpoint history");
+    history.push_back(checkpoint);
+    while history.len() > VALIDATOR_CHECKPOINT_HISTORY_CAP {
+        history.pop_front();
+    }
+}
+
+/// Return retained validator checkpoints newest first.
+#[must_use]
+pub fn validator_checkpoint_history() -> Vec<ValidatorSetCheckpoint> {
+    lock_operator_status_slot(checkpoint_history_slot(), "validator checkpoint history")
+        .iter()
+        .rev()
+        .cloned()
+        .collect()
+}
+
+/// Record a legacy commit certificate for archival query and fixture consumers.
+///
+/// Protocol-v2 finality remains represented exclusively by its typed finality
+/// artifact; this cache does not participate in v2 consensus decisions.
+pub fn record_commit_qc(cert: Qc) {
+    let mut history =
+        lock_operator_status_slot(commit_cert_history_slot(), "commit certificate history");
+    history.retain(|entry| {
+        !(entry.height == cert.height
+            && entry.subject_block_hash == cert.subject_block_hash
+            && entry.view <= cert.view)
+    });
+    history.push_back(cert);
+    while history.len() > COMMIT_CERT_HISTORY_CAP {
+        history.pop_front();
+    }
+}
+
+/// Return retained legacy commit certificates newest first.
+#[must_use]
+pub fn commit_qc_history() -> Vec<Qc> {
+    let mut entries: Vec<_> =
+        lock_operator_status_slot(commit_cert_history_slot(), "commit certificate history")
+            .iter()
+            .cloned()
+            .collect();
+    entries.sort_by(|left, right| {
+        right
+            .height
+            .cmp(&left.height)
+            .then_with(|| right.view.cmp(&left.view))
+    });
+    entries
+}
+
+/// Raw finality fixture hook for dependent-crate tests.
+#[cfg(all(feature = "iroha-core-tests", feature = "finality-test-fixtures"))]
+#[doc(hidden)]
+pub fn record_commit_qc_for_tests(cert: Qc) {
+    record_commit_qc(cert);
+}
+
 /// Record a consensus-key lifecycle entry for the remaining legacy Torii endpoint.
 pub fn record_consensus_key(record: ConsensusKeyRecord) {
     let mut history = lock_operator_status_slot(key_history_slot(), "key lifecycle history");
@@ -1282,6 +1901,18 @@ pub fn consensus_key_history() -> Vec<ConsensusKeyRecord> {
 #[cfg(test)]
 pub fn reset_consensus_keys_for_tests() {
     lock_operator_status_slot(key_history_slot(), "key lifecycle history").clear();
+}
+
+/// Clear validator checkpoint history in isolated tests.
+#[cfg(test)]
+pub fn reset_validator_checkpoints_for_tests() {
+    lock_operator_status_slot(checkpoint_history_slot(), "validator checkpoint history").clear();
+}
+
+/// Clear legacy commit-certificate history in isolated tests.
+#[cfg(test)]
+pub fn reset_commit_certs_for_tests() {
+    lock_operator_status_slot(commit_cert_history_slot(), "commit certificate history").clear();
 }
 
 static VRF_PENALTY_EPOCH: AtomicU64 = AtomicU64::new(0);
@@ -1345,6 +1976,384 @@ pub fn record_worker_queue_drop(kind: WorkerQueueKind) {
 }
 
 static GOSSIP_DUPLICATE_KNOWN_SKIPPED_TOTAL: AtomicU64 = AtomicU64::new(0);
+
+/// Set the last observed propose-phase latency in milliseconds.
+pub fn set_phase_propose_ms(ms: u64) {
+    store_phase_ms(&LAST_PROPOSE_MS, &MAX_PROPOSE_MS, ms);
+}
+
+/// Set the last observed data-availability collection latency in milliseconds.
+pub fn set_phase_collect_da_ms(ms: u64) {
+    store_phase_ms(&LAST_COLLECT_DA_MS, &MAX_COLLECT_DA_MS, ms);
+}
+
+/// Set the last observed prevote collection latency in milliseconds.
+pub fn set_phase_collect_prevote_ms(ms: u64) {
+    store_phase_ms(&LAST_COLLECT_PREVOTE_MS, &MAX_COLLECT_PREVOTE_MS, ms);
+}
+
+/// Set the last observed precommit collection latency in milliseconds.
+pub fn set_phase_collect_precommit_ms(ms: u64) {
+    store_phase_ms(&LAST_COLLECT_PRECOMMIT_MS, &MAX_COLLECT_PRECOMMIT_MS, ms);
+}
+
+/// Set the last observed redundant collector fan-out latency in milliseconds.
+pub fn set_phase_collect_aggregator_ms(ms: u64) {
+    store_phase_ms(&LAST_COLLECT_AGG_MS, &MAX_COLLECT_AGG_MS, ms);
+}
+
+/// Set the last observed commit-phase latency in milliseconds.
+pub fn set_phase_commit_ms(ms: u64) {
+    store_phase_ms(&LAST_COMMIT_MS, &MAX_COMMIT_MS, ms);
+}
+
+fn store_phase_ms(latest: &AtomicU64, maximum: &AtomicU64, ms: u64) {
+    latest.store(ms, Ordering::Relaxed);
+    maximum.fetch_max(ms, Ordering::Relaxed);
+}
+
+/// Set the EMA propose-phase latency in milliseconds.
+pub fn set_phase_propose_ema_ms(ms: u64) {
+    LAST_PROPOSE_EMA_MS.store(ms, Ordering::Relaxed);
+}
+
+/// Set the EMA data-availability collection latency in milliseconds.
+pub fn set_phase_collect_da_ema_ms(ms: u64) {
+    LAST_COLLECT_DA_EMA_MS.store(ms, Ordering::Relaxed);
+}
+
+/// Set the EMA prevote collection latency in milliseconds.
+pub fn set_phase_collect_prevote_ema_ms(ms: u64) {
+    LAST_COLLECT_PREVOTE_EMA_MS.store(ms, Ordering::Relaxed);
+}
+
+/// Set the EMA precommit collection latency in milliseconds.
+pub fn set_phase_collect_precommit_ema_ms(ms: u64) {
+    LAST_COLLECT_PRECOMMIT_EMA_MS.store(ms, Ordering::Relaxed);
+}
+
+/// Set the EMA redundant collector fan-out latency in milliseconds.
+pub fn set_phase_collect_aggregator_ema_ms(ms: u64) {
+    LAST_COLLECT_AGG_EMA_MS.store(ms, Ordering::Relaxed);
+}
+
+/// Set the EMA commit-phase latency in milliseconds.
+pub fn set_phase_commit_ema_ms(ms: u64) {
+    LAST_COMMIT_EMA_MS.store(ms, Ordering::Relaxed);
+}
+
+/// Set the EMA aggregate pipeline latency in milliseconds.
+pub fn set_phase_pipeline_total_ema_ms(ms: u64) {
+    LAST_PIPELINE_TOTAL_EMA_MS.store(ms, Ordering::Relaxed);
+}
+
+/// Increment the collector-exhaustion gossip fallback counter.
+pub fn inc_gossip_fallback() {
+    GOSSIP_FALLBACK_TOTAL.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Increment the counter for block-created messages rejected by the lock gate.
+pub fn inc_block_created_dropped_by_lock() {
+    BLOCK_CREATED_DROPPED_BY_LOCK_TOTAL.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Increment the counter for block-created hint mismatches.
+pub fn inc_block_created_hint_mismatch() {
+    BLOCK_CREATED_HINT_MISMATCH_TOTAL.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Increment the counter for block-created proposal mismatches.
+pub fn inc_block_created_proposal_mismatch() {
+    BLOCK_CREATED_PROPOSAL_MISMATCH_TOTAL.fetch_add(1, Ordering::Relaxed);
+}
+
+fn phase_pipeline_total(values: [u64; 5]) -> u64 {
+    values.into_iter().fold(0_u64, u64::saturating_add)
+}
+
+/// Snapshot process-local per-phase latency diagnostics.
+#[must_use]
+pub fn phase_latencies_snapshot() -> PhaseLatenciesSnapshot {
+    let propose_ms = LAST_PROPOSE_MS.load(Ordering::Relaxed);
+    let collect_da_ms = LAST_COLLECT_DA_MS.load(Ordering::Relaxed);
+    let collect_prevote_ms = LAST_COLLECT_PREVOTE_MS.load(Ordering::Relaxed);
+    let collect_precommit_ms = LAST_COLLECT_PRECOMMIT_MS.load(Ordering::Relaxed);
+    let collect_aggregator_ms = LAST_COLLECT_AGG_MS.load(Ordering::Relaxed);
+    let commit_ms = LAST_COMMIT_MS.load(Ordering::Relaxed);
+    let propose_max_ms = MAX_PROPOSE_MS.load(Ordering::Relaxed);
+    let collect_da_max_ms = MAX_COLLECT_DA_MS.load(Ordering::Relaxed);
+    let collect_prevote_max_ms = MAX_COLLECT_PREVOTE_MS.load(Ordering::Relaxed);
+    let collect_precommit_max_ms = MAX_COLLECT_PRECOMMIT_MS.load(Ordering::Relaxed);
+    let collect_aggregator_max_ms = MAX_COLLECT_AGG_MS.load(Ordering::Relaxed);
+    let commit_max_ms = MAX_COMMIT_MS.load(Ordering::Relaxed);
+
+    PhaseLatenciesSnapshot {
+        propose_ms,
+        collect_da_ms,
+        collect_prevote_ms,
+        collect_precommit_ms,
+        collect_aggregator_ms,
+        commit_ms,
+        propose_max_ms,
+        collect_da_max_ms,
+        collect_prevote_max_ms,
+        collect_precommit_max_ms,
+        collect_aggregator_max_ms,
+        commit_max_ms,
+        propose_ema_ms: LAST_PROPOSE_EMA_MS.load(Ordering::Relaxed),
+        collect_da_ema_ms: LAST_COLLECT_DA_EMA_MS.load(Ordering::Relaxed),
+        collect_prevote_ema_ms: LAST_COLLECT_PREVOTE_EMA_MS.load(Ordering::Relaxed),
+        collect_precommit_ema_ms: LAST_COLLECT_PRECOMMIT_EMA_MS.load(Ordering::Relaxed),
+        collect_aggregator_ema_ms: LAST_COLLECT_AGG_EMA_MS.load(Ordering::Relaxed),
+        commit_ema_ms: LAST_COMMIT_EMA_MS.load(Ordering::Relaxed),
+        pipeline_total_ms: phase_pipeline_total([
+            propose_ms,
+            collect_da_ms,
+            collect_prevote_ms,
+            collect_precommit_ms,
+            commit_ms,
+        ]),
+        pipeline_total_max_ms: phase_pipeline_total([
+            propose_max_ms,
+            collect_da_max_ms,
+            collect_prevote_max_ms,
+            collect_precommit_max_ms,
+            commit_max_ms,
+        ]),
+        pipeline_total_ema_ms: LAST_PIPELINE_TOTAL_EMA_MS.load(Ordering::Relaxed),
+        gossip_fallback_total: GOSSIP_FALLBACK_TOTAL.load(Ordering::Relaxed),
+        block_created_dropped_by_lock_total: BLOCK_CREATED_DROPPED_BY_LOCK_TOTAL
+            .load(Ordering::Relaxed),
+        block_created_hint_mismatch_total: BLOCK_CREATED_HINT_MISMATCH_TOTAL
+            .load(Ordering::Relaxed),
+        block_created_proposal_mismatch_total: BLOCK_CREATED_PROPOSAL_MISMATCH_TOTAL
+            .load(Ordering::Relaxed),
+    }
+}
+
+/// Record an availability vote ingested by the local collector.
+pub fn record_availability_vote(collector_idx: u64, peer: &PeerId) {
+    let mut stats = lock_operator_status_slot(availability_slot(), "availability vote stats");
+    stats.total_votes = stats.total_votes.saturating_add(1);
+    let entry = stats
+        .per_peer
+        .entry(peer.clone())
+        .or_insert_with(|| CollectorEntry {
+            idx: collector_idx,
+            votes: 0,
+        });
+    entry.idx = collector_idx;
+    entry.votes = entry.votes.saturating_add(1);
+}
+
+/// Snapshot process-local availability vote ingestion counters.
+#[must_use]
+pub fn availability_snapshot() -> AvailabilitySnapshot {
+    let stats = lock_operator_status_slot(availability_slot(), "availability vote stats");
+    let mut collectors: Vec<_> = stats
+        .per_peer
+        .iter()
+        .map(|(peer, entry)| AvailabilityCollectorSnapshot {
+            collector_idx: entry.idx,
+            peer: peer.clone(),
+            votes_ingested: entry.votes,
+        })
+        .collect();
+    collectors.sort_by_key(|entry| entry.collector_idx);
+    AvailabilitySnapshot {
+        total: stats.total_votes,
+        collectors,
+    }
+}
+
+/// Record the last observed QC assembly latency for a stable kind label.
+pub fn record_qc_latency(kind: &'static str, ms: u64) {
+    lock_operator_status_slot(qc_latency_slot(), "QC latency stats").insert(kind, ms);
+}
+
+/// Snapshot QC assembly latencies sorted by kind label.
+#[must_use]
+pub fn qc_latency_snapshot() -> Vec<(String, u64)> {
+    lock_operator_status_slot(qc_latency_slot(), "QC latency stats")
+        .iter()
+        .map(|(kind, ms)| ((*kind).to_owned(), *ms))
+        .collect()
+}
+
+/// Replace the aggregated RBC backlog telemetry snapshot.
+pub fn set_rbc_backlog_snapshot(
+    total_missing_chunks: u64,
+    max_missing_chunks: u64,
+    pending_sessions: u64,
+) {
+    *lock_operator_status_slot(rbc_backlog_slot(), "RBC backlog snapshot") = RbcBacklogSnapshot {
+        total_missing_chunks,
+        max_missing_chunks,
+        pending_sessions,
+    };
+}
+
+/// Snapshot the aggregated RBC backlog telemetry.
+#[must_use]
+pub fn rbc_backlog_snapshot() -> RbcBacklogSnapshot {
+    *lock_operator_status_slot(rbc_backlog_slot(), "RBC backlog snapshot")
+}
+
+/// Replace the pending-RBC compatibility snapshot.
+pub fn set_pending_rbc_snapshot(snapshot: PendingRbcSnapshot) {
+    #[cfg(test)]
+    let _guard = rbc_status_test_guard();
+    *lock_operator_status_slot(pending_rbc_slot(), "pending RBC snapshot") = snapshot;
+}
+
+/// Snapshot pending-RBC compatibility diagnostics.
+#[must_use]
+pub fn pending_rbc_snapshot() -> PendingRbcSnapshot {
+    #[cfg(test)]
+    let _guard = rbc_status_test_guard();
+    lock_operator_status_slot(pending_rbc_slot(), "pending RBC snapshot").clone()
+}
+
+#[cfg(test)]
+mod telemetry_compatibility_tests {
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
+    use iroha_data_model::{block::BlockHeader, peer::PeerId};
+
+    use super::{PendingRbcEntrySnapshot, PendingRbcSnapshot, RbcBacklogSnapshot};
+
+    #[test]
+    fn phase_snapshot_tracks_current_max_ema_and_compatibility_counters() {
+        let _guard = super::rbc_status_test_guard();
+        super::reset_rbc_backlog_stats_for_tests();
+
+        super::set_phase_propose_ms(10);
+        super::set_phase_propose_ms(4);
+        super::set_phase_collect_da_ms(2);
+        super::set_phase_collect_prevote_ms(3);
+        super::set_phase_collect_precommit_ms(4);
+        super::set_phase_collect_aggregator_ms(50);
+        super::set_phase_commit_ms(6);
+        super::set_phase_propose_ema_ms(11);
+        super::set_phase_collect_da_ema_ms(12);
+        super::set_phase_collect_prevote_ema_ms(13);
+        super::set_phase_collect_precommit_ema_ms(14);
+        super::set_phase_collect_aggregator_ema_ms(15);
+        super::set_phase_commit_ema_ms(16);
+        super::set_phase_pipeline_total_ema_ms(17);
+        super::inc_gossip_fallback();
+        super::inc_block_created_dropped_by_lock();
+        super::inc_block_created_hint_mismatch();
+        super::inc_block_created_proposal_mismatch();
+
+        let snapshot = super::phase_latencies_snapshot();
+        assert_eq!(snapshot.propose_ms, 4);
+        assert_eq!(snapshot.propose_max_ms, 10);
+        assert_eq!(snapshot.collect_da_ms, 2);
+        assert_eq!(snapshot.collect_prevote_ms, 3);
+        assert_eq!(snapshot.collect_precommit_ms, 4);
+        assert_eq!(snapshot.collect_aggregator_ms, 50);
+        assert_eq!(snapshot.commit_ms, 6);
+        assert_eq!(snapshot.pipeline_total_ms, 19);
+        assert_eq!(snapshot.pipeline_total_max_ms, 25);
+        assert_eq!(snapshot.propose_ema_ms, 11);
+        assert_eq!(snapshot.collect_da_ema_ms, 12);
+        assert_eq!(snapshot.collect_prevote_ema_ms, 13);
+        assert_eq!(snapshot.collect_precommit_ema_ms, 14);
+        assert_eq!(snapshot.collect_aggregator_ema_ms, 15);
+        assert_eq!(snapshot.commit_ema_ms, 16);
+        assert_eq!(snapshot.pipeline_total_ema_ms, 17);
+        assert_eq!(snapshot.gossip_fallback_total, 1);
+        assert_eq!(snapshot.block_created_dropped_by_lock_total, 1);
+        assert_eq!(snapshot.block_created_hint_mismatch_total, 1);
+        assert_eq!(snapshot.block_created_proposal_mismatch_total, 1);
+
+        super::reset_rbc_backlog_stats_for_tests();
+        assert_eq!(super::phase_latencies_snapshot(), Default::default());
+    }
+
+    #[test]
+    fn phase_pipeline_totals_saturate() {
+        let _guard = super::rbc_status_test_guard();
+        super::reset_rbc_backlog_stats_for_tests();
+        super::set_phase_propose_ms(u64::MAX);
+        super::set_phase_collect_da_ms(1);
+
+        let snapshot = super::phase_latencies_snapshot();
+        assert_eq!(snapshot.pipeline_total_ms, u64::MAX);
+        assert_eq!(snapshot.pipeline_total_max_ms, u64::MAX);
+
+        super::reset_rbc_backlog_stats_for_tests();
+    }
+
+    #[test]
+    fn collector_qc_and_rbc_snapshots_roundtrip_and_reset() {
+        let _guard = super::rbc_status_test_guard();
+        super::reset_rbc_backlog_stats_for_tests();
+        let key_pair = KeyPair::try_from_seed(
+            b"telemetry-compatibility-collector".to_vec(),
+            Algorithm::BlsNormal,
+        )
+        .expect("derive collector fixture");
+        let peer = PeerId::new(key_pair.public_key().clone());
+
+        super::record_availability_vote(4, &peer);
+        super::record_availability_vote(5, &peer);
+        let availability = super::availability_snapshot();
+        assert_eq!(availability.total, 2);
+        assert_eq!(availability.collectors.len(), 1);
+        assert_eq!(availability.collectors[0].collector_idx, 5);
+        assert_eq!(availability.collectors[0].peer, peer);
+        assert_eq!(availability.collectors[0].votes_ingested, 2);
+
+        super::record_qc_latency("precommit", 30);
+        super::record_qc_latency("availability", 10);
+        super::record_qc_latency("availability", 20);
+        assert_eq!(
+            super::qc_latency_snapshot(),
+            vec![
+                ("availability".to_owned(), 20),
+                ("precommit".to_owned(), 30)
+            ]
+        );
+
+        super::set_rbc_backlog_snapshot(9, 4, 2);
+        assert_eq!(
+            super::rbc_backlog_snapshot(),
+            RbcBacklogSnapshot {
+                total_missing_chunks: 9,
+                max_missing_chunks: 4,
+                pending_sessions: 2,
+            }
+        );
+
+        let pending = PendingRbcSnapshot {
+            sessions: 1,
+            session_cap: 8,
+            chunks: 3,
+            bytes: 512,
+            drops_total: 2,
+            entries: vec![PendingRbcEntrySnapshot {
+                block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+                    b"pending-rbc",
+                )),
+                height: 7,
+                view: 2,
+                chunks: 3,
+                bytes: 512,
+                ..PendingRbcEntrySnapshot::default()
+            }],
+            ..PendingRbcSnapshot::default()
+        };
+        super::set_pending_rbc_snapshot(pending.clone());
+        assert_eq!(super::pending_rbc_snapshot(), pending);
+
+        super::reset_rbc_backlog_stats_for_tests();
+        assert_eq!(super::availability_snapshot(), Default::default());
+        assert!(super::qc_latency_snapshot().is_empty());
+        assert_eq!(super::rbc_backlog_snapshot(), Default::default());
+        assert_eq!(super::pending_rbc_snapshot(), Default::default());
+    }
+}
 
 /// Count a duplicate transaction skipped by gossip.
 pub fn inc_gossip_duplicate_known_skipped() {
@@ -2101,6 +3110,10 @@ static STATUS_TEST_GLOBAL_LOCK: OnceLock<TestLock> = OnceLock::new();
 #[cfg(test)]
 static RBC_STATUS_TEST_LOCK: OnceLock<TestLock> = OnceLock::new();
 #[cfg(test)]
+static COMMIT_HISTORY_TEST_LOCK: OnceLock<TestLock> = OnceLock::new();
+#[cfg(test)]
+static MODE_TAGS_TEST_LOCK: OnceLock<TestLock> = OnceLock::new();
+#[cfg(test)]
 static PEER_KEY_POLICY_TEST_LOCK: OnceLock<TestLock> = OnceLock::new();
 #[cfg(test)]
 static LOCAL_REMOVED_TEST_LOCK: OnceLock<TestLock> = OnceLock::new();
@@ -2186,6 +3199,18 @@ pub(crate) fn rbc_status_test_guard() -> TestLockGuard {
 }
 
 #[cfg(test)]
+/// Serialize tests that mutate archival commit history.
+pub(crate) fn commit_history_test_guard() -> TestLockGuard {
+    reentrant_test_guard(&COMMIT_HISTORY_TEST_LOCK)
+}
+
+#[cfg(test)]
+/// Serialize tests that mutate archival mode tags.
+pub(crate) fn mode_tags_test_guard() -> TestLockGuard {
+    reentrant_test_guard(&MODE_TAGS_TEST_LOCK)
+}
+
+#[cfg(test)]
 pub(crate) fn peer_key_policy_test_guard() -> TestLockGuard {
     reentrant_test_guard(&PEER_KEY_POLICY_TEST_LOCK)
 }
@@ -2208,4 +3233,51 @@ pub(crate) fn lane_relay_test_guard() -> std::sync::MutexGuard<'static, ()> {
 pub fn settlement_status_reset_for_tests() {
     *lock_operator_status_slot(settlement_status_slot(), "settlement status") =
         SettlementStatusState::default();
+}
+
+#[cfg(test)]
+/// Reset process-local telemetry compatibility and lane-adapter diagnostics.
+pub(crate) fn reset_rbc_backlog_stats_for_tests() {
+    let _guard = rbc_status_test_guard();
+    for counter in [
+        &LAST_PROPOSE_MS,
+        &LAST_COLLECT_DA_MS,
+        &LAST_COLLECT_PREVOTE_MS,
+        &LAST_COLLECT_PRECOMMIT_MS,
+        &LAST_COLLECT_AGG_MS,
+        &LAST_COMMIT_MS,
+        &MAX_PROPOSE_MS,
+        &MAX_COLLECT_DA_MS,
+        &MAX_COLLECT_PREVOTE_MS,
+        &MAX_COLLECT_PRECOMMIT_MS,
+        &MAX_COLLECT_AGG_MS,
+        &MAX_COMMIT_MS,
+        &LAST_PROPOSE_EMA_MS,
+        &LAST_COLLECT_DA_EMA_MS,
+        &LAST_COLLECT_PREVOTE_EMA_MS,
+        &LAST_COLLECT_PRECOMMIT_EMA_MS,
+        &LAST_COLLECT_AGG_EMA_MS,
+        &LAST_COMMIT_EMA_MS,
+        &LAST_PIPELINE_TOTAL_EMA_MS,
+        &GOSSIP_FALLBACK_TOTAL,
+        &BLOCK_CREATED_DROPPED_BY_LOCK_TOTAL,
+        &BLOCK_CREATED_HINT_MISMATCH_TOTAL,
+        &BLOCK_CREATED_PROPOSAL_MISMATCH_TOTAL,
+    ] {
+        counter.store(0, Ordering::Relaxed);
+    }
+    *lock_operator_status_slot(availability_slot(), "availability vote stats") =
+        AvailabilityStats::default();
+    lock_operator_status_slot(qc_latency_slot(), "QC latency stats").clear();
+    *lock_operator_status_slot(rbc_backlog_slot(), "RBC backlog snapshot") =
+        RbcBacklogSnapshot::default();
+    *lock_operator_status_slot(pending_rbc_slot(), "pending RBC snapshot") =
+        PendingRbcSnapshot::default();
+    lock_operator_status_slot(lane_activity_slot(), "lane activity snapshot").clear();
+    lock_operator_status_slot(dataspace_activity_slot(), "dataspace activity snapshot").clear();
+    *lock_operator_status_slot(pipeline_execution_slot(), "pipeline execution snapshot") =
+        PipelineExecutionSnapshot::default();
+    *lock_operator_status_slot(access_set_source_slot(), "access-set source snapshot") =
+        AccessSetSourceSummary::default();
+    PIPELINE_CONFLICT_RATE_BPS.store(0, Ordering::Relaxed);
 }

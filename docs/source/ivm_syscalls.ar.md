@@ -36,13 +36,13 @@ translator: machine-google-reviewed
 جدول syscall الكنسي (مجموعة فرعية)| عرافة | الاسم | الوسائط (في `r10+`) | عوائد | غاز (قاعدي + متغير) | ملاحظات |
 |------|-------------------------------------------|--------------------------------------------------------------------------|-------------|------------------------------|-------|
 | 0x1A | SET_ACCOUNT_DETAIL | `&AccountId`، `&Name`، `&Json` | `u64=0` | `G_set_detail + bytes(val)` | يكتب تفاصيل الحساب |
-| 0x22 | MINT_ASSET | `&AccountId`، `&AssetDefinitionId`، `&Amount` | `u64=0` | `G_mint` | النعناع `amount` من الأصول إلى الحساب |
-| 0x23 | حرق_الأصول | `&AccountId`، `&AssetDefinitionId`، `&Amount` | `u64=0` | `G_burn` | يحرق `amount` من الحساب |
-| 0x24 | TRANSFER_V1 | `&AccountId(from)`, `&AccountId(to)`, `&AssetDefinitionId`, `&Amount` | `u64=0` | `G_transfer` | Batch-internal FASTPQ transfer; `transfer_batch` coalesces entries on this path |
+| 0x22 | MINT_ASSET | `&AccountId`، `&AssetDefinitionId`، `&QuantityValueV1` | `u64=0` | `G_mint` | النعناع `amount` من الأصول إلى الحساب |
+| 0x23 | حرق_الأصول | `&AccountId`، `&AssetDefinitionId`، `&QuantityValueV1` | `u64=0` | `G_burn` | يحرق `amount` من الحساب |
+| 0x24 | TRANSFER_V1 | `&AccountId(from)`, `&AccountId(to)`, `&AssetDefinitionId`, `&QuantityValueV1` | `u64=0` | `G_transfer` | Batch-internal FASTPQ transfer; `transfer_batch` coalesces entries on this path |
 | 0x29 | TRANSFER_V1_BATCH_BEGIN | – | `u64=0` | `G_transfer` | بدء نطاق دفعة نقل FASTPQ |
 | 0x2A | TRANSFER_V1_BATCH_END | – | `u64=0` | `G_transfer` | تدفق دفعة نقل FASTPQ المتراكمة |
 | 0x2B | TRANSFER_V1_BATCH_APPLY | `r10=&NoritoBytes(TransferAssetBatch)` | `u64=0` | `G_transfer` | تطبيق دفعة مشفرة بـ Norito في مكالمة نظام واحدة |
-| 0x2C | TRANSFER_ASSET_SCOPED | `&AccountId(from)`, `&AccountId(to)`, `&AssetDefinitionId`, `&Amount`, `&DataSpaceId` | `u64=0` | `G_transfer` | Standalone `transfer_asset` path; global assets use global source balances and dataspace-restricted assets use `r14` |
+| 0x2C | TRANSFER_ASSET_SCOPED | `&AccountId(from)`, `&AccountId(to)`, `&AssetDefinitionId`, `&QuantityValueV1`, `&DataSpaceId` | `u64=0` | `G_transfer` | Standalone `transfer_asset` path; global assets use global source balances and dataspace-restricted assets use `r14` |
 | 0x25 | NFT_MINT_ASSET | `&NftId`، `&AccountId(owner)` | `u64=0` | `G_nft_mint_asset` | يسجل NFT جديد |
 | 0x26 | NFT_TRANSFER_ASSET | `&AccountId(from)`، `&NftId`، `&AccountId(to)` | `u64=0` | `G_nft_transfer_asset` | ينقل ملكية NFT |
 | 0x27 | NFT_SET_METADATA | `&NftId`، `&Json` | `u64=0` | `G_nft_set_metadata` | تحديثات البيانات التعريفية NFT |

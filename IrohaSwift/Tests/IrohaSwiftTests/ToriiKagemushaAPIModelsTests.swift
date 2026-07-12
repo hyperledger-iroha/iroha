@@ -585,7 +585,10 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
             topUpOperationID: fixed32(0xd5),
             shieldVerifierID: "halo2/ipa:fixture-topup-shield",
             shieldVerifierCommitment: fixed32(0xd6),
-            artifactGeneration: "generation-v2-test",
+            artifactBinding: try KagemushaRecursiveSpendArtifactBinding(
+                generation: "generation-v3-test",
+                manifestSHA256: fixed32(0xd9)
+            ),
             finalizedHeight: 1,
             finalizedTransactionHash: fixed32(0xd7),
             anchorDigest: fixed32(0xd8),

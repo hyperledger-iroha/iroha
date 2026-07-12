@@ -13,6 +13,7 @@ import {
   encodeIdentifierResolutionReceiptPayload,
   encryptIdentifierInputForPolicy,
   getIdentifierBfvPublicParameters,
+  hashIdentifierEncryptedInput,
   verifyIdentifierResolutionReceipt,
 } from "../src/toriiClient.js";
 import { normalizeIdentifierInput } from "../src/normalizers.js";
@@ -89,6 +90,26 @@ function irohaPrehash(bytes) {
   digest[digest.length - 1] |= 1;
   return digest;
 }
+
+test("hashIdentifierEncryptedInput binds exact ciphertext bytes with Iroha hash semantics", () => {
+  const ciphertext = "abcd00ff";
+  assert.equal(
+    hashIdentifierEncryptedInput(ciphertext),
+    irohaPrehash(Buffer.from(ciphertext, "hex")).toString("hex"),
+  );
+  assert.throws(
+    () => hashIdentifierEncryptedInput("ABCD"),
+    /exact lowercase byte-aligned hex/,
+  );
+  assert.throws(
+    () => hashIdentifierEncryptedInput("abc"),
+    /exact lowercase byte-aligned hex/,
+  );
+  assert.throws(
+    () => hashIdentifierEncryptedInput(" abcd"),
+    /exact lowercase byte-aligned hex|surrounding whitespace/,
+  );
+});
 
 function ed25519MultihashLiteral(publicKeyBytes) {
   return `ed25519:ed0120${Buffer.from(publicKeyBytes).toString("hex").toUpperCase()}`;
@@ -762,22 +783,26 @@ test("verifyIdentifierResolutionReceipt rejects adversarial receipt mutations", 
     resolver_public_key: signedReceipt.resolver_public_key,
     backend: "bfv-programmed-sha3-256-v1",
   };
+  const receipt = {
+    payload: signedReceipt.payload,
+    attestation: signedReceipt.attestation,
+  };
 
-  assert.equal(verifyIdentifierResolutionReceipt(signedReceipt, policy), true);
+  assert.equal(verifyIdentifierResolutionReceipt(receipt, policy), true);
 
-  const tampered = JSON.parse(JSON.stringify(signedReceipt));
+  const tampered = JSON.parse(JSON.stringify(receipt));
   tampered.payload.execution.output_ciphertext_hash = "67".repeat(32);
   assert.equal(verifyIdentifierResolutionReceipt(tampered, policy), false);
 
   assert.equal(
-    verifyIdentifierResolutionReceipt(signedReceipt, {
+    verifyIdentifierResolutionReceipt(receipt, {
       ...policy,
       resolver_public_key: "ed25519:ed0120" + "45".repeat(32),
     }),
     false,
   );
 
-  const malformedSignature = JSON.parse(JSON.stringify(signedReceipt));
+  const malformedSignature = JSON.parse(JSON.stringify(receipt));
   malformedSignature.attestation.signature = "GG";
   assert.throws(
     () => verifyIdentifierResolutionReceipt(malformedSignature, policy),
@@ -788,7 +813,7 @@ test("verifyIdentifierResolutionReceipt rejects adversarial receipt mutations", 
     ` ${signedReceipt.attestation.signature}`,
     `${signedReceipt.attestation.signature} `,
   ]) {
-    const paddedSignature = JSON.parse(JSON.stringify(signedReceipt));
+    const paddedSignature = JSON.parse(JSON.stringify(receipt));
     paddedSignature.attestation.signature = signature;
     assert.throws(
       () => verifyIdentifierResolutionReceipt(paddedSignature, policy),
@@ -800,7 +825,7 @@ test("verifyIdentifierResolutionReceipt rejects adversarial receipt mutations", 
     ` ${signedReceipt.payload.opening.signature}`,
     `${signedReceipt.payload.opening.signature} `,
   ]) {
-    const paddedOpeningSignature = JSON.parse(JSON.stringify(signedReceipt));
+    const paddedOpeningSignature = JSON.parse(JSON.stringify(receipt));
     paddedOpeningSignature.payload.opening.signature = signature;
     assert.throws(
       () => verifyIdentifierResolutionReceipt(paddedOpeningSignature, policy),
@@ -808,12 +833,12 @@ test("verifyIdentifierResolutionReceipt rejects adversarial receipt mutations", 
     );
   }
 
-  const signedWithProofFields = JSON.parse(JSON.stringify(signedReceipt));
+  const signedWithProofFields = JSON.parse(JSON.stringify(receipt));
   signedWithProofFields.attestation.proof_backend = "halo2/ipa";
   signedWithProofFields.attestation.proof_b64 = "AQID";
   assert.throws(
     () => verifyIdentifierResolutionReceipt(signedWithProofFields, policy),
-    /signed attestation must not include proof fields/,
+    /attestation contains unsupported fields: proof_backend, proof_b64/,
   );
 
   const proofAttestation = {
@@ -831,7 +856,7 @@ test("verifyIdentifierResolutionReceipt rejects adversarial receipt mutations", 
 
   assert.throws(
     () =>
-      verifyIdentifierResolutionReceipt(signedReceipt, {
+      verifyIdentifierResolutionReceipt(receipt, {
         ...policy,
         policy_id: "email#retail",
       }),
@@ -890,7 +915,7 @@ test("encodeIdentifierResolutionReceiptAttestation rejects padded proof backend"
           proof_backend: "halo2/ipa",
           proof_b64: proofB64,
         }),
-      /identifier receipt attestation\.proof_b64 must not contain surrounding whitespace/,
+      /identifier receipt attestation\.proof_b64 must be exact standard-base64/,
     );
   }
 
@@ -901,7 +926,7 @@ test("encodeIdentifierResolutionReceiptAttestation rejects padded proof backend"
         proof_backend: "halo2/ipa",
         proof_b64: "@@@",
       }),
-    /attestation\.proof_b64 must be a valid base64 string/,
+    /attestation\.proof_b64 must be exact standard-base64/,
   );
 });
 

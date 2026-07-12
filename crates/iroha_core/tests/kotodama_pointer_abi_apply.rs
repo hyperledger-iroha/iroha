@@ -526,7 +526,7 @@ fn kotodama_event_to_state_loaded_transfer_asset_survives_cross_call() {
           state StateMap<Name, AccountId> VaultAccount;
           kotoage fn main() authorize("TransferAsset") {{
             let key = Name::parse("pool");
-            let ev = Json::parse("{{\"provider\":\"{authority_literal}\",\"base_amount\":\"1000\"}}");
+            let ev = json {{ provider: AccountId::parse("{authority_literal}"), base_amount: 1000 }};
             let provider = ev.get_account_id(Name::parse("provider")).unwrap_or(AccountId::parse("{authority_literal}"));
             let quantity zero = 0;
             let base_amount = ev.get_quantity(Name::parse("base_amount")).unwrap_or(zero);

@@ -5,12 +5,12 @@ import XCTest
 
 final class NativeBridgeLoaderTests: XCTestCase {
     func testExpectedBridgeAbiVersionIsEighteenForPackagedArtifacts() {
-        XCTAssertEqual(NoritoBridgeLoader.expectedBridgeAbiVersion(for: "macos-arm64"), 18)
-        XCTAssertEqual(NoritoBridgeLoader.expectedBridgeAbiVersion(for: "ios-arm64"), 18)
-        XCTAssertEqual(NoritoBridgeLoader.expectedBridgeAbiVersion(for: "ios-arm64_x86_64-simulator"), 18)
-        XCTAssertTrue(NoritoBridgeLoader.isSupportedBridgeAbiVersion(18, for: "macos-arm64"))
-        XCTAssertFalse(NoritoBridgeLoader.isSupportedBridgeAbiVersion(17, for: "macos-arm64"))
-        XCTAssertFalse(NoritoBridgeLoader.isSupportedBridgeAbiVersion(19, for: "macos-arm64"))
+        XCTAssertEqual(NoritoBridgeLoader.expectedBridgeAbiVersion(for: "macos-arm64"), 19)
+        XCTAssertEqual(NoritoBridgeLoader.expectedBridgeAbiVersion(for: "ios-arm64"), 19)
+        XCTAssertEqual(NoritoBridgeLoader.expectedBridgeAbiVersion(for: "ios-arm64_x86_64-simulator"), 19)
+        XCTAssertTrue(NoritoBridgeLoader.isSupportedBridgeAbiVersion(19, for: "macos-arm64"))
+        XCTAssertFalse(NoritoBridgeLoader.isSupportedBridgeAbiVersion(18, for: "macos-arm64"))
+        XCTAssertFalse(NoritoBridgeLoader.isSupportedBridgeAbiVersion(20, for: "macos-arm64"))
         XCTAssertFalse(NoritoBridgeLoader.isSupportedBridgeAbiVersion(nil, for: "macos-arm64"))
     }
 

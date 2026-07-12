@@ -2,10 +2,10 @@
 
 Kagemusha is the single offline-cash protocol in the first release. It supports
 exact decimal amounts, sender change, bounded two-input joins, offline multihop
-spending, and full or partial online redemption. The public product mode is
-`recursive_spend_v1`. `recursive_spend_v2`, V2 request names, V3 manifests, and
-bridge ABI 18 are internal wire and artifact versions, not alternative product
-modes.
+spending, and full or partial online redemption. There is no runtime product
+mode or alternative offline API. V2 request names, V3 manifests, and bridge ABI
+19 are internal wire and artifact versions; authenticated artifact manifests
+carry the fixed `recursive_spend_v1` discriminator.
 
 ## Amounts and assets
 
@@ -64,7 +64,7 @@ device authority, and submits it to Torii. Core atomically:
 5. appends the initial note commitment; and
 6. persists the finalized top-up anchor and operation receipt.
 
-After finality the wallet creates the initial Reserved-lineage recursive bundle
+After finality the wallet creates the initial recursive bundle
 with `initSpend`. The note is not available for offline use until both the chain
 operation and local encrypted-state transition are durable.
 
@@ -82,7 +82,7 @@ output. It never carries a spend key or local key reference.
 
 The receiver runs `verifySpend` and checks the signed request, chain, asset,
 scale, exact amount, recipient commitment, hop limit, verifier activation
-window, finalized top-up origin, Reserved lineage, proof validity, and branch
+window, finalized top-up origin, recursive proof validity, and branch
 disjointness. It atomically persists the received note before signing a durable
 acknowledgement. The sender marks reserved inputs spent only after verifying
 that acknowledgement. Duplicate delivery and lost acknowledgements are
@@ -99,7 +99,7 @@ zero private output. Partial redemption binds exactly one non-zero Kagemusha
 change output and proves exact conservation between the redeemed public amount
 and the offline change branch.
 
-Core validates the finalized top-up provenance, current Reserved-lineage proof,
+Core validates the finalized top-up provenance, current recursive proof,
 active lineage and unshield verifier records, nullifier freshness, exact scale,
 unshield public inputs, and optional change branch before mutating balances. It
 then consumes the branch nullifier, credits the exact public `Numeric`, appends
@@ -118,7 +118,7 @@ notes. Pending, reserved, spent, quarantined, and redeeming notes are not
 silently reclassified.
 
 The authenticated V3 manifest binds source commit, chain, asset, scale,
-activation and withdrawal heights, bridge ABI 18, proof size, transcript,
+activation and withdrawal heights, bridge ABI 19, proof size, transcript,
 backend, and benchmark evidence. It contains exactly two Pasta-cycle profiles
 (transition and state), each with one parameters file, proving key, and
 verifying key, plus the content-addressed top-up-finality roster artifact.
@@ -134,7 +134,7 @@ native proof backend. The following compile-time capabilities remain false
 until their cryptographic implementations and signed artifacts pass the release
 suite:
 
-- `KAGEMUSHA_RECURSIVE_SPEND_V2_PROOF_BACKEND_AVAILABLE`
+- `KAGEMUSHA_RECURSIVE_SPEND_PROOF_BACKEND_AVAILABLE`
 - `KAGEMUSHA_RECURSIVE_SPEND_AUTHENTICATED_RELEASE_ENVELOPE_WIRED_V3`
 - `KAGEMUSHA_RECURSIVE_SPEND_INIT_BINDS_TOPUP_FINALITY_V2`
 

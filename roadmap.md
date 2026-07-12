@@ -3,25 +3,17 @@
 Last updated: 2026-07-12
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
-The detailed engineering backlog lives in
-[`docs/source/engineering_backlog.md`](./docs/source/engineering_backlog.md),
-and completed history lives in [`status.md`](./status.md).
+Completed history lives in [`status.md`](./status.md).
 
-Kagemusha V2 transport and proof admission are fail-closed for the first release.
-The only public product selector is `recursive_spend_v1`; it requires exact
-bridge ABI 18 and the governed
+Kagemusha transport and proof admission are fail-closed for the first release.
+Its sole mode is `recursive_spend_v1`; it requires exact bridge ABI 19 and the governed
 `kagemusha.offline.recursive_spend.artifact_manifest.v3` manifest with the V3
-atomic artifact lifecycle. ABI-6/ABI-7 fixtures and unsuffixed recursive-spend
-helpers are not first-release compatibility surfaces. The typed V2 native
-capability and artifact manifest retain the internal `recursive_spend_v2` mode;
-that value is not accepted as a product selector.
-`KAGEMUSHA_RECURSIVE_SPEND_V2_PROOF_BACKEND_AVAILABLE = false` is the
+atomic artifact lifecycle. Typed V2/V3 names are internal wire versions.
+`KAGEMUSHA_RECURSIVE_SPEND_PROOF_BACKEND_AVAILABLE = false` is the
 authoritative release state: Core top-up execution and every proof-gated
-init/append/redeem-change/verify/redeem path remain unavailable. Record-backed
-lineage and semantic aggregation are validation and fixture-convergence
-scaffolding, not funded alternatives. The 64-depth branch bound and eight-hop
-semantic limit are protocol bounds, not availability signals.
-The remaining release work is the ABI-18 two-layer Pasta IPA/Poseidon backend:
+init/append/verify/redeem path remain unavailable. The 64-depth branch bound is
+a protocol bound, not an availability signal.
+The remaining release work is the ABI-19 two-layer Pasta IPA/Poseidon backend:
 an EqAffine/Vesta transition proof and EpAffine/Pallas state wrapper must
 authenticate the previous recursive proof and current transition proof under
 fixed verifier keys, bind their exact public instances to the Kagemusha
@@ -23772,7 +23764,7 @@ digest-bound pending-XSD source probe summaries for reviewed
   a verified record-backed lineage witness and a verifying final recursive proof
   serialize instructions. Witnessless Reserved-lineage requests return no
   instruction bytes for every circuit and hop while
-  `KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1 = false`.
+  the retired lineage-transition gate disabled.
   Active lineage verifier records, chain/asset, root, final commitment, proof,
   and nullifier checks remain mandatory on the record-backed path.
   Ledger recursive redeem execution now checks the final unshield/redeem proof

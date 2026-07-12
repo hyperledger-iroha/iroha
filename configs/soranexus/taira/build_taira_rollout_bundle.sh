@@ -200,11 +200,23 @@ if [[ "$reference_validator_source_mode" == "attested" ]]; then
   python3 "$validator_source_verifier" verify --repo "$REPO_ROOT" --bundle-dir "$validator_source_bundle"
 fi
 
+irohad_core_feature_graph="$(
+  cd "$REPO_ROOT"
+  cargo tree --locked -e features,no-dev -p irohad \
+    --features embedded-soracloud-runtime -i iroha_core
+)"
+if [[ "$irohad_core_feature_graph" == *'iroha-core-tests'* \
+  || "$irohad_core_feature_graph" == *'finality-test-fixtures'* ]]; then
+  echo "refusing to build validator with finality test-fixture capabilities" >&2
+  printf '%s\n' "$irohad_core_feature_graph" >&2
+  exit 1
+fi
+
 if [[ $SKIP_LOCAL_REGRESSIONS -ne 1 ]]; then
   (
     cd "$REPO_ROOT"
     cargo test --locked -p iroha_core queue::router::tests::smart_contract_deploy_rule --lib
-    cargo test --locked -p iroha_core contract_call_transaction_preserves_three_hop_transfer_authorities --lib
+    cargo test --locked -p iroha_core call_contract_syscall_preserves_root_and_nested_transfer_authorities_in_artifacts --lib
     cargo test --locked -p iroha_core snapshot_hash_reconcile_extends_verified_local_snapshot_ahead_of_kura --lib
     cargo test --locked -p iroha_core snapshot_read_extends_verified_local_snapshot_ahead_of_kura --lib
   )

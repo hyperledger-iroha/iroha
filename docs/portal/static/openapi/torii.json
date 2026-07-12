@@ -4281,77 +4281,6 @@
           }
         ]
       },
-      "OfflineLineageMode": {
-        "description": "Tagged unit enum selecting witnessless or record-backed lineage. Canonical output includes value=null; decoders also accept an omitted value member.",
-        "properties": {
-          "mode": {
-            "enum": [
-              "reserved",
-              "semantic"
-            ],
-            "type": "string"
-          },
-          "value": {
-            "type": "null"
-          }
-        },
-        "required": [
-          "mode"
-        ],
-        "type": "object"
-      },
-      "OfflineLineageNode": {
-        "properties": {
-          "parent_bundle_digests": {
-            "items": {
-              "$ref": "#/components/schemas/OfflineFixed32Bytes"
-            },
-            "type": "array"
-          },
-          "proof_step_count": {
-            "format": "uint32",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "result_bundle_digest": {
-            "$ref": "#/components/schemas/OfflineFixed32Bytes"
-          },
-          "transition_archive": {
-            "$ref": "#/components/schemas/OfflineByteArray"
-          },
-          "verified_at_block_height": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          }
-        },
-        "required": [
-          "result_bundle_digest",
-          "parent_bundle_digests",
-          "proof_step_count",
-          "verified_at_block_height",
-          "transition_archive"
-        ],
-        "type": "object"
-      },
-      "OfflineLineageWitness": {
-        "properties": {
-          "final_bundle_digest": {
-            "$ref": "#/components/schemas/OfflineFixed32Bytes"
-          },
-          "nodes": {
-            "items": {
-              "$ref": "#/components/schemas/OfflineLineageNode"
-            },
-            "type": "array"
-          }
-        },
-        "required": [
-          "nodes",
-          "final_bundle_digest"
-        ],
-        "type": "object"
-      },
       "OfflineMerkleProof": {
         "properties": {
           "audit_path": {
@@ -4779,7 +4708,30 @@
         "type": "string"
       },
       "OfflineReadiness": {
+        "additionalProperties": false,
         "properties": {
+          "active_recursive_state_verifier": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OfflineActiveTransferVerifier"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Authoritative active V3 recursive state verifier at the evaluated height."
+          },
+          "active_recursive_transition_verifier": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OfflineActiveTransferVerifier"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Authoritative active V3 recursive transition verifier at the evaluated height."
+          },
           "active_topup_shield_verifier": {
             "anyOf": [
               {
@@ -4801,6 +4753,17 @@
               }
             ],
             "description": "Authoritative active confidential-transfer verifier at the evaluated height, or null with a transfer_verifier_unavailable blocker."
+          },
+          "active_unshield_verifier": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OfflineActiveTransferVerifier"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Authoritative active confidential-unshield verifier at the evaluated height."
           },
           "asset_definition_id": {
             "description": "Resolved canonical unprefixed Base58 asset-definition address; an alias selector is never echoed here.",
@@ -4837,18 +4800,45 @@
             "minimum": 0,
             "type": "integer"
           },
+          "max_hops": {
+            "format": "uint32",
+            "maximum": 64,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "proof_backend_available": {
+            "description": "Whether this Torii/Core build contains the sound V3 recursive backend.",
+            "type": "boolean"
+          },
           "ready": {
             "description": "True exactly when blockers is empty. False is a successfully evaluated domain state, not a service error.",
             "type": "boolean"
+          },
+          "recursive_lineage_supported": {
+            "description": "Whether recursive branches can be verified and redeemed through the production lineage proof path.",
+            "type": "boolean"
+          },
+          "required_bridge_abi_version": {
+            "format": "uint32",
+            "maximum": 19,
+            "minimum": 19,
+            "type": "integer"
           }
         },
         "required": [
+          "required_bridge_abi_version",
+          "max_hops",
           "asset_definition_id",
           "asset_scale",
           "evaluated_block_height",
           "evaluated_block_hash",
           "active_transfer_verifier",
           "active_topup_shield_verifier",
+          "active_unshield_verifier",
+          "active_recursive_transition_verifier",
+          "active_recursive_state_verifier",
+          "proof_backend_available",
+          "recursive_lineage_supported",
           "ready",
           "blockers"
         ],
@@ -4937,19 +4927,6 @@
             "$ref": "#/components/schemas/OfflineSpendBundle",
             "description": "Typed scale-carrying recursive state being redeemed."
           },
-          "lineage_verifier_record": {
-            "$ref": "#/components/schemas/OfflineVerifyingKeyRecord"
-          },
-          "lineage_witness": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/OfflineLineageWitness"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
           "offline_change": {
             "oneOf": [
               {
@@ -4980,7 +4957,6 @@
           "amount",
           "redeem_proof",
           "redemption",
-          "lineage_verifier_record",
           "block_height",
           "operation_id",
           "authorization"
@@ -5304,9 +5280,6 @@
           "final_root": {
             "$ref": "#/components/schemas/OfflineFixed32Bytes"
           },
-          "lineage_mode": {
-            "$ref": "#/components/schemas/OfflineLineageMode"
-          },
           "peer_hop_count": {
             "format": "uint32",
             "minimum": 0,
@@ -5348,7 +5321,6 @@
           "current_note",
           "branch_claims",
           "artifact_generation",
-          "lineage_mode",
           "verifier_key_id"
         ],
         "type": "object"

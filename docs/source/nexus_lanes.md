@@ -236,6 +236,31 @@ LaneConfigEntry {
   scale-out and scale-in, including staged DA indexes in the block: a Kura or
   tiered conflict for a new or retiring elastic lane aborts before tiered
   artifacts or DA runtime/query indexes are published.
+  Production startup authenticates the process-configured catalog in the
+  canonical V5 geometry journal before opening any lane-derived Kura path, then
+  binds the physical primary lane to its exact incarnation and storage paths.
+  Replay restores the cursor before the first transition at genesis height, or
+  to the snapshot's exact committed height, so multiple transitions at one
+  height retain their durable sequence and cannot be skipped or replayed out of
+  order. Checkpoints retain the last transition height and sequence; the first
+  post-checkpoint transition uses checked height/sequence advancement. The
+  published journal file is the commit point: only exact, regular, direct-child
+  temporary files owned by an unfinished publication are consumed or removed.
+  Configured-primary and journal-derived trees are traversed within fixed depth
+  and entry bounds, every opened path is revalidated by filesystem identity,
+  and paired geometry moves use atomic no-clobber renames. Before the first
+  rename, the V2 lane-incarnation marker seals both intended target paths and a
+  digest of the paired merge log. Mutable live pairs clear that move seal only
+  after both halves arrive; retained archive pairs keep it, and GC validates
+  the journal-owned logical target even after moving the archive into its
+  quarantine name. Restart completes a block-before-merge partial move in
+  either direction without overwriting an operator-created collision or
+  adopting an unauthenticated path. Only a newly appended journal `Intent` may
+  finish provisioning its journal-owned empty staging pair. Replay keeps
+  `CatalogPublished` or `RolledBack` provenance until the inverse or forward
+  move completes, and requires authenticated durable storage on every retry;
+  losing that evidence can never be reinterpreted as authority to create an
+  empty lane.
   Catalog-only routing without a live Nexus state view does not shard over
   elastic lanes; it keeps ordinary no-target traffic on the configured base
   default lane until live autoscale enablement and bounds are available.

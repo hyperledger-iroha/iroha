@@ -507,6 +507,8 @@ fn canonical_norito_frame_len<T: NoritoSerialize>(value: &T) -> usize {
 }
 
 fn canonical_norito_frame<T: NoritoSerialize>(value: &T) -> Result<Vec<u8>, norito::core::Error> {
+    // Contract-boundary bytes must never inherit an ambient decoder's layout
+    // policy, including while validating a nested Norito value.
     let _flags = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
     to_bytes(value)
 }
@@ -644,8 +646,10 @@ fn encode_leaf_atom(
         )?,
         EntrypointValueKindV1::Json => encoded_pointer(
             PointerType::Json,
-            to_bytes(&Json::from_norito_value_ref(value).map_err(|_| VMError::DecodeError)?)
-                .map_err(|_| VMError::NoritoInvalid)?,
+            canonical_norito_frame(
+                &Json::from_norito_value_ref(value).map_err(|_| VMError::DecodeError)?,
+            )
+            .map_err(|_| VMError::NoritoInvalid)?,
         )?,
         EntrypointValueKindV1::Name => {
             let name = decode_canonical_string(
@@ -655,7 +659,7 @@ fn encode_leaf_atom(
             )?;
             encoded_pointer(
                 PointerType::Name,
-                to_bytes(&name).map_err(|_| VMError::NoritoInvalid)?,
+                canonical_norito_frame(&name).map_err(|_| VMError::NoritoInvalid)?,
             )?
         }
         EntrypointValueKindV1::AccountId => {
@@ -667,7 +671,7 @@ fn encode_leaf_atom(
             let account_id = parsed.into_account_id();
             encoded_pointer(
                 PointerType::AccountId,
-                to_bytes(&account_id).map_err(|_| VMError::NoritoInvalid)?,
+                canonical_norito_frame(&account_id).map_err(|_| VMError::NoritoInvalid)?,
             )?
         }
         EntrypointValueKindV1::AssetDefinitionId => {
@@ -680,7 +684,7 @@ fn encode_leaf_atom(
             )?;
             encoded_pointer(
                 PointerType::AssetDefinitionId,
-                to_bytes(&asset_definition_id).map_err(|_| VMError::NoritoInvalid)?,
+                canonical_norito_frame(&asset_definition_id).map_err(|_| VMError::NoritoInvalid)?,
             )?
         }
         EntrypointValueKindV1::AssetId => {
@@ -691,7 +695,7 @@ fn encode_leaf_atom(
             )?;
             encoded_pointer(
                 PointerType::AssetId,
-                to_bytes(&asset_id).map_err(|_| VMError::NoritoInvalid)?,
+                canonical_norito_frame(&asset_id).map_err(|_| VMError::NoritoInvalid)?,
             )?
         }
         EntrypointValueKindV1::DomainId => {
@@ -702,7 +706,7 @@ fn encode_leaf_atom(
             )?;
             encoded_pointer(
                 PointerType::DomainId,
-                to_bytes(&domain_id).map_err(|_| VMError::NoritoInvalid)?,
+                canonical_norito_frame(&domain_id).map_err(|_| VMError::NoritoInvalid)?,
             )?
         }
         EntrypointValueKindV1::NftId => {
@@ -713,14 +717,14 @@ fn encode_leaf_atom(
             )?;
             encoded_pointer(
                 PointerType::NftId,
-                to_bytes(&nft_id).map_err(|_| VMError::NoritoInvalid)?,
+                canonical_norito_frame(&nft_id).map_err(|_| VMError::NoritoInvalid)?,
             )?
         }
         EntrypointValueKindV1::DataSpaceId => {
             let dataspace_id = DataSpaceId::new(decode_u64(value)?);
             encoded_pointer(
                 PointerType::DataSpaceId,
-                to_bytes(&dataspace_id).map_err(|_| VMError::NoritoInvalid)?,
+                canonical_norito_frame(&dataspace_id).map_err(|_| VMError::NoritoInvalid)?,
             )?
         }
         EntrypointValueKindV1::Blob => encoded_pointer(PointerType::Blob, decode_blob(value)?)?,
@@ -2272,6 +2276,64 @@ mod tests {
     }
 
     #[test]
+    fn canonical_argument_boundary_ignores_ambient_norito_layout_flags() {
+        let schema = EntrypointArgumentSchemaV1 {
+            fields: vec![EntrypointArgumentFieldV1 {
+                name: "value".to_owned(),
+                ty: EntrypointValueTypeV1 {
+                    nodes: vec![
+                        EntrypointValueTypeNodeV1::Result,
+                        EntrypointValueTypeNodeV1::List(EntrypointListTypeNodeV1 { capacity: 2 }),
+                        EntrypointValueTypeNodeV1::Leaf(EntrypointValueKindV1::String),
+                        EntrypointValueTypeNodeV1::Tuple(2),
+                        EntrypointValueTypeNodeV1::Leaf(EntrypointValueKindV1::Int),
+                        EntrypointValueTypeNodeV1::Leaf(EntrypointValueKindV1::Int),
+                    ],
+                },
+            }],
+        };
+        let payload = Json::from(norito::json!({
+            "value": { "err": ["7", "9"] }
+        }));
+        let expected_schema = canonical_norito_frame(&schema).expect("canonical schema");
+        let expected_record =
+            encode_argument_record_from_json(&schema, &payload).expect("canonical record");
+
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+        let ambient_schema = to_bytes(&schema).expect("ambient-layout schema");
+        assert_ne!(
+            ambient_schema, expected_schema,
+            "the adversarial ambient layout must exercise a distinct encoding"
+        );
+        assert_eq!(
+            canonical_norito_frame(&schema).expect("pinned canonical schema"),
+            expected_schema
+        );
+        assert_eq!(canonical_norito_frame_len(&schema), expected_schema.len());
+        assert_eq!(
+            encode_argument_record_from_json(&schema, &payload).expect("pinned canonical record"),
+            expected_record
+        );
+
+        let prepared = prepare_argument_record_with_gas_limit(
+            &schema,
+            Arc::from(expected_record.clone()),
+            u64::MAX,
+        )
+        .expect("prepare under adversarial ambient layout");
+        assert_eq!(prepared.schema_bytes(), expected_schema);
+        validate_argument_record(&schema, &expected_record)
+            .expect("validate under adversarial ambient layout");
+        assert_eq!(
+            to_bytes(&schema).expect("ambient layout after canonical operations"),
+            ambient_schema,
+            "nested canonical framing must restore the caller's ambient Norito layout"
+        );
+    }
+
+    #[test]
     fn large_prepared_argument_spills_to_heap_without_input_arena_trap() {
         let schema = EntrypointArgumentSchemaV1 {
             fields: vec![EntrypointArgumentFieldV1 {
@@ -2729,7 +2791,7 @@ mod tests {
             "collectible".parse().expect("fixture NFT name"),
         );
         let dataspace = DataSpaceId::new(u64::MAX);
-        let wide = u128::MAX;
+        let wide = BigInt::from(u128::MAX);
         let account_literal = account.canonical_i105().expect("canonical account literal");
         let definition_literal = definition.canonical_address();
         let asset_literal = asset.canonical_literal();
@@ -2798,7 +2860,7 @@ mod tests {
         assert_eq!(string.type_id, PointerType::Blob);
         assert_eq!(string.payload, "言霊".as_bytes());
 
-        assert_eq!(decoded_int(&vm, words[2]), BigInt::from(wide));
+        assert_eq!(decoded_int(&vm, words[2]), wide);
 
         let account_tlv = vm.validate_tlv(words[3]).expect("AccountId TLV");
         assert_eq!(account_tlv.type_id, PointerType::AccountId);
@@ -2806,10 +2868,7 @@ mod tests {
             decode_from_bytes::<AccountId>(account_tlv.payload).expect("decode AccountId"),
             account
         );
-        let definition_tlv = vm
-            .memory
-            .validate_tlv(words[4])
-            .expect("AssetDefinitionId TLV");
+        let definition_tlv = vm.validate_tlv(words[4]).expect("AssetDefinitionId TLV");
         assert_eq!(definition_tlv.type_id, PointerType::AssetDefinitionId);
         assert_eq!(
             decode_from_bytes::<AssetDefinitionId>(definition_tlv.payload)

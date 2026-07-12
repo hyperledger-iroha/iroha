@@ -169,7 +169,7 @@ hyper = "1.7.0"
 ivm = { path = "../ivm" }
 iroha = { workspace = true }
 iroha_telemetry = { workspace = true }
-iroha_core = { workspace = true, features = ["iroha-core-tests"] }
+iroha_core = { workspace = true, features = ["iroha-core-tests", "finality-test-fixtures"] }
 iroha_sccp = { path = "../iroha_sccp", features = ["test-fixtures"] }
 halo2_proofs = { version = "0.5.1", package = "halo2-axiom", features = ["batch", "multicore", "circuit-params"] }
 iroha_test_samples = { path = "../iroha_test_samples" }
@@ -216,16 +216,16 @@ path = "tests/grouped/zk.rs"
 required-features = ["app_api"]
 
 [[test]]
-name = "offline_v2_kagemusha_redeem_smoke"
-path = "tests/offline_v2_kagemusha_redeem_smoke.rs"
+name = "offline_redeem_contract"
+path = "tests/offline_redeem_contract.rs"
 required-features = ["app_api"]
 
 [[test]]
-name = "offline_v2_kagemusha_topup_smoke"
-path = "tests/offline_v2_kagemusha_topup_smoke.rs"
+name = "offline_top_up_contract"
+path = "tests/offline_top_up_contract.rs"
 required-features = ["app_api"]
 
 [[test]]
-name = "offline_kagemusha_only_smoke"
-path = "tests/offline_kagemusha_only_smoke.rs"
+name = "offline_operation_contract"
+path = "tests/offline_operation_contract.rs"
 required-features = ["app_api"]

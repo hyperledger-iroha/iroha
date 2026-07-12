@@ -47,4 +47,4 @@ if unexpected:
     raise SystemExit("unexpected JVM offline lifecycle files: " + ", ".join(unexpected))
 PY
 
-echo "Kagemusha JVM boundary passed: ABI-18 artifact streaming only."
+echo "Kagemusha JVM boundary passed: ABI-19 artifact streaming only."

@@ -266,12 +266,6 @@ fn gas_for_recursive_kagemusha_redeem_v2(
                 .unwrap_or(u64::MAX),
         ),
     );
-    if let Some(witness) = &request.lineage_witness {
-        let witness_bytes = norito::to_bytes(witness)
-            .map(|bytes| u64::try_from(bytes.len()).unwrap_or(u64::MAX))
-            .unwrap_or(u64::MAX);
-        gas = gas.saturating_add(zk_gas_per_proof_byte().saturating_mul(witness_bytes));
-    }
     gas
 }
 

@@ -10,14 +10,12 @@ use iroha_crypto::Algorithm;
 use iroha_data_model::{
     account::address::ChainDiscriminantGuard,
     asset::{AssetDefinitionAlias, definition::AssetConfidentialPolicy},
-    isi::verifying_keys,
     parameter::{
         Parameter, Parameters,
         custom::{CustomParameter, CustomParameterId},
         system::{SumeragiConsensusMode, SumeragiNposParameters, SumeragiParameter},
     },
     prelude::*,
-    proof::VerifyingKeyId,
 };
 use iroha_executor_data_model::permission::{
     account::CanRegisterAccount, domain::CanRegisterDomain, parameter::CanSetParameters,
@@ -36,19 +34,6 @@ use crate::{
     },
     tui,
 };
-
-const OFFLINE_NOTE_VK_NAMESPACE: &str = "offline_note";
-
-fn offline_note_verifier_registration()
--> color_eyre::Result<(VerifyingKeyId, iroha_data_model::proof::VerifyingKeyRecord)> {
-    let id = VerifyingKeyId::new(
-        iroha_core::zk::ZK_BACKEND_HALO2_IPA,
-        iroha_core::zk::OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID,
-    );
-    let record = iroha_core::zk::offline_note_recursive_vk_record(OFFLINE_NOTE_VK_NAMESPACE, 1)
-        .map_err(|error| color_eyre::eyre::eyre!(error))?;
-    Ok((id, record))
-}
 
 /// Generate a genesis configuration and standard-output in JSON format
 #[derive(Parser, Debug, Clone)]
@@ -853,15 +838,9 @@ pub fn generate_default(
             SumeragiParameter::ModeActivationHeight(height),
         ));
     }
-    let (offline_note_vk_id, offline_note_vk_record) = offline_note_verifier_registration()?;
     builder = builder
         .next_transaction()
-        .append_instruction(grant_permission_to_manage_verifying_keys)
-        .next_transaction()
-        .append_instruction(verifying_keys::RegisterVerifyingKey {
-            id: offline_note_vk_id,
-            record: offline_note_vk_record,
-        });
+        .append_instruction(grant_permission_to_manage_verifying_keys);
 
     // Use transaction-oriented API: separate initial registrations from
     // subsequent state updates.
@@ -955,137 +934,6 @@ mod da_tests {
             Some(5),
             "genesis should include mode_activation_height when requested"
         );
-    }
-
-    #[test]
-    fn default_genesis_registers_offline_note_verifier() -> color_eyre::Result<()> {
-        let builder = GenesisBuilder::new_without_executor(
-            ChainId::from("offline-note-genesis"),
-            PathBuf::from("."),
-        );
-        let manifest = generate_default(
-            builder,
-            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key(),
-            None,
-            SumeragiConsensusMode::Npos,
-            None,
-            None,
-            None,
-            None,
-            BuildLine::Iroha3,
-        )?;
-
-        let offline_vk_id = VerifyingKeyId::new(
-            iroha_core::zk::ZK_BACKEND_HALO2_IPA,
-            iroha_core::zk::OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID,
-        );
-        let register = manifest
-            .instructions()
-            .filter_map(|instruction| {
-                instruction
-                    .as_any()
-                    .downcast_ref::<verifying_keys::RegisterVerifyingKey>()
-            })
-            .find(|register| register.id == offline_vk_id)
-            .expect("default genesis must register the Offline verifier");
-        assert!(register.record.is_active());
-        assert_eq!(register.record.namespace, OFFLINE_NOTE_VK_NAMESPACE);
-        assert_eq!(
-            register.record.public_inputs_schema_hash,
-            iroha_data_model::offline::offline_note_recursive_public_inputs_schema_hash()
-        );
-        assert_eq!(
-            register.record.key.as_ref().map(|key| key.backend.as_str()),
-            Some(iroha_core::zk::ZK_BACKEND_HALO2_IPA)
-        );
-
-        let expected_vk_set_hash =
-            iroha_genesis::compute_genesis_vk_set_hash(manifest.instructions())?
-                .expect("verifier registry hash should be populated");
-        let batches = manifest.parse()?;
-        let declared_vk_set_hash = batches
-            .into_iter()
-            .flatten()
-            .find_map(|instruction| {
-                let set_parameter = instruction.as_any().downcast_ref::<SetParameter>()?;
-                let Parameter::Custom(custom) = set_parameter.inner() else {
-                    return None;
-                };
-                if custom.id()
-                    != &iroha_data_model::parameter::system::confidential_metadata::registry_root_id()
-                {
-                    return None;
-                }
-                let value: norito::json::Value =
-                    custom.payload().try_into_any_norito().ok()?;
-                let Some(norito::json::Value::String(hash)) = value.get("vk_set_hash") else {
-                    return None;
-                };
-                Some(hash.clone())
-            })
-            .expect("confidential registry root must declare the generated VK set hash");
-        assert_eq!(
-            declared_vk_set_hash,
-            format!("0x{}", hex::encode(expected_vk_set_hash))
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn default_genesis_grants_verifying_key_permission_before_registration()
-    -> color_eyre::Result<()> {
-        let builder = GenesisBuilder::new_without_executor(
-            ChainId::from("offline-note-permission-order"),
-            PathBuf::from("."),
-        );
-        let manifest = generate_default(
-            builder,
-            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key(),
-            None,
-            SumeragiConsensusMode::Permissioned,
-            None,
-            None,
-            None,
-            None,
-            BuildLine::Iroha3,
-        )?;
-        let genesis_account_id =
-            AccountId::new(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone());
-        let batches = manifest.parse()?;
-        let grant_batch = batches
-            .iter()
-            .position(|batch| {
-                batch.iter().any(|instruction| {
-                    let Some(GrantBox::Permission(grant)) =
-                        instruction.as_any().downcast_ref::<GrantBox>()
-                    else {
-                        return false;
-                    };
-                    let permission_name: &str = grant.object().name();
-                    grant.destination() == &genesis_account_id
-                        && permission_name == "CanManageVerifyingKeys"
-                })
-            })
-            .expect("default genesis must grant verifying-key management");
-        let registration_batch = batches
-            .iter()
-            .position(|batch| {
-                batch.iter().any(|instruction| {
-                    instruction
-                        .as_any()
-                        .downcast_ref::<verifying_keys::RegisterVerifyingKey>()
-                        .is_some()
-                })
-            })
-            .expect("default genesis must register an offline-note verifier");
-
-        assert!(
-            grant_batch < registration_batch,
-            "verifying-key management grant must commit before verifier registration"
-        );
-
-        Ok(())
     }
 
     #[test]

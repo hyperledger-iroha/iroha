@@ -2529,7 +2529,6 @@ impl LaneBlockSessionCache {
     ///
     /// The cursor is a stable session key instead of a vector index so concurrent
     /// insertion and pruning cannot repeatedly select the first cached sibling.
-    #[cfg(test)]
     pub(crate) fn periodic_rebroadcast_bundles_after(
         &self,
         signer: &PeerId,

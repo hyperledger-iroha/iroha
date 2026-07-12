@@ -283,11 +283,6 @@ package_android() {
     "$stage" \
     "$stage_checksums"
   copy_android_artifact \
-    "$ROOT_DIR/kotlin/offline-wallet-android/build/outputs/aar/offline-wallet-android-release.aar" \
-    "offline-wallet-android/offline-wallet-android-release.aar" \
-    "$stage" \
-    "$stage_checksums"
-  copy_android_artifact \
     "$ROOT_DIR/kotlin/client-android/src/main/jniLibs/arm64-v8a/libconnect_norito_bridge.so" \
     "native/arm64-v8a/libconnect_norito_bridge.so" \
     "$stage" \

@@ -13,7 +13,7 @@ use std::{
 use clap::{Args as ClapArgs, ValueEnum};
 use color_eyre::eyre::{Result, WrapErr as _, eyre};
 use iroha_config::{base::toml::TomlSource, parameters::actual};
-use iroha_core::zk::{self, confidential_v2};
+use iroha_core::zk::confidential_v2;
 use iroha_crypto::{ExposedPrivateKey, KeyPair};
 use iroha_data_model::{
     account::address::ChainDiscriminantGuard,
@@ -457,10 +457,10 @@ const LOCALNET_STAKE_ASSET_NAME: &str = "xor";
 const LOCALNET_SAMPLE_ASSET_DOMAIN: &str = "wonderland.universal";
 pub(crate) const LOCALNET_SAMPLE_ASSET_NAME: &str = "sample";
 const LOCALNET_REQUESTED_ASSET_INITIAL_QUANTITY: u64 = 1_000_000_000;
-const LOCALNET_OFFLINE_NOTE_ASSET_ID: &str = "7EAD8EFYUx1aVKZPUU1fyKvr8dF1";
-const LOCALNET_OFFLINE_NOTE_ASSET_NAME: &str = "usd";
-const LOCALNET_OFFLINE_NOTE_ASSET_ALIAS: &str = "usd#wonderland";
-const LOCALNET_OFFLINE_NOTE_INITIAL_QUANTITY: u64 = 100;
+const LOCALNET_KAGEMUSHA_ASSET_ID: &str = "7EAD8EFYUx1aVKZPUU1fyKvr8dF1";
+const LOCALNET_KAGEMUSHA_ASSET_NAME: &str = "usd";
+const LOCALNET_KAGEMUSHA_ASSET_ALIAS: &str = "usd#wonderland";
+const LOCALNET_KAGEMUSHA_INITIAL_QUANTITY: u64 = 100;
 const LOCALNET_GAS_ACCOUNT_SEED: &[u8] = b"localnet-gas-account";
 /// Minimum faucet reserve before startup auto-mints a replenishment.
 const LOCALNET_FEE_ASSET_RESERVE_MIN: u128 = 1_000_000_000_000_000_000_000_000;
@@ -537,10 +537,7 @@ fn localnet_fee_asset_literal() -> String {
 const LOCALNET_FEE_ZK_VK_BACKEND: &str = "halo2/ipa";
 const LOCALNET_FEE_ZK_VK_TRANSFER_NAME: &str = "vk_transfer";
 const LOCALNET_FEE_ZK_VK_UNSHIELD_NAME: &str = "vk_unshield";
-const LOCALNET_OFFLINE_NOTE_VK_BACKEND: &str = "halo2/ipa";
-const LOCALNET_OFFLINE_NOTE_VK_NAME: &str = "offline-note-recursive";
 const LOCALNET_FEE_ASSET_SCALE: u32 = 9;
-const LOCALNET_OFFLINE_NOTE_VK_NAMESPACE: &str = "offline_note";
 
 fn localnet_fee_vk_transfer_id() -> VerifyingKeyId {
     VerifyingKeyId::new(LOCALNET_FEE_ZK_VK_BACKEND, LOCALNET_FEE_ZK_VK_TRANSFER_NAME)
@@ -548,13 +545,6 @@ fn localnet_fee_vk_transfer_id() -> VerifyingKeyId {
 
 fn localnet_fee_vk_unshield_id() -> VerifyingKeyId {
     VerifyingKeyId::new(LOCALNET_FEE_ZK_VK_BACKEND, LOCALNET_FEE_ZK_VK_UNSHIELD_NAME)
-}
-
-fn localnet_offline_note_vk_id() -> VerifyingKeyId {
-    VerifyingKeyId::new(
-        LOCALNET_OFFLINE_NOTE_VK_BACKEND,
-        LOCALNET_OFFLINE_NOTE_VK_NAME,
-    )
 }
 
 fn localnet_confidential_fee_vk_record(name: &str, version: u32) -> Result<VerifyingKeyRecord> {
@@ -585,31 +575,23 @@ fn localnet_confidential_fee_vk_registrations() -> Result<[(VerifyingKeyId, Veri
     ])
 }
 
-fn localnet_offline_note_vk_registration() -> Result<(VerifyingKeyId, VerifyingKeyRecord)> {
-    Ok((
-        localnet_offline_note_vk_id(),
-        zk::offline_note_recursive_vk_record(LOCALNET_OFFLINE_NOTE_VK_NAMESPACE, 1)
-            .map_err(|error| eyre!(error))?,
-    ))
-}
-
 fn localnet_sample_asset_literal() -> String {
     canonical_asset_definition_literal(LOCALNET_SAMPLE_ASSET_DOMAIN, LOCALNET_SAMPLE_ASSET_NAME)
 }
 
-fn localnet_offline_note_asset_literal() -> String {
-    LOCALNET_OFFLINE_NOTE_ASSET_ID.to_owned()
+fn localnet_kagemusha_asset_literal() -> String {
+    LOCALNET_KAGEMUSHA_ASSET_ID.to_owned()
 }
 
-fn localnet_offline_note_asset_spec() -> AssetSpec {
+fn localnet_kagemusha_asset_spec() -> AssetSpec {
     let client_account_id = localnet_client_account_id();
     AssetSpec {
-        id: localnet_offline_note_asset_literal(),
-        name: LOCALNET_OFFLINE_NOTE_ASSET_NAME.to_owned(),
-        alias: Some(LOCALNET_OFFLINE_NOTE_ASSET_ALIAS.to_owned()),
+        id: localnet_kagemusha_asset_literal(),
+        name: LOCALNET_KAGEMUSHA_ASSET_NAME.to_owned(),
+        alias: Some(LOCALNET_KAGEMUSHA_ASSET_ALIAS.to_owned()),
         owned_by: client_account_id.clone(),
         mint_to: client_account_id,
-        quantity: LOCALNET_OFFLINE_NOTE_INITIAL_QUANTITY,
+        quantity: LOCALNET_KAGEMUSHA_INITIAL_QUANTITY,
     }
 }
 
@@ -634,7 +616,7 @@ fn requested_localnet_asset_spec(asset_definition_id: &str) -> Result<AssetSpec>
 fn effective_localnet_assets(extra_assets: &[AssetSpec]) -> Vec<AssetSpec> {
     let mut assets = Vec::with_capacity(extra_assets.len() + 1);
     let mut seen_asset_ids = BTreeSet::new();
-    let built_in = localnet_offline_note_asset_spec();
+    let built_in = localnet_kagemusha_asset_spec();
     seen_asset_ids.insert(built_in.id.clone());
     assets.push(built_in);
     for asset in extra_assets {
@@ -685,7 +667,7 @@ pub struct Args {
     #[arg(long, default_value_t = 0)]
     extra_accounts: u16,
     /// Register the optional sample asset and mint to the default account.
-    /// The built-in offline-note asset is always emitted.
+    /// The built-in Kagemusha asset is always emitted.
     #[arg(long, default_value_t = false)]
     sample_asset: bool,
     /// Register additional asset definition IDs owned by the generated client signer.
@@ -1033,8 +1015,10 @@ fn generate_localnet_with_line<T: Write>(
         .first()
         .expect("localnet always has at least one peer");
     let bootstrap_kura_dir = out_dir.join("storage").join("peer0");
-    let bootstrap_tiered_state_dir = bootstrap_kura_dir.join("tiered_state");
-    let bootstrap_da_store_dir = bootstrap_kura_dir.join("da_wsv_snapshots");
+    let bootstrap_peer_state_dir = out_dir.join("state").join("peer0");
+    let bootstrap_runtime_state_dir = bootstrap_peer_state_dir.join("soracloud_runtime");
+    let bootstrap_tiered_state_dir = bootstrap_peer_state_dir.join("tiered_state");
+    let bootstrap_da_store_dir = bootstrap_peer_state_dir.join("da_wsv_snapshots");
     let bootstrap_config = render_peer_config(
         bootstrap_peer,
         &trusted,
@@ -1043,6 +1027,7 @@ fn generate_localnet_with_line<T: Write>(
         &genesis_signed_path,
         &bls_entries,
         &bootstrap_kura_dir,
+        &bootstrap_runtime_state_dir,
         &bootstrap_tiered_state_dir,
         &bootstrap_da_store_dir,
         &chain_id,
@@ -1087,14 +1072,22 @@ fn generate_localnet_with_line<T: Write>(
         let kura_dir = out_dir.join("storage").join(format!("peer{idx}"));
         fs::create_dir_all(&kura_dir)
             .wrap_err_with(|| format!("failed to create kura dir {}", kura_dir.display()))?;
-        let tiered_state_dir = kura_dir.join("tiered_state");
+        let peer_state_dir = out_dir.join("state").join(format!("peer{idx}"));
+        fs::create_dir_all(&peer_state_dir).wrap_err_with(|| {
+            format!(
+                "failed to create peer state dir {}",
+                peer_state_dir.display()
+            )
+        })?;
+        let runtime_state_dir = peer_state_dir.join("soracloud_runtime");
+        let tiered_state_dir = peer_state_dir.join("tiered_state");
         fs::create_dir_all(&tiered_state_dir).wrap_err_with(|| {
             format!(
                 "failed to create tiered state dir {}",
                 tiered_state_dir.display()
             )
         })?;
-        let da_store_dir = kura_dir.join("da_wsv_snapshots");
+        let da_store_dir = peer_state_dir.join("da_wsv_snapshots");
         fs::create_dir_all(&da_store_dir).wrap_err_with(|| {
             format!(
                 "failed to create DA WSV snapshot dir {}",
@@ -1109,6 +1102,7 @@ fn generate_localnet_with_line<T: Write>(
             &genesis_signed_path,
             &bls_entries,
             &kura_dir,
+            &runtime_state_dir,
             &tiered_state_dir,
             &da_store_dir,
             &chain_id,
@@ -1548,6 +1542,7 @@ fn render_peer_config(
     genesis_signed_path: &Path,
     bls_entries: &[BlsEntry],
     kura_store_dir: &Path,
+    runtime_state_root: &Path,
     tiered_state_root: &Path,
     da_store_root: &Path,
     chain_id: &str,
@@ -1633,12 +1628,7 @@ fn render_peer_config(
     let mut soracloud_runtime = Table::new();
     soracloud_runtime.insert(
         "state_dir".into(),
-        Value::String(
-            kura_store_dir
-                .join("soracloud_runtime")
-                .to_string_lossy()
-                .into_owned(),
-        ),
+        Value::String(runtime_state_root.to_string_lossy().into_owned()),
     );
     root.insert("soracloud_runtime".into(), Value::Table(soracloud_runtime));
 
@@ -2252,17 +2242,17 @@ fn render_peer_config(
     root.insert("torii".into(), Value::Table(torii));
 
     let mut settlement_offline_escrow_accounts = Table::new();
-    let offline_note_asset_definition =
-        AssetDefinitionId::parse_address_literal(LOCALNET_OFFLINE_NOTE_ASSET_ID)
-            .expect("built-in offline-note asset definition id must parse");
-    let offline_note_escrow_account = offline_escrow_account_id(
+    let kagemusha_asset_definition =
+        AssetDefinitionId::parse_address_literal(LOCALNET_KAGEMUSHA_ASSET_ID)
+            .expect("built-in Kagemusha asset definition id must parse");
+    let kagemusha_escrow_account = offline_escrow_account_id(
         &ChainId::from(chain_id.to_owned()),
-        &offline_note_asset_definition,
+        &kagemusha_asset_definition,
     );
     settlement_offline_escrow_accounts.insert(
-        LOCALNET_OFFLINE_NOTE_ASSET_ID.into(),
+        LOCALNET_KAGEMUSHA_ASSET_ID.into(),
         Value::String(account_id_runtime_literal(
-            &offline_note_escrow_account,
+            &kagemusha_escrow_account,
             chain_discriminant,
         )),
     );
@@ -2332,7 +2322,7 @@ fn extend_genesis(
         let asset_def = AssetDefinitionId::parse_address_literal(&asset.id)
             .wrap_err("invalid asset definition id")?;
         let mut metadata = Metadata::default();
-        if asset.id == LOCALNET_OFFLINE_NOTE_ASSET_ID {
+        if asset.id == LOCALNET_KAGEMUSHA_ASSET_ID {
             metadata.insert(
                 OFFLINE_ASSET_ENABLED_METADATA_KEY
                     .parse()
@@ -2799,16 +2789,6 @@ fn append_localnet_npos_bootstrap(
                 builder.append_instruction(verifying_keys::RegisterVerifyingKey { id, record });
         }
     }
-    let (offline_note_vk_id, offline_note_vk_record) = localnet_offline_note_vk_registration()?;
-    if registrations
-        .verifying_keys
-        .insert(offline_note_vk_id.clone())
-    {
-        builder = builder.append_instruction(verifying_keys::RegisterVerifyingKey {
-            id: offline_note_vk_id,
-            record: offline_note_vk_record,
-        });
-    }
     if !registrations.zk_assets.contains(&fee_asset_id) {
         builder = builder.append_instruction(iroha_data_model::isi::zk::RegisterZkAsset::new(
             fee_asset_id.clone(),
@@ -3169,7 +3149,7 @@ fn write_start_script(
     writeln!(start_file, "for i in $(seq 0 {}); do", peers - 1)?;
     writeln!(
         start_file,
-        "  SNAPSHOT_STORE_DIR=\"$DIR/storage/peer${{i}}/snapshot\""
+        "  SNAPSHOT_STORE_DIR=\"$DIR/state/peer${{i}}/snapshot\""
     )?;
     writeln!(start_file, "  PIDFILE=\"$DIR/peer${{i}}.pid\"")?;
     writeln!(start_file, "  if [ -f \"$PIDFILE\" ]; then")?;
@@ -3493,11 +3473,11 @@ fn write_localnet_readme(
             "- Signed genesis: `{genesis_signed}`\n",
             "- Client config: `{client_config}`\n\n",
             "## Built-in App API bootstrap\n\n",
-            "- Offline-note asset definition: `{offline_note_asset}`\n",
-            "- Offline-note alias: `{offline_note_alias}`\n",
+            "- Kagemusha asset definition: `{kagemusha_asset}`\n",
+            "- Kagemusha asset alias: `{kagemusha_alias}`\n",
             "- Localnet app authority: `{client_account_id}`\n",
             "- Offline escrow account: deterministic account derived from the chain id and asset definition\n",
-            "- Generated peer configs enable `torii.onboarding` and Offline escrow routing\n\n",
+            "- Generated peer configs enable `torii.onboarding` and Kagemusha escrow routing\n\n",
             "- Start script: `{start_script}`\n",
             "- Stop script: `{stop_script}`\n\n",
             "## Next steps\n\n",
@@ -3518,8 +3498,8 @@ fn write_localnet_readme(
         genesis_json = genesis_json_path.display(),
         genesis_signed = genesis_signed_path.display(),
         client_config = client_config_path.display(),
-        offline_note_asset = LOCALNET_OFFLINE_NOTE_ASSET_ID,
-        offline_note_alias = LOCALNET_OFFLINE_NOTE_ASSET_ALIAS,
+        kagemusha_asset = LOCALNET_KAGEMUSHA_ASSET_ID,
+        kagemusha_alias = LOCALNET_KAGEMUSHA_ASSET_ALIAS,
         client_account_id = client_account_id,
         start_script = start_path.display(),
         stop_script = stop_path.display(),
@@ -3811,13 +3791,13 @@ mod tests {
 
     #[test]
     #[allow(clippy::too_many_lines)]
-    fn generated_localnet_bootstraps_builtin_offline_note_asset_and_permissions() {
+    fn generated_localnet_bootstraps_kagemusha_asset_and_permissions() {
         let opts = LocalnetOptions {
             build_line: BuildLine::Iroha3,
             sora_profile: None,
             perf_profile: None,
             peers: NonZeroU16::new(4).expect("non-zero"),
-            seed: Some("offline-note-bootstrap".to_owned()),
+            seed: Some("kagemusha-bootstrap".to_owned()),
             bind_host: DEFAULT_PUBLIC_HOST.to_owned(),
             public_host: DEFAULT_PUBLIC_HOST.to_owned(),
             base_api_port: 29080,
@@ -3830,12 +3810,12 @@ mod tests {
         };
 
         let manifest = localnet_genesis_for_opts(&opts);
-        let offline_asset_id =
-            AssetDefinitionId::parse_address_literal(LOCALNET_OFFLINE_NOTE_ASSET_ID)
-                .expect("offline note asset id");
-        let offline_alias = LOCALNET_OFFLINE_NOTE_ASSET_ALIAS
+        let kagemusha_asset_id =
+            AssetDefinitionId::parse_address_literal(LOCALNET_KAGEMUSHA_ASSET_ID)
+                .expect("Kagemusha asset id");
+        let kagemusha_alias = LOCALNET_KAGEMUSHA_ASSET_ALIAS
             .parse::<AssetDefinitionAlias>()
-            .expect("offline note alias");
+            .expect("Kagemusha asset alias");
         let client_account_id = localnet_client_account_id();
         let (genesis_public_key, _) =
             generate_genesis_key_pair(opts.seed.as_ref().map(String::as_bytes), GENESIS_SEED)
@@ -3844,7 +3824,7 @@ mod tests {
         let expected_explicit_manage_offline_escrow_grants =
             usize::from(client_account_id != *ALICE_ID);
         let expected_mint_destination =
-            AssetId::new(offline_asset_id.clone(), client_account_id.clone());
+            AssetId::new(kagemusha_asset_id.clone(), client_account_id.clone());
         let offline_enabled_key: iroha_data_model::name::Name = OFFLINE_ASSET_ENABLED_METADATA_KEY
             .parse()
             .expect("offline asset metadata key");
@@ -3857,7 +3837,7 @@ mod tests {
                     matches!(
                         register,
                         RegisterBox::AssetDefinition(register)
-                            if register.object().id == offline_asset_id
+                            if register.object().id == kagemusha_asset_id
                                 && register
                                     .object()
                                     .metadata
@@ -3868,7 +3848,7 @@ mod tests {
         });
         assert!(
             has_definition,
-            "localnet must register the built-in offline-note asset with offline.enabled=true"
+            "localnet must register the built-in Kagemusha asset with offline.enabled=true"
         );
 
         let has_alias_binding = manifest.instructions().any(|instruction| {
@@ -3876,13 +3856,13 @@ mod tests {
                 .as_any()
                 .downcast_ref::<SetAssetDefinitionAlias>()
                 .is_some_and(|set_alias| {
-                    set_alias.asset_definition_id() == &offline_asset_id
-                        && set_alias.alias().as_ref() == Some(&offline_alias)
+                    set_alias.asset_definition_id() == &kagemusha_asset_id
+                        && set_alias.alias().as_ref() == Some(&kagemusha_alias)
                 })
         });
         assert!(
             has_alias_binding,
-            "localnet must bind the built-in offline-note alias"
+            "localnet must bind the built-in Kagemusha asset alias"
         );
 
         let has_initial_mint = manifest.instructions().any(|instruction| {
@@ -3898,7 +3878,7 @@ mod tests {
         });
         assert!(
             has_initial_mint,
-            "localnet must mint the built-in offline-note asset to the client signer"
+            "localnet must mint the built-in Kagemusha asset to the client signer"
         );
 
         let has_owner_transfer = manifest.instructions().any(|instruction| {
@@ -3907,7 +3887,7 @@ mod tests {
                 .downcast_ref::<TransferBox>()
                 .is_some_and(|transfer| match transfer {
                     TransferBox::AssetDefinition(transfer_asset) => {
-                        transfer_asset.object() == &offline_asset_id
+                        transfer_asset.object() == &kagemusha_asset_id
                             && transfer_asset.destination() == &client_account_id
                     }
                     _ => false,
@@ -3915,7 +3895,7 @@ mod tests {
         });
         assert!(
             has_owner_transfer,
-            "localnet must transfer offline-note asset ownership to the client signer"
+            "localnet must transfer Kagemusha asset ownership to the client signer"
         );
 
         let mut has_alias_manage = false;
@@ -4040,14 +4020,14 @@ mod tests {
     }
 
     #[test]
-    fn generated_peer_config_enables_offline_note_bootstrap_services() {
+    fn generated_peer_config_enables_kagemusha_bootstrap_services() {
         let temp = tempfile::tempdir().expect("make temp dir");
         let opts = LocalnetOptions {
             build_line: BuildLine::Iroha3,
             sora_profile: None,
             perf_profile: None,
             peers: NonZeroU16::new(4).expect("non-zero"),
-            seed: Some("offline-note-config".to_owned()),
+            seed: Some("kagemusha-config".to_owned()),
             bind_host: DEFAULT_PUBLIC_HOST.to_owned(),
             public_host: DEFAULT_PUBLIC_HOST.to_owned(),
             base_api_port: 29080,
@@ -4103,26 +4083,26 @@ mod tests {
             .get("chain_discriminant")
             .and_then(toml::Value::as_integer)
             .map(|value| u16::try_from(value).expect("chain discriminant must fit u16"));
-        let offline_note_asset_definition =
-            AssetDefinitionId::parse_address_literal(LOCALNET_OFFLINE_NOTE_ASSET_ID)
-                .expect("offline note asset id");
+        let kagemusha_asset_definition =
+            AssetDefinitionId::parse_address_literal(LOCALNET_KAGEMUSHA_ASSET_ID)
+                .expect("Kagemusha asset id");
         let expected_escrow_account = offline_escrow_account_id(
             &ChainId::from(chain_id.to_owned()),
-            &offline_note_asset_definition,
+            &kagemusha_asset_definition,
         );
         let expected_escrow_literal =
             account_id_runtime_literal(&expected_escrow_account, chain_discriminant);
         assert_eq!(
             escrow_accounts.len(),
             1,
-            "generated peer config must include only the built-in offline-note escrow binding"
+            "generated peer config must include only the built-in Kagemusha escrow binding"
         );
         assert_eq!(
             escrow_accounts
-                .get(LOCALNET_OFFLINE_NOTE_ASSET_ID)
+                .get(LOCALNET_KAGEMUSHA_ASSET_ID)
                 .and_then(toml::Value::as_str),
             Some(expected_escrow_literal.as_str()),
-            "generated peer config must map the offline-note asset to its deterministic escrow account"
+            "generated peer config must map the Kagemusha asset to its deterministic escrow account"
         );
     }
 
@@ -5879,7 +5859,6 @@ mod tests {
 
         let transfer_vk_id = localnet_fee_vk_transfer_id();
         let unshield_vk_id = localnet_fee_vk_unshield_id();
-        let offline_note_vk_id = localnet_offline_note_vk_id();
         let zk_registration = raw_genesis
             .instructions()
             .find_map(|instruction| {
@@ -5933,20 +5912,6 @@ mod tests {
                         == confidential_v2::CONFIDENTIAL_UNSHIELD_V2_CIRCUIT_ID
             }),
             "generated fee asset must register an active confidential unshield verifier"
-        );
-        assert!(
-            vk_registrations.iter().any(|register| {
-                register.id == offline_note_vk_id
-                    && register.record.is_active()
-                    && register.record.key.as_ref().map(|key| key.backend.as_str())
-                        == Some(LOCALNET_OFFLINE_NOTE_VK_BACKEND)
-                    && register.record.max_proof_bytes == zk::OFFLINE_NOTE_MAX_PROOF_BYTES
-                    && register.record.namespace == LOCALNET_OFFLINE_NOTE_VK_NAMESPACE
-                    && register.record.circuit_id == zk::OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID
-                    && register.record.public_inputs_schema_hash
-                        == iroha_data_model::offline::offline_note_recursive_public_inputs_schema_hash()
-            }),
-            "generated localnet genesis must register the real Offline recursive verifier"
         );
     }
 
@@ -6017,7 +5982,7 @@ mod tests {
         .expect("write readme");
         let contents = fs::read_to_string(tmp.path().join("README.md")).expect("read readme");
         assert!(contents.contains("- Base seed: `Iroha`"));
-        assert!(contents.contains(LOCALNET_OFFLINE_NOTE_ASSET_ALIAS));
+        assert!(contents.contains(LOCALNET_KAGEMUSHA_ASSET_ALIAS));
         assert!(contents.contains("- Localnet app authority: `"));
         assert!(
             contents.contains(
@@ -6644,9 +6609,16 @@ mod tests {
             Path::new(soracloud_runtime_path).is_absolute(),
             "soracloud runtime state_dir should be absolute"
         );
+        let peer_state_path = Path::new(kura_path)
+            .parent()
+            .and_then(Path::parent)
+            .expect("Kura path lives below the localnet output root")
+            .join("state")
+            .join("peer0");
         assert!(
-            Path::new(soracloud_runtime_path).starts_with(Path::new(kura_path)),
-            "soracloud runtime state_dir should be isolated under the peer store"
+            Path::new(soracloud_runtime_path).starts_with(&peer_state_path)
+                && !Path::new(soracloud_runtime_path).starts_with(Path::new(kura_path)),
+            "soracloud runtime state_dir must remain outside the pristine Kura root"
         );
         assert!(
             Path::new(tiered_root).is_absolute(),
@@ -6655,6 +6627,20 @@ mod tests {
         assert!(
             Path::new(da_root).is_absolute(),
             "tiered_state da_store_root should be absolute"
+        );
+        assert!(
+            Path::new(tiered_root).starts_with(&peer_state_path)
+                && Path::new(da_root).starts_with(&peer_state_path)
+                && !Path::new(tiered_root).starts_with(Path::new(kura_path))
+                && !Path::new(da_root).starts_with(Path::new(kura_path)),
+            "auxiliary state roots must remain outside the pristine Kura root"
+        );
+        assert!(
+            fs::read_dir(kura_path)
+                .expect("read pristine Kura root")
+                .next()
+                .is_none(),
+            "generated localnet must leave the Kura root pristine for catalog binding"
         );
     }
 
@@ -6754,6 +6740,10 @@ mod tests {
         assert!(
             start_contents.contains("nohup env SNAPSHOT_STORE_DIR="),
             "start script should keep a nohup fallback for minimal shells"
+        );
+        assert!(
+            start_contents.contains("SNAPSHOT_STORE_DIR=\"$DIR/state/peer${i}/snapshot\""),
+            "snapshot state must remain outside the pristine Kura root"
         );
         assert!(
             start_contents.contains("peer$i already running with pid $existing_pid"),

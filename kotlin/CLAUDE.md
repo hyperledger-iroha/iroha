@@ -34,7 +34,7 @@ All protocol logic — no Android dependencies:
 - **`sdk.address`** — account/asset address encoding (IH58, Bech32M)
 - **`sdk.tx`** — transaction building, signing, offline envelopes, norito adapters
 - **`sdk.client`** — Torii HTTP/WS/SSE client, JSON, transport, queue
-- **`sdk.offline`** — ABI-18 Kagemusha V3 artifact streaming only
+- **`sdk.offline`** — ABI-19 Kagemusha V3 artifact streaming only
 - **`sdk.connect`** — connect protocol (BouncyCastle)
 - **`sdk.telemetry`** — telemetry sink, options, providers
 - **`sdk.multisig`**, **`sdk.subscriptions`**, **`sdk.sorafs`**, **`sdk.nexus`** — feature packages

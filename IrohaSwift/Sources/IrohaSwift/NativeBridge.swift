@@ -82,7 +82,10 @@ enum NoritoBridgeLoader {
         "connect_norito_free",
         "connect_norito_encode_transfer_signed_transaction",
         "connect_norito_encode_transfer_instruction_box",
-        "connect_norito_encode_validation_fee_transfer_signed_transaction"
+        "connect_norito_encode_validation_fee_transfer_signed_transaction",
+        "connect_norito_detached_transaction_scaffold_inspect_v1",
+        "connect_norito_detached_transaction_scaffold_finalize_ed25519_v1",
+        "connect_norito_canonical_json_blake3_v1"
     ]
 
     private typealias BridgeAbiVersionFn = @convention(c) () -> UInt32
@@ -93,7 +96,7 @@ enum NoritoBridgeLoader {
     }
 
     static func expectedBridgeAbiVersion(for identifier: String) -> UInt32 {
-        return 18
+        return 19
     }
 
     static func isSupportedBridgeAbiVersion(_ actual: UInt32?, for identifier: String = currentIdentifier()) -> Bool {
@@ -584,6 +587,11 @@ enum NativeBridgeError: Error, Equatable {
     case secpVerify
     case invalidPrivacyRequest
     case invalidPrivacyOutput
+    case bridgeUnavailable
+    case detachedTransactionScaffold
+    case detachedTransactionSignature
+    case canonicalJSON
+    case invalidDetachedTransactionOutput
     case unknown(Int32)
 
     static func fromStatus(_ status: Int32) -> NativeBridgeError? {
@@ -629,6 +637,9 @@ enum NativeBridgeError: Error, Equatable {
         case -406: return .identifierReceipt
         case -403: return .verifyingKeyId
         case -404: return .zkAssetMode
+        case -501: return .detachedTransactionScaffold
+        case -502: return .detachedTransactionSignature
+        case -503: return .canonicalJSON
         default: return .unknown(status)
         }
     }
@@ -695,6 +706,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     #endif
 
     static let privacyNativeArchiveMaxBytes = 64 * 1024 * 1024
+    private static let detachedTransactionNativeMaximumBytes = 16 * 1024 * 1024
     private static let privacyRequestTextFieldMaxBytes = 1024
     private static let privacyRequestPublicInputsMaxBytes = 1024 * 1024
     private static let privacyRequestWitnessMaxBytes = privacyNativeArchiveMaxBytes / 2
@@ -1920,6 +1932,22 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         UnsafePointer<UInt8>?, CUnsignedLong,
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?
     ) -> Int32
+    private typealias DetachedTransactionInspectFn = @convention(c) (
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?
+    ) -> Int32
+    private typealias DetachedTransactionFinalizeEd25519Fn = @convention(c) (
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?,
+        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?
+    ) -> Int32
+    private typealias CanonicalJSONBlake3Fn = @convention(c) (
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?,
+        UnsafeMutablePointer<UInt8>?, CUnsignedLong
+    ) -> Int32
     private typealias PrivacyCapabilitiesFn = @convention(c) (
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?
     ) -> Int32
@@ -2083,6 +2111,9 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private var sorafsReferenceValidatePdpBundleFn: SorafsReferencePdpBundleFn? = nil
     private var daProofSummaryFn: DaProofSummaryFn? = nil
     private var blake3HashFn: Blake3HashFn? = nil
+    private var detachedTransactionInspectFn: DetachedTransactionInspectFn? = nil
+    private var detachedTransactionFinalizeEd25519Fn: DetachedTransactionFinalizeEd25519Fn? = nil
+    private var canonicalJSONBlake3Fn: CanonicalJSONBlake3Fn? = nil
     private var privacyCapabilitiesFn: PrivacyCapabilitiesFn? = nil
     private var privacyProofRequestFn: PrivacyProofRequestFn? = nil
     private var privacyBuildProofFn: PrivacyProofArchiveFn? = nil
@@ -2205,6 +2236,9 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private let sorafsReferenceValidatePdpBundleFn: Any? = nil
     private let daProofSummaryFn: Any? = nil
     private let blake3HashFn: Any? = nil
+    private let detachedTransactionInspectFn: Any? = nil
+    private let detachedTransactionFinalizeEd25519Fn: Any? = nil
+    private let canonicalJSONBlake3Fn: Any? = nil
     private let privacyCapabilitiesFn: Any? = nil
     private let privacyProofRequestFn: Any? = nil
     private let privacyBuildProofFn: Any? = nil
@@ -2298,6 +2332,10 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             self.encodeTransferInstructionBoxFn = nil
         }
         loadPrivacySymbols(from: staticHandle)
+        self.detachedTransactionInspectFn = connect_norito_detached_transaction_scaffold_inspect_v1
+        self.detachedTransactionFinalizeEd25519Fn =
+            connect_norito_detached_transaction_scaffold_finalize_ed25519_v1
+        self.canonicalJSONBlake3Fn = connect_norito_canonical_json_blake3_v1
         self.freeFn = connect_norito_free
         self.setChainDiscriminantFn = connect_norito_set_chain_discriminant
         self.bridgeStatus = .valid(path: "static", identifier: NoritoBridgeLoader.currentIdentifier())
@@ -2392,9 +2430,30 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         self.loadedBridgeAbiVersion = Self.loadedBridgeAbiVersion(in: handle)
         if let handle,
            let encodeSymbol = dlsym(handle, "connect_norito_encode_transfer_signed_transaction"),
-           let freeSymbol = dlsym(handle, "connect_norito_free") {
+           let freeSymbol = dlsym(handle, "connect_norito_free"),
+           let detachedInspectSymbol = dlsym(
+               handle,
+               "connect_norito_detached_transaction_scaffold_inspect_v1"
+           ),
+           let detachedFinalizeSymbol = dlsym(
+               handle,
+               "connect_norito_detached_transaction_scaffold_finalize_ed25519_v1"
+           ),
+           let canonicalJSONSymbol = dlsym(handle, "connect_norito_canonical_json_blake3_v1") {
             self.encodeTransferFn = unsafeBitCast(encodeSymbol, to: EncodeTransferFn.self)
             self.freeFn = unsafeBitCast(freeSymbol, to: FreeFn.self)
+            self.detachedTransactionInspectFn = unsafeBitCast(
+                detachedInspectSymbol,
+                to: DetachedTransactionInspectFn.self
+            )
+            self.detachedTransactionFinalizeEd25519Fn = unsafeBitCast(
+                detachedFinalizeSymbol,
+                to: DetachedTransactionFinalizeEd25519Fn.self
+            )
+            self.canonicalJSONBlake3Fn = unsafeBitCast(
+                canonicalJSONSymbol,
+                to: CanonicalJSONBlake3Fn.self
+            )
             loadPrivacySymbols(from: handle)
             if let encodeFeeSponsorSymbol = dlsym(handle, "connect_norito_encode_transfer_signed_transaction_with_fee_sponsor") {
                 self.encodeTransferWithFeeSponsorFn = unsafeBitCast(
@@ -3080,6 +3139,9 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             self.sorafsReferenceValidatePdpBundleFn = nil
             self.daProofSummaryFn = nil
             self.blake3HashFn = nil
+            self.detachedTransactionInspectFn = nil
+            self.detachedTransactionFinalizeEd25519Fn = nil
+            self.canonicalJSONBlake3Fn = nil
             self.privacyCapabilitiesFn = nil
             self.privacyProofRequestFn = nil
             self.privacyBuildProofFn = nil
@@ -3344,7 +3406,24 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     public var isAvailable: Bool {
         #if canImport(Darwin)
         guard bridgeEnabledForRuntime else { return false }
-        return encodeTransferFn != nil && freeFn != nil
+        return encodeTransferFn != nil
+            && detachedTransactionInspectFn != nil
+            && detachedTransactionFinalizeEd25519Fn != nil
+            && canonicalJSONBlake3Fn != nil
+            && freeFn != nil
+        #else
+        return false
+        #endif
+    }
+
+    public var isDetachedTransactionVerificationAvailable: Bool {
+        #if canImport(Darwin)
+        guard bridgeEnabledForRuntime else { return false }
+        return loadedBridgeAbiVersion == NoritoBridgeLoader.expectedBridgeAbiVersion
+            && detachedTransactionInspectFn != nil
+            && detachedTransactionFinalizeEd25519Fn != nil
+            && canonicalJSONBlake3Fn != nil
+            && freeFn != nil
         #else
         return false
         #endif
@@ -3406,7 +3485,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         #endif
     }
 
-    /// Whether ABI 18 exposes the complete first-release Kagemusha surface.
+    /// Whether ABI 19 exposes the complete first-release Kagemusha surface.
     public var isKagemushaRecursiveSpendBridgeAvailable: Bool {
         #if canImport(Darwin)
         guard bridgeEnabledForRuntime else { return false }
@@ -3846,6 +3925,182 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         return takeData(pointer: outPtr, length: UInt(outLen))
         #else
         return nil
+        #endif
+    }
+
+    /// Inspect one exact canonical versioned detached transaction scaffold.
+    public func inspectDetachedTransactionScaffold(
+        _ scaffold: Data
+    ) throws -> DetachedTransactionScaffoldInspection {
+        #if canImport(Darwin)
+        guard isDetachedTransactionVerificationAvailable,
+              let detachedTransactionInspectFn,
+              let freeFn else {
+            throw NativeBridgeError.bridgeUnavailable
+        }
+        guard !scaffold.isEmpty,
+              scaffold.count <= Self.detachedTransactionNativeMaximumBytes else {
+            throw NativeBridgeError.detachedTransactionScaffold
+        }
+        var jsonPointer: UnsafeMutablePointer<UInt8>? = nil
+        var jsonLength: CUnsignedLong = 0
+        let status = scaffold.withUnsafeBytes { buffer -> Int32 in
+            detachedTransactionInspectFn(
+                buffer.bindMemory(to: UInt8.self).baseAddress,
+                CUnsignedLong(buffer.count),
+                &jsonPointer,
+                &jsonLength
+            )
+        }
+        defer {
+            if let jsonPointer {
+                freeFn(jsonPointer)
+            }
+        }
+        try throwOnStatus(status)
+        guard let jsonPointer,
+              jsonLength > 0,
+              jsonLength <= CUnsignedLong(Self.detachedTransactionNativeMaximumBytes) else {
+            throw NativeBridgeError.invalidDetachedTransactionOutput
+        }
+        let json = Data(bytes: jsonPointer, count: Int(jsonLength))
+        do {
+            return try DetachedTransactionBridgeJSONCodec.decodeInspection(json)
+        } catch let error as NativeBridgeError {
+            throw error
+        } catch {
+            throw NativeBridgeError.invalidDetachedTransactionOutput
+        }
+        #else
+        throw NativeBridgeError.bridgeUnavailable
+        #endif
+    }
+
+    /// Finalize a detached scaffold with an exact raw Ed25519 key and signature.
+    public func finalizeDetachedTransactionScaffold(
+        _ scaffold: Data,
+        publicKey: Data,
+        signature: Data
+    ) throws -> DetachedTransactionFinalizationResult {
+        #if canImport(Darwin)
+        guard isDetachedTransactionVerificationAvailable,
+              let detachedTransactionFinalizeEd25519Fn,
+              let freeFn else {
+            throw NativeBridgeError.bridgeUnavailable
+        }
+        guard !scaffold.isEmpty,
+              scaffold.count <= Self.detachedTransactionNativeMaximumBytes else {
+            throw NativeBridgeError.detachedTransactionScaffold
+        }
+        guard publicKey.count == 32, signature.count == 64 else {
+            throw NativeBridgeError.detachedTransactionSignature
+        }
+
+        var signedPointer: UnsafeMutablePointer<UInt8>? = nil
+        var signedLength: CUnsignedLong = 0
+        var jsonPointer: UnsafeMutablePointer<UInt8>? = nil
+        var jsonLength: CUnsignedLong = 0
+        let status = scaffold.withUnsafeBytes { scaffoldBuffer -> Int32 in
+            publicKey.withUnsafeBytes { publicKeyBuffer -> Int32 in
+                signature.withUnsafeBytes { signatureBuffer -> Int32 in
+                    detachedTransactionFinalizeEd25519Fn(
+                        scaffoldBuffer.bindMemory(to: UInt8.self).baseAddress,
+                        CUnsignedLong(scaffoldBuffer.count),
+                        publicKeyBuffer.bindMemory(to: UInt8.self).baseAddress,
+                        CUnsignedLong(publicKeyBuffer.count),
+                        signatureBuffer.bindMemory(to: UInt8.self).baseAddress,
+                        CUnsignedLong(signatureBuffer.count),
+                        &signedPointer,
+                        &signedLength,
+                        &jsonPointer,
+                        &jsonLength
+                    )
+                }
+            }
+        }
+        defer {
+            if let signedPointer {
+                freeFn(signedPointer)
+            }
+            if let jsonPointer {
+                freeFn(jsonPointer)
+            }
+        }
+        try throwOnStatus(status)
+        guard let signedPointer,
+              signedLength > 0,
+              signedLength <= CUnsignedLong(Self.detachedTransactionNativeMaximumBytes),
+              let jsonPointer,
+              jsonLength > 0,
+              jsonLength <= CUnsignedLong(Self.detachedTransactionNativeMaximumBytes) else {
+            throw NativeBridgeError.invalidDetachedTransactionOutput
+        }
+        let signedTransaction = Data(bytes: signedPointer, count: Int(signedLength))
+        let json = Data(bytes: jsonPointer, count: Int(jsonLength))
+        let finalization: DetachedTransactionFinalization
+        do {
+            finalization = try DetachedTransactionBridgeJSONCodec.decodeFinalization(json)
+        } catch let error as NativeBridgeError {
+            throw error
+        } catch {
+            throw NativeBridgeError.invalidDetachedTransactionOutput
+        }
+        let signedInspection = try inspectDetachedTransactionScaffold(signedTransaction)
+        guard signedInspection.payloadSigningHash == finalization.payloadSigningHash,
+              signedInspection.entrypointHash == finalization.entrypointHash,
+              finalization.transactionHash == finalization.entrypointHash else {
+            throw NativeBridgeError.invalidDetachedTransactionOutput
+        }
+        return DetachedTransactionFinalizationResult(
+            signedTransaction: signedTransaction,
+            finalization: finalization
+        )
+        #else
+        throw NativeBridgeError.bridgeUnavailable
+        #endif
+    }
+
+    /// Strictly canonicalize JSON and compute BLAKE3 over those exact bytes.
+    public func canonicalizeJSONBlake3(_ json: Data) throws -> CanonicalJSONBlake3Result {
+        #if canImport(Darwin)
+        guard isDetachedTransactionVerificationAvailable,
+              let canonicalJSONBlake3Fn,
+              let freeFn else {
+            throw NativeBridgeError.bridgeUnavailable
+        }
+        guard json.count <= Self.detachedTransactionNativeMaximumBytes else {
+            throw NativeBridgeError.canonicalJSON
+        }
+        var canonicalPointer: UnsafeMutablePointer<UInt8>? = nil
+        var canonicalLength: CUnsignedLong = 0
+        var hash = [UInt8](repeating: 0, count: 32)
+        let status = json.withUnsafeBytes { buffer -> Int32 in
+            canonicalJSONBlake3Fn(
+                buffer.bindMemory(to: UInt8.self).baseAddress,
+                CUnsignedLong(buffer.count),
+                &canonicalPointer,
+                &canonicalLength,
+                &hash,
+                CUnsignedLong(hash.count)
+            )
+        }
+        defer {
+            if let canonicalPointer {
+                freeFn(canonicalPointer)
+            }
+        }
+        try throwOnStatus(status)
+        guard canonicalLength <= CUnsignedLong(Self.detachedTransactionNativeMaximumBytes),
+              (canonicalLength == 0) == json.isEmpty,
+              canonicalLength == 0 || canonicalPointer != nil else {
+            throw NativeBridgeError.invalidDetachedTransactionOutput
+        }
+        let canonicalJSON = canonicalPointer.map {
+            Data(bytes: $0, count: Int(canonicalLength))
+        } ?? Data()
+        return CanonicalJSONBlake3Result(canonicalJSON: canonicalJSON, hash: Data(hash))
+        #else
+        throw NativeBridgeError.bridgeUnavailable
         #endif
     }
 

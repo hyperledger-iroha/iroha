@@ -37,9 +37,8 @@ build = read(build_path)
 require(
     model_path,
     model,
-    'KAGEMUSHA_RECURSIVE_SPEND_PRODUCT_MODE_V1: &str = "recursive_spend_v1"',
-    'KAGEMUSHA_RECURSIVE_SPEND_MODE_V2: &str = "recursive_spend_v2"',
-    "KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3: u32 = 18",
+    'KAGEMUSHA_RECURSIVE_SPEND_MODE: &str = "recursive_spend_v1"',
+    "KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3: u32 = 19",
     'KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V3: &str =\n    "kagemusha.offline.recursive_spend.artifact_manifest.v3"',
     'KAGEMUSHA_TOPUP_FINALITY_ROSTER_FILE_NAME_V2: &str = "topup-finality-roster.norito"',
 )
@@ -86,7 +85,7 @@ require(
     "KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_PURPOSE_V2",
 )
 
-require(bridge_path, bridge, "CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 18")
+require(bridge_path, bridge, "CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 19")
 release_symbols = (
     "connect_norito_bridge_abi_version",
     "connect_norito_kagemusha_recursive_spend_capabilities_v1",
@@ -124,11 +123,9 @@ for relative in (
         relative,
         text,
         "REQUIRED_NATIVE_BRIDGE_ABI_VERSION",
-        "18",
-        'PRODUCT_MODE',
-        '"recursive_spend_v1"',
+        "19",
         'ARTIFACT_MANIFEST_MODE',
-        '"recursive_spend_v2"',
+        '"recursive_spend_v1"',
         '"kagemusha.offline.recursive_spend.artifact_manifest.v3"',
     )
     for file_name in artifact_constants.values():
@@ -139,5 +136,5 @@ if errors:
     for error in errors:
         print(f" - {error}", file=sys.stderr)
     raise SystemExit(1)
-print("Kagemusha V3 release contract passed: ABI 18, six proof keys, one roster.")
+print("Kagemusha V3 release contract passed: ABI 19, six proof keys, one roster.")
 PY

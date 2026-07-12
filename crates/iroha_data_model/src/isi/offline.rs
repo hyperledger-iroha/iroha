@@ -15,7 +15,7 @@ isi! {
 isi! {
     /// Redeem a branch-safe, scale-bound Kagemusha state.
     pub struct RedeemKagemushaRecursiveV2 {
-        /// Canonical redemption request with Reserved-lineage and unshield evidence.
+        /// Canonical redemption request with recursive-lineage and unshield evidence.
         pub request: KagemushaRecursiveSpendRedeemRequestV2,
     }
 }

@@ -820,15 +820,8 @@ fn validate_path(route: &RouteDescriptor) -> Result<(), &'static str> {
             if !valid_kebab_segment(segment) {
                 return Err("static path segments must use lowercase kebab-case");
             }
-            if matches!(segment, "json" | "sse") {
-                return Err("static path segment uses a forbidden transport word");
-            }
-            if matches!(segment, "get" | "list")
-                && !is_terminal_post_read_operation(route, segment, index, segment_count)
-            {
-                return Err(
-                    "CRUD read operation segments require a matching POST route id and must appear last",
-                );
+            if matches!(segment, "get" | "list" | "json" | "sse") {
+                return Err("static path segment uses a forbidden transport or CRUD word");
             }
             if segment.strip_prefix('v').is_some_and(|suffix| {
                 !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_digit())
@@ -839,23 +832,6 @@ fn validate_path(route: &RouteDescriptor) -> Result<(), &'static str> {
     }
 
     validate_wildcard_shape(path, route.route_match)
-}
-
-fn is_terminal_post_read_operation(
-    route: &RouteDescriptor,
-    segment: &str,
-    index: usize,
-    segment_count: usize,
-) -> bool {
-    if route.method != HttpMethod::Post || index + 1 != segment_count {
-        return false;
-    }
-
-    match segment {
-        "get" => route.stable_route_id.ends_with("_get_post"),
-        "list" => route.stable_route_id.ends_with("_list_post"),
-        _ => false,
-    }
 }
 
 fn validate_wildcard_shape(path: &str, route_match: RouteMatch) -> Result<(), &'static str> {
@@ -3665,6 +3641,7 @@ pub mod contracts_and_verification_keys {
         CONTRACTS_ALIASES_POST => app_post("contracts.contracts_aliases_post", "/v1/contracts/aliases");
         CONTRACTS_DEPLOY_BUNDLES_BY_BUNDLE_DIGEST_GET => app_sdk_get("contracts.contracts_deploy_bundles_by_bundle_digest_get", "/v1/contracts/deploy-bundles/{bundle_digest}");
         CONTRACTS_ALIASES_RESOLVE_POST => app_post("contracts.contracts_aliases_resolve_post", "/v1/contracts/aliases/resolve");
+        ASSETS_TRANSFER_POST => app_post("assets.assets_transfer_post", "/v1/assets/transfer");
         CONTRACTS_CALL_POST => app_post("contracts.contracts_call_post", "/v1/contracts/call");
         CONTRACTS_CALL_SIMULATE_POST => app_post("contracts.contracts_call_simulate_post", "/v1/contracts/call/simulate");
         BRIDGE_PROOFS_SUBMIT_POST => app_sdk_post("contracts.bridge_proofs_submit_post", "/v1/bridge/proofs/submit");
@@ -3680,8 +3657,12 @@ pub mod contracts_and_verification_keys {
         MULTISIG_APPROVE_POST => app_post("contracts.multisig_approve_post", "/v1/multisig/approve");
         MULTISIG_CANCEL_POST => app_post("contracts.multisig_cancel_post", "/v1/multisig/cancel");
         MULTISIG_SPEC_POST => app_post("contracts.multisig_spec_post", "/v1/multisig/spec");
-        MULTISIG_PROPOSALS_LIST_POST => app_post("contracts.multisig_proposals_list_post", "/v1/multisig/proposals/list");
-        MULTISIG_PROPOSALS_GET_POST => app_post("contracts.multisig_proposals_get_post", "/v1/multisig/proposals/get");
+        MULTISIG_PROPOSALS_QUERY_POST => app_post("contracts.multisig_proposals_query_post", "/v1/multisig/proposals/query");
+        MULTISIG_PROPOSALS_LOOKUP_POST => app_post("contracts.multisig_proposals_lookup_post", "/v1/multisig/proposals/lookup");
+        MULTISIG_APPROVALS_QUERY_POST => app_post("contracts.multisig_approvals_query_post", "/v1/multisig/approvals/query");
+        MULTISIG_APPROVALS_LOOKUP_POST => app_post("contracts.multisig_approvals_lookup_post", "/v1/multisig/approvals/lookup");
+        MULTISIG_APPROVALS_QUERY_FOR_AUTHORITY_POST => app_post("contracts.multisig_approvals_query_for_authority_post", "/v1/multisig/approvals/query-for-authority");
+        MULTISIG_APPROVALS_LOOKUP_FOR_AUTHORITY_POST => app_post("contracts.multisig_approvals_lookup_for_authority_post", "/v1/multisig/approvals/lookup-for-authority");
         CONTROLS_ASSET_TRANSFER_QUERY_POST => app_post("contracts.controls_asset_transfer_query_post", "/v1/controls/asset-transfer/query");
         ZK_VK_REGISTER_POST => app_sdk_post("contracts.zk_vk_register_post", "/v1/zk/vk/register");
         ZK_VK_UPDATE_POST => app_sdk_post("contracts.zk_vk_update_post", "/v1/zk/vk/update");
@@ -4369,6 +4350,7 @@ pub const CATALOGED_ROUTES: &[RouteDescriptor] = &[
     contracts_and_verification_keys::CONTRACTS_ALIASES_POST,
     contracts_and_verification_keys::CONTRACTS_DEPLOY_BUNDLES_BY_BUNDLE_DIGEST_GET,
     contracts_and_verification_keys::CONTRACTS_ALIASES_RESOLVE_POST,
+    contracts_and_verification_keys::ASSETS_TRANSFER_POST,
     contracts_and_verification_keys::CONTRACTS_CALL_POST,
     contracts_and_verification_keys::CONTRACTS_CALL_SIMULATE_POST,
     contracts_and_verification_keys::BRIDGE_PROOFS_SUBMIT_POST,
@@ -4384,8 +4366,12 @@ pub const CATALOGED_ROUTES: &[RouteDescriptor] = &[
     contracts_and_verification_keys::MULTISIG_APPROVE_POST,
     contracts_and_verification_keys::MULTISIG_CANCEL_POST,
     contracts_and_verification_keys::MULTISIG_SPEC_POST,
-    contracts_and_verification_keys::MULTISIG_PROPOSALS_LIST_POST,
-    contracts_and_verification_keys::MULTISIG_PROPOSALS_GET_POST,
+    contracts_and_verification_keys::MULTISIG_PROPOSALS_QUERY_POST,
+    contracts_and_verification_keys::MULTISIG_PROPOSALS_LOOKUP_POST,
+    contracts_and_verification_keys::MULTISIG_APPROVALS_QUERY_POST,
+    contracts_and_verification_keys::MULTISIG_APPROVALS_LOOKUP_POST,
+    contracts_and_verification_keys::MULTISIG_APPROVALS_QUERY_FOR_AUTHORITY_POST,
+    contracts_and_verification_keys::MULTISIG_APPROVALS_LOOKUP_FOR_AUTHORITY_POST,
     contracts_and_verification_keys::CONTROLS_ASSET_TRANSFER_QUERY_POST,
     contracts_and_verification_keys::ZK_VK_REGISTER_POST,
     contracts_and_verification_keys::ZK_VK_UPDATE_POST,
@@ -4770,12 +4756,8 @@ mod tests {
         }
 
         for unsupported_path in [
-            "/v1/multisig/proposals/query",
-            "/v1/multisig/proposals/lookup",
-            "/v1/multisig/approvals/query",
-            "/v1/multisig/approvals/lookup",
-            "/v1/multisig/approvals/query-for-authority",
-            "/v1/multisig/approvals/lookup-for-authority",
+            "/v1/multisig/proposals/list",
+            "/v1/multisig/proposals/get",
             "/v1/multisig/approvals/list",
             "/v1/multisig/approvals/get",
             "/v1/multisig/approvals/list_for_authority",
@@ -4790,11 +4772,25 @@ mod tests {
                 routes.iter().all(|route| route.path() != unsupported_path),
                 "unsupported first-release spelling leaked into the catalog: {unsupported_path}"
             );
+            assert!(
+                RouteCatalog::new(CATALOGED_ROUTES)
+                    .project(
+                        CatalogProjection::OpenApi,
+                        EnabledFeatures::new(&["app_api"]),
+                    )
+                    .iter()
+                    .all(|route| route.path() != unsupported_path),
+                "unsupported first-release spelling leaked into OpenAPI projection: {unsupported_path}"
+            );
         }
 
         for canonical_path in [
-            "/v1/multisig/proposals/list",
-            "/v1/multisig/proposals/get",
+            "/v1/multisig/proposals/query",
+            "/v1/multisig/proposals/lookup",
+            "/v1/multisig/approvals/query",
+            "/v1/multisig/approvals/lookup",
+            "/v1/multisig/approvals/query-for-authority",
+            "/v1/multisig/approvals/lookup-for-authority",
             "/v1/controls/asset-transfer/query",
             "/v1/nexus/public-lanes/{lane_id}/validators",
         ] {
@@ -4831,7 +4827,7 @@ mod tests {
             RouteMatch::Wildcard
         );
         assert!(
-            contracts_and_verification_keys::MULTISIG_PROPOSALS_LIST_POST
+            contracts_and_verification_keys::MULTISIG_PROPOSALS_QUERY_POST
                 .projections()
                 .openapi()
         );
@@ -5134,7 +5130,7 @@ mod tests {
     }
 
     #[test]
-    fn canonical_path_grammar_limits_body_bearing_read_operation_segments() {
+    fn canonical_path_grammar_rejects_crud_read_operation_segments() {
         for descriptor in [
             RouteDescriptor::new(
                 "test.resources_list_post",
@@ -5150,11 +5146,6 @@ mod tests {
                 ApiSurface::Public,
                 Listener::Torii,
             ),
-        ] {
-            assert_eq!(validate_path(&descriptor), Ok(()));
-        }
-
-        for descriptor in [
             RouteDescriptor::new(
                 "test.resources_list_get",
                 HttpMethod::Get,
@@ -5179,9 +5170,7 @@ mod tests {
         ] {
             assert_eq!(
                 validate_path(&descriptor),
-                Err(
-                    "CRUD read operation segments require a matching POST route id and must appear last"
-                )
+                Err("static path segment uses a forbidden transport or CRUD word")
             );
         }
 
@@ -5203,7 +5192,7 @@ mod tests {
         ] {
             assert_eq!(
                 validate_path(&descriptor),
-                Err("static path segment uses a forbidden transport word")
+                Err("static path segment uses a forbidden transport or CRUD word")
             );
         }
     }

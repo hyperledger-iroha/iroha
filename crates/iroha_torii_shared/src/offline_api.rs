@@ -180,8 +180,6 @@ impl norito::json::JsonDeserialize for OfflineActiveTransferVerifier {
 /// Snapshot-bound readiness result for one asset definition.
 #[derive(Debug, Clone, PartialEq, Eq, JsonSerialize, NoritoDeserialize, NoritoSerialize)]
 pub struct OfflineReadiness {
-    /// Sole public first-release spendable-cash selector.
-    pub product_mode: String,
     /// Minimum native bridge ABI required by this chain build.
     pub required_bridge_abi_version: u32,
     /// Maximum peer-spend hop depth accepted by the protocol.
@@ -209,9 +207,9 @@ pub struct OfflineReadiness {
     pub active_recursive_state_verifier: Option<OfflineActiveRecursiveStateVerifier>,
     /// Whether this Torii/Core build contains the sound V3 recursive backend.
     pub proof_backend_available: bool,
-    /// Whether Reserved-lineage branches can be verified and redeemed without
-    /// a peer-supplied lineage witness.
-    pub witnessless_reserved_lineage_supported: bool,
+    /// Whether recursive branches can be verified and redeemed through the
+    /// production lineage proof path.
+    pub recursive_lineage_supported: bool,
     /// Whether every requirement is satisfied at the evaluated snapshot.
     pub ready: bool,
     /// Empty when `ready` is true; otherwise the complete known blocker set.
@@ -225,7 +223,6 @@ impl norito::json::JsonDeserialize for OfflineReadiness {
         use norito::json::{Error, MapVisitor};
 
         let mut visitor = MapVisitor::new(parser)?;
-        let mut product_mode = None;
         let mut required_bridge_abi_version = None;
         let mut max_hops = None;
         let mut asset_definition_id = None;
@@ -238,19 +235,13 @@ impl norito::json::JsonDeserialize for OfflineReadiness {
         let mut active_recursive_transition_verifier = None;
         let mut active_recursive_state_verifier = None;
         let mut proof_backend_available = None;
-        let mut witnessless_reserved_lineage_supported = None;
+        let mut recursive_lineage_supported = None;
         let mut ready = None;
         let mut blockers = None;
 
         while let Some(key) = visitor.next_key()? {
             let field = key.as_str();
             match field {
-                "product_mode" => {
-                    if product_mode.is_some() {
-                        return Err(Error::duplicate_field(field));
-                    }
-                    product_mode = Some(visitor.parse_value::<String>()?);
-                }
                 "required_bridge_abi_version" => {
                     if required_bridge_abi_version.is_some() {
                         return Err(Error::duplicate_field(field));
@@ -330,11 +321,11 @@ impl norito::json::JsonDeserialize for OfflineReadiness {
                     }
                     proof_backend_available = Some(visitor.parse_value::<bool>()?);
                 }
-                "witnessless_reserved_lineage_supported" => {
-                    if witnessless_reserved_lineage_supported.is_some() {
+                "recursive_lineage_supported" => {
+                    if recursive_lineage_supported.is_some() {
                         return Err(Error::duplicate_field(field));
                     }
-                    witnessless_reserved_lineage_supported = Some(visitor.parse_value::<bool>()?);
+                    recursive_lineage_supported = Some(visitor.parse_value::<bool>()?);
                 }
                 "ready" => {
                     if ready.is_some() {
@@ -354,7 +345,6 @@ impl norito::json::JsonDeserialize for OfflineReadiness {
         visitor.finish()?;
 
         Ok(Self {
-            product_mode: product_mode.ok_or_else(|| Error::missing_field("product_mode"))?,
             required_bridge_abi_version: required_bridge_abi_version
                 .ok_or_else(|| Error::missing_field("required_bridge_abi_version"))?,
             max_hops: max_hops.ok_or_else(|| Error::missing_field("max_hops"))?,
@@ -377,8 +367,8 @@ impl norito::json::JsonDeserialize for OfflineReadiness {
                 .ok_or_else(|| Error::missing_field("active_recursive_state_verifier"))?,
             proof_backend_available: proof_backend_available
                 .ok_or_else(|| Error::missing_field("proof_backend_available"))?,
-            witnessless_reserved_lineage_supported: witnessless_reserved_lineage_supported
-                .ok_or_else(|| Error::missing_field("witnessless_reserved_lineage_supported"))?,
+            recursive_lineage_supported: recursive_lineage_supported
+                .ok_or_else(|| Error::missing_field("recursive_lineage_supported"))?,
             ready: ready.ok_or_else(|| Error::missing_field("ready"))?,
             blockers: blockers.ok_or_else(|| Error::missing_field("blockers"))?,
         })
@@ -576,8 +566,7 @@ mod tests {
     #[test]
     fn readiness_roundtrips_through_both_public_representations() {
         let readiness = OfflineReadiness {
-            product_mode: "recursive_spend_v1".to_owned(),
-            required_bridge_abi_version: 18,
+            required_bridge_abi_version: 19,
             max_hops: 64,
             asset_definition_id: "xor#wonderland".to_owned(),
             asset_scale: Some(9),
@@ -614,7 +603,7 @@ mod tests {
             active_recursive_transition_verifier: None,
             active_recursive_state_verifier: None,
             proof_backend_available: false,
-            witnessless_reserved_lineage_supported: false,
+            recursive_lineage_supported: false,
             ready: false,
             blockers: vec![OfflineReadinessBlocker {
                 code: "proof_backend_unavailable".to_owned(),
@@ -636,8 +625,7 @@ mod tests {
     #[test]
     fn readiness_json_rejects_unknown_members_and_type_confusion() {
         let readiness = OfflineReadiness {
-            product_mode: "recursive_spend_v1".to_owned(),
-            required_bridge_abi_version: 18,
+            required_bridge_abi_version: 19,
             max_hops: 64,
             asset_definition_id: "xor#wonderland".to_owned(),
             asset_scale: Some(9),
@@ -649,7 +637,7 @@ mod tests {
             active_recursive_transition_verifier: None,
             active_recursive_state_verifier: None,
             proof_backend_available: false,
-            witnessless_reserved_lineage_supported: false,
+            recursive_lineage_supported: false,
             ready: false,
             blockers: Vec::new(),
         };
@@ -671,8 +659,7 @@ mod tests {
     #[test]
     fn readiness_json_requires_every_first_release_member() {
         let readiness = OfflineReadiness {
-            product_mode: "recursive_spend_v1".to_owned(),
-            required_bridge_abi_version: 18,
+            required_bridge_abi_version: 19,
             max_hops: 64,
             asset_definition_id: "xor#wonderland".to_owned(),
             asset_scale: Some(9),
@@ -684,13 +671,12 @@ mod tests {
             active_recursive_transition_verifier: None,
             active_recursive_state_verifier: None,
             proof_backend_available: false,
-            witnessless_reserved_lineage_supported: false,
+            recursive_lineage_supported: false,
             ready: false,
             blockers: Vec::new(),
         };
         let canonical = norito::json::to_string(&readiness).expect("encode readiness");
         for member in [
-            r#""product_mode":"recursive_spend_v1","#,
             r#""asset_scale":9,"#,
             r#""active_transfer_verifier":null,"#,
             r#""active_unshield_verifier":null,"#,
@@ -711,8 +697,7 @@ mod tests {
     #[test]
     fn readiness_json_emits_unavailable_authorities_as_explicit_nulls() {
         let readiness = OfflineReadiness {
-            product_mode: "recursive_spend_v1".to_owned(),
-            required_bridge_abi_version: 18,
+            required_bridge_abi_version: 19,
             max_hops: 64,
             asset_definition_id: "xor#wonderland".to_owned(),
             asset_scale: None,
@@ -724,7 +709,7 @@ mod tests {
             active_recursive_transition_verifier: None,
             active_recursive_state_verifier: None,
             proof_backend_available: false,
-            witnessless_reserved_lineage_supported: false,
+            recursive_lineage_supported: false,
             ready: false,
             blockers: vec![
                 OfflineReadinessBlocker {

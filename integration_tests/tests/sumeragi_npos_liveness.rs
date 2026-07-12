@@ -33,7 +33,18 @@ const POST_RESTART_PROGRESS_PROBE_SECS: u64 = 60;
 const TOLERATED_LAGGING_PEERS: usize = 1;
 const NPOS_LIVENESS_SYNC_TIMEOUT: Duration = Duration::from_secs(600);
 const PACEMAKER_RESTART_SYNC_TIMEOUT: Duration = Duration::from_secs(600);
+const FAIL_ON_SANDBOX_SKIP_ENV: &str = "IROHA_FAIL_ON_SANDBOX_SKIP";
 static NEXT_SUBMIT_PEER_INDEX: AtomicUsize = AtomicUsize::new(0);
+
+fn fail_on_sandbox_skip() -> bool {
+    let Ok(raw) = std::env::var(FAIL_ON_SANDBOX_SKIP_ENV) else {
+        return false;
+    };
+    matches!(
+        raw.trim().to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "on"
+    )
+}
 
 #[test]
 fn npos_network_produces_blocks() -> Result<()> {
@@ -49,6 +60,10 @@ fn npos_network_produces_blocks() -> Result<()> {
     let Some((network, rt)) =
         sandbox::start_network_blocking_or_skip(builder, stringify!(npos_network_produces_blocks))?
     else {
+        ensure!(
+            !fail_on_sandbox_skip(),
+            "sandboxed skip surfaced and {FAIL_ON_SANDBOX_SKIP_ENV} is enabled"
+        );
         return Ok(());
     };
     let sync_timeout = network.sync_timeout();
@@ -215,55 +230,111 @@ async fn wait_for_converged_heights_with_skew(
     let mut last_snapshot = Vec::new();
 
     loop {
-        let mut heights = Vec::new();
-        for peer in network.peers() {
-            let status = tokio::time::timeout(Duration::from_secs(5), peer.status()).await;
-            match status {
-                Ok(Ok(status)) => heights.push(status.blocks),
-                Ok(Err(error)) => {
-                    if let Some(height) = detect_height_from_storage(peer) {
-                        heights.push(height);
-                    } else {
-                        last_snapshot.clear();
-                        eprintln!("status poll failed for peer {}: {error:?}", peer.mnemonic());
-                        break;
-                    }
+        let last_error = match peer_height_snapshot(network).await {
+            Ok(heights) => {
+                last_snapshot.clone_from(&heights);
+                if heights_meet_target_tolerating_lag(
+                    &heights,
+                    min_height,
+                    allowed_skew,
+                    TOLERATED_LAGGING_PEERS,
+                ) {
+                    return Ok(heights);
                 }
-                Err(_) => {
-                    if let Some(height) = detect_height_from_storage(peer) {
-                        heights.push(height);
-                    } else {
-                        last_snapshot.clear();
-                        eprintln!(
-                            "status poll timed out for peer {}; falling back to storage",
-                            peer.mnemonic()
-                        );
-                        break;
-                    }
-                }
+                None
             }
-        }
-
-        if !heights.is_empty() {
-            last_snapshot.clone_from(&heights);
-            if heights_meet_target_tolerating_lag(
-                &heights,
-                min_height,
-                allowed_skew,
-                TOLERATED_LAGGING_PEERS,
-            ) {
-                return Ok(heights);
-            }
-        }
+            Err(error) => Some(format!("{error:?}")),
+        };
 
         if Instant::now() >= deadline {
             return Err(eyre!(
-                "heights failed to converge within {:?}; target={min_height} allowed_skew={allowed_skew} last_snapshot={last_snapshot:?}",
+                "heights failed to converge within {:?}; target={min_height} allowed_skew={allowed_skew} last_snapshot={last_snapshot:?} last_error={last_error:?}",
                 timeout,
             ));
         }
 
         tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+}
+
+async fn peer_height_snapshot(network: &Network) -> Result<Vec<u64>> {
+    let mut heights = Vec::with_capacity(network.peers().len());
+    for peer in network.peers() {
+        let status = tokio::time::timeout(Duration::from_secs(5), peer.status()).await;
+        match status {
+            Ok(Ok(status)) => heights.push(status.blocks),
+            Ok(Err(error)) => {
+                if let Some(height) = detect_height_from_storage(peer) {
+                    heights.push(height);
+                } else {
+                    return Err(eyre!(
+                        "status poll failed for peer {} and storage has no durable height: {error:?}",
+                        peer.mnemonic()
+                    ));
+                }
+            }
+            Err(_) => {
+                if let Some(height) = detect_height_from_storage(peer) {
+                    heights.push(height);
+                } else {
+                    return Err(eyre!(
+                        "status poll timed out after 5s for peer {} and storage has no durable height",
+                        peer.mnemonic()
+                    ));
+                }
+            }
+        }
+    }
+    ensure!(
+        heights.len() == network.peers().len(),
+        "peer height snapshot is incomplete: expected {} peers, got {} heights",
+        network.peers().len(),
+        heights.len()
+    );
+    Ok(heights)
+}
+
+fn all_peer_heights_advanced(baseline: &[u64], current: &[u64]) -> bool {
+    !baseline.is_empty()
+        && baseline.len() == current.len()
+        && baseline
+            .iter()
+            .zip(current)
+            .all(|(before, after)| after > before)
+}
+
+async fn wait_for_all_peer_heights_to_advance(
+    network: &Network,
+    baseline: &[u64],
+    timeout: Duration,
+) -> Result<Vec<u64>> {
+    ensure!(
+        !baseline.is_empty() && baseline.len() == network.peers().len(),
+        "per-peer progress baseline must cover all {} peers, got {baseline:?}",
+        network.peers().len()
+    );
+    let deadline = Instant::now() + timeout;
+    let mut last_snapshot = Vec::new();
+
+    loop {
+        let last_error = match peer_height_snapshot(network).await {
+            Ok(heights) => {
+                last_snapshot.clone_from(&heights);
+                if all_peer_heights_advanced(baseline, &heights) {
+                    return Ok(heights);
+                }
+                None
+            }
+            Err(error) => Some(format!("{error:?}")),
+        };
+
+        if Instant::now() >= deadline {
+            return Err(eyre!(
+                "not every peer advanced within {:?}; baseline={baseline:?} last_snapshot={last_snapshot:?} last_error={last_error:?}",
+                timeout,
+            ));
+        }
+        sleep(Duration::from_millis(250)).await;
     }
 }
 
@@ -551,6 +622,14 @@ fn heights_meet_target_tolerating_lag_accepts_quorum_progress() {
 }
 
 #[test]
+fn all_peer_heights_advanced_requires_every_matching_peer_to_progress() {
+    assert!(all_peer_heights_advanced(&[4, 4, 4, 4], &[5, 6, 5, 7]));
+    assert!(!all_peer_heights_advanced(&[4, 4, 4, 4], &[5, 4, 5, 7]));
+    assert!(!all_peer_heights_advanced(&[4, 4, 4, 4], &[5, 6, 5]));
+    assert!(!all_peer_heights_advanced(&[], &[]));
+}
+
+#[test]
 fn min_connected_peers_for_submit_keeps_quorum_margin() {
     assert_eq!(min_connected_peers_for_submit(0), 0);
     assert_eq!(min_connected_peers_for_submit(1), 0);
@@ -636,6 +715,10 @@ async fn npos_pacemaker_resumes_after_downtime() -> Result<()> {
     )
     .await?
     else {
+        ensure!(
+            !fail_on_sandbox_skip(),
+            "sandboxed skip surfaced and {FAIL_ON_SANDBOX_SKIP_ENV} is enabled"
+        );
         return Ok(());
     };
 
@@ -699,20 +782,38 @@ async fn npos_pacemaker_resumes_after_downtime() -> Result<()> {
                 .all(|height| *height >= baseline_height),
             "post-restart peers should recover at least baseline height {baseline_height} before resuming traffic, got {recovered_heights:?}"
         );
-        let _resumed_heights = drive_network_to_height(
+        let resume_deadline = Instant::now() + sync_timeout;
+        let resume_target = recovered_heights
+            .iter()
+            .copied()
+            .max()
+            .unwrap_or(baseline_height)
+            .saturating_add(1);
+        let _quorum_resumed_heights = drive_network_to_height(
             &network,
             &client,
-            baseline_height + 1,
+            resume_target,
             sync_timeout,
             "npos pacemaker resume seed",
         )
         .await
         .wrap_err("post-restart heights did not converge")?;
+        let remaining = resume_deadline.saturating_duration_since(Instant::now());
+        let resumed_heights = wait_for_all_peer_heights_to_advance(
+            &network,
+            &recovered_heights,
+            remaining,
+        )
+        .await
+        .wrap_err("not all four peers advanced after restart within the progress bound")?;
+        ensure!(
+            all_peer_heights_advanced(&recovered_heights, &resumed_heights),
+            "every peer must advance after restart: baseline={recovered_heights:?} resumed={resumed_heights:?}"
+        );
 
         let pacemaker_after = fetch_pacemaker_status(&http, &pacemaker_url).await?;
 
         assert_pacemaker_matches_config(&pacemaker_after, "after restart");
-
         network.shutdown().await;
         Ok(())
     }

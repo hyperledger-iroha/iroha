@@ -7,16 +7,15 @@ import java.util.Map;
 import java.util.Objects;
 
 /**
- * ABI-18 Kagemusha V3 artifact streaming and capability bridge.
+ * ABI-19 Kagemusha V3 artifact streaming and capability bridge.
  *
  * <p>The first-release Android SDK deliberately exposes no spend protocol. The supported wallet
  * lifecycle is implemented by the Swift SDK; this JVM surface only prepares and atomically installs
  * the opaque six-file proof artifact set used by that lifecycle.
  */
 public final class KagemushaRecursiveSpendProver {
-  public static final int REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 18;
-  public static final String PRODUCT_MODE = "recursive_spend_v1";
-  public static final String ARTIFACT_MANIFEST_MODE = "recursive_spend_v2";
+  public static final int REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 19;
+  public static final String ARTIFACT_MANIFEST_MODE = "recursive_spend_v1";
   public static final String ARTIFACT_MANIFEST_SCHEMA =
       "kagemusha.offline.recursive_spend.artifact_manifest.v3";
   public static final List<String> ARTIFACT_FILES =

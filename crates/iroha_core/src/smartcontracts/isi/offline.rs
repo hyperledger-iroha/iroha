@@ -33,9 +33,9 @@ use iroha_data_model::{
         OfflineDeviceAttestationRegistration, OfflineDeviceAttestationTrustedRoot,
         OfflineIosAppAttestationPolicy,
     },
-    proof::{ProofAttachment, VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord},
+    proof::{ProofAttachment, VerifyingKeyBox, VerifyingKeyRecord},
     query::error::FindError,
-    zk::BackendTag,
+    zk::{BackendTag, OpenVerifyEnvelope},
 };
 use iroha_primitives::numeric::Numeric;
 use p256::PublicKey as P256PublicKey;
@@ -4962,7 +4962,7 @@ pub mod isi {
     }
 
     fn ensure_kagemusha_v2_proof_backend_available() -> Result<(), Error> {
-        if iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_V2_PROOF_BACKEND_AVAILABLE {
+        if iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PROOF_BACKEND_AVAILABLE {
             return Ok(());
         }
         // This gate is deliberately fail-closed. Remove it only in the same

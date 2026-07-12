@@ -17,7 +17,7 @@ fn scalar_state_parameter_is_rejected() {
     assert_state_parameter_rejected(
         r#"
         module RemovedScalarStateParameter {
-            fn read_counter(value: state int) -> int { return value; }
+            fn read_counter(state int value) -> int { return value; }
         }
         "#,
     );
@@ -28,7 +28,7 @@ fn state_map_parameter_is_rejected() {
     assert_state_parameter_rejected(
         r#"
         module RemovedMapStateParameter {
-            fn read_value(values: state StateMap<int, int>, int key) -> int {
+            fn read_value(state StateMap<int, int> values, int key) -> int {
                 return values.get(key).unwrap_or(0);
             }
         }

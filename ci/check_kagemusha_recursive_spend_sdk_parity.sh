@@ -216,7 +216,6 @@ REQUIRED_NATIVE_EXPORTS = (
     "connect_norito_kagemusha_receiver_acknowledgement_create_v2",
     "connect_norito_kagemusha_receiver_acknowledgement_verify_v2",
     "connect_norito_kagemusha_recursive_spend_build_split_intent_v2",
-    "connect_norito_kagemusha_recursive_spend_build_redemption_intent_v2",
     "connect_norito_kagemusha_recursive_spend_peer_payment_from_split_v2",
     "connect_norito_kagemusha_recursive_spend_peer_payment_validate_v2",
     "connect_norito_kagemusha_recursive_spend_bundle_summary_v2",
@@ -226,7 +225,6 @@ REQUIRED_NATIVE_EXPORTS = (
     "connect_norito_kagemusha_recursive_spend_topup_finalize_request_v2",
     "connect_norito_kagemusha_recursive_spend_topup_v2",
     "connect_norito_kagemusha_recursive_spend_append_v2",
-    "connect_norito_kagemusha_recursive_spend_redeem_change_v2",
     "connect_norito_kagemusha_recursive_spend_verify_v2",
     "connect_norito_kagemusha_recursive_spend_redeem_unsigned_payload_digest_v2",
     "connect_norito_kagemusha_recursive_spend_redeem_finalize_request_v2",
@@ -333,25 +331,47 @@ def check(texts: dict[Path, str]) -> None:
         texts.get(path.relative_to(root), path.read_text(encoding="utf-8"))
         for path in (root / SWIFT_SOURCE_ROOT).glob("*.swift")
     )
+    all_swift_tests = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in (root / SWIFT_TEST_ROOT).glob("*.swift")
+    )
     retired_public_patterns = (
         r"^public\s+(?:final\s+)?(?:struct|enum|class|protocol|typealias)\s+Offline\w+",
         r"\bToriiOffline\w+\b",
         r"\b(?:get|submit|buildUnsigned)Offline\w+\s*\(",
+        r"\bKagemushaOfflineSpendMode\b",
+        r"\bKagemushaRecursiveSpendLineage\w*\b",
+        r"\bKagemushaRecursiveSpendArtifactReference\w*\b",
+        r"\b(?:lineageMode|preferredProductionMode|isNativeStubAvailable|isProofBackendAvailable)\b",
     )
     for pattern in retired_public_patterns:
-        if re.search(pattern, all_swift_source, re.M):
+        if re.search(pattern, all_swift_source + "\n" + all_swift_tests, re.M):
             raise CheckFailure(
                 f"retired Swift offline API declaration/reference remains: {pattern}"
             )
 
     expected_native_exports = set(REQUIRED_NATIVE_EXPORTS)
-    for path, source in (
-        (NATIVE_RUST, native_rust),
-        (NATIVE_HEADER, native_header),
-        (SWIFT_NATIVE, swift_native),
-    ):
+    native_export_patterns = (
+        (
+            NATIVE_RUST,
+            native_rust,
+            r'pub\s+unsafe\s+extern\s+"C"\s+fn\s+'
+            r'(connect_norito_kagemusha_[a-z0-9_]+)',
+        ),
+        (
+            NATIVE_HEADER,
+            native_header,
+            r'\bint32_t\s+(connect_norito_kagemusha_[a-z0-9_]+)\s*\(',
+        ),
+        (
+            SWIFT_NATIVE,
+            swift_native,
+            r'"(connect_norito_kagemusha_[a-z0-9_]+)"',
+        ),
+    )
+    for path, source, export_pattern in native_export_patterns:
         actual_native_exports = set(
-            re.findall(r"\bconnect_norito_kagemusha_[a-z0-9_]+\b", source)
+            re.findall(export_pattern, source)
         )
         if actual_native_exports != expected_native_exports:
             raise CheckFailure(
@@ -360,10 +380,7 @@ def check(texts: dict[Path, str]) -> None:
                 f"extra={sorted(actual_native_exports - expected_native_exports)}"
             )
 
-    if len(re.findall(r'public\s+static\s+let\s+productMode\s*=\s*"recursive_spend_v1"', swift_protocol)) != 1:
-        raise CheckFailure("Swift must expose exactly one recursive_spend_v1 product selector")
-    require(swift_protocol, 'public static let productMode = "recursive_spend_v1"', "Swift product mode")
-    require(swift_protocol, 'static let artifactContractMode = "recursive_spend_v2"', "Swift internal artifact contract mode")
+    require(swift_protocol, 'static let artifactContractMode = "recursive_spend_v1"', "Swift Kagemusha artifact contract mode")
 
     swift_api = swift_protocol + "\n" + swift_amount
     for needle in (
@@ -485,11 +502,6 @@ negative_controls = {
         "\nint32_t connect_norito_kagemusha_alternative_spend(void);\n",
         "Kagemusha native export inventory",
     ),
-    "--negative-control-product-mode": (
-        SWIFT_PROTOCOL,
-        None,
-        "Swift product mode",
-    ),
     "--negative-control-direct-route": (
         SWIFT_TORII_MODELS,
         None,
@@ -519,12 +531,6 @@ if mode:
     mutated = dict(texts)
     if suffix is not None:
         mutated[target] += suffix
-    elif mode == "--negative-control-product-mode":
-        mutated[target] = mutated[target].replace(
-            'public static let productMode = "recursive_spend_v1"',
-            'public static let productMode = "recursive_spend_v9"',
-            1,
-        )
     elif mode == "--negative-control-direct-route":
         mutated[target] = mutated[target].replace(
             'case topUp = "/v1/offline/top-up"',

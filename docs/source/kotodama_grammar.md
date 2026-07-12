@@ -498,10 +498,10 @@ arithmetic implementation as runtime execution.
 Intentional modular arithmetic is written with explicit operations such as `math::wrapping_add`, `math::wrapping_sub`, `math::wrapping_mul`, and `math::wrapping_neg`. Ordinary operators never silently wrap.
 
 ```text
-math::wrapping_neg(value: int) -> int
-math::wrapping_add(left: int, right: int) -> int
-math::wrapping_sub(left: int, right: int) -> int
-math::wrapping_mul(left: int, right: int) -> int
+math::wrapping_neg(int value) -> int
+math::wrapping_add(int left, int right) -> int
+math::wrapping_sub(int left, int right) -> int
+math::wrapping_mul(int left, int right) -> int
 ```
 
 The binary forms are named-only. These are the complete V1 modular-arithmetic
@@ -533,9 +533,9 @@ faults.
 The exact rounded source surface is:
 
 ```text
-decimal.div_round(divisor: decimal, scale: int, mode: rounding-mode) -> decimal
-quantity.div_round(divisor: decimal, scale: int, mode: rounding-mode) -> quantity
-quantity.ratio_round(divisor: quantity, scale: int, mode: rounding-mode) -> decimal
+decimal.div_round(decimal divisor, int scale, rounding-mode mode) -> decimal
+quantity.div_round(decimal divisor, int scale, rounding-mode mode) -> quantity
+quantity.ratio_round(quantity divisor, int scale, rounding-mode mode) -> decimal
 ```
 
 All three arguments are named-only. `rounding-mode` denotes one of the seven

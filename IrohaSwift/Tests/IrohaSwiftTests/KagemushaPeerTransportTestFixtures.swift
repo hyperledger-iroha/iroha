@@ -86,9 +86,11 @@ enum KagemushaPeerTransportTestFixtures {
             spendNullifier: fixed32(seed &+ 5),
             hopCount: 1,
             branchClaims: [claim],
-            artifactGeneration: "transport-fixture-v2",
-            verifierKeyID: KagemushaRecursiveSpend.semanticCircuitID,
-            lineageMode: .semantic,
+            artifactBinding: try KagemushaRecursiveSpendArtifactBinding(
+                generation: "transport-fixture-v3",
+                manifestSHA256: fixed32(0xA7)
+            ),
+            verifierKeyID: KagemushaRecursiveSpend.transitionEqCircuitID,
             bundleDigest: fixed32(seed &+ 6)
         )
         let bundle = KagemushaRecursiveSpendBundle(archive: archive, summary: summary)

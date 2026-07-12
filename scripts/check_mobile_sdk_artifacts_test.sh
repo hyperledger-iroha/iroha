@@ -113,7 +113,7 @@ PLIST
   cat >"$root/dist/NoritoBridge.artifacts.json" <<JSON
 {
   "version": "1.0.0",
-  "native_bridge_abi_version": 18,
+  "native_bridge_abi_version": 19,
   "privacy_production_enabled": false,
   "source_commit": "0000000000000000000000000000000000000000",
   "source_tree_dirty": false,
@@ -121,6 +121,9 @@ PLIST
   "bridge_header_sha256": "$header_hash",
   "required_symbols": [
     "connect_norito_bridge_abi_version",
+    "connect_norito_detached_transaction_scaffold_inspect_v1",
+    "connect_norito_detached_transaction_scaffold_finalize_ed25519_v1",
+    "connect_norito_canonical_json_blake3_v1",
     "connect_norito_kagemusha_recursive_spend_capabilities_v1",
     "connect_norito_kagemusha_topup_finality_verify_v2",
     "connect_norito_kagemusha_topup_shield_build_unsigned_v2",
@@ -136,7 +139,6 @@ PLIST
     "connect_norito_kagemusha_recursive_spend_topup_finalize_request_v2",
     "connect_norito_kagemusha_recursive_spend_topup_v2",
     "connect_norito_kagemusha_recursive_spend_append_v2",
-    "connect_norito_kagemusha_recursive_spend_redeem_change_v2",
     "connect_norito_kagemusha_recursive_spend_verify_v2",
     "connect_norito_kagemusha_recursive_spend_redeem_unsigned_payload_digest_v2",
     "connect_norito_kagemusha_recursive_spend_redeem_finalize_request_v2",
@@ -155,8 +157,7 @@ PLIST
     "connect_norito_kagemusha_recursive_spend_peer_payment_from_split_v2",
     "connect_norito_kagemusha_recursive_spend_peer_payment_validate_v2",
     "connect_norito_kagemusha_recursive_spend_bundle_summary_v2",
-    "connect_norito_kagemusha_recursive_spend_build_split_intent_v2",
-    "connect_norito_kagemusha_recursive_spend_build_redemption_intent_v2"
+    "connect_norito_kagemusha_recursive_spend_build_split_intent_v2"
   ],
   "hashes": {
     "ios-arm64": "$hash_a",
@@ -166,18 +167,15 @@ PLIST
 }
 JSON
 
-  mkdir -p "$root/kotlin/client-android/src/main" "$root/kotlin/offline-wallet-android/src/main"
+  mkdir -p "$root/kotlin/client-android/src/main"
   cat >"$root/kotlin/settings.gradle.kts" <<'SETTINGS'
 rootProject.name = "iroha_kotlin_sdk"
 include(":core-jvm")
 include(":client-android")
-include(":offline-wallet-android")
 SETTINGS
   make_gradle_file "$root/kotlin/core-jvm/build.gradle.kts" "core-jvm"
   make_gradle_file "$root/kotlin/client-android/build.gradle.kts" "client-android"
-  make_gradle_file "$root/kotlin/offline-wallet-android/build.gradle.kts" "offline-wallet-android"
   printf '<manifest />\n' >"$root/kotlin/client-android/src/main/AndroidManifest.xml"
-  printf '<manifest />\n' >"$root/kotlin/offline-wallet-android/src/main/AndroidManifest.xml"
 }
 
 run_expect_pass() {
@@ -214,10 +212,10 @@ run_expect_pass "$fixture"
 
 wrong_bridge_abi="$TMP_DIR/wrong-bridge-abi"
 make_fixture "$wrong_bridge_abi"
-sed -i.bak 's/"native_bridge_abi_version": 18/"native_bridge_abi_version": 17/' \
+sed -i.bak 's/"native_bridge_abi_version": 19/"native_bridge_abi_version": 18/' \
   "$wrong_bridge_abi/dist/NoritoBridge.artifacts.json"
 rm -f "$wrong_bridge_abi/dist/NoritoBridge.artifacts.json.bak"
-run_expect_fail "$wrong_bridge_abi" "exact first-release NoritoBridge ABI 18"
+run_expect_fail "$wrong_bridge_abi" "exact first-release NoritoBridge ABI 19"
 
 enabled_privacy="$TMP_DIR/enabled-privacy"
 make_fixture "$enabled_privacy"
@@ -301,7 +299,7 @@ run_expect_fail "$header_mismatch" "NoritoBridge bridge header differs in ios-ar
 symbol_inventory_mismatch="$TMP_DIR/symbol-inventory-mismatch"
 make_fixture "$symbol_inventory_mismatch"
 sed -i.bak \
-  's/connect_norito_kagemusha_recursive_spend_build_redemption_intent_v2/unexpected_symbol/' \
+  's/connect_norito_canonical_json_blake3_v1/unexpected_symbol/' \
   "$symbol_inventory_mismatch/dist/NoritoBridge.artifacts.json"
 rm -f "$symbol_inventory_mismatch/dist/NoritoBridge.artifacts.json.bak"
 run_expect_fail "$symbol_inventory_mismatch" "required symbol inventory is missing or non-canonical"
@@ -335,31 +333,11 @@ mkdir -p "$missing_client_android_aar/kotlin/core-jvm/build/libs"
 printf 'jar\n' >"$missing_client_android_aar/kotlin/core-jvm/build/libs/core-jvm-0.1-SNAPSHOT.jar"
 run_expect_fail "$missing_client_android_aar" "missing client-android release aar" --require-built-android
 
-missing_offline_wallet_android_aar="$TMP_DIR/missing-offline-wallet-android-aar"
-make_fixture "$missing_offline_wallet_android_aar"
-mkdir -p \
-  "$missing_offline_wallet_android_aar/kotlin/core-jvm/build/libs" \
-  "$missing_offline_wallet_android_aar/kotlin/client-android/build/outputs/aar"
-printf 'jar\n' >"$missing_offline_wallet_android_aar/kotlin/core-jvm/build/libs/core-jvm-0.1-SNAPSHOT.jar"
-mkdir -p \
-  "$missing_offline_wallet_android_aar/kotlin/client-android/src/main/jniLibs/arm64-v8a" \
-  "$missing_offline_wallet_android_aar/kotlin/client-android/src/main/jniLibs/x86_64"
-printf 'so\n' >"$missing_offline_wallet_android_aar/kotlin/client-android/src/main/jniLibs/arm64-v8a/libconnect_norito_bridge.so"
-printf 'so\n' >"$missing_offline_wallet_android_aar/kotlin/client-android/src/main/jniLibs/x86_64/libconnect_norito_bridge.so"
-make_aar \
-  "$missing_offline_wallet_android_aar/kotlin/client-android/build/outputs/aar/client-android-release.aar" \
-  "AndroidManifest.xml" \
-  "classes.jar" \
-  "jni/arm64-v8a/libconnect_norito_bridge.so" \
-  "jni/x86_64/libconnect_norito_bridge.so"
-run_expect_fail "$missing_offline_wallet_android_aar" "missing offline-wallet-android release aar" --require-built-android
-
 missing_client_native_source="$TMP_DIR/missing-client-native-source"
 make_fixture "$missing_client_native_source"
 mkdir -p \
   "$missing_client_native_source/kotlin/core-jvm/build/libs" \
-  "$missing_client_native_source/kotlin/client-android/build/outputs/aar" \
-  "$missing_client_native_source/kotlin/offline-wallet-android/build/outputs/aar"
+  "$missing_client_native_source/kotlin/client-android/build/outputs/aar"
 printf 'jar\n' >"$missing_client_native_source/kotlin/core-jvm/build/libs/core-jvm-0.1-SNAPSHOT.jar"
 make_aar \
   "$missing_client_native_source/kotlin/client-android/build/outputs/aar/client-android-release.aar" \
@@ -367,10 +345,6 @@ make_aar \
   "classes.jar" \
   "jni/arm64-v8a/libconnect_norito_bridge.so" \
   "jni/x86_64/libconnect_norito_bridge.so"
-make_aar \
-  "$missing_client_native_source/kotlin/offline-wallet-android/build/outputs/aar/offline-wallet-android-release.aar" \
-  "AndroidManifest.xml" \
-  "classes.jar"
 run_expect_fail "$missing_client_native_source" "missing client-android arm64-v8a native bridge library" --require-built-android
 
 missing_client_native_aar_entry="$TMP_DIR/missing-client-native-aar-entry"
@@ -379,8 +353,7 @@ mkdir -p \
   "$missing_client_native_aar_entry/kotlin/core-jvm/build/libs" \
   "$missing_client_native_aar_entry/kotlin/client-android/build/outputs/aar" \
   "$missing_client_native_aar_entry/kotlin/client-android/src/main/jniLibs/arm64-v8a" \
-  "$missing_client_native_aar_entry/kotlin/client-android/src/main/jniLibs/x86_64" \
-  "$missing_client_native_aar_entry/kotlin/offline-wallet-android/build/outputs/aar"
+  "$missing_client_native_aar_entry/kotlin/client-android/src/main/jniLibs/x86_64"
 printf 'jar\n' >"$missing_client_native_aar_entry/kotlin/core-jvm/build/libs/core-jvm-0.1-SNAPSHOT.jar"
 printf 'so\n' >"$missing_client_native_aar_entry/kotlin/client-android/src/main/jniLibs/arm64-v8a/libconnect_norito_bridge.so"
 printf 'so\n' >"$missing_client_native_aar_entry/kotlin/client-android/src/main/jniLibs/x86_64/libconnect_norito_bridge.so"
@@ -389,10 +362,6 @@ make_aar \
   "AndroidManifest.xml" \
   "classes.jar" \
   "jni/arm64-v8a/libconnect_norito_bridge.so"
-make_aar \
-  "$missing_client_native_aar_entry/kotlin/offline-wallet-android/build/outputs/aar/offline-wallet-android-release.aar" \
-  "AndroidManifest.xml" \
-  "classes.jar"
 run_expect_fail "$missing_client_native_aar_entry" "client-android release aar missing ZIP entry jni/x86_64/libconnect_norito_bridge.so" --require-built-android
 
 with_android_outputs="$TMP_DIR/with-android-outputs"
@@ -401,8 +370,7 @@ mkdir -p \
   "$with_android_outputs/kotlin/core-jvm/build/libs" \
   "$with_android_outputs/kotlin/client-android/build/outputs/aar" \
   "$with_android_outputs/kotlin/client-android/src/main/jniLibs/arm64-v8a" \
-  "$with_android_outputs/kotlin/client-android/src/main/jniLibs/x86_64" \
-  "$with_android_outputs/kotlin/offline-wallet-android/build/outputs/aar"
+  "$with_android_outputs/kotlin/client-android/src/main/jniLibs/x86_64"
 printf 'jar\n' >"$with_android_outputs/kotlin/core-jvm/build/libs/core-jvm-0.1-SNAPSHOT.jar"
 printf 'so\n' >"$with_android_outputs/kotlin/client-android/src/main/jniLibs/arm64-v8a/libconnect_norito_bridge.so"
 printf 'so\n' >"$with_android_outputs/kotlin/client-android/src/main/jniLibs/x86_64/libconnect_norito_bridge.so"
@@ -412,10 +380,6 @@ make_aar \
   "classes.jar" \
   "jni/arm64-v8a/libconnect_norito_bridge.so" \
   "jni/x86_64/libconnect_norito_bridge.so"
-make_aar \
-  "$with_android_outputs/kotlin/offline-wallet-android/build/outputs/aar/offline-wallet-android-release.aar" \
-  "AndroidManifest.xml" \
-  "classes.jar"
 run_expect_pass "$with_android_outputs" --require-built-android
 rm -rf "$with_android_outputs/IrohaSwift" "$with_android_outputs/dist"
 run_expect_pass "$with_android_outputs" --android-only --require-built-android

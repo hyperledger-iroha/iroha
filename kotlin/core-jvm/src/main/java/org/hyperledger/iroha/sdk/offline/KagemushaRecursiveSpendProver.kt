@@ -1,16 +1,15 @@
 package org.hyperledger.iroha.sdk.offline
 
 /**
- * ABI-18 Kagemusha V3 artifact streaming and capability bridge.
+ * ABI-19 Kagemusha V3 artifact streaming and capability bridge.
  *
  * The first-release JVM SDK intentionally exposes no offline-spend lifecycle. Swift owns the
  * supported wallet lifecycle; this surface only installs the opaque six-file proof artifact set.
  */
 class KagemushaRecursiveSpendProver private constructor() {
     companion object {
-        const val REQUIRED_NATIVE_BRIDGE_ABI_VERSION: Int = 18
-        const val PRODUCT_MODE: String = "recursive_spend_v1"
-        const val ARTIFACT_MANIFEST_MODE: String = "recursive_spend_v2"
+        const val REQUIRED_NATIVE_BRIDGE_ABI_VERSION: Int = 19
+        const val ARTIFACT_MANIFEST_MODE: String = "recursive_spend_v1"
         const val ARTIFACT_MANIFEST_SCHEMA: String =
             "kagemusha.offline.recursive_spend.artifact_manifest.v3"
         val ARTIFACT_FILES: List<String> = listOf(

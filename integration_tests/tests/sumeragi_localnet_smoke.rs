@@ -3852,6 +3852,11 @@ async fn permissioned_localnet_produces_blocks_within_bound() -> Result<()> {
     )
     .await?
     else {
+        ensure!(
+            !fail_on_sandbox_skip(),
+            "sandboxed skip surfaced and {} is enabled",
+            FAIL_ON_SANDBOX_SKIP_ENV
+        );
         return Ok(());
     };
 

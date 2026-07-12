@@ -2959,7 +2959,7 @@ mod tests {
             argument_schema: None,
             return_type: None,
             return_schema: None,
-            permission: None,
+            permission: Some("CanInvokeValidationFeePayout".to_owned()),
             read_keys: Vec::new(),
             write_keys: Vec::new(),
             access_hints_complete: None,

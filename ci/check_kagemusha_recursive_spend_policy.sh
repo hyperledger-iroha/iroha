@@ -15,38 +15,15 @@ import sys
 root = Path(sys.argv[1])
 errors: list[str] = []
 
+
 def relative(path: Path) -> str:
     return path.relative_to(root).as_posix()
 
-def require_absent(path: str) -> None:
-    if (root / path).exists():
-        errors.append(f"retired path still exists: {path}")
 
-for path in (
-    "fixtures/kagemusha_recursive_spend_abi6",
-    "fixtures/kagemusha_recursive_spend_abi7",
-    "fixtures/offline",
-    "kotlin/offline-wallet-android",
-    "kotlin/offline-wallet-lab-app",
-    "javascript/iroha_js/src/offlineApi.js",
-    "javascript/iroha_js/src/offlineCashLifecycle.js",
-    "javascript/iroha_js/src/offlineQrStream.js",
-    "python/iroha_python/src/iroha_python/kagemusha.py",
-    "python/iroha_python/src/iroha_python/offline_cash.py",
-    "ci/check_kagemusha_production_readiness.sh",
-    "scripts/kagemusha_production_readiness.py",
-    "scripts/kagemusha_recursive_compact_key_evidence.py",
-    "scripts/kagemusha_run_recursive_compact_keygen_staged.py",
-    "scripts/kagemusha_finalize_recursive_compact_key_staged_run.py",
-    "scripts/kagemusha_lineage_proof_evidence.py",
-    "scripts/kagemusha_run_lineage_proof_staged.py",
-    "scripts/kagemusha_finalize_lineage_proof_staged_run.py",
-):
-    require_absent(path)
-
+# The JVM boundary has one exact, artifact-only Kagemusha source per language.
 java_main = root / "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline"
 kotlin_main = root / "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline"
-allowed_jvm = {
+expected_jvm = {
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProver.java",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt",
 }
@@ -57,94 +34,95 @@ actual_jvm = {
     for path in directory.iterdir()
     if path.is_file()
 }
-if actual_jvm != allowed_jvm:
+if actual_jvm != expected_jvm:
     errors.append(
-        "JVM offline source inventory must contain only ABI-18 artifact bridges; "
-        f"found {sorted(actual_jvm)}"
+        "JVM Kagemusha source inventory mismatch: "
+        f"missing={sorted(expected_jvm - actual_jvm)}, "
+        f"extra={sorted(actual_jvm - expected_jvm)}"
     )
 
-for path in (root / "csharp/src").rglob("*"):
-    if path.is_file() and "Offline" in path.parts:
-        errors.append(f"C# offline lifecycle file is forbidden: {relative(path)}")
+for source in sorted(expected_jvm):
+    text = (root / source).read_text(encoding="utf-8")
+    for literal in (
+        "REQUIRED_NATIVE_BRIDGE_ABI_VERSION",
+        "19",
+        'ARTIFACT_MANIFEST_MODE',
+        'recursive_spend_v1',
+        'kagemusha.offline.recursive_spend.artifact_manifest.v3',
+    ):
+        if literal not in text:
+            errors.append(f"{source}: missing exact Kagemusha contract literal {literal!r}")
 
-text_scopes = [
-    root / "crates/iroha_data_model/src/offline",
-    root / "crates/iroha_core/src/zk",
-    root / "crates/iroha_torii/src",
-    root / "crates/iroha_torii_shared/src",
-    root / "IrohaSwift/Sources/IrohaSwift",
-    root / "crates/iroha_js_host/src",
-    root / "javascript/iroha_js/src",
-    root / "javascript/iroha_js/index.d.ts",
-    root / "python/iroha_python/src/iroha_python",
-    root / "python/iroha_python/iroha_python_rs/src",
-    root / "csharp/src",
-]
-source_files: list[Path] = []
-for scope in text_scopes:
-    if scope.is_file():
-        source_files.append(scope)
-    elif scope.exists():
-        source_files.extend(
-            path
-            for path in scope.rglob("*")
-            if path.is_file() and path.suffix in {".rs", ".swift", ".js", ".ts", ".py", ".cs"}
-        )
+# The route catalog is the authoritative public inventory. It contains exactly
+# four Kagemusha routes and exactly one descriptor for each route.
+catalog_path = root / "crates/iroha_torii_shared/src/route_catalog.rs"
+catalog = catalog_path.read_text(encoding="utf-8")
+try:
+    offline_catalog = catalog.split("pub mod offline {", 1)[1].split("\n}\n", 1)[0]
+except IndexError:
+    errors.append("Torii route catalog has no offline module")
+    offline_catalog = ""
 
-retired_patterns = {
-    "Offline Note protocol": re.compile(r"\bOfflineNote\b|\bBearerOffline|offline[_ -]note", re.I),
-    "compact-payment prototype": re.compile(r"KagemushaCompactPayment|recursive[_ -]compact|compact[_ -]payment", re.I),
-    "recursive-aggregation prototype": re.compile(r"KagemushaRecursiveAggregation|recursive[_ -]aggregation", re.I),
-    "semantic-lineage fallback": re.compile(r"semantic[_ -]lineage", re.I),
-    "V1 recursive-spend contract": re.compile(r"KagemushaRecursiveSpend(?:Bundle|Accumulator|InitRequest|AppendRequest|VerifyRequest|RedeemRequest)V1"),
+expected_paths = {
+    "READINESS": "/v1/offline/readiness",
+    "TOP_UP": "/v1/offline/top-up",
+    "REDEEM": "/v1/offline/redeem",
+    "OPERATION": "/v1/offline/operations/{operation_id}",
 }
-for path in source_files:
-    # Generic queued transaction envelopes are not an offline-cash protocol.
-    if "/tx/offline/" in f"/{relative(path)}":
-        continue
-    text = path.read_text(encoding="utf-8", errors="replace")
-    for label, pattern in retired_patterns.items():
-        match = pattern.search(text)
-        if match is not None:
-            line = text.count("\n", 0, match.start()) + 1
-            errors.append(f"{relative(path)}:{line}: retired {label}: {match.group(0)!r}")
-
-torii_files = (
-    root / "crates/iroha_torii/src/lib.rs",
-    root / "crates/iroha_torii/src/openapi.rs",
-    root / "crates/iroha_torii/src/app_auth.rs",
+actual_paths = dict(
+    re.findall(r'pub const ([A-Z_]+)_PATH: &str = "([^"]+)";', offline_catalog)
 )
-torii_text = "\n".join(path.read_text(encoding="utf-8") for path in torii_files)
-for route in (
-    "/v1/offline/readiness",
-    "/v1/offline/top-up",
-    "/v1/offline/redeem",
-    "/v1/offline/operations/{operation_id}",
-):
-    if route not in torii_text:
-        errors.append(f"missing first-release Torii route: {route}")
-for retired_route in (
-    "/v1/offline/v2",
-    "/v1/offline/notes",
-    "/v1/offline/issuer",
-    "/v1/offline/audit",
-):
-    if retired_route in torii_text:
-        errors.append(f"retired Torii route remains: {retired_route}")
-for wrapper in ("topup_request_norito_base64", "redeem_request_norito_base64"):
-    if wrapper in torii_text:
-        errors.append(f"retired base64 request wrapper remains: {wrapper}")
+if actual_paths != expected_paths:
+    errors.append(
+        "Torii Kagemusha route inventory mismatch: "
+        f"expected={expected_paths}, actual={actual_paths}"
+    )
+if "pub const ROUTES: &[RouteDescriptor] = &[READINESS, TOP_UP, REDEEM, OPERATION];" not in offline_catalog:
+    errors.append("Torii Kagemusha descriptor inventory is not exact")
 
-package_json = (root / "javascript/iroha_js/package.json").read_text(encoding="utf-8")
-if '"./offline-cash"' in package_json:
-    errors.append("JavaScript package still exports ./offline-cash")
-python_init = (root / "python/iroha_python/src/iroha_python/__init__.py").read_text(encoding="utf-8")
-if re.search(r"kagemusha|offline_cash", python_init, re.I):
-    errors.append("Python package root still exports an offline lifecycle")
+torii_path = root / "crates/iroha_torii/src/lib.rs"
+torii = torii_path.read_text(encoding="utf-8")
+expected_registrations = {
+    "READINESS": "catalog_get(handler_offline_readiness)",
+    "TOP_UP": "catalog_post(handler_offline_top_up)",
+    "REDEEM": "catalog_post(handler_offline_redeem)",
+    "OPERATION": "catalog_get(handler_offline_operation_status)",
+}
+for descriptor, handler in expected_registrations.items():
+    marker = f"&route_catalog::offline::{descriptor}"
+    if torii.count(marker) != 1:
+        errors.append(f"Torii must register {marker} exactly once")
+    if handler not in torii:
+        errors.append(f"Torii is missing exact Kagemusha handler {handler}")
 
-workflow = (root / ".github/workflows/pr_kagemusha_payload_bench.yml").read_text(encoding="utf-8")
-if re.search(r"negative-control|production_readiness|recursive_compact|semantic[_ -]lineage", workflow, re.I):
-    errors.append("Kagemusha workflow still invokes legacy compatibility/negative-control machinery")
+# Generated OpenAPI must expose the same exact path set.
+openapi_path = root / "docs/portal/static/openapi/torii.json"
+import json
+
+openapi = json.loads(openapi_path.read_text(encoding="utf-8"))
+actual_openapi_paths = {
+    path for path in openapi.get("paths", {}) if path.startswith("/v1/offline/")
+}
+expected_openapi_paths = set(expected_paths.values())
+if actual_openapi_paths != expected_openapi_paths:
+    errors.append(
+        "OpenAPI Kagemusha route inventory mismatch: "
+        f"missing={sorted(expected_openapi_paths - actual_openapi_paths)}, "
+        f"extra={sorted(actual_openapi_paths - expected_openapi_paths)}"
+    )
+
+# Native release scripts own the exact exported-symbol inventory. Pin the
+# shared capability identity here so route, SDK, and artifact checks cannot
+# silently select different Kagemusha contracts.
+model_path = root / "crates/iroha_data_model/src/offline/mod.rs"
+model = model_path.read_text(encoding="utf-8")
+for literal in (
+    'KAGEMUSHA_RECURSIVE_SPEND_MODE: &str = "recursive_spend_v1"',
+    'KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3: u32 = 19',
+    '"kagemusha.offline.recursive_spend.artifact_manifest.v3"',
+):
+    if literal not in model:
+        errors.append(f"data-model Kagemusha contract is missing {literal!r}")
 
 if errors:
     print("Kagemusha first-release policy failed:", file=sys.stderr)

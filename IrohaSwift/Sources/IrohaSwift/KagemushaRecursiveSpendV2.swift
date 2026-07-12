@@ -15,7 +15,7 @@ public enum KagemushaRecursiveSpendError: Error, Equatable, LocalizedError {
         case let .invalidArchive(field):
             return "Invalid Kagemusha recursive spend V2 Norito archive: \(field)."
         case .nativeBridgeUnavailable:
-            return "The ABI-18 Kagemusha recursive spend V2 bridge is unavailable."
+            return "The ABI-19 Kagemusha recursive spend bridge is unavailable."
         case .proofBackendUnavailable:
             return "Kagemusha recursive spend V2 is unavailable until the branch-safe proof backend is linked."
         case .finalityTrustUnavailable:
@@ -24,7 +24,7 @@ public enum KagemushaRecursiveSpendError: Error, Equatable, LocalizedError {
     }
 }
 
-/// Exact capability record returned by the loaded ABI-18 native bridge.
+/// Exact capability record returned by the loaded ABI-19 native bridge.
 /// Wallet readiness uses this authenticated, canonical Norito record rather
 /// than inferring proof availability from symbol presence.
 public struct KagemushaRecursiveSpendNativeCapabilities: Equatable, Sendable {
@@ -88,17 +88,58 @@ public struct KagemushaRecursiveSpendNativeCapabilities: Equatable, Sendable {
 }
 
 public enum KagemushaRecursiveSpend {
-    public static let requiredNativeBridgeAbiVersion: UInt32 = 18
+    /// Exact verifier-registry roles carried by the five readiness fields.
+    /// A field is valid only for its matching role and circuit; roles are not
+    /// interchangeable even though Torii uses one common record shape.
+    public enum VerifierRole: CaseIterable, Sendable {
+        case transfer
+        case topUpShield
+        case unshield
+        case recursiveTransition
+        case recursiveState
+
+        public var registryBackend: String { "halo2/ipa" }
+
+        public var registryName: String {
+            switch self {
+            case .transfer:
+                return "confidential_transfer_v2_verifier_record"
+            case .topUpShield:
+                return "kagemusha_topup_shield_v2_verifier_record"
+            case .unshield:
+                return "confidential_unshield_v3_verifier_record"
+            case .recursiveTransition:
+                return "kagemusha_recursive_transition_v3_verifier_record"
+            case .recursiveState:
+                return "kagemusha_recursive_state_v3_verifier_record"
+            }
+        }
+
+        public var circuitID: String {
+            switch self {
+            case .transfer:
+                return "halo2/pasta/ipa/anon-transfer-2x2-merkle16-poseidon-diversified"
+            case .topUpShield:
+                return KagemushaRecursiveSpend.topUpShieldCircuitID
+            case .unshield:
+                return "halo2/pasta/ipa/anon-unshield-2in-1change-merkle16-poseidon-diversified"
+            case .recursiveTransition:
+                return KagemushaRecursiveSpend.transitionEqCircuitID
+            case .recursiveState:
+                return KagemushaRecursiveSpend.stateEpCircuitID
+            }
+        }
+    }
+
+    public static let requiredNativeBridgeAbiVersion: UInt32 = 19
     /// First-release peer-depth bound advertised by Torii readiness and
     /// enforced by every recursive-spend request codec.
     public static let maximumPeerHops: UInt32 = 64
     public static let artifactManifestSchema =
         "kagemusha.offline.recursive_spend.artifact_manifest.v3"
-    /// Public first-release product selector.
-    public static let productMode = "recursive_spend_v1"
-    /// Internal mode authenticated by ABI-18 capabilities and V3 artifacts.
-    /// It is deliberately not public API and cannot be selected by a wallet.
-    static let artifactContractMode = "recursive_spend_v2"
+    /// Sole artifact contract mode authenticated by ABI-19 capabilities and
+    /// V3 manifests. There is no alternative spend protocol.
+    static let artifactContractMode = "recursive_spend_v1"
     public static let pastaCycleBackend = "halo2/ipa-pasta-cycle-v1"
     public static let pastaCycleTranscript = "kagemusha-pasta-cycle-poseidon-v1"
     public static let pastaCycleProofEnvelopeVersion: UInt16 = 1
@@ -285,19 +326,12 @@ public enum KagemushaRecursiveSpend {
 
     public static func initSpend(
         request: KagemushaRecursiveSpendInitRequest,
-        rosterArtifact: KagemushaTopUpFinalityRosterArtifactArchive,
         installedArtifacts: KagemushaRecursiveSpendInstalledArtifactSet
     ) throws -> KagemushaRecursiveSpendInitResult {
         try installedArtifacts.requireInstalled()
         guard request.artifactBinding == installedArtifacts.binding else {
             throw KagemushaRecursiveSpendError.invalidField("artifactBinding")
         }
-        try verifyTopUpFinality(
-            proof: request.topUpFinalityProof,
-            rosterArtifact: rosterArtifact,
-            anchor: request.topUpAnchor,
-            manifest: installedArtifacts.manifest
-        )
         let requestArchive = try request.noritoEncoded()
         try ensureProofBackendAvailable()
         do {
@@ -826,7 +860,7 @@ public struct KagemushaRecursiveSpendBranchClaim: Equatable, Hashable, Sendable 
 /// Sole artifact selector carried by first-release Kagemusha operations.
 /// Individual parameter/prover/verifier roles are intentionally absent: the
 /// native bridge resolves them from the authenticated installed V3 manifest.
-public struct KagemushaRecursiveSpendArtifactBinding: Equatable, Sendable {
+public struct KagemushaRecursiveSpendArtifactBinding: Equatable, Hashable, Sendable {
     public let generation: String
     public let manifestSHA256: Data
 
@@ -1238,14 +1272,17 @@ public struct KagemushaTopUpShieldEvidence: Equatable, Sendable {
 public struct KagemushaRecursiveSpendInitRequest: Equatable, Sendable {
     public let topUpAnchor: KagemushaRecursiveSpendTopUpAnchor
     public let topUpFinalityProof: KagemushaTopUpFinalityProofArchive
+    public let topUpFinalityRosterArtifact: KagemushaTopUpFinalityRosterArtifactArchive
     public let artifactBinding: KagemushaRecursiveSpendArtifactBinding
 
     public init(
         topUpAnchor: KagemushaRecursiveSpendTopUpAnchor,
-        topUpFinalityProof: KagemushaTopUpFinalityProofArchive
+        topUpFinalityProof: KagemushaTopUpFinalityProofArchive,
+        topUpFinalityRosterArtifact: KagemushaTopUpFinalityRosterArtifactArchive
     ) throws {
         self.topUpAnchor = topUpAnchor
         self.topUpFinalityProof = topUpFinalityProof
+        self.topUpFinalityRosterArtifact = topUpFinalityRosterArtifact
         artifactBinding = topUpAnchor.artifactBinding
     }
 
@@ -2678,7 +2715,7 @@ public struct KagemushaRecursiveSpendRedeemResult: Equatable, Sendable {
     }
 }
 
-/// Owns one ABI-18 V3 streaming handle. `write` accepts chunks of the complete
+/// Owns one ABI-19 V3 streaming handle. `write` accepts chunks of the complete
 /// published `KRV3KEY` file and never exposes or parses its header or payload.
 /// Native finalization re-parses and authenticates the held file descriptor.
 public final class KagemushaRecursiveSpendArtifactIngest: @unchecked Sendable {

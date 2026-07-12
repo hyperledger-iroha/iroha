@@ -31,7 +31,10 @@ use iroha_data_model::{
 };
 #[cfg(test)]
 use iroha_primitives::numeric::{Numeric, Quantity};
-use iroha_primitives::{json::Json, numeric_abi::QuantityValueV1};
+use iroha_primitives::{
+    json::Json,
+    numeric_abi::{MAX_QUANTITY_FRAME_BYTES_V1, QuantityValueV1},
+};
 use norito::{
     core::{Archived, Header, NoritoDeserialize, NoritoSerialize},
     decode_from_bytes,
@@ -606,14 +609,7 @@ pub fn checked_state_keys_limit(limit: u64) -> Result<usize, VMError> {
     usize::try_from(limit).map_err(|_| VMError::NoritoInvalid)
 }
 
-/// Inspect a TLV header for gas quoting without decoding, hashing, or allocating.
-///
-/// # Errors
-///
-/// Returns an error when the envelope header, bounds, pointer type, or ABI policy is invalid.
-pub fn quote_any_tlv_at(vm: &IVM, address: u64) -> Result<(PointerType, usize), VMError> {
-    vm.ensure_owned_public_tlv_range(address, 7)?;
-    let header = vm.memory.inspect_region(address, 7)?;
+fn parse_tlv_header(vm: &IVM, header: &[u8]) -> Result<(PointerType, usize), VMError> {
     let raw_type = u16::from_be_bytes([header[0], header[1]]);
     let pointer_type = PointerType::from_u16(raw_type).ok_or(VMError::NoritoInvalid)?;
     if header[2] != 1 {
@@ -626,6 +622,20 @@ pub fn quote_any_tlv_at(vm: &IVM, address: u64) -> Result<(PointerType, usize), 
         });
     }
     let payload_len = u32::from_be_bytes([header[3], header[4], header[5], header[6]]) as usize;
+    Ok((pointer_type, payload_len))
+}
+
+fn quote_tlv_header_at(vm: &IVM, address: u64) -> Result<(PointerType, usize), VMError> {
+    vm.ensure_owned_public_tlv_range(address, 7)?;
+    parse_tlv_header(vm, vm.memory.inspect_region(address, 7)?)
+}
+
+fn read_tlv_header_at(vm: &IVM, address: u64) -> Result<(PointerType, usize), VMError> {
+    vm.ensure_owned_public_tlv_range(address, 7)?;
+    parse_tlv_header(vm, vm.memory.load_region(address, 7)?)
+}
+
+fn validate_quoted_tlv_range(vm: &IVM, address: u64, payload_len: usize) -> Result<(), VMError> {
     let total = 7usize
         .checked_add(payload_len)
         .and_then(|len| len.checked_add(iroha_crypto::Hash::LENGTH))
@@ -633,6 +643,49 @@ pub fn quote_any_tlv_at(vm: &IVM, address: u64) -> Result<(PointerType, usize), 
     let total = u64::try_from(total).map_err(|_| VMError::NoritoInvalid)?;
     vm.ensure_owned_tlv_range(address, total)?;
     vm.memory.inspect_region(address, total)?;
+    Ok(())
+}
+
+fn quote_bounded_tlv_payload_len_at(
+    vm: &IVM,
+    address: u64,
+    expected: PointerType,
+    maximum_payload_len: usize,
+) -> Result<usize, VMError> {
+    // The cap is checked from the provenance-checked fixed header before the
+    // complete declared range is inspected or its digest is authenticated.
+    // Fixed/byte-linear syscalls can therefore reject oversized envelopes
+    // without performing attacker-controlled payload work first.
+    let (actual, payload_len) = quote_tlv_header_at(vm, address)?;
+    if actual != expected || payload_len > maximum_payload_len {
+        return Err(VMError::NoritoInvalid);
+    }
+    validate_quoted_tlv_range(vm, address, payload_len)?;
+    Ok(payload_len)
+}
+
+fn read_bounded_tlv_payload_len_at(
+    vm: &IVM,
+    address: u64,
+    expected: PointerType,
+    maximum_payload_len: usize,
+) -> Result<usize, VMError> {
+    let (actual, payload_len) = read_tlv_header_at(vm, address)?;
+    if actual != expected || payload_len > maximum_payload_len {
+        return Err(VMError::NoritoInvalid);
+    }
+    validate_quoted_tlv_range(vm, address, payload_len)?;
+    Ok(payload_len)
+}
+
+/// Inspect a TLV header for gas quoting without decoding, hashing, or allocating.
+///
+/// # Errors
+///
+/// Returns an error when the envelope header, bounds, pointer type, or ABI policy is invalid.
+pub fn quote_any_tlv_at(vm: &IVM, address: u64) -> Result<(PointerType, usize), VMError> {
+    let (pointer_type, payload_len) = quote_tlv_header_at(vm, address)?;
+    validate_quoted_tlv_range(vm, address, payload_len)?;
     Ok((pointer_type, payload_len))
 }
 
@@ -2193,12 +2246,11 @@ impl DefaultHost {
         if !self.fastpq_batch_active {
             return Err(VMError::PermissionDenied);
         }
+        let quantity_len = Self::expect_quantity(vm, 13)?;
         Self::expect_tlv(vm, 10, PointerType::AccountId)?;
         Self::expect_tlv(vm, 11, PointerType::AccountId)?;
         Self::expect_tlv(vm, 12, PointerType::AssetDefinitionId)?;
-        Self::expect_amount(vm, 13)?;
-        let gas = Self::mutation_gas(0);
-        preflight_reserved_syscall_gas(vm, gas)?;
+        let gas = Self::mutation_gas(quantity_len);
         self.fastpq_batch_has_entries = true;
         Ok(gas)
     }
@@ -2279,11 +2331,22 @@ impl DefaultHost {
         Ok(tlv)
     }
 
-    fn expect_amount(vm: &IVM, reg: usize) -> Result<(), VMError> {
+    fn expect_quantity(vm: &IVM, reg: usize) -> Result<usize, VMError> {
+        let pointer = Self::resolve_code_tlv_addr(vm, vm.register(reg));
+        let payload_len = read_bounded_tlv_payload_len_at(
+            vm,
+            pointer,
+            PointerType::Quantity,
+            MAX_QUANTITY_FRAME_BYTES_V1,
+        )?;
+        // VM-dispatched mutation calls must afford the complete bounded frame
+        // before hashing or canonical decoding begins. Direct host calls have
+        // no reserve and remain available to low-level tests and tooling.
+        preflight_reserved_syscall_gas(vm, Self::mutation_gas(payload_len))?;
         let tlv = Self::expect_tlv(vm, reg, PointerType::Quantity)?;
-        QuantityValueV1::decode_frame(tlv.payload)
-            .map(drop)
-            .map_err(|_| VMError::DecodeError)
+        QuantityValueV1::decode_frame(tlv.payload).map_err(|_| VMError::DecodeError)?;
+        debug_assert_eq!(tlv.payload.len(), payload_len);
+        Ok(payload_len)
     }
 
     fn resolve_literal_pointer(vm: &IVM, src: usize) -> Option<usize> {
@@ -2990,9 +3053,17 @@ impl IVMHost for DefaultHost {
             | crate::syscalls::SYSCALL_SET_ACCOUNT_QUORUM
             | crate::syscalls::SYSCALL_NFT_MINT_ASSET
             | crate::syscalls::SYSCALL_NFT_TRANSFER_ASSET
-            | crate::syscalls::SYSCALL_TRANSFER_ASSET_SCOPED
             | crate::syscalls::SYSCALL_NFT_SET_METADATA
             | crate::syscalls::SYSCALL_NFT_BURN_ASSET => Self::mutation_gas(0),
+            crate::syscalls::SYSCALL_TRANSFER_ASSET_SCOPED => {
+                let quantity_len = quote_bounded_tlv_payload_len_at(
+                    vm,
+                    Self::resolve_code_tlv_addr(vm, vm.register(13)),
+                    PointerType::Quantity,
+                    MAX_QUANTITY_FRAME_BYTES_V1,
+                )?;
+                Self::mutation_gas(quantity_len)
+            }
             crate::syscalls::SYSCALL_SET_ACCOUNT_DETAIL => Self::mutation_gas(tlv_len(12)?),
             crate::syscalls::SYSCALL_TRANSFER_V1 => {
                 reserve_available_syscall_gas_at_least(vm, metering.minimum_gas)?
@@ -3476,12 +3547,12 @@ impl IVMHost for DefaultHost {
             crate::syscalls::SYSCALL_TRANSFER_ASSET_SCOPED => {
                 // r10=&AccountId(from), r11=&AccountId(to), r12=&AssetDefinitionId,
                 // r13=&Quantity, r14=&DataSpaceId
+                let quantity_len = Self::expect_quantity(vm, 13)?;
                 Self::expect_tlv(vm, 10, PointerType::AccountId)?;
                 Self::expect_tlv(vm, 11, PointerType::AccountId)?;
                 Self::expect_tlv(vm, 12, PointerType::AssetDefinitionId)?;
-                Self::expect_amount(vm, 13)?;
                 Self::expect_tlv(vm, 14, PointerType::DataSpaceId)?;
-                Ok(Self::mutation_gas(0))
+                Ok(Self::mutation_gas(quantity_len))
             }
             crate::syscalls::SYSCALL_TRANSFER_V1_BATCH_BEGIN => self.begin_fastpq_batch(),
             crate::syscalls::SYSCALL_TRANSFER_V1_BATCH_END => self.finish_fastpq_batch(),
@@ -4418,7 +4489,8 @@ impl IVMHost for DefaultHost {
                     vm,
                     usize::try_from(src).map_err(|_| VMError::NoritoInvalid)?,
                 )
-                .ok_or(VMError::NoritoInvalid)? as u64;
+                .ok_or(VMError::NoritoInvalid)?;
+                let resolved = u64::try_from(resolved).map_err(|_| VMError::NoritoInvalid)?;
                 let bytes_vec = vm.clone_tlv(resolved)?;
                 let total = bytes_vec.len();
                 let dst = vm.alloc_host_tlv(&bytes_vec)?;
@@ -5110,11 +5182,9 @@ mod tests {
 
     #[test]
     fn state_keys_page_bound_covers_admissible_pages_and_rejects_item_overflow() {
-        for count in [
-            0_usize,
-            1,
-            usize::try_from(syscalls::STATE_KEYS_MAX_ITEMS).unwrap(),
-        ] {
+        let maximum_items = usize::try_from(syscalls::STATE_KEYS_MAX_ITEMS)
+            .expect("the V1 state-key page limit must fit usize");
+        for count in [0_usize, 1, maximum_items] {
             let keys: Vec<Name> = (0..count).map(maximum_bounded_state_name).collect();
             let encoded = norito::to_bytes(&keys).expect("encode bounded state-key page");
             let quote =
@@ -5127,9 +5197,9 @@ mod tests {
             );
             assert!(encoded.len() <= syscalls::STATE_MAP_MAX_PAGE_BYTES);
         }
-        let max_items = usize::try_from(syscalls::STATE_KEYS_MAX_ITEMS)
-            .expect("state-key page limit fits usize");
-        let oversized: Vec<Name> = (0..=max_items).map(maximum_bounded_state_name).collect();
+        let oversized: Vec<Name> = (0..=maximum_items)
+            .map(maximum_bounded_state_name)
+            .collect();
         assert_eq!(
             state_keys_page_gas_quote(&oversized, 0, 0, syscalls::STATE_KEYS_MAX_ITEMS + 1,),
             Err(VMError::NoritoInvalid)
@@ -5531,10 +5601,7 @@ mod tests {
             assert_eq!(vm.remaining_gas(), quote - actual);
             assert_eq!(vm.register(11), ERR_BACKEND);
             assert_eq!(vm.register(12), 0);
-            let output = vm
-                .memory
-                .validate_tlv(vm.register(10))
-                .expect("batch output");
+            let output = vm.validate_tlv(vm.register(10)).expect("batch output");
             assert_eq!(output.type_id, PointerType::NoritoBytes);
             let statuses: Vec<u8> =
                 norito::decode_from_bytes(output.payload).expect("decode statuses");
@@ -6507,7 +6574,7 @@ mod tests {
     }
 
     #[test]
-    fn amount_arguments_require_canonical_amount_pointer() {
+    fn quantity_arguments_require_canonical_quantity_pointer() {
         crate::set_banner_enabled(false);
         let mut vm = IVM::new(u64::MAX);
         let canonical = Numeric::new(125_u32, 2);
@@ -6520,7 +6587,46 @@ mod tests {
             .alloc_input_tlv(&test_tlv(PointerType::Quantity, &canonical_payload))
             .expect("allocate canonical quantity");
         vm.set_register(13, canonical_ptr);
-        assert_eq!(DefaultHost::expect_amount(&vm, 13), Ok(()));
+        assert_eq!(
+            DefaultHost::expect_quantity(&vm, 13),
+            Ok(canonical_payload.len())
+        );
+
+        let account_ptr = vm
+            .alloc_input_tlv(&test_tlv(PointerType::AccountId, &[]))
+            .expect("allocate account fixture");
+        let definition_ptr = vm
+            .alloc_input_tlv(&test_tlv(PointerType::AssetDefinitionId, &[]))
+            .expect("allocate asset definition fixture");
+        let dataspace_ptr = vm
+            .alloc_input_tlv(&test_tlv(PointerType::DataSpaceId, &[]))
+            .expect("allocate dataspace fixture");
+        vm.set_register(10, account_ptr);
+        vm.set_register(11, account_ptr);
+        vm.set_register(12, definition_ptr);
+        vm.set_register(14, dataspace_ptr);
+        let expected_gas = DefaultHost::mutation_gas(canonical_payload.len());
+
+        let mut scoped_host = DefaultHost::new();
+        assert_eq!(
+            scoped_host.prepare_syscall(syscalls::SYSCALL_TRANSFER_ASSET_SCOPED, &vm),
+            Ok(expected_gas)
+        );
+        assert_eq!(
+            scoped_host.syscall(syscalls::SYSCALL_TRANSFER_ASSET_SCOPED, &mut vm),
+            Ok(expected_gas)
+        );
+
+        let mut batch_host = DefaultHost::new();
+        assert_eq!(
+            batch_host.syscall(syscalls::SYSCALL_TRANSFER_V1_BATCH_BEGIN, &mut vm),
+            Ok(gas::G_FASTPQ_BATCH)
+        );
+        assert_eq!(
+            batch_host.syscall(syscalls::SYSCALL_TRANSFER_V1, &mut vm),
+            Ok(expected_gas)
+        );
+        assert!(batch_host.fastpq_batch_has_entries);
 
         let legacy_payload = norito::to_bytes(&canonical).expect("encode legacy Numeric");
         let legacy_ptr = vm
@@ -6528,7 +6634,7 @@ mod tests {
             .expect("allocate legacy Numeric pointer");
         vm.set_register(13, legacy_ptr);
         assert_eq!(
-            DefaultHost::expect_amount(&vm, 13),
+            DefaultHost::expect_quantity(&vm, 13),
             Err(VMError::NoritoInvalid)
         );
 
@@ -6541,8 +6647,161 @@ mod tests {
             .expect("allocate noncanonical quantity");
         vm.set_register(13, noncanonical_ptr);
         assert_eq!(
-            DefaultHost::expect_amount(&vm, 13),
+            DefaultHost::expect_quantity(&vm, 13),
             Err(VMError::DecodeError)
         );
+    }
+
+    #[test]
+    fn oversized_quantity_fails_from_bounded_header_before_hash_or_mutation() {
+        crate::set_banner_enabled(false);
+        let mut vm = IVM::new(u64::MAX);
+
+        let account_ptr = vm
+            .alloc_input_tlv(&test_tlv(PointerType::AccountId, &[]))
+            .expect("allocate account fixture");
+        let definition_ptr = vm
+            .alloc_input_tlv(&test_tlv(PointerType::AssetDefinitionId, &[]))
+            .expect("allocate asset definition fixture");
+        let dataspace_ptr = vm
+            .alloc_input_tlv(&test_tlv(PointerType::DataSpaceId, &[]))
+            .expect("allocate dataspace fixture");
+        let oversized = test_tlv(
+            PointerType::Quantity,
+            &[0xa5; MAX_QUANTITY_FRAME_BYTES_V1 + 1],
+        );
+        let valid_oversized_ptr = vm
+            .alloc_input_tlv(&oversized)
+            .expect("allocate oversized quantity with a valid digest");
+        let mut corrupted_oversized = oversized;
+        *corrupted_oversized
+            .last_mut()
+            .expect("quantity envelope has a digest") ^= 1;
+        let quantity_ptr = vm
+            .alloc_input_tlv(&corrupted_oversized)
+            .expect("allocate oversized quantity with a corrupt digest");
+        let mut impossible_length = test_tlv(PointerType::Quantity, &[]);
+        impossible_length[3..7].copy_from_slice(&u32::MAX.to_be_bytes());
+        let impossible_length_ptr = vm
+            .alloc_input_tlv(&impossible_length)
+            .expect("allocate quantity with an impossible declared length");
+        let maximum_sized_noncanonical_ptr = vm
+            .alloc_input_tlv(&test_tlv(
+                PointerType::Quantity,
+                &[0x5a; MAX_QUANTITY_FRAME_BYTES_V1],
+            ))
+            .expect("allocate maximum-sized noncanonical quantity");
+
+        vm.set_register(13, maximum_sized_noncanonical_ptr);
+        assert_eq!(
+            read_bounded_tlv_payload_len_at(
+                &vm,
+                maximum_sized_noncanonical_ptr,
+                PointerType::Quantity,
+                MAX_QUANTITY_FRAME_BYTES_V1,
+            ),
+            Ok(MAX_QUANTITY_FRAME_BYTES_V1),
+            "the exact V1 maximum must reach canonical frame validation"
+        );
+        assert_eq!(
+            DefaultHost::expect_quantity(&vm, 13),
+            Err(VMError::DecodeError),
+            "size admission must not replace canonical frame validation"
+        );
+
+        for (label, pointer) in [
+            ("valid digest", valid_oversized_ptr),
+            ("corrupt digest", quantity_ptr),
+            ("impossible declared length", impossible_length_ptr),
+        ] {
+            vm.set_register(13, pointer);
+            vm.memory.clear_tracking();
+            assert_eq!(
+                DefaultHost::expect_quantity(&vm, 13),
+                Err(VMError::NoritoInvalid),
+                "{label}"
+            );
+            assert_eq!(
+                vm.memory.read_set(),
+                vec![crate::memory::AccessRange {
+                    addr: pointer,
+                    len: 7,
+                }],
+                "{label} must be rejected after the fixed header only"
+            );
+            assert!(vm.memory.write_log().is_empty(), "{label}");
+        }
+
+        vm.set_register(10, account_ptr);
+        vm.set_register(11, account_ptr);
+        vm.set_register(12, definition_ptr);
+        vm.set_register(13, quantity_ptr);
+        vm.set_register(14, dataspace_ptr);
+        let registers_before = [
+            vm.register(10),
+            vm.register(11),
+            vm.register(12),
+            vm.register(13),
+            vm.register(14),
+        ];
+
+        let mut scoped_host = DefaultHost::new();
+        vm.memory.clear_tracking();
+        assert_eq!(
+            scoped_host.prepare_syscall(syscalls::SYSCALL_TRANSFER_ASSET_SCOPED, &vm),
+            Err(VMError::NoritoInvalid)
+        );
+        assert!(
+            vm.memory.read_set().is_empty(),
+            "header-only preparation must reject the oversized frame before reading its payload"
+        );
+        assert!(vm.memory.write_log().is_empty());
+
+        vm.memory.clear_tracking();
+        assert_eq!(
+            scoped_host.syscall(syscalls::SYSCALL_TRANSFER_ASSET_SCOPED, &mut vm),
+            Err(VMError::NoritoInvalid)
+        );
+        assert_eq!(
+            vm.memory.read_set(),
+            vec![crate::memory::AccessRange {
+                addr: quantity_ptr,
+                len: 7,
+            }],
+            "scoped transfer must read only the bounded header before rejecting the payload"
+        );
+        assert!(vm.memory.write_log().is_empty());
+        assert_eq!(
+            [
+                vm.register(10),
+                vm.register(11),
+                vm.register(12),
+                vm.register(13),
+                vm.register(14),
+            ],
+            registers_before
+        );
+
+        let mut batch_host = DefaultHost::new();
+        assert_eq!(
+            batch_host.syscall(syscalls::SYSCALL_TRANSFER_V1_BATCH_BEGIN, &mut vm),
+            Ok(gas::G_FASTPQ_BATCH)
+        );
+        vm.memory.clear_tracking();
+        assert_eq!(
+            batch_host.syscall(syscalls::SYSCALL_TRANSFER_V1, &mut vm),
+            Err(VMError::NoritoInvalid)
+        );
+        assert_eq!(
+            vm.memory.read_set(),
+            vec![crate::memory::AccessRange {
+                addr: quantity_ptr,
+                len: 7,
+            }],
+            "batch transfer must read only the bounded header before rejecting the payload"
+        );
+        assert!(vm.memory.write_log().is_empty());
+        assert!(batch_host.fastpq_batch_active);
+        assert!(!batch_host.fastpq_batch_has_entries);
     }
 }

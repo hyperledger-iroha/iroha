@@ -1513,7 +1513,7 @@ impl KotoTestHost {
                 }
                 Ok(0)
             }
-            Err(err) if expect_reject => {
+            Err(_err) if expect_reject => {
                 let _ = self.inner.restore(rollback.as_ref());
                 vm.set_register(10, 0);
                 Ok(0)
