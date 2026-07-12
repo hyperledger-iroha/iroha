@@ -121,7 +121,13 @@ String escapes are `\\`, `\"`, `\n`, `\r`, `\t`, `\0`, `\xNN`, and
 processing. Decimal fractions and decimal exponents are exact: they never
 create a binary floating-point value. Separators are permitted only between
 digits. Spellings such as `1.`, `.5`, `1__0`, and an exponent without digits
-are invalid. V1 has no numeric suffixes.
+are invalid. Leading zeroes are valid in source numeric literals: `0007` is
+base ten (never octal), and leading zeroes in decimal, hexadecimal, or binary
+coefficients do not change the mathematical value or its domain check.
+Likewise, `0001.2300` is normalized by the exact-decimal rules. Source
+acceptance does not weaken canonical external encodings: typed numeric JSON
+strings and numeric pointer payloads reject leading or otherwise redundant
+zeroes. V1 has no numeric suffixes.
 
 The compiler applies the same mandatory frontend budgets in every driver: at
 most 1 MiB (1,048,576 UTF-8 bytes) per source file, 250,000 significant tokens
@@ -306,13 +312,25 @@ pointer or numeric zero as a request to re-read JSON trigger arguments.
 `let` creates an immutable local. `var` creates a mutable local. Assigning to a `let`, parameter, constant, or immutable field is an error. Redeclaring or shadowing a name in an enclosing scope is an error.
 
 ```ebnf
-binding         = "let" (type identifier | identifier) "=" expression ";"
-                | "var" (type identifier | identifier) "=" expression ";" ;
+binding         = ("let" | "var") (type identifier | binding-pattern)
+                  "=" expression ";" ;
+binding-pattern = identifier | positional-destructure ;
+positional-destructure = "(" identifier ("," identifier)* ")" ;
 assignment      = place ("=" | "+=" | "-=" | "*=" | "/=" | "%=") expression ";" ;
 ```
 
 Every local binding is initialized at its declaration; there is no
-uninitialized-local state in V1.
+uninitialized-local state in V1. A positional destructure accepts a tuple or
+a declared struct and must contain exactly one identifier for every element or
+field. Tuple elements bind in tuple order; struct fields bind in declaration
+order, not struct-literal source order. `_` discards that position. Duplicate
+non-`_` names, a trailing comma, an arity mismatch, or a non-tuple/non-struct
+initializer is an error. Destructuring is one level only: nested binding
+patterns and named-field patterns such as `let Pair { left, right } = value;`
+are not V1 syntax. `var` applies mutability independently to every non-`_`
+binding produced by the pattern. Positional destructuring is inferred from its
+initializer and has no separate type annotation in V1; ordinary single-name
+annotations remain type-first.
 
 ## Types
 

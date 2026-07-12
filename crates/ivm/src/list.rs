@@ -368,7 +368,13 @@ mod tests {
 
         for element_words in [1_u64, 2, 4] {
             let mut vm = IVM::new(0);
+            let template = vm.runtime_template();
             for capacity in 1..=64 {
+                // Every capacity is an independent model-checking scenario.
+                // Reusing one VM across all capacities retains every prior
+                // bounded allocation and eventually tests heap exhaustion
+                // instead of list semantics.
+                vm.reset_from_runtime_template(&template);
                 let layout = ListLayoutV1::try_new(capacity, element_words).expect("layout");
                 for active_len in 0..=capacity {
                     let mut model = (0..active_len)

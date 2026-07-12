@@ -5198,7 +5198,7 @@ mod tests {
         ] {
             assert_eq!(
                 validate_path(&descriptor),
-                Err("static path segment uses a forbidden transport word")
+                Err("static path segment uses a forbidden transport or CRUD word")
             );
         }
     }

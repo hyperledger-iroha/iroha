@@ -701,6 +701,13 @@ function parseSoraFinalityAnchor(value, label) {
   });
 }
 
+function requireDistinctProofPolicyRoles(semantic, anchor, label) {
+  const roles = [...semantic.roles, semantic.hash, ...anchor.roles, anchor.hash];
+  if (roles.some(allZero) || new Set(roles.map(lowerHexBytes)).size !== roles.length) {
+    throw new TypeError(`${label} reuses a proof-policy hash role`);
+  }
+}
+
 function parseOutboundProofPolicy(value, label) {
   const record = exactFields(
     value,
@@ -716,10 +723,7 @@ function parseOutboundProofPolicy(value, label) {
     record.sora_finality_anchor,
     `${label}.sora_finality_anchor`,
   );
-  const roles = [...semantic.roles, semantic.hash, ...anchor.roles, anchor.hash];
-  if (roles.some(allZero) || new Set(roles.map(lowerHexBytes)).size !== roles.length) {
-    throw new TypeError(`${label} reuses a proof-policy hash role`);
-  }
+  requireDistinctProofPolicyRoles(semantic, anchor, label);
   return Object.freeze({ semanticHash: semantic.hash, anchorHash: anchor.hash });
 }
 
@@ -2117,6 +2121,7 @@ export function normalizeSccpProofRequest(value) {
     record.sora_finality_anchor,
     "SCCP proof request.sora_finality_anchor",
   );
+  requireDistinctProofPolicyRoles(semantic, anchor, "SCCP proof request outbound policy");
   const hashes = [
     "verifier_key_hash",
     "semantic_proof_profile_hash",

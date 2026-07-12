@@ -17,7 +17,9 @@ use iroha_data_model::{
         SetKeyValueBox, TransferBox, UnregisterBox,
     },
     nexus::{DataSpaceId, LaneId},
-    transaction::{Executable, SignedTransaction, TransactionEntrypoint},
+    transaction::{
+        Executable, SignedTransaction, TransactionEntrypoint, executable::ContractInvocation,
+    },
 };
 use iroha_version::codec::DecodeVersioned;
 use norito::core::{Header, MAGIC, reset_decode_state, set_decode_flags};
@@ -117,12 +119,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     vec![InstructionRow {
                         index: 0,
                         kind: "ContractCall".to_string(),
-                        json: format!(
-                            "{{\"ContractCall\":{{\"address\":{},\"entrypoint\":{},\"payload\":{}}}}}",
-                            json_string(call.contract_address.as_ref()),
-                            json_string(&call.entrypoint),
-                            json_string(&format!("{:?}", call.payload))
-                        ),
+                        json: contract_call_json(call),
                     }]
                 }
                 Executable::Ivm(bytecode) => {
@@ -493,6 +490,15 @@ fn instruction_json(instruction: &InstructionBox) -> String {
         .unwrap_or_else(|_| format!("{{\"Debug\":{}}}", json_string(&format!("{instruction:?}"))))
 }
 
+fn contract_call_json(call: &ContractInvocation) -> String {
+    format!(
+        "{{\"ContractCall\":{{\"address\":{},\"entrypoint\":{},\"arguments\":{}}}}}",
+        json_string(call.contract_address.as_ref()),
+        json_string(&call.entrypoint),
+        to_json_value(&call.arguments)
+    )
+}
+
 fn to_json_value<T: JsonSerialize>(value: &T) -> String {
     to_json(value).unwrap_or_else(|_| "null".to_string())
 }
@@ -598,14 +604,38 @@ mod tests {
     use iroha_data_model::{
         block::ExternalExecutionContext,
         nexus::{DataSpaceId, LaneId},
-        transaction::TransactionEntrypoint,
+        transaction::{
+            TransactionEntrypoint,
+            executable::{ContractArgumentRecord, ContractInvocation},
+        },
     };
     use tempfile::TempDir;
 
-    use super::{EVICTED_BLOCK_START, read_block_payload, route_context_is_public};
+    use super::{
+        EVICTED_BLOCK_START, contract_call_json, read_block_payload, route_context_is_public,
+    };
 
     fn entrypoint_hash(label: &[u8]) -> HashOf<TransactionEntrypoint> {
         HashOf::<TransactionEntrypoint>::from_untyped_unchecked(Hash::new(label))
+    }
+
+    #[test]
+    fn contract_call_json_emits_canonical_arguments() {
+        let address = "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8";
+        let call = ContractInvocation {
+            contract_address: address.parse().expect("contract address"),
+            entrypoint: "invoke".to_owned(),
+            arguments: Some(
+                ContractArgumentRecord::try_new(vec![1, 2, 3]).expect("bounded argument record"),
+            ),
+        };
+
+        assert_eq!(
+            contract_call_json(&call),
+            format!(
+                "{{\"ContractCall\":{{\"address\":\"{address}\",\"entrypoint\":\"invoke\",\"arguments\":[1,2,3]}}}}"
+            )
+        );
     }
 
     #[test]

@@ -39,6 +39,7 @@ fn first_release_compiler_runtime_syscalls_are_ungated_in_abi_v1() {
         ivm::syscalls::SYSCALL_STATE_MAP_KEY_AT,
         ivm::syscalls::SYSCALL_STATE_VALUE_ENCODE,
         ivm::syscalls::SYSCALL_STATE_VALUE_DECODE,
+        ivm::syscalls::SYSCALL_NORMALIZE_NORITO_BYTES,
     ] {
         assert!(
             ivm::syscalls::is_syscall_allowed(SyscallPolicy::AbiV1, number),

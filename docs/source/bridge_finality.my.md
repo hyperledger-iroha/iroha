@@ -4,8 +4,8 @@ direction: ltr
 source: docs/source/bridge_finality.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 5e28e5c38283ad6be40a0fc48e0312797f490542a143f4cefdd209aaf8099ac5
-source_last_modified: "2026-07-11T20:38:35.470900+00:00"
+source_hash: 1cbd248fe14e63d00f002f09e1663181f3ab9bd99124ffeb89c56763b784046b
+source_last_modified: "2026-07-12"
 translation_last_reviewed: 2026-07-12
 translator: machine-google-reviewed
 ---
@@ -45,11 +45,13 @@ context id ၏ အစိတ်အပိုင်းဖြစ်သောကြ�
 
 ## အမြဲတမ်းသိမ်းဆည်းမှုနှင့် စစ်ဆေးမှု
 
-Sumeragi v2 apply path သည် artifact ကို စစ်ဆေးပြီး မပြောင်းလဲနိုင်သော Kura sidecar အဖြစ် သိမ်းသည်။
-Proof builder သည် canonical block နှင့် ၎င်း၏ sidecar ကို ဖတ်ပြီး သမိုင်းဝင် PoP သို့မဟုတ် certificate
-ကို ပြောင်းလဲနိုင်သော လက်ရှိ world state မှ ပြန်လည်မတည်ဆောက်ပါ။ Sidecar ပျောက်ဆုံးခြင်း၊ ပျက်စီးခြင်း၊
-ပဋိပက္ခဖြစ်ခြင်း သို့မဟုတ် မစစ်ဆေးနိုင်ခြင်းကို fail closed လုပ်ပြီး availability ကို နောက်ဆုံးပေါ်
-in-memory history window ဖြင့် မကန့်သတ်ပါ။
+Finality မထုတ်ပြန်မီ သို့မဟုတ် block body မဖယ်ရှားမီ Kura သည် exact canonical header နှင့်
+root-authenticated SCCP archive ကို immutable retained-block record တွင် ရေးပြီး exact V2
+artifact ကို သီးခြား immutable finality record တွင် သိမ်းသည်။ Record နှစ်ခုလုံး idempotent ဖြစ်ပြီး
+height တူ conflict ကို ငြင်းပယ်သည်။ `build_finality_proof` သည် retained header နှင့် verified
+finality record ကိုသာ ဖတ်ပြီး historical block body သို့မဟုတ် mutable world state PoP ကို မသုံးပါ။
+Restart တွင် header/archive/artifact/hash association ကို ပြန်စစ်သည်။ Body eviction ကြောင့် မှန်ကန်သော
+proof မပျောက်ပါ။ ပျောက်ဆုံး၊ ပျက်စီး၊ conflict ဖြစ်သော သို့မဟုတ် မစစ်နိုင်သော record သည် fail closed ဖြစ်သည်။
 
 Stateless verifier သည် version၊ chain၊ height၊ header hash၊ header ၏ canonical predecessor နှင့်
 view၊ context၊ subject နှင့် CommitQC ကို အတိအကျ ကိုက်ညီစေပြီး artifact ထဲရှိ PoP အားလုံးကို
@@ -80,6 +82,6 @@ artifact အထိ immediate successor တစ်ခုချင်းကို �
 - `GET /v1/bridge/finality/{height}` သည် `BridgeFinalityProof` ကို ပြန်ပေးသည်။
 - `GET /v1/bridge/finality/bundle/{height}` သည် `BridgeFinalityBundle` ကို ပြန်ပေးသည်။
 
-Block သို့မဟုတ် အတိအကျ အမြဲတမ်း v2 artifact မရှိခြင်း သို့မဟုတ် invalid ဖြစ်ခြင်းတွင် endpoint နှစ်ခုလုံး
-fail closed ဖြစ်သည်။ မသိသော field များ၊ မထောက်ပံ့သော version များနှင့် retired proof shape များကို
-ပယ်ချရမည်။
+Retained canonical header သို့မဟုတ် အတိအကျ အမြဲတမ်း v2 artifact မရှိခြင်း သို့မဟုတ် invalid
+ဖြစ်ခြင်းတွင် endpoint နှစ်ခုလုံး fail closed ဖြစ်သည်။ Historical block body eviction ကြောင့် မှန်ကန်သော
+proof မပျောက်ပါ။ မသိသော field များ၊ မထောက်ပံ့သော version များနှင့် retired proof shape များကို ပယ်ချရမည်။

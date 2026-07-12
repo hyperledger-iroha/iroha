@@ -13,7 +13,7 @@ import hmac
 import re
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Mapping, NoReturn, Union
+from typing import Mapping, NoReturn, Union, cast
 
 INT_MIN = -(1 << 511)
 """Smallest canonical Kotodama ``int`` and numeric mantissa."""
@@ -88,9 +88,11 @@ def _fail(code: str, message: str) -> NoReturn:
 
 def _as_bytes(value: object, context: str) -> bytes:
     if type(value) is bytes:
-        return value
-    if type(value) in (bytearray, memoryview):
-        return bytes(value)
+        return cast(bytes, value)
+    if type(value) is bytearray:
+        return bytes(cast(bytearray, value))
+    if type(value) is memoryview:
+        return cast(memoryview, value).tobytes()
     raise TypeError(f"{context} must be bytes-like")
 
 
@@ -250,6 +252,24 @@ class KotodamaQuantity:
 
 
 NumericValue = Union[KotodamaInt, KotodamaDecimal, KotodamaQuantity]
+
+
+def _canonical_int_input(value: Union[KotodamaInt, int, str]) -> KotodamaInt:
+    if type(value) is KotodamaInt:
+        return cast(KotodamaInt, value)
+    return KotodamaInt(cast(Union[int, str], value))
+
+
+def _canonical_decimal_input(value: Union[KotodamaDecimal, str]) -> KotodamaDecimal:
+    if type(value) is KotodamaDecimal:
+        return cast(KotodamaDecimal, value)
+    return KotodamaDecimal(cast(str, value))
+
+
+def _canonical_quantity_input(value: Union[KotodamaQuantity, str]) -> KotodamaQuantity:
+    if type(value) is KotodamaQuantity:
+        return cast(KotodamaQuantity, value)
+    return KotodamaQuantity(cast(str, value))
 
 
 def _encode_twos_complement(value: int) -> bytes:
@@ -430,15 +450,15 @@ class NumericV1Codec:
 
     @staticmethod
     def encode_int_json(value: Union[KotodamaInt, int, str]) -> str:
-        return str(value if type(value) is KotodamaInt else KotodamaInt(value))
+        return str(_canonical_int_input(value))
 
     @staticmethod
     def encode_decimal_json(value: Union[KotodamaDecimal, str]) -> str:
-        return str(value if type(value) is KotodamaDecimal else KotodamaDecimal(value))
+        return str(_canonical_decimal_input(value))
 
     @staticmethod
     def encode_quantity_json(value: Union[KotodamaQuantity, str]) -> str:
-        return str(value if type(value) is KotodamaQuantity else KotodamaQuantity(value))
+        return str(_canonical_quantity_input(value))
 
     @staticmethod
     def decode_int_json(value: object) -> KotodamaInt:
@@ -466,17 +486,15 @@ class NumericV1Codec:
 
     @staticmethod
     def encode_int_frame(value: Union[KotodamaInt, int, str]) -> bytes:
-        return _frame_for("int", value if type(value) is KotodamaInt else KotodamaInt(value))
+        return _frame_for("int", _canonical_int_input(value))
 
     @staticmethod
     def encode_decimal_frame(value: Union[KotodamaDecimal, str]) -> bytes:
-        numeric = value if type(value) is KotodamaDecimal else KotodamaDecimal(value)
-        return _frame_for("decimal", numeric)
+        return _frame_for("decimal", _canonical_decimal_input(value))
 
     @staticmethod
     def encode_quantity_frame(value: Union[KotodamaQuantity, str]) -> bytes:
-        numeric = value if type(value) is KotodamaQuantity else KotodamaQuantity(value)
-        return _frame_for("quantity", numeric)
+        return _frame_for("quantity", _canonical_quantity_input(value))
 
     @staticmethod
     def decode_int_frame(value: object) -> KotodamaInt:
@@ -498,18 +516,15 @@ class NumericV1Codec:
 
     @staticmethod
     def encode_int_envelope(value: Union[KotodamaInt, int, str]) -> bytes:
-        numeric = value if type(value) is KotodamaInt else KotodamaInt(value)
-        return _envelope_for("int", numeric)
+        return _envelope_for("int", _canonical_int_input(value))
 
     @staticmethod
     def encode_decimal_envelope(value: Union[KotodamaDecimal, str]) -> bytes:
-        numeric = value if type(value) is KotodamaDecimal else KotodamaDecimal(value)
-        return _envelope_for("decimal", numeric)
+        return _envelope_for("decimal", _canonical_decimal_input(value))
 
     @staticmethod
     def encode_quantity_envelope(value: Union[KotodamaQuantity, str]) -> bytes:
-        numeric = value if type(value) is KotodamaQuantity else KotodamaQuantity(value)
-        return _envelope_for("quantity", numeric)
+        return _envelope_for("quantity", _canonical_quantity_input(value))
 
     @staticmethod
     def decode_int_envelope(value: object) -> KotodamaInt:

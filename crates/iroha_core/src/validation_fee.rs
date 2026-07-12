@@ -2972,6 +2972,7 @@ mod tests {
         let interface = ivm::EmbeddedContractInterfaceV1 {
             seiyaku_name: "ValidationFeePayout".to_owned(),
             compiler_fingerprint: "validation-fee-bound-contract-test".to_owned(),
+            abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
             features_bitmap: 0,
             access_set_hints: None,
             kotoba: Vec::new(),

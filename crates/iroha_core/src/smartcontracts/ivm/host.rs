@@ -2493,8 +2493,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             return Ok(Vec::new());
         }
 
-        let tlv = Self::decode_pointer_tlv(vm, ptr, PointerType::NoritoBytes)
-            .or_else(|_| Self::decode_pointer_tlv(vm, ptr, PointerType::Blob))?;
+        let tlv = Self::decode_pointer_tlv(vm, ptr, PointerType::NoritoBytes)?;
         decode_from_bytes(tlv.payload)
             .or_else(|_| {
                 let owned = tlv.payload.to_vec();
@@ -5550,8 +5549,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     where
         T: for<'de> NoritoDeserialize<'de>,
     {
-        let tlv = Self::decode_pointer_tlv(vm, ptr, expected)
-            .or_else(|_| Self::decode_pointer_tlv(vm, ptr, PointerType::NoritoBytes))?;
+        let tlv = Self::decode_pointer_tlv(vm, ptr, expected)?;
         decode_from_bytes(tlv.payload)
             .or_else(|_| {
                 let owned = tlv.payload.to_vec();
@@ -5569,8 +5567,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         {
             return Ok(ContractInstanceLookup::Address(address));
         }
-        let alias_name = Self::decode_tlv_typed::<Name>(vm, ptr, PointerType::Name)
-            .or_else(|_| Self::decode_tlv_typed::<Name>(vm, ptr, PointerType::NoritoBytes))?;
+        let alias_name = Self::decode_tlv_typed::<Name>(vm, ptr, PointerType::Name)?;
         let alias = alias_name
             .as_ref()
             .parse::<ContractAlias>()
@@ -6535,6 +6532,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             crate::smartcontracts::code::BoundContractIdentity {
                 contract_address: record.contract_address.clone(),
                 contract_alias: record.contract_alias.clone(),
+                contract_alias_binding: record.contract_alias_binding.clone(),
                 code_hash: record.code_hash,
             },
             record.contract_subject.clone(),
@@ -8698,25 +8696,8 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
 
     fn decode_opaque_instruction(vm: &IVM) -> Result<InstructionBox, ivm::VMError> {
         let pointer = vm.register(10);
-        let tlv = Self::decode_pointer_tlv(vm, pointer, PointerType::NoritoBytes)
-            .or_else(|_| Self::decode_pointer_tlv(vm, pointer, PointerType::Blob))?;
-        let payload = if tlv.type_id == PointerType::Blob {
-            std::str::from_utf8(tlv.payload)
-                .ok()
-                .and_then(|raw| {
-                    let trimmed = raw.strip_prefix("0x").unwrap_or(raw);
-                    (!trimmed.is_empty()
-                        && trimmed.len() % 2 == 0
-                        && trimmed.chars().all(|ch| ch.is_ascii_hexdigit()))
-                    .then(|| hex::decode(trimmed).ok())
-                    .flatten()
-                })
-                .map(std::borrow::Cow::Owned)
-                .unwrap_or_else(|| std::borrow::Cow::Borrowed(tlv.payload))
-        } else {
-            std::borrow::Cow::Borrowed(tlv.payload)
-        };
-        norito::decode_from_bytes(payload.as_ref()).map_err(|_| ivm::VMError::NoritoInvalid)
+        let tlv = Self::decode_pointer_tlv(vm, pointer, PointerType::NoritoBytes)?;
+        norito::decode_from_bytes(tlv.payload).map_err(|_| ivm::VMError::NoritoInvalid)
     }
 
     fn effect_authority(&self) -> AccountId {
@@ -9898,6 +9879,7 @@ impl<QS> CoreHostImpl<QS> {
                 | ivm::syscalls::SYSCALL_STATE_MAP_KEY_AT
                 | ivm::syscalls::SYSCALL_STATE_VALUE_ENCODE
                 | ivm::syscalls::SYSCALL_STATE_VALUE_DECODE
+                | ivm::syscalls::SYSCALL_NORMALIZE_NORITO_BYTES
                 | ivm::syscalls::SYSCALL_ENCODE_INT
                 | ivm::syscalls::SYSCALL_DECODE_INT
                 | ivm::syscalls::SYSCALL_JSON_ENCODE
@@ -11018,7 +11000,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 out.extend_from_slice(&response_bytes);
                 let h: [u8; Hash::LENGTH] = Hash::new(&response_bytes).into();
                 out.extend_from_slice(&h);
-                let p = vm.alloc_input_tlv(&out)?;
+                let p = vm.alloc_host_tlv(&out)?;
                 vm.set_register(10, p);
                 Ok(gas)
             }
@@ -11059,7 +11041,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 out.extend_from_slice(&payload);
                 let h: [u8; Hash::LENGTH] = Hash::new(&payload).into();
                 out.extend_from_slice(&h);
-                let p = vm.alloc_input_tlv(&out)?;
+                let p = vm.alloc_host_tlv(&out)?;
                 vm.set_register(10, p);
                 Ok(gas)
             }
@@ -11138,7 +11120,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                     let gas = PUBLIC_INPUT_GAS_BASE_DEFAULT
                         .saturating_add(PUBLIC_INPUT_GAS_PER_BYTE_DEFAULT.saturating_mul(bytes));
                     ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
-                    let ptr = vm.alloc_input_tlv(&out)?;
+                    let ptr = vm.alloc_host_tlv(&out)?;
                     vm.set_register(10, ptr);
                     return Ok(gas);
                 }
@@ -11153,7 +11135,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 }
                 let gas = record.gas_cost();
                 ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
-                let ptr = vm.alloc_input_tlv(&record.tlv)?;
+                let ptr = vm.alloc_host_tlv(&record.tlv)?;
                 vm.set_register(10, ptr);
                 Ok(gas)
             }
@@ -11454,7 +11436,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 out.extend_from_slice(&body);
                 let h: [u8; 32] = iroha_crypto::Hash::new(&body).into();
                 out.extend_from_slice(&h);
-                let p = vm.alloc_input_tlv(&out)?;
+                let p = vm.alloc_host_tlv(&out)?;
                 vm.set_register(10, p);
                 Ok(gas)
             }
@@ -11478,7 +11460,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 out.extend_from_slice(&body);
                 let h: [u8; 32] = iroha_crypto::Hash::new(&body).into();
                 out.extend_from_slice(&h);
-                let p = vm.alloc_input_tlv(&out)?;
+                let p = vm.alloc_host_tlv(&out)?;
                 vm.set_register(10, p);
                 Ok(gas)
             }
@@ -11522,7 +11504,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 out.extend_from_slice(&body);
                 let h: [u8; 32] = iroha_crypto::Hash::new(&body).into();
                 out.extend_from_slice(&h);
-                match vm.alloc_input_tlv(&out) {
+                match vm.alloc_host_tlv(&out) {
                     Ok(p) => {
                         vm.set_register(10, p);
                         vm.set_register(11, OK);
@@ -11739,7 +11721,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 self.default.syscall(forwarded, vm)
             }
 
-            // Provide current authority AccountId pointer via INPUT region.
+            // Provide the current authority as a host-owned AccountId pointer.
             // New format: TLV (type_id:u16, version:u8, len:be u32, payload, hash:32).
             // Historical len-prefixed payloads are no longer emitted.
             ivm::syscalls::SYSCALL_GET_AUTHORITY | ivm::syscalls::SYSCALL_SYSVAR_AUTHORITY => {
@@ -11758,8 +11740,8 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 // Append hash: single ABI requires valid digest
                 let h = iroha_crypto::Hash::new(&payload);
                 blob.extend_from_slice(h.as_ref());
-                // Allocate using the VM input bump to avoid overwriting other INPUT TLVs.
-                let ptr = vm.alloc_input_tlv(&blob)?;
+                // Prefer INPUT and spill to owned HEAP without overwriting earlier TLVs.
+                let ptr = vm.alloc_host_tlv(&blob)?;
                 vm.set_register(10, ptr);
                 Ok(Self::sysvar_gas(payload.len()))
             }
@@ -12005,6 +11987,7 @@ mod pointer_abi_tests {
             &crate::smartcontracts::code::BoundContractIdentity {
                 contract_address: contract.clone(),
                 contract_alias: None,
+                contract_alias_binding: None,
                 code_hash: Hash::new(b"depth-guard caller contract"),
             },
         );
@@ -12125,6 +12108,54 @@ seiyaku StateBackedBinding {
         assert_eq!(authorization.contract_address, contract_address);
         assert_eq!(authorization.contract_alias, record.contract_alias);
         assert_eq!(authorization.code_hash, record.code_hash);
+        assert_eq!(authorization.entrypoint, "inspect");
+        assert_eq!(
+            authorization.permission.as_deref(),
+            Some("CanInspectContract")
+        );
+    }
+
+    #[test]
+    fn prevalidated_runtime_binding_captures_exact_root_authorization() {
+        let authority = ALICE_ID.clone();
+        let contract = ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &authority,
+            43,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("derive contract address");
+        let code_hash = Hash::new(b"Torii prevalidated runtime binding");
+        let mut host = CoreHost::new(authority.clone());
+
+        let authorization = ContractEntrypointAuthorizationSnapshot::new(
+            authority.clone(),
+            "inspect".to_owned(),
+            Some("CanInspectContract".to_owned()),
+            &crate::smartcontracts::code::BoundContractIdentity {
+                contract_address: contract.clone(),
+                contract_alias: None,
+                contract_alias_binding: None,
+                code_hash,
+            },
+        );
+        host.bind_contract_runtime_context(contract.subject_id(), authorization);
+
+        let context = host
+            .current_contract_runtime_context
+            .as_ref()
+            .expect("runtime context");
+        assert_eq!(context.contract_address, contract);
+        assert_eq!(context.contract_subject, contract.subject_id());
+        assert_eq!(context.entrypoint, "inspect");
+        let authorization = host
+            .current_entrypoint_authorization
+            .as_ref()
+            .expect("root authorization");
+        assert!(authorization.is_root());
+        assert_eq!(authorization.authority, authority);
+        assert_eq!(authorization.contract_address, contract);
+        assert_eq!(authorization.code_hash, code_hash);
         assert_eq!(authorization.entrypoint, "inspect");
         assert_eq!(
             authorization.permission.as_deref(),
@@ -12313,6 +12344,7 @@ seiyaku PrivilegedBinding {
             &crate::smartcontracts::code::BoundContractIdentity {
                 contract_address: contract.clone(),
                 contract_alias: None,
+                contract_alias_binding: None,
                 code_hash: Hash::new(b"manifest-free runtime fixture"),
             },
         );
@@ -14461,6 +14493,8 @@ seiyaku PrivilegedBinding {
             PointerType::NoritoBytes,
             &norito_blob(&evidence_hashes),
         );
+        let retired_blob_evidence_ptr =
+            store_tlv(&mut vm, PointerType::Blob, &norito_blob(&evidence_hashes));
 
         let assert_queued = |host: &mut CoreHost, res, expected: InstructionBox| {
             let expected_gas = crate::gas::meter_instruction(&expected);
@@ -14576,6 +14610,15 @@ seiyaku PrivilegedBinding {
             host.syscall(ivm::syscalls::SYSCALL_ESCROW_RESOLVE_DISPUTE, &mut vm),
             Err(ivm::VMError::NoritoInvalid)
         ));
+        assert!(host.queued.is_empty());
+
+        vm.set_register(10, escrow_ptr);
+        vm.set_register(11, retired_blob_evidence_ptr);
+        assert!(matches!(
+            host.syscall(ivm::syscalls::SYSCALL_ESCROW_OPEN_DISPUTE, &mut vm),
+            Err(ivm::VMError::NoritoInvalid)
+        ));
+        assert_eq!(vm.register(11), retired_blob_evidence_ptr);
         assert!(host.queued.is_empty());
     }
 
@@ -15569,15 +15612,15 @@ seiyaku PrivilegedBinding {
 
 #[cfg(test)]
 fn build_program(code: &[u8], vector_length: u8) -> Vec<u8> {
-    let mut program = Vec::with_capacity(17 + code.len());
-    program.extend_from_slice(b"IVM\0");
-    program.push(1); // version_major
-    program.push(0); // version_minor
-    program.push(0); // mode
-    program.push(vector_length);
-    program.extend_from_slice(&1_000_000_u64.to_le_bytes());
-    // ABI v1 is the only supported surface; tests must encode the version byte accordingly.
-    program.push(1); // abi_version
+    let mut program = ivm::ProgramMetadata {
+        version_major: 1,
+        version_minor: 0,
+        mode: 0,
+        vector_length,
+        max_cycles: 1_000_000,
+        abi_version: 1,
+    }
+    .encode();
     program.extend_from_slice(code);
     program
 }
@@ -16443,6 +16486,7 @@ seiyaku AliasPayout {{
                 &crate::smartcontracts::code::BoundContractIdentity {
                     contract_address: caller_contract.clone(),
                     contract_alias: None,
+                    contract_alias_binding: None,
                     code_hash: caller_code_hash,
                 },
             ),
@@ -16502,6 +16546,7 @@ seiyaku AliasPayout {{
                 &crate::smartcontracts::code::BoundContractIdentity {
                     contract_address: caller_contract.clone(),
                     contract_alias: None,
+                    contract_alias_binding: None,
                     code_hash: caller_code_hash,
                 },
             ),
@@ -16569,6 +16614,7 @@ seiyaku AliasPayout {{
                 &crate::smartcontracts::code::BoundContractIdentity {
                     contract_address: caller_contract.clone(),
                     contract_alias: None,
+                    contract_alias_binding: None,
                     code_hash: caller_code_hash,
                 },
             ),
@@ -17015,6 +17061,18 @@ seiyaku OuterCaller {
             norito::decode_from_bytes(parameter_tlv.payload).expect("decode parameter");
         assert!(matches!(parameter_out, Parameter::Block(_)));
 
+        let retired_untyped_parameter_ptr = store_tlv(
+            &mut vm,
+            PointerType::NoritoBytes,
+            &norito_blob(&parameter_name),
+        );
+        vm.set_register(10, retired_untyped_parameter_ptr);
+        assert!(matches!(
+            host.syscall(ivm_sys::SYSCALL_QUERY_GET_PARAMETER, &mut vm),
+            Err(ivm::VMError::NoritoInvalid)
+        ));
+        assert_eq!(vm.register(10), retired_untyped_parameter_ptr);
+
         let contract_ptr = store_tlv(
             &mut vm,
             PointerType::NoritoBytes,
@@ -17048,6 +17106,15 @@ seiyaku OuterCaller {
         assert_eq!(alias_instance_out.contract_address, contract_address);
         assert_eq!(alias_instance_out.code_hash, code_hash);
         assert_eq!(alias_instance_out.contract_alias, Some(alias));
+
+        let retired_untyped_alias_ptr =
+            store_tlv(&mut vm, PointerType::NoritoBytes, &norito_blob(&alias_name));
+        vm.set_register(10, retired_untyped_alias_ptr);
+        assert!(matches!(
+            host.syscall(ivm_sys::SYSCALL_QUERY_GET_CONTRACT_INSTANCE, &mut vm),
+            Err(ivm::VMError::NoritoInvalid)
+        ));
+        assert_eq!(vm.register(10), retired_untyped_alias_ptr);
     }
 
     #[test]
@@ -19004,50 +19071,30 @@ seiyaku OuterCaller {
     }
 
     #[test]
-    fn execute_instruction_syscall_accepts_blob_sccp_record_message() {
+    fn execute_instruction_syscall_rejects_retired_blob_payload_forms() {
         let authority = (*ALICE_ID).clone();
-        let mut host = CoreHost::new(authority);
-        let mut vm = ivm::IVM::new(1_000_000);
         let instruction =
             InstructionBox::from(crate::bridge::test_record_sccp_message(vec![1, 2, 3, 4]));
         let payload = norito::to_bytes(&instruction).expect("encode instruction");
-        let ptr = store_tlv(&mut vm, PointerType::Blob, &payload);
-        vm.set_register(10, ptr);
-        vm.set_register(
-            11,
-            ivm_sys::SMARTCONTRACT_INSTRUCTION_TAG_RECORD_SCCP_MESSAGE,
-        );
+        let retired_payloads = [payload.clone(), hex::encode(payload).into_bytes()];
 
-        let gas = host
-            .syscall(ivm_sys::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION, &mut vm)
-            .expect("SCCP record instruction should be queued from Blob bytes");
+        for retired_payload in retired_payloads {
+            let mut host = CoreHost::new(authority.clone());
+            let mut vm = ivm::IVM::new(1_000_000);
+            let ptr = store_tlv(&mut vm, PointerType::Blob, &retired_payload);
+            vm.set_register(10, ptr);
+            vm.set_register(
+                11,
+                ivm_sys::SMARTCONTRACT_INSTRUCTION_TAG_RECORD_SCCP_MESSAGE,
+            );
 
-        assert_eq!(gas, crate::gas::meter_instruction(&instruction));
-        assert_eq!(host.queued, vec![instruction]);
-    }
-
-    #[test]
-    fn execute_instruction_syscall_accepts_blob_hex_sccp_record_message() {
-        let authority = (*ALICE_ID).clone();
-        let mut host = CoreHost::new(authority);
-        let mut vm = ivm::IVM::new(1_000_000);
-        let instruction =
-            InstructionBox::from(crate::bridge::test_record_sccp_message(vec![1, 2, 3, 4]));
-        let payload = norito::to_bytes(&instruction).expect("encode instruction");
-        let hex_payload = hex::encode(payload);
-        let ptr = store_tlv(&mut vm, PointerType::Blob, hex_payload.as_bytes());
-        vm.set_register(10, ptr);
-        vm.set_register(
-            11,
-            ivm_sys::SMARTCONTRACT_INSTRUCTION_TAG_RECORD_SCCP_MESSAGE,
-        );
-
-        let gas = host
-            .syscall(ivm_sys::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION, &mut vm)
-            .expect("SCCP record instruction should be queued from Blob hex bytes");
-
-        assert_eq!(gas, crate::gas::meter_instruction(&instruction));
-        assert_eq!(host.queued, vec![instruction]);
+            assert_eq!(
+                host.syscall(ivm_sys::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION, &mut vm),
+                Err(ivm::VMError::NoritoInvalid)
+            );
+            assert_eq!(vm.register(10), ptr);
+            assert!(host.queued.is_empty());
+        }
     }
 
     #[test]
@@ -20048,6 +20095,28 @@ seiyaku OpaqueInstructionSubmission {
         let decoded: AccountId =
             CoreHost::decode_tlv_typed(&vm, authority_ptr, PointerType::AccountId)
                 .expect("authority TLV should remain intact");
+        assert_eq!(decoded, authority);
+    }
+
+    #[test]
+    fn get_authority_spills_to_owned_heap_after_input_exhaustion() {
+        crate::test_alias::ensure();
+        let authority: AccountId = fixture_account("alice");
+        let mut host = CoreHost::new(authority.clone());
+        let mut vm = IVM::new(1_000_000);
+        vm.load_program(&ivm::ProgramMetadata::default().encode())
+            .expect("load metadata");
+        vm.alloc_input_tlv(&vec![0; ivm::Memory::INPUT_SIZE as usize])
+            .expect("fill INPUT exactly");
+
+        host.syscall(ivm::syscalls::SYSCALL_GET_AUTHORITY, &mut vm)
+            .expect("authority syscall must spill");
+
+        let authority_pointer = vm.register(10);
+        assert!((ivm::Memory::HEAP_START..ivm::Memory::INPUT_START).contains(&authority_pointer));
+        let decoded: AccountId =
+            CoreHost::decode_tlv_typed(&vm, authority_pointer, PointerType::AccountId)
+                .expect("decode HEAP-backed authority");
         assert_eq!(decoded, authority);
     }
 
@@ -22074,6 +22143,7 @@ seiyaku Callee {
                 &crate::smartcontracts::code::BoundContractIdentity {
                     contract_address: caller_contract.clone(),
                     contract_alias: None,
+                    contract_alias_binding: None,
                     code_hash: caller_code_hash,
                 },
             ),
@@ -22182,6 +22252,7 @@ seiyaku Callee {
                     &crate::smartcontracts::code::BoundContractIdentity {
                         contract_address: caller_contract.clone(),
                         contract_alias: None,
+                        contract_alias_binding: None,
                         code_hash: caller_code_hash,
                     },
                 ),
@@ -22294,6 +22365,7 @@ seiyaku Callee {
                 &crate::smartcontracts::code::BoundContractIdentity {
                     contract_address: contract_address.clone(),
                     contract_alias: None,
+                    contract_alias_binding: None,
                     code_hash: Hash::new(b"unavailable caller contract"),
                 },
             ),
@@ -22386,6 +22458,7 @@ seiyaku Callee {
                 &crate::smartcontracts::code::BoundContractIdentity {
                     contract_address: caller_contract.clone(),
                     contract_alias: None,
+                    contract_alias_binding: None,
                     code_hash: caller_code_hash,
                 },
             ),
@@ -25547,6 +25620,237 @@ seiyaku AliasPayout {
             Err(ivm::VMError::PermissionDenied)
         ));
         assert!(host.drain_durable_state_overlay().is_empty());
+    }
+
+    #[test]
+    fn contract_address_bytes_roundtrip_through_typed_durable_state() {
+        crate::test_alias::ensure();
+        let authority: AccountId = fixture_account("alice");
+        let contract_address = ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &authority,
+            701,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("derive contract address");
+        let source = r#"
+            seiyaku AddressState {
+                state bytes Stored;
+
+                hajimari() {
+                    Stored = b"";
+                }
+
+                kotoage fn capture() -> int authorize("WriteState") {
+                    Stored = context::contract_address();
+                    return 1;
+                }
+
+                view fn read() -> bytes {
+                    return Stored;
+                }
+            }
+        "#;
+        let (program, _) = ivm::KotodamaCompiler::new()
+            .compile_source_with_manifest(source)
+            .expect("compile typed bytes contract");
+        let metadata = ivm::ProgramMetadata::parse(&program).expect("parse contract metadata");
+        let interface = metadata
+            .contract_interface
+            .as_ref()
+            .expect("CNTR interface");
+        let entry_pc = |name: &str| {
+            metadata.prefix_len() as u64
+                + interface
+                    .entrypoints
+                    .iter()
+                    .find(|entrypoint| entrypoint.name == name)
+                    .unwrap_or_else(|| panic!("missing `{name}` entrypoint"))
+                    .entry_pc
+        };
+
+        let mut host = CoreHost::new(authority);
+        host.set_contract_runtime_context(Some(ContractRuntimeExecutionContext {
+            contract_subject: contract_address.subject_id(),
+            contract_address: contract_address.clone(),
+            contract_alias: None,
+            entrypoint: "capture".to_owned(),
+        }));
+        let mut vm = IVM::new(u64::MAX);
+        vm.load_program(&program)
+            .expect("load typed bytes contract");
+        vm.set_register(1, vm.memory.code_len());
+        vm.set_program_counter(entry_pc("capture"))
+            .expect("seek capture entrypoint");
+        vm.run_with_host(&mut host)
+            .expect("store contract address bytes");
+        assert_eq!(host.durable_state_overlay.len(), 1);
+        let stored = host
+            .durable_state_overlay
+            .values()
+            .next()
+            .and_then(Option::as_ref)
+            .expect("typed durable state record");
+        let path: Name = "Stored".parse().expect("declared scalar path");
+        ivm::host::validate_declared_state_value_payload(&vm, &path, stored)
+            .expect("persisted record remains schema-bound and canonical");
+
+        host.set_contract_runtime_context(Some(ContractRuntimeExecutionContext {
+            contract_subject: contract_address.subject_id(),
+            contract_address: contract_address.clone(),
+            contract_alias: None,
+            entrypoint: "read".to_owned(),
+        }));
+        let mut read_vm = IVM::new(u64::MAX);
+        read_vm
+            .load_program(&program)
+            .expect("load typed bytes contract for readback");
+        read_vm.set_register(1, read_vm.memory.code_len());
+        read_vm
+            .set_program_counter(entry_pc("read"))
+            .expect("seek read entrypoint");
+        read_vm
+            .run_with_host(&mut host)
+            .expect("read canonical durable contract address bytes");
+
+        let returned = read_vm
+            .validate_tlv(read_vm.register(10))
+            .expect("validate bytes return");
+        assert_eq!(returned.type_id, PointerType::Blob);
+        assert_eq!(returned.version, 1);
+        assert_eq!(
+            returned.payload,
+            norito::to_bytes(&contract_address)
+                .expect("encode expected contract address")
+                .as_slice()
+        );
+    }
+
+    #[test]
+    fn production_typed_state_map_scans_and_writes_validate_cntr() {
+        crate::test_alias::ensure();
+        let authority: AccountId = fixture_account("alice");
+        let contract_address = ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &authority,
+            702,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("derive contract address");
+        let source = r#"
+            seiyaku TypedMapState {
+                state StateMap<int, bytes> BytesMap;
+                state StateMap<int, int> IntMap;
+
+                kotoage fn write() -> int authorize("WriteState") {
+                    BytesMap[1] = b"canonical";
+                    return 1;
+                }
+            }
+        "#;
+        let (program, _) = ivm::KotodamaCompiler::new()
+            .compile_source_with_manifest(source)
+            .expect("compile typed map contract");
+        let metadata = ivm::ProgramMetadata::parse(&program).expect("parse contract metadata");
+        let entry_pc = metadata.prefix_len() as u64
+            + metadata
+                .contract_interface
+                .as_ref()
+                .expect("CNTR interface")
+                .entrypoints
+                .iter()
+                .find(|entrypoint| entrypoint.name == "write")
+                .expect("write entrypoint")
+                .entry_pc;
+
+        let mut host = CoreHost::new(authority);
+        host.set_contract_runtime_context(Some(ContractRuntimeExecutionContext {
+            contract_subject: contract_address.subject_id(),
+            contract_address,
+            contract_alias: None,
+            entrypoint: "write".to_owned(),
+        }));
+        let mut vm = IVM::new(u64::MAX);
+        vm.load_program(&program).expect("load typed map contract");
+        vm.set_register(1, vm.memory.code_len());
+        vm.set_program_counter(entry_pc)
+            .expect("seek write entrypoint");
+        vm.run_with_host(&mut host)
+            .expect("canonical typed child write");
+
+        let base: Name = "BytesMap".parse().expect("declared map base");
+        let base_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&base));
+        vm.set_register(10, base_ptr);
+        vm.set_register(11, 0);
+        vm.set_register(12, ivm_sys::STATE_KEYS_MAX_ITEMS);
+        host.syscall(ivm_sys::SYSCALL_STATE_KEYS, &mut vm)
+            .expect("bare StateMap base is a valid scan prefix");
+        assert_eq!(vm.register(11), 1);
+        assert_eq!(vm.register(12), 1);
+        let keys = vm.validate_tlv(vm.register(10)).expect("state-key page");
+        let keys: Vec<Name> = norito::decode_from_bytes(keys.payload).expect("decode key page");
+        assert_eq!(keys.len(), 1);
+
+        vm.set_register(10, base_ptr);
+        host.syscall(ivm_sys::SYSCALL_STATE_COUNT, &mut vm)
+            .expect("bare StateMap base is a valid count prefix");
+        assert_eq!(vm.register(10), 1);
+
+        let before_overlay = host.durable_state_overlay.clone();
+        let before_reads = host.state_access_log.read_keys.clone();
+        let before_writes = host.state_access_log.write_keys.clone();
+        let before_durable_reads = host.state_access_log.durable_read_paths.clone();
+        let before_state_write_count = host.state_access_log.state_writes.len();
+        vm.set_register(10, base_ptr);
+        assert!(matches!(
+            host.syscall(ivm_sys::SYSCALL_STATE_HAS, &mut vm),
+            Err(ivm::VMError::NoritoInvalid)
+        ));
+        assert_eq!(host.durable_state_overlay, before_overlay);
+
+        let bytes_record = before_overlay
+            .iter()
+            .find_map(|(path, value)| {
+                path.as_ref()
+                    .contains("BytesMap/")
+                    .then(|| value.as_ref())
+                    .flatten()
+            })
+            .expect("compiler-emitted bytes record")
+            .clone();
+        let key = ivm::numeric_tlv::encode_int(&iroha_primitives::bigint::BigInt::from_i128(1))
+            .expect("encode canonical map key");
+        let wrong_path: Name = format!("IntMap/{}", hex::encode(key))
+            .parse()
+            .expect("canonical typed child path");
+        let wrong_path_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&wrong_path));
+        let wrong_value_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &bytes_record);
+        vm.set_register(10, wrong_path_ptr);
+        vm.set_register(11, wrong_value_ptr);
+        assert_eq!(
+            host.syscall(ivm_sys::SYSCALL_STATE_SET, &mut vm),
+            Err(ivm::VMError::DecodeError),
+            "a record for bytes must not be staged under an int declaration"
+        );
+
+        let malformed_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, b"not a state record");
+        vm.set_register(10, wrong_path_ptr);
+        vm.set_register(11, malformed_ptr);
+        assert_eq!(
+            host.syscall(ivm_sys::SYSCALL_STATE_SET, &mut vm),
+            Err(ivm::VMError::DecodeError)
+        );
+        assert_eq!(host.durable_state_overlay, before_overlay);
+        assert_eq!(host.state_access_log.read_keys, before_reads);
+        assert_eq!(host.state_access_log.write_keys, before_writes);
+        assert_eq!(
+            host.state_access_log.durable_read_paths,
+            before_durable_reads
+        );
+        assert_eq!(
+            host.state_access_log.state_writes.len(),
+            before_state_write_count
+        );
     }
 
     #[test]

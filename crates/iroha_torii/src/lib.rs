@@ -11158,7 +11158,7 @@ async fn handler_offline_readiness(
 
 #[cfg(all(test, feature = "app_api"))]
 mod offline_kagemusha_readiness_tests {
-    use iroha_data_model::{asset::AssetDefinitionId, domain::DomainId};
+    use iroha_data_model::asset::AssetDefinitionId;
 
     use super::{
         encode_offline_readiness_representation, offline_kagemusha_asset_transfer_verifier_record,
@@ -11196,13 +11196,15 @@ mod offline_kagemusha_readiness_tests {
         record.withdraw_height = withdrawal_height;
         record.max_proof_bytes = max_proof_bytes;
 
-        let mut world = iroha_core::state::World::new();
-        world
+        let world = iroha_core::state::World::new();
+        let mut block = world.block();
+        block
             .verifying_keys_mut_for_testing()
             .insert(id.clone(), record);
-        world
+        block
             .verifying_keys_by_circuit_mut_for_testing()
             .insert((circuit_id.to_owned(), indexed_version), id);
+        block.commit();
         iroha_core::state::State::new_for_testing(
             world,
             iroha_core::kura::Kura::blank_kura_for_testing(),
@@ -11302,10 +11304,9 @@ mod offline_kagemusha_readiness_tests {
     fn readiness_does_not_substitute_a_global_verifier_for_the_asset_binding() {
         let state = transfer_verifier_state(7, 7, 4096, None, None);
         let view = state.view();
-        let asset = AssetDefinitionId::new(
-            DomainId::try_new("wonderland", "universal").expect("domain id"),
-            "xor".parse().expect("asset name"),
-        );
+        let asset: AssetDefinitionId = "61CtjvNd9T3THAR65GsMVHr82Bjc"
+            .parse()
+            .expect("canonical asset definition id");
 
         assert!(
             offline_kagemusha_asset_transfer_verifier_record(&view.world, &asset, 9)
@@ -70423,6 +70424,7 @@ pub(crate) mod tests_runtime_handlers {
             let interface = ivm::EmbeddedContractInterfaceV1 {
                 seiyaku_name: "TestContract".to_owned(),
                 compiler_fingerprint: "torii-lib-tests".to_owned(),
+                abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
                 features_bitmap: 0,
                 access_set_hints: None,
                 kotoba: Vec::new(),
@@ -72681,7 +72683,7 @@ mod tests {
             (
                 "application/json",
                 norito::json::to_vec(&crate::routing::MultisigApprovalLookupRequestDto {
-                    multisig_account_id: account_id.clone(),
+                    multisig_account_ref: crate::routing::multisig_account_fingerprint(&account_id),
                     proposal_id: Some(proposal_id.clone()),
                     instructions_hash: None,
                 })
@@ -72690,7 +72692,7 @@ mod tests {
             (
                 "application/x-norito",
                 norito::to_bytes(&crate::routing::MultisigApprovalLookupRequestDto {
-                    multisig_account_id: account_id.clone(),
+                    multisig_account_ref: crate::routing::multisig_account_fingerprint(&account_id),
                     proposal_id: Some(proposal_id.clone()),
                     instructions_hash: None,
                 })

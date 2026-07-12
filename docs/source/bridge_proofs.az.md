@@ -4,9 +4,9 @@ direction: ltr
 source: docs/source/bridge_proofs.md
 status: needs-review
 generator: scripts/sync_docs_i18n.py
-source_hash: 69c9a740261d0c367d52870fc1f48775ae48307056ba9b79d2f811e0c0849f20
-source_last_modified: "2026-07-11"
-translation_last_reviewed: 2026-07-11
+source_hash: 74e29801129deccb6d5640d414289c47cf13fa9e0229fb55212b6c7710d7c5f7
+source_last_modified: "2026-07-12T07:38:49.568351+00:00"
+translation_last_reviewed: 2026-07-12
 translator: machine-assisted
 ---
 
@@ -49,6 +49,14 @@ hesablayır və dəqiq bərabərlik tələb edir; çatışmayan, köhnəlmiş, z
 əsassız indeks rədd edilir. İstifadə edilmiş message id-lər replay-i dayandırmaq
 üçün davamlı saxlanılır.
 
+TRON mənbə route-u dəqiq
+`transferToTaira(bytes,uint256,uint64 expectedNonce)` ABI-sindən istifadə edir.
+Uğurlu icra üçün `expectedNonce == transferNonce` olmalıdır; sonra storage
+artırılmamışdan əvvəl həmin dəyər canonical payload-a yazılır. Native admission
+tam ABI çağırışını payload recipient-i, miqyaslanmış məbləğ və nonce əsasında
+yenidən qurur; buna görə köhnə iki-argumentli selector, stale və ya future nonce,
+həmçinin tükənmiş `uint64` nonce təhlükəsiz şəkildə rədd edilir.
+
 ## Tək keçidli yoxlama və iş hədləri
 
 Destination və native sübutları bir dəfə strukturlaşdırılır, bir dəfə bağlanır
@@ -79,6 +87,24 @@ dəyərləri olmalıdır və environment-variable alternativləri yoxdur.
 
 Bir proof ən çox 8 MiB canonical bytes daşıya bilər. Yarımçıq saxlanmış və ya
 rədd edilmiş transaction üçün ayrılmış iş block-a sızmır.
+
+## Outbound öhdəliyi, saxlanma və discovery
+
+Hər uğurlu outbound message block execution order üzrə sıx `commitment_index`
+(`0..=511`) alır. V1 üçün dəyişməz hədlər hər block-da 512 message və hər message-da
+4,096 canonical payload byte-dır. `[zk.sccp]` pending payload state-i həm
+`max_pending_outbound_messages` (default `65536`), həm də
+`max_pending_outbound_payload_bytes` (default `268435456`) ilə məhdudlaşdırır.
+
+Kura finality yayımlanmadan və ya block body silinmədən əvvəl dəqiq canonical header-i
+və root-authenticated SCCP archive-i immutable saxlayır. Proof, bundle, proof request
+və recent history bərpası tarixi block body-yə və ya mutable WSV payload nüsxəsinə
+ehtiyac duymur. Destination proof qəbul ediləndə pending payload və onun charge-ı
+atomically silinir, fixed terminal descriptor isə locator/index ilə qalır. Pending
+state məhduddur; terminal records və immutable Kura history daimi replay müdafiəsi
+üçün qəsdən artır. `GET /v1/sccp/messages/recent` mürəkkəb
+`{ from, after_index }` cursor-dan istifadə edir. Immutable evidence total/operator
+disk usage-a daxildir, lakin evictable-body budget-dən çıxarılıb.
 
 ## Torii və HTTP hədləri
 

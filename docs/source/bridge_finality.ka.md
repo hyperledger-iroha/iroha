@@ -4,8 +4,8 @@ direction: ltr
 source: docs/source/bridge_finality.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 5e28e5c38283ad6be40a0fc48e0312797f490542a143f4cefdd209aaf8099ac5
-source_last_modified: "2026-07-11T20:38:35.470900+00:00"
+source_hash: 1cbd248fe14e63d00f002f09e1663181f3ab9bd99124ffeb89c56763b784046b
+source_last_modified: "2026-07-12"
 translation_last_reviewed: 2026-07-12
 translator: machine-google-reviewed
 ---
@@ -46,11 +46,14 @@ Epoch-ის დამამთავრებელი parent block-ის cont
 
 ## მუდმივი შენახვა და შემოწმება
 
-Sumeragi v2 apply path ამოწმებს artifact-ს და ინახავს უცვლელ Kura sidecar-ად. Proof
-builder კითხულობს კანონიკურ block-სა და მის sidecar-ს და ისტორიულ PoP-ს ან certificate-ს
-არ აღადგენს ცვალებადი მიმდინარე world state-იდან. დაკარგული, დაზიანებული, კონფლიქტური
-ან შეუმოწმებელი sidecar fail-closed რეჟიმში უარყოფილია; ხელმისაწვდომობა ახლო in-memory
-history window-ით არ იზღუდება.
+Finality-ის გამოქვეყნებამდე ან block body eviction-მდე Kura ზუსტ canonical header-ს და
+root-authenticated SCCP archive-ს წერს immutable retained-block record-ში, შემდეგ exact
+V2 artifact-ს ცალკე immutable finality record-ში ინახავს. ორივე ჩანაწერი idempotent-ია
+და იმავე height-ის კონფლიქტს უარყოფს. `build_finality_proof` მხოლოდ retained header-სა
+და verified finality record-ს კითხულობს; historical block body-ს ან mutable world state-ის
+PoP-ს არასოდეს იყენებს. Restart-ზე header/archive/artifact/hash association ხელახლა
+მოწმდება. Body eviction სწორ proof-ს ხელმისაწვდომობას არ უკარგავს; დაკარგული,
+დაზიანებული, კონფლიქტური ან შეუმოწმებელი record fail closed რეჟიმში უარყოფილია.
 
 Stateless verifier ზუსტად ადარებს version, chain, height, header hash, header-ის canonical
 predecessor-სა და view-ს, context, subject და CommitQC-ს და ამოწმებს artifact-ში არსებულ ყველა PoP-ს.
@@ -82,6 +85,7 @@ context/artifact-იდან message artifact-მდე ყოველი უ�
 - `GET /v1/bridge/finality/{height}` აბრუნებს `BridgeFinalityProof`-ს;
 - `GET /v1/bridge/finality/bundle/{height}` აბრუნებს `BridgeFinalityBundle`-ს.
 
-თუ block ან ზუსტი მუდმივი v2 artifact არ არის ან არასწორია, ორივე endpoint fail closed
-რეჟიმშია. უცნობი ველები, მხარდაუჭერელი version-ები და მოძველებული proof shape-ები უნდა
-უარყოფილ იქნეს.
+თუ retained canonical header ან ზუსტი მუდმივი v2 artifact არ არის ან არასწორია, ორივე
+endpoint fail closed რეჟიმშია. Historical block body eviction სწორ proof-ს
+ხელმისაწვდომობას არ უკარგავს. უცნობი ველები, მხარდაუჭერელი version-ები და მოძველებული
+proof shape-ები უნდა უარყოფილ იქნეს.

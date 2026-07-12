@@ -45,13 +45,31 @@ pub struct VerifiedContractArtifact {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ContractArtifactError {
     message: String,
+    abi_hash_mismatch: Option<([u8; 32], [u8; 32])>,
 }
 
 impl ContractArtifactError {
     fn invalid(message: impl Into<String>) -> Self {
         Self {
             message: format!("invalid contract artifact: {}", message.into()),
+            abi_hash_mismatch: None,
         }
+    }
+
+    fn abi_hash_mismatch(expected: [u8; 32], actual: [u8; 32]) -> Self {
+        Self {
+            message: "invalid contract artifact: embedded CNTR abi_hash does not match the runtime ABI descriptor".to_owned(),
+            abi_hash_mismatch: Some((expected, actual)),
+        }
+    }
+
+    /// Convert this artifact-admission failure into the stable VM error surface.
+    #[must_use]
+    pub fn into_vm_error(self) -> crate::VMError {
+        self.abi_hash_mismatch
+            .map_or(crate::VMError::InvalidMetadata, |(expected, actual)| {
+                crate::VMError::ArtifactAbiHashMismatch { expected, actual }
+            })
     }
 }
 
@@ -175,18 +193,19 @@ impl PreparedContract {
 struct ValidatedContractEnvelope {
     metadata: ProgramMetadata,
     contract_interface: EmbeddedContractInterfaceV1,
-    syscall_policy: SyscallPolicy,
 }
 
 fn parse_contract_metadata(
     artifact: &[u8],
 ) -> Result<ParsedProgramMetadata, ContractArtifactError> {
-    ProgramMetadata::parse(artifact).map_err(|err| {
-        if header_declares_contract_minor_one(artifact) && cntr_section_missing(artifact) {
-            ContractArtifactError::invalid("missing required CNTR section")
-        } else {
-            ContractArtifactError::invalid(format!("metadata parse failed: {err}"))
+    ProgramMetadata::parse(artifact).map_err(|err| match err {
+        crate::VMError::ArtifactAbiHashMismatch { expected, actual } => {
+            ContractArtifactError::abi_hash_mismatch(expected, actual)
         }
+        _ if header_declares_contract_minor_one(artifact) && cntr_section_missing(artifact) => {
+            ContractArtifactError::invalid("missing required CNTR section")
+        }
+        other => ContractArtifactError::invalid(format!("metadata parse failed: {other}")),
     })
 }
 
@@ -239,11 +258,17 @@ fn validate_contract_envelope(
             )));
         }
     };
+    let expected_abi_hash = crate::syscalls::compute_abi_hash(syscall_policy);
+    if contract_interface.abi_hash != expected_abi_hash {
+        return Err(ContractArtifactError::abi_hash_mismatch(
+            expected_abi_hash,
+            contract_interface.abi_hash,
+        ));
+    }
 
     Ok(ValidatedContractEnvelope {
         metadata,
         contract_interface,
-        syscall_policy,
     })
 }
 
@@ -256,7 +281,7 @@ fn verify_decoded_contract_artifact(
     validate_contract_interface(&envelope.metadata, &envelope.contract_interface, decoded)?;
 
     let code_hash = contract_code_hash(artifact);
-    let abi_hash = Hash::prehashed(crate::syscalls::compute_abi_hash(envelope.syscall_policy));
+    let abi_hash = Hash::prehashed(envelope.contract_interface.abi_hash);
     let entrypoints = envelope
         .contract_interface
         .entrypoints
@@ -1313,6 +1338,7 @@ mod tests {
         let interface = EmbeddedContractInterfaceV1 {
             seiyaku_name: "PreparedFixture".to_owned(),
             compiler_fingerprint: "ivm-unit-tests".to_owned(),
+            abi_hash: crate::syscalls::compute_abi_hash(crate::SyscallPolicy::AbiV1),
             features_bitmap: 0,
             access_set_hints: None,
             kotoba: Vec::new(),
@@ -1349,6 +1375,7 @@ mod tests {
         let interface = EmbeddedContractInterfaceV1 {
             seiyaku_name: "LiteralAdmission".to_owned(),
             compiler_fingerprint: "ivm-unit-tests".to_owned(),
+            abi_hash: crate::syscalls::compute_abi_hash(crate::SyscallPolicy::AbiV1),
             features_bitmap: 0,
             access_set_hints: None,
             kotoba: Vec::new(),
@@ -1395,6 +1422,7 @@ mod tests {
         EmbeddedContractInterfaceV1 {
             seiyaku_name: "StateAdmission".to_owned(),
             compiler_fingerprint: "ivm-unit-tests".to_owned(),
+            abi_hash: crate::syscalls::compute_abi_hash(crate::SyscallPolicy::AbiV1),
             features_bitmap: 0,
             access_set_hints: None,
             kotoba: Vec::new(),

@@ -4,8 +4,8 @@ direction: ltr
 source: docs/source/bridge_finality.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 5e28e5c38283ad6be40a0fc48e0312797f490542a143f4cefdd209aaf8099ac5
-source_last_modified: "2026-07-11T20:38:35.470900+00:00"
+source_hash: 1cbd248fe14e63d00f002f09e1663181f3ab9bd99124ffeb89c56763b784046b
+source_last_modified: "2026-07-12"
 translation_last_reviewed: 2026-07-12
 translator: machine-google-reviewed
 ---
@@ -45,11 +45,14 @@ bilan birga `epoch_end_height` va keyingi rosterga mos `validator_set_pops` ni h
 
 ## Doimiy saqlash va tekshirish
 
-Sumeragi v2 apply yo'li artefaktni tekshiradi va o'zgarmas Kura sidecar sifatida saqlaydi.
-Isbot quruvchisi kanonik blok va uning sidecar-ini o'qiydi; tarixiy PoP yoki sertifikatlarni
-o'zgaruvchan joriy world state-dan qayta tiklamaydi. Yo'qolgan, buzilgan, ziddiyatli yoki
-tekshirilmaydigan sidecar yopiq tarzda rad etiladi; mavjudlik yaqin in-memory tarix oynasi
-bilan cheklanmaydi.
+Finality e'lon qilinishidan yoki block body chiqarilishidan oldin Kura aniq canonical
+header va root-authenticated SCCP archive-ni immutable retained-block record-ga yozadi,
+keyin exact V2 artifact-ni alohida immutable finality record-da saqlaydi. Ikkala yozuv
+ham idempotent bo'lib, shu height-dagi ziddiyatni rad etadi. `build_finality_proof` faqat
+retained header va verified finality record-ni o'qiydi; historical block body yoki
+mutable world state PoP-ini hech qachon ishlatmaydi. Restart paytida
+header/archive/artifact/hash association qayta tekshiriladi. Body eviction to'g'ri
+proof-ni yo'qotmaydi; yo'qolgan, buzilgan, ziddiyatli yoki tekshirilmaydigan record fail closed.
 
 Stateless tekshiruvchi version, chain, height, header hash, header-ning canonical predecessor-i
 va view-i, context, subject va CommitQC-ni aniq moslashtiradi hamda artefaktdagi barcha
@@ -81,6 +84,7 @@ xabar artefaktigacha har bir bevosita successor tekshirilishi kerak.
 - `GET /v1/bridge/finality/{height}` `BridgeFinalityProof` qaytaradi;
 - `GET /v1/bridge/finality/bundle/{height}` `BridgeFinalityBundle` qaytaradi.
 
-Blok yoki aniq doimiy v2 artefakt yo'q yoki yaroqsiz bo'lsa, ikkala endpoint ham yopiq
-tarzda muvaffaqiyatsiz tugaydi. Noma'lum maydonlar, qo'llanmaydigan versiyalar va iste'foga
-chiqarilgan isbot shakllari rad etilishi kerak.
+Retained canonical header yoki aniq doimiy v2 artefakt yo'q yoki yaroqsiz bo'lsa, ikkala
+endpoint ham yopiq tarzda muvaffaqiyatsiz tugaydi. Historical block body eviction to'g'ri
+proof-ni yo'qotmaydi. Noma'lum maydonlar, qo'llanmaydigan versiyalar va iste'foga chiqarilgan
+isbot shakllari rad etilishi kerak.

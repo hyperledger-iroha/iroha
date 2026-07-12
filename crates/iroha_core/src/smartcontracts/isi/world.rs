@@ -40,6 +40,7 @@ pub mod isi {
         asset_definition::{CanModifyAssetDefinitionMetadata, CanUnregisterAssetDefinition},
         domain::{CanModifyDomainMetadata, CanUnregisterDomain},
         nft::{CanModifyNftMetadata, CanRegisterNft, CanTransferNft, CanUnregisterNft},
+        smart_contract::CanRegisterSmartContractCode,
         zk_ace::CanManageZkAceIdentityForAccount,
     };
     // Governance ISIs
@@ -409,6 +410,28 @@ pub mod isi {
             })
     }
 
+    fn has_exact_permission(
+        world: &WorldTransaction<'_, '_>,
+        who: &AccountId,
+        required: &Permission,
+    ) -> bool {
+        if world
+            .account_permissions
+            .get(who)
+            .is_some_and(|permissions| permissions.iter().any(|permission| permission == required))
+        {
+            return true;
+        }
+        world
+            .account_roles_iter(who)
+            .filter_map(|role_id| world.roles.get(role_id))
+            .any(|role| {
+                role.permissions
+                    .iter()
+                    .any(|permission| permission == required)
+            })
+    }
+
     const VERIFIED_LANE_RELAY_CONTRACT_MAP_STATE: &str = "VerifiedLaneRelays";
 
     fn encode_pointer_abi_tlv(
@@ -621,17 +644,10 @@ pub mod isi {
         authority: &AccountId,
         state_transaction: &StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
-        if !has_permission(
-            &state_transaction.world,
-            authority,
-            iroha_data_model::smart_contract::CONTRACT_HAJIMARI_PERMISSION_NAME,
-        ) {
+        let required: Permission = CanRegisterSmartContractCode.into();
+        if !has_exact_permission(&state_transaction.world, authority, &required) {
             return Err(InstructionExecutionError::InvariantViolation(
-                format!(
-                    "not permitted: {}",
-                    iroha_data_model::smart_contract::CONTRACT_HAJIMARI_PERMISSION_NAME
-                )
-                .into(),
+                format!("not permitted: {}", required.name()).into(),
             ));
         }
         Ok(())
@@ -8250,6 +8266,14 @@ pub mod isi {
         finality_block_hash: [u8; 32],
     }
 
+    #[derive(Clone, Debug)]
+    struct PreparedSccpOutboundTerminalTransitionV1 {
+        key: iroha_data_model::bridge::SccpOutboundMessageKeyV1,
+        pending: iroha_data_model::bridge::SccpOutboundPendingMessageRecordV1,
+        terminal: iroha_data_model::bridge::SccpOutboundProofRecordV1,
+        next_usage: iroha_data_model::bridge::SccpOutboundPendingUsageV1,
+    }
+
     fn validate_sccp_destination_bridge_proof(
         proof: &iroha_data_model::bridge::BridgeProof,
         destination_proof: &iroha_data_model::bridge::BridgeSccpDestinationProofV1,
@@ -9143,6 +9167,81 @@ pub mod isi {
                 None
             };
 
+            let outbound_terminal_transition = if let Some((key, terminal)) =
+                outbound_proof_replay_entry
+            {
+                let pending = state_transaction
+                    .world
+                    .sccp_outbound_pending_messages
+                    .get(&key)
+                    .cloned()
+                    .ok_or_else(|| {
+                        InstructionExecutionError::InvariantViolation(
+                            "validated SCCP destination proof lost its pending payload record"
+                                .into(),
+                        )
+                    })?;
+                if pending.descriptor() != terminal.descriptor() {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                            "validated SCCP destination proof descriptor changed before terminal transition"
+                                .into(),
+                        ));
+                }
+                let expected_index =
+                    iroha_data_model::bridge::SccpOutboundMessageIndexKeyV1::new(key, &pending)
+                        .ok_or_else(|| {
+                            InstructionExecutionError::InvariantViolation(
+                                "validated SCCP pending payload cannot form its ordered index"
+                                    .into(),
+                            )
+                        })?;
+                if state_transaction
+                    .world
+                    .sccp_outbound_message_locator
+                    .get(&key.message_id)
+                    != Some(&key)
+                    || state_transaction
+                        .world
+                        .sccp_outbound_message_index
+                        .get(&expected_index)
+                        .is_none()
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "validated SCCP pending payload lost its global locator or ordered index"
+                            .into(),
+                    ));
+                }
+                let current_usage = *state_transaction.world.sccp_outbound_pending_usage.get();
+                if !current_usage.is_structurally_valid() {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                            "SCCP pending outbound usage is structurally corrupt during terminal transition"
+                                .into(),
+                        ));
+                }
+                let next_usage = current_usage
+                    .checked_remove_payload(pending.payload_bytes.len())
+                    .ok_or_else(|| {
+                        InstructionExecutionError::InvariantViolation(
+                            "SCCP pending outbound usage underflow during terminal transition"
+                                .into(),
+                        )
+                    })?;
+                if !next_usage.is_structurally_valid() {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                            "SCCP pending outbound usage became structurally corrupt during terminal transition"
+                                .into(),
+                        ));
+                }
+                Some(PreparedSccpOutboundTerminalTransitionV1 {
+                    key,
+                    pending,
+                    terminal,
+                    next_usage,
+                })
+            } else {
+                None
+            };
+
             let native_replay_entry = if let Some(native) = native_message.as_ref() {
                 let admission = &native.admission;
                 let key = iroha_data_model::bridge::SccpInboundMessageKeyV1::new(
@@ -9235,61 +9334,20 @@ pub mod isi {
                 }),
             };
             state_transaction.world.insert_proof_record(record);
-            if let Some((key, record)) = outbound_proof_replay_entry {
-                let pending = state_transaction
-                    .world
-                    .sccp_outbound_pending_messages
-                    .get(&key)
-                    .ok_or_else(|| {
-                        InstructionExecutionError::InvariantViolation(
-                            "validated SCCP destination proof lost its pending payload record"
-                                .into(),
-                        )
-                    })?;
-                if pending.descriptor() != record.descriptor() {
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        "validated SCCP destination proof descriptor changed before terminal transition"
-                            .into(),
-                    ));
-                }
-                let pending_payload_len = pending.payload_bytes.len();
-                let next_usage = state_transaction
-                    .world
-                    .sccp_outbound_pending_usage
-                    .get()
-                    .checked_remove_payload(pending_payload_len)
-                    .ok_or_else(|| {
-                        InstructionExecutionError::InvariantViolation(
-                            "SCCP pending outbound usage underflow during terminal transition"
-                                .into(),
-                        )
-                    })?;
+            if let Some(transition) = outbound_terminal_transition {
                 let removed = state_transaction
                     .world
                     .sccp_outbound_pending_messages
-                    .remove(key)
-                    .ok_or_else(|| {
-                        InstructionExecutionError::InvariantViolation(
-                            "validated SCCP pending payload disappeared during terminal transition"
-                                .into(),
-                        )
-                    })?;
-                if removed.descriptor() != record.descriptor()
-                    || removed.payload_bytes.len() != pending_payload_len
-                {
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        "removed SCCP pending payload differs from its validated terminal descriptor"
-                            .into(),
-                    ));
-                }
+                    .remove(transition.key);
+                debug_assert_eq!(removed.as_ref(), Some(&transition.pending));
                 *state_transaction
                     .world
                     .sccp_outbound_pending_usage
-                    .get_mut() = next_usage;
+                    .get_mut() = transition.next_usage;
                 state_transaction
                     .world
                     .sccp_outbound_proofs
-                    .insert(key, record);
+                    .insert(transition.key, transition.terminal);
             }
             if let Some((key, record, high_water_key)) = native_replay_entry {
                 let high_water = state_transaction
@@ -10373,6 +10431,12 @@ pub mod isi {
             settlement.settlement_asset_definition_id.clone(),
             authority.clone(),
         );
+        if state_transaction.tx_call_hash.is_none() {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "SCCP message recording requires a transaction call_hash before custody or outbox mutation"
+                    .into(),
+            ));
+        }
         crate::smartcontracts::isi::asset::isi::execute_user_numeric_asset_transfer(
             state_transaction,
             authority,
@@ -14287,6 +14351,11 @@ pub mod isi {
                     InvalidParameterError::SmartContract("manifest.code_hash missing".into()),
                 ));
             };
+            if manifest.abi_hash.is_none() {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract("manifest.abi_hash missing".into()),
+                ));
+            }
             let provenance = ensure_manifest_signature(&manifest)?;
 
             let signer_allowed = match authority.controller() {
@@ -17430,15 +17499,12 @@ pub mod isi {
             state_transaction: &mut StateTransaction<'_, '_>,
             account: &AccountId,
         ) {
-            Grant::account_permission(
-                Permission::new(
-                    iroha_data_model::smart_contract::CONTRACT_HAJIMARI_PERMISSION_NAME.to_owned(),
-                    Json::new(()),
-                ),
-                account.clone(),
-            )
-            .execute(account, state_transaction)
-            .expect("grant runtime contract lifecycle authority");
+            let permission: Permission =
+                iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode
+                    .into();
+            Grant::account_permission(permission, account.clone())
+                .execute(account, state_transaction)
+                .expect("grant runtime contract lifecycle authority");
         }
 
         const SMALL_ORDER_ED25519_R: [u8; 32] = [
@@ -18175,7 +18241,7 @@ pub mod isi {
         }
 
         #[test]
-        fn record_sccp_message_rejects_stale_binding_and_cross_profile_contexts() {
+        fn record_sccp_message_rejects_stale_binding_route_and_cross_profile_contexts() {
             use iroha_data_model::bridge::{
                 SccpLaneIdV1, SccpNetworkV1, SccpOutboundMessageContextV1,
             };
@@ -18198,16 +18264,15 @@ pub mod isi {
             enable_sccp_recording_for_test(&mut stx, LaneId::SINGLE);
             let payload = sora_outbound_sccp_payload(88);
             let payload_bytes = canonical_test_sccp_payload_bytes(&payload);
+            let exact_context =
+                crate::bridge::test_sccp_outbound_context_for_payload_bytes(&payload_bytes);
 
             for (context, expected) in [
                 (
                     SccpOutboundMessageContextV1::new(
-                        SccpLaneIdV1 {
-                            source: SccpNetworkV1::SoraTaira,
-                            target: SccpNetworkV1::EthereumMainnet,
-                        },
+                        exact_context.lane,
                         [0x99; 32],
-                        [0x98; 32],
+                        exact_context.route_configuration_hash,
                     )
                     .expect("stale-binding context"),
                     "destination binding is stale",
@@ -18226,15 +18291,12 @@ pub mod isi {
                 ),
                 (
                     SccpOutboundMessageContextV1::new(
-                        SccpLaneIdV1 {
-                            source: SccpNetworkV1::SoraTaira,
-                            target: SccpNetworkV1::EthereumMainnet,
-                        },
-                        [0x36; 32],
+                        exact_context.lane,
+                        exact_context.destination_binding_hash,
                         [0x37; 32],
                     )
-                    .expect("foreign-local-profile context"),
-                    "does not match local profile",
+                    .expect("stale-route context"),
+                    "route configuration is stale",
                 ),
             ] {
                 let instruction = iroha_data_model::isi::bridge::RecordSccpMessage::new(
@@ -18708,7 +18770,7 @@ pub mod isi {
                 .execute(&ALICE_ID, &mut stx)
                 .expect_err("outbound SCCP route id must bind to the asset key");
             assert!(
-                format!("{err:?}").contains("exactly match the governed route manifest"),
+                format!("{err:?}").contains("no enabled exact route revision"),
                 "unexpected error: {err:?}"
             );
             assert!(stx.world.sccp_outbound_pending_messages.get(&key).is_none());
@@ -18908,6 +18970,7 @@ pub mod isi {
             let mut block = state.block(header);
             let mut stx = block.transaction();
             enable_sccp_recording_for_test(&mut stx, LaneId::SINGLE);
+            seed_sccp_test_tx_call_hash(&mut stx, 0x81);
 
             let payload = sora_outbound_sccp_payload(43);
             let key = crate::bridge::test_sccp_outbound_message_key(&payload);
@@ -18980,6 +19043,7 @@ pub mod isi {
             let mut block = state.block(header);
             let mut stx = block.transaction();
             enable_sccp_recording_for_test(&mut stx, LaneId::SINGLE);
+            seed_sccp_test_tx_call_hash(&mut stx, 0x82);
             stx.zk.sccp.max_pending_outbound_messages =
                 NonZeroU64::new(1).expect("one pending message");
 
@@ -19024,6 +19088,7 @@ pub mod isi {
             let mut block = state.block(header);
             let mut stx = block.transaction();
             enable_sccp_recording_for_test(&mut stx, LaneId::SINGLE);
+            seed_sccp_test_tx_call_hash(&mut stx, 0x83);
             stx.zk.sccp.max_pending_outbound_messages =
                 NonZeroU64::new(2).expect("two pending messages");
 
@@ -19068,6 +19133,101 @@ pub mod isi {
         }
 
         #[test]
+        fn record_sccp_message_rejects_missing_call_hash_before_lock_or_outbox() {
+            let state = State::new_for_testing(
+                World::default(),
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let header = iroha_data_model::block::BlockHeader::new(
+                NonZeroU64::new(1).expect("nonzero height"),
+                None,
+                None,
+                None,
+                0,
+                0,
+            );
+            let mut block = state.block(header);
+            let mut stx = block.transaction();
+            enable_sccp_recording_for_test(&mut stx, LaneId::SINGLE);
+            assert!(stx.tx_call_hash.is_none());
+            let payload = sora_outbound_sccp_payload(148);
+            let before = sccp_outbound_mutation_snapshot(&stx, &ALICE_ID);
+
+            let error = crate::bridge::test_record_sccp_message(canonical_test_sccp_payload_bytes(
+                &payload,
+            ))
+            .execute(&ALICE_ID, &mut stx)
+            .expect_err("a valid transfer without transaction identity must fail closed");
+            assert!(
+                format!("{error:?}").contains("transaction call_hash"),
+                "unexpected missing-call-hash rejection: {error:?}"
+            );
+            assert_eq!(
+                sccp_outbound_mutation_snapshot(&stx, &ALICE_ID),
+                before,
+                "missing call_hash must reject before custody, payload, locator, index, terminal, and usage mutation"
+            );
+        }
+
+        #[test]
+        fn record_sccp_message_rejects_corrupt_or_overflowing_usage_before_mutation() {
+            let state = State::new_for_testing(
+                World::default(),
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let header = iroha_data_model::block::BlockHeader::new(
+                NonZeroU64::new(1).expect("nonzero height"),
+                None,
+                None,
+                None,
+                0,
+                0,
+            );
+            let mut block = state.block(header);
+            let mut stx = block.transaction();
+            enable_sccp_recording_for_test(&mut stx, LaneId::SINGLE);
+            let payload = sora_outbound_sccp_payload(147);
+            let instruction = crate::bridge::test_record_sccp_message(
+                canonical_test_sccp_payload_bytes(&payload),
+            );
+
+            for (hostile_usage, expected_error) in [
+                (
+                    SccpOutboundPendingUsageV1 {
+                        message_count: 0,
+                        payload_bytes: 1,
+                    },
+                    "structurally corrupt",
+                ),
+                (
+                    SccpOutboundPendingUsageV1 {
+                        message_count: u64::MAX,
+                        payload_bytes: u64::MAX,
+                    },
+                    "usage overflow",
+                ),
+            ] {
+                *stx.world.sccp_outbound_pending_usage.get_mut() = hostile_usage;
+                let before = sccp_outbound_mutation_snapshot(&stx, &ALICE_ID);
+                let error = instruction
+                    .clone()
+                    .execute(&ALICE_ID, &mut stx)
+                    .expect_err("hostile usage must fail before custody or index mutation");
+                assert!(
+                    format!("{error:?}").contains(expected_error),
+                    "unexpected hostile-usage rejection: {error:?}"
+                );
+                assert_eq!(
+                    sccp_outbound_mutation_snapshot(&stx, &ALICE_ID),
+                    before,
+                    "hostile usage rejection must be side-effect free"
+                );
+            }
+        }
+
+        #[test]
         fn rejected_later_instruction_rolls_back_pending_usage_custody_and_indexes() {
             let state = State::new_for_testing(
                 World::default(),
@@ -19096,6 +19256,7 @@ pub mod isi {
             let baseline = {
                 let mut failed = block.transaction();
                 enable_sccp_recording_for_test(&mut failed, LaneId::SINGLE);
+                seed_sccp_test_tx_call_hash(&mut failed, 0x84);
                 let baseline = sccp_outbound_mutation_snapshot(&failed, &ALICE_ID);
                 instruction
                     .clone()
@@ -19115,6 +19276,7 @@ pub mod isi {
 
             let mut retry = block.transaction();
             enable_sccp_recording_for_test(&mut retry, LaneId::SINGLE);
+            seed_sccp_test_tx_call_hash(&mut retry, 0x85);
             assert_eq!(
                 sccp_outbound_mutation_snapshot(&retry, &ALICE_ID),
                 baseline,
@@ -19133,7 +19295,7 @@ pub mod isi {
         fn accepted_destination_proof_terminalizes_one_payload_and_frees_capacity_immediately() {
             let fixture = iroha_sccp::sccp_exact_outbound_test_fixture_v1();
             let kura = Kura::blank_kura_for_testing();
-            let finality = store_exact_sccp_finality_for_test(&kura, &fixture);
+            let (fixture, finality) = store_exact_sccp_finality_for_test(&kura, &fixture);
             let state =
                 State::new_for_testing(World::default(), kura, LiveQueryStore::start_test());
             let mut state_block = state.block(finality.block_header.clone());
@@ -19141,7 +19303,12 @@ pub mod isi {
             let exact_key = crate::bridge::test_sccp_outbound_message_key(&fixture.bundle.payload);
             let sibling_payload = sora_outbound_sccp_payload(145);
             let sibling_key = crate::bridge::test_sccp_outbound_message_key(&sibling_payload);
+            let replacement_payload = sora_outbound_sccp_payload(146);
+            let replacement_key =
+                crate::bridge::test_sccp_outbound_message_key(&replacement_payload);
             assert_ne!(exact_key, sibling_key);
+            assert_ne!(exact_key, replacement_key);
+            assert_ne!(sibling_key, replacement_key);
             let proof = BridgeProof {
                 range: BridgeProofRange {
                     start_height: finality.finality_artifact.height,
@@ -19153,20 +19320,63 @@ pub mod isi {
             let terminal_descriptor;
             let exact_index;
             {
-                let mut stx = state_block.transaction();
-                enable_sccp_recording_for_test(&mut stx, LaneId::SINGLE);
-                stx.zk.max_proof_size_bytes = 32 * 1024 * 1024;
-                fund_sccp_sender_for_test(&mut stx, &exact_sender);
+                let mut setup = state_block.transaction();
+                enable_sccp_recording_for_test(&mut setup, LaneId::SINGLE);
+                seed_sccp_test_tx_call_hash(&mut setup, 0xA1);
+                setup.zk.sccp.max_pending_outbound_messages =
+                    NonZeroU64::new(2).expect("two pending messages");
+                fund_sccp_sender_for_test(&mut setup, &exact_sender);
                 crate::bridge::test_record_sccp_message(canonical_test_sccp_payload_bytes(
                     &fixture.bundle.payload,
                 ))
-                .execute(&exact_sender, &mut stx)
+                .execute(&exact_sender, &mut setup)
                 .expect("record exact finalized SCCP payload");
                 crate::bridge::test_record_sccp_message(canonical_test_sccp_payload_bytes(
                     &sibling_payload,
                 ))
-                .execute(&ALICE_ID, &mut stx)
+                .execute(&ALICE_ID, &mut setup)
                 .expect("record independent pending sibling payload");
+                assert_eq!(
+                    setup.world.sccp_outbound_pending_usage.get().message_count,
+                    2
+                );
+                setup.apply();
+            }
+
+            {
+                let mut corrupt = state_block.transaction();
+                enable_sccp_recording_for_test(&mut corrupt, LaneId::SINGLE);
+                corrupt.zk.max_proof_size_bytes = 32 * 1024 * 1024;
+                *corrupt.world.sccp_outbound_pending_usage.get_mut() =
+                    SccpOutboundPendingUsageV1::default();
+                let before = sccp_outbound_mutation_snapshot(&corrupt, &exact_sender);
+                assert!(corrupt.world.proofs.is_empty());
+
+                let error = SubmitBridgeProof::new(proof.clone())
+                    .execute(&ALICE_ID, &mut corrupt)
+                    .expect_err("usage underflow must reject before proof or terminal mutation");
+                assert!(
+                    format!("{error:?}").contains("usage underflow"),
+                    "unexpected corrupt-usage rejection: {error:?}"
+                );
+                assert!(
+                    corrupt.world.proofs.is_empty(),
+                    "terminal preflight failure must not insert the generic proof record"
+                );
+                assert_eq!(
+                    sccp_outbound_mutation_snapshot(&corrupt, &exact_sender),
+                    before,
+                    "terminal preflight failure must preserve pending, terminal, usage, locator, index, and custody state"
+                );
+            }
+
+            {
+                let mut stx = state_block.transaction();
+                enable_sccp_recording_for_test(&mut stx, LaneId::SINGLE);
+                seed_sccp_test_tx_call_hash(&mut stx, 0xA2);
+                stx.zk.max_proof_size_bytes = 32 * 1024 * 1024;
+                stx.zk.sccp.max_pending_outbound_messages =
+                    NonZeroU64::new(2).expect("two pending messages");
 
                 let exact_pending = stx
                     .world
@@ -19226,6 +19436,26 @@ pub mod isi {
                     .expect("accepted proof inserts the fixed terminal descriptor");
                 assert_eq!(terminal.descriptor(), terminal_descriptor);
                 assert_eq!(terminal.commitment_index, exact_pending.commitment_index);
+
+                crate::bridge::test_record_sccp_message(canonical_test_sccp_payload_bytes(
+                    &replacement_payload,
+                ))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("terminalization must release one pending slot immediately");
+                assert_eq!(stx.world.sccp_outbound_pending_usage.get().message_count, 2);
+                assert!(
+                    stx.world
+                        .sccp_outbound_pending_messages
+                        .get(&replacement_key)
+                        .is_some(),
+                    "the released slot must be reusable in the same transaction"
+                );
+                assert!(
+                    stx.world
+                        .sccp_outbound_pending_messages
+                        .get(&exact_key)
+                        .is_none()
+                );
                 stx.apply();
             }
 
@@ -19573,6 +19803,7 @@ pub mod isi {
             let mut block = state.block(header);
             let mut stx = block.transaction();
             enable_sccp_recording_for_test(&mut stx, LaneId::SINGLE);
+            seed_sccp_test_tx_call_hash(&mut stx, 0x86);
 
             let instruction = crate::bridge::test_record_sccp_message(
                 canonical_test_sccp_payload_bytes(&sora_outbound_sccp_payload(44)),
@@ -19614,6 +19845,7 @@ pub mod isi {
                 let mut block = state.block(header);
                 let mut stx = block.transaction();
                 enable_sccp_recording_for_test(&mut stx, LaneId::SINGLE);
+                seed_sccp_test_tx_call_hash(&mut stx, 0x87);
                 instruction
                     .clone()
                     .execute(&ALICE_ID, &mut stx)
@@ -19665,6 +19897,7 @@ pub mod isi {
                 let mut block = state.block(header);
                 let mut stx = block.transaction();
                 enable_sccp_recording_for_test(&mut stx, LaneId::SINGLE);
+                seed_sccp_test_tx_call_hash(&mut stx, 0x88);
                 instruction
                     .clone()
                     .execute(&ALICE_ID, &mut stx)
@@ -19697,6 +19930,7 @@ pub mod isi {
             let mut replay_stx = replay_block.transaction();
             configure_active_test_lanes(&mut replay_stx, &[LaneId::SINGLE, LaneId::new(7)]);
             enable_sccp_recording_for_test(&mut replay_stx, LaneId::new(7));
+            seed_sccp_test_tx_call_hash(&mut replay_stx, 0x89);
 
             let err = instruction
                 .execute(&ALICE_ID, &mut replay_stx)
@@ -19732,6 +19966,7 @@ pub mod isi {
                 let mut block = state.block(header);
                 let mut stx = block.transaction();
                 enable_sccp_recording_for_test(&mut stx, LaneId::SINGLE);
+                seed_sccp_test_tx_call_hash(&mut stx, 0x8A);
                 binary_instruction
                     .execute(&ALICE_ID, &mut stx)
                     .expect("binary SCCP outbox record should execute");
@@ -19753,6 +19988,7 @@ pub mod isi {
             let mut replay_stx = replay_block.transaction();
             configure_active_test_lanes(&mut replay_stx, &[LaneId::SINGLE, LaneId::new(7)]);
             enable_sccp_recording_for_test(&mut replay_stx, LaneId::new(7));
+            seed_sccp_test_tx_call_hash(&mut replay_stx, 0x8B);
 
             let err = hex_alias_instruction
                 .execute(&ALICE_ID, &mut replay_stx)
@@ -19786,6 +20022,7 @@ pub mod isi {
             let interface = ivm::EmbeddedContractInterfaceV1 {
                 seiyaku_name: "TestContract".to_owned(),
                 compiler_fingerprint: "world-isi-test".to_owned(),
+                abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
                 features_bitmap: 0,
                 access_set_hints: None,
                 kotoba: Vec::new(),
@@ -21747,6 +21984,11 @@ seiyaku GovernanceLifecycle {
             }
         }
 
+        fn seed_sccp_test_tx_call_hash(stx: &mut StateTransaction<'_, '_>, byte: u8) {
+            assert_ne!(byte, 0, "SCCP test transaction hash seed must be nonzero");
+            stx.tx_call_hash = Some(Hash::prehashed([byte; Hash::LENGTH]));
+        }
+
         fn sccp_test_settlement_ids(
             stx: &StateTransaction<'_, '_>,
         ) -> (AssetDefinitionId, AccountId) {
@@ -21848,12 +22090,19 @@ seiyaku GovernanceLifecycle {
         fn store_exact_sccp_finality_for_test(
             kura: &Kura,
             fixture: &iroha_sccp::SccpExactOutboundTestFixtureV1,
-        ) -> iroha_sccp::TairaBridgeFinalityProofV1 {
-            let finality =
+        ) -> (
+            iroha_sccp::SccpExactOutboundTestFixtureV1,
+            iroha_sccp::TairaBridgeFinalityProofV1,
+        ) {
+            let provisional_finality =
                 iroha_sccp::decode_taira_bridge_finality_proof(&fixture.bundle.finality_proof)
-                    .expect("exact SCCP finality fixture decodes");
+                    .expect("exact provisional SCCP finality fixture decodes");
             let instruction = crate::bridge::test_record_sccp_message(
                 canonical_test_sccp_payload_bytes(&fixture.bundle.payload),
+            );
+            assert_eq!(
+                instruction.context, fixture.bundle.commitment.context,
+                "exact settlement block instruction must preserve the bundle context"
             );
             let executable = Executable::IvmProved(IvmProved {
                 bytecode: IvmBytecode::from_compiled(vec![0x01, 0x02, 0x03]),
@@ -21868,16 +22117,24 @@ seiyaku GovernanceLifecycle {
             .with_executable(executable)
             .sign(ALICE_KEYPAIR.private_key());
             let entry_hash = transaction.hash_as_entrypoint();
+            let template_header = provisional_finality.block_header;
+            let mut provisional_header = BlockHeader::new(
+                template_header.height(),
+                template_header.prev_block_hash(),
+                None,
+                None,
+                u64::try_from(template_header.creation_time().as_millis())
+                    .expect("fixture creation time fits u64"),
+                template_header.view_change_index(),
+            );
+            provisional_header.set_sccp_commitment_root(template_header.sccp_commitment_root());
             let signature = BlockSignature::new(
                 0,
-                SignatureOf::try_from_hash(
-                    ALICE_KEYPAIR.private_key(),
-                    finality.block_header.hash(),
-                )
-                .expect("sign exact SCCP retained header fixture"),
+                SignatureOf::try_from_hash(ALICE_KEYPAIR.private_key(), provisional_header.hash())
+                    .expect("sign provisional SCCP retained header fixture"),
             );
             let mut block =
-                SignedBlock::presigned(signature, finality.block_header.clone(), vec![transaction]);
+                SignedBlock::presigned(signature, provisional_header, vec![transaction]);
             block
                 .set_transaction_results(
                     Vec::new(),
@@ -21885,13 +22142,55 @@ seiyaku GovernanceLifecycle {
                     vec![TransactionResultInner::Ok(DataTriggerSequence::default())],
                 )
                 .expect("attach successful exact SCCP transaction result");
+            assert!(
+                provisional_finality
+                    .finality_artifact
+                    .validate_for_header(&block.header())
+                    .is_err(),
+                "pre-finalization artifact must reject the completed settlement block"
+            );
+            let signature = BlockSignature::new(
+                0,
+                SignatureOf::try_from_hash(ALICE_KEYPAIR.private_key(), block.hash())
+                    .expect("sign completed SCCP retained header fixture"),
+            );
+            block
+                .replace_signatures([signature].into_iter().collect())
+                .expect("replace provisional SCCP retained signature");
+            block
+                .signatures()
+                .next()
+                .expect("completed SCCP retained signature")
+                .signature()
+                .verify_hash(ALICE_KEYPAIR.public_key(), block.hash())
+                .expect("completed SCCP retained signature verifies");
+            crate::bridge::validate_sccp_commitment_root_for_signed_block(&block)
+                .expect("completed settlement block authenticates its exact SCCP message");
+
+            let fixture = fixture.with_finalized_block(&block, None);
+            let finality =
+                iroha_sccp::decode_taira_bridge_finality_proof(&fixture.bundle.finality_proof)
+                    .expect("exact completed SCCP finality fixture decodes");
+            assert_eq!(block.header(), finality.block_header);
             assert_eq!(block.hash(), finality.finality_artifact.block_hash);
-            kura.store_block(Arc::new(block))
-                .expect("store exact SCCP finalized block fixture");
+            assert_eq!(
+                fixture.request.public_inputs.finality_block_hash,
+                <[u8; 32]>::from(Hash::from(block.hash()))
+            );
+            finality
+                .finality_artifact
+                .validate_for_header(&block.header())
+                .expect("completed settlement artifact binds the exact block header");
+            finality
+                .finality_artifact
+                .verify()
+                .expect("completed settlement artifact is cryptographically valid");
+            kura.persist_block_with_retained_archive_for_tests(&Arc::new(block))
+                .expect("store exact SCCP finalized block and retained archive fixture");
             let _receipt = kura
                 .store_v2_finality_artifact(&finality.finality_artifact)
                 .expect("store exact SCCP retained finality fixture");
-            finality
+            (fixture, finality)
         }
 
         fn configure_native_sccp_settlement_for_test(
@@ -26712,11 +27011,11 @@ seiyaku GovernanceLifecycle {
                 iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1);
             stx.zk.max_proof_size_bytes = 32 * 1024 * 1024;
             stx.world
-                .sccp_outbound_pending_messages
-                .insert(key, message);
-            stx.world
                 .sccp_outbound_message_locator
                 .insert(key.message_id, key);
+            let index = SccpOutboundMessageIndexKeyV1::from_terminal(key, &replay)
+                .expect("terminal replay fixture forms its ordered index");
+            stx.world.sccp_outbound_message_index.insert(index, ());
             stx.world.sccp_outbound_proofs.insert(key, replay);
             iroha_sccp::reset_sccp_destination_proof_work_counters_v1();
 
@@ -28960,7 +29259,9 @@ seiyaku GovernanceLifecycle {
             zk.halo2.enabled = true;
             zk.halo2.max_envelope_bytes = usize::MAX;
             zk.halo2.max_proof_bytes = usize::MAX;
-            state.set_zk(zk);
+            state
+                .set_zk(zk)
+                .expect("empty SCCP outbox accepts world test configuration");
 
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
@@ -34663,6 +34964,27 @@ seiyaku GovernanceLifecycle {
                 .expect_err("raw bytecode registration requires runtime lifecycle authority");
             assert!(error.to_string().contains("CanRegisterSmartContractCode"));
             assert!(stx.world.contract_code.get(&code_hash).is_none());
+
+            Grant::account_permission(
+                Permission::new(
+                    "CanRegisterSmartContractCode".to_owned(),
+                    Json::from(norito::json!({ "scope": "wrong" })),
+                ),
+                attacker.clone(),
+            )
+            .execute(&attacker, &mut stx)
+            .expect("store adversarial same-name permission payload");
+            let error = register_bytes
+                .clone()
+                .execute(&attacker, &mut stx)
+                .expect_err(
+                    "a malformed same-name permission must not authorize bytecode mutation",
+                );
+            assert!(error.to_string().contains("CanRegisterSmartContractCode"));
+            assert!(
+                stx.world.contract_code.get(&code_hash).is_none(),
+                "malformed same-name permission must apply no bytecode mutation"
+            );
 
             grant_contract_lifecycle_authority(&mut stx, &ALICE_ID);
             register_bytes

@@ -6869,6 +6869,269 @@ mod sccp_first_release_api_tests {
         (message_id, key, record)
     }
 
+    fn signed_empty_archive_boundary_block(
+        height: u64,
+        previous: Option<&SignedBlock>,
+    ) -> Arc<SignedBlock> {
+        let signer = KeyPair::try_random().expect("SCCP archive boundary block key");
+        let header = BlockHeader::new(
+            std::num::NonZeroU64::new(height).expect("archive boundary height is nonzero"),
+            previous.map(SignedBlock::hash),
+            None,
+            None,
+            height,
+            0,
+        );
+        let signature = iroha_data_model::block::BlockSignature::new(
+            0,
+            SignatureOf::try_from_hash(signer.private_key(), header.hash())
+                .expect("sign SCCP archive boundary header"),
+        );
+        let mut block = SignedBlock::presigned(signature, header, Vec::new());
+        block
+            .set_transaction_results(Vec::new(), &[], Vec::new())
+            .expect("empty archive boundary results are complete");
+        block
+            .signatures()
+            .next()
+            .expect("archive boundary signature")
+            .signature()
+            .verify_hash(signer.public_key(), block.hash())
+            .expect("archive boundary signature verifies");
+        Arc::new(block)
+    }
+
+    fn exact_archived_sccp_state() -> (CoreState, [u8; 32]) {
+        let fixture = iroha_sccp::sccp_exact_outbound_test_fixture_v1();
+        let genesis = signed_empty_archive_boundary_block(1, None);
+        let finalized_genesis =
+            iroha_sccp::sccp_finalize_taira_block_test_fixture_v1(genesis.as_ref(), None);
+        let mut provisional_header = BlockHeader::new(
+            std::num::NonZeroU64::new(2).expect("SCCP archive height is nonzero"),
+            Some(genesis.hash()),
+            None,
+            None,
+            2,
+            0,
+        );
+        provisional_header.set_sccp_commitment_root(Some(fixture.bundle.commitment_root));
+        let incomplete_header = provisional_header.clone();
+        let payload_bytes = iroha_sccp::canonical_sccp_payload_bytes(&fixture.bundle.payload)
+            .expect("exact SCCP payload encodes");
+        let transaction_key = KeyPair::try_random().expect("SCCP archive transaction key");
+        let authority = AccountId::new(transaction_key.public_key().clone());
+        let transaction = TransactionBuilder::new(
+            iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1
+                .parse()
+                .expect("Taira chain id"),
+            authority,
+        )
+        .with_executable(Executable::IvmProved(IvmProved {
+            bytecode: IvmBytecode::from_compiled(vec![0x01, 0x02, 0x03]),
+            overlay: vec![InstructionBox::from(
+                iroha_data_model::isi::bridge::RecordSccpMessage::new(
+                    fixture.bundle.commitment.context,
+                    payload_bytes.clone(),
+                ),
+            )]
+            .into(),
+            events_commitment: Hash::new(b"events"),
+            gas_policy_commitment: Hash::new(b"gas"),
+        }))
+        .sign(transaction_key.private_key());
+        let entry_hash = transaction.hash_as_entrypoint();
+        let block_key = KeyPair::try_random().expect("SCCP archive block key");
+        let signature = iroha_data_model::block::BlockSignature::new(
+            0,
+            SignatureOf::try_from_hash(block_key.private_key(), provisional_header.hash())
+                .expect("sign exact SCCP archive header"),
+        );
+        let mut block = SignedBlock::presigned(signature, provisional_header, vec![transaction]);
+        block
+            .set_transaction_results(
+                Vec::new(),
+                &[entry_hash],
+                vec![TransactionResultInner::Ok(DataTriggerSequence::default())],
+            )
+            .expect("exact SCCP archive block results");
+        assert_ne!(
+            block.header(),
+            incomplete_header,
+            "attaching the transaction/results must finalize the header Merkle roots"
+        );
+        let final_signature = iroha_data_model::block::BlockSignature::new(
+            0,
+            SignatureOf::try_from_hash(block_key.private_key(), block.hash())
+                .expect("sign the completed SCCP archive header"),
+        );
+        block
+            .replace_signatures([final_signature].into_iter().collect())
+            .expect("replace the provisional block signature");
+        block
+            .signatures()
+            .next()
+            .expect("completed SCCP archive signature")
+            .signature()
+            .verify_hash(block_key.public_key(), block.hash())
+            .expect("completed SCCP archive signature verifies");
+
+        let fixture = fixture.with_finalized_block(&block, Some(&finalized_genesis));
+        let finality =
+            iroha_sccp::decode_taira_bridge_finality_proof(&fixture.bundle.finality_proof)
+                .expect("completed SCCP finality proof");
+        assert_eq!(block.header(), finality.block_header);
+        assert_eq!(block.hash(), finality.finality_artifact.block_hash);
+        assert_eq!(
+            fixture.request.public_inputs.finality_block_hash,
+            <[u8; 32]>::from(Hash::from(block.hash()))
+        );
+        finality
+            .finality_artifact
+            .validate_for_header(&block.header())
+            .expect("completed SCCP artifact binds the persisted block header");
+        finality
+            .finality_artifact
+            .verify()
+            .expect("completed SCCP artifact is cryptographically valid");
+
+        let block = Arc::new(block);
+        let tail = signed_empty_archive_boundary_block(3, Some(block.as_ref()));
+        let kura = Kura::blank_kura_for_testing_with_blocks_in_memory(
+            std::num::NonZeroUsize::new(1).expect("one retained body"),
+        );
+        kura.store_block(Arc::clone(&genesis))
+            .expect("store SCCP archive genesis block");
+        kura.store_block(Arc::clone(&block))
+            .expect("store exact SCCP archive block");
+        kura.store_block(Arc::clone(&tail))
+            .expect("store SCCP archive tail block");
+        let _receipt = kura
+            .store_v2_finality_artifact(&finality.finality_artifact)
+            .expect("store exact SCCP archive finality");
+        let mut state = CoreState::new_with_chain_for_testing(
+            iroha_core::state::World::default(),
+            Arc::clone(&kura),
+            iroha_core::query::store::LiveQueryStore::start_test(),
+            iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1
+                .parse()
+                .expect("Taira chain id"),
+        );
+        for canonical in [&genesis, &block, &tail] {
+            state.push_block_hash_for_testing(canonical.hash());
+        }
+        let (_, source_identity, trust_anchor) =
+            iroha_sccp::sccp_native_ethereum_transfer_inbound_test_fixture_v1();
+        assert_eq!(
+            fixture.route.source_identity, source_identity,
+            "exact archive route and native trust anchor must share one source identity"
+        );
+        state.set_sccp_registry_for_testing(
+            iroha_core::state::ValidatedSccpRegistryV1::try_from_wire(
+                iroha_data_model::bridge::SccpRegistryV1 {
+                    version: 1,
+                    lanes: vec![iroha_data_model::bridge::SccpGovernedLaneV1 {
+                        lane_id: fixture.route.lane_id,
+                        native_trust_anchors: vec![trust_anchor],
+                        current_native_trust_anchor_hash: Some(trust_anchor.anchor_hash),
+                        routes: vec![fixture.route.clone()],
+                    }],
+                },
+            )
+            .expect("exact SCCP route registry"),
+        );
+        let key = iroha_data_model::bridge::SccpOutboundMessageKeyV1 {
+            lane: fixture.bundle.commitment.context.lane,
+            message_id: fixture.bundle.commitment.message_id,
+        };
+        state
+            .insert_sccp_outbound_message_for_testing(
+                key,
+                iroha_data_model::bridge::SccpOutboundPendingMessageRecordV1 {
+                    destination_binding_hash: fixture
+                        .bundle
+                        .commitment
+                        .context
+                        .destination_binding_hash,
+                    route_configuration_hash: fixture
+                        .bundle
+                        .commitment
+                        .context
+                        .route_configuration_hash,
+                    payload_hash: fixture.bundle.commitment.payload_hash,
+                    payload_bytes,
+                    recorded_at_height: 2,
+                    commitment_index: 0,
+                },
+            )
+            .expect("insert exact SCCP outbox descriptor");
+        state
+            .transition_sccp_outbound_message_to_terminal_for_testing(
+                key,
+                iroha_data_model::bridge::SccpOutboundProofRecordV1 {
+                    payload_hash: fixture.bundle.commitment.payload_hash,
+                    destination_binding_hash: fixture
+                        .bundle
+                        .commitment
+                        .context
+                        .destination_binding_hash,
+                    route_configuration_hash: fixture
+                        .bundle
+                        .commitment
+                        .context
+                        .route_configuration_hash,
+                    finality_block_hash: <[u8; 32]>::from(Hash::from(
+                        finality.finality_artifact.block_hash,
+                    )),
+                    destination_proof_commitment: [0xE7; 32],
+                    finality_height: 2,
+                    commitment_index: 0,
+                    accepted_at_height: 3,
+                },
+            )
+            .expect("move exact SCCP message to terminal fixed replay state");
+        let world = state.world_view();
+        assert!(world.sccp_outbound_pending_messages().get(&key).is_none());
+        let stored_proof = world
+            .sccp_outbound_proofs()
+            .get(&key)
+            .copied()
+            .expect("terminal SCCP proof record");
+        assert_eq!(
+            stored_proof.finality_block_hash,
+            fixture.request.public_inputs.finality_block_hash
+        );
+        assert_eq!(stored_proof.finality_height, 2);
+        assert_eq!(
+            world.sccp_outbound_pending_usage(),
+            iroha_data_model::bridge::SccpOutboundPendingUsageV1::default()
+        );
+        drop(world);
+        let height = std::num::NonZeroUsize::new(2).expect("two is nonzero");
+        assert_eq!(kura.get_block(height).as_deref(), Some(block.as_ref()));
+        let payload_len = kura
+            .advertise_required_replicas_for_bench(height)
+            .expect("stored SCCP body length");
+        assert!(
+            kura.evict_block_bodies_for_bench(payload_len)
+                .expect("evict exact SCCP historical body")
+                >= payload_len
+        );
+        kura.remove_evicted_block_sidecar_for_testing(height)
+            .expect("make exact SCCP historical body remote-only");
+        assert!(kura.get_block(height).is_none());
+        assert_eq!(
+            kura.get_block(std::num::NonZeroUsize::new(1).expect("one is nonzero"))
+                .as_deref(),
+            Some(genesis.as_ref())
+        );
+        assert_eq!(
+            kura.get_block(std::num::NonZeroUsize::new(3).expect("three is nonzero"))
+                .as_deref(),
+            Some(tail.as_ref())
+        );
+        (state, fixture.bundle.commitment.message_id)
+    }
+
     #[test]
     fn message_id_parser_rejects_malleability_and_zero() {
         let canonical = "ab".repeat(32);
@@ -7354,6 +7617,49 @@ mod sccp_first_release_api_tests {
             panic!("unexpected missing-block error: {error}");
         };
         assert!(message.contains("finality artifact for height 9 not found"));
+    }
+
+    #[test]
+    fn bundle_proof_request_and_recent_readback_survive_body_eviction() {
+        let (state, message_id) = exact_archived_sccp_state();
+
+        let bundle = sccp_message_bundle_for_request(&state, message_id)
+            .expect("bodyless bundle lookup")
+            .expect("bodyless bundle exists");
+        assert_eq!(bundle.commitment.message_id, message_id);
+        assert!(
+            iroha_sccp::verified_sccp_message_taira_finality_proof_cryptographically_self_consistent(
+                &bundle,
+            )
+            .is_some()
+        );
+
+        let material = sccp_exact_proof_material(&state, message_id)
+            .expect("bodyless proof-request lookup")
+            .expect("bodyless proof request exists");
+        assert_eq!(material.bundle, bundle);
+        assert_eq!(material.indexed.descriptor.commitment_index, 0);
+        let finality = iroha_sccp::decode_taira_bridge_finality_proof(&bundle.finality_proof)
+            .expect("bodyless bundle finality decodes");
+        assert_eq!(finality.block_header.height().get(), 2);
+        assert_eq!(
+            material.request.public_inputs.finality_block_hash,
+            <[u8; 32]>::from(Hash::from(finality.finality_artifact.block_hash))
+        );
+
+        let recent = collect_recent_sccp_messages(
+            &state,
+            &SccpRecentWindowQuery {
+                from: None,
+                after_index: None,
+                limit: Some(1),
+            },
+        )
+        .expect("bodyless recent lookup");
+        assert_eq!(recent.items.len(), 1);
+        assert_eq!(recent.items[0].commitment_index, 0);
+        assert_eq!(recent.items[0].message_id_hex, hex::encode(message_id));
+        assert!(recent.next.is_none());
     }
 
     #[tokio::test]
@@ -19342,11 +19648,32 @@ struct MultisigProposalsCursor {
 }
 
 #[cfg(feature = "app_api")]
-fn multisig_account_fingerprint(
+pub(crate) fn multisig_account_fingerprint(
     multisig_account_id: &iroha_data_model::account::AccountId,
 ) -> String {
     Hash::new(format!("iroha.torii.multisig.account.v1\0{}", multisig_account_id).as_bytes())
         .to_string()
+}
+
+#[cfg(feature = "app_api")]
+fn canonical_multisig_account_ref(raw: &str) -> Result<String> {
+    if raw.is_empty() || raw.trim() != raw || !raw.is_ascii() {
+        return Err(multisig_selector_validation_error(
+            "multisig_account_ref must be a canonical lowercase hash",
+        ));
+    }
+    let account_ref = Hash::from_str(raw).map_err(|_| {
+        multisig_selector_validation_error(
+            "multisig_account_ref must be a canonical lowercase hash",
+        )
+    })?;
+    let canonical = account_ref.to_string();
+    if canonical != raw {
+        return Err(multisig_selector_validation_error(
+            "multisig_account_ref must be a canonical lowercase hash",
+        ));
+    }
+    Ok(canonical)
 }
 
 #[cfg(feature = "app_api")]
@@ -20245,6 +20572,16 @@ fn multisig_approval_requires_viewer_signature(
 const MULTISIG_APPROVALS_CURSOR_MAX_BYTES: usize = 512;
 
 #[cfg(feature = "app_api")]
+const MULTISIG_APPROVALS_MAX_EMBEDDED_SPEC_BYTES: usize = 1024 * 1024;
+
+#[cfg(feature = "app_api")]
+struct MultisigApprovalCandidate {
+    multisig_account_id: iroha_data_model::account::AccountId,
+    spec: Arc<iroha_executor_data_model::isi::multisig::MultisigSpec>,
+    proposal: MultisigProposalEntryDto,
+}
+
+#[cfg(feature = "app_api")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct MultisigApprovalsCursor {
     proposed_at_ms: u64,
@@ -20419,12 +20756,12 @@ fn multisig_approval_sort_order(
 
 #[cfg(feature = "app_api")]
 fn multisig_approval_cursor_for(
-    entry: &MultisigApprovalEntryDto,
+    entry: &MultisigApprovalCandidate,
     context_fingerprint: &str,
 ) -> MultisigApprovalsCursor {
     MultisigApprovalsCursor {
-        proposed_at_ms: entry.proposal.proposed_at_ms,
-        instructions_hash: entry.instructions_hash.clone(),
+        proposed_at_ms: entry.proposal.proposal.proposed_at_ms,
+        instructions_hash: entry.proposal.instructions_hash.clone(),
         multisig_account_fingerprint: multisig_account_fingerprint(&entry.multisig_account_id),
         context_fingerprint: context_fingerprint.to_owned(),
     }
@@ -20432,24 +20769,24 @@ fn multisig_approval_cursor_for(
 
 #[cfg(feature = "app_api")]
 fn multisig_approval_matches_cursor(
-    entry: &MultisigApprovalEntryDto,
+    entry: &MultisigApprovalCandidate,
     cursor: &MultisigApprovalsCursor,
 ) -> bool {
-    entry.proposal.proposed_at_ms == cursor.proposed_at_ms
-        && entry.instructions_hash == cursor.instructions_hash
+    entry.proposal.proposal.proposed_at_ms == cursor.proposed_at_ms
+        && entry.proposal.instructions_hash == cursor.instructions_hash
         && multisig_account_fingerprint(&entry.multisig_account_id)
             == cursor.multisig_account_fingerprint
 }
 
 #[cfg(feature = "app_api")]
-fn multisig_approval_entry(
-    multisig_account_id: iroha_data_model::account::AccountId,
-    spec: iroha_executor_data_model::isi::multisig::MultisigSpec,
-    proposal_entry: MultisigProposalEntryDto,
-) -> MultisigApprovalEntryDto {
+fn multisig_approval_entry(candidate: MultisigApprovalCandidate) -> MultisigApprovalEntryDto {
+    let multisig_account_id = candidate.multisig_account_id;
+    let multisig_account_ref = multisig_account_fingerprint(&multisig_account_id);
+    let proposal_entry = candidate.proposal;
     MultisigApprovalEntryDto {
         multisig_account_id,
-        spec,
+        multisig_account_ref,
+        spec: Arc::unwrap_or_clone(candidate.spec),
         proposal_id: proposal_entry.proposal_id,
         instructions_hash: proposal_entry.instructions_hash,
         proposal: proposal_entry.proposal,
@@ -22242,6 +22579,7 @@ mod multisig_selector_tests {
         let interface = ivm::EmbeddedContractInterfaceV1 {
             seiyaku_name: "TestContract".to_owned(),
             compiler_fingerprint: "torii-tests".to_owned(),
+            abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
             features_bitmap: 0,
             access_set_hints: None,
             kotoba: Vec::new(),
@@ -22598,7 +22936,7 @@ mod multisig_selector_tests {
     }
 
     #[test]
-    fn multisig_approval_lookup_json_requires_exact_multisig_account() {
+    fn multisig_approval_lookup_json_requires_exact_multisig_account_ref() {
         let multisig_account_id = checked_multisig_selector_account_id(
             0x77,
             "derive approval lookup JSON multisig account",
@@ -22606,24 +22944,25 @@ mod multisig_selector_tests {
         let instructions: Vec<dm::InstructionBox> =
             vec![dm::Log::new(dm::Level::INFO, "lookup-json".to_owned()).into()];
         let proposal_id = HashOf::new(&instructions).to_string();
+        let multisig_account_ref = multisig_account_fingerprint(&multisig_account_id);
         let valid = format!(
-            r#"{{"multisig_account_id":"{multisig_account_id}","proposal_id":"{proposal_id}"}}"#
+            r#"{{"multisig_account_ref":"{multisig_account_ref}","proposal_id":"{proposal_id}"}}"#
         );
         let decoded: MultisigApprovalLookupRequestDto =
             norito::json::from_str(&valid).expect("exact approval lookup request");
-        assert_eq!(decoded.multisig_account_id, multisig_account_id);
+        assert_eq!(decoded.multisig_account_ref, multisig_account_ref);
         assert_eq!(decoded.proposal_id.as_deref(), Some(proposal_id.as_str()));
         assert!(decoded.instructions_hash.is_none());
 
         for invalid in [
             format!(r#"{{"proposal_id":"{proposal_id}"}}"#),
             format!(
-                r#"{{"multisig_account_id":"{multisig_account_id}","proposal_id":"{proposal_id}","unexpected":true}}"#
+                r#"{{"multisig_account_ref":"{multisig_account_ref}","proposal_id":"{proposal_id}","unexpected":true}}"#
             ),
         ] {
             assert!(
                 norito::json::from_str::<MultisigApprovalLookupRequestDto>(&invalid).is_err(),
-                "approval lookup JSON must be closed and require multisig_account_id",
+                "approval lookup JSON must be closed and require multisig_account_ref",
             );
         }
     }
@@ -24496,7 +24835,7 @@ mod multisig_selector_tests {
         let JsonBody(lookup_response) = handle_post_multisig_approvals_lookup_for_authority(
             state,
             MultisigApprovalLookupRequestDto {
-                multisig_account_id,
+                multisig_account_ref: multisig_account_fingerprint(&multisig_account_id),
                 proposal_id: Some(active_hash.clone()),
                 instructions_hash: None,
             },
@@ -24753,7 +25092,7 @@ mod multisig_selector_tests {
                 viewer_account_ids: vec![signer_two_id.clone()],
             },
             NoritoJson(MultisigApprovalLookupRequestDto {
-                multisig_account_id: multisig_account_id.clone(),
+                multisig_account_ref: multisig_account_fingerprint(&multisig_account_id),
                 proposal_id: Some(active_hash.clone()),
                 instructions_hash: None,
             }),
@@ -24761,6 +25100,10 @@ mod multisig_selector_tests {
         .await
         .expect("get signer-visible approval");
         assert_eq!(response.item.multisig_account_id, multisig_account_id);
+        assert_eq!(
+            response.item.multisig_account_ref,
+            multisig_account_fingerprint(&response.item.multisig_account_id)
+        );
         assert_eq!(response.item.instructions_hash, active_hash);
         assert_eq!(response.item.status, "COLLECTING_SIGNATURES");
         assert!(response.item.spec.signatories.contains_key(&signer_two_id));
@@ -24775,7 +25118,7 @@ mod multisig_selector_tests {
                 viewer_account_ids: vec![signer_two_id.clone()],
             },
             NoritoJson(MultisigApprovalLookupRequestDto {
-                multisig_account_id: wrong_multisig_account_id,
+                multisig_account_ref: multisig_account_fingerprint(&wrong_multisig_account_id),
                 proposal_id: Some(active_hash.clone()),
                 instructions_hash: None,
             }),
@@ -24792,7 +25135,7 @@ mod multisig_selector_tests {
                 viewer_account_ids: vec![hidden_viewer],
             },
             NoritoJson(MultisigApprovalLookupRequestDto {
-                multisig_account_id,
+                multisig_account_ref: multisig_account_fingerprint(&multisig_account_id),
                 proposal_id: Some(active_hash),
                 instructions_hash: None,
             }),
@@ -25019,6 +25362,33 @@ mod multisig_selector_tests {
     }
 
     #[tokio::test]
+    async fn multisig_approvals_query_propagates_indexed_authority_corruption() {
+        let (
+            mut world,
+            multisig_account_id,
+            _signer_one_id,
+            signer_two_id,
+            _alias_literal,
+            _active_hash,
+        ) = multisig_test_world();
+        world.smart_contract_state_mut_for_testing().insert(
+            multisig_account_state_contract_key(&multisig_account_id),
+            vec![0xff],
+        );
+
+        let error = handle_post_multisig_approvals_query(
+            build_state(world),
+            MultisigApprovalsViewerScope {
+                viewer_account_ids: vec![signer_two_id],
+            },
+            NoritoJson(MultisigApprovalsQueryRequestDto::default()),
+        )
+        .await
+        .expect_err("indexed multisig state corruption must fail closed");
+        assert!(expect_conversion(error).contains("invalid native multisig account state"));
+    }
+
+    #[tokio::test]
     async fn multisig_approval_lookup_includes_asset_transfer_control_intent() {
         let (
             mut world,
@@ -25054,7 +25424,7 @@ mod multisig_selector_tests {
                 viewer_account_ids: vec![signer_two_id.clone()],
             },
             NoritoJson(MultisigApprovalLookupRequestDto {
-                multisig_account_id: multisig_account_id.clone(),
+                multisig_account_ref: multisig_account_fingerprint(&multisig_account_id),
                 proposal_id: Some(freeze_hash.clone()),
                 instructions_hash: None,
             }),
@@ -27445,6 +27815,7 @@ fn multisig_approvals_query_response(
         .map_err(|_| conversion_error("multisig approvals scan limit exceeds usize".to_owned()))?;
 
     for (multisig_account_id, spec) in viewer_multisig_accounts(state, viewer_scope)? {
+        let spec = Arc::new(spec);
         if !multisig_approval_is_viewer_relevant(&spec, viewer_scope) {
             continue;
         }
@@ -27470,21 +27841,21 @@ fn multisig_approvals_query_response(
             {
                 continue;
             }
-            items.push(multisig_approval_entry(
-                multisig_account_id.clone(),
-                spec.clone(),
-                proposal_entry,
-            ));
+            items.push(MultisigApprovalCandidate {
+                multisig_account_id: multisig_account_id.clone(),
+                spec: Arc::clone(&spec),
+                proposal: proposal_entry,
+            });
         }
     }
 
     items.sort_by(|left, right| {
         multisig_approval_sort_order(
-            left.proposal.proposed_at_ms,
-            &left.instructions_hash,
+            left.proposal.proposal.proposed_at_ms,
+            &left.proposal.instructions_hash,
             &left.multisig_account_id,
-            right.proposal.proposed_at_ms,
-            &right.instructions_hash,
+            right.proposal.proposal.proposed_at_ms,
+            &right.proposal.instructions_hash,
             &right.multisig_account_id,
         )
     });
@@ -27509,7 +27880,29 @@ fn multisig_approvals_query_response(
     });
     items.truncate(page_limit);
 
-    Ok(MultisigApprovalsQueryResponseDto { items, next_cursor })
+    let mut embedded_spec_bytes = 0_usize;
+    let mut response_items = Vec::with_capacity(items.len());
+    for item in items {
+        let spec_bytes = norito::to_bytes(item.spec.as_ref())
+            .map_err(|err| conversion_error(format!("failed to encode multisig spec: {err}")))?
+            .len();
+        embedded_spec_bytes = embedded_spec_bytes.checked_add(spec_bytes).ok_or_else(|| {
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+            ))
+        })?;
+        if embedded_spec_bytes > MULTISIG_APPROVALS_MAX_EMBEDDED_SPEC_BYTES {
+            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+            )));
+        }
+        response_items.push(multisig_approval_entry(item));
+    }
+
+    Ok(MultisigApprovalsQueryResponseDto {
+        items: response_items,
+        next_cursor,
+    })
 }
 
 /// POST /v1/multisig/approvals/lookup — fetch a signer-visible multisig approval by id/hash.
@@ -27550,10 +27943,20 @@ fn multisig_approvals_lookup_response(
 ) -> Result<MultisigApprovalLookupResponseDto> {
     let (hash_literal, instructions_hash) =
         resolve_multisig_proposal_hash(req.proposal_id.clone(), req.instructions_hash.clone())?;
-    let (multisig_account_id, spec) = viewer_multisig_accounts(state, viewer_scope)?
+    let requested_account_ref = canonical_multisig_account_ref(&req.multisig_account_ref)?;
+    let mut matching_accounts = viewer_multisig_accounts(state, viewer_scope)?
         .into_iter()
-        .find(|(account_id, _)| account_id == &req.multisig_account_id)
+        .filter(|(account_id, _)| {
+            multisig_account_fingerprint(account_id) == requested_account_ref
+        });
+    let (multisig_account_id, spec) = matching_accounts
+        .next()
         .ok_or_else(multisig_not_found_error)?;
+    if matching_accounts.next().is_some() {
+        return Err(conversion_error(
+            "multisig account reference collision in viewer scope".to_owned(),
+        ));
+    }
     if !multisig_approval_is_viewer_relevant(&spec, viewer_scope) {
         return Err(multisig_not_found_error());
     }
@@ -27568,6 +27971,7 @@ fn multisig_approvals_lookup_response(
     let intent = multisig_proposal_intent(&world, &multisig_account_id, &proposal_record.proposal);
     let item = MultisigApprovalEntryDto {
         multisig_account_id,
+        multisig_account_ref: requested_account_ref,
         spec,
         proposal_id: hash_literal.clone(),
         instructions_hash: hash_literal,
@@ -31044,6 +31448,8 @@ pub struct MultisigApprovalsQueryRequestDto {
 pub struct MultisigApprovalEntryDto {
     /// Multisig account that owns the proposal.
     pub multisig_account_id: iroha_data_model::account::AccountId,
+    /// Fixed-size domain-separated reference for subsequent exact lookups.
+    pub multisig_account_ref: String,
     /// Current multisig authority specification.
     pub spec: iroha_executor_data_model::isi::multisig::MultisigSpec,
     /// Stable proposal identifier.
@@ -31086,8 +31492,8 @@ pub struct MultisigApprovalsQueryResponseDto {
 #[norito(deny_unknown_fields)]
 /// Request payload for looking up one signer-visible multisig approval.
 pub struct MultisigApprovalLookupRequestDto {
-    /// Exact multisig account that owns the selected proposal.
-    pub multisig_account_id: iroha_data_model::account::AccountId,
+    /// Fixed-size reference of the exact viewer-visible multisig account.
+    pub multisig_account_ref: String,
     /// Optional stable proposal identifier.
     #[norito(default)]
     pub proposal_id: Option<String>,
@@ -36700,6 +37106,7 @@ mod deploy_tests {
         let interface = ivm::EmbeddedContractInterfaceV1 {
             seiyaku_name: "TestContract".to_owned(),
             compiler_fingerprint: "torii-tests".to_owned(),
+            abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
             features_bitmap: 0,
             access_set_hints: None,
             kotoba: Vec::new(),

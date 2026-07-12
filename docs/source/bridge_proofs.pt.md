@@ -4,9 +4,9 @@ direction: ltr
 source: docs/source/bridge_proofs.md
 status: needs-review
 generator: scripts/sync_docs_i18n.py
-source_hash: 69c9a740261d0c367d52870fc1f48775ae48307056ba9b79d2f811e0c0849f20
-source_last_modified: "2026-07-11T15:09:39+04:00"
-translation_last_reviewed: 2026-07-11
+source_hash: 74e29801129deccb6d5640d414289c47cf13fa9e0229fb55212b6c7710d7c5f7
+source_last_modified: "2026-07-12T07:38:49.568351+00:00"
+translation_last_reviewed: 2026-07-12
 translator: machine-assisted
 ---
 
@@ -42,6 +42,14 @@ translator: machine-assisted
   excedentes. A reutilização de message id e qualquer replay também são
   rejeitados.
 
+A route de origem TRON usa a ABI exata
+`transferToTaira(bytes,uint256,uint64 expectedNonce)`. A execução só tem êxito
+quando `expectedNonce == transferNonce`; em seguida, grava esse mesmo valor no
+payload canônico antes de incrementar o storage. A admissão native reconstrói a
+chamada ABI completa a partir do recipient do payload, do valor escalado e do
+nonce. Assim, o selector descontinuado de dois argumentos, um nonce antigo ou
+futuro e um nonce `uint64` esgotado são rejeitados de modo seguro.
+
 ## Verificação única e limites determinísticos
 
 - Cada prova native ou destination é decodificada canonicamente uma só vez e
@@ -53,6 +61,25 @@ translator: machine-assisted
   contribuições BLS e verificações pairing-product BN254. Esses limites de
   admissão são vinculados ao consenso e devem ser idênticos em todos os
   validadores.
+
+## Compromisso outbound, retenção e descoberta
+
+Cada mensagem outbound bem-sucedida recebe um `commitment_index` denso na ordem
+de execução do bloco (`0..=511`). V1 fixa os limites imutáveis em 512 mensagens por
+bloco e 4.096 bytes de payload canônico por mensagem. `[zk.sccp]` limita em conjunto
+os payloads pendentes por `max_pending_outbound_messages` (padrão `65536`) e
+`max_pending_outbound_payload_bytes` (padrão `268435456`).
+
+Antes de publicar a finalidade ou remover o corpo do bloco, Kura mantém de forma
+imutável o header canônico exato e o arquivo SCCP autenticado pela raiz. A reconstrução
+de proofs, bundles, proof requests e histórico recente não lê o corpo histórico nem
+uma cópia mutável do payload no WSV. Ao aceitar a destination proof, o payload pendente
+e sua cobrança são removidos atomicamente e substituídos por um descritor terminal de
+tamanho fixo, preservando locator/index. O estado pendente é limitado; os registros
+terminais e o histórico imutável de Kura crescem deliberadamente para proteção
+permanente contra replay. `GET /v1/sccp/messages/recent` usa o cursor composto
+`{ from, after_index }`. A evidência imutável conta no uso total/do operador do disco,
+mas fica fora do orçamento de corpos removíveis.
 
 ## Limites do Torii
 

@@ -4,8 +4,8 @@ direction: ltr
 source: docs/source/bridge_finality.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 5e28e5c38283ad6be40a0fc48e0312797f490542a143f4cefdd209aaf8099ac5
-source_last_modified: "2026-07-11T20:38:35.470900+00:00"
+source_hash: 1cbd248fe14e63d00f002f09e1663181f3ab9bd99124ffeb89c56763b784046b
+source_last_modified: "2026-07-12"
 translation_last_reviewed: 2026-07-12
 ---
 
@@ -51,14 +51,15 @@ certificat n'est accepté au niveau de la preuve.
 
 ## Source durable et vérification
 
-Après application du bloc, Sumeragi v2 valide puis écrit l'artéfact comme
-sidecar Kura immuable. L'écriture est idempotente et Kura refuse un artéfact
-conflictuel à la même hauteur. La reprise peut compléter un sidecar absent sans
-réexécuter le bloc. Le constructeur lit le bloc et ce sidecar par hauteur,
-vérifie leur association et exécute le vérificateur canonique. Les PoP
-historiques viennent du sidecar ; ils ne sont jamais remplacés par ceux de
-l'état mondial mutable. La preuve ne dépend pas d'une fenêtre récente de
-certificats.
+Avant de publier la finalité ou d'évincer le corps, Kura écrit le header canonique exact
+et l'archive SCCP authentifiée par la racine dans un enregistrement retained-block
+immuable, puis conserve l'artéfact V2 exact dans un enregistrement de finalité immuable
+distinct. Les deux écritures sont idempotentes et refusent tout conflit à la même
+hauteur. `build_finality_proof` lit uniquement le header retenu et l'enregistrement de
+finalité vérifié ; il ne lit jamais un corps historique et ne remplace jamais les PoP
+par l'état mondial mutable. Au redémarrage, l'association header/archive/artifact/hash
+est vérifiée de nouveau. L'éviction du corps ne rend pas une preuve valide indisponible ;
+un enregistrement absent, corrompu, conflictuel ou invérifiable échoue de manière fermée.
 
 `verify_bridge_finality_proof` impose :
 
@@ -121,6 +122,7 @@ propre branche Merkle typée et son ancre gouvernée.
 - `GET /v1/bridge/finality/{height}` renvoie `BridgeFinalityProof`.
 - `GET /v1/bridge/finality/bundle/{height}` renvoie `BridgeFinalityBundle`.
 
-Les deux routes échouent si le bloc ou le sidecar v2 exact est absent ou
-invalide. Les consommateurs de première version doivent rejeter toute forme ou
-version inconnue ; aucune compatibilité de repli n'est prévue.
+Les deux routes échouent si le header canonique retenu ou l'artéfact v2 exact est absent
+ou invalide. L'éviction du corps historique ne rend pas une preuve valide indisponible.
+Les consommateurs de première version doivent rejeter toute forme ou version inconnue ;
+aucune compatibilité de repli n'est prévue.

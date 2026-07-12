@@ -90,11 +90,15 @@ fn literal_data_start(literal_count: usize) -> usize {
 }
 
 fn assemble_program_with_literals(code: &[u8], literals: &[&[u8]]) -> Vec<u8> {
-    let mut program = Vec::new();
-    program.extend_from_slice(b"IVM\0");
-    program.extend_from_slice(&[1, 1, 0, 4]);
-    program.extend_from_slice(&default_max_cycles().to_le_bytes());
-    program.push(1); // abi_version
+    let mut program = ivm::ProgramMetadata {
+        version_major: 1,
+        version_minor: 1,
+        mode: 0,
+        vector_length: 4,
+        max_cycles: default_max_cycles(),
+        abi_version: 1,
+    }
+    .encode();
     if !literals.is_empty() {
         let data_start = literal_data_start(literals.len());
         let data_len = literals
@@ -235,11 +239,15 @@ fn build_program_create_nft_for_authority() -> Vec<u8> {
     );
     code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
 
-    let mut v = Vec::new();
-    v.extend_from_slice(b"IVM\0");
-    v.extend_from_slice(&[1, 1, 0, 4]);
-    v.extend_from_slice(&default_max_cycles().to_le_bytes());
-    v.push(1);
+    let mut v = ivm::ProgramMetadata {
+        version_major: 1,
+        version_minor: 1,
+        mode: 0,
+        vector_length: 4,
+        max_cycles: default_max_cycles(),
+        abi_version: 1,
+    }
+    .encode();
     v.extend_from_slice(&code);
     v
 }

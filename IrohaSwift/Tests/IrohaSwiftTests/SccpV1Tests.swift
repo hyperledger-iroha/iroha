@@ -721,6 +721,24 @@ final class SccpV1Tests: XCTestCase {
             XCTAssertThrowsError(try SccpGroth16ProofRequestV1.parse(jsonData(object)))
         }
 
+        var crossPolicyAlias = try jsonObject(request, mutableContainers: true)
+        var semanticProfile = crossPolicyAlias["semantic_proof_profile"] as! [String: Any]
+        var semanticCommitments = semanticProfile["commitments"] as! [String: Any]
+        let anchor = crossPolicyAlias["sora_finality_anchor"] as! [String: Any]
+        semanticCommitments["circuit_commitment"] = anchor["checkpoint_block_hash"]
+        semanticProfile["commitments"] = semanticCommitments
+        crossPolicyAlias["semantic_proof_profile"] = semanticProfile
+        let circuit = Data(hexString: semanticCommitments["circuit_commitment"] as! String)!
+        let witness = Data(hexString: semanticCommitments["witness_generator_commitment"] as! String)!
+        let schema = Data(hexString: semanticCommitments["public_signal_schema_hash"] as! String)!
+        let semanticHash = irohaKeccak256(
+            Data("sccp:semantic-proof-profile:v1".utf8) + Data([1, 0, 1]) + circuit + witness + schema
+        )
+        crossPolicyAlias["semantic_proof_profile_hash"] = "0x\(semanticHash.hexEncodedString())"
+        XCTAssertThrowsError(try SccpGroth16ProofRequestV1.parse(jsonData(crossPolicyAlias))) { error in
+            XCTAssertTrue(String(describing: error).contains("proof-policy hash role"))
+        }
+
         let bundle = bundleJSON(messageId: String(repeating: "11", count: 32))
         XCTAssertEqual(try SccpMessageBundleV1.parse(bundle).targetDomain, 2)
         var retiredPayload = try jsonObject(bundle)

@@ -133,8 +133,8 @@ pub use crate::metadata::{
     CONTRACT_FEATURE_KNOWN_BITS, EmbeddedContractDebugInfoV1, EmbeddedContractInterfaceV1,
     EmbeddedEntrypointDescriptor, EmbeddedFunctionBudgetReportV1, EmbeddedSourceLocation,
     EmbeddedSourceMapEntryV1, EmbeddedStateDescriptor, EmbeddedStateFieldDescriptor,
-    EmbeddedStateType, LiteralKindV1, MAGIC as METADATA_MAGIC, ProgramMetadata, VECTOR_LENGTH_MAX,
-    contract_code_hash, decode_literal_descriptor, encode_literal_descriptor,
+    EmbeddedStateType, HEADER_SIZE, LiteralKindV1, MAGIC as METADATA_MAGIC, ProgramMetadata,
+    VECTOR_LENGTH_MAX, contract_code_hash, decode_literal_descriptor, encode_literal_descriptor,
 };
 pub use crate::prepared::PreparedContract;
 pub use crate::{

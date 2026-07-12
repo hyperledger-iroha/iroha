@@ -795,7 +795,7 @@ mod tests {
 
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use hickory_proto::{
-        op::{Message, Query, ResponseCode},
+        op::{Message, MessageType, OpCode, Query, ResponseCode},
         rr::{Name, RData, Record, RecordType, rdata::A},
     };
     use norito::json::Value;
@@ -846,11 +846,10 @@ mod tests {
         };
         client.connect(addr).await?;
 
-        let mut query = Message::new();
+        let mut query = Message::new(0xCAFE, MessageType::Query, OpCode::Query);
         let name = Name::from_ascii("example.test.").unwrap();
         query.add_query(Query::query(name.clone(), RecordType::A));
-        query.set_id(0xCAFE);
-        query.set_recursion_desired(true);
+        query.metadata.recursion_desired = true;
         let body = dns::encode_message(&query)?;
 
         client.send(&body).await?;
@@ -859,11 +858,11 @@ mod tests {
         let len = client.recv(&mut buf).await?;
 
         let response = dns::decode_message(&buf[..len])?;
-        assert_eq!(response.id(), 0xCAFE);
-        assert_eq!(response.response_code(), ResponseCode::NoError);
-        assert_eq!(response.answers().len(), 1);
+        assert_eq!(response.metadata.id, 0xCAFE);
+        assert_eq!(response.metadata.response_code, ResponseCode::NoError);
+        assert_eq!(response.answers.len(), 1);
 
-        if let RData::A(answer) = response.answers()[0].data() {
+        if let RData::A(answer) = response.answers[0].data() {
             assert_eq!(*answer, A::new(192, 0, 2, 1));
         } else {
             panic!("expected A record in response");
@@ -909,11 +908,10 @@ mod tests {
         ));
         sleep(Duration::from_millis(50)).await;
 
-        let mut query = Message::new();
+        let mut query = Message::new(0xCAFE, MessageType::Query, OpCode::Query);
         let name = Name::from_ascii("example.test.").unwrap();
         query.add_query(Query::query(name.clone(), RecordType::A));
-        query.set_id(0xCAFE);
-        query.set_recursion_desired(true);
+        query.metadata.recursion_desired = true;
         let body = dns::encode_message(&query)?;
 
         let client = HttpClient::builder()
@@ -1116,10 +1114,10 @@ mod tests {
 
     fn assert_example_a_response(bytes: &[u8]) -> Result<()> {
         let response = dns::decode_message(bytes)?;
-        assert_eq!(response.id(), 0xCAFE);
-        assert_eq!(response.response_code(), ResponseCode::NoError);
-        assert_eq!(response.answers().len(), 1);
-        if let RData::A(answer) = response.answers()[0].data() {
+        assert_eq!(response.metadata.id, 0xCAFE);
+        assert_eq!(response.metadata.response_code, ResponseCode::NoError);
+        assert_eq!(response.answers.len(), 1);
+        if let RData::A(answer) = response.answers[0].data() {
             assert_eq!(*answer, A::new(192, 0, 2, 1));
         } else {
             eyre::bail!("expected A record in DoH response");

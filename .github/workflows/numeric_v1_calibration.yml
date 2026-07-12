@@ -57,7 +57,7 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          cargo bench --locked -p ivm --bench gas_calibration -- \
+          cargo bench -p ivm --bench gas_calibration -- \
             --sample-size 100 \
             --warm-up-time 3 \
             --measurement-time 5 \

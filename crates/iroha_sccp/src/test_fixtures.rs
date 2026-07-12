@@ -1,6 +1,7 @@
 //! Deterministic exact SCCP fixtures for crate and downstream integration tests.
 
-use core::num::NonZeroU64;
+use core::{num::NonZeroU64, time::Duration};
+use std::collections::BTreeSet;
 
 use halo2curves::{
     Coordinates, CurveAffine,
@@ -8,14 +9,16 @@ use halo2curves::{
     ff::PrimeField as _,
     group::Curve,
 };
-use iroha_crypto::{Algorithm, Hash, KeyPair, Signature};
+use iroha_crypto::{Algorithm, Hash, KeyPair, MerkleTree, Signature, SignatureOf};
 use iroha_data_model::{
+    ChainId,
     account::AccountId,
     block::consensus_v2::{
         BlockSubject, ConsensusMode, ConsensusRound, DataAvailabilityLayout, DualQuorum,
         ExecutionCommitment, GlobalPhase, HeightContext, PROTOCOL_VERSION, PayloadEncoding,
         QuorumCertificate, ValidatorPower, finality::V2FinalityArtifact,
     },
+    block::{BlockHeader, BlockSignature, SignedBlock},
     bridge::{
         BRIDGE_FINALITY_PROOF_VERSION_V1, BridgeSccpDestinationProofV1,
         SCCP_V1_TAIRA_TO_TOKEN_MULTIPLIER, SCCP_V1_XOR_PAYLOAD_AMOUNT_SCALE, SccpBn254G1PointV1,
@@ -28,7 +31,12 @@ use iroha_data_model::{
         sccp_groth16_bn254_public_signal_schema_hash_v1, sccp_sora_taira_chain_id_hash_v1,
         sccp_v1_taira_xor_asset_definition_id,
     },
+    isi::{InstructionBox, bridge::RecordSccpMessage},
     peer::PeerId,
+    transaction::{
+        DataTriggerSequence, Executable, IvmBytecode, IvmProved, TransactionBuilder,
+        TransactionEntrypoint, TransactionResult, TransactionResultInner,
+    },
 };
 use norito::to_bytes;
 
@@ -51,6 +59,115 @@ pub struct SccpExactOutboundTestFixtureV1 {
     pub artifact: SccpGroth16Bn254ProofArtifactV1,
     /// Closed bridge-proof container for Core and Torii admission tests.
     pub bridge_proof: BridgeSccpDestinationProofV1,
+    /// Complete signed block and exact Sumeragi-v2 finality used by the bundle.
+    pub finalized_block: SccpFinalizedBlockTestFixtureV1,
+}
+
+/// Complete block plus finality produced only through the exact test signer.
+///
+/// Private fields keep the parent invariant closed: a height-two fixture can
+/// inherit only a parent CommitQC already bound to a complete canonical block
+/// wire image by this module.
+#[derive(Clone, Debug)]
+pub struct SccpFinalizedBlockTestFixtureV1 {
+    block: SignedBlock,
+    proof: TairaBridgeFinalityProofV1,
+}
+
+impl SccpFinalizedBlockTestFixtureV1 {
+    /// Return the complete signed block authenticated by this fixture.
+    #[must_use]
+    pub const fn block(&self) -> &SignedBlock {
+        &self.block
+    }
+
+    /// Return the exact finality proof bound to the complete block wire image.
+    #[must_use]
+    pub const fn proof(&self) -> &TairaBridgeFinalityProofV1 {
+        &self.proof
+    }
+}
+
+impl SccpExactOutboundTestFixtureV1 {
+    /// Rebuild this exact fixture around one complete finalized signed block.
+    ///
+    /// The caller must first attach the block's transactions and results so
+    /// both Merkle roots are present. A height-two block must also receive the
+    /// typed complete parent fixture whose exact CommitQC becomes the frozen
+    /// successor context. This method then signs the canonical block wire with
+    /// the deterministic test-only Taira roster and regenerates every
+    /// downstream request, Groth16 artifact, and bridge-proof binding.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the block is incomplete, commits another SCCP root, has an
+    /// invalid parent, or the
+    /// regenerated exact proof stops satisfying production verification.
+    #[must_use]
+    pub fn with_finalized_block(
+        &self,
+        block: &SignedBlock,
+        parent: Option<&SccpFinalizedBlockTestFixtureV1>,
+    ) -> Self {
+        let block_header = block.header();
+        assert!(
+            block_header.merkle_root().is_some(),
+            "an SCCP finalized-header fixture must commit its external entrypoints"
+        );
+        assert!(
+            block_header.result_merkle_root().is_some(),
+            "an SCCP finalized-header fixture must commit its transaction results"
+        );
+        assert_eq!(
+            block_header.sccp_commitment_root(),
+            Some(self.bundle.commitment_root),
+            "an SCCP finalized-header fixture must commit the exact bundle root"
+        );
+
+        let finalized_block = sccp_finalize_taira_block_test_fixture_v1(block, parent);
+        let finality = finalized_block.proof();
+        assert_eq!(finality.block_header, block_header);
+        assert_eq!(finality.finality_artifact.block_hash, block_header.hash());
+        assert_eq!(finalized_block.block(), block);
+        finality
+            .finality_artifact
+            .validate_for_header(&block_header)
+            .expect("exact SCCP finality artifact binds the complete block header");
+        finality
+            .finality_artifact
+            .verify()
+            .expect("exact SCCP finalized-header fixture is cryptographically valid");
+
+        let mut bundle = self.bundle.clone();
+        bundle.finality_proof =
+            to_bytes(finality).expect("canonical exact SCCP finalized-header finality proof");
+        assert!(verify_message_bundle_structure(&bundle));
+        assert!(
+            verified_sccp_message_taira_finality_proof_cryptographically_self_consistent(&bundle)
+                .is_some()
+        );
+
+        let route = self.route.clone();
+        let request =
+            build_sccp_groth16_bn254_proof_request_from_governed_route_v1(&bundle, &route)
+                .expect("exact finalized-header SCCP governed proof request");
+        let proof_bytes = valid_proof(&request);
+        assert!(verify_sccp_groth16_bn254_proof_v1(&request, &proof_bytes,));
+        let artifact = wrap_sccp_evm_groth16_bn254_proof_result(&proof_bytes, &request)
+            .expect("exact finalized-header SCCP Groth16 artifact");
+        let bridge_proof = bridge_sccp_destination_proof_v1(&artifact)
+            .expect("closed exact finalized-header SCCP bridge proof");
+        assert!(verify_sccp_destination_proof_v1(&bridge_proof, &bundle, &route).is_some());
+
+        Self {
+            route,
+            bundle,
+            request,
+            artifact,
+            bridge_proof,
+            finalized_block,
+        }
+    }
 }
 
 fn word_u64(value: u64) -> H256 {
@@ -249,19 +366,176 @@ fn transfer_payload(route: &SccpGovernedRouteV1, nonce: u64) -> SccpPayloadV1 {
     })
 }
 
-/// Build an exact cryptographically valid Sumeragi-v2 Taira finality proof.
-pub(crate) fn signed_finality_proof(commitment_root: H256) -> Vec<u8> {
-    let height = 1;
-    let view = 1;
-    let mut block_header = BlockHeader::new(
-        NonZeroU64::new(height).expect("exact SCCP fixture height is nonzero"),
-        None,
-        None,
-        None,
-        0,
-        view,
+fn exact_fixture_block_wire_hash(block: &SignedBlock) -> Hash {
+    Hash::new(
+        &block
+            .encode_wire()
+            .expect("exact SCCP fixture block has canonical wire bytes"),
+    )
+}
+
+fn assert_exact_finalized_block_fixture(fixture: &SccpFinalizedBlockTestFixtureV1) {
+    assert_eq!(fixture.proof.block_header, fixture.block.header());
+    assert_eq!(
+        fixture.proof.finality_artifact.block_hash,
+        fixture.block.hash()
     );
-    block_header.set_sccp_commitment_root(Some(commitment_root));
+    assert_eq!(
+        fixture.proof.finality_artifact.subject.payload_hash,
+        exact_fixture_block_wire_hash(&fixture.block),
+        "the finality subject must bind the complete canonical signed-block wire image"
+    );
+    fixture
+        .proof
+        .finality_artifact
+        .validate_for_header(&fixture.block.header())
+        .expect("exact SCCP fixture finality binds its complete block header");
+    fixture
+        .proof
+        .finality_artifact
+        .verify()
+        .expect("exact SCCP fixture finality is cryptographically valid");
+}
+
+fn assert_exact_fixture_block_body(block: &SignedBlock) {
+    assert!(
+        block.has_results(),
+        "an exact finalized block fixture must carry its complete execution results"
+    );
+    let external_entrypoints = block.external_entrypoints_cloned().collect::<Vec<_>>();
+    let external_root = external_entrypoints
+        .iter()
+        .map(TransactionEntrypoint::hash)
+        .collect::<MerkleTree<TransactionEntrypoint>>()
+        .root();
+    assert_eq!(
+        block.header().merkle_root(),
+        external_root,
+        "the finalized header must commit the exact external entrypoint order"
+    );
+
+    let entrypoint_hashes = block
+        .entrypoints_cloned()
+        .map(|entrypoint| entrypoint.hash())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        block.entrypoint_hashes().collect::<Vec<_>>(),
+        entrypoint_hashes,
+        "the attached full-entrypoint Merkle tree must match the canonical entrypoints"
+    );
+    let results = block.results().collect::<Vec<_>>();
+    assert_eq!(
+        results.len(),
+        entrypoint_hashes.len(),
+        "every canonical entrypoint must have exactly one committed result"
+    );
+    let result_hashes = results
+        .iter()
+        .map(|result| result.hash())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        block.result_hashes().collect::<Vec<_>>(),
+        result_hashes,
+        "the attached result Merkle tree must match the exact result vector"
+    );
+    let result_root = result_hashes
+        .iter()
+        .copied()
+        .collect::<MerkleTree<TransactionResult>>()
+        .root();
+    assert_eq!(
+        block.header().result_merkle_root(),
+        result_root,
+        "the finalized header must commit the exact transaction-result vector"
+    );
+
+    let mut commitments = Vec::new();
+    let mut seen = BTreeSet::new();
+    for (entrypoint_index, entrypoint) in external_entrypoints.iter().enumerate() {
+        if !results
+            .get(entrypoint_index)
+            .is_some_and(|result| result.as_ref().is_ok())
+        {
+            continue;
+        }
+        let transaction = match entrypoint {
+            TransactionEntrypoint::External(transaction) => transaction,
+            TransactionEntrypoint::SealedReveal(reveal) => reveal.signed_transaction(),
+            TransactionEntrypoint::SealedCommitment(_)
+            | TransactionEntrypoint::PrivateKaigi(_)
+            | TransactionEntrypoint::Time(_) => continue,
+        };
+        let instructions: &[InstructionBox] = match transaction.instructions() {
+            Executable::Instructions(instructions) => instructions.as_ref(),
+            Executable::IvmProved(proved) => proved.overlay.as_ref(),
+            Executable::ContractCall(_) | Executable::Ivm(_) => continue,
+        };
+        for instruction in instructions {
+            let Some(record) = instruction.as_any().downcast_ref::<RecordSccpMessage>() else {
+                continue;
+            };
+            let payload = decode_canonical_sccp_payload_bytes(&record.payload_bytes)
+                .expect("successful exact SCCP record must use canonical payload bytes");
+            assert_eq!(
+                canonical_sccp_payload_bytes(&payload)
+                    .expect("exact SCCP record payload re-encodes canonically"),
+                record.payload_bytes
+            );
+            let commitment = hub_commitment_from_sccp_payload(record.context, &payload)
+                .expect("successful exact SCCP record must have a well-formed outbound context");
+            assert!(
+                seen.insert((record.context.lane, commitment.message_id)),
+                "an exact finalized block must not repeat an outbound SCCP replay key"
+            );
+            commitments.push(commitment);
+        }
+    }
+    let maximum =
+        usize::try_from(iroha_data_model::bridge::SCCP_OUTBOUND_MESSAGES_MAX_PER_BLOCK_V1)
+            .expect("SCCP block bound fits usize");
+    assert!(commitments.len() <= maximum);
+    assert_eq!(
+        block.header().sccp_commitment_root(),
+        commitment_merkle_root(&commitments),
+        "the finalized header SCCP root must match successful record instructions exactly"
+    );
+}
+
+/// Finalize one complete height-one or height-two block with the test-only Taira roster.
+///
+/// This helper is available only to crate tests or consumers of the existing
+/// `test-fixtures` feature. It provides no caller-selected signing material and
+/// must not be used by production release tooling. The returned opaque parent
+/// type proves that a successor reuses the exact CommitQC of a proof already
+/// bound to its complete canonical signed-block wire image.
+///
+/// # Panics
+///
+/// Panics if `block` is outside the exact two-height fixture corridor, has an
+/// invalid or non-exact parent, carries an SCCP root without both transaction
+/// Merkle roots, or cannot be bound to a cryptographically valid artifact.
+#[must_use]
+pub fn sccp_finalize_taira_block_test_fixture_v1(
+    block: &SignedBlock,
+    parent: Option<&SccpFinalizedBlockTestFixtureV1>,
+) -> SccpFinalizedBlockTestFixtureV1 {
+    let block_header = block.header();
+    let height = block_header.height().get();
+    assert!(
+        (1..=2).contains(&height),
+        "the exact SCCP finality signer supports fixture heights one and two only"
+    );
+    if block_header.sccp_commitment_root().is_some() {
+        assert!(
+            block_header.merkle_root().is_some(),
+            "an SCCP-finalized block must commit its external entrypoints"
+        );
+        assert!(
+            block_header.result_merkle_root().is_some(),
+            "an SCCP-finalized block must commit its transaction results"
+        );
+    }
+    assert_exact_fixture_block_body(block);
     let mut keypairs = vec![
         KeyPair::try_from_seed(vec![1; 32], Algorithm::BlsNormal).expect("BLS fixture key 1"),
         KeyPair::try_from_seed(vec![2; 32], Algorithm::BlsNormal).expect("BLS fixture key 2"),
@@ -279,32 +553,76 @@ pub(crate) fn signed_finality_proof(commitment_root: H256) -> Vec<u8> {
             power,
         })
         .collect::<Vec<_>>();
-    let context = HeightContext {
-        chain_id: SCCP_TAIRA_FINALITY_CHAIN_ID_V1.into(),
-        protocol_version: PROTOCOL_VERSION,
-        height,
-        epoch: 0,
-        epoch_end_height: 10,
-        next_epoch_snapshot: None,
-        mode: ConsensusMode::Npos,
-        parent_commit_qc: None,
-        quorum: DualQuorum::from_roster(&roster).expect("valid powered SCCP fixture roster"),
-        roster,
-        nexus_amx_context_hash: Hash::new(b"exact SCCP fixture Nexus/AMX context"),
-        da_layout: DataAvailabilityLayout {
-            encoding: PayloadEncoding::Plain,
-            chunk_size_bytes: 1024,
-            data_shards: 0,
-            parity_shards: 0,
-            max_payload_size_bytes: 4096,
-            max_chunk_count: 4,
+    let quorum = DualQuorum::from_roster(&roster).expect("valid powered SCCP fixture roster");
+    let validator_set_pops = keypairs
+        .iter()
+        .map(|keypair| {
+            iroha_crypto::bls_normal_pop_prove(keypair.private_key()).expect("BLS fixture PoP")
+        })
+        .collect::<Vec<_>>();
+    let da_layout = DataAvailabilityLayout {
+        encoding: PayloadEncoding::Plain,
+        chunk_size_bytes: 1024,
+        data_shards: 0,
+        parity_shards: 0,
+        max_payload_size_bytes: 4096,
+        max_chunk_count: 4,
+    };
+    let context = match (height, block_header.prev_block_hash(), parent) {
+        (1, None, None) => HeightContext {
+            chain_id: SCCP_TAIRA_FINALITY_CHAIN_ID_V1.into(),
+            protocol_version: PROTOCOL_VERSION,
+            height,
+            epoch: 0,
+            epoch_end_height: 10,
+            next_epoch_snapshot: None,
+            mode: ConsensusMode::Npos,
+            parent_commit_qc: None,
+            quorum,
+            roster,
+            nexus_amx_context_hash: Hash::new(b"exact SCCP fixture Nexus/AMX context"),
+            da_layout,
+            leader_seed: [0x5a; 32],
         },
-        leader_seed: [0x5a; 32],
+        (2, Some(parent_hash), Some(parent)) => {
+            assert_exact_finalized_block_fixture(parent);
+            assert_eq!(parent.block().header().height().get(), 1);
+            assert_eq!(parent_hash, parent.block().hash());
+            assert_eq!(parent.proof().finality_artifact.height, 1);
+            assert!(
+                parent
+                    .proof()
+                    .finality_artifact
+                    .height_context
+                    .next_epoch_snapshot
+                    .is_none(),
+                "the two-height exact corridor does not synthesize an epoch transition"
+            );
+            let parent_context = &parent.proof().finality_artifact.height_context;
+            HeightContext {
+                chain_id: parent_context.chain_id.clone(),
+                protocol_version: PROTOCOL_VERSION,
+                height,
+                epoch: parent_context.epoch,
+                epoch_end_height: parent_context.epoch_end_height,
+                next_epoch_snapshot: None,
+                mode: parent_context.mode,
+                parent_commit_qc: Some(parent.proof().finality_artifact.commit_qc.clone()),
+                quorum: parent_context.quorum,
+                roster: parent_context.roster.clone(),
+                nexus_amx_context_hash: parent_context.nexus_amx_context_hash,
+                da_layout: parent_context.da_layout,
+                leader_seed: parent_context.leader_seed,
+            }
+        }
+        _ => panic!(
+            "height one requires no parent and height two requires the exact complete parent fixture"
+        ),
     };
     let subject = BlockSubject {
-        parent_block_hash: None,
+        parent_block_hash: block_header.prev_block_hash(),
         block_hash: block_header.hash(),
-        payload_hash: Hash::new(b"exact SCCP fixture payload"),
+        payload_hash: exact_fixture_block_wire_hash(block),
     };
     let mut commit_qc = QuorumCertificate {
         round: ConsensusRound {
@@ -342,23 +660,111 @@ pub(crate) fn signed_finality_proof(commitment_root: H256) -> Vec<u8> {
         .collect::<Vec<_>>();
     commit_qc.aggregate_signature = iroha_crypto::bls_normal_aggregate_signatures(&signature_refs)
         .expect("aggregate BLS fixture votes");
-    let validator_set_pops = keypairs
-        .iter()
-        .map(|keypair| {
-            iroha_crypto::bls_normal_pop_prove(keypair.private_key()).expect("BLS fixture PoP")
-        })
-        .collect();
     let finality_artifact =
         V2FinalityArtifact::new(context, subject, commit_qc, validator_set_pops);
-    to_bytes(&TairaBridgeFinalityProofV1 {
-        version: BRIDGE_FINALITY_PROOF_VERSION_V1,
-        block_header,
-        finality_artifact,
-    })
-    .expect("canonical exact SCCP finality fixture")
+    finality_artifact
+        .validate_for_header(&block_header)
+        .expect("exact SCCP finality artifact binds the supplied block header");
+    finality_artifact
+        .verify()
+        .expect("exact SCCP finality artifact is cryptographically valid");
+    let finalized = SccpFinalizedBlockTestFixtureV1 {
+        block: block.clone(),
+        proof: TairaBridgeFinalityProofV1 {
+            version: BRIDGE_FINALITY_PROOF_VERSION_V1,
+            block_header,
+            finality_artifact,
+        },
+    };
+    assert_exact_finalized_block_fixture(&finalized);
+    finalized
 }
 
-fn message_bundle(route: &SccpGovernedRouteV1, nonce: u64) -> TairaSccpMessageProofV1 {
+fn exact_sccp_fixture_block(
+    context: SccpOutboundMessageContextV1,
+    payload: &SccpPayloadV1,
+    commitment_root: Option<H256>,
+    height: u64,
+    previous: Option<iroha_crypto::HashOf<BlockHeader>>,
+) -> SignedBlock {
+    let payload_bytes =
+        canonical_sccp_payload_bytes(payload).expect("exact SCCP fixture payload is canonical");
+    let transaction_key = KeyPair::try_from_seed(vec![0x31; 32], Algorithm::Ed25519)
+        .expect("exact SCCP fixture transaction key");
+    let authority = AccountId::new(transaction_key.public_key().clone());
+    let mut transaction_builder =
+        TransactionBuilder::new(ChainId::from(SCCP_TAIRA_FINALITY_CHAIN_ID_V1), authority);
+    transaction_builder.set_creation_time(Duration::from_millis(1_700_000_000_001));
+    let transaction = transaction_builder
+        .with_executable(Executable::IvmProved(IvmProved {
+            bytecode: IvmBytecode::from_compiled(vec![0x01, 0x02, 0x03]),
+            overlay: vec![InstructionBox::from(RecordSccpMessage::new(
+                context,
+                payload_bytes,
+            ))]
+            .into(),
+            events_commitment: Hash::new(b"exact SCCP fixture events"),
+            gas_policy_commitment: Hash::new(b"exact SCCP fixture gas policy"),
+        }))
+        .sign(transaction_key.private_key());
+    let entrypoint_hash = transaction.hash_as_entrypoint();
+    let mut header = BlockHeader::new(
+        NonZeroU64::new(height).expect("exact SCCP fixture height is nonzero"),
+        previous,
+        None,
+        None,
+        1_700_000_000_002,
+        0,
+    );
+    header.set_sccp_commitment_root(commitment_root);
+    let block_key = KeyPair::try_from_seed(vec![0x32; 32], Algorithm::Ed25519)
+        .expect("exact SCCP fixture block key");
+    let provisional_signature = BlockSignature::new(
+        0,
+        SignatureOf::try_from_hash(block_key.private_key(), header.hash())
+            .expect("sign exact SCCP provisional block header"),
+    );
+    let mut block = SignedBlock::presigned(provisional_signature, header, vec![transaction]);
+    block
+        .set_transaction_results(
+            Vec::new(),
+            &[entrypoint_hash],
+            vec![TransactionResultInner::Ok(DataTriggerSequence::default())],
+        )
+        .expect("exact SCCP fixture block results match its transaction");
+    let final_signature = BlockSignature::new(
+        0,
+        SignatureOf::try_from_hash(block_key.private_key(), block.hash())
+            .expect("sign exact SCCP complete block header"),
+    );
+    block
+        .replace_signatures([final_signature].into_iter().collect())
+        .expect("replace exact SCCP provisional block signature");
+    block
+        .signatures()
+        .next()
+        .expect("exact SCCP block signature")
+        .signature()
+        .verify_hash(block_key.public_key(), block.hash())
+        .expect("exact SCCP complete block signature verifies");
+    block
+}
+
+#[cfg(test)]
+pub(crate) fn signed_finality_proof_for_message_test_fixture_v1(
+    context: SccpOutboundMessageContextV1,
+    payload: &SccpPayloadV1,
+    commitment_root: H256,
+) -> Vec<u8> {
+    let block = exact_sccp_fixture_block(context, payload, Some(commitment_root), 1, None);
+    let finalized = sccp_finalize_taira_block_test_fixture_v1(&block, None);
+    to_bytes(finalized.proof()).expect("canonical complete-block SCCP finality fixture")
+}
+
+fn message_bundle(
+    route: &SccpGovernedRouteV1,
+    nonce: u64,
+) -> (TairaSccpMessageProofV1, SccpFinalizedBlockTestFixtureV1) {
     let payload = transfer_payload(route, nonce);
     let context = SccpOutboundMessageContextV1::new(
         SccpLaneIdV1 {
@@ -377,20 +783,23 @@ fn message_bundle(route: &SccpGovernedRouteV1, nonce: u64) -> TairaSccpMessagePr
         hub_commitment_from_sccp_payload(context, &payload).expect("exact SCCP commitment");
     let merkle_proof = SccpMerkleProofV1 { steps: Vec::new() };
     let commitment_root = merkle_root_from_commitment(&commitment, &merkle_proof);
+    let block = exact_sccp_fixture_block(context, &payload, Some(commitment_root), 1, None);
+    let finalized_block = sccp_finalize_taira_block_test_fixture_v1(&block, None);
     let bundle = TairaSccpMessageProofV1 {
         version: 1,
         commitment_root,
         commitment,
         merkle_proof,
         payload,
-        finality_proof: signed_finality_proof(commitment_root),
+        finality_proof: to_bytes(finalized_block.proof())
+            .expect("canonical exact SCCP finality fixture"),
     };
     assert!(verify_message_bundle_structure(&bundle));
     assert!(
         verified_sccp_message_taira_finality_proof_cryptographically_self_consistent(&bundle)
             .is_some()
     );
-    bundle
+    (bundle, finalized_block)
 }
 
 fn valid_proof(request: &SccpGroth16Bn254ProofRequestV1) -> Vec<u8> {
@@ -450,7 +859,7 @@ pub fn sccp_exact_outbound_test_fixture_for_nonce_v1(nonce: u64) -> SccpExactOut
         SccpNetworkV1::EthereumMainnet,
         SccpRouteActivationV1::Bidirectional,
     );
-    let bundle = message_bundle(&route, nonce);
+    let (bundle, finalized_block) = message_bundle(&route, nonce);
     let request = build_sccp_groth16_bn254_proof_request_from_governed_route_v1(&bundle, &route)
         .expect("exact SCCP governed proof request");
     let proof_bytes = valid_proof(&request);
@@ -466,5 +875,323 @@ pub fn sccp_exact_outbound_test_fixture_for_nonce_v1(nonce: u64) -> SccpExactOut
         request,
         artifact,
         bridge_proof,
+        finalized_block,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn finalized_block_rebinding_authenticates_every_exact_hash_role() {
+        let fixture = sccp_exact_outbound_test_fixture_v1();
+        let default_finality = decode_taira_bridge_finality_proof(&fixture.bundle.finality_proof)
+            .expect("default exact finality decodes");
+        assert_eq!(default_finality.finality_artifact.height, 1);
+        assert_eq!(
+            default_finality
+                .finality_artifact
+                .height_context
+                .epoch_end_height,
+            10
+        );
+        assert!(
+            default_finality
+                .finality_artifact
+                .height_context
+                .parent_commit_qc
+                .is_none()
+        );
+        let block = fixture.finalized_block.block().clone();
+        let header = block.header();
+        let rebound = fixture.with_finalized_block(&block, None);
+        let finality = decode_taira_bridge_finality_proof(&rebound.bundle.finality_proof)
+            .expect("rebound exact finality decodes");
+
+        assert_eq!(finality.block_header, header);
+        assert_eq!(finality.finality_artifact.block_hash, header.hash());
+        assert_eq!(
+            rebound.request.public_inputs.finality_block_hash,
+            <[u8; 32]>::from(Hash::from(header.hash()))
+        );
+        finality
+            .finality_artifact
+            .validate_for_header(&header)
+            .expect("rebound artifact authenticates the exact complete header");
+        finality
+            .finality_artifact
+            .verify()
+            .expect("rebound artifact remains cryptographically valid");
+        assert!(
+            verify_sccp_destination_proof_v1(
+                &rebound.bridge_proof,
+                &rebound.bundle,
+                &rebound.route,
+            )
+            .is_some()
+        );
+    }
+
+    #[test]
+    fn finalized_height_two_rebinding_authenticates_parent_and_request() {
+        let fixture = sccp_exact_outbound_test_fixture_v1();
+        let parent = fixture.finalized_block.clone();
+        let block = exact_sccp_fixture_block(
+            fixture.bundle.commitment.context,
+            &fixture.bundle.payload,
+            Some(fixture.bundle.commitment_root),
+            2,
+            Some(parent.block().hash()),
+        );
+        let header = block.header();
+        let rebound = fixture.with_finalized_block(&block, Some(&parent));
+        let finality = decode_taira_bridge_finality_proof(&rebound.bundle.finality_proof)
+            .expect("height-two exact finality decodes");
+
+        assert_eq!(finality.block_header, header);
+        assert_eq!(finality.finality_artifact.height, 2);
+        let inherited_parent_qc = finality
+            .finality_artifact
+            .height_context
+            .parent_commit_qc
+            .as_ref()
+            .expect("height-two fixture parent CommitQC");
+        assert_eq!(
+            inherited_parent_qc.round.view, 0,
+            "the exact height-one fixture finalizes in view zero"
+        );
+        assert!(
+            inherited_parent_qc
+                .as_ref()
+                .same_commit_decision(parent.proof().finality_artifact.commit_qc.as_ref()),
+            "the successor must freeze the exact finalized parent decision"
+        );
+        assert_eq!(
+            inherited_parent_qc,
+            &parent.proof().finality_artifact.commit_qc,
+            "the fixture successor must carry the exact parent CommitQC, not a reconstructed adjacent decision"
+        );
+        assert_eq!(
+            finality.finality_artifact.height_context.epoch,
+            parent.proof().finality_artifact.height_context.epoch,
+            "an in-epoch successor must inherit its parent's epoch"
+        );
+        assert_eq!(
+            finality.finality_artifact.height_context.epoch_end_height,
+            parent
+                .proof()
+                .finality_artifact
+                .height_context
+                .epoch_end_height,
+            "an in-epoch successor must inherit its parent's epoch boundary"
+        );
+        assert!(
+            parent
+                .proof()
+                .finality_artifact
+                .height_context
+                .next_epoch_snapshot
+                .is_none()
+        );
+        assert!(
+            finality
+                .finality_artifact
+                .height_context
+                .next_epoch_snapshot
+                .is_none()
+        );
+        assert_eq!(
+            finality
+                .finality_artifact
+                .height_context
+                .parent_commit_qc
+                .as_ref()
+                .expect("height-two fixture parent CommitQC")
+                .subject
+                .block_hash,
+            parent.block().hash()
+        );
+        assert_eq!(rebound.request.public_inputs.finality_height, 2);
+        assert_eq!(
+            rebound.request.public_inputs.finality_block_hash,
+            <[u8; 32]>::from(Hash::from(header.hash()))
+        );
+        finality
+            .finality_artifact
+            .validate_for_header(&header)
+            .expect("height-two artifact binds its full header lineage");
+        finality
+            .finality_artifact
+            .verify()
+            .expect("height-two artifact is cryptographically valid");
+    }
+
+    #[test]
+    fn finalized_block_rebinding_rejects_rootless_and_mismatched_blocks() {
+        let fixture = sccp_exact_outbound_test_fixture_v1();
+        for block in [
+            exact_sccp_fixture_block(
+                fixture.bundle.commitment.context,
+                &fixture.bundle.payload,
+                None,
+                1,
+                None,
+            ),
+            exact_sccp_fixture_block(
+                fixture.bundle.commitment.context,
+                &fixture.bundle.payload,
+                Some([0xA5; 32]),
+                1,
+                None,
+            ),
+        ] {
+            assert!(
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    fixture.with_finalized_block(&block, None)
+                }))
+                .is_err(),
+                "rootless or mismatched finalized block must fail closed"
+            );
+        }
+    }
+
+    #[test]
+    fn successor_rejects_header_matching_parent_wire_substitution() {
+        let fixture = sccp_exact_outbound_test_fixture_v1();
+        let parent = fixture.finalized_block.clone();
+        let mut substituted_block = parent.block().clone();
+        let substitute_key = KeyPair::try_from_seed(vec![0x7C; 32], Algorithm::Ed25519)
+            .expect("substitute block key");
+        let substitute_signature = BlockSignature::new(
+            0,
+            SignatureOf::try_from_hash(substitute_key.private_key(), substituted_block.hash())
+                .expect("sign substituted block envelope"),
+        );
+        substituted_block
+            .replace_signatures([substitute_signature].into_iter().collect())
+            .expect("replace substituted block signature");
+        assert_eq!(substituted_block.header(), parent.block().header());
+        assert_ne!(
+            exact_fixture_block_wire_hash(&substituted_block),
+            parent.proof().finality_artifact.subject.payload_hash
+        );
+        parent
+            .proof()
+            .finality_artifact
+            .validate_for_header(&substituted_block.header())
+            .expect("header-only validation cannot detect a signed-body substitution");
+        let forged_parent = SccpFinalizedBlockTestFixtureV1 {
+            block: substituted_block,
+            proof: parent.proof().clone(),
+        };
+        let child = exact_sccp_fixture_block(
+            fixture.bundle.commitment.context,
+            &fixture.bundle.payload,
+            Some(fixture.bundle.commitment_root),
+            2,
+            Some(parent.block().hash()),
+        );
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                sccp_finalize_taira_block_test_fixture_v1(&child, Some(&forged_parent))
+            }))
+            .is_err(),
+            "a successor must reject a parent whose header matches but canonical wire does not"
+        );
+    }
+
+    #[test]
+    fn finality_signer_rejects_fixed_header_external_entrypoint_tamper() {
+        let fixture = sccp_exact_outbound_test_fixture_v1();
+        let mut tampered = fixture.finalized_block.block().clone();
+        let canonical_header = tampered.header();
+        tampered.set_external_entrypoints(Vec::new());
+        tampered.replace_header_for_testing(canonical_header);
+        assert_eq!(tampered.header(), canonical_header);
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                sccp_finalize_taira_block_test_fixture_v1(&tampered, None)
+            }))
+            .is_err(),
+            "the test signer must reject a body whose external entrypoints do not match its fixed header"
+        );
+    }
+
+    #[test]
+    fn finality_signer_rejects_fixed_header_result_envelope_tamper() {
+        let fixture = sccp_exact_outbound_test_fixture_v1();
+        let mut tampered = fixture.finalized_block.block().clone();
+        let canonical_header = tampered.header();
+        assert!(tampered.update_transaction_result(
+            0,
+            &TransactionResultInner::Err(
+                iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
+                    iroha_data_model::ValidationFail::NotPermitted(
+                        "adversarial SCCP result envelope".to_owned(),
+                    ),
+                ),
+            ),
+        ));
+        tampered.replace_header_for_testing(canonical_header);
+        assert_eq!(tampered.header(), canonical_header);
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                sccp_finalize_taira_block_test_fixture_v1(&tampered, None)
+            }))
+            .is_err(),
+            "the test signer must reject a result envelope whose Merkle root does not match its fixed header"
+        );
+    }
+
+    #[test]
+    fn finality_signer_rejects_internally_consistent_body_with_stale_sccp_root() {
+        let fixture = sccp_exact_outbound_test_fixture_v1();
+        let alternate = sccp_exact_outbound_test_fixture_for_nonce_v1(8);
+        let mut tampered = alternate.finalized_block.block().clone();
+        let alternate_header = tampered.header();
+        assert_eq!(
+            alternate_header.sccp_commitment_root(),
+            Some(alternate.bundle.commitment_root)
+        );
+        assert_ne!(
+            fixture.bundle.commitment_root, alternate.bundle.commitment_root,
+            "the substituted instruction body must have a distinct SCCP commitment"
+        );
+        let mut stale_header = alternate_header;
+        stale_header.set_sccp_commitment_root(Some(fixture.bundle.commitment_root));
+        tampered.replace_header_for_testing(stale_header);
+        let block_key = KeyPair::try_from_seed(vec![0x32; 32], Algorithm::Ed25519)
+            .expect("exact SCCP fixture block key");
+        let final_signature = BlockSignature::new(
+            0,
+            SignatureOf::try_from_hash(block_key.private_key(), tampered.hash())
+                .expect("sign adversarial complete block header"),
+        );
+        tampered
+            .replace_signatures([final_signature].into_iter().collect())
+            .expect("replace adversarial block signature");
+        tampered
+            .signatures()
+            .next()
+            .expect("adversarial block signature")
+            .signature()
+            .verify_hash(block_key.public_key(), tampered.hash())
+            .expect("adversarial block signature verifies");
+        assert_eq!(
+            tampered.header().merkle_root(),
+            alternate_header.merkle_root()
+        );
+        assert_eq!(
+            tampered.header().result_merkle_root(),
+            alternate_header.result_merkle_root()
+        );
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                sccp_finalize_taira_block_test_fixture_v1(&tampered, None)
+            }))
+            .is_err(),
+            "the test signer must reject a complete, internally consistent body whose SCCP root was replaced by a stale root"
+        );
     }
 }

@@ -1256,7 +1256,7 @@ impl KotoTestHost {
         payload: &[u8],
     ) -> Result<u64, crate::VMError> {
         let tlv = make_tlv(pointer_type, payload);
-        vm.alloc_input_tlv(&tlv)
+        vm.alloc_host_tlv(&tlv)
     }
 
     fn record_nested_trace(&mut self, nested_vm: &IVM) {
@@ -1402,7 +1402,7 @@ impl KotoTestHost {
                     let out_reg = 10 + idx;
                     if ((return_pointer_mask >> idx) & 1) != 0 && value != 0 {
                         let tlv = nested_vm.clone_tlv(value)?;
-                        let ptr = vm.alloc_input_tlv(&tlv)?;
+                        let ptr = vm.alloc_host_tlv(&tlv)?;
                         vm.set_register(out_reg, ptr);
                     } else {
                         vm.set_register(out_reg, value);
@@ -3054,9 +3054,9 @@ mod tests {
                     test::invoke_entrypoint_as(actor: "issuer", entrypoint: "remember_caller", arguments: Json::parse("{{}}"));
                     test::assert(last_actor == AccountId::parse("{actor_account}"));
 
-                    let pair = test::invoke_entrypoint_as(actor: "issuer", entrypoint: "pair", arguments: Json::parse("{{}}"));
-                    test::assert_eq(actual: pair.0, expected: 2);
-                    test::assert_eq(actual: pair.1, expected: 3);
+                    let pair_result = test::invoke_entrypoint_as(actor: "issuer", entrypoint: "pair", arguments: Json::parse("{{}}"));
+                    test::assert_eq(actual: pair_result.0, expected: 2);
+                    test::assert_eq(actual: pair_result.1, expected: 3);
                 }}
 
                 #[test(fixture="actors")]
@@ -3156,7 +3156,10 @@ mod tests {
 
                 #[test]
                 fn smoke() {
-                    let next = invoke_entrypoint("run", Json::parse("{\"count\":\"7\"}"));
+                    let next = test::invoke_entrypoint(
+                        entrypoint: "run",
+                        arguments: Json::parse("{\"count\":\"7\"}")
+                    );
                     test::assert_eq(actual: next, expected: 8);
                 }
             }

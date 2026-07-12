@@ -1585,6 +1585,7 @@ pub(crate) struct ContractEntrypointAuthorizationSnapshot {
     pub(crate) permission: Option<String>,
     pub(crate) contract_address: iroha_data_model::smart_contract::ContractAddress,
     pub(crate) contract_alias: Option<iroha_data_model::smart_contract::ContractAlias>,
+    pub(crate) contract_alias_binding: Option<crate::state::ContractAliasBindingRecord>,
     pub(crate) code_hash: iroha_crypto::Hash,
     parent: Option<Box<ContractEntrypointAuthorizationSnapshot>>,
 }
@@ -1603,6 +1604,7 @@ impl ContractEntrypointAuthorizationSnapshot {
             permission,
             contract_address: identity.contract_address.clone(),
             contract_alias: identity.contract_alias.clone(),
+            contract_alias_binding: identity.contract_alias_binding.clone(),
             code_hash: identity.code_hash,
             parent: None,
         }
@@ -1630,6 +1632,22 @@ impl ContractEntrypointAuthorizationSnapshot {
     /// Return whether this snapshot represents a top-level invocation.
     pub(crate) fn is_root(&self) -> bool {
         self.parent.is_none()
+    }
+
+    /// Return whether `path` is owned by the exact contract instance captured by this snapshot.
+    ///
+    /// Durable contract state is namespaced by the immutable contract address rather than by a
+    /// movable alias. Lifecycle markers use the same address digest in their reserved namespace.
+    /// Keeping this check on the snapshot prevents a valid permission for one contract from being
+    /// attached to a durable write targeting another contract's namespace.
+    pub(crate) fn owns_durable_state_path(&self, path: &Name) -> bool {
+        let address = self.contract_address.to_string();
+        let digest = hex::encode(iroha_crypto::Hash::new(address.as_bytes()).as_ref());
+        let path: &str = path.as_ref();
+        path.strip_prefix("sc/")
+            .and_then(|suffix| suffix.strip_prefix(&digest))
+            .is_some_and(|suffix| suffix.starts_with('/'))
+            || path == code::contract_lifecycle_state_key(&self.contract_address).as_ref()
     }
 
     /// Validate the immutable caller relationship between every adjacent invocation.
@@ -1694,13 +1712,22 @@ impl ContractEntrypointAuthorizationSnapshot {
             )));
         }
 
-        let reverse_alias = world
+        let live_alias_binding = world
             .contract_alias_bindings()
             .get(&self.contract_address)
+            .cloned();
+        if live_alias_binding != self.contract_alias_binding {
+            return Err(ValidationFail::NotPermitted(format!(
+                "contract instance `{}` changed alias binding while its call was prepared",
+                self.contract_address
+            )));
+        }
+        let reverse_alias = live_alias_binding
+            .as_ref()
             .map(|binding| binding.alias.clone());
         if reverse_alias != self.contract_alias {
             return Err(ValidationFail::NotPermitted(format!(
-                "contract instance `{}` changed alias binding while its call was prepared",
+                "contract instance `{}` has inconsistent captured alias binding metadata",
                 self.contract_address
             )));
         }
@@ -2308,9 +2335,12 @@ pub(crate) fn resolve_raw_contract_runtime_identity(
             "contract instance `{contract_address}` is bound to code `{bound_code_hash}`, not executing code `{code_hash}`"
         )));
     }
-    let live_alias = world
+    let live_alias_binding = world
         .contract_alias_bindings()
         .get(&contract_address)
+        .cloned();
+    let live_alias = live_alias_binding
+        .as_ref()
         .map(|binding| binding.alias.clone());
     if let Some(alias) = live_alias.as_ref()
         && world.contract_aliases().get(alias) != Some(&contract_address)
@@ -2330,6 +2360,7 @@ pub(crate) fn resolve_raw_contract_runtime_identity(
     Ok(Some(code::BoundContractIdentity {
         contract_address,
         contract_alias: live_alias,
+        contract_alias_binding: live_alias_binding,
         code_hash,
     }))
 }
@@ -3684,12 +3715,6 @@ impl Executor {
             ));
         }
         if let Some(replay) = ivm_proved_replay.as_ref() {
-            if !replay.durable_state_overlay.is_empty() {
-                return Err(ValidationFail::NotPermitted(
-                    "Executable::IvmProved ABI V1 cannot apply durable StateMap writes without per-path authorization metadata"
-                        .to_owned(),
-                ));
-            }
             crate::validation_fee::enforce_ivm_proved_completed_axt_admission(
                 replay.completed_axt.len(),
                 state_transaction,
@@ -3754,6 +3779,22 @@ impl Executor {
                 ));
             }
             (None, None) => {}
+        }
+        if let Some(replay) = ivm_proved_replay.as_ref()
+            && !replay.durable_state_overlay.is_empty()
+        {
+            let root = entrypoint_authorization.ok_or_else(|| {
+                ValidationFail::NotPermitted(
+                    "proved durable-state replay is missing its root authorization snapshot"
+                        .to_owned(),
+                )
+            })?;
+            crate::pipeline::overlay::validate_ivm_proved_durable_authorizations(
+                &state_transaction.world,
+                &replay.durable_state_overlay,
+                &replay.durable_state_authorizations,
+                root,
+            )?;
         }
 
         let instruction_count = instructions.len();
@@ -3828,11 +3869,44 @@ impl Executor {
                         authorization.validate(&state_transaction.world)?;
                     }
                 }
+                if !replay.durable_state_overlay.is_empty() {
+                    let root = entrypoint_authorization.ok_or_else(|| {
+                        ValidationFail::NotPermitted(
+                            "proved durable-state replay is missing its root authorization snapshot"
+                                .to_owned(),
+                        )
+                    })?;
+                    root.validate_for_authority(&state_transaction.world, authority)?;
+                    // A queued instruction can revoke the selected permission or replace a live
+                    // contract binding. Validate the complete set before recording any replay
+                    // artifact or writing the first durable key, so rejection remains atomic.
+                    crate::pipeline::overlay::validate_ivm_proved_durable_authorizations(
+                        &state_transaction.world,
+                        &replay.durable_state_overlay,
+                        &replay.durable_state_authorizations,
+                        root,
+                    )?;
+                }
                 crate::smartcontracts::ivm::host::HostExecutionArtifacts::record_completed_axt_states(
                     state_transaction,
                     replay.completed_axt,
                 );
                 for (path, value) in replay.durable_state_overlay {
+                    let authorization = replay
+                        .durable_state_authorizations
+                        .get(&path)
+                        .and_then(Option::as_ref)
+                        .ok_or_else(|| {
+                            ValidationFail::InternalError(format!(
+                                "proved durable state path `{path}` lost its authorization snapshot before apply"
+                            ))
+                        })?;
+                    authorization.validate(&state_transaction.world)?;
+                    if !authorization.owns_durable_state_path(&path) {
+                        return Err(ValidationFail::NotPermitted(format!(
+                            "proved durable state path `{path}` does not belong to its contract authorization snapshot"
+                        )));
+                    }
                     if let Some(stored) = value {
                         state_transaction
                             .world
@@ -5537,24 +5611,24 @@ fn detect_fixture_executor_kind(executor: &LoadedExecutor) -> Option<FixtureExec
 
 fn detect_fixture_executor_kind_from_bytecode(bytecode: &[u8]) -> Option<FixtureExecutorKind> {
     // Placeholder samples are tiny deterministic programs with this exact layout:
-    // header(17) + HALT(4) = 21 bytes.
-    if bytecode.len() != 21 {
+    // authenticated header + one HALT instruction.
+    if bytecode.len() != ivm::HEADER_SIZE + core::mem::size_of::<u32>() {
         return None;
     }
-    if bytecode.get(0..4) != Some(b"IVM\0") {
+    let parsed = ivm::ProgramMetadata::parse(bytecode).ok()?;
+    if parsed.code_offset != ivm::HEADER_SIZE
+        || parsed.metadata.version_major != 1
+        || parsed.metadata.version_minor != 1
+        || parsed.metadata.mode != 0
+        || parsed.metadata.abi_version != 1
+    {
         return None;
     }
-    if bytecode.get(4..7) != Some(&[1, 1, 0]) {
-        return None;
-    }
-    let vector_length = *bytecode.get(7)?;
+    let vector_length = parsed.metadata.vector_length;
     let kind = FixtureExecutorKind::from_vector_length(vector_length)?;
-    if bytecode.get(16) != Some(&1) {
-        return None;
-    }
 
     let halt = ivm::encoding::wide::encode_halt().to_le_bytes();
-    if bytecode.get(17..21) != Some(&halt) {
+    if bytecode.get(ivm::HEADER_SIZE..) != Some(&halt) {
         return None;
     }
 
@@ -7853,6 +7927,8 @@ mod tests {
             queued: Vec::new(),
             completed_axt: vec![completed_axt],
             durable_state_overlay: BTreeMap::new(),
+            durable_state_authorizations: BTreeMap::new(),
+            access_log: None,
             events_commitment: Hash::new(b"events"),
             gas_used: replay_gas,
             trace_hash: Hash::new(b"trace"),
@@ -7894,7 +7970,210 @@ mod tests {
     }
 
     #[test]
-    fn proved_replay_rejects_durable_state_overlay_before_effects() {
+    fn proved_replay_applies_durable_state_with_exact_per_path_authorization() {
+        let keypair = checked_keypair();
+        let authority = AccountId::new(keypair.public_key().clone());
+        let domain =
+            Domain::new(DomainId::try_new("wonderland", "universal").expect("valid test domain"))
+                .build(&authority);
+        let account = Account::new(authority.clone()).build(&authority);
+        let contract_address = ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &authority,
+            405,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("contract address");
+        let code_hash = Hash::new(b"proved durable-state contract");
+        let mut world = World::with([domain], [account], []);
+        world
+            .contract_instances
+            .insert(contract_address.clone(), code_hash);
+        let state = State::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            query::store::LiveQueryStore::start_test(),
+        );
+        let tx = TransactionBuilder::new(state.chain_id.clone(), authority.clone())
+            .with_instructions([Log::new(Level::INFO, "proved durable fixture".to_owned())])
+            .sign(keypair.private_key());
+
+        let authorization = ContractEntrypointAuthorizationSnapshot::new(
+            authority.clone(),
+            "write".to_owned(),
+            None,
+            &code::BoundContractIdentity {
+                contract_address: contract_address.clone(),
+                contract_alias: None,
+                contract_alias_binding: None,
+                code_hash,
+            },
+        );
+        let runtime_context = ContractRuntimeExecutionContext {
+            contract_subject: contract_address.subject_id(),
+            contract_address: contract_address.clone(),
+            contract_alias: None,
+            entrypoint: "write".to_owned(),
+        };
+        let digest = hex::encode(Hash::new(contract_address.to_string().as_bytes()).as_ref());
+        let marker: Name = format!("sc/{digest}/Values/fixture")
+            .parse()
+            .expect("scoped durable state marker");
+        let stored = vec![0xA5];
+        let replay = crate::pipeline::overlay::IvmProvedReplay {
+            queued: Vec::new(),
+            completed_axt: Vec::new(),
+            durable_state_overlay: BTreeMap::from([(marker.clone(), Some(stored.clone()))]),
+            durable_state_authorizations: BTreeMap::from([(
+                marker.clone(),
+                Some(authorization.clone()),
+            )]),
+            access_log: None,
+            events_commitment: Hash::new(b"events"),
+            gas_used: 0,
+            trace_hash: Hash::new(b"trace"),
+        };
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut state_tx = block.transaction();
+        let tx_hash = tx.hash();
+        super::Executor::Initial
+            .execute_metered_instructions(
+                &mut state_tx,
+                &authority,
+                &tx,
+                Vec::new(),
+                Some(replay),
+                Some(&runtime_context),
+                Some(&authorization),
+                0,
+                [0_u8; Hash::LENGTH],
+                tx_hash,
+                Some(50_000),
+                true,
+                true,
+                None,
+                None,
+                true,
+                false,
+            )
+            .expect("proved replay applies its authorized durable write");
+        assert_eq!(
+            state_tx.world.smart_contract_state.get(&marker),
+            Some(&stored)
+        );
+        drop(state_tx);
+        drop(block);
+
+        let malformed_replay = crate::pipeline::overlay::IvmProvedReplay {
+            queued: Vec::new(),
+            completed_axt: Vec::new(),
+            durable_state_overlay: BTreeMap::from([(marker.clone(), Some(stored))]),
+            durable_state_authorizations: BTreeMap::new(),
+            access_log: None,
+            events_commitment: Hash::new(b"malformed-events"),
+            gas_used: 0,
+            trace_hash: Hash::new(b"malformed-trace"),
+        };
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut malformed_block = state.block(header);
+        let mut malformed_tx = malformed_block.transaction();
+        let error = super::Executor::Initial
+            .execute_metered_instructions(
+                &mut malformed_tx,
+                &authority,
+                &tx,
+                Vec::new(),
+                Some(malformed_replay),
+                Some(&runtime_context),
+                Some(&authorization),
+                0,
+                [0_u8; Hash::LENGTH],
+                tx_hash,
+                Some(50_000),
+                true,
+                true,
+                None,
+                None,
+                true,
+                false,
+            )
+            .expect_err("post-verification replay metadata must retain an exact authorization map");
+        assert!(matches!(
+            error,
+            ValidationFail::InternalError(message)
+                if message.contains("structurally inconsistent")
+        ));
+        assert!(
+            malformed_tx
+                .world
+                .smart_contract_state
+                .get(&marker)
+                .is_none(),
+            "malformed replay authorization metadata must apply zero durable writes"
+        );
+        drop(malformed_tx);
+        drop(malformed_block);
+
+        let foreign_digest = hex::encode(Hash::new(b"foreign contract namespace").as_ref());
+        let foreign_path: Name = format!("sc/{foreign_digest}/Values/fixture")
+            .parse()
+            .expect("foreign scoped durable state marker");
+        let foreign_replay = crate::pipeline::overlay::IvmProvedReplay {
+            queued: Vec::new(),
+            completed_axt: Vec::new(),
+            durable_state_overlay: BTreeMap::from([(foreign_path.clone(), Some(vec![0x5A]))]),
+            durable_state_authorizations: BTreeMap::from([(
+                foreign_path.clone(),
+                Some(authorization.clone()),
+            )]),
+            access_log: None,
+            events_commitment: Hash::new(b"foreign-events"),
+            gas_used: 0,
+            trace_hash: Hash::new(b"foreign-trace"),
+        };
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut foreign_block = state.block(header);
+        let mut foreign_tx = foreign_block.transaction();
+        let error = super::Executor::Initial
+            .execute_metered_instructions(
+                &mut foreign_tx,
+                &authority,
+                &tx,
+                Vec::new(),
+                Some(foreign_replay),
+                Some(&runtime_context),
+                Some(&authorization),
+                0,
+                [0_u8; Hash::LENGTH],
+                tx_hash,
+                Some(50_000),
+                true,
+                true,
+                None,
+                None,
+                true,
+                false,
+            )
+            .expect_err("one contract's snapshot must not authorize another state namespace");
+        assert!(matches!(
+            error,
+            ValidationFail::NotPermitted(message)
+                if message.contains("does not belong to its contract authorization snapshot")
+        ));
+        assert!(
+            foreign_tx
+                .world
+                .smart_contract_state
+                .get(&foreign_path)
+                .is_none(),
+            "a foreign per-path snapshot must apply zero durable writes"
+        );
+    }
+
+    #[test]
+    fn proved_replay_rejects_durable_state_without_root_authorization_before_effects() {
         let keypair = checked_keypair();
         let authority = AccountId::new(keypair.public_key().clone());
         let kura = Kura::blank_kura_for_testing();
@@ -7910,6 +8189,8 @@ mod tests {
             queued: Vec::new(),
             completed_axt: Vec::new(),
             durable_state_overlay: BTreeMap::from([(marker.clone(), Some(vec![0xA5]))]),
+            durable_state_authorizations: BTreeMap::from([(marker.clone(), None)]),
+            access_log: None,
             events_commitment: Hash::new(b"events"),
             gas_used: 0,
             trace_hash: Hash::new(b"trace"),
@@ -7939,9 +8220,13 @@ mod tests {
                 true,
                 false,
             )
-            .expect_err("proved replay durable state writes must be rejected");
+            .expect_err("proved replay durable state writes require root authorization");
 
-        assert!(matches!(error, ValidationFail::NotPermitted(_)));
+        assert!(matches!(
+            error,
+            ValidationFail::NotPermitted(message)
+                if message.contains("missing its root authorization snapshot")
+        ));
         assert!(
             state_tx.world.smart_contract_state.get(&marker).is_none(),
             "rejected proved replay must apply no durable state"
@@ -8154,11 +8439,15 @@ mod tests {
     }
 
     fn generate_fixture_placeholder_program(vector_length: u8) -> Vec<u8> {
-        let mut program = Vec::new();
-        program.extend_from_slice(b"IVM\0");
-        program.extend_from_slice(&[1, 1, 0, vector_length]);
-        program.extend_from_slice(&1_000_000_u64.to_le_bytes());
-        program.push(1);
+        let mut program = ivm::ProgramMetadata {
+            version_major: 1,
+            version_minor: 1,
+            mode: 0,
+            vector_length,
+            max_cycles: 1_000_000,
+            abi_version: 1,
+        }
+        .encode();
         program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
         program
     }
@@ -13070,6 +13359,7 @@ mod tests {
         let interface = EmbeddedContractInterfaceV1 {
             seiyaku_name: "TestContract".to_owned(),
             compiler_fingerprint: "executor-test".to_owned(),
+            abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
             features_bitmap: 0,
             access_set_hints: None,
             kotoba: Vec::new(),
@@ -14481,11 +14771,9 @@ seiyaku IdentityRequired {
     fn migrate_fails_on_invalid_bytecode() {
         // Construct an invalid program (oversized code section) to trigger a VM error
         let mut prog = Vec::new();
-        // Metadata header: IVM, version 1.0, mode 0, vector len 0, max_cycles 0, abi_version 0
-        prog.extend_from_slice(b"IVM\0");
-        prog.extend_from_slice(&[1, 0, 0, 0]);
-        prog.extend_from_slice(&0u64.to_le_bytes());
-        prog.push(0);
+        // Start with a fully valid authenticated header so rejection exercises the
+        // oversized code section rather than an earlier metadata failure.
+        prog.extend_from_slice(&ivm::ProgramMetadata::default_for(1, 0, 1).encode());
         // Oversized code
         let heap_start =
             usize::try_from(ivm::Memory::HEAP_START).expect("HEAP_START fits within usize");

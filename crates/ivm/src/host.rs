@@ -812,9 +812,12 @@ pub fn quote_zk_batch_at(
 ///
 /// Returns [`ERR_DECODE`] for invalid headers, flags, schema, checksum, or payloads.
 pub fn decode_canonical_zk_envelope(payload: &[u8]) -> Result<OpenVerifyEnvelope, u64> {
-    let archived =
-        norito::core::from_bytes::<OpenVerifyEnvelope>(payload).map_err(|_| ERR_DECODE)?;
-    OpenVerifyEnvelope::try_deserialize(archived).map_err(|_| ERR_DECODE)
+    // Pointer-ABI payloads begin seven bytes into their TLV envelope, so a
+    // valid nested Norito frame is not necessarily aligned for the zero-copy
+    // `from_bytes` path. The canonical slice decoder validates the same
+    // header, schema, flags, padding, and checksum while safely realigning
+    // when required.
+    decode_from_bytes(payload).map_err(|_| ERR_DECODE)
 }
 
 /// Decode the sole ABI-v1 public ZK batch schema with a bounded item count.
@@ -828,19 +831,35 @@ pub fn decode_canonical_zk_batch(
     max_items: usize,
 ) -> Result<Vec<OpenVerifyEnvelope>, u64> {
     type Batch = Vec<OpenVerifyEnvelope>;
-    let archived = norito::core::from_bytes::<Batch>(payload).map_err(|_| ERR_DECODE)?;
-    let archive_offset = (archived as *const Archived<Batch> as usize)
-        .checked_sub(payload.as_ptr() as usize)
+    // Validate the complete frame without requiring the TLV payload address
+    // itself to satisfy `Archived<Batch>` alignment. Inspect the bounded
+    // top-level count before materializing any elements.
+    let view = norito::core::from_bytes_view(payload).map_err(|_| ERR_DECODE)?;
+    if view.schema() != <Batch as NoritoDeserialize>::schema_hash() {
+        return Err(ERR_DECODE);
+    }
+    let alignment = core::mem::align_of::<Archived<Batch>>();
+    let expected_padding = if alignment <= 1 {
+        0
+    } else {
+        (alignment - Header::SIZE % alignment) % alignment
+    };
+    let actual_padding = payload
+        .len()
+        .checked_sub(Header::SIZE)
+        .and_then(|tail| tail.checked_sub(view.as_bytes().len()))
         .ok_or(ERR_DECODE)?;
-    let archive_payload = payload.get(archive_offset..).ok_or(ERR_DECODE)?;
-    let (count, _) = norito::core::read_seq_len_slice(archive_payload).map_err(|_| ERR_DECODE)?;
+    if actual_padding != expected_padding {
+        return Err(ERR_DECODE);
+    }
+    let (count, _) = norito::core::read_seq_len_slice(view.as_bytes()).map_err(|_| ERR_DECODE)?;
     if count == 0 {
         return Err(ERR_DECODE);
     }
     if count > max_items {
         return Err(ERR_BATCH);
     }
-    let batch = Batch::try_deserialize(archived).map_err(|_| ERR_DECODE)?;
+    let batch: Batch = decode_from_bytes(payload).map_err(|_| ERR_DECODE)?;
     if batch.len() != count {
         return Err(ERR_DECODE);
     }
@@ -1223,6 +1242,7 @@ pub const fn registered_host_syscall_gas_formula(number: u32) -> Option<HostSysc
             | syscalls::SYSCALL_SYSVAR_CONTRACT_ADDRESS
             | syscalls::SYSCALL_SYSVAR_CONTRACT_SUBJECT
             | syscalls::SYSCALL_SYSVAR_ENTRYPOINT
+            | syscalls::SYSCALL_NORMALIZE_NORITO_BYTES
             | syscalls::SYSCALL_DECODE_ARGUMENT_RECORD
             | syscalls::SYSCALL_STATE_MAP_KEY_AT
     ) {
@@ -1693,7 +1713,7 @@ pub(crate) fn common_syscall_gas_quote(number: u32, vm: &IVM) -> Result<Option<u
             } else {
                 let (pointer_type, payload_len) =
                     quote_any_tlv_at(vm, DefaultHost::resolve_code_tlv_addr(vm, pointer))?;
-                if !matches!(pointer_type, PointerType::NoritoBytes | PointerType::Blob) {
+                if pointer_type != PointerType::NoritoBytes {
                     return Err(VMError::NoritoInvalid);
                 }
                 DefaultHost::pointer_gas(payload_len)
@@ -1775,9 +1795,45 @@ pub(crate) fn common_syscall_gas_quote(number: u32, vm: &IVM) -> Result<Option<u
                 DefaultHost::input_publish_gas(TLV_ENVELOPE_OVERHEAD.saturating_add(payload_len))
             }
         }
+        syscalls::SYSCALL_NORMALIZE_NORITO_BYTES => {
+            vm.ensure_public_register(10)?;
+            let pointer = vm.register(10);
+            if pointer == 0 {
+                return Err(VMError::NoritoInvalid);
+            }
+            let (pointer_type, payload_len) = quote_any_tlv_at(vm, pointer)?;
+            if !matches!(pointer_type, PointerType::Blob | PointerType::NoritoBytes) {
+                return Err(VMError::NoritoInvalid);
+            }
+            DefaultHost::pointer_gas(payload_len)
+        }
         _ => return Ok(None),
     };
     Ok(Some(quote))
+}
+
+/// Canonicalize a public byte carrier as a fresh host-owned `NoritoBytes` TLV.
+///
+/// The payload is copied verbatim; only the pointer-ABI type tag and envelope
+/// digest are produced anew. Keeping this implementation shared makes the
+/// standalone, codec, mock-WSV, and production hosts byte-for-byte identical.
+pub(crate) fn normalize_norito_bytes(vm: &mut IVM) -> Result<u64, VMError> {
+    vm.ensure_public_register(10)?;
+    let pointer = vm.register(10);
+    if pointer == 0 {
+        return Err(VMError::NoritoInvalid);
+    }
+    let payload = {
+        let tlv = vm.validate_tlv(pointer)?;
+        if !matches!(tlv.type_id, PointerType::Blob | PointerType::NoritoBytes) {
+            return Err(VMError::NoritoInvalid);
+        }
+        tlv.payload.to_vec()
+    };
+    let gas = DefaultHost::pointer_gas(payload.len());
+    let normalized = DefaultHost::alloc_norito_bytes_tlv(vm, &payload)?;
+    vm.set_register(10, normalized);
+    Ok(gas)
 }
 
 /// Trait for IVM host environment to handle syscalls (SCALL).
@@ -2492,17 +2548,10 @@ impl DefaultHost {
 
     fn decode_signature_inputs(vm: &IVM) -> Result<(Vec<u8>, Vec<u8>, Vec<u8>), VMError> {
         let message_tlv = vm.validate_tlv(vm.register(10))?;
-        let message = match message_tlv.type_id {
-            PointerType::Blob | PointerType::NoritoBytes => message_tlv.payload.to_vec(),
-            PointerType::Json => {
-                let json: Json =
-                    decode_from_bytes(message_tlv.payload).map_err(|_| VMError::DecodeError)?;
-                let value =
-                    norito::json::parse_value(json.get()).map_err(|_| VMError::DecodeError)?;
-                norito::json::to_vec(&value).map_err(|_| VMError::DecodeError)?
-            }
-            _ => return Err(VMError::NoritoInvalid),
-        };
+        if message_tlv.type_id != PointerType::Blob {
+            return Err(VMError::NoritoInvalid);
+        }
+        let message = message_tlv.payload.to_vec();
         let decode_blob = |register: usize| -> Result<Vec<u8>, VMError> {
             let tlv = vm.validate_tlv(vm.register(register))?;
             if tlv.type_id != PointerType::Blob {
@@ -2514,13 +2563,7 @@ impl DefaultHost {
     }
 
     fn signature_verify_gas_quote(vm: &IVM) -> Result<u64, VMError> {
-        let (message_type, message_len) = quote_any_tlv_at(vm, vm.register(10))?;
-        if !matches!(
-            message_type,
-            PointerType::Blob | PointerType::NoritoBytes | PointerType::Json
-        ) {
-            return Err(VMError::NoritoInvalid);
-        }
+        let message_len = quote_tlv_payload_len_at(vm, vm.register(10), PointerType::Blob)?;
         let signature_len = quote_tlv_payload_len_at(vm, vm.register(11), PointerType::Blob)?;
         let public_key_len = quote_tlv_payload_len_at(vm, vm.register(12), PointerType::Blob)?;
         Ok(Self::signature_verify_gas(
@@ -3318,7 +3361,7 @@ impl IVMHost for DefaultHost {
                     return Ok(Self::pointer_gas(0));
                 }
                 let tlv = Self::decode_any_tlv(vm, ptr)?;
-                if !matches!(tlv.type_id, PointerType::NoritoBytes | PointerType::Blob) {
+                if tlv.type_id != PointerType::NoritoBytes {
                     return Err(VMError::NoritoInvalid);
                 }
                 let encoded_len = tlv.payload.len();
@@ -3349,7 +3392,7 @@ impl IVMHost for DefaultHost {
                 let hash: [u8; iroha_crypto::Hash::LENGTH] =
                     iroha_crypto::Hash::new(&inner_payload).into();
                 out.extend_from_slice(&hash);
-                let out_ptr = vm.alloc_input_tlv(&out)?;
+                let out_ptr = vm.alloc_host_tlv(&out)?;
                 vm.set_register(10, out_ptr);
                 Ok(Self::pointer_gas(encoded_len))
             }
@@ -3416,6 +3459,7 @@ impl IVMHost for DefaultHost {
                     crate::core_host::CoreHost::resolve_code_tlv_addr,
                 )
             }
+            crate::syscalls::SYSCALL_NORMALIZE_NORITO_BYTES => normalize_norito_bytes(vm),
             crate::syscalls::SYSCALL_DEBUG_LOG => {
                 let ptr = vm.register(10);
                 if ptr == 0 {
@@ -3705,7 +3749,7 @@ impl IVMHost for DefaultHost {
                 out_buf.extend_from_slice(&req.proof);
                 let y: [u8; 32] = iroha_crypto::Hash::new(&out_buf).into();
 
-                // Build Blob TLV in INPUT and return pointer
+                // Build a host-owned Blob TLV and return its public pointer.
                 let mut tlv = Vec::with_capacity(7 + 32 + 32);
                 tlv.extend_from_slice(&(PointerType::Blob as u16).to_be_bytes());
                 tlv.push(1);
@@ -3713,7 +3757,7 @@ impl IVMHost for DefaultHost {
                 tlv.extend_from_slice(&y);
                 let h: [u8; 32] = iroha_crypto::Hash::new(y).into();
                 tlv.extend_from_slice(&h);
-                match vm.alloc_input_tlv(&tlv) {
+                match vm.alloc_host_tlv(&tlv) {
                     Ok(p) => {
                         vm.set_register(10, p);
                         vm.set_register(11, OK);
@@ -3764,7 +3808,7 @@ impl IVMHost for DefaultHost {
                     out.extend_from_slice(&body);
                     let h: [u8; 32] = iroha_crypto::Hash::new(&body).into();
                     out.extend_from_slice(&h);
-                    let p = vm.alloc_input_tlv(&out)?;
+                    let p = vm.alloc_host_tlv(&out)?;
                     vm.set_register(10, p);
                     vm.set_register(11, OK);
                     return Ok(gas);
@@ -3923,7 +3967,7 @@ impl IVMHost for DefaultHost {
                 out.extend_from_slice(&body);
                 let h: [u8; 32] = iroha_crypto::Hash::new(&body).into();
                 out.extend_from_slice(&h);
-                let p = vm.alloc_input_tlv(&out)?;
+                let p = vm.alloc_host_tlv(&out)?;
                 vm.set_register(10, p);
                 vm.set_register(11, OK);
                 Ok(gas)
@@ -3981,7 +4025,7 @@ impl IVMHost for DefaultHost {
                 let gas = PUBLIC_INPUT_GAS_BASE
                     .saturating_add(PUBLIC_INPUT_GAS_PER_BYTE.saturating_mul(len));
                 preflight_reserved_syscall_gas(vm, gas)?;
-                let dst = vm.alloc_input_tlv(bytes)?;
+                let dst = vm.alloc_host_tlv(bytes)?;
                 vm.set_register(10, dst);
                 Ok(gas)
             }
@@ -4139,10 +4183,8 @@ impl IVMHost for DefaultHost {
                 let sig_tlv = vm.validate_tlv(vm.register(11))?;
                 let pk_tlv = vm.validate_tlv(vm.register(12))?;
 
-                if !matches!(
-                    msg_tlv.type_id,
-                    PointerType::Blob | PointerType::NoritoBytes
-                ) || sig_tlv.type_id != PointerType::Blob
+                if msg_tlv.type_id != PointerType::Blob
+                    || sig_tlv.type_id != PointerType::Blob
                     || pk_tlv.type_id != PointerType::Blob
                 {
                     return Err(VMError::NoritoInvalid);
@@ -4611,7 +4653,7 @@ impl IVMHost for DefaultHost {
                         height: 0,
                     };
                     let body = norito::to_bytes(&resp).map_err(|_| VMError::NoritoInvalid)?;
-                    // Build TLV in INPUT and return its pointer
+                    // Build a host-owned TLV and return its public pointer.
                     let mut out = Vec::with_capacity(7 + body.len() + 32);
                     out.extend_from_slice(&(PointerType::NoritoBytes as u16).to_be_bytes());
                     out.push(1);
@@ -4619,7 +4661,7 @@ impl IVMHost for DefaultHost {
                     out.extend_from_slice(&body);
                     let h: [u8; 32] = iroha_crypto::Hash::new(&body).into();
                     out.extend_from_slice(&h);
-                    let p = vm.alloc_input_tlv(&out)?;
+                    let p = vm.alloc_host_tlv(&out)?;
                     vm.set_register(10, p);
                     Ok(Self::state_query_gas(input_len.saturating_add(body.len())))
                 } else {
@@ -4639,7 +4681,7 @@ impl IVMHost for DefaultHost {
                     out.extend_from_slice(&body);
                     let h: [u8; 32] = iroha_crypto::Hash::new(&body).into();
                     out.extend_from_slice(&h);
-                    let p = vm.alloc_input_tlv(&out)?;
+                    let p = vm.alloc_host_tlv(&out)?;
                     vm.set_register(10, p);
                     Ok(Self::state_query_gas(input_len.saturating_add(body.len())))
                 }
@@ -4933,6 +4975,72 @@ mod tests {
             DefaultHost::new().syscall(syscalls::SYSCALL_SHA256_HASH, &mut code_vm),
             Err(VMError::NoritoInvalid)
         ));
+    }
+
+    #[test]
+    fn default_host_public_input_result_spills_to_owned_heap() {
+        let mut vm = IVM::new(u64::MAX);
+        vm.alloc_input_tlv(&vec![0; Memory::INPUT_SIZE as usize])
+            .expect("fill INPUT exactly");
+
+        let name: Name = "payload".parse().expect("public input name");
+        let name_payload = norito::to_bytes(&name).expect("encode public input name");
+        let name_pointer = vm
+            .alloc_host_tlv(&test_tlv(PointerType::Name, &name_payload))
+            .expect("spill public input name to HEAP");
+        let expected = test_tlv(PointerType::Blob, b"heap-backed-public-input");
+        let mut inputs = BTreeMap::new();
+        inputs.insert(name, expected);
+        let mut host = DefaultHost::new().with_public_inputs(inputs);
+        vm.set_register(10, name_pointer);
+
+        host.syscall(syscalls::SYSCALL_GET_PUBLIC_INPUT, &mut vm)
+            .expect("materialize public input after INPUT exhaustion");
+
+        let output_pointer = vm.register(10);
+        assert!((Memory::HEAP_START..Memory::INPUT_START).contains(&output_pointer));
+        let output = vm
+            .validate_tlv(output_pointer)
+            .expect("validate HEAP result");
+        assert_eq!(output.type_id, PointerType::Blob);
+        assert_eq!(output.payload, b"heap-backed-public-input");
+    }
+
+    #[test]
+    fn default_host_large_public_input_dispatch_stays_within_reserved_quote() {
+        let name: Name = "large_payload".parse().expect("public input name");
+        let payload = vec![0x6b; (Memory::INPUT_SIZE as usize) * 2];
+        let expected = test_tlv(PointerType::Blob, &payload);
+        let mut inputs = BTreeMap::new();
+        inputs.insert(name.clone(), expected);
+        let mut host = DefaultHost::new().with_public_inputs(inputs);
+        let mut vm = IVM::new(1_000_000);
+        let code = [
+            crate::encoding::wide::encode_sys(
+                crate::instruction::wide::system::SCALL,
+                u8::try_from(syscalls::SYSCALL_GET_PUBLIC_INPUT).expect("syscall fits"),
+            )
+            .to_le_bytes(),
+            crate::encoding::wide::encode_halt().to_le_bytes(),
+        ]
+        .concat();
+        vm.load_code(&code).expect("load public-input program");
+        let name_payload = norito::to_bytes(&name).expect("encode public input name");
+        let name_pointer = vm
+            .alloc_input_tlv(&test_tlv(PointerType::Name, &name_payload))
+            .expect("allocate input name");
+        vm.set_register(10, name_pointer);
+
+        vm.run_with_host(&mut host)
+            .expect("dispatcher must reconcile the heap-sized result quote");
+
+        let output_pointer = vm.register(10);
+        assert!((Memory::HEAP_START..Memory::INPUT_START).contains(&output_pointer));
+        let output = vm
+            .validate_tlv(output_pointer)
+            .expect("validate heap-backed public input");
+        assert_eq!(output.type_id, PointerType::Blob);
+        assert_eq!(output.payload, payload);
     }
 
     #[test]
@@ -5856,13 +5964,9 @@ mod tests {
         vm.set_register(11, PointerType::Blob as u64);
         assert_eq!(
             host.syscall(syscalls::SYSCALL_POINTER_FROM_NORITO, &mut vm),
-            Ok(DefaultHost::pointer_gas(envelope_len))
+            Err(VMError::NoritoInvalid)
         );
-        let blob_roundtrip = vm
-            .validate_tlv(vm.register(10))
-            .expect("blob-carrier roundtrip tlv");
-        assert_eq!(blob_roundtrip.type_id, PointerType::Blob);
-        assert_eq!(blob_roundtrip.payload, payload);
+        assert_eq!(vm.register(10), blob_carrier_ptr);
     }
 
     #[test]
@@ -5941,7 +6045,7 @@ mod tests {
         }));
         let json_payload = norito::to_bytes(&json).expect("encode JSON envelope");
         let message = vm
-            .alloc_input_tlv(&test_tlv(PointerType::Json, &json_payload))
+            .alloc_input_tlv(&test_tlv(PointerType::Blob, &json_payload))
             .expect("allocate message");
         let signature = vm
             .alloc_input_tlv(&test_tlv(PointerType::Blob, b"signature"))
@@ -5993,7 +6097,46 @@ mod tests {
     }
 
     #[test]
-    fn unaffordable_signature_syscall_does_not_parse_the_message_during_prepare() {
+    fn signature_and_sm2_verification_reject_retired_message_carriers() {
+        crate::set_banner_enabled(false);
+        for message_type in [PointerType::NoritoBytes, PointerType::Json] {
+            let mut vm = IVM::new(u64::MAX);
+            let message = vm
+                .alloc_input_tlv(&test_tlv(message_type, b"message"))
+                .expect("allocate retired message carrier");
+            let signature = vm
+                .alloc_input_tlv(&test_tlv(PointerType::Blob, b"signature"))
+                .expect("allocate signature");
+            let public_key = vm
+                .alloc_input_tlv(&test_tlv(PointerType::Blob, b"public-key"))
+                .expect("allocate public key");
+            vm.set_register(10, message);
+            vm.set_register(11, signature);
+            vm.set_register(12, public_key);
+            vm.set_register(13, u64::MAX);
+
+            let mut host = DefaultHost::new();
+            assert_eq!(
+                host.prepare_syscall(syscalls::SYSCALL_VERIFY_SIGNATURE, &vm),
+                Err(VMError::NoritoInvalid)
+            );
+            assert_eq!(
+                host.syscall(syscalls::SYSCALL_VERIFY_SIGNATURE, &mut vm),
+                Err(VMError::NoritoInvalid)
+            );
+            assert_eq!(vm.register(10), message);
+
+            let mut sm_host = DefaultHost::new().with_sm_enabled(true);
+            assert_eq!(
+                sm_host.syscall(syscalls::SYSCALL_SM2_VERIFY, &mut vm),
+                Err(VMError::NoritoInvalid)
+            );
+            assert_eq!(vm.register(10), message);
+        }
+    }
+
+    #[test]
+    fn unaffordable_signature_syscall_preserves_inputs_before_dispatch() {
         crate::set_banner_enabled(false);
         let mut vm = IVM::new(u64::MAX);
         let mut code = Vec::new();
@@ -6007,8 +6150,8 @@ mod tests {
         code.extend_from_slice(&crate::encoding::wide::encode_halt().to_le_bytes());
         vm.load_code(&code).expect("load signature test program");
         let message = vm
-            .alloc_input_tlv(&test_tlv(PointerType::Json, b"not valid Norito JSON"))
-            .expect("allocate malformed JSON message");
+            .alloc_input_tlv(&test_tlv(PointerType::Blob, b"message"))
+            .expect("allocate message");
         let signature = vm
             .alloc_input_tlv(&test_tlv(PointerType::Blob, b"signature"))
             .expect("allocate signature");
@@ -6021,7 +6164,7 @@ mod tests {
         let mut host = DefaultHost::new();
         let quote = host
             .prepare_syscall(syscalls::SYSCALL_VERIFY_SIGNATURE, &vm)
-            .expect("header-only preparation must not parse the message");
+            .expect("quote signature verification");
         vm.set_gas_limit(quote.saturating_add(4));
 
         let error = vm

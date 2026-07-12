@@ -1877,7 +1877,9 @@ mod tests {
         );
         let mut zk = state.zk_snapshot();
         zk.halo2.enabled = true;
-        state.set_zk(zk);
+        state
+            .set_zk(zk)
+            .expect("empty SCCP outbox accepts prover test configuration");
         Arc::new(state)
     }
 

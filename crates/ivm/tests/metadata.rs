@@ -19,6 +19,7 @@ fn minimal_contract_artifact() -> Vec<u8> {
     let interface = ivm::EmbeddedContractInterfaceV1 {
         seiyaku_name: "TestContract".to_owned(),
         compiler_fingerprint: "metadata-tests".to_owned(),
+        abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
         features_bitmap: 0,
         access_set_hints: None,
         kotoba: Vec::new(),
@@ -58,6 +59,7 @@ fn minimal_contract_artifact_with_debug() -> Vec<u8> {
     let interface = ivm::EmbeddedContractInterfaceV1 {
         seiyaku_name: "TestContract".to_owned(),
         compiler_fingerprint: "metadata-tests".to_owned(),
+        abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
         features_bitmap: 0,
         access_set_hints: None,
         kotoba: Vec::new(),
@@ -124,7 +126,8 @@ fn parse_accepts_valid_default_header() {
     let meta = ProgramMetadata::default();
     let bytes = meta.encode();
     let parsed = ProgramMetadata::parse(&bytes).expect("parse valid header");
-    assert_eq!(parsed.code_offset, ivm::METADATA_MAGIC.len() + 13); // 17 total
+    assert_eq!(parsed.code_offset, bytes.len());
+    assert_eq!(parsed.header_len, 49);
     assert_eq!(parsed.metadata.version_major, 1);
     assert_eq!(parsed.metadata.version_minor, 1);
     assert_eq!(parsed.metadata.mode, 0);
@@ -146,15 +149,31 @@ fn parse_rejects_unknown_mode_bits() {
 }
 
 #[test]
-fn parse_accepts_legacy_minor_zero_without_cntr() {
+fn parse_accepts_generic_minor_zero_without_cntr() {
     let bytes = encode_with(ProgramMetadata::default(), |m| {
         m.version_minor = 0;
     });
-    let parsed = ProgramMetadata::parse(&bytes).expect("parse legacy generic header");
+    let parsed = ProgramMetadata::parse(&bytes).expect("parse generic header");
     assert_eq!(parsed.metadata.version_major, 1);
     assert_eq!(parsed.metadata.version_minor, 0);
     assert!(parsed.contract_interface.is_none());
     assert_eq!(parsed.code_offset, parsed.header_len);
+}
+
+#[test]
+fn parse_rejects_stale_authenticated_header_abi_hash() {
+    let mut bytes = ProgramMetadata::default().encode();
+    let expected = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
+    bytes[17] ^= 0x80;
+    let actual: [u8; 32] = bytes[17..49].try_into().expect("fixed ABI hash field");
+
+    assert!(matches!(
+        ProgramMetadata::parse(&bytes),
+        Err(VMError::ArtifactAbiHashMismatch {
+            expected: observed_expected,
+            actual: observed_actual,
+        }) if observed_expected == expected && observed_actual == actual
+    ));
 }
 
 #[test]

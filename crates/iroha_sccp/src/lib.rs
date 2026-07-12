@@ -28,8 +28,9 @@ pub use native_admission::*;
 mod test_fixtures;
 #[cfg(any(test, feature = "test-fixtures"))]
 pub use test_fixtures::{
-    SccpExactOutboundTestFixtureV1, sccp_exact_evm_governed_route_test_fixture_v1,
-    sccp_exact_outbound_test_fixture_for_nonce_v1, sccp_exact_outbound_test_fixture_v1,
+    SccpExactOutboundTestFixtureV1, SccpFinalizedBlockTestFixtureV1,
+    sccp_exact_evm_governed_route_test_fixture_v1, sccp_exact_outbound_test_fixture_for_nonce_v1,
+    sccp_exact_outbound_test_fixture_v1, sccp_finalize_taira_block_test_fixture_v1,
 };
 
 use alloc::{borrow::ToOwned, format, string::String, vec::Vec};
@@ -2735,6 +2736,11 @@ fn sccp_groth16_bn254_proof_request_header_is_canonical_v1(
     request: &SccpGroth16Bn254ProofRequestV1,
     expected_backend: BridgeSccpDestinationProofBackendV1,
 ) -> bool {
+    let outbound_proof_policy = SccpOutboundProofPolicyV1 {
+        version: 1,
+        semantic_profile: request.semantic_proof_profile,
+        sora_finality_anchor: request.sora_finality_anchor,
+    };
     request.version == 1
         && request.backend == expected_backend
         && sccp_destination_proof_backend_supports_network_v1(
@@ -2752,8 +2758,7 @@ fn sccp_groth16_bn254_proof_request_header_is_canonical_v1(
         && h256_is_nonzero(&request.route_configuration_hash)
         && h256_is_nonzero(&request.semantic_proof_profile_hash)
         && h256_is_nonzero(&request.sora_finality_anchor_hash)
-        && request.semantic_proof_profile.validate().is_ok()
-        && request.sora_finality_anchor.validate().is_ok()
+        && outbound_proof_policy.validate().is_ok()
         && sccp_semantic_proof_profile_hash_v1(request.semantic_proof_profile).ok()
             == Some(request.semantic_proof_profile_hash)
         && sccp_sora_finality_anchor_hash_v1(request.sora_finality_anchor).ok()
@@ -4243,6 +4248,8 @@ pub fn verify_taira_bridge_finality_proof_structure(proof: &TairaBridgeFinalityP
             SCCP_TAIRA_MAX_BLOCK_HEADER_BYTES_V1,
         )
         || !h256_is_nonzero(&commitment_root)
+        || proof.block_header.merkle_root().is_none()
+        || proof.block_header.result_merkle_root().is_none()
         || roster_len == 0
         || roster_len > SCCP_TAIRA_MAX_FINALITY_VALIDATORS_V1
         || artifact.validator_set_pops.len() != roster_len
@@ -4786,10 +4793,6 @@ mod tests {
         })
     }
 
-    fn signed_finality_proof(commitment_root: H256) -> Vec<u8> {
-        crate::test_fixtures::signed_finality_proof(commitment_root)
-    }
-
     fn message_bundle(route: &SccpGovernedRouteV1) -> TairaSccpMessageProofV1 {
         let payload = transfer_payload(route.revision);
         let context = SccpOutboundMessageContextV1::new(
@@ -4807,13 +4810,19 @@ mod tests {
             hub_commitment_from_sccp_payload(context, &payload).expect("hub commitment");
         let merkle_proof = SccpMerkleProofV1 { steps: Vec::new() };
         let commitment_root = merkle_root_from_commitment(&commitment, &merkle_proof);
+        let finality_proof =
+            crate::test_fixtures::signed_finality_proof_for_message_test_fixture_v1(
+                context,
+                &payload,
+                commitment_root,
+            );
         let bundle = TairaSccpMessageProofV1 {
             version: 1,
             commitment_root,
             commitment,
             merkle_proof,
             payload,
-            finality_proof: signed_finality_proof(commitment_root),
+            finality_proof,
         };
         assert!(verify_message_bundle_structure(&bundle));
         assert!(
@@ -4906,6 +4915,73 @@ mod tests {
         assert!(encode_canonical_sccp_groth16_bn254_proof_request_v1(&request).is_none());
         let bytes = to_bytes(&request).expect("encode adversarial request");
         assert!(decode_canonical_sccp_groth16_bn254_proof_request_v1(&bytes).is_none());
+    }
+
+    fn rehash_request_after_proof_policy_mutation(
+        request: &mut SccpGroth16Bn254ProofRequestV1,
+        canonical_payload_bytes: &[u8],
+    ) {
+        request.semantic_proof_profile_hash =
+            sccp_semantic_proof_profile_hash_v1(request.semantic_proof_profile)
+                .expect("individually valid semantic profile");
+        request.sora_finality_anchor_hash =
+            sccp_sora_finality_anchor_hash_v1(request.sora_finality_anchor)
+                .expect("individually valid finality anchor");
+        request.statement_hash =
+            sccp_groth16_bn254_statement_hash_v1(request, canonical_payload_bytes)
+                .expect("policy mutation preserves canonical statement roles");
+        let public_signal_words = sccp_groth16_bn254_public_signal_words(
+            &request.public_inputs,
+            request.source_network.domain_id(),
+            request.statement_hash,
+            request.destination_binding_hash,
+            request.route_configuration_hash,
+            request.sora_finality_anchor_hash,
+        );
+        request.request_hash = sccp_groth16_bn254_proof_request_hash(
+            request,
+            canonical_payload_bytes,
+            &public_signal_words,
+        )
+        .expect("policy mutation preserves canonical request hashing");
+    }
+
+    fn assert_cross_policy_alias_request_rejected(
+        mut request: SccpGroth16Bn254ProofRequestV1,
+        canonical_payload_bytes: &[u8],
+        semantic_role: &str,
+        anchor_role: &str,
+    ) {
+        assert!(
+            request.semantic_proof_profile.validate().is_ok(),
+            "{semantic_role} alias with {anchor_role} must remain individually valid"
+        );
+        assert!(
+            request.sora_finality_anchor.validate().is_ok(),
+            "anchor must remain individually valid for {semantic_role}/{anchor_role}"
+        );
+        rehash_request_after_proof_policy_mutation(&mut request, canonical_payload_bytes);
+        assert!(
+            SccpOutboundProofPolicyV1 {
+                version: 1,
+                semantic_profile: request.semantic_proof_profile,
+                sora_finality_anchor: request.sora_finality_anchor,
+            }
+            .validate()
+            .is_err(),
+            "full policy accepted {semantic_role}/{anchor_role} alias"
+        );
+        assert!(
+            !sccp_groth16_bn254_proof_request_header_is_canonical_v1(&request, request.backend,),
+            "request header accepted {semantic_role}/{anchor_role} alias"
+        );
+
+        let request_json = norito::json::to_json(&request).expect("adversarial request JSON");
+        assert!(
+            decode_canonical_sccp_groth16_bn254_proof_request_json_v1(&request_json).is_none(),
+            "JSON decoder accepted {semantic_role}/{anchor_role} alias"
+        );
+        assert_request_rejected(request);
     }
 
     #[test]
@@ -5158,6 +5234,89 @@ mod tests {
             let mut candidate = base.clone();
             candidate.statement_hash = role_hash;
             assert_request_rejected(candidate);
+        }
+    }
+
+    #[test]
+    fn proof_request_decoders_reject_cross_policy_semantic_anchor_role_aliases() {
+        let fixture = fixture();
+        let base = &fixture.request;
+        let canonical_payload_bytes = canonical_sccp_payload_bytes(&fixture.bundle.payload)
+            .expect("canonical fixture payload");
+        assert!(sccp_groth16_bn254_proof_request_header_is_canonical_v1(
+            base,
+            base.backend,
+        ));
+
+        let anchor_roles = [
+            ("chain id", base.sora_finality_anchor.chain_id_hash),
+            (
+                "checkpoint block",
+                base.sora_finality_anchor.checkpoint_block_hash,
+            ),
+            (
+                "checkpoint context",
+                base.sora_finality_anchor.checkpoint_context_id,
+            ),
+            (
+                "finality artifact",
+                base.sora_finality_anchor.checkpoint_finality_artifact_hash,
+            ),
+        ];
+        let semantic_roles = ["circuit commitment", "witness generator commitment"];
+
+        for (semantic_role_index, semantic_role) in semantic_roles.into_iter().enumerate() {
+            for (anchor_role, anchor_hash) in anchor_roles {
+                let mut candidate = base.clone();
+                let SccpSemanticProofProfileV1::SoraTairaFinalityInclusionGroth16Bn254(
+                    ref mut circuit,
+                ) = candidate.semantic_proof_profile;
+                match semantic_role_index {
+                    0 => circuit.circuit_commitment = anchor_hash,
+                    1 => circuit.witness_generator_commitment = anchor_hash,
+                    _ => unreachable!("closed semantic role matrix"),
+                }
+                assert_cross_policy_alias_request_rejected(
+                    candidate,
+                    &canonical_payload_bytes,
+                    semantic_role,
+                    anchor_role,
+                );
+            }
+        }
+
+        let semantic_commitments = base.semantic_proof_profile.commitments();
+        let semantic_roles = [
+            ("circuit commitment", semantic_commitments[0]),
+            ("witness generator commitment", semantic_commitments[1]),
+            ("public signal schema", semantic_commitments[2]),
+        ];
+        let anchor_roles = [
+            "checkpoint block",
+            "checkpoint context",
+            "finality artifact",
+        ];
+
+        for (anchor_role_index, anchor_role) in anchor_roles.into_iter().enumerate() {
+            for (semantic_role, semantic_hash) in semantic_roles {
+                let mut candidate = base.clone();
+                match anchor_role_index {
+                    0 => candidate.sora_finality_anchor.checkpoint_block_hash = semantic_hash,
+                    1 => candidate.sora_finality_anchor.checkpoint_context_id = semantic_hash,
+                    2 => {
+                        candidate
+                            .sora_finality_anchor
+                            .checkpoint_finality_artifact_hash = semantic_hash;
+                    }
+                    _ => unreachable!("closed anchor role matrix"),
+                }
+                assert_cross_policy_alias_request_rejected(
+                    candidate,
+                    &canonical_payload_bytes,
+                    semantic_role,
+                    anchor_role,
+                );
+            }
         }
     }
 
@@ -5784,7 +5943,12 @@ mod tests {
         candidate.finality_proof = to_bytes(&finality).unwrap();
         candidates.push(candidate);
         let mut candidate = fixture.bundle.clone();
-        candidate.finality_proof = signed_finality_proof([0xa5; 32]);
+        candidate.finality_proof =
+            crate::test_fixtures::signed_finality_proof_for_message_test_fixture_v1(
+                candidate.commitment.context,
+                &candidate.payload,
+                [0xa5; 32],
+            );
         candidates.push(candidate);
         for candidate in candidates {
             assert!(
@@ -5934,6 +6098,36 @@ mod tests {
             !verify_taira_bridge_finality_proof_cryptographic(&attack),
             "every frozen-roster PoP, including non-signers, must authenticate its validator key"
         );
+
+        for (merkle_root, result_merkle_root, missing) in [
+            (None, proof.block_header.result_merkle_root(), "entrypoint"),
+            (proof.block_header.merkle_root(), None, "result"),
+        ] {
+            let mut attack = proof.clone();
+            let mut incomplete_header = BlockHeader::new(
+                proof.block_header.height(),
+                proof.block_header.prev_block_hash(),
+                merkle_root,
+                result_merkle_root,
+                u64::try_from(proof.block_header.creation_time().as_millis())
+                    .expect("fixture creation time fits u64"),
+                proof.block_header.view_change_index(),
+            );
+            incomplete_header.set_sccp_commitment_root(proof.block_header.sccp_commitment_root());
+            let incomplete_hash = incomplete_header.hash();
+            attack.block_header = incomplete_header;
+            attack.finality_artifact.block_hash = incomplete_hash;
+            attack.finality_artifact.subject.block_hash = incomplete_hash;
+            attack.finality_artifact.commit_qc.subject.block_hash = incomplete_hash;
+            attack
+                .finality_artifact
+                .validate_for_header(&incomplete_header)
+                .expect("the hostile artifact is otherwise structurally header-consistent");
+            assert!(
+                !verify_taira_bridge_finality_proof_structure(&attack),
+                "SCCP finality must reject a missing {missing} Merkle root"
+            );
+        }
 
         let mut attack = proof.clone();
         attack.block_header.set_sccp_commitment_root(None);

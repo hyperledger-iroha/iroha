@@ -699,6 +699,11 @@ private enum SccpExactParser {
         guard "0x" + SccpV1.encodeLowerHex(finalityAnchor.anchorHash) == anchorHash else {
             throw SccpV1Error.invalid("sora_finality_anchor_hash does not match its typed anchor")
         }
+        try validateOutboundPolicyRoles(
+            semantic,
+            finalityAnchor,
+            label: "SCCP proof request outbound policy"
+        )
         let statement = try prefixedHash(root, "statement_hash")
         let binding = try prefixedHash(root, "destination_binding_hash")
         let configuration = try prefixedHash(root, "route_configuration_hash")
@@ -1024,13 +1029,21 @@ private enum SccpExactParser {
         guard try SccpStrictJSON.uint64(item, "version", minimum: 1) == 1 else { throw SccpV1Error.invalid("\(label).version must be 1") }
         let semantic = try semanticProfile(object(item, "semantic_profile"), label: "\(label).semantic_profile")
         let anchor = try finalityAnchor(object(item, "sora_finality_anchor"), label: "\(label).sora_finality_anchor")
+        try validateOutboundPolicyRoles(semantic, anchor, label: label)
+        return (semantic, anchor)
+    }
+
+    private static func validateOutboundPolicyRoles(
+        _ semantic: SccpSemanticProofProfileV1,
+        _ anchor: SccpSoraFinalityAnchorV1,
+        label: String
+    ) throws {
         let roles = [semantic.circuitCommitment, semantic.witnessGeneratorCommitment, semantic.publicSignalSchemaHash,
                      semantic.profileHash, anchor.chainIdHash, anchor.checkpointBlockHash,
                      anchor.checkpointContextId, anchor.checkpointFinalityArtifactHash, anchor.anchorHash]
         guard roles.allSatisfy({ !$0.allSatisfy { $0 == 0 } }), Set(roles).count == roles.count else {
             throw SccpV1Error.invalid("\(label) reuses a proof-policy hash role")
         }
-        return (semantic, anchor)
     }
 
     private static func semanticProfile(_ item: [String: Any], label: String) throws -> SccpSemanticProofProfileV1 {
