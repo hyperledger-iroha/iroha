@@ -243,7 +243,7 @@ seiyaku RecursiveArgumentRecordRuntime {
     Result<int, bool> outcome
   ) -> int {
     let optional = match maybe { Option::some(value) => value, Option::none => 0 };
-    let result = match outcome { Result::ok(value) => value, Result::err(error) => 0 };
+    let result = match outcome { Result::ok(value) => value, Result::err(_) => 0 };
     if (!request.ready || !pair.1) { return 0; }
     return request.count + pair.0 + optional + result;
   }

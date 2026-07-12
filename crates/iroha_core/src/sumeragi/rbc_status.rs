@@ -1,6 +1,9 @@
-//! Disk-backed snapshot of `RBC` session summaries for operator endpoints.
-//! Not consensus-critical. Each Sumeragi instance registers its own handle
-//! so concurrent actors do not trample one another.
+//! Instance-local, disk-backed `RBC` session summaries.
+//!
+//! Handles remain available to archival and lane-local code, but the v2-only
+//! runtime deliberately has no globally active store. Global compatibility
+//! queries therefore stay empty instead of exposing a retired consensus state
+//! machine as live protocol state.
 
 use core::sync::atomic::{AtomicU64, Ordering};
 use std::{
@@ -8,7 +11,7 @@ use std::{
     fs,
     io::{self, Write},
     path::{Path, PathBuf},
-    sync::{Arc, Mutex, MutexGuard, OnceLock},
+    sync::{Arc, Mutex, MutexGuard},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -20,13 +23,6 @@ use norito::{decode_from_bytes, to_bytes};
 
 use super::status::{DataspaceRbcSnapshot, LaneRbcSnapshot};
 use crate::panic_hook;
-
-/// Active store used by `Torii` endpoints and other global queries.
-static ACTIVE_STORE: OnceLock<Mutex<Option<Arc<Store>>>> = OnceLock::new();
-
-fn active_slot() -> &'static Mutex<Option<Arc<Store>>> {
-    ACTIVE_STORE.get_or_init(|| Mutex::new(None))
-}
 
 fn lock_or_recover<'a, T>(mutex: &'a Mutex<T>, name: &'static str) -> MutexGuard<'a, T> {
     match mutex.lock() {
@@ -416,15 +412,6 @@ pub fn register_handle() -> Handle {
     Handle::new()
 }
 
-/// Mark the supplied handle as active for global snapshot queries.
-pub fn set_active(handle: &Handle) {
-    *lock_or_recover(active_slot(), "rbc_status_active_slot") = Some(handle.store.clone());
-}
-
-fn active_store() -> Option<Arc<Store>> {
-    lock_or_recover(active_slot(), "rbc_status_active_slot").clone()
-}
-
 /// Compact summary of an RBC session.
 ///
 /// This carries non-consensus operator-facing state about a single RBC
@@ -478,14 +465,17 @@ pub struct StoreConfig {
     pub capacity: usize,
 }
 
-/// Snapshot the active store (if any).
-pub fn snapshot() -> Vec<Summary> {
-    active_store().map_or_else(Vec::new, |store| store.snapshot())
+/// Return the retired global snapshot.
+///
+/// Sumeragi v2 keeps chunk transport and lane-local commitments separate from
+/// global consensus, so no store can be activated here.
+pub const fn snapshot() -> Vec<Summary> {
+    Vec::new()
 }
 
-/// Gauge: number of active sessions in the active store.
-pub fn sessions_active() -> u64 {
-    active_store().map_or(0, |store| store.sessions_active())
+/// Return the retired global active-session gauge.
+pub const fn sessions_active() -> u64 {
+    0
 }
 
 /// Read persisted snapshot directly from disk without touching in-memory state.
@@ -1361,6 +1351,20 @@ mod tests {
         }
     }
 
+    #[test]
+    fn registered_handles_never_activate_retired_global_snapshot() {
+        let handle = register_handle();
+        handle.update(
+            summary(0xA5, 42, 2, 1, false, Some(b"instance-local")),
+            SystemTime::now(),
+        );
+
+        assert_eq!(handle.snapshot().len(), 1);
+        assert_eq!(handle.sessions_active(), 1);
+        assert!(snapshot().is_empty());
+        assert_eq!(sessions_active(), 0);
+    }
+
     fn allocated_summary(
         lane_backlog: Vec<LaneRbcSnapshot>,
         dataspace_backlog: Vec<DataspaceRbcSnapshot>,
@@ -2116,7 +2120,6 @@ mod tests {
     fn persistence_roundtrip() {
         let dir = tempdir().expect("tempdir");
         let handle = register_handle();
-        set_active(&handle);
         handle.configure(Some(StoreConfig {
             dir: dir.path().to_path_buf(),
             ttl: Duration::from_secs(60),
@@ -2145,7 +2148,6 @@ mod tests {
         assert_eq!(handle.snapshot().len(), 1);
 
         let handle = register_handle();
-        set_active(&handle);
         handle.configure(Some(StoreConfig {
             dir: dir.path().to_path_buf(),
             ttl: Duration::from_secs(60),
@@ -2398,7 +2400,6 @@ mod tests {
     #[test]
     fn delivered_payload_matches_requires_complete_chunks() {
         let handle = register_handle();
-        set_active(&handle);
 
         let block_hash = hash(9);
         let payload_hash = Hash::new(b"payload");
@@ -2441,7 +2442,6 @@ mod tests {
     #[test]
     fn payload_match_predicates_reject_recovered_status_summaries() {
         let handle = register_handle();
-        set_active(&handle);
 
         let block_hash = hash(10);
         let payload_hash = Hash::new(b"recovered-summary-payload");
@@ -2483,7 +2483,6 @@ mod tests {
     #[test]
     fn delivery_predicates_require_valid_complete_chunks() {
         let handle = register_handle();
-        set_active(&handle);
 
         let block_hash = hash(12);
         let payload_hash = Hash::new(b"payload");
@@ -2616,7 +2615,6 @@ mod tests {
     #[test]
     fn update_drops_delivered_incomplete_summary_and_clears_stale_entry() {
         let handle = register_handle();
-        set_active(&handle);
 
         let valid = summary(15, 15, 4, 1, true, Some(b"delivered-complete"));
         let block_hash = valid.block_hash;
@@ -2671,7 +2669,6 @@ mod tests {
     #[test]
     fn update_drops_impossible_summary_and_clears_stale_entry() {
         let handle = register_handle();
-        set_active(&handle);
 
         let block_hash = hash(13);
         let payload_hash = Hash::new(b"payload");
@@ -2774,7 +2771,6 @@ mod tests {
     #[test]
     fn update_drops_impossible_encoding_and_reconstruction_summaries() {
         let handle = register_handle();
-        set_active(&handle);
 
         let block_hash = hash(14);
         let payload_hash = Hash::new(b"encoding-profile");

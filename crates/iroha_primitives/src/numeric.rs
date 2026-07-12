@@ -1037,19 +1037,31 @@ impl Numeric {
     }
 
     /// Checked addition. Computes `self + other`, returning `None` if overflow occurred
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "the consuming API deliberately mirrors primitive checked operator methods"
+    )]
     pub fn checked_add(self, other: Self) -> Option<Self> {
         self.try_decimal_add(&other).ok()
     }
 
     /// Checked subtraction. Computes `self - other`, returning `None` if overflow occurred
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "the consuming API deliberately mirrors primitive checked operator methods"
+    )]
     pub fn checked_sub(self, other: Self) -> Option<Self> {
         self.try_decimal_sub(&other).ok()
     }
 
     /// Checked multiplication. Computes `self * other`, returning `None` if overflow occurred
     pub fn checked_mul(self, other: Self, spec: NumericSpec) -> Option<Self> {
-        let mut scale = self.scale.checked_add(other.scale)?;
-        let mut adjusted = self.mantissa.inner() * other.mantissa.inner();
+        let Self {
+            mantissa: rhs_mantissa,
+            scale: rhs_scale,
+        } = other;
+        let mut scale = self.scale.checked_add(rhs_scale)?;
+        let mut adjusted = self.mantissa.inner() * rhs_mantissa.inner();
 
         if let Some(target_scale) = spec.scale
             && scale > target_scale

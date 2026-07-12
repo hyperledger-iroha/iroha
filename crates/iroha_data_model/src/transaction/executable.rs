@@ -129,6 +129,11 @@ pub struct ContractArgumentRecordTooLarge {
 
 impl ContractArgumentRecord {
     /// Construct a bounded signed argument record.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ContractArgumentRecordTooLarge`] when `bytes` exceeds
+    /// [`MAX_CONTRACT_ARGUMENT_RECORD_BYTES`].
     pub fn try_new(bytes: Vec<u8>) -> Result<Self, ContractArgumentRecordTooLarge> {
         if bytes.len() > MAX_CONTRACT_ARGUMENT_RECORD_BYTES {
             return Err(ContractArgumentRecordTooLarge {
@@ -234,8 +239,7 @@ impl norito::json::JsonDeserialize for ContractArgumentRecord {
         while let Some(byte) = sequence.next_element::<u8>()? {
             if bytes.len() == MAX_CONTRACT_ARGUMENT_RECORD_BYTES {
                 return Err(norito::json::Error::Message(format!(
-                    "contract argument record exceeds {} bytes",
-                    MAX_CONTRACT_ARGUMENT_RECORD_BYTES
+                    "contract argument record exceeds {MAX_CONTRACT_ARGUMENT_RECORD_BYTES} bytes"
                 )));
             }
             if bytes.len() == bytes.capacity() {
@@ -260,8 +264,7 @@ impl norito::json::JsonDeserialize for ContractArgumentRecord {
         })?;
         if items.len() > MAX_CONTRACT_ARGUMENT_RECORD_BYTES {
             return Err(norito::json::Error::Message(format!(
-                "contract argument record exceeds {} bytes",
-                MAX_CONTRACT_ARGUMENT_RECORD_BYTES
+                "contract argument record exceeds {MAX_CONTRACT_ARGUMENT_RECORD_BYTES} bytes"
             )));
         }
         let mut bytes = Vec::with_capacity(items.len());

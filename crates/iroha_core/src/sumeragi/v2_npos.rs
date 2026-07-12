@@ -1563,7 +1563,7 @@ mod tests {
             Err(V2NposError::MissingEpochStartRecord)
         ));
 
-        let mut lifecycle =
+        let lifecycle =
             V2NposVrfLifecycle::open(&context, &state, &npos_config(), Some(0), &keys[0])
                 .expect("open epoch-start lifecycle");
         let record = lifecycle
@@ -1579,7 +1579,7 @@ mod tests {
         let keys = keys();
         let first_context = context(1, &keys);
         let state = state_with_record(None);
-        let mut first =
+        let first =
             V2NposVrfLifecycle::open(&first_context, &state, &npos_config(), Some(0), &keys[0])
                 .expect("open first epoch height");
         let first_record = first
@@ -1856,7 +1856,7 @@ mod tests {
             V2VrfIngressOutcome::Rejected(V2VrfRejection::Capacity)
         );
 
-        let mut boundary = lifecycle_at(10, 10, Some(first_record), None, &keys);
+        let boundary = lifecycle_at(10, 10, Some(first_record), None, &keys);
         let seal = boundary.pending_records().pop().expect("boundary seal");
         assert!(seal.finalized);
         assert_eq!(seal.updated_at_height, 10);
@@ -1867,7 +1867,7 @@ mod tests {
     #[test]
     fn committed_local_commit_recovers_and_emits_reveal_after_restart() {
         let keys = keys();
-        let mut commit_height = lifecycle_at(2, 2, None, Some(0), &keys);
+        let commit_height = lifecycle_at(2, 2, None, Some(0), &keys);
         let committed = commit_height
             .pending_records()
             .pop()
@@ -1947,7 +1947,7 @@ mod tests {
             "a candidate must not backdate a same-block commitment and late reveal"
         );
 
-        let mut boundary = lifecycle_at(10, 10, Some(late_record), None, &keys);
+        let boundary = lifecycle_at(10, 10, Some(late_record), None, &keys);
         let seal = boundary.pending_records().pop().expect("boundary seal");
         assert!(!seal.committed_no_reveal.contains(&0));
         assert!(!seal.no_participation.contains(&0));

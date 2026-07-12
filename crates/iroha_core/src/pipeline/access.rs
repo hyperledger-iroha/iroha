@@ -547,6 +547,7 @@ where
                             let identity = code::BoundContractIdentity {
                                 contract_address: record.contract_address.clone(),
                                 contract_alias: record.contract_alias.clone(),
+                                contract_alias_binding: record.contract_alias_binding.clone(),
                                 code_hash: record.code_hash,
                             };
                             let authorization =
@@ -2437,6 +2438,7 @@ mod tests {
         let interface = ivm::EmbeddedContractInterfaceV1 {
             seiyaku_name: "TestContract".to_owned(),
             compiler_fingerprint: "access-test".to_owned(),
+            abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
             features_bitmap: 0,
             access_set_hints,
             kotoba: Vec::new(),

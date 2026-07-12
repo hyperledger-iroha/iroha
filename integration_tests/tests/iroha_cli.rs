@@ -4885,7 +4885,7 @@ async fn soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_co
     let restart_timeout = network.peer_startup_timeout();
     tokio::time::timeout(
         restart_timeout,
-        restart_peer.start_checked(config_layers.iter().cloned(), None),
+        restart_peer.start_checked(config_layers.iter(), None),
     )
     .await
     .map_err(|_| {

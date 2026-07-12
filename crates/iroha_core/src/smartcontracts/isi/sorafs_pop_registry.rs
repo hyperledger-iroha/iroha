@@ -1967,8 +1967,8 @@ mod tests {
     fn genesis_permission_bypass_matches_executor_but_policy_requires_registered_issuer() {
         let operator = keypair(0x18);
         let genesis_authority = keypair(0x19);
-        let state = state(&operator, &[&genesis_authority]);
-        let mut block = state.block(block_header());
+        let configured_state = state(&operator, &[&genesis_authority]);
+        let mut block = configured_state.block(block_header());
         let mut stx = block.transaction();
         let genesis_authority_id = account(&genesis_authority);
         SetSorafsPopIssuerPolicy::new(policy(&operator))

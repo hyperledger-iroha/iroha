@@ -4006,12 +4006,6 @@ impl StateBlock<'_> {
         let is_heartbeat = admission.is_heartbeat;
         let allow_unregistered_authority = admission.allow_unregistered_authority;
 
-        let manifest_metadata = tx
-            .as_ref()
-            .metadata()
-            .get(&*CONTRACT_MANIFEST_METADATA_NAME)
-            .and_then(|json| json.clone().try_into_any_norito::<ContractManifest>().ok());
-
         // Extract optional governance deployment metadata for protected-contract gating.
         let contract_address_meta = tx
             .as_ref()
@@ -4064,11 +4058,22 @@ impl StateBlock<'_> {
                         ),
                     ));
                 }
+                let manifest_metadata = tx
+                    .as_ref()
+                    .metadata()
+                    .get(&*CONTRACT_MANIFEST_METADATA_NAME)
+                    .map(|json| json.clone().try_into_any_norito::<ContractManifest>())
+                    .transpose()
+                    .map_err(|_| {
+                        TransactionRejectionReason::Validation(ValidationFail::IvmAdmission(
+                            iroha_data_model::executor::IvmAdmissionError::ManifestMalformed,
+                        ))
+                    })?;
                 Self::validate_ivm(
                     authority.clone(),
                     state_transaction,
                     bytes.clone(),
-                    manifest_metadata.clone(),
+                    manifest_metadata,
                     contract_address_meta.clone(),
                     ivm_cache,
                 )?;
@@ -4267,8 +4272,21 @@ impl StateBlock<'_> {
 
         // Parse and cache metadata + derived hashes.
         let bytes = contract.as_ref();
-        let summary = ivm_cache.summarize_program(bytes).map_err(|e| {
-            TransactionRejectionReason::Validation(ValidationFail::InternalError(e.to_string()))
+        let summary = ivm_cache.summarize_program(bytes).map_err(|error| {
+            let admission = match error {
+                ivm::VMError::ArtifactAbiHashMismatch { expected, actual } => {
+                    iroha_data_model::executor::IvmAdmissionError::ArtifactAbiHashMismatch(
+                        iroha_data_model::executor::ArtifactAbiHashMismatchInfo {
+                            expected: iroha_crypto::Hash::prehashed(expected),
+                            actual: iroha_crypto::Hash::prehashed(actual),
+                        },
+                    )
+                }
+                other => iroha_data_model::executor::IvmAdmissionError::BytecodeDecodingFailed(
+                    other.to_string(),
+                ),
+            };
+            TransactionRejectionReason::Validation(ValidationFail::IvmAdmission(admission))
         })?;
         let meta = summary.metadata.clone();
         let offset = summary.code_offset;
@@ -4491,38 +4509,14 @@ impl StateBlock<'_> {
             }
         }
 
-        // Optional manifest validation (lookup by code_hash).
+        // Validate every supplied or stored manifest as a complete V1
+        // consensus binding. A present manifest may not omit either hash.
         let validate_manifest =
             |manifest: &ContractManifest| -> Result<(), TransactionRejectionReason> {
-                if let Some(mh) = manifest.code_hash
-                    && mh != code_hash
-                {
-                    return Err(TransactionRejectionReason::Validation(
-                        ValidationFail::IvmAdmission(
-                            iroha_data_model::executor::IvmAdmissionError::ManifestCodeHashMismatch(
-                                iroha_data_model::executor::ManifestCodeHashMismatchInfo {
-                                    expected: mh,
-                                    actual: code_hash,
-                                },
-                            ),
-                        ),
-                    ));
-                }
-                if let Some(ah) = manifest.abi_hash
-                    && ah != abi_hash
-                {
-                    return Err(TransactionRejectionReason::Validation(
-                        ValidationFail::IvmAdmission(
-                            iroha_data_model::executor::IvmAdmissionError::ManifestAbiHashMismatch(
-                                iroha_data_model::executor::ManifestAbiHashMismatchInfo {
-                                    expected: ah,
-                                    actual: abi_hash,
-                                },
-                            ),
-                        ),
-                    ));
-                }
-                Ok(())
+                crate::smartcontracts::ivm::validate_manifest_hashes(manifest, code_hash, abi_hash)
+                    .map_err(|error| {
+                        TransactionRejectionReason::Validation(ValidationFail::IvmAdmission(error))
+                    })
             };
 
         if let Some(manifest) = manifest_metadata.as_ref() {
@@ -9150,18 +9144,22 @@ pub mod tests {
         assert!(AcceptedTransaction::ensure_signature_limit(2, &limits).is_ok());
     }
 
-    const IVM_METADATA_HEADER_LEN: usize = 17;
+    const IVM_METADATA_HEADER_LEN: usize = ivm::HEADER_SIZE;
     const LITERAL_SECTION_MAGIC: [u8; 4] = *b"LTLB";
 
     /// Build a minimal valid IVM program: header (1.0, vector=4, `max_cycles=0`, abi=1) + HALT.
     fn minimal_ivm_program(abi_version: u8) -> Vec<u8> {
         let mut code = Vec::new();
         code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
-        let mut program = Vec::new();
-        program.extend_from_slice(b"IVM\0");
-        program.extend_from_slice(&[1, 0, 0, 4]);
-        program.extend_from_slice(&1_000u64.to_le_bytes());
-        program.push(abi_version);
+        let mut program = ivm::ProgramMetadata {
+            version_major: 1,
+            version_minor: 0,
+            mode: 0,
+            vector_length: 4,
+            max_cycles: 1_000,
+            abi_version,
+        }
+        .encode();
         program.extend_from_slice(&code);
         program
     }
@@ -9186,11 +9184,15 @@ pub mod tests {
         for _ in 0..instruction_count {
             code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
         }
-        let mut program = Vec::new();
-        program.extend_from_slice(b"IVM\0");
-        program.extend_from_slice(&[1, 0, 0, 4]);
-        program.extend_from_slice(&max_cycles.to_le_bytes());
-        program.push(abi_version);
+        let mut program = ivm::ProgramMetadata {
+            version_major: 1,
+            version_minor: 0,
+            mode: 0,
+            vector_length: 4,
+            max_cycles,
+            abi_version,
+        }
+        .encode();
         program.extend_from_slice(&code);
         program
     }
@@ -9255,11 +9257,15 @@ pub mod tests {
         );
         code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
 
-        let mut program = Vec::new();
-        program.extend_from_slice(b"IVM\0");
-        program.extend_from_slice(&[1, 0, 0, 4]);
-        program.extend_from_slice(&1_000u64.to_le_bytes());
-        program.push(abi_version);
+        let mut program = ivm::ProgramMetadata {
+            version_major: 1,
+            version_minor: 0,
+            mode: 0,
+            vector_length: 4,
+            max_cycles: 1_000,
+            abi_version,
+        }
+        .encode();
         program.extend_from_slice(&code);
         program
     }
@@ -9270,11 +9276,15 @@ pub mod tests {
         code.extend_from_slice(&ivm::encoding::wide::encode_syscallx(syscall).to_le_bytes());
         code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
 
-        let mut program = Vec::new();
-        program.extend_from_slice(b"IVM\0");
-        program.extend_from_slice(&[1, 0, 0, 4]);
-        program.extend_from_slice(&1_000u64.to_le_bytes());
-        program.push(abi_version);
+        let mut program = ivm::ProgramMetadata {
+            version_major: 1,
+            version_minor: 0,
+            mode: 0,
+            vector_length: 4,
+            max_cycles: 1_000,
+            abi_version,
+        }
+        .encode();
         program.extend_from_slice(&code);
         program
     }
@@ -9389,6 +9399,98 @@ pub mod tests {
             ))) => {}
             other => panic!("Expected UnsupportedAbiVersion(0) error, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn validate_ivm_rejects_malformed_manifest_metadata_before_artifact_admission() {
+        use iroha_data_model::transaction::{Executable, TransactionBuilder};
+        use nonzero_ext::nonzero;
+
+        let (world, authority_id, kp) = world_with_authority("wonderland");
+        let kura = crate::kura::Kura::blank_kura_for_testing();
+        let query_handle = crate::query::store::LiveQueryStore::start_test();
+        let chain: ChainId = "chain".parse().unwrap();
+        let state = State::new_with_chain(world, kura, query_handle, chain.clone());
+        let header =
+            iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+
+        let mut metadata = metadata_with_gas_limit(TEST_GAS_LIMIT);
+        metadata.insert(
+            (*CONTRACT_MANIFEST_METADATA_NAME).clone(),
+            Json::from("not-a-contract-manifest"),
+        );
+        let tx = TransactionBuilder::new(chain, authority_id)
+            .with_metadata(metadata)
+            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(
+                minimal_ivm_program(1),
+            )))
+            .sign(kp.private_key());
+
+        let mut ivm_cache = IvmCache::new();
+        let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
+        let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
+        assert!(matches!(
+            result,
+            Err(TransactionRejectionReason::Validation(
+                ValidationFail::IvmAdmission(
+                    iroha_data_model::executor::IvmAdmissionError::ManifestMalformed
+                )
+            ))
+        ));
+    }
+
+    #[test]
+    fn validate_ivm_rejects_stale_authenticated_cntr_abi_hash() {
+        use iroha_data_model::transaction::{Executable, TransactionBuilder};
+        use nonzero_ext::nonzero;
+
+        let (world, authority_id, kp) = world_with_authority("wonderland");
+        let kura = crate::kura::Kura::blank_kura_for_testing();
+        let query_handle = crate::query::store::LiveQueryStore::start_test();
+        let chain: ChainId = "chain".parse().unwrap();
+        let state = State::new_with_chain(world, kura, query_handle, chain.clone());
+        let header =
+            iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+
+        let (artifact, _) = ivm::KotodamaCompiler::new()
+            .compile_source_with_manifest(
+                "seiyaku StaleAbi { view fn inspect() -> int { return 1; } }",
+            )
+            .expect("compile self-describing contract");
+        let parsed = ivm::ProgramMetadata::parse(&artifact).expect("parse compiled contract");
+        let mut interface = parsed
+            .contract_interface
+            .expect("compiled contract carries CNTR");
+        let original_section_len = interface.encode_section().len();
+        let expected = interface.abi_hash;
+        interface.abi_hash[0] ^= 0x80;
+        let actual = interface.abi_hash;
+        let mut stale = parsed.metadata.encode();
+        stale.extend_from_slice(&interface.encode_section());
+        stale.extend_from_slice(
+            artifact
+                .get(parsed.header_len + original_section_len..)
+                .expect("post-CNTR artifact suffix is in bounds"),
+        );
+
+        let tx = TransactionBuilder::new(chain, authority_id)
+            .with_metadata(metadata_with_gas_limit(TEST_GAS_LIMIT))
+            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(stale)))
+            .sign(kp.private_key());
+        let mut ivm_cache = IvmCache::new();
+        let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
+        let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
+        assert!(matches!(
+            result,
+            Err(TransactionRejectionReason::Validation(
+                ValidationFail::IvmAdmission(
+                    iroha_data_model::executor::IvmAdmissionError::ArtifactAbiHashMismatch(info)
+                )
+            )) if info.expected == iroha_crypto::Hash::prehashed(expected)
+                && info.actual == iroha_crypto::Hash::prehashed(actual)
+        ));
     }
 
     #[test]

@@ -148,7 +148,7 @@ final class NoritoRpcFixtureParityTests: XCTestCase {
         )
         let payloadHash = IrohaHash.hash(payloadBytes).hexLowercased()
         XCTAssertEqual(payloadHash, fixture.entry.payloadHash, "payload hash mismatch for \(name)")
-        var entrypoint = OfflineCompactNoritoWriter()
+        var entrypoint = CompactNoritoWriter()
         entrypoint.writeUInt32LE(0)
         entrypoint.writeField(signedBytes)
         let signedHash = IrohaHash.hash(entrypoint.data).hexLowercased()

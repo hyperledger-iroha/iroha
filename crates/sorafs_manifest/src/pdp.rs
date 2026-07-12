@@ -70,8 +70,7 @@ pub const PDP_CHUNK_PROFILE_ALIAS_MAX_BYTES_V1: usize = 128;
 const PDP_COMMITMENT_DIGEST_DOMAIN_V1: &[u8] = b"sorafs.pdp.commitment.digest.v1\0";
 const PDP_CHALLENGE_ID_DOMAIN_V1: &[u8] = b"sorafs.pdp.challenge.id.v1\0";
 const PDP_PROOF_DIGEST_DOMAIN_V1: &[u8] = b"sorafs.pdp.proof.digest.v1\0";
-const PDP_GOVERNANCE_ARCHIVE_DIGEST_DOMAIN_V1: &[u8] =
-    b"sorafs.pdp.governance-archive.v1\0";
+const PDP_GOVERNANCE_ARCHIVE_DIGEST_DOMAIN_V1: &[u8] = b"sorafs.pdp.governance-archive.v1\0";
 /// Domain under which providers sign canonical PDP proof digests.
 pub const PDP_PROOF_SIGNATURE_DOMAIN_V1: &[u8] = b"sorafs.pdp.proof.signature.v1\0";
 
@@ -1172,8 +1171,7 @@ impl PdpGovernanceArchiveV1 {
                 }
                 if matches!(
                     reason,
-                    PdpRejectionReasonV1::DeadlineExpired
-                        | PdpRejectionReasonV1::SubmissionLate
+                    PdpRejectionReasonV1::DeadlineExpired | PdpRejectionReasonV1::SubmissionLate
                 ) && self.decided_at_unix <= self.response_deadline_unix
                 {
                     return Err(PdpGovernanceArchiveValidationError::DecisionMismatch);
@@ -2421,9 +2419,8 @@ mod tests {
                 7 => archive.canonical_challenge.push(0),
                 8 => archive.canonical_proof.as_mut().expect("proof")[0] ^= 1,
                 9 => {
-                    archive.decision = PdpTerminalDecisionV1::Rejected(
-                        PdpRejectionReasonV1::DeadlineExpired,
-                    )
+                    archive.decision =
+                        PdpTerminalDecisionV1::Rejected(PdpRejectionReasonV1::DeadlineExpired)
                 }
                 _ => unreachable!(),
             }
@@ -2438,8 +2435,7 @@ mod tests {
         invalid_proof.manifest_digest[0] ^= 1;
         resign(&mut invalid_proof, &fixture.signing_key);
         let mut rejected = accepted_archive(&fixture);
-        rejected.decision =
-            PdpTerminalDecisionV1::Rejected(PdpRejectionReasonV1::InvalidProof);
+        rejected.decision = PdpTerminalDecisionV1::Rejected(PdpRejectionReasonV1::InvalidProof);
         rejected.proof_digest = Some(invalid_proof.proof_digest().expect("invalid proof digest"));
         rejected.canonical_proof =
             Some(norito::to_bytes(&invalid_proof).expect("invalid proof bytes"));
@@ -2449,8 +2445,7 @@ mod tests {
             .expect("authenticated invalid proof remains archivable");
 
         let mut expired = accepted_archive(&fixture);
-        expired.decision =
-            PdpTerminalDecisionV1::Rejected(PdpRejectionReasonV1::DeadlineExpired);
+        expired.decision = PdpTerminalDecisionV1::Rejected(PdpRejectionReasonV1::DeadlineExpired);
         expired.proof_digest = None;
         expired.canonical_proof = None;
         expired.sampled_bytes = 0;

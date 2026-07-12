@@ -1138,7 +1138,8 @@ mod tests {
         );
         assert_eq!(
             usize::try_from(
-                iroha_config::parameters::defaults::sorafs::storage::pdp_provider::PROOF_MAX_BYTES.0,
+                iroha_config::parameters::defaults::sorafs::storage::pdp_provider::PROOF_MAX_BYTES
+                    .0,
             )
             .expect("proof cap fits usize"),
             sorafs_manifest::PDP_PROOF_MAX_CANONICAL_BYTES_V1

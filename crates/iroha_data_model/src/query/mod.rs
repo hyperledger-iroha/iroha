@@ -1079,25 +1079,25 @@ mod model {
         FindSorafsOrderbookOrders(sorafs::prelude::FindSorafsOrderbookOrders),
         /// Fetch a cursor-bounded page of authoritative `SoraFS` settlement receipts.
         FindSorafsOrderbookReceipts(sorafs::prelude::FindSorafsOrderbookReceipts),
-        /// Fetch the active authoritative `SoraFS` PoP issuer policy.
+        /// Fetch the active authoritative `SoraFS` `PoP` issuer policy.
         FindSorafsPopIssuerPolicy(sorafs::prelude::FindSorafsPopIssuerPolicy),
-        /// Fetch one payload-free PoP credential commitment.
+        /// Fetch one payload-free `PoP` credential commitment.
         FindSorafsPopCredentialCommitmentByDigest(
             sorafs::prelude::FindSorafsPopCredentialCommitmentByDigest,
         ),
-        /// Fetch one signed PoP commitment-root publication by version.
+        /// Fetch one signed `PoP` commitment-root publication by version.
         FindSorafsPopCommitmentRootByVersion(sorafs::prelude::FindSorafsPopCommitmentRootByVersion),
-        /// Fetch one signed PoP revocation publication by version.
+        /// Fetch one signed `PoP` revocation publication by version.
         FindSorafsPopRevocationPublicationByVersion(
             sorafs::prelude::FindSorafsPopRevocationPublicationByVersion,
         ),
-        /// Fetch one payload-free PoP revocation by nonce commitment.
+        /// Fetch one payload-free `PoP` revocation by nonce commitment.
         FindSorafsPopRevocationByNonceCommitment(
             sorafs::prelude::FindSorafsPopRevocationByNonceCommitment,
         ),
-        /// Fetch one PoP registry audit-chain link by sequence.
+        /// Fetch one `PoP` registry audit-chain link by sequence.
         FindSorafsPopAuditDigestBySequence(sorafs::prelude::FindSorafsPopAuditDigestBySequence),
-        /// Fetch constant-time authoritative PoP registry anchors and counters.
+        /// Fetch constant-time authoritative `PoP` registry anchors and counters.
         FindSorafsPopRegistryStatus(sorafs::prelude::FindSorafsPopRegistryStatus),
         /// Fetch the active authoritative `SoraFS` moderation policy.
         FindSorafsModerationPolicy(sorafs::prelude::FindSorafsModerationPolicy),
@@ -1221,25 +1221,25 @@ mod model {
         SorafsOrderbookOrderPage(crate::sorafs::orderbook::OrderbookOrderPageV1),
         /// Cursor-bounded authoritative `SoraFS` settlement-receipt page.
         SorafsOrderbookReceiptPage(crate::sorafs::orderbook::OrderbookSettlementReceiptPageV1),
-        /// Active authoritative `SoraFS` PoP issuer policy.
+        /// Active authoritative `SoraFS` `PoP` issuer policy.
         SorafsPopIssuerPolicy(crate::sorafs::pop_registry::PopIssuerPolicyRecordV1),
-        /// Payload-free authoritative PoP credential commitment.
+        /// Payload-free authoritative `PoP` credential commitment.
         SorafsPopCredentialCommitment(crate::sorafs::pop_registry::PopCredentialCommitmentRecordV1),
-        /// Authoritative signed PoP commitment-root publication.
+        /// Authoritative signed `PoP` commitment-root publication.
         SorafsPopCommitmentRoot(crate::sorafs::pop_registry::PopCommitmentRootRecordV1),
-        /// Authoritative signed PoP revocation publication.
+        /// Authoritative signed `PoP` revocation publication.
         SorafsPopRevocationPublication(
             crate::sorafs::pop_registry::PopRevocationPublicationRecordV1,
         ),
-        /// Payload-free authoritative PoP revocation.
+        /// Payload-free authoritative `PoP` revocation.
         SorafsPopRevocation(crate::sorafs::pop_registry::PopRevocationRecordV1),
-        /// Authoritative PoP registry audit-chain link.
+        /// Authoritative `PoP` registry audit-chain link.
         SorafsPopAuditDigest(crate::sorafs::pop_registry::PopRegistryAuditDigestRecordV1),
-        /// Authoritative PoP registry anchors and counters.
+        /// Authoritative `PoP` registry anchors and counters.
         SorafsPopRegistryStatus(crate::sorafs::pop_registry::PopRegistryStatusV1),
         /// Active authoritative `SoraFS` moderation policy payload.
         SorafsModerationPolicy(crate::sorafs::moderation_ledger::ModerationLedgerPolicyRecord),
-        /// Authoritative appeal intake, PoP snapshot, and sortition lifecycle.
+        /// Authoritative appeal intake, `PoP` snapshot, and sortition lifecycle.
         SorafsModerationAppeal(crate::sorafs::moderation_ledger::ModerationAppealRecordV1),
         /// Payload-free, PoP-verified juror eligibility record.
         SorafsModerationJurorEligibility(
@@ -5262,7 +5262,7 @@ pub mod sorafs {
             pub limit: u32,
         }
 
-        /// Fetch the active authoritative PoP issuer policy.
+        /// Fetch the active authoritative `PoP` issuer policy.
         #[derive(Copy)]
         pub struct FindSorafsPopIssuerPolicy;
 
@@ -5306,7 +5306,7 @@ pub mod sorafs {
             pub sequence: u64,
         }
 
-        /// Fetch constant-time authoritative PoP registry anchors and counters.
+        /// Fetch constant-time authoritative `PoP` registry anchors and counters.
         #[derive(Copy)]
         pub struct FindSorafsPopRegistryStatus;
 
@@ -5322,7 +5322,7 @@ pub mod sorafs {
             pub round_id: String,
         }
 
-        /// Fetch one payload-free PoP eligibility record.
+        /// Fetch one payload-free `PoP` eligibility record.
         pub struct FindSorafsModerationJurorEligibility {
             /// Moderation case identifier.
             pub case_id: String,
@@ -6139,49 +6139,49 @@ pub mod error {
             DefiOracleAttestation(crate::oracle::DefiOracleAttestationKey),
             /// Failed to find native asset escrow: `{0:?}`
             AssetEscrow(crate::escrow::EscrowId),
-            /// Failed to find the active authoritative SoraFS orderbook policy
+            /// Failed to find the active authoritative `SoraFS` orderbook policy
             SorafsOrderbookPolicy,
-            /// Failed to find authoritative SoraFS orderbook order: `{0:?}`
+            /// Failed to find authoritative `SoraFS` orderbook order: `{0:?}`
             SorafsOrderbookOrder([u8; 32]),
-            /// Failed to find authoritative SoraFS orderbook cancellation: `{0:?}`
+            /// Failed to find authoritative `SoraFS` orderbook cancellation: `{0:?}`
             SorafsOrderbookCancellation([u8; 32]),
-            /// Failed to find authoritative SoraFS orderbook receipt: `{0:?}`
+            /// Failed to find authoritative `SoraFS` orderbook receipt: `{0:?}`
             SorafsOrderbookReceipt([u8; 32]),
-            /// Failed to find authoritative SoraFS orderbook status
+            /// Failed to find authoritative `SoraFS` orderbook status
             SorafsOrderbookStatus,
-            /// Failed to find the active authoritative SoraFS PoP issuer policy
+            /// Failed to find the active authoritative `SoraFS` `PoP` issuer policy
             SorafsPopIssuerPolicy,
-            /// Failed to find authoritative SoraFS PoP credential commitment: `{0:?}`
+            /// Failed to find authoritative `SoraFS` `PoP` credential commitment: `{0:?}`
             SorafsPopCredentialCommitment([u8; 32]),
-            /// Failed to find authoritative SoraFS PoP commitment root version `{0}`
+            /// Failed to find authoritative `SoraFS` `PoP` commitment root version `{0}`
             SorafsPopCommitmentRoot(u64),
-            /// Failed to find authoritative SoraFS PoP revocation publication version `{0}`
+            /// Failed to find authoritative `SoraFS` `PoP` revocation publication version `{0}`
             SorafsPopRevocationPublication(u64),
-            /// Failed to find authoritative SoraFS PoP revocation commitment: `{0:?}`
+            /// Failed to find authoritative `SoraFS` `PoP` revocation commitment: `{0:?}`
             SorafsPopRevocation([u8; 32]),
-            /// Failed to find authoritative SoraFS PoP registry audit sequence `{0}`
+            /// Failed to find authoritative `SoraFS` `PoP` registry audit sequence `{0}`
             SorafsPopAuditDigest(u64),
-            /// Failed to find authoritative SoraFS PoP registry status
+            /// Failed to find authoritative `SoraFS` `PoP` registry status
             SorafsPopRegistryStatus,
-            /// Failed to find the active authoritative SoraFS moderation policy
+            /// Failed to find the active authoritative `SoraFS` moderation policy
             SorafsModerationPolicy,
-            /// Failed to find authoritative SoraFS moderation appeal `{0}`
+            /// Failed to find authoritative `SoraFS` moderation appeal `{0}`
             SorafsModerationAppeal(String),
-            /// Failed to find authoritative SoraFS moderation juror eligibility `{0}`
+            /// Failed to find authoritative `SoraFS` moderation juror eligibility `{0}`
             SorafsModerationJurorEligibility(String),
-            /// Failed to find authoritative SoraFS moderation case `{0}`
+            /// Failed to find authoritative `SoraFS` moderation case `{0}`
             SorafsModerationCase(String),
-            /// Failed to find authoritative SoraFS moderation commit `{0}`
+            /// Failed to find authoritative `SoraFS` moderation commit `{0}`
             SorafsModerationCommit(String),
-            /// Failed to find authoritative SoraFS moderation reveal `{0}`
+            /// Failed to find authoritative `SoraFS` moderation reveal `{0}`
             SorafsModerationReveal(String),
-            /// Failed to find authoritative SoraFS moderation challenge `{0}`
+            /// Failed to find authoritative `SoraFS` moderation challenge `{0}`
             SorafsModerationChallenge(String),
-            /// Failed to find authoritative SoraFS moderation outcome `{0}`
+            /// Failed to find authoritative `SoraFS` moderation outcome `{0}`
             SorafsModerationOutcome(String),
-            /// Failed to find authoritative SoraFS moderation no-show `{0}`
+            /// Failed to find authoritative `SoraFS` moderation no-show `{0}`
             SorafsModerationNoShow(String),
-            /// Failed to find authoritative SoraFS moderation status
+            /// Failed to find authoritative `SoraFS` moderation status
             SorafsModerationStatus,
         }
     }

@@ -117,7 +117,6 @@ impl LaneLifecycleStatusV1 {
     ///
     /// Returns [`LaneLifecycleStatusError`] when the incarnation map does not
     /// exactly and canonically cover the active catalog.
-    #[must_use]
     pub fn new(
         nexus_enabled: bool,
         catalog: &LaneCatalog,
@@ -244,7 +243,6 @@ impl LaneLifecycleParameterV1 {
     ///
     /// Returns [`LaneLifecycleStatusError`] when the incarnation entries do not
     /// exactly and canonically cover the expected catalog.
-    #[must_use]
     pub fn new(
         expected_catalog: &LaneCatalog,
         expected_incarnations: &[LaneLifecycleIncarnationEntry],
@@ -356,6 +354,11 @@ impl LaneLifecycleParameterV1 {
     ///
     /// Non-matching parameter identifiers return `Ok(None)`. Matching identifiers
     /// are parsed strictly and reject unsupported versions.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`norito::json::Error`] when a matching payload is malformed or
+    /// carries an unsupported lifecycle version.
     #[cfg(feature = "json")]
     pub fn from_custom_parameter(
         custom: &CustomParameter,
@@ -632,6 +635,14 @@ impl From<u64> for DataSpaceId {
 impl From<DataSpaceId> for u64 {
     fn from(value: DataSpaceId) -> Self {
         value.0
+    }
+}
+
+impl FromStr for DataSpaceId {
+    type Err = std::num::ParseIntError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        value.parse::<u64>().map(Self)
     }
 }
 
@@ -1750,6 +1761,11 @@ mod tests {
         let decoded = DataSpaceId::decode_all(&mut slice).expect("decode DataSpaceId");
         assert_eq!(decoded, original);
         assert_eq!(DataSpaceId::UNIVERSAL.as_u64(), 0);
+        assert_eq!(
+            "7".parse::<DataSpaceId>().expect("parse DataSpaceId"),
+            original
+        );
+        assert!("-1".parse::<DataSpaceId>().is_err());
     }
 
     #[test]

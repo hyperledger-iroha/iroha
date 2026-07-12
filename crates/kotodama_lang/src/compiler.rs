@@ -86,6 +86,7 @@ const HINT_SKIP_DYNAMIC_STATE_PATH: &str = "dynamic state path is not compiler-r
 const HINT_SKIP_CONTRACT_CALL_TARGET: &str = "contract call target is not compiler-resolved";
 const HINT_SKIP_INTERNAL_CALL_TARGET: &str = "internal call target is not compiler-resolved";
 const HINT_SKIP_OPAQUE_ISI: &str = "opaque ISI access is not compiler-resolved";
+const TEST_RETURN_ENTRYPOINT_BASE: &str = "__koto_test_return";
 
 fn multiply_defined_temps(program: &ir::Program) -> HashSet<(usize, ir::Temp)> {
     let mut seen = HashSet::new();
@@ -1311,6 +1312,9 @@ fn encode_pointer_tlv_bytes(kind: ir::DataRefKind, raw: &str) -> Option<Vec<u8>>
     use ir::DataRefKind as DRK;
     use iroha_primitives::json::Json;
     use norito::{decode_from_bytes, to_bytes};
+
+    let _canonical_flags =
+        norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
 
     let (type_id, payload) = match kind {
         DRK::Account => {
@@ -2608,17 +2612,9 @@ seiyaku SumJoinFacts {
 
         super::propagate_transitive_access_hints(&program, &mut access_sets, &mut hint_skips);
 
-        for index in 0..2 {
-            assert!(
-                access_sets[index]
-                    .reads
-                    .contains(super::GLOBAL_WILDCARD_KEY)
-            );
-            assert!(
-                access_sets[index]
-                    .writes
-                    .contains(super::GLOBAL_WILDCARD_KEY)
-            );
+        for access_set in &access_sets {
+            assert!(access_set.reads.contains(super::GLOBAL_WILDCARD_KEY));
+            assert!(access_set.writes.contains(super::GLOBAL_WILDCARD_KEY));
         }
         assert!(hint_skips[0].contains(super::HINT_SKIP_INTERNAL_CALL_TARGET));
         assert!(hint_skips[1].contains(super::HINT_SKIP_CONTRACT_CALL_TARGET));
@@ -5563,16 +5559,21 @@ view fn main() {
                 ivm_abi::syscalls::SYSCALL_INPUT_PUBLISH_TLV,
                 "INPUT_PUBLISH_TLV",
             ),
+            (
+                ivm_abi::syscalls::SYSCALL_NORMALIZE_NORITO_BYTES,
+                "NORMALIZE_NORITO_BYTES",
+            ),
             (ivm_abi::syscalls::SYSCALL_VRF_VERIFY, "VRF_VERIFY"),
             (
                 ivm_abi::syscalls::SYSCALL_VRF_VERIFY_BATCH,
                 "VRF_VERIFY_BATCH",
             ),
         ] {
-            let needle = encoding::wide::encode_sys(
-                instruction::wide::system::SCALL,
-                u8::try_from(syscall).expect("VRF syscall id fits in u8"),
-            )
+            let needle = if let Ok(imm8) = u8::try_from(syscall) {
+                encoding::wide::encode_sys(instruction::wide::system::SCALL, imm8)
+            } else {
+                encoding::wide::encode_syscallx(syscall)
+            }
             .to_le_bytes();
             assert!(
                 code.windows(needle.len()).any(|window| window == needle),
@@ -5593,6 +5594,33 @@ view fn main() {
             2,
             "single and batch VRF verification each publish exactly one request envelope"
         );
+
+        let syscall_words = code
+            .chunks_exact(4)
+            .filter_map(|chunk| {
+                let word = u32::from_le_bytes(chunk.try_into().expect("four-byte instruction"));
+                match instruction::wide::opcode(word) {
+                    instruction::wide::system::SCALL => {
+                        Some(u32::from(encoding::wide::decode_sys(word).1))
+                    }
+                    instruction::wide::system::SYSTEM => {
+                        Some(encoding::wide::decode_syscallx(word))
+                    }
+                    _ => None,
+                }
+            })
+            .collect::<Vec<_>>();
+        for operation in [
+            ivm_abi::syscalls::SYSCALL_VRF_VERIFY,
+            ivm_abi::syscalls::SYSCALL_VRF_VERIFY_BATCH,
+        ] {
+            assert!(
+                syscall_words.windows(2).any(|window| {
+                    window == [ivm_abi::syscalls::SYSCALL_NORMALIZE_NORITO_BYTES, operation]
+                }),
+                "NORMALIZE_NORITO_BYTES must immediately precede VRF syscall {operation:#x}"
+            );
+        }
     }
 
     #[test]
@@ -10044,6 +10072,30 @@ seiyaku Test {
     }
 
     #[test]
+    fn manifest_access_set_hints_use_norito_i64_for_bool_map_keys() {
+        let src = r#"
+seiyaku Test {
+  state StateMap<bool, int> Foo;
+
+  kotoage fn main()  authorize("Entry") {
+    Foo[true] = 2;
+    let _x = Foo.get(true);
+  }
+}
+"#;
+        let (_bytes, manifest) = Compiler::new()
+            .compile_source_with_manifest(src)
+            .expect("compile bool map access hints");
+        let hints = manifest.access_set_hints.expect("access hints");
+        let encoded = norito::to_bytes(&1_i64).expect("encode canonical bool map key");
+        let literal_key = format!("state:Foo/{}", hex::encode(encoded));
+        assert!(hints.read_keys.contains(&"state:Foo".to_string()));
+        assert!(hints.write_keys.contains(&"state:Foo".to_string()));
+        assert!(hints.read_keys.contains(&literal_key), "{hints:?}");
+        assert!(hints.write_keys.contains(&literal_key), "{hints:?}");
+    }
+
+    #[test]
     fn manifest_access_set_hints_support_canonical_quantity_map_keys() {
         let src = r#"
 seiyaku Test {
@@ -11780,17 +11832,28 @@ impl Compiler {
                         dataref_kind_map.insert((func_idx, *dest), DRK::Int);
                     }
                     if let ir::Instr::NumericConvert {
-                        dest, destination, ..
+                        dest,
+                        value,
+                        source,
+                        destination,
                     } = instr
                     {
-                        dataref_kind_map.insert(
-                            (func_idx, *dest),
-                            match destination {
-                                ir::WideNumericKind::Int => DRK::Int,
-                                ir::WideNumericKind::Decimal => DRK::Decimal,
-                                ir::WideNumericKind::Quantity => DRK::Quantity,
-                            },
-                        );
+                        let source_kind = match source {
+                            ir::WideNumericKind::Int => DRK::Int,
+                            ir::WideNumericKind::Decimal => DRK::Decimal,
+                            ir::WideNumericKind::Quantity => DRK::Quantity,
+                        };
+                        let destination_kind = match destination {
+                            ir::WideNumericKind::Int => DRK::Int,
+                            ir::WideNumericKind::Decimal => DRK::Decimal,
+                            ir::WideNumericKind::Quantity => DRK::Quantity,
+                        };
+                        if dataref_kind_map.get(&(func_idx, *value)) == Some(&source_kind)
+                            && let Some(raw) = string_map.get(&(func_idx, *value)).cloned()
+                        {
+                            string_map.insert((func_idx, *dest), raw);
+                        }
+                        dataref_kind_map.insert((func_idx, *dest), destination_kind);
                     }
                     if let ir::Instr::NumericTryConvert {
                         dest, destination, ..
@@ -12551,8 +12614,16 @@ impl Compiler {
                             let tuple_items = tuple_map.get(tuple).cloned();
                             if let Some(items) = tuple_items {
                                 if let Some(src_t) = items.get(*index) {
-                                    let rs = src_reg(src_t, scratch1, &mut code)?;
-                                    emit_addi(&mut code, rd, rs, 0);
+                                    if let (Some(kind), Some(literal)) = (
+                                        dataref_kind_map.get(&(func_idx, *src_t)).copied(),
+                                        string_map.get(&(func_idx, *src_t)).cloned(),
+                                    ) {
+                                        let key = data_key_for_pointer(kind, &literal);
+                                        emit_literal_load(&mut code, &fixups, rd, key);
+                                    } else {
+                                        let rs = src_reg(src_t, scratch1, &mut code)?;
+                                        emit_addi(&mut code, rd, rs, 0);
+                                    }
                                     if let Some(child_items) = tuple_map.get(src_t).cloned() {
                                         tuple_map.insert(*dest, child_items);
                                     } else {
@@ -17630,6 +17701,7 @@ impl Compiler {
                                 push_word(&mut code, encode_addi(10, r, 0)?);
                             }
                             code.extend_from_slice(&pub_word.to_le_bytes());
+                            push_syscall(&mut code, syscalls::SYSCALL_NORMALIZE_NORITO_BYTES);
                             let word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
                                 syscalls::SYSCALL_VRF_VERIFY as u8,
@@ -17652,6 +17724,7 @@ impl Compiler {
                                 syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
                             );
                             code.extend_from_slice(&pub_word.to_le_bytes());
+                            push_syscall(&mut code, syscalls::SYSCALL_NORMALIZE_NORITO_BYTES);
                             let word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
                                 syscalls::SYSCALL_VRF_VERIFY_BATCH as u8,
@@ -18173,6 +18246,14 @@ impl Compiler {
                 .map_err(|_| "relaxed function end does not fit u64".to_owned())?;
         }
 
+        // Local test functions return through r1 just like ordinary private
+        // calls. Give the test driver a compiler-owned terminal return target
+        // inside the authenticated artifact instead of requiring it to append
+        // an instruction after metadata and CNTR construction.
+        if self.opts.mode == CompilerMode::Test {
+            push_word(&mut code, encoding::wide::encode_halt());
+        }
+
         uses_vector_global |= detect_vector_usage(&code);
         uses_zk_global |= detect_zk_usage(&code);
 
@@ -18539,13 +18620,46 @@ impl Compiler {
 
         let mut entrypoint_start_offsets = func_start_offsets.clone();
         entrypoint_start_offsets.extend(entrypoint_wrapper_offsets);
-        let entrypoint_descriptors = build_entrypoint_descriptors(
+        let mut entrypoint_descriptors = build_entrypoint_descriptors(
             &typed,
             &access_sets,
             &ir_prog.functions,
             &hint_reports,
             &entrypoint_start_offsets,
         )?;
+        if self.opts.mode == CompilerMode::Test {
+            // Test suites are self-describing CNTR artifacts even when the
+            // production projection has no public entrypoint. Authenticate the
+            // compiler-owned return target through a local-only view descriptor
+            // so the normal artifact verifier remains mandatory for execution.
+            let return_pc = code
+                .len()
+                .checked_sub(core::mem::size_of::<u32>())
+                .ok_or_else(|| "test artifact is missing its return HALT".to_owned())?;
+            let mut name = TEST_RETURN_ENTRYPOINT_BASE.to_owned();
+            while entrypoint_descriptors
+                .iter()
+                .any(|entrypoint| entrypoint.name == name)
+            {
+                name.push('_');
+            }
+            entrypoint_descriptors.push(EmbeddedEntrypointDescriptor {
+                name,
+                kind: EntryPointKind::View,
+                params: Vec::new(),
+                argument_schema: None,
+                return_type: None,
+                return_schema: None,
+                permission: None,
+                read_keys: Vec::new(),
+                write_keys: Vec::new(),
+                access_hints_complete: Some(true),
+                access_hints_skipped: Vec::new(),
+                triggers: Vec::new(),
+                entry_pc: u64::try_from(return_pc)
+                    .map_err(|_| "test return PC does not fit u64".to_owned())?,
+            });
+        }
         if self.opts.mode == CompilerMode::Production
             && let Some(entrypoint) = entrypoint_descriptors.iter().find(|entrypoint| {
                 entrypoint.access_hints_complete == Some(false)
@@ -18576,6 +18690,7 @@ impl Compiler {
         let contract_interface = EmbeddedContractInterfaceV1 {
             seiyaku_name: typed.unit.name.clone(),
             compiler_fingerprint: COMPILER_FINGERPRINT.to_owned(),
+            abi_hash: crate::syscalls::compute_abi_hash(crate::SyscallPolicy::AbiV1),
             features_bitmap: feature_bits,
             access_set_hints: access_set_hints.clone(),
             kotoba: message_entries.clone(),
@@ -18802,10 +18917,16 @@ impl Compiler {
             v => return Err(format!("unsupported abi_version {v}; expected 1")),
         };
         let abi_hash_bytes = crate::syscalls::compute_abi_hash(policy);
+        if contract_interface.abi_hash != abi_hash_bytes {
+            return Err(
+                "manifest parse header: embedded CNTR abi_hash does not match the compiler ABI"
+                    .to_owned(),
+            );
+        }
         let manifest = iroha_data_model::smart_contract::manifest::ContractManifest {
             seiyaku_name: Some(contract_interface.seiyaku_name.clone()),
             code_hash: Some(code_hash),
-            abi_hash: Some(iroha_crypto::Hash::prehashed(abi_hash_bytes)),
+            abi_hash: Some(iroha_crypto::Hash::prehashed(contract_interface.abi_hash)),
             compiler_fingerprint: Some(contract_interface.compiler_fingerprint),
             features_bitmap: Some(contract_interface.features_bitmap),
             access_set_hints: contract_interface.access_set_hints,

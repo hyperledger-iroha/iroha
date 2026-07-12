@@ -60,14 +60,14 @@ pub const MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES: usize = 4 * 1024 * 1024;
 /// Maximum canonical size reserved for the certified-proposal half of one source bundle.
 ///
 /// The certified envelope repeats the bounded entrypoint commitments in the proposal and
-/// prepare/commit vote bodies and carries the validator sets, availability QC, and signer PoPs.
+/// prepare/commit vote bodies and carries the validator sets, availability QC, and signer `PoPs`.
 /// Keeping this reservation protocol-wide prevents an autonomous view chain from consuming the
 /// complete source budget before the globally executable certificate is attached.
 pub const MAX_MERGE_EXECUTION_CERTIFIED_SOURCE_BYTES: usize = 1024 * 1024;
 
 /// Maximum canonical size of the autonomous payload and authenticated view-chain half.
 ///
-/// NewView persistence checkpoints before this budget is exceeded. The independently bounded
+/// `NewView` persistence checkpoints before this budget is exceeded. The independently bounded
 /// certified envelope and the exact final bundle check then keep every accepted source within
 /// [`MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES`].
 pub const MAX_MERGE_EXECUTION_AUTONOMOUS_SOURCE_BYTES: usize =
@@ -209,7 +209,7 @@ pub struct LaneDrainCertificateV1 {
     pub validator_set: Vec<PeerId>,
     /// Bitmap encoding of participating validators (LSB-first).
     pub signers_bitmap: Vec<u8>,
-    /// Canonical PoPs for the selected signer indices, in bitmap order.
+    /// Canonical `PoPs` for the selected signer indices, in bitmap order.
     pub signer_proofs: Vec<MergeSignerProof>,
     /// Aggregate BLS-normal signature over [`LaneDrainCertificateBodyV1::signature_preimage`].
     pub aggregate_signature: Vec<u8>,
@@ -321,7 +321,7 @@ pub struct MergeQuorumCertificate {
     pub validator_set: Vec<PeerId>,
     /// Bitmap encoding of participating validators (LSB-first).
     pub signers_bitmap: Vec<u8>,
-    /// Exact, canonical signer PoPs required to verify the aggregate signature after restart.
+    /// Exact, canonical signer `PoPs` required to verify the aggregate signature after restart.
     pub signer_proofs: Vec<MergeSignerProof>,
     /// Aggregate signature bytes covering the serialized merge entry payload.
     pub aggregate_signature: Vec<u8>,
@@ -331,6 +331,10 @@ pub struct MergeQuorumCertificate {
 
 impl MergeQuorumCertificate {
     /// Construct a new quorum certificate using explicit fields.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the constructor intentionally mirrors every fixed quorum-certificate field"
+    )]
     pub fn new(
         view: u64,
         epoch_id: u64,
@@ -439,7 +443,7 @@ pub struct MergeLaneSignerProof {
 )]
 pub struct MergeLaneExecution {
     /// Canonical framed Norito bytes of the complete producer-authenticated
-    /// payload, availability certificate, NewView chain, and lane QCs.
+    /// payload, availability certificate, `NewView` chain, and lane QCs.
     pub source_bundle: Vec<u8>,
     /// Hash of `source_bundle`, used for holder fetch and corruption checks.
     pub source_bundle_hash: Hash,
@@ -452,7 +456,7 @@ pub struct MergeLaneExecution {
     pub prepare_qc: LaneBlockQcV1,
     /// Commit QC authorizing execution of the proposal.
     pub commit_qc: LaneBlockQcV1,
-    /// Canonically ordered PoPs needed to verify both embedded QCs after restart.
+    /// Canonically ordered `PoPs` needed to verify both embedded QCs after restart.
     pub signer_proofs: Vec<MergeLaneSignerProof>,
     /// Chain binding of the producer-authenticated autonomous payload.
     pub autonomous_chain_id_hash: Hash,

@@ -55,13 +55,33 @@ function jsonResponse(payload, init = {}) {
   });
 }
 
+function browserFixedBytes(byte) {
+  return Array(32).fill(byte);
+}
+
 function browserOfflineTopUpRequest(overrides = {}) {
+  const amount = { atomic_units: 9_007_199_254_740_993n, scale: 4 };
   return {
     asset: "xor#sora",
-    amount: { atomic_units: 9_007_199_254_740_993n, scale: 4 },
-    current_note: { version: 2 },
-    record_bundle: { version: 2 },
-    pallas_open_envelopes_archive: [1, 2],
+    amount,
+    current_note: {
+      chain_id: "wonderland",
+      asset: "xor#sora",
+      note_commitment: browserFixedBytes(0x41),
+      spend_nullifier: browserFixedBytes(0x51),
+      amount: { ...amount },
+    },
+    shield_evidence: {
+      initial_root: browserFixedBytes(0x10),
+      finalized_root: browserFixedBytes(0x20),
+      leaf_index: 0,
+      proof: {
+        backend: "halo2/ipa",
+        proof: { backend: "halo2/ipa", bytes: [1, 2, 3] },
+        vk_ref: { backend: "halo2/ipa", name: "topup-shield-v2" },
+        vk_commitment: browserFixedBytes(0x61),
+      },
+    },
     artifact_generation: "generation-1",
     operation_id: [...OFFLINE_OPERATION_BYTES],
     authorization: { operation_id: [...OFFLINE_OPERATION_BYTES] },

@@ -41,8 +41,15 @@ fn load_tlv<'a>(
     address: u64,
     resolver: AddressResolver,
 ) -> Result<(&'a [u8], Tlv<'a>), VMError> {
+    let original_address = address;
     let address = resolver(vm, address);
-    let tlv = vm.validate_tlv(address)?;
+    let tlv = vm.validate_tlv(address).inspect_err(|error| {
+        if crate::dev_env::decode_trace_enabled() {
+            eprintln!(
+                "[state-value] invalid TLV pointer original=0x{original_address:016x} resolved=0x{address:016x}: {error:?}"
+            );
+        }
+    })?;
     let total = 7usize
         .checked_add(tlv.payload.len())
         .and_then(|len| len.checked_add(Hash::LENGTH))
@@ -62,6 +69,12 @@ fn load_expected_tlv<'a>(
 ) -> Result<(&'a [u8], Tlv<'a>), VMError> {
     let (envelope, tlv) = load_tlv(vm, address, resolver)?;
     if tlv.type_id != expected {
+        if crate::dev_env::decode_trace_enabled() {
+            eprintln!(
+                "[state-value] TLV type mismatch pointer=0x{address:016x} expected={expected:?} actual={:?}",
+                tlv.type_id
+            );
+        }
         return Err(VMError::NoritoInvalid);
     }
     Ok((envelope, tlv))
@@ -697,6 +710,21 @@ fn encode_state_node(
             };
             atoms.push(StateValueAtomV1::Bool(value));
         }
+        StateValueNodeV1::Leaf(StateValueKindV1::Bytes) => {
+            let pointer = *words.get(*word_index).ok_or(VMError::DecodeError)?;
+            *word_index = word_index.saturating_add(1);
+            if pointer == 0 {
+                return Err(VMError::DecodeError);
+            }
+            let (envelope, tlv) = load_tlv(context.vm, pointer, context.resolver)?;
+            if !matches!(tlv.type_id, PointerType::Blob | PointerType::NoritoBytes) {
+                return Err(VMError::NoritoInvalid);
+            }
+            validate_pointer_payload(StateValueKindV1::Bytes, tlv.payload)?;
+            let canonical = encode_tlv(PointerType::Blob, tlv.payload)?;
+            *pointer_bytes = pointer_bytes.saturating_add(envelope.len());
+            atoms.push(StateValueAtomV1::Pointer(canonical));
+        }
         StateValueNodeV1::Leaf(kind) => {
             let pointer = *words.get(*word_index).ok_or(VMError::DecodeError)?;
             *word_index = word_index.saturating_add(1);
@@ -1129,6 +1157,58 @@ mod tests {
         vm.alloc_host_tlv(&envelope).expect("install quantity")
     }
 
+    fn mixed_pointer_scalar_schema() -> StateValueSchemaV1 {
+        StateValueSchemaV1 {
+            nodes: vec![
+                StateValueNodeV1::Struct {
+                    name: "Mixed".into(),
+                    fields: vec!["label".into(), "enabled".into(), "count".into()],
+                },
+                StateValueNodeV1::Leaf(StateValueKindV1::Name),
+                StateValueNodeV1::Leaf(StateValueKindV1::Bool),
+                StateValueNodeV1::Leaf(StateValueKindV1::Int),
+            ],
+        }
+    }
+
+    fn assert_mixed_name_pointer_rejected<F>(install_pointer: F, expected: VMError)
+    where
+        F: FnOnce(&mut IVM) -> u64,
+    {
+        let schema = mixed_pointer_scalar_schema();
+        let mut vm = IVM::new(u64::MAX);
+        let schema_pointer = install_schema(&mut vm, &schema);
+        let count_pointer = install_int(&mut vm, 7);
+        let name_pointer = install_pointer(&mut vm);
+        let table = vm.alloc_heap(24).expect("mixed aggregate word table");
+        vm.store_u64(table, name_pointer)
+            .expect("store candidate Name pointer");
+        vm.store_u64(table + 8, 1).expect("store valid bool scalar");
+        vm.store_u64(table + 16, count_pointer)
+            .expect("store valid int pointer");
+        let heap_before = vm.memory.heap_allocated_len();
+        vm.set_register(10, schema_pointer);
+        vm.set_register(11, table);
+        vm.set_register(12, 3);
+
+        assert_eq!(encode_state_value(&mut vm, identity_address), Err(expected));
+        assert_eq!(
+            vm.register(10),
+            schema_pointer,
+            "a rejected input must not publish an output pointer"
+        );
+        assert_eq!(
+            vm.memory.heap_allocated_len(),
+            heap_before,
+            "a rejected input must not allocate a partial output"
+        );
+    }
+
+    fn install_pointer(vm: &mut IVM, pointer_type: PointerType, payload: &[u8]) -> u64 {
+        let envelope = encode_tlv(pointer_type, payload).expect("pointer TLV");
+        vm.alloc_host_tlv(&envelope).expect("install pointer")
+    }
+
     #[test]
     fn schema_hash_is_domain_separated_and_stable() {
         let schema = StateValueSchemaV1 {
@@ -1180,6 +1260,121 @@ mod tests {
             record.atoms.as_slice(),
             [StateValueAtomV1::Pointer(_), StateValueAtomV1::Bool(true)]
         ));
+    }
+
+    #[test]
+    fn nested_bytes_sources_encode_as_identical_canonical_blob_records() {
+        let schema = StateValueSchemaV1 {
+            nodes: vec![
+                StateValueNodeV1::Struct {
+                    name: "Outer".into(),
+                    fields: vec!["inner".into()],
+                },
+                StateValueNodeV1::Struct {
+                    name: "Inner".into(),
+                    fields: vec!["value".into()],
+                },
+                StateValueNodeV1::Leaf(StateValueKindV1::Bytes),
+            ],
+        };
+        let mut vm = IVM::new(u64::MAX);
+        let schema_pointer = install_schema(&mut vm, &schema);
+        let table = vm.alloc_heap(8).expect("word table");
+        let payload = b"canonical bytes";
+        let mut records = Vec::new();
+
+        for pointer_type in [PointerType::Blob, PointerType::NoritoBytes] {
+            let source = install_pointer(&mut vm, pointer_type, payload);
+            vm.store_u64(table, source).expect("store bytes pointer");
+            vm.set_register(10, schema_pointer);
+            vm.set_register(11, table);
+            vm.set_register(12, 1);
+            encode_state_value(&mut vm, identity_address).expect("encode nested bytes");
+            let record_pointer = vm.register(10);
+            let record_tlv = vm.validate_tlv(record_pointer).expect("encoded record");
+            records.push((record_pointer, record_tlv.payload.to_vec()));
+        }
+
+        assert_eq!(records[0].1, records[1].1);
+        let record: StateValueRecordV1 =
+            decode_from_bytes(&records[1].1).expect("decode stored record");
+        let [StateValueAtomV1::Pointer(envelope)] = record.atoms.as_slice() else {
+            panic!("nested bytes must encode as one pointer atom");
+        };
+        let atom = pointer_abi::validate_tlv_bytes(envelope).expect("canonical bytes atom");
+        assert_eq!(atom.type_id, PointerType::Blob);
+        assert_eq!(atom.payload, payload);
+
+        vm.set_register(10, schema_pointer);
+        vm.set_register(11, records[1].0);
+        decode_state_value(&mut vm, identity_address).expect("decode nested bytes");
+        let table = vm
+            .validate_tlv(vm.register(10))
+            .expect("decoded word table");
+        assert_eq!(table.type_id, PointerType::Blob);
+        let bytes_pointer =
+            u64::from_le_bytes(table.payload[1..9].try_into().expect("bytes pointer word"));
+        let bytes = vm.validate_tlv(bytes_pointer).expect("decoded bytes TLV");
+        assert_eq!(bytes.type_id, PointerType::Blob);
+        assert_eq!(bytes.payload, payload);
+    }
+
+    #[test]
+    fn persisted_norito_bytes_atom_is_rejected_for_bytes_schema() {
+        let schema = StateValueSchemaV1 {
+            nodes: vec![StateValueNodeV1::Leaf(StateValueKindV1::Bytes)],
+        };
+        let schema_bytes = to_bytes(&schema).expect("schema bytes");
+        let record = StateValueRecordV1 {
+            schema_hash: state_value_schema_hash_v1(&schema_bytes),
+            atoms: vec![StateValueAtomV1::Pointer(
+                encode_tlv(PointerType::NoritoBytes, b"not canonical durable bytes")
+                    .expect("NoritoBytes atom"),
+            )],
+        };
+        let record = to_bytes(&record).expect("record bytes");
+        let vm = IVM::new(u64::MAX);
+
+        assert_eq!(
+            validate_state_value_record(&vm, &schema, &record),
+            Err(VMError::DecodeError)
+        );
+    }
+
+    #[test]
+    fn bytes_normalization_does_not_widen_other_pointer_types() {
+        let bytes_schema = StateValueSchemaV1 {
+            nodes: vec![StateValueNodeV1::Leaf(StateValueKindV1::Bytes)],
+        };
+        let string_schema = StateValueSchemaV1 {
+            nodes: vec![StateValueNodeV1::Leaf(StateValueKindV1::String)],
+        };
+        let mut vm = IVM::new(u64::MAX);
+        let table = vm.alloc_heap(8).expect("word table");
+
+        let bytes_schema_pointer = install_schema(&mut vm, &bytes_schema);
+        let unrelated = install_pointer(&mut vm, PointerType::Name, b"unrelated");
+        vm.store_u64(table, unrelated)
+            .expect("store unrelated pointer");
+        vm.set_register(10, bytes_schema_pointer);
+        vm.set_register(11, table);
+        vm.set_register(12, 1);
+        assert_eq!(
+            encode_state_value(&mut vm, identity_address),
+            Err(VMError::NoritoInvalid)
+        );
+
+        let string_schema_pointer = install_schema(&mut vm, &string_schema);
+        let norito_bytes = install_pointer(&mut vm, PointerType::NoritoBytes, b"text");
+        vm.store_u64(table, norito_bytes)
+            .expect("store NoritoBytes pointer");
+        vm.set_register(10, string_schema_pointer);
+        vm.set_register(11, table);
+        vm.set_register(12, 1);
+        assert_eq!(
+            encode_state_value(&mut vm, identity_address),
+            Err(VMError::NoritoInvalid)
+        );
     }
 
     #[test]
@@ -1344,6 +1539,37 @@ mod tests {
         assert_eq!(
             encode_state_value(&mut vm, identity_address),
             Err(VMError::DecodeError)
+        );
+    }
+
+    #[test]
+    fn mixed_pointer_scalar_record_rejects_missing_stale_and_malformed_dynamic_pointers() {
+        assert_mixed_name_pointer_rejected(|_| 0, VMError::DecodeError);
+        assert_mixed_name_pointer_rejected(|_| 1, VMError::NoritoInvalid);
+        assert_mixed_name_pointer_rejected(|vm| install_int(vm, 7), VMError::NoritoInvalid);
+        assert_mixed_name_pointer_rejected(
+            |vm| {
+                let envelope = encode_tlv(PointerType::Name, b"not canonical Norito")
+                    .expect("hash-valid malformed Name TLV");
+                vm.alloc_host_tlv(&envelope)
+                    .expect("install malformed dynamic Name")
+            },
+            VMError::DecodeError,
+        );
+        assert_mixed_name_pointer_rejected(
+            |vm| {
+                let name: Name = "valid-name".parse().expect("valid Name");
+                let mut envelope = encode_tlv(
+                    PointerType::Name,
+                    &to_bytes(&name).expect("encode canonical Name"),
+                )
+                .expect("valid Name TLV");
+                let last = envelope.last_mut().expect("TLV checksum byte");
+                *last ^= 1;
+                vm.alloc_host_tlv(&envelope)
+                    .expect("install checksum-corrupted Name")
+            },
+            VMError::NoritoInvalid,
         );
     }
 

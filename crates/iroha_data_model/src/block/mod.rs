@@ -498,6 +498,16 @@ impl SignedBlock {
         self.payload.header
     }
 
+    /// Replace the header without rebuilding body Merkle material for adversarial fixtures.
+    ///
+    /// This is intentionally available only to data-model tests and the
+    /// existing `test-fixtures` feature. Production block construction must
+    /// use the validated builders and result-attachment APIs.
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub fn replace_header_for_testing(&mut self, header: BlockHeader) -> BlockHeader {
+        core::mem::replace(&mut self.payload.header, header)
+    }
+
     /// Signatures of peers which approved this block.
     #[inline]
     pub fn signatures(
@@ -2095,6 +2105,30 @@ mod tests {
     fn block_header_new_and_display() {
         let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
         assert_eq!(header.to_string(), format!("{} (№1)", header.hash()));
+    }
+
+    #[test]
+    fn adversarial_fixture_header_replacement_preserves_body() {
+        let keypair = checked_random_keypair();
+        let authority = crate::account::AccountId::new(keypair.public_key().clone());
+        let transaction =
+            TransactionBuilder::new(ChainId::from("header-replacement-test"), authority)
+                .sign(keypair.private_key());
+        let mut block = SignedBlock::genesis(vec![transaction], keypair.private_key(), None, None);
+        let original = block.header();
+        let replacement = BlockHeader::new(
+            NonZeroU64::new(2).expect("nonzero height"),
+            Some(original.hash()),
+            original.merkle_root(),
+            original.result_merkle_root(),
+            1,
+            0,
+        );
+        let transaction_count = block.external_entrypoint_count();
+
+        assert_eq!(block.replace_header_for_testing(replacement), original);
+        assert_eq!(block.header(), replacement);
+        assert_eq!(block.external_entrypoint_count(), transaction_count);
     }
 
     #[test]

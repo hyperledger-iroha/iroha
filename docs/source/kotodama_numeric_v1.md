@@ -129,20 +129,53 @@ order: canonical scale, signed mantissa width, then the nominal non-negative
 reports `MantissaOverflow`. `quantity - quantity` maps a representable negative
 mathematical result to `QuantityUnderflow`.
 
-The ordinary operator matrix is:
+The following tables are the complete ordinary numeric operator surface. An
+em dash means that the combination is a compile-time error; operators are not
+commutatively inferred, so an allowed `quantity * decimal` row does not create
+a `decimal * quantity` row.
 
-| Left | Operator | Right | Result | Semantics |
-| --- | --- | --- | --- | --- |
-| `int` | `+ - *` | `int` | `int` | exact, checked |
-| `int` | `/ %` | `int` | `int` | quotient truncates toward zero |
-| `decimal` | `+ - * /` | `decimal` | `decimal` | exact; `/` rejects an unrepresentable exact result |
-| `int` | `+ - * /` and comparisons | `decimal` | `decimal`/`bool` | `int` promotes exactly |
-| `decimal` | `+ - * /` and comparisons | `int` | `decimal`/`bool` | `int` promotes exactly |
-| `quantity` | `+ -` | `quantity` | `quantity` | subtraction rejects underflow |
-| `quantity` | `* /` | `decimal` | `quantity` | negative results reject |
-| `quantity` | `/` | `quantity` | `decimal` | dimensionless exact ratio |
+| Operand | Unary `-` result | Semantics |
+| --- | --- | --- |
+| `int` | `int` | exact checked negation; negating `-2^511` overflows |
+| `decimal` | `decimal` | exact negation, canonicalize, then check the final domain |
+| `quantity` | — | a non-negative nominal value has no ordinary negation |
 
-Other mixed arithmetic is invalid without an explicit named conversion.
+| Left | Right | `+` | `-` | `*` | `/` | `%` |
+| --- | --- | --- | --- | --- | --- | --- |
+| `int` | `int` | `int` | `int` | `int` | `int` | `int` |
+| `int` | `decimal` | `decimal` | `decimal` | `decimal` | `decimal` | — |
+| `int` | `quantity` | — | — | — | — | — |
+| `decimal` | `int` | `decimal` | `decimal` | `decimal` | `decimal` | — |
+| `decimal` | `decimal` | `decimal` | `decimal` | `decimal` | `decimal` | — |
+| `decimal` | `quantity` | — | — | — | — | — |
+| `quantity` | `int` | — | — | — | — | — |
+| `quantity` | `decimal` | — | — | `quantity` | `quantity` | — |
+| `quantity` | `quantity` | `quantity` | `quantity` | — | `decimal` | — |
+
+All allowed arithmetic is exact and checked. `int / int` truncates toward
+zero and `int % int` is its paired remainder. Mixed `int`/`decimal` rows
+promote the `int` exactly before operating. Decimal division accepts only a
+canonical exact result representable with scale in `0..=28`. Quantity
+addition remains non-negative by construction; quantity subtraction reports
+`QuantityUnderflow` for a representable negative result. Multiplication or
+division of a quantity by a decimal preserves the nominal quantity domain and
+therefore rejects a negative result. Dividing quantity by quantity produces
+an exact dimensionless decimal ratio. No ordinary numeric `%` exists outside
+`int % int`.
+
+Each of `==`, `!=`, `<`, `<=`, `>`, and `>=` has this complete matrix:
+
+| Left | `int` right | `decimal` right | `quantity` right |
+| --- | --- | --- | --- |
+| `int` | `bool` | `bool` | — |
+| `decimal` | `bool` | `bool` | — |
+| `quantity` | — | — | `bool` |
+
+Comparison is over mathematical values after canonicalization. Mixed
+`int`/`decimal` comparison promotes `int` exactly. `quantity` compares only
+with `quantity`; crossing its nominal boundary requires a named conversion.
+These unary, arithmetic, and comparison tables comprise 102 ordered rows (54
+allowed and 48 rejected) in numeric-semantics descriptor version 2.
 
 Compound assignment applies the same operator matrix and then requires the
 result to remain assignable to the target's declared type. In particular,
@@ -183,6 +216,41 @@ performs no speculative output-scale attempts and distinguishes:
 - `ExactDivisionScaleOverflow`: the expansion terminates but needs a canonical
   scale above 28.
 
+For nonzero `b`, exact decimal division is normatively equivalent to this
+pseudocode. Every integer in the pseudocode is conceptual and unbounded until
+the final-domain check:
+
+```text
+exact_divide((ma, sa), (mb, sb)):
+    if mb == 0: fail DivisionByZero
+    if ma == 0: return (0, 0)
+
+    n = ma * 10^sb
+    d = mb * 10^sa
+    if d < 0: n = -n; d = -d
+    g = gcd(abs(n), d)
+    n = n / g
+    d = d / g
+
+    twos = 0
+    while d % 2 == 0: d = d / 2; twos += 1
+    fives = 0
+    while d % 5 == 0: d = d / 5; fives += 1
+    if d != 1: fail RepeatingDecimal
+
+    scale = max(twos, fives)
+    if scale > 28: fail ExactDivisionScaleOverflow
+    mantissa = n * 2^(scale - twos) * 5^(scale - fives)
+    result = canonicalize(mantissa, scale)
+    check final scale, signed mantissa, then nominal quantity domain
+    return result
+```
+
+The zero special case is canonical without a GCD, factor-classification, or
+normalization division. Classification uses exact Euclidean quotient/remainder
+steps and repeated exact division by two and five; a host bigint library's GCD
+or radix-specific shortcut is not a different observable algorithm.
+
 Rounded division requires an output scale and one of these stable modes:
 
 ```text
@@ -214,22 +282,47 @@ The tag is the stable numeric ABI tag emitted by the compiler; source does not
 expose raw numeric rounding tags. Any spelling outside this table is rejected
 with `E_NUMERIC_ROUNDING_MODE`.
 
-The source conversion surface is explicit:
+Rounded decimal division is normatively equivalent to:
 
 ```text
-decimal::from_int(value)
-decimal::to_int_exact(value)
-decimal::to_int_trunc(value)
-decimal::to_int_round(value, mode)
-quantity::try_from_int(value)
-quantity::try_from_decimal(value)
-decimal::from_quantity(value)
+rounded_divide((ma, sa), (mb, sb), output_scale, mode):
+    require 0 <= output_scale <= 28
+    if mb == 0: fail DivisionByZero
+    n = ma * 10^(sb + output_scale)
+    d = mb * 10^sa
+    q, r = truncating_div_rem(n, d)
+    if r != 0:
+        adjust q by at most one unit according to mode, sign(n / d),
+        comparison(2 * abs(r), abs(d)), and q parity for nearest_even
+    result = canonicalize(q, output_scale)
+    check final scale, signed mantissa, then nominal quantity domain
+    return result
 ```
 
-Decimal-to-int conversion is exact by default. Truncating and rounded forms
-must be named. Quantity conversions are checked and return a recoverable
-`Result<quantity, int>` fault value. Width-specific constructors and generic
-`numeric::*` arithmetic helpers are not part of V1.
+`toward_zero` never adjusts; `away_from_zero` always adjusts a nonzero
+remainder away from zero; `floor` adjusts only a negative result; `ceil`
+adjusts only a positive result. The three nearest modes adjust when
+`2*abs(r) > abs(d)` and apply their documented tie rule when equal. All modes
+use the same charged conservative work bound.
+
+The source conversion surface is explicit and complete:
+
+| Operation | Result | Normative behavior |
+| --- | --- | --- |
+| `decimal::from_int(value)` | `decimal` | exact `(value, 0)`; cannot lose range or precision |
+| `decimal::to_int_exact(value)` | `int` | succeeds only when the mathematical value is integral; otherwise `InexactConversion` |
+| `decimal::to_int_trunc(value)` | `int` | discards the fractional part toward zero |
+| `decimal::to_int_round(value, mode)` | `int` | rounds to scale zero using exactly one of the seven modes above |
+| `quantity::try_from_int(value)` | `Result<quantity, int>` | exact scale-zero conversion; a negative input returns the stable numeric fault tag |
+| `quantity::try_from_decimal(value)` | `Result<quantity, int>` | preserves the exact canonical value; a negative input returns the stable numeric fault tag |
+| `decimal::from_quantity(value)` | `decimal` | exact nominal-domain exit with identical mantissa and scale |
+
+The `int` error payload of a recoverable quantity conversion is the stable
+numeric fault tag; it is not a substituted value. Exact and truncating
+decimal-to-int forms and all infallible conversions trap on an impossible
+final-domain violation rather than saturating. Width-specific constructors,
+implicit assignment/argument/return conversions, and generic `numeric::*`
+arithmetic helpers are not part of V1.
 
 Checked negation, addition, subtraction, multiplication, division, and
 remainder fail rather than wrap. The explicit integer wrapping operations use
@@ -270,7 +363,7 @@ The schema names and 16-byte schema hashes are:
 | `decimal` | `iroha.numeric.DecimalValueV1` | `ba2ffed52e4d8ee16f17efefe1828524` |
 | `quantity` | `iroha.numeric.QuantityValueV1` | `e4769984c81ce0e8b678f2eb06274ee3` |
 
-ABI V1 descriptor format 4 embeds a versioned numeric-semantics record. It
+ABI V1 descriptor format 5 embeds numeric-semantics descriptor version 2. It
 binds all three value domains, exact-intermediate and result-validation rules,
 the complete operator/conversion/wrapping rules, canonicalization, integer and
 decimal division behavior, and the ordered arithmetic and validation failure
@@ -470,6 +563,65 @@ The version-3 phase tags are `0 Entry`, `1 PointerHeader`,
 `8 OutputSerialization`. Every tag names work that a production numeric path
 can actually reach; V1 has no reserved or quote-only staged phases.
 
+Every ABI V1 numeric syscall number requires the wide `SYSTEM`/`SCALLX`
+instruction. Executing that instruction costs 5 gas before syscall admission
+or staged dispatch. That opcode cost is part of total VM gas, but is
+deliberately outside the numeric staged-call formula below. Therefore:
+
+```text
+total_vm_gas_for_one_numeric_call = 5 + completed_numeric_stage_gas
+```
+
+The stage charge unit is exact and uses checked `u64` arithmetic:
+
+| Phase | Charge immediately before work | Repetition |
+| --- | ---: | --- |
+| `Entry` | `16` | once per admitted numeric call |
+| `PointerHeader` | `7` | once per pointer operand |
+| `PointerEnvelope` | `frame_bytes` | once per pointer operand |
+| `PayloadHash` | `32 + frame_bytes` | once per pointer operand |
+| `NoritoDecode` | `4 * decode_work(frame_bytes)` | once per pointer operand |
+| `CanonicalValidation` | `4 * canonical_work(frame_bytes)`, plus `4 * QR(mantissa_limbs, 1)` when a canonicality probe is required | in operand-register order |
+| `Arithmetic` | `4 * event_work` | once before every arithmetic event actually begun |
+| `Normalization` | `4 * QR(mantissa_limbs, 1)` | once before each divide-by-ten normalization probe actually begun |
+| `OutputSerialization` | `4 * finalization_work(output_limbs)`, then `output_envelope_bytes + 2 * output_frame_bytes` | only when a numeric pointer result is produced |
+
+Here `QR` is `quotient_remainder_work` defined below. Boolean or scalar
+results do not acquire a nonexistent pointer-output charge. A trap or
+recoverable arithmetic fault has no output charge. The operational state
+machine is:
+
+```text
+execute_numeric_scallx(call):
+    debit 5                         # ordinary VM instruction gas
+    staged_debit(Entry, 16)
+    validate bounded entry/privacy/register contract
+    for pointer operand in register order:
+        staged_debit(PointerHeader, 7)
+        read header; validate provenance, type, version, and capped length
+        staged_debit(PointerEnvelope, frame_bytes)
+        staged_debit(PayloadHash, 32 + frame_bytes)
+        snapshot bounded tail; authenticate the exact snapshot
+        staged_debit(NoritoDecode, 4 * decode_work(frame_bytes))
+        structurally validate the frame
+        staged_debit(CanonicalValidation, 4 * canonical_work(frame_bytes))
+        decode the body; debit any canonicality probe before performing it
+    validate scalar controls in the specified precedence order
+    for event in the selected exact operation:
+        staged_debit(event.phase, 4 * event_work(event))
+        perform event
+    if a pointer result exists:
+        debit its output-length probe
+        derive exact bounded frame/envelope lengths
+        debit framing, checksum, authentication, and publication bytes
+        allocate, write, and publish result registers
+```
+
+`staged_debit` first compares the whole phase charge with remaining gas. If it
+is unaffordable, it deducts nothing for that phase, reports that phase's stable
+tag, and preserves all earlier charges. There is no quote, reservation, or
+refund path.
+
 The successful aggregate identity is:
 
 ```text
@@ -636,6 +788,55 @@ include their generic-bigint and V1-domain result scans. Wrapping operations
 separately charge arithmetic and the source scan, eight-limb sign fill,
 truncation, and two eight-limb reconstruction/domain scans used by modulo
 `2^512` reduction.
+
+For avoidance of doubt, the directly precharged integer work formulas are:
+
+| Operation | Logical work |
+| --- | ---: |
+| checked `int` negation | `v + 2*(v + 1)` |
+| checked `int` addition or subtraction | `m + 2*(m + 1)`, where `m = max(l, r, 1)` |
+| checked `int` multiplication | `l*r + 2*(l + r)` |
+| checked `int` division or remainder | `QR(l, r) + 2*(q + min(l, r))` |
+| any `int` comparison | `max(l, r, 1)` |
+| wrapping negation before reduction | `2*v + 1` |
+| wrapping addition/subtraction before reduction | `2*m + 1` |
+| wrapping multiplication before reduction | `l*r + l + r` |
+| wrapping reduction of a signed temporary with `x` limbs | `x + 3*8 + min(x, 8)` |
+
+Here every operand width is at least one limb and `q` is the quotient-limb
+bound above. A wrapping operation pays both its pre-reduction row and the
+wrapping-reduction row. Simple representation conversions and scalar range
+checks pay one scan of the source value; an output pointer, when present, is
+still charged separately.
+
+Decimal and quantity primitives report this closed work-event vocabulary.
+The VM sums the listed work and debits `4 * work` immediately before each
+reported event, so an implementation cannot fuse away a consensus charge or
+perform an unreported backend pass:
+
+| Work event | Logical work |
+| --- | ---: |
+| `CanonicalityProbe(m, scale)` | `0` when no probe is emitted; otherwise `QR(m, 1)` |
+| `ScaleByPowerOfTen(v, d)` | `0` if `d = 0`; otherwise `C(d) + v*P(d)` |
+| `Materialize(v)` | `max(v, 1)` |
+| `Negate(v)` | `max(v, 1)` |
+| `Add(l, r)` or `Subtract(l, r)` | `max(l, r, 1)` |
+| `Multiply(l, r)` | `max(l, 1) * max(r, 1)` |
+| `DivisionClassificationPrepare(n, d)` | `max(n, 1) + 2*max(d, 1)` |
+| `DivisionClassification(n, d)` | `QR(n, d)` |
+| `ExactDivisionAttempt(n, d)` | `QR(n, d)` |
+| `RoundedDivision(n, d)` | `rounded_division_work(n, d)` |
+| `Normalize(m, scale)` | `QR(m, 1)` for the divide-by-ten probe about to run |
+| `Finalize(v)` | `max(v, 1)` |
+
+Scale alignment emits `ScaleByPowerOfTen` or `Materialize` for both operands,
+then the applicable add/subtract/compare event. Exact denominator reduction
+emits preparation followed by every Euclidean/classification event actually
+begun, and a terminating quotient emits one `ExactDivisionAttempt` at its
+proven minimum scale. Rounded division emits exactly one bounded
+`RoundedDivision` event after its scale operands are materialized. Result
+canonicalization emits one `Normalize` event per attempted division by ten;
+zero emits none.
 
 Exact division first charges the Euclidean reduction and denominator
 classification steps actually begun. Once classification proves a terminating

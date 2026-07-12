@@ -1003,6 +1003,10 @@ pub enum LaneRelayError {
 }
 
 impl PartialEq for LaneRelayError {
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the exhaustive error comparison keeps all payload-bearing variants explicit"
+    )]
     fn eq(&self, other: &Self) -> bool {
         use LaneRelayError::*;
         match (self, other) {

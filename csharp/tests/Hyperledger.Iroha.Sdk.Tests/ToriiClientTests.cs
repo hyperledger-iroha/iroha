@@ -6080,7 +6080,7 @@ public sealed class ToriiClientTests
                   },
                   "warnings": ["historical bytes"],
                   "rendered_source_kind": "pseudo_source",
-                  "rendered_source_text": "public fn main() {}",
+                  "rendered_source_text": "seiyaku Demo { view fn main() {} }",
                   "verified_source_ref": {
                     "language": "kotodama",
                     "source_name": "demo.ko",
@@ -19969,7 +19969,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             {
                 Language = "kotodama",
                 SourceName = "demo.ko",
-                SourceText = "public fn main() {}",
+                SourceText = "seiyaku Demo { kotoage fn main() authorize(\"Run\") {} }",
             }, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal("job-1", job.JobId);
@@ -31737,7 +31737,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         {
             Language = "kotodama",
             SourceName = "demo.ko",
-            SourceText = "public fn main() {}",
+            SourceText = "seiyaku Demo { kotoage fn main() authorize(\"Run\") {} }",
         };
     }
 

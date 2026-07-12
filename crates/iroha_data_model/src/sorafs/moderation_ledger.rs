@@ -50,9 +50,9 @@ pub const MODERATION_LEDGER_ROSTER_HASH_DOMAIN_V1: &[u8] =
     b"sorafs.moderation.local.panel-roster-hash.v1";
 /// Domain separator for immutable appeal-intake digests.
 pub const MODERATION_APPEAL_INTAKE_DIGEST_DOMAIN_V1: &[u8] = b"sorafs.moderation.appeal-intake.v1";
-/// Domain separator for pinned PoP registry snapshots.
+/// Domain separator for pinned `PoP` registry snapshots.
 pub const MODERATION_POP_SNAPSHOT_DIGEST_DOMAIN_V1: &[u8] = b"sorafs.moderation.pop-snapshot.v1";
-/// Domain separator for the shared, per-appeal PoP proof challenge.
+/// Domain separator for the shared, per-appeal `PoP` proof challenge.
 pub const MODERATION_POP_CHALLENGE_DOMAIN_V1: &[u8] = b"sorafs.moderation.pop-challenge.v1";
 /// Domain separator for deterministic panel-selection seed derivation.
 pub const MODERATION_SORTITION_SEED_DOMAIN_V1: &[u8] = b"sorafs.moderation.sortition-seed.v1";
@@ -261,7 +261,7 @@ pub struct ModerationLedgerPolicyRecord {
     pub activated_by: AccountId,
 }
 
-/// Immutable active PoP registry anchors captured when an appeal is admitted.
+/// Immutable active `PoP` registry anchors captured when an appeal is admitted.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -292,6 +292,11 @@ pub struct ModerationPoPRegistrySnapshotV1 {
 
 impl ModerationPoPRegistrySnapshotV1 {
     /// Validate that every authoritative anchor is present and non-inert.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a required digest, publication version, audit
+    /// sequence, or capture time is zero.
     pub fn validate(&self) -> Result<(), ModerationPoPRegistrySnapshotError> {
         for (field, digest) in [
             ("issuer_policy_digest", self.issuer_policy_digest),
@@ -316,6 +321,10 @@ impl ModerationPoPRegistrySnapshotV1 {
     }
 
     /// Compute the canonical, domain-separated snapshot digest.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when Norito cannot encode the snapshot.
     pub fn digest(&self) -> Result<[u8; 32], norito::Error> {
         let encoded = norito::to_bytes(self)?;
         let mut hasher = blake3::Hasher::new();
@@ -325,7 +334,7 @@ impl ModerationPoPRegistrySnapshotV1 {
     }
 }
 
-/// Invalid authoritative PoP snapshot.
+/// Invalid authoritative `PoP` snapshot.
 #[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
 pub enum ModerationPoPRegistrySnapshotError {
     /// A required digest is all zeroes.
@@ -383,7 +392,7 @@ pub struct ModerationAppealIntakeV1 {
     pub quorum: u16,
     /// Canonically ordered conflict-of-interest exclusions; must include the appellant.
     pub exclusions: Vec<AccountId>,
-    /// Last timestamp at which private PoP proofs may be registered.
+    /// Last timestamp at which private `PoP` proofs may be registered.
     pub registration_deadline_unix_ms: u64,
     /// Last timestamp at which primary jurors may accept their assignment.
     pub acceptance_deadline_unix_ms: u64,
@@ -400,6 +409,11 @@ pub struct ModerationAppealIntakeV1 {
 
 impl ModerationAppealIntakeV1 {
     /// Validate the bounded appeal body independently of live policy and block time.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the version, identifiers, digests, panel bounds,
+    /// exclusions, evidence URI, or deadline ordering is invalid.
     pub fn validate(&self) -> Result<(), ModerationAppealIntakeError> {
         if self.version != MODERATION_APPEAL_INTAKE_VERSION_V1 {
             return Err(ModerationAppealIntakeError::UnsupportedVersion {
@@ -480,6 +494,10 @@ impl ModerationAppealIntakeV1 {
     }
 
     /// Compute the immutable canonical appeal-intake digest.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when Norito cannot encode the intake.
     pub fn digest(&self) -> Result<[u8; 32], norito::Error> {
         let encoded = norito::to_bytes(self)?;
         let mut hasher = blake3::Hasher::new();
@@ -621,7 +639,7 @@ pub enum ModerationJurorEligibilityClassV1 {
     Observer,
 }
 
-/// Payload-free result of one verified private PoP membership proof.
+/// Payload-free result of one verified private `PoP` membership proof.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -642,7 +660,7 @@ pub struct ModerationJurorEligibilityRecordV1 {
     /// Per-credential, per-appeal nullifier preventing duplicate-person entries.
     #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
     pub nullifier: [u8; 32],
-    /// PoP registry snapshot digest against which the proof verified.
+    /// `PoP` registry snapshot digest against which the proof verified.
     #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
     pub pop_snapshot_digest: [u8; 32],
     /// Hidden credential expiry disclosed by the membership statement.
@@ -661,7 +679,7 @@ pub struct ModerationPanelSelectionV1 {
     /// Exact already-committed parent block fixed only after registration closes.
     #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
     pub randomness_anchor: [u8; 32],
-    /// Deterministic seed digest fixed by appeal, PoP snapshot, and parent block.
+    /// Deterministic seed digest fixed by appeal, `PoP` snapshot, and parent block.
     #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
     pub seed_digest: [u8; 32],
     /// Primary jurors in canonical score order.
@@ -701,7 +719,7 @@ pub struct ModerationJurorReplacementV1 {
     norito(tag = "status", content = "value", rename_all = "snake_case")
 )]
 pub enum ModerationAppealStatusV1 {
-    /// Appeal admitted; private PoP eligibility proofs are being collected.
+    /// Appeal admitted; private `PoP` eligibility proofs are being collected.
     RegisteringJurors,
     /// Primary panel and waitlist selected; primary acceptance window is open.
     AwaitingAcceptance,
@@ -715,7 +733,7 @@ pub enum ModerationAppealStatusV1 {
     Finalized,
 }
 
-/// Authoritative appeal intake, PoP snapshot, sortition, and activation record.
+/// Authoritative appeal intake, `PoP` snapshot, sortition, and activation record.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -729,9 +747,9 @@ pub struct ModerationAppealRecordV1 {
     pub intake_digest: [u8; 32],
     /// Immutable active moderation-policy snapshot.
     pub policy: ModerationLedgerPolicyV1,
-    /// Immutable active PoP registry snapshot.
+    /// Immutable active `PoP` registry snapshot.
     pub pop_snapshot: ModerationPoPRegistrySnapshotV1,
-    /// Canonical PoP snapshot digest.
+    /// Canonical `PoP` snapshot digest.
     #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
     pub pop_snapshot_digest: [u8; 32],
     /// Current appeal lifecycle phase.
@@ -740,7 +758,7 @@ pub struct ModerationAppealRecordV1 {
     pub submitted_by: AccountId,
     /// Consensus block timestamp at intake.
     pub submitted_at_unix_ms: u64,
-    /// Canonically account-ordered PoP-eligible candidates.
+    /// Canonically account-ordered `PoP`-eligible candidates.
     pub eligible_jurors: Vec<AccountId>,
     /// Selected primary panel and waitlist after registration closes.
     pub selection: Option<ModerationPanelSelectionV1>,
@@ -754,7 +772,7 @@ pub struct ModerationAppealRecordV1 {
     pub finalized_at_unix_ms: Option<u64>,
 }
 
-/// Return the shared per-appeal PoP membership-proof challenge.
+/// Return the shared per-appeal `PoP` membership-proof challenge.
 #[must_use]
 pub fn sorafs_moderation_pop_challenge_v1(
     intake_digest: [u8; 32],
@@ -827,7 +845,18 @@ pub fn sorafs_moderation_sortition_digest_v1(
     *hasher.finalize().as_bytes()
 }
 
+/// Successful output of deterministic moderation panel selection.
+///
+/// The tuple contains the primary jurors, waitlist, seed digest, and sortition
+/// digest, in that order.
+pub type ModerationPanelSelectionResultV1 = (Vec<AccountId>, Vec<AccountId>, [u8; 32], [u8; 32]);
+
 /// Select a panel and bounded failover queue independently of candidate input order.
+///
+/// # Errors
+///
+/// Returns an error for invalid bounds or candidates, duplicate accounts or
+/// person nullifiers, or a candidate pool too small to fill the primary panel.
 pub fn sorafs_moderation_select_panel_v1(
     intake_digest: [u8; 32],
     pop_snapshot_digest: [u8; 32],
@@ -836,7 +865,7 @@ pub fn sorafs_moderation_select_panel_v1(
     panel_size: u16,
     waitlist_size: u16,
     quorum: u16,
-) -> Result<(Vec<AccountId>, Vec<AccountId>, [u8; 32], [u8; 32]), ModerationSortitionError> {
+) -> Result<ModerationPanelSelectionResultV1, ModerationSortitionError> {
     if !(1..=MODERATION_LEDGER_MAX_PANEL_SIZE_V1).contains(&panel_size)
         || quorum == 0
         || quorum > panel_size
@@ -1460,7 +1489,7 @@ pub struct ModerationNoShowRecordV1 {
 pub struct ModerationLedgerStatusV1 {
     /// Authoritative appeal intakes admitted.
     pub appeal_intakes: u64,
-    /// Private PoP eligibility proofs admitted without retaining proof bodies.
+    /// Private `PoP` eligibility proofs admitted without retaining proof bodies.
     pub eligibility_proofs: u64,
     /// Deterministic panel selections persisted.
     pub panel_selections: u64,

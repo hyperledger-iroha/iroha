@@ -26,8 +26,7 @@ pub const MODERATION_MODEL_ARTIFACT_VERSION_V1: u16 = 1;
 /// Number of integer features consumed by the first-release model engine.
 pub const MODERATION_MODEL_FEATURE_COUNT_V1: usize = 512;
 /// Exact fixed working set, in bytes, required by the first-release model engine.
-pub const MODERATION_MODEL_WORKING_MEMORY_BYTES_V1: u32 =
-    (MODERATION_MODEL_FEATURE_COUNT_V1 * core::mem::size_of::<u64>()) as u32;
+pub const MODERATION_MODEL_WORKING_MEMORY_BYTES_V1: u32 = 4_096;
 /// Maximum number of models admitted by one reproducibility manifest.
 pub const MODERATION_MODEL_MAX_MODELS_V1: usize = 16;
 /// Maximum canonical encoded size of one model artefact.
@@ -276,6 +275,11 @@ pub fn moderation_model_required_operations_v1(
 
 impl ModerationModelArtifactV1 {
     /// Validate all shape, range, and declared resource-budget invariants.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ModerationModelArtifactError`] when the version, dimensions,
+    /// bounds, model bytes, or declared resource budget is invalid.
     pub fn validate(&self) -> Result<(), ModerationModelArtifactError> {
         if self.schema_version != MODERATION_MODEL_ARTIFACT_VERSION_V1 {
             return Err(ModerationModelArtifactError::UnsupportedVersion {
@@ -1032,6 +1036,10 @@ impl ModerationReproManifestV1 {
     /// The digest slot is zeroed before encoding so that it cannot be a
     /// self-referential, operator-selected label. Production loaders must compare
     /// this value with the signed field before accepting any artefact.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`norito::Error`] when the canonical manifest body cannot be encoded.
     pub fn computed_manifest_digest(&self) -> Result<[u8; 32], norito::Error> {
         self.body.computed_manifest_digest()
     }
@@ -1069,6 +1077,10 @@ impl ModerationReproManifestV1 {
 
 impl ModerationReproBodyV1 {
     /// Compute the canonical digest of this body with the digest slot zeroed.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`norito::Error`] when the canonical body cannot be encoded.
     pub fn computed_manifest_digest(&self) -> Result<[u8; 32], norito::Error> {
         let mut body = self.clone();
         body.manifest_digest = [0; 32];
@@ -1080,6 +1092,10 @@ impl ModerationReproBodyV1 {
     }
 
     /// Replace `manifest_digest` with the canonical domain-separated body digest.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`norito::Error`] when the canonical body cannot be encoded.
     pub fn refresh_manifest_digest(&mut self) -> Result<(), norito::Error> {
         self.manifest_digest = self.computed_manifest_digest()?;
         Ok(())
@@ -1769,6 +1785,10 @@ pub enum ModerationProvenanceError {
 
 impl ModerationTrustPolicyBodyV1 {
     /// Compute the domain-separated policy digest with the digest slot zeroed.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`norito::Error`] when the canonical policy body cannot be encoded.
     pub fn computed_policy_digest(&self) -> Result<[u8; 32], norito::Error> {
         let mut body = self.clone();
         body.policy_digest = [0; 32];
@@ -1780,6 +1800,10 @@ impl ModerationTrustPolicyBodyV1 {
     }
 
     /// Refresh the canonical policy digest in place.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`norito::Error`] when the canonical policy body cannot be encoded.
     pub fn refresh_policy_digest(&mut self) -> Result<(), norito::Error> {
         self.policy_digest = self.computed_policy_digest()?;
         Ok(())
@@ -1789,6 +1813,11 @@ impl ModerationTrustPolicyBodyV1 {
 impl ModerationTrustPolicyV1 {
     /// Validate structure, manifest binding, signatures, external trust roots,
     /// quorum downgrade resistance, and current policy activity.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ModerationTrustPolicyError`] when the manifest binding, policy
+    /// structure, signer set, signatures, quorum, or validity window is invalid.
     pub fn validate_with_trust_anchors(
         &self,
         manifest: &ModerationReproManifestV1,
@@ -1838,6 +1867,10 @@ impl ModerationTrustPolicyV1 {
         })
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the fail-closed policy validator keeps all signed-field invariants together"
+    )]
     fn validate_structure(
         &self,
         manifest: &ModerationReproManifestV1,
@@ -2020,6 +2053,10 @@ impl ModerationTrustPolicyV1 {
 
 impl ModerationSignedScreeningBodyV1 {
     /// Compute the domain-separated evidence digest with its slot zeroed.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`norito::Error`] when the canonical evidence body cannot be encoded.
     pub fn computed_evidence_digest(&self) -> Result<[u8; 32], norito::Error> {
         let mut body = self.clone();
         body.evidence_digest = [0; 32];
@@ -2031,6 +2068,10 @@ impl ModerationSignedScreeningBodyV1 {
     }
 
     /// Refresh the canonical evidence digest in place.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`norito::Error`] when the canonical evidence body cannot be encoded.
     pub fn refresh_evidence_digest(&mut self) -> Result<(), norito::Error> {
         self.evidence_digest = self.computed_evidence_digest()?;
         Ok(())
@@ -2044,6 +2085,11 @@ impl ModerationReproBodyV1 {
     /// This digest deliberately covers the complete canonical reproducibility
     /// body, including thresholds and model weights, so a committee cannot
     /// accept a score produced under a silently different policy surface.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`norito::Error`] when the canonical reproducibility body cannot
+    /// be encoded.
     pub fn computed_screening_policy_digest(&self) -> Result<[u8; 32], norito::Error> {
         let encoded = norito::to_bytes(self)?;
         let mut hasher = blake3::Hasher::new();
@@ -2056,6 +2102,15 @@ impl ModerationReproBodyV1 {
 impl ModerationSignedScreeningResultV1 {
     /// Verify manifest/policy bindings, signer authorization and revocation,
     /// deterministic score derivation, signature validity, and freshness.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ModerationSignedResultError`] when any binding, score, signer,
+    /// signature, digest, or time invariant is invalid.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one fail-closed verifier keeps every signed result invariant in a fixed order"
+    )]
     pub fn validate(
         &self,
         manifest: &ModerationReproManifestV1,
@@ -2282,6 +2337,15 @@ impl ModerationCommitteeAggregateV1 {
     /// caller cannot obtain an aggregate by validating only policy-internal
     /// signatures or by supplying a weaker quorum than the external trust
     /// configuration requires.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ModerationCommitteeAggregateError`] when policy authentication,
+    /// result validation, quorum, ordering, time, or aggregate encoding fails.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "aggregate construction validates and binds all member evidence atomically"
+    )]
     pub fn aggregate_authenticated(
         manifest: &ModerationReproManifestV1,
         policy: &ModerationTrustPolicyV1,
@@ -2416,6 +2480,10 @@ impl ModerationCommitteeAggregateV1 {
     }
 
     /// Compute the domain-separated aggregate digest with its slot zeroed.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`norito::Error`] when the canonical aggregate cannot be encoded.
     pub fn computed_aggregate_digest(&self) -> Result<[u8; 32], norito::Error> {
         let mut aggregate = self.clone();
         aggregate.aggregate_digest = [0; 32];
@@ -2427,6 +2495,10 @@ impl ModerationCommitteeAggregateV1 {
     }
 
     /// Refresh the canonical aggregate digest in place.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`norito::Error`] when the canonical aggregate cannot be encoded.
     pub fn refresh_aggregate_digest(&mut self) -> Result<(), norito::Error> {
         self.aggregate_digest = self.computed_aggregate_digest()?;
         Ok(())
@@ -2435,6 +2507,10 @@ impl ModerationCommitteeAggregateV1 {
 
 impl ModerationProvenanceEntryV1 {
     /// Compute the domain-separated entry digest with its slot zeroed.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`norito::Error`] when the canonical provenance entry cannot be encoded.
     pub fn computed_entry_digest(&self) -> Result<[u8; 32], norito::Error> {
         let mut entry = self.clone();
         entry.entry_digest = [0; 32];
@@ -2446,6 +2522,10 @@ impl ModerationProvenanceEntryV1 {
     }
 
     /// Refresh the canonical entry digest in place.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`norito::Error`] when the canonical provenance entry cannot be encoded.
     pub fn refresh_entry_digest(&mut self) -> Result<(), norito::Error> {
         self.entry_digest = self.computed_entry_digest()?;
         Ok(())
@@ -2454,6 +2534,10 @@ impl ModerationProvenanceEntryV1 {
 
 impl ModerationProvenanceLogV1 {
     /// Create an empty provenance segment with a non-zero operator identifier.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ModerationProvenanceError::MissingLogId`] when `log_id` is zero.
     pub fn new(log_id: [u8; 16]) -> Result<Self, ModerationProvenanceError> {
         if log_id == [0; 16] {
             return Err(ModerationProvenanceError::MissingLogId);
@@ -2469,6 +2553,11 @@ impl ModerationProvenanceLogV1 {
     /// Append one complete evidence payload after validating the existing
     /// chain. The durable store remains responsible for validating the payload
     /// against the active manifest and trust policy before calling this method.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ModerationProvenanceError`] when the existing chain, capacity,
+    /// timestamp ordering, sequence, or new entry encoding is invalid.
     pub fn append(
         &mut self,
         payload: ModerationProvenancePayloadV1,
@@ -2523,6 +2612,11 @@ impl ModerationProvenanceLogV1 {
 
     /// Validate schema, bounds, ordering, timestamps, every hash-chain link,
     /// every entry digest, and the advertised head digest.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ModerationProvenanceError`] when any log identity, bound,
+    /// timestamp, sequence, digest, or hash-chain invariant is invalid.
     pub fn validate_chain(&self) -> Result<(), ModerationProvenanceError> {
         if self.schema_version != MODERATION_PROVENANCE_LOG_VERSION_V1 {
             return Err(ModerationProvenanceError::UnsupportedVersion {

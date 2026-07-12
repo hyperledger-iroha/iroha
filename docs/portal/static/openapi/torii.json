@@ -3695,6 +3695,16 @@
             "minimum": 0,
             "type": "integer"
           },
+          "participant_lane_block_height": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "participant_lane_block_view": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
           "participant_lane_id": {
             "format": "uint32",
             "maximum": 4294967295,
@@ -3709,6 +3719,27 @@
             "maximum": 128,
             "minimum": 1,
             "type": "integer"
+          },
+          "participant_previous_block_descriptor_hash": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Hash"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "participant_previous_block_height": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "participant_proposal_hash": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "participant_settlement_commitment": {
+            "$ref": "#/components/schemas/Hash"
           },
           "participant_validator_count": {
             "format": "uint32",
@@ -3777,6 +3808,12 @@
           "participant_lane_id",
           "participant_dataspace_id",
           "participant_lane_incarnation",
+          "participant_previous_block_height",
+          "participant_previous_block_descriptor_hash",
+          "participant_lane_block_height",
+          "participant_lane_block_view",
+          "participant_proposal_hash",
+          "participant_settlement_commitment",
           "participant_validator_set_hash",
           "participant_validator_count",
           "participant_min_quorum",
@@ -3879,6 +3916,15 @@
             "minimum": 0,
             "type": "integer"
           },
+          "participant_proposal": {
+            "$ref": "#/components/schemas/NativeAmxParticipantLaneBlockProposal"
+          },
+          "participant_settlement": {
+            "$ref": "#/components/schemas/LaneSettlementCommitment"
+          },
+          "participant_settlement_hash": {
+            "$ref": "#/components/schemas/Hash"
+          },
           "prepare_qc": {
             "$ref": "#/components/schemas/NativeAmxAttestationQc"
           }
@@ -3886,8 +3932,162 @@
         "required": [
           "lane_id",
           "dataspace_id",
+          "participant_proposal",
+          "participant_settlement",
+          "participant_settlement_hash",
           "prepare_qc",
           "commit_qc"
+        ],
+        "type": "object"
+      },
+      "NativeAmxParticipantLaneBlockDescriptor": {
+        "additionalProperties": false,
+        "properties": {
+          "accepted_candidate_indices": {
+            "items": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "minItems": 1,
+            "type": "array"
+          },
+          "accepted_transaction_hashes": {
+            "items": {
+              "$ref": "#/components/schemas/Hash"
+            },
+            "minItems": 1,
+            "type": "array"
+          },
+          "dataspace_id": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "descriptor_hash": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "lane_block_height": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "lane_block_view": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "lane_id": {
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "lane_incarnation": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "min_quorum": {
+            "format": "uint32",
+            "maximum": 128,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "payload_ownership_hash": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "previous_lane_block_descriptor_hash": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Hash"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "previous_lane_block_height": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "proposal_height": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "qc_mode_tag": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "rbc_instance_hash": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "subject_hash": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "validator_count": {
+            "format": "uint32",
+            "maximum": 128,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "validator_set": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 128,
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "validator_set_hash": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "validator_set_hash_version": {
+            "enum": [
+              1
+            ],
+            "format": "uint16",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "lane_id",
+          "dataspace_id",
+          "lane_incarnation",
+          "proposal_height",
+          "lane_block_height",
+          "lane_block_view",
+          "subject_hash",
+          "payload_ownership_hash",
+          "rbc_instance_hash",
+          "accepted_candidate_indices",
+          "accepted_transaction_hashes",
+          "validator_set_hash_version",
+          "validator_set_hash",
+          "validator_set",
+          "validator_count",
+          "min_quorum",
+          "qc_mode_tag",
+          "descriptor_hash",
+          "previous_lane_block_height"
+        ],
+        "type": "object"
+      },
+      "NativeAmxParticipantLaneBlockProposal": {
+        "additionalProperties": false,
+        "description": "Exact non-empty control-only participant proposal. Payload recovery hints are forbidden because the global transaction executes only once on the coordinator path.",
+        "properties": {
+          "descriptor": {
+            "$ref": "#/components/schemas/NativeAmxParticipantLaneBlockDescriptor"
+          },
+          "proposal_hash": {
+            "$ref": "#/components/schemas/Hash"
+          }
+        },
+        "required": [
+          "descriptor",
+          "proposal_hash"
         ],
         "type": "object"
       },
@@ -5855,7 +6055,7 @@
           },
           "version": {
             "enum": [
-              2
+              1
             ],
             "format": "uint16",
             "type": "integer"
@@ -21560,7 +21760,7 @@
     },
     "/v1/offline/redeem": {
       "post": {
-        "description": "Submit one directly encoded OfflineRedeemRequest. JSON contains the structured request itself and application/x-norito contains the canonical typed Norito value; whole-payload base64 wrappers are rejected. Acceptance is asynchronous and returns the operation resource in Location.",
+        "description": "Submit one typed Kagemusha OfflineRedeemRequest. JSON contains the structured request and application/x-norito contains the canonical Norito value. Acceptance is asynchronous and returns the operation resource in Location.",
         "operationId": "offlineRedeem",
         "parameters": [
           {
@@ -21857,7 +22057,7 @@
     },
     "/v1/offline/top-up": {
       "post": {
-        "description": "Submit one directly encoded OfflineTopUpRequest. JSON contains the structured request itself and application/x-norito contains the canonical typed Norito value; whole-payload base64 wrappers are rejected. Acceptance is asynchronous and returns the operation resource in Location.",
+        "description": "Submit one typed Kagemusha OfflineTopUpRequest. JSON contains the structured request and application/x-norito contains the canonical Norito value. Acceptance is asynchronous and returns the operation resource in Location.",
         "operationId": "offlineTopUp",
         "parameters": [
           {
@@ -30822,7 +31022,7 @@
       "name": "Sumeragi"
     },
     {
-      "description": "Offline readiness and asynchronous top-up/redemption operations. Requests use the same typed DTO in JSON and Norito; whole-payload base64 wrapper objects are not part of the public API.",
+      "description": "Kagemusha readiness and asynchronous top-up/redemption operations. Requests use the same typed DTO in JSON and canonical Norito.",
       "name": "Offline"
     },
     {

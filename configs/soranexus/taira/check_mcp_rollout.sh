@@ -77,6 +77,9 @@ The check fails unless:
     `build.git_commit_sha` (published and expected values must be 7 to 40
     hexadecimal characters; short or full prefix matches are accepted)
   - GET /v1/sumeragi/status reports protocol v2 durable reducer state
+  - GET /v1/pipeline/transactions/status reaches the canonical typed status
+    handler (the no-hash probe returns HTTP 400), while the retired
+    /v1/transactions/status alias remains unmounted (HTTP 404)
   - when validator roots are supplied, every labeled validator reports the same
     protocol/build/config/context/commit tuple across repeated advancing samples
   - direct public Torii ingress also exposes SCCP, ZK, bridge, validator-set,
@@ -96,15 +99,19 @@ automatically, preferring `/run/secrets/taira-canary-client.toml` when that
 directory is writable and otherwise falling back to `${TMPDIR:-/tmp}`. It
 reuses an existing config at the automatic path. An explicit `--write-config`
 must already exist and is read without modification; the script never
-overwrites operator-supplied signing material. Automatic bootstrap
-onboards a fresh ordinary account on Taira and, when a gas asset is configured,
-passes that asset to onboarding and skips faucet funding by default. The write
-canary attaches Taira's accepted XOR gas asset metadata by default and still
-retries the faucet lane on `Failed to find asset` so a saturated queue does not
-require manual signer preparation. Set `ROLLOUT_CANARY_SKIP_FAUCET=0` to require
-an initial faucet claim. Use `--gas-asset-id ""` only against networks that do
-not require pipeline gas metadata. Use `--skip-write-canary` only for read-only
-validation.
+overwrites operator-supplied signing material. Automatic bootstrap posts the
+current universal-account DTO to `/v1/accounts/onboard`, requires `HTTP 202`
+with a `QUEUED` receipt, and follows that receipt through
+`/v1/pipeline/transactions/status` before using the signer. Onboarding fees are
+sponsored by the configured Torii onboarding authority; gas fields are not part
+of the onboarding request. The write canary attaches Taira's accepted XOR gas
+asset metadata by default and still retries the faucet lane on `Failed to find
+asset` so a saturated queue does not require manual signer preparation. Set
+`ROLLOUT_CANARY_SKIP_FAUCET=0` to require an initial faucet claim. Use
+`--gas-asset-id ""` only against networks that do not require pipeline gas
+metadata. Both onboarding and faucet helpers wait for their `202 QUEUED`
+receipts to reach `Applied` or `Committed` through the canonical pipeline
+status route. Use `--skip-write-canary` only for read-only validation.
 
 When `--iroha-bin` is omitted, the script first reuses a repo-local
 `bin/iroha`, `target/debug/iroha`, or `target/release/iroha` if present, and
@@ -544,6 +551,7 @@ http_request() {
   local payload="${3:-}"
   local body_file header_file error_file
   local curl_output curl_rc
+  # The first-release /v1 API has no version-negotiation request header.
   local curl_cmd=(
     curl
     --silent
@@ -807,6 +815,7 @@ check_route_status() {
   local expected_statuses="$4"
   local description="$5"
   local payload="${6:-}"
+  local expected_error_code="${7:-}"
   local -a expected_codes=()
 
   read -r -a expected_codes <<< "$expected_statuses"
@@ -817,6 +826,27 @@ check_route_status() {
     sed -n '1,20p' "$last_headers" >&2 || true
     sed -n '1,40p' "$last_body" >&2 || true
     exit 1
+  fi
+  if [[ -n "$expected_error_code" ]]; then
+    python3 - "$label" "$description" "$expected_error_code" "$last_body" <<'PY'
+import json
+import sys
+
+label, description, expected_code, body_path = sys.argv[1:]
+try:
+    with open(body_path, "r", encoding="utf-8") as handle:
+        payload = json.load(handle)
+except (OSError, json.JSONDecodeError) as error:
+    raise SystemExit(
+        f"{label}: {description} did not return a typed JSON error envelope: {error}"
+    ) from error
+actual_code = payload.get("code") if isinstance(payload, dict) else None
+if actual_code != expected_code:
+    raise SystemExit(
+        f"{label}: {description} returned error code {actual_code!r}; "
+        f"expected {expected_code!r}"
+    )
+PY
   fi
 }
 
@@ -929,10 +959,12 @@ def require_uint(value, field, *, positive=False):
 
 def enum_tag(value, key, field, allowed):
     record = require_dict(value, field)
+    if set(record) != {key, "details"}:
+        fail(f"v2 status {field} is not a canonical tagged unit")
     tag = record.get(key)
     if not isinstance(tag, str) or tag not in allowed:
         fail(f"v2 status reported invalid {field} tag: {tag!r}")
-    if "details" not in record or record.get("details") is not None:
+    if record.get("details") is not None:
         fail(f"v2 status reported non-canonical {field}.details")
     return tag
 
@@ -1265,16 +1297,19 @@ required = (
     "height_context_id",
     "height",
     "view",
+    "phase",
+    "leader",
+    "body_state",
     "last_committed_height",
 )
-missing = [name for name in required if status.get(name) is None]
+missing = [name for name in required if status.get(name) in (None, "", {})]
 if missing:
     raise SystemExit(
         f"validator {label}: v2 status omitted required fields: {', '.join(missing)}"
     )
-for name in ("height", "view", "last_committed_height"):
+for name in ("height", "view", "leader", "last_committed_height"):
     value = status[name]
-    if not isinstance(value, int) or value < 0:
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
         raise SystemExit(f"validator {label}: invalid {name}: {value!r}")
 context = status["height_context"]
 
@@ -1448,6 +1483,12 @@ check_route_parity() {
     "public-lane stake snapshot route"
   check_route_status "$label" GET "${root_url}/v1/contracts/state" "400" \
     "contract state route should be mounted and reject missing query selectors"
+  check_route_status "$label" GET "${root_url}/v1/pipeline/transactions/status" "400" \
+    "canonical pipeline transaction-status route should reject a missing hash" \
+    "" "query_validation_failed"
+  check_route_status "$label" GET "${root_url}/v1/transactions/status" "404" \
+    "retired transaction-status compatibility route must remain unmounted" \
+    "" "route_not_found"
   check_route_status "$label" GET "${root_url}/v1/musubi/packages?query=&limit=1" "200" \
     "Musubi package search route"
   check_route_status "$label" POST "${root_url}/v1/musubi/instructions/yank-release" "200" \
@@ -1841,7 +1882,8 @@ claim_faucet_for_canary() {
   echo "==> faucet bootstrap: ${account_id}" >&2
   python3 "${REPO_ROOT}/scripts/taira_faucet_canary.py" \
     --account-id "$account_id" \
-    --torii-root "$target_url"
+    --torii-root "$target_url" \
+    --status-timeout-ms "$ROLLOUT_CANARY_STATUS_TIMEOUT_MS"
 }
 
 write_canary_metadata_file() {

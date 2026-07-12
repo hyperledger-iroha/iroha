@@ -98,6 +98,10 @@ pub struct SccpSwitchRouteRevisionV1 {
 )]
 #[norito(deny_unknown_fields)]
 #[norito(tag = "action", content = "route")]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "boxing a governance action would change its canonical Norito wire shape"
+)]
 pub enum SccpRouteGovernanceActionV1 {
     /// Register one complete immutable route in staged state.
     #[codec(index = 0)]
@@ -121,6 +125,15 @@ pub enum SccpRouteGovernanceActionV1 {
 
 impl SccpRouteGovernanceActionV1 {
     /// Validate invariants that do not require current world state.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::bridge::SccpRouteValidationError`] when the action's
+    /// route, activation transition, revision, or trust-anchor update is invalid.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one exhaustive match keeps all closed governance variants visibly fail-closed"
+    )]
     pub fn validate_static(&self) -> Result<(), crate::bridge::SccpRouteValidationError> {
         use crate::bridge::SccpRouteValidationError;
 

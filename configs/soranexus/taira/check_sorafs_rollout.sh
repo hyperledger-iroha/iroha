@@ -54,17 +54,26 @@ The check fails unless:
   - POST /v1/sorafs/capacity/declare returns HTTP 400 for an empty JSON body
   - POST /v1/sorafs/capacity/schedule returns HTTP 400 for an empty JSON body
   - GET /v1/sorafs/capacity/state returns HTTP 200
+  - GET /v1/pipeline/transactions/status reaches the canonical typed status
+    handler (the no-hash probe returns HTTP 400), while the retired
+    /v1/transactions/status alias remains unmounted (HTTP 404)
   - a deterministic capacity declaration lands through `iroha ledger transaction stdin`
   - the declaration is visible in /v1/sorafs/capacity/state
 
 When `--write-config` is omitted, the script bootstraps a runtime-only canary
 config automatically, preferring `/run/secrets/taira-canary-client.toml` when
 that directory is writable and otherwise falling back to the local temp
-directory. The bootstrap onboards a fresh ordinary account on Taira before
-running the capacity declaration canary. When a gas asset is configured, the
-bootstrap passes that asset to onboarding and skips faucet funding by default,
-so the canary proves the sponsored-fee path directly. Set
-`ROLLOUT_CANARY_SKIP_FAUCET=0` to require an initial faucet claim.
+directory. The bootstrap posts the current universal-account DTO to
+`/v1/accounts/onboard`, requires `HTTP 202` with a `QUEUED` receipt, and follows
+that receipt through `/v1/pipeline/transactions/status` before running the
+capacity declaration canary. Onboarding fees are sponsored by the configured
+Torii onboarding authority; gas fields are not part of the onboarding request.
+When a gas asset is configured, the script skips initial faucet funding by
+default and attaches that asset only to the signed capacity transaction, so the
+canary proves the sponsored onboarding path and the normal transaction-fee path
+separately. Set `ROLLOUT_CANARY_SKIP_FAUCET=0` to require an initial faucet
+claim. Both onboarding and faucet helpers wait for their `202 QUEUED` receipts
+to reach `Applied` or `Committed` through the canonical pipeline status route.
 When `--write-config` is supplied, that runtime-only signer config is read
 as-is and is never overwritten by bootstrap.
 Use `--skip-write-canary` only for read-only validation.
@@ -365,6 +374,7 @@ http_request() {
   local payload="${3:-}"
   local body_file
   local curl_status
+  # The first-release /v1 API has no version-negotiation request header.
   local curl_cmd=(
     curl
     --silent
@@ -406,12 +416,33 @@ expect_status() {
   local url="$3"
   local expected_status="$4"
   local payload="${5:-}"
+  local expected_error_code="${6:-}"
 
   http_request "$method" "$url" "$payload"
   if [[ "$last_status" != "$expected_status" ]]; then
     echo "${label}: expected HTTP ${expected_status}, got ${last_status}" >&2
     sed -n '1,120p' "$last_body" >&2 || true
     exit 1
+  fi
+  if [[ -n "$expected_error_code" ]]; then
+    python3 - "$label" "$expected_error_code" "$last_body" <<'PY'
+import json
+import sys
+
+label, expected_code, body_path = sys.argv[1:]
+try:
+    with open(body_path, "r", encoding="utf-8") as handle:
+        payload = json.load(handle)
+except (OSError, json.JSONDecodeError) as error:
+    raise SystemExit(
+        f"{label}: response was not a typed JSON error envelope: {error}"
+    ) from error
+actual_code = payload.get("code") if isinstance(payload, dict) else None
+if actual_code != expected_code:
+    raise SystemExit(
+        f"{label}: response error code was {actual_code!r}; expected {expected_code!r}"
+    )
+PY
   fi
 }
 
@@ -422,6 +453,20 @@ probe_surface() {
   expect_status "capacity/declare" POST "${root_url}/v1/sorafs/capacity/declare" 400 '{}'
   expect_status "capacity/schedule" POST "${root_url}/v1/sorafs/capacity/schedule" 400 '{}'
   expect_status "capacity/state" GET "${root_url}/v1/sorafs/capacity/state" 200
+  expect_status \
+    "pipeline transaction status" \
+    GET \
+    "${root_url}/v1/pipeline/transactions/status" \
+    400 \
+    "" \
+    "query_validation_failed"
+  expect_status \
+    "retired transaction status alias" \
+    GET \
+    "${root_url}/v1/transactions/status" \
+    404 \
+    "" \
+    "route_not_found"
 }
 
 check_node_health() {
@@ -430,7 +475,6 @@ check_node_health() {
   expect_status "status" GET "${root_url}/status" 200
   python3 - "$last_body" <<'PY'
 import json
-import re
 import sys
 
 with open(sys.argv[1], "r", encoding="utf-8") as handle:
@@ -444,8 +488,8 @@ PY
   expect_status "sumeragi/status" GET "${root_url}/v1/sumeragi/status" 200
   python3 - "$last_body" <<'PY'
 import json
+import re
 import sys
-
 
 def require_dict(value, label):
     if not isinstance(value, dict):
@@ -461,20 +505,37 @@ def require_uint(value, label, *, positive=False):
 
 def enum_tag(value, key, label):
     record = require_dict(value, label)
+    if set(record) != {key, "details"}:
+        raise SystemExit(f"sumeragi/status {label} is not a canonical tagged unit")
     tag = record.get(key)
     if not isinstance(tag, str) or not tag:
         raise SystemExit(f"sumeragi/status reported invalid {label} tag: {tag!r}")
-    if "details" not in record or record.get("details") is not None:
+    if record.get("details") is not None:
         raise SystemExit(f"sumeragi/status reported non-canonical {label}.details")
     return tag
 
-
 with open(sys.argv[1], "r", encoding="utf-8") as handle:
-    payload = json.load(handle)
+    status = json.load(handle)
 
-status = payload
-if status.get("protocol_version") != 2:
-    raise SystemExit("sumeragi/status did not return the authoritative protocol-v2 schema")
+if not isinstance(status, dict) or status.get("protocol_version") != 2:
+    raise SystemExit(
+        "expected the Sumeragi v2 reducer status; "
+        "legacy RBC/recovery status is not accepted"
+    )
+
+required = (
+    "node_fingerprint",
+    "build_fingerprint",
+    "config_fingerprint",
+    "height_context_id",
+    "phase",
+    "body_state",
+)
+missing = [name for name in required if status.get(name) in (None, "", {})]
+if missing:
+    raise SystemExit(
+        f"sumeragi/status omitted required v2 field(s): {', '.join(missing)}"
+    )
 
 height = require_uint(status.get("height"), "height", positive=True)
 view = require_uint(status.get("view"), "view")
@@ -1028,7 +1089,8 @@ claim_faucet_for_canary() {
   echo "==> faucet bootstrap: ${account_id}" >&2
   python3 "${REPO_ROOT}/scripts/taira_faucet_canary.py" \
     --account-id "$account_id" \
-    --torii-root "$target_url"
+    --torii-root "$target_url" \
+    --status-timeout-ms "$ROLLOUT_CANARY_STATUS_TIMEOUT_MS"
 }
 
 write_canary_metadata_file() {

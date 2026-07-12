@@ -429,12 +429,11 @@ pub fn execute(number: u32, vm: &mut IVM) -> Result<u64, VMError> {
             let lhs = decode_int_register(vm, 10)?;
             let rhs = decode_int_register(vm, 11)?;
             let mode = failure_mode(vm, &[12, 13])?;
-            if rhs.is_zero() {
-                if resolve_bigint_failure::<()>(vm, mode, Err(BigIntError::DivisionByZero))?
+            if rhs.is_zero()
+                && resolve_bigint_failure::<()>(vm, mode, Err(BigIntError::DivisionByZero))?
                     .is_none()
-                {
-                    return Ok(0);
-                }
+            {
+                return Ok(0);
             }
             charge_checked_division(vm, &lhs, &rhs)?;
             if let Some((quotient, remainder)) =

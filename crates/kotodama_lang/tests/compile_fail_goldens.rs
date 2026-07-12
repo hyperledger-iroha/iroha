@@ -77,7 +77,7 @@ const CASES: &[CompileFailCase] = &[
         source: "seiyaku UntypedParameter {\nfn run(value) {}\n}",
         phase: DiagnosticPhase::Parse,
         code: "K1001",
-        message: "expected Colon",
+        message: "expected identifier but found RParen",
         line: 2,
     },
     CompileFailCase {
@@ -131,9 +131,9 @@ const CASES: &[CompileFailCase] = &[
     CompileFailCase {
         name: "numeric-prefix-identifier",
         source: "seiyaku 1Invalid {\nfn run() {}\n}",
-        phase: DiagnosticPhase::Parse,
-        code: "K1001",
-        message: "expected identifier but found Number(1)",
+        phase: DiagnosticPhase::Lex,
+        code: "E_RETIRED_NUMERIC_SUFFIX",
+        message: "numeric literal suffixes are not part of Kotodama V1",
         line: 1,
     },
     CompileFailCase {
@@ -432,7 +432,7 @@ fn public_session_compile_fail_diagnostics_are_stable() {
 #[test]
 fn multi_error_renderers_preserve_identical_semantic_records_and_exact_spans() {
     let source = r#"seiyaku Broken {
-  fn first() { let quantity amount = 1; }
+  fn first() { let quantity amount = true; }
   fn second() { let value = 1; value = 2; }
 }"#;
     let source_name = "multi-error-renderers.ko";

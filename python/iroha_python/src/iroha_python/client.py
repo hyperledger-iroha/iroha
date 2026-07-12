@@ -75,6 +75,7 @@ from iroha_torii_client.client import (
     OfflineProofBackend,
     OfflinePeerSplitTransitionJson,
     OfflinePeerSplitTransitionVariantJson,
+    OfflineActiveTopUpShieldVerifier,
     OfflineActiveTransferVerifier,
     OfflineReadiness,
     SumeragiV2AdapterQueueStatus,
@@ -8638,6 +8639,44 @@ class SumeragiLaneRelayEnvelope:
 SumeragiV2Status = _SumeragiV2Status
 SumeragiStatusSnapshot = SumeragiV2Status
 
+
+class SumeragiV2StatusPhase(str, Enum):
+    """Canonical lowercase phase tags in the authoritative v2 snapshot."""
+
+    AWAITING_PROPOSAL = "awaiting_proposal"
+    RECONSTRUCTING_PAYLOAD = "reconstructing_payload"
+    VALIDATING_PAYLOAD = "validating_payload"
+    PREPARE = "prepare"
+    COMMIT = "commit"
+    PENDING_APPLY = "pending_apply"
+
+
+class SumeragiV2BodyState(str, Enum):
+    """Canonical lowercase proposal-body state tags."""
+
+    MISSING = "missing"
+    RECONSTRUCTING = "reconstructing"
+    STORED = "stored"
+    VALIDATED = "validated"
+    PENDING_APPLY = "pending_apply"
+    APPLIED = "applied"
+
+
+class SumeragiV2GlobalPhase(str, Enum):
+    """Canonical lowercase two-phase consensus tags."""
+
+    PREPARE = "prepare"
+    COMMIT = "commit"
+
+
+# Preserve the descriptive public names introduced by the reducer-only draft
+# while binding them to the complete, authoritative snapshot model.
+SumeragiV2HeightContextId = Tuple[str]
+SumeragiV2ConsensusRound = SumeragiV2Round
+SumeragiV2QuorumCertificateRef = SumeragiV2QcReference
+SumeragiV2TimeoutCertificateRef = SumeragiV2TimeoutReference
+
+
 @dataclass(frozen=True)
 class SumeragiNewViewReceipt:
     """NEW_VIEW receipt counts per (height, view)."""
@@ -10902,6 +10941,7 @@ __all__ = [
     "OfflineProofBackend",
     "OfflinePeerSplitTransitionJson",
     "OfflinePeerSplitTransitionVariantJson",
+    "OfflineActiveTopUpShieldVerifier",
     "OfflineActiveTransferVerifier",
     "OfflineReadiness",
     "OfflineReadinessBlocker",

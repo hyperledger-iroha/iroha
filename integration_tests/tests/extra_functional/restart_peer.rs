@@ -55,7 +55,6 @@ use iroha_torii::{
     HEADER_ACCOUNT, HEADER_NONCE, HEADER_SIGNATURE, HEADER_TIMESTAMP_MS, Method, Uri,
     canonical_request_signature_message, signature_header_value,
 };
-use norito::codec::Encode as _;
 use norito::json::{self, Value};
 use sorafs_manifest::{DagCodecId, MANIFEST_DAG_CODEC, ManifestBuilder};
 use tokio::{
@@ -666,7 +665,7 @@ async fn restarted_peer_should_restore_its_state() -> Result<()> {
     let config: Vec<_> = network.config_layers().collect();
     assert_ne!(peer_a, peer_b);
     let start_result = timeout(network.peer_startup_timeout(), async move {
-        peer_b.start_checked(config.iter().cloned(), None).await?;
+        peer_b.start_checked(config.iter(), None).await?;
         peer_b.once_block(2).await;
         Ok::<(), eyre::Report>(())
     })
@@ -822,8 +821,7 @@ async fn restarted_four_peers_rebuild_route_sensitive_state_from_kura_blocks() -
     let config_layers: Vec<_> = network.config_layers().collect();
     for peer in network.peers() {
         timeout(network.peer_startup_timeout(), async {
-            peer.start_checked(config_layers.iter().cloned(), None)
-                .await?;
+            peer.start_checked(config_layers.iter(), None).await?;
             peer.once_block(2).await;
             Ok::<(), eyre::Report>(())
         })
@@ -1241,8 +1239,7 @@ async fn soracloud_private_uploaded_model_receipt_survives_four_peer_restart() -
     let config_layers: Vec<_> = network.config_layers().collect();
     for peer in network.peers() {
         timeout(network.peer_startup_timeout(), async {
-            peer.start_checked(config_layers.iter().cloned(), None)
-                .await?;
+            peer.start_checked(config_layers.iter(), None).await?;
             peer.once_block(4).await;
             Ok::<(), eyre::Report>(())
         })

@@ -202,7 +202,7 @@ isi! {
 impl crate::seal::Instruction for UpsertProviderCredit {}
 
 isi! {
-    /// Activate the next governance-controlled PoP issuer policy revision.
+    /// Activate the next governance-controlled `PoP` issuer policy revision.
     pub struct SetSorafsPopIssuerPolicy {
         /// Policy revision to validate and activate.
         pub policy: PopIssuerPolicyV1,
@@ -212,7 +212,7 @@ isi! {
 impl crate::seal::Instruction for SetSorafsPopIssuerPolicy {}
 
 isi! {
-    /// Commit a bounded batch of private PoP credentials and public roots atomically.
+    /// Commit a bounded batch of private `PoP` credentials and public roots atomically.
     pub struct CommitSorafsPopCredentialBatch {
         /// Exact canonical Norito `PopCredentialCommitmentBatchV1` bytes.
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
@@ -223,7 +223,7 @@ isi! {
 impl crate::seal::Instruction for CommitSorafsPopCredentialBatch {}
 
 isi! {
-    /// Publish a strict signed extension of the active PoP revocation list.
+    /// Publish a strict signed extension of the active `PoP` revocation list.
     pub struct PublishSorafsPopRevocationList {
         /// Exact canonical Norito `sorafs_manifest::PopRevocationListV1` bytes.
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
@@ -237,7 +237,7 @@ isi! {
 impl crate::seal::Instruction for PublishSorafsPopRevocationList {}
 
 isi! {
-    /// Activate the next governance-controlled SoraFS orderbook policy revision.
+    /// Activate the next governance-controlled `SoraFS` orderbook policy revision.
     pub struct SetSorafsOrderbookPolicy {
         /// Policy revision to validate and activate.
         pub policy: OrderbookAdmissionPolicyV1,
@@ -247,7 +247,7 @@ isi! {
 impl crate::seal::Instruction for SetSorafsOrderbookPolicy {}
 
 isi! {
-    /// Submit a signed canonical order to the authoritative SoraFS orderbook ledger.
+    /// Submit a signed canonical order to the authoritative `SoraFS` orderbook ledger.
     pub struct SubmitSorafsOrderbookOrder {
         /// Exact canonical Norito `sorafs_manifest::orderbook::OrderRequestV1` bytes.
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
@@ -261,7 +261,7 @@ isi! {
 impl crate::seal::Instruction for SubmitSorafsOrderbookOrder {}
 
 isi! {
-    /// Commit a signed owner cancellation to the authoritative SoraFS orderbook ledger.
+    /// Commit a signed owner cancellation to the authoritative `SoraFS` orderbook ledger.
     pub struct CancelSorafsOrderbookOrder {
         /// Exact canonical Norito `sorafs_manifest::orderbook::OrderCancelV1` bytes.
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
@@ -289,7 +289,7 @@ isi! {
 impl crate::seal::Instruction for RecordSorafsOrderbookSettlementReceipt {}
 
 isi! {
-    /// Activate the next authoritative SoraFS moderation-ledger policy revision.
+    /// Activate the next authoritative `SoraFS` moderation-ledger policy revision.
     pub struct SetSorafsModerationPolicy {
         /// Policy revision to validate and activate.
         pub policy: ModerationLedgerPolicyV1,
@@ -299,7 +299,7 @@ isi! {
 impl crate::seal::Instruction for SetSorafsModerationPolicy {}
 
 isi! {
-    /// Admit one appellant-authenticated moderation appeal and pin active PoP anchors.
+    /// Admit one appellant-authenticated moderation appeal and pin active `PoP` anchors.
     pub struct SubmitSorafsModerationAppeal {
         /// Immutable bounded appeal intake.
         pub intake: ModerationAppealIntakeV1,
@@ -309,7 +309,7 @@ isi! {
 impl crate::seal::Instruction for SubmitSorafsModerationAppeal {}
 
 isi! {
-    /// Register one authority-bound private PoP membership proof for panel eligibility.
+    /// Register one authority-bound private `PoP` membership proof for panel eligibility.
     pub struct RegisterSorafsModerationJurorEligibility {
         /// Appeal case identifier.
         pub case_id: String,
@@ -330,7 +330,7 @@ isi! {
         pub case_id: String,
         /// Ballot round identifier.
         pub round_id: String,
-        /// Exact pinned PoP snapshot digest expected by the operator.
+        /// Exact pinned `PoP` snapshot digest expected by the operator.
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
         pub pop_snapshot_digest: [u8; 32],
         /// Exact latest committed parent hash expected to seed the draw.
@@ -684,7 +684,7 @@ impl SubmitSorafsModerationAppeal {
 }
 
 impl RegisterSorafsModerationJurorEligibility {
-    /// Construct a private PoP eligibility-proof submission.
+    /// Construct a private `PoP` eligibility-proof submission.
     #[must_use]
     pub fn new(case_id: String, round_id: String, membership_proof_payload: Vec<u8>) -> Self {
         Self {

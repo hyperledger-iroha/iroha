@@ -559,7 +559,7 @@ pub enum EvidenceKind {
 /// Proofs of possession are retained in roster order so an auditor can verify
 /// current-context aggregate certificates referenced by the artifacts without
 /// consulting mutable validator state. Production persistence additionally
-/// compares this context and PoP vector with the locally verified immutable
+/// compares this context and `PoP` vector with the locally verified immutable
 /// context record.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -956,8 +956,6 @@ pub fn committed_lane_block_status_counts_as_progress(
         | COMMITTED_LANE_STATUS_PAYLOAD_PREFLIGHTED_AWAITING_STATE_APPLICATION
         | COMMITTED_LANE_STATUS_STATE_APPLIED_BY_CANONICAL_BLOCK
         | COMMITTED_LANE_STATUS_STATE_APPLIED_BY_DIRECT_EXECUTION => executable_payload_available,
-        COMMITTED_LANE_STATUS_PAYLOAD_PREFLIGHT_REJECTED_AWAITING_STATE_APPLICATION
-        | COMMITTED_LANE_STATUS_AWAITING_PREDECESSOR_APPLICATION => false,
         _ => false,
     }
 }
@@ -1342,7 +1340,7 @@ impl LaneBlockVoteBodyV1 {
 /// The body names both the immutable payload's origin proposal and the
 /// view-specific proposal being prepared. This prevents a valid payload
 /// certificate from being rebound across chains, epochs, lane incarnations,
-/// proposals, NewView transitions, or DA/RBC instances.
+/// proposals, `NewView` transitions, or DA/RBC instances.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -1425,7 +1423,7 @@ pub struct LanePayloadAvailabilityQcV1 {
     pub validator_set_hash: HashOf<Vec<PeerId>>,
     /// Ordered historical validator set indexed by `signers_bitmap`.
     pub validator_set: Vec<PeerId>,
-    /// Valid historical PoPs aligned exactly with `validator_set`.
+    /// Valid historical `PoPs` aligned exactly with `validator_set`.
     pub validator_set_pops: Vec<Vec<u8>>,
     /// Compact READY signer bitmap (LSB-first).
     pub signers_bitmap: Vec<u8>,
@@ -1616,6 +1614,10 @@ impl SumeragiLanePayloadOwnership {
     ///
     /// Returns [`SumeragiLanePayloadOwnershipReplayError::Encode`] if the
     /// canonical preimage cannot be encoded.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the public replay API mirrors the canonical ownership subject preimage fields"
+    )]
     pub fn compute_replay_subject_hash(
         lane_id: LaneId,
         dataspace_id: DataSpaceId,
@@ -1648,6 +1650,10 @@ impl SumeragiLanePayloadOwnership {
     ///
     /// Returns [`SumeragiLanePayloadOwnershipReplayError::Encode`] if the
     /// canonical preimage cannot be encoded.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the public replay API mirrors the canonical payload ownership preimage fields"
+    )]
     pub fn compute_replay_payload_ownership_hash(
         lane_id: LaneId,
         dataspace_id: DataSpaceId,
@@ -2069,7 +2075,7 @@ pub struct NativeAmxAttestationBodyV2 {
     pub participant_validator_count: u32,
     /// Minimum number of participant signatures required by the lane quorum policy.
     pub participant_min_quorum: u32,
-    /// Global/catalog height used to resolve routes, lane incarnations, keys, and PoPs.
+    /// Global/catalog height used to resolve routes, lane incarnations, keys, and `PoPs`.
     pub authority_context_height: u64,
     /// Coordinator block height planned for final inclusion.
     pub planned_coordinator_block_height: u64,
@@ -3554,6 +3560,10 @@ pub struct SumeragiV1StatusWire {
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "these flags are distinct fields in the stable Norito consensus-status payload"
 )]
 pub struct SumeragiLaneBlockSessionStatus {
     /// Lane whose lane-local block is being certified.

@@ -238,7 +238,7 @@ async fn commit_certificate_block_sync_restores_restart_peer() -> Result<()> {
         let expected_height = status.blocks;
 
         restart_peer
-            .start_checked(config_layers.iter().cloned(), None)
+            .start_checked(config_layers.iter(), None)
             .await
             .wrap_err("restart peer for block sync")?;
         timeout(

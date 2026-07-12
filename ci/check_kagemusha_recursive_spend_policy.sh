@@ -30,11 +30,12 @@ DOC_PATHS = (
     "python/iroha_python/README.md",
 )
 
-# The production release has one public spend-again corridor. V2 is the
-# product selector; V3 names the governed artifact manifest/streaming
-# lifecycle, and 18 is the exact native bridge ABI. Historical ABI-6/ABI-7
-# fixtures are deliberately not part of this release policy.
-FIRST_RELEASE_SELECTOR = "recursive_spend_v2"
+# The production release has one public spend-again corridor. V1 is the public
+# product selector; V2 remains the internal typed/native artifact contract; V3
+# names the governed artifact manifest/streaming lifecycle; and 18 is the exact
+# native bridge ABI. Historical ABI-6/ABI-7 fixtures are deliberately excluded.
+FIRST_RELEASE_SELECTOR = "recursive_spend_v1"
+FIRST_RELEASE_ARTIFACT_MODE = "recursive_spend_v2"
 FIRST_RELEASE_BRIDGE_ABI = 18
 FIRST_RELEASE_MANIFEST_SCHEMA = "kagemusha.offline.recursive_spend.artifact_manifest.v3"
 FIRST_RELEASE_JAVA_PROVER = (
@@ -139,25 +140,6 @@ SHARED_FIXTURE_COVERAGE = {
         '"sha256_hex": "703128068fa36897c952640cb77006af29a8aa802d67da82c97e73c8e0ef1864"',
         '"sha256_hex": "e05fb3ebb3a3e823f65403e09d1aa6e5deab0145f7aa0827f66a371ad633cc3e"',
     ),
-    "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendProverTests.swift": (
-        "testSharedRecursiveSpendAbi6FixtureMatchesSdkSurface",
-        "fixtures",
-        "kagemusha_recursive_spend_abi6",
-        "archives.json",
-        "archive_fixtures",
-        "redeem_request",
-        "redeem_instruction",
-        "lineage_append_boundary",
-        "operation_count",
-        "connect_norito_kagemusha_recursive_spend_redeem",
-        "reserved_lineage_payload_bytes",
-        "request_archive_fields",
-        "lineage_verifier_key",
-        "lineage_proving_key_archive",
-        "previous_recursive_proof_open_envelopes_archive",
-        "lineage_witness",
-        "change_output",
-    ),
     "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java": (
         "sharedRecursiveSpendAbi6FixtureMatchesSdkSurface",
         "kagemusha_recursive_spend_abi6",
@@ -230,7 +212,8 @@ SHARED_FIXTURE_COVERAGE = {
         "change_output",
     ),
     "csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs": (
-        "RecursiveSpendSharedAbi6FixtureMatchesSdkSurface",
+        "RecursiveSpendSharedAbi6FixtureIsExplicitlyRejectedByFirstReleaseSurface",
+        "Assert.NotEqual(KagemushaRecursiveSpendNative.RequiredNativeBridgeAbiVersion, fixtureAbiVersion)",
         "kagemusha_recursive_spend_abi6",
         "archives.json",
         "archive_fixtures",
@@ -324,22 +307,6 @@ SHARED_ABI7_FIXTURE_COVERAGE = {
         "append_bundle",
         "verify_request",
         "verify_result",
-        "redeem_request",
-        "redeem_instruction",
-    ),
-    "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendProverTests.swift": (
-        "kagemusha_recursive_spend_abi7",
-        "sharedRecursiveSpendAbi7Manifest",
-        "testSharedRecursiveSpendAbi7ManifestMatchesArchiveFixture",
-        "Set(manifest.keys)",
-        "Set(archive.keys)",
-        "archives.count, expectedOperations.count",
-        "SHA256.hash(data: archiveBytes)",
-        "archiveBytes.count",
-        "testRedeemSpendRejectsSyntheticAbi7FixtureWhenBridgeAvailable",
-        "Native redemption must reject the synthetic ABI-7 fixture proof.",
-        ".proofRejected",
-        "native_bridge_norito_archives",
         "redeem_request",
         "redeem_instruction",
     ),
@@ -1366,44 +1333,6 @@ SDK_HELPER_EDGE_COVERAGE = {
         "semantic previous proofs cannot select Reserved-lineage output",
         "appends must use the record-backed semantic profile while witnessless lineage is disabled",
     ),
-    "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendProver.swift": (
-        "public struct LineageKeyArtifacts: Equatable {",
-        "recursiveAggregationProofBackend",
-        "isSupportedLineageKeyArtifactOpeningLen",
-        "lineageKeyArtifactsForInit",
-        "lineageKeyArtifactsForAppend",
-        "validateLineageKeyArtifacts",
-        "invalidLineageKeyArtifact",
-        '"proof_circuit_id"',
-        '"verifier_opening_len"',
-        '"lineage_verifier_key"',
-        '"lineage_proving_key_archive"',
-        "requiresLineageKeyArtifactsForInit",
-        "requiresLineageKeyArtifactsForAppendOutput",
-        "normalizedAppendOutputCircuitId(outputCircuitId)",
-    ),
-    "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendProverTests.swift": (
-        "testLineageKeyArtifactPackagesValidateReleaseProfiles",
-        "lineageKeyArtifactsForInit",
-        "lineageKeyArtifactsForAppend",
-        "validateLineageKeyArtifacts",
-        "isSupportedLineageKeyArtifactOpeningLen(3)",
-        "recursiveAggregationProofBackend",
-        "halo2/kzg",
-        "assertInvalidLineageKeyArtifact",
-        "compactTokenMaxHops",
-        "KagemushaRecursiveSpendProver.recursiveAggregationProofCircuitIdV1, UInt32.max",
-        "unknown-kagemusha-recursive-spend-circuit",
-        "canAppendWitnesslessLineage(previousHopCount: UInt32.max)",
-        "isSupportedAppendProofTransition",
-        "requiresLineageKeyArtifactsForInit",
-        "requiresLineageKeyArtifactsForAppendOutput",
-        "outputCircuitId: nil",
-        "semantic previous proofs cannot select Reserved-lineage output",
-        "for hopCount: UInt32 in [1, 2, 63, 64]",
-        "must require a record-backed lineage witness",
-        "the semantic append circuit remains preferred while lineage transition verification is unavailable",
-    ),
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt": (
         "class LineageKeyArtifacts internal constructor(",
         "RECURSIVE_AGGREGATION_PROOF_BACKEND",
@@ -1597,11 +1526,6 @@ SDK_HELPER_EDGE_COVERAGE = {
     ),
 }
 SDK_APPEND_CAP_BINDING_COVERAGE = {
-    "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendProver.swift": (
-        "case recursiveAggregationProofCircuitIdV1:",
-        "public static let compactTokenMaxHops: UInt32 = 64",
-        "return previousHopCount < compactTokenMaxHops",
-    ),
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt": (
         "RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1 ->",
         "const val COMPACT_TOKEN_MAX_HOPS: Int = 64",
@@ -1655,114 +1579,33 @@ NATIVE_OUTPUT_CAP_COVERAGE = {
         "fn kagemusha_native_archive_writer_rejects_empty_and_oversized_outputs",
         "KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES + 1",
     ),
-    "IrohaSwift/Sources/IrohaSwift/KagemushaCompactPaymentTokenProver.swift": (
-        "case invalidRecordBundleArchive",
-        "case emptyRecordBundlePayload",
-        "case oversizedCompactTokenArchive",
-        "case invalidCompactTokenArchive",
-        "case emptyCompactTokenPayload",
-        "try requireValidRecordBundleArchive(recordBundleArchive)",
-        "try requireValidCompactTokenArchive(token)",
-        "noritoDecodeFrame(archive)",
-        "Kagemusha verified fold record bundle archive must be a valid Norito archive.",
-        "Kagemusha verified fold record bundle archive must contain a non-empty Norito payload.",
-        "Kagemusha compact-token native bridge returned an invalid Norito archive.",
-        "Kagemusha compact-token native bridge returned an empty Norito payload.",
+    "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendV2.swift": (
+        "public static let artifactMaximumFileBytes = 256 * 1024 * 1024",
+        "static func requireArchive(_ archive: Data, schema: String, field: String) throws",
+        "archive.count <= artifactMaximumFileBytes",
+        "let frame = noritoDecodeFrame(archive)",
+        "frame.header.schema == noritoSchemaHash(forTypeName: schema)",
+        "frame.header.compression == .none",
+        "frame.header.flags == NoritoHeader.compactLen",
+        "frame.paddingLength == 0",
+        "!frame.payload.isEmpty",
+        "throw KagemushaRecursiveSpendError.invalidArchive(field)",
     ),
-    "IrohaSwift/Tests/IrohaSwiftTests/KagemushaCompactPaymentTokenProverTests.swift": (
-        "testRejectsMalformedRecordBundleArchiveBeforeBridgeCall",
-        "testRejectsEmptyPayloadRecordBundleArchiveBeforeBridgeCall",
-        "testRejectsMalformedNativeOutput",
-        "testRejectsEmptyPayloadNativeOutput",
-        "testReturnsValidNativeOutput",
-        ".invalidRecordBundleArchive",
-        ".emptyRecordBundlePayload",
-        ".invalidCompactTokenArchive",
-        ".emptyCompactTokenPayload",
-        "validKagemushaNoritoArchive",
-        "emptyPayloadKagemushaNoritoArchive",
+    "IrohaSwift/Sources/IrohaSwift/NativeBridge.swift": (
+        "static func copyKagemushaNativeArchiveOutput(",
+        "defer { free(pointer) }",
+        "length <= CUnsignedLong(KagemushaRecursiveSpend.artifactMaximumFileBytes)",
+        "throw NativeBridgeError.kagemushaProve",
     ),
-    "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveAggregationProofBundleProver.swift": (
-        "case invalidRecordBundleArchive",
-        "case emptyRecordBundlePayload",
-        "case invalidPallasOpenEnvelopesArchive",
-        "case emptyPallasOpenEnvelopesPayload",
-        "case oversizedProofBundleArchive",
-        "case invalidProofBundleArchive",
-        "case emptyProofBundlePayload",
-        "try requireValidInputArchive(",
-        "try requireValidProofBundleArchive(proofBundle)",
-        "noritoDecodeFrame(archive)",
-        "Kagemusha verified fold record bundle archive must be a valid Norito archive.",
-        "Kagemusha Pallas open-envelope archive must contain a non-empty Norito payload.",
-        "Kagemusha recursive aggregation native bridge returned an invalid Norito archive.",
-        "Kagemusha recursive aggregation native bridge returned an empty Norito payload.",
+    "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendV2Native.swift": (
+        "private func copyKagemushaV2Output(",
+        "return try Self.copyKagemushaNativeArchiveOutput(",
     ),
-    "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveAggregationProofBundleProverTests.swift": (
-        "testRejectsMalformedInputArchivesBeforeBridgeCall",
-        "testRejectsEmptyPayloadInputArchivesBeforeBridgeCall",
-        "testRejectsMalformedNativeOutput",
-        "testRejectsEmptyPayloadNativeOutput",
-        "testReturnsValidNativeOutput",
-        ".invalidRecordBundleArchive",
-        ".emptyPallasOpenEnvelopesPayload",
-        ".invalidProofBundleArchive",
-        ".emptyProofBundlePayload",
-        "validKagemushaNoritoArchive",
-        "emptyPayloadKagemushaNoritoArchive",
-    ),
-    "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendProver.swift": (
-        "case invalidInputArchive",
-        "case emptyInputPayload",
-        "case oversizedNativeOutput",
-        "case invalidNativeOutput",
-        "case emptyNativeOutputPayload",
-        "public static let nativeArchiveMaxBytes = 256 * 1024 * 1024",
-        "try archives.forEach(requireValidInputArchive)",
-        "try requireValidOutputArchive(archive)",
-        "noritoDecodeFrame(archive)",
-        "Kagemusha recursive spend input archive must be a valid Norito archive.",
-        "Kagemusha recursive spend input archive must contain a non-empty Norito payload.",
-        "Kagemusha recursive spend native bridge returned an invalid Norito archive.",
-        "Kagemusha recursive spend native bridge returned an empty Norito payload.",
-        "guard archive.count <= nativeArchiveMaxBytes else",
-    ),
-    "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendProverTests.swift": (
-        "testRejectsMalformedInputArchivesBeforeBridgeCall",
-        "testRejectsEmptyPayloadInputArchivesBeforeBridgeCall",
-        "testRejectsMalformedNativeOutput",
-        "testRejectsEmptyPayloadNativeOutput",
-        "testReturnsValidNativeOutput",
-        ".invalidInputArchive",
-        ".emptyInputPayload",
-        ".invalidNativeOutput",
-        ".emptyNativeOutputPayload",
-        "KagemushaRecursiveSpendProver.nativeArchiveMaxBytes, 256 * 1024 * 1024",
-        "KagemushaRecursiveSpendProver.nativeArchiveMaxBytes + 1",
-        "validKagemushaNoritoArchive",
-        "emptyPayloadKagemushaNoritoArchive",
-        ".oversizedNativeOutput",
-    ),
-    "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveCompactPaymentTokenProver.swift": (
-        "case invalidRecordBundleArchive",
-        "case emptyRecordBundlePayload",
-        "case invalidPallasOpenEnvelopesArchive",
-        "case emptyPallasOpenEnvelopesPayload",
-        "try requireValidInputArchive(",
-        "Kagemusha verified fold record bundle archive must be a valid Norito archive.",
-        "Kagemusha Pallas open-envelope archive must contain a non-empty Norito payload.",
-        "recursiveCompactUnavailable",
-        "append verifier batch",
-        "try requireValidRecursiveCompactTokenArchive(token)",
-    ),
-    "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveCompactPaymentTokenProverTests.swift": (
-        "testRejectsMalformedInputArchivesBeforeBridgeCall",
-        "testRejectsEmptyPayloadInputArchivesBeforeBridgeCall",
-        ".invalidRecordBundleArchive",
-        ".emptyPallasOpenEnvelopesPayload",
-        "testNativeRecursiveCompactUnavailableIsDistinctFromProofRejection",
-        "validKagemushaNoritoArchive",
-        "emptyPayloadKagemushaNoritoArchive",
+    "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendV2Tests.swift": (
+        "testABI18InventoryRequiresExplicitFailClosedCapabilities",
+        "KagemushaRecursiveSpend.artifactMaximumFileBytes",
+        "256 * 1_024 * 1_024",
+        "XCTAssertFalse(KagemushaRecursiveSpend.isProductionAvailable)",
     ),
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaCompactPaymentTokenProver.java": (
         "public static final int NATIVE_ARCHIVE_MAX_BYTES = 256 * 1024 * 1024;",
@@ -2135,12 +1978,6 @@ RESERVED_LINEAGE_PROFILE_SPLIT_COVERAGE = {
         "--record-version",
         "VerifyingKeyRecord",
     ),
-    "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendProver.swift": (
-        "recursiveSpendLineageOneHopProofCircuitIdV1",
-        "recursiveSpendLineageAppendProofCircuitIdV1",
-        "isLineageProofCircuitId",
-        "isLineageAppendOutputCircuitId",
-    ),
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt": (
         "RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1",
         "RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1",
@@ -2250,12 +2087,12 @@ ACTIVE_KAGEMUSHA_TODO_SCAN_PATHS = (
     "crates/connect_norito_bridge/src/lib.rs",
     "crates/iroha_js_host/src/lib.rs",
     "integration_tests/tests/zk_confidential_localnet.rs",
-    "crates/iroha_torii/src/offline_v2_issuer.rs",
+    "crates/iroha_torii/src/offline_commands.rs",
     "crates/iroha_torii/src/openapi.rs",
     "crates/iroha_torii/src/zk_prover.rs",
-    "crates/iroha_torii/tests/offline_kagemusha_only_smoke.rs",
-    "crates/iroha_torii/tests/offline_v2_kagemusha_redeem_smoke.rs",
-    "crates/iroha_torii/tests/offline_v2_kagemusha_topup_smoke.rs",
+    "crates/iroha_torii/tests/offline_operation_contract.rs",
+    "crates/iroha_torii/tests/offline_redeem_contract.rs",
+    "crates/iroha_torii/tests/offline_top_up_contract.rs",
     "ci/check_kagemusha_production_readiness.sh",
     "ci/check_kagemusha_recursive_spend_jvm_sdk.sh",
     "ci/check_kagemusha_recursive_spend_js_sdk.sh",
@@ -2286,27 +2123,17 @@ ACTIVE_KAGEMUSHA_TODO_SCAN_PATHS = (
     "csharp/src/Hyperledger.Iroha.Sdk/Offline/OfflineNoteWalletNote.cs",
     "csharp/src/Hyperledger.Iroha.Sdk/Transactions/KagemushaInstructionArchiveInstruction.cs",
     "csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs",
+    "csharp/tests/Hyperledger.Iroha.Sdk.Tests/OfflineToriiApiTests.cs",
     "csharp/tests/Hyperledger.Iroha.Sdk.Tests/OfflineNoteWalletNoteTests.cs",
     "IrohaSwift/README.md",
-    "IrohaSwift/Sources/IrohaSwift/KagemushaCompactPaymentTokenProver.swift",
-    "IrohaSwift/Sources/IrohaSwift/KagemushaInstructionTransactionEncoder.swift",
-    "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveAggregationProofBundleProver.swift",
-    "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveCompactPaymentTokenProver.swift",
-    "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendProver.swift",
-    "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendRequestCodecs.swift",
     "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendV2.swift",
     "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendV2Codecs.swift",
     "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendV2Native.swift",
     "IrohaSwift/Sources/IrohaSwift/KagemushaScaledAmount.swift",
-    "IrohaSwift/Tests/IrohaSwiftTests/KagemushaCompactPaymentTokenProverTests.swift",
-    "IrohaSwift/Tests/IrohaSwiftTests/KagemushaInstructionTransactionEncoderTests.swift",
-    "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveAggregationProofBundleProverTests.swift",
-    "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveCompactPaymentTokenProverTests.swift",
-    "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendProverTests.swift",
-    "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendRequestCodecsTests.swift",
+    "IrohaSwift/Sources/IrohaSwift/ToriiKagemushaAPIModels.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendV2Tests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/KagemushaScaledAmountTests.swift",
-    "IrohaSwift/Tests/IrohaSwiftTests/KagemushaTopUpParityTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/ToriiKagemushaAPIModelsTests.swift",
     "java/iroha_android/README.md",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaCompactPaymentTokenProver.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaInstructionArchives.java",
@@ -2390,18 +2217,17 @@ REQUIRED_KAGEMUSHA_RUNNER_INPUT_TODO_CONTENT_SCAN_PATHS = (
 )
 ACTIVE_KAGEMUSHA_TODO_CONTENT_SCAN_PATHS = (
     *REQUIRED_KAGEMUSHA_RUNNER_INPUT_TODO_CONTENT_SCAN_PATHS,
+    "IrohaSwift/Sources/IrohaSwift/CanonicalNoritoDecoding.swift",
+    "IrohaSwift/Sources/IrohaSwift/CanonicalNoritoEncoding.swift",
     "IrohaSwift/Sources/IrohaSwift/NativeBridge.swift",
-    "IrohaSwift/Sources/IrohaSwift/OfflineNote.swift",
-    "IrohaSwift/Sources/IrohaSwift/OfflineNoteWallet.swift",
+    "IrohaSwift/Sources/IrohaSwift/OfflineDeviceAttestation.swift",
     "IrohaSwift/Sources/IrohaSwift/PrivacyConfidentialWitness.swift",
+    "IrohaSwift/Sources/IrohaSwift/SumeragiV2Wire.swift",
     "IrohaSwift/Sources/IrohaSwift/ToriiClient.swift",
-    "IrohaSwift/Sources/IrohaSwift/ToriiOfflineCashAPIModels.swift",
     "IrohaSwift/Sources/IrohaSwift/TransactionEncoder.swift",
     "IrohaSwift/Sources/IrohaSwift/TxBuilder.swift",
     "IrohaSwift/Sources/IrohaSwift/VerifyingKeyBackendTag.swift",
     "IrohaSwift/Sources/IrohaSwift/ZkAssetMerklePath.swift",
-    "IrohaSwift/Tests/IrohaSwiftTests/OfflineCashLifecycleTests.swift",
-    "IrohaSwift/Tests/IrohaSwiftTests/ToriiOfflineCashAPIModelsTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/VerifyingKeyBackendTagTests.swift",
     "crates/iroha_cli/src/main_shared.rs",
@@ -2575,10 +2401,10 @@ PAYLOAD_BENCH_SOURCE_COVERAGE = {
         '"reserved-lineage recursive Kagemusha append transition profile grew at hop {}"',
     ),
 }
-TORII_OFFLINE_V2_KAGEMUSHA_REDEEM_COVERAGE = {
+TORII_KAGEMUSHA_REDEEM_COVERAGE = {
     "crates/iroha_torii/Cargo.toml": (
-        'name = "offline_v2_kagemusha_redeem_smoke"',
-        'path = "tests/offline_v2_kagemusha_redeem_smoke.rs"',
+        'name = "torii_nexus_sorafs"',
+        'path = "tests/grouped/nexus_sorafs.rs"',
     ),
     "crates/iroha_torii_shared/src/route_catalog.rs": (
         'pub const REDEEM_PATH: &str = "/v1/offline/redeem";',
@@ -2597,12 +2423,12 @@ TORII_OFFLINE_V2_KAGEMUSHA_REDEEM_COVERAGE = {
         "async fn enforce_offline_command_prebody_admission(",
         'Some("v1/offline/redeem")',
         "if let Err(error) = check_access(&app, &headers, remote, route_hint).await {",
-        "offline_v2_issuer::validate_command_headers_before_body(&headers)",
-        "offline_v2_issuer::handle_redeem(app, &headers, request).await",
+        "offline_commands::validate_command_headers_before_body(&headers)",
+        "offline_commands::handle_redeem(app, &headers, request).await",
         "&route_catalog::offline::REDEEM,",
         "catalog_post(handler_offline_redeem)",
     ),
-    "crates/iroha_torii/src/offline_v2_issuer.rs": (
+    "crates/iroha_torii/src/offline_commands.rs": (
         "pub(crate) async fn handle_redeem(",
         "redeem_request: OfflineRedeemRequest,",
         "redeem_request.validate_public_binding()",
@@ -2623,25 +2449,22 @@ TORII_OFFLINE_V2_KAGEMUSHA_REDEEM_COVERAGE = {
     ),
     "crates/iroha_torii/src/openapi.rs": (
         '"/v1/offline/redeem",',
-        '"Submit one directly encoded OfflineRedeemRequest.',
+        '"Submit one typed Kagemusha OfflineRedeemRequest.',
         '"#/components/schemas/OfflineRedeemRequest",',
         "OFFLINE_REDEEM_REQUEST_SCHEMA_NAME",
-        'assert!(redeem_description.contains("directly encoded OfflineRedeemRequest"));',
-        'assert!(redeem_description.contains("whole-payload base64 wrappers are rejected"));',
-        'assert!(!properties.contains_key("redeem_request_norito_base64"));',
+        'assert!(redeem_description.contains("typed Kagemusha OfflineRedeemRequest"));',
+        '"typed request JSON must reject unknown fields"',
     ),
     "docs/portal/static/openapi/torii.json": (
         '"/v1/offline/redeem": {',
-        "Submit one directly encoded OfflineRedeemRequest.",
-        "application/x-norito contains the canonical typed Norito value",
-        "whole-payload base64 wrappers are rejected",
+        "Submit one typed Kagemusha OfflineRedeemRequest.",
+        "application/x-norito contains the canonical Norito value",
         '"$ref": "#/components/schemas/OfflineRedeemRequest"',
     ),
     "docs/portal/static/openapi/versions/current/torii.json": (
         '"/v1/offline/redeem": {',
-        "Submit one directly encoded OfflineRedeemRequest.",
-        "application/x-norito contains the canonical typed Norito value",
-        "whole-payload base64 wrappers are rejected",
+        "Submit one typed Kagemusha OfflineRedeemRequest.",
+        "application/x-norito contains the canonical Norito value",
         '"$ref": "#/components/schemas/OfflineRedeemRequest"',
     ),
     "docs/source/offline_kagemusha.md": (
@@ -2649,13 +2472,12 @@ TORII_OFFLINE_V2_KAGEMUSHA_REDEEM_COVERAGE = {
         "The request body is the direct",
         "typed `OfflineRedeemRequest`",
         "`iroha.torii.v1.offline.redeem.request` for `application/x-norito`",
-        "Whole-payload base64 wrappers, compact-token",
-        "second structured-note parser are not part of the first-release contract",
+        "validates the chain, asset, exact scaled amount, current note, proof, optional",
     ),
     "crates/iroha_torii/tests/grouped/nexus_sorafs.rs": (
-        "mod offline_v2_kagemusha_redeem_smoke;",
+        "mod offline_redeem_contract;",
     ),
-    "crates/iroha_torii/tests/offline_v2_kagemusha_redeem_smoke.rs": (
+    "crates/iroha_torii/tests/offline_redeem_contract.rs": (
         "redeem_is_a_typed_async_command_on_the_final_route",
         'TORII_SOURCE.contains("&route_catalog::offline::REDEEM")',
         'TORII_SOURCE.contains("catalog_post(handler_offline_redeem)")',
@@ -2667,10 +2489,6 @@ TORII_OFFLINE_V2_KAGEMUSHA_REDEEM_COVERAGE = {
         'issuer.contains("require_idempotency_key")',
         'issuer.contains("StatusCode::ACCEPTED")',
         'issuer.contains("header::LOCATION")',
-        "redeem_has_no_wrapper_or_compatibility_payload",
-        "whole-payload wrapper must be absent",
-        "retired_redeem_routes_are_not_mounted",
-        '"/v1/offline/v2/notes/redeem"',
     ),
 }
 OFFLINE_V2_VECTOR_ATTESTATION_PROFILE_COVERAGE = {
@@ -2832,7 +2650,7 @@ WORKFLOW_REQUIRED_PATHS = (
     *PAYLOAD_BENCH_REQUIRED_PATHS,
     *DOC_PATHS,
     *VERIFY_RESULT_FAIL_CLOSED_COVERAGE.keys(),
-    *TORII_OFFLINE_V2_KAGEMUSHA_REDEEM_COVERAGE.keys(),
+    *TORII_KAGEMUSHA_REDEEM_COVERAGE.keys(),
     *OFFLINE_V2_VECTOR_ATTESTATION_PROFILE_COVERAGE.keys(),
     *OFFLINE_VECTOR_ATTESTATION_PROFILE_COVERAGE.keys(),
     *READINESS_SECTION_CONSISTENCY_COVERAGE.keys(),
@@ -3074,15 +2892,15 @@ POLICY_NEGATIVE_CONTROL_COMMANDS = (
     ),
     (
         "typed first-release Torii offline redeem ingress negative control",
-        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-torii-offline-v2-kagemusha-redeem",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-torii-kagemusha-redeem",
     ),
     (
         "typed first-release Torii offline redeem OpenAPI negative control",
-        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-torii-offline-v2-kagemusha-openapi",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-torii-kagemusha-openapi",
     ),
     (
         "typed first-release Torii offline redeem smoke negative control",
-        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-torii-offline-v2-kagemusha-smoke",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-torii-kagemusha-smoke",
     ),
     (
         "active Kagemusha TODO scan negative control",
@@ -5357,23 +5175,9 @@ def extract_rust_const_str_array_body(source, name, label):
     return match.group("body")
 
 
-def check_torii_offline_v2_kagemusha_redeem_coverage():
-    issuer_relative = "crates/iroha_torii/src/offline_v2_issuer.rs"
-    issuer = read(issuer_relative).split("\n#[cfg(test)]", 1)[0]
-    for retired in (
-        "redeem_request_norito_base64",
-        "compact_payment_token_norito_base64",
-        "projection_verifier_record_norito_base64",
-        "KagemushaRecursiveSpendRedeemRequestV1",
-        "ParsedOfflineRequest",
-    ):
-        if retired in issuer:
-            fail(
-                f"{issuer_relative} contains retired offline redemption wrapper/parser marker: "
-                + retired
-            )
+def check_torii_kagemusha_redeem_coverage():
     require_needles(
-        TORII_OFFLINE_V2_KAGEMUSHA_REDEEM_COVERAGE,
+        TORII_KAGEMUSHA_REDEEM_COVERAGE,
         "is missing typed first-release Torii offline redeem ingress coverage",
     )
 
@@ -6106,13 +5910,18 @@ def check_first_release_v3_contract():
     kotlin = read(FIRST_RELEASE_KOTLIN_PROVER)
 
     if re.search(
-        rf"KAGEMUSHA_RECURSIVE_SPEND_MODE_V2\s*:\s*&str\s*=\s*\"{re.escape(FIRST_RELEASE_SELECTOR)}\"\s*;",
+        rf"KAGEMUSHA_RECURSIVE_SPEND_PRODUCT_MODE_V1\s*:\s*&str\s*=\s*\"{re.escape(FIRST_RELEASE_SELECTOR)}\"\s*;",
         model,
     ) is None:
         fail(
-            f"{model_relative} must expose only the {FIRST_RELEASE_SELECTOR} first-release selector"
+            f"{model_relative} must expose only the {FIRST_RELEASE_SELECTOR} public selector"
         )
-    if "Some(KAGEMUSHA_RECURSIVE_SPEND_MODE_V2)" not in model:
+    if re.search(
+        rf"KAGEMUSHA_RECURSIVE_SPEND_MODE_V2\s*:\s*&str\s*=\s*\"{re.escape(FIRST_RELEASE_ARTIFACT_MODE)}\"\s*;",
+        model,
+    ) is None:
+        fail(f"{model_relative} must preserve the {FIRST_RELEASE_ARTIFACT_MODE} internal artifact mode")
+    if "Some(KAGEMUSHA_RECURSIVE_SPEND_PRODUCT_MODE_V1)" not in model:
         fail(f"{model_relative} first-release selector must fail closed when the backend is unavailable")
     if re.search(
         rf"KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V3\s*:\s*&str\s*=\s*\"{re.escape(FIRST_RELEASE_MANIFEST_SCHEMA)}\"\s*;",
@@ -6179,6 +5988,8 @@ def check_first_release_v3_contract():
             fail(f"{relative} must pin {FIRST_RELEASE_MANIFEST_SCHEMA}")
         if FIRST_RELEASE_SELECTOR not in source:
             fail(f"{relative} must expose {FIRST_RELEASE_SELECTOR}")
+        if FIRST_RELEASE_ARTIFACT_MODE not in source:
+            fail(f"{relative} must preserve {FIRST_RELEASE_ARTIFACT_MODE} for the internal V3 artifact contract")
         if re.search(
             rf"REQUIRED_NATIVE_BRIDGE_ABI_VERSION(?:\s*:\s*Int)?\s*=\s*{FIRST_RELEASE_BRIDGE_ABI}\b",
             source,
@@ -6236,7 +6047,8 @@ def check_first_release_v3_contract():
         "isExactBridgeAbi(17)",
         "isExactBridgeAbi(19)",
         "Mode.values().length == 1",
-        '"recursive_spend_v2".equals(KagemushaRecursiveSpendProver.MODE)',
+        '"recursive_spend_v1".equals(KagemushaRecursiveSpendProver.MODE)',
+        '"recursive_spend_v2".equals(KagemushaRecursiveSpendProver.PASTA_CYCLE_V3_MODE)',
         "malformedArtifactInputsFailBeforeNativeDispatch",
         "MAX_MANIFEST_BYTES + 1",
         "new byte[31]",
@@ -6251,7 +6063,8 @@ def check_first_release_v3_contract():
         "isExactBridgeAbi(17)",
         "isExactBridgeAbi(19)",
         "Mode.values()",
-        'assertEquals("recursive_spend_v2", KagemushaRecursiveSpendProver.MODE)',
+        'assertEquals("recursive_spend_v1", KagemushaRecursiveSpendProver.MODE)',
+        'assertEquals("recursive_spend_v2", KagemushaRecursiveSpendProver.PASTA_CYCLE_V3_MODE)',
         "malformedArtifactInputsFailBeforeNativeDispatch",
         "MAX_MANIFEST_BYTES + 1",
         "ByteArray(31)",
@@ -6266,6 +6079,7 @@ def check_first_release_v3_contract():
 
 def check_first_release_v3_docs():
     required = (
+        "`recursive_spend_v1`",
         "`recursive_spend_v2`",
         "ABI 18",
         "`kagemusha.offline.recursive_spend.artifact_manifest.v3`",
@@ -6275,6 +6089,40 @@ def check_first_release_v3_docs():
         for needle in required:
             if needle not in normalized:
                 fail(f"{relative} is missing the first-release ABI-18/V3 contract: {needle}")
+        selector_sentence = (
+            "The sole first-release product selector is `recursive_spend_v1`"
+            if relative == "docs/source/offline_kagemusha.md"
+            else "The only public product selector is `recursive_spend_v1`"
+        )
+        if selector_sentence not in normalized:
+            fail(
+                f"{relative} is missing the first-release ABI-18/V3 contract: "
+                f"{selector_sentence}"
+            )
+
+
+def check_first_release_archive_fields_required():
+    """Reject compatibility defaults in every archive carried by recursive_spend_v2."""
+
+    model_relative = "crates/iroha_data_model/src/offline/mod.rs"
+    model = read(model_relative)
+    for struct_name in (
+        "KagemushaRecursiveAggregationProofPublicInputs",
+        "KagemushaRecursiveSpendAccumulatorV1",
+        "KagemushaRecursiveSpendTransitionProfileV1",
+        "KagemushaRecursiveSpendLineageAppendBoundaryV1",
+    ):
+        match = re.search(
+            rf"pub struct {struct_name} \{{(?P<body>[\s\S]*?)\n    \}}",
+            model,
+        )
+        if match is None:
+            fail(f"{model_relative} is missing {struct_name}")
+        if "#[norito(default)]" in match.group("body"):
+            fail(
+                f"{struct_name} first-release recursive spend archive fields must not use "
+                "#[norito(default)]"
+            )
 
 
 def run_checks():
@@ -6303,11 +6151,12 @@ def run_checks():
     check_core_offline_note_v2_retired_ios_app_attest_profile()
     check_first_release_v3_contract()
     check_first_release_v3_docs()
+    check_first_release_archive_fields_required()
     check_current_roadmap_profile_is_fresh()
     check_current_roadmap_semantic_init_is_fresh()
     check_verify_result_fail_closed_coverage()
     check_payload_benchmark_source_coverage()
-    check_torii_offline_v2_kagemusha_redeem_coverage()
+    check_torii_kagemusha_redeem_coverage()
     check_offline_v2_vector_attestation_profile_coverage()
     check_offline_vector_attestation_profile_coverage()
     check_readiness_section_consistency_coverage()
@@ -6362,11 +6211,20 @@ if mode == "--negative-control-first-release-v3-contract":
             (
                 "crates/iroha_data_model/src/offline/mod.rs",
                 lambda source: source.replace(
-                    'KAGEMUSHA_RECURSIVE_SPEND_MODE_V2: &str = "recursive_spend_v2";',
-                    'KAGEMUSHA_RECURSIVE_SPEND_MODE_V2: &str = "recursive_spend_v1";',
+                    'KAGEMUSHA_RECURSIVE_SPEND_PRODUCT_MODE_V1: &str = "recursive_spend_v1";',
+                    'KAGEMUSHA_RECURSIVE_SPEND_PRODUCT_MODE_V1: &str = "unsupported_mode";',
                     1,
                 ),
-                "must expose only the recursive_spend_v2 first-release selector",
+                "must expose only the recursive_spend_v1 public selector",
+            ),
+            (
+                "crates/iroha_data_model/src/offline/mod.rs",
+                lambda source: source.replace(
+                    'KAGEMUSHA_RECURSIVE_SPEND_MODE_V2: &str = "recursive_spend_v2";',
+                    'KAGEMUSHA_RECURSIVE_SPEND_MODE_V2: &str = "unsupported_mode";',
+                    1,
+                ),
+                "must preserve the recursive_spend_v2 internal artifact mode",
             ),
             (
                 "crates/iroha_data_model/src/offline/mod.rs",
@@ -6421,10 +6279,10 @@ if mode == "--negative-control-first-release-v3-jvm-tests":
             (
                 FIRST_RELEASE_JAVA_TEST,
                 lambda source: source.replace(
-                    "exactAbiAndSingleModeAreFailClosed",
-                    "exactAbiAndSingleModeMayDrift",
+                    "exposesStableModesAndCircuitIds",
+                    "exposesDriftedModesAndCircuitIds",
                 ),
-                "exactAbiAndSingleModeAreFailClosed",
+                "exposesStableModesAndCircuitIds",
             ),
             (
                 FIRST_RELEASE_JAVA_TEST,
@@ -6437,18 +6295,18 @@ if mode == "--negative-control-first-release-v3-jvm-tests":
             (
                 FIRST_RELEASE_KOTLIN_TEST,
                 lambda source: source.replace(
-                    "malformed artifact inputs fail before native dispatch",
-                    "malformed artifact inputs may reach native dispatch",
+                    "malformedArtifactInputsFailBeforeNativeDispatch",
+                    "malformedArtifactInputsMayReachNativeDispatch",
                 ),
-                "malformed artifact inputs fail before native dispatch",
+                "malformedArtifactInputsFailBeforeNativeDispatch",
             ),
             (
                 FIRST_RELEASE_KOTLIN_TEST,
                 lambda source: source.replace(
-                    "public surface omits retired recursive APIs",
-                    "public surface may expose retired recursive APIs",
+                    "publicSurfaceOmitsRetiredRecursiveApis",
+                    "publicSurfaceMayExposeRetiredRecursiveApis",
                 ),
-                "public surface omits retired recursive APIs",
+                "publicSurfaceOmitsRetiredRecursiveApis",
             ),
         ),
         "ABI-18/V3 first-release JVM adversarial coverage",
@@ -6468,8 +6326,8 @@ if mode == "--negative-control-first-release-v3-docs":
             ),
             (
                 "roadmap.md",
-                lambda source: source.replace("`recursive_spend_v2`", "`recursive_spend_v1`"),
-                "`recursive_spend_v2`",
+                lambda source: source.replace("`recursive_spend_v1`", "`unsupported_mode`", 1),
+                "`recursive_spend_v1`",
             ),
         ),
         "ABI-18/V3 first-release documentation",
@@ -6491,12 +6349,6 @@ if mode == "--negative-control":
             "[undefined, 1]",
         ),
         (
-            "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendProverTests.swift",
-            "KagemushaRecursiveSpendProver.recursiveAggregationProofCircuitIdV1, UInt32.max",
-            "KagemushaRecursiveSpendProver.recursiveAggregationProofCircuitIdV1, UInt32.min",
-            "KagemushaRecursiveSpendProver.recursiveAggregationProofCircuitIdV1, UInt32.max",
-        ),
-        (
             "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProverTest.kt",
             "KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1 to Int.MAX_VALUE",
             "KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1 to Int.MIN_VALUE",
@@ -6507,12 +6359,6 @@ if mode == "--negative-control":
             "KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1, Integer.MAX_VALUE",
             "KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1, Integer.MIN_VALUE",
             "KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1, Integer.MAX_VALUE",
-        ),
-        (
-            "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendProver.swift",
-            "public struct LineageKeyArtifacts: Equatable {",
-            "public struct RecursiveLineageKeyArtifacts: Equatable {",
-            "public struct LineageKeyArtifacts: Equatable {",
         ),
         (
             "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt",
@@ -6690,18 +6536,6 @@ if mode == "--negative-control-js-package-dist-hop-edges":
 
 if mode == "--negative-control-sdk-append-cap-binding":
     cases = (
-        (
-            "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendProver.swift",
-            "public static let compactTokenMaxHops: UInt32 = 64",
-            "public static let compactTokenMaxHops: UInt32 = 65",
-            "public static let compactTokenMaxHops: UInt32 = 64",
-        ),
-        (
-            "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendProver.swift",
-            "return previousHopCount < compactTokenMaxHops",
-            "return previousHopCount < 64",
-            "return previousHopCount < compactTokenMaxHops",
-        ),
         (
             "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt",
             "const val COMPACT_TOKEN_MAX_HOPS: Int = 64",
@@ -7178,34 +7012,6 @@ if mode == "--negative-control-shared-abi7-sdk-manifest-coverage":
         (
             "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
             "archive.byte_len, archiveBytes.length",
-        ),
-        (
-            "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendProverTests.swift",
-            "sharedRecursiveSpendAbi7Manifest",
-        ),
-        (
-            "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendProverTests.swift",
-            "testSharedRecursiveSpendAbi7ManifestMatchesArchiveFixture",
-        ),
-        (
-            "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendProverTests.swift",
-            "Set(manifest.keys)",
-        ),
-        (
-            "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendProverTests.swift",
-            "Set(archive.keys)",
-        ),
-        (
-            "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendProverTests.swift",
-            "archives.count, expectedOperations.count",
-        ),
-        (
-            "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendProverTests.swift",
-            "SHA256.hash(data: archiveBytes)",
-        ),
-        (
-            "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendProverTests.swift",
-            "archiveBytes.count",
         ),
         (
             "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendRequestCodecsTest.kt",
@@ -8767,40 +8573,40 @@ if mode == "--negative-control-offline-vector-platform-aliases":
         print(detected_message)
     raise SystemExit(0)
 
-if mode == "--negative-control-torii-offline-v2-kagemusha-redeem":
+if mode == "--negative-control-torii-kagemusha-redeem":
     cases = (
         (
             "crates/iroha_torii_shared/src/route_catalog.rs",
             'pub const REDEEM_PATH: &str = "/v1/offline/redeem";',
-            'pub const REDEEM_PATH: &str = "/v1/offline/v2/notes/redeem";',
+            'pub const REDEEM_PATH: &str = "/v1/offline/alternate";',
         ),
         (
             "crates/iroha_torii_shared/src/offline_api.rs",
             "KagemushaRecursiveSpendRedeemRequestV2 as OfflineRedeemRequest",
-            "KagemushaRecursiveSpendRedeemRequestV2 as WrappedOfflineRedeemRequest",
+            "KagemushaRecursiveSpendRedeemRequestV2 as IncorrectOfflineRedeemRequest",
         ),
         (
             "crates/iroha_torii/src/lib.rs",
             "iroha_torii_shared::offline_api::OfflineRedeemRequest,",
-            "iroha_torii_shared::offline_api::WrappedOfflineRedeemRequest,",
+            "iroha_torii_shared::offline_api::IncorrectOfflineRedeemRequest,",
         ),
         (
             "crates/iroha_torii/src/lib.rs",
             'Some("v1/offline/redeem")',
-            'Some("v1/offline/v2/notes/redeem")',
+            'Some("v1/offline/alternate")',
         ),
         (
             "crates/iroha_torii/src/lib.rs",
             "&route_catalog::offline::REDEEM,",
-            "&route_catalog::offline::RETIRED_REDEEM,",
+            "&route_catalog::offline::BROKEN_REDEEM,",
         ),
         (
-            "crates/iroha_torii/src/offline_v2_issuer.rs",
+            "crates/iroha_torii/src/offline_commands.rs",
             "validate_kagemusha_v2_redeem_snapshot(&app, &redeem_request)?;",
             "// skipped typed redeem snapshot validation",
         ),
         (
-            "crates/iroha_torii/src/offline_v2_issuer.rs",
+            "crates/iroha_torii/src/offline_commands.rs",
             "fn validate_kagemusha_v2_redeem_snapshot(\n"
             "    app: &SharedAppState,\n"
             "    request: &OfflineRedeemRequest,\n"
@@ -8857,22 +8663,17 @@ if mode == "--negative-control-torii-offline-v2-kagemusha-redeem":
     print(first_message.splitlines()[0])
     raise SystemExit(0)
 
-if mode == "--negative-control-torii-offline-v2-kagemusha-openapi":
+if mode == "--negative-control-torii-kagemusha-openapi":
     cases = (
         (
             "crates/iroha_torii/src/openapi.rs",
-            'assert!(redeem_description.contains("directly encoded OfflineRedeemRequest"));',
+            'assert!(redeem_description.contains("typed Kagemusha OfflineRedeemRequest"));',
             'assert!(redeem_description.contains("encoded redeem payload"));',
-        ),
-        (
-            "crates/iroha_torii/src/openapi.rs",
-            'assert!(redeem_description.contains("whole-payload base64 wrappers are rejected"));',
-            'assert!(redeem_description.contains("whole-payload base64 wrappers are accepted"));',
         ),
         (
             "docs/portal/static/openapi/torii.json",
             '"/v1/offline/redeem": {',
-            '"/v1/offline/v2/notes/redeem": {',
+            '"/v1/offline/alternate": {',
         ),
         (
             "docs/portal/static/openapi/torii.json",
@@ -8882,7 +8683,7 @@ if mode == "--negative-control-torii-offline-v2-kagemusha-openapi":
         (
             "docs/portal/static/openapi/versions/current/torii.json",
             '"/v1/offline/redeem": {',
-            '"/v1/offline/v2/notes/redeem": {',
+            '"/v1/offline/alternate": {',
         ),
     )
     first_message = None
@@ -8929,24 +8730,16 @@ if mode == "--negative-control-torii-offline-v2-kagemusha-openapi":
     print(first_message.splitlines()[0])
     raise SystemExit(0)
 
-if mode == "--negative-control-torii-offline-v2-kagemusha-smoke":
-    target = "crates/iroha_torii/tests/offline_v2_kagemusha_redeem_smoke.rs"
+if mode == "--negative-control-torii-kagemusha-smoke":
+    target = "crates/iroha_torii/tests/offline_redeem_contract.rs"
     cases = (
         (
             "redeem_is_a_typed_async_command_on_the_final_route",
-            "redeem_accepts_a_compatibility_wrapper_on_a_retired_route",
+            "redeem_contract_is_broken",
         ),
         (
             'TORII_SOURCE.contains("NoritoJson(request)")',
             'TORII_SOURCE.contains("Json(request)")',
-        ),
-        (
-            "redeem_has_no_wrapper_or_compatibility_payload",
-            "redeem_accepts_wrapper_or_compatibility_payload",
-        ),
-        (
-            "retired_redeem_routes_are_not_mounted",
-            "retired_redeem_routes_are_mounted",
         ),
     )
     first_message = None
@@ -9020,7 +8813,7 @@ if mode == "--negative-control-active-kagemusha-todo":
             "JS host active marker",
         ),
         (
-            "crates/iroha_torii/src/offline_v2_issuer.rs",
+            "crates/iroha_torii/src/offline_commands.rs",
             "use std::{",
             f"// {todo_prefix} bypass Kagemusha Torii offline-v2 issuer review\n"
             "use std::{",
@@ -9090,14 +8883,14 @@ if mode == "--negative-control-active-kagemusha-todo":
             "staged resource guard script active marker",
         ),
         (
-            "crates/iroha_torii/tests/offline_kagemusha_only_smoke.rs",
+            "crates/iroha_torii/tests/offline_operation_contract.rs",
             "//! Wire-contract guards for the first-release offline operation resource.",
             f"// {todo_prefix} bypass Kagemusha-only offline smoke\n"
             "//! Wire-contract guards for the first-release offline operation resource.",
             "Torii Kagemusha-only smoke active marker",
         ),
         (
-            "crates/iroha_torii/tests/offline_v2_kagemusha_redeem_smoke.rs",
+            "crates/iroha_torii/tests/offline_redeem_contract.rs",
             "//! Source-level contract guards for the first-release offline redeem command.",
             f"// {todo_prefix} bypass offline-v2 Kagemusha redeem smoke\n"
             "//! Source-level contract guards for the first-release offline redeem command.",
@@ -9203,7 +8996,7 @@ if mode == "--negative-control-active-kagemusha-todo":
     raise SystemExit(0)
 
 if mode == "--negative-control-active-kagemusha-todo-scan-inventory":
-    target = "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendProverTests.swift"
+    target = "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendV2Tests.swift"
     ACTIVE_KAGEMUSHA_TODO_SCAN_PATHS = tuple(
         path for path in ACTIVE_KAGEMUSHA_TODO_SCAN_PATHS if path != target
     )

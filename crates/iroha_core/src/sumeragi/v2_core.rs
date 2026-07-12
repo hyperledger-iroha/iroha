@@ -18,6 +18,10 @@ mod refinement;
 mod reducer;
 #[allow(dead_code)]
 mod types;
+// The physical WAL framing/append API is also the public surface of the
+// standalone `iroha_sumeragi_core` verification crate. The embedded adapter
+// currently consumes only the logical replay subset.
+#[allow(dead_code)]
 mod wal;
 
 pub(crate) use quorum::{Quorum, QuorumError};

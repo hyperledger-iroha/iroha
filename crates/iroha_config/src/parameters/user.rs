@@ -3962,6 +3962,10 @@ impl Zk {
 /// These are consensus execution limits. They deliberately have no environment-variable aliases:
 /// every validator must obtain the same values from its configuration file.
 #[derive(Debug, ReadConfig, Clone, Copy)]
+#[expect(
+    clippy::struct_field_names,
+    reason = "the max_* names are stable, explicit consensus configuration keys"
+)]
 pub struct Sccp {
     /// Maximum payload-bearing outbound messages awaiting destination proof acceptance.
     #[config(default = "defaults::zk::sccp::MAX_PENDING_OUTBOUND_MESSAGES")]
@@ -4079,7 +4083,7 @@ impl Sccp {
             );
         }
 
-        fn require_order<T: Ord + Debug>(
+        fn require_order<T: Ord + Debug + Copy>(
             transaction: T,
             block: T,
             transaction_name: &str,
@@ -9044,7 +9048,7 @@ impl SoranetHandshakePow {
             revocation_store_path: revocation_store_path.to_string_lossy().into_owned().into(),
             signed_ticket_public_key: signed_ticket_public_key_hex
                 .map(|value| value.into_value().into()),
-            puzzle: puzzle.parse(),
+            puzzle: Some(puzzle.parse()),
         }
     }
 }
@@ -9073,7 +9077,7 @@ impl SoranetHandshakePuzzle {
         1
     }
 
-    fn parse(self) -> Option<actual::SoranetPuzzle> {
+    fn parse(self) -> actual::SoranetPuzzle {
         let Self {
             memory_kib,
             time_cost,
@@ -9082,11 +9086,11 @@ impl SoranetHandshakePuzzle {
         let memory = NonZeroU32::new(memory_kib.max(4_096)).unwrap();
         let time_cost = NonZeroU32::new(time_cost.max(1)).unwrap();
         let lanes = NonZeroU32::new(lanes.clamp(1, 16)).unwrap();
-        Some(actual::SoranetPuzzle {
+        actual::SoranetPuzzle {
             memory_kib: memory,
             time_cost,
             lanes,
-        })
+        }
     }
 }
 

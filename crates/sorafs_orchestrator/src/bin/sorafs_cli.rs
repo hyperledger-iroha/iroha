@@ -795,7 +795,6 @@ struct DeployPackArtifacts {
     manifest_digest_hex: String,
     root_cid_hex: String,
     root_cid_base32: String,
-    chunk_digest_sha3: [u8; 32],
     payload_bytes: Vec<u8>,
     storage_files: Option<Vec<StorageFileEntryOwned>>,
     gateway_expectations: Vec<GatewayExpectation>,
@@ -1443,7 +1442,6 @@ fn build_deploy_artifacts(
         manifest_digest_hex: hex_encode(manifest_digest.as_bytes()),
         root_cid_hex,
         root_cid_base32,
-        chunk_digest_sha3,
         payload_bytes,
         storage_files,
         gateway_expectations,
@@ -2939,7 +2937,9 @@ fn render_summary(
     );
     obj.insert(
         "chunk_digest_sha3_256_hex".into(),
-        Value::from(hex_encode(chunk_digest_sha3_from_chunks(&plan.chunks))),
+        Value::from(hex_encode(chunk_digest_sha3_from_specs(
+            &plan.chunk_fetch_specs(),
+        ))),
     );
     obj.insert(
         "car_cid_hex".into(),
@@ -16487,8 +16487,6 @@ fn submit_manifest_via_transaction_endpoint(
         prelude::{InstructionBox, Json, TransactionBuilder},
         sorafs::pin_registry::{ManifestAliasBinding, ManifestDigest},
     };
-    use norito::codec::Encode as _;
-
     let chain_id = resolve_chain_id_from_sorafs_registry(request.client, request.torii_base_url)?;
     let manifest_payload = manifest
         .encode()
@@ -23036,8 +23034,6 @@ mod tests {
             prelude::{InstructionBox, TransactionBuilder},
             sorafs::pin_registry::ManifestDigest,
         };
-        use norito::codec::Encode as _;
-
         let manifest = sample_manifest();
         let instruction = iroha_data_model::isi::sorafs::RegisterPinManifest::new(
             manifest.encode().expect("canonical manifest payload"),

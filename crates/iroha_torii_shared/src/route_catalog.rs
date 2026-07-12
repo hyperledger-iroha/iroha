@@ -74,9 +74,9 @@ pub enum AuthenticationPolicy {
     OperatorSignature,
     /// The operator credential exchange authenticates inside the handler.
     ///
-    /// WebAuthn registration and login cannot require an already-established
+    /// `WebAuthn` registration and login cannot require an already-established
     /// operator signature: registration accepts the configured bootstrap
-    /// credential until enrollment, while login verifies a WebAuthn challenge.
+    /// credential until enrollment, while login verifies a `WebAuthn` challenge.
     /// The handlers still enforce mTLS, rate limits, lockout, bootstrap/session
     /// policy, and challenge verification as appropriate.
     OperatorCredentialExchange,
@@ -180,18 +180,18 @@ impl RouteProjections {
 
     /// Do not expose the route through a generated projection.
     pub const NONE: Self = Self(0);
-    /// Expose the route in OpenAPI only.
+    /// Expose the route in `OpenAPI` only.
     pub const OPENAPI: Self = Self(Self::OPENAPI_BIT);
     /// Expose the route to generated SDKs only.
     pub const SDK: Self = Self(Self::SDK_BIT);
     /// Expose the route as an explicitly allowlisted MCP operation only.
     pub const MCP: Self = Self(Self::MCP_BIT);
-    /// Expose the route in OpenAPI and generated SDKs.
+    /// Expose the route in `OpenAPI` and generated SDKs.
     pub const OPENAPI_AND_SDK: Self = Self(Self::OPENAPI_BIT | Self::SDK_BIT);
     /// Expose the route in every generated projection.
     pub const ALL: Self = Self(Self::OPENAPI_BIT | Self::SDK_BIT | Self::MCP_BIT);
 
-    /// Return whether the route belongs in the OpenAPI projection.
+    /// Return whether the route belongs in the `OpenAPI` projection.
     #[must_use]
     pub const fn openapi(self) -> bool {
         self.0 & Self::OPENAPI_BIT != 0
@@ -221,7 +221,7 @@ impl RouteProjections {
 pub enum CatalogProjection {
     /// Routes mounted by a build with the supplied features.
     Mounted,
-    /// Enabled routes explicitly included in OpenAPI.
+    /// Enabled routes explicitly included in `OpenAPI`.
     OpenApi,
     /// Canonical SDK superset, independent of one node's enabled features.
     Sdk,
@@ -230,7 +230,7 @@ pub enum CatalogProjection {
 }
 
 /// A framework-level route which is intentionally not an application
-/// operation in OpenAPI, SDK, or MCP projections.
+/// operation in `OpenAPI`, SDK, or MCP projections.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ImplicitRouteKind {
     /// Axum's GET method router also answers HEAD without invoking a distinct
@@ -493,7 +493,7 @@ impl<'a> RouteCatalog<'a> {
 
     /// Materialize one consumer projection in declaration order.
     ///
-    /// Mounted, OpenAPI, and MCP projections honor `features`. The SDK
+    /// Mounted, `OpenAPI`, and MCP projections honor `features`. The SDK
     /// projection is the canonical feature-independent superset.
     #[must_use]
     pub fn project(
@@ -607,6 +607,10 @@ pub enum CatalogValidationErrorKind {
 ///
 /// Returns every detected [`CatalogValidationError`] when any descriptor
 /// violates the catalog contract.
+#[expect(
+    clippy::too_many_lines,
+    reason = "the single-pass closed-catalog validator keeps every route invariant and error ordering explicit"
+)]
 pub fn validate_catalog(routes: &[RouteDescriptor]) -> Result<(), Vec<CatalogValidationError>> {
     let mut errors = Vec::new();
     let mut ids = BTreeSet::new();
@@ -628,25 +632,23 @@ pub fn validate_catalog(routes: &[RouteDescriptor]) -> Result<(), Vec<CatalogVal
                 kind: CatalogValidationErrorKind::DuplicateStableRouteId,
             });
         }
-        let duplicate_exact = if let Some(existing_route_id) =
-            method_paths.insert((route.method, route.path), route_id)
+        let duplicate_exact = method_paths
+            .insert((route.method, route.path), route_id)
+            .is_some_and(|existing_route_id| {
+                errors.push(CatalogValidationError {
+                    stable_route_id: route_id,
+                    kind: CatalogValidationErrorKind::DuplicateMethodAndPath { existing_route_id },
+                });
+                true
+            });
+        let shape = normalized_route_shape(route.path);
+        if let Some(existing_route_id) = method_shapes.insert((route.method, shape), route_id)
+            && !duplicate_exact
         {
             errors.push(CatalogValidationError {
                 stable_route_id: route_id,
-                kind: CatalogValidationErrorKind::DuplicateMethodAndPath { existing_route_id },
+                kind: CatalogValidationErrorKind::DuplicateMethodAndShape { existing_route_id },
             });
-            true
-        } else {
-            false
-        };
-        let shape = normalized_route_shape(route.path);
-        if let Some(existing_route_id) = method_shapes.insert((route.method, shape), route_id) {
-            if !duplicate_exact {
-                errors.push(CatalogValidationError {
-                    stable_route_id: route_id,
-                    kind: CatalogValidationErrorKind::DuplicateMethodAndShape { existing_route_id },
-                });
-            }
         }
 
         if let Err(reason) = validate_path(route) {
@@ -780,7 +782,7 @@ fn validate_path(route: &RouteDescriptor) -> Result<(), &'static str> {
     if path.contains("//") {
         return Err("path must not contain duplicate slashes");
     }
-    if path.contains(|character| matches!(character, '?' | '#' | '%')) {
+    if path.contains(['?', '#', '%']) {
         return Err("path must not contain query, fragment, or percent-encoded text");
     }
 
@@ -1066,7 +1068,7 @@ pub mod aliases {
     ];
 }
 
-/// Operator WebAuthn credential-registration and login descriptors.
+/// Operator `WebAuthn` credential-registration and login descriptors.
 pub mod operator_authentication {
     use super::{
         ApiSurface, AuthenticationPolicy, HttpMethod, Listener, RouteDescriptor, RouteProjections,
@@ -1088,22 +1090,22 @@ pub mod operator_authentication {
         .with_cors_options(true)
     }
 
-    /// Start operator WebAuthn credential registration.
+    /// Start operator `WebAuthn` credential registration.
     pub const REGISTRATION_OPTIONS: RouteDescriptor = credential_exchange(
         "operator.authentication.registration_options",
         "/v1/operator/auth/registration/options",
     );
-    /// Verify and persist an operator WebAuthn credential.
+    /// Verify and persist an operator `WebAuthn` credential.
     pub const REGISTRATION_VERIFY: RouteDescriptor = credential_exchange(
         "operator.authentication.registration_verify",
         "/v1/operator/auth/registration/verify",
     );
-    /// Start an operator WebAuthn login challenge.
+    /// Start an operator `WebAuthn` login challenge.
     pub const LOGIN_OPTIONS: RouteDescriptor = credential_exchange(
         "operator.authentication.login_options",
         "/v1/operator/auth/login/options",
     );
-    /// Verify an operator WebAuthn login challenge and issue a session.
+    /// Verify an operator `WebAuthn` login challenge and issue a session.
     pub const LOGIN_VERIFY: RouteDescriptor = credential_exchange(
         "operator.authentication.login_verify",
         "/v1/operator/auth/login/verify",
@@ -1463,7 +1465,7 @@ pub mod diagnostic {
     .with_feature_gate(FeatureGate::Feature("schema"))
     .with_projections(RouteProjections::OPENAPI)
     .with_implicit_head(true);
-    /// OpenAPI document at its media-typed filename.
+    /// `OpenAPI` document at its media-typed filename.
     pub const OPENAPI_JSON: RouteDescriptor = RouteDescriptor::new(
         "protocol.openapi_json",
         HttpMethod::Get,
@@ -1475,7 +1477,7 @@ pub mod diagnostic {
         reason: "OpenAPI document discovery convention",
     })
     .with_implicit_head(true);
-    /// OpenAPI document convenience endpoint.
+    /// `OpenAPI` document convenience endpoint.
     pub const OPENAPI: RouteDescriptor = RouteDescriptor::new(
         "protocol.openapi",
         HttpMethod::Get,
@@ -1490,7 +1492,7 @@ pub mod diagnostic {
 
     /// Schema route registered by `add_schema_routes`.
     pub const SCHEMA_ROUTES: &[RouteDescriptor] = &[SCHEMA];
-    /// OpenAPI routes registered by `add_openapi_routes`.
+    /// `OpenAPI` routes registered by `add_openapi_routes`.
     pub const OPENAPI_ROUTES: &[RouteDescriptor] = &[OPENAPI_JSON, OPENAPI];
     /// Profiling route registered by `add_profiling_routes`.
     pub const PROFILE_ROUTES: &[RouteDescriptor] = &[PROFILE];
@@ -1618,7 +1620,7 @@ pub mod pipeline {
     .with_projections(RouteProjections::OPENAPI_AND_SDK)
     .with_implicit_head(true)
     .with_cors_options(true);
-    /// Read FastPQ proofs associated with one recovery height.
+    /// Read `FastPQ` proofs associated with one recovery height.
     pub const RECOVERY_FASTPQ_PROOFS: RouteDescriptor = RouteDescriptor::new(
         "pipeline.recovery_fastpq_proofs",
         HttpMethod::Get,
@@ -2193,10 +2195,10 @@ pub mod telemetry {
     pub const DEBUG_WITNESS: RouteDescriptor =
         telemetry_operator_get("operator.debug.witness", "/v1/debug/witness")
             .with_projections(RouteProjections::NONE);
-    /// Ingest one SoraNet privacy observation.
+    /// Ingest one `SoraNet` privacy observation.
     pub const SORANET_PRIVACY_EVENT: RouteDescriptor =
         telemetry_public_post("soranet.privacy_event.ingest", "/v1/soranet/privacy/event");
-    /// Ingest one SoraNet privacy collector share.
+    /// Ingest one `SoraNet` privacy collector share.
     pub const SORANET_PRIVACY_SHARE: RouteDescriptor =
         telemetry_public_post("soranet.privacy_share.ingest", "/v1/soranet/privacy/share");
     /// List holders of one asset definition.
@@ -2314,10 +2316,10 @@ pub mod sumeragi {
     pub const VRF_EPOCH: RouteDescriptor =
         public_get("sumeragi.vrf.epoch.read", "/v1/sumeragi/vrf/epoch/{epoch}");
 
-    /// Stream NEW_VIEW receipt counts over SSE.
+    /// Stream `NEW_VIEW` receipt counts over SSE.
     pub const NEW_VIEW_SSE: RouteDescriptor =
         telemetry_sse("sumeragi.new_view.stream_sse", "/v1/sumeragi/new-view/sse");
-    /// Read the bounded NEW_VIEW receipt snapshot.
+    /// Read the bounded `NEW_VIEW` receipt snapshot.
     pub const NEW_VIEW: RouteDescriptor =
         telemetry_get("sumeragi.new_view.read", "/v1/sumeragi/new-view");
     /// Read the authoritative Sumeragi status snapshot.
@@ -2787,7 +2789,7 @@ pub mod runtime_governance {
     ];
 }
 
-/// SoraFS discovery, storage, transparency, reputation, and gateway routes.
+/// `SoraFS` discovery, storage, transparency, reputation, and gateway routes.
 pub mod sorafs {
     use super::{
         ApiSurface, AuthenticationPolicy, FeatureGate, HttpMethod, Listener, PathPolicy,
@@ -2895,13 +2897,13 @@ pub mod sorafs {
         .with_implicit_head(true)
     }
 
-    /// Read configured SoraFS publication peers.
+    /// Read configured `SoraFS` publication peers.
     pub const STORAGE_PEERS: RouteDescriptor =
         documented_get("sorafs.storage_peer.list", "/v1/sorafs/storage/peers");
-    /// List admitted SoraFS provider advertisements.
+    /// List admitted `SoraFS` provider advertisements.
     pub const PROVIDERS: RouteDescriptor =
         documented_get("sorafs.provider.list", "/v1/sorafs/providers");
-    /// Submit a SoraFS provider advertisement.
+    /// Submit a `SoraFS` provider advertisement.
     pub const PROVIDER_ADVERT: RouteDescriptor = documented_post(
         "sorafs.provider_advert.submit",
         "/v1/sorafs/providers/advert",
@@ -2916,7 +2918,7 @@ pub mod sorafs {
         "sorafs.delegated_routing.peers",
         "/routing/v1/peers/{peer_id}",
     );
-    /// Read the local SoraFS capacity state.
+    /// Read the local `SoraFS` capacity state.
     pub const CAPACITY_STATE: RouteDescriptor =
         documented_get("sorafs.capacity.read", "/v1/sorafs/capacity/state");
 
@@ -3007,7 +3009,7 @@ pub mod sorafs {
         "sorafs.transparency_token.issue",
         "/v1/sorafs/transparency/tokens/issuances",
     );
-    /// Verify a SoraFS proof token.
+    /// Verify a `SoraFS` proof token.
     pub const TRANSPARENCY_TOKEN_VERIFY: RouteDescriptor = documented_post(
         "sorafs.transparency_token.verify",
         "/v1/sorafs/transparency/tokens/verify",
@@ -3131,20 +3133,20 @@ pub mod sorafs {
         "/v1/sorafs/reputation/events/ws",
     );
 
-    /// Read the SoraFS pin registry.
+    /// Read the `SoraFS` pin registry.
     pub const PIN_REGISTRY: RouteDescriptor = documented_get("sorafs.pin.list", "/v1/sorafs/pin");
-    /// Read one SoraFS pin manifest.
+    /// Read one `SoraFS` pin manifest.
     pub const PIN_MANIFEST: RouteDescriptor =
         documented_get("sorafs.pin.read", "/v1/sorafs/pin/{digest_hex}");
-    /// Register a paid SoraFS pin manifest.
+    /// Register a paid `SoraFS` pin manifest.
     pub const PIN_REGISTER: RouteDescriptor =
         documented_post("sorafs.pin.register", "/v1/sorafs/pin/register");
-    /// List SoraFS aliases.
+    /// List `SoraFS` aliases.
     pub const ALIASES: RouteDescriptor = documented_get("sorafs.alias.list", "/v1/sorafs/aliases");
-    /// List SoraFS replication orders.
+    /// List `SoraFS` replication orders.
     pub const REPLICATION: RouteDescriptor =
         documented_get("sorafs.replication_order.list", "/v1/sorafs/replication");
-    /// Read local SoraFS storage state.
+    /// Read local `SoraFS` storage state.
     pub const STORAGE_STATE: RouteDescriptor =
         documented_get("sorafs.storage_state.read", "/v1/sorafs/storage/state");
     /// Resolve a content identifier to stored manifest metadata.
@@ -3206,58 +3208,58 @@ pub mod sorafs {
         documented_post(stable_route_id, path).with_authentication(authentication)
     }
 
-    /// Fund a provider's SoraFS deal escrow.
+    /// Fund a provider's `SoraFS` deal escrow.
     pub const DEAL_FUND_PROVIDER: RouteDescriptor = authenticated_deal_post(
         "sorafs.deal.provider_fund",
         "/v1/sorafs/deal/fund-provider",
         AuthenticationPolicy::IdentityBoundSignature,
     );
-    /// Fund a client's SoraFS deal escrow.
+    /// Fund a client's `SoraFS` deal escrow.
     pub const DEAL_FUND_CLIENT: RouteDescriptor = authenticated_deal_post(
         "sorafs.deal.client_fund",
         "/v1/sorafs/deal/fund-client",
         AuthenticationPolicy::OperatorSignature,
     );
-    /// Open a funded SoraFS deal.
+    /// Open a funded `SoraFS` deal.
     pub const DEAL_OPEN: RouteDescriptor = authenticated_deal_post(
         "sorafs.deal.open",
         "/v1/sorafs/deal/open",
         AuthenticationPolicy::OperatorSignature,
     );
-    /// Cancel a SoraFS deal.
+    /// Cancel a `SoraFS` deal.
     pub const DEAL_CANCEL: RouteDescriptor = authenticated_deal_post(
         "sorafs.deal.cancel",
         "/v1/sorafs/deal/cancel",
         AuthenticationPolicy::OperatorSignature,
     );
-    /// Submit a SoraFS deal-usage report.
+    /// Submit a `SoraFS` deal-usage report.
     pub const DEAL_USAGE: RouteDescriptor = authenticated_deal_post(
         "sorafs.deal_usage.submit",
         "/v1/sorafs/deal/usage",
         AuthenticationPolicy::IdentityBoundSignature,
     );
-    /// Submit a SoraFS deal settlement.
+    /// Submit a `SoraFS` deal settlement.
     pub const DEAL_SETTLE: RouteDescriptor = authenticated_deal_post(
         "sorafs.deal_settlement.submit",
         "/v1/sorafs/deal/settle",
         AuthenticationPolicy::OperatorSignature,
     );
 
-    /// Read the manifest selected by the request's SoraFS site binding.
+    /// Read the manifest selected by the request's `SoraFS` site binding.
     pub const SITE_MANIFEST: RouteDescriptor = protocol_get(
         "protocol.sorafs.site_manifest",
         "/.well-known/sorafs/manifest",
         RouteMatch::Exact,
         "well-known SoraFS site-manifest discovery endpoint",
     );
-    /// Read the root document for one content-addressed SoraFS site.
+    /// Read the root document for one content-addressed `SoraFS` site.
     pub const CID_ROOT: RouteDescriptor = protocol_get(
         "protocol.sorafs.cid_root",
         "/sorafs/cid/{cid}",
         RouteMatch::Exact,
         "content-addressed SoraFS gateway root",
     );
-    /// Read a path under one content-addressed SoraFS site.
+    /// Read a path under one content-addressed `SoraFS` site.
     pub const CID_PATH: RouteDescriptor = protocol_get(
         "protocol.sorafs.cid_path",
         "/sorafs/cid/{cid}/{*path}",
@@ -3886,14 +3888,14 @@ pub mod contracts_and_verification_keys {
     }
 }
 
-/// Protocol-native SoraCloud public gateway routes.
+/// Protocol-native `SoraCloud` public gateway routes.
 pub mod soracloud_gateway {
     use super::{
         ApiSurface, AuthenticationPolicy, FeatureGate, HttpMethod, Listener, PathPolicy,
         RouteDescriptor, RouteMatch,
     };
 
-    /// Resolve a SoraDNS name to the root of its active public runtime.
+    /// Resolve a `SoraDNS` name to the root of its active public runtime.
     pub const SORADNS_ROOT: RouteDescriptor = RouteDescriptor::new(
         "protocol.soracloud.soradns_root",
         HttpMethod::Any,
@@ -3906,7 +3908,7 @@ pub mod soracloud_gateway {
     .with_path_policy(PathPolicy::ProtocolException {
         reason: "public SoraDNS virtual-host gateway",
     });
-    /// Forward a path under a SoraDNS public runtime.
+    /// Forward a path under a `SoraDNS` public runtime.
     pub const SORADNS_PATH: RouteDescriptor = RouteDescriptor::new(
         "protocol.soracloud.soradns_path",
         HttpMethod::Any,
@@ -3920,7 +3922,7 @@ pub mod soracloud_gateway {
     .with_path_policy(PathPolicy::ProtocolException {
         reason: "public SoraDNS virtual-host gateway wildcard",
     });
-    /// Forward the root path for a local SoraCloud public runtime.
+    /// Forward the root path for a local `SoraCloud` public runtime.
     pub const LOCAL_ROOT: RouteDescriptor = RouteDescriptor::new(
         "protocol.soracloud.local_root",
         HttpMethod::Any,
@@ -3933,7 +3935,7 @@ pub mod soracloud_gateway {
     .with_path_policy(PathPolicy::ProtocolException {
         reason: "public SoraCloud runtime gateway",
     });
-    /// Forward a path under a local SoraCloud public runtime.
+    /// Forward a path under a local `SoraCloud` public runtime.
     pub const LOCAL_PATH: RouteDescriptor = RouteDescriptor::new(
         "protocol.soracloud.local_path",
         HttpMethod::Any,
@@ -3952,7 +3954,7 @@ pub mod soracloud_gateway {
     pub const ROUTES: &[RouteDescriptor] = &[SORADNS_ROOT, SORADNS_PATH, LOCAL_ROOT, LOCAL_PATH];
 }
 
-/// Raw content and SoraDNS directory routes.
+/// Raw content and `SoraDNS` directory routes.
 pub mod content_directory {
     use super::{
         ApiSurface, FeatureGate, HttpMethod, Listener, RouteDescriptor, RouteMatch,
@@ -3972,7 +3974,7 @@ pub mod content_directory {
     .with_route_match(RouteMatch::Wildcard)
     .with_implicit_head(true)
     .with_cors_options(true);
-    /// Read the latest signed SoraDNS directory snapshot.
+    /// Read the latest signed `SoraDNS` directory snapshot.
     pub const SORADNS_LATEST: RouteDescriptor = RouteDescriptor::new(
         "soradns.directory.latest",
         HttpMethod::Get,
@@ -3984,7 +3986,7 @@ pub mod content_directory {
     .with_projections(RouteProjections::OPENAPI)
     .with_implicit_head(true)
     .with_cors_options(true);
-    /// Read the bounded SoraDNS directory event snapshot.
+    /// Read the bounded `SoraDNS` directory event snapshot.
     pub const SORADNS_EVENTS: RouteDescriptor = RouteDescriptor::new(
         "soradns.directory.events",
         HttpMethod::Get,
@@ -5215,7 +5217,6 @@ mod tests {
     fn canonical_path_grammar_rejects_ambiguous_shapes() {
         let invalid_paths = [
             "/offline/readiness",
-            "/v1/offline/v2/readiness",
             "/v1/offline/note_issue",
             "/v1/offline/list",
             "/v1/offline/{operationId}",

@@ -91,7 +91,7 @@ fn pointer_from_norito_syscall_returns_pointer() {
 }
 
 #[test]
-fn pointer_from_norito_accepts_blob_carrier_for_public_blob_parameters() {
+fn pointer_from_norito_rejects_retired_blob_carrier() {
     const OWNER_ID: &str = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
     let pointer_bytes = encode_account_id_pointer_in_blob(OWNER_ID);
 
@@ -103,14 +103,11 @@ fn pointer_from_norito_accepts_blob_carrier_for_public_blob_parameters() {
     vm.set_register(11, PointerType::AccountId as u64);
 
     let mut host = CoreHost::new();
-    host.syscall(syscalls::SYSCALL_POINTER_FROM_NORITO, &mut vm)
-        .expect("pointer_from_norito syscall succeeds");
-
-    let tlv = vm
-        .memory
-        .validate_tlv(vm.register(10))
-        .expect("returned pointer TLV");
-    assert_eq!(tlv.type_id, PointerType::AccountId);
+    assert_eq!(
+        host.syscall(syscalls::SYSCALL_POINTER_FROM_NORITO, &mut vm),
+        Err(VMError::NoritoInvalid)
+    );
+    assert_eq!(vm.register(10), ptr);
 }
 
 #[test]

@@ -31,7 +31,6 @@ use iroha_executor_data_model::permission::musubi::CanSetMusubiShortAlias;
 use iroha_primitives::numeric::Numeric;
 use iroha_test_network::{NetworkBuilder, init_instruction_registry};
 use iroha_test_samples::{ALICE_ID, SAMPLE_GENESIS_ACCOUNT_ID};
-use norito::codec::Encode as _;
 use sorafs_car::{CarBuildPlan, CarWriter, FileEntry, compute_chunk_plan_digest_sha3};
 use sorafs_manifest::{DagCodecId, ManifestBuilder, PinPolicy, StorageClass, chunker_registry};
 

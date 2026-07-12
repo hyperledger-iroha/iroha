@@ -2191,6 +2191,24 @@ mod tests {
         })
     }
 
+    fn replace_finalized_test_block_signature(block: &mut SignedBlock, signer: &KeyPair) {
+        let signature = BlockSignature::new(
+            0,
+            SignatureOf::try_from_hash(signer.private_key(), block.hash())
+                .expect("sign finalized test block header"),
+        );
+        block
+            .replace_signatures([signature].into_iter().collect())
+            .expect("replace provisional test block signature");
+        block
+            .signatures()
+            .next()
+            .expect("finalized test block signature")
+            .signature()
+            .verify_hash(signer.public_key(), block.hash())
+            .expect("finalized test block signature verifies");
+    }
+
     fn signed_block_with_transactions(
         transactions: Vec<SignedTransaction>,
         height: u64,
@@ -2221,6 +2239,7 @@ mod tests {
         block
             .set_transaction_results(Vec::new(), &entry_hashes, results)
             .expect("test block entrypoint hashes should match payload");
+        replace_finalized_test_block_signature(&mut block, &keypair);
         block
     }
 
@@ -2288,25 +2307,47 @@ mod tests {
                 vec![TransactionResultInner::Ok(DataTriggerSequence::default())],
             )
             .expect("test block entrypoint hashes should match payload");
+        replace_finalized_test_block_signature(&mut block, &keypair);
         (block, decoded_payloads)
     }
 
     fn persisted_state_for_exact_sccp_fixture(
         fixture: &iroha_sccp::SccpExactOutboundTestFixtureV1,
-        finality: &TairaBridgeFinalityProofV1,
-    ) -> TestSccpFinalityState {
+    ) -> (
+        iroha_sccp::SccpExactOutboundTestFixtureV1,
+        TestSccpFinalityState,
+    ) {
+        let provisional_finality =
+            iroha_sccp::decode_taira_bridge_finality_proof(&fixture.bundle.finality_proof)
+                .expect("exact provisional SCCP finality proof");
         let payload = canonical_test_sccp_payload_bytes(&fixture.bundle.payload);
+        let instruction = crate::bridge::test_record_sccp_message(payload);
+        assert_eq!(
+            instruction.context, fixture.bundle.commitment.context,
+            "exact local block instruction must preserve the bundle context"
+        );
         let tx = signed_transaction_with_executable(ivm_proved_with_overlay(vec![
-            InstructionBox::from(crate::bridge::test_record_sccp_message(payload)),
+            InstructionBox::from(instruction),
         ]));
         let entry_hash = tx.hash_as_entrypoint();
         let block_signer = checked_keypair();
+        let template_header = provisional_finality.block_header;
+        let mut provisional_header = BlockHeader::new(
+            template_header.height(),
+            template_header.prev_block_hash(),
+            None,
+            None,
+            u64::try_from(template_header.creation_time().as_millis())
+                .expect("fixture creation time fits u64"),
+            template_header.view_change_index(),
+        );
+        provisional_header.set_sccp_commitment_root(template_header.sccp_commitment_root());
         let signature = BlockSignature::new(
             0,
-            SignatureOf::try_from_hash(block_signer.private_key(), finality.block_header.hash())
-                .expect("fixture local block signature"),
+            SignatureOf::try_from_hash(block_signer.private_key(), provisional_header.hash())
+                .expect("fixture provisional local block signature"),
         );
-        let mut block = SignedBlock::presigned(signature, finality.block_header.clone(), vec![tx]);
+        let mut block = SignedBlock::presigned(signature, provisional_header, vec![tx]);
         block
             .set_transaction_results(
                 Vec::new(),
@@ -2314,21 +2355,51 @@ mod tests {
                 vec![TransactionResultInner::Ok(DataTriggerSequence::default())],
             )
             .expect("fixture local block results");
+        assert!(
+            provisional_finality
+                .finality_artifact
+                .validate_for_header(&block.header())
+                .is_err(),
+            "a pre-finalization artifact must not authenticate the completed local block"
+        );
+        replace_finalized_test_block_signature(&mut block, &block_signer);
+        validate_sccp_commitment_root_for_signed_block(&block)
+            .expect("completed local block authenticates its exact SCCP message");
+
+        let fixture = fixture.with_finalized_block(&block, None);
+        let finality =
+            iroha_sccp::decode_taira_bridge_finality_proof(&fixture.bundle.finality_proof)
+                .expect("exact completed SCCP finality proof");
+        assert_eq!(block.header(), finality.block_header);
         assert_eq!(block.hash(), finality.finality_artifact.block_hash);
+        assert_eq!(
+            fixture.request.public_inputs.finality_block_hash,
+            <[u8; 32]>::from(Hash::from(block.hash()))
+        );
+        finality
+            .finality_artifact
+            .validate_for_header(&block.header())
+            .expect("completed local finality artifact binds the exact block header");
+        finality
+            .finality_artifact
+            .verify()
+            .expect("completed local finality artifact is cryptographically valid");
 
         let messages = test_sccp_projections_from_block(&block);
-        TestSccpFinalityState {
+        let state = TestSccpFinalityState {
             chain_id: finality.finality_artifact.height_context.chain_id.clone(),
             retained_header: Some(block.header()),
             messages,
-            artifact: Some(finality.finality_artifact.clone()),
+            artifact: Some(finality.finality_artifact),
             artifact_error: None,
-        }
+        };
+        (fixture, state)
     }
 
     #[test]
     fn destination_context_uses_one_decode_pairing_and_verified_local_artifact() {
         let fixture = iroha_sccp::sccp_exact_outbound_test_fixture_v1();
+        let (fixture, state) = persisted_state_for_exact_sccp_fixture(&fixture);
         iroha_sccp::reset_sccp_destination_proof_work_counters_v1();
         let parsed = iroha_sccp::parse_sccp_destination_proof_v1(&fixture.bridge_proof)
             .expect("exact destination proof parses");
@@ -2343,8 +2414,6 @@ mod tests {
                 bls_verifications: 0,
             }
         );
-        let state = persisted_state_for_exact_sccp_fixture(&fixture, verified.finality());
-
         verify_sccp_destination_context_against_local_state(&state, &verified)
             .expect("route-bound context must anchor to exact local v2 artifact");
         assert_eq!(
@@ -2380,10 +2449,7 @@ mod tests {
     #[test]
     fn finality_builder_never_substitutes_an_adjacent_retained_height() {
         let fixture = iroha_sccp::sccp_exact_outbound_test_fixture_v1();
-        let finality =
-            iroha_sccp::decode_taira_bridge_finality_proof(&fixture.bundle.finality_proof)
-                .expect("exact fixture finality proof");
-        let state = persisted_state_for_exact_sccp_fixture(&fixture, &finality);
+        let (_, state) = persisted_state_for_exact_sccp_fixture(&fixture);
 
         assert_eq!(
             build_finality_proof(&state, 2),
@@ -2397,10 +2463,10 @@ mod tests {
     #[test]
     fn sccp_local_anchor_rejects_artifact_chain_and_record_substitution() {
         let fixture = iroha_sccp::sccp_exact_outbound_test_fixture_v1();
+        let (fixture, base) = persisted_state_for_exact_sccp_fixture(&fixture);
         let finality =
             iroha_sccp::decode_taira_bridge_finality_proof(&fixture.bundle.finality_proof)
-                .expect("exact fixture finality proof");
-        let base = persisted_state_for_exact_sccp_fixture(&fixture, &finality);
+                .expect("exact completed fixture finality proof");
 
         let assert_rejected = |state: &TestSccpFinalityState, expected: &str| {
             let error = verify_sccp_finality_proof_against_local_state(state, &finality)
@@ -2435,7 +2501,7 @@ mod tests {
             .aggregate_signature[0] ^= 1;
         assert_rejected(
             &attack,
-            "failed to load local Sumeragi-v2 finality artifact",
+            "invalid Sumeragi-v2 quorum-certificate aggregate signature",
         );
 
         let mut attack = base.clone();
@@ -2446,30 +2512,12 @@ mod tests {
             .validator_set_pops[0][0] ^= 1;
         assert_rejected(
             &attack,
-            "failed to load local Sumeragi-v2 finality artifact",
+            "invalid Sumeragi-v2 proof of possession at roster index 0",
         );
 
         let hostile_payload =
             canonical_test_sccp_payload_bytes(&sample_transfer_payload(999, [0x44; 20]));
-        let hostile_tx = signed_transaction_with_executable(ivm_proved_with_overlay(vec![
-            InstructionBox::from(crate::bridge::test_record_sccp_message(hostile_payload)),
-        ]));
-        let hostile_entry_hash = hostile_tx.hash_as_entrypoint();
-        let signer = checked_keypair();
-        let signature = BlockSignature::new(
-            0,
-            SignatureOf::try_from_hash(signer.private_key(), finality.block_header.hash())
-                .expect("hostile local block signature"),
-        );
-        let mut hostile_block =
-            SignedBlock::presigned(signature, finality.block_header.clone(), vec![hostile_tx]);
-        hostile_block
-            .set_transaction_results(
-                Vec::new(),
-                &[hostile_entry_hash],
-                vec![TransactionResultInner::Ok(DataTriggerSequence::default())],
-            )
-            .expect("hostile local block results");
+        let (hostile_block, _) = signed_block_with_sccp_payloads(&[hostile_payload], 1);
         let mut attack = base;
         attack.messages = test_sccp_projections_from_block(&hostile_block);
         assert_rejected(&attack, "reconstructs root");

@@ -802,7 +802,7 @@ async fn restart_peer_and_wait_non_empty(
 
     let _ = peer.shutdown_if_started().await;
     let config_layers = network.config_layers().collect::<Vec<_>>();
-    peer.start_checked(config_layers.iter().cloned(), None)
+    peer.start_checked(config_layers.iter(), None)
         .await
         .wrap_err_with(|| format!("{context}: restart peer {peer_index}"))?;
 
@@ -823,7 +823,7 @@ async fn restart_peer_and_wait_reachable(
 
     let _ = peer.shutdown_if_started().await;
     let config_layers = network.config_layers().collect::<Vec<_>>();
-    peer.start_checked(config_layers.iter().cloned(), None)
+    peer.start_checked(config_layers.iter(), None)
         .await
         .wrap_err_with(|| format!("{context}: restart peer {peer_index}"))?;
 

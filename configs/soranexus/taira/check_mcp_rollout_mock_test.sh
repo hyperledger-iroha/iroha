@@ -58,6 +58,24 @@ PY
 
   cat >"${root}/scripts/taira_faucet_canary.py" <<'PY'
 #!/usr/bin/env python3
+import os
+import sys
+from pathlib import Path
+
+status_timeout_ms = None
+args = sys.argv[1:]
+for index, value in enumerate(args):
+    if value == "--status-timeout-ms" and index + 1 < len(args):
+        status_timeout_ms = args[index + 1]
+
+state_dir = os.environ.get("MOCK_STATE_DIR")
+if state_dir:
+    state = Path(state_dir)
+    state.joinpath("faucet_seen").write_text("1\n", encoding="utf-8")
+    if status_timeout_ms is not None:
+        state.joinpath("faucet_status_timeout_seen").write_text(
+            status_timeout_ms + "\n", encoding="utf-8"
+        )
 print("faucet bootstrap skipped in mock harness")
 PY
 
@@ -72,6 +90,7 @@ payload=""
 url=""
 connect_timeout=""
 max_time=""
+headers=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -102,6 +121,7 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     -H)
+      headers+=("$2")
       shift 2
       ;;
     --data)
@@ -116,6 +136,14 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
   esac
+done
+
+for header in "${headers[@]+"${headers[@]}"}"; do
+  header_name="$(printf '%s' "${header%%:*}" | tr '[:upper:]' '[:lower:]')"
+  if [[ "$header_name" == "x-iroha-api-version" ]]; then
+    echo "rollout must not send the retired x-iroha-api-version header" >&2
+    exit 92
+  fi
 done
 
 if [[ -n "${MOCK_STATE_DIR:-}" ]]; then
@@ -200,6 +228,28 @@ elif [[ "$method" == "GET" && "$url" == "https://taira.sora.org/v1/nexus/public-
 elif [[ "$method" == "GET" && "$url" == "https://taira.sora.org/v1/contracts/state" ]]; then
   status="400"
   body='{"error":"missing selectors"}'
+elif [[ "$method" == "GET" && "$url" == "https://taira.sora.org/v1/pipeline/transactions/status" ]]; then
+  if [[ "$scenario" == "canonical_status_missing" ]]; then
+    status="404"
+    body='{"code":"route_not_found","message":"route not found"}'
+  elif [[ "$scenario" == "canonical_status_wrong_error" ]]; then
+    status="400"
+    body='{"code":"bad_request","message":"generic edge rejection"}'
+  else
+    status="400"
+    body='{"code":"query_validation_failed","message":"missing hash query parameter"}'
+  fi
+elif [[ "$method" == "GET" && "$url" == "https://taira.sora.org/v1/transactions/status" ]]; then
+  if [[ "$scenario" == "retired_status_alias_mounted" ]]; then
+    status="200"
+    body='{"status":{"kind":"Applied"}}'
+  elif [[ "$scenario" == "retired_status_wrong_error" ]]; then
+    status="404"
+    body='{"code":"not_found","message":"non-canonical edge rejection"}'
+  else
+    status="404"
+    body='{"code":"route_not_found","message":"route not found"}'
+  fi
 elif [[ "$method" == "GET" && "$url" == "https://taira.sora.org/v1/musubi/packages?query=&limit=1" ]]; then
   body='{"items":[]}'
 elif [[ "$method" == "POST" && "$url" == "https://taira.sora.org/v1/musubi/instructions/yank-release" ]]; then
@@ -241,6 +291,19 @@ if [[ "$*" == *"ledger transaction ping"* ]]; then
         exit 1
         ;;
       sumeragi_highest_qc_behind_commit|sumeragi_locked_qc_behind_commit|sumeragi_idle_high_view_missing_qc|post_canary_sumeragi_missing_validator_set)
+        echo "pong"
+        exit 0
+        ;;
+      failed_asset_then_success)
+        ping_calls_file="${MOCK_STATE_DIR}/ping_calls"
+        ping_calls=0
+        [[ -f "$ping_calls_file" ]] && ping_calls="$(cat "$ping_calls_file")"
+        ping_calls=$((ping_calls + 1))
+        printf '%s\n' "$ping_calls" >"$ping_calls_file"
+        if [[ "$ping_calls" -eq 1 ]]; then
+          echo "Failed to find asset"
+          exit 1
+        fi
         echo "pong"
         exit 0
         ;;
@@ -395,6 +458,10 @@ run_case sumeragi_highest_qc_behind_commit 'durable CommitQC height does not mat
 run_case sumeragi_locked_qc_behind_commit 'durable CommitQC does not satisfy its frozen dual quorum'
 run_case sumeragi_idle_high_view_missing_qc 'v2 status omitted required last_commit_qc object'
 run_case post_canary_sumeragi_missing_validator_set '/v1/sumeragi/status still did not publish a healthy commit QC snapshot after the signed write canary' 'reported invalid height_context.validator_count: 0'
+run_case canonical_status_missing 'canonical pipeline transaction-status route should reject a missing hash failed with HTTP 404'
+run_case canonical_status_wrong_error "canonical pipeline transaction-status route should reject a missing hash returned error code 'bad_request'"
+run_case retired_status_alias_mounted 'retired transaction-status compatibility route must remain unmounted failed with HTTP 200'
+run_case retired_status_wrong_error "retired transaction-status compatibility route must remain unmounted returned error code 'not_found'"
 run_invalid_canary_identity_case \
   archived-chain \
   'write canary config must target the public Sumeragi-v2 Taira chain'
@@ -444,6 +511,32 @@ fi
 after_hash="$(shasum -a 256 "${root}/explicit-canary.toml" | awk '{print $1}')"
 [[ "$before_hash" == "$after_hash" ]]
 grep -q 'Taira MCP rollout checks passed.' "${root}/explicit-canary-output.log"
+
+root="$(mktemp -d)"
+cleanup_paths+=("$root")
+make_fake_repo "$root"
+"${root}/scripts/taira_bootstrap_canary.py" \
+  --output-config "${root}/asset-retry-canary.toml"
+if ! PATH="${root}/mockbin:${PATH}" \
+    MOCK_SCENARIO="failed_asset_then_success" \
+    MOCK_STATE_DIR="${root}/state" \
+    ROLLOUT_CANARY_STATUS_TIMEOUT_MS=34567 \
+    POST_CANARY_STATUS_RECHECK_ATTEMPTS=2 \
+    POST_CANARY_STATUS_RECHECK_DELAY_SECONDS=0 \
+    "${root}/configs/soranexus/taira/check_mcp_rollout.sh" \
+      --skip-local \
+      --public-root https://taira.sora.org \
+      --write-config "${root}/asset-retry-canary.toml" \
+      --iroha-bin "${root}/mockbin/iroha" \
+      >"${root}/asset-retry-output.log" 2>&1; then
+  echo "faucet asset-retry case unexpectedly failed" >&2
+  sed -n '1,200p' "${root}/asset-retry-output.log" >&2 || true
+  exit 1
+fi
+grep -q 'Taira MCP rollout checks passed.' "${root}/asset-retry-output.log"
+test -f "${root}/state/faucet_seen"
+grep -q '^34567$' "${root}/state/faucet_status_timeout_seen"
+grep -q '^2$' "${root}/state/ping_calls"
 
 root="$(mktemp -d)"
 cleanup_paths+=("$root")

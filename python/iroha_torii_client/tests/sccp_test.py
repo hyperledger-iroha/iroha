@@ -1276,6 +1276,16 @@ def test_bundle_and_proof_request_are_closed_and_query_free() -> None:
     wrong_anchor["sora_finality_anchor_hash"] = PREFIX_HASH(0x99)
     with pytest.raises(ValueError, match="sora_finality_anchor_hash"):
         normalize_sccp_proof_request(wrong_anchor)
+    cross_policy_alias = _proof_request()
+    cross_policy_alias["semantic_proof_profile"]["commitments"]["circuit_commitment"] = (
+        cross_policy_alias["sora_finality_anchor"]["checkpoint_block_hash"]
+    )
+    semantic_hash, _ = sccp._semantic_proof_profile(  # noqa: SLF001
+        cross_policy_alias["semantic_proof_profile"], "test semantic profile"
+    )
+    cross_policy_alias["semantic_proof_profile_hash"] = "0x" + semantic_hash.hex()
+    with pytest.raises(ValueError, match="proof-policy hash role"):
+        normalize_sccp_proof_request(cross_policy_alias)
     archived_identity = _proof_request()
     archived_identity["sora_finality_anchor"]["chain_id_hash"] = sccp._keccak_256(  # noqa: SLF001
         bytes.fromhex("809574f5fee75e69bfcf52451e42d50f")

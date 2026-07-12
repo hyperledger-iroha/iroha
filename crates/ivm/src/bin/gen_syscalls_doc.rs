@@ -67,11 +67,11 @@ fn guess_defaults(n: u32) -> (String, String, String) {
         gas = "G_verify_proof + bytes".into();
     } else if up.contains("ROOTS_GET") || n == 0x64 {
         args = "r10=&NoritoBytes(RootsGetRequest)".into();
-        ret = "ptr (NoritoBytes in INPUT)".into();
+        ret = "host-owned ptr (&NoritoBytes)".into();
         gas = "G_roots_get + bytes".into();
     } else if up.contains("VOTE_GET_TALLY") || n == 0x65 {
         args = "r10=&NoritoBytes(VoteGetTallyRequest)".into();
-        ret = "ptr (NoritoBytes in INPUT)".into();
+        ret = "host-owned ptr (&NoritoBytes)".into();
         gas = "G_vote_get + bytes".into();
     } else if up.contains("DECODE_INT") || n == 0x53 {
         args = "r10=&NoritoBytes(Norito-framed i64)".into();
@@ -126,7 +126,7 @@ fn guess_defaults(n: u32) -> (String, String, String) {
         ret = "ptr (&Quantity)".into();
         gas = "G_get_bal".into();
     } else if up.contains("NAME_DECODE") || n == 0x5C {
-        args = "r10=&NoritoBytes(UTF-8 string)".into();
+        args = "r10=&NoritoBytes(Name)".into();
         ret = "ptr (&Name)".into();
         gas = "G_name_decode + bytes".into();
     } else if up.contains("POINTER_TO_NORITO") || n == 0x5D {
@@ -237,11 +237,11 @@ fn guess_defaults(n: u32) -> (String, String, String) {
         ret = "ptr (r10)".into();
         gas = "G_get_pub".into();
     } else if up.contains("GET_AUTHORITY") || n == 0xA4 {
-        ret = "ptr (AccountId in INPUT)".into();
+        ret = "host-owned ptr (&AccountId)".into();
         gas = "G_get_auth + bytes".into();
     } else if up.contains("RESOLVE_ACCOUNT_ALIAS") || n == 0xA7 {
         args = "r10=&Blob(alias literal)".into();
-        ret = "ptr (&AccountId in INPUT)".into();
+        ret = "host-owned ptr (&AccountId)".into();
         gas = "G_alias_resolve".into();
     } else if up.contains("CURRENT_TIME_MS") || n == 0xA8 {
         ret = "r10=unix_time_ms:u64".into();
@@ -309,6 +309,10 @@ fn guess_defaults(n: u32) -> (String, String, String) {
             .into();
         ret = "r10=ptr (&Blob(pad:u8 then [u64; word_count]))".into();
         gas = "G_argument_decode + record + schema + output".into();
+    } else if up.contains("NORMALIZE_NORITO_BYTES") || n == 0x01_0028 {
+        args = "r10=&Blob or &NoritoBytes (validated public TLV)".into();
+        ret = "r10=&NoritoBytes(same payload)".into();
+        gas = "G_pointer + bytes".into();
     } else if up.contains("STATE_KEYS") || n == 0x01_0030 {
         args = "r10=&Name(prefix), r11=offset:u64, r12=limit:u64 (0..=64)".into();
         ret = "r10=ptr (&NoritoBytes(Vec<Name>)), r11=total:u64, r12=count:u64".into();

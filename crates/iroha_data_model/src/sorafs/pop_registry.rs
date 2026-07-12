@@ -81,6 +81,11 @@ pub struct PopIssuerPolicyV1 {
 
 impl PopIssuerPolicyV1 {
     /// Validate the complete first-release issuer policy.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the version, revision chain, issuer identity or
+    /// key, batch limits, credential lifetime, or clock skew is invalid.
     pub fn validate(&self) -> Result<(), PopIssuerPolicyValidationError> {
         if self.version != POP_ISSUER_POLICY_VERSION_V1 {
             return Err(PopIssuerPolicyValidationError::UnsupportedVersion {
@@ -135,6 +140,10 @@ impl PopIssuerPolicyV1 {
     }
 
     /// Compute the canonical domain-separated policy digest.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when Norito cannot encode the policy.
     pub fn digest(&self) -> Result<[u8; 32], norito::Error> {
         let encoded = norito::to_bytes(self)?;
         let mut hasher = blake3::Hasher::new();
@@ -244,6 +253,11 @@ pub struct PopCredentialCommitmentV1 {
 
 impl PopCredentialCommitmentV1 {
     /// Validate payload-free commitment invariants.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a commitment is zero, a publication version is
+    /// zero, or the credential validity window is invalid.
     pub fn validate(&self) -> Result<(), PopCredentialCommitmentValidationError> {
         if self.credential_commitment == [0; 32] {
             return Err(PopCredentialCommitmentValidationError::ZeroCredentialCommitment);
@@ -308,6 +322,12 @@ pub struct PopCredentialCommitmentBatchV1 {
 
 impl PopCredentialCommitmentBatchV1 {
     /// Validate hard resource bounds and canonical commitment ordering.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an unsupported version, inert policy digest,
+    /// invalid payload or batch bounds, invalid commitments, non-canonical
+    /// ordering, or duplicate revocation commitments.
     pub fn validate(&self) -> Result<(), PopCredentialCommitmentBatchValidationError> {
         if self.version != POP_CREDENTIAL_COMMITMENT_BATCH_VERSION_V1 {
             return Err(

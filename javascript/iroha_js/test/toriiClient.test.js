@@ -13027,6 +13027,49 @@ test("governanceSubmitPlainBallot accepts decimal Numeric amounts", async () => 
   assert.equal(capturedBody.amount, "12.500");
 });
 
+test("governanceSubmitPlainBallot enforces the signed Numeric and text bounds", async () => {
+  let fetchCalls = 0;
+  let capturedBody;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async (_url, init) => {
+      fetchCalls += 1;
+      capturedBody = JSON.parse(init.body);
+      return createResponse({
+        status: 200,
+        jsonData: cloneFixture(toriiFixtures.governance.plainBallotResponse),
+        headers: { "content-type": "application/json" },
+      });
+    },
+  });
+  const maximumAmount = (1n << 511n) - 1n;
+  const payload = {
+    authority: FIXTURE_ALICE_ID,
+    chainId: "chain-0",
+    referendumId: "ref-plain-bounds",
+    owner: FIXTURE_ALICE_ID,
+    durationBlocks: 1,
+    direction: "aye",
+  };
+
+  await client.governanceSubmitPlainBallot({ ...payload, amount: maximumAmount });
+  assert.equal(capturedBody.amount, maximumAmount.toString());
+  assert.equal(fetchCalls, 1);
+
+  await assert.rejects(
+    () => client.governanceSubmitPlainBallot({ ...payload, amount: 1n << 511n }),
+    /signed 512-bit range/u,
+  );
+  await assert.rejects(
+    () =>
+      client.governanceSubmitPlainBallot({
+        ...payload,
+        amount: "1".repeat(100_000),
+      }),
+    /bounded Numeric text length/u,
+  );
+  assert.equal(fetchCalls, 1);
+});
+
 test("governanceSubmitPlainBallot forwards AbortSignal to fetch", async () => {
   let observedSignal;
   const client = new ToriiClient(BASE_URL, {
@@ -23850,12 +23893,28 @@ function offlineReadinessPayload(overrides = {}) {
 }
 
 function offlineTopUpRequest(overrides = {}) {
+  const amount = { atomic_units: 9_007_199_254_740_993n, scale: 4 };
   return {
     asset: OFFLINE_ASSET_ID,
-    amount: { atomic_units: 9_007_199_254_740_993n, scale: 4 },
-    current_note: { version: 2 },
-    record_bundle: { version: 2 },
-    pallas_open_envelopes_archive: [1, 2, 3],
+    amount,
+    current_note: {
+      chain_id: "wonderland",
+      asset: OFFLINE_ASSET_DEFINITION_ID,
+      note_commitment: offlineFixedBytes(0x41),
+      spend_nullifier: offlineFixedBytes(0x51),
+      amount: { ...amount },
+    },
+    shield_evidence: {
+      initial_root: offlineFixedBytes(0x10),
+      finalized_root: offlineFixedBytes(0x20),
+      leaf_index: 0,
+      proof: {
+        backend: "halo2/ipa",
+        proof: { backend: "halo2/ipa", bytes: [1, 2, 3] },
+        vk_ref: { backend: "halo2/ipa", name: "topup-shield-v2" },
+        vk_commitment: offlineFixedBytes(0x61),
+      },
+    },
     artifact_generation: "generation-1",
     operation_id: [...OFFLINE_OPERATION_BYTES],
     authorization: { operation_id: [...OFFLINE_OPERATION_BYTES] },
@@ -23905,7 +23964,7 @@ function offlineTopUpAnchor(overrides = {}) {
     amount,
     initial_root: offlineFixedBytes(0x10),
     finalized_root: offlineFixedBytes(0x20),
-    topup_anchor_nullifiers: [offlineFixedBytes(0x31)],
+    shield_leaf_index: 0,
     current_note: {
       chain_id: "wonderland",
       asset: OFFLINE_ASSET_DEFINITION_ID,
@@ -23914,8 +23973,8 @@ function offlineTopUpAnchor(overrides = {}) {
       amount: { ...amount },
     },
     topup_operation_id: offlineFixedBytes(0x11),
-    transfer_verifier_id: { backend: "halo2/ipa", name: "offline-transfer" },
-    transfer_verifier_commitment: offlineFixedBytes(0x61),
+    shield_verifier_id: { backend: "halo2/ipa", name: "topup-shield-v2" },
+    shield_verifier_commitment: offlineFixedBytes(0x61),
     artifact_generation: "generation-1",
     finalized_height: 12,
     finalized_tx_hash: offlineFixedBytes(0x22),
@@ -23929,6 +23988,7 @@ function offlineTopUpFinalityProof(
   finalizedHeight = 12,
   overrides = {},
 ) {
+  const contextId = [fakeSumeragiHash(0x81)];
   return {
     version: 1,
     anchor: {
@@ -23937,12 +23997,41 @@ function offlineTopUpFinalityProof(
     },
     commit_qc: {
       height_context: {
+        context_id: contextId,
+        chain_id: "wonderland",
+        protocol_version: 2,
         height: finalizedHeight,
-        opaque_context: { protocol_version: 2 },
+        epoch: 1,
+        epoch_end_height: 20,
+        mode: { mode: "permissioned", details: null },
+        nexus_amx_context_hash: fakeSumeragiHash(0x82),
+        da_layout: {
+          encoding: { encoding: "plain", details: null },
+          chunk_size_bytes: 1024,
+          data_shards: 0,
+          parity_shards: 0,
+          max_payload_size_bytes: 4096,
+          max_chunk_count: 4,
+        },
+        leader_seed: Array(32).fill(0x83),
       },
       certificate: {
-        round: { height: finalizedHeight, view: 0 },
-        opaque_certificate: [1, 2, 3],
+        round: { context_id: contextId, height: finalizedHeight, view: 0 },
+        phase: { phase: "commit", details: null },
+        subject: {
+          parent_block_hash: fakeSumeragiHash(0x84),
+          block_hash: fakeSumeragiHash(0x85),
+          payload_hash: fakeSumeragiHash(0x86),
+        },
+        execution_commitment: {
+          parent_state_root: fakeSumeragiHash(0x87),
+          post_state_root: fakeSumeragiHash(0x88),
+          ordinary_writes_root: fakeSumeragiHash(0x89),
+          topup_anchor_count: 1,
+          topup_anchor_root: fakeSumeragiHash(0x8a),
+        },
+        signers: [0],
+        aggregate_signature: Array(96).fill(0x8b),
       },
     },
     anchor_path: { leaf_index: 0, leaf_count: 1, siblings: [] },
@@ -24057,6 +24146,13 @@ test("getOfflineReadiness rejects invalid selectors and contradictory snapshots"
     }),
     offlineReadinessPayload({
       active_topup_shield_verifier: offlineActiveTopUpShieldVerifier({ withdrawal_height: 42 }),
+    }),
+    offlineReadinessPayload({
+      ready: false,
+      blockers: [{
+        code: "topup_shield_verifier_unavailable",
+        message: "top-up shield verifier unavailable",
+      }],
     }),
     offlineReadinessPayload({
       ready: false,
@@ -24370,10 +24466,8 @@ test("getOfflineOperationStatus parses all three tagged states", async () => {
   }
 });
 
-test("applied top-up preserves a direct typed finality proof and its opaque verifier fields", async () => {
+test("applied top-up returns an isolated canonical typed finality proof", async () => {
   const proof = offlineTopUpFinalityProof();
-  proof.commit_qc.future_qc_field = { opaque: [7, 8, 9] };
-  proof.anchor_path.future_path_field = "preserved";
   const payload = {
     state: "applied",
     value: {
@@ -24400,10 +24494,10 @@ test("applied top-up preserves a direct typed finality proof and its opaque veri
 
   const status = await client.getOfflineOperationStatus(OFFLINE_OPERATION_ID);
   assert.deepEqual(status.value.result.result.finality_proof, proof);
-  proof.commit_qc.future_qc_field.opaque[0] = 255;
-  assert.deepEqual(
-    status.value.result.result.finality_proof.commit_qc.future_qc_field,
-    { opaque: [7, 8, 9] },
+  proof.commit_qc.certificate.aggregate_signature[0] = 255;
+  assert.equal(
+    status.value.result.result.finality_proof.commit_qc.certificate.aggregate_signature[0],
+    0x8b,
   );
 });
 
@@ -24438,6 +24532,11 @@ test("applied top-up rejects missing, mismatched, and type-confused finality pro
       anchor: { ...base.anchor, anchor_digest: offlineFixedBytes(0x72) },
     }),
     applied({ ...base, commit_qc: [] }),
+    applied({ ...base, future_proof_field: true }),
+    applied({
+      ...base,
+      commit_qc: { ...base.commit_qc, future_qc_field: true },
+    }),
     applied({
       ...base,
       commit_qc: { ...base.commit_qc, height_context: [] },

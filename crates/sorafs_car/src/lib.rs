@@ -6760,7 +6760,7 @@ mod tests {
 
         let digest = compute_chunk_plan_digest_sha3(&[first.clone(), second.clone()]);
         let repeated = compute_chunk_plan_digest_sha3(&[first.clone(), second.clone()]);
-        let reordered = compute_chunk_plan_digest_sha3(&[second, first]);
+        let reordered = compute_chunk_plan_digest_sha3(&[second, first.clone()]);
 
         let mut content_changed = first;
         content_changed.digest[0] ^= 1;

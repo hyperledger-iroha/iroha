@@ -4,8 +4,8 @@ direction: ltr
 source: docs/source/bridge_finality.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 5e28e5c38283ad6be40a0fc48e0312797f490542a143f4cefdd209aaf8099ac5
-source_last_modified: "2026-07-11T20:38:35.470900+00:00"
+source_hash: 1cbd248fe14e63d00f002f09e1663181f3ab9bd99124ffeb89c56763b784046b
+source_last_modified: "2026-07-12"
 translation_last_reviewed: 2026-07-12
 translator: machine-google-reviewed
 ---
@@ -41,9 +41,12 @@ seed 等共识数据。结束 epoch 的父区块上下文还包含可选的 `nex
 
 ## 持久化与验证
 
-Sumeragi v2 的应用路径验证该制品并将其写为不可变的 Kura sidecar。证明构造器读取规范
-区块及其 sidecar，不会从可变的当前 world state 重建历史 PoP 或证书。sidecar 缺失、
-损坏、冲突或无法验证时一律关闭失败；证明不受近期内存历史窗口限制。
+Kura 在发布最终性或淘汰区块体之前，先将精确的规范 header 和由根认证的 SCCP archive
+写入不可变 retained-block 记录，再把精确 V2 artifact 保存到单独的不可变最终性记录。
+两次写入都具有幂等、禁止覆盖的语义，并拒绝同一高度的冲突。`build_finality_proof`
+只读取 retained header 和已验证的最终性记录，绝不读取历史区块体，也不会用可变 world
+state 替换 PoP。重启清点会再次验证 header/archive/artifact/hash 的关联。淘汰区块体不会
+使有效 proof 失效；记录缺失、损坏、冲突或不可验证时一律关闭失败。
 
 无状态验证器严格核对版本、链、高度、header 哈希、规范前驱和 view、上下文、subject 和
 CommitQC，并验证制品中的全部 PoP。签名者索引必须严格递增且在范围内；CommitQC 必须同时满足验证器数量
@@ -68,5 +71,5 @@ checkpoint context/artifact 开始，验证到消息制品为止的每个紧邻�
 - `GET /v1/bridge/finality/{height}` 返回 `BridgeFinalityProof`；
 - `GET /v1/bridge/finality/bundle/{height}` 返回 `BridgeFinalityBundle`。
 
-若区块或精确的持久 v2 制品缺失或无效，两个端点都会关闭失败。消费者必须拒绝未知字段、
-不支持的版本和已废弃的证明形状。
+若 retained canonical header 或精确的持久 v2 制品缺失或无效，两个端点都会关闭失败。
+淘汰历史区块体不会使有效 proof 无法取得。消费者必须拒绝未知字段、不支持的版本和已废弃的证明形状。

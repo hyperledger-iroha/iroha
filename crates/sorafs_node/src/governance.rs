@@ -2607,7 +2607,10 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
 
             let decision = pdp_decision_label(archive.decision);
             let mut payload = JsonMap::new();
-            payload.insert("version".into(), JsonValue::from(u64::from(archive.version)));
+            payload.insert(
+                "version".into(),
+                JsonValue::from(u64::from(archive.version)),
+            );
             payload.insert("sequence".into(), JsonValue::from(archive.sequence));
             payload.insert(
                 "challenge_id_hex".into(),
@@ -2642,8 +2645,14 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
                 "sampled_hot_leaves".into(),
                 JsonValue::from(u64::from(archive.sampled_hot_leaves)),
             );
-            payload.insert("sampled_bytes".into(), JsonValue::from(archive.sampled_bytes));
-            payload.insert("issued_at_unix".into(), JsonValue::from(archive.issued_at_unix));
+            payload.insert(
+                "sampled_bytes".into(),
+                JsonValue::from(archive.sampled_bytes),
+            );
+            payload.insert(
+                "issued_at_unix".into(),
+                JsonValue::from(archive.issued_at_unix),
+            );
             payload.insert(
                 "response_deadline_unix".into(),
                 JsonValue::from(archive.response_deadline_unix),

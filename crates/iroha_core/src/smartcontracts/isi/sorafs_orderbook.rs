@@ -1623,7 +1623,7 @@ mod tests {
     fn policy_activation_is_permissioned_and_exactly_chained() {
         let operator = keypair(0x11);
         let authority = account(&operator);
-        let mut state = state_with_accounts(&[&operator]);
+        let state = state_with_accounts(&[&operator]);
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
 
@@ -1638,7 +1638,7 @@ mod tests {
         assert_eq!(stored.policy_digest, first_digest);
         assert_eq!(stored.activated_at_unix, NOW);
 
-        for mut invalid in {
+        for invalid in {
             let mut gap = first.clone();
             gap.revision = 3;
             gap.predecessor_policy_digest = Some(first_digest);
@@ -1656,7 +1656,6 @@ mod tests {
                     .execute(&authority, &mut stx)
                     .is_err()
             );
-            invalid.paused = !invalid.paused;
             assert_eq!(
                 read_policy(stx.world())
                     .expect("read unchanged policy")
@@ -1686,7 +1685,7 @@ mod tests {
     fn policy_activation_rejects_missing_permission_without_state_mutation() {
         let operator = keypair(0x12);
         let authority = account(&operator);
-        let mut state = state_with_accounts(&[&operator]);
+        let state = state_with_accounts(&[&operator]);
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         stx.world
@@ -1707,7 +1706,7 @@ mod tests {
     fn signed_order_submission_persists_authoritative_record_and_nonce() {
         let buyer = keypair(0x21);
         let authority = account(&buyer);
-        let mut state = state_with_accounts(&[&buyer]);
+        let state = state_with_accounts(&[&buyer]);
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         let policy_digest = activate_policy(&mut stx, &authority);
@@ -1736,7 +1735,7 @@ mod tests {
     fn order_rejects_malformed_noncanonical_and_oversized_payloads_atomically() {
         let buyer = keypair(0x22);
         let authority = account(&buyer);
-        let mut state = state_with_accounts(&[&buyer]);
+        let state = state_with_accounts(&[&buyer]);
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         let policy_digest = activate_policy(&mut stx, &authority);
@@ -1767,7 +1766,7 @@ mod tests {
     fn order_policy_failures_do_not_advance_nonce() {
         let buyer = keypair(0x23);
         let authority = account(&buyer);
-        let mut state = state_with_accounts(&[&buyer]);
+        let state = state_with_accounts(&[&buyer]);
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         let policy_digest = activate_policy(&mut stx, &authority);
@@ -1831,7 +1830,7 @@ mod tests {
         let buyer = keypair(0x24);
         let attacker = keypair(0x25);
         let authority = account(&buyer);
-        let mut state = state_with_accounts(&[&buyer, &attacker]);
+        let state = state_with_accounts(&[&buyer, &attacker]);
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         let policy_digest = activate_policy(&mut stx, &authority);
@@ -1875,7 +1874,7 @@ mod tests {
     fn ask_requires_registered_provider_owner_binding() {
         let provider = keypair(0x26);
         let authority = account(&provider);
-        let mut state = state_with_accounts(&[&provider]);
+        let state = state_with_accounts(&[&provider]);
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         let policy_digest = activate_policy(&mut stx, &authority);
@@ -1900,7 +1899,7 @@ mod tests {
     fn order_replay_and_nonce_rollback_are_rejected() {
         let buyer = keypair(0x27);
         let authority = account(&buyer);
-        let mut state = state_with_accounts(&[&buyer]);
+        let state = state_with_accounts(&[&buyer]);
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         let policy_digest = activate_policy(&mut stx, &authority);
@@ -1942,7 +1941,7 @@ mod tests {
     fn typed_order_queries_return_policy_cancellation_status_and_cursor_pages() {
         let buyer = keypair(0x28);
         let authority = account(&buyer);
-        let mut state = state_with_accounts(&[&buyer]);
+        let state = state_with_accounts(&[&buyer]);
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         let policy_digest = activate_policy(&mut stx, &authority);
@@ -2024,7 +2023,7 @@ mod tests {
     fn typed_queries_reject_not_found_and_invalid_limits() {
         let operator = keypair(0x29);
         let authority = account(&operator);
-        let mut state = state_with_accounts(&[&operator]);
+        let state = state_with_accounts(&[&operator]);
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
 
@@ -2081,7 +2080,7 @@ mod tests {
     fn signed_cancellation_updates_order_and_shared_nonce() {
         let buyer = keypair(0x31);
         let authority = account(&buyer);
-        let mut state = state_with_accounts(&[&buyer]);
+        let state = state_with_accounts(&[&buyer]);
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         let policy_digest = activate_policy(&mut stx, &authority);
@@ -2120,7 +2119,7 @@ mod tests {
         let buyer = keypair(0x32);
         let attacker = keypair(0x33);
         let authority = account(&buyer);
-        let mut state = state_with_accounts(&[&buyer, &attacker]);
+        let state = state_with_accounts(&[&buyer, &attacker]);
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         let policy_digest = activate_policy(&mut stx, &authority);
@@ -2180,7 +2179,7 @@ mod tests {
         let buyer_id = account(&buyer);
         let provider_id = account(&provider);
         let treasury_id = account(&treasury);
-        let mut state =
+        let state =
             state_with_settlement_accounts(&settlement, &buyer, &provider, &treasury, 1_000);
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
@@ -2398,7 +2397,7 @@ mod tests {
         let buyer_id = account(&buyer);
         let provider_id = account(&provider);
         let treasury_id = account(&treasury);
-        let mut state =
+        let state =
             state_with_settlement_accounts(&settlement, &buyer, &provider, &treasury, 1_000);
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
@@ -2534,7 +2533,7 @@ mod tests {
     fn receipt_without_funded_lock_fails_closed() {
         let settlement = keypair(0x4A);
         let authority = account(&settlement);
-        let mut state = state_with_accounts(&[&settlement]);
+        let state = state_with_accounts(&[&settlement]);
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx, 0xA3);
@@ -2569,8 +2568,7 @@ mod tests {
         let buyer_id = account(&buyer);
         let provider_id = account(&provider);
         let treasury_id = account(&treasury);
-        let mut state =
-            state_with_settlement_accounts(&settlement, &buyer, &provider, &treasury, 50);
+        let state = state_with_settlement_accounts(&settlement, &buyer, &provider, &treasury, 50);
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx, 0xA4);
@@ -2632,7 +2630,7 @@ mod tests {
         let buyer_id = account(&buyer);
         let provider_id = account(&provider);
         let treasury_id = account(&treasury);
-        let mut state =
+        let state =
             state_with_settlement_accounts(&settlement, &buyer, &provider, &treasury, 1_000);
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
@@ -2709,7 +2707,7 @@ mod tests {
     fn corrupted_authoritative_state_fails_closed_before_new_mutation() {
         let buyer = keypair(0x51);
         let authority = account(&buyer);
-        let mut state = state_with_accounts(&[&buyer]);
+        let state = state_with_accounts(&[&buyer]);
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         let policy_digest = activate_policy(&mut stx, &authority);
@@ -2747,7 +2745,7 @@ mod tests {
     fn missing_or_corrupt_status_fails_closed_before_order_mutation() {
         let buyer = keypair(0x57);
         let authority = account(&buyer);
-        let mut state = state_with_accounts(&[&buyer]);
+        let state = state_with_accounts(&[&buyer]);
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         let policy_digest = activate_policy(&mut stx, &authority);

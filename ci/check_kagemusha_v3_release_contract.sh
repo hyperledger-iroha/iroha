@@ -21,7 +21,6 @@ MODEL = "crates/iroha_data_model/src/offline/mod.rs"
 PACKAGER = "crates/iroha_core/src/bin/kagemusha_recursive_spend_v3_bundle.rs"
 BRIDGE = "crates/connect_norito_bridge/src/lib.rs"
 HEADER = "crates/connect_norito_bridge/include/connect_norito_bridge.h"
-SWIFT_PROVER = "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendProver.swift"
 SWIFT_V2 = "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendV2.swift"
 SWIFT_NATIVE = "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendV2Native.swift"
 SWIFT_BRIDGE = "IrohaSwift/Sources/IrohaSwift/NativeBridge.swift"
@@ -191,7 +190,12 @@ def check_release_contract() -> list[str]:
         ),
     )
     if rust_string_constant(model, "KAGEMUSHA_RECURSIVE_SPEND_MODE_V2") != "recursive_spend_v2":
-        errors.append(f"{MODEL}: first-release mode must be exactly recursive_spend_v2")
+        errors.append(f"{MODEL}: internal artifact mode must be exactly recursive_spend_v2")
+    if (
+        rust_string_constant(model, "KAGEMUSHA_RECURSIVE_SPEND_PRODUCT_MODE_V1")
+        != "recursive_spend_v1"
+    ):
+        errors.append(f"{MODEL}: public product selector must be exactly recursive_spend_v1")
 
     preferred = re.search(
         r"pub\s+const\s+fn\s+preferred_kagemusha_offline_spend_mode\(\s*"
@@ -205,10 +209,10 @@ def check_release_contract() -> list[str]:
         normalized = re.sub(r"\s+", " ", preferred.group("body")).strip()
         expected = (
             "if pasta_cycle_v3_backend_available { "
-            "Some(KAGEMUSHA_RECURSIVE_SPEND_MODE_V2) } else { None }"
+            "Some(KAGEMUSHA_RECURSIVE_SPEND_PRODUCT_MODE_V1) } else { None }"
         )
         if normalized != expected:
-            errors.append(f"{MODEL}: first-release selector must expose only recursive_spend_v2")
+            errors.append(f"{MODEL}: first-release selector must expose only recursive_spend_v1")
 
     input_match = re.search(
         r"const\s+INPUTS\s*:\s*&\[InputSpec\]\s*=\s*&\[(?P<body>[\s\S]*?)\n\];",
@@ -338,30 +342,34 @@ def check_release_contract() -> list[str]:
             if symbol not in bridge:
                 errors.append(f"{BRIDGE}: missing JNI export `{symbol}`")
 
-    swift_prover = read(SWIFT_PROVER)
+    swift_v2 = read(SWIFT_V2)
     swift_mode = enum_body(
-        swift_prover,
+        swift_v2,
         r"public\s+enum\s+KagemushaOfflineSpendMode[^\{]*\{(?P<body>[\s\S]*?)\n\}",
     )
     swift_cases = set() if swift_mode is None else set(re.findall(r"case\s+(\w+)\s*=", swift_mode))
     if swift_cases != {"recursiveSpend"}:
-        errors.append(f"{SWIFT_PROVER}: first-release mode enum must contain only recursiveSpend")
+        errors.append(f"{SWIFT_V2}: first-release mode enum must contain only recursiveSpend")
     add_missing(
         errors,
-        SWIFT_PROVER,
-        swift_prover,
+        SWIFT_V2,
+        swift_v2,
         (
-            "pastaCycleV3BackendAvailable ? .recursiveSpend : nil",
+            'case recursiveSpend = "recursive_spend_v1"',
+            "public static func preferredProductionMode(",
+            "proofBackendAvailable && nativeStubAvailable ? .recursiveSpend : nil",
         ),
     )
-    swift_v2 = read(SWIFT_V2)
     add_missing(
         errors,
         SWIFT_V2,
         swift_v2,
         (
             "requiredNativeBridgeAbiVersion: UInt32 = 18",
-            'public static let mode = "recursive_spend_v2"',
+            'public static let productMode = "recursive_spend_v1"',
+            'public static let artifactManifestMode = "recursive_spend_v2"',
+            "public static let mode = productMode",
+            "mode == KagemushaRecursiveSpend.artifactManifestMode",
             "public static func verifyTopUpFinality(",
             "anchor: KagemushaRecursiveSpendTopUpAnchor,",
             "anchorArchive: anchor.archive,",
@@ -432,7 +440,8 @@ def check_release_contract() -> list[str]:
         kotlin,
         (
             "REQUIRED_NATIVE_BRIDGE_ABI_VERSION: Int = 18",
-            'MODE: String = "recursive_spend_v2"',
+            'MODE: String = "recursive_spend_v1"',
+            'PASTA_CYCLE_V3_MODE: String = "recursive_spend_v2"',
             "if (pastaCycleV3BackendAvailable) Mode.RECURSIVE_SPEND else null",
             "ArtifactIngest",
             "beginArtifactInstallSession",
@@ -465,7 +474,8 @@ def check_release_contract() -> list[str]:
         java,
         (
             "REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 18",
-            'MODE = "recursive_spend_v2"',
+            'MODE = "recursive_spend_v1"',
+            'PASTA_CYCLE_V3_MODE = "recursive_spend_v2"',
             "return pastaCycleV3BackendAvailable ? Mode.RECURSIVE_SPEND : null;",
             "ArtifactIngest",
             "beginArtifactInstallSession",
@@ -540,7 +550,9 @@ def check_release_contract() -> list[str]:
         SWIFT_README,
         swift_readme,
         (
-            "The first release exposes one Kagemusha production mode:",
+            "The first release exposes one Kagemusha product selector:",
+            "`recursive_spend_v1`",
+            "internal",
             "`recursive_spend_v2`",
             "exact native bridge ABI 18",
             "The release directory has exactly ten files:",
@@ -551,15 +563,13 @@ def check_release_contract() -> list[str]:
             "ambiguous terminal outcome rather than submitting the same operation again",
         ),
     )
-    for retired in ("recursive_spend_v1", "recursive_compact_v1", "ABI 6", "ABI 7"):
+    for retired in ("recursive_compact_v1", "ABI 6", "ABI 7"):
         if retired in swift_readme:
             errors.append(f"{SWIFT_README}: publishes retired release selection `{retired}`")
     for relative in (V2_CONTRACT_DOC, RECURSION_DOC):
         text = read(relative)
         if "recursive_spend_v2" not in text:
-            errors.append(f"{relative}: missing recursive_spend_v2 release mode")
-        if "recursive_spend_v1" in text:
-            errors.append(f"{relative}: publishes retired recursive_spend_v1 release mode")
+            errors.append(f"{relative}: missing recursive_spend_v2 internal artifact mode")
 
     workflow = read(WORKFLOW)
     add_missing(
@@ -616,18 +626,25 @@ def run_self_test() -> None:
             "must remain fail-closed",
         ),
         (
-            "mode substitution",
+            "internal artifact mode substitution",
             MODEL,
             'KAGEMUSHA_RECURSIVE_SPEND_MODE_V2: &str = "recursive_spend_v2";',
             'KAGEMUSHA_RECURSIVE_SPEND_MODE_V2: &str = "unsupported_mode";',
-            "first-release mode must be exactly recursive_spend_v2",
+            "internal artifact mode must be exactly recursive_spend_v2",
         ),
         (
-            "legacy Swift mode reintroduction",
-            SWIFT_PROVER,
-            '    case recursiveSpend = "recursive_spend_v2"',
-            '    case recursiveSpend = "recursive_spend_v2"\n'
-            '    case recursiveSpendV1 = "recursive_spend_v1"',
+            "product selector substitution",
+            MODEL,
+            'KAGEMUSHA_RECURSIVE_SPEND_PRODUCT_MODE_V1: &str = "recursive_spend_v1";',
+            'KAGEMUSHA_RECURSIVE_SPEND_PRODUCT_MODE_V1: &str = "unsupported_mode";',
+            "public product selector must be exactly recursive_spend_v1",
+        ),
+        (
+            "internal Swift mode reintroduction",
+            SWIFT_V2,
+            '    case recursiveSpend = "recursive_spend_v1"',
+            '    case recursiveSpend = "recursive_spend_v1"\n'
+            '    case recursiveSpendV2 = "recursive_spend_v2"',
             "mode enum must contain only recursiveSpend",
         ),
         (
@@ -685,5 +702,5 @@ else:
     failures = check_release_contract()
     if failures:
         raise SystemExit("\n".join(failures))
-    print("Kagemusha first-release contract is exact: ABI 18, recursive_spend_v2, ten files, V3 ingest only")
+    print("Kagemusha first-release contract is exact: public recursive_spend_v1, internal recursive_spend_v2, ABI 18, ten files, V3 ingest only")
 PY

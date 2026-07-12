@@ -16281,9 +16281,6 @@ impl SumeragiStartArgs {
         let frontier_block_sync_hint = handle.frontier_block_sync_hint();
         frontier_block_sync_hint.set_initialized(false);
 
-        let rbc_status_handle = rbc_status::register_handle();
-        rbc_status::set_active(&rbc_status_handle);
-
         let actor = SumeragiWorker {
             config,
             common_config,
@@ -16318,7 +16315,6 @@ impl SumeragiStartArgs {
             wake_tx,
             wake_rx,
             shutdown_signal,
-            rbc_status_handle,
         };
 
         let join_handle = tokio::task::spawn(spawn_os_thread_as_future(
@@ -16367,7 +16363,6 @@ struct SumeragiWorker {
     wake_tx: mpsc::SyncSender<()>,
     wake_rx: mpsc::Receiver<()>,
     shutdown_signal: ShutdownSignal,
-    rbc_status_handle: rbc_status::Handle,
 }
 
 fn is_authoritative_v2_protocol(protocol_version: u32) -> bool {
@@ -18593,7 +18588,6 @@ impl SumeragiWorker {
             wake_tx,
             wake_rx,
             shutdown_signal,
-            rbc_status_handle,
             consensus_frame_cap,
             consensus_payload_frame_cap,
             config,
@@ -18686,6 +18680,7 @@ impl SumeragiWorker {
             startup_trace_started_at,
         );
         let actor_state = Arc::clone(&state);
+        let rbc_status_handle = rbc_status::register_handle();
         let mut actor = match crate::sumeragi::main_loop::Actor::new_with_block_sync_hint(
             config,
             common_config,

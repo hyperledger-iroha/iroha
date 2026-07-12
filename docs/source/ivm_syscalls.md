@@ -20,7 +20,7 @@ Durable helpers (ABI v1)
 
 Pointer‑ABI calling convention (smart‑contract syscalls)
 - Arguments are placed in registers `r10+` as raw `u64` values or as pointers to immutable Norito TLV envelopes in INPUT, an allocated HEAP range, or an exact loader-authenticated code literal (e.g., `AccountId`, `AssetDefinitionId`, `Name`, `Json`, `NftId`).
-- Scalar return values are the `u64` returned from the host. Pointer results are written by the host into `r10`.
+- Scalar return values are the `u64` returned from the host. Pointer results are written into `r10`; host-produced TLVs use INPUT first and deterministically spill to allocated HEAP when INPUT is full.
 
 Canonical syscall table (subset)
 
@@ -159,4 +159,4 @@ This section documents the TLV shapes and minimal JSON payloads accepted by the 
   - UNREGISTER_ASSET (`r10=&AssetDefinitionId`) fails if any balances exist for the asset.
 
 Notes
-- These examples reflect the mock WSV host used in tests; real node hosts may expose richer admin schemas or require additional validation. The pointer‑ABI rules still apply: TLVs must be in INPUT, version=1, type IDs must match, and payload hashes must validate.
+- These examples reflect the mock WSV host used in tests; real node hosts may expose richer admin schemas or require additional validation. The pointer‑ABI rules still apply: TLVs must have allowed provenance (INPUT, allocated HEAP, or an exact loader-authenticated literal), version 1, matching type IDs, and valid payload hashes.

@@ -48,7 +48,7 @@ use crate::{
     state::{
         LaneIncarnationLineage, SnapshotNexusRuntime, SnapshotNoritoBlob,
         SnapshotPublicLaneRewardClaim, SnapshotSpaceDirectoryManifestSet, State,
-        deserialize::KuraSeed, lane_incarnation_lineage_root,
+        ZkConfigInstallError, deserialize::KuraSeed, lane_incarnation_lineage_root,
         public_lane_reward_record_matches_key, public_lane_stake_share_matches_key,
         public_lane_validator_record_matches_key, storage_transactions::TransactionsBlockError,
     },
@@ -1295,7 +1295,7 @@ fn reconcile_snapshot_hashes_with_kura(
 
 #[allow(clippy::too_many_lines)]
 #[allow(clippy::too_many_arguments)]
-fn try_read_snapshot_bundle(
+fn try_read_snapshot_bundle<F>(
     bytes: &[u8],
     data_used_tmp: bool,
     store_dir: &Path,
@@ -1305,8 +1305,12 @@ fn try_read_snapshot_bundle(
     merkle_chunk_size: NonZeroUsize,
     verification_key: &PublicKey,
     expected_chain_id: &ChainId,
+    initialize_state: &F,
     #[cfg(feature = "telemetry")] telemetry: StateTelemetry,
-) -> Result<SnapshotReadOutcome, TryReadError> {
+) -> Result<SnapshotReadOutcome, TryReadError>
+where
+    F: Fn(&mut State) -> Result<(), TryReadError>,
+{
     let digest_path = store_dir.join(SNAPSHOT_DIGEST_FILE_NAME);
     let digest_tmp_path = store_dir.join(SNAPSHOT_DIGEST_TMP_FILE_NAME);
     let digest_bytes = Sha256::digest(bytes);
@@ -1397,6 +1401,11 @@ fn try_read_snapshot_bundle(
     if snapshot_height > block_count && !has_space_directory_manifest_section {
         return Err(TryReadError::MissingSpaceDirectoryManifestSection { snapshot_height });
     }
+    // Runtime configuration must be installed after semantic decoding and all
+    // read-only snapshot checks, but before any snapshot-driven Kura extension,
+    // pruning, or legacy recovery. A rejected configuration therefore leaves
+    // durable storage untouched.
+    initialize_state(&mut state)?;
     let hash_override_after_height = hard_fork_snapshot_bootstrap_hash_override_after_height(
         block_count,
         hard_fork_snapshot_bootstrap,
@@ -1444,11 +1453,14 @@ fn try_read_snapshot_bundle(
     })
 }
 
-/// Try to deserialize [`State`] from a snapshot file.
+/// Deserialize [`State`] and install the actual runtime ZK configuration
+/// before snapshot reconciliation is allowed to mutate Kura.
 ///
 /// # Errors
-/// - IO errors
-/// - Deserialization errors
+///
+/// Returns all ordinary snapshot read errors, plus
+/// [`TryReadError::ZkConfigInstall`] when the decoded committed SCCP outbox is
+/// incompatible with the actual configured pending limits.
 #[allow(clippy::too_many_lines)]
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::needless_pass_by_value)]
@@ -1456,12 +1468,48 @@ pub fn try_read_snapshot(
     store_dir: impl AsRef<Path>,
     kura: &Arc<Kura>,
     live_query_store_lazy: impl FnOnce() -> LiveQueryStoreHandle,
+    block_count: BlockCount,
+    merkle_chunk_size: NonZeroUsize,
+    verification_key: &PublicKey,
+    expected_chain_id: &ChainId,
+    zk: &iroha_config::parameters::actual::Zk,
+    #[cfg(feature = "telemetry")] telemetry: StateTelemetry,
+) -> Result<State, TryReadError> {
+    try_read_snapshot_with_initializer(
+        store_dir,
+        kura,
+        live_query_store_lazy,
+        block_count,
+        merkle_chunk_size,
+        verification_key,
+        expected_chain_id,
+        &|state| {
+            state
+                .set_zk(zk.clone())
+                .map_err(TryReadError::ZkConfigInstall)
+        },
+        #[cfg(feature = "telemetry")]
+        telemetry,
+    )
+}
+
+#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_arguments)]
+#[allow(clippy::needless_pass_by_value)]
+fn try_read_snapshot_with_initializer<F>(
+    store_dir: impl AsRef<Path>,
+    kura: &Arc<Kura>,
+    live_query_store_lazy: impl FnOnce() -> LiveQueryStoreHandle,
     BlockCount(block_count): BlockCount,
     merkle_chunk_size: NonZeroUsize,
     verification_key: &PublicKey,
     expected_chain_id: &ChainId,
+    initialize_state: &F,
     #[cfg(feature = "telemetry")] telemetry: StateTelemetry,
-) -> Result<State, TryReadError> {
+) -> Result<State, TryReadError>
+where
+    F: Fn(&mut State) -> Result<(), TryReadError>,
+{
     let store_dir = store_dir.as_ref();
     let path = store_dir.join(SNAPSHOT_FILE_NAME);
     let tmp_path = store_dir.join(SNAPSHOT_TMP_FILE_NAME);
@@ -1484,6 +1532,7 @@ pub fn try_read_snapshot(
             merkle_chunk_size,
             verification_key,
             expected_chain_id,
+            initialize_state,
             #[cfg(feature = "telemetry")]
             telemetry.clone(),
         )
@@ -1500,6 +1549,7 @@ pub fn try_read_snapshot(
             merkle_chunk_size,
             verification_key,
             expected_chain_id,
+            initialize_state,
             #[cfg(feature = "telemetry")]
             telemetry.clone(),
         )
@@ -1509,6 +1559,13 @@ pub fn try_read_snapshot(
         Some(bytes) => match attempt_main(bytes) {
             Ok(outcome) => outcome,
             Err(main_err) => {
+                if !snapshot_error_allows_temp_fallback(&main_err) {
+                    // Configuration incompatibility is a property of the
+                    // committed state, not corrupt primary snapshot bytes.
+                    // Falling back to an older temp snapshot would turn the
+                    // configured cap into a rollback oracle and fail open.
+                    return Err(main_err);
+                }
                 if let Some(tmp_bytes) = tmp_bytes.as_deref() {
                     iroha_logger::warn!(
                         ?main_err,
@@ -1576,6 +1633,10 @@ pub fn try_read_snapshot(
         sync_dir_best_effort(store_dir);
     }
     Ok(outcome.state)
+}
+
+fn snapshot_error_allows_temp_fallback(error: &TryReadError) -> bool {
+    !matches!(error, TryReadError::ZkConfigInstall(_))
 }
 
 fn cleanup_tmp_snapshot_files(store_dir: &Path) -> bool {
@@ -2195,6 +2256,8 @@ pub enum TryReadError {
     },
     /// Snapshot contains an invalid governed SCCP registry (`{0}`)
     InvalidSccpRegistry(String),
+    /// Snapshot state is incompatible with runtime ZK configuration: {0}
+    ZkConfigInstall(#[source] ZkConfigInstallError),
     /// Snapshot is in a non-consistent state. Snapshot has greater height (`{snapshot_height}`) than kura block store (`{kura_height}`)
     MismatchedHeight {
         /// The amount of block hashes stored by snapshot
@@ -2305,7 +2368,14 @@ enum TryWriteError {
 
 #[cfg(test)]
 mod tests {
-    use std::{borrow::Cow, fs::File, io::Write, num::NonZeroUsize, path::Path, sync::Arc};
+    use std::{
+        borrow::Cow,
+        fs::File,
+        io::Write,
+        num::{NonZeroU64, NonZeroUsize},
+        path::Path,
+        sync::Arc,
+    };
 
     use iroha_config::{
         base::WithOrigin,
@@ -2425,6 +2495,17 @@ mod tests {
         ));
     }
 
+    #[test]
+    async fn zk_config_incompatibility_cannot_fall_back_to_stale_temp_snapshot() {
+        let error = TryReadError::ZkConfigInstall(ZkConfigInstallError::InvalidSccpPendingUsage {
+            usage: iroha_data_model::bridge::SccpOutboundPendingUsageV1 {
+                message_count: 0,
+                payload_bytes: 1,
+            },
+        });
+        assert!(!snapshot_error_allows_temp_fallback(&error));
+    }
+
     fn state_factory_with_kura(kura: Arc<Kura>) -> State {
         let query_handle = LiveQueryStore::start_test();
         let mut state = State::new(
@@ -2454,6 +2535,162 @@ mod tests {
                 routes: vec![route],
             }],
         }
+    }
+
+    fn state_with_exact_pending_sccp_snapshot_fixture(
+        kura: Arc<Kura>,
+    ) -> (
+        State,
+        iroha_data_model::bridge::SccpOutboundMessageKeyV1,
+        iroha_data_model::bridge::SccpOutboundPendingMessageRecordV1,
+    ) {
+        let exact = iroha_sccp::sccp_exact_outbound_test_fixture_v1();
+        let provisional_finality =
+            iroha_sccp::decode_taira_bridge_finality_proof(&exact.bundle.finality_proof)
+                .expect("exact provisional SCCP finality fixture decodes");
+        let payload_bytes = iroha_sccp::canonical_sccp_payload_bytes(&exact.bundle.payload)
+            .expect("exact SCCP payload encodes canonically");
+        let instruction = crate::bridge::test_record_sccp_message(payload_bytes.clone());
+        assert_eq!(
+            instruction.context, exact.bundle.commitment.context,
+            "exact snapshot block instruction must preserve the bundle context"
+        );
+        let transaction_key = checked_seeded_keypair(0x34, Algorithm::Ed25519);
+        let authority = AccountId::new(transaction_key.public_key().clone());
+        let transaction = TransactionBuilder::new(
+            ChainId::from(iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1),
+            authority,
+        )
+        .with_executable(iroha_data_model::transaction::Executable::IvmProved(
+            iroha_data_model::transaction::IvmProved {
+                bytecode: iroha_data_model::transaction::IvmBytecode::from_compiled(vec![
+                    0x01, 0x02, 0x03,
+                ]),
+                overlay: vec![iroha_data_model::isi::InstructionBox::from(instruction)].into(),
+                events_commitment: Hash::new(b"snapshot-sccp-events"),
+                gas_policy_commitment: Hash::new(b"snapshot-sccp-gas"),
+            },
+        ))
+        .sign(transaction_key.private_key());
+        let entry_hash = transaction.hash_as_entrypoint();
+        let block_signer = checked_seeded_keypair(0x35, Algorithm::Ed25519);
+        let template_header = provisional_finality.block_header;
+        let mut provisional_header = iroha_data_model::block::BlockHeader::new(
+            template_header.height(),
+            template_header.prev_block_hash(),
+            None,
+            None,
+            u64::try_from(template_header.creation_time().as_millis())
+                .expect("fixture creation time fits u64"),
+            template_header.view_change_index(),
+        );
+        provisional_header.set_sccp_commitment_root(template_header.sccp_commitment_root());
+        let signature = iroha_data_model::block::BlockSignature::new(
+            0,
+            iroha_crypto::SignatureOf::try_from_hash(
+                block_signer.private_key(),
+                provisional_header.hash(),
+            )
+            .expect("sign provisional retained SCCP header"),
+        );
+        let mut block = SignedBlock::presigned(signature, provisional_header, vec![transaction]);
+        block
+            .set_transaction_results(
+                Vec::new(),
+                &[entry_hash],
+                vec![iroha_data_model::transaction::TransactionResultInner::Ok(
+                    iroha_data_model::transaction::DataTriggerSequence::default(),
+                )],
+            )
+            .expect("exact retained SCCP block results");
+        assert!(
+            provisional_finality
+                .finality_artifact
+                .validate_for_header(&block.header())
+                .is_err(),
+            "pre-finalization SCCP artifact must reject the completed snapshot block"
+        );
+        let signature = iroha_data_model::block::BlockSignature::new(
+            0,
+            iroha_crypto::SignatureOf::try_from_hash(block_signer.private_key(), block.hash())
+                .expect("sign completed retained SCCP header"),
+        );
+        block
+            .replace_signatures([signature].into_iter().collect())
+            .expect("replace provisional retained SCCP signature");
+        block
+            .signatures()
+            .next()
+            .expect("completed retained SCCP signature")
+            .signature()
+            .verify_hash(block_signer.public_key(), block.hash())
+            .expect("completed retained SCCP signature verifies");
+        crate::bridge::validate_sccp_commitment_root_for_signed_block(&block)
+            .expect("completed snapshot block authenticates its exact SCCP message");
+
+        let exact = exact.with_finalized_block(&block, None);
+        let finality = iroha_sccp::decode_taira_bridge_finality_proof(&exact.bundle.finality_proof)
+            .expect("exact completed SCCP finality fixture decodes");
+        assert_eq!(block.header(), finality.block_header);
+        assert_eq!(block.hash(), finality.finality_artifact.block_hash);
+        assert_eq!(
+            exact.request.public_inputs.finality_block_hash,
+            <[u8; 32]>::from(Hash::from(block.hash()))
+        );
+        finality
+            .finality_artifact
+            .validate_for_header(&block.header())
+            .expect("completed snapshot SCCP artifact binds the exact block header");
+        finality
+            .finality_artifact
+            .verify()
+            .expect("completed snapshot SCCP artifact is cryptographically valid");
+        let block = Arc::new(block);
+        kura.persist_block_with_retained_archive_for_tests(&block)
+            .expect("persist exact SCCP block and archive");
+        let _ = kura
+            .store_v2_finality_artifact(&finality.finality_artifact)
+            .expect("persist exact SCCP finality artifact");
+
+        let mut state = state_factory_with_kura(Arc::clone(&kura));
+        state.chain_id = ChainId::from(iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1);
+        state.push_block_hash_for_testing(block.hash());
+        let (_, source_identity, trust_anchor) =
+            iroha_sccp::sccp_native_ethereum_transfer_inbound_test_fixture_v1();
+        assert_eq!(
+            exact.route.source_identity, source_identity,
+            "exact snapshot route and native trust anchor must share one source identity"
+        );
+        state.set_sccp_registry_for_testing(
+            crate::state::ValidatedSccpRegistryV1::try_from_wire(
+                iroha_data_model::bridge::SccpRegistryV1 {
+                    version: 1,
+                    lanes: vec![iroha_data_model::bridge::SccpGovernedLaneV1 {
+                        lane_id: exact.route.lane_id,
+                        native_trust_anchors: vec![trust_anchor],
+                        current_native_trust_anchor_hash: Some(trust_anchor.anchor_hash),
+                        routes: vec![exact.route.clone()],
+                    }],
+                },
+            )
+            .expect("exact outbound snapshot registry validates"),
+        );
+        let key = iroha_data_model::bridge::SccpOutboundMessageKeyV1 {
+            lane: exact.bundle.commitment.context.lane,
+            message_id: exact.bundle.commitment.message_id,
+        };
+        let record = iroha_data_model::bridge::SccpOutboundPendingMessageRecordV1 {
+            destination_binding_hash: exact.bundle.commitment.context.destination_binding_hash,
+            route_configuration_hash: exact.bundle.commitment.context.route_configuration_hash,
+            payload_hash: exact.bundle.commitment.payload_hash,
+            payload_bytes,
+            recorded_at_height: 1,
+            commitment_index: 0,
+        };
+        state
+            .insert_sccp_outbound_message_for_testing(key, record.clone())
+            .expect("insert canonical SCCP outbound snapshot fixture");
+        (state, key, record)
     }
     fn kura_config_for_snapshot_test(
         store_dir: &Path,
@@ -3035,6 +3272,7 @@ mod tests {
             TEST_CHUNK_SIZE,
             key_pair.public_key(),
             &state.chain_id,
+            &crate::state::default_zk_config(),
             #[cfg(feature = "telemetry")]
             StateTelemetry::new(<_>::default(), true),
         )
@@ -3113,6 +3351,7 @@ mod tests {
             TEST_CHUNK_SIZE,
             snapshot_key.public_key(),
             &expected_chain_id,
+            &crate::state::default_zk_config(),
             #[cfg(feature = "telemetry")]
             StateTelemetry::new(<_>::default(), true),
         )
@@ -3202,6 +3441,7 @@ mod tests {
                 TEST_CHUNK_SIZE,
                 snapshot_key.public_key(),
                 &state.chain_id,
+                &crate::state::default_zk_config(),
                 #[cfg(feature = "telemetry")]
                 StateTelemetry::new(<_>::default(), true),
             ) {
@@ -3254,6 +3494,7 @@ mod tests {
             TEST_CHUNK_SIZE,
             key_pair.public_key(),
             &state.chain_id,
+            &crate::state::default_zk_config(),
             #[cfg(feature = "telemetry")]
             StateTelemetry::new(<_>::default(), true),
         )
@@ -3297,6 +3538,7 @@ mod tests {
                 TEST_CHUNK_SIZE,
                 key_pair.public_key(),
                 &state.chain_id,
+                &crate::state::default_zk_config(),
                 #[cfg(feature = "telemetry")]
                 StateTelemetry::new(<_>::default(), true),
             );
@@ -3379,43 +3621,8 @@ mod tests {
         let tmp_root = tempdir().unwrap();
         let store_dir = tmp_root.path().join("snapshot");
         let kura = Kura::blank_kura_for_testing();
-        let mut state = state_factory_with_kura(Arc::clone(&kura));
-        state.chain_id =
-            iroha_data_model::ChainId::from(iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1);
-        let block =
-            signed_block_with_transaction(accepted_log_transaction("sccp-outbound-snapshot"));
-        store_block_and_mark_state_height(&mut state, &kura, block);
-        let exact = iroha_sccp::sccp_exact_outbound_test_fixture_v1();
-        state.set_sccp_registry_for_testing(
-            crate::state::ValidatedSccpRegistryV1::try_from_wire(
-                iroha_data_model::bridge::SccpRegistryV1 {
-                    version: 1,
-                    lanes: vec![iroha_data_model::bridge::SccpGovernedLaneV1 {
-                        lane_id: exact.route.lane_id,
-                        native_trust_anchors: Vec::new(),
-                        current_native_trust_anchor_hash: None,
-                        routes: vec![exact.route.clone()],
-                    }],
-                },
-            )
-            .expect("exact outbound snapshot registry validates"),
-        );
-        let key = iroha_data_model::bridge::SccpOutboundMessageKeyV1 {
-            lane: exact.bundle.commitment.context.lane,
-            message_id: exact.bundle.commitment.message_id,
-        };
-        let record = iroha_data_model::bridge::SccpOutboundPendingMessageRecordV1 {
-            destination_binding_hash: exact.bundle.commitment.context.destination_binding_hash,
-            route_configuration_hash: exact.bundle.commitment.context.route_configuration_hash,
-            payload_hash: exact.bundle.commitment.payload_hash,
-            payload_bytes: iroha_sccp::canonical_sccp_payload_bytes(&exact.bundle.payload)
-                .expect("exact fixture payload encodes canonically"),
-            recorded_at_height: u64::try_from(state.view().height()).expect("height fits u64"),
-            commitment_index: 0,
-        };
-        state
-            .insert_sccp_outbound_message_for_testing(key, record.clone())
-            .expect("insert canonical SCCP outbound snapshot fixture");
+        let (state, key, record) =
+            state_with_exact_pending_sccp_snapshot_fixture(Arc::clone(&kura));
         let key_pair = checked_random_snapshot_keypair();
 
         try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE).unwrap();
@@ -3441,6 +3648,7 @@ mod tests {
             TEST_CHUNK_SIZE,
             key_pair.public_key(),
             &state.chain_id,
+            &crate::state::default_zk_config(),
             #[cfg(feature = "telemetry")]
             StateTelemetry::new(<_>::default(), true),
         )
@@ -3462,6 +3670,99 @@ mod tests {
                 .get()
                 .message_count,
             1
+        );
+    }
+
+    #[test]
+    async fn incompatible_sccp_caps_reject_before_snapshot_can_prune_kura() {
+        let tmp_root = tempdir().unwrap();
+        let store_dir = tmp_root.path().join("snapshot");
+        let kura = Kura::blank_kura_for_testing();
+        let (state, _, record) = state_with_exact_pending_sccp_snapshot_fixture(Arc::clone(&kura));
+        let key_pair = checked_random_snapshot_keypair();
+        try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE)
+            .expect("write exact SCCP snapshot");
+
+        // A latest-hash mismatch would normally reconcile by reverting the
+        // snapshot and pruning Kura. Keep every SCCP record/archive association
+        // exact so the configured-cap rejection is the first failing boundary.
+        let snapshot_bytes =
+            std::fs::read(store_dir.join(SNAPSHOT_FILE_NAME)).expect("snapshot bytes");
+        let mut snapshot_value: json::Value =
+            json::from_slice(&snapshot_bytes).expect("snapshot JSON parses");
+        let json::Value::Object(root) = &mut snapshot_value else {
+            panic!("snapshot root is an object");
+        };
+        let Some(json::Value::Array(block_hashes)) = root.get_mut("block_hashes") else {
+            panic!("snapshot block hashes are an array");
+        };
+        assert_eq!(block_hashes.len(), 1);
+        let forged_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA5; 32]));
+        assert_ne!(
+            forged_hash,
+            state.latest_block_hash_fast().expect("fixture block hash")
+        );
+        block_hashes[0] = json::to_value(&forged_hash).expect("encode forged block hash");
+        let mut forged_snapshot_bytes = Vec::new();
+        json::to_writer(&mut forged_snapshot_bytes, &snapshot_value)
+            .expect("encode forged snapshot");
+        write_snapshot_bundle_from_bytes(&store_dir, &forged_snapshot_bytes, &key_pair);
+
+        let canonical_hash = kura
+            .block_hash_at_height(nonzero!(1_usize))
+            .expect("canonical Kura hash");
+        let body_before = kura
+            .get_block(nonzero!(1_usize))
+            .expect("canonical Kura body");
+        let retained_before = kura
+            .v2_finality_artifact_with_archive(1)
+            .expect("read exact retained SCCP material")
+            .expect("exact retained SCCP material exists");
+        let mut incompatible = state.zk_snapshot();
+        let payload_bytes = u64::try_from(record.payload_bytes.len()).expect("small payload");
+        incompatible.sccp.max_pending_outbound_payload_bytes =
+            NonZeroU64::new(payload_bytes - 1).expect("fixture payload exceeds one byte");
+
+        let error = match try_read_snapshot(
+            &store_dir,
+            &kura,
+            LiveQueryStore::start_test,
+            BlockCount(1),
+            TEST_CHUNK_SIZE,
+            key_pair.public_key(),
+            &state.chain_id,
+            &incompatible,
+            #[cfg(feature = "telemetry")]
+            StateTelemetry::new(<_>::default(), true),
+        ) {
+            Ok(_) => panic!("incompatible actual SCCP cap must fail before reconciliation"),
+            Err(error) => error,
+        };
+        assert!(matches!(
+            error,
+            TryReadError::ZkConfigInstall(
+                ZkConfigInstallError::SccpPendingUsageLimitExceeded { .. }
+            )
+        ));
+
+        assert_eq!(kura.blocks_count(), 1, "rejected snapshot pruned Kura");
+        assert_eq!(kura.durable_blocks_count(), 1);
+        assert_eq!(
+            kura.block_hash_at_height(nonzero!(1_usize)),
+            Some(canonical_hash)
+        );
+        assert_eq!(
+            kura.get_block(nonzero!(1_usize)),
+            Some(body_before),
+            "rejected snapshot changed the canonical block body"
+        );
+        assert_eq!(
+            kura.v2_finality_artifact_with_archive(1)
+                .expect("read retained SCCP material after rejection")
+                .expect("retained SCCP material still exists"),
+            retained_before,
+            "rejected snapshot changed retained header, finality, or archive material"
         );
     }
 
@@ -3515,6 +3816,7 @@ mod tests {
             TEST_CHUNK_SIZE,
             key_pair.public_key(),
             &state.chain_id,
+            &crate::state::default_zk_config(),
             #[cfg(feature = "telemetry")]
             StateTelemetry::default(),
         ) else {
@@ -3546,6 +3848,7 @@ mod tests {
             TEST_CHUNK_SIZE,
             key_pair.public_key(),
             &state.chain_id,
+            &crate::state::default_zk_config(),
             #[cfg(feature = "telemetry")]
             StateTelemetry::default(),
         ) else {
@@ -3587,6 +3890,7 @@ mod tests {
                 TEST_CHUNK_SIZE,
                 key_pair.public_key(),
                 &state.chain_id,
+                &crate::state::default_zk_config(),
                 #[cfg(feature = "telemetry")]
                 StateTelemetry::default(),
             ) else {
@@ -3639,6 +3943,7 @@ mod tests {
                 TEST_CHUNK_SIZE,
                 key_pair.public_key(),
                 &state.chain_id,
+                &crate::state::default_zk_config(),
                 #[cfg(feature = "telemetry")]
                 StateTelemetry::default(),
             ) else {
@@ -3683,6 +3988,7 @@ mod tests {
             TEST_CHUNK_SIZE,
             key_pair.public_key(),
             &state.chain_id,
+            &crate::state::default_zk_config(),
             #[cfg(feature = "telemetry")]
             StateTelemetry::new(<_>::default(), true),
         )
@@ -3733,6 +4039,7 @@ mod tests {
             TEST_CHUNK_SIZE,
             key_pair.public_key(),
             &state.chain_id,
+            &crate::state::default_zk_config(),
             #[cfg(feature = "telemetry")]
             StateTelemetry::new(<_>::default(), true),
         )
@@ -3776,6 +4083,7 @@ mod tests {
             TEST_CHUNK_SIZE,
             key_pair.public_key(),
             &state.chain_id,
+            &crate::state::default_zk_config(),
             #[cfg(feature = "telemetry")]
             StateTelemetry::new(<_>::default(), true),
         )
@@ -3805,6 +4113,7 @@ mod tests {
             TEST_CHUNK_SIZE,
             key_pair.public_key(),
             &state.chain_id,
+            &crate::state::default_zk_config(),
             #[cfg(feature = "telemetry")]
             StateTelemetry::new(<_>::default(), true),
         );
@@ -3897,6 +4206,7 @@ mod tests {
             TEST_CHUNK_SIZE,
             key_pair.public_key(),
             &state.chain_id,
+            &crate::state::default_zk_config(),
             #[cfg(feature = "telemetry")]
             StateTelemetry::new(<_>::default(), true),
         )
@@ -3930,6 +4240,7 @@ mod tests {
             TEST_CHUNK_SIZE,
             key_pair.public_key(),
             &expected_chain_id,
+            &crate::state::default_zk_config(),
             #[cfg(feature = "telemetry")]
             StateTelemetry::new(<_>::default(), true),
         )
@@ -4005,6 +4316,7 @@ mod tests {
             TEST_CHUNK_SIZE,
             key_pair.public_key(),
             &state.chain_id,
+            &crate::state::default_zk_config(),
             #[cfg(feature = "telemetry")]
             StateTelemetry::new(<_>::default(), true),
         )
@@ -4127,6 +4439,7 @@ mod tests {
             TEST_CHUNK_SIZE,
             key_pair.public_key(),
             &state.chain_id,
+            &crate::state::default_zk_config(),
             #[cfg(feature = "telemetry")]
             StateTelemetry::new(<_>::default(), true),
         )
@@ -4168,6 +4481,7 @@ mod tests {
             TEST_CHUNK_SIZE,
             key_pair.public_key(),
             &state.chain_id,
+            &crate::state::default_zk_config(),
             #[cfg(feature = "telemetry")]
             StateTelemetry::new(<_>::default(), true),
         )
@@ -4246,6 +4560,7 @@ mod tests {
             TEST_CHUNK_SIZE,
             key_pair.public_key(),
             &expected_chain_id,
+            &crate::state::default_zk_config(),
             #[cfg(feature = "telemetry")]
             StateTelemetry::new(<_>::default(), true),
         )
@@ -4306,6 +4621,7 @@ mod tests {
             TEST_CHUNK_SIZE,
             key_pair.public_key(),
             &expected_chain_id,
+            &crate::state::default_zk_config(),
             #[cfg(feature = "telemetry")]
             StateTelemetry::new(<_>::default(), true),
         )
@@ -4408,6 +4724,7 @@ mod tests {
             TEST_CHUNK_SIZE,
             key_pair.public_key(),
             &chain_id,
+            &crate::state::default_zk_config(),
             #[cfg(feature = "telemetry")]
             StateTelemetry::default(),
         ) else {
@@ -4452,6 +4769,7 @@ mod tests {
             TEST_CHUNK_SIZE,
             key_pair.public_key(),
             &chain_id,
+            &crate::state::default_zk_config(),
             #[cfg(feature = "telemetry")]
             StateTelemetry::default(),
         ) else {
@@ -4480,6 +4798,7 @@ mod tests {
             TEST_CHUNK_SIZE,
             key_pair.public_key(),
             &state.chain_id,
+            &crate::state::default_zk_config(),
             #[cfg(feature = "telemetry")]
             StateTelemetry::default(),
         ) else {
@@ -4507,6 +4826,7 @@ mod tests {
             TEST_CHUNK_SIZE,
             key_pair.public_key(),
             &expected_chain_id,
+            &crate::state::default_zk_config(),
             #[cfg(feature = "telemetry")]
             StateTelemetry::default(),
         ) else {
@@ -4561,6 +4881,7 @@ mod tests {
             TEST_CHUNK_SIZE,
             key_pair.public_key(),
             &state.chain_id,
+            &crate::state::default_zk_config(),
             #[cfg(feature = "telemetry")]
             StateTelemetry::default(),
         ) else {
@@ -4588,6 +4909,7 @@ mod tests {
             TEST_CHUNK_SIZE,
             key_pair.public_key(),
             &state.chain_id,
+            &crate::state::default_zk_config(),
             #[cfg(feature = "telemetry")]
             StateTelemetry::default(),
         ) else {
@@ -4621,6 +4943,7 @@ mod tests {
             TEST_CHUNK_SIZE,
             key_pair.public_key(),
             &state.chain_id,
+            &crate::state::default_zk_config(),
             #[cfg(feature = "telemetry")]
             StateTelemetry::default(),
         ) else {
@@ -4657,6 +4980,7 @@ mod tests {
             TEST_CHUNK_SIZE,
             key_pair.public_key(),
             &state.chain_id,
+            &crate::state::default_zk_config(),
             #[cfg(feature = "telemetry")]
             StateTelemetry::default(),
         ) else {
@@ -4690,6 +5014,7 @@ mod tests {
             TEST_CHUNK_SIZE,
             key_pair.public_key(),
             &state.chain_id,
+            &crate::state::default_zk_config(),
             #[cfg(feature = "telemetry")]
             StateTelemetry::default(),
         ) else {
@@ -4831,6 +5156,7 @@ mod tests {
             TEST_CHUNK_SIZE,
             key_pair.public_key(),
             &state.chain_id,
+            &crate::state::default_zk_config(),
             #[cfg(feature = "telemetry")]
             StateTelemetry::default(),
         )
@@ -4914,6 +5240,7 @@ mod tests {
             TEST_CHUNK_SIZE,
             key_pair.public_key(),
             &state.chain_id,
+            &crate::state::default_zk_config(),
             #[cfg(feature = "telemetry")]
             <_>::default(),
         )

@@ -3282,6 +3282,186 @@ export interface RetailRecipientLookupResponse {
   full_name?: string;
 }
 
+export type IdentifierBfvInteger = number | bigint;
+
+export interface IdentifierBfvParameters {
+  polynomial_degree: number;
+  plaintext_modulus: IdentifierBfvInteger;
+  ciphertext_modulus: IdentifierBfvInteger;
+  decomposition_base_log: number;
+}
+
+export interface IdentifierBfvPublicKey {
+  b: ReadonlyArray<IdentifierBfvInteger>;
+  a: ReadonlyArray<IdentifierBfvInteger>;
+}
+
+export interface IdentifierBfvPublicParameters {
+  parameters: IdentifierBfvParameters;
+  public_key: IdentifierBfvPublicKey;
+  max_input_bytes: number;
+  norito_length_encoding?: string;
+}
+
+export interface RamLfeProgramProfile {
+  profile_version: number;
+  register_count: number;
+  memory_lane_count: number;
+  ciphertext_mul_per_step: number;
+  encrypted_input_mode: "encrypted_envelope_v1";
+  min_ciphertext_modulus: IdentifierBfvInteger;
+}
+
+export interface RamLfeProofVerifierMetadata {
+  proof_backend: string;
+  circuit_id: string;
+  public_inputs_schema_hash: string;
+  verifying_key_bytes_b64: string;
+}
+
+export interface RamLfeProgramPolicySummary {
+  program_id: string;
+  owner: string;
+  active: boolean;
+  resolver_public_key: string;
+  output_opening_public_key: string;
+  backend: string;
+  verification_mode: string;
+  input_encryption?: string;
+  input_encryption_public_parameters?: string;
+  input_encryption_public_parameters_decoded?: IdentifierBfvPublicParameters;
+  ram_fhe_profile?: RamLfeProgramProfile;
+  proof_verifier?: RamLfeProofVerifierMetadata;
+  note?: string;
+}
+
+export interface RamLfeProgramPolicyListResponse {
+  total: number;
+  items: ReadonlyArray<RamLfeProgramPolicySummary>;
+}
+
+export interface IdentifierPolicySummary {
+  policy_id: string;
+  program_id: string;
+  owner: string;
+  active: boolean;
+  normalization: string;
+  resolver_public_key: string;
+  output_opening_public_key: string;
+  backend: string;
+  input_encryption?: string;
+  input_encryption_public_parameters?: string;
+  input_encryption_public_parameters_decoded?: IdentifierBfvPublicParameters;
+  ram_fhe_profile?: RamLfeProgramProfile;
+  proof_verifier?: RamLfeProofVerifierMetadata;
+  note?: string;
+}
+
+export interface IdentifierPolicyListResponse {
+  total: number;
+  items: ReadonlyArray<IdentifierPolicySummary>;
+}
+
+export type IdentifierPolicyClientSummary = Omit<
+  IdentifierPolicySummary,
+  "program_id" | "output_opening_public_key"
+> &
+  Partial<
+    Pick<IdentifierPolicySummary, "program_id" | "output_opening_public_key">
+  >;
+
+export interface RamLfeOutputOpeningPayload {
+  program_id: string;
+  input_ciphertext_hash: string;
+  output_ciphertext_hash: string;
+  parameter_digest: string;
+  evaluation_key_digest: string;
+  opened_output_hash: string;
+  opened_at_ms: number;
+  expires_at_ms: number | null;
+}
+
+export interface RamLfeOutputOpening {
+  payload: RamLfeOutputOpeningPayload;
+  signature: string;
+}
+
+export interface RamLfeExecutionReceiptPayload {
+  program_id: string;
+  program_digest: string;
+  backend: string;
+  verification_mode: string;
+  input_ciphertext_hash: string;
+  output_ciphertext_hash: string;
+  parameter_digest: string;
+  evaluation_key_digest: string;
+  output_hash: string;
+  associated_data_hash: string;
+  executed_at_ms: number;
+  expires_at_ms: number | null;
+}
+
+export type RamLfeReceiptAttestation =
+  | { kind: "signed"; signature: string }
+  | { kind: "proof"; proof_backend: string; proof_b64: string };
+
+export interface RamLfeExecutionReceipt {
+  payload: RamLfeExecutionReceiptPayload;
+  attestation: RamLfeReceiptAttestation;
+}
+
+export interface RamLfeExecuteOptions {
+  encryptedInput: string;
+  signal?: AbortSignal;
+}
+
+export interface RamLfeExecuteResponse {
+  program_id: string;
+  opaque_hash: string;
+  receipt_hash: string;
+  output_ciphertext: string;
+  output_hash: string;
+  associated_data_hash: string;
+  executed_at_ms: number;
+  expires_at_ms: number | null;
+  backend: string;
+  verification_mode: string;
+  receipt: RamLfeExecutionReceipt;
+  output_opening: RamLfeOutputOpening;
+}
+
+export interface IdentifierResolutionRequestOptions {
+  policyId: string;
+  encryptedInput: string;
+  outputOpening: RamLfeOutputOpening;
+  signal?: AbortSignal;
+}
+
+export interface IdentifierResolutionReceiptPayload {
+  policy_id: string;
+  execution: RamLfeExecutionReceiptPayload;
+  opening: RamLfeOutputOpening;
+  opaque_id: string;
+  receipt_hash: string;
+  uaid: string;
+  account_id: string;
+}
+
+export interface IdentifierResolutionReceipt {
+  payload: IdentifierResolutionReceiptPayload;
+  attestation: RamLfeReceiptAttestation;
+}
+
+export interface IdentifierClaimLookupResponse {
+  policy_id: string;
+  opaque_id: string;
+  receipt_hash: string;
+  uaid: string;
+  account_id: string;
+  verified_at_ms: number;
+  expires_at_ms: number | null;
+}
+
 export interface RbcSampleRequestOptions {
   blockHash: string;
   height: number | string | bigint;
@@ -5042,13 +5222,13 @@ export interface IdentifierRequestForPolicyOptions {
   encrypt?: boolean;
   seed?: BinaryLike;
   seedHex?: string;
-  outputOpening: unknown;
+  outputOpening: RamLfeOutputOpening;
 }
 
 export interface IdentifierRequestForPolicy {
   policyId: string;
   encryptedInput: string;
-  outputOpening: unknown;
+  outputOpening: RamLfeOutputOpening;
 }
 
 export function encodeIdentifierResolutionReceiptPayload(payload: unknown): Buffer;
@@ -5056,20 +5236,20 @@ export function encodeIdentifierResolutionReceiptAttestation(
   attestation: unknown,
 ): Buffer;
 export function getIdentifierBfvPublicParameters(
-  policySummary: unknown,
-): Readonly<Record<string, unknown>> | null;
+  policySummary: IdentifierPolicyClientSummary,
+): Readonly<IdentifierBfvPublicParameters> | null;
 export function encryptIdentifierInputForPolicy(
-  policySummary: unknown,
+  policySummary: IdentifierPolicyClientSummary,
   input: unknown,
   options?: { seed?: BinaryLike; seedHex?: string },
 ): string;
 export function buildIdentifierRequestForPolicy(
-  policySummary: unknown,
+  policySummary: IdentifierPolicyClientSummary,
   options: IdentifierRequestForPolicyOptions,
 ): IdentifierRequestForPolicy;
 export function verifyIdentifierResolutionReceipt(
-  receipt: unknown,
-  policySummary: unknown,
+  receipt: IdentifierResolutionReceipt,
+  policySummary: IdentifierPolicyClientSummary,
 ): boolean;
 
 export const sakuraStormQrStreamTheme: OfflineQrStreamTheme;
@@ -5119,8 +5299,7 @@ type CryptoRuntimeNamespaceExport =
     "CRYPTO_ALGORITHMS"
   | "KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS"
   | "KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES"
-  | "KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1"
-  | "KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V2"
+  | "KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1"
   | "KAGEMUSHA_PROOF_ATTACHMENT_WIRE_NAME"
   | "KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND"
   | "KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1"
@@ -6794,12 +6973,18 @@ export interface OfflineVerifiedFoldRecordBundleJson {
   verifier_records: ReadonlyArray<OfflineVerifiedFoldVerifierRecordJson>;
 }
 
+export interface OfflineTopUpShieldEvidenceJson {
+  initial_root: OfflineFixed32Bytes;
+  finalized_root: OfflineFixed32Bytes;
+  leaf_index: OfflineJsonUnsignedInteger;
+  proof: OfflineProofAttachmentJson;
+}
+
 export interface OfflineTopUpRequestJson {
   asset: string;
   amount: OfflineScaledAmountJson;
   current_note: OfflineSpendableNoteJson;
-  record_bundle: OfflineVerifiedFoldRecordBundleJson;
-  pallas_open_envelopes_archive: OfflineByteArray;
+  shield_evidence: OfflineTopUpShieldEvidenceJson;
   artifact_generation: string;
   operation_id: OfflineFixed32Bytes;
   authorization: OfflineAuthorizationJson;
@@ -7007,13 +7192,11 @@ export interface OfflineTopUpAnchor {
   amount: OfflineScaledAmountJson;
   initial_root: OfflineFixed32Bytes;
   finalized_root: OfflineFixed32Bytes;
-  topup_anchor_nullifiers:
-    | readonly [OfflineFixed32Bytes]
-    | readonly [OfflineFixed32Bytes, OfflineFixed32Bytes];
+  shield_leaf_index: OfflineJsonUnsignedInteger;
   current_note: OfflineSpendableNoteJson;
   topup_operation_id: OfflineFixed32Bytes;
-  transfer_verifier_id: OfflineVerifierKeyIdJson;
-  transfer_verifier_commitment: OfflineFixed32Bytes;
+  shield_verifier_id: OfflineVerifierKeyIdJson;
+  shield_verifier_commitment: OfflineFixed32Bytes;
   artifact_generation: string;
   finalized_height: OfflineJsonUnsignedInteger;
   finalized_tx_hash: OfflineFixed32Bytes;
@@ -7025,38 +7208,124 @@ export interface OfflineTopUpFinalityProofAnchor {
   anchor_digest: OfflineFixed32Bytes;
 }
 
-export interface OfflineTopUpFinalityHeightContextBinding {
+export type OfflineFinalityHashLiteral = `hash:${string}#${string}`;
+
+export type OfflineFinalityHeightContextId = readonly [OfflineFinalityHashLiteral];
+
+export type OfflineFinalityConsensusMode = {
+  mode: "permissioned" | "npos";
+  details: null;
+};
+
+export type OfflineFinalityPayloadEncoding = {
+  encoding: "plain" | "reed_solomon16";
+  details: null;
+};
+
+export type OfflineFixed96Bytes = readonly [
+  number, number, number, number, number, number, number, number,
+  number, number, number, number, number, number, number, number,
+  number, number, number, number, number, number, number, number,
+  number, number, number, number, number, number, number, number,
+  number, number, number, number, number, number, number, number,
+  number, number, number, number, number, number, number, number,
+  number, number, number, number, number, number, number, number,
+  number, number, number, number, number, number, number, number,
+  number, number, number, number, number, number, number, number,
+  number, number, number, number, number, number, number, number,
+  number, number, number, number, number, number, number, number,
+  number, number, number, number, number, number, number, number,
+];
+
+export interface OfflineTopUpFinalityDataAvailabilityLayout {
+  encoding: OfflineFinalityPayloadEncoding;
+  chunk_size_bytes: OfflineJsonUnsignedInteger;
+  data_shards: OfflineJsonUnsignedInteger;
+  parity_shards: OfflineJsonUnsignedInteger;
+  max_payload_size_bytes: OfflineJsonUnsignedInteger;
+  max_chunk_count: OfflineJsonUnsignedInteger;
+}
+
+export interface OfflineTopUpFinalityValidatorPower {
+  validator: string;
+  power: OfflineJsonUnsignedInteger;
+}
+
+export interface OfflineTopUpFinalityDualQuorum {
+  min_signers: OfflineJsonUnsignedInteger;
+  total_power: OfflineJsonUnsignedInteger;
+}
+
+export interface OfflineTopUpFinalityNextEpochSnapshot {
+  epoch: OfflineJsonUnsignedInteger;
+  epoch_end_height: OfflineJsonUnsignedInteger;
+  mode: OfflineFinalityConsensusMode;
+  roster: ReadonlyArray<OfflineTopUpFinalityValidatorPower>;
+  validator_set_pops: ReadonlyArray<OfflineFixed96Bytes>;
+  quorum: OfflineTopUpFinalityDualQuorum;
+  leader_seed: OfflineFixed32Bytes;
+}
+
+export interface OfflineTopUpFinalityConsensusRound {
+  context_id: OfflineFinalityHeightContextId;
   height: OfflineJsonUnsignedInteger;
-  /** Remaining consensus context is opaque and consumed by the native verifier. */
-  readonly [key: string]: unknown;
+  view: OfflineJsonUnsignedInteger;
 }
 
-export interface OfflineTopUpFinalityRoundBinding {
+export interface OfflineTopUpFinalityBlockSubject {
+  parent_block_hash?: OfflineFinalityHashLiteral;
+  block_hash: OfflineFinalityHashLiteral;
+  payload_hash: OfflineFinalityHashLiteral;
+}
+
+export interface OfflineTopUpFinalityExecutionCommitment {
+  parent_state_root: OfflineFinalityHashLiteral;
+  post_state_root: OfflineFinalityHashLiteral;
+  ordinary_writes_root: OfflineFinalityHashLiteral;
+  topup_anchor_root?: OfflineFinalityHashLiteral;
+  topup_anchor_count: OfflineJsonUnsignedInteger;
+}
+
+export interface OfflineTopUpFinalityCommitQuorumCertificate {
+  round: OfflineTopUpFinalityConsensusRound;
+  phase: { phase: "commit"; details: null };
+  subject: OfflineTopUpFinalityBlockSubject;
+  execution_commitment: OfflineTopUpFinalityExecutionCommitment;
+  signers: ReadonlyArray<OfflineJsonUnsignedInteger>;
+  aggregate_signature: OfflineFixed96Bytes;
+}
+
+export interface OfflineTopUpFinalityHeightContext {
+  context_id: OfflineFinalityHeightContextId;
+  chain_id: string;
+  protocol_version: 2 | 2n;
   height: OfflineJsonUnsignedInteger;
-  /** Remaining round fields are opaque and consumed by the native verifier. */
-  readonly [key: string]: unknown;
+  epoch: OfflineJsonUnsignedInteger;
+  epoch_end_height: OfflineJsonUnsignedInteger;
+  next_epoch_snapshot?: OfflineTopUpFinalityNextEpochSnapshot;
+  mode: OfflineFinalityConsensusMode;
+  parent_commit_qc?: OfflineTopUpFinalityCommitQuorumCertificate;
+  nexus_amx_context_hash: OfflineFinalityHashLiteral;
+  da_layout: OfflineTopUpFinalityDataAvailabilityLayout;
+  leader_seed: OfflineFixed32Bytes;
 }
 
-export interface OfflineTopUpFinalityCertificateBinding {
-  round: OfflineTopUpFinalityRoundBinding;
-  /** Remaining certificate fields are opaque and consumed by the native verifier. */
-  readonly [key: string]: unknown;
+export interface OfflineTopUpFinalityCompactQc {
+  height_context: OfflineTopUpFinalityHeightContext;
+  certificate: OfflineTopUpFinalityCommitQuorumCertificate;
 }
 
-export interface OfflineTopUpFinalityCommitQcBinding {
-  height_context: OfflineTopUpFinalityHeightContextBinding;
-  certificate: OfflineTopUpFinalityCertificateBinding;
-  /** Remaining QC fields are opaque and consumed by the native verifier. */
-  readonly [key: string]: unknown;
+export interface OfflineTopUpFinalityMerkleProof {
+  leaf_index: OfflineJsonUnsignedInteger;
+  leaf_count: OfflineJsonUnsignedInteger;
+  siblings: ReadonlyArray<OfflineFixed32Bytes>;
 }
 
 export interface OfflineTopUpFinalityProof {
   version: 1 | 1n;
   anchor: OfflineTopUpFinalityProofAnchor;
-  commit_qc: OfflineTopUpFinalityCommitQcBinding;
-  anchor_path: Readonly<Record<string, unknown>>;
-  /** Future proof fields are preserved for the native verifier. */
-  readonly [key: string]: unknown;
+  commit_qc: OfflineTopUpFinalityCompactQc;
+  anchor_path: OfflineTopUpFinalityMerkleProof;
 }
 
 export interface OfflineTopUpResult {
@@ -7571,6 +7840,18 @@ export interface ToriiSumeragiV2TimeoutReference {
   highest_prepare_qc: ToriiSumeragiV2QcReference | null;
   certificate_hash: string;
 }
+
+/** Canonical-name alias retained for consumers of the reducer-only draft. */
+export type ToriiSumeragiV2HeightContextId = ToriiSumeragiV2ContextId;
+
+/** Canonical-name alias retained for consumers of the reducer-only draft. */
+export type ToriiSumeragiV2ConsensusRound = ToriiSumeragiV2Round;
+
+/** Canonical-name alias retained for consumers of the reducer-only draft. */
+export type ToriiSumeragiV2QuorumCertificateRef = ToriiSumeragiV2QcReference;
+
+/** Canonical-name alias retained for consumers of the reducer-only draft. */
+export type ToriiSumeragiV2TimeoutCertificateRef = ToriiSumeragiV2TimeoutReference;
 
 export interface ToriiSumeragiV2HeightContextStatus {
   epoch: number;
@@ -12160,13 +12441,27 @@ export declare class ToriiClient {
     request: RetailRecipientLookupRequest,
     options?: CanonicalRequestOptions,
   ): Promise<RetailRecipientLookupResponse>;
+  listIdentifierPolicies(options?: {
+    signal?: AbortSignal;
+  }): Promise<IdentifierPolicyListResponse>;
+  resolveIdentifier(
+    options: IdentifierResolutionRequestOptions,
+  ): Promise<IdentifierResolutionReceipt | null>;
   listRamLfeProgramPolicies(options?: {
     signal?: AbortSignal;
-  }): Promise<{ total: number; items: Array<Record<string, unknown>> }>;
+  }): Promise<RamLfeProgramPolicyListResponse>;
   executeRamLfeProgram(
     programId: string,
-    options: { encryptedInput: string; signal?: AbortSignal },
-  ): Promise<Record<string, unknown> | null>;
+    options: RamLfeExecuteOptions,
+  ): Promise<RamLfeExecuteResponse | null>;
+  getIdentifierClaimByReceiptHash(
+    receiptHash: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<IdentifierClaimLookupResponse | null>;
+  issueIdentifierClaimReceipt(
+    accountId: string,
+    options: IdentifierResolutionRequestOptions,
+  ): Promise<IdentifierResolutionReceipt | null>;
   verifyRamLfeReceipt(options: {
     receipt: Record<string, unknown>;
     outputHex?: string;
@@ -13353,8 +13648,7 @@ export function deriveConfidentialNullifierV2(input: {
   rho?: ArrayBufferView | ArrayBuffer | Buffer;
 }): { nullifier: Buffer; nullifierHex: string };
 
-export const KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1: "recursive_compact_v1";
-export const KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V2: "recursive_spend_v2";
+export const KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1: "recursive_spend_v1";
 export const KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_NATIVE_BRIDGE_ABI_VERSION: 18;
 export const KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_NATIVE_BRIDGE_ABI_VERSION: 7;
 export const KAGEMUSHA_RECURSIVE_SPEND_TOPUP_REQUIRED_NATIVE_BRIDGE_ABI_VERSION: 15;
@@ -13396,7 +13690,7 @@ export class KagemushaRecursiveSpendRequestCodecError extends Error {
   readonly field: string;
   constructor(kind: string, field: string, message?: string);
 }
-export type KagemushaOfflineSpendMode = "recursive_spend_v2";
+export type KagemushaOfflineSpendMode = "recursive_spend_v1";
 export type KagemushaRecursiveSpendLineageKeyArtifactOpeningLen =
   | 2
   | 4

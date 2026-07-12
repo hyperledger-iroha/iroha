@@ -886,6 +886,211 @@ fn fill_common_statement_values(
     Ok(())
 }
 
+fn ensure_transition_statement_binding(
+    statement: &KagemushaRecursiveSpendPublicStatementV2,
+    transition: &[Scalar],
+) -> Result<(), String> {
+    statement
+        .validate_context()
+        .map_err(|err| err.to_string())?;
+    if transition.len() < KAGEMUSHA_RECURSIVE_SPEND_V2_INSTANCE_ROWS {
+        return Err("Kagemusha V2 recursive proof transition instance is truncated".to_owned());
+    }
+
+    let mut expected = [Scalar::from(0); KAGEMUSHA_RECURSIVE_SPEND_V2_INSTANCE_ROWS];
+    fill_common_statement_values(&mut expected, statement, None, [0; 32], [0; 32])?;
+    expected[I_ASSET_TAG] = scalar_from_canonical_bytes(
+        &super::confidential_v2::derive_confidential_asset_tag_v2(&statement.asset.to_string()),
+        "statement asset tag",
+    )?;
+    expected[I_CHAIN_TAG] = scalar_from_canonical_bytes(
+        &super::confidential_v2::derive_confidential_chain_tag_v2(statement.chain_id.as_str()),
+        "statement chain tag",
+    )?;
+
+    let require_row = |index: usize, field: &str| {
+        if transition[index] != expected[index] {
+            return Err(format!(
+                "Kagemusha V2 recursive proof {field} does not match the submitted statement"
+            ));
+        }
+        Ok(())
+    };
+    for (index, field) in [
+        (I_LAYOUT_VERSION, "layout version"),
+        (I_PROOF_STEP_COUNT, "proof-step count"),
+        (I_PEER_HOP_COUNT, "peer-hop count"),
+        (I_BRANCH_DEPTH, "branch depth"),
+        (I_ASSET_SCALE, "asset scale"),
+        (I_CURRENT_SCALE, "current-note scale"),
+        (I_CURRENT_AMOUNT_LO, "current-note amount low limb"),
+        (I_CURRENT_AMOUNT_HI, "current-note amount high limb"),
+        (I_BRANCH_PATH_BITS, "branch path"),
+        (I_FINAL_ROOT, "final root"),
+        (I_CURRENT_COMMITMENT, "current-note commitment"),
+        (I_CURRENT_NULLIFIER, "current-note nullifier"),
+        (I_ASSET_TAG, "confidential asset tag"),
+        (I_CHAIN_TAG, "confidential chain tag"),
+        (I_TOPUP_ANCHOR_COUNT, "top-up anchor count"),
+    ] {
+        require_row(index, field)?;
+    }
+    for (start, field) in [
+        (I_STATEMENT_DIGEST, "statement digest"),
+        (I_BRANCH_LINEAGE_ROOT, "branch lineage root"),
+        (I_CHAIN_ID_DIGEST, "chain id"),
+        (I_ASSET_ID_DIGEST, "asset definition id"),
+        (I_TOPUP_OPERATION_ID, "top-up operation id"),
+        (I_ARTIFACT_GENERATION_DIGEST, "artifact generation"),
+        (I_TOPUP_ANCHOR_DIGEST, "top-up anchor digest"),
+        (I_VERIFIER_KEY_ID_DIGEST, "verifier key id"),
+    ] {
+        for index in start..start + 4 {
+            require_row(index, field)?;
+        }
+    }
+
+    let zero = Scalar::from(0);
+    let one = Scalar::from(1);
+    let require_value = |index: usize, value: Scalar, field: &str| {
+        if transition[index] != value {
+            return Err(format!(
+                "Kagemusha V2 recursive proof {field} does not match the submitted transition"
+            ));
+        }
+        Ok(())
+    };
+    let require_limbs = |start: usize, value: &[u8; 32], field: &str| {
+        if transition[start..start + 4] != bytes_to_limbs(value) {
+            return Err(format!(
+                "Kagemusha V2 recursive proof {field} does not match the submitted transition"
+            ));
+        }
+        Ok(())
+    };
+    let require_parent_path = |branch: KagemushaRecursiveSpendBranchV2| -> Result<(), String> {
+        let [claim] = statement.branch_claims.as_slice() else {
+            return Err(
+                "current Kagemusha V2 transition layout cannot bind joined branch claims"
+                    .to_owned(),
+            );
+        };
+        let parent = claim.path.parent().ok_or_else(|| {
+            "Kagemusha V2 extending transition has no parent branch path".to_owned()
+        })?;
+        if parent.child(branch).map_err(|err| err.to_string())? != claim.path {
+            return Err(
+                "Kagemusha V2 statement branch path does not match its selected branch".to_owned(),
+            );
+        }
+        require_value(
+            I_PARENT_BRANCH_DEPTH,
+            Scalar::from(u64::from(parent.depth)),
+            "parent branch depth",
+        )?;
+        require_value(
+            I_PARENT_BRANCH_PATH_BITS,
+            Scalar::from(path_bits_as_u64(parent.path_bits)),
+            "parent branch path",
+        )?;
+        require_limbs(
+            I_PARENT_BRANCH_LINEAGE_ROOT,
+            &parent.lineage_root,
+            "parent branch lineage root",
+        )
+    };
+
+    match &statement.transition {
+        None => {
+            for (index, field) in [
+                (I_APPEND_PROFILE, "append profile"),
+                (I_REDEMPTION_PROFILE, "redemption profile"),
+                (I_BRANCH_CHANGE, "init branch selector"),
+                (I_HAS_CHANGE, "init change selector"),
+            ] {
+                require_value(index, zero, field)?;
+            }
+            for (start, field) in [
+                (I_SPLIT_DIGEST, "init split digest"),
+                (I_RECIPIENT_REQUEST_DIGEST, "init recipient request"),
+                (I_OPERATION_ID, "init transition operation"),
+                (I_PARENT_BUNDLE_DIGEST, "init parent bundle"),
+            ] {
+                require_limbs(start, &[0; 32], field)?;
+            }
+        }
+        Some(KagemushaRecursiveSpendTransitionV2::PeerSplit(split)) => {
+            require_value(I_APPEND_PROFILE, one, "append profile")?;
+            require_value(I_REDEMPTION_PROFILE, zero, "redemption profile")?;
+            require_value(
+                I_BRANCH_CHANGE,
+                branch_selector(split.branch),
+                "peer-split branch selector",
+            )?;
+            require_limbs(I_SPLIT_DIGEST, &split.binding_digest, "peer-split digest")?;
+            require_limbs(
+                I_RECIPIENT_REQUEST_DIGEST,
+                &split.recipient_request_digest,
+                "recipient request digest",
+            )?;
+            require_limbs(
+                I_OPERATION_ID,
+                &split.operation_id,
+                "peer-split operation id",
+            )?;
+            require_value(
+                I_PREVIOUS_PROOF_STEP_COUNT,
+                Scalar::from(u64::from(split.parent_max_proof_step_count)),
+                "parent proof-step count",
+            )?;
+            require_value(
+                I_PREVIOUS_PEER_HOP_COUNT,
+                Scalar::from(u64::from(split.parent_max_peer_hop_count)),
+                "parent peer-hop count",
+            )?;
+            require_parent_path(split.branch)?;
+        }
+        Some(KagemushaRecursiveSpendTransitionV2::RedemptionChange(redemption)) => {
+            require_value(I_APPEND_PROFILE, zero, "append profile")?;
+            require_value(I_REDEMPTION_PROFILE, one, "redemption profile")?;
+            require_value(I_BRANCH_CHANGE, one, "redemption branch selector")?;
+            require_value(I_HAS_CHANGE, one, "redemption change selector")?;
+            require_limbs(
+                I_SPLIT_DIGEST,
+                &redemption.binding_digest,
+                "redemption binding digest",
+            )?;
+            require_limbs(
+                I_OPERATION_ID,
+                &redemption.operation_id,
+                "redemption operation id",
+            )?;
+            require_limbs(
+                I_PARENT_BUNDLE_DIGEST,
+                &redemption.parent_bundle_digest,
+                "redemption parent bundle digest",
+            )?;
+            require_limbs(
+                I_RECIPIENT_REQUEST_DIGEST,
+                &[0; 32],
+                "redemption recipient request digest",
+            )?;
+            require_value(
+                I_PREVIOUS_PROOF_STEP_COUNT,
+                Scalar::from(u64::from(redemption.parent_proof_step_count)),
+                "redemption parent proof-step count",
+            )?;
+            require_value(
+                I_PREVIOUS_PEER_HOP_COUNT,
+                Scalar::from(u64::from(redemption.parent_peer_hop_count)),
+                "redemption parent peer-hop count",
+            )?;
+            require_parent_path(KagemushaRecursiveSpendBranchV2::Change)?;
+        }
+    }
+    Ok(())
+}
+
 fn fill_transfer_values(
     public: &mut [Scalar; KAGEMUSHA_RECURSIVE_SPEND_V2_INSTANCE_ROWS],
     transfer: KagemushaConfidentialTransferPublicInputsV2,
@@ -1416,11 +1621,14 @@ pub fn kagemusha_recursive_spend_transition_instance_column_v2(
 /// Validate the chain-visible binding between a V2 bundle and its proof envelope.
 ///
 /// Cryptographic verification alone proves the instance columns embedded in the
-/// envelope.  Consensus admission must additionally require the final transition
-/// column to expose the digest of the exact canonical statement submitted to the
-/// ledger; otherwise a valid proof for one statement could be paired with a
-/// different host-side bundle.  This helper performs only that metadata/instance
-/// binding.  Callers must still verify the Halo2 proof with the registered key.
+/// envelope. Consensus admission must additionally bind every statement-derived
+/// transition row (not only the statement digest) to the exact canonical bundle
+/// submitted to the ledger. Otherwise an attacker could pair a valid proof for
+/// one note, root, branch, asset, or chain with the digest of another statement.
+/// This helper performs only that metadata/instance binding. Callers must still
+/// verify the Halo2 proof with the registered key, and the unavailable composite
+/// backend must remain disabled until its lineage/transition equality constraints
+/// are implemented in-circuit.
 pub fn ensure_kagemusha_recursive_spend_v2_proof_envelope_binding(
     bundle: &iroha_data_model::offline::KagemushaRecursiveSpendBundleV2,
     record: &VerifyingKeyRecord,
@@ -1481,17 +1689,7 @@ pub fn ensure_kagemusha_recursive_spend_v2_proof_envelope_binding(
         return Err("Kagemusha V2 recursive proof transition instance shape mismatch".to_owned());
     }
 
-    let statement_digest = bundle.statement.digest().map_err(|err| err.to_string())?;
-    let expected_digest_limbs = bytes_to_limbs(&statement_digest);
-    if transition[I_STATEMENT_DIGEST..I_STATEMENT_DIGEST + expected_digest_limbs.len()]
-        != expected_digest_limbs
-    {
-        return Err(
-            "Kagemusha V2 recursive proof is not bound to the submitted public statement"
-                .to_owned(),
-        );
-    }
-    Ok(())
+    ensure_transition_statement_binding(&bundle.statement, transition)
 }
 
 type OneHopLineageCircuit<const LEN: usize> =
@@ -2387,7 +2585,163 @@ pub fn validate_kagemusha_recursive_spend_lineage_key_artifact_v2<R: Read>(
 
 #[cfg(test)]
 mod tests {
+    use core::str::FromStr as _;
+
     use super::*;
+
+    const RECURSIVE_AGGREGATION_PROOF_BACKEND: &str = "halo2/ipa";
+
+    fn scalar_bytes(value: u64) -> [u8; 32] {
+        let repr = Scalar::from(value).to_repr();
+        let mut bytes = [0; 32];
+        bytes.copy_from_slice(repr.as_ref());
+        bytes
+    }
+
+    fn init_statement() -> KagemushaRecursiveSpendPublicStatementV2 {
+        use iroha_data_model::{
+            ChainId,
+            asset::AssetDefinitionId,
+            offline::{
+                KAGEMUSHA_RECURSIVE_SPEND_RESERVED_INIT_PROOF_CIRCUIT_ID_V2,
+                KagemushaRecursiveSpendBranchClaimV2, KagemushaRecursiveSpendBranchPathV2,
+                KagemushaRecursiveSpendLineageModeV2, KagemushaRecursiveSpendTopUpAnchorRefV2,
+                KagemushaScaledAmountV2, KagemushaSpendableNoteDescriptorV2,
+            },
+            proof::VerifyingKeyId,
+        };
+
+        let chain_id = ChainId::from("kagemusha-v2-statement-binding");
+        let asset = AssetDefinitionId::from_str("rose#wonderland").expect("asset id");
+        let anchor = KagemushaRecursiveSpendTopUpAnchorRefV2 {
+            topup_operation_id: [0x41; 32],
+            anchor_digest: [0x42; 32],
+        };
+        KagemushaRecursiveSpendPublicStatementV2 {
+            chain_id: chain_id.clone(),
+            asset: asset.clone(),
+            asset_scale: 9,
+            final_root: scalar_bytes(12),
+            topup_anchor_refs: vec![anchor],
+            proof_step_count: 1,
+            peer_hop_count: 0,
+            current_note: KagemushaSpendableNoteDescriptorV2 {
+                chain_id,
+                asset,
+                note_commitment: scalar_bytes(31),
+                spend_nullifier: scalar_bytes(32),
+                amount: KagemushaScaledAmountV2::new(10_750_000_000, 9).expect("amount"),
+            },
+            branch_claims: vec![KagemushaRecursiveSpendBranchClaimV2 {
+                path: KagemushaRecursiveSpendBranchPathV2::root(anchor.anchor_digest)
+                    .expect("root path"),
+                transition_tags: Vec::new(),
+            }],
+            transition: None,
+            artifact_generation: "release-generation-1".to_owned(),
+            lineage_mode: KagemushaRecursiveSpendLineageModeV2::Reserved,
+            verifier_key_id: VerifyingKeyId::new(
+                RECURSIVE_AGGREGATION_PROOF_BACKEND,
+                KAGEMUSHA_RECURSIVE_SPEND_RESERVED_INIT_PROOF_CIRCUIT_ID_V2,
+            ),
+        }
+    }
+
+    fn statement_bound_transition(
+        statement: &KagemushaRecursiveSpendPublicStatementV2,
+    ) -> [Scalar; KAGEMUSHA_RECURSIVE_SPEND_V2_INSTANCE_ROWS] {
+        let mut transition = [Scalar::from(0); KAGEMUSHA_RECURSIVE_SPEND_V2_INSTANCE_ROWS];
+        fill_common_statement_values(&mut transition, statement, None, [0; 32], [0; 32])
+            .expect("common statement values");
+        transition[I_ASSET_TAG] = scalar_from_canonical_bytes(
+            &super::super::confidential_v2::derive_confidential_asset_tag_v2(
+                &statement.asset.to_string(),
+            ),
+            "asset tag",
+        )
+        .expect("canonical asset tag");
+        transition[I_CHAIN_TAG] = scalar_from_canonical_bytes(
+            &super::super::confidential_v2::derive_confidential_chain_tag_v2(
+                statement.chain_id.as_str(),
+            ),
+            "chain tag",
+        )
+        .expect("canonical chain tag");
+        transition
+    }
+
+    fn append_statement() -> KagemushaRecursiveSpendPublicStatementV2 {
+        use iroha_data_model::offline::{
+            KAGEMUSHA_RECURSIVE_SPEND_RESERVED_APPEND_PROOF_CIRCUIT_ID_V2,
+            KagemushaRecursiveSpendBranchV2, KagemushaRecursiveSpendPeerSplitTransitionV2,
+            KagemushaRecursiveSpendTransitionV2, kagemusha_recursive_spend_transition_tag_v2,
+        };
+
+        let mut statement = init_statement();
+        let binding_digest = [0x61; 32];
+        let branch = KagemushaRecursiveSpendBranchV2::Recipient;
+        statement.current_note.note_commitment = scalar_bytes(51);
+        statement.current_note.spend_nullifier = scalar_bytes(52);
+        statement.final_root = scalar_bytes(13);
+        statement.proof_step_count = 2;
+        statement.peer_hop_count = 1;
+        statement.branch_claims[0].path = statement.branch_claims[0]
+            .path
+            .child(branch)
+            .expect("recipient child");
+        statement.branch_claims[0].transition_tags =
+            kagemusha_recursive_spend_transition_tag_v2(binding_digest)
+                .expect("transition tag")
+                .to_vec();
+        statement.transition = Some(KagemushaRecursiveSpendTransitionV2::PeerSplit(
+            KagemushaRecursiveSpendPeerSplitTransitionV2 {
+                binding_digest,
+                branch,
+                recipient_request_digest: [0x62; 32],
+                operation_id: [0x63; 32],
+                parent_max_proof_step_count: 1,
+                parent_max_peer_hop_count: 0,
+            },
+        ));
+        statement.verifier_key_id.name =
+            KAGEMUSHA_RECURSIVE_SPEND_RESERVED_APPEND_PROOF_CIRCUIT_ID_V2.to_owned();
+        statement
+    }
+
+    fn append_statement_bound_transition(
+        statement: &KagemushaRecursiveSpendPublicStatementV2,
+    ) -> [Scalar; KAGEMUSHA_RECURSIVE_SPEND_V2_INSTANCE_ROWS] {
+        let mut transition = statement_bound_transition(statement);
+        let Some(KagemushaRecursiveSpendTransitionV2::PeerSplit(split)) = &statement.transition
+        else {
+            panic!("append statement has peer split");
+        };
+        let parent = statement.branch_claims[0]
+            .path
+            .parent()
+            .expect("append parent path");
+        transition[I_APPEND_PROFILE] = Scalar::from(1);
+        transition[I_BRANCH_CHANGE] = branch_selector(split.branch);
+        transition[I_PREVIOUS_PROOF_STEP_COUNT] =
+            Scalar::from(u64::from(split.parent_max_proof_step_count));
+        transition[I_PREVIOUS_PEER_HOP_COUNT] =
+            Scalar::from(u64::from(split.parent_max_peer_hop_count));
+        transition[I_PARENT_BRANCH_DEPTH] = Scalar::from(u64::from(parent.depth));
+        transition[I_PARENT_BRANCH_PATH_BITS] = Scalar::from(path_bits_as_u64(parent.path_bits));
+        write_limb_group(
+            &mut transition,
+            I_PARENT_BRANCH_LINEAGE_ROOT,
+            &parent.lineage_root,
+        );
+        write_limb_group(&mut transition, I_SPLIT_DIGEST, &split.binding_digest);
+        write_limb_group(
+            &mut transition,
+            I_RECIPIENT_REQUEST_DIGEST,
+            &split.recipient_request_digest,
+        );
+        write_limb_group(&mut transition, I_OPERATION_ID, &split.operation_id);
+        transition
+    }
 
     fn valid_append_values() -> KagemushaRecursiveSpendTransitionValuesV2 {
         let mut values = KagemushaRecursiveSpendTransitionValuesV2::default();
@@ -2504,6 +2858,138 @@ mod tests {
         }
         values.path_depth_selectors[3] = Scalar::from(1);
         values
+    }
+
+    #[test]
+    fn envelope_statement_binding_rejects_every_mutable_common_row() {
+        let statement = init_statement();
+        let transition = statement_bound_transition(&statement);
+        ensure_transition_statement_binding(&statement, &transition)
+            .expect("canonical statement rows");
+
+        let mut statement_bound_rows = vec![
+            I_LAYOUT_VERSION,
+            I_PROOF_STEP_COUNT,
+            I_PEER_HOP_COUNT,
+            I_BRANCH_DEPTH,
+            I_ASSET_SCALE,
+            I_CURRENT_SCALE,
+            I_CURRENT_AMOUNT_LO,
+            I_CURRENT_AMOUNT_HI,
+            I_BRANCH_PATH_BITS,
+            I_FINAL_ROOT,
+            I_CURRENT_COMMITMENT,
+            I_CURRENT_NULLIFIER,
+            I_ASSET_TAG,
+            I_CHAIN_TAG,
+            I_TOPUP_ANCHOR_COUNT,
+        ];
+        for start in [
+            I_STATEMENT_DIGEST,
+            I_BRANCH_LINEAGE_ROOT,
+            I_CHAIN_ID_DIGEST,
+            I_ASSET_ID_DIGEST,
+            I_TOPUP_OPERATION_ID,
+            I_ARTIFACT_GENERATION_DIGEST,
+            I_TOPUP_ANCHOR_DIGEST,
+            I_VERIFIER_KEY_ID_DIGEST,
+        ] {
+            statement_bound_rows.extend(start..start + 4);
+        }
+
+        for row in statement_bound_rows {
+            let mut tampered = transition;
+            tampered[row] += Scalar::from(1);
+            assert!(
+                ensure_transition_statement_binding(&statement, &tampered).is_err(),
+                "statement-derived row {row} must not be independently malleable"
+            );
+        }
+    }
+
+    #[test]
+    fn envelope_statement_binding_rejects_init_transition_smuggling() {
+        let statement = init_statement();
+        let transition = statement_bound_transition(&statement);
+        for row in [
+            I_APPEND_PROFILE,
+            I_REDEMPTION_PROFILE,
+            I_BRANCH_CHANGE,
+            I_HAS_CHANGE,
+        ] {
+            let mut tampered = transition;
+            tampered[row] = Scalar::from(1);
+            assert!(
+                ensure_transition_statement_binding(&statement, &tampered).is_err(),
+                "init profile row {row} must be canonical zero"
+            );
+        }
+        for start in [
+            I_SPLIT_DIGEST,
+            I_RECIPIENT_REQUEST_DIGEST,
+            I_OPERATION_ID,
+            I_PARENT_BUNDLE_DIGEST,
+        ] {
+            let mut tampered = transition;
+            tampered[start] = Scalar::from(1);
+            assert!(
+                ensure_transition_statement_binding(&statement, &tampered).is_err(),
+                "init-only proof must reject transition metadata at row {start}"
+            );
+        }
+    }
+
+    #[test]
+    fn envelope_statement_binding_rejects_peer_profile_and_branch_substitution() {
+        let statement = append_statement();
+        let transition = append_statement_bound_transition(&statement);
+        ensure_transition_statement_binding(&statement, &transition)
+            .expect("canonical append statement rows");
+
+        for row in [
+            I_APPEND_PROFILE,
+            I_REDEMPTION_PROFILE,
+            I_BRANCH_CHANGE,
+            I_PREVIOUS_PROOF_STEP_COUNT,
+            I_PREVIOUS_PEER_HOP_COUNT,
+            I_PARENT_BRANCH_DEPTH,
+            I_PARENT_BRANCH_PATH_BITS,
+        ] {
+            let mut tampered = transition;
+            tampered[row] += Scalar::from(1);
+            assert!(
+                ensure_transition_statement_binding(&statement, &tampered).is_err(),
+                "peer transition row {row} must match the statement"
+            );
+        }
+        for start in [
+            I_SPLIT_DIGEST,
+            I_RECIPIENT_REQUEST_DIGEST,
+            I_OPERATION_ID,
+            I_PARENT_BRANCH_LINEAGE_ROOT,
+        ] {
+            let mut tampered = transition;
+            tampered[start] += Scalar::from(1);
+            assert!(
+                ensure_transition_statement_binding(&statement, &tampered).is_err(),
+                "peer transition limb group at {start} must match the statement"
+            );
+        }
+
+        let mut wrong_path_statement = statement.clone();
+        let parent = wrong_path_statement.branch_claims[0]
+            .path
+            .parent()
+            .expect("parent path");
+        wrong_path_statement.branch_claims[0].path = parent
+            .child(KagemushaRecursiveSpendBranchV2::Change)
+            .expect("change child");
+        let wrong_path_transition = append_statement_bound_transition(&wrong_path_statement);
+        assert!(
+            ensure_transition_statement_binding(&wrong_path_statement, &wrong_path_transition)
+                .is_err(),
+            "a recipient transition must not claim the sender-change path"
+        );
     }
 
     #[test]

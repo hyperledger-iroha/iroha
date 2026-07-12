@@ -2203,13 +2203,15 @@ mod tests {
     fn council_signing_key_file_requires_exact_raw_seed() {
         assert!(
             read_council_signing_key_file(Path::new(""))
-                .expect_err("empty signing key path must fail")
+                .err()
+                .expect("empty signing key path must fail")
                 .contains("requires a regular file path")
         );
         let (_temp, temp_path) = canonical_tempdir();
         assert!(
             read_council_signing_key_file(&temp_path)
-                .expect_err("directory signing key path must fail")
+                .err()
+                .expect("directory signing key path must fail")
                 .contains("regular file")
         );
         for size in [0, 31, 33, 4096] {
@@ -2217,7 +2219,8 @@ mod tests {
             key.write_all(&vec![0xA5; size]).expect("write key bytes");
             key.flush().expect("flush key bytes");
             let error = read_council_signing_key_file(key.path())
-                .expect_err("non-32-byte key file must fail");
+                .err()
+                .expect("non-32-byte key file must fail");
             assert!(
                 error.contains("exactly 32 raw bytes"),
                 "unexpected key-size error for {size} bytes: {error}"
@@ -2274,7 +2277,8 @@ mod tests {
         symlink(&key_path, &symlink_path).expect("create key symlink");
         assert!(
             read_council_signing_key_file(&symlink_path)
-                .expect_err("key symlink must fail")
+                .err()
+                .expect("key symlink must fail")
                 .contains("must not be a symlink")
         );
 
@@ -2282,7 +2286,8 @@ mod tests {
         fs::hard_link(&key_path, &hardlink_path).expect("create key hard link");
         assert!(
             read_council_signing_key_file(&key_path)
-                .expect_err("multiply-linked key must fail")
+                .err()
+                .expect("multiply-linked key must fail")
                 .contains("exactly one hard link")
         );
         fs::remove_file(&hardlink_path).expect("remove key hard link");
@@ -2291,7 +2296,8 @@ mod tests {
             .expect("make signing key group-readable");
         assert!(
             read_council_signing_key_file(&key_path)
-                .expect_err("permissive key mode must fail")
+                .err()
+                .expect("permissive key mode must fail")
                 .contains("deny all group and other access")
         );
     }
@@ -2313,7 +2319,8 @@ mod tests {
 
         assert!(
             read_council_signing_key_file(&linked_parent.join("council.seed"))
-                .expect_err("symlinked key parent must fail")
+                .err()
+                .expect("symlinked key parent must fail")
                 .contains("parent must not be a symlink")
         );
     }

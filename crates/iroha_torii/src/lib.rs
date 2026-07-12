@@ -63,7 +63,7 @@ mod app_api;
 #[cfg(feature = "app_api")]
 mod identifier_resolution;
 #[cfg(feature = "app_api")]
-mod offline_v2_issuer;
+mod offline_commands;
 mod operator_auth;
 mod operator_signatures;
 #[doc(hidden)]
@@ -1878,7 +1878,7 @@ struct AppState {
     #[cfg(feature = "app_api")]
     sorafs_appeal_settlement_submitter: Option<SoraFsAppealSettlementSubmitter>,
     #[cfg(feature = "app_api")]
-    offline_v2_issuer: Option<Arc<offline_v2_issuer::OfflineV2IssuerRuntime>>,
+    offline_commands: Option<Arc<offline_commands::OfflineCommandRuntime>>,
     #[cfg(feature = "app_api")]
     uaid_onboarding: Option<AccountOnboardingSigner>,
     vpn_helper_ticket_secret: Option<[u8; 32]>,
@@ -11107,7 +11107,7 @@ async fn handler_offline_readiness(
     let witnessless_reserved_lineage_supported = false;
     let artifacts_ready = false;
     let mut blockers = Vec::new();
-    if app.offline_v2_issuer.is_none() {
+    if app.offline_commands.is_none() {
         blockers.push(offline_readiness_blocker(
             "issuer_unavailable",
             "The offline command issuer is not configured on this node.",
@@ -11245,7 +11245,7 @@ async fn handler_offline_readiness(
 
 #[cfg(all(test, feature = "app_api"))]
 mod offline_kagemusha_readiness_tests {
-    use iroha_data_model::{asset::AssetDefinitionId, domain::DomainId};
+    use iroha_data_model::asset::AssetDefinitionId;
 
     use super::{
         encode_offline_readiness_representation, offline_kagemusha_asset_transfer_verifier_record,
@@ -11283,13 +11283,15 @@ mod offline_kagemusha_readiness_tests {
         record.withdraw_height = withdrawal_height;
         record.max_proof_bytes = max_proof_bytes;
 
-        let mut world = iroha_core::state::World::new();
-        world
+        let world = iroha_core::state::World::new();
+        let mut block = world.block();
+        block
             .verifying_keys_mut_for_testing()
             .insert(id.clone(), record);
-        world
+        block
             .verifying_keys_by_circuit_mut_for_testing()
             .insert((circuit_id.to_owned(), indexed_version), id);
+        block.commit();
         iroha_core::state::State::new_for_testing(
             world,
             iroha_core::kura::Kura::blank_kura_for_testing(),
@@ -11389,10 +11391,9 @@ mod offline_kagemusha_readiness_tests {
     fn readiness_does_not_substitute_a_global_verifier_for_the_asset_binding() {
         let state = transfer_verifier_state(7, 7, 4096, None, None);
         let view = state.view();
-        let asset = AssetDefinitionId::new(
-            DomainId::try_new("wonderland", "universal").expect("domain id"),
-            "xor".parse().expect("asset name"),
-        );
+        let asset: AssetDefinitionId = "61CtjvNd9T3THAR65GsMVHr82Bjc"
+            .parse()
+            .expect("canonical asset definition id");
 
         assert!(
             offline_kagemusha_asset_transfer_verifier_record(&view.world, &asset, 9)
@@ -11444,7 +11445,7 @@ async fn handler_offline_redeem(
         iroha_torii_shared::offline_api::OfflineRedeemRequest,
     >,
 ) -> Result<AxResponse, Error> {
-    offline_v2_issuer::handle_redeem(app, &headers, request).await
+    offline_commands::handle_redeem(app, &headers, request).await
 }
 
 #[cfg(feature = "app_api")]
@@ -11456,7 +11457,7 @@ async fn handler_offline_top_up(
         iroha_torii_shared::offline_api::OfflineTopUpRequest,
     >,
 ) -> Result<AxResponse, Error> {
-    offline_v2_issuer::handle_top_up(app, &headers, request).await
+    offline_commands::handle_top_up(app, &headers, request).await
 }
 
 #[cfg(feature = "app_api")]
@@ -11497,7 +11498,7 @@ async fn enforce_offline_command_prebody_admission(
     if let Err(response) = crate::utils::typed_request_content_format(&headers) {
         return Ok(response);
     }
-    if let Err(error) = offline_v2_issuer::validate_command_headers_before_body(&headers) {
+    if let Err(error) = offline_commands::validate_command_headers_before_body(&headers) {
         return Ok(error.into_response());
     }
     Ok(next.run(req).await)
@@ -11518,7 +11519,7 @@ async fn handler_offline_operation_status(
         "v1/offline/operations/{operation_id}",
     )
     .await?;
-    offline_v2_issuer::handle_operation_status(&app, &operation_id)
+    offline_commands::handle_operation_status(&app, &operation_id)
 }
 
 #[cfg(feature = "app_api")]
@@ -44600,7 +44601,7 @@ pub struct Torii {
     #[cfg(feature = "app_api")]
     sorafs_appeal_settlement_submitter: Option<SoraFsAppealSettlementSubmitter>,
     #[cfg(feature = "app_api")]
-    offline_v2_issuer: Option<Arc<offline_v2_issuer::OfflineV2IssuerRuntime>>,
+    offline_commands: Option<Arc<offline_commands::OfflineCommandRuntime>>,
     #[cfg(feature = "app_api")]
     uaid_onboarding: Option<AccountOnboardingSigner>,
     vpn_helper_ticket_secret: Option<[u8; 32]>,
@@ -47996,10 +47997,10 @@ impl Torii {
         let sorafs_appeal_settlement_submitter =
             SoraFsAppealSettlementSubmitter::from_config(&config.sorafs_appeal_finance_settlement);
         #[cfg(feature = "app_api")]
-        let offline_v2_issuer = config
+        let offline_commands = config
             .offline_issuer
             .clone()
-            .map(offline_v2_issuer::OfflineV2IssuerRuntime::from_config)
+            .map(offline_commands::OfflineCommandRuntime::from_config)
             .map(Arc::new);
         #[cfg(feature = "app_api")]
         let identifier_resolver = config.ram_lfe.as_ref().and_then(|cfg| {
@@ -48199,7 +48200,7 @@ impl Torii {
             #[cfg(feature = "app_api")]
             sorafs_appeal_settlement_submitter,
             #[cfg(feature = "app_api")]
-            offline_v2_issuer,
+            offline_commands,
             #[cfg(feature = "app_api")]
             uaid_onboarding,
             vpn_helper_ticket_secret,
@@ -48663,7 +48664,7 @@ impl Torii {
             #[cfg(feature = "app_api")]
             sorafs_appeal_settlement_submitter: self.sorafs_appeal_settlement_submitter.clone(),
             #[cfg(feature = "app_api")]
-            offline_v2_issuer: self.offline_v2_issuer.clone(),
+            offline_commands: self.offline_commands.clone(),
             #[cfg(feature = "app_api")]
             uaid_onboarding: self.uaid_onboarding.clone(),
             vpn_helper_ticket_secret: self.vpn_helper_ticket_secret,
@@ -53020,7 +53021,7 @@ pub(crate) mod tests_runtime_handlers {
             #[cfg(feature = "app_api")]
             sorafs_appeal_settlement_submitter: None,
             #[cfg(feature = "app_api")]
-            offline_v2_issuer: None,
+            offline_commands: None,
             #[cfg(feature = "app_api")]
             uaid_onboarding: None,
             vpn_helper_ticket_secret: None,
@@ -70693,6 +70694,7 @@ pub(crate) mod tests_runtime_handlers {
             let interface = ivm::EmbeddedContractInterfaceV1 {
                 seiyaku_name: "TestContract".to_owned(),
                 compiler_fingerprint: "torii-lib-tests".to_owned(),
+                abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
                 features_bitmap: 0,
                 access_set_hints: None,
                 kotoba: Vec::new(),

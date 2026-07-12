@@ -302,8 +302,8 @@ class OfflineToriiClientOperationTest {
             OfflineTopUpRequest(
                 canonicalRequestArchive(
                     TOP_UP_REQUEST_SCHEMA,
-                    fieldCount = 9,
-                    operationIdFieldIndex = 6,
+                    fieldCount = 7,
+                    operationIdFieldIndex = 4,
                     operationId = operationIdBytes,
                 ),
             )
@@ -313,7 +313,17 @@ class OfflineToriiClientOperationTest {
                 canonicalRequestArchive(
                     TOP_UP_REQUEST_SCHEMA,
                     fieldCount = 8,
-                    operationIdFieldIndex = 6,
+                    operationIdFieldIndex = 5,
+                    operationId = operationIdBytes,
+                ),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            OfflineTopUpRequest(
+                canonicalRequestArchive(
+                    TOP_UP_REQUEST_SCHEMA,
+                    fieldCount = 7,
+                    operationIdFieldIndex = 5,
                     operationId = operationIdBytes,
                     trailingBytes = byteArrayOf(0x7F),
                 ),
@@ -333,8 +343,8 @@ class OfflineToriiClientOperationTest {
             OfflineTopUpRequest(
                 canonicalRequestArchive(
                     TOP_UP_REQUEST_SCHEMA,
-                    fieldCount = 8,
-                    operationIdFieldIndex = 6,
+                    fieldCount = 7,
+                    operationIdFieldIndex = 5,
                     operationId = operationIdBytes,
                     flags = 0,
                 ),
@@ -545,8 +555,8 @@ class OfflineToriiClientOperationTest {
     private fun topUpRequestArchive(operationId: ByteArray): ByteArray =
         canonicalRequestArchive(
             TOP_UP_REQUEST_SCHEMA,
-            fieldCount = 8,
-            operationIdFieldIndex = 6,
+            fieldCount = 7,
+            operationIdFieldIndex = 5,
             operationId = operationId,
         )
 

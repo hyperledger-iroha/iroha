@@ -179,7 +179,9 @@ pub const KAGEMUSHA_RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES: u
 pub const KAGEMUSHA_AGGREGATION_MODE_CHECKED_PREFOLD_V1: u16 = 1;
 /// Kagemusha aggregation mode for compact tokens whose private-hop verifier is proven in-circuit.
 pub const KAGEMUSHA_AGGREGATION_MODE_RECURSIVE_IN_CIRCUIT_V1: u16 = 2;
-/// Sole first-release product selector for recursive spend-again-offline cash.
+/// Sole first-release product selector for recursive spend-again offline cash.
+pub const KAGEMUSHA_RECURSIVE_SPEND_PRODUCT_MODE_V1: &str = "recursive_spend_v1";
+/// Internal mode bound into ABI-18 native capability and V3 artifact records.
 pub const KAGEMUSHA_RECURSIVE_SPEND_MODE_V2: &str = "recursive_spend_v2";
 /// Maximum asset scale accepted by the exact Kagemusha V2 amount contract.
 pub const KAGEMUSHA_SCALED_AMOUNT_MAX_SCALE_V2: u32 = 28;
@@ -218,7 +220,7 @@ pub const KAGEMUSHA_TOPUP_FINALITY_MAX_ROSTER_WINDOWS_V2: usize = 1;
 /// Maximum canonical Norito bytes accepted for one compact top-up finality proof.
 ///
 /// The epoch-boundary case retains the complete next-epoch identity snapshot,
-/// including all 128 bounded PoPs plus maximum current and parent signer
+/// including all 128 bounded `PoPs` plus maximum current and parent signer
 /// lists. The exact maximum wire-shape test below pins the encoded size below
 /// this 256 KiB ingress cap.
 pub const KAGEMUSHA_TOPUP_FINALITY_PROOF_MAX_BYTES_V2: u64 = 256 * 1024;
@@ -427,7 +429,7 @@ pub const fn preferred_kagemusha_offline_spend_mode(
     pasta_cycle_v3_backend_available: bool,
 ) -> Option<&'static str> {
     if pasta_cycle_v3_backend_available {
-        Some(KAGEMUSHA_RECURSIVE_SPEND_MODE_V2)
+        Some(KAGEMUSHA_RECURSIVE_SPEND_PRODUCT_MODE_V1)
     } else {
         None
     }
@@ -2819,9 +2821,9 @@ mod model {
     /// Public inputs used by the native bridge to derive one receiver-owned
     /// confidential output.
     ///
-    /// The receiver's transient 32-byte spend secret is deliberately not part
-    /// of this archive. It is supplied through a separate native-only argument
-    /// and must never cross the stable Norito or Swift model boundary.
+    /// The receiver's local note opening is deliberately not part of this
+    /// archive. It is supplied through a separate native-only archive and must
+    /// never cross a payment, Torii, or peer protocol boundary.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
@@ -2842,9 +2844,9 @@ mod model {
     /// Public descriptor plus sender-prover material derived for one receiver
     /// output by the native bridge.
     ///
-    /// `recipient_output_prover_material` may contain only the amount opening,
+    /// `sender_output_prover_material` may contain only the amount opening,
     /// `rho`, and owner tag required by the sender's proof. It must never
-    /// contain the receiver spend secret or the output diversifier.
+    /// contain the receiver spend key or the output diversifier.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
@@ -2854,7 +2856,7 @@ mod model {
         /// Receiver-owned confidential output descriptor.
         pub recipient_output: KagemushaSpendableNoteDescriptorV2,
         /// Opaque, bounded opening archive consumed by the sender prover.
-        pub recipient_output_prover_material: Vec<u8>,
+        pub sender_output_prover_material: Vec<u8>,
     }
 
     /// Canonical unsigned fields of a receiver-created payment request.
@@ -2888,17 +2890,18 @@ mod model {
         pub expires_at_ms: u64,
         /// Requested recipient output descriptor.
         pub recipient_output: KagemushaSpendableNoteDescriptorV2,
-        /// Native-only output opening archive used by the sender prover.
-        pub recipient_output_prover_material: Vec<u8>,
+        /// Peer-carried opaque output-opening archive consumed by the sender prover.
+        pub sender_output_prover_material: Vec<u8>,
     }
 
     /// Receiver-created, nonce-bound and device-signed request for one exact offline payment.
     ///
-    /// `recipient_output_prover_material` is opaque to SDK callers. The native
-    /// prover derives it from a receiver-held 32-byte secret and the public
-    /// request fields. It contains only the output-opening material the sender
-    /// needs to prove the requested commitment; it must never contain the
-    /// receiver's spend key.
+    /// `sender_output_prover_material` is part of the signed peer request but
+    /// remains opaque to wallet code. The native bridge derives it from a
+    /// receiver-held local note opening and the public request fields. It
+    /// contains only the amount opening, `rho`, and owner tag needed to prove
+    /// the requested commitment; it must never contain the receiver's spend
+    /// key or diversifier.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
@@ -2929,8 +2932,8 @@ mod model {
         pub expires_at_ms: u64,
         /// Requested recipient output descriptor.
         pub recipient_output: KagemushaSpendableNoteDescriptorV2,
-        /// Native-only output opening archive used by the sender prover.
-        pub recipient_output_prover_material: Vec<u8>,
+        /// Peer-carried opaque output-opening archive consumed by the sender prover.
+        pub sender_output_prover_material: Vec<u8>,
         /// Receiver-device signature over the canonical unsigned fields.
         pub signature: Signature,
     }
@@ -3230,7 +3233,7 @@ mod model {
         pub version: u16,
         /// Exact compact anchor identity bound by the recursive init proof.
         pub anchor: KagemushaRecursiveSpendTopUpAnchorRefV2,
-        /// Commit QC with its roster PoPs supplied by the trusted artifact.
+        /// Commit QC with its roster `PoPs` supplied by the trusted artifact.
         pub commit_qc: KagemushaTopUpFinalityCompactQcV2,
         /// Bounded block-local inclusion proof.
         pub anchor_path: KagemushaTopUpAnchorMerkleProofV2,
@@ -4851,10 +4854,10 @@ pub struct OfflineDeviceAttestationRegistration {
     pub expires_at_ms: u64,
 }
 
-/// Android KeyMint challenge inputs available before the attested key is generated.
+/// Android `KeyMint` challenge inputs available before the attested key is generated.
 ///
 /// Android derives the final registration `key_id` from the public key created by
-/// KeyMint. Consequently, this first-phase challenge deliberately has no `key_id`
+/// `KeyMint`. Consequently, this first-phase challenge deliberately has no `key_id`
 /// or assertion-public-key field. Consensus later validates both values against the
 /// returned certificate chain before accepting the registration.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -4873,7 +4876,7 @@ pub struct OfflineAndroidKeyMintChallenge {
     pub ios_bundle_id: Option<String>,
     /// Optional iOS environment metadata retained in the registration schema.
     pub ios_environment: Option<String>,
-    /// Android package name expected in the KeyMint attestation application id.
+    /// Android package name expected in the `KeyMint` attestation application id.
     pub android_package_name: Option<String>,
     /// Android signing-certificate SHA-256 expected in the attestation application id.
     pub android_signing_certificate_sha256: Option<Vec<u8>>,
@@ -4883,7 +4886,7 @@ pub struct OfflineAndroidKeyMintChallenge {
     pub assertion_scheme: String,
     /// Hardware assertion key algorithm.
     pub assertion_key_algorithm: String,
-    /// Hardware one-use limit exposed by KeyMint.
+    /// Hardware one-use limit exposed by `KeyMint`.
     pub assertion_usage_count_limit: Option<u32>,
     /// True when the submitted evidence claims hardware one-use semantics.
     pub one_use: bool,
@@ -5043,7 +5046,7 @@ struct OfflineDeviceAttestationChallengePreimage {
     expires_at_ms: u64,
 }
 
-/// KeyMint uses this separate schema because `key_id` is derived from the key
+/// `KeyMint` uses this separate schema because `key_id` is derived from the key
 /// that Android creates while processing this challenge.
 #[derive(Debug, Clone, Decode, Encode)]
 struct OfflineAndroidKeyMintChallengePreimage {
@@ -5444,7 +5447,7 @@ impl OfflineDeviceAttestationRegistration {
     ///
     /// The preimage intentionally excludes the attestation report, evidence
     /// hashes, and assertion public key because those values are learned from
-    /// the platform response after the challenge is created. Android KeyMint
+    /// the platform response after the challenge is created. Android `KeyMint`
     /// additionally uses a platform-specific preimage without `key_id`, because
     /// its canonical key id is the SHA-256 of that not-yet-generated assertion
     /// public key. Admission binds the reported credential/certificate public
@@ -5515,7 +5518,7 @@ impl OfflineAndroidKeyMintChallenge {
         }
     }
 
-    /// Return the canonical Norito preimage bytes embedded into the KeyMint challenge hash.
+    /// Return the canonical Norito preimage bytes embedded into the `KeyMint` challenge hash.
     ///
     /// # Errors
     ///
@@ -9844,6 +9847,10 @@ impl KagemushaRecursiveSpendLineageKeyArtifactsV1 {
 
 impl KagemushaSpendableNoteDescriptorV2 {
     /// Validate exact amount plus disjoint, non-zero note material.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when the amount or note material is invalid.
     pub fn validate_public_binding(&self) -> Result<(), KagemushaFoldError> {
         self.amount.validate()?;
         if self.note_commitment == [0; 32] {
@@ -9865,6 +9872,10 @@ impl KagemushaSpendableNoteDescriptorV2 {
 /// The lineage root is deliberately the complete finalized-anchor digest. This
 /// removes a second identity derivation and lets compact peer references bind
 /// branch conflict history one-to-one to chain-resolved provenance.
+///
+/// # Errors
+///
+/// Returns [`KagemushaFoldError`] when `anchor_digest` is zero.
 pub fn kagemusha_recursive_spend_lineage_root_v2(
     anchor_digest: [u8; 32],
 ) -> Result<[u8; 32], KagemushaFoldError> {
@@ -9877,6 +9888,10 @@ pub fn kagemusha_recursive_spend_lineage_root_v2(
 }
 
 /// Derive the compact transition-choice tag retained by descendant claims.
+///
+/// # Errors
+///
+/// Returns [`KagemushaFoldError`] when `transition_binding` is zero.
 pub fn kagemusha_recursive_spend_transition_tag_v2(
     transition_binding: [u8; 32],
 ) -> Result<[u8; 24], KagemushaFoldError> {
@@ -9902,6 +9917,10 @@ pub fn kagemusha_recursive_spend_transition_tag_v2(
 
 impl KagemushaRecursiveSpendBranchPathV2 {
     /// Construct the root coordinate for a top-up lineage.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when `lineage_root` is not a valid root coordinate.
     pub fn root(lineage_root: [u8; 32]) -> Result<Self, KagemushaFoldError> {
         let path = Self {
             lineage_root,
@@ -9913,6 +9932,10 @@ impl KagemushaRecursiveSpendBranchPathV2 {
     }
 
     /// Append the deterministic recipient (`0`) or change (`1`) branch bit.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when the path is invalid or already at maximum depth.
     pub fn child(
         self,
         branch: KagemushaRecursiveSpendBranchV2,
@@ -9949,6 +9972,10 @@ impl KagemushaRecursiveSpendBranchPathV2 {
     }
 
     /// Return the canonical prefix at `depth`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when the path is invalid or `depth` exceeds its depth.
     pub fn prefix(self, depth: u8) -> Result<Self, KagemushaFoldError> {
         self.validate()?;
         if depth > self.depth {
@@ -9971,6 +9998,10 @@ impl KagemushaRecursiveSpendBranchPathV2 {
     }
 
     /// Validate the lineage root, depth, and canonical zeroed unused bits.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when any path field is noncanonical.
     pub fn validate(self) -> Result<(), KagemushaFoldError> {
         if self.lineage_root == [0; 32] {
             return Err(KagemushaFoldError::InvalidRecursiveSpendProof {
@@ -10039,6 +10070,10 @@ impl KagemushaRecursiveSpendBranchPathV2 {
 
 impl KagemushaRecursiveSpendBranchClaimV2 {
     /// Construct a root claim with an empty transition history.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when `lineage_root` cannot form a valid root claim.
     pub fn root(lineage_root: [u8; 32]) -> Result<Self, KagemushaFoldError> {
         let claim = Self {
             path: KagemushaRecursiveSpendBranchPathV2::root(lineage_root)?,
@@ -10049,6 +10084,10 @@ impl KagemushaRecursiveSpendBranchClaimV2 {
     }
 
     /// Append one output edge and bind it to the exact producing transition.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when the claim or transition binding is invalid.
     pub fn child(
         &self,
         branch: KagemushaRecursiveSpendBranchV2,
@@ -10064,6 +10103,10 @@ impl KagemushaRecursiveSpendBranchClaimV2 {
     }
 
     /// Return the canonical ancestor claim at `depth`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when the claim is invalid or `depth` is not an ancestor.
     pub fn prefix(&self, depth: u8) -> Result<Self, KagemushaFoldError> {
         self.validate()?;
         let path = self.path.prefix(depth)?;
@@ -10081,6 +10124,10 @@ impl KagemushaRecursiveSpendBranchClaimV2 {
     }
 
     /// Validate the path and its exact-depth edge history.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when the path or transition history is noncanonical.
     pub fn validate(&self) -> Result<(), KagemushaFoldError> {
         self.path.validate()?;
         let expected_len = usize::from(self.path.depth)
@@ -10179,6 +10226,10 @@ fn kagemusha_recursive_spend_output_branch_claims_v2(
 
 impl KagemushaRecipientOutputDerivationRequestV2 {
     /// Validate the public, secret-free derivation context.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when the amount or request identifier is invalid.
     pub fn validate(&self) -> Result<(), KagemushaFoldError> {
         self.amount.validate()?;
         if self.request_id == [0; 32] {
@@ -10196,6 +10247,10 @@ impl KagemushaRecipientOutputDerivationResultV2 {
     /// Native implementations additionally decode the opaque prover material
     /// before returning it and enforce that its schema contains no receiver
     /// spend secret or output diversifier.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when the result does not exactly bind to `request`.
     pub fn validate_for_request(
         &self,
         request: &KagemushaRecipientOutputDerivationRequestV2,
@@ -10213,8 +10268,8 @@ impl KagemushaRecipientOutputDerivationResultV2 {
                 field: "recipient_output_derivation.amount",
             });
         }
-        if self.recipient_output_prover_material.is_empty()
-            || self.recipient_output_prover_material.len() > 4 * 1024
+        if self.sender_output_prover_material.is_empty()
+            || self.sender_output_prover_material.len() > 4 * 1024
         {
             return Err(KagemushaFoldError::InvalidRecursiveSpendProof {
                 field: "recipient_output_derivation.prover_material",
@@ -10226,6 +10281,10 @@ impl KagemushaRecipientOutputDerivationResultV2 {
 
 impl KagemushaRecipientPaymentRequestSigningPayloadV2 {
     /// Validate unsigned request fields before device signing.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when any request, receiver, amount, or lifetime field is invalid.
     pub fn validate_public_binding(&self) -> Result<(), KagemushaFoldError> {
         self.amount.validate()?;
         self.recipient_output.validate_public_binding()?;
@@ -10270,17 +10329,21 @@ impl KagemushaRecipientPaymentRequestSigningPayloadV2 {
                 field: "recipient_output.amount",
             });
         }
-        if self.recipient_output_prover_material.is_empty()
-            || self.recipient_output_prover_material.len() > 4 * 1024
+        if self.sender_output_prover_material.is_empty()
+            || self.sender_output_prover_material.len() > 4 * 1024
         {
             return Err(KagemushaFoldError::InvalidRecursiveSpendProof {
-                field: "recipient_output_prover_material",
+                field: "sender_output_prover_material",
             });
         }
         Ok(())
     }
 
     /// Return the exact domain-separated bytes signed by the receiver device.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when validation or canonical Norito encoding fails.
     pub fn signing_bytes(&self) -> Result<Vec<u8>, KagemushaFoldError> {
         self.validate_public_binding()?;
         Ok(to_bytes(
@@ -10294,6 +10357,10 @@ impl KagemushaRecipientPaymentRequestSigningPayloadV2 {
 
 impl KagemushaRecipientPaymentRequestV2 {
     /// Construct the canonical request from prevalidated fields and a device signature.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when the assembled signed request is invalid.
     pub fn from_signed_payload(
         payload: KagemushaRecipientPaymentRequestSigningPayloadV2,
         signature: Signature,
@@ -10310,7 +10377,7 @@ impl KagemushaRecipientPaymentRequestV2 {
             issued_at_ms: payload.issued_at_ms,
             expires_at_ms: payload.expires_at_ms,
             recipient_output: payload.recipient_output,
-            recipient_output_prover_material: payload.recipient_output_prover_material,
+            sender_output_prover_material: payload.sender_output_prover_material,
             signature,
         };
         request.validate_public_binding()?;
@@ -10332,11 +10399,15 @@ impl KagemushaRecipientPaymentRequestV2 {
             issued_at_ms: self.issued_at_ms,
             expires_at_ms: self.expires_at_ms,
             recipient_output: self.recipient_output.clone(),
-            recipient_output_prover_material: self.recipient_output_prover_material.clone(),
+            sender_output_prover_material: self.sender_output_prover_material.clone(),
         }
     }
 
     /// Validate the exact signed request and opaque sender-prover material.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when request validation, signature verification, or encoding fails.
     pub fn validate_public_binding(&self) -> Result<(), KagemushaFoldError> {
         let payload = self.signing_payload();
         payload.validate_public_binding()?;
@@ -10356,6 +10427,10 @@ impl KagemushaRecipientPaymentRequestV2 {
     }
 
     /// Verify request authentication and lifetime at the sender's current time.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when authentication fails or `now_ms` is outside the request lifetime.
     pub fn validate_at(&self, now_ms: u64) -> Result<(), KagemushaFoldError> {
         self.validate_public_binding()?;
         if now_ms < self.issued_at_ms || now_ms > self.expires_at_ms {
@@ -10367,6 +10442,10 @@ impl KagemushaRecipientPaymentRequestV2 {
     }
 
     /// Return the canonical request digest bound by the split proof.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when request validation or digest construction fails.
     pub fn digest(&self) -> Result<[u8; 32], KagemushaFoldError> {
         self.validate_public_binding()?;
         kagemusha_poseidon_preimage(&KagemushaRecipientPaymentRequestDigestPreimageV2 {
@@ -10383,6 +10462,10 @@ impl KagemushaRequestAuthorizationV2 {
     /// signature, request user-presence signing from the device key, then
     /// replace only `signature`; the signature itself is deliberately excluded
     /// from this preimage.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when the signing preimage cannot be encoded canonically.
     pub fn signing_bytes(&self) -> Result<Vec<u8>, KagemushaFoldError> {
         Ok(to_bytes(&KagemushaRequestAuthorizationSigningPreimageV2 {
             domain: KAGEMUSHA_REQUEST_AUTHORIZATION_DOMAIN_V2.to_owned(),
@@ -10398,6 +10481,10 @@ impl KagemushaRequestAuthorizationV2 {
     }
 
     /// Verify structure, evidence digest, payload binding, and account signature.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when any authorization field, digest, or signature is invalid.
     pub fn validate_for_payload(
         &self,
         expected_payload_digest: [u8; 32],
@@ -10438,6 +10525,10 @@ impl KagemushaRequestAuthorizationV2 {
     }
 
     /// Verify the signed request is live at the authoritative Torii time.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when authorization validation fails or `now_ms` is outside its lifetime.
     pub fn validate_for_payload_at(
         &self,
         expected_payload_digest: [u8; 32],
@@ -10533,6 +10624,10 @@ impl KagemushaScaledAmountV2 {
 
 impl KagemushaRecursiveSpendArtifactReferenceV2 {
     /// Validate a content-addressed artifact and its required semantic role.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when the artifact is malformed or has a different role.
     pub fn validate_for_role(
         &self,
         expected_role: KagemushaRecursiveSpendArtifactRoleV2,
@@ -10582,6 +10677,10 @@ impl KagemushaRecursiveSpendArtifactReferenceV2 {
 
 impl KagemushaRecursiveSpendStateBoundaryV1 {
     /// Validate the canonical cross-field state boundary.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when the version or state digest is invalid.
     pub fn validate(&self) -> Result<(), KagemushaFoldError> {
         if self.layout_version != KAGEMUSHA_RECURSIVE_SPEND_STATE_BOUNDARY_VERSION_V1
             || (self.state_digest_limb0 == 0
@@ -10604,6 +10703,10 @@ impl KagemushaPastaCycleProofEnvelopeV1 {
     /// [`Self::validate_against_manifest`] so the otherwise well-formed
     /// generation and verifier-key fields are bound to an authenticated
     /// release manifest.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when the envelope structure or proof metadata is invalid.
     pub fn validate(&self) -> Result<(), KagemushaFoldError> {
         if self.version != KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_PROOF_ENVELOPE_VERSION_V1
             || self.proof_backend != KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1
@@ -10638,6 +10741,10 @@ impl KagemushaPastaCycleProofEnvelopeV1 {
     }
 
     /// Validate this envelope against the exact artifact release that verifies it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when the manifest is invalid or does not bind this envelope.
     pub fn validate_against_manifest(
         &self,
         manifest: &KagemushaRecursiveSpendArtifactManifestV3,
@@ -10685,6 +10792,10 @@ impl KagemushaPastaCycleProofEnvelopeV1 {
     }
 
     /// Validate this envelope for an exact chain/asset release context and block height.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when the release or requested chain, asset, scale, or height is invalid.
     pub fn validate_against_manifest_for_context(
         &self,
         manifest: &KagemushaRecursiveSpendArtifactManifestV3,
@@ -10710,6 +10821,10 @@ impl KagemushaPastaCycleProofEnvelopeV1 {
 
 impl KagemushaPastaCycleArtifactV3 {
     /// Validate one immutable V3 artifact file descriptor.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when the artifact name, size, or digest fields are invalid.
     pub fn validate(&self) -> Result<(), KagemushaFoldError> {
         if !is_kagemusha_v3_portable_file_name(&self.file_name)
             || self.size_bytes == 0
@@ -10731,6 +10846,10 @@ impl KagemushaPastaCycleArtifactV3 {
 
 impl KagemushaTopUpFinalityRosterArtifactReferenceV2 {
     /// Validate the exact role-specific finality-roster file contract.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when any roster artifact identity or compatibility field is invalid.
     pub fn validate(&self) -> Result<(), KagemushaFoldError> {
         if !is_kagemusha_v3_portable_file_name(&self.file_name)
             || self.file_name != KAGEMUSHA_TOPUP_FINALITY_ROSTER_FILE_NAME_V2
@@ -10753,6 +10872,10 @@ impl KagemushaTopUpFinalityRosterArtifactReferenceV2 {
 
 impl KagemushaPastaCycleProofProfileV1 {
     /// Validate one fixed parity profile and its exact three-file inventory.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when the circuit identity or artifact inventory is invalid.
     pub fn validate(&self) -> Result<(), KagemushaFoldError> {
         let (expected_circuit, expected_file_names) = match self.parity {
             KagemushaPastaCycleParityV1::TransitionEq => (
@@ -10808,6 +10931,10 @@ impl KagemushaRecursiveSpendArtifactManifestV3 {
     /// This does not authenticate the release attestation. Callers must verify
     /// that attestation before treating the manifest or any bound envelope as
     /// production material.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when the release metadata, profiles, or artifacts are inconsistent.
     pub fn validate(&self) -> Result<(), KagemushaFoldError> {
         if self.schema != KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V3
             || self.version != KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_VERSION_V3
@@ -10880,6 +11007,10 @@ impl KagemushaRecursiveSpendArtifactManifestV3 {
 
 impl KagemushaRecursiveSpendNativeCapabilitiesV1 {
     /// Validate that a capability record exactly describes this bridge contract.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when any advertised capability differs from the bridge contract.
     pub fn validate(&self) -> Result<(), KagemushaFoldError> {
         if self.bridge_abi_version != KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3
             || self.artifact_manifest_schema
@@ -11031,6 +11162,10 @@ impl KagemushaRecursiveSpendInitRequestV2 {
     ///
     /// This is structural validation. The native init entrypoint must also
     /// authenticate the QC and Merkle path with the manifest-pinned roster.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when the anchor, finality proof, or lineage artifact binding is invalid.
     pub fn validate_public_binding(&self) -> Result<(), KagemushaFoldError> {
         self.topup_anchor.validate_public_binding()?;
         self.topup_finality_proof.validate_structure()?;
@@ -11067,6 +11202,10 @@ impl KagemushaRecursiveSpendInitRequestV2 {
 
 impl KagemushaTopUpShieldEvidenceV2 {
     /// Validate the typed proof envelope before authoritative ledger checks.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when the roots, leaf, verifier key, or proof envelope is invalid.
     pub fn validate_public_binding(&self) -> Result<(), KagemushaFoldError> {
         let commitment =
             self.proof
@@ -11094,6 +11233,10 @@ impl KagemushaTopUpShieldEvidenceV2 {
 
 impl KagemushaRecursiveSpendTopUpUnsignedV2 {
     /// Validate every proof, amount, note, operation, and artifact field before signing.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when any unsigned top-up field is inconsistent.
     pub fn validate_public_binding(&self) -> Result<(), KagemushaFoldError> {
         self.amount.validate()?;
         self.current_note.validate_public_binding()?;
@@ -11127,6 +11270,10 @@ impl KagemushaRecursiveSpendTopUpUnsignedV2 {
     }
 
     /// Return the canonical digest placed into the authorization payload.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when unsigned validation or digest construction fails.
     pub fn digest(&self) -> Result<[u8; 32], KagemushaFoldError> {
         self.validate_public_binding()?;
         kagemusha_poseidon_preimage(&KagemushaTopUpUnsignedPayloadDigestPreimageV2 {
@@ -11141,6 +11288,10 @@ impl KagemushaRecursiveSpendTopUpUnsignedV2 {
     }
 
     /// Attach a matching payer authorization and produce the chain-facing request.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when the authorization does not bind the unsigned request.
     pub fn into_request(
         self,
         authorization: KagemushaRequestAuthorizationV2,
@@ -11161,6 +11312,10 @@ impl KagemushaRecursiveSpendTopUpUnsignedV2 {
 
 impl KagemushaRecursiveSpendTopUpRequestV2 {
     /// Construct and validate a scale-bound online-to-offline request.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when the assembled top-up request is invalid.
     pub fn new(
         asset: AssetId,
         amount: KagemushaScaledAmountV2,
@@ -11195,6 +11350,10 @@ impl KagemushaRecursiveSpendTopUpRequestV2 {
     }
 
     /// Validate the charged asset and exact first-hop amount binding.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when the unsigned fields or payer authorization are inconsistent.
     pub fn validate_public_binding(&self) -> Result<(), KagemushaFoldError> {
         let unsigned = self.unsigned_payload();
         unsigned.validate_public_binding()?;
@@ -11214,11 +11373,19 @@ impl KagemushaRecursiveSpendTopUpRequestV2 {
     }
 
     /// Digest of all unsigned debit/proof fields covered by authorization.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when unsigned validation or digest construction fails.
     pub fn unsigned_payload_digest(&self) -> Result<[u8; 32], KagemushaFoldError> {
         self.unsigned_payload().digest()
     }
 
     /// Verify authorization against authoritative Torii time.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when request validation fails or the authorization is not live at `now_ms`.
     pub fn validate_authorization_at(&self, now_ms: u64) -> Result<(), KagemushaFoldError> {
         self.validate_public_binding()?;
         self.authorization
@@ -11228,6 +11395,10 @@ impl KagemushaRecursiveSpendTopUpRequestV2 {
 
 impl KagemushaRecursiveSpendTopUpAnchorV2 {
     /// Populate and validate the canonical receipt digest.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when digest construction or anchor validation fails.
     pub fn finalize_digest(mut self) -> Result<Self, KagemushaFoldError> {
         self.anchor_digest = self.compute_anchor_digest()?;
         self.validate_public_binding()?;
@@ -11235,6 +11406,10 @@ impl KagemushaRecursiveSpendTopUpAnchorV2 {
     }
 
     /// Compute the digest bound into the later Reserved init/redemption proof.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when the canonical digest preimage cannot be constructed.
     pub fn compute_anchor_digest(&self) -> Result<[u8; 32], KagemushaFoldError> {
         kagemusha_poseidon_preimage(&KagemushaTopUpAnchorDigestPreimageV2 {
             domain: KAGEMUSHA_TOPUP_ANCHOR_DIGEST_DOMAIN_V2.to_owned(),
@@ -11258,6 +11433,10 @@ impl KagemushaRecursiveSpendTopUpAnchorV2 {
     }
 
     /// Validate the immutable transfer, amount, operation, and finality bindings.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when any anchor field or its canonical digest is invalid.
     pub fn validate_public_binding(&self) -> Result<(), KagemushaFoldError> {
         self.amount.validate()?;
         self.current_note.validate_public_binding()?;
@@ -11291,6 +11470,10 @@ impl KagemushaRecursiveSpendTopUpAnchorV2 {
     }
 
     /// Return the compact identity carried by peer and redemption archives.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when the full anchor does not validate.
     pub fn compact_ref(
         &self,
     ) -> Result<KagemushaRecursiveSpendTopUpAnchorRefV2, KagemushaFoldError> {
@@ -11304,6 +11487,10 @@ impl KagemushaRecursiveSpendTopUpAnchorV2 {
 
 impl KagemushaRecursiveSpendTopUpAnchorRefV2 {
     /// Validate a non-zero chain-resolvable identity pair.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when either identity component is zero.
     pub fn validate(self) -> Result<(), KagemushaFoldError> {
         if self.topup_operation_id == [0; 32] || self.anchor_digest == [0; 32] {
             return Err(KagemushaFoldError::InvalidRecursiveSpendProof {
@@ -11316,6 +11503,10 @@ impl KagemushaRecursiveSpendTopUpAnchorRefV2 {
 
 impl KagemushaTopUpFinalityHeightContextV2 {
     /// Validate the bounded context projection independently of a trust artifact.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when the context identity, roster bounds, or consensus fields are invalid.
     pub fn validate_structure(&self) -> Result<(), KagemushaFoldError> {
         let next_roster_too_large = self.next_epoch_snapshot.as_ref().is_some_and(|snapshot| {
             snapshot.roster.len() > KAGEMUSHA_TOPUP_FINALITY_MAX_VALIDATORS_V2
@@ -11340,6 +11531,10 @@ impl KagemushaTopUpFinalityHeightContextV2 {
 
     /// Reconstruct and validate the exact complete height context using one
     /// manifest-authenticated roster window.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when the projection or roster window is invalid or does not cover this height.
     pub fn reconstruct_for_roster_window(
         &self,
         window: &KagemushaTopUpFinalityRosterWindowV2,
@@ -11384,6 +11579,10 @@ impl KagemushaTopUpFinalityHeightContextV2 {
 
 impl KagemushaTopUpFinalityCompactQcV2 {
     /// Validate canonical bounds before consulting a trusted roster.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when the compact context or commit certificate shape is invalid.
     pub fn validate_structure(&self) -> Result<(), KagemushaFoldError> {
         let context = &self.height_context;
         let certificate = &self.certificate;
@@ -11412,6 +11611,10 @@ impl KagemushaTopUpFinalityCompactQcV2 {
     }
 
     /// Bind the compact certificate to one separately trusted roster window.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when structural validation or roster-bound certificate validation fails.
     pub fn validate_for_roster_window(
         &self,
         window: &KagemushaTopUpFinalityRosterWindowV2,
@@ -11431,6 +11634,10 @@ impl KagemushaTopUpFinalityCompactQcV2 {
 
 impl KagemushaTopUpAnchorMerkleProofV2 {
     /// Validate the unique balanced-tree shape implied by `leaf_count`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when the leaf coordinates or sibling path are invalid.
     pub fn validate(&self) -> Result<(), KagemushaFoldError> {
         if self.leaf_count == 0
             || self.leaf_count > KAGEMUSHA_TOPUP_FINALITY_MAX_ANCHORS_PER_BLOCK_V2
@@ -11444,7 +11651,7 @@ impl KagemushaTopUpAnchorMerkleProofV2 {
         let expected_depth = width.trailing_zeros() as usize;
         if self.siblings.len() != expected_depth
             || self.siblings.len() > KAGEMUSHA_TOPUP_FINALITY_MAX_SIBLINGS_V2
-            || self.siblings.iter().any(|sibling| *sibling == [0; 32])
+            || self.siblings.contains(&[0; 32])
         {
             return Err(KagemushaFoldError::InvalidRecursiveSpendProof {
                 field: "topup_finality.anchor_path.siblings",
@@ -11457,6 +11664,10 @@ impl KagemushaTopUpAnchorMerkleProofV2 {
 impl KagemushaTopUpFinalityProofV2 {
     /// Validate the canonical self-contained proof shape. Cryptographic QC and
     /// Merkle verification are performed by the native verifier.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when the proof version, anchor, certificate, or Merkle binding is invalid.
     pub fn validate_structure(&self) -> Result<(), KagemushaFoldError> {
         if self.version != KAGEMUSHA_TOPUP_FINALITY_PROOF_VERSION_V2 {
             return Err(KagemushaFoldError::InvalidRecursiveSpendProof {
@@ -11484,6 +11695,10 @@ impl KagemushaTopUpFinalityProofV2 {
 impl KagemushaTopUpFinalityRosterWindowV2 {
     /// Validate the exact ordered roster, powers, and activation window without
     /// performing proof-of-possession pairings.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when the height window, roster, powers, or consensus mode is invalid.
     pub fn validate_structure(&self) -> Result<(), KagemushaFoldError> {
         if self.activates_at_height == 0
             || self.withdraws_at_height <= self.activates_at_height
@@ -11522,6 +11737,10 @@ impl KagemushaTopUpFinalityRosterWindowV2 {
     /// Validate the complete roster window, including every BLS proof of
     /// possession. Callers handling repeated proofs should cache success by the
     /// authenticated roster-archive digest.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when structural validation or any proof of possession fails.
     pub fn validate(&self) -> Result<(), KagemushaFoldError> {
         self.validate_structure()?;
         if self
@@ -11543,6 +11762,10 @@ impl KagemushaTopUpFinalityRosterWindowV2 {
 impl KagemushaTopUpFinalityRosterArtifactV2 {
     /// Validate chain-scoped, strictly ordered, non-overlapping trust windows
     /// without performing BLS proof-of-possession pairings.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when artifact identity or window ordering is invalid.
     pub fn validate_structure(&self) -> Result<(), KagemushaFoldError> {
         if self.version != KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_VERSION_V2
             || !is_kagemusha_v3_chain_id(&self.chain_id)
@@ -11568,6 +11791,10 @@ impl KagemushaTopUpFinalityRosterArtifactV2 {
     }
 
     /// Validate every structural field and every BLS proof of possession.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when artifact structure or any roster window is invalid.
     pub fn validate(&self) -> Result<(), KagemushaFoldError> {
         self.validate_structure()?;
         for window in &self.windows {
@@ -11577,6 +11804,10 @@ impl KagemushaTopUpFinalityRosterArtifactV2 {
     }
 
     /// Select exactly one trusted roster for `height`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when artifact structure is invalid or `height` has no unique window.
     pub fn window_at(
         &self,
         height: u64,
@@ -11630,6 +11861,10 @@ fn validate_kagemusha_recursive_spend_topup_anchor_refs_v2(
 
 impl KagemushaRecursiveSpendSplitIntentV2 {
     /// Construct and validate a fractional transfer statement.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when the assembled split intent violates any public binding.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         chain_id: ChainId,
@@ -11664,6 +11899,14 @@ impl KagemushaRecursiveSpendSplitIntentV2 {
     }
 
     /// Validate exact conservation, split shape, recipient nonce, and lineage bindings.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when conservation, branch, note, or lineage validation fails.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "keeping protocol cross-field validation contiguous preserves its deterministic check ordering"
+    )]
     pub fn validate_public_binding(&self) -> Result<(), KagemushaFoldError> {
         if self.inputs.is_empty() || self.inputs.len() > KAGEMUSHA_RECURSIVE_SPEND_MAX_INPUTS_V2 {
             return Err(KagemushaFoldError::InvalidRecursiveSpendProof {
@@ -11841,6 +12084,10 @@ impl KagemushaRecursiveSpendSplitIntentV2 {
     }
 
     /// Return the transition-bound claims assigned to one output branch.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when the split is invalid or branch claims cannot be derived.
     pub fn output_branch_claims(
         &self,
         branch: KagemushaRecursiveSpendBranchV2,
@@ -11852,6 +12099,10 @@ impl KagemushaRecursiveSpendSplitIntentV2 {
 
     /// Validate one independently spendable result bundle against this full
     /// parent-bound split intent.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when the bundle is invalid or does not match the requested split branch.
     pub fn validate_output_bundle(
         &self,
         bundle: &KagemushaRecursiveSpendBundleV2,
@@ -11911,6 +12162,10 @@ impl KagemushaRecursiveSpendSplitIntentV2 {
     }
 
     /// Return the circuit-bound digest of this exact split statement.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when split validation or digest construction fails.
     pub fn binding_digest(&self) -> Result<[u8; 32], KagemushaFoldError> {
         self.validate_public_binding()?;
         kagemusha_poseidon_preimage(&KagemushaRecursiveSpendSplitBindingDigestPreimageV2 {
@@ -11927,6 +12182,10 @@ impl KagemushaRecursiveSpendSplitIntentBuildRequestV2 {
     /// chain context are copied only from the parent statements. Parent bundles
     /// must be in strict digest order and must agree on chain, asset, scale, and
     /// lineage mode.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when parent bundles are invalid, unordered, inconsistent, or cannot form the split.
     pub fn into_intent(self) -> Result<KagemushaRecursiveSpendSplitIntentV2, KagemushaFoldError> {
         if self.previous_bundles.is_empty()
             || self.previous_bundles.len() > KAGEMUSHA_RECURSIVE_SPEND_MAX_INPUTS_V2
@@ -12041,6 +12300,10 @@ pub fn kagemusha_confidential_amount_encoding_v2(atomic_units: u128) -> [u8; 32]
 
 impl KagemushaUnshieldPublicInputsBindingV2 {
     /// Return the domain-separated digest exposed by the redemption-change circuit.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when the digest preimage cannot be encoded or hashed.
     pub fn digest(&self) -> Result<[u8; 32], KagemushaFoldError> {
         kagemusha_poseidon_preimage(&KagemushaUnshieldPublicInputsDigestPreimageV2 {
             domain: KAGEMUSHA_UNSHIELD_PUBLIC_INPUTS_DIGEST_DOMAIN_V2.to_owned(),
@@ -12051,6 +12314,10 @@ impl KagemushaUnshieldPublicInputsBindingV2 {
 
 impl KagemushaRecursiveSpendRedemptionIntentV2 {
     /// Validate exact full/partial conservation and canonical unshield public words.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when conservation, note, lineage, or unshield bindings are invalid.
     pub fn validate_public_binding(&self) -> Result<(), KagemushaFoldError> {
         self.input_note.validate_public_binding()?;
         validate_kagemusha_recursive_spend_branch_claims_v2(&self.parent_branch_claims)?;
@@ -12153,6 +12420,10 @@ impl KagemushaRecursiveSpendRedemptionIntentV2 {
     }
 
     /// Return the domain-separated circuit binding for this redemption transition.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when redemption validation or digest construction fails.
     pub fn binding_digest(&self) -> Result<[u8; 32], KagemushaFoldError> {
         self.validate_public_binding()?;
         kagemusha_poseidon_preimage(&KagemushaRedemptionTransitionDigestPreimageV2 {
@@ -12164,6 +12435,10 @@ impl KagemushaRecursiveSpendRedemptionIntentV2 {
 
 impl KagemushaRecursiveSpendRedemptionIntentBuildRequestV2 {
     /// Consume an opaque parent bundle and derive every parent-bound redemption field.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when the parent bundle or derived redemption intent is invalid.
     pub fn into_intent(
         self,
     ) -> Result<KagemushaRecursiveSpendRedemptionIntentV2, KagemushaFoldError> {
@@ -12217,6 +12492,10 @@ impl KagemushaRecursiveSpendTransitionV2 {
 
 impl KagemushaRecursiveSpendPeerSplitTransitionV2 {
     /// Project the compact proof-bound transition carried by each output bundle.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when the split is invalid or the requested branch does not exist.
     pub fn from_intent(
         intent: &KagemushaRecursiveSpendSplitIntentV2,
         branch: KagemushaRecursiveSpendBranchV2,
@@ -12252,6 +12531,10 @@ impl KagemushaRecursiveSpendPeerSplitTransitionV2 {
 
 impl KagemushaRecursiveSpendRedemptionChangeTransitionV2 {
     /// Project the compact proof-bound transition carried by a change bundle.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when the redemption is invalid or has no complete change output.
     pub fn from_intent(
         intent: &KagemushaRecursiveSpendRedemptionIntentV2,
     ) -> Result<Self, KagemushaFoldError> {
@@ -12276,6 +12559,14 @@ impl KagemushaRecursiveSpendAppendRequestV2 {
     ///
     /// This does not make the request provable; call
     /// [`Self::ensure_proof_backend_available`] before any proving attempt.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when any split, parent, lineage, proof, or height binding is invalid.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "keeping protocol cross-field validation contiguous preserves its deterministic check ordering"
+    )]
     pub fn validate_public_binding(&self) -> Result<(), KagemushaFoldError> {
         self.split.validate_public_binding()?;
         if self.previous_inputs.len() != self.split.inputs.len()
@@ -12366,12 +12657,11 @@ impl KagemushaRecursiveSpendAppendRequestV2 {
             for anchor_ref in &statement.topup_anchor_refs {
                 if let Some(existing) =
                     contributing_anchor_refs.insert(anchor_ref.topup_operation_id, anchor_ref)
+                    && existing != anchor_ref
                 {
-                    if existing != anchor_ref {
-                        return Err(KagemushaFoldError::InvalidRecursiveSpendProof {
-                            field: "previous_inputs.topup_anchor_refs",
-                        });
-                    }
+                    return Err(KagemushaFoldError::InvalidRecursiveSpendProof {
+                        field: "previous_inputs.topup_anchor_refs",
+                    });
                 }
             }
             let expected = KagemushaRecursiveSpendInputBranchV2 {
@@ -12436,7 +12726,7 @@ impl KagemushaRecursiveSpendAppendRequestV2 {
         }
         let expected_anchor_refs = contributing_anchor_refs
             .into_values()
-            .cloned()
+            .copied()
             .collect::<Vec<_>>();
         if self.split.topup_anchor_refs != expected_anchor_refs {
             return Err(KagemushaFoldError::InvalidRecursiveSpendProof {
@@ -12473,6 +12763,10 @@ impl KagemushaRecursiveSpendAppendRequestV2 {
     }
 
     /// Fail closed until a circuit proves branch-independent lineage/nullifiers.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when request validation fails or the proof backend is unavailable.
     pub fn ensure_proof_backend_available(&self) -> Result<(), KagemushaFoldError> {
         self.validate_public_binding()?;
         if !KAGEMUSHA_RECURSIVE_SPEND_V2_PROOF_BACKEND_AVAILABLE {
@@ -12484,6 +12778,10 @@ impl KagemushaRecursiveSpendAppendRequestV2 {
 
 impl KagemushaRecursiveSpendRedeemChangeBuildRequestV2 {
     /// Validate the stable public builder ABI before native proving begins.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when parent, redemption, artifact, proof, or height bindings are invalid.
     pub fn validate_public_binding(&self) -> Result<(), KagemushaFoldError> {
         self.previous_bundle.validate_public_binding()?;
         self.redemption.validate_public_binding()?;
@@ -12525,6 +12823,10 @@ impl KagemushaRecursiveSpendRedeemChangeBuildRequestV2 {
     }
 
     /// Fail closed until the dedicated Reserved redeem-change prover is linked.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when request validation fails or the proof backend is unavailable.
     pub fn ensure_proof_backend_available(&self) -> Result<(), KagemushaFoldError> {
         self.validate_public_binding()?;
         if !KAGEMUSHA_RECURSIVE_SPEND_V2_PROOF_BACKEND_AVAILABLE {
@@ -12536,6 +12838,10 @@ impl KagemushaRecursiveSpendRedeemChangeBuildRequestV2 {
 
 impl KagemushaRecursiveSpendRedeemChangeBuildResultV2 {
     /// Validate the completed child and both circuit-exposed digests.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when the request, change branch, or exposed digests do not match.
     pub fn validate_for_request(
         &self,
         request: &KagemushaRecursiveSpendRedeemChangeBuildRequestV2,
@@ -12562,6 +12868,14 @@ impl KagemushaRecursiveSpendRedeemChangeBuildResultV2 {
 
 impl KagemushaRecursiveSpendPublicStatementV2 {
     /// Validate every public field before it is accepted as a proof instance.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when any note, amount, branch, transition, or lineage field is inconsistent.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "keeping proof-instance validation contiguous preserves its deterministic cross-field ordering"
+    )]
     pub fn validate_context(&self) -> Result<(), KagemushaFoldError> {
         self.current_note.validate_public_binding()?;
         validate_kagemusha_recursive_spend_branch_claims_v2(&self.branch_claims)?;
@@ -12713,6 +13027,10 @@ impl KagemushaRecursiveSpendPublicStatementV2 {
     }
 
     /// Return the digest that must be a public instance of the V2 recursive proof.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when statement validation or digest construction fails.
     pub fn digest(&self) -> Result<[u8; 32], KagemushaFoldError> {
         self.validate_context()?;
         kagemusha_poseidon_preimage(&KagemushaRecursiveSpendPublicStatementDigestPreimageV2 {
@@ -12724,6 +13042,10 @@ impl KagemushaRecursiveSpendPublicStatementV2 {
 
 impl KagemushaRecursiveSpendBundleV2 {
     /// Validate the exact public statement and proof-envelope binding.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when the statement or recursive proof envelope is invalid.
     pub fn validate_public_binding(&self) -> Result<(), KagemushaFoldError> {
         self.statement.validate_context()?;
         if self.recursive_proof.verifier_key_id != self.statement.verifier_key_id
@@ -12746,6 +13068,10 @@ impl KagemushaRecursiveSpendBundleV2 {
     }
 
     /// Return a canonical identity digest for idempotency and parent binding.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when bundle validation or digest construction fails.
     pub fn digest(&self) -> Result<[u8; 32], KagemushaFoldError> {
         self.validate_public_binding()?;
         kagemusha_poseidon_preimage(&KagemushaRecursiveSpendBundleDigestPreimageV2 {
@@ -12755,6 +13081,10 @@ impl KagemushaRecursiveSpendBundleV2 {
     }
 
     /// Decode only the fields the wallet needs while retaining the bundle archive separately.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when bundle validation or identity digest construction fails.
     pub fn summary(&self) -> Result<KagemushaRecursiveSpendBundleSummaryV2, KagemushaFoldError> {
         self.validate_public_binding()?;
         let statement = &self.statement;
@@ -12773,6 +13103,10 @@ impl KagemushaRecursiveSpendBundleV2 {
     }
 
     /// Reject V2 bundles until their statement digest is verified by a real V2 circuit.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when bundle validation fails or because the proof backend is unavailable.
     pub fn ensure_proof_backend_available(&self) -> Result<(), KagemushaFoldError> {
         self.validate_public_binding()?;
         Err(KagemushaFoldError::RecursiveSpendV2ProofBackendUnavailable)
@@ -12857,6 +13191,10 @@ impl KagemushaRecursiveSpendLineageTransitionArchiveV2 {
 
 impl KagemushaRecursiveSpendLineageNodeV2 {
     /// Decode and validate the exact canonical transition archive bound by this node.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when the archive is empty, oversized, noncanonical, or does not bind this node.
     pub fn decode_transition_archive(
         &self,
     ) -> Result<KagemushaRecursiveSpendLineageTransitionArchiveV2, KagemushaFoldError> {
@@ -12891,6 +13229,14 @@ impl KagemushaRecursiveSpendLineageWitnessV2 {
     /// availability at every node, exact proof-depth progression, and a single
     /// connected sink. Cryptographic interpretation of `transition_archive`
     /// remains the verifier's responsibility.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when node ordering, ancestry, transition archives, or sink connectivity is invalid.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "keeping canonical DAG validation contiguous avoids changing protocol acceptance ordering"
+    )]
     pub fn validate_canonical_dag(&self) -> Result<(), KagemushaFoldError> {
         if self.final_bundle_digest == [0; 32] {
             return Err(KagemushaFoldError::InvalidRecursiveSpendProof {
@@ -13068,6 +13414,10 @@ impl KagemushaRecursiveSpendLineageWitnessV2 {
 
     /// Validate this witness as the exact semantic ancestor closure of
     /// `bundle` at an authoritative redemption/request height.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when the height, bundle, or semantic ancestor closure is invalid.
     pub fn validate_for_bundle_at_height(
         &self,
         bundle: &KagemushaRecursiveSpendBundleV2,
@@ -13134,6 +13484,10 @@ impl KagemushaRecursiveSpendLineageWitnessV2 {
 
 impl KagemushaRecursiveSpendSplitResultV2 {
     /// Construct and validate independently spendable recipient/change branches.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when either output branch or its shared split binding is invalid.
     pub fn new(
         split: KagemushaRecursiveSpendSplitIntentV2,
         split_binding_digest: [u8; 32],
@@ -13151,6 +13505,10 @@ impl KagemushaRecursiveSpendSplitResultV2 {
     }
 
     /// Validate conservation plus the shared-parent and disjoint-branch bindings.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when conservation or either output branch binding is invalid.
     pub fn validate_public_binding(&self) -> Result<(), KagemushaFoldError> {
         self.split.validate_public_binding()?;
         if self.split_binding_digest != self.split.binding_digest()? {
@@ -13218,6 +13576,10 @@ impl KagemushaRecursiveSpendSplitResultV2 {
     }
 
     /// Fail closed until branch-independent V2 proving is linked.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when result validation fails or because the proof backend is unavailable.
     pub fn ensure_proof_backend_available(&self) -> Result<(), KagemushaFoldError> {
         self.validate_public_binding()?;
         Err(KagemushaFoldError::RecursiveSpendV2ProofBackendUnavailable)
@@ -13226,6 +13588,10 @@ impl KagemushaRecursiveSpendSplitResultV2 {
 
 impl KagemushaRecursiveSpendPeerPaymentV2 {
     /// Project the recipient-only transport envelope from a local split result.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when the split result or projected payment is invalid.
     pub fn from_split_result(
         result: &KagemushaRecursiveSpendSplitResultV2,
     ) -> Result<Self, KagemushaFoldError> {
@@ -13238,6 +13604,10 @@ impl KagemushaRecursiveSpendPeerPaymentV2 {
     }
 
     /// Return the canonical recipient peer-split transition embedded in this payment.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when the recipient bundle is invalid or lacks the expected transition.
     pub fn recipient_split_transition(
         &self,
     ) -> Result<&KagemushaRecursiveSpendPeerSplitTransitionV2, KagemushaFoldError> {
@@ -13258,16 +13628,28 @@ impl KagemushaRecursiveSpendPeerPaymentV2 {
     }
 
     /// Return the canonical split operation identifier from the embedded transition.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when the embedded recipient transition is invalid.
     pub fn operation_id(&self) -> Result<[u8; 32], KagemushaFoldError> {
         Ok(self.recipient_split_transition()?.operation_id)
     }
 
     /// Return the canonical recipient-request digest from the embedded transition.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when the embedded recipient transition is invalid.
     pub fn recipient_request_digest(&self) -> Result<[u8; 32], KagemushaFoldError> {
         Ok(self.recipient_split_transition()?.recipient_request_digest)
     }
 
     /// Validate the recipient branch, derived replay identity, and peer-size contract.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when the transition, replay identity, bundle, or encoded size is invalid.
     pub fn validate_public_binding(&self) -> Result<(), KagemushaFoldError> {
         let transition = self.recipient_split_transition()?;
         if transition.operation_id == [0; 32] || transition.recipient_request_digest == [0; 32] {
@@ -13288,6 +13670,10 @@ impl KagemushaRecursiveSpendPeerPaymentV2 {
 
 impl KagemushaRecursiveSpendVerifyRequestV2 {
     /// Validate receiver request, artifact, hop, and branch-output bindings.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when any receiver, timing, hop, artifact, or output binding is invalid.
     pub fn validate_public_binding(&self) -> Result<(), KagemushaFoldError> {
         self.bundle.validate_public_binding()?;
         if self.verified_at_ms == 0 {
@@ -13341,6 +13727,10 @@ impl KagemushaRecursiveSpendVerifyRequestV2 {
     }
 
     /// Reject receiver verification until the V2 proof backend is linked.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when request validation fails or because the proof backend is unavailable.
     pub fn ensure_proof_backend_available(&self) -> Result<(), KagemushaFoldError> {
         self.validate_public_binding()?;
         self.bundle.ensure_proof_backend_available()
@@ -13349,6 +13739,10 @@ impl KagemushaRecursiveSpendVerifyRequestV2 {
 
 impl KagemushaRecursiveSpendVerifyResultV2 {
     /// Enforce fail-closed result consistency before an SDK persists a payment.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when the result is unsuccessful or any verification binding is invalid.
     pub fn validate_public_binding(&self) -> Result<(), KagemushaFoldError> {
         if !self.valid
             || self.recipient_request_digest == [0; 32]
@@ -13394,6 +13788,10 @@ impl KagemushaRecursiveSpendVerifyResultV2 {
 }
 
 /// Derive the canonical public reference carried by a receiver payment request.
+///
+/// # Errors
+///
+/// Returns [`KagemushaFoldError`] when the reference preimage cannot be encoded or hashed.
 pub fn kagemusha_receiver_key_reference_v2(
     receiver_public_key: &PublicKey,
 ) -> Result<[u8; 32], KagemushaFoldError> {
@@ -13405,6 +13803,10 @@ pub fn kagemusha_receiver_key_reference_v2(
 
 impl KagemushaReceiverAcknowledgementPayloadV2 {
     /// Validate structural fields and the domain-separated public-key reference.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when any acknowledgement identity, device, or key field is invalid.
     pub fn validate_public_binding(&self) -> Result<(), KagemushaFoldError> {
         if self.operation_id == [0; 32]
             || self.recipient_request_digest == [0; 32]
@@ -13426,6 +13828,10 @@ impl KagemushaReceiverAcknowledgementPayloadV2 {
     }
 
     /// Return the exact domain-separated bytes signed by the receiver device key.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when payload validation or canonical encoding fails.
     pub fn signing_bytes(&self) -> Result<Vec<u8>, KagemushaFoldError> {
         self.validate_public_binding()?;
         Ok(to_bytes(
@@ -13449,6 +13855,10 @@ impl KagemushaReceiverAcknowledgementV2 {
     /// Callers must additionally check the device key against the registered
     /// receiver device lineage. A sender may commit reserved inputs only after
     /// this function and that registry check both succeed.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when the acknowledgement, signature, request, or payment binding is invalid.
     pub fn validate_for_payment(
         &self,
         recipient_request: &KagemushaRecipientPaymentRequestV2,
@@ -13503,6 +13913,10 @@ impl KagemushaReceiverAcknowledgementV2 {
     }
 
     /// Return the canonical ACK archive to persist and replay byte-for-byte.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when payment validation or canonical encoding fails.
     pub fn canonical_archive_for_payment(
         &self,
         recipient_request: &KagemushaRecipientPaymentRequestV2,
@@ -13513,6 +13927,10 @@ impl KagemushaReceiverAcknowledgementV2 {
     }
 
     /// Return the canonical identity digest of the signed acknowledgement.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when the acknowledgement digest cannot be constructed.
     pub fn digest(&self) -> Result<[u8; 32], KagemushaFoldError> {
         kagemusha_poseidon_preimage(&KagemushaReceiverAcknowledgementDigestPreimageV2 {
             domain: KAGEMUSHA_RECEIVER_ACKNOWLEDGEMENT_DIGEST_DOMAIN_V2.to_owned(),
@@ -13521,6 +13939,10 @@ impl KagemushaReceiverAcknowledgementV2 {
     }
 
     /// Build the typed successful native verification result.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when payment validation or acknowledgement digest construction fails.
     pub fn verified_result(
         &self,
         recipient_request: &KagemushaRecipientPaymentRequestV2,
@@ -13539,6 +13961,10 @@ impl KagemushaReceiverAcknowledgementV2 {
 
 impl KagemushaReceiverAcknowledgementVerifyResultV2 {
     /// Enforce fail-closed result consistency before a sender consumes inputs.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when the result is unsuccessful or any required identity or digest is zero.
     pub fn validate_public_binding(&self) -> Result<(), KagemushaFoldError> {
         if !self.valid
             || self.operation_id == [0; 32]
@@ -13556,6 +13982,10 @@ impl KagemushaReceiverAcknowledgementVerifyResultV2 {
 
 impl KagemushaRecursiveSpendRedeemResultV2 {
     /// Validate the canonical request archive and optional change bundle shape.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when the operation, request archive, or optional change bundle is invalid.
     pub fn validate_public_binding(&self) -> Result<(), KagemushaFoldError> {
         if self.operation_id == [0; 32]
             || self.redeem_request_archive.is_empty()
@@ -13575,6 +14005,10 @@ impl KagemushaRecursiveSpendRedeemResultV2 {
 
 impl KagemushaRecursiveSpendRedeemChangeBranchV2 {
     /// Validate the dedicated change child against the exact consumed input and intent.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when the input, redemption, change output, proof, or branch binding is invalid.
     pub fn validate_for_redemption(
         &self,
         input_bundle: &KagemushaRecursiveSpendBundleV2,
@@ -13652,6 +14086,10 @@ impl KagemushaRecursiveSpendRedeemChangeBranchV2 {
 
 impl KagemushaRecursiveSpendRedeemUnsignedV2 {
     /// Validate exact credit/change conservation and proof metadata before signing.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when conservation, proof, lineage, recipient, or operation fields are invalid.
     pub fn validate_public_binding(&self) -> Result<(), KagemushaFoldError> {
         self.bundle.validate_public_binding()?;
         self.amount.validate()?;
@@ -13733,6 +14171,10 @@ impl KagemushaRecursiveSpendRedeemUnsignedV2 {
     }
 
     /// Return the canonical digest placed into the authorization payload.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when unsigned redemption validation or digest construction fails.
     pub fn digest(&self) -> Result<[u8; 32], KagemushaFoldError> {
         self.validate_public_binding()?;
         kagemusha_poseidon_preimage(&KagemushaRedeemUnsignedPayloadDigestPreimageV2 {
@@ -13751,6 +14193,10 @@ impl KagemushaRecursiveSpendRedeemUnsignedV2 {
     }
 
     /// Attach a matching recipient authorization and produce the chain-facing request.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when the authorization does not bind the unsigned redemption.
     pub fn into_request(
         self,
         authorization: KagemushaRequestAuthorizationV2,
@@ -13792,6 +14238,10 @@ impl KagemushaRecursiveSpendRedeemRequestV2 {
     }
 
     /// Validate exact credit/change conservation and self-contained authorization.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when unsigned redemption or recipient authorization validation fails.
     pub fn validate_public_binding(&self) -> Result<(), KagemushaFoldError> {
         let unsigned = self.unsigned_payload();
         unsigned.validate_public_binding()?;
@@ -13809,11 +14259,19 @@ impl KagemushaRecursiveSpendRedeemRequestV2 {
     }
 
     /// Digest of all unsigned redemption fields covered by authorization.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when unsigned validation or digest construction fails.
     pub fn unsigned_payload_digest(&self) -> Result<[u8; 32], KagemushaFoldError> {
         self.unsigned_payload().digest()
     }
 
     /// Verify authorization against authoritative Torii time.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when request validation fails or authorization is not live at `now_ms`.
     pub fn validate_authorization_at(&self, now_ms: u64) -> Result<(), KagemushaFoldError> {
         self.validate_public_binding()?;
         self.authorization
@@ -13821,6 +14279,10 @@ impl KagemushaRecursiveSpendRedeemRequestV2 {
     }
 
     /// Fail closed until the chain has a scale-aware V2 redemption instruction.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when request validation fails or because the proof backend is unavailable.
     pub fn ensure_proof_backend_available(&self) -> Result<(), KagemushaFoldError> {
         self.validate_public_binding()?;
         Err(KagemushaFoldError::RecursiveSpendV2ProofBackendUnavailable)
@@ -14351,6 +14813,10 @@ impl KagemushaRecursiveSpendAppendRequestV1 {
 
 impl KagemushaRecursiveSpendLineageWitnessVerifyRequestV1 {
     /// Build and structurally validate a standalone lineage-witness request.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when the assembled bundle, witness, or verifier-record selection is invalid.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         bundle: KagemushaRecursiveSpendBundleV1,
@@ -14374,6 +14840,10 @@ impl KagemushaRecursiveSpendLineageWitnessVerifyRequestV1 {
     ///
     /// Cryptographic verification remains a native/core responsibility; this
     /// method must not be interpreted as proof admission.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when the bundle, lineage witness, or verifier-record selection is invalid.
     pub fn validate_public_binding(&self) -> Result<(), KagemushaFoldError> {
         self.bundle.validate_public_input_binding()?;
         validate_kagemusha_recursive_spend_lineage_witness(&self.bundle, &self.lineage_witness)?;
@@ -14962,15 +15432,15 @@ fn kagemusha_pallas_open_envelope_archive_declared_count(
             .map_err(|_| KagemushaFoldError::InvalidRecursiveSpendProof { field })
     };
 
-    match kagemusha_pallas_open_envelope_archive_uncompressed_payload::<PallasOpenEnvelopeArchive>(
-        archive, field,
-    )? {
-        Some(payload) => read_count(payload),
-        None => {
-            let archived = norito::from_compressed_bytes::<PallasOpenEnvelopeArchive>(archive)
-                .map_err(|_| KagemushaFoldError::InvalidRecursiveSpendProof { field })?;
-            read_count(archived.bytes())
-        }
+    if let Some(payload) = kagemusha_pallas_open_envelope_archive_uncompressed_payload::<
+        PallasOpenEnvelopeArchive,
+    >(archive, field)?
+    {
+        read_count(payload)
+    } else {
+        let archived = norito::from_compressed_bytes::<PallasOpenEnvelopeArchive>(archive)
+            .map_err(|_| KagemushaFoldError::InvalidRecursiveSpendProof { field })?;
+        read_count(archived.bytes())
     }
 }
 
@@ -15005,7 +15475,7 @@ where
     }
     let schema = archive
         .get(SCHEMA_OFFSET..COMPRESSION_OFFSET)
-        .ok_or_else(|| invalid())?;
+        .ok_or_else(&invalid)?;
     let expected_schema = <T as norito::NoritoDeserialize<'static>>::schema_hash();
     if schema != expected_schema.as_slice() {
         return Err(invalid());
@@ -15022,7 +15492,7 @@ where
     length_bytes.copy_from_slice(
         archive
             .get(LENGTH_OFFSET..CHECKSUM_OFFSET)
-            .ok_or_else(|| invalid())?,
+            .ok_or_else(&invalid)?,
     );
     let payload_len_u64 = u64::from_le_bytes(length_bytes);
     if payload_len_u64 > norito::core::max_archive_len() {
@@ -15034,11 +15504,11 @@ where
     checksum_bytes.copy_from_slice(
         archive
             .get(CHECKSUM_OFFSET..FLAGS_OFFSET)
-            .ok_or_else(|| invalid())?,
+            .ok_or_else(&invalid)?,
     );
     let checksum = u64::from_le_bytes(checksum_bytes);
 
-    let flags = *archive.get(FLAGS_OFFSET).ok_or_else(|| invalid())?;
+    let flags = *archive.get(FLAGS_OFFSET).ok_or_else(&invalid)?;
     norito::core::validate_header_flags(flags).map_err(|_| invalid())?;
 
     let padding = {
@@ -15052,10 +15522,10 @@ where
     };
     let payload_offset = norito::core::Header::SIZE
         .checked_add(padding)
-        .ok_or_else(|| invalid())?;
+        .ok_or_else(&invalid)?;
     let payload_end = payload_offset
         .checked_add(payload_len)
-        .ok_or_else(|| invalid())?;
+        .ok_or_else(&invalid)?;
     if archive.len() != payload_end {
         return Err(invalid());
     }
@@ -15067,7 +15537,7 @@ where
     }
     let payload = archive
         .get(payload_offset..payload_end)
-        .ok_or_else(|| invalid())?;
+        .ok_or_else(&invalid)?;
     if norito::hardware_crc64(payload) != checksum {
         return Err(invalid());
     }
@@ -17074,7 +17544,7 @@ pub fn derive_offline_note_payment_token_id(
 }
 
 #[cfg(test)]
-mod offline_note_tests {
+mod kagemusha_tests {
     #![allow(
         clippy::assertions_on_constants,
         clippy::items_after_statements,
@@ -18701,6 +19171,7 @@ mod offline_note_tests {
             capabilities.bridge_abi_version,
             KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3
         );
+        assert_eq!(capabilities.mode, KAGEMUSHA_RECURSIVE_SPEND_MODE_V2);
         assert!(!capabilities.proof_backend_available);
         assert_eq!(
             capabilities.missing_gates,
@@ -19992,7 +20463,7 @@ mod offline_note_tests {
                 5,
                 9,
             ),
-            recipient_output_prover_material: vec![0xA5; 96],
+            sender_output_prover_material: vec![0xA5; 96],
         };
         result
             .validate_for_request(&request)
@@ -20099,7 +20570,7 @@ mod offline_note_tests {
             issued_at_ms: 5_000,
             expires_at_ms: 20_000,
             recipient_output: recipient.clone(),
-            recipient_output_prover_material: vec![0x71; 64],
+            sender_output_prover_material: vec![0x71; 64],
         };
         let recipient_request = KagemushaRecipientPaymentRequestV2::from_signed_payload(
             recipient_request_payload.clone(),
@@ -21600,7 +22071,7 @@ mod offline_note_tests {
         );
         assert_eq!(
             preferred_kagemusha_offline_spend_mode(true),
-            Some(KAGEMUSHA_RECURSIVE_SPEND_MODE_V2)
+            Some(KAGEMUSHA_RECURSIVE_SPEND_PRODUCT_MODE_V1)
         );
         assert_eq!(preferred_kagemusha_offline_spend_mode(false), None);
         assert_eq!(

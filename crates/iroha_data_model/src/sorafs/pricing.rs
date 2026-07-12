@@ -279,6 +279,10 @@ impl PricingScheduleRecord {
     /// # Errors
     ///
     /// Returns [`PricingValidationError`] when the schedule violates currency or tier constraints.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one fail-closed validator keeps all first-release pricing invariants together"
+    )]
     pub fn validate(&self) -> Result<(), PricingValidationError> {
         if self.version != PRICING_SCHEDULE_VERSION_V1 {
             return Err(PricingValidationError::UnsupportedVersion(self.version));
@@ -710,7 +714,7 @@ pub enum PricingValidationError {
     },
 }
 
-/// Errors raised while calculating deterministic SoraFS pricing values.
+/// Errors raised while calculating deterministic `SoraFS` pricing values.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum PricingComputationError {
     /// The stored pricing schedule itself is invalid.

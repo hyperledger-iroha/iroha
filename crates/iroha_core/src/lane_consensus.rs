@@ -354,12 +354,6 @@ impl LaneDrainVoteState {
         &self.votes
     }
 
-    /// Return the number of signers quarantined for the active drain intent.
-    #[cfg(test)]
-    pub(crate) fn quarantined_signer_count(&self) -> usize {
-        self.remote_equivocators.len()
-    }
-
     /// Return the aggregate certificate, when the caller has sealed one.
     pub(crate) fn certificate(&self) -> Option<&LaneDrainCertificateV1> {
         self.certificate.as_ref()

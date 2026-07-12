@@ -1730,6 +1730,9 @@ impl Actor {
     }
 
     pub(super) fn drain_commit_results(&mut self) -> CommitDrainSummary {
+        if self.kura_recovery_required() {
+            return CommitDrainSummary::default();
+        }
         let mut summary = CommitDrainSummary::default();
         while let Some(recv_result) = self
             .subsystems
@@ -1779,6 +1782,9 @@ impl Actor {
                     summary.progress = true;
                     if committed {
                         let _ = self.kickstart_pacemaker_after_durable_commit();
+                    }
+                    if self.kura_recovery_required() {
+                        break;
                     }
                 }
                 Err(mpsc::TryRecvError::Empty) => break,
@@ -1833,6 +1839,12 @@ impl Actor {
     }
 
     pub(super) fn start_commit_job(&mut self, inflight: CommitInFlight, work: CommitWork) -> bool {
+        if self.kura_recovery_required() {
+            self.pending
+                .pending_blocks
+                .insert(inflight.block_hash, inflight.pending);
+            return false;
+        }
         let pending_height = inflight.pending.height;
         let pending_view = inflight.pending.view;
         let block_hash = inflight.block_hash;
@@ -2400,12 +2412,39 @@ impl Actor {
                 committed_block,
                 error,
             } => {
-                let pending = take_pending_or_return!();
+                let mut pending = take_pending_or_return!();
                 crate::sumeragi::status::record_kura_stage(
                     pending_height,
                     pending_view,
                     block_hash,
                 );
+                if let Some(reason) = super::KuraRecoveryRequiredReason::from_error(&error) {
+                    crate::sumeragi::status::record_kura_store_failure(
+                        pending_height,
+                        pending_view,
+                        block_hash,
+                    );
+                    error!(
+                        ?error,
+                        recovery_reason = reason.as_str(),
+                        height = pending_height,
+                        view = pending_view,
+                        block = %block_hash,
+                        "canonical Kura commit outcome is ambiguous; preserving certified state for restart recovery"
+                    );
+                    pending.set_block(committed_block.into());
+                    self.pending.pending_blocks.insert(block_hash, pending);
+                    self.enter_kura_recovery_required(
+                        reason,
+                        block_hash,
+                        pending_height,
+                        pending_view,
+                        lock,
+                        commit_qc.clone(),
+                        post_commit_qc,
+                    );
+                    return false;
+                }
                 error!(
                     ?error,
                     height = pending_height,
@@ -3301,6 +3340,10 @@ impl Actor {
         post_commit_qc: Option<crate::sumeragi::consensus::QcHeaderRef>,
     ) -> bool {
         let block_hash = lock.subject_block_hash;
+        if self.kura_recovery_required() {
+            self.pending.pending_blocks.insert(block_hash, pending);
+            return false;
+        }
         let pending_height = pending.height;
         let pending_view = pending.view;
         let now = Instant::now();
@@ -3871,6 +3914,9 @@ impl Actor {
         tick_deadline: Option<Instant>,
         include_recovery_candidates: bool,
     ) -> CommitPipelineTimings {
+        if self.kura_recovery_required() {
+            return CommitPipelineTimings::default();
+        }
         let pipeline_start = Instant::now();
         let finish_timings = |timings: CommitPipelineTimings| {
             let timings = timings.finish(pipeline_start);
@@ -3899,6 +3945,9 @@ impl Actor {
         timings.drain_kura_store_ms = drain_summary.kura_store_ms;
         timings.drain_state_apply_ms = drain_summary.state_apply_ms;
         timings.drain_state_commit_ms = drain_summary.state_commit_ms;
+        if self.kura_recovery_required() {
+            return finish_timings(timings);
+        }
         let now = Instant::now();
         let timeout_start = Instant::now();
         let _ = self.report_inflight_commit_if_timed_out(now);
@@ -9653,6 +9702,9 @@ impl Actor {
     }
 
     pub(super) fn poll_committed_blocks(&mut self) -> bool {
+        if self.kura_recovery_required() {
+            return false;
+        }
         match self.try_poll_committed_blocks() {
             Ok(progress) => progress,
             Err(err) => {
@@ -9708,6 +9760,9 @@ impl Actor {
 
     #[allow(clippy::too_many_lines)]
     pub(super) fn on_block_commit(&mut self, height: u64) -> Result<()> {
+        if self.kura_recovery_required() {
+            return Ok(());
+        }
         self.refresh_roster_validation_cache();
         let committed_block = usize::try_from(height)
             .ok()

@@ -33,8 +33,8 @@ use iroha_data_model::{
         capacity::ProviderId,
         pin_registry::{
             ChunkerProfileHandle, ManifestAliasBinding, ManifestAliasId, ManifestAliasRecord,
-            ManifestDigest, ManifestRootCid, PinManifestRecord, PinPolicy, PinStatus,
-            ReplicationOrderId, ReplicationOrderRecord, ReplicationOrderStatus, StorageClass,
+            ManifestDigest, ManifestRootCid, PinManifestRecord, PinStatus, ReplicationOrderId,
+            ReplicationOrderRecord, ReplicationOrderStatus, StorageClass,
         },
         reserve::{ReserveDuration, ReservePolicyV1, ReserveQuote, ReserveTier},
     },
@@ -5638,8 +5638,9 @@ fn pin_fixture_default_chunker() -> ChunkerProfileHandle {
     }
 }
 
-fn pin_fixture_default_policy() -> PinPolicy {
-    PinPolicy {
+#[cfg(test)]
+fn pin_fixture_default_policy() -> sorafs_manifest::PinPolicy {
+    sorafs_manifest::PinPolicy {
         min_replicas: 3,
         storage_class: StorageClass::Hot,
         retention_epoch: 42,

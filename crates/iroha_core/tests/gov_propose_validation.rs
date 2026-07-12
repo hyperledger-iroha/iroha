@@ -312,7 +312,9 @@ fn zk_ballot_rejects_oversized_proof() {
     state.gov.min_bond_amount = 0;
     let mut zk_cfg = state.view().zk.clone();
     zk_cfg.preverify_max_bytes = 4;
-    state.set_zk(zk_cfg);
+    state
+        .set_zk(zk_cfg)
+        .expect("empty SCCP outbox accepts governance test configuration");
 
     let header = BlockHeader::new(nonzero!(3_u64), None, None, None, 0, 0);
     let mut block = state.block(header);

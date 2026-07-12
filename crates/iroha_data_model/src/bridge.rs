@@ -204,7 +204,7 @@ pub enum BridgeNativeProofBackendV1 {
     #[codec(index = 1)]
     #[norito(rename = "bsc_parlia_v1")]
     BscParlia,
-    /// TRON proof using native DPoS replay and transaction inclusion.
+    /// TRON proof using native `DPoS` replay and transaction inclusion.
     #[codec(index = 2)]
     #[norito(rename = "tron_dpos_v1")]
     TronDpos,
@@ -674,14 +674,14 @@ pub enum BridgeFinalityVerifyError {
     /// Block header predecessor differs from the finalized subject predecessor.
     #[error("block header predecessor does not match the finalized subject")]
     BlockHeaderParentMismatch,
-    /// Block header view-change index differs from the CommitQC round view.
+    /// Block header view-change index differs from the `CommitQC` round view.
     #[error(
         "block header view {header_view} does not match finality certificate view {certificate_view}"
     )]
     BlockHeaderViewMismatch {
         /// View-change index recomputed from the block header.
         header_view: u64,
-        /// View carried by the exact CommitQC round.
+        /// View carried by the exact `CommitQC` round.
         certificate_view: u64,
     },
     /// V2 certificate/roster cryptography failed.
@@ -752,7 +752,7 @@ pub struct BridgeFinalityVerifier {
 impl BridgeFinalityVerifier {
     /// Construct a verifier bound only to a chain id.
     ///
-    /// set_context_anchor must be called before the first proof can be accepted.
+    /// [`Self::set_context_anchor`] must be called before the first proof can be accepted.
     #[must_use]
     pub fn new(expected_chain_id: ChainId) -> Self {
         Self {
@@ -788,9 +788,9 @@ impl BridgeFinalityVerifier {
     ///
     /// # Errors
     ///
-    /// Returns BridgeFinalityVerifyError when the proof's version, chain,
+    /// Returns [`BridgeFinalityVerifyError`] when the proof's version, chain,
     /// artifact/header binding, context anchor, successor transition, quorum,
-    /// PoPs, or aggregate signature is invalid.
+    /// `PoPs`, or aggregate signature is invalid.
     pub fn verify(&mut self, proof: &BridgeFinalityProof) -> Result<(), BridgeFinalityVerifyError> {
         validate_bridge_finality_proof_structure(proof, &self.expected_chain_id)?;
         if let Some(previous) = self.latest_proof.as_ref() {
@@ -850,7 +850,7 @@ impl BridgeFinalityVerifier {
 /// # Errors
 ///
 /// Returns [`BridgeFinalityVerifyError`] when the version, chain, header,
-/// durable artifact, powered quorum, roster PoPs, or aggregate signature is
+/// durable artifact, powered quorum, roster `PoPs`, or aggregate signature is
 /// invalid. Callers must separately pin the artifact's
 /// [`crate::block::consensus_v2::finality::V2FinalityArtifact::context_id`]
 /// or use [`BridgeFinalityVerifier`] when establishing trust.
@@ -868,7 +868,7 @@ pub fn verify_bridge_finality_proof(
 /// Verify one complete bridge finality bundle without maintaining successor state.
 ///
 /// This checks the exact commitment/proof bindings, expected chain id,
-/// header/artifact bindings, powered quorum, roster PoPs, and aggregate
+/// header/artifact bindings, powered quorum, roster `PoPs`, and aggregate
 /// signature.
 ///
 /// # Errors
@@ -952,22 +952,29 @@ fn verify_successor_bridge_finality_proof(
     {
         return Err(BridgeFinalityVerifyError::ParentFinalityMismatch);
     }
-    let transition_matches = if let Some(snapshot) = &parent.height_context.next_epoch_snapshot {
-        context.epoch == snapshot.epoch
-            && context.epoch_end_height == snapshot.epoch_end_height
-            && context.mode == snapshot.mode
-            && context.roster == snapshot.roster
-            && context.quorum == snapshot.quorum
-            && context.leader_seed == snapshot.leader_seed
-            && child.validator_set_pops.as_slice() == snapshot.validator_set_pops.as_slice()
-    } else {
-        context.epoch == parent.height_context.epoch
-            && context.epoch_end_height == parent.height_context.epoch_end_height
-            && context.roster == parent.height_context.roster
-            && context.quorum == parent.height_context.quorum
-            && context.leader_seed == parent.height_context.leader_seed
-            && child.validator_set_pops.as_slice() == parent.validator_set_pops.as_slice()
-    };
+    let transition_matches = parent
+        .height_context
+        .next_epoch_snapshot
+        .as_ref()
+        .map_or_else(
+            || {
+                context.epoch == parent.height_context.epoch
+                    && context.epoch_end_height == parent.height_context.epoch_end_height
+                    && context.roster == parent.height_context.roster
+                    && context.quorum == parent.height_context.quorum
+                    && context.leader_seed == parent.height_context.leader_seed
+                    && child.validator_set_pops.as_slice() == parent.validator_set_pops.as_slice()
+            },
+            |snapshot| {
+                context.epoch == snapshot.epoch
+                    && context.epoch_end_height == snapshot.epoch_end_height
+                    && context.mode == snapshot.mode
+                    && context.roster == snapshot.roster
+                    && context.quorum == snapshot.quorum
+                    && context.leader_seed == snapshot.leader_seed
+                    && child.validator_set_pops.as_slice() == snapshot.validator_set_pops.as_slice()
+            },
+        );
     if !transition_matches {
         return Err(BridgeFinalityVerifyError::SuccessorContextMismatch);
     }

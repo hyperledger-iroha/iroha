@@ -62,10 +62,10 @@ pub use orderbook::{
     local_orderbook_provider_id_for_owner_account,
 };
 pub use pdp_provider::{
-    PdpChallengeEnqueueOutcome, PdpGovernanceArchiveV1, PdpNextChallengeV1,
-    PdpProofBuildError, PdpProviderProtocol, PdpProviderProtocolError,
-    PdpProviderTelemetrySnapshot, PdpRejectionReasonV1, PdpTerminalDecisionV1,
-    PdpTerminalHandoff, PdpTerminalOutcomeV1, build_signed_pdp_proof_v1,
+    PdpChallengeEnqueueOutcome, PdpGovernanceArchiveV1, PdpNextChallengeV1, PdpProofBuildError,
+    PdpProviderProtocol, PdpProviderProtocolError, PdpProviderTelemetrySnapshot,
+    PdpRejectionReasonV1, PdpTerminalDecisionV1, PdpTerminalHandoff, PdpTerminalOutcomeV1,
+    build_signed_pdp_proof_v1,
 };
 pub use por::{
     ManifestVrfBundle, ManifestVrfKey, PlannedChallenge, PorChallengePlannerError, PorRandomness,
@@ -3901,9 +3901,7 @@ impl PdpTerminalHandoff for NodeHandle {
         report: &RepairReportV1,
     ) -> Result<[u8; 32], pdp_provider::PdpExternalHandoffError> {
         let bytes = norito::to_bytes(report).map_err(|error| {
-            pdp_provider::PdpExternalHandoffError(format!(
-                "encode PDP repair handoff: {error}"
-            ))
+            pdp_provider::PdpExternalHandoffError(format!("encode PDP repair handoff: {error}"))
         })?;
         self.enqueue_repair_report(report)
             .map_err(|error| pdp_provider::PdpExternalHandoffError(error.to_string()))?;
@@ -4041,11 +4039,8 @@ impl NodeHandle {
         let pdp_provider = storage
             .as_ref()
             .map(|_| {
-                PdpProviderProtocol::open(
-                    config.pdp_provider_policy(),
-                    &pdp_provider_state_dir,
-                )
-                .map_err(|error| NodeInitError::PdpProvider {
+                PdpProviderProtocol::open(config.pdp_provider_policy(), &pdp_provider_state_dir)
+                    .map_err(|error| NodeInitError::PdpProvider {
                         path: pdp_provider_state_dir.clone(),
                         message: error.to_string(),
                     })

@@ -325,9 +325,7 @@ async fn npos_rbc_persists_payload_across_restart() -> eyre::Result<()> {
 
     restart_peer.shutdown().await;
     if sandbox::handle_result(
-        restart_peer
-            .start_checked(config_layers.iter().cloned(), None)
-            .await,
+        restart_peer.start_checked(config_layers.iter(), None).await,
         "npos_rbc_persists_payload_across_restart_restart",
     )?
     .is_none()

@@ -3402,10 +3402,6 @@ mod sorafs_tests {
         manifest_digest_for_seed(0xCC)
     }
 
-    fn fourth_digest() -> ManifestDigest {
-        manifest_digest_for_seed(0xDD)
-    }
-
     pub(super) fn alias_binding_for(
         digest: ManifestDigest,
         namespace: &str,

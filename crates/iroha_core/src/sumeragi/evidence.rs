@@ -1359,7 +1359,7 @@ mod tests {
         },
         *,
     };
-    use crate::state::{State, World, WorldTransaction};
+    use crate::state::{State, World};
 
     type EvidenceCase = (EvidenceKind, EvidencePayload, EvidenceValidationError);
     type EvidenceRoundtripCase = (

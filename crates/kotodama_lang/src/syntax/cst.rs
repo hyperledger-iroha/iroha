@@ -367,22 +367,28 @@ pub(crate) fn build_tree_from_outline(
         missing: usize,
     }
 
+    struct DirectEmissionBoundary {
+        offset: u32,
+        include_missing: bool,
+        include_eof: bool,
+    }
+
     fn emit_direct(
         events: &mut Vec<Event>,
         tokens: &[GreenToken],
         token: &mut usize,
         missing: &[(u32, SyntaxKind)],
         missing_index: &mut usize,
-        boundary: u32,
-        include_boundary_missing: bool,
-        include_eof: bool,
+        boundary: DirectEmissionBoundary,
     ) {
         loop {
             let next_token = tokens.get(*token).filter(|token| {
-                (token.kind == SyntaxKind::Eof && include_eof) || token.range.start < boundary
+                (token.kind == SyntaxKind::Eof && boundary.include_eof)
+                    || token.range.start < boundary.offset
             });
             let next_missing = missing.get(*missing_index).filter(|(offset, _)| {
-                *offset < boundary || (include_boundary_missing && *offset == boundary)
+                *offset < boundary.offset
+                    || (boundary.include_missing && *offset == boundary.offset)
             });
             match (next_token, next_missing) {
                 (Some(token_value), Some((offset, expected)))
@@ -431,9 +437,11 @@ pub(crate) fn build_tree_from_outline(
                 &mut token,
                 &direct_missing[frame.node],
                 &mut frame.missing,
-                child.range.start,
-                false,
-                false,
+                DirectEmissionBoundary {
+                    offset: child.range.start,
+                    include_missing: false,
+                    include_eof: false,
+                },
             );
             frame.child = frame.child.saturating_add(1);
             events.push(Event::Start {
@@ -454,9 +462,11 @@ pub(crate) fn build_tree_from_outline(
             &mut token,
             &direct_missing[frame.node],
             &mut frame.missing,
-            node.range.end,
-            true,
-            include_eof,
+            DirectEmissionBoundary {
+                offset: node.range.end,
+                include_missing: true,
+                include_eof,
+            },
         );
         events.push(Event::Finish {
             offset: node.range.end,
@@ -500,7 +510,7 @@ pub(crate) fn build_tree(
             }),
             Event::Token(index) => {
                 if let (Some(parent), Some(token)) = (stack.last_mut(), tokens.get(index)) {
-                    parent.children.push(GreenElement::Token(token.clone()));
+                    parent.children.push(GreenElement::Token(*token));
                 }
             }
             Event::Missing { expected, offset } => {

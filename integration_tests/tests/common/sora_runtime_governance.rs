@@ -1321,7 +1321,7 @@ async fn restart_peer_and_wait_for_height(
 
     let _ = peer.shutdown_if_started().await;
     let config_layers = network.config_layers().collect::<Vec<_>>();
-    peer.start_checked(config_layers.iter().cloned(), None)
+    peer.start_checked(config_layers.iter(), None)
         .await
         .wrap_err_with(|| format!("{context}: restart peer {peer_idx}"))?;
 

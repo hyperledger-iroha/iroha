@@ -605,17 +605,17 @@ public enum PrivacyNativeBridge {
                 repeating: privacyCapabilitiesResultSchemaByte,
                 count: 16
               ) else {
-            throw OfflineNoritoDecodingError.invalidField("invalid privacy capabilities archive")
+            throw CanonicalNoritoDecodingError.invalidField("invalid privacy capabilities archive")
         }
         let context = NativeNoritoDecodeContext(flags: frame.header.flags)
-        var reader = OfflineNoritoReader(data: frame.payload)
+        var reader = CanonicalNoritoReader(data: frame.payload)
         let capabilities = try decodeNativeCapabilities(&reader, context: context)
         try requireNativeFullyRead(reader, label: "native capabilities archive")
         return capabilities
     }
 
     private static func decodeNativeCapabilities(
-        _ reader: inout OfflineNoritoReader,
+        _ reader: inout CanonicalNoritoReader,
         context: NativeNoritoDecodeContext
     ) throws -> NativePrivacyCapabilities {
         let packedSizes = try readNativePackedFieldSizes(
@@ -662,7 +662,7 @@ public enum PrivacyNativeBridge {
     }
 
     private static func decodeNativeCapability(
-        _ reader: inout OfflineNoritoReader,
+        _ reader: inout CanonicalNoritoReader,
         context: NativeNoritoDecodeContext
     ) throws -> NativePrivacyCapability {
         let packedSizes = try readNativePackedFieldSizes(
@@ -747,7 +747,7 @@ public enum PrivacyNativeBridge {
     }
 
     private static func decodeNativeProductionGate(
-        _ reader: inout OfflineNoritoReader,
+        _ reader: inout CanonicalNoritoReader,
         context: NativeNoritoDecodeContext
     ) throws -> NativePrivacyProductionGate {
         let packedSizes = try readNativePackedFieldSizes(
@@ -833,7 +833,7 @@ public enum PrivacyNativeBridge {
     }
 
     private static func decodeNativeGateStatus(
-        _ reader: inout OfflineNoritoReader,
+        _ reader: inout CanonicalNoritoReader,
         context: NativeNoritoDecodeContext
     ) throws -> NativePrivacyGateStatus {
         let packedSizes = try readNativePackedFieldSizes(
@@ -862,7 +862,7 @@ public enum PrivacyNativeBridge {
     }
 
     private static func readNativeStringSequence(
-        _ reader: inout OfflineNoritoReader,
+        _ reader: inout CanonicalNoritoReader,
         context: NativeNoritoDecodeContext,
         label: String
     ) throws -> [String] {
@@ -872,17 +872,17 @@ public enum PrivacyNativeBridge {
     }
 
     private static func readNativeSequence<T>(
-        _ reader: inout OfflineNoritoReader,
+        _ reader: inout CanonicalNoritoReader,
         context: NativeNoritoDecodeContext,
         label: String,
-        decodeElement: (inout OfflineNoritoReader) throws -> T
+        decodeElement: (inout CanonicalNoritoReader) throws -> T
     ) throws -> [T] {
         let count = try readNativeLength(&reader, compact: false)
         guard count <= UInt64(Int.max) else {
-            throw OfflineNoritoDecodingError.invalidField("\(label) length overflow")
+            throw CanonicalNoritoDecodingError.invalidField("\(label) length overflow")
         }
         if count > 0 && count > UInt64(reader.remaining()) {
-            throw OfflineNoritoDecodingError.invalidField("\(label) length exceeds payload")
+            throw CanonicalNoritoDecodingError.invalidField("\(label) length exceeds payload")
         }
 
         let elementCount = Int(count)
@@ -892,12 +892,12 @@ public enum PrivacyNativeBridge {
         if context.packedSeqActive {
             if elementCount == 0 {
                 guard reader.remaining() == 0 || reader.remaining() >= 8 else {
-                    throw OfflineNoritoDecodingError.invalidField("\(label) packed zero length")
+                    throw CanonicalNoritoDecodingError.invalidField("\(label) packed zero length")
                 }
                 if reader.remaining() >= 8 {
                     let prefix = try reader.readBytes(8)
                     guard prefix.allSatisfy({ $0 == 0 }) else {
-                        throw OfflineNoritoDecodingError.invalidField(
+                        throw CanonicalNoritoDecodingError.invalidField(
                             "\(label) packed zero offsets"
                         )
                     }
@@ -907,7 +907,7 @@ public enum PrivacyNativeBridge {
 
             var previous = try reader.readUInt64LE()
             guard previous == 0 else {
-                throw OfflineNoritoDecodingError.invalidField("\(label) offsets start")
+                throw CanonicalNoritoDecodingError.invalidField("\(label) offsets start")
             }
             var sizes: [Int] = []
             sizes.reserveCapacity(elementCount)
@@ -915,13 +915,13 @@ public enum PrivacyNativeBridge {
                 let current = try reader.readUInt64LE()
                 guard current >= previous,
                       current - previous <= UInt64(Int.max) else {
-                    throw OfflineNoritoDecodingError.invalidField("\(label) offsets")
+                    throw CanonicalNoritoDecodingError.invalidField("\(label) offsets")
                 }
                 sizes.append(Int(current - previous))
                 previous = current
             }
             for size in sizes {
-                var child = OfflineNoritoReader(data: try reader.readBytes(size))
+                var child = CanonicalNoritoReader(data: try reader.readBytes(size))
                 let value = try decodeElement(&child)
                 try requireNativeFullyRead(child, label: "\(label) element")
                 values.append(value)
@@ -932,9 +932,9 @@ public enum PrivacyNativeBridge {
         for _ in 0..<elementCount {
             let length = try readNativeLength(&reader, compact: context.compactLenActive)
             guard length <= UInt64(Int.max) else {
-                throw OfflineNoritoDecodingError.invalidField("\(label) element length overflow")
+                throw CanonicalNoritoDecodingError.invalidField("\(label) element length overflow")
             }
-            var child = OfflineNoritoReader(data: try reader.readBytes(Int(length)))
+            var child = CanonicalNoritoReader(data: try reader.readBytes(Int(length)))
             let value = try decodeElement(&child)
             try requireNativeFullyRead(child, label: "\(label) element")
             values.append(value)
@@ -943,40 +943,40 @@ public enum PrivacyNativeBridge {
     }
 
     private static func readNativeString(
-        _ reader: inout OfflineNoritoReader,
+        _ reader: inout CanonicalNoritoReader,
         context: NativeNoritoDecodeContext
     ) throws -> String {
         let length = try readNativeLength(&reader, compact: context.compactLenActive)
         guard length <= UInt64(Int.max) else {
-            throw OfflineNoritoDecodingError.invalidField("string length overflow")
+            throw CanonicalNoritoDecodingError.invalidField("string length overflow")
         }
         let bytes = try reader.readBytes(Int(length))
         guard let value = String(data: bytes, encoding: .utf8) else {
-            throw OfflineNoritoDecodingError.invalidField("invalid UTF-8")
+            throw CanonicalNoritoDecodingError.invalidField("invalid UTF-8")
         }
         return value
     }
 
-    private static func readNativeBool(_ reader: inout OfflineNoritoReader) throws -> Bool {
+    private static func readNativeBool(_ reader: inout CanonicalNoritoReader) throws -> Bool {
         switch try reader.readUInt8() {
         case 0:
             return false
         case 1:
             return true
         default:
-            throw OfflineNoritoDecodingError.invalidField("invalid native boolean")
+            throw CanonicalNoritoDecodingError.invalidField("invalid native boolean")
         }
     }
 
     private static func readNativeLength(
-        _ reader: inout OfflineNoritoReader,
+        _ reader: inout CanonicalNoritoReader,
         compact: Bool
     ) throws -> UInt64 {
         compact ? try reader.readVarint() : try reader.readUInt64LE()
     }
 
     private static func readNativePackedFieldSizes(
-        _ reader: inout OfflineNoritoReader,
+        _ reader: inout CanonicalNoritoReader,
         fieldCount: Int,
         context: NativeNoritoDecodeContext,
         label: String
@@ -991,14 +991,14 @@ public enum PrivacyNativeBridge {
             bitset |= UInt64(bitsetData[index]) << UInt64(index * 8)
         }
         for bit in fieldCount..<(bitsetBytes * 8) where ((bitset >> UInt64(bit)) & 1) != 0 {
-            throw OfflineNoritoDecodingError.invalidField("\(label) unused field bit")
+            throw CanonicalNoritoDecodingError.invalidField("\(label) unused field bit")
         }
 
         var sizes = Array<Int?>(repeating: nil, count: fieldCount)
         for index in 0..<fieldCount where ((bitset >> UInt64(index)) & 1) != 0 {
             let size = try reader.readVarint()
             guard size <= UInt64(Int.max) else {
-                throw OfflineNoritoDecodingError.invalidField("\(label) packed field too large")
+                throw CanonicalNoritoDecodingError.invalidField("\(label) packed field too large")
             }
             sizes[index] = Int(size)
         }
@@ -1006,14 +1006,14 @@ public enum PrivacyNativeBridge {
     }
 
     private static func decodeNativeStructField<T>(
-        _ reader: inout OfflineNoritoReader,
+        _ reader: inout CanonicalNoritoReader,
         packedSizes: [Int?]?,
         fieldIndex: Int,
         label: String,
-        decode: (inout OfflineNoritoReader) throws -> T
+        decode: (inout CanonicalNoritoReader) throws -> T
     ) throws -> T {
         if let packedSizes, let size = packedSizes[fieldIndex] {
-            var child = OfflineNoritoReader(data: try reader.readBytes(size))
+            var child = CanonicalNoritoReader(data: try reader.readBytes(size))
             let value = try decode(&child)
             try requireNativeFullyRead(child, label: label)
             return value
@@ -1022,11 +1022,11 @@ public enum PrivacyNativeBridge {
     }
 
     private static func requireNativeFullyRead(
-        _ reader: OfflineNoritoReader,
+        _ reader: CanonicalNoritoReader,
         label: String
     ) throws {
         guard reader.remaining() == 0 else {
-            throw OfflineNoritoDecodingError.invalidField("\(label) trailing bytes")
+            throw CanonicalNoritoDecodingError.invalidField("\(label) trailing bytes")
         }
     }
 

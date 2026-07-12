@@ -1342,7 +1342,7 @@ async fn native_amx_rotating_validator_fault_soak_preserves_independent_particip
             previous_authority_height = receipt.authority_context_height;
 
             faulted_peer
-                .start_checked(config_layers.iter().cloned(), None)
+                .start_checked(config_layers.iter(), None)
                 .await
                 .wrap_err_with(|| {
                     format!("restart faulted validator after AMX iteration {iteration}")
@@ -1428,7 +1428,7 @@ async fn native_amx_queue_journal_replays_plan_after_restart() -> Result<()> {
 
         admitting_peer.shutdown().await;
         admitting_peer
-            .start_checked(config_layers.iter().cloned(), None)
+            .start_checked(config_layers.iter(), None)
             .await
             .wrap_err("restart admitting peer")?;
 

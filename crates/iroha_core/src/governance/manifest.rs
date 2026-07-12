@@ -673,6 +673,7 @@ struct LaneManifestSourceContentDigestV1 {
     digest: [u8; 32],
 }
 
+#[cfg(any(test, feature = "telemetry"))]
 #[derive(Encode)]
 #[cfg(any(test, feature = "telemetry"))]
 struct LaneManifestRegistryDigestV1 {
@@ -680,6 +681,7 @@ struct LaneManifestRegistryDigestV1 {
     lanes: Vec<LaneManifestStatusDigestV1>,
 }
 
+#[cfg(any(test, feature = "telemetry"))]
 #[derive(Encode)]
 #[cfg(any(test, feature = "telemetry"))]
 struct LaneManifestStatusDigestV1 {
@@ -694,6 +696,7 @@ struct LaneManifestStatusDigestV1 {
     privacy_commitments: Vec<LanePrivacyCommitmentDigestV1>,
 }
 
+#[cfg(any(test, feature = "telemetry"))]
 #[derive(Encode)]
 #[cfg(any(test, feature = "telemetry"))]
 struct GovernanceRulesDigestV1 {
@@ -705,6 +708,7 @@ struct GovernanceRulesDigestV1 {
     runtime_upgrade: Option<RuntimeUpgradeHookDigestV1>,
 }
 
+#[cfg(any(test, feature = "telemetry"))]
 #[derive(Encode)]
 #[cfg(any(test, feature = "telemetry"))]
 struct ManifestValidatorBindingDigestV1 {
@@ -713,6 +717,7 @@ struct ManifestValidatorBindingDigestV1 {
     torii_url: Option<String>,
 }
 
+#[cfg(any(test, feature = "telemetry"))]
 #[derive(Encode)]
 #[cfg(any(test, feature = "telemetry"))]
 struct RuntimeUpgradeHookDigestV1 {
@@ -722,6 +727,7 @@ struct RuntimeUpgradeHookDigestV1 {
     allowed_ids: Option<Vec<String>>,
 }
 
+#[cfg(any(test, feature = "telemetry"))]
 #[derive(Encode)]
 #[cfg(any(test, feature = "telemetry"))]
 enum LanePrivacyCommitmentDigestV1 {

@@ -748,7 +748,7 @@ impl AsRef<Table> for ConfigLayer {
 async fn restart_all_peers(network: &Network, layers: &[ConfigLayer]) -> Result<()> {
     for peer in network.peers() {
         let mnemonic = peer.mnemonic().to_string();
-        peer.start_checked(layers.iter().cloned(), None)
+        peer.start_checked(layers.iter(), None)
             .await
             .wrap_err_with(|| format!("restart peer {mnemonic}"))?;
     }

@@ -80,11 +80,23 @@ PY
   cat >"${root}/scripts/taira_faucet_canary.py" <<'PY'
 #!/usr/bin/env python3
 import os
+import sys
 from pathlib import Path
+
+status_timeout_ms = None
+args = sys.argv[1:]
+for index, value in enumerate(args):
+    if value == "--status-timeout-ms" and index + 1 < len(args):
+        status_timeout_ms = args[index + 1]
 
 state_dir = os.environ.get("MOCK_STATE_DIR")
 if state_dir:
-    Path(state_dir, "faucet_seen").write_text("1\n", encoding="utf-8")
+    state = Path(state_dir)
+    state.joinpath("faucet_seen").write_text("1\n", encoding="utf-8")
+    if status_timeout_ms is not None:
+        state.joinpath("faucet_status_timeout_seen").write_text(
+            status_timeout_ms + "\n", encoding="utf-8"
+        )
 print("faucet bootstrap skipped in mock harness")
 PY
 
@@ -98,6 +110,7 @@ payload=""
 url=""
 connect_timeout=""
 max_time=""
+headers=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -124,6 +137,7 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     --header)
+      headers+=("$2")
       shift 2
       ;;
     --data)
@@ -138,6 +152,15 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
   esac
+done
+
+
+for header in "${headers[@]+"${headers[@]}"}"; do
+  header_name="$(printf '%s' "${header%%:*}" | tr '[:upper:]' '[:lower:]')"
+  if [[ "$header_name" == "x-iroha-api-version" ]]; then
+    echo "rollout must not send the retired x-iroha-api-version header" >&2
+    exit 92
+  fi
 done
 
 if [[ -z "$connect_timeout" || -z "$max_time" ]]; then
@@ -180,6 +203,30 @@ case "${method} ${url}" in
       body='{"declarations":[]}'
     fi
     ;;
+  "GET https://taira.sora.org/v1/pipeline/transactions/status")
+    if [[ "$scenario" == "canonical_status_missing" ]]; then
+      status="404"
+      body='{"code":"route_not_found","message":"route not found"}'
+    elif [[ "$scenario" == "canonical_status_wrong_error" ]]; then
+      status="400"
+      body='{"code":"bad_request","message":"generic edge rejection"}'
+    else
+      status="400"
+      body='{"code":"query_validation_failed","message":"missing hash query parameter"}'
+    fi
+    ;;
+  "GET https://taira.sora.org/v1/transactions/status")
+    if [[ "$scenario" == "retired_status_alias_mounted" ]]; then
+      status="200"
+      body='{"status":{"kind":"Applied"}}'
+    elif [[ "$scenario" == "retired_status_wrong_error" ]]; then
+      status="404"
+      body='{"code":"not_found","message":"non-canonical edge rejection"}'
+    else
+      status="404"
+      body='{"code":"route_not_found","message":"route not found"}'
+    fi
+    ;;
   "GET https://taira.sora.org/status")
     if [[ "$scenario" == "status_blocks_zero" ]]; then
       body='{"blocks":0}'
@@ -188,14 +235,20 @@ case "${method} ${url}" in
     fi
     ;;
   "GET https://taira.sora.org/v1/sumeragi/status")
+    body='{"protocol_version":2,"node_fingerprint":"n","build_fingerprint":"b","config_fingerprint":"c","height_context_id":["ctx"],"height":708,"view":0,"phase":{"phase":"prepare","details":null},"leader":0,"body_state":{"state":"missing","details":null},"last_committed_height":707,"last_committed_subject":{"block_hash":"block","payload_hash":"payload"},"height_context":{"epoch":1,"epoch_end_height":720,"mode":{"mode":"permissioned","details":null},"epoch_seed":"0000000000000000000000000000000000000000000000000000000000000000","validator_count":4,"quorum":{"min_signers":3,"total_power":4}},"last_commit_qc":{"certificate":{"round":{"height":707,"view":0},"phase":{"phase":"commit","details":null},"subject":{"block_hash":"block","payload_hash":"payload"}},"validator_count":4,"signer_count":3,"min_signers":3,"signed_power":3,"total_power":4},"lane_settlement_commitments":[],"lane_relay_envelopes":[],"lane_payload_ownerships":[],"committed_lane_blocks":[],"lane_block_sessions":[],"local_peer_removed":false,"operator":{"adapter_queues":{"ingress_keys":0,"ingress_capacity":64,"deferred_completion":0,"deferred_progress":0,"deferred_progress_capacity":64,"deferred_normal":0,"deferred_normal_capacity":64},"tx_queue":{"tracked_transactions":0,"queued_transactions":0,"capacity":100,"max_retained_bytes":8192}}}'
     if [[ "$scenario" == "sumeragi_3_validators" ]]; then
-      body='{"protocol_version":2,"node_fingerprint":"n","build_fingerprint":"b","config_fingerprint":"c","height_context_id":["ctx"],"height":708,"view":0,"phase":{"phase":"Prepare","details":null},"leader":0,"body_state":{"state":"Missing","details":null},"last_committed_height":707,"last_committed_subject":{"block_hash":"block","payload_hash":"payload"},"height_context":{"epoch":1,"epoch_end_height":720,"mode":{"mode":"Permissioned","details":null},"epoch_seed":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],"validator_count":3,"quorum":{"min_signers":3,"total_power":3}},"last_commit_qc":{"certificate":{"round":{"height":707,"view":0},"phase":{"phase":"Commit","details":null},"subject":{"block_hash":"block","payload_hash":"payload"}},"validator_count":3,"signer_count":3,"min_signers":3,"signed_power":3,"total_power":3},"lane_settlement_commitments":[],"lane_relay_envelopes":[],"lane_payload_ownerships":[],"committed_lane_blocks":[],"lane_block_sessions":[],"local_peer_removed":false,"operator":{"adapter_queues":{"ingress_keys":0,"ingress_capacity":64,"deferred_completion":0,"deferred_progress":0,"deferred_progress_capacity":64,"deferred_normal":0,"deferred_normal_capacity":64},"tx_queue":{"tracked_transactions":0,"queued_transactions":0,"capacity":100,"max_retained_bytes":8192}}}'
-    elif [[ "$scenario" == "sumeragi_canonical_behind" ]]; then
-      body='{"protocol_version":2,"height":706,"view":0,"phase":{"phase":"Prepare"},"leader":0,"body_state":{"state":"Missing"},"last_committed_height":707,"height_context":{"epoch":1,"epoch_end_height":720,"mode":{"mode":"Permissioned"},"validator_count":4,"quorum":{"min_signers":3,"total_power":4}}}'
+      body="${body//\"validator_count\":4/\"validator_count\":3}"
+    elif [[ "$scenario" == "sumeragi_canonical_behind" || "$scenario" == "sumeragi_committed_ahead" ]]; then
+      body="${body/\"height\":708/\"height\":706}"
     elif [[ "$scenario" == "sumeragi_idle_high_view_missing_qc" ]]; then
-      body='{"protocol_version":2,"height":708,"view":42,"phase":{"phase":"Prepare"},"leader":0,"body_state":{"state":"Missing"},"last_committed_height":707,"last_committed_subject":{"block_hash":"block","payload_hash":"payload"},"height_context":{"epoch":1,"epoch_end_height":720,"mode":{"mode":"Permissioned"},"validator_count":4,"quorum":{"min_signers":3,"total_power":4}},"lane_settlement_commitments":[],"lane_relay_envelopes":[],"lane_payload_ownerships":[],"committed_lane_blocks":[],"lane_block_sessions":[],"operator":{"adapter_queues":{"ingress_keys":0,"ingress_capacity":64,"deferred_progress":0,"deferred_progress_capacity":64,"deferred_normal":0,"deferred_normal_capacity":64},"tx_queue":{"tracked_transactions":1,"queued_transactions":1,"capacity":100,"max_retained_bytes":8192}}}'
-    else
-      body='{"protocol_version":2,"node_fingerprint":"n","build_fingerprint":"b","config_fingerprint":"c","height_context_id":["ctx"],"height":708,"view":0,"phase":{"phase":"Prepare","details":null},"leader":0,"body_state":{"state":"Missing","details":null},"last_committed_height":707,"last_committed_subject":{"block_hash":"block","payload_hash":"payload"},"height_context":{"epoch":1,"epoch_end_height":720,"mode":{"mode":"Permissioned","details":null},"epoch_seed":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],"validator_count":4,"quorum":{"min_signers":3,"total_power":4}},"last_commit_qc":{"certificate":{"round":{"height":707,"view":0},"phase":{"phase":"Commit","details":null},"subject":{"block_hash":"block","payload_hash":"payload"}},"validator_count":4,"signer_count":3,"min_signers":3,"signed_power":3,"total_power":4},"lane_settlement_commitments":[],"lane_relay_envelopes":[],"lane_payload_ownerships":[],"committed_lane_blocks":[],"lane_block_sessions":[],"local_peer_removed":false,"operator":{"adapter_queues":{"ingress_keys":0,"ingress_capacity":64,"deferred_completion":0,"deferred_progress":0,"deferred_progress_capacity":64,"deferred_normal":0,"deferred_normal_capacity":64},"tx_queue":{"tracked_transactions":0,"queued_transactions":0,"capacity":100,"max_retained_bytes":8192}}}'
+      body="${body/\"last_commit_qc\"/\"invalid_commit_qc\"}"
+      body="${body/\"view\":0,\"phase\"/\"view\":42,\"phase\"}"
+    elif [[ "$scenario" == "sumeragi_legacy_status" ]]; then
+      body='{"commit_qc":{"height":707,"validator_set_len":4},"canonical":{"height":707}}'
+    elif [[ "$scenario" == "sumeragi_pending_zero" ]]; then
+      body="${body/\"last_committed_height\"/\"pending_persistence_id\":0,\"last_committed_height\"}"
+    elif [[ "$scenario" == "sumeragi_missing_fingerprint" ]]; then
+      body="${body/\"config_fingerprint\":\"c\",/}"
     fi
     ;;
   *)
@@ -203,18 +256,6 @@ case "${method} ${url}" in
     body='{"error":"unexpected mock route"}'
     ;;
 esac
-
-if [[ "$method" == "GET" && "$url" == "https://taira.sora.org/v1/sumeragi/status" ]]; then
-  body="${body//\"phase\":\"Prepare\"/\"phase\":\"prepare\"}"
-  body="${body//\"phase\":\"Commit\"/\"phase\":\"commit\"}"
-  body="${body//\"state\":\"Missing\"/\"state\":\"missing\"}"
-  body="${body//\"mode\":\"Permissioned\"/\"mode\":\"permissioned\"}"
-  body="${body//\"epoch_seed\":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]/\"epoch_seed\":\"0000000000000000000000000000000000000000000000000000000000000000\"}"
-  body="${body//{\"phase\":\"prepare\"}/{\"phase\":\"prepare\",\"details\":null}}"
-  body="${body//{\"state\":\"missing\"}/{\"state\":\"missing\",\"details\":null}}"
-  body="${body//{\"mode\":\"permissioned\"}/{\"mode\":\"permissioned\",\"details\":null}}"
-  body="${body//\"mode\":{\"mode\":\"permissioned\",\"details\":null},\"validator_count\"/\"mode\":{\"mode\":\"permissioned\",\"details\":null},\"epoch_seed\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"validator_count\"}"
-fi
 
 if [[ -z "$output_file" ]]; then
   echo "mock curl missing --output" >&2
@@ -510,7 +551,11 @@ run_read_only_success_case() {
   root="$(make_case_root)"
   output_file="${root}/output.log"
 
-  run_rollout "$root" success --skip-write-canary >"$output_file" 2>&1
+  if ! run_rollout "$root" success --skip-write-canary >"$output_file" 2>&1; then
+    echo "read-only rollout case failed" >&2
+    sed -n '1,200p' "$output_file" >&2 || true
+    return 1
+  fi
   grep -q 'SoraFS rollout verification passed.' "$output_file"
   test ! -f "${root}/state/bootstrap_seen"
   test ! -f "${root}/state/submit_seen"
@@ -771,6 +816,7 @@ run_asset_retry_success_case() {
   grep -q 'SoraFS rollout verification passed.' "$output_file"
   test -f "${root}/state/retry_seen"
   test -f "${root}/state/faucet_seen"
+  grep -q '^120000$' "${root}/state/faucet_status_timeout_seen"
   test -f "${root}/state/gas_asset_seen"
   ! grep -q 'ASSETRETRYPRIVATEKEY' "${root}/state/sorafs_manifest_stub_argv"
 }
@@ -814,6 +860,30 @@ run_expected_preflight_failure_case \
 run_expected_preflight_failure_case \
   sumeragi_idle_high_view_missing_qc \
   'sumeragi/status omitted required last_commit_qc object'
+run_expected_preflight_failure_case \
+  canonical_status_missing \
+  'pipeline transaction status: expected HTTP 400, got 404'
+run_expected_preflight_failure_case \
+  canonical_status_wrong_error \
+  "pipeline transaction status: response error code was 'bad_request'"
+run_expected_preflight_failure_case \
+  retired_status_alias_mounted \
+  'retired transaction status alias: expected HTTP 404, got 200'
+run_expected_preflight_failure_case \
+  retired_status_wrong_error \
+  "retired transaction status alias: response error code was 'not_found'"
+run_expected_preflight_failure_case \
+  sumeragi_legacy_status \
+  'expected the Sumeragi v2 reducer status'
+run_expected_preflight_failure_case \
+  sumeragi_committed_ahead \
+  'sumeragi/status reducer/commit frontier is inconsistent'
+run_expected_preflight_failure_case \
+  sumeragi_pending_zero \
+  'sumeragi/status reported invalid pending_persistence_id: 0'
+run_expected_preflight_failure_case \
+  sumeragi_missing_fingerprint \
+  'sumeragi/status omitted required v2 field(s): config_fingerprint'
 run_expected_numeric_argument_failure_case \
   'DECLARED_CAPACITY_GIB must be a positive integer' \
   --declared-capacity-gib 0

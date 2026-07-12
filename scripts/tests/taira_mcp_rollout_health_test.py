@@ -169,6 +169,16 @@ def test_sumeragi_checker_rejects_noncanonical_tag_and_seed(tmp_path: Path) -> N
     assert result.returncode == 1
     assert "invalid phase tag" in result.stderr
 
+    extra_field = _healthy_base_payload()
+    extra_field["phase"] = {
+        "phase": "prepare",
+        "details": None,
+        "unexpected": True,
+    }
+    result = _run_checker(tmp_path, extra_field)
+    assert result.returncode == 1
+    assert "phase is not a canonical tagged unit" in result.stderr
+
     array_seed = _healthy_base_payload()
     array_seed["height_context"]["epoch_seed"] = [17] * 32  # type: ignore[index]
     result = _run_checker(tmp_path, array_seed)
@@ -250,6 +260,87 @@ def test_sumeragi_checker_only_allows_genesis_without_qc_during_bootstrap(
 
     bootstrap = _run_checker(tmp_path, payload, allow_pending=True)
     assert bootstrap.returncode == 0, bootstrap.stderr
+
+
+def test_sumeragi_checker_rejects_legacy_rbc_status(tmp_path: Path) -> None:
+    result = _run_checker(
+        tmp_path,
+        {"commit_qc": {"height": 42}, "pending_rbc": {"sessions": 0}},
+    )
+
+    assert result.returncode == 1
+    assert "expected the Sumeragi v2 reducer status" in result.stderr
+
+
+def test_sumeragi_checker_rejects_wrong_protocol_version(tmp_path: Path) -> None:
+    payload = _healthy_base_payload()
+    payload["protocol_version"] = 1
+
+    result = _run_checker(tmp_path, payload)
+
+    assert result.returncode == 1
+    assert "expected the Sumeragi v2 reducer status" in result.stderr
+
+
+def test_sumeragi_checker_rejects_missing_consensus_fingerprint(tmp_path: Path) -> None:
+    payload = _healthy_base_payload()
+    del payload["config_fingerprint"]
+
+    result = _run_checker(tmp_path, payload)
+
+    assert result.returncode == 1
+    assert "v2 status omitted required field(s): config_fingerprint" in result.stderr
+
+
+def test_sumeragi_checker_rejects_invalid_numeric_state(tmp_path: Path) -> None:
+    payload = _healthy_base_payload()
+    payload["view"] = -1
+
+    result = _run_checker(tmp_path, payload)
+
+    assert result.returncode == 1
+    assert "v2 status reported invalid view: -1" in result.stderr
+
+
+def test_sumeragi_checker_rejects_committed_height_ahead_of_reducer(
+    tmp_path: Path,
+) -> None:
+    payload = _healthy_base_payload()
+    payload["height"] = 41
+
+    result = _run_checker(tmp_path, payload)
+
+    assert result.returncode == 1
+    assert "committed height 42 is ahead of reducer height 41" in result.stderr
+
+
+def test_sumeragi_checker_requires_subject_after_first_commit(tmp_path: Path) -> None:
+    payload = _healthy_base_payload()
+    payload["last_committed_subject"] = None
+
+    result = _run_checker(tmp_path, payload)
+
+    assert result.returncode == 1
+    assert "omitted required last_committed_subject object" in result.stderr
+
+
+def test_sumeragi_checker_rejects_zero_pending_persistence_id(tmp_path: Path) -> None:
+    payload = _healthy_base_payload()
+    payload["pending_persistence_id"] = 0
+
+    result = _run_checker(tmp_path, payload)
+
+    assert result.returncode == 1
+    assert "invalid pending_persistence_id: 0" in result.stderr
+
+
+def test_sumeragi_checker_accepts_positive_pending_persistence_id(tmp_path: Path) -> None:
+    payload = _healthy_base_payload()
+    payload["pending_persistence_id"] = 9
+
+    result = _run_checker(tmp_path, payload)
+
+    assert result.returncode == 0, result.stderr
 
 
 def test_status_checker_accepts_expected_git_sha_prefix(tmp_path: Path) -> None:

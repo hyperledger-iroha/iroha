@@ -6,7 +6,7 @@ use iroha_data_model::{
         AddSignatory, BurnBox, CustomInstruction, GrantBox, MintBox, RegisterBox,
         RemoveAssetKeyValue, RemoveKeyValueBox, RemoveSignatory, RevokeBox, SetAccountQuorum,
         SetAssetKeyValue, SetKeyValueBox, TransferAssetBatch, TransferBox, UnregisterBox,
-        offline::{AuditOfflineNote, IssueOfflineNote, RedeemOfflineNote, TopUpKagemushaRecursive},
+        offline::{RedeemKagemushaRecursiveV2, TopUpKagemushaRecursiveV2},
         staking::RecordPublicLaneRewards,
     },
     prelude::InstructionBox,
@@ -213,41 +213,24 @@ fn collect_instruction_account_activities(
         );
         return;
     }
-    if let Some(issue) = any.downcast_ref::<IssueOfflineNote>() {
+    if let Some(topup) = any.downcast_ref::<TopUpKagemushaRecursiveV2>() {
         push_unique(
             out,
-            issue.issue.asset.account(),
-            AccountActivityRole::Outgoing,
-        );
-        push_unique(
-            out,
-            &issue.issue.key_certificate.account_id,
-            AccountActivityRole::Incoming,
-        );
-        return;
-    }
-    if let Some(topup) = any.downcast_ref::<TopUpKagemushaRecursive>() {
-        push_unique(out, topup.asset.account(), AccountActivityRole::Outgoing);
-        return;
-    }
-    if let Some(redeem) = any.downcast_ref::<RedeemOfflineNote>() {
-        push_unique(
-            out,
-            &redeem.redemption.recipient,
-            AccountActivityRole::Incoming,
-        );
-        push_unique(
-            out,
-            &redeem.redemption.sender_key_certificate.account_id,
+            topup.request.asset.account(),
             AccountActivityRole::Outgoing,
         );
         return;
     }
-    if let Some(audit) = any.downcast_ref::<AuditOfflineNote>() {
+    if let Some(redeem) = any.downcast_ref::<RedeemKagemushaRecursiveV2>() {
         push_unique(
             out,
-            &audit.audit.sender_key_certificate.account_id,
-            AccountActivityRole::Affected,
+            &redeem.request.recipient,
+            AccountActivityRole::Incoming,
+        );
+        push_unique(
+            out,
+            &redeem.request.authorization.authority,
+            AccountActivityRole::Outgoing,
         );
         return;
     }

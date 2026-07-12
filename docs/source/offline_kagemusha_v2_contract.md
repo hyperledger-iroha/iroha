@@ -50,16 +50,15 @@ one global namespace across authorities and operation kinds, matching the
 globally keyed top-up-anchor receipt; nonces, payload digests, and exact-request
 replay markers remain authority-scoped. The local
 `KagemushaRecursiveSpendInitRequestV2` is deliberately flat and anchor-derived.
-It contains exactly the finalized `topup_anchor`, checked one-hop
-`record_bundle`, `pallas_open_envelopes_archive`, `lineage_mode`, and optional
-`lineage_artifact`. It does not nest the discarded pre-release init request or
-duplicate amount, current note, operation id, inline keys, or an optional block
-height. Amount,
-note, operation identity, artifact generation, and verifier lifecycle height
-come from the finalized anchor. Before native dispatch, the checked transfer
-must match the anchor's chain, asset, initial/final roots, input nullifiers,
-single output commitment, verifier id, verifier commitment, and finalization
-height. The append request binds the receiver's nonce-bearing request digest,
+It contains exactly the finalized `topup_anchor`, its direct typed
+`topup_finality_proof`, `lineage_mode`, and optional `lineage_artifact`. It does
+not nest the discarded pre-release init request or duplicate amount, current
+note, operation id, inline keys, proof-opening archives, or an optional block
+height. Amount, note, operation identity, artifact generation, and verifier
+lifecycle height come from the finalized anchor. Before native dispatch, the
+finality proof must authenticate the anchor operation and digest, the exact
+commit-certificate height context, and the block-local anchor inclusion path.
+The append request binds the receiver's nonce-bearing request digest,
 the canonical parent bundle digests, recipient output, optional change output,
 exact transfer amount, and operation id.
 

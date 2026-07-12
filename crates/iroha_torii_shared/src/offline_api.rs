@@ -379,6 +379,10 @@ pub struct OfflineRedeemResult {
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
 )]
 #[norito(tag = "kind", content = "result", rename_all = "snake_case")]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "the unboxed variants are part of the typed Norito and JSON operation-result contract"
+)]
 pub enum OfflineOperationResult {
     /// Applied top-up result.
     #[norito(rename = "top_up")]
@@ -391,6 +395,10 @@ pub enum OfflineOperationResult {
 /// Pollable terminal or non-terminal state of an offline operation.
 #[derive(Debug, Clone, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize)]
 #[norito(tag = "state", content = "value", rename_all = "snake_case")]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "the unboxed applied result is part of the typed pollable-operation API contract"
+)]
 pub enum OfflineOperationStatus {
     /// The transaction is queued or awaiting finality.
     #[norito(rename = "pending")]

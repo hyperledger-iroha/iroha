@@ -504,7 +504,7 @@ fn entrypoint_signature(entrypoint: &EntrypointDescriptor) -> String {
     let params = entrypoint
         .params
         .iter()
-        .map(|param| format!("{}: {}", param.name, param.type_name))
+        .map(|param| format!("{} {}", param.type_name, param.name))
         .collect::<Vec<_>>()
         .join(", ");
     let return_type = entrypoint
@@ -1315,9 +1315,17 @@ mod tests {
             triggers: Vec::new(),
         };
 
+        let mut run = descriptor("run", EntryPointKind::Kotoage);
+        run.params.push(
+            iroha_data_model::smart_contract::manifest::EntrypointParamDescriptor {
+                name: "amount".to_owned(),
+                type_name: "quantity".to_owned(),
+            },
+        );
+
         assert_eq!(
-            entrypoint_signature(&descriptor("run", EntryPointKind::Kotoage)),
-            "kotoage fn run()",
+            entrypoint_signature(&run),
+            "kotoage fn run(quantity amount)",
         );
         assert_eq!(
             entrypoint_signature(&descriptor("read", EntryPointKind::View)),
@@ -1432,7 +1440,8 @@ mod tests {
         let payload: ContractCodeViewDto =
             norito::json::from_slice(&body).expect("decode contract view");
         assert_eq!(payload.rendered_source_kind, RENDERED_SOURCE_PSEUDO);
-        assert!(payload.rendered_source_text.contains("public fn main()"));
+        assert!(payload.rendered_source_text.contains("seiyaku Contract_"));
+        assert!(payload.rendered_source_text.contains("view fn main()"));
         assert!(!payload.entrypoints.is_empty());
     }
 

@@ -936,8 +936,9 @@ pub mod entrypoint;
 // Smart contract manifest types and helpers.
 pub mod manifest {
     //! Manifest metadata for IVM smart contracts.
-    //! Intended to be attached optionally to a transaction's `metadata`
-    //! under a well-known key for admission-time checks.
+    //! It can be attached to a transaction's `metadata` under a well-known
+    //! key for admission-time checks. When attached or registered, a V1
+    //! manifest must carry both consensus-binding hashes.
 
     use iroha_crypto::{Error as CryptoError, Hash, KeyPair, PublicKey, Signature};
     use iroha_schema::IntoSchema;
@@ -956,10 +957,13 @@ pub mod manifest {
     /// Well-known metadata key used to attach a contract manifest.
     pub const MANIFEST_METADATA_KEY: &str = "contract_manifest";
 
-    /// Minimal smart contract manifest used for admission-time validation.
+    /// Smart contract manifest used for admission-time validation.
     ///
-    /// All fields are optional: when present they are verified; when absent they
-    /// are ignored.
+    /// `code_hash` and `abi_hash` remain represented as options so malformed
+    /// external payloads can be decoded into a stable, structured admission
+    /// error. Every V1 registration and every admission path that observes a
+    /// manifest rejects either field when absent; the remaining fields are
+    /// optional metadata.
     #[derive(Debug, Clone, Encode, Decode, IntoSchema, PartialEq, Eq, PartialOrd, Ord)]
     #[norito(reuse_archived)]
     #[cfg_attr(
@@ -977,10 +981,11 @@ pub mod manifest {
         #[norito(default)]
         pub seiyaku_name: Option<String>,
         /// Content-addressed hash of the compiled `.to` bytecode.
-        /// If present, nodes compare it to the hash computed from the submitted bytecode.
+        /// Required in V1 and compared with the complete submitted artifact.
         pub code_hash: Option<Hash>,
         /// ABI hash computed by the node for the `abi_version` policy.
-        /// If present, must match the node's view of the syscall policy.
+        /// Required in V1 and must match the artifact's authenticated CNTR
+        /// binding and the node's canonical ABI descriptor.
         pub abi_hash: Option<Hash>,
         /// Optional compiler fingerprint (e.g., rustc/LLVM versions).
         pub compiler_fingerprint: Option<String>,

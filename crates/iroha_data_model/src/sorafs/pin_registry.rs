@@ -10,7 +10,7 @@ use crate::{account::AccountId, asset::AssetDefinitionId, metadata::Metadata};
 /// Exact byte length of a canonical first-release manifest root CID.
 pub const MANIFEST_ROOT_CID_LENGTH: usize = sorafs_manifest::MAX_MANIFEST_ROOT_CID_BYTES;
 
-/// Canonical binary CIDv1 identifying the content DAG root of a manifest.
+/// Canonical binary `CIDv1` identifying the content DAG root of a manifest.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, IntoSchema)]
 #[repr(transparent)]
 pub struct ManifestRootCid([u8; MANIFEST_ROOT_CID_LENGTH]);
@@ -196,7 +196,7 @@ impl std::error::Error for ManifestRootCidError {}
 pub enum ManifestRootCidErrorKind {
     /// CID byte width differs from the fixed first-release layout.
     InvalidLength,
-    /// CID version is not the canonical single-byte CIDv1 value.
+    /// CID version is not the canonical single-byte `CIDv1` value.
     InvalidVersion,
     /// CID codec is not the canonical single-byte dag-cbor value.
     InvalidCodec,
@@ -442,7 +442,7 @@ pub struct PinFeePayment {
 pub struct PinManifestRecord {
     /// Canonical manifest digest (BLAKE3-256 of Norito encoding).
     pub digest: ManifestDigest,
-    /// Canonical CIDv1 of the content DAG root described by the manifest.
+    /// Canonical `CIDv1` of the content DAG root described by the manifest.
     pub root_cid: ManifestRootCid,
     /// Chunker profile handle used to produce the CAR commitment.
     pub chunker: ChunkerProfileHandle,

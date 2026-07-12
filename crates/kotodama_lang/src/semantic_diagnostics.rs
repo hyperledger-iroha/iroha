@@ -207,22 +207,22 @@ pub(crate) fn from_semantic_failures(
                 };
                 let mut diagnostic =
                     Diagnostic::error(code, DiagnosticPhase::Semantic, message, primary_span);
-                if let Some(semantic) = semantic {
-                    if let Some(source) = source {
-                        diagnostic.labels = semantic
-                            .labels
-                            .into_iter()
-                            .filter_map(|label| {
-                                Some(DiagnosticLabel {
-                                    span: source_span(source, label.source)?,
-                                    message: label.message,
-                                })
+                if let Some(semantic) = semantic
+                    && let Some(source) = source
+                {
+                    diagnostic.labels = semantic
+                        .labels
+                        .into_iter()
+                        .filter_map(|label| {
+                            Some(DiagnosticLabel {
+                                span: source_span(source, label.source)?,
+                                message: label.message,
                             })
-                            .collect();
-                        diagnostic.fix = semantic
-                            .fix
-                            .and_then(|fix| materialize_fix(source, semantic.primary, fix));
-                    }
+                        })
+                        .collect();
+                    diagnostic.fix = semantic
+                        .fix
+                        .and_then(|fix| materialize_fix(source, semantic.primary, fix));
                 }
                 diagnostic
             })

@@ -4,7 +4,7 @@ use std::{
     fs,
     path::PathBuf,
     str::FromStr,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use eyre::{Context, Result, eyre};
@@ -17,10 +17,11 @@ use iroha::{
         level::Level as LogLevel,
         metadata::Metadata,
         name::Name,
+        nexus::UniversalAccountId,
         prelude::{FindTransactions, HashOf, QueryBuilderExt, TransactionEntrypoint},
     },
 };
-use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair};
+use iroha_crypto::{Algorithm, ExposedPrivateKey, Hash, KeyPair};
 use iroha_primitives::json::Json as IrohaJson;
 use norito::json::{self, Map, Value};
 use reqwest::blocking::Client as HttpClient;
@@ -53,6 +54,16 @@ const REQUIRED_MCP_TOOLS: &[&str] = &[
 const ROUTE_CHECKS: &[(&str, &str, &[u16])] = &[
     ("status", "/status", &[200]),
     ("sumeragi_status", "/v1/sumeragi/status", &[200]),
+    (
+        "pipeline_transaction_status",
+        "/v1/pipeline/transactions/status",
+        &[400],
+    ),
+    (
+        "retired_transaction_status_alias",
+        "/v1/transactions/status",
+        &[404],
+    ),
     ("sccp_capabilities", "/v1/sccp/capabilities", &[200]),
     ("zk_proofs_count", "/v1/zk/proofs/count", &[200]),
     ("validator_sets", "/v1/sumeragi/validator-sets", &[200]),
@@ -139,7 +150,7 @@ impl Run for WriteCanary {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let receipt = run_write_canary(context.config(), &self)?;
         render_report(context, self.json, &receipt)?;
-        Ok(())
+        ensure_write_canary_succeeded(&receipt)
     }
 }
 
@@ -303,8 +314,14 @@ fn run_doctor(public_root: &str) -> Result<Value> {
 
 fn run_write_canary(config: &Config, args: &WriteCanary) -> Result<Value> {
     let public_root = normalize_root_url(&args.public_root)?;
+    // Account literals in both onboarding and faucet payloads must use the
+    // same I105 network discriminant as the fresh Taira genesis.  Install the
+    // guard before the first AccountId formatting operation, not only before
+    // the later signed transaction.
+    let _guard = ChainDiscriminantGuard::enter(DEFAULT_CHAIN_DISCRIMINANT);
     let http = http_client()?;
     let signer = resolve_canary_signer(config, args.use_config_signer)?;
+    let uaid = derive_canary_uaid(&signer.public_key_raw_hex);
     let alias = build_alias(
         &args.alias_prefix,
         signer.key_pair.public_key(),
@@ -319,16 +336,18 @@ fn run_write_canary(config: &Config, args: &WriteCanary) -> Result<Value> {
         &public_root,
         &alias,
         &signer.public_key_raw_hex,
-        &mut warnings,
+        &uaid,
     )?;
+    let onboarding_contract =
+        validate_onboarding_response(onboarding.body.as_ref(), &signer.account_id, &uaid, &alias);
     push_check(
         &mut checks,
         "accounts_onboard",
         onboarding.status,
-        (200..300).contains(&onboarding.status),
+        onboarding.status == 202 && onboarding_contract.is_ok(),
         onboarding.body.as_ref().map(compact_json),
     );
-    if !(200..300).contains(&onboarding.status) {
+    if onboarding.status != 202 {
         failures.push(format!(
             "account onboarding failed with HTTP {}; faucet funding was not attempted",
             onboarding.status
@@ -345,12 +364,48 @@ fn run_write_canary(config: &Config, args: &WriteCanary) -> Result<Value> {
             extra,
         );
     }
-    if let Some(actual) = extract_optional_response_string(onboarding.body.as_ref(), "account_id")
-        && actual != signer.account_id.to_string()
-    {
+    let onboarding_tx_hash = match onboarding_contract {
+        Ok(hash) => hash,
+        Err(error) => {
+            failures.push(format!(
+                "account onboarding response was invalid: {error:#}"
+            ));
+            let mut extra = Map::new();
+            insert_write_receipt_identity(&mut extra, &signer, &alias, &args.gas_asset_id);
+            return report_value(
+                "taira_write_canary",
+                "fail",
+                &public_root,
+                checks,
+                warnings,
+                failures,
+                extra,
+            );
+        }
+    };
+    let onboarding_final = wait_for_pipeline_terminal_status(
+        &http,
+        &public_root,
+        &onboarding_tx_hash,
+        Duration::from_millis(DEFAULT_WRITE_STATUS_TIMEOUT_MS),
+    )?;
+    let onboarding_terminal = pipeline_status_kind(onboarding_final.body.as_ref());
+    let onboarding_applied = onboarding_final.status == 200
+        && matches!(
+            onboarding_terminal.as_deref(),
+            Some("Applied" | "Committed")
+        );
+    push_check(
+        &mut checks,
+        "accounts_onboard_finality",
+        onboarding_final.status,
+        onboarding_applied,
+        onboarding_final.body.as_ref().map(compact_json),
+    );
+    if !onboarding_applied {
         failures.push(format!(
-            "account onboarding resolved unexpected account_id; expected {}, actual {}",
-            signer.account_id, actual
+            "account onboarding transaction {onboarding_tx_hash} did not reach Applied finality; last status was {}",
+            onboarding_terminal.as_deref().unwrap_or("not_observed")
         ));
         let mut extra = Map::new();
         insert_write_receipt_identity(&mut extra, &signer, &alias, &args.gas_asset_id);
@@ -366,18 +421,71 @@ fn run_write_canary(config: &Config, args: &WriteCanary) -> Result<Value> {
     }
 
     let faucet = claim_faucet(&http, &public_root, &signer.account_id)?;
-    let faucet_applied = response_status_is_applied(faucet.body.as_ref());
+    let faucet_contract =
+        validate_faucet_response(faucet.body.as_ref(), &signer.account_id, &args.gas_asset_id);
     push_check(
         &mut checks,
         "accounts_faucet",
         faucet.status,
-        (200..300).contains(&faucet.status) && faucet_applied,
+        faucet.status == 202 && faucet_contract.is_ok(),
         faucet.body.as_ref().map(compact_json),
     );
-    if !(200..300).contains(&faucet.status) {
+    if faucet.status != 202 {
         failures.push(faucet_failure_hint(&faucet));
-    } else if !faucet_applied {
-        failures.push("faucet funding did not report Applied finality".to_owned());
+    }
+    let faucet_tx_hash = match faucet_contract {
+        Ok(hash) if faucet.status == 202 => hash,
+        Ok(_) => String::new(),
+        Err(error) => {
+            failures.push(format!("faucet response was invalid: {error:#}"));
+            String::new()
+        }
+    };
+    if !failures.is_empty() {
+        let mut extra = Map::new();
+        insert_write_receipt_identity(&mut extra, &signer, &alias, &args.gas_asset_id);
+        return report_value(
+            "taira_write_canary",
+            "fail",
+            &public_root,
+            checks,
+            warnings,
+            failures,
+            extra,
+        );
+    }
+    let faucet_final = wait_for_pipeline_terminal_status(
+        &http,
+        &public_root,
+        &faucet_tx_hash,
+        Duration::from_millis(DEFAULT_WRITE_STATUS_TIMEOUT_MS),
+    )?;
+    let faucet_terminal = pipeline_status_kind(faucet_final.body.as_ref());
+    let faucet_applied = faucet_final.status == 200
+        && matches!(faucet_terminal.as_deref(), Some("Applied" | "Committed"));
+    push_check(
+        &mut checks,
+        "accounts_faucet_finality",
+        faucet_final.status,
+        faucet_applied,
+        faucet_final.body.as_ref().map(compact_json),
+    );
+    if !faucet_applied {
+        failures.push(format!(
+            "faucet transaction {faucet_tx_hash} did not reach Applied finality; last status was {}",
+            faucet_terminal.as_deref().unwrap_or("not_observed")
+        ));
+        let mut extra = Map::new();
+        insert_write_receipt_identity(&mut extra, &signer, &alias, &args.gas_asset_id);
+        return report_value(
+            "taira_write_canary",
+            "fail",
+            &public_root,
+            checks,
+            warnings,
+            failures,
+            extra,
+        );
     }
 
     let mut canary_config = config.clone();
@@ -396,7 +504,6 @@ fn run_write_canary(config: &Config, args: &WriteCanary) -> Result<Value> {
         write_runtime_config(path, &canary_config)?;
     }
 
-    let _guard = ChainDiscriminantGuard::enter(DEFAULT_CHAIN_DISCRIMINANT);
     let client = IrohaClient::new(canary_config.clone());
     let mut metadata = metadata_with_gas_asset(&args.gas_asset_id)?;
     insert_string_metadata(&mut metadata, "taira_canary", "write-canary")?;
@@ -445,10 +552,7 @@ fn run_write_canary(config: &Config, args: &WriteCanary) -> Result<Value> {
     let mut extra = Map::new();
     insert_write_receipt_identity(&mut extra, &signer, &alias, &args.gas_asset_id);
     extra.insert("message".into(), Value::String(message));
-    extra.insert(
-        "faucet_tx_hash".into(),
-        extract_response_string(faucet.body.as_ref(), "tx_hash_hex"),
-    );
+    extra.insert("faucet_tx_hash".into(), Value::String(faucet_tx_hash));
     extra.insert("ping_tx_hash".into(), Value::String(wait.hash.clone()));
     extra.insert(
         "applied_block_height".into(),
@@ -539,6 +643,13 @@ fn report_status(report: &Value) -> Option<&str> {
         .as_object()
         .and_then(|object| object.get("status"))
         .and_then(Value::as_str)
+}
+
+fn ensure_write_canary_succeeded(report: &Value) -> Result<()> {
+    if report_status(report) == Some("ok") {
+        return Ok(());
+    }
+    eyre::bail!("Taira write canary found hard failures")
 }
 
 fn print_receipt_fields<C: RunContext>(context: &mut C, object: &Map) -> Result<()> {
@@ -819,7 +930,7 @@ fn onboard_canary(
     public_root: &str,
     alias: &str,
     public_key_raw_hex: &str,
-    _warnings: &mut Vec<String>,
+    uaid: &UniversalAccountId,
 ) -> Result<HttpJson> {
     let url = join_url(public_root, "/v1/accounts/onboard")?;
     let mut body = Map::new();
@@ -828,12 +939,7 @@ fn onboard_canary(
         "public_key_hex".into(),
         Value::String(public_key_raw_hex.to_owned()),
     );
-    body.insert(
-        "identity".into(),
-        norito::json!({
-            "source": "iroha taira write-canary"
-        }),
-    );
+    body.insert("uaid".into(), Value::String(uaid.to_string()));
     let result = http_json(
         http,
         reqwest::Method::POST,
@@ -841,6 +947,179 @@ fn onboard_canary(
         Some(&Value::Object(body)),
     )?;
     Ok(result)
+}
+
+fn derive_canary_uaid(public_key_raw_hex: &str) -> UniversalAccountId {
+    let normalized = public_key_raw_hex.trim().to_ascii_lowercase();
+    UniversalAccountId::from_hash(Hash::new(
+        format!("taira-canary-account:{normalized}").as_bytes(),
+    ))
+}
+
+fn validate_onboarding_response(
+    response: Option<&Value>,
+    expected_account: &AccountId,
+    expected_uaid: &UniversalAccountId,
+    expected_alias: &str,
+) -> Result<String> {
+    let object = response
+        .and_then(Value::as_object)
+        .ok_or_else(|| eyre!("response must be a JSON object"))?;
+    let required_string = |key: &str| -> Result<&str> {
+        object
+            .get(key)
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| eyre!("missing non-empty `{key}`"))
+    };
+    let account_id = required_string("account_id")?;
+    if account_id != expected_account.to_string() {
+        return Err(eyre!(
+            "unexpected account_id; expected {expected_account}, actual {account_id}"
+        ));
+    }
+    let uaid = required_string("uaid")?;
+    if uaid != expected_uaid.to_string() {
+        return Err(eyre!(
+            "unexpected uaid; expected {expected_uaid}, actual {uaid}"
+        ));
+    }
+    let status = required_string("status")?;
+    if status != "QUEUED" {
+        return Err(eyre!(
+            "unexpected onboarding status `{status}`; expected QUEUED"
+        ));
+    }
+    let tx_hash = required_string("tx_hash_hex")?;
+    let decoded = hex::decode(tx_hash).wrap_err("onboarding tx_hash_hex is not hex")?;
+    if decoded.len() != 32 {
+        return Err(eyre!(
+            "onboarding tx_hash_hex must encode 32 bytes, got {}",
+            decoded.len()
+        ));
+    }
+    let lease = object
+        .get("lease")
+        .and_then(Value::as_object)
+        .ok_or_else(|| eyre!("missing onboarding lease object"))?;
+    if lease.get("alias").and_then(Value::as_str) != Some(expected_alias) {
+        return Err(eyre!("onboarding lease alias does not match the request"));
+    }
+    for key in ["dataspace", "lease_status"] {
+        if !lease
+            .get(key)
+            .and_then(Value::as_str)
+            .is_some_and(|value| !value.is_empty())
+        {
+            return Err(eyre!("onboarding lease is missing non-empty `{key}`"));
+        }
+    }
+    for key in [
+        "expires_at_ms",
+        "grace_expires_at_ms",
+        "redemption_expires_at_ms",
+    ] {
+        if lease.get(key).and_then(Value::as_u64).is_none() {
+            return Err(eyre!("onboarding lease is missing integer `{key}`"));
+        }
+    }
+    for key in ["is_primary", "auto_renew_enabled"] {
+        if lease.get(key).and_then(Value::as_bool).is_none() {
+            return Err(eyre!("onboarding lease is missing boolean `{key}`"));
+        }
+    }
+    Ok(tx_hash.to_owned())
+}
+
+fn validate_faucet_response(
+    response: Option<&Value>,
+    expected_account: &AccountId,
+    expected_asset_definition_id: &str,
+) -> Result<String> {
+    let object = response
+        .and_then(Value::as_object)
+        .ok_or_else(|| eyre!("response must be a JSON object"))?;
+    let required_string = |key: &str| -> Result<&str> {
+        object
+            .get(key)
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| eyre!("missing non-empty `{key}`"))
+    };
+    let account_id = required_string("account_id")?;
+    if account_id != expected_account.to_string() {
+        return Err(eyre!(
+            "unexpected account_id; expected {expected_account}, actual {account_id}"
+        ));
+    }
+    let asset_definition_id = required_string("asset_definition_id")?;
+    if !expected_asset_definition_id.is_empty()
+        && asset_definition_id != expected_asset_definition_id
+    {
+        return Err(eyre!(
+            "unexpected asset_definition_id; expected {expected_asset_definition_id}, actual {asset_definition_id}"
+        ));
+    }
+    for key in ["asset_id", "amount"] {
+        required_string(key)?;
+    }
+    let status = required_string("status")?;
+    if status != "QUEUED" {
+        return Err(eyre!(
+            "unexpected faucet status `{status}`; expected QUEUED"
+        ));
+    }
+    let tx_hash = required_string("tx_hash_hex")?;
+    let decoded = hex::decode(tx_hash).wrap_err("faucet tx_hash_hex is not hex")?;
+    if decoded.len() != 32 {
+        return Err(eyre!(
+            "faucet tx_hash_hex must encode 32 bytes, got {}",
+            decoded.len()
+        ));
+    }
+    Ok(tx_hash.to_owned())
+}
+
+fn pipeline_status_kind(response: Option<&Value>) -> Option<String> {
+    let status = response
+        .and_then(Value::as_object)
+        .and_then(|object| object.get("status"))?;
+    status
+        .as_object()
+        .and_then(|object| object.get("kind"))
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+}
+
+fn wait_for_pipeline_terminal_status(
+    http: &HttpClient,
+    public_root: &str,
+    tx_hash_hex: &str,
+    timeout: Duration,
+) -> Result<HttpJson> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let mut url = join_url(public_root, "/v1/pipeline/transactions/status")?;
+        url.query_pairs_mut()
+            .append_pair("hash", tx_hash_hex)
+            .append_pair("scope", "global");
+        let mut response = http_json(http, reqwest::Method::GET, url.as_str(), None)?;
+        if response.status != 200 && response.status != 404 {
+            return Ok(response);
+        }
+        let terminal = matches!(
+            pipeline_status_kind(response.body.as_ref()).as_deref(),
+            Some("Applied" | "Committed" | "Rejected" | "Expired")
+        );
+        if terminal {
+            return Ok(response);
+        }
+        if Instant::now() >= deadline {
+            response.status = 504;
+            return Ok(response);
+        }
+        std::thread::sleep(Duration::from_millis(500));
+    }
 }
 
 fn claim_faucet(http: &HttpClient, public_root: &str, account_id: &AccountId) -> Result<HttpJson> {
@@ -1095,28 +1374,6 @@ fn error_value(code: &str, message: &str) -> Value {
     Value::Object(error)
 }
 
-fn extract_response_string(response: Option<&Value>, key: &str) -> Value {
-    extract_optional_response_string(response, key)
-        .map(Value::String)
-        .unwrap_or(Value::Null)
-}
-
-fn extract_optional_response_string(response: Option<&Value>, key: &str) -> Option<String> {
-    response
-        .and_then(Value::as_object)
-        .and_then(|obj| obj.get(key))
-        .and_then(Value::as_str)
-        .map(str::to_owned)
-}
-
-fn response_status_is_applied(response: Option<&Value>) -> bool {
-    response
-        .and_then(Value::as_object)
-        .and_then(|obj| obj.get("status"))
-        .and_then(Value::as_str)
-        .is_some_and(|status| status == "Applied")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1125,7 +1382,10 @@ mod tests {
     use std::{
         io::{Read as _, Write as _},
         net::{TcpListener, TcpStream},
-        sync::{Arc, Mutex},
+        sync::{
+            Arc, Mutex,
+            atomic::{AtomicBool, Ordering},
+        },
         thread,
     };
 
@@ -1223,6 +1483,7 @@ mod tests {
     struct MockHttpServer {
         base_url: String,
         requests: Arc<Mutex<Vec<MockRequest>>>,
+        stop: Arc<AtomicBool>,
         handle: thread::JoinHandle<()>,
     }
 
@@ -1232,24 +1493,42 @@ mod tests {
     {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock server");
         let addr = listener.local_addr().expect("mock server address");
+        listener
+            .set_nonblocking(true)
+            .expect("set mock server nonblocking");
         let requests = Arc::new(Mutex::new(Vec::new()));
         let server_requests = Arc::clone(&requests);
+        let stop = Arc::new(AtomicBool::new(false));
+        let server_stop = Arc::clone(&stop);
         let responder = Arc::new(responder);
         let handle = thread::spawn(move || {
-            for _ in 0..expected_requests {
-                let (mut stream, _) = listener.accept().expect("mock server accept");
-                let request = read_mock_request(&mut stream);
-                let response = responder(&request);
-                server_requests
-                    .lock()
-                    .expect("requests")
-                    .push(request.clone());
-                write_mock_response(&mut stream, response);
+            let mut accepted = 0_usize;
+            while accepted < expected_requests && !server_stop.load(Ordering::Acquire) {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        stream
+                            .set_nonblocking(false)
+                            .expect("set accepted mock stream blocking");
+                        let request = read_mock_request(&mut stream);
+                        let response = responder(&request);
+                        server_requests
+                            .lock()
+                            .expect("requests")
+                            .push(request.clone());
+                        write_mock_response(&mut stream, response);
+                        accepted += 1;
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(1));
+                    }
+                    Err(error) => panic!("mock server accept failed: {error}"),
+                }
             }
         });
         MockHttpServer {
             base_url: format!("http://{addr}"),
             requests,
+            stop,
             handle,
         }
     }
@@ -1318,6 +1597,7 @@ mod tests {
     }
 
     fn finish_mock(server: MockHttpServer) -> Vec<MockRequest> {
+        server.stop.store(true, Ordering::Release);
         server.handle.join().expect("mock server thread");
         Arc::try_unwrap(server.requests)
             .expect("request references")
@@ -1341,6 +1621,10 @@ mod tests {
             ("GET", "/v1/contracts/state") => {
                 MockResponse::json(400, norito::json!({"error": "missing selector"}))
             }
+            ("GET", "/v1/pipeline/transactions/status") => {
+                MockResponse::json(400, norito::json!({"error": "missing transaction hash"}))
+            }
+            ("GET", "/v1/transactions/status") => MockResponse::text(404, "not found"),
             ("GET", "/v1/mcp") => MockResponse::json(200, norito::json!({"ok": true})),
             ("POST", "/v1/mcp") if request.body.contains("tools/list") => {
                 let tools: Vec<Value> = REQUIRED_MCP_TOOLS
@@ -1387,19 +1671,40 @@ mod tests {
                         }),
                     )
                 } else {
+                    let request_body =
+                        json::from_str::<Value>(&request.body).expect("decode onboarding request");
+                    let request_object = request_body.as_object().expect("onboarding object");
+                    let alias = request_object
+                        .get("alias")
+                        .and_then(Value::as_str)
+                        .expect("onboarding alias");
+                    let public_key_hex = request_object
+                        .get("public_key_hex")
+                        .and_then(Value::as_str)
+                        .expect("onboarding public key");
+                    let public_key_bytes = hex::decode(public_key_hex).expect("public key hex");
+                    let public_key =
+                        iroha_crypto::PublicKey::from_bytes(Algorithm::Ed25519, &public_key_bytes)
+                            .expect("Ed25519 public key");
+                    let account_id = AccountId::new(public_key).to_string();
+                    let uaid = derive_canary_uaid(public_key_hex).to_string();
                     MockResponse::json(
-                        200,
+                        202,
                         norito::json!({
-                            "uaid": "uaid:mock",
-                            "tx_hash_hex": "onboardabc",
-                            "status": "Applied",
+                            "account_id": (account_id),
+                            "uaid": (uaid),
+                            "tx_hash_hex": ("ab".repeat(32)),
+                            "status": "QUEUED",
                             "lease": {
-                                "alias": "mock@universal",
-                                "account_id": "mock",
+                                "alias": (alias),
                                 "dataspace": "universal",
                                 "domain": "wonderland.universal",
-                                "expires_at_ms": null,
-                                "auto_renew": false
+                                "is_primary": true,
+                                "lease_status": "active",
+                                "expires_at_ms": 1000,
+                                "grace_expires_at_ms": 2000,
+                                "redemption_expires_at_ms": 3000,
+                                "auto_renew_enabled": false
                             }
                         }),
                     )
@@ -1408,17 +1713,26 @@ mod tests {
             ("GET", "/v1/accounts/faucet/puzzle") => {
                 MockResponse::json(200, norito::json!({ "difficulty_bits": 0 }))
             }
-            ("POST", "/v1/accounts/faucet") => MockResponse::json(
-                200,
-                norito::json!({
-                    "account_id": "mock",
-                    "asset_definition_id": DEFAULT_GAS_ASSET_ID,
-                    "asset_id": "mock",
-                    "amount": "1000000000000000000",
-                    "tx_hash_hex": "faucetabc",
-                    "status": "Applied"
-                }),
-            ),
+            ("POST", "/v1/accounts/faucet") => {
+                let request_body =
+                    json::from_str::<Value>(&request.body).expect("decode faucet request");
+                let account_id = request_body
+                    .as_object()
+                    .and_then(|object| object.get("account_id"))
+                    .and_then(Value::as_str)
+                    .expect("faucet account_id");
+                MockResponse::json(
+                    202,
+                    norito::json!({
+                        "account_id": (account_id),
+                        "asset_definition_id": (DEFAULT_GAS_ASSET_ID),
+                        "asset_id": (format!("{DEFAULT_GAS_ASSET_ID}#{account_id}")),
+                        "amount": "1000000000000000000",
+                        "tx_hash_hex": ("cd".repeat(32)),
+                        "status": "QUEUED"
+                    }),
+                )
+            }
             ("GET", "/v1/node/capabilities") => MockResponse::text(404, "not advertised"),
             ("POST", path) if path == torii_uri::TRANSACTION => MockResponse::text(200, ""),
             ("GET", "/v1/pipeline/transactions/status") => {
@@ -1433,7 +1747,7 @@ mod tests {
                 MockResponse::json(
                     200,
                     norito::json!({
-                        "hash": hash,
+                        "hash": (hash),
                         "status": { "kind": "Applied", "block_height": 42 },
                         "scope": "local",
                         "resolved_from": "state"
@@ -1449,7 +1763,7 @@ mod tests {
 
     #[test]
     fn doctor_mock_healthy_flow_reports_ok() {
-        let server = spawn_mock_http(11, |request| doctor_mock_response(request, None));
+        let server = spawn_mock_http(13, |request| doctor_mock_response(request, None));
         let report = run_doctor(&server.base_url).expect("doctor report");
         let requests = finish_mock(server);
 
@@ -1464,6 +1778,13 @@ mod tests {
                 .iter()
                 .any(|request| request.method == "POST" && request.body.contains("tools/list"))
         );
+        assert!(requests.iter().any(|request| {
+            request.method == "GET"
+                && path_only(&request.path) == "/v1/pipeline/transactions/status"
+        }));
+        assert!(requests.iter().any(|request| {
+            request.method == "GET" && path_only(&request.path) == "/v1/transactions/status"
+        }));
     }
 
     #[test]
@@ -1498,9 +1819,23 @@ mod tests {
     }
 
     #[test]
+    fn write_canary_exit_gate_fails_closed() {
+        ensure_write_canary_succeeded(&norito::json!({"status": "ok"}))
+            .expect("an explicitly successful canary may exit zero");
+        for report in [
+            norito::json!({"status": "fail"}),
+            norito::json!({"status": "unknown"}),
+            norito::json!({}),
+        ] {
+            let _ = ensure_write_canary_succeeded(&report)
+                .expect_err("non-success canary reports must produce a failing process exit");
+        }
+    }
+
+    #[test]
     fn doctor_mock_required_tool_missing_reports_failure() {
         let missing_tool = REQUIRED_MCP_TOOLS[0];
-        let server = spawn_mock_http(11, move |request| {
+        let server = spawn_mock_http(13, move |request| {
             doctor_mock_response(request, Some(missing_tool))
         });
         let report = run_doctor(&server.base_url).expect("doctor report");
@@ -1522,7 +1857,7 @@ mod tests {
 
     #[test]
     fn write_canary_mock_success_returns_redacted_receipt() {
-        let server = spawn_mock_http(7, |request| write_canary_mock_response(request, 200));
+        let server = spawn_mock_http(9, |request| write_canary_mock_response(request, 202));
         let args = WriteCanary {
             public_root: server.base_url.clone(),
             alias_prefix: "mock-canary".to_owned(),
@@ -1535,13 +1870,126 @@ mod tests {
         let requests = finish_mock(server);
         let rendered = compact_json(&report);
 
-        assert_eq!(report_status(&report), Some("ok"));
-        assert!(rendered.contains("faucetabc"));
+        assert_eq!(report_status(&report), Some("ok"), "{rendered}");
+        assert!(rendered.contains(&"cd".repeat(32)));
         assert!(rendered.contains(DEFAULT_CHAIN_ID));
         assert!(rendered.contains(DEFAULT_GAS_ASSET_ID));
         assert!(!rendered.contains("private_key"));
         assert!(requests.iter().any(|request| request.method == "POST"
             && path_only(&request.path) == torii_uri::TRANSACTION));
+        let onboarding = requests
+            .iter()
+            .find(|request| {
+                request.method == "POST" && path_only(&request.path) == "/v1/accounts/onboard"
+            })
+            .expect("onboarding request");
+        let onboarding_body =
+            json::from_str::<Value>(&onboarding.body).expect("decode onboarding request");
+        let onboarding_object = onboarding_body.as_object().expect("onboarding object");
+        assert_eq!(
+            onboarding_object
+                .keys()
+                .map(String::as_str)
+                .collect::<std::collections::BTreeSet<_>>(),
+            ["alias", "public_key_hex", "uaid"].into_iter().collect()
+        );
+        assert!(!onboarding_object.contains_key("identity"));
+        let public_key_hex = onboarding_object
+            .get("public_key_hex")
+            .and_then(Value::as_str)
+            .expect("public key hex");
+        let expected_uaid = derive_canary_uaid(public_key_hex).to_string();
+        assert_eq!(
+            onboarding_object.get("uaid").and_then(Value::as_str),
+            Some(expected_uaid.as_str())
+        );
+        assert!(requests.iter().any(|request| {
+            request.method == "GET"
+                && path_only(&request.path) == "/v1/pipeline/transactions/status"
+                && request.path.contains(&"ab".repeat(32))
+        }));
+        assert!(requests.iter().any(|request| {
+            request.method == "GET"
+                && path_only(&request.path) == "/v1/pipeline/transactions/status"
+                && request.path.contains(&"cd".repeat(32))
+        }));
+    }
+
+    #[test]
+    fn faucet_response_rejects_retired_synchronous_shape() {
+        let key_pair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let account_id = AccountId::new(key_pair.public_key().clone());
+        let response = norito::json!({
+            "account_id": (account_id.to_string()),
+            "asset_definition_id": (DEFAULT_GAS_ASSET_ID),
+            "asset_id": (format!("{DEFAULT_GAS_ASSET_ID}#{account_id}")),
+            "amount": "1000000000000000000",
+            "tx_hash_hex": "faucetabc",
+            "status": "Applied"
+        });
+
+        let error = validate_faucet_response(Some(&response), &account_id, DEFAULT_GAS_ASSET_ID)
+            .expect_err("retired synchronous faucet response must fail closed");
+
+        assert!(format!("{error:#}").contains("expected QUEUED"));
+    }
+
+    #[test]
+    fn faucet_response_rejects_wrong_asset_and_short_hash() {
+        let key_pair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let account_id = AccountId::new(key_pair.public_key().clone());
+        let response = |asset_definition_id: &str, tx_hash_hex: &str| {
+            norito::json!({
+                "account_id": (account_id.to_string()),
+                "asset_definition_id": (asset_definition_id),
+                "asset_id": (format!("{asset_definition_id}#{account_id}")),
+                "amount": "1000000000000000000",
+                "tx_hash_hex": (tx_hash_hex),
+                "status": "QUEUED"
+            })
+        };
+
+        let wrong_asset = response("wrong-asset", &"cd".repeat(32));
+        let error = validate_faucet_response(Some(&wrong_asset), &account_id, DEFAULT_GAS_ASSET_ID)
+            .expect_err("a different funded asset cannot satisfy the canary");
+        assert!(format!("{error:#}").contains("unexpected asset_definition_id"));
+
+        let short_hash = response(DEFAULT_GAS_ASSET_ID, "cd");
+        let error = validate_faucet_response(Some(&short_hash), &account_id, DEFAULT_GAS_ASSET_ID)
+            .expect_err("a short transaction hash must fail closed");
+        assert!(format!("{error:#}").contains("must encode 32 bytes"));
+    }
+
+    #[test]
+    fn pipeline_status_requires_current_nested_shape() {
+        let current = norito::json!({"status": {"kind": "Applied"}});
+        assert_eq!(
+            pipeline_status_kind(Some(&current)).as_deref(),
+            Some("Applied")
+        );
+
+        let retired = norito::json!({"status": "Applied"});
+        assert_eq!(pipeline_status_kind(Some(&retired)), None);
+    }
+
+    #[test]
+    fn pipeline_status_poll_fails_fast_on_noncanonical_http_error() {
+        let server = spawn_mock_http(1, |_request| {
+            MockResponse::json(503, norito::json!({"error": "route unavailable"}))
+        });
+        let http = http_client().expect("HTTP client");
+
+        let response = wait_for_pipeline_terminal_status(
+            &http,
+            &server.base_url,
+            &"ab".repeat(32),
+            Duration::from_secs(30),
+        )
+        .expect("HTTP error remains a typed canary result");
+        let requests = finish_mock(server);
+
+        assert_eq!(response.status, 503);
+        assert_eq!(requests.len(), 1);
     }
 
     #[test]
@@ -1664,6 +2112,37 @@ mod tests {
             AccountId::new(signer.key_pair.public_key().clone())
         );
         assert_eq!(signer.public_key_raw_hex.len(), 64);
+    }
+
+    #[test]
+    fn canary_uaid_uses_current_universal_account_hash_contract() {
+        let public_key_hex = "AABBCC";
+        let expected = UniversalAccountId::from_hash(Hash::new(b"taira-canary-account:aabbcc"));
+        assert_eq!(derive_canary_uaid(public_key_hex), expected);
+        assert_eq!(derive_canary_uaid(" aabbcc "), expected);
+        assert_eq!(
+            expected.to_string(),
+            "uaid:54b79979e70601aa2d9573b9c37778809a62ff3096ed05f940b964752f45cd69"
+        );
+    }
+
+    #[test]
+    fn onboarding_response_rejects_the_retired_synchronous_shape() {
+        let key_pair = fixture_key_pair(11);
+        let account_id = AccountId::new(key_pair.public_key().clone());
+        let uaid = derive_canary_uaid("11");
+        let stale = norito::json!({
+            "account_id": (account_id.to_string()),
+            "uaid": (uaid.to_string()),
+            "tx_hash_hex": ("ab".repeat(32)),
+            "status": "Applied",
+            "lease": {}
+        });
+
+        let error =
+            validate_onboarding_response(Some(&stale), &account_id, &uaid, "canary@universal")
+                .expect_err("the current endpoint queues onboarding");
+        assert!(error.to_string().contains("expected QUEUED"));
     }
 
     #[test]

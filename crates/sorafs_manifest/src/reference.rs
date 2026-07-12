@@ -8015,6 +8015,27 @@ mod tests {
     }
 
     #[test]
+    fn pdp_archive_governance_errors_have_stable_reference_mappings() {
+        let errors = [
+            GovernanceLogValidationError::PdpArchive(
+                crate::PdpGovernanceArchiveValidationError::InvalidIdentity,
+            ),
+            GovernanceLogValidationError::PdpArchiveDecisionAfterNode {
+                decided_at: 2,
+                node_timestamp: 1,
+            },
+        ];
+
+        for error in errors {
+            assert_eq!(governance_log_validation_code(&error), "SFS-GOV-001");
+            assert_eq!(
+                governance_log_validation_category(&error),
+                CATEGORY_VALIDATION
+            );
+        }
+    }
+
+    #[test]
     fn validate_governance_dag_block_bytes_accepts_signed_block() {
         let block = signed_governance_dag_block(None, 0, 1_700_000_300);
         let bytes = to_bytes(&block).expect("encode governance DAG block");

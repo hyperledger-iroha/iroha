@@ -29,6 +29,9 @@ const MAX_SAFE_INTEGER = Number.MAX_SAFE_INTEGER;
 const MAX_SAFE_INTEGER_BIGINT = BigInt(MAX_SAFE_INTEGER);
 const MAX_NUMERIC_SCALE = 28;
 const MAX_NUMERIC_BITS = 512;
+const MAX_NUMERIC_TEXT_LENGTH = 185;
+const MIN_NUMERIC_MANTISSA = -(1n << BigInt(MAX_NUMERIC_BITS - 1));
+const MAX_NUMERIC_MANTISSA = (1n << BigInt(MAX_NUMERIC_BITS - 1)) - 1n;
 const UINT32_MAX = 0xffff_ffff;
 const DEFAULT_PRIVACY_MAX_PROOF_BYTES = 64 * 1024 * 1024;
 const DEFAULT_PRIVACY_MAX_PUBLIC_INPUT_BYTES = 1024 * 1024;
@@ -297,6 +300,13 @@ function normalizeNumericLiteral(value, name, { allowNegative = false } = {}) {
   if (!raw) {
     fail(ValidationErrorCode.INVALID_NUMERIC, `${name} must be a valid Numeric literal`, name);
   }
+  if (raw.length > MAX_NUMERIC_TEXT_LENGTH) {
+    fail(
+      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      `${name} exceeds the bounded Numeric text length`,
+      name,
+    );
+  }
 
   let digits = raw;
   const sign = digits[0];
@@ -344,11 +354,13 @@ function normalizeNumericLiteral(value, name, { allowNegative = false } = {}) {
   if (sign === "-") {
     mantissaValue = -mantissaValue;
   }
-  const absValue = mantissaValue < 0n ? -mantissaValue : mantissaValue;
-  if (absValue !== 0n && absValue.toString(2).length > MAX_NUMERIC_BITS) {
+  if (
+    mantissaValue < MIN_NUMERIC_MANTISSA ||
+    mantissaValue > MAX_NUMERIC_MANTISSA
+  ) {
     fail(
       ValidationErrorCode.VALUE_OUT_OF_RANGE,
-      `${name} mantissa exceeds ${MAX_NUMERIC_BITS} bits`,
+      `${name} mantissa exceeds the signed ${MAX_NUMERIC_BITS}-bit range`,
       name,
     );
   }

@@ -185,7 +185,13 @@ an evaluation failure.
 
 ```ts
 const readiness = await torii.getOfflineReadiness("xor#wonderland");
-console.log("offline ready", readiness.ready, readiness.blockers);
+console.log(
+  "offline ready",
+  readiness.ready,
+  readiness.active_transfer_verifier?.id,
+  readiness.active_topup_shield_verifier?.id,
+  readiness.blockers,
+);
 ```
 
 ## Torii queries & streaming (WebSockets)

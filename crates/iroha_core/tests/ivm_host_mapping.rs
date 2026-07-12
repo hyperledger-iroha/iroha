@@ -17,7 +17,7 @@ use iroha_core::{
 };
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{account::NewAccount, metadata::Metadata, nft::NftId, prelude::*};
-use ivm::{IVM, PointerType, encoding, instruction, syscalls as ivm_sys};
+use ivm::{IVM, PointerType, ProgramMetadata, encoding, instruction, syscalls as ivm_sys};
 use mv::storage::StorageReadOnly;
 use norito::NoritoSerialize;
 
@@ -71,12 +71,15 @@ fn built_account_in_domain(account_id: &AccountId) -> Account {
 }
 
 fn make_header() -> Vec<u8> {
-    let mut v = Vec::new();
-    v.extend_from_slice(b"IVM\0");
-    v.extend_from_slice(&[1, 0, 0, 4]);
-    v.extend_from_slice(&1_000_000_u64.to_le_bytes());
-    v.push(1);
-    v
+    ProgramMetadata {
+        version_major: 1,
+        version_minor: 0,
+        mode: 0,
+        vector_length: 4,
+        max_cycles: 1_000_000,
+        abi_version: 1,
+    }
+    .encode()
 }
 
 fn scall_program(syscall: u32) -> Vec<u8> {

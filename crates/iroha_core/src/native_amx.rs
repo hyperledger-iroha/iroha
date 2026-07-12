@@ -2045,7 +2045,7 @@ impl NativeAmxAttestationRequestV2 {
             && (participant_entrypoint_count == 0
                 || (participant_entrypoint_count == 1
                     && participant_descriptor.accepted_candidate_indices.len()
-                    == settlement_receipts.len()
+                        == settlement_receipts.len()
                     && participant_descriptor.accepted_transaction_hashes.len()
                         == settlement_receipts.len()
                     && participant_entrypoint_position.is_some_and(|position| {

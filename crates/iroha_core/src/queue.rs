@@ -110,6 +110,8 @@ use crate::{
     telemetry::StateTelemetry,
     tx::{CheckedTransaction, instructions_allow_multisig_envelope_authority},
 };
+#[cfg(test)]
+use iroha_data_model::nexus::LaneLifecyclePlan;
 
 type SignedTxHash = HashOf<iroha_data_model::transaction::SignedTransaction>;
 

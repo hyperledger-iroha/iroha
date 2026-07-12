@@ -124,6 +124,115 @@ pub const BOUNDARY_COMPLETE_APPLICATION: u8 = 3;
 /// Capability to consume the one recovery-resumption transition.
 pub const BOUNDARY_RESUME_AFTER_REPLAY: u8 = 4;
 
+// Keep the durability acknowledgement predicate shared between the ordinary
+// Rust WAL lifecycle and its Verus proof.  An append receipt is minted only
+// after all three adapter completions have happened in this order; the
+// expression below states the safety half of that contract without treating a
+// successful write or userspace flush as durable storage.
+macro_rules! wal_append_acknowledged_body {
+    ($write_complete:expr, $flush_complete:expr, $sync_complete:expr $(,)?) => {{ $write_complete && $flush_complete && $sync_complete }};
+}
+
+// Canonical header acceptance is also a shared production/Verus expression.
+// The byte parser still returns field-specific errors, then crosses this final
+// fail-closed gate before exposing any recovered frame.
+macro_rules! wal_header_accepted_body {
+    (
+        $complete:expr,
+        $magic_matches:expr,
+        $format_matches:expr,
+        $actual_protocol:expr,
+        $expected_protocol:expr,
+        $actual_chain:expr,
+        $expected_chain:expr,
+        $actual_key:expr,
+        $expected_key:expr,
+        $checksum_matches:expr $(,)?
+    ) => {{
+        $complete
+            && $magic_matches
+            && $format_matches
+            && $actual_protocol == $expected_protocol
+            && $actual_chain == $expected_chain
+            && $actual_key == $expected_key
+            && $checksum_matches
+    }};
+}
+
+// Complete-frame acceptance is intentionally expressed only over parsed
+// primitives.  Production and Verus therefore agree on the exact sequence,
+// size, hash-link, and checksum corridor even though BLAKE3 itself stays in the
+// cryptographic TCB.
+macro_rules! wal_complete_frame_valid_body {
+    (
+        $before_failed_closed:expr,
+        $complete:expr,
+        $expected_sequence:expr,
+        $maximum_sequence:expr,
+        $actual_sequence:expr,
+        $payload_len:expr,
+        $maximum_payload_len:expr,
+        $encoded_previous:expr,
+        $expected_previous:expr,
+        $encoded_hash:expr,
+        $calculated_hash:expr $(,)?
+    ) => {{
+        !$before_failed_closed
+            && $complete
+            && $expected_sequence < $maximum_sequence
+            && $actual_sequence == $expected_sequence
+            && $payload_len <= $maximum_payload_len
+            && $encoded_previous == $expected_previous
+            && $encoded_hash == $calculated_hash
+    }};
+}
+
+// This is the fixed-width retirement rule used by the executable lifecycle
+// projection and Verus.  Presence bits are derived from typed production
+// state: a closed FinalizedHeight and its trusted Kura durability receipt.
+// Identity equality is deliberately expanded field by field so neither side
+// can authorize pruning with a merely same-height or same-subject artifact.
+macro_rules! wal_retirement_authorized_body {
+    (
+        $height_closed:expr,
+        $block_durable:expr,
+        $certificate_durable:expr,
+        $decision_context:expr,
+        $decision_height:expr,
+        $decision_subject:expr,
+        $decision_certificate_context:expr,
+        $decision_certificate_height:expr,
+        $decision_certificate_view:expr,
+        $decision_certificate_phase:expr,
+        $commit_phase:expr,
+        $decision_certificate_subject:expr,
+        $receipt_context:expr,
+        $receipt_height:expr,
+        $receipt_subject:expr,
+        $receipt_certificate_context:expr,
+        $receipt_certificate_height:expr,
+        $receipt_certificate_view:expr,
+        $receipt_certificate_phase:expr,
+        $receipt_certificate_subject:expr $(,)?
+    ) => {{
+        $height_closed
+            && $block_durable
+            && $certificate_durable
+            && $decision_context == $receipt_context
+            && $decision_height == $receipt_height
+            && $decision_subject == $receipt_subject
+            && $decision_certificate_context == $receipt_certificate_context
+            && $decision_certificate_height == $receipt_certificate_height
+            && $decision_certificate_view == $receipt_certificate_view
+            && $decision_certificate_phase == $commit_phase
+            && $decision_certificate_phase == $receipt_certificate_phase
+            && $decision_certificate_subject == $receipt_certificate_subject
+            && $decision_context == $decision_certificate_context
+            && $decision_height == $decision_certificate_height
+            && $decision_subject == $decision_certificate_subject
+    }};
+}
+
 /// Primitive `(height, view, generation)` projection.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct TagProjection {

@@ -6459,7 +6459,7 @@ fn nexus_autoscale_certified_merge_fails_over_and_recovers_sidecar_after_restart
         "offline peer merge log changed while its process was stopped"
     );
 
-    rt.block_on(lagging_peer.start_checked(config_layers.iter().cloned(), None))?;
+    rt.block_on(lagging_peer.start_checked(config_layers.iter(), None))?;
     rt.block_on(async {
         tokio::time::timeout(
             network.sync_timeout().max(MERGE_WAIT),
@@ -6496,7 +6496,7 @@ fn nexus_autoscale_certified_merge_fails_over_and_recovers_sidecar_after_restart
     );
 
     rt.block_on(lagging_peer.shutdown());
-    rt.block_on(lagging_peer.start_checked(config_layers.iter().cloned(), None))?;
+    rt.block_on(lagging_peer.start_checked(config_layers.iter(), None))?;
     rt.block_on(async {
         tokio::time::timeout(
             network.sync_timeout().max(MERGE_WAIT),
@@ -6812,7 +6812,7 @@ fn nexus_autoscale_two_phase_drain_closes_certifies_then_retires_after_restart_i
         "stopped peer changed durable merge state while the quorum certified and retired the lane"
     );
 
-    rt.block_on(lagging_peer.start_checked(config_layers.iter().cloned(), None))?;
+    rt.block_on(lagging_peer.start_checked(config_layers.iter(), None))?;
     rt.block_on(async {
         tokio::time::timeout(
             network.sync_timeout().max(SCALE_IN_WAIT_TIMEOUT),
@@ -7188,7 +7188,7 @@ fn nexus_autoscale_recreates_same_lane_without_incarnation_aba_after_restart_imp
         "offline recovery peer received the recreated drain certificate"
     );
 
-    rt.block_on(lagging_peer.start_checked(config_layers.iter().cloned(), None))?;
+    rt.block_on(lagging_peer.start_checked(config_layers.iter(), None))?;
     rt.block_on(async {
         tokio::time::timeout(
             network.sync_timeout().max(SCALE_IN_WAIT_TIMEOUT),

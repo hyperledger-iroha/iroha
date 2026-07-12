@@ -446,9 +446,12 @@ fn wsv_host_pointer_helpers_charge_envelope_bytes() {
         Ok(16 + u64::try_from(envelope_len).expect("test envelope length"))
     );
     let wrapped_ptr = vm.register(10);
-    let wrapped = vm.memory.validate_tlv(wrapped_ptr).expect("wrapped tlv");
-    assert_eq!(wrapped.type_id, PointerType::NoritoBytes);
-    assert_eq!(wrapped.payload.len(), envelope_len);
+    let wrapped_payload = {
+        let wrapped = vm.validate_tlv(wrapped_ptr).expect("wrapped tlv");
+        assert_eq!(wrapped.type_id, PointerType::NoritoBytes);
+        assert_eq!(wrapped.payload.len(), envelope_len);
+        wrapped.payload.to_vec()
+    };
 
     vm.set_register(10, wrapped_ptr);
     vm.set_register(11, PointerType::Blob as u64);
@@ -456,12 +459,21 @@ fn wsv_host_pointer_helpers_charge_envelope_bytes() {
         IVMHost::syscall(&mut host, syscalls::SYSCALL_POINTER_FROM_NORITO, &mut vm),
         Ok(16 + u64::try_from(envelope_len).expect("test envelope length"))
     );
-    let roundtrip = vm
-        .memory
-        .validate_tlv(vm.register(10))
-        .expect("roundtrip tlv");
+    let roundtrip = vm.validate_tlv(vm.register(10)).expect("roundtrip tlv");
     assert_eq!(roundtrip.type_id, PointerType::Blob);
     assert_eq!(roundtrip.payload, payload);
+
+    let retired_blob_carrier = make_tlv(PointerType::Blob, &wrapped_payload);
+    let retired_blob_carrier_ptr = vm
+        .alloc_input_tlv(&retired_blob_carrier)
+        .expect("allocate retired blob carrier");
+    vm.set_register(10, retired_blob_carrier_ptr);
+    vm.set_register(11, PointerType::Blob as u64);
+    assert_eq!(
+        IVMHost::syscall(&mut host, syscalls::SYSCALL_POINTER_FROM_NORITO, &mut vm),
+        Err(VMError::NoritoInvalid)
+    );
+    assert_eq!(vm.register(10), retired_blob_carrier_ptr);
 }
 
 #[test]

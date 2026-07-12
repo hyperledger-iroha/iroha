@@ -464,6 +464,10 @@ pub fn work_step_gas(step: NumericWorkStep) -> Result<u64, VMError> {
 /// booleans add their stable validation phases. Canonical validation,
 /// output-length, and normalization work remain explicit so they cannot
 /// disappear into a codec or bigint backend.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the explicit arguments mirror every independently audited term in the public gas formula"
+)]
 pub fn successful_call_gas(
     input_envelope_bytes: u64,
     input_hash_frame_bytes: u64,

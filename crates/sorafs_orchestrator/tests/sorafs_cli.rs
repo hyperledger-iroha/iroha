@@ -23,7 +23,6 @@ use iroha_data_model::account::AccountId;
 use iroha_data_model::taikai::TaikaiSegmentEnvelopeV1;
 use norito::{
     decode_from_bytes,
-    derive::{JsonSerialize, NoritoDeserialize, NoritoSerialize},
     json::{Map, Value, from_slice, to_vec},
     to_bytes,
 };
@@ -469,7 +468,7 @@ fn retired_por_trigger_command_is_absent_and_never_sends_a_request() {
         !stderr.contains("sorafs_cli por trigger"),
         "retired command leaked into usage: {stderr}"
     );
-    trigger_mock.assert_hits(0);
+    trigger_mock.assert_calls(0);
 }
 
 #[test]

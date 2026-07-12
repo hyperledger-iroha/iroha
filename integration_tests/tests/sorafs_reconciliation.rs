@@ -180,7 +180,7 @@ async fn sorafs_reconciliation_reports_detect_divergence() -> Result<()> {
     network.ensure_blocks(1).await?;
 
     let payload = b"sorafs reconciliation divergence payload";
-    let (manifest, plan) = build_manifest(payload)?;
+    let (manifest, _plan) = build_manifest(payload)?;
     let manifest_bytes = manifest.encode()?;
     let client = network.client();
     register_paid_pin_manifest(&client, &manifest)?;
