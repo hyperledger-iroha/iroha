@@ -2977,118 +2977,33 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         self.current_entrypoint_authorization = Some(authorization);
     }
 
-    fn verified_deployed_contract_runtime_identity(
-        &self,
-        state: &impl StateReadOnly,
-        contract_address: &ContractAddress,
-        expected_alias: Option<&ContractAlias>,
-        contract: &ivm::PreparedContract,
-    ) -> Result<
-        (
-            crate::smartcontracts::code::BoundContractIdentity,
-            AccountId,
-        ),
-        ValidationFail,
-    > {
-        let identity =
-            crate::smartcontracts::code::fetch_bound_contract_identity(state, contract_address)
-                .ok_or_else(|| {
-                    ValidationFail::NotPermitted(format!(
-                        "contract instance `{contract_address}` has no valid live identity binding"
-                    ))
-                })?;
-        if identity.contract_alias.as_ref() != expected_alias {
-            return Err(ValidationFail::NotPermitted(format!(
-                "contract instance `{contract_address}` alias changed before runtime binding"
-            )));
-        }
-        if identity.code_hash != contract.code_hash() {
-            return Err(ValidationFail::NotPermitted(format!(
-                "contract instance `{contract_address}` code binding changed before runtime binding"
-            )));
-        }
-        let contract_subject =
-            crate::smartcontracts::code::fetch_bound_contract_subject(state, contract_address)
-                .ok_or_else(|| {
-                    ValidationFail::NotPermitted(format!(
-                        "contract instance `{contract_address}` has no valid subject binding"
-                    ))
-                })?;
-        Ok((identity, contract_subject))
-    }
-
-    /// Revalidate and bind a transaction-capable deployed contract runtime against one immutable
-    /// state view.
+    /// Bind a live, pre-authorized top-level contract for non-committing execution.
     ///
-    /// App-facing simulation paths use this boundary instead of constructing runtime provenance
-    /// from caller-supplied address, alias, code hash, or permission fields. Read-only selectors
-    /// are deliberately rejected here and must use the view-specific boundary below.
-    pub fn bind_authorized_deployed_contract_runtime_context(
+    /// This is the narrow cross-crate boundary used by Torii view and simulation handlers after
+    /// they have resolved the exact live address/alias/code binding and enforced the selected
+    /// artifact permission before payload decoding. It only seeds host provenance; transaction
+    /// application remains crate-private and independently revalidates the authorization snapshot.
+    pub fn bind_prevalidated_contract_runtime_context(
         &mut self,
-        state: &impl StateReadOnly,
-        contract_address: &ContractAddress,
-        expected_alias: Option<&ContractAlias>,
-        contract: &ivm::PreparedContract,
-        selector: &str,
-    ) -> Result<(), ValidationFail> {
-        let (identity, contract_subject) = self.verified_deployed_contract_runtime_identity(
-            state,
+        contract_address: iroha_data_model::smart_contract::ContractAddress,
+        contract_alias: Option<iroha_data_model::smart_contract::ContractAlias>,
+        code_hash: Hash,
+        entrypoint: String,
+        permission: Option<String>,
+    ) {
+        let contract_subject = contract_address.subject_id();
+        let identity = crate::smartcontracts::code::BoundContractIdentity {
             contract_address,
-            expected_alias,
-            contract,
-        )?;
-        let authorization = crate::executor::authorize_prepared_contract_selector(
-            state.world(),
-            &self.authority,
-            contract,
-            selector,
+            contract_alias,
+            code_hash,
+        };
+        let authorization = ContractEntrypointAuthorizationSnapshot::new(
+            self.authority.clone(),
+            entrypoint,
+            permission,
             &identity,
-        )?;
-        let descriptor = contract.entrypoint_descriptor(selector).ok_or_else(|| {
-            ValidationFail::NotPermitted(format!("unknown contract entrypoint `{selector}`"))
-        })?;
-        crate::smartcontracts::code::ensure_contract_entrypoint_lifecycle(
-            state.world(),
-            contract_address,
-            identity.code_hash,
-            descriptor.kind,
-        )?;
+        );
         self.bind_contract_runtime_context(contract_subject, authorization);
-        Ok(())
-    }
-
-    /// Revalidate and bind a read-only deployed contract view against one immutable state view.
-    ///
-    /// This boundary captures the same live identity and subject provenance as transaction
-    /// simulation while requiring the selected artifact entrypoint to be declared as `view`.
-    pub fn bind_authorized_deployed_contract_view_runtime_context(
-        &mut self,
-        state: &impl StateReadOnly,
-        contract_address: &ContractAddress,
-        expected_alias: Option<&ContractAlias>,
-        contract: &ivm::PreparedContract,
-        selector: &str,
-    ) -> Result<(), ValidationFail> {
-        let (identity, contract_subject) = self.verified_deployed_contract_runtime_identity(
-            state,
-            contract_address,
-            expected_alias,
-            contract,
-        )?;
-        let authorization = crate::executor::authorize_prepared_contract_view_selector(
-            state.world(),
-            &self.authority,
-            contract,
-            selector,
-            &identity,
-        )?;
-        crate::smartcontracts::code::ensure_contract_ready_for_view(
-            state.world(),
-            contract_address,
-            identity.code_hash,
-        )?;
-        self.bind_contract_runtime_context(contract_subject, authorization);
-        Ok(())
     }
 
     /// Share the outer runtime's bounded immutable contract-artifact cache.
@@ -11810,6 +11725,49 @@ mod pointer_abi_tests {
         assert_eq!(
             host.nested_contract_call_depth, MAX_NESTED_CONTRACT_CALL_DEPTH,
             "rejection must not mutate the active-frame counter"
+        );
+    }
+
+    #[test]
+    fn prevalidated_runtime_binding_captures_exact_root_authorization() {
+        let authority = ALICE_ID.clone();
+        let contract = ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &authority,
+            43,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("derive contract address");
+        let code_hash = Hash::new(b"Torii prevalidated runtime binding");
+        let mut host = CoreHost::new(authority.clone());
+
+        host.bind_prevalidated_contract_runtime_context(
+            contract.clone(),
+            None,
+            code_hash,
+            "inspect".to_owned(),
+            Some("CanInspectContract".to_owned()),
+        );
+
+        let context = host
+            .current_contract_runtime_context
+            .as_ref()
+            .expect("runtime context");
+        assert_eq!(context.contract_address, contract);
+        assert_eq!(context.contract_subject, contract.subject_id());
+        assert_eq!(context.entrypoint, "inspect");
+        let authorization = host
+            .current_entrypoint_authorization
+            .as_ref()
+            .expect("root authorization");
+        assert!(authorization.is_root());
+        assert_eq!(authorization.authority, authority);
+        assert_eq!(authorization.contract_address, contract);
+        assert_eq!(authorization.code_hash, code_hash);
+        assert_eq!(authorization.entrypoint, "inspect");
+        assert_eq!(
+            authorization.permission.as_deref(),
+            Some("CanInspectContract")
         );
     }
 
@@ -21091,7 +21049,7 @@ seiyaku Callee {
             &authority,
             r#"
 seiyaku ViewCaller {
-  kotoage fn main() -> int { return 0; }
+  kotoage fn main() -> int authorize("NestedView") { return 0; }
 }
 "#,
             0,
@@ -21103,17 +21061,29 @@ seiyaku ViewCaller {
 seiyaku EffectfulView {
   state int Counter;
 
-  kotoage fn seed(int value) {
+  kotoage fn seed(int value) authorize("NestedView") {
     Counter = value;
   }
 
-  kotoage fn increment_then_return() -> int {
+  kotoage fn increment_then_return() -> int authorize("NestedView") {
     Counter = Counter + 1;
     return Counter;
   }
 }
 "#,
             1,
+        );
+        grant_named_permission_to_account(
+            &state,
+            &authority,
+            authority.clone(),
+            "NestedView",
+        );
+        grant_named_permission_to_account(
+            &state,
+            &authority,
+            caller.subject_id(),
+            "NestedView",
         );
         let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
         execute_contract_call_transaction(

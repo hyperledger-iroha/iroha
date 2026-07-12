@@ -414,9 +414,9 @@ fn apply_queued_isis_from_compiled_json_driven_double_transfer() {
           kotoage fn main() authorize("TransferAsset") {{
             let ev = Json::parse("{{\"kind\":\"asset_change\",\"op\":\"added\",\"asset_definition_id\":\"{aed}\",\"account_domain\":\"{domain}\",\"account_id\":\"{dst}\",\"amount_i64\":1}}");
             let recipient = ev.get_account_id(Name::parse("account_id")).unwrap_or(AccountId::parse("{dst}"));
-            let amount = Amount::from_i64(ev.get_i64(Name::parse("amount_i64")).unwrap_or(0));
+            let quantity amount = ev.get_quantity(Name::parse("amount_i64")).unwrap_or(0);
             ledger::asset::transfer(source: recipient, destination: AccountId::parse("{reserve}"), asset_definition: AssetDefinitionId::parse("{aed}"), amount: amount, dataspace: DataSpaceId::parse("0"));
-            ledger::asset::transfer(source: AccountId::parse("{reserve}"), destination: recipient, asset_definition: AssetDefinitionId::parse("{cbdc}"), amount: amount * Amount::from_i64({ratio}), dataspace: DataSpaceId::parse("0"));
+            ledger::asset::transfer(source: AccountId::parse("{reserve}"), destination: recipient, asset_definition: AssetDefinitionId::parse("{cbdc}"), amount: amount * {ratio}, dataspace: DataSpaceId::parse("0"));
           }}
         }}
         "#,

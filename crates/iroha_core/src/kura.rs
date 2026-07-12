@@ -19394,8 +19394,10 @@ mod tests {
             0
         );
 
-        kura.store_v2_finality_artifact(&artifact)
+        let first_receipt = kura
+            .store_v2_finality_artifact(&artifact)
             .expect("persist and verify finality artifact");
+        assert_eq!(first_receipt.artifact_hash(), HashOf::new(&artifact));
         assert_eq!(
             kura.v2_finality_crypto_verifications
                 .load(Ordering::Relaxed),
@@ -19408,8 +19410,13 @@ mod tests {
                 Some(artifact.clone())
             );
         }
-        kura.store_v2_finality_artifact(&artifact)
+        let repeated_receipt = kura
+            .store_v2_finality_artifact(&artifact)
             .expect("idempotent store reuses verified immutable identity");
+        assert_eq!(
+            repeated_receipt.artifact_hash(),
+            first_receipt.artifact_hash()
+        );
         assert_eq!(
             kura.v2_finality_crypto_verifications
                 .load(Ordering::Relaxed),
@@ -19503,8 +19510,10 @@ mod tests {
             "cryptographically invalid bytes must not reach the durable path"
         );
 
-        kura.store_v2_finality_artifact(&artifact)
+        let receipt = kura
+            .store_v2_finality_artifact(&artifact)
             .expect("persist valid finality artifact");
+        assert_eq!(receipt.artifact_hash(), HashOf::new(&artifact));
         std::fs::write(&path, forged.encode())
             .expect("replace durable artifact with structurally valid forgery");
         assert!(matches!(
@@ -19636,8 +19645,10 @@ mod tests {
         kura.store_block(Arc::clone(&block))
             .expect("store canonical block");
         let artifact = v2_finality_artifact_for_block(&block);
-        kura.store_v2_finality_artifact(&artifact)
+        let receipt = kura
+            .store_v2_finality_artifact(&artifact)
             .expect("persist finality artifact");
+        assert_eq!(receipt.artifact_hash(), HashOf::new(&artifact));
         let path = kura.v2_finality_artifact_path(artifact.height);
         let alias = path.with_extension("hardlink.norito");
         std::fs::hard_link(&path, &alias).expect("create attacker-controlled hardlink alias");
@@ -19704,8 +19715,10 @@ mod tests {
         let predictable = path.with_extension("norito.tmp");
         symlink(&victim, &predictable).expect("preplant retired predictable temp symlink");
 
-        kura.store_v2_finality_artifact(&artifact)
+        let receipt = kura
+            .store_v2_finality_artifact(&artifact)
             .expect("random create-new temp path avoids the preplanted symlink");
+        assert_eq!(receipt.artifact_hash(), HashOf::new(&artifact));
         assert_eq!(
             std::fs::read(&victim).expect("read attacker victim"),
             victim_bytes

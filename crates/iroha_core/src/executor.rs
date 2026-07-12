@@ -13073,8 +13073,8 @@ seiyaku GuardedValue {
             .compile_source(
                 r#"
 seiyaku IdentityRequired {
-  kotoage fn write(int value) {
-    let _value = value;
+  view fn write(int value) -> int {
+    return value;
   }
 }
 "#,
@@ -13265,8 +13265,10 @@ seiyaku IdentityRequired {
         );
 
         for (selector, kind) in [
-            ("start", EntryPointKind::Hajimari),
-            ("upgrade", EntryPointKind::Kaizen),
+            ("hajimari", EntryPointKind::Hajimari),
+            ("始まり", EntryPointKind::Hajimari),
+            ("kaizen", EntryPointKind::Kaizen),
+            ("改善", EntryPointKind::Kaizen),
         ] {
             let (program, _) = contract_program_with_entrypoint_kind(selector, kind, None);
             let prepared = ivm::prepare_contract(Arc::<[u8]>::from(program))
@@ -13315,8 +13317,10 @@ seiyaku IdentityRequired {
 
         for (selector, kind) in [
             ("write", EntryPointKind::Kotoage),
-            ("start", EntryPointKind::Hajimari),
-            ("upgrade", EntryPointKind::Kaizen),
+            ("hajimari", EntryPointKind::Hajimari),
+            ("始まり", EntryPointKind::Hajimari),
+            ("kaizen", EntryPointKind::Kaizen),
+            ("改善", EntryPointKind::Kaizen),
         ] {
             let (program, _) = contract_program_with_entrypoint_kind(selector, kind, None);
             let prepared = ivm::prepare_contract(Arc::<[u8]>::from(program))

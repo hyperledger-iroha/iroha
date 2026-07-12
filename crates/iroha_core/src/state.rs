@@ -34106,7 +34106,7 @@ impl State {
     ///
     /// # Errors
     /// Returns a [`LaneLifecycleError`] when the lifecycle plan is invalid or fails to apply.
-    #[cfg(any(test, feature = "iroha-core-tests"))]
+    #[cfg(test)]
     fn apply_lane_lifecycle_with_options(
         &self,
         plan: &iroha_data_model::nexus::LaneLifecyclePlan,
@@ -34276,7 +34276,7 @@ impl State {
     ///
     /// # Errors
     /// Returns a [`LaneLifecycleError`] when the lifecycle plan is invalid or cannot be applied.
-    #[cfg(any(test, feature = "iroha-core-tests"))]
+    #[cfg(test)]
     pub(crate) fn apply_lane_lifecycle(
         &self,
         plan: &iroha_data_model::nexus::LaneLifecyclePlan,
@@ -34293,7 +34293,7 @@ impl State {
     ///
     /// # Errors
     /// Returns a [`LaneLifecycleError`] when the lifecycle plan is invalid or fails to apply.
-    #[cfg(any(test, feature = "iroha-core-tests"))]
+    #[cfg(test)]
     pub(crate) fn apply_lane_lifecycle_shared(
         self: &Arc<Self>,
         plan: &iroha_data_model::nexus::LaneLifecyclePlan,
@@ -35496,7 +35496,7 @@ pub(crate) fn lane_incarnation_lineage_root(
     let encoded = (chain_id.clone(), entries).encode();
     Hash::new_from_chunks(&[LANE_INCARNATION_LINEAGE_ROOT_DOMAIN, encoded.as_slice()])
 }
-#[cfg(any(test, feature = "iroha-core-tests"))]
+#[cfg(test)]
 const SYNTHETIC_LANE_LIFECYCLE_HEADER_DOMAIN: &[u8] =
     b"iroha:nexus:lane-incarnation:synthetic-header:v1\0";
 
@@ -35517,7 +35517,7 @@ fn lane_incarnation_matches_at_height(
             .is_some_and(|activation_height| proposal_height > *activation_height)
 }
 
-#[cfg(any(test, feature = "iroha-core-tests"))]
+#[cfg(test)]
 fn synthetic_lane_lifecycle_header_hash(
     chain_id: &iroha_data_model::ChainId,
     current_block_height: u64,
@@ -55183,7 +55183,10 @@ mod tests {
     #[test]
     fn state_snapshot_rejects_negative_numeric_asset_state() {
         let (mut state, definition_id, asset_id) = snapshot_state_with_numeric_asset();
-        **state.world.assets.get_mut(&asset_id).expect("asset exists") = Numeric::new(-1_i32, 0);
+        state
+            .world
+            .assets
+            .insert(asset_id.clone(), AssetValue::new(Numeric::new(-1_i32, 0)));
         let value = norito::json::to_value(&state).expect("serialize negative balance snapshot");
         let error = deserialize_state_snapshot_value(value)
             .err()
@@ -55192,12 +55195,18 @@ mod tests {
 
         let (mut state, definition_id_again, _) = snapshot_state_with_numeric_asset();
         assert_eq!(definition_id_again, definition_id);
+        let mut definition = state
+            .world
+            .asset_definitions
+            .view()
+            .get(&definition_id_again)
+            .cloned()
+            .expect("asset definition exists");
+        definition.total_quantity = Numeric::new(-1_i32, 0);
         state
             .world
             .asset_definitions
-            .get_mut(&definition_id_again)
-            .expect("asset definition exists")
-            .total_quantity = Numeric::new(-1_i32, 0);
+            .insert(definition_id_again, definition);
         let value = norito::json::to_value(&state).expect("serialize negative total snapshot");
         let error = deserialize_state_snapshot_value(value)
             .err()
@@ -55208,7 +55217,10 @@ mod tests {
         );
 
         let (mut state, _, asset_id) = snapshot_state_with_numeric_asset();
-        **state.world.assets.get_mut(&asset_id).expect("asset exists") = Numeric::new(1_u32, 1);
+        state
+            .world
+            .assets
+            .insert(asset_id.clone(), AssetValue::new(Numeric::new(1_u32, 1)));
         let value = norito::json::to_value(&state).expect("serialize invalid-scale snapshot");
         let error = deserialize_state_snapshot_value(value)
             .err()
@@ -105804,7 +105816,7 @@ seiyaku IdentitylessRawCallback {
         let ids = vec![1, 1, 2];
         let qtys = vec![Numeric::new(5, 0), Numeric::new(3, 0), Numeric::new(2, 0)];
 
-        let aggregated = aggregate_numeric(&ids, &qtys);
+        let aggregated = aggregate_numeric(&ids, &qtys).expect("valid quantities must aggregate");
 
         assert_eq!(aggregated.len(), 2, "duplicate ids should coalesce");
         assert_eq!(aggregated[0], (1, Numeric::new(8, 0)));

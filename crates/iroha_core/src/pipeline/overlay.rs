@@ -4149,8 +4149,8 @@ seiyaku ProtectedStateFreeOverlay {
             .compile_source(
                 r#"
 seiyaku PermissionlessStateFreeOverlay {
-  kotoage fn write(int value) {
-    let _value = value;
+  view fn write(int value) -> int {
+    return value;
   }
 }
 "#,

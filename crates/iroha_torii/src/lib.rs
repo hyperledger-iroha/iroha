@@ -43465,6 +43465,14 @@ impl Torii {
             catalog_post(handler_post_multisig_proposals_get),
         );
         builder.route(
+            &route_catalog::contracts_and_verification_keys::MULTISIG_PROPOSALS_LIST_POST,
+            catalog_post(handler_post_multisig_proposals_list),
+        );
+        builder.route(
+            &route_catalog::contracts_and_verification_keys::MULTISIG_PROPOSALS_GET_POST,
+            catalog_post(handler_post_multisig_proposals_get),
+        );
+        builder.route(
             &route_catalog::contracts_and_verification_keys::MULTISIG_APPROVALS_QUERY_POST,
             catalog_post(handler_post_multisig_approvals_list),
         );

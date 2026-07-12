@@ -85,7 +85,7 @@ use tokio::{
     time::{MissedTickBehavior, interval},
 };
 
-#[cfg(any(test, feature = "iroha-core-tests"))]
+#[cfg(test)]
 use crate::state::LaneLifecycleError;
 #[cfg(feature = "telemetry")]
 use crate::telemetry::{DataspaceTeuGaugeUpdate, LaneTeuGaugeUpdate};
@@ -7793,7 +7793,7 @@ impl Queue {
     ///
     /// # Errors
     /// Returns an error if updating the lane lifecycle or reconfiguring Nexus metadata fails.
-    #[cfg(any(test, feature = "iroha-core-tests"))]
+    #[cfg(test)]
     pub(crate) fn apply_lane_lifecycle(
         &self,
         state: &mut State,

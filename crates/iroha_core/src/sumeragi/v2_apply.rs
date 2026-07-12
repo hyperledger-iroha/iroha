@@ -683,6 +683,16 @@ mod tests {
                 &state.nexus_snapshot(),
                 context.height,
             );
+            let confidential_features = {
+                let state_view = state.view();
+                let digest = crate::state::compute_confidential_feature_digest(
+                    state_view.world(),
+                    &state_view.zk,
+                    state_view.sccp_registry.as_ref(),
+                    context.height,
+                );
+                (!digest.is_empty()).then_some(digest)
+            };
             let build_genesis_body =
                 |transaction: iroha_data_model::transaction::signed::SignedTransaction,
                  execution_context: Option<BlockExecutionContextBundle>| {
@@ -690,7 +700,7 @@ mod tests {
                         .as_millis()
                         .try_into()
                         .expect("fixture creation time fits u64");
-                    let header = BlockHeader::new(
+                    let mut header = BlockHeader::new(
                         NonZeroU64::new(1).expect("non-zero fixture height"),
                         None,
                         None,
@@ -698,6 +708,7 @@ mod tests {
                         creation_time_ms,
                         0,
                     );
+                    header.set_confidential_features(confidential_features);
                     let mut builder = iroha_data_model::block::builder::BlockBuilder::new(header);
                     builder.push_transaction(transaction);
                     builder.set_da_proof_policies(Some(proof_policy_bundle.clone()));

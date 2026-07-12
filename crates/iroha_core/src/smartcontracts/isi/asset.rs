@@ -10,6 +10,9 @@ use iroha_data_model::{
 };
 use iroha_telemetry::metrics;
 
+#[cfg(test)]
+use iroha_data_model::isi::error::InstructionEvaluationError;
+
 use super::prelude::*;
 /// ISI module contains all instructions related to assets:
 /// - minting/burning assets
